@@ -51,6 +51,29 @@ done
 log()  { echo ""; echo "==> $1"; }
 fail() { echo "ERROR: $1" >&2; exit 1; }
 
+refresh_bpanel_mariadb_grants() {
+  local defaults_file="$APP_DIR/.my.cnf"
+  [[ -f "$defaults_file" ]] || return 0
+  local mysql_bin
+  mysql_bin="$(command -v mariadb || command -v mysql || true)"
+  [[ -n "$mysql_bin" ]] || return 0
+  local password
+  password="$(awk -F= '
+    /^\[client\]/ { in_client=1; next }
+    /^\[/ { in_client=0 }
+    in_client && $1 == "password" {
+      value=$0; sub(/^[^=]*=/, "", value); gsub(/^"|"$/, "", value); print value; exit
+    }
+  ' "$defaults_file")"
+  [[ -n "$password" ]] || return 0
+  "$mysql_bin" <<SQL
+CREATE USER IF NOT EXISTS 'bpanel'@'localhost' IDENTIFIED BY '${password}';
+ALTER USER 'bpanel'@'localhost' IDENTIFIED BY '${password}';
+GRANT ALL PRIVILEGES ON *.* TO 'bpanel'@'localhost' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+SQL
+}
+
 # --- Snapshot the SQLite DB before doing anything ---------------------------
 backup_db() {
   local db_path="$APP_DIR/backend/bpanel.db"
@@ -96,7 +119,7 @@ if [[ "$SKIP_PULL" != "true" ]]; then
   git fetch --all --prune
   git checkout "$BRANCH"
   git reset --hard "origin/$BRANCH"
-  echo "HEAD: $(git rev-parse --short HEAD) — $(git log -1 --pretty=%s)"
+  echo "HEAD: $(git rev-parse --short HEAD) â€” $(git log -1 --pretty=%s)"
 fi
 
 # --- Validate ---------------------------------------------------------------
@@ -148,8 +171,9 @@ if [[ -f "$SOURCE_DIR/installer/files/bpanel-helper.sh" ]]; then
     install -m 0750 -o root -g bpanel "$SOURCE_DIR/installer/files/bpanel-helper.sh" /usr/local/sbin/bpanel-helper
     install -m 0440 -o root -g root  "$SOURCE_DIR/installer/files/bpanel-sudoers"   /etc/sudoers.d/bpanel
     visudo -c -f /etc/sudoers.d/bpanel >/dev/null
+    sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper wp --info >/dev/null
   else
-    echo "  (bpanel user not found; skipping helper refresh — run install.sh first)"
+    echo "  (bpanel user not found; skipping helper refresh â€” run install.sh first)"
   fi
 fi
 
@@ -169,6 +193,9 @@ fi
 source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
+
+log "Refreshing MariaDB grants"
+refresh_bpanel_mariadb_grants
 
 log "Running database migrations"
 if id -u bpanel >/dev/null 2>&1; then
@@ -201,6 +228,17 @@ python -m py_compile \
 deactivate
 
 log "Restarting bpanel-api"
+mkdir -p /etc/systemd/system/bpanel-api.service.d
+cat >/etc/systemd/system/bpanel-api.service.d/10-bpanel-helper.conf <<'SERVICE'
+[Service]
+NoNewPrivileges=false
+ProtectSystem=false
+RestrictSUIDSGID=false
+CapabilityBoundingSet=~
+SystemCallFilter=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+SERVICE
+systemctl daemon-reload
 systemctl restart bpanel-api
 
 # --- Frontend --------------------------------------------------------------

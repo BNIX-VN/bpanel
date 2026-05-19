@@ -36,13 +36,14 @@ is_in() {
 
 require_safe_path() {
   local prefix="$1" path="$2"
-  # Reject path traversal components, NUL/newline bytes, empty input.
+  # Reject path traversal components, newlines, and empty input. Bash strings
+  # cannot carry NUL bytes, so there is no separate NUL pattern here.
   # Note: we cannot use `*..*` as a glob because that would also reject
   # legitimate filenames that just happen to contain a dot adjacent to a dot
   # via Bash's pattern matching quirks; instead we match the `..` only when
   # it actually forms a path component.
   case "$path" in
-    *$'\n'*|*$'\0'*) deny "unsafe path: $path" ;;
+    *$'\n'*) deny "unsafe path: $path" ;;
     "") deny "empty path" ;;
     "..") deny "path traversal not allowed" ;;
     "../"*|*"/.."|*"/../"*) deny "path traversal not allowed" ;;

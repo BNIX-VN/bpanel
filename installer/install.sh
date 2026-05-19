@@ -252,11 +252,11 @@ setup_panel_user() {
   mariadb_password="$(openssl rand -base64 32 | tr -d '/+=' | cut -c1-32)"
   mariadb -e "
     CREATE USER IF NOT EXISTS 'bpanel'@'localhost' IDENTIFIED BY '${mariadb_password}';
-    GRANT CREATE, DROP, ALTER, REFERENCES, INDEX, CREATE USER, RELOAD, PROCESS, SHOW DATABASES, LOCK TABLES, SELECT, INSERT, UPDATE, DELETE, GRANT OPTION ON *.* TO 'bpanel'@'localhost';
+    GRANT ALL PRIVILEGES ON *.* TO 'bpanel'@'localhost' WITH GRANT OPTION;
     FLUSH PRIVILEGES;
   " 2>/dev/null || mysql -e "
     CREATE USER IF NOT EXISTS 'bpanel'@'localhost' IDENTIFIED BY '${mariadb_password}';
-    GRANT CREATE, DROP, ALTER, REFERENCES, INDEX, CREATE USER, RELOAD, PROCESS, SHOW DATABASES, LOCK TABLES, SELECT, INSERT, UPDATE, DELETE, GRANT OPTION ON *.* TO 'bpanel'@'localhost';
+    GRANT ALL PRIVILEGES ON *.* TO 'bpanel'@'localhost' WITH GRANT OPTION;
     FLUSH PRIVILEGES;
   "
 
@@ -280,6 +280,10 @@ install_privileged_helper() {
   install -m 0750 -o root -g bpanel "${SCRIPT_DIR}/files/bpanel-helper.sh" /usr/local/sbin/bpanel-helper
   install -m 0440 -o root -g root "${SCRIPT_DIR}/files/bpanel-sudoers" /etc/sudoers.d/bpanel
   visudo -c -f /etc/sudoers.d/bpanel >/dev/null
+}
+
+validate_privileged_helper() {
+  sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper wp --info >/dev/null
 }
 
 setup_backend() {
@@ -346,9 +350,10 @@ ExecStart=${APP_DIR}/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --p
 Restart=always
 RestartSec=3
 
-# Hardening
-NoNewPrivileges=true
-ProtectSystem=strict
+# Hardening. These settings must not block the sudo helper; privileged work is
+# restricted by /usr/local/sbin/bpanel-helper and /etc/sudoers.d/bpanel.
+NoNewPrivileges=false
+ProtectSystem=false
 ProtectHome=read-only
 ReadWritePaths=${APP_DIR} ${SITES_ROOT} ${BACKUP_ROOT} /etc/nginx/conf.d /tmp /var/lib/bpanel
 PrivateTmp=true
@@ -362,14 +367,12 @@ ProtectHostname=true
 ProtectProc=invisible
 RestrictNamespaces=true
 RestrictRealtime=true
-RestrictSUIDSGID=true
+RestrictSUIDSGID=false
 LockPersonality=true
 MemoryDenyWriteExecute=true
 SystemCallArchitectures=native
-SystemCallFilter=@system-service
-SystemCallFilter=~@privileged @resources @mount @debug @cpu-emulation @obsolete @reboot @swap
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+CapabilityBoundingSet=~
 
 [Install]
 WantedBy=multi-user.target
@@ -700,6 +703,9 @@ main() {
 
   log "Installing privileged helper and sudoers rule"
   install_privileged_helper
+
+  log "Validating privileged helper"
+  validate_privileged_helper
 
   log "Configuring backend"
   setup_backend

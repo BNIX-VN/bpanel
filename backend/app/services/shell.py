@@ -39,6 +39,13 @@ class CommandResult:
     stderr: str
 
 
+def _redact_output(value: str) -> str:
+    if not value:
+        return ""
+    blocked = ("password", "identified by", "user_pass", "db_password")
+    return "\n".join(line for line in value.splitlines() if not any(token in line.lower() for token in blocked))
+
+
 class ShellRunner:
     def run(
         self,
@@ -98,8 +105,8 @@ class ShellRunner:
             check=False,
             input=input,
         )
-        stdout = "[redacted]" if sensitive else completed.stdout
-        stderr = "[redacted]" if sensitive else completed.stderr
+        stdout = _redact_output(completed.stdout) if sensitive else completed.stdout
+        stderr = _redact_output(completed.stderr) if sensitive else completed.stderr
         result = CommandResult(log_command, completed.returncode, stdout, stderr)
         if check and completed.returncode != 0:
             raise RuntimeError(f"Command failed: {log_command}\n{stderr}")

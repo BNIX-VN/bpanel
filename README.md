@@ -193,14 +193,21 @@ What the helper allows:
 Anything else is rejected. The helper validates domains, ports, IPs, and
 filesystem paths before invoking the real binary.
 
+The installer also creates a local MariaDB `bpanel` account used by the API to
+create per-site databases and users for WordPress installs.
+
 Additional hardening on the systemd unit:
 
-- `NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome=read-only`
+- `ProtectHome=read-only`
 - `PrivateTmp`, `PrivateDevices`, `ProtectKernelModules`, `ProtectKernelLogs`
-- `MemoryDenyWriteExecute`, `LockPersonality`, `RestrictSUIDSGID`
-- `SystemCallFilter=@system-service ~@privileged @debug @mount`
-- `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6`
-- `CapabilityBoundingSet=` (drops every capability)
+- `MemoryDenyWriteExecute`, `LockPersonality`
+- `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK`
+- Privileged operations stay constrained by the root-owned helper and sudoers
+
+`NoNewPrivileges`, `ProtectSystem=strict`, `RestrictSUIDSGID`, broad syscall
+deny-lists, and capability bounding must not block the helper: `bpanel-api`
+intentionally uses `sudo -n /usr/local/sbin/bpanel-helper` for the narrowly
+whitelisted root operations.
 
 If the API itself were ever compromised, the attacker would be limited to:
 - writing into `/etc/nginx/conf.d/`, `/home/bpanel-sites/`, `/var/backups/bpanel/`

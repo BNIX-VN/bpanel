@@ -39,6 +39,7 @@ log "Installing privileged helper and sudoers rule"
 install -m 0750 -o root -g bpanel "$SOURCE_DIR/installer/files/bpanel-helper.sh" /usr/local/sbin/bpanel-helper
 install -m 0440 -o root -g root  "$SOURCE_DIR/installer/files/bpanel-sudoers"   /etc/sudoers.d/bpanel
 visudo -c -f /etc/sudoers.d/bpanel >/dev/null
+sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper wp --info >/dev/null
 
 log "Fixing filesystem ownership and permissions"
 # /etc/nginx/conf.d: writable by group bpanel (so bpanel can write vhost files)
@@ -74,7 +75,7 @@ else
   [[ -n "$MYSQL_BIN" ]] || fail "Neither mariadb nor mysql client found"
   "$MYSQL_BIN" <<SQL
 CREATE USER IF NOT EXISTS 'bpanel'@'localhost' IDENTIFIED BY '${MARIADB_PASSWORD}';
-GRANT CREATE, DROP, ALTER, REFERENCES, INDEX, CREATE USER, RELOAD, PROCESS, SHOW DATABASES, LOCK TABLES, SELECT, INSERT, UPDATE, DELETE, GRANT OPTION ON *.* TO 'bpanel'@'localhost';
+GRANT ALL PRIVILEGES ON *.* TO 'bpanel'@'localhost' WITH GRANT OPTION;
 FLUSH PRIVILEGES;
 SQL
   cat >"$APP_DIR/.my.cnf" <<MYCNF
@@ -113,9 +114,10 @@ ExecStart=${APP_DIR}/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --p
 Restart=always
 RestartSec=3
 
-# Hardening
-NoNewPrivileges=true
-ProtectSystem=strict
+# Hardening. These settings must not block the sudo helper; privileged work is
+# restricted by /usr/local/sbin/bpanel-helper and /etc/sudoers.d/bpanel.
+NoNewPrivileges=false
+ProtectSystem=false
 ProtectHome=read-only
 ReadWritePaths=${APP_DIR} ${SITES_ROOT} ${BACKUP_ROOT} /etc/nginx/conf.d /tmp /var/lib/bpanel
 PrivateTmp=true
@@ -129,14 +131,12 @@ ProtectHostname=true
 ProtectProc=invisible
 RestrictNamespaces=true
 RestrictRealtime=true
-RestrictSUIDSGID=true
+RestrictSUIDSGID=false
 LockPersonality=true
 MemoryDenyWriteExecute=true
 SystemCallArchitectures=native
-SystemCallFilter=@system-service
-SystemCallFilter=~@privileged @resources @mount @debug @cpu-emulation @obsolete @reboot @swap
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+CapabilityBoundingSet=~
 
 [Install]
 WantedBy=multi-user.target

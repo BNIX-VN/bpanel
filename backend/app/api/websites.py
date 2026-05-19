@@ -52,10 +52,15 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
                 payload.admin_password,
                 str(payload.admin_email),
             )
-        except ValueError as exc:
+        except (RuntimeError, ValueError) as exc:
             mariadb.drop_database(db_info["db_name"], db_info["db_user"])
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        nginx.write_vhost(payload.domain, root_path, app_type="wordpress", php_version=payload.php_version)
+        try:
+            nginx.write_vhost(payload.domain, root_path, app_type="wordpress", php_version=payload.php_version)
+        except (RuntimeError, ValueError) as exc:
+            mariadb.drop_database(db_info["db_name"], db_info["db_user"])
+            wordpress.delete_wordpress(root_path)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_type_value = "wordpress"
     else:
         # Just create the public/ folder skeleton and write a vhost.
