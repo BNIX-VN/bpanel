@@ -108,20 +108,37 @@ log "Syncing source to $APP_DIR"
 mkdir -p "$APP_DIR"
 
 if command -v rsync >/dev/null 2>&1; then
+  # --filter='P ...' (protect) keeps the destination file even when --delete
+  # would otherwise remove it because the source side doesn't have it. We use
+  # this for runtime artefacts that the installer creates: .env, .venv,
+  # bpanel.db, .my.cnf.
   rsync -a --delete \
-    --exclude '.venv/' \
+    --filter='P /backend/.env' \
+    --filter='P /backend/.venv/***' \
+    --filter='P /backend/bpanel.db' \
+    --filter='P /.my.cnf' \
     --exclude '__pycache__/' \
     --exclude '*.pyc' \
-    --exclude 'bpanel.db' \
     "$SOURCE_DIR/backend/" "$APP_DIR/backend/"
   rsync -a --delete \
-    --exclude 'node_modules/' \
-    --exclude 'dist/' \
-    --exclude '.vite/' \
+    --filter='P /node_modules/***' \
+    --filter='P /dist/***' \
+    --filter='P /.vite/***' \
     "$SOURCE_DIR/frontend/" "$APP_DIR/frontend/"
 else
   cp -r "$SOURCE_DIR/backend/."  "$APP_DIR/backend/"
   cp -r "$SOURCE_DIR/frontend/." "$APP_DIR/frontend/"
+fi
+
+# Defensive: if .env still doesn't exist (e.g. fresh deploy syncing on top of
+# nothing), leave a clear error message.
+if [[ ! -f "$APP_DIR/backend/.env" ]]; then
+  fail "$APP_DIR/backend/.env is missing. Run installer/install.sh first or restore .env from backup."
+fi
+if [[ ! -x "$APP_DIR/backend/.venv/bin/uvicorn" ]]; then
+  log "Recreating Python virtualenv (was missing)"
+  rm -rf "$APP_DIR/backend/.venv"
+  python3 -m venv "$APP_DIR/backend/.venv"
 fi
 
 # --- Refresh helper + sudoers (idempotent) ---------------------------------
