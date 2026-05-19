@@ -20,7 +20,18 @@ fi
 
 # --- Config ----------------------------------------------------------------
 APP_DIR="${APP_DIR:-/opt/bpanel}"                 # Production deployment dir
-SOURCE_DIR="${SOURCE_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+DEFAULT_SOURCE_DIR="/opt/bpanel-source"           # Where the git checkout lives
+
+# Resolve where THIS script lives. If it's inside a real git checkout we use
+# that. Otherwise we fall back to /opt/bpanel-source so users running the
+# script from the deploy dir still get a usable workflow.
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -d "$_SCRIPT_DIR/.git" ]]; then
+  SOURCE_DIR="${SOURCE_DIR:-$_SCRIPT_DIR}"
+else
+  SOURCE_DIR="${SOURCE_DIR:-$DEFAULT_SOURCE_DIR}"
+fi
+
 REPO_URL="${REPO_URL:-https://github.com/BNIX-VN/bpanel.git}"
 BRANCH="${BRANCH:-main}"
 SKIP_PULL="${SKIP_PULL:-false}"
@@ -68,8 +79,15 @@ log "Backing up SQLite DB before update"
 backup_db
 
 # --- Pull latest source ----------------------------------------------------
+if [[ "$(readlink -f "$SOURCE_DIR")" == "$(readlink -f "$APP_DIR")" ]]; then
+  fail "SOURCE_DIR ($SOURCE_DIR) and APP_DIR ($APP_DIR) must be different. Clone the repo to /opt/bpanel-source first."
+fi
+
 if [[ "$SKIP_PULL" != "true" ]]; then
   if [[ ! -d "$SOURCE_DIR/.git" ]]; then
+    if [[ -e "$SOURCE_DIR" && -n "$(ls -A "$SOURCE_DIR" 2>/dev/null)" ]]; then
+      fail "$SOURCE_DIR exists but is not a git checkout and is not empty. Move it aside or set SOURCE_DIR=/some/empty/dir."
+    fi
     log "Cloning $REPO_URL to $SOURCE_DIR"
     git clone "$REPO_URL" "$SOURCE_DIR"
   fi
