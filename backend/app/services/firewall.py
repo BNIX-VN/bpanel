@@ -36,46 +36,70 @@ def _validate_network(network: str) -> str:
 
 
 def status() -> CommandResult:
-    return shell.run(["ufw", "status", "verbose", "numbered"], check=False)
+    return shell.privileged("ufw-status", check=False, fallback=["ufw", "status", "verbose", "numbered"])
 
 
 def enable() -> CommandResult:
-    return shell.run(["ufw", "--force", "enable"])
+    return shell.privileged("ufw-enable", fallback=["ufw", "--force", "enable"])
 
 
 def disable() -> CommandResult:
-    return shell.run(["ufw", "--force", "disable"])
+    return shell.privileged("ufw-disable", fallback=["ufw", "--force", "disable"])
 
 
 def reload() -> CommandResult:
-    return shell.run(["ufw", "reload"])
+    return shell.privileged("ufw-reload", fallback=["ufw", "reload"])
 
 
 def allow_port(port: str | int, protocol: str = "tcp") -> CommandResult:
     clean_port = _validate_port(port)
     clean_protocol = _validate_protocol(protocol)
-    return shell.run(["ufw", "allow", f"{clean_port}/{clean_protocol}"])
+    return shell.privileged(
+        "ufw-allow-port",
+        helper_args=[clean_port, clean_protocol],
+        fallback=["ufw", "allow", f"{clean_port}/{clean_protocol}"],
+    )
 
 
 def allow_ip(network: str, port: Optional[str | int] = None, protocol: str = "tcp") -> CommandResult:
     clean_network = _validate_network(network)
     if not port:
-        return shell.run(["ufw", "allow", "from", clean_network])
+        return shell.privileged(
+            "ufw-allow-ip",
+            helper_args=[clean_network],
+            fallback=["ufw", "allow", "from", clean_network],
+        )
     clean_port = _validate_port(port)
     clean_protocol = _validate_protocol(protocol)
-    return shell.run(["ufw", "allow", "from", clean_network, "to", "any", "port", clean_port, "proto", clean_protocol])
+    return shell.privileged(
+        "ufw-allow-ip",
+        helper_args=[clean_network, clean_port, clean_protocol],
+        fallback=["ufw", "allow", "from", clean_network, "to", "any", "port", clean_port, "proto", clean_protocol],
+    )
 
 
 def block_ip(network: str, port: Optional[str | int] = None, protocol: str = "tcp") -> CommandResult:
     clean_network = _validate_network(network)
     if not port:
-        return shell.run(["ufw", "deny", "from", clean_network])
+        return shell.privileged(
+            "ufw-deny-ip",
+            helper_args=[clean_network],
+            fallback=["ufw", "deny", "from", clean_network],
+        )
     clean_port = _validate_port(port)
     clean_protocol = _validate_protocol(protocol)
-    return shell.run(["ufw", "deny", "from", clean_network, "to", "any", "port", clean_port, "proto", clean_protocol])
+    return shell.privileged(
+        "ufw-deny-ip",
+        helper_args=[clean_network, clean_port, clean_protocol],
+        fallback=["ufw", "deny", "from", clean_network, "to", "any", "port", clean_port, "proto", clean_protocol],
+    )
 
 
 def delete_rule(number: int) -> CommandResult:
     if number < 1:
         raise ValueError("Rule number must be greater than 0")
-    return shell.run(["ufw", "--force", "delete", str(number)])
+    return shell.privileged(
+        "ufw-delete",
+        helper_args=[str(number)],
+        fallback=["ufw", "--force", "delete", str(number)],
+    )

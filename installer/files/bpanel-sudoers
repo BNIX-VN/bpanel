@@ -1,0 +1,10 @@
+# /etc/sudoers.d/bpanel
+# Installed by installer/install.sh as root:root mode 0440.
+# Grants the 'bpanel' system user the right to run a single root-owned
+# helper script with no password. The helper does its own validation.
+
+Defaults:bpanel !requiretty
+Defaults:bpanel env_reset
+Defaults:bpanel secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+bpanel ALL=(root) NOPASSWD: /usr/local/sbin/bpanel-helper, /usr/local/sbin/bpanel-helper *

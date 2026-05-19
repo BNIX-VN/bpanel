@@ -79,6 +79,23 @@ else
   cp -r "$SOURCE_DIR/frontend/." "$APP_DIR/frontend/"
 fi
 
+# --- Refresh helper + sudoers (idempotent) ---------------------------------
+if [[ -f "$SOURCE_DIR/installer/files/bpanel-helper.sh" ]]; then
+  log "Refreshing /usr/local/sbin/bpanel-helper and /etc/sudoers.d/bpanel"
+  if id -u bpanel >/dev/null 2>&1; then
+    install -m 0750 -o root -g bpanel "$SOURCE_DIR/installer/files/bpanel-helper.sh" /usr/local/sbin/bpanel-helper
+    install -m 0440 -o root -g root  "$SOURCE_DIR/installer/files/bpanel-sudoers"   /etc/sudoers.d/bpanel
+    visudo -c -f /etc/sudoers.d/bpanel >/dev/null
+  else
+    echo "  (bpanel user not found; skipping helper refresh — run install.sh first)"
+  fi
+fi
+
+# --- Restore ownership so bpanel user can read/write the deploy ------------
+if id -u bpanel >/dev/null 2>&1; then
+  chown -R bpanel:bpanel "$APP_DIR/backend" "$APP_DIR/frontend" 2>/dev/null || true
+fi
+
 # --- Backend ---------------------------------------------------------------
 log "Updating backend dependencies"
 cd "$APP_DIR/backend"

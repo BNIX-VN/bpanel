@@ -215,11 +215,10 @@ def write_vhost(
     if target.exists():
         existing = target.read_text(encoding="utf-8")
         if _has_ssl_config(existing):
-            shell.run(["cp", str(target), f"{target}.bak"], check=False)
+            target.with_suffix(target.suffix + ".bak").write_text(existing, encoding="utf-8")
             return str(target)
     target.write_text(content, encoding="utf-8")
-    shell.run(["nginx", "-t"])
-    shell.run(["systemctl", "reload", "nginx"])
+    shell.privileged("nginx-reload", fallback=["bash", "-lc", "nginx -t && systemctl reload nginx"])
     return str(target)
 
 
@@ -240,18 +239,17 @@ def rewrite_vhost(
         return content
     if target.exists():
         existing = target.read_text(encoding="utf-8")
-        shell.run(["cp", str(target), f"{target}.bak"], check=False)
+        target.with_suffix(target.suffix + ".bak").write_text(existing, encoding="utf-8")
         if _has_ssl_config(existing):
             content = _merge_certbot_ssl_config(content, existing)
     old_content = target.read_text(encoding="utf-8") if target.exists() else None
     target.write_text(content, encoding="utf-8")
-    result = shell.run(["nginx", "-t"], check=False)
-    if result.returncode != 0:
+    test = shell.privileged("nginx-test", check=False, fallback=["nginx", "-t"])
+    if test.returncode != 0:
         if old_content is not None:
             target.write_text(old_content, encoding="utf-8")
-        shell.run(["nginx", "-t"], check=False)
-        raise RuntimeError((result.stderr or result.stdout or "nginx -t failed").strip())
-    shell.run(["systemctl", "reload", "nginx"])
+        raise RuntimeError((test.stderr or test.stdout or "nginx -t failed").strip())
+    shell.privileged("nginx-reload", fallback=["bash", "-lc", "nginx -t && systemctl reload nginx"])
     return str(target)
 
 
@@ -268,14 +266,13 @@ def update_custom_block(domain: str, custom_directives: str) -> str:
         raise FileNotFoundError(str(target))
     existing = target.read_text(encoding="utf-8")
     new_content = _replace_custom_block(existing, safe_custom)
-    shell.run(["cp", str(target), f"{target}.bak"], check=False)
+    target.with_suffix(target.suffix + ".bak").write_text(existing, encoding="utf-8")
     target.write_text(new_content, encoding="utf-8")
-    result = shell.run(["nginx", "-t"], check=False)
-    if result.returncode != 0:
+    test = shell.privileged("nginx-test", check=False, fallback=["nginx", "-t"])
+    if test.returncode != 0:
         target.write_text(existing, encoding="utf-8")
-        shell.run(["nginx", "-t"], check=False)
-        raise RuntimeError((result.stderr or result.stdout or "nginx -t failed").strip())
-    shell.run(["systemctl", "reload", "nginx"])
+        raise RuntimeError((test.stderr or test.stdout or "nginx -t failed").strip())
+    shell.privileged("nginx-reload", fallback=["bash", "-lc", "nginx -t && systemctl reload nginx"])
     return str(target)
 
 
@@ -287,8 +284,7 @@ def set_wordpress_php_version(domain: str, php_version: str) -> str:
         raise FileNotFoundError(str(target))
     existing = target.read_text(encoding="utf-8")
     target.write_text(_replace_php_fpm_socket(existing, php_version), encoding="utf-8")
-    shell.run(["nginx", "-t"])
-    shell.run(["systemctl", "reload", "nginx"])
+    shell.privileged("nginx-reload", fallback=["bash", "-lc", "nginx -t && systemctl reload nginx"])
     return str(target)
 
 
@@ -302,12 +298,10 @@ def harden_existing_wordpress_vhost(domain: str, root_path: str, php_version: st
         if _has_ssl_config(existing):
             updated = _replace_php_fpm_socket(_ensure_hsts_header(existing), php_version) if php_version else _ensure_hsts_header(existing)
             target.write_text(updated, encoding="utf-8")
-            shell.run(["nginx", "-t"])
-            shell.run(["systemctl", "reload", "nginx"])
+            shell.privileged("nginx-reload", fallback=["bash", "-lc", "nginx -t && systemctl reload nginx"])
             return str(target)
     target.write_text(content, encoding="utf-8")
-    shell.run(["nginx", "-t"])
-    shell.run(["systemctl", "reload", "nginx"])
+    shell.privileged("nginx-reload", fallback=["bash", "-lc", "nginx -t && systemctl reload nginx"])
     return str(target)
 
 
@@ -316,6 +310,5 @@ def delete_wordpress_vhost(domain: str):
     if settings.command_dry_run:
         return str(target)
     target.unlink(missing_ok=True)
-    shell.run(["nginx", "-t"])
-    shell.run(["systemctl", "reload", "nginx"])
+    shell.privileged("nginx-reload", fallback=["bash", "-lc", "nginx -t && systemctl reload nginx"])
     return str(target)

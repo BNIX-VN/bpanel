@@ -1,6 +1,4 @@
-import os
 import re
-import tempfile
 from pathlib import Path
 from typing import Dict
 
@@ -8,8 +6,7 @@ from app.core.config import settings
 from app.services.shell import shell
 
 
-# Strict whitelists: WP usernames, titles, emails. Reject anything that could
-# be parsed as a CLI flag or contain shell-special characters.
+# Strict whitelists for values fed to WP-CLI to prevent flag injection.
 WP_USER_RE = re.compile(r"^[A-Za-z0-9._@-]{3,60}$")
 WP_TITLE_RE = re.compile(r"^[\w\s.,'\-:!()&]{1,150}$", re.UNICODE)
 EMAIL_RE = re.compile(r"^[^@\s]{1,64}@[^@\s]{3,255}$")
@@ -35,26 +32,32 @@ def install_wordpress(domain: str, db: Dict[str, str], title: str, admin_user: s
 
     root = Path(site_root(domain))
     public = root / "public"
-    shell.run(["mkdir", "-p", str(public)])
-    shell.run(["chown", "-R", "www-data:www-data", str(root)], check=False)
+    # Create site directory with proper ownership via the helper.
+    shell.privileged(
+        "mkdir-site",
+        helper_args=[str(root)],
+        fallback=["bash", "-lc", f"mkdir -p {public} && chown -R www-data:www-data {root}"],
+    )
     wp_path = f"--path={public}"
 
-    shell.run(["wp", "core", "download", wp_path, "--allow-root"])
+    # WP-CLI runs as www-data through the helper.
+    shell.privileged("wp", helper_args=["core", "download", wp_path, "--allow-root"], fallback=["wp", "core", "download", wp_path, "--allow-root"])
 
-    # Use wp config create with -- separator to prevent flag injection on values.
-    # db identifiers are already validated upstream (mariadb._validate_identifier).
-    shell.run([
-        "wp", "config", "create", wp_path,
-        f"--dbname={db['db_name']}",
-        f"--dbuser={db['db_user']}",
-        f"--dbpass={db['db_password']}",
-        "--allow-root",
-    ], sensitive=True)
+    shell.privileged(
+        "wp",
+        helper_args=[
+            "config", "create", wp_path,
+            f"--dbname={db['db_name']}",
+            f"--dbuser={db['db_user']}",
+            f"--dbpass={db['db_password']}",
+            "--allow-root",
+        ],
+        fallback=["wp", "config", "create", wp_path, f"--dbname={db['db_name']}", f"--dbuser={db['db_user']}", f"--dbpass={db['db_password']}", "--allow-root"],
+        sensitive=True,
+    )
 
-    # Pass the admin password via env to wp-cli so it doesn't show up in `ps`.
-    # WP-CLI has --prompt= but env file is simpler. We feed it via stdin prompt.
     install_args = [
-        "wp", "core", "install", wp_path,
+        "core", "install", wp_path,
         f"--url=https://{domain}",
         f"--title={safe_title}",
         f"--admin_user={safe_user}",
@@ -63,44 +66,65 @@ def install_wordpress(domain: str, db: Dict[str, str], title: str, admin_user: s
         "--skip-email",
         "--allow-root",
     ]
-    shell.run(install_args, input=admin_password + "\n", sensitive=True)
+    shell.privileged(
+        "wp",
+        helper_args=install_args,
+        fallback=["wp", *install_args],
+        input=admin_password + "\n",
+        sensitive=True,
+    )
 
     fix_permissions(str(root))
     return str(root)
 
 
 def fix_permissions(root_path: str):
-    shell.run(["chown", "-R", "www-data:www-data", root_path], check=False)
-    shell.run(["find", root_path, "-type", "d", "-exec", "chmod", "755", "{}", ";"], check=False)
-    shell.run(["find", root_path, "-type", "f", "-exec", "chmod", "644", "{}", ";"], check=False)
-    shell.run(["find", root_path, "-type", "d", "-name", "uploads", "-exec", "chmod", "775", "{}", ";"], check=False)
+    return shell.privileged(
+        "fix-permissions",
+        helper_args=[root_path],
+        check=False,
+        fallback=["bash", "-lc", (
+            f"chown -R www-data:www-data {root_path} && "
+            f"find {root_path} -type d -exec chmod 755 {{}} + && "
+            f"find {root_path} -type f -exec chmod 644 {{}} + && "
+            f"find {root_path} -type d -name uploads -exec chmod 775 {{}} + 2>/dev/null || true"
+        )],
+    )
 
 
 def wp_update(path: str, action: str):
     if action == "core":
-        return shell.run(["wp", "core", "update", f"--path={path}", "--allow-root"])
-    if action == "plugins":
-        return shell.run(["wp", "plugin", "update", "--all", f"--path={path}", "--allow-root"])
-    if action == "themes":
-        return shell.run(["wp", "theme", "update", "--all", f"--path={path}", "--allow-root"])
-    raise ValueError("Unsupported WordPress action")
+        args = ["core", "update", f"--path={path}", "--allow-root"]
+    elif action == "plugins":
+        args = ["plugin", "update", "--all", f"--path={path}", "--allow-root"]
+    elif action == "themes":
+        args = ["theme", "update", "--all", f"--path={path}", "--allow-root"]
+    else:
+        raise ValueError("Unsupported WordPress action")
+    return shell.privileged("wp", helper_args=args, fallback=["wp", *args])
 
 
 def reset_admin_password(path: str, user: str, password: str):
     safe_user = _safe_value(user, WP_USER_RE, "WordPress username")
     if not isinstance(password, str) or len(password) < 10 or "\x00" in password:
         raise ValueError("Password must be at least 10 characters")
-    return shell.run(
-        ["wp", "user", "update", safe_user, "--user_pass=/dev/stdin", f"--path={path}", "--allow-root"],
+    args = ["user", "update", safe_user, "--user_pass=/dev/stdin", f"--path={path}", "--allow-root"]
+    return shell.privileged(
+        "wp",
+        helper_args=args,
+        fallback=["wp", *args],
         input=password,
         sensitive=True,
     )
 
 
 def delete_wordpress(root_path: str):
-    # Hard guard: only allow deleting paths under settings.sites_root
     target = Path(root_path).resolve()
     sites_root = Path(settings.sites_root).resolve()
     if sites_root not in target.parents:
         raise ValueError("Refusing to delete path outside sites root")
-    return shell.run(["rm", "-rf", str(target)])
+    return shell.privileged(
+        "rm-site",
+        helper_args=[str(target)],
+        fallback=["rm", "-rf", str(target)],
+    )

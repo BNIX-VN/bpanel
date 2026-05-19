@@ -24,7 +24,11 @@ def update_php_ini(payload: PhpConfigUpdate) -> str:
     if settings.command_dry_run:
         return content
     target.write_text(content, encoding="utf-8")
-    shell.run(["systemctl", "restart", f"php{php_version}-fpm"])
+    shell.privileged(
+        "systemctl",
+        helper_args=[f"php{php_version}-fpm", "restart"],
+        fallback=["systemctl", "restart", f"php{php_version}-fpm"],
+    )
     return str(target)
 
 

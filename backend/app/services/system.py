@@ -1,7 +1,7 @@
 from app.services.shell import shell
 
-SUPPORTED_SERVICES = {"nginx", "php8.3-fpm", "php8.4-fpm", "php8.5-fpm", "mariadb", "redis-server", "redis", "filebrowser", "ufw"}
-SUPPORTED_ACTIONS = {"start", "stop", "restart", "reload", "status", "enable", "disable"}
+SUPPORTED_SERVICES = {"nginx", "php8.3-fpm", "php8.4-fpm", "mariadb", "redis-server", "filebrowser"}
+SUPPORTED_ACTIONS = {"start", "stop", "restart", "reload", "status"}
 
 
 def service_action(name: str, action: str):
@@ -9,7 +9,15 @@ def service_action(name: str, action: str):
         raise ValueError("Unsupported service")
     if action not in SUPPORTED_ACTIONS:
         raise ValueError("Unsupported action")
-    return shell.run(["systemctl", action, name], check=False)
+    if action == "status":
+        # Status is read-only; non-privileged user can call systemctl status fine.
+        return shell.run(["systemctl", action, name], check=False)
+    return shell.privileged(
+        "systemctl",
+        helper_args=[name, action],
+        check=False,
+        fallback=["systemctl", action, name],
+    )
 
 
 def system_info() -> dict:
@@ -20,8 +28,7 @@ def system_info() -> dict:
 
 
 def install_wordpress_stack():
-    return shell.run([
-        "apt-get", "install", "-y", "nginx", "mariadb-server", "redis-server", "php8.3", "php8.3-fpm",
-        "php8.3-mysql", "php8.3-gd", "php8.3-xml", "php8.3-mbstring", "php8.3-curl", "php8.3-zip",
-        "certbot", "python3-certbot-nginx", "phpmyadmin"
-    ])
+    raise PermissionError(
+        "Installing the system stack from the panel is disabled. "
+        "Run installer/install.sh on the server instead."
+    )

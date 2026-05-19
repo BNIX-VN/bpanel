@@ -222,6 +222,59 @@ build_frontend() {
   VITE_API_URL=/api npm run build
 }
 
+setup_panel_user() {
+  if ! id -u bpanel >/dev/null 2>&1; then
+    useradd --system --home-dir "$APP_DIR" --shell /usr/sbin/nologin --user-group bpanel
+  fi
+  # bpanel needs to be in www-data group to write site files.
+  usermod -aG www-data bpanel || true
+
+  # Allow bpanel to write into /etc/nginx/conf.d (vhost files).
+  install -d -o root -g bpanel -m 2775 /etc/nginx/conf.d
+  # setgid so new files inherit the bpanel group; allows future writes.
+  chmod g+s /etc/nginx/conf.d || true
+
+  # Make the panel data dirs writable by bpanel.
+  install -d -o bpanel -g bpanel -m 0750 "$APP_DIR"
+  install -d -o bpanel -g www-data -m 2775 "$SITES_ROOT"
+  install -d -o bpanel -g bpanel -m 0750 "$BACKUP_ROOT"
+
+  # MariaDB: create an admin user that bpanel can use without password
+  # (auth via a defaults-file in ~bpanel/.my.cnf, mode 0600).
+  local mariadb_password
+  mariadb_password="$(openssl rand -base64 32 | tr -d '/+=' | cut -c1-32)"
+  mariadb -e "
+    CREATE USER IF NOT EXISTS 'bpanel'@'localhost' IDENTIFIED BY '${mariadb_password}';
+    GRANT CREATE, DROP, ALTER, REFERENCES, INDEX, CREATE USER, RELOAD, PROCESS, SHOW DATABASES, LOCK TABLES, SELECT, INSERT, UPDATE, DELETE, GRANT OPTION ON *.* TO 'bpanel'@'localhost';
+    FLUSH PRIVILEGES;
+  " 2>/dev/null || mysql -e "
+    CREATE USER IF NOT EXISTS 'bpanel'@'localhost' IDENTIFIED BY '${mariadb_password}';
+    GRANT CREATE, DROP, ALTER, REFERENCES, INDEX, CREATE USER, RELOAD, PROCESS, SHOW DATABASES, LOCK TABLES, SELECT, INSERT, UPDATE, DELETE, GRANT OPTION ON *.* TO 'bpanel'@'localhost';
+    FLUSH PRIVILEGES;
+  "
+
+  install -d -o bpanel -g bpanel -m 0700 /home/bpanel || true
+  cat >"${APP_DIR}/.my.cnf" <<MYCNF
+[client]
+user=bpanel
+password="${mariadb_password}"
+host=localhost
+
+[mysqldump]
+user=bpanel
+password="${mariadb_password}"
+host=localhost
+MYCNF
+  chown bpanel:bpanel "${APP_DIR}/.my.cnf"
+  chmod 0600 "${APP_DIR}/.my.cnf"
+}
+
+install_privileged_helper() {
+  install -m 0750 -o root -g bpanel "${SCRIPT_DIR}/files/bpanel-helper.sh" /usr/local/sbin/bpanel-helper
+  install -m 0440 -o root -g root "${SCRIPT_DIR}/files/bpanel-sudoers" /etc/sudoers.d/bpanel
+  visudo -c -f /etc/sudoers.d/bpanel >/dev/null
+}
+
 setup_backend() {
   cd "${APP_DIR}/backend"
   python3 -m venv .venv
@@ -244,6 +297,11 @@ FILEBROWSER_PORT=8088
 ENV
 
   BPANEL_ADMIN_PASSWORD="$ADMIN_PASSWORD" python -m app.seed
+  deactivate || true
+
+  # Make all panel files owned by bpanel so the daemon can read/write them.
+  chown -R bpanel:bpanel "${APP_DIR}/backend"
+  chown -R bpanel:bpanel "${APP_DIR}/frontend" 2>/dev/null || true
 }
 
 wait_for_backend() {
@@ -261,19 +319,51 @@ setup_systemd() {
   cat >/etc/systemd/system/bpanel-api.service <<SERVICE
 [Unit]
 Description=BPanel API
-After=network.target
+After=network.target mariadb.service
 
 [Service]
+Type=exec
+User=bpanel
+Group=bpanel
+SupplementaryGroups=www-data
 WorkingDirectory=${APP_DIR}/backend
 EnvironmentFile=${APP_DIR}/backend/.env
+Environment=HOME=${APP_DIR}
+Environment=BPANEL_USE_HELPER=true
 ExecStart=${APP_DIR}/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
 Restart=always
 RestartSec=3
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=${APP_DIR} ${SITES_ROOT} ${BACKUP_ROOT} /etc/nginx/conf.d /tmp /var/lib/bpanel
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @mount @debug @cpu-emulation @obsolete @reboot @swap
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
 
 [Install]
 WantedBy=multi-user.target
 SERVICE
 
+  install -d -o bpanel -g bpanel -m 0750 /var/lib/bpanel
   systemctl daemon-reload
   systemctl enable --now bpanel-api
   wait_for_backend
@@ -593,10 +683,16 @@ main() {
   log "Building frontend"
   build_frontend
 
+  log "Creating bpanel system user, MariaDB credentials and filesystem ACLs"
+  setup_panel_user
+
+  log "Installing privileged helper and sudoers rule"
+  install_privileged_helper
+
   log "Configuring backend"
   setup_backend
 
-  log "Creating systemd service"
+  log "Creating systemd service (hardened, runs as bpanel user)"
   setup_systemd
 
   log "Configuring File Browser"

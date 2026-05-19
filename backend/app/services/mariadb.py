@@ -35,9 +35,19 @@ def _quote_identifier(value: str) -> str:
     return f"`{_validate_identifier(value)}`"
 
 
+def _mysql_args(extra: list = None) -> list:
+    args = ["mysql"]
+    home_cnf = Path.home() / ".my.cnf"
+    if home_cnf.exists():
+        args.append(f"--defaults-file={home_cnf}")
+    if extra:
+        args.extend(extra)
+    return args
+
+
 def _run_sql(sql: str, *, check: bool = True):
     """Pipe SQL through stdin so secrets never appear in argv/ps output."""
-    return shell.run(["mysql"], check=check, input=sql, sensitive=True)
+    return shell.run(_mysql_args(), check=check, input=sql, sensitive=True)
 
 
 def create_database(domain: str) -> Dict[str, str]:
@@ -73,7 +83,12 @@ def change_database_password(db_user: str, db_password: str):
 
 
 def export_database(db_name: str, output_file: str):
-    return shell.run(["mysqldump", _validate_identifier(db_name), "--result-file", output_file])
+    args = ["mysqldump"]
+    home_cnf = Path.home() / ".my.cnf"
+    if home_cnf.exists():
+        args.append(f"--defaults-file={home_cnf}")
+    args.extend([_validate_identifier(db_name), "--result-file", output_file])
+    return shell.run(args, sensitive=True)
 
 
 def dump_database_file(db_name: str, output_dir: Path) -> Path:

@@ -142,6 +142,47 @@ nginx -t && systemctl reload nginx
 systemctl status bpanel-api filebrowser nginx mariadb php8.3-fpm
 ```
 
+## Security model
+
+The panel daemon does **not** run as root. The installer creates a system user
+`bpanel` and a single root-owned helper script that does all privileged work.
+
+```
+bpanel-api  (uvicorn, user=bpanel, hardened systemd unit)
+   │
+   │  sudo -n /usr/local/sbin/bpanel-helper <subcommand> ...
+   ▼
+bpanel-helper  (root, runs only whitelisted operations)
+```
+
+What the helper allows:
+
+- `systemctl start/stop/restart/reload <whitelisted service>`
+- `nginx -t`, `nginx reload`
+- `certbot --nginx ...` for a single validated domain
+- `ufw status/enable/disable/allow/deny/delete`
+- `chown -R www-data:www-data <path under /home/bpanel-sites>`
+- `rm -rf <path under /home/bpanel-sites>`
+- WP-CLI as `www-data`, crontab management for `www-data`
+
+Anything else is rejected. The helper validates domains, ports, IPs, and
+filesystem paths before invoking the real binary.
+
+Additional hardening on the systemd unit:
+
+- `NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome=read-only`
+- `PrivateTmp`, `PrivateDevices`, `ProtectKernelModules`, `ProtectKernelLogs`
+- `MemoryDenyWriteExecute`, `LockPersonality`, `RestrictSUIDSGID`
+- `SystemCallFilter=@system-service ~@privileged @debug @mount`
+- `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6`
+- `CapabilityBoundingSet=` (drops every capability)
+
+If the API itself were ever compromised, the attacker would be limited to:
+- writing into `/etc/nginx/conf.d/`, `/home/bpanel-sites/`, `/var/backups/bpanel/`
+- running the helper subcommands above (no arbitrary code execution as root)
+
+There is no path back to root via the API process.
+
 ## Security notes
 
 - Login is rate-limited (8 attempts / minute, lockout after 20 fails).

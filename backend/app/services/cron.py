@@ -45,26 +45,43 @@ def add_cron(website: Website, schedule: str, command: str) -> str:
     safe_domain = _validate_domain(website.domain)
     marker = f"# bpanel:{safe_domain}"
     line = f"{safe_schedule} cd {shlex.quote(website.root_path + '/public')} && {safe_command} {marker}"
-    script = f"(crontab -l 2>/dev/null; echo {shlex.quote(line)}) | crontab -"
-    shell.run(["bash", "-lc", script])
+    existing = list_cron_all()
+    new_content = existing.rstrip() + ("\n" if existing.strip() else "") + line + "\n"
+    shell.privileged(
+        "cron-write",
+        input=new_content,
+        fallback=["bash", "-lc", "crontab -"],
+    )
     return line
+
+
+def list_cron_all() -> str:
+    result = shell.privileged(
+        "cron-list",
+        check=False,
+        fallback=["bash", "-lc", "crontab -l 2>/dev/null || true"],
+    )
+    return result.stdout or ""
 
 
 def list_cron(domain: str) -> str:
     safe_domain = _validate_domain(domain)
-    result = shell.run(
-        ["bash", "-lc", f"crontab -l 2>/dev/null | grep -F {shlex.quote('bpanel:' + safe_domain)} || true"],
-        check=False,
-    )
-    return result.stdout
+    marker = f"bpanel:{safe_domain}"
+    return "\n".join(line for line in list_cron_all().splitlines() if marker in line)
 
 
 def delete_cron(domain: str, index: int) -> str:
     safe_domain = _validate_domain(domain)
-    lines = list_cron(safe_domain).splitlines()
-    if index < 0 or index >= len(lines):
+    matching = list_cron(safe_domain).splitlines()
+    if index < 0 or index >= len(matching):
         raise ValueError("Cron not found")
-    target = lines[index]
-    script = f"crontab -l 2>/dev/null | grep -Fv {shlex.quote(target)} | crontab -"
-    shell.run(["bash", "-lc", script])
+    target = matching[index]
+    full = list_cron_all().splitlines()
+    new_lines = [line for line in full if line.strip() != target.strip()]
+    new_content = "\n".join(new_lines) + ("\n" if new_lines else "")
+    shell.privileged(
+        "cron-write",
+        input=new_content,
+        fallback=["bash", "-lc", "crontab -"],
+    )
     return target
