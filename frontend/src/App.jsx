@@ -8,8 +8,11 @@ const API = import.meta.env.VITE_API_URL || '/api';
 const SERVICE_NAMES = ['nginx', 'php8.3-fpm', 'php8.4-fpm', 'mariadb', 'redis-server', 'filebrowser'];
 
 function App() {
-  const [token, setToken] = useState(localStorage.getItem('token') || '');
+  // Auth is now cookie-based (HttpOnly bpanel_session). The SPA does not see
+  // the JWT at all. We track only whether the user is authenticated in memory.
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
+  const [bootstrapping, setBootstrapping] = useState(true);
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('');
   const [page, setPage] = useState('dashboard');
@@ -65,9 +68,15 @@ function App() {
     return () => { if (noticeTimer.current) clearTimeout(noticeTimer.current); };
   }, [notice]);
 
+  function readCookie(name) {
+    const match = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/[$()*+./?[\\\]^{|}]/g, '\\$&') + '=([^;]*)'));
+    return match ? decodeURIComponent(match[1]) : '';
+  }
+
   function clearSession(message = 'Your session expired. Please log in again.') {
-    localStorage.removeItem('token');
-    setToken('');
+    // Old localStorage token from a previous deploy: nuke it for safety.
+    try { localStorage.removeItem('token'); } catch {}
+    setIsAuthenticated(false);
     setCurrentUser(null);
     setWebsites([]);
     setDatabases([]);
@@ -93,9 +102,22 @@ function App() {
     try {
       setError('');
       if (label) setLoading(label);
+      const method = (options.method || 'GET').toUpperCase();
+      const headers = {
+        'Content-Type': 'application/json',
+        ...(options.headers || {}),
+      };
+      // CSRF: echo the bpanel_csrf cookie back in a header for mutating
+      // requests. The backend rejects mismatches when the request was
+      // authenticated via cookie.
+      if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+        const csrf = readCookie('bpanel_csrf');
+        if (csrf) headers['X-CSRF-Token'] = csrf;
+      }
       const res = await fetch(`${API}${path}`, {
         ...options,
-        headers: { 'Content-Type': 'application/json', Authorization: token ? `Bearer ${token}` : '', ...(options.headers || {}) },
+        credentials: 'include',
+        headers,
       });
       const text = await res.text();
       let data;
@@ -117,13 +139,18 @@ function App() {
       setError('');
       setLoading('Logging in...');
       const body = new URLSearchParams({ username, password });
-      const res = await fetch(`${API}/auth/login`, { method: 'POST', body });
-      const data = await res.json();
-      if (data.access_token) {
-        localStorage.setItem('token', data.access_token);
-        setToken(data.access_token);
+      const res = await fetch(`${API}/auth/login`, {
+        method: 'POST',
+        body,
+        credentials: 'include',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.access_token) {
+        // Don't keep the token anywhere: the HttpOnly cookie just got set by
+        // the response. JS code MUST NOT touch the JWT.
+        setIsAuthenticated(true);
         setNotice('Login successful.');
-        await loadCurrentUser(data.access_token);
+        await loadCurrentUser();
       } else {
         setError(data.detail || `Login failed with status ${res.status}`);
       }
@@ -134,17 +161,51 @@ function App() {
     }
   }
 
-  function logout() { clearSession('Logged out.'); }
-
-  async function loadCurrentUser(authToken = token) {
-    if (!authToken) return;
+  async function logout() {
     try {
-      const res = await fetch(`${API}/users/me`, { headers: { Authorization: `Bearer ${authToken}` } });
-      const data = await res.json();
-      if (res.ok) setCurrentUser(data);
-      else handleAuthExpired(res.status, data.detail);
-    } catch { setCurrentUser(null); }
+      // Best-effort server logout: clears cookies and bumps token_version.
+      await fetch(`${API}/auth/logout`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: (() => {
+          const csrf = readCookie('bpanel_csrf');
+          return csrf ? { 'X-CSRF-Token': csrf } : {};
+        })(),
+      });
+    } catch {}
+    clearSession('Logged out.');
   }
+
+  async function loadCurrentUser() {
+    try {
+      const res = await fetch(`${API}/users/me`, { credentials: 'include' });
+      if (!res.ok) {
+        if (res.status === 401) clearSession('Session expired.');
+        return;
+      }
+      const data = await res.json();
+      setCurrentUser(data);
+      setIsAuthenticated(true);
+    } catch {
+      setCurrentUser(null);
+    }
+  }
+
+  // Bootstrap: try to restore session from the HttpOnly cookie (set previously
+  // and still valid). If /users/me returns 200 we are authenticated.
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch(`${API}/users/me`, { credentials: 'include' });
+        if (res.ok) {
+          const data = await res.json();
+          setCurrentUser(data);
+          setIsAuthenticated(true);
+        }
+      } catch {}
+      finally { setBootstrapping(false); }
+    })();
+  }, []);
 
   async function refreshAll() {
     const siteData = await request('/websites');
@@ -305,9 +366,13 @@ function App() {
     try {
       setError('');
       setLoading('Opening File Browser...');
+      const csrfToken = readCookie('bpanel_csrf');
+      const headers = { 'Content-Type': 'application/json' };
+      if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
       const res = await fetch(`${API}/maintenance/filebrowser`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: token ? `Bearer ${token}` : '' },
+        credentials: 'include',
+        headers,
         body: JSON.stringify({ website_id: selectedWebsiteId ? Number(selectedWebsiteId) : null }),
       });
       const data = await res.json().catch(() => ({}));
@@ -337,7 +402,7 @@ function App() {
     if (!selectedWebsiteId) return;
     try {
       setError(''); setLoading('Downloading backup...');
-      const res = await fetch(`${API}/maintenance/backups/${selectedWebsiteId}/download?backup_file=${encodeURIComponent(file)}`, { headers: { Authorization: token ? `Bearer ${token}` : '' } });
+      const res = await fetch(`${API}/maintenance/backups/${selectedWebsiteId}/download?backup_file=${encodeURIComponent(file)}`, { credentials: 'include' });
       if (!res.ok) { const data = await res.json().catch(() => ({})); if (handleAuthExpired(res.status, data.detail)) return; setError(data.detail || 'Download failed.'); return; }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
@@ -353,7 +418,13 @@ function App() {
   async function openPhpMyAdmin(databaseId) {
     try {
       setError(''); setLoading('Opening phpMyAdmin...');
-      const res = await fetch(`${API}/databases/${databaseId}/phpmyadmin-sso`, { method: 'POST', headers: { Authorization: token ? `Bearer ${token}` : '' } });
+      const csrfToken = readCookie('bpanel_csrf');
+      const headers = csrfToken ? { 'X-CSRF-Token': csrfToken } : {};
+      const res = await fetch(`${API}/databases/${databaseId}/phpmyadmin-sso`, {
+        method: 'POST',
+        credentials: 'include',
+        headers,
+      });
       const data = await res.json().catch(() => ({}));
       if (handleAuthExpired(res.status, data.detail)) return;
       if (!res.ok || !data.url) { setError(data.detail || 'Cannot open phpMyAdmin.'); return; }
@@ -365,7 +436,7 @@ function App() {
   async function downloadDatabase(databaseId, databaseName) {
     try {
       setError(''); setLoading('Downloading database...');
-      const res = await fetch(`${API}/databases/${databaseId}/download`, { headers: { Authorization: token ? `Bearer ${token}` : '' } });
+      const res = await fetch(`${API}/databases/${databaseId}/download`, { credentials: 'include' });
       if (!res.ok) { const data = await res.json().catch(() => ({})); if (handleAuthExpired(res.status, data.detail)) return; setError(data.detail || 'Download failed.'); return; }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
@@ -390,8 +461,13 @@ function App() {
     form.append('file', file);
     try {
       setError(''); setLoading('Uploading backup...');
+      const csrfToken = readCookie('bpanel_csrf');
+      const headers = csrfToken ? { 'X-CSRF-Token': csrfToken } : {};
       const res = await fetch(`${API}/maintenance/backups/${selectedWebsiteId}/upload`, {
-        method: 'POST', headers: { Authorization: token ? `Bearer ${token}` : '' }, body: form,
+        method: 'POST',
+        credentials: 'include',
+        headers,
+        body: form,
       });
       const responseText = await res.text();
       let data;
@@ -464,23 +540,27 @@ function App() {
     setFirewallDeleteNumber('');
   }
 
-  useEffect(() => { if (token) { loadCurrentUser(); refreshAll(); } }, [token]);
+  useEffect(() => {
+    if (isAuthenticated) {
+      refreshAll();
+    }
+  }, [isAuthenticated]);
 
   useEffect(() => {
-    if (!token || page !== 'services') return undefined;
+    if (!isAuthenticated || page !== 'services') return undefined;
     checkAllServices();
     const timer = setInterval(checkAllServices, 10000);
     return () => clearInterval(timer);
-  }, [token, page]);
+  }, [isAuthenticated, page]);
 
   useEffect(() => { if (selectedWebsiteId && page === 'backups') listBackups(); }, [selectedWebsiteId, page]);
 
   useEffect(() => {
-    if (token && page === 'users') loadUsers();
-    if (token && page === 'system') loadSystemInfo();
-    if (token && page === 'php') loadPhpConfig();
-    if (token && page === 'firewall') loadFirewall();
-  }, [token, page]);
+    if (isAuthenticated && page === 'users') loadUsers();
+    if (isAuthenticated && page === 'system') loadSystemInfo();
+    if (isAuthenticated && page === 'php') loadPhpConfig();
+    if (isAuthenticated && page === 'firewall') loadFirewall();
+  }, [isAuthenticated, page]);
 
   useEffect(() => { setMobileMenuOpen(false); }, [page]);
 
@@ -920,7 +1000,15 @@ function App() {
   }
 
   // Login screen
-  if (!token) {
+  if (bootstrapping) {
+    return <main className="login-page">
+      <section className="login-card">
+        <div><p className="eyebrow">BPanel</p><h1>Loading…</h1></div>
+      </section>
+    </main>;
+  }
+
+  if (!isAuthenticated) {
     return <main className="login-page">
       <section className="login-card">
         <div>

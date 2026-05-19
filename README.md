@@ -190,11 +190,19 @@ There is no path back to root via the API process.
   exist, to avoid username enumeration via timing.
 - DB and WordPress passwords are passed via stdin / `--prompt`, never as
   command-line args, so they don't appear in `ps`.
+- DB passwords are encrypted at rest (Fernet, key derived from SECRET_KEY).
 - Custom Nginx blocks are validated: braces must balance, dangerous directives
-  (`server {`, `http {`, `events {`, `include`, `load_module`, `user`, `lua_*`)
-  are rejected, max 16 KB.
-- File manager rejects symlinks anywhere in the path.
+  (`server {`, `http {`, `events {`, `include`, `load_module`, `user`, `lua_*`,
+  `proxy_pass`, `alias`, `*_log`, `ssl_*`) are rejected, max 16 KB.
+- File manager rejects symlinks anywhere in the path. `wp-config.php`,
+  `.user.ini`, `.env`, `.htaccess` are admin-only.
 - Path traversal is blocked at every layer that touches the filesystem.
+- Auth uses HttpOnly cookies (`bpanel_session`) plus a CSRF token cookie
+  (`bpanel_csrf`) echoed in the `X-CSRF-Token` header. The JWT is never
+  exposed to JavaScript, mitigating token theft via XSS.
+- Strict `Content-Security-Policy` (`script-src 'self'`, `frame-ancestors 'none'`).
+- `token_version` on the User row invalidates previously issued JWTs on
+  password change, role change, account disable, or explicit logout.
 
 ## License
 
