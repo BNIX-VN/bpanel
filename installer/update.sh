@@ -134,6 +134,15 @@ source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
 
+log "Running database migrations"
+if id -u bpanel >/dev/null 2>&1; then
+  # Run migrations as the bpanel user so the SQLite file ownership stays correct.
+  sudo -u bpanel "$APP_DIR/backend/.venv/bin/python" -c \
+    "from app.core.database import run_migrations; run_migrations()"
+else
+  python -c "from app.core.database import run_migrations; run_migrations()"
+fi
+
 log "Compiling backend modules"
 python -m py_compile \
   app/main.py \

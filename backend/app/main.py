@@ -5,10 +5,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import auth, databases, firewall, maintenance, services, users, websites
 from app.core.config import settings
-from app.core.database import Base, apply_simple_migrations, engine
+from app.core.database import run_migrations
 
-Base.metadata.create_all(bind=engine)
-apply_simple_migrations()
+run_migrations()
 
 logger = logging.getLogger("bpanel")
 

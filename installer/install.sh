@@ -297,6 +297,8 @@ FILEBROWSER_PORT=8088
 ENV
 
   BPANEL_ADMIN_PASSWORD="$ADMIN_PASSWORD" python -m app.seed
+  # Create / migrate the schema explicitly so subsequent service start is fast.
+  python -c "from app.core.database import run_migrations; run_migrations()"
   deactivate || true
 
   # Make all panel files owned by bpanel so the daemon can read/write them.

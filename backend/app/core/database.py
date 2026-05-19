@@ -1,4 +1,6 @@
-from sqlalchemy import create_engine, inspect, text
+from pathlib import Path
+
+from sqlalchemy import create_engine, inspect
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from app.core.config import settings
@@ -20,22 +22,42 @@ def get_db():
         db.close()
 
 
-# Lightweight schema migrations for additive columns. Replace with Alembic when
-# the project grows beyond a handful of changes.
-_PENDING_COLUMNS = [
-    ("websites", "nginx_custom", "TEXT NOT NULL DEFAULT ''"),
-    ("websites", "app_type", "VARCHAR(32) NOT NULL DEFAULT 'wordpress'"),
-    ("users", "token_version", "INTEGER NOT NULL DEFAULT 0"),
-]
+def _alembic_config():
+    """Build an Alembic Config bound to the application's database URL.
+
+    Imported lazily so non-migration code paths don't pay the alembic import
+    cost.
+    """
+    from alembic.config import Config
+
+    here = Path(__file__).resolve().parents[2]  # backend/
+    cfg = Config(str(here / "alembic.ini"))
+    cfg.set_main_option("script_location", str(here / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", settings.database_url)
+    return cfg
 
 
-def apply_simple_migrations() -> None:
+def _has_legacy_schema() -> bool:
+    """Return True if the DB already contains BPanel tables but has never
+    been stamped by Alembic. This is the case for servers that ran the old
+    apply_simple_migrations() bootstrap before we adopted Alembic."""
     inspector = inspect(engine)
-    for table, column, ddl in _PENDING_COLUMNS:
-        if not inspector.has_table(table):
-            continue
-        existing = {col["name"] for col in inspector.get_columns(table)}
-        if column in existing:
-            continue
-        with engine.begin() as conn:
-            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+    return inspector.has_table("users") and not inspector.has_table("alembic_version")
+
+
+def run_migrations() -> None:
+    """Bring the schema up to date with the latest Alembic revision.
+
+    - Fresh install (empty DB): runs every migration from 0001 onwards.
+    - Legacy install (tables exist, alembic_version absent): stamps the DB
+      to '0001_initial' (matching the schema as it existed before Alembic),
+      then upgrades to head. No DDL is replayed for tables that already
+      exist with the correct columns.
+    - Already-managed install: upgrades from current revision to head.
+    """
+    from alembic import command
+
+    cfg = _alembic_config()
+    if _has_legacy_schema():
+        command.stamp(cfg, "0001_initial")
+    command.upgrade(cfg, "head")

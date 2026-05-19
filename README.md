@@ -80,23 +80,48 @@ open in incognito.
 ```
 bpanel/
 ├─ backend/                    FastAPI application
+│  ├─ alembic/                 SQL schema migrations (Alembic)
+│  │  └─ versions/             Migration scripts
+│  ├─ alembic.ini              Alembic config
 │  ├─ app/
 │  │  ├─ api/                  HTTP routes
-│  │  ├─ core/                 config, db, security, permissions
+│  │  ├─ core/                 config, db, security, permissions, secrets
 │  │  ├─ models/               SQLAlchemy entities
 │  │  ├─ schemas/              Pydantic v2 schemas
 │  │  ├─ services/             nginx, mariadb, wp, firewall, backup, etc.
 │  │  ├─ templates/nginx/      Jinja2 vhost templates
 │  │  ├─ main.py
 │  │  └─ seed.py               Seeds the first admin user
+│  ├─ tests/                   pytest smoke tests for validators
 │  └─ requirements.txt
 ├─ frontend/                   React + Vite SPA
 │  └─ src/
 ├─ installer/
+│  ├─ files/                   bpanel-helper.sh + sudoers rule
 │  ├─ install.sh               Full first-time install
+│  ├─ migrate-security.sh      One-shot migration to non-root + helper mode
 │  └─ update.sh                Pull from GitHub and redeploy
 └─ README.md
 ```
+
+## Database migrations
+
+Schema changes are managed by [Alembic](https://alembic.sqlalchemy.org/).
+Migrations live in `backend/alembic/versions/`. The backend automatically
+runs `alembic upgrade head` on startup and `installer/update.sh` runs it
+explicitly before restarting the API.
+
+To author a new migration locally:
+
+```bash
+cd backend
+.venv/bin/alembic revision --autogenerate -m "describe change"
+# Inspect the generated file in alembic/versions/, then commit it.
+```
+
+Existing servers that pre-date Alembic adoption are detected at startup
+(tables exist but `alembic_version` does not) and are stamped to revision
+`0001_initial` so no DDL is replayed on already-correct schemas.
 
 ## Roles
 
