@@ -1,0 +1,77 @@
+from datetime import datetime
+from typing import List, Optional
+
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.core.database import Base
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    hashed_password: Mapped[str] = mapped_column(String(255))
+    role: Mapped[str] = mapped_column(String(32), default="user")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    website_limit: Mapped[int] = mapped_column(Integer, default=5)
+    storage_limit_mb: Mapped[int] = mapped_column(Integer, default=1024)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    websites: Mapped[List["Website"]] = relationship(back_populates="owner")
+
+
+class Website(Base):
+    __tablename__ = "websites"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    domain: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    root_path: Mapped[str] = mapped_column(String(500))
+    php_version: Mapped[str] = mapped_column(String(16), default="8.3")
+    app_type: Mapped[str] = mapped_column(String(32), default="wordpress")
+    ssl_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[str] = mapped_column(String(32), default="pending")
+    nginx_custom: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    owner: Mapped[User] = relationship(back_populates="websites")
+    database: Mapped["DatabaseAccount"] = relationship(back_populates="website", uselist=False)
+
+
+class DatabaseAccount(Base):
+    __tablename__ = "database_accounts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    website_id: Mapped[int] = mapped_column(ForeignKey("websites.id"))
+    db_name: Mapped[str] = mapped_column(String(64), unique=True)
+    db_user: Mapped[str] = mapped_column(String(64), unique=True)
+    db_password: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    website: Mapped[Website] = relationship(back_populates="database")
+
+
+class Job(Base):
+    __tablename__ = "jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    kind: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32), default="queued")
+    target: Mapped[str] = mapped_column(String(255))
+    output: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    action: Mapped[str] = mapped_column(String(128))
+    target: Mapped[str] = mapped_column(String(255))
+    detail: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

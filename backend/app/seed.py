@@ -1,0 +1,42 @@
+import os
+import secrets
+import string
+
+from app.core.database import Base, SessionLocal, engine
+from app.core.security import hash_password
+from app.models.entities import User
+
+
+def _admin_password() -> str:
+    if password := os.getenv("BPANEL_ADMIN_PASSWORD"):
+        if len(password) < 12:
+            raise ValueError("BPANEL_ADMIN_PASSWORD must be at least 12 characters")
+        return password
+    alphabet = string.ascii_letters + string.digits + "!@#%^*_+-"
+    return "".join(secrets.choice(alphabet) for _ in range(24))
+
+
+def seed_admin():
+    Base.metadata.create_all(bind=engine)
+    db = SessionLocal()
+    try:
+        if not db.query(User).filter(User.username == "admin").first():
+            password = _admin_password()
+            db.add(User(
+                username="admin",
+                email="admin@example.com",
+                hashed_password=hash_password(password),
+                role="super_admin",
+                website_limit=999,
+                storage_limit_mb=102400,
+            ))
+            db.commit()
+            print(f"Created admin user: admin / {password}")
+        else:
+            print("Admin user already exists")
+    finally:
+        db.close()
+
+
+if __name__ == "__main__":
+    seed_admin()

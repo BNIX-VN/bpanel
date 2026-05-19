@@ -1,0 +1,983 @@
+import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { createRoot } from 'react-dom/client';
+import { Archive, Clock, Code2, Database, FileText, FolderOpen, Globe, Home, KeyRound, Lock, LogOut, Menu, Server, Shield, Trash2, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
+import './style.css';
+import './file-manager.css';
+
+const API = import.meta.env.VITE_API_URL || '/api';
+const SERVICE_NAMES = ['nginx', 'php8.3-fpm', 'php8.4-fpm', 'mariadb', 'redis-server', 'filebrowser'];
+
+function App() {
+  const [token, setToken] = useState(localStorage.getItem('token') || '');
+  const [currentUser, setCurrentUser] = useState(null);
+  const [username, setUsername] = useState('admin');
+  const [password, setPassword] = useState('');
+  const [page, setPage] = useState('dashboard');
+  const [domain, setDomain] = useState('');
+  const [adminEmail, setAdminEmail] = useState('');
+  const [wpAdminUser, setWpAdminUser] = useState('admin');
+  const [wpAdminPassword, setWpAdminPassword] = useState('');
+  const [phpVersion, setPhpVersion] = useState('8.3');
+  const [siteType, setSiteType] = useState('wordpress');
+  const [installSslAfterCreate, setInstallSslAfterCreate] = useState(false);
+  const [installWordPress, setInstallWordPress] = useState(true);
+  const [nginxCustomEditing, setNginxCustomEditing] = useState(null); // {id, domain, content}
+  const [websites, setWebsites] = useState([]);
+  const [databases, setDatabases] = useState([]);
+  const [users, setUsers] = useState([]);
+  const [systemInfo, setSystemInfo] = useState(null);
+  const [serviceStates, setServiceStates] = useState({});
+  const [backups, setBackups] = useState([]);
+  const [selectedWebsiteId, setSelectedWebsiteId] = useState('');
+  const [cronSchedule, setCronSchedule] = useState('0 2 * * *');
+  const [cronCommand, setCronCommand] = useState('wp cron event run --due-now --allow-root');
+  const [filePath, setFilePath] = useState('public/wp-config.php');
+  const [fileListPath, setFileListPath] = useState('public');
+  const [files, setFiles] = useState([]);
+  const [fileContent, setFileContent] = useState('');
+  const [newUser, setNewUser] = useState({ username: '', email: '', password: '', role: 'user', website_limit: 5, storage_limit_mb: 1024 });
+  const [phpConfig, setPhpConfig] = useState({ php_version: '8.3', display_errors: 'Off', max_execution_time: 300, max_input_time: 600, max_input_vars: 10000, memory_limit: '512M', post_max_size: '1024M', upload_max_filesize: '1024M' });
+  const [firewallStatus, setFirewallStatus] = useState(null);
+  const [firewallPort, setFirewallPort] = useState('80');
+  const [firewallProtocol, setFirewallProtocol] = useState('tcp');
+  const [firewallAllowIp, setFirewallAllowIp] = useState('');
+  const [firewallAllowPort, setFirewallAllowPort] = useState('');
+  const [firewallAllowProtocol, setFirewallAllowProtocol] = useState('tcp');
+  const [firewallBlockIp, setFirewallBlockIp] = useState('');
+  const [firewallBlockPort, setFirewallBlockPort] = useState('');
+  const [firewallBlockProtocol, setFirewallBlockProtocol] = useState('tcp');
+  const [firewallDeleteNumber, setFirewallDeleteNumber] = useState('');
+  const [websitePhpVersions, setWebsitePhpVersions] = useState({});
+  const [assignUserId, setAssignUserId] = useState('');
+  const [assignWebsiteId, setAssignWebsiteId] = useState('');
+  const [notice, setNotice] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState('');
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const noticeTimer = useRef(null);
+
+  // Auto-dismiss notices after 6 seconds
+  useEffect(() => {
+    if (notice) {
+      if (noticeTimer.current) clearTimeout(noticeTimer.current);
+      noticeTimer.current = setTimeout(() => setNotice(''), 6000);
+    }
+    return () => { if (noticeTimer.current) clearTimeout(noticeTimer.current); };
+  }, [notice]);
+
+  function clearSession(message = 'Your session expired. Please log in again.') {
+    localStorage.removeItem('token');
+    setToken('');
+    setCurrentUser(null);
+    setWebsites([]);
+    setDatabases([]);
+    setUsers([]);
+    setServiceStates({});
+    setBackups([]);
+    setSelectedWebsiteId('');
+    setMobileMenuOpen(false);
+    setPage('dashboard');
+    setError('');
+    setNotice(message);
+  }
+
+  function handleAuthExpired(status, detail = '') {
+    if (status === 401 || detail === 'Could not validate credentials' || detail === 'Not authenticated') {
+      clearSession();
+      return true;
+    }
+    return false;
+  }
+
+  async function request(path, options = {}, label = '') {
+    try {
+      setError('');
+      if (label) setLoading(label);
+      const res = await fetch(`${API}${path}`, {
+        ...options,
+        headers: { 'Content-Type': 'application/json', Authorization: token ? `Bearer ${token}` : '', ...(options.headers || {}) },
+      });
+      const text = await res.text();
+      let data;
+      try { data = text ? JSON.parse(text) : {}; } catch { data = { detail: text || `HTTP ${res.status}` }; }
+      if (!res.ok && handleAuthExpired(res.status, data.detail)) return null;
+      if (!res.ok) setError(data.detail || `Request failed with status ${res.status}`);
+      if (res.ok && data?.message) setNotice(data.message);
+      return res.ok ? data : null;
+    } catch (err) {
+      setError(`Cannot connect to the backend API at ${API}. Check bpanel-api and the Nginx proxy.`);
+      return null;
+    } finally {
+      if (label) setLoading('');
+    }
+  }
+
+  async function login() {
+    try {
+      setError('');
+      setLoading('Logging in...');
+      const body = new URLSearchParams({ username, password });
+      const res = await fetch(`${API}/auth/login`, { method: 'POST', body });
+      const data = await res.json();
+      if (data.access_token) {
+        localStorage.setItem('token', data.access_token);
+        setToken(data.access_token);
+        setNotice('Login successful.');
+        await loadCurrentUser(data.access_token);
+      } else {
+        setError(data.detail || `Login failed with status ${res.status}`);
+      }
+    } catch (err) {
+      setError(`Cannot connect to the backend API at ${API}. Check bpanel-api and the Nginx proxy.`);
+    } finally {
+      setLoading('');
+    }
+  }
+
+  function logout() { clearSession('Logged out.'); }
+
+  async function loadCurrentUser(authToken = token) {
+    if (!authToken) return;
+    try {
+      const res = await fetch(`${API}/users/me`, { headers: { Authorization: `Bearer ${authToken}` } });
+      const data = await res.json();
+      if (res.ok) setCurrentUser(data);
+      else handleAuthExpired(res.status, data.detail);
+    } catch { setCurrentUser(null); }
+  }
+
+  async function refreshAll() {
+    const siteData = await request('/websites');
+    if (siteData) {
+      setWebsites(siteData);
+      if (!selectedWebsiteId && siteData[0]) setSelectedWebsiteId(String(siteData[0].id));
+    }
+    const dbData = await request('/databases');
+    if (dbData) setDatabases(dbData);
+  }
+
+  async function loadUsers() { const data = await request('/users'); if (data) setUsers(data); }
+
+  async function loadSystemInfo() {
+    const data = await request('/services/system-info', {}, 'Loading system status...');
+    if (data) setSystemInfo(data);
+  }
+
+  async function createUser() {
+    const data = await request('/users', { method: 'POST', body: JSON.stringify({ ...newUser, website_limit: Number(newUser.website_limit), storage_limit_mb: Number(newUser.storage_limit_mb) }) }, 'Creating user...');
+    if (data) {
+      setNotice(`Created user ${data.username}`);
+      setNewUser({ username: '', email: '', password: '', role: 'user', website_limit: 5, storage_limit_mb: 1024 });
+      await loadUsers();
+    }
+  }
+
+  async function changeUserPassword(user) {
+    const password = prompt(`Enter a new password for ${user.username} (minimum 8 characters):`);
+    if (!password) return;
+    if (password.length < 8) { setError('Password must be at least 8 characters.'); return; }
+    const data = await request(`/users/${user.id}/password`, { method: 'POST', body: JSON.stringify({ password }) }, `Changing password for ${user.username}...`);
+    if (data?.message) setNotice(data.message);
+  }
+
+  async function changeMyPassword() { if (!currentUser) return; await changeUserPassword(currentUser); }
+
+  async function assignDomainToUser() {
+    if (!assignWebsiteId || !assignUserId) return;
+    const data = await request(`/websites/${assignWebsiteId}`, { method: 'PATCH', body: JSON.stringify({ owner_id: Number(assignUserId) }) }, 'Assigning domain to user...');
+    if (data) { setNotice(`Assigned domain ${data.domain} to user ID ${assignUserId}`); await refreshAll(); }
+  }
+
+  async function createWordPress() {
+    if (!domain) { setError('Please enter a domain name.'); return; }
+    const installWp = siteType === 'wordpress' && installWordPress;
+    const body = {
+      domain,
+      php_version: phpVersion,
+      app_type: siteType,
+      install_wordpress: installWp,
+      title: domain,
+      admin_user: wpAdminUser,
+      admin_email: adminEmail || `admin@${domain}`,
+      admin_password: wpAdminPassword || (installWp ? 'StrongPass123!' : ''),
+    };
+    const data = await request('/websites', { method: 'POST', body: JSON.stringify(body) },
+      installWp ? 'Creating WordPress website...' : 'Creating website...');
+    if (data) {
+      if (installWp) {
+        setNotice(`Created WordPress site: https://${domain}\nAdmin: ${wpAdminUser} | Password: ${wpAdminPassword || 'StrongPass123!'}`);
+      } else {
+        setNotice(`Created site ${domain}. Upload your files to public/ folder.`);
+      }
+      if (installSslAfterCreate) await enableSsl(data.id);
+      refreshAll();
+    }
+  }
+
+  async function deleteWebsite(id) {
+    if (!confirm('Delete this website including files, vhost, and database?')) return;
+    const data = await request(`/websites/${id}?delete_files=true&delete_database=true`, { method: 'DELETE' }, 'Deleting website...');
+    if (data) refreshAll();
+  }
+
+  async function enableSsl(id) {
+    const data = await request(`/websites/${id}/ssl`, { method: 'POST' }, "Installing Let's Encrypt SSL...");
+    if (data) refreshAll();
+  }
+
+  async function openNginxCustom(site) {
+    const data = await request(`/websites/${site.id}/nginx-custom`, {}, 'Loading custom Nginx...');
+    if (data !== null) {
+      setNginxCustomEditing({ id: site.id, domain: site.domain, content: data?.nginx_custom || '' });
+    }
+  }
+
+  async function saveNginxCustom() {
+    if (!nginxCustomEditing) return;
+    const data = await request(`/websites/${nginxCustomEditing.id}/nginx-custom`, {
+      method: 'PUT',
+      body: JSON.stringify({ nginx_custom: nginxCustomEditing.content }),
+    }, 'Applying custom Nginx and reloading...');
+    if (data) {
+      setNotice(`Updated custom Nginx for ${nginxCustomEditing.domain}`);
+      setNginxCustomEditing(null);
+      refreshAll();
+    }
+  }
+
+  async function fixWordPressPermissions(id) {
+    const data = await request(`/maintenance/wordpress/${id}/fix-permissions`, { method: 'POST' }, 'Fixing permissions...');
+    if (data?.message) setNotice(data.message);
+  }
+
+  async function fixNginxSecurity(id) {
+    const data = await request(`/websites/${id}/fix-nginx-security`, { method: 'POST' }, 'Rewriting Nginx security template...');
+    if (data?.message) setNotice(data.message);
+  }
+
+  async function changeWebsitePhpVersion(site) {
+    const next = websitePhpVersions[site.id] || site.php_version || '8.3';
+    if (next === site.php_version) return;
+    const data = await request(`/websites/${site.id}`, { method: 'PATCH', body: JSON.stringify({ php_version: next }) }, `Changing ${site.domain} to PHP ${next}...`);
+    if (data) { setNotice(`Changed ${site.domain} to PHP ${next} and reloaded Nginx.`); await refreshAll(); }
+  }
+
+  async function changeDbPassword(id) {
+    const newPass = prompt('Enter a new database password, minimum 12 characters:');
+    if (!newPass) return;
+    await request(`/databases/${id}/password`, { method: 'POST', body: JSON.stringify({ password: newPass }) }, 'Changing database password...');
+  }
+
+  async function addCron() {
+    await request('/maintenance/cron', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), schedule: cronSchedule, command: cronCommand }) }, 'Adding cron job...');
+  }
+
+  async function deleteCron() {
+    const index = Number(prompt('Enter the cron index to delete, starting from 0:'));
+    if (Number.isNaN(index)) return;
+    await request('/maintenance/cron', { method: 'DELETE', body: JSON.stringify({ website_id: Number(selectedWebsiteId), index }) }, 'Deleting cron job...');
+  }
+
+  async function listFiles(path = fileListPath) {
+    const data = await request(`/maintenance/files/${selectedWebsiteId}?path=${encodeURIComponent(path)}`, {}, 'Loading file list...');
+    if (data?.items) { setFiles(data.items); setFileListPath(path); }
+  }
+
+  async function readFile(pathOverride = filePath) {
+    const targetPath = pathOverride || filePath;
+    if (pathOverride) setFilePath(pathOverride);
+    const data = await request(`/maintenance/files/${selectedWebsiteId}/read?path=${encodeURIComponent(targetPath)}`, {}, 'Reading file...');
+    if (data?.content !== undefined) setFileContent(data.content);
+  }
+
+  async function writeFile() {
+    await request('/maintenance/files/write', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), path: filePath, content: fileContent }) }, 'Saving file...');
+    listFiles(fileListPath);
+  }
+
+  async function deleteFileAction(path) {
+    if (!confirm(`Delete file ${path}?`)) return;
+    await request(`/maintenance/files/${selectedWebsiteId}?path=${encodeURIComponent(path)}`, { method: 'DELETE' }, 'Deleting file...');
+    listFiles(fileListPath);
+  }
+
+  async function openFileBrowser() {
+    try {
+      setError('');
+      setLoading('Opening File Browser...');
+      const res = await fetch(`${API}/maintenance/filebrowser`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: token ? `Bearer ${token}` : '' },
+        body: JSON.stringify({ website_id: selectedWebsiteId ? Number(selectedWebsiteId) : null }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (handleAuthExpired(res.status, data.detail)) return;
+      if (!res.ok || !data.url) { setError(data.detail || `Cannot open File Browser.`); return; }
+      window.open(data.url, '_blank', 'noopener,noreferrer');
+    } catch (err) { setError('Cannot open File Browser.'); }
+    finally { setLoading(''); }
+  }
+
+  async function createBackup() {
+    const data = await request('/maintenance/backup', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId) }) }, 'Creating backup...');
+    if (data?.backup_file) { setNotice(`Created backup: ${data.backup_file}`); await listBackups(); }
+  }
+
+  async function listBackups() {
+    const data = await request(`/maintenance/backups/${selectedWebsiteId}`);
+    if (data?.items) setBackups(data.items);
+  }
+
+  async function restoreBackup(file) {
+    if (!confirm(`Restore this backup to the current website?\n${file}`)) return;
+    await request('/maintenance/restore', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), backup_file: file }) }, 'Restoring backup...');
+  }
+
+  async function downloadBackup(file) {
+    if (!selectedWebsiteId) return;
+    try {
+      setError(''); setLoading('Downloading backup...');
+      const res = await fetch(`${API}/maintenance/backups/${selectedWebsiteId}/download?backup_file=${encodeURIComponent(file)}`, { headers: { Authorization: token ? `Bearer ${token}` : '' } });
+      if (!res.ok) { const data = await res.json().catch(() => ({})); if (handleAuthExpired(res.status, data.detail)) return; setError(data.detail || 'Download failed.'); return; }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url; link.download = file.split('/').pop() || 'backup.tar.gz';
+      document.body.appendChild(link); link.click(); link.remove();
+      URL.revokeObjectURL(url);
+      setNotice('Backup downloaded.');
+    } catch (err) { setError('Backup download failed.'); }
+    finally { setLoading(''); }
+  }
+
+  async function openPhpMyAdmin(databaseId) {
+    try {
+      setError(''); setLoading('Opening phpMyAdmin...');
+      const res = await fetch(`${API}/databases/${databaseId}/phpmyadmin-sso`, { method: 'POST', headers: { Authorization: token ? `Bearer ${token}` : '' } });
+      const data = await res.json().catch(() => ({}));
+      if (handleAuthExpired(res.status, data.detail)) return;
+      if (!res.ok || !data.url) { setError(data.detail || 'Cannot open phpMyAdmin.'); return; }
+      window.open(data.url, '_blank', 'noopener,noreferrer');
+    } catch (err) { setError('Cannot open phpMyAdmin.'); }
+    finally { setLoading(''); }
+  }
+
+  async function downloadDatabase(databaseId, databaseName) {
+    try {
+      setError(''); setLoading('Downloading database...');
+      const res = await fetch(`${API}/databases/${databaseId}/download`, { headers: { Authorization: token ? `Bearer ${token}` : '' } });
+      if (!res.ok) { const data = await res.json().catch(() => ({})); if (handleAuthExpired(res.status, data.detail)) return; setError(data.detail || 'Download failed.'); return; }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url; link.download = `${databaseName || 'database'}.sql`;
+      document.body.appendChild(link); link.click(); link.remove();
+      URL.revokeObjectURL(url);
+      setNotice('Database SQL downloaded.');
+    } catch (err) { setError('Database download failed.'); }
+    finally { setLoading(''); }
+  }
+
+  async function deleteBackup(file) {
+    if (!confirm(`Delete this backup?\n${file}`)) return;
+    const data = await request(`/maintenance/backups/${selectedWebsiteId}?backup_file=${encodeURIComponent(file)}`, { method: 'DELETE' }, 'Deleting backup...');
+    if (data) await listBackups();
+  }
+
+  async function uploadBackup(file) {
+    if (!file || !selectedWebsiteId) return;
+    const form = new FormData();
+    form.append('file', file);
+    try {
+      setError(''); setLoading('Uploading backup...');
+      const res = await fetch(`${API}/maintenance/backups/${selectedWebsiteId}/upload`, {
+        method: 'POST', headers: { Authorization: token ? `Bearer ${token}` : '' }, body: form,
+      });
+      const responseText = await res.text();
+      let data;
+      try { data = responseText ? JSON.parse(responseText) : {}; } catch { data = { detail: responseText || `HTTP ${res.status}` }; }
+      if (!res.ok) { if (handleAuthExpired(res.status, data.detail)) return; setError(data.detail || 'Upload failed.'); return; }
+      if (data.backup_file) { setNotice(`Uploaded backup: ${data.backup_file}`); await listBackups(); }
+    } catch (err) { setError('Upload backup failed.'); }
+    finally { setLoading(''); }
+  }
+
+  async function checkService(name) {
+    const data = await request('/services/action', { method: 'POST', body: JSON.stringify({ name, action: 'status' }) });
+    setServiceStates(prev => ({ ...prev, [name]: data || { stdout: '', stderr: error || 'Cannot check', returncode: 1 } }));
+    return data;
+  }
+
+  async function checkAllServices() {
+    setLoading('Checking services...');
+    for (const name of SERVICE_NAMES) { await checkService(name); }
+    setLoading('');
+  }
+
+  async function runServiceAction(name, action) {
+    await request('/services/action', { method: 'POST', body: JSON.stringify({ name, action }) }, `${action} ${name}...`);
+    await checkService(name);
+  }
+
+  async function loadPhpConfig(version = phpConfig.php_version) {
+    const data = await request(`/maintenance/php-config?php_version=${encodeURIComponent(version)}`, {}, 'Loading PHP config...');
+    if (data) setPhpConfig(prev => ({ ...prev, ...data, php_version: version }));
+  }
+
+  async function updatePhpConfig() {
+    const data = await request('/maintenance/php-config', {
+      method: 'POST',
+      body: JSON.stringify({ ...phpConfig, max_execution_time: Number(phpConfig.max_execution_time), max_input_time: Number(phpConfig.max_input_time), max_input_vars: Number(phpConfig.max_input_vars) }),
+    }, 'Updating PHP config...');
+    if (data?.target) { setNotice(`Updated PHP config: ${data.target}`); await loadPhpConfig(phpConfig.php_version); }
+  }
+
+  async function loadFirewall() {
+    const data = await request('/firewall/status', {}, 'Loading firewall...');
+    if (data) setFirewallStatus(data);
+  }
+
+  async function runFirewallAction(path, options = {}, label = 'Updating firewall...') {
+    const data = await request(path, options, label);
+    if (data) { setNotice((data.stdout || data.stderr || 'Firewall updated.').trim()); await loadFirewall(); }
+  }
+
+  async function enableFirewall() {
+    if (!confirm('Enable UFW firewall now? Make sure SSH and web ports are allowed.')) return;
+    await runFirewallAction('/firewall/enable', { method: 'POST' }, 'Enabling firewall...');
+  }
+  async function disableFirewall() {
+    if (!confirm('Disable UFW firewall?')) return;
+    await runFirewallAction('/firewall/disable', { method: 'POST' }, 'Disabling firewall...');
+  }
+  async function reloadFirewall() { await runFirewallAction('/firewall/reload', { method: 'POST' }, 'Reloading firewall...'); }
+  async function openFirewallPort() { await runFirewallAction('/firewall/allow-port', { method: 'POST', body: JSON.stringify({ port: firewallPort, protocol: firewallProtocol }) }, 'Opening port...'); }
+  async function allowFirewallIp() { await runFirewallAction('/firewall/allow-ip', { method: 'POST', body: JSON.stringify({ ip: firewallAllowIp, port: firewallAllowPort || null, protocol: firewallAllowProtocol }) }, 'Allowing IP...'); }
+  async function blockFirewallIp() {
+    if (!confirm(`Block ${firewallBlockIp || 'this IP'}?`)) return;
+    await runFirewallAction('/firewall/block-ip', { method: 'POST', body: JSON.stringify({ ip: firewallBlockIp, port: firewallBlockPort || null, protocol: firewallBlockProtocol }) }, 'Blocking IP...');
+  }
+  async function deleteFirewallRule() {
+    if (!firewallDeleteNumber) return;
+    if (!confirm(`Delete UFW rule #${firewallDeleteNumber}?`)) return;
+    await runFirewallAction(`/firewall/rules/${encodeURIComponent(firewallDeleteNumber)}`, { method: 'DELETE' }, 'Deleting rule...');
+    setFirewallDeleteNumber('');
+  }
+
+  useEffect(() => { if (token) { loadCurrentUser(); refreshAll(); } }, [token]);
+
+  useEffect(() => {
+    if (!token || page !== 'services') return undefined;
+    checkAllServices();
+    const timer = setInterval(checkAllServices, 10000);
+    return () => clearInterval(timer);
+  }, [token, page]);
+
+  useEffect(() => { if (selectedWebsiteId && page === 'backups') listBackups(); }, [selectedWebsiteId, page]);
+
+  useEffect(() => {
+    if (token && page === 'users') loadUsers();
+    if (token && page === 'system') loadSystemInfo();
+    if (token && page === 'php') loadPhpConfig();
+    if (token && page === 'firewall') loadFirewall();
+  }, [token, page]);
+
+  useEffect(() => { setMobileMenuOpen(false); }, [page]);
+
+  const isAdmin = ['super_admin', 'admin'].includes(currentUser?.role);
+
+  const navItems = [
+    ['dashboard', 'Dashboard', Home],
+    ['websites', 'Websites', Globe],
+    ['ssl', 'SSL', Lock],
+    ['databases', 'Database', Database],
+    ['cron', 'Cron', Clock],
+    ['files', 'File manager', FolderOpen],
+    ['backups', 'Backups', Archive],
+    ...(isAdmin ? [['php', 'PHP config', Code2]] : []),
+    ...(isAdmin ? [['firewall', 'Firewall', Shield]] : []),
+    ['services', 'Services', Server],
+    ...(isAdmin ? [['users', 'Users', Users]] : []),
+    ['system', 'System info', Server],
+  ];
+
+  const currentSite = websites.find(site => String(site.id) === String(selectedWebsiteId));
+  const activeNavItem = navItems.find(([key]) => key === page) || navItems[0];
+
+  function WebsiteSelect() {
+    return <select value={selectedWebsiteId} onChange={e => setSelectedWebsiteId(e.target.value)}>
+      <option value="">-- Select website --</option>
+      {websites.map(site => <option key={site.id} value={site.id}>{site.domain}</option>)}
+    </select>;
+  }
+
+  function EmptyState({ icon: Icon = AlertCircle, message = 'No data yet' }) {
+    return <div className="empty-state"><Icon size={40} /><p>{message}</p></div>;
+  }
+
+  function renderDashboard() {
+    return <>
+      <section className="stats-grid">
+        <div className="stat-card"><strong>{websites.length}</strong><span>Websites</span></div>
+        <div className="stat-card"><strong>{databases.length}</strong><span>Databases</span></div>
+        <div className="stat-card"><strong>{websites.filter(s => s.ssl_enabled).length}</strong><span>SSL active</span></div>
+      </section>
+      {websites.length > 0 && <section className="section">
+        <h2>Quick overview</h2>
+        <div className="site-grid">
+          {websites.slice(0, 4).map(site => <article className="site-card" key={site.id}>
+            <div className="site-head">
+              <div><strong>{site.domain}</strong></div>
+              <span className={site.ssl_enabled ? 'badge ok' : 'badge'}>{site.ssl_enabled ? 'SSL' : 'No SSL'}</span>
+            </div>
+            <div className="site-meta">
+              <span>PHP <strong>{site.php_version}</strong></span>
+              <span>Status <strong>{site.status}</strong></span>
+            </div>
+          </article>)}
+        </div>
+        {websites.length > 4 && <p className="hint" style={{marginTop:8}}>Showing 4 of {websites.length} websites. Go to Websites for full list.</p>}
+      </section>}
+      {websites.length === 0 && <section className="section">
+        <EmptyState icon={Globe} message="No websites yet. Create your first WordPress site from the Websites menu." />
+      </section>}
+    </>;
+  }
+
+  function renderSystemStatus() {
+    return <section className="section">
+      <div className="section-title">
+        <h2>System info</h2>
+        <button disabled={!!loading} onClick={loadSystemInfo}><RefreshCw size={15}/> Refresh</button>
+      </div>
+      {!systemInfo && <EmptyState icon={Server} message="Click Refresh to load system information." />}
+      {systemInfo && <div className="system-grid">
+        <div className="info-box"><strong>OS</strong><pre>{systemInfo.os}</pre></div>
+        <div className="info-box"><strong>Disk</strong><pre>{systemInfo.disk}</pre></div>
+        <div className="info-box"><strong>Memory</strong><pre>{systemInfo.memory}</pre></div>
+      </div>}
+    </section>;
+  }
+
+  function renderWebsites() {
+    const wpFieldsEnabled = siteType === 'wordpress' && installWordPress;
+    return <>
+      <section className="section">
+        <h2>Create website</h2>
+        <div className="form-row create-site-row">
+          <input value={domain} onChange={e => setDomain(e.target.value)} placeholder="domain.com" />
+          <select value={siteType} onChange={e => setSiteType(e.target.value)}>
+            <option value="wordpress">WordPress</option>
+            <option value="static">Static / PHP</option>
+          </select>
+          <select value={phpVersion} onChange={e => setPhpVersion(e.target.value)}>
+            <option value="8.3">PHP 8.3</option>
+            <option value="8.4">PHP 8.4</option>
+          </select>
+          <input value={adminEmail} onChange={e => setAdminEmail(e.target.value)} placeholder="admin@domain.com" disabled={!wpFieldsEnabled} />
+          <input value={wpAdminUser} onChange={e => setWpAdminUser(e.target.value)} placeholder="WP admin user" disabled={!wpFieldsEnabled} />
+          <input value={wpAdminPassword} onChange={e => setWpAdminPassword(e.target.value)} placeholder="WP admin password" type="password" disabled={!wpFieldsEnabled} />
+          <button disabled={!!loading || !domain} onClick={createWordPress}><Plus size={15}/> Create</button>
+        </div>
+        {siteType === 'wordpress' && <label className="check-line">
+          <input type="checkbox" checked={installWordPress} onChange={e => setInstallWordPress(e.target.checked)} />
+          Install WordPress (creates database, downloads WP, configures vhost)
+        </label>}
+        <label className="check-line">
+          <input type="checkbox" checked={installSslAfterCreate} onChange={e => setInstallSslAfterCreate(e.target.checked)} />
+          Install SSL after creating
+        </label>
+        <p className="hint">{wpFieldsEnabled
+          ? 'WordPress will be installed and the panel will show the URL, admin account, and password after creation.'
+          : 'A plain Nginx vhost will be created with public/ folder. Upload your files via File Manager.'}</p>
+      </section>
+      <section className="section">
+        <div className="section-title">
+          <h2>Website list</h2>
+          <button disabled={!!loading} onClick={refreshAll}><RefreshCw size={15}/> Refresh</button>
+        </div>
+        {websites.length === 0 && <EmptyState icon={Globe} message="No websites yet." />}
+        <div className="site-grid">
+          {websites.map(site => <article className="site-card" key={site.id}>
+            <div className="site-head">
+              <div>
+                <strong>{site.domain}</strong>
+                <small>{site.root_path}</small>
+              </div>
+              <span className={site.ssl_enabled ? 'badge ok' : 'badge'}>{site.ssl_enabled ? 'SSL OK' : 'No SSL'}</span>
+            </div>
+            <div className="site-meta">
+              <span>Type <strong>{site.app_type || 'wordpress'}</strong></span>
+              <span>PHP <strong>{site.php_version}</strong></span>
+              <span>Status <strong>{site.status}</strong></span>
+              {site.nginx_custom && <span className="badge ok">Custom Nginx</span>}
+            </div>
+            <div className="actions">
+              <select value={websitePhpVersions[site.id] || site.php_version || '8.3'} onChange={e => setWebsitePhpVersions(prev => ({ ...prev, [site.id]: e.target.value }))}>
+                <option value="8.3">PHP 8.3</option><option value="8.4">PHP 8.4</option>
+              </select>
+              <button disabled={!!loading || (websitePhpVersions[site.id] || site.php_version) === site.php_version} onClick={() => changeWebsitePhpVersion(site)}>Change PHP</button>
+              <button disabled={!!loading} onClick={() => openNginxCustom(site)}><Code2 size={14}/> Nginx</button>
+              {site.app_type === 'wordpress' && <button disabled={!!loading} onClick={() => fixWordPressPermissions(site.id)}>Fix permissions</button>}
+              {isAdmin && <button className="danger" disabled={!!loading} onClick={() => deleteWebsite(site.id)}><Trash2 size={14}/> Delete</button>}
+            </div>
+          </article>)}
+        </div>
+      </section>
+      {nginxCustomEditing && <section className="section nginx-modal">
+        <div className="section-title">
+          <div>
+            <h2>Custom Nginx — {nginxCustomEditing.domain}</h2>
+            <p className="hint">Lines you add here are inserted inside this site's <code>server &#123; ... &#125;</code> block.</p>
+          </div>
+          <button className="secondary-light" onClick={() => setNginxCustomEditing(null)}><X size={14}/> Close</button>
+        </div>
+        <textarea
+          className="code-editor"
+          value={nginxCustomEditing.content}
+          onChange={e => setNginxCustomEditing(prev => ({ ...prev, content: e.target.value }))}
+          placeholder={`# Examples:\nlocation /api/ {\n    proxy_pass http://127.0.0.1:8080;\n}\n\nrewrite ^/old-path$ /new-path permanent;`}
+          spellCheck={false}
+          rows={14}
+        />
+        <p className="hint">Disallowed: <code>server &#123;</code>, <code>http &#123;</code>, <code>events &#123;</code>, <code>include</code>, <code>load_module</code>, <code>user</code>. Keep braces balanced.</p>
+        <div className="actions">
+          <button disabled={!!loading} onClick={saveNginxCustom}>Save and reload Nginx</button>
+          <button className="secondary-light" disabled={!!loading} onClick={() => setNginxCustomEditing(null)}>Cancel</button>
+        </div>
+      </section>}
+    </>;
+  }
+
+  function renderSsl() {
+    return <section className="section">
+      <h2>SSL Certificate</h2>
+      <WebsiteSelect />
+      {currentSite && <div className="info-box" style={{marginTop:8}}>
+        <strong>{currentSite.domain}</strong>
+        <span className={currentSite.ssl_enabled ? 'badge ok' : 'badge'} style={{justifySelf:'start'}}>{currentSite.ssl_enabled ? 'SSL Enabled' : 'SSL Disabled'}</span>
+      </div>}
+      <button disabled={!selectedWebsiteId || !!loading} onClick={() => enableSsl(selectedWebsiteId)} style={{marginTop:8}}><Lock size={15}/> Install / Renew SSL</button>
+      <p className="hint">The domain must point to the correct VPS IP before issuing SSL.</p>
+    </section>;
+  }
+
+  function renderDatabases() {
+    return <section className="section">
+      <h2>Databases</h2>
+      {databases.length === 0 && <EmptyState icon={Database} message="No databases found." />}
+      <div className="table">
+        {databases.map(db => <div className="row db-row" key={db.id}>
+          <span><strong>{db.db_name}</strong></span>
+          <span style={{color:'var(--text-muted)'}}>{db.db_user}</span>
+          <button disabled={!!loading} onClick={() => openPhpMyAdmin(db.id)}>phpMyAdmin</button>
+          <button disabled={!!loading} onClick={() => downloadDatabase(db.id, db.db_name)}><Download size={14}/> SQL</button>
+          <button disabled={!!loading} onClick={() => changeDbPassword(db.id)}><KeyRound size={14}/> Password</button>
+        </div>)}
+      </div>
+      <p className="hint">Click phpMyAdmin to sign in directly. Token expires after 60s.</p>
+    </section>;
+  }
+
+  function renderCron() {
+    return <section className="section">
+      <h2>Cron manager</h2>
+      <WebsiteSelect />
+      <input value={cronSchedule} onChange={e => setCronSchedule(e.target.value)} placeholder="0 2 * * *" />
+      <input value={cronCommand} onChange={e => setCronCommand(e.target.value)} placeholder="wp cron event run --due-now --allow-root" />
+      <div className="actions">
+        <button disabled={!selectedWebsiteId || !!loading} onClick={addCron}><Plus size={14}/> Add cron</button>
+        <button disabled={!selectedWebsiteId || !!loading} onClick={deleteCron}><Trash2 size={14}/> Delete cron</button>
+        <button disabled={!selectedWebsiteId || !!loading} onClick={() => request(`/maintenance/cron/${selectedWebsiteId}`)}>View cron</button>
+      </div>
+    </section>;
+  }
+
+  function renderFiles() {
+    return <section className="section">
+      <div className="section-title">
+        <div><h2>File manager</h2><p className="hint">Use File Browser for uploads, downloads, editing, and source management.</p></div>
+      </div>
+      <div className="filebrowser-panel">
+        <div className="filebrowser-card">
+          <FolderOpen size={38} />
+          <div>
+            <h3>File Browser</h3>
+            <p>Select a website to open its <code>public</code> folder, or leave blank to browse all.</p>
+          </div>
+        </div>
+        <div className="filebrowser-actions">
+          <WebsiteSelect />
+          <button disabled={!!loading} onClick={openFileBrowser}><FolderOpen size={15}/> Open File Browser</button>
+        </div>
+        {currentSite && <div className="file-meta">
+          <span>Website: <strong>{currentSite.domain}</strong></span>
+          <span>Root: <strong>{currentSite.root_path}/public</strong></span>
+        </div>}
+        <p className="hint">Protected by BPanel session. Only admins can open it.</p>
+      </div>
+    </section>;
+  }
+
+  function renderBackups() {
+    return <section className="section">
+      <h2>Backups</h2>
+      <WebsiteSelect />
+      <p className="hint">Backups include website source files and a database SQL export.</p>
+      <div className="actions">
+        <button disabled={!selectedWebsiteId || !!loading} onClick={createBackup}><Plus size={14}/> Create backup</button>
+        <button disabled={!selectedWebsiteId || !!loading} onClick={listBackups}><RefreshCw size={14}/> Refresh</button>
+        <label className="upload-button">
+          <Upload size={14}/> Upload backup
+          <input type="file" accept=".tar.gz,application/gzip" onChange={e => { uploadBackup(e.target.files?.[0]); e.target.value = ''; }} />
+        </label>
+      </div>
+      {backups.length === 0 && selectedWebsiteId && <EmptyState icon={Archive} message="No backups found for this website." />}
+      <div className="backup-list">
+        {backups.map(file => <div className="backup-item" key={file}>
+          <span>{file.split('/').pop()}</span>
+          <div className="actions">
+            <button disabled={!!loading} onClick={() => downloadBackup(file)}><Download size={14}/> Download</button>
+            <button disabled={!!loading} onClick={() => restoreBackup(file)}><RotateCcw size={14}/> Restore</button>
+            <button className="danger" disabled={!!loading} onClick={() => deleteBackup(file)}><Trash2 size={14}/></button>
+          </div>
+        </div>)}
+      </div>
+    </section>;
+  }
+
+  function renderServices() {
+    return <section className="section">
+      <div className="section-title">
+        <h2>Services / Stack</h2>
+        <button disabled={!!loading} onClick={checkAllServices}><RefreshCw size={15}/> Refresh</button>
+      </div>
+      <div className="service-grid">
+        {SERVICE_NAMES.map(name => {
+          const state = serviceStates[name];
+          const text = `${state?.stdout || ''} ${state?.stderr || ''}`;
+          const active = text.includes('active (running)');
+          const inactive = text.includes('inactive') || text.includes('failed');
+          return <div className="service-card" key={name}>
+            <div><strong>{name}</strong><span className={active ? 'badge ok' : inactive ? 'badge bad' : 'badge'}>{active ? 'Running' : inactive ? 'Stopped' : '...'}</span></div>
+            <small>Auto-refreshes every 10s</small>
+            {isAdmin && <div className="service-actions">
+              <button onClick={() => runServiceAction(name, 'start')}><Play size={13}/> Start</button>
+              {name !== 'nginx' && <button onClick={() => runServiceAction(name, 'stop')}><Square size={13}/> Stop</button>}
+              <button onClick={() => runServiceAction(name, 'restart')}><RotateCcw size={13}/> Restart</button>
+            </div>}
+          </div>;
+        })}
+      </div>
+    </section>;
+  }
+
+  function renderPhpConfig() {
+    if (!isAdmin) return <section className="section"><h2>PHP config</h2><p className="hint">You do not have permission to edit PHP config.</p></section>;
+    return <section className="section">
+      <div className="section-title">
+        <div><h2>PHP Configuration</h2><p className="hint">Edit <code>99-bpanel.ini</code> then restart the matching PHP-FPM service.</p></div>
+      </div>
+      <div className="user-create-card">
+        <label><span>PHP version</span><select value={phpConfig.php_version} onChange={e => { const v = e.target.value; setPhpConfig(prev => ({ ...prev, php_version: v })); loadPhpConfig(v); }}>
+          <option value="8.3">PHP 8.3</option><option value="8.4">PHP 8.4</option>
+        </select></label>
+        <label><span>display_errors</span><select value={phpConfig.display_errors} onChange={e => setPhpConfig(prev => ({ ...prev, display_errors: e.target.value }))}>
+          <option value="Off">Off (production)</option><option value="On">On (debug)</option>
+        </select></label>
+        <label><span>max_execution_time</span><input type="number" value={phpConfig.max_execution_time} onChange={e => setPhpConfig(prev => ({ ...prev, max_execution_time: e.target.value }))} /></label>
+        <label><span>max_input_time</span><input type="number" value={phpConfig.max_input_time} onChange={e => setPhpConfig(prev => ({ ...prev, max_input_time: e.target.value }))} /></label>
+        <label><span>max_input_vars</span><input type="number" value={phpConfig.max_input_vars} onChange={e => setPhpConfig(prev => ({ ...prev, max_input_vars: e.target.value }))} /></label>
+        <label><span>memory_limit</span><input value={phpConfig.memory_limit} onChange={e => setPhpConfig(prev => ({ ...prev, memory_limit: e.target.value }))} placeholder="512M" /></label>
+        <label><span>post_max_size</span><input value={phpConfig.post_max_size} onChange={e => setPhpConfig(prev => ({ ...prev, post_max_size: e.target.value }))} placeholder="1024M" /></label>
+        <label><span>upload_max_filesize</span><input value={phpConfig.upload_max_filesize} onChange={e => setPhpConfig(prev => ({ ...prev, upload_max_filesize: e.target.value }))} placeholder="1024M" /></label>
+        <button disabled={!!loading} onClick={updatePhpConfig}>Save PHP config</button>
+      </div>
+      <p className="hint">Note: <code>post_max_size</code> should be ≥ <code>upload_max_filesize</code>.</p>
+    </section>;
+  }
+
+  function renderFirewall() {
+    if (!isAdmin) return <section className="section"><h2>Firewall</h2><p className="hint">No permission.</p></section>;
+    return <>
+      <section className="section">
+        <div className="section-title">
+          <div><h2>Firewall (UFW)</h2><p className="hint">Keep SSH and web ports allowed before enabling.</p></div>
+        </div>
+        <div className="actions">
+          <button disabled={!!loading} onClick={loadFirewall}><RefreshCw size={14}/> Refresh</button>
+          <button disabled={!!loading} onClick={enableFirewall}><Shield size={14}/> Enable</button>
+          <button disabled={!!loading} onClick={disableFirewall}>Disable</button>
+          <button disabled={!!loading} onClick={reloadFirewall}>Reload</button>
+        </div>
+        <div className="info-box firewall-status">
+          <strong>UFW status</strong>
+          <pre>{firewallStatus?.stdout || firewallStatus?.stderr || 'Click Refresh to load status.'}</pre>
+        </div>
+      </section>
+      <section className="section">
+        <h2>Open port</h2>
+        <div className="firewall-form">
+          <label><span>Port</span><input value={firewallPort} onChange={e => setFirewallPort(e.target.value)} placeholder="80" inputMode="numeric" /></label>
+          <label><span>Protocol</span><select value={firewallProtocol} onChange={e => setFirewallProtocol(e.target.value)}><option value="tcp">TCP</option><option value="udp">UDP</option></select></label>
+          <button disabled={!!loading || !firewallPort} onClick={openFirewallPort}>Open port</button>
+        </div>
+      </section>
+      <section className="section">
+        <h2>Allow IP</h2>
+        <div className="firewall-form">
+          <label><span>IP / CIDR</span><input value={firewallAllowIp} onChange={e => setFirewallAllowIp(e.target.value)} placeholder="1.2.3.4" /></label>
+          <label><span>Port (optional)</span><input value={firewallAllowPort} onChange={e => setFirewallAllowPort(e.target.value)} placeholder="22" inputMode="numeric" /></label>
+          <label><span>Protocol</span><select value={firewallAllowProtocol} onChange={e => setFirewallAllowProtocol(e.target.value)}><option value="tcp">TCP</option><option value="udp">UDP</option></select></label>
+          <button disabled={!!loading || !firewallAllowIp} onClick={allowFirewallIp}>Allow</button>
+        </div>
+      </section>
+      <section className="section">
+        <h2>Block IP</h2>
+        <div className="firewall-form">
+          <label><span>IP / CIDR</span><input value={firewallBlockIp} onChange={e => setFirewallBlockIp(e.target.value)} placeholder="5.6.7.8" /></label>
+          <label><span>Port (optional)</span><input value={firewallBlockPort} onChange={e => setFirewallBlockPort(e.target.value)} placeholder="All ports" inputMode="numeric" /></label>
+          <label><span>Protocol</span><select value={firewallBlockProtocol} onChange={e => setFirewallBlockProtocol(e.target.value)}><option value="tcp">TCP</option><option value="udp">UDP</option></select></label>
+          <button className="danger" disabled={!!loading || !firewallBlockIp} onClick={blockFirewallIp}>Block</button>
+        </div>
+      </section>
+      <section className="section">
+        <h2>Delete rule</h2>
+        <div className="firewall-form">
+          <label><span>Rule #</span><input value={firewallDeleteNumber} onChange={e => setFirewallDeleteNumber(e.target.value)} placeholder="1" inputMode="numeric" /></label>
+          <button className="danger" disabled={!!loading || !firewallDeleteNumber} onClick={deleteFirewallRule}>Delete rule</button>
+        </div>
+        <p className="hint">Rule numbers change after each delete. Refresh status first.</p>
+      </section>
+    </>;
+  }
+
+  function renderUsers() {
+    if (!isAdmin) return <section className="section"><h2>Users</h2><p className="hint">No permission.</p></section>;
+    return <>
+      <section className="section">
+        <div className="section-title">
+          <div><h2>Add user</h2><p className="hint">Create an account, then assign domains below.</p></div>
+        </div>
+        <div className="user-create-card">
+          <label><span>Username</span><input value={newUser.username} onChange={e => setNewUser(prev => ({ ...prev, username: e.target.value }))} placeholder="johndoe" /></label>
+          <label><span>Email</span><input value={newUser.email} onChange={e => setNewUser(prev => ({ ...prev, email: e.target.value }))} placeholder="user@domain.com" /></label>
+          <label><span>Password</span><input value={newUser.password} onChange={e => setNewUser(prev => ({ ...prev, password: e.target.value }))} placeholder="Min 8 characters" type="password" /></label>
+          <label><span>Role</span><select value={newUser.role} onChange={e => setNewUser(prev => ({ ...prev, role: e.target.value }))}>
+            <option value="user">User</option><option value="readonly">Readonly</option><option value="admin">Admin</option>
+          </select></label>
+          <label><span>Site limit</span><input type="number" value={newUser.website_limit} onChange={e => setNewUser(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
+          <label><span>Storage MB</span><input type="number" value={newUser.storage_limit_mb} onChange={e => setNewUser(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
+          <button disabled={!!loading || !newUser.username || !newUser.password} onClick={createUser}><Plus size={14}/> Create user</button>
+        </div>
+      </section>
+      <section className="section">
+        <h2>Assign domain to user</h2>
+        <div className="assign-row">
+          <select value={assignWebsiteId} onChange={e => setAssignWebsiteId(e.target.value)}>
+            <option value="">Select domain</option>
+            {websites.map(site => <option key={site.id} value={site.id}>{site.domain}</option>)}
+          </select>
+          <select value={assignUserId} onChange={e => setAssignUserId(e.target.value)}>
+            <option value="">Select user</option>
+            {users.map(user => <option key={user.id} value={user.id}>{user.username} ({user.role})</option>)}
+          </select>
+          <button disabled={!assignWebsiteId || !assignUserId || !!loading} onClick={assignDomainToUser}>Assign</button>
+        </div>
+      </section>
+      <section className="section">
+        <div className="section-title">
+          <h2>User list</h2>
+          <button disabled={!!loading} onClick={loadUsers}><RefreshCw size={14}/> Refresh</button>
+        </div>
+        {users.length === 0 && <EmptyState icon={Users} message="No users found." />}
+        <div className="table">
+          {users.map(user => <div className="row user-row" key={user.id}>
+            <div className="user-main"><strong>{user.username}</strong><small>{user.email}</small></div>
+            <span className="badge">{user.role}</span>
+            <span>{user.website_limit} sites</span>
+            <span>{user.storage_limit_mb} MB</span>
+            <div className="row-actions"><button className="mini secondary-light" disabled={!!loading} onClick={() => changeUserPassword(user)}><KeyRound size={14}/> Password</button></div>
+          </div>)}
+        </div>
+      </section>
+    </>;
+  }
+
+  function renderPage() {
+    if (page === 'websites') return renderWebsites();
+    if (page === 'system') return renderSystemStatus();
+    if (page === 'ssl') return renderSsl();
+    if (page === 'databases') return renderDatabases();
+    if (page === 'cron') return renderCron();
+    if (page === 'files') return renderFiles();
+    if (page === 'backups') return renderBackups();
+    if (page === 'php') return renderPhpConfig();
+    if (page === 'firewall') return renderFirewall();
+    if (page === 'services') return renderServices();
+    if (page === 'users') return renderUsers();
+    return renderDashboard();
+  }
+
+  // Login screen
+  if (!token) {
+    return <main className="login-page">
+      <section className="login-card">
+        <div>
+          <p className="eyebrow">Server Management Panel</p>
+          <h1>BPanel</h1>
+          <p className="hint">Manage websites, databases, backups, SSL, and services.</p>
+        </div>
+        <div className="login-form">
+          <input value={username} onChange={e => setUsername(e.target.value)} placeholder="Username" autoComplete="username" />
+          <input value={password} onChange={e => setPassword(e.target.value)} placeholder="Password" type="password" autoComplete="current-password" onKeyDown={e => { if (e.key === 'Enter') login(); }} />
+          <button disabled={!!loading || !username || !password} onClick={login}>{loading ? 'Logging in...' : 'Login'}</button>
+        </div>
+        {error && <div className="error"><AlertCircle size={16} style={{display:'inline',verticalAlign:'middle',marginRight:6}}/>{error}</div>}
+        {notice && <div className="notice">{notice}</div>}
+      </section>
+    </main>;
+  }
+
+  const ActiveIcon = activeNavItem?.[2] || Home;
+
+  return <main>
+    <section className="topbar">
+      <div>
+        <p className="eyebrow">Server Management Panel</p>
+        <h1>BPanel</h1>
+      </div>
+      <div className="login logged-in">
+        <div className="account-pill"><span>Logged in as</span><strong>{currentUser?.username || username}</strong></div>
+        <div className="top-actions">
+          <button className="secondary compact-btn" onClick={changeMyPassword} aria-label="Change password" title="Change password"><KeyRound size={15}/><span className="btn-label">Password</span></button>
+          <button className="secondary compact-btn" onClick={logout} aria-label="Logout" title="Logout"><LogOut size={15}/><span className="btn-label">Logout</span></button>
+        </div>
+      </div>
+    </section>
+
+    <button className="mobile-nav-toggle" onClick={() => setMobileMenuOpen(o => !o)} aria-expanded={mobileMenuOpen} aria-label="Toggle navigation">
+      <Menu size={20}/><span><ActiveIcon size={17}/>{activeNavItem?.[1] || 'Menu'}</span>
+    </button>
+
+    <section className="layout">
+      {mobileMenuOpen && <div className="mobile-nav-backdrop" onClick={() => setMobileMenuOpen(false)} aria-hidden="true"></div>}
+      <aside className={`sidebar ${mobileMenuOpen ? 'open' : ''}`} role="navigation" aria-label="Main navigation">
+        <div className="sidebar-head">
+          <button className="sidebar-close" onClick={() => setMobileMenuOpen(false)} aria-label="Close menu"><X size={18}/></button>
+        </div>
+        {navItems.map(([key, label, Icon]) => <button key={key} className={page === key ? 'active' : ''} onClick={() => setPage(key)} aria-current={page === key ? 'page' : undefined}>
+          <Icon size={17}/>{label}
+        </button>)}
+      </aside>
+      <div className="content">
+        {renderPage()}
+        {loading && <div className="loading"><span></span>{loading}</div>}
+        {error && <div className="error">{error}</div>}
+        {notice && <div className="notice">{notice}</div>}
+      </div>
+    </section>
+  </main>;
+}
+
+createRoot(document.getElementById('root')).render(<App />);
