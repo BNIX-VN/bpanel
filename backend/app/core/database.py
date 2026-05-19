@@ -25,6 +25,7 @@ def get_db():
 _PENDING_COLUMNS = [
     ("websites", "nginx_custom", "TEXT NOT NULL DEFAULT ''"),
     ("websites", "app_type", "VARCHAR(32) NOT NULL DEFAULT 'wordpress'"),
+    ("users", "token_version", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 

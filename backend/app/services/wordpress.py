@@ -1,4 +1,5 @@
 import re
+import secrets as _secrets
 from pathlib import Path
 from typing import Dict
 
@@ -10,6 +11,50 @@ from app.services.shell import shell
 WP_USER_RE = re.compile(r"^[A-Za-z0-9._@-]{3,60}$")
 WP_TITLE_RE = re.compile(r"^[\w\s.,'\-:!()&]{1,150}$", re.UNICODE)
 EMAIL_RE = re.compile(r"^[^@\s]{1,64}@[^@\s]{3,255}$")
+
+
+WP_SALT_KEYS = (
+    "AUTH_KEY", "SECURE_AUTH_KEY", "LOGGED_IN_KEY", "NONCE_KEY",
+    "AUTH_SALT", "SECURE_AUTH_SALT", "LOGGED_IN_SALT", "NONCE_SALT",
+)
+
+
+def _generate_wp_salts() -> str:
+    lines = []
+    for key in WP_SALT_KEYS:
+        salt = _secrets.token_urlsafe(48).replace("'", "")
+        lines.append(f"define('{key}', '{salt}');")
+    return "\n".join(lines)
+
+
+def _render_wp_config(db_name: str, db_user: str, db_password: str) -> str:
+    """Render wp-config.php directly so the DB password never appears in argv.
+
+    PHP single-quoted strings only need ' and \\ escaping.
+    """
+    def esc(value: str) -> str:
+        return value.replace("\\", "\\\\").replace("'", "\\'")
+
+    return (
+        "<?php\n"
+        f"define('DB_NAME', '{esc(db_name)}');\n"
+        f"define('DB_USER', '{esc(db_user)}');\n"
+        f"define('DB_PASSWORD', '{esc(db_password)}');\n"
+        "define('DB_HOST', 'localhost');\n"
+        "define('DB_CHARSET', 'utf8mb4');\n"
+        "define('DB_COLLATE', '');\n"
+        "\n"
+        "$table_prefix = 'wp_';\n"
+        "\n"
+        f"{_generate_wp_salts()}\n"
+        "\n"
+        "define('WP_DEBUG', false);\n"
+        "define('DISALLOW_FILE_EDIT', true);\n"
+        "if ( ! defined('ABSPATH') ) {\n"
+        "    define('ABSPATH', __DIR__ . '/');\n"
+        "}\n"
+        "require_once ABSPATH . 'wp-settings.php';\n"
+    )
 
 
 def _safe_value(value: str, pattern: re.Pattern, label: str) -> str:
@@ -43,17 +88,22 @@ def install_wordpress(domain: str, db: Dict[str, str], title: str, admin_user: s
     # WP-CLI runs as www-data through the helper.
     shell.privileged("wp", helper_args=["core", "download", wp_path, "--allow-root"], fallback=["wp", "core", "download", wp_path, "--allow-root"])
 
+    # Render wp-config.php directly to avoid leaking the DB password through
+    # argv (which would be visible to other local users via /proc/<pid>/cmdline
+    # or `ps auxww` while wp config create runs).
+    config_path = public / "wp-config.php"
+    config_content = _render_wp_config(db["db_name"], db["db_user"], db["db_password"])
+    if not settings.command_dry_run:
+        config_path.write_text(config_content, encoding="utf-8")
+        try:
+            config_path.chmod(0o640)
+        except PermissionError:
+            pass
     shell.privileged(
-        "wp",
-        helper_args=[
-            "config", "create", wp_path,
-            f"--dbname={db['db_name']}",
-            f"--dbuser={db['db_user']}",
-            f"--dbpass={db['db_password']}",
-            "--allow-root",
-        ],
-        fallback=["wp", "config", "create", wp_path, f"--dbname={db['db_name']}", f"--dbuser={db['db_user']}", f"--dbpass={db['db_password']}", "--allow-root"],
-        sensitive=True,
+        "chown-www",
+        helper_args=[str(public)],
+        check=False,
+        fallback=["chown", "-R", "www-data:www-data", str(public)],
     )
 
     install_args = [

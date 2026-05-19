@@ -1,4 +1,5 @@
 import json
+import os
 import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -14,13 +15,25 @@ def create_phpmyadmin_token(db_user: str, db_password: str, db_name: str) -> str
     token = secrets.token_urlsafe(32)
     TOKEN_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
     token_path = _token_path(token)
-    token_path.write_text(json.dumps({
+    payload = json.dumps({
         "db_user": db_user,
         "db_password": db_password,
         "db_name": db_name,
         "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=TOKEN_TTL_SECONDS)).isoformat(),
-    }), encoding="utf-8")
-    token_path.chmod(0o600)
+    })
+    # Atomic create with mode 0o600 from the start. O_EXCL prevents symlink
+    # racing — if a file already exists at that path (collision or attack),
+    # we abort.
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(str(token_path), flags, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(payload)
+    except Exception:
+        token_path.unlink(missing_ok=True)
+        raise
     return token
 
 

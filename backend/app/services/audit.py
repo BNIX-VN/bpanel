@@ -16,8 +16,10 @@ def log_action(
 ) -> None:
     extras = []
     if request is not None:
-        forwarded = request.headers.get("x-forwarded-for", "")
-        ip = forwarded.split(",", 1)[0].strip() if forwarded else (request.client.host if request.client else "")
+        # request.client.host is now trustworthy because uvicorn is started
+        # with --proxy-headers --forwarded-allow-ips 127.0.0.1, so X-Forwarded-For
+        # is only honoured when the peer is the trusted local Nginx.
+        ip = request.client.host if request.client else ""
         ua = request.headers.get("user-agent", "")[:200]
         if ip:
             extras.append(f"ip={ip}")

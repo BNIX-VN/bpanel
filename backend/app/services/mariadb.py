@@ -99,9 +99,3 @@ def dump_database_file(db_name: str, output_dir: Path) -> Path:
     if settings.command_dry_run and not target.exists():
         target.write_text(f"-- DRY RUN database dump for {safe_name}\n", encoding="utf-8")
     return target
-
-
-def import_database(db_name: str, input_file: str):
-    safe_name = _validate_identifier(db_name)
-    sql = f"USE {_quote_identifier(safe_name)};\nsource {input_file};\n"
-    return _run_sql(sql)

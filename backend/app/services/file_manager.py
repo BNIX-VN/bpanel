@@ -6,7 +6,14 @@ from app.models.entities import Website
 
 
 MAX_TEXT_FILE_BYTES = 2 * 1024 * 1024
-BLOCKED_WRITE_SUFFIXES = {".php", ".phtml", ".phar", ".cgi", ".pl", ".py", ".sh", ".exe", ".dll", ".so"}
+BLOCKED_WRITE_SUFFIXES = {
+    ".php", ".phtml", ".phar", ".pht", ".php3", ".php4", ".php5", ".php7", ".php8",
+    ".cgi", ".pl", ".py", ".sh", ".exe", ".dll", ".so",
+    ".htaccess", ".htpasswd",
+}
+# Filenames that bypass suffix rules (no extension) but are still dangerous.
+BLOCKED_WRITE_NAMES = {".user.ini", ".env", ".htaccess", ".htpasswd", "wp-config.php"}
+SENSITIVE_READ_NAMES = {".user.ini", ".env", "wp-config.php", ".htpasswd"}
 
 
 def _safe_path(website: Website, relative_path: str) -> Path:
@@ -69,12 +76,14 @@ def list_files(website: Website, relative_path: str = "") -> List[Dict]:
     return items
 
 
-def read_text_file(website: Website, relative_path: str) -> str:
+def read_text_file(website: Website, relative_path: str, allow_sensitive: bool = False) -> str:
     target = _safe_path(website, relative_path)
     if not target.is_file():
         raise ValueError("File not found")
     if target.is_symlink():
         raise ValueError("Symlinks are not allowed")
+    if target.name.lower() in SENSITIVE_READ_NAMES and not allow_sensitive:
+        raise ValueError(f"Reading {target.name} requires admin permissions")
     if target.stat().st_size > MAX_TEXT_FILE_BYTES:
         raise ValueError("File is too large")
     return target.read_text(encoding="utf-8")
@@ -82,6 +91,9 @@ def read_text_file(website: Website, relative_path: str) -> str:
 
 def write_text_file(website: Website, relative_path: str, content: str, allow_executable: bool = False) -> str:
     target = _safe_path(website, relative_path)
+    name_lower = target.name.lower()
+    if name_lower in BLOCKED_WRITE_NAMES and not allow_executable:
+        raise ValueError(f"Writing {target.name} requires admin permissions")
     if target.suffix.lower() in BLOCKED_WRITE_SUFFIXES and not allow_executable:
         raise ValueError("Writing executable files requires admin permissions")
     if len(content.encode("utf-8")) > MAX_TEXT_FILE_BYTES:
@@ -97,6 +109,9 @@ def delete_file(website: Website, relative_path: str, allow_executable: bool = F
     target = _safe_path(website, relative_path)
     if target.is_dir():
         raise ValueError("Cannot delete directory")
+    name_lower = target.name.lower()
+    if name_lower in BLOCKED_WRITE_NAMES and not allow_executable:
+        raise ValueError(f"Deleting {target.name} requires admin permissions")
     if target.suffix.lower() in BLOCKED_WRITE_SUFFIXES and not allow_executable:
         raise ValueError("Deleting executable files requires admin permissions")
     target.unlink(missing_ok=True)

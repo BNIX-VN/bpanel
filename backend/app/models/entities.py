@@ -18,6 +18,9 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     website_limit: Mapped[int] = mapped_column(Integer, default=5)
     storage_limit_mb: Mapped[int] = mapped_column(Integer, default=1024)
+    # Bumped to invalidate previously-issued JWTs (logout-everywhere, role
+    # change, password reset by admin, account disable, etc).
+    token_version: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     websites: Mapped[List["Website"]] = relationship(back_populates="owner")
@@ -52,18 +55,6 @@ class DatabaseAccount(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     website: Mapped[Website] = relationship(back_populates="database")
-
-
-class Job(Base):
-    __tablename__ = "jobs"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    kind: Mapped[str] = mapped_column(String(64))
-    status: Mapped[str] = mapped_column(String(32), default="queued")
-    target: Mapped[str] = mapped_column(String(255))
-    output: Mapped[str] = mapped_column(Text, default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
 class AuditLog(Base):

@@ -255,7 +255,11 @@ def list_files(website_id: int, path: str = Query(default=""), db: Session = Dep
 def read_file(website_id: int, path: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     website = get_owned_website(db, current_user, website_id)
     try:
-        content = file_manager.read_text_file(website, path)
+        content = file_manager.read_text_file(
+            website,
+            path,
+            allow_sensitive=current_user.role in {"super_admin", "admin"},
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"content": content}
@@ -263,6 +267,8 @@ def read_file(website_id: int, path: str, db: Session = Depends(get_db), current
 
 @router.post("/files/write")
 def write_file(payload: FileWrite, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    # Readonly users must not write.
+    ensure_role(current_user.role, Role.user)
     website = get_owned_website(db, current_user, payload.website_id)
     try:
         target = file_manager.write_text_file(website, payload.path, payload.content, current_user.role in {"super_admin", "admin"})
@@ -273,6 +279,7 @@ def write_file(payload: FileWrite, db: Session = Depends(get_db), current_user: 
 
 @router.delete("/files/{website_id}")
 def delete_file(website_id: int, path: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.user)
     website = get_owned_website(db, current_user, website_id)
     try:
         target = file_manager.delete_file(website, path, current_user.role in {"super_admin", "admin"})

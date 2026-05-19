@@ -1,5 +1,5 @@
 import re
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
@@ -7,6 +7,8 @@ from pydantic import BaseModel, EmailStr, Field, field_validator
 DOMAIN_RE = re.compile(r"^(?!-)([a-zA-Z0-9-]{1,63}\.)+[a-zA-Z]{2,}$")
 SUPPORTED_PHP_VERSIONS = {"8.3", "8.4"}
 SUPPORTED_APP_TYPES = {"wordpress", "static"}
+SUPPORTED_ROLES = {"user", "readonly", "admin", "super_admin"}
+SIZE_RE = re.compile(r"^\d{1,6}[KMG]?$")  # e.g. "512M", "1024M"
 
 
 def _validate_php_version(value: Optional[str]) -> Optional[str]:
@@ -31,16 +33,24 @@ class Token(BaseModel):
 
 
 class UserCreate(BaseModel):
-    username: str = Field(min_length=3, max_length=64)
+    username: str = Field(min_length=3, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")
     email: EmailStr
-    password: str = Field(min_length=8)
-    role: str = "user"
-    website_limit: int = 5
-    storage_limit_mb: int = 1024
+    password: str = Field(min_length=12, max_length=72)  # bcrypt 72-byte limit
+    role: Literal["user", "readonly", "admin", "super_admin"] = "user"
+    website_limit: int = Field(default=5, ge=0, le=1000)
+    storage_limit_mb: int = Field(default=1024, ge=0, le=1024 * 1024)
+
+
+class UserUpdate(BaseModel):
+    email: Optional[EmailStr] = None
+    role: Optional[Literal["user", "readonly", "admin", "super_admin"]] = None
+    is_active: Optional[bool] = None
+    website_limit: Optional[int] = Field(default=None, ge=0, le=1000)
+    storage_limit_mb: Optional[int] = Field(default=None, ge=0, le=1024 * 1024)
 
 
 class UserPasswordUpdate(BaseModel):
-    password: str = Field(min_length=8)
+    password: str = Field(min_length=12, max_length=72)
 
 
 class UserOut(BaseModel):
@@ -54,6 +64,29 @@ class UserOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class AuditLogOut(BaseModel):
+    id: int
+    user_id: Optional[int] = None
+    action: str
+    target: str
+    detail: str = ""
+    created_at: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+    @classmethod
+    def from_row(cls, row) -> "AuditLogOut":
+        return cls(
+            id=row.id,
+            user_id=row.user_id,
+            action=row.action,
+            target=row.target,
+            detail=row.detail or "",
+            created_at=row.created_at.isoformat() if row.created_at else None,
+        )
 
 
 class WebsiteCreate(BaseModel):
@@ -181,19 +214,22 @@ class RestoreBackup(BaseModel):
 
 
 class PhpConfigUpdate(BaseModel):
-    php_version: str = "8.3"
-    display_errors: str = "Off"
+    php_version: Literal["8.3", "8.4"] = "8.3"
+    display_errors: Literal["On", "Off"] = "Off"
     memory_limit: str = "512M"
     upload_max_filesize: str = "1024M"
     post_max_size: str = "1024M"
-    max_execution_time: int = 300
-    max_input_time: int = 600
-    max_input_vars: int = 10000
+    max_execution_time: int = Field(default=300, ge=1, le=3600)
+    max_input_time: int = Field(default=600, ge=1, le=3600)
+    max_input_vars: int = Field(default=10000, ge=100, le=1_000_000)
 
-    @field_validator("php_version")
+    @field_validator("memory_limit", "upload_max_filesize", "post_max_size")
     @classmethod
-    def validate_php(cls, value: str) -> str:
-        return _validate_php_version(value)
+    def validate_size(cls, value: str) -> str:
+        value = (value or "").strip()
+        if not SIZE_RE.fullmatch(value):
+            raise ValueError("must match digits optionally followed by K, M, or G")
+        return value
 
 
 class CronCreate(BaseModel):

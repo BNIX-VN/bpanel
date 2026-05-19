@@ -5,18 +5,24 @@ from app.schemas.schemas import PhpConfigUpdate
 from app.services.shell import shell
 
 
+def _safe_ini_value(value: str) -> str:
+    if "\n" in value or "\r" in value or "\x00" in value:
+        raise ValueError("Invalid PHP ini value")
+    return value
+
+
 def update_php_ini(payload: PhpConfigUpdate) -> str:
     if payload.php_version not in {"8.3", "8.4"}:
         raise ValueError("Unsupported PHP version")
     display_errors = "On" if str(payload.display_errors).lower() in {"1", "true", "on", "yes"} else "Off"
     content = "\n".join([
         f"display_errors = {display_errors}",
-        f"memory_limit = {payload.memory_limit}",
-        f"upload_max_filesize = {payload.upload_max_filesize}",
-        f"post_max_size = {payload.post_max_size}",
-        f"max_execution_time = {payload.max_execution_time}",
-        f"max_input_time = {payload.max_input_time}",
-        f"max_input_vars = {payload.max_input_vars}",
+        f"memory_limit = {_safe_ini_value(payload.memory_limit)}",
+        f"upload_max_filesize = {_safe_ini_value(payload.upload_max_filesize)}",
+        f"post_max_size = {_safe_ini_value(payload.post_max_size)}",
+        f"max_execution_time = {int(payload.max_execution_time)}",
+        f"max_input_time = {int(payload.max_input_time)}",
+        f"max_input_vars = {int(payload.max_input_vars)}",
         "",
     ])
     php_version = payload.php_version

@@ -9,6 +9,7 @@ from typing import List
 from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.permissions import Role, ensure_role
+from app.core.secrets import decrypt, encrypt
 from app.models.entities import DatabaseAccount, User, Website
 from app.schemas.schemas import DatabaseOut, DatabasePasswordUpdate
 from app.services import mariadb
@@ -69,9 +70,14 @@ def download_database(database_id: int, db: Session = Depends(get_db), current_u
 
 
 @router.get("/phpmyadmin-sso/{token}")
-def consume_phpmyadmin_sso(token: str, request: Request):
-    if request.client and request.client.host not in {"127.0.0.1", "::1", "localhost"}:
-        raise HTTPException(status_code=403, detail="Forbidden")
+def consume_phpmyadmin_sso(token: str):
+    """Consume a one-shot phpMyAdmin SSO token.
+
+    Security model: 256-bit token entropy (secrets.token_urlsafe(32)), one-shot
+    (file removed on read), TTL 60 seconds. The previous IP whitelist was a
+    no-op because uvicorn was not configured with proxy headers, so we now
+    rely entirely on token secrecy.
+    """
     data = consume_phpmyadmin_token(token)
     if not data:
         raise HTTPException(status_code=404, detail="Invalid or expired token")
@@ -81,7 +87,7 @@ def consume_phpmyadmin_sso(token: str, request: Request):
 @router.post("/{database_id}/phpmyadmin-sso")
 def create_phpmyadmin_sso(database_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     item = get_accessible_database(database_id, db, current_user)
-    token = create_phpmyadmin_token(item.db_user, item.db_password, item.db_name)
+    token = create_phpmyadmin_token(item.db_user, decrypt(item.db_password), item.db_name)
     return {"url": f"/phpmyadmin/bpanel-signon.php?bpanel_sso={token}"}
 
 
@@ -89,6 +95,6 @@ def create_phpmyadmin_sso(database_id: int, db: Session = Depends(get_db), curre
 def change_database_password(database_id: int, payload: DatabasePasswordUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     item = get_accessible_database(database_id, db, current_user)
     mariadb.change_database_password(item.db_user, payload.password)
-    item.db_password = payload.password
+    item.db_password = encrypt(payload.password)
     db.commit()
     return {"ok": True, "db_user": item.db_user}

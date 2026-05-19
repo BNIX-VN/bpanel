@@ -330,7 +330,7 @@ WorkingDirectory=${APP_DIR}/backend
 EnvironmentFile=${APP_DIR}/backend/.env
 Environment=HOME=${APP_DIR}
 Environment=BPANEL_USE_HELPER=true
-ExecStart=${APP_DIR}/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+ExecStart=${APP_DIR}/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips 127.0.0.1
 Restart=always
 RestartSec=3
 

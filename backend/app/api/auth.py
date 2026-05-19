@@ -8,7 +8,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.security import create_access_token, hash_password, verify_password
+from app.core.security import create_access_token, hash_password, needs_rehash, verify_password
 from app.models.entities import User
 from app.schemas.schemas import Token
 
@@ -30,9 +30,13 @@ _DUMMY_HASH = hash_password("not-a-real-password-bpanel-dummy")
 
 
 def _client_key(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for", "")
-    if forwarded:
-        return forwarded.split(",", 1)[0].strip()
+    """Return the client identifier for rate-limit bookkeeping.
+
+    With uvicorn started using --proxy-headers --forwarded-allow-ips 127.0.0.1,
+    request.client.host is set from the proxy's X-Forwarded-For value but ONLY
+    when the immediate peer is the trusted proxy (Nginx on loopback). Spoofed
+    X-Forwarded-For from arbitrary clients is therefore ignored.
+    """
     return request.client.host if request.client else "unknown"
 
 
@@ -104,5 +108,13 @@ def login(
         )
 
     _record_success(key)
-    token = create_access_token(user.username, {"role": user.role})
+    # Transparent password hash upgrade.
+    if needs_rehash(user.hashed_password):
+        try:
+            user.hashed_password = hash_password(form.password)
+            db.commit()
+        except Exception:
+            db.rollback()
+    token_extra = {"role": user.role, "tv": user.token_version or 0}
+    token = create_access_token(user.username, token_extra)
     return Token(access_token=token)

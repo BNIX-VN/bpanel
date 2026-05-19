@@ -53,21 +53,46 @@ def save_uploaded_backup(domain: str, filename: str, source_file) -> str:
 
 def restore_backup(website: Website, backup_file: str) -> str:
     archive = backup_path(website.domain, backup_file)
-    _ensure_safe_tar(archive, Path(website.root_path).resolve())
+    destination = Path(website.root_path).resolve()
+
+    # Single-pass extraction with PEP 706 data filter (Python 3.12+).
+    # The data filter rejects path traversal, absolute paths, and unsafe
+    # symlinks at the tarfile layer itself.
     with tarfile.open(archive, "r:gz") as tar:
-        members = tar.getmembers()
-        has_site_prefix = any(member.name == "site" or member.name.startswith("site/") for member in members)
-        for member in members:
+        members = list(tar.getmembers())
+        has_site_prefix = any(m.name == "site" or m.name.startswith("site/") for m in members)
+
+        def safe_filter(member: tarfile.TarInfo, dest_path: str):
+            # Hard-links inside backups are uncommon and risky; refuse outright.
+            if member.islnk():
+                return None
             if member.name.startswith("database/"):
-                continue
+                return None
             if has_site_prefix:
                 if member.name == "site":
-                    continue
+                    return None
                 if not member.name.startswith("site/"):
-                    continue
+                    return None
                 member.name = member.name[len("site/"):]
-            tar.extract(member, website.root_path)
-    return website.root_path
+            return tarfile.data_filter(member, dest_path)
+
+        try:
+            tar.extractall(path=str(destination), filter=safe_filter)
+        except TypeError:
+            # Older Python (<3.12) without the filter parameter — fall back to
+            # manual extraction with the existing safety check.
+            _ensure_safe_tar(archive, destination)
+            for member in members:
+                if member.name.startswith("database/"):
+                    continue
+                if has_site_prefix:
+                    if member.name == "site":
+                        continue
+                    if not member.name.startswith("site/"):
+                        continue
+                    member.name = member.name[len("site/"):]
+                tar.extract(member, str(destination))
+    return str(destination)
 
 
 def backup_path(domain: str, backup_file: str) -> Path:

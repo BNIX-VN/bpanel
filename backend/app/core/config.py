@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     app_name: str = "BPanel"
     app_env: str = "development"
     secret_key: str = DEFAULT_SECRET_KEY
-    access_token_expire_minutes: int = 720
+    access_token_expire_minutes: int = 120  # was 720; shorter window if a token is stolen
     database_url: str = "sqlite:///./bpanel.db"
     command_dry_run: bool = True
     allowed_origins: str = Field(default="")

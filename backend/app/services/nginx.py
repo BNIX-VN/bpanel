@@ -14,19 +14,43 @@ ALLOWED_APP_TYPES = {"wordpress", "static"}
 DOMAIN_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+")
 
 # Directives that must never appear inside a per-site custom block.
+# This is a conservative deny-list; safer than allow-list because nginx has
+# many context-dependent valid directives, but it still rejects the common
+# escalation primitives.
 DANGEROUS_DIRECTIVES = re.compile(
     r"(?mi)^\s*("
-    r"server\s*\{|"  # nesting server blocks
+    r"server\s*\{|"           # nesting server blocks
     r"http\s*\{|"
-    r"include\s+|"
-    r"load_module|"
-    r"user\s+|"
     r"events\s*\{|"
+    r"stream\s*\{|"
+    r"include\s+|"            # arbitrary file inclusion
+    r"load_module|"           # load shared object
+    r"user\s+|"               # change worker UID
     r"daemon\s+|"
     r"pid\s+|"
     r"working_directory|"
-    r"lua_|"
-    r"pcre_jit"
+    r"lua_|"                  # ngx_lua
+    r"perl_|"                 # ngx_http_perl
+    r"js_|"                   # njs scripting
+    r"pcre_jit|"
+    # ---- routing / upstream subversion ----
+    r"proxy_pass\b|"
+    r"fastcgi_pass\b|"
+    r"uwsgi_pass\b|"
+    r"scgi_pass\b|"
+    r"grpc_pass\b|"
+    r"upstream\s+|"
+    # ---- arbitrary file read / serve ----
+    r"alias\s+|"
+    r"root\s+|"
+    r"auth_basic_user_file\b|"
+    # ---- arbitrary file write via logging ----
+    r"access_log\s+|"
+    r"error_log\s+|"
+    # ---- cert path override ----
+    r"ssl_certificate\b|"
+    r"ssl_certificate_key\b|"
+    r"ssl_trusted_certificate\b"
     r")"
 )
 

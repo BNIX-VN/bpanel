@@ -40,6 +40,33 @@ done
 log()  { echo ""; echo "==> $1"; }
 fail() { echo "ERROR: $1" >&2; exit 1; }
 
+# --- Snapshot the SQLite DB before doing anything ---------------------------
+backup_db() {
+  local db_path="$APP_DIR/backend/bpanel.db"
+  if [[ ! -f "$db_path" ]]; then
+    return 0
+  fi
+  local snap_dir="${BACKUP_ROOT:-/var/backups/bpanel}/db-snapshots"
+  install -d -m 0750 "$snap_dir"
+  if id -u bpanel >/dev/null 2>&1; then
+    chown bpanel:bpanel "$snap_dir" 2>/dev/null || true
+  fi
+  local stamp
+  stamp=$(date -u +%Y%m%d-%H%M%S)
+  local snap="$snap_dir/bpanel-$stamp.db"
+  if command -v sqlite3 >/dev/null 2>&1; then
+    sqlite3 "$db_path" ".backup '$snap'"
+  else
+    cp -a "$db_path" "$snap"
+  fi
+  echo "DB snapshot saved: $snap"
+  # Keep the 10 most recent snapshots.
+  ls -1t "$snap_dir"/bpanel-*.db 2>/dev/null | tail -n +11 | xargs -r rm -f
+}
+
+log "Backing up SQLite DB before update"
+backup_db
+
 # --- Pull latest source ----------------------------------------------------
 if [[ "$SKIP_PULL" != "true" ]]; then
   if [[ ! -d "$SOURCE_DIR/.git" ]]; then

@@ -8,6 +8,7 @@ from app.api.deps import get_current_user
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.permissions import Role, ensure_role
+from app.core.secrets import encrypt
 from app.models.entities import DatabaseAccount, User, Website
 from app.schemas.schemas import WebsiteCreate, WebsiteNginxCustom, WebsiteOut, WebsiteUpdate
 from app.services import mariadb, nginx, ssl, wordpress
@@ -89,7 +90,13 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
     db.commit()
     db.refresh(website)
     if db_info:
-        db.add(DatabaseAccount(website_id=website.id, **db_info))
+        # Store password encrypted; phpMyAdmin SSO decrypts on demand.
+        db.add(DatabaseAccount(
+            website_id=website.id,
+            db_name=db_info["db_name"],
+            db_user=db_info["db_user"],
+            db_password=encrypt(db_info["db_password"]),
+        ))
         db.commit()
     log_action(
         db,
@@ -143,6 +150,7 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
             raise HTTPException(status_code=404, detail="Owner not found")
         website.owner_id = payload.owner_id
     if payload.nginx_custom is not None:
+        ensure_role(current_user.role, Role.admin)
         try:
             nginx.update_custom_block(website.domain, payload.nginx_custom)
         except (RuntimeError, ValueError) as exc:
@@ -166,11 +174,12 @@ def get_website_nginx_custom(website_id: int, db: Session = Depends(get_db), cur
 
 @router.put("/{website_id}/nginx-custom", response_model=WebsiteOut)
 def set_website_nginx_custom(website_id: int, payload: WebsiteNginxCustom, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    # Only admins can modify nginx config; the directives we accept are
+    # filesystem-write-adjacent and easy to misuse.
+    ensure_role(current_user.role, Role.admin)
     website = db.query(Website).filter(Website.id == website_id).first()
     if not website:
         raise HTTPException(status_code=404, detail="Website not found")
-    if website.owner_id != current_user.id:
-        ensure_role(current_user.role, Role.admin)
     try:
         nginx.update_custom_block(website.domain, payload.nginx_custom)
     except (RuntimeError, ValueError) as exc:
