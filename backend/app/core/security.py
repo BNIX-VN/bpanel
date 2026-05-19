@@ -6,14 +6,22 @@ from passlib.context import CryptContext
 
 from app.core.config import settings
 
-# Use bcrypt_sha256 to avoid the 72-byte password truncation issue inherent
-# to plain bcrypt (longer passwords silently hash to the same value as their
-# 72-byte prefix). Old plain-bcrypt hashes still verify and are auto-upgraded
-# on next successful login.
+
+# Plain bcrypt. To prevent the 72-byte silent truncation problem (see
+# security audit #8) we:
+#   1. Cap password length at 72 bytes in the Pydantic schemas (bcrypt 72-byte
+#      limit), so users can never set a password whose meaningful prefix is
+#      truncated.
+#   2. Set ``truncate_error=True`` so passlib raises rather than silently
+#      truncating if anything bypasses the schema.
+#
+# We tried bcrypt_sha256 (which pre-hashes with SHA-256 to bypass the limit)
+# but the passlib<->bcrypt 4.x compatibility issue makes that path unreliable
+# in production. Plain bcrypt with the input length cap is the simplest fix.
 pwd_context = CryptContext(
-    schemes=["bcrypt_sha256", "bcrypt"],
-    default="bcrypt_sha256",
-    deprecated=["bcrypt"],
+    schemes=["bcrypt"],
+    deprecated="auto",
+    bcrypt__truncate_error=True,
 )
 ALGORITHM = "HS256"
 
@@ -23,7 +31,11 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(password, hashed_password)
+    try:
+        return pwd_context.verify(password, hashed_password)
+    except ValueError:
+        # truncate_error=True raises ValueError when the password is too long.
+        return False
 
 
 def needs_rehash(hashed_password: str) -> bool:

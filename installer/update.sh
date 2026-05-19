@@ -156,6 +156,7 @@ fi
 # --- Restore ownership so bpanel user can read/write the deploy ------------
 if id -u bpanel >/dev/null 2>&1; then
   chown -R bpanel:bpanel "$APP_DIR/backend" "$APP_DIR/frontend" 2>/dev/null || true
+  [[ -f "$APP_DIR/backend/.env" ]] && chmod 0640 "$APP_DIR/backend/.env"
 fi
 
 # --- Backend ---------------------------------------------------------------

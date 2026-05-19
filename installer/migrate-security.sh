@@ -61,6 +61,8 @@ chmod 0750 "$BACKUP_ROOT"
 # Application files (Python venv, frontend, .env, sqlite db)
 chown -R bpanel:bpanel "$APP_DIR/backend"
 [[ -d "$APP_DIR/frontend" ]] && chown -R bpanel:bpanel "$APP_DIR/frontend"
+# Make sure the env file is readable by the service user.
+[[ -f "$APP_DIR/backend/.env" ]] && chmod 0640 "$APP_DIR/backend/.env"
 
 log "Setting up MariaDB credentials for the bpanel user"
 if [[ -f "$APP_DIR/.my.cnf" ]]; then

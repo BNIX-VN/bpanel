@@ -301,6 +301,9 @@ ENV
   python -c "from app.core.database import run_migrations; run_migrations()"
   deactivate || true
 
+  # Lock down the env file: contains SECRET_KEY and ALLOWED_ORIGINS.
+  chmod 0640 "${APP_DIR}/backend/.env"
+
   # Make all panel files owned by bpanel so the daemon can read/write them.
   chown -R bpanel:bpanel "${APP_DIR}/backend"
   chown -R bpanel:bpanel "${APP_DIR}/frontend" 2>/dev/null || true
