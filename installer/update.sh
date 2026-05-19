@@ -218,6 +218,10 @@ VITE_API_URL=/api npm run build
 HASHED=$(grep -oE 'index-[a-zA-Z0-9_-]+\.js' dist/index.html | head -n1 || true)
 echo "Built bundle: ${HASHED:-unknown}"
 
+# Make sure nginx (www-data) can read the freshly built bundle.
+chmod o+rX "$APP_DIR" "$APP_DIR/frontend" 2>/dev/null || true
+chmod -R o+rX "$APP_DIR/frontend/dist"
+
 # --- Reload Nginx ----------------------------------------------------------
 log "Reloading nginx"
 nginx -t

@@ -217,9 +217,16 @@ copy_sources() {
 
 build_frontend() {
   cd "${APP_DIR}/frontend"
-  rm -rf node_modules package-lock.json dist
+  rm -rf node_modules package-lock.json dist .vite
   npm install
   VITE_API_URL=/api npm run build
+  if [[ ! -f dist/index.html ]]; then
+    fail "Frontend build failed: ${APP_DIR}/frontend/dist/index.html is missing"
+  fi
+  # Nginx (www-data) needs to read the bundle. The frontend is public anyway.
+  chmod o+rX "${APP_DIR}" "${APP_DIR}/frontend" 2>/dev/null || true
+  chmod -R o+rX "${APP_DIR}/frontend/dist"
+  echo "Frontend built: $(grep -oE 'index-[a-zA-Z0-9_-]+\.js' dist/index.html | head -n1 || echo 'unknown')"
 }
 
 setup_panel_user() {
