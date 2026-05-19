@@ -9,7 +9,7 @@
     "vite": "8.0.13",
     "react": "18.2.0",
     "react-dom": "18.2.0",
-    "lucide-react": "0.468.0"
+    "lucide-react": "1.16.0"
   },
   "devDependencies": {},
   "engines": {
