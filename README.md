@@ -34,7 +34,7 @@ Run as root on a fresh Ubuntu 24.04 server:
 
 ```bash
 apt-get update && apt-get install -y git
-git clone https://github.com/bnixvn/bpanel.git /opt/bpanel-source
+git clone https://github.com/BNIX-VN/bpanel.git /opt/bpanel-source
 cd /opt/bpanel-source
 chmod +x installer/install.sh installer/update.sh
 sudo bash installer/install.sh

@@ -21,7 +21,7 @@ fi
 # --- Config ----------------------------------------------------------------
 APP_DIR="${APP_DIR:-/opt/bpanel}"                 # Production deployment dir
 SOURCE_DIR="${SOURCE_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-REPO_URL="${REPO_URL:-https://github.com/bnixvn/bpanel.git}"
+REPO_URL="${REPO_URL:-https://github.com/BNIX-VN/bpanel.git}"
 BRANCH="${BRANCH:-main}"
 SKIP_PULL="${SKIP_PULL:-false}"
 
