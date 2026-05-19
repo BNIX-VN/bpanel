@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     sites_root: str = "/home/bpanel-sites"
     backup_root: str = "/var/backups/bpanel"
     nginx_sites_available: str = "/etc/nginx/conf.d"
-    php_fpm_service: str = "php-fpm"
+    default_php_version: str = "8.3"
     ssl_email: str = ""
     redis_url: str = "redis://localhost:6379/0"
     filebrowser_port: int = 8088

@@ -119,7 +119,6 @@ DATABASE_URL=sqlite:////opt/bpanel/backend/bpanel.db
 ALLOWED_ORIGINS=https://panel.example.com
 SITES_ROOT=/home/bpanel-sites
 BACKUP_ROOT=/var/backups/bpanel
-PHP_FPM_SERVICE=php8.3-fpm
 SSL_EMAIL=admin@example.com
 FILEBROWSER_PORT=8088
 ```

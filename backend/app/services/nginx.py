@@ -128,9 +128,9 @@ def _ensure_hsts_header(content: str) -> str:
 
 
 def _php_fpm_socket(php_version: str | None = None) -> str:
-    version = _check_php_version(php_version) or settings.php_fpm_service.removeprefix("php").removesuffix("-fpm")
+    version = _check_php_version(php_version) or settings.default_php_version
     if version not in ALLOWED_PHP_VERSIONS:
-        raise ValueError(f"Unsupported PHP version derived from settings: {version}")
+        raise ValueError(f"Unsupported PHP version: {version}")
     return f"/run/php/php{version}-fpm.sock"
 
 
