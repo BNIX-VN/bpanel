@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import json
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile, status
@@ -85,6 +86,33 @@ def upload_archive_to_target(db: Session, target_id: int, archive: str) -> tuple
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return target.name, remote_file
+
+
+def _save_user_restore_upload(file: UploadFile) -> dict:
+    target = ""
+    try:
+        target = backup.save_uploaded_user_backup(file.filename or "user-backup.tar.gz", file.file)
+        manifest = backup.read_backup_manifest(target)
+        if manifest.get("kind") != "bpanel_user":
+            raise ValueError("This is not a full user backup")
+    except (ValueError, FileNotFoundError) as exc:
+        if target:
+            try:
+                backup.delete_user_backup(target)
+            except Exception:
+                pass
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    path = backup.user_backup_path(target)
+    return {
+        "backup_file": target,
+        "filename": path.name,
+        "username": (manifest.get("user") or {}).get("username"),
+        "generated_at": manifest.get("generated_at"),
+        "websites": len(manifest.get("websites") or []),
+        "size": path.stat().st_size,
+        "valid": True,
+        "error": "",
+    }
 
 
 def _make_filebrowser_token(username: str, kind: str, ttl_seconds: int, redirect: str = "/filebrowser/", base_url: str = "") -> str:
@@ -175,6 +203,38 @@ def upload_backup(website_id: int, file: UploadFile = File(...), db: Session = D
     return {"backup_file": target}
 
 
+@router.get("/user-restore-backups")
+def list_user_restore_backups(current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.admin)
+    return {"directory": backup.user_restore_dir(), "items": backup.list_user_restore_backups()}
+
+
+@router.post("/user-restore-backups/upload")
+def upload_user_restore_backups(
+    files: list[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    ensure_role(current_user.role, Role.admin)
+    if not files:
+        raise HTTPException(status_code=400, detail="No backup files uploaded")
+    items = [_save_user_restore_upload(file) for file in files]
+    users = ", ".join(item.get("username") or item.get("filename") or "user" for item in items)
+    log_action(db, current_user.id, "upload_user_restore_backups", "restore_folder", users)
+    return {"directory": backup.user_restore_dir(), "items": items}
+
+
+@router.delete("/user-restore-backups")
+def delete_user_restore_backup(backup_file: str, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.admin)
+    try:
+        deleted = backup.delete_user_restore_backup(backup_file)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Backup not found") from exc
+    log_action(db, current_user.id, "delete_user_restore_backup", "restore_folder", deleted, request=request)
+    return {"deleted": deleted}
+
+
 @router.get("/user-backups/{user_id}")
 def list_user_backups(user_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     user = get_backup_user(db, current_user, user_id)
@@ -211,13 +271,9 @@ def download_user_backup(backup_file: str, db: Session = Depends(get_db), curren
 @router.post("/user-backups/upload")
 def upload_user_backup(file: UploadFile = File(...), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.admin)
-    try:
-        target = backup.save_uploaded_user_backup(file.filename or "user-backup.tar.gz", file.file)
-        manifest = backup.read_backup_manifest(target)
-    except (ValueError, FileNotFoundError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    log_action(db, current_user.id, "upload_user_backup", manifest.get("user", {}).get("username", "user"), target)
-    return {"backup_file": target, "username": manifest.get("user", {}).get("username")}
+    item = _save_user_restore_upload(file)
+    log_action(db, current_user.id, "upload_user_backup", item.get("username") or "user", item["backup_file"])
+    return {"backup_file": item["backup_file"], "username": item.get("username")}
 
 
 @router.post("/user-restore")
@@ -251,13 +307,23 @@ def list_backup_schedules(db: Session = Depends(get_db), current_user: User = De
 @router.post("/backup-schedules", response_model=BackupScheduleOut)
 def create_backup_schedule(payload: BackupScheduleCreate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.admin)
-    user = db.query(User).filter(User.id == payload.user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    user_ids = [] if payload.all_users else (payload.user_ids or ([payload.user_id] if payload.user_id else []))
+    user_ids = sorted({int(user_id) for user_id in user_ids if int(user_id) > 0})
+    users = []
+    if not payload.all_users:
+        if not user_ids:
+            raise HTTPException(status_code=400, detail="Select at least one user")
+        users = db.query(User).filter(User.id.in_(user_ids)).all()
+        found_ids = {user.id for user in users}
+        missing_ids = [str(user_id) for user_id in user_ids if user_id not in found_ids]
+        if missing_ids:
+            raise HTTPException(status_code=404, detail=f"User not found: {', '.join(missing_ids)}")
     if payload.target_id and not db.query(SftpBackupTarget).filter(SftpBackupTarget.id == payload.target_id, SftpBackupTarget.is_active == True).first():  # noqa: E712
         raise HTTPException(status_code=404, detail="SFTP target not found")
     item = BackupSchedule(
-        user_id=payload.user_id,
+        user_id=user_ids[0] if user_ids else None,
+        user_ids=json.dumps(user_ids),
+        all_users=payload.all_users,
         target_id=payload.target_id,
         schedule=payload.schedule,
         retention=payload.retention,
@@ -267,7 +333,8 @@ def create_backup_schedule(payload: BackupScheduleCreate, request: Request, db: 
     db.add(item)
     db.commit()
     db.refresh(item)
-    log_action(db, current_user.id, "create_backup_schedule", user.username, payload.schedule, request=request)
+    target = "all_users" if payload.all_users else ",".join(user.username for user in users)
+    log_action(db, current_user.id, "create_backup_schedule", target, payload.schedule, request=request)
     return item
 
 

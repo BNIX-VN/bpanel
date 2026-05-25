@@ -1,4 +1,5 @@
 from datetime import datetime
+import json
 
 from app.core.database import SessionLocal
 from app.core.secrets import decrypt
@@ -57,6 +58,36 @@ def _upload_if_configured(db, schedule: BackupSchedule, archive: str) -> str:
     return f"{target.name}:{remote_file}"
 
 
+def _decode_user_ids(raw: str | None) -> list[int]:
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        value = [item for item in raw.split(",") if item]
+    if isinstance(value, int):
+        value = [value]
+    return [int(item) for item in value if int(item) > 0]
+
+
+def _schedule_users(db, schedule: BackupSchedule) -> list[User]:
+    if schedule.all_users:
+        return db.query(User).filter(User.is_active == True).order_by(User.id.asc()).all()  # noqa: E712
+    user_ids = _decode_user_ids(schedule.user_ids)
+    if not user_ids and schedule.user_id:
+        user_ids = [schedule.user_id]
+    if not user_ids:
+        return []
+    users = db.query(User).filter(User.id.in_(user_ids)).all()
+    by_id = {user.id: user for user in users}
+    return [by_id[user_id] for user_id in user_ids if user_id in by_id]
+
+
+def _short_message(parts: list[str]) -> str:
+    message = "; ".join(parts)
+    return message[:1000]
+
+
 def run_due_schedules(now: datetime | None = None) -> int:
     now = (now or datetime.now()).replace(second=0, microsecond=0)
     db = SessionLocal()
@@ -68,26 +99,32 @@ def run_due_schedules(now: datetime | None = None) -> int:
                 continue
             if schedule.last_run_at and schedule.last_run_at.replace(second=0, microsecond=0) == now:
                 continue
-            user = db.query(User).filter(User.id == schedule.user_id).first()
-            if not user:
+            users = _schedule_users(db, schedule)
+            if not users:
                 schedule.last_run_at = now
                 schedule.last_status = "error"
-                schedule.last_message = "User not found"
+                schedule.last_message = "No users selected"
                 db.commit()
                 continue
-            try:
-                archive = backup.create_user_backup(user, db)
-                message = _upload_if_configured(db, schedule, archive)
-                backup.prune_user_backups(user.username, schedule.retention)
-                schedule.last_status = "ok"
-                schedule.last_message = message
-                ran += 1
-            except Exception as exc:  # pragma: no cover - operational path
+            messages = []
+            errors = []
+            for user in users:
+                try:
+                    archive = backup.create_user_backup(user, db)
+                    target = _upload_if_configured(db, schedule, archive)
+                    backup.prune_user_backups(user.username, schedule.retention)
+                    messages.append(f"{user.username}: {target}")
+                except Exception as exc:  # pragma: no cover - operational path
+                    errors.append(f"{user.username}: {exc}")
+            if errors:
                 schedule.last_status = "error"
-                schedule.last_message = str(exc)[:1000]
-            finally:
-                schedule.last_run_at = now
-                db.commit()
+                schedule.last_message = _short_message([f"ok {len(messages)} user(s)"] + errors)
+            else:
+                schedule.last_status = "ok"
+                schedule.last_message = _short_message([f"ok {len(messages)} user(s)"] + messages)
+                ran += 1
+            schedule.last_run_at = now
+            db.commit()
     finally:
         db.close()
     return ran

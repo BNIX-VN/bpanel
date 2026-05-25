@@ -90,7 +90,9 @@ class BackupSchedule(Base):
     __tablename__ = "backup_schedules"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    user_ids: Mapped[str] = mapped_column(Text, default="")
+    all_users: Mapped[bool] = mapped_column(Boolean, default=False)
     target_id: Mapped[Optional[int]] = mapped_column(ForeignKey("sftp_backup_targets.id"), nullable=True)
     schedule: Mapped[str] = mapped_column(String(100), default="0 2 * * *")
     retention: Mapped[int] = mapped_column(Integer, default=7)

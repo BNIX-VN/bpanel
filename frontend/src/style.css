@@ -264,7 +264,11 @@ button:disabled{opacity:.55;cursor:not-allowed;box-shadow:none}
 .sftp-form{display:grid;grid-template-columns:1fr 1fr 110px 1fr 1fr 1fr auto;gap:10px;align-items:start}
 .sftp-form textarea{grid-column:1 / -2;min-height:96px}
 .sftp-form button{align-self:stretch}
-.schedule-form{grid-template-columns:minmax(150px,1fr) 150px minmax(140px,1fr) 90px auto}
+.schedule-form{grid-template-columns:130px minmax(180px,1.2fr) 150px minmax(140px,1fr) 90px auto}
+.schedule-form select[multiple]{min-height:96px;padding-block:8px}
+.schedule-toggle{display:flex;align-items:center;gap:8px;background:var(--surface-alt);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;font-weight:700;color:var(--text-secondary)}
+.schedule-toggle input{width:16px;height:16px;min-height:0;accent-color:var(--primary)}
+.restore-title{margin-top:14px}
 
 /* Security */
 .security-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;margin-top:12px}

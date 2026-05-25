@@ -48,6 +48,14 @@ def _user_backup_dir(username: str) -> Path:
     return Path(settings.backup_root) / "users" / username
 
 
+def _user_restore_dir() -> Path:
+    return Path(settings.backup_root) / "users" / "restore"
+
+
+def user_restore_dir() -> str:
+    return str(_user_restore_dir())
+
+
 def create_user_backup(user: User, db) -> str:
     stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
     backup_dir = _user_backup_dir(user.username)
@@ -121,20 +129,59 @@ def list_user_backups(username: str) -> List[str]:
 
 
 def list_uploaded_user_backups(username: Optional[str] = None) -> List[str]:
-    backup_dir = Path(settings.backup_root) / "users" / "uploads"
-    if settings.command_dry_run or not backup_dir.exists():
+    backup_dirs = [_user_restore_dir(), Path(settings.backup_root) / "users" / "uploads"]
+    if settings.command_dry_run:
         return []
     items = []
-    for path in sorted(backup_dir.glob("*.tar.gz"), reverse=True):
-        if username:
-            try:
-                manifest = read_backup_manifest(str(path))
-            except Exception:
+    seen = set()
+    for backup_dir in backup_dirs:
+        if not backup_dir.exists():
+            continue
+        for path in sorted(backup_dir.glob("*.tar.gz"), reverse=True):
+            if path in seen:
                 continue
-            if (manifest.get("user") or {}).get("username") != username:
-                continue
-        items.append(str(path))
+            if username:
+                try:
+                    manifest = read_backup_manifest(str(path))
+                except Exception:
+                    continue
+                if (manifest.get("user") or {}).get("username") != username:
+                    continue
+            seen.add(path)
+            items.append(str(path))
     return items
+
+
+def describe_user_backup(backup_file: str) -> dict:
+    path = user_backup_path(backup_file)
+    item = {
+        "backup_file": str(path),
+        "filename": path.name,
+        "size": path.stat().st_size,
+        "username": "",
+        "generated_at": "",
+        "websites": 0,
+        "valid": False,
+        "error": "",
+    }
+    try:
+        manifest = read_backup_manifest(str(path))
+        item["valid"] = manifest.get("kind") == "bpanel_user"
+        item["username"] = (manifest.get("user") or {}).get("username") or ""
+        item["generated_at"] = manifest.get("generated_at") or ""
+        item["websites"] = len(manifest.get("websites") or [])
+        if not item["valid"]:
+            item["error"] = "This is not a full user backup"
+    except Exception as exc:
+        item["error"] = str(exc)
+    return item
+
+
+def list_user_restore_backups() -> list[dict]:
+    backup_dir = _user_restore_dir()
+    if settings.command_dry_run or not backup_dir.exists():
+        return []
+    return [describe_user_backup(str(path)) for path in sorted(backup_dir.glob("*.tar.gz"), reverse=True)]
 
 
 def user_backup_path(backup_file: str) -> Path:
@@ -149,6 +196,15 @@ def user_backup_path(backup_file: str) -> Path:
 
 def delete_user_backup(backup_file: str) -> str:
     path = user_backup_path(backup_file)
+    path.unlink()
+    return str(path)
+
+
+def delete_user_restore_backup(backup_file: str) -> str:
+    path = user_backup_path(backup_file)
+    restore_dir = _user_restore_dir().resolve()
+    if restore_dir not in path.parents:
+        raise FileNotFoundError("Backup not found")
     path.unlink()
     return str(path)
 
@@ -365,7 +421,7 @@ def save_uploaded_backup(domain: str, filename: str, source_file) -> str:
 
 
 def save_uploaded_user_backup(filename: str, source_file) -> str:
-    backup_dir = (Path(settings.backup_root).resolve() / "users" / "uploads").resolve()
+    backup_dir = _user_restore_dir().resolve()
     backup_dir.mkdir(parents=True, exist_ok=True)
     safe_name = Path(filename).name
     if not safe_name.endswith(".tar.gz"):
@@ -373,6 +429,10 @@ def save_uploaded_user_backup(filename: str, source_file) -> str:
     target = (backup_dir / safe_name).resolve()
     if backup_dir not in target.parents:
         raise ValueError("Invalid backup filename")
+    if target.exists():
+        stem = safe_name[:-7]
+        suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+        target = (backup_dir / f"{stem}-{suffix}-{secrets.token_hex(3)}.tar.gz").resolve()
     written = 0
     with target.open("wb") as buffer:
         while chunk := source_file.read(1024 * 1024):

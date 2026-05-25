@@ -1,5 +1,6 @@
 import re
 from datetime import datetime
+import json
 from typing import Literal, Optional
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
@@ -267,7 +268,9 @@ class UserRestoreBackup(BaseModel):
 
 
 class BackupScheduleCreate(BaseModel):
-    user_id: int
+    user_id: Optional[int] = None
+    user_ids: list[int] = Field(default_factory=list)
+    all_users: bool = False
     schedule: str = "0 2 * * *"
     target_id: Optional[int] = None
     retention: int = Field(default=7, ge=1, le=365)
@@ -278,10 +281,26 @@ class BackupScheduleCreate(BaseModel):
     def validate_schedule(cls, value: str) -> str:
         return _validate_backup_schedule(value)
 
+    @field_validator("user_ids", mode="before")
+    @classmethod
+    def validate_user_ids(cls, value) -> list[int]:
+        if value in (None, ""):
+            return []
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                value = [item for item in value.split(",") if item]
+        if isinstance(value, int):
+            value = [value]
+        return sorted({int(item) for item in value if int(item) > 0})
+
 
 class BackupScheduleOut(BaseModel):
     id: int
-    user_id: int
+    user_id: Optional[int] = None
+    user_ids: list[int] = Field(default_factory=list)
+    all_users: bool = False
     target_id: Optional[int] = None
     schedule: str
     retention: int
@@ -289,6 +308,20 @@ class BackupScheduleOut(BaseModel):
     last_run_at: Optional[datetime] = None
     last_status: str
     last_message: str = ""
+
+    @field_validator("user_ids", mode="before")
+    @classmethod
+    def decode_user_ids(cls, value) -> list[int]:
+        if value in (None, ""):
+            return []
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                value = [item for item in value.split(",") if item]
+        if isinstance(value, int):
+            value = [value]
+        return [int(item) for item in value]
 
     class Config:
         from_attributes = True

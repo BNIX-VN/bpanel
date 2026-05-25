@@ -35,9 +35,11 @@ function App() {
   const [serviceStates, setServiceStates] = useState({});
   const [backups, setBackups] = useState([]);
   const [userBackups, setUserBackups] = useState([]);
+  const [restoreBackups, setRestoreBackups] = useState([]);
+  const [restoreBackupDir, setRestoreBackupDir] = useState('');
   const [selectedBackupUserId, setSelectedBackupUserId] = useState('');
   const [backupSchedules, setBackupSchedules] = useState([]);
-  const [newBackupSchedule, setNewBackupSchedule] = useState({ user_id: '', schedule: '0 2 * * *', target_id: '', retention: 7 });
+  const [newBackupSchedule, setNewBackupSchedule] = useState({ user_ids: [], all_users: false, schedule: '0 2 * * *', target_id: '', retention: 7 });
   const [sftpTargets, setSftpTargets] = useState([]);
   const [selectedSftpTargetId, setSelectedSftpTargetId] = useState('');
   const [newSftpTarget, setNewSftpTarget] = useState({ name: '', host: '', port: 22, username: '', password: '', private_key: '', remote_path: '/backups/bpanel' });
@@ -100,6 +102,8 @@ function App() {
     setServiceStates({});
     setBackups([]);
     setUserBackups([]);
+    setRestoreBackups([]);
+    setRestoreBackupDir('');
     setSelectedBackupUserId('');
     setBackupSchedules([]);
     setSftpTargets([]);
@@ -253,7 +257,7 @@ function App() {
     if (data) {
       setUsers(data);
       if (!selectedBackupUserId && data[0]) setSelectedBackupUserId(String(data[0].id));
-      if (!newBackupSchedule.user_id && data[0]) setNewBackupSchedule(prev => ({ ...prev, user_id: String(data[0].id) }));
+      setNewBackupSchedule(prev => (!prev.all_users && (!prev.user_ids || prev.user_ids.length === 0) && data[0]) ? ({ ...prev, user_ids: [String(data[0].id)] }) : prev);
     }
   }
 
@@ -539,10 +543,19 @@ function App() {
     if (data) setBackupSchedules(data);
   }
 
+  async function loadRestoreBackups() {
+    const data = await request('/maintenance/user-restore-backups');
+    if (data?.items) setRestoreBackups(data.items);
+    if (data?.directory) setRestoreBackupDir(data.directory);
+  }
+
   async function createBackupSchedule() {
-    if (!newBackupSchedule.user_id) return;
+    const selectedUserIds = (newBackupSchedule.user_ids || []).map(Number).filter(Boolean);
+    if (!newBackupSchedule.all_users && selectedUserIds.length === 0) return;
     const body = {
-      user_id: Number(newBackupSchedule.user_id),
+      user_id: selectedUserIds[0] || null,
+      user_ids: newBackupSchedule.all_users ? [] : selectedUserIds,
+      all_users: !!newBackupSchedule.all_users,
       schedule: newBackupSchedule.schedule,
       target_id: newBackupSchedule.target_id ? Number(newBackupSchedule.target_id) : null,
       retention: Number(newBackupSchedule.retention || 7),
@@ -648,24 +661,38 @@ function App() {
       await refreshAll();
       await loadUsers();
       await listUserBackups();
+      await loadRestoreBackups();
     }
   }
 
   async function deleteUserBackup(file) {
     if (!confirm(`Delete this full user backup?\n${file}`)) return;
     const data = await request(`/maintenance/user-backups?backup_file=${encodeURIComponent(file)}`, { method: 'DELETE' }, 'Deleting full user backup...');
-    if (data) await listUserBackups();
+    if (data) {
+      await listUserBackups();
+      await loadRestoreBackups();
+    }
   }
 
-  async function uploadUserBackup(file) {
-    if (!file) return;
+  async function deleteRestoreBackup(file) {
+    if (!confirm(`Delete this restore backup?\n${file}`)) return;
+    const data = await request(`/maintenance/user-restore-backups?backup_file=${encodeURIComponent(file)}`, { method: 'DELETE' }, 'Deleting restore backup...');
+    if (data) {
+      await loadRestoreBackups();
+      await listUserBackups();
+    }
+  }
+
+  async function uploadUserBackups(files) {
+    const selectedFiles = Array.from(files || []);
+    if (selectedFiles.length === 0) return;
     const form = new FormData();
-    form.append('file', file);
+    selectedFiles.forEach(file => form.append('files', file));
     try {
-      setError(''); setLoading('Uploading full user backup...');
+      setError(''); setLoading('Uploading full user backups...');
       const csrfToken = readCookie('bpanel_csrf');
       const headers = csrfToken ? { 'X-CSRF-Token': csrfToken } : {};
-      const res = await fetch(`${API}/maintenance/user-backups/upload`, {
+      const res = await fetch(`${API}/maintenance/user-restore-backups/upload`, {
         method: 'POST',
         credentials: 'include',
         headers,
@@ -675,8 +702,9 @@ function App() {
       let data;
       try { data = responseText ? JSON.parse(responseText) : {}; } catch { data = { detail: responseText || `HTTP ${res.status}` }; }
       if (!res.ok) { if (handleAuthExpired(res.status, data.detail)) return; setError(data.detail || 'Upload failed.'); return; }
-      setNotice(`Uploaded full user backup${data.username ? ` for ${data.username}` : ''}.`);
-      if (data.backup_file) setUserBackups(prev => [data.backup_file, ...prev.filter(item => item !== data.backup_file)]);
+      setNotice(`Uploaded ${data.items?.length || selectedFiles.length} full user backup file(s).`);
+      await loadRestoreBackups();
+      await listUserBackups();
     } catch (err) { setError('Full user backup upload failed.'); }
     finally { setLoading(''); }
   }
@@ -829,7 +857,7 @@ function App() {
     if (isAuthenticated && page === 'php') loadPhpConfig();
     if (isAuthenticated && page === 'firewall') loadFirewall();
     if (isAuthenticated && page === 'security') loadTwoFactorStatus();
-    if (isAuthenticated && page === 'backups' && isAdmin) { loadUsers(); loadSftpTargets(); loadBackupSchedules(); }
+    if (isAuthenticated && page === 'backups' && isAdmin) { loadUsers(); loadSftpTargets(); loadBackupSchedules(); loadRestoreBackups(); }
   }, [isAuthenticated, page]);
 
   useEffect(() => { setMobileMenuOpen(false); }, [page]);
@@ -1092,6 +1120,12 @@ function App() {
 
   function renderBackups() {
     const selectedBackupUser = users.find(user => String(user.id) === String(selectedBackupUserId));
+    const userNameById = id => users.find(user => String(user.id) === String(id))?.username || `User #${id}`;
+    const scheduleUserLabel = item => {
+      if (item.all_users) return 'All users';
+      const ids = (item.user_ids && item.user_ids.length > 0) ? item.user_ids : (item.user_id ? [item.user_id] : []);
+      return ids.length ? ids.map(userNameById).join(', ') : 'No users';
+    };
     return <section className="section">
       <h2>Backups</h2>
       <WebsiteSelect />
@@ -1118,7 +1152,7 @@ function App() {
       {isAdmin && <div className="sftp-panel">
         <div className="section-title">
           <div><h2>Full user backup</h2><p className="hint">Includes the panel user, all owned websites, source files, database dumps, and restore metadata.</p></div>
-          <button disabled={!!loading} onClick={() => { loadUsers(); loadBackupSchedules(); }}><RefreshCw size={14}/> Refresh</button>
+          <button disabled={!!loading} onClick={() => { loadUsers(); loadBackupSchedules(); loadRestoreBackups(); }}><RefreshCw size={14}/> Refresh</button>
         </div>
         <div className="sftp-run-row user-backup-row">
           <select value={selectedBackupUserId} onChange={e => setSelectedBackupUserId(e.target.value)}>
@@ -1134,10 +1168,6 @@ function App() {
         {selectedBackupUser && <p className="hint">Current user: <strong>{selectedBackupUser.username}</strong></p>}
         <div className="actions">
           <button disabled={!selectedBackupUserId || !!loading} onClick={() => listUserBackups()}><RefreshCw size={14}/> Backups</button>
-          <label className="upload-button">
-            <Upload size={14}/> Upload full backup
-            <input type="file" accept=".tar.gz,application/gzip" onChange={e => { uploadUserBackup(e.target.files?.[0]); e.target.value = ''; }} />
-          </label>
         </div>
         <div className="backup-list">
           {userBackups.map(file => <div className="backup-item" key={file}>
@@ -1149,10 +1179,33 @@ function App() {
             </div>
           </div>)}
         </div>
+        <div className="section-title restore-title">
+          <div><h2>Restore folder</h2><p className="hint">{restoreBackupDir || '/var/backups/bpanel/users/restore'}</p></div>
+          <div className="actions">
+            <button disabled={!!loading} onClick={loadRestoreBackups}><RefreshCw size={14}/> Refresh</button>
+            <label className="upload-button">
+              <Upload size={14}/> Upload backups
+              <input type="file" multiple accept=".tar.gz,application/gzip" onChange={e => { uploadUserBackups(e.target.files); e.target.value = ''; }} />
+            </label>
+          </div>
+        </div>
+        <div className="backup-list">
+          {restoreBackups.map(item => <div className="backup-item" key={item.backup_file}>
+            <span>{item.filename || item.backup_file.split('/').pop()}<small>{item.valid ? `${item.username || 'unknown user'} - ${item.websites || 0} website(s)` : (item.error || 'Invalid backup')}</small></span>
+            <div className="actions">
+              <button disabled={!!loading} onClick={() => downloadUserBackup(item.backup_file)}><Download size={14}/> Download</button>
+              <button disabled={!!loading || !item.valid} onClick={() => restoreUserBackup(item.backup_file)}><RotateCcw size={14}/> Restore user</button>
+              <button className="danger" disabled={!!loading} onClick={() => deleteRestoreBackup(item.backup_file)}><Trash2 size={14}/></button>
+            </div>
+          </div>)}
+        </div>
         <div className="sftp-form schedule-form">
-          <select value={newBackupSchedule.user_id} onChange={e => setNewBackupSchedule(prev => ({ ...prev, user_id: e.target.value }))}>
-            <option value="">Schedule user</option>
-            {users.map(user => <option key={user.id} value={user.id}>{user.username}</option>)}
+          <label className="schedule-toggle">
+            <input type="checkbox" checked={!!newBackupSchedule.all_users} onChange={e => setNewBackupSchedule(prev => ({ ...prev, all_users: e.target.checked }))} />
+            <span>All users</span>
+          </label>
+          <select multiple value={newBackupSchedule.user_ids || []} disabled={!!newBackupSchedule.all_users} onChange={e => setNewBackupSchedule(prev => ({ ...prev, user_ids: Array.from(e.target.selectedOptions, option => option.value) }))}>
+            {users.map(user => <option key={user.id} value={String(user.id)}>{user.username}</option>)}
           </select>
           <input value={newBackupSchedule.schedule} onChange={e => setNewBackupSchedule(prev => ({ ...prev, schedule: e.target.value }))} placeholder="0 2 * * *" />
           <select value={newBackupSchedule.target_id} onChange={e => setNewBackupSchedule(prev => ({ ...prev, target_id: e.target.value }))}>
@@ -1160,14 +1213,13 @@ function App() {
             {sftpTargets.map(target => <option key={target.id} value={target.id}>{target.name}</option>)}
           </select>
           <input value={newBackupSchedule.retention} onChange={e => setNewBackupSchedule(prev => ({ ...prev, retention: e.target.value }))} placeholder="7" inputMode="numeric" />
-          <button disabled={!newBackupSchedule.user_id || !!loading} onClick={createBackupSchedule}><Clock size={14}/> Schedule</button>
+          <button disabled={(!newBackupSchedule.all_users && (!newBackupSchedule.user_ids || newBackupSchedule.user_ids.length === 0)) || !!loading} onClick={createBackupSchedule}><Clock size={14}/> Schedule</button>
         </div>
         <div className="backup-list">
           {backupSchedules.map(item => {
-            const scheduleUser = users.find(user => user.id === item.user_id);
             const scheduleTarget = sftpTargets.find(target => target.id === item.target_id);
             return <div className="backup-item" key={item.id}>
-              <span>{scheduleUser?.username || `User #${item.user_id}`} - {item.schedule} - keep {item.retention}{scheduleTarget ? ` - ${scheduleTarget.name}` : ''}<small>{item.last_status}: {item.last_message || 'not run yet'}</small></span>
+              <span>{scheduleUserLabel(item)} - {item.schedule} - keep {item.retention}{scheduleTarget ? ` - ${scheduleTarget.name}` : ''}<small>{item.last_status}: {item.last_message || 'not run yet'}</small></span>
               <button className="danger" disabled={!!loading} onClick={() => deleteBackupSchedule(item.id)}><Trash2 size={14}/></button>
             </div>;
           })}
