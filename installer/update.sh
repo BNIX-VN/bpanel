@@ -185,6 +185,44 @@ SupplementaryGroups=www-data bpanel-sites
 ProtectHome=false
 ReadWritePaths=/home /home/bpanel-sites /var/backups/bpanel /etc/nginx/conf.d /tmp /var/lib/bpanel
 SERVICE
+  cat >/etc/systemd/system/bpanel-backup-scheduler.service <<SERVICE
+[Unit]
+Description=BPanel scheduled backup runner
+After=network.target mariadb.service
+
+[Service]
+Type=oneshot
+User=bpanel
+Group=bpanel
+SupplementaryGroups=www-data bpanel-sites
+WorkingDirectory=${APP_DIR}/backend
+EnvironmentFile=${APP_DIR}/backend/.env
+Environment=HOME=${APP_DIR}
+Environment=BPANEL_USE_HELPER=true
+ExecStart=${APP_DIR}/backend/.venv/bin/python -m app.services.backup_scheduler
+NoNewPrivileges=false
+ProtectSystem=false
+ProtectHome=false
+ReadWritePaths=/home /home/bpanel-sites /var/backups/bpanel /etc/nginx/conf.d /tmp /var/lib/bpanel ${APP_DIR}
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+  cat >/etc/systemd/system/bpanel-backup-scheduler.timer <<'SERVICE'
+[Unit]
+Description=Run BPanel scheduled backups every minute
+
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=60s
+AccuracySec=15s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+SERVICE
+  systemctl daemon-reload
   mkdir -p /etc/systemd/system/filebrowser.service.d
   cat >/etc/systemd/system/filebrowser.service.d/10-bpanel-sites.conf <<'SERVICE'
 [Service]
@@ -389,6 +427,7 @@ if id -u bpanel >/dev/null 2>&1; then
 else
   python -c "from app.core.database import run_migrations; run_migrations()"
 fi
+systemctl enable --now bpanel-backup-scheduler.timer >/dev/null 2>&1 || true
 
 log "Refreshing managed site permissions"
 if id -u bpanel >/dev/null 2>&1; then
@@ -426,6 +465,7 @@ python -m py_compile \
   app/services/wordpress.py \
   app/services/file_manager.py \
   app/services/backup.py \
+  app/services/backup_scheduler.py \
   app/services/site_users.py \
   app/services/cron.py \
   app/services/php.py \

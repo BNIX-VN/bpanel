@@ -255,13 +255,16 @@ button:disabled{opacity:.55;cursor:not-allowed;box-shadow:none}
 }
 .backup-item:hover{border-color:var(--border-hover)}
 .backup-item span{font-weight:700;word-break:break-all;min-width:0}
+.backup-item small{display:block;color:var(--text-muted);font-weight:600;margin-top:4px}
 
 /* SFTP backups */
 .sftp-panel{display:grid;gap:12px;margin-top:18px;padding-top:16px;border-top:1px solid var(--border)}
 .sftp-run-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center}
+.user-backup-row{grid-template-columns:minmax(160px,1fr) minmax(150px,1fr) auto}
 .sftp-form{display:grid;grid-template-columns:1fr 1fr 110px 1fr 1fr 1fr auto;gap:10px;align-items:start}
 .sftp-form textarea{grid-column:1 / -2;min-height:96px}
 .sftp-form button{align-self:stretch}
+.schedule-form{grid-template-columns:minmax(150px,1fr) 150px minmax(140px,1fr) 90px auto}
 
 /* Security */
 .security-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;margin-top:12px}

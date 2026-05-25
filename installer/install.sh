@@ -442,8 +442,48 @@ WantedBy=multi-user.target
 SERVICE
 
   install -d -o bpanel -g bpanel -m 0750 /var/lib/bpanel
+  cat >/etc/systemd/system/bpanel-backup-scheduler.service <<SERVICE
+[Unit]
+Description=BPanel scheduled backup runner
+After=network.target mariadb.service
+
+[Service]
+Type=oneshot
+User=bpanel
+Group=bpanel
+SupplementaryGroups=www-data bpanel-sites
+WorkingDirectory=${APP_DIR}/backend
+EnvironmentFile=${APP_DIR}/backend/.env
+Environment=HOME=${APP_DIR}
+Environment=BPANEL_USE_HELPER=true
+ExecStart=${APP_DIR}/backend/.venv/bin/python -m app.services.backup_scheduler
+NoNewPrivileges=false
+ProtectSystem=false
+ProtectHome=false
+ReadWritePaths=${APP_DIR} /home ${SITES_ROOT} ${BACKUP_ROOT} /etc/nginx/conf.d /tmp /var/lib/bpanel
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+
+  cat >/etc/systemd/system/bpanel-backup-scheduler.timer <<'SERVICE'
+[Unit]
+Description=Run BPanel scheduled backups every minute
+
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=60s
+AccuracySec=15s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+SERVICE
+
   systemctl daemon-reload
   systemctl enable --now bpanel-api
+  systemctl enable --now bpanel-backup-scheduler.timer
   wait_for_backend
 }
 

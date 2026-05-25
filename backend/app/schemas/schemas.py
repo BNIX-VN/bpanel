@@ -1,4 +1,5 @@
 import re
+from datetime import datetime
 from typing import Literal, Optional
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
@@ -246,6 +247,51 @@ class FirewallIpRule(BaseModel):
 
 class BackupCreate(BaseModel):
     website_id: int
+
+
+def _validate_backup_schedule(value: str) -> str:
+    fields = (value or "").split()
+    field_re = re.compile(r"^(?:\*|\d{1,2})(?:[-/,](?:\*|\d{1,2}))*$")
+    if len(fields) != 5 or not all(field_re.fullmatch(field) for field in fields):
+        raise ValueError("Invalid cron schedule")
+    return " ".join(fields)
+
+
+class UserBackupCreate(BaseModel):
+    user_id: int
+    target_id: Optional[int] = None
+
+
+class UserRestoreBackup(BaseModel):
+    backup_file: str
+
+
+class BackupScheduleCreate(BaseModel):
+    user_id: int
+    schedule: str = "0 2 * * *"
+    target_id: Optional[int] = None
+    retention: int = Field(default=7, ge=1, le=365)
+    is_active: bool = True
+
+    @field_validator("schedule")
+    @classmethod
+    def validate_schedule(cls, value: str) -> str:
+        return _validate_backup_schedule(value)
+
+
+class BackupScheduleOut(BaseModel):
+    id: int
+    user_id: int
+    target_id: Optional[int] = None
+    schedule: str
+    retention: int
+    is_active: bool
+    last_run_at: Optional[datetime] = None
+    last_status: str
+    last_message: str = ""
+
+    class Config:
+        from_attributes = True
 
 
 class SftpBackupTargetCreate(BaseModel):

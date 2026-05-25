@@ -1,19 +1,27 @@
 from datetime import datetime
 from io import StringIO
+import json
 from pathlib import Path
 import posixpath
+import re
+import secrets
 import tarfile
+import tempfile
 from typing import List, Optional
 
 import paramiko
 
 from app.core.config import settings
-from app.models.entities import Website
-from app.services.mariadb import export_database
+from app.core.secrets import decrypt, encrypt
+from app.core.security import hash_password
+from app.models.entities import DatabaseAccount, User, Website
+from app.services import mariadb, nginx, site_users, wordpress
 from app.services.shell import shell
 
 
 MAX_UPLOAD_BYTES = 1024 * 1024 * 1024
+BACKUP_MANIFEST = "manifest.json"
+PANEL_USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]{3,64}$")
 
 
 def create_backup(website: Website, db_name: Optional[str] = None) -> str:
@@ -24,7 +32,7 @@ def create_backup(website: Website, db_name: Optional[str] = None) -> str:
     shell.run(["mkdir", "-p", str(backup_dir)])
     backup_dir.mkdir(parents=True, exist_ok=True)
     if db_name:
-        export_database(db_name, str(sql_file))
+        mariadb.export_database(db_name, str(sql_file))
         if settings.command_dry_run and not sql_file.exists():
             sql_file.write_text(f"-- DRY RUN database dump for {db_name}\n", encoding="utf-8")
     with tarfile.open(archive, "w:gz") as tar:
@@ -34,8 +42,328 @@ def create_backup(website: Website, db_name: Optional[str] = None) -> str:
     return str(archive)
 
 
+def _user_backup_dir(username: str) -> Path:
+    if not PANEL_USERNAME_RE.fullmatch(username or ""):
+        raise ValueError("Invalid panel username")
+    return Path(settings.backup_root) / "users" / username
+
+
+def create_user_backup(user: User, db) -> str:
+    stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    backup_dir = _user_backup_dir(user.username)
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    archive = backup_dir / f"user-{user.username}-{stamp}.tar.gz"
+    websites = db.query(Website).filter(Website.owner_id == user.id).order_by(Website.id.asc()).all()
+
+    with tempfile.TemporaryDirectory(prefix="bpanel-user-backup-", dir=str(backup_dir)) as tmp:
+        tmp_dir = Path(tmp)
+        manifest = {
+            "kind": "bpanel_user",
+            "version": 1,
+            "generated_at": datetime.utcnow().isoformat() + "Z",
+            "user": {
+                "username": user.username,
+                "email": user.email,
+                "hashed_password": user.hashed_password,
+                "role": user.role,
+                "is_active": user.is_active,
+                "website_limit": user.website_limit,
+                "storage_limit_mb": user.storage_limit_mb,
+            },
+            "websites": [],
+        }
+
+        sql_files: dict[str, Path] = {}
+        for website in websites:
+            site_entry = {
+                "domain": website.domain,
+                "php_version": website.php_version,
+                "app_type": website.app_type or "wordpress",
+                "status": website.status or "active",
+                "nginx_custom": website.nginx_custom or "",
+                "database": None,
+            }
+            db_item = db.query(DatabaseAccount).filter(DatabaseAccount.website_id == website.id).first()
+            if db_item:
+                sql_name = f"{website.domain}.sql"
+                sql_path = tmp_dir / sql_name
+                mariadb.export_database(db_item.db_name, str(sql_path))
+                if settings.command_dry_run and not sql_path.exists():
+                    sql_path.write_text(f"-- DRY RUN database dump for {db_item.db_name}\n", encoding="utf-8")
+                sql_files[website.domain] = sql_path
+                site_entry["database"] = {
+                    "db_name": db_item.db_name,
+                    "db_user": db_item.db_user,
+                    "db_password": decrypt(db_item.db_password),
+                    "sql_member": f"databases/{sql_name}",
+                }
+            manifest["websites"].append(site_entry)
+
+        manifest_path = tmp_dir / BACKUP_MANIFEST
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=True, indent=2), encoding="utf-8")
+        with tarfile.open(archive, "w:gz") as tar:
+            tar.add(manifest_path, arcname=BACKUP_MANIFEST)
+            for website in websites:
+                root = Path(website.root_path)
+                if root.exists():
+                    tar.add(root, arcname=f"sites/{website.domain}/site")
+                sql_path = sql_files.get(website.domain)
+                if sql_path and sql_path.exists():
+                    tar.add(sql_path, arcname=f"databases/{website.domain}.sql")
+    return str(archive)
+
+
+def list_user_backups(username: str) -> List[str]:
+    backup_dir = _user_backup_dir(username)
+    if settings.command_dry_run or not backup_dir.exists():
+        return []
+    return [str(path) for path in sorted(backup_dir.glob("*.tar.gz"), reverse=True)]
+
+
+def list_uploaded_user_backups(username: Optional[str] = None) -> List[str]:
+    backup_dir = Path(settings.backup_root) / "users" / "uploads"
+    if settings.command_dry_run or not backup_dir.exists():
+        return []
+    items = []
+    for path in sorted(backup_dir.glob("*.tar.gz"), reverse=True):
+        if username:
+            try:
+                manifest = read_backup_manifest(str(path))
+            except Exception:
+                continue
+            if (manifest.get("user") or {}).get("username") != username:
+                continue
+        items.append(str(path))
+    return items
+
+
+def user_backup_path(backup_file: str) -> Path:
+    backup_root = Path(settings.backup_root).resolve()
+    path = Path(backup_file).resolve()
+    if backup_root != path and backup_root not in path.parents:
+        raise FileNotFoundError("Backup not found")
+    if not path.exists() or not path.is_file() or path.suffixes[-2:] != [".tar", ".gz"]:
+        raise FileNotFoundError("Backup not found")
+    return path
+
+
+def delete_user_backup(backup_file: str) -> str:
+    path = user_backup_path(backup_file)
+    path.unlink()
+    return str(path)
+
+
+def prune_user_backups(username: str, keep: int) -> None:
+    keep = max(int(keep or 1), 1)
+    for old_backup in list_user_backups(username)[keep:]:
+        Path(old_backup).unlink(missing_ok=True)
+
+
+def read_backup_manifest(backup_file: str) -> dict:
+    archive = user_backup_path(backup_file)
+    with tarfile.open(archive, "r:gz") as tar:
+        try:
+            member = tar.getmember(BACKUP_MANIFEST)
+        except KeyError as exc:
+            raise ValueError("Backup manifest not found") from exc
+        if member.size > 2 * 1024 * 1024:
+            raise ValueError("Backup manifest is too large")
+        source = tar.extractfile(member)
+        if source is None:
+            raise ValueError("Backup manifest cannot be read")
+        return json.loads(source.read().decode("utf-8"))
+
+
+def _safe_extract_prefix(archive: Path, prefix: str, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    prefix = prefix.strip("/")
+    with tarfile.open(archive, "r:gz") as tar:
+        for original in tar.getmembers():
+            if original.name == prefix:
+                continue
+            if not original.name.startswith(prefix + "/"):
+                continue
+            if original.islnk():
+                continue
+            original.name = original.name[len(prefix) + 1:]
+            if not original.name:
+                continue
+
+            def safe_filter(member: tarfile.TarInfo, dest_path: str):
+                if member.islnk():
+                    return None
+                return tarfile.data_filter(member, dest_path)
+
+            try:
+                tar.extract(original, path=str(destination), filter=safe_filter)
+            except TypeError:
+                member_path = (destination / original.name).resolve()
+                if destination != member_path and destination not in member_path.parents:
+                    raise ValueError("Backup archive contains unsafe paths")
+                if original.issym():
+                    link_path = (member_path.parent / original.linkname).resolve()
+                    if destination != link_path and destination not in link_path.parents:
+                        raise ValueError("Backup archive contains unsafe links")
+                tar.extract(original, str(destination))
+
+
+def _extract_member_to_file(archive: Path, member_name: str, output_dir: Path) -> Optional[Path]:
+    with tarfile.open(archive, "r:gz") as tar:
+        try:
+            member = tar.getmember(member_name)
+        except KeyError:
+            return None
+        if not member.isfile() or member.size > MAX_UPLOAD_BYTES:
+            raise ValueError("Invalid SQL backup member")
+        source = tar.extractfile(member)
+        if source is None:
+            return None
+        target = output_dir / Path(member_name).name
+        with target.open("wb") as output:
+            while chunk := source.read(1024 * 1024):
+                output.write(chunk)
+        return target
+
+
+def restore_user_backup(backup_file: str, db) -> dict:
+    archive = user_backup_path(backup_file)
+    manifest = read_backup_manifest(str(archive))
+    if manifest.get("kind") != "bpanel_user":
+        raise ValueError("This is not a full user backup")
+    user_info = manifest.get("user") or {}
+    username = user_info.get("username") or ""
+    if not PANEL_USERNAME_RE.fullmatch(username):
+        raise ValueError("Invalid user in backup")
+
+    user = db.query(User).filter(User.username == username).first()
+    created_user = False
+    if user is None:
+        email = user_info.get("email") or f"{username}@users.bpanel.test"
+        if db.query(User).filter(User.email == email).first():
+            email = f"{username}-{secrets.token_hex(4)}@users.bpanel.test"
+        user = User(
+            username=username,
+            email=email,
+            hashed_password=user_info.get("hashed_password") or hash_password(secrets.token_urlsafe(18)),
+            role=user_info.get("role") if user_info.get("role") in {"user", "readonly", "admin", "super_admin"} else "user",
+            is_active=bool(user_info.get("is_active", True)),
+            website_limit=int(user_info.get("website_limit") or 5),
+            storage_limit_mb=int(user_info.get("storage_limit_mb") or 1024),
+        )
+        db.add(user)
+        db.flush()
+        created_user = True
+
+    restored_websites = []
+    with tempfile.TemporaryDirectory(prefix="bpanel-user-restore-") as tmp:
+        tmp_dir = Path(tmp)
+        for site_info in manifest.get("websites") or []:
+            domain = (site_info.get("domain") or "").strip().lower()
+            if not site_users.DOMAIN_RE.fullmatch(domain):
+                raise ValueError(f"Invalid domain in backup: {domain}")
+            php_version = site_info.get("php_version") or settings.default_php_version
+            app_type = site_info.get("app_type") or "wordpress"
+            if app_type not in {"wordpress", "static"}:
+                app_type = "wordpress"
+            linux_user = site_users.linux_user_for_domain(domain)
+            root_path = site_users.site_root_for_domain(domain)
+            runtime_php_version = php_version if app_type == "wordpress" else None
+            site_users.ensure_site_runtime(domain, root_path, runtime_php_version)
+            _safe_extract_prefix(archive, f"sites/{domain}/site", Path(root_path).resolve())
+
+            website = db.query(Website).filter(Website.domain == domain).first()
+            created_site = False
+            if website is None:
+                website = Website(
+                    domain=domain,
+                    owner_id=user.id,
+                    root_path=root_path,
+                    linux_user=linux_user,
+                    php_version=php_version,
+                    app_type=app_type,
+                    ssl_enabled=False,
+                    status=site_info.get("status") or "active",
+                    nginx_custom=site_info.get("nginx_custom") or "",
+                )
+                db.add(website)
+                db.flush()
+                created_site = True
+            else:
+                website.owner_id = user.id
+                website.root_path = root_path
+                website.linux_user = linux_user
+                website.php_version = php_version
+                website.app_type = app_type
+                website.status = site_info.get("status") or "active"
+                website.nginx_custom = site_info.get("nginx_custom") or ""
+                db.flush()
+
+            db_info = site_info.get("database") or None
+            if db_info:
+                db_name = db_info.get("db_name")
+                db_user = db_info.get("db_user")
+                db_password = db_info.get("db_password") or mariadb.random_password()
+                conflict = db.query(DatabaseAccount).filter(
+                    DatabaseAccount.db_name == db_name,
+                    DatabaseAccount.website_id != website.id,
+                ).first()
+                if conflict:
+                    raise ValueError(f"Database name already belongs to another website: {db_name}")
+                mariadb.create_database_credentials(db_name, db_user, db_password)
+                sql_member = db_info.get("sql_member") or f"databases/{domain}.sql"
+                sql_path = _extract_member_to_file(archive, sql_member, tmp_dir)
+                if sql_path:
+                    mariadb.import_database(db_name, str(sql_path))
+                db_account = db.query(DatabaseAccount).filter(DatabaseAccount.website_id == website.id).first()
+                if db_account is None:
+                    db.add(DatabaseAccount(
+                        website_id=website.id,
+                        db_name=db_name,
+                        db_user=db_user,
+                        db_password=encrypt(db_password),
+                    ))
+                else:
+                    db_account.db_name = db_name
+                    db_account.db_user = db_user
+                    db_account.db_password = encrypt(db_password)
+
+            nginx.rewrite_vhost(
+                domain,
+                root_path,
+                app_type=app_type,
+                php_version=php_version,
+                custom_directives=website.nginx_custom or "",
+                php_fpm_socket_override=site_users.php_fpm_socket(linux_user) if runtime_php_version else None,
+            )
+            wordpress.fix_permissions(root_path, linux_user)
+            restored_websites.append({"domain": domain, "created": created_site})
+
+    db.commit()
+    return {"created_user": created_user, "username": username, "websites": restored_websites}
+
+
 def save_uploaded_backup(domain: str, filename: str, source_file) -> str:
     backup_dir = (Path(settings.backup_root).resolve() / domain).resolve()
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = Path(filename).name
+    if not safe_name.endswith(".tar.gz"):
+        raise ValueError("Only .tar.gz backup files are supported")
+    target = (backup_dir / safe_name).resolve()
+    if backup_dir not in target.parents:
+        raise ValueError("Invalid backup filename")
+    written = 0
+    with target.open("wb") as buffer:
+        while chunk := source_file.read(1024 * 1024):
+            written += len(chunk)
+            if written > MAX_UPLOAD_BYTES:
+                target.unlink(missing_ok=True)
+                raise ValueError("Backup file is too large")
+            buffer.write(chunk)
+    return str(target)
+
+
+def save_uploaded_user_backup(filename: str, source_file) -> str:
+    backup_dir = (Path(settings.backup_root).resolve() / "users" / "uploads").resolve()
     backup_dir.mkdir(parents=True, exist_ok=True)
     safe_name = Path(filename).name
     if not safe_name.endswith(".tar.gz"):

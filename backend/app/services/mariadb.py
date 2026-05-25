@@ -2,6 +2,7 @@ from datetime import datetime
 from pathlib import Path
 import secrets
 import string
+import subprocess
 from typing import Dict
 
 from app.core.config import settings
@@ -66,6 +67,20 @@ def create_database(seed: str, prefix: str = "wp", db_name: str | None = None, i
     return {"db_name": db_name, "db_user": db_user, "db_password": db_password}
 
 
+def create_database_credentials(db_name: str, db_user: str, db_password: str) -> Dict[str, str]:
+    db_name = _validate_identifier(db_name)
+    db_user = _validate_identifier(db_user)
+    sql = (
+        f"CREATE DATABASE IF NOT EXISTS {_quote_identifier(db_name)} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;\n"
+        f"CREATE USER IF NOT EXISTS {_quote_sql_string(db_user)}@'localhost' IDENTIFIED BY {_quote_sql_string(db_password)};\n"
+        f"ALTER USER {_quote_sql_string(db_user)}@'localhost' IDENTIFIED BY {_quote_sql_string(db_password)};\n"
+        f"GRANT ALL PRIVILEGES ON {_quote_identifier(db_name)}.* TO {_quote_sql_string(db_user)}@'localhost';\n"
+        "FLUSH PRIVILEGES;\n"
+    )
+    _run_sql(sql)
+    return {"db_name": db_name, "db_user": db_user, "db_password": db_password}
+
+
 def drop_database(db_name: str, db_user: str):
     sql = (
         f"DROP DATABASE IF EXISTS {_quote_identifier(db_name)};\n"
@@ -91,6 +106,22 @@ def export_database(db_name: str, output_file: str):
         args.append(f"--defaults-file={home_cnf}")
     args.extend([_validate_identifier(db_name), "--result-file", output_file])
     return shell.run(args, sensitive=True)
+
+
+def import_database(db_name: str, input_file: str):
+    safe_name = _validate_identifier(db_name)
+    sql_path = Path(input_file).resolve()
+    if not sql_path.exists() or not sql_path.is_file():
+        raise FileNotFoundError("SQL file not found")
+    if settings.command_dry_run:
+        return shell.run(["mysql", safe_name], sensitive=True)
+    args = _mysql_args([safe_name])
+    with sql_path.open("rb") as source:
+        completed = subprocess.run(args, stdin=source, capture_output=True, check=False)
+    if completed.returncode != 0:
+        stderr = completed.stderr.decode("utf-8", errors="replace")
+        raise RuntimeError(f"Database import failed: {stderr.strip()}")
+    return completed
 
 
 def dump_database_file(db_name: str, output_dir: Path) -> Path:

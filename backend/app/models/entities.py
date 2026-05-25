@@ -84,3 +84,18 @@ class SftpBackupTarget(Base):
     remote_path: Mapped[str] = mapped_column(String(500), default="/backups/bpanel")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class BackupSchedule(Base):
+    __tablename__ = "backup_schedules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    target_id: Mapped[Optional[int]] = mapped_column(ForeignKey("sftp_backup_targets.id"), nullable=True)
+    schedule: Mapped[str] = mapped_column(String(100), default="0 2 * * *")
+    retention: Mapped[int] = mapped_column(Integer, default=7)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_run_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_status: Mapped[str] = mapped_column(String(32), default="pending")
+    last_message: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

@@ -11,7 +11,7 @@ from a single web UI.
 - MariaDB database creation and management with phpMyAdmin SSO (60s tokens)
 - Let's Encrypt SSL via certbot
 - File Browser integration with single sign-on
-- Backups: archive site files + SQL, restore, upload, download
+- Backups: archive site files + SQL, scheduled full-user backups, restore, upload, download
 - SFTP backup targets for off-server backup copies
 - UFW firewall manager (allow port, allow/block IP, delete rules)
 - PHP-FPM config editor per version

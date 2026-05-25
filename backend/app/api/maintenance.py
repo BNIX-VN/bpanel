@@ -13,8 +13,10 @@ from app.core.config import settings
 from app.core.security import ALGORITHM
 from app.core.permissions import Role, ensure_role
 from app.core.secrets import decrypt, encrypt
-from app.models.entities import DatabaseAccount, SftpBackupTarget, User, Website
+from app.models.entities import BackupSchedule, DatabaseAccount, SftpBackupTarget, User, Website
 from app.schemas.schemas import (
+    BackupScheduleCreate,
+    BackupScheduleOut,
     BackupCreate,
     CronCreate,
     CronDelete,
@@ -23,6 +25,8 @@ from app.schemas.schemas import (
     SftpBackupRun,
     SftpBackupTargetCreate,
     SftpBackupTargetOut,
+    UserBackupCreate,
+    UserRestoreBackup,
     WpAction,
 )
 from app.services import backup, cron, file_manager, panel_urls, php, site_users, wordpress
@@ -53,6 +57,34 @@ def get_owned_website(db: Session, current_user: User, website_id: int) -> Websi
     if website.owner_id != current_user.id:
         ensure_role(current_user.role, Role.admin)
     return website
+
+
+def get_backup_user(db: Session, current_user: User, user_id: int) -> User:
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.id != current_user.id:
+        ensure_role(current_user.role, Role.admin)
+    return user
+
+
+def upload_archive_to_target(db: Session, target_id: int, archive: str) -> tuple[str, str]:
+    target = db.query(SftpBackupTarget).filter(SftpBackupTarget.id == target_id).first()
+    if not target or not target.is_active:
+        raise HTTPException(status_code=404, detail="SFTP target not found")
+    try:
+        remote_file = backup.upload_to_sftp(
+            archive,
+            host=target.host,
+            port=target.port,
+            username=target.username,
+            password=decrypt(target.password) if target.password else None,
+            private_key=decrypt(target.private_key) if target.private_key else None,
+            remote_path=target.remote_path,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return target.name, remote_file
 
 
 def _make_filebrowser_token(username: str, kind: str, ttl_seconds: int, redirect: str = "/filebrowser/", base_url: str = "") -> str:
@@ -141,6 +173,114 @@ def upload_backup(website_id: int, file: UploadFile = File(...), db: Session = D
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     log_action(db, current_user.id, "upload_backup", website.domain, target)
     return {"backup_file": target}
+
+
+@router.get("/user-backups/{user_id}")
+def list_user_backups(user_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    user = get_backup_user(db, current_user, user_id)
+    items = backup.list_user_backups(user.username)
+    if current_user.role in {"super_admin", "admin"}:
+        items.extend(item for item in backup.list_uploaded_user_backups(user.username) if item not in items)
+    return {"items": items}
+
+
+@router.post("/user-backup")
+def create_user_backup(payload: UserBackupCreate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    user = get_backup_user(db, current_user, payload.user_id)
+    archive = backup.create_user_backup(user, db)
+    remote_file = None
+    target_name = None
+    if payload.target_id:
+        ensure_role(current_user.role, Role.admin)
+        target_name, remote_file = upload_archive_to_target(db, payload.target_id, archive)
+    detail = f"{archive}" + (f" -> {target_name}:{remote_file}" if remote_file else "")
+    log_action(db, current_user.id, "backup_user", user.username, detail, request=request)
+    return {"backup_file": archive, "remote_file": remote_file, "target": target_name}
+
+
+@router.get("/user-backups-download")
+def download_user_backup(backup_file: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.admin)
+    try:
+        path = backup.user_backup_path(backup_file)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Backup not found") from exc
+    return FileResponse(str(path), filename=path.name, media_type="application/gzip")
+
+
+@router.post("/user-backups/upload")
+def upload_user_backup(file: UploadFile = File(...), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.admin)
+    try:
+        target = backup.save_uploaded_user_backup(file.filename or "user-backup.tar.gz", file.file)
+        manifest = backup.read_backup_manifest(target)
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    log_action(db, current_user.id, "upload_user_backup", manifest.get("user", {}).get("username", "user"), target)
+    return {"backup_file": target, "username": manifest.get("user", {}).get("username")}
+
+
+@router.post("/user-restore")
+def restore_user_backup(payload: UserRestoreBackup, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.admin)
+    try:
+        result = backup.restore_user_backup(payload.backup_file, db)
+    except (FileNotFoundError, ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    log_action(db, current_user.id, "restore_user", result.get("username", "user"), payload.backup_file, request=request)
+    return result
+
+
+@router.delete("/user-backups")
+def delete_user_backup(backup_file: str, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.admin)
+    try:
+        deleted = backup.delete_user_backup(backup_file)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Backup not found") from exc
+    log_action(db, current_user.id, "delete_user_backup", "user", deleted, request=request)
+    return {"deleted": deleted}
+
+
+@router.get("/backup-schedules", response_model=list[BackupScheduleOut])
+def list_backup_schedules(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.admin)
+    return db.query(BackupSchedule).order_by(BackupSchedule.id.desc()).all()
+
+
+@router.post("/backup-schedules", response_model=BackupScheduleOut)
+def create_backup_schedule(payload: BackupScheduleCreate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.admin)
+    user = db.query(User).filter(User.id == payload.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if payload.target_id and not db.query(SftpBackupTarget).filter(SftpBackupTarget.id == payload.target_id, SftpBackupTarget.is_active == True).first():  # noqa: E712
+        raise HTTPException(status_code=404, detail="SFTP target not found")
+    item = BackupSchedule(
+        user_id=payload.user_id,
+        target_id=payload.target_id,
+        schedule=payload.schedule,
+        retention=payload.retention,
+        is_active=payload.is_active,
+        last_status="pending",
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    log_action(db, current_user.id, "create_backup_schedule", user.username, payload.schedule, request=request)
+    return item
+
+
+@router.delete("/backup-schedules/{schedule_id}")
+def delete_backup_schedule(schedule_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.admin)
+    item = db.query(BackupSchedule).filter(BackupSchedule.id == schedule_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Backup schedule not found")
+    db.delete(item)
+    db.commit()
+    log_action(db, current_user.id, "delete_backup_schedule", str(schedule_id), request=request)
+    return {"ok": True}
 
 
 @router.get("/sftp-targets", response_model=list[SftpBackupTargetOut])

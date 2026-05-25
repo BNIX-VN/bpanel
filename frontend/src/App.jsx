@@ -34,6 +34,10 @@ function App() {
   const [systemInfo, setSystemInfo] = useState(null);
   const [serviceStates, setServiceStates] = useState({});
   const [backups, setBackups] = useState([]);
+  const [userBackups, setUserBackups] = useState([]);
+  const [selectedBackupUserId, setSelectedBackupUserId] = useState('');
+  const [backupSchedules, setBackupSchedules] = useState([]);
+  const [newBackupSchedule, setNewBackupSchedule] = useState({ user_id: '', schedule: '0 2 * * *', target_id: '', retention: 7 });
   const [sftpTargets, setSftpTargets] = useState([]);
   const [selectedSftpTargetId, setSelectedSftpTargetId] = useState('');
   const [newSftpTarget, setNewSftpTarget] = useState({ name: '', host: '', port: 22, username: '', password: '', private_key: '', remote_path: '/backups/bpanel' });
@@ -95,6 +99,9 @@ function App() {
     setUsers([]);
     setServiceStates({});
     setBackups([]);
+    setUserBackups([]);
+    setSelectedBackupUserId('');
+    setBackupSchedules([]);
     setSftpTargets([]);
     setSelectedSftpTargetId('');
     setTwoFactorStatus(null);
@@ -241,7 +248,14 @@ function App() {
     if (dbData) setDatabases(dbData);
   }
 
-  async function loadUsers() { const data = await request('/users'); if (data) setUsers(data); }
+  async function loadUsers() {
+    const data = await request('/users');
+    if (data) {
+      setUsers(data);
+      if (!selectedBackupUserId && data[0]) setSelectedBackupUserId(String(data[0].id));
+      if (!newBackupSchedule.user_id && data[0]) setNewBackupSchedule(prev => ({ ...prev, user_id: String(data[0].id) }));
+    }
+  }
 
   async function loadSystemInfo() {
     const data = await request('/services/system-info', {}, 'Loading system status...');
@@ -501,6 +515,52 @@ function App() {
     if (data?.items) setBackups(data.items);
   }
 
+  async function listUserBackups(userId = selectedBackupUserId) {
+    if (!userId) return;
+    const data = await request(`/maintenance/user-backups/${userId}`);
+    if (data?.items) setUserBackups(data.items);
+  }
+
+  async function createUserBackup() {
+    if (!selectedBackupUserId) return;
+    const body = {
+      user_id: Number(selectedBackupUserId),
+      target_id: selectedSftpTargetId ? Number(selectedSftpTargetId) : null,
+    };
+    const data = await request('/maintenance/user-backup', { method: 'POST', body: JSON.stringify(body) }, 'Creating full user backup...');
+    if (data?.backup_file) {
+      setNotice(data.remote_file ? `Full user backup uploaded: ${data.remote_file}` : `Created full user backup: ${data.backup_file}`);
+      await listUserBackups();
+    }
+  }
+
+  async function loadBackupSchedules() {
+    const data = await request('/maintenance/backup-schedules');
+    if (data) setBackupSchedules(data);
+  }
+
+  async function createBackupSchedule() {
+    if (!newBackupSchedule.user_id) return;
+    const body = {
+      user_id: Number(newBackupSchedule.user_id),
+      schedule: newBackupSchedule.schedule,
+      target_id: newBackupSchedule.target_id ? Number(newBackupSchedule.target_id) : null,
+      retention: Number(newBackupSchedule.retention || 7),
+      is_active: true,
+    };
+    const data = await request('/maintenance/backup-schedules', { method: 'POST', body: JSON.stringify(body) }, 'Saving backup schedule...');
+    if (data) {
+      setNotice('Backup schedule saved.');
+      await loadBackupSchedules();
+    }
+  }
+
+  async function deleteBackupSchedule(id) {
+    if (!confirm('Delete this backup schedule?')) return;
+    const data = await request(`/maintenance/backup-schedules/${id}`, { method: 'DELETE' }, 'Deleting backup schedule...');
+    if (data) await loadBackupSchedules();
+  }
+
   async function loadSftpTargets() {
     const data = await request('/maintenance/sftp-targets');
     if (data) {
@@ -561,6 +621,63 @@ function App() {
       URL.revokeObjectURL(url);
       setNotice('Backup downloaded.');
     } catch (err) { setError('Backup download failed.'); }
+    finally { setLoading(''); }
+  }
+
+  async function downloadUserBackup(file) {
+    try {
+      setError(''); setLoading('Downloading full user backup...');
+      const res = await fetch(`${API}/maintenance/user-backups-download?backup_file=${encodeURIComponent(file)}`, { credentials: 'include' });
+      if (!res.ok) { const data = await res.json().catch(() => ({})); if (handleAuthExpired(res.status, data.detail)) return; setError(data.detail || 'Download failed.'); return; }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url; link.download = file.split('/').pop() || 'user-backup.tar.gz';
+      document.body.appendChild(link); link.click(); link.remove();
+      URL.revokeObjectURL(url);
+      setNotice('Full user backup downloaded.');
+    } catch (err) { setError('Full user backup download failed.'); }
+    finally { setLoading(''); }
+  }
+
+  async function restoreUserBackup(file) {
+    if (!confirm(`Restore this full user backup? Missing panel user and websites will be created.\n${file}`)) return;
+    const data = await request('/maintenance/user-restore', { method: 'POST', body: JSON.stringify({ backup_file: file }) }, 'Restoring full user backup...');
+    if (data) {
+      setNotice(`Restored user ${data.username}. Websites: ${data.websites?.length || 0}`);
+      await refreshAll();
+      await loadUsers();
+      await listUserBackups();
+    }
+  }
+
+  async function deleteUserBackup(file) {
+    if (!confirm(`Delete this full user backup?\n${file}`)) return;
+    const data = await request(`/maintenance/user-backups?backup_file=${encodeURIComponent(file)}`, { method: 'DELETE' }, 'Deleting full user backup...');
+    if (data) await listUserBackups();
+  }
+
+  async function uploadUserBackup(file) {
+    if (!file) return;
+    const form = new FormData();
+    form.append('file', file);
+    try {
+      setError(''); setLoading('Uploading full user backup...');
+      const csrfToken = readCookie('bpanel_csrf');
+      const headers = csrfToken ? { 'X-CSRF-Token': csrfToken } : {};
+      const res = await fetch(`${API}/maintenance/user-backups/upload`, {
+        method: 'POST',
+        credentials: 'include',
+        headers,
+        body: form,
+      });
+      const responseText = await res.text();
+      let data;
+      try { data = responseText ? JSON.parse(responseText) : {}; } catch { data = { detail: responseText || `HTTP ${res.status}` }; }
+      if (!res.ok) { if (handleAuthExpired(res.status, data.detail)) return; setError(data.detail || 'Upload failed.'); return; }
+      setNotice(`Uploaded full user backup${data.username ? ` for ${data.username}` : ''}.`);
+      if (data.backup_file) setUserBackups(prev => [data.backup_file, ...prev.filter(item => item !== data.backup_file)]);
+    } catch (err) { setError('Full user backup upload failed.'); }
     finally { setLoading(''); }
   }
 
@@ -704,13 +821,15 @@ function App() {
 
   useEffect(() => { if (selectedWebsiteId && page === 'backups') listBackups(); }, [selectedWebsiteId, page]);
 
+  useEffect(() => { if (selectedBackupUserId && page === 'backups') listUserBackups(selectedBackupUserId); }, [selectedBackupUserId, page]);
+
   useEffect(() => {
     if (isAuthenticated && page === 'users') loadUsers();
     if (isAuthenticated && page === 'system') loadSystemInfo();
     if (isAuthenticated && page === 'php') loadPhpConfig();
     if (isAuthenticated && page === 'firewall') loadFirewall();
     if (isAuthenticated && page === 'security') loadTwoFactorStatus();
-    if (isAuthenticated && page === 'backups' && isAdmin) loadSftpTargets();
+    if (isAuthenticated && page === 'backups' && isAdmin) { loadUsers(); loadSftpTargets(); loadBackupSchedules(); }
   }, [isAuthenticated, page]);
 
   useEffect(() => { setMobileMenuOpen(false); }, [page]);
@@ -972,6 +1091,7 @@ function App() {
   }
 
   function renderBackups() {
+    const selectedBackupUser = users.find(user => String(user.id) === String(selectedBackupUserId));
     return <section className="section">
       <h2>Backups</h2>
       <WebsiteSelect />
@@ -995,6 +1115,64 @@ function App() {
           </div>
         </div>)}
       </div>
+      {isAdmin && <div className="sftp-panel">
+        <div className="section-title">
+          <div><h2>Full user backup</h2><p className="hint">Includes the panel user, all owned websites, source files, database dumps, and restore metadata.</p></div>
+          <button disabled={!!loading} onClick={() => { loadUsers(); loadBackupSchedules(); }}><RefreshCw size={14}/> Refresh</button>
+        </div>
+        <div className="sftp-run-row user-backup-row">
+          <select value={selectedBackupUserId} onChange={e => setSelectedBackupUserId(e.target.value)}>
+            <option value="">Select user</option>
+            {users.map(user => <option key={user.id} value={user.id}>{user.username}</option>)}
+          </select>
+          <select value={selectedSftpTargetId} onChange={e => setSelectedSftpTargetId(e.target.value)}>
+            <option value="">Local only</option>
+            {sftpTargets.map(target => <option key={target.id} value={target.id}>{target.name}</option>)}
+          </select>
+          <button disabled={!selectedBackupUserId || !!loading} onClick={createUserBackup}><Archive size={14}/> Full backup</button>
+        </div>
+        {selectedBackupUser && <p className="hint">Current user: <strong>{selectedBackupUser.username}</strong></p>}
+        <div className="actions">
+          <button disabled={!selectedBackupUserId || !!loading} onClick={() => listUserBackups()}><RefreshCw size={14}/> Backups</button>
+          <label className="upload-button">
+            <Upload size={14}/> Upload full backup
+            <input type="file" accept=".tar.gz,application/gzip" onChange={e => { uploadUserBackup(e.target.files?.[0]); e.target.value = ''; }} />
+          </label>
+        </div>
+        <div className="backup-list">
+          {userBackups.map(file => <div className="backup-item" key={file}>
+            <span>{file.split('/').pop()}</span>
+            <div className="actions">
+              <button disabled={!!loading} onClick={() => downloadUserBackup(file)}><Download size={14}/> Download</button>
+              <button disabled={!!loading} onClick={() => restoreUserBackup(file)}><RotateCcw size={14}/> Restore user</button>
+              <button className="danger" disabled={!!loading} onClick={() => deleteUserBackup(file)}><Trash2 size={14}/></button>
+            </div>
+          </div>)}
+        </div>
+        <div className="sftp-form schedule-form">
+          <select value={newBackupSchedule.user_id} onChange={e => setNewBackupSchedule(prev => ({ ...prev, user_id: e.target.value }))}>
+            <option value="">Schedule user</option>
+            {users.map(user => <option key={user.id} value={user.id}>{user.username}</option>)}
+          </select>
+          <input value={newBackupSchedule.schedule} onChange={e => setNewBackupSchedule(prev => ({ ...prev, schedule: e.target.value }))} placeholder="0 2 * * *" />
+          <select value={newBackupSchedule.target_id} onChange={e => setNewBackupSchedule(prev => ({ ...prev, target_id: e.target.value }))}>
+            <option value="">Local only</option>
+            {sftpTargets.map(target => <option key={target.id} value={target.id}>{target.name}</option>)}
+          </select>
+          <input value={newBackupSchedule.retention} onChange={e => setNewBackupSchedule(prev => ({ ...prev, retention: e.target.value }))} placeholder="7" inputMode="numeric" />
+          <button disabled={!newBackupSchedule.user_id || !!loading} onClick={createBackupSchedule}><Clock size={14}/> Schedule</button>
+        </div>
+        <div className="backup-list">
+          {backupSchedules.map(item => {
+            const scheduleUser = users.find(user => user.id === item.user_id);
+            const scheduleTarget = sftpTargets.find(target => target.id === item.target_id);
+            return <div className="backup-item" key={item.id}>
+              <span>{scheduleUser?.username || `User #${item.user_id}`} - {item.schedule} - keep {item.retention}{scheduleTarget ? ` - ${scheduleTarget.name}` : ''}<small>{item.last_status}: {item.last_message || 'not run yet'}</small></span>
+              <button className="danger" disabled={!!loading} onClick={() => deleteBackupSchedule(item.id)}><Trash2 size={14}/></button>
+            </div>;
+          })}
+        </div>
+      </div>}
       {isAdmin && <div className="sftp-panel">
         <div className="section-title">
           <div><h2>SFTP backup</h2><p className="hint">Create a local archive and upload it to an SFTP target.</p></div>
