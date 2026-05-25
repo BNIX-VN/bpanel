@@ -68,6 +68,64 @@ detect_server_ip() {
   hostname -I 2>/dev/null | awk '{print $1}' || true
 }
 
+write_tools_nginx_config() {
+  local panel_port panel_domain panel_cert panel_key filebrowser_port php_version server_ip host api_scheme tools_scheme pma_secure ssl_block
+  panel_port="$(env_get PANEL_PORT)"; panel_port="${panel_port:-2222}"
+  panel_domain="$(env_get PANEL_DOMAIN)"
+  panel_cert="$(env_get PANEL_SSL_CERT)"
+  panel_key="$(env_get PANEL_SSL_KEY)"
+  filebrowser_port="$(env_get FILEBROWSER_PORT)"; filebrowser_port="${filebrowser_port:-8088}"
+  php_version="${PHP_DEFAULT:-8.3}"
+  server_ip="$(detect_server_ip)"
+  host="${panel_domain:-$server_ip}"
+  api_scheme="http"; tools_scheme="http"; pma_secure="false"; ssl_block=""
+  if [[ -n "$panel_cert" && -n "$panel_key" && -f "$panel_cert" && -f "$panel_key" ]]; then
+    api_scheme="https"; tools_scheme="https"; pma_secure="true"
+    printf -v ssl_block '\n    listen 443 ssl default_server;\n    ssl_certificate %s;\n    ssl_certificate_key %s;' "$panel_cert" "$panel_key"
+  fi
+  cat >/etc/nginx/conf.d/00-bpanel-tools.conf <<NGINX
+server {
+    listen 80 default_server;${ssl_block}
+    server_name _;
+    client_max_body_size 1100M;
+
+    location = /_bpanel/filebrowser-auth {
+        internal;
+        proxy_pass ${api_scheme}://127.0.0.1:${panel_port}/api/maintenance/filebrowser-auth;
+        proxy_ssl_verify off;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header Cookie \$http_cookie;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Forwarded-Host \$host;
+    }
+
+    location /filebrowser/ {
+        auth_request /_bpanel/filebrowser-auth;
+        proxy_pass http://127.0.0.1:${filebrowser_port};
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    location = /phpmyadmin { return 301 /phpmyadmin/; }
+    location /phpmyadmin/ { alias /usr/share/phpmyadmin/; index index.php; try_files \$uri \$uri/ =404; }
+    location ~ ^/phpmyadmin/(.+\.php)$ {
+        alias /usr/share/phpmyadmin/\$1;
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME /usr/share/phpmyadmin/\$1;
+        fastcgi_param SCRIPT_NAME /phpmyadmin/\$1;
+        fastcgi_pass unix:/run/php/php${php_version}-fpm.sock;
+        fastcgi_read_timeout 300;
+    }
+}
+NGINX
+  sed -i -E "s#(\$apiUrl = ')[^']+(/api/databases/phpmyadmin-sso/)'#\1${api_scheme}://127.0.0.1:${panel_port}\2'#" /usr/share/phpmyadmin/bpanel-signon.php 2>/dev/null || true
+  sed -i -E "s#('secure' => )(true|false)#\1${pma_secure}#" /etc/phpmyadmin/conf.d/bpanel-signon.php /usr/share/phpmyadmin/bpanel-signon.php 2>/dev/null || true
+  [[ -n "$host" ]] && sed -i -E "s#(\$cfg\['PmaAbsoluteUri'\] = ')[^']+('#\1${tools_scheme}://${host}/phpmyadmin/\2#" /etc/phpmyadmin/conf.d/bpanel-signon.php 2>/dev/null || true
+}
+
 install_panel_runtime() {
   local env_file="$APP_DIR/backend/.env"
   [[ -f "$env_file" ]] || return 0
@@ -114,16 +172,24 @@ STARTER
 ExecStart=
 ExecStart=/usr/local/sbin/bpanel-api-start
 SupplementaryGroups=www-data bpanel-sites
+ProtectHome=false
+ReadWritePaths=/home /home/bpanel-sites /var/backups/bpanel /etc/nginx/conf.d /tmp /var/lib/bpanel
 SERVICE
   mkdir -p /etc/systemd/system/filebrowser.service.d
   cat >/etc/systemd/system/filebrowser.service.d/10-bpanel-sites.conf <<'SERVICE'
 [Service]
 SupplementaryGroups=bpanel-sites
+ReadWritePaths=/home /home/bpanel-sites /etc/filebrowser /var/lib/filebrowser /tmp
 SERVICE
+  if command -v filebrowser >/dev/null 2>&1 && [[ -f /etc/filebrowser/database.db ]]; then
+    runuser -u www-data -- filebrowser -d /etc/filebrowser/database.db config set --root /home >/dev/null 2>&1 || true
+  fi
   if command -v ufw >/dev/null 2>&1; then
     ufw allow "${panel_port}/tcp" >/dev/null || true
   fi
+  rm -f /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf 2>/dev/null || true
   rm -f /etc/nginx/sites-enabled/bpanel.conf /etc/nginx/sites-available/bpanel.conf 2>/dev/null || true
+  write_tools_nginx_config
   if [[ -f /usr/share/phpmyadmin/bpanel-signon.php ]]; then
     local scheme="http"
     if [[ -n "$(env_get PANEL_SSL_CERT)" && -n "$(env_get PANEL_SSL_KEY)" ]]; then
@@ -226,9 +292,9 @@ if command -v rsync >/dev/null 2>&1; then
   # this for runtime artefacts that the installer creates: .env, .venv,
   # bpanel.db, .my.cnf.
   rsync -a --delete \
-    --filter='P /backend/.env' \
-    --filter='P /backend/.venv/***' \
-    --filter='P /backend/bpanel.db' \
+    --filter='P /.env' \
+    --filter='P /.venv/***' \
+    --filter='P /bpanel.db' \
     --filter='P /.my.cnf' \
     --exclude '__pycache__/' \
     --exclude '*.pyc' \
@@ -316,6 +382,7 @@ python -m py_compile \
   app/api/services.py \
   app/services/firewall.py \
   app/services/nginx.py \
+  app/services/panel_urls.py \
   app/services/mariadb.py \
   app/services/wordpress.py \
   app/services/file_manager.py \

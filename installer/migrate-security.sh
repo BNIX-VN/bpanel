@@ -160,8 +160,8 @@ RestartSec=3
 # restricted by /usr/local/sbin/bpanel-helper and /etc/sudoers.d/bpanel.
 NoNewPrivileges=false
 ProtectSystem=false
-ProtectHome=read-only
-ReadWritePaths=${APP_DIR} ${SITES_ROOT} ${BACKUP_ROOT} /etc/nginx/conf.d /tmp /var/lib/bpanel
+ProtectHome=false
+ReadWritePaths=${APP_DIR} /home ${SITES_ROOT} ${BACKUP_ROOT} /etc/nginx/conf.d /tmp /var/lib/bpanel
 PrivateTmp=true
 PrivateDevices=true
 ProtectKernelTunables=true
@@ -189,7 +189,11 @@ mkdir -p /etc/systemd/system/filebrowser.service.d
 cat >/etc/systemd/system/filebrowser.service.d/10-bpanel-sites.conf <<'SERVICE'
 [Service]
 SupplementaryGroups=bpanel-sites
+ReadWritePaths=/home ${SITES_ROOT} /etc/filebrowser /var/lib/filebrowser /tmp
 SERVICE
+if command -v filebrowser >/dev/null 2>&1 && [[ -f /etc/filebrowser/database.db ]]; then
+  runuser -u www-data -- filebrowser -d /etc/filebrowser/database.db config set --root /home >/dev/null 2>&1 || true
+fi
 rm -f /etc/nginx/sites-enabled/bpanel.conf /etc/nginx/sites-available/bpanel.conf 2>/dev/null || true
 if command -v ufw >/dev/null 2>&1; then
   ufw allow "${PANEL_PORT}/tcp" >/dev/null || true

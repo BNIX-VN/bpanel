@@ -8,6 +8,8 @@ from app.services.shell import shell
 
 
 LINUX_USER_RE = re.compile(r"^bp_[a-z0-9_]{3,28}$")
+DOMAIN_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$")
+HOME_ROOT = Path("/home")
 
 
 def linux_user_for_domain(domain: str) -> str:
@@ -30,6 +32,33 @@ def php_fpm_socket(username: Optional[str]) -> Optional[str]:
         return None
     safe_user = validate_linux_user(username)
     return f"/run/php/bpanel-{safe_user}.sock"
+
+
+def site_root_for_domain(domain: str) -> str:
+    username = linux_user_for_domain(domain)
+    return str(HOME_ROOT / username / domain.strip().lower())
+
+
+def is_managed_site_path(path: str | Path) -> bool:
+    resolved = Path(path).resolve()
+    legacy_root = Path(settings.sites_root).resolve()
+    if legacy_root == resolved or legacy_root in resolved.parents:
+        return True
+    try:
+        relative = resolved.relative_to(HOME_ROOT)
+    except ValueError:
+        return False
+    parts = relative.parts
+    return len(parts) >= 2 and bool(LINUX_USER_RE.fullmatch(parts[0])) and bool(DOMAIN_RE.fullmatch(parts[1]))
+
+
+def is_site_root_for_domain(path: str | Path, domain: str) -> bool:
+    resolved = Path(path).resolve()
+    legacy_root = Path(settings.sites_root).resolve()
+    if resolved == legacy_root / domain:
+        return True
+    expected = Path(site_root_for_domain(domain)).resolve()
+    return resolved == expected
 
 
 def ensure_site_runtime(domain: str, root_path: str, php_version: Optional[str] = None) -> str:

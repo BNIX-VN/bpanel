@@ -1,3 +1,4 @@
+import secrets
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -9,12 +10,61 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.permissions import Role, ensure_role
 from app.core.secrets import encrypt
+from app.core.security import hash_password
 from app.models.entities import DatabaseAccount, User, Website
 from app.schemas.schemas import WebsiteCreate, WebsiteNginxCustom, WebsiteOut, WebsiteUpdate
 from app.services import mariadb, nginx, site_users, ssl, wordpress
 from app.services.audit import log_action
 
 router = APIRouter(prefix="/websites", tags=["websites"])
+
+
+def _panel_email_for_site_user(username: str) -> str:
+    return f"{username}@users.bpanel.test"
+
+
+def _ensure_panel_user_for_site(db: Session, username: str) -> tuple[User, str | None]:
+    user = db.query(User).filter(User.username == username).first()
+    if user:
+        return user, None
+
+    password = secrets.token_urlsafe(18)
+    email = _panel_email_for_site_user(username)
+    if db.query(User).filter(User.email == email).first():
+        email = f"{username}-{secrets.token_hex(4)}@users.bpanel.test"
+    user = User(
+        username=username,
+        email=email,
+        hashed_password=hash_password(password),
+        role="user",
+        website_limit=1,
+        storage_limit_mb=1024,
+    )
+    db.add(user)
+    db.flush()
+    return user, password
+
+
+def _website_out_with_panel_user(website: Website, username: str | None, password: str | None) -> WebsiteOut:
+    out = WebsiteOut.model_validate(website)
+    if username:
+        out.panel_username = username
+    if password:
+        out.panel_password = password
+    return out
+
+
+def _delete_auto_panel_user_for_site(db: Session, website: Website, current_user: User) -> None:
+    owner = website.owner
+    if not owner or owner.id == current_user.id:
+        return
+    if not website.linux_user or owner.username != website.linux_user:
+        return
+    if owner.role != "user" or not owner.email.endswith("@users.bpanel.test"):
+        return
+    remaining = db.query(Website).filter(Website.owner_id == owner.id, Website.id != website.id).count()
+    if remaining == 0:
+        db.delete(owner)
 
 
 def _command_error(result):
@@ -37,20 +87,31 @@ def _cleanup_failed_site(root_path: str, linux_user: str | None, delete_files: b
 def create_website(payload: WebsiteCreate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Create a website. If install_wordpress is False, only creates the domain
     folder + Nginx vhost (no DB, no WordPress files)."""
-    owner_id = payload.owner_id or current_user.id
-    if owner_id != current_user.id:
+    requested_owner_id = payload.owner_id
+    if requested_owner_id and requested_owner_id != current_user.id:
         ensure_role(current_user.role, Role.admin)
     if db.query(Website).filter(Website.domain == payload.domain).first():
         raise HTTPException(status_code=409, detail="Domain already exists")
-    owner = db.query(User).filter(User.id == owner_id).first()
-    if not owner:
-        raise HTTPException(status_code=404, detail="Owner not found")
+
+    panel_username = None
+    panel_password = None
+    if requested_owner_id:
+        owner = db.query(User).filter(User.id == requested_owner_id).first()
+        if not owner:
+            raise HTTPException(status_code=404, detail="Owner not found")
+    elif current_user.role in {"super_admin", "admin"}:
+        panel_username = site_users.linux_user_for_domain(payload.domain)
+        owner, panel_password = _ensure_panel_user_for_site(db, panel_username)
+    else:
+        owner = current_user
+
+    owner_id = owner.id
     current_count = db.query(Website).filter(Website.owner_id == owner_id).count()
     if current_count >= owner.website_limit:
         raise HTTPException(status_code=403, detail="Website limit reached")
 
     install_wp = payload.install_wordpress and payload.app_type == "wordpress"
-    root_path = str(Path(settings.sites_root) / payload.domain)
+    root_path = site_users.site_root_for_domain(payload.domain)
     if install_wp and (not payload.admin_email or not payload.admin_password):
         raise HTTPException(status_code=400, detail="admin_email and admin_password are required when install_wordpress is true")
     linux_user = None
@@ -143,7 +204,7 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
         payload.domain,
         request=request,
     )
-    return website
+    return _website_out_with_panel_user(website, panel_username, panel_password)
 
 
 @router.post("/wordpress", response_model=WebsiteOut)
@@ -249,6 +310,7 @@ def delete_website(website_id: int, request: Request, delete_files: bool = True,
         site_users.delete_site_runtime(website.root_path, website.linux_user)
     if db_item:
         db.delete(db_item)
+    _delete_auto_panel_user_for_site(db, website, current_user)
     db.delete(website)
     db.commit()
     log_action(db, current_user.id, "delete_website", website.domain, request=request)

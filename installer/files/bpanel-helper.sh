@@ -22,6 +22,7 @@ export PATH
 ALLOWED_SERVICES=(nginx mariadb redis-server filebrowser php8.3-fpm php8.4-fpm bpanel-api)
 ALLOWED_ACTIONS=(start stop restart reload status is-active is-enabled)
 SITES_ROOT="/home/bpanel-sites"
+HOME_ROOT="/home"
 NGINX_CONF_DIR="/etc/nginx/conf.d"
 PHP_CONF_DIRS=(/etc/php/8.3/fpm/conf.d /etc/php/8.4/fpm/conf.d)
 BPANEL_SITES_GROUP="bpanel-sites"
@@ -87,6 +88,43 @@ require_linux_user() {
   [[ "$1" =~ ^bp_[a-z0-9_]{3,28}$ ]] || deny "invalid site user: $1"
 }
 
+require_site_domain_segment() {
+  [[ "$1" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]] \
+    || deny "invalid site domain path segment: $1"
+}
+
+require_managed_path() {
+  local path="$1" user="${2:-}"
+  local resolved first_part relative domain_part
+  resolved=$(require_safe_path "$HOME_ROOT" "$path")
+  if [[ -n "$user" ]]; then
+    require_linux_user "$user"
+    case "$resolved/" in
+      "$HOME_ROOT/$user/"*)
+        relative="${resolved#${HOME_ROOT}/${user}/}"
+        domain_part="${relative%%/*}"
+        require_site_domain_segment "$domain_part"
+        ;;
+      "$SITES_ROOT"/*) ;;
+      *) deny "path is not owned by site user $user: $resolved" ;;
+    esac
+  else
+    case "$resolved/" in
+      "$SITES_ROOT"/*) ;;
+      "$HOME_ROOT"/bp_*/*)
+        first_part="${resolved#${HOME_ROOT}/}"
+        first_part="${first_part%%/*}"
+        require_linux_user "$first_part"
+        relative="${resolved#${HOME_ROOT}/${first_part}/}"
+        domain_part="${relative%%/*}"
+        require_site_domain_segment "$domain_part"
+        ;;
+      *) deny "path outside managed site roots: $resolved" ;;
+    esac
+  fi
+  echo "$resolved"
+}
+
 ensure_sites_group() {
   getent group "$BPANEL_SITES_GROUP" >/dev/null || groupadd --system "$BPANEL_SITES_GROUP"
   usermod -aG "$BPANEL_SITES_GROUP" bpanel 2>/dev/null || true
@@ -128,9 +166,6 @@ case "$cmd" in
     service="$1"; action="$2"
     is_in "$service" "${ALLOWED_SERVICES[@]}" || deny "service not allowed: $service"
     is_in "$action" "${ALLOWED_ACTIONS[@]}" || deny "action not allowed: $action"
-    if [[ "$service" == "nginx" && "$action" == "stop" ]]; then
-      deny "refusing to stop nginx (would disconnect the panel)"
-    fi
     exec systemctl "$action" "$service"
     ;;
 
@@ -211,13 +246,13 @@ case "$cmd" in
   # ---- filesystem -------------------------------------------------------
   chown-www)
     [[ $# -eq 1 ]] || deny "usage: chown-www <path>"
-    target=$(require_safe_path "$SITES_ROOT" "$1")
+    target=$(require_managed_path "$1")
     exec chown -R www-data:www-data "$target"
     ;;
 
   fix-permissions)
     [[ $# -ge 1 && $# -le 2 ]] || deny "usage: fix-permissions <path> [site-user]"
-    target=$(require_safe_path "$SITES_ROOT" "$1")
+    target=$(require_managed_path "$1" "${2:-}")
     if [[ $# -eq 2 ]]; then
       fix_site_tree "$target" "$2"
       exit 0
@@ -230,7 +265,7 @@ case "$cmd" in
 
   site-path-fix)
     [[ $# -eq 2 ]] || deny "usage: site-path-fix <path> <site-user>"
-    target=$(require_safe_path "$SITES_ROOT" "$1")
+    target=$(require_managed_path "$1" "$2")
     fix_site_tree "$target" "$2"
     ;;
 
@@ -238,14 +273,19 @@ case "$cmd" in
     [[ $# -eq 3 ]] || deny "usage: site-runtime-ensure <site-user> <path> <php-version|none>"
     user="$1"; path="$2"; php_version="$3"
     require_linux_user "$user"
-    target=$(require_safe_path "$SITES_ROOT" "$path")
+    target=$(require_managed_path "$path" "$user")
+    home_dir="$HOME_ROOT/$user"
     ensure_sites_group
     if ! id -u "$user" >/dev/null 2>&1; then
-      useradd --system --home-dir "$target" --shell /usr/sbin/nologin --user-group "$user"
+      useradd --system --home-dir "$home_dir" --shell /usr/sbin/nologin --user-group "$user"
     fi
-    usermod --home "$target" --shell /usr/sbin/nologin "$user" 2>/dev/null || true
+    usermod --home "$home_dir" --shell /usr/sbin/nologin "$user" 2>/dev/null || true
     usermod -L "$user" 2>/dev/null || true
-    install -d -o "$user" -g "$user" -m 0755 "$target" "$target/public"
+    mkdir -p "$home_dir" "$target/public"
+    chown "$user:$BPANEL_SITES_GROUP" "$home_dir"
+    chmod 0750 "$home_dir"
+    chown "$user:$user" "$target" "$target/public"
+    chmod 0755 "$target" "$target/public"
     fix_site_tree "$target" "$user"
     if [[ "$php_version" != "none" ]]; then
       require_php_version "$php_version"
@@ -285,7 +325,7 @@ POOL
     [[ $# -eq 2 ]] || deny "usage: site-runtime-delete <site-user> <path>"
     user="$1"; path="$2"
     require_linux_user "$user"
-    require_safe_path "$SITES_ROOT" "$path" >/dev/null
+    require_managed_path "$path" "$user" >/dev/null
     for dir in /etc/php/*/fpm/pool.d; do
       [[ -d "$dir" ]] || continue
       old_file="$dir/bpanel-${user}.conf"
@@ -299,18 +339,19 @@ POOL
     pkill -u "$user" 2>/dev/null || true
     userdel "$user" 2>/dev/null || true
     groupdel "$user" 2>/dev/null || true
+    rm -rf "$HOME_ROOT/$user" 2>/dev/null || true
     ;;
 
   rm-site)
     [[ $# -eq 1 ]] || deny "usage: rm-site <path>"
-    target=$(require_safe_path "$SITES_ROOT" "$1")
-    [[ "$target" == "$SITES_ROOT" ]] && deny "refusing to delete the entire sites root"
+    target=$(require_managed_path "$1")
+    [[ "$target" == "$SITES_ROOT" || "$target" =~ ^${HOME_ROOT}/bp_[a-z0-9_]{3,28}$ ]] && deny "refusing to delete a site root container"
     exec rm -rf "$target"
     ;;
 
   mkdir-site)
     [[ $# -eq 1 ]] || deny "usage: mkdir-site <path>"
-    target=$(require_safe_path "$SITES_ROOT" "$1")
+    target=$(require_managed_path "$1")
     install -d -o www-data -g www-data -m 0775 "$target"
     install -d -o www-data -g www-data -m 0775 "$target/public"
     ;;

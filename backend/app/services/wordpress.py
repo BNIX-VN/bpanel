@@ -66,7 +66,7 @@ def _safe_value(value: str, pattern: re.Pattern, label: str) -> str:
 
 
 def site_root(domain: str) -> str:
-    return str(Path(settings.sites_root) / domain)
+    return site_users.site_root_for_domain(domain)
 
 
 def install_wordpress(
@@ -171,9 +171,8 @@ def reset_admin_password(path: str, user: str, password: str, linux_user: str | 
 
 def delete_wordpress(root_path: str):
     target = Path(root_path).resolve()
-    sites_root = Path(settings.sites_root).resolve()
-    if sites_root not in target.parents:
-        raise ValueError("Refusing to delete path outside sites root")
+    if not site_users.is_managed_site_path(target):
+        raise ValueError("Refusing to delete path outside managed site roots")
     return shell.privileged(
         "rm-site",
         helper_args=[str(target)],

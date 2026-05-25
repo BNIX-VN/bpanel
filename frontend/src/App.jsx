@@ -326,11 +326,13 @@ function App() {
     const data = await request('/websites', { method: 'POST', body: JSON.stringify(body) },
       installWp ? 'Creating WordPress website...' : 'Creating website...');
     if (data) {
-      const linuxUserText = data.linux_user ? `\nLinux user: ${data.linux_user}` : '';
+      const panelUserText = data.panel_username
+        ? `\nPanel user: ${data.panel_username}${data.panel_password ? ` | Password: ${data.panel_password}` : ''}`
+        : '';
       if (installWp) {
-        setNotice(`Created WordPress site: https://${domain}\nAdmin: ${wpAdminUser} | Password: ${wpAdminPassword || 'StrongPass123!'}${linuxUserText}`);
+        setNotice(`Created WordPress site: https://${domain}\nAdmin: ${wpAdminUser} | Password: ${wpAdminPassword || 'StrongPass123!'}${panelUserText}`);
       } else {
-        setNotice(`Created site ${domain}. Upload your files to public/ folder.${linuxUserText}`);
+        setNotice(`Created site ${domain}. Upload your files to public/ folder.${panelUserText}`);
       }
       if (installSslAfterCreate) await enableSsl(data.id);
       refreshAll();
@@ -795,7 +797,6 @@ function App() {
             <div className="site-meta">
               <span>Type <strong>{site.app_type || 'wordpress'}</strong></span>
               <span>PHP <strong>{site.php_version}</strong></span>
-              {site.linux_user && <span>Linux <strong>{site.linux_user}</strong></span>}
               <span>Status <strong>{site.status}</strong></span>
               {site.nginx_custom && <span className="badge ok">Custom Nginx</span>}
             </div>
@@ -979,7 +980,7 @@ function App() {
             <small>Auto-refreshes every 10s</small>
             {isAdmin && <div className="service-actions">
               <button onClick={() => runServiceAction(name, 'start')}><Play size={13}/> Start</button>
-              {!['nginx', 'bpanel-api'].includes(name) && <button onClick={() => runServiceAction(name, 'stop')}><Square size={13}/> Stop</button>}
+              {name !== 'bpanel-api' && <button onClick={() => runServiceAction(name, 'stop')}><Square size={13}/> Stop</button>}
               <button onClick={() => runServiceAction(name, 'restart')}><RotateCcw size={13}/> Restart</button>
             </div>}
           </div>;

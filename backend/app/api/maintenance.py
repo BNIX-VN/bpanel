@@ -27,7 +27,7 @@ from app.schemas.schemas import (
     SftpBackupTargetOut,
     WpAction,
 )
-from app.services import backup, cron, file_manager, php, site_users, wordpress
+from app.services import backup, cron, file_manager, panel_urls, php, site_users, wordpress
 from app.services.audit import log_action
 
 router = APIRouter(prefix="/maintenance", tags=["maintenance"])
@@ -57,15 +57,10 @@ def get_owned_website(db: Session, current_user: User, website_id: int) -> Websi
     return website
 
 
-def _is_secure_request(request: Request) -> bool:
-    forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
-    return forwarded_proto == "https" or request.url.scheme == "https"
-
-
-def _make_filebrowser_token(username: str, kind: str, ttl_seconds: int, redirect: str = "/filebrowser/") -> str:
+def _make_filebrowser_token(username: str, kind: str, ttl_seconds: int, redirect: str = "/filebrowser/", base_url: str = "") -> str:
     expire = datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
     return jwt.encode(
-        {"sub": username, "kind": kind, "redirect": redirect, "exp": expire},
+        {"sub": username, "kind": kind, "redirect": redirect, "base_url": base_url, "exp": expire},
         settings.secret_key,
         algorithm=ALGORITHM,
     )
@@ -84,12 +79,14 @@ def _decode_filebrowser_token(token: str, expected_kind: str) -> dict:
 def _filebrowser_redirect_for(website: Optional[Website]) -> str:
     if not website:
         return "/filebrowser/files/"
-    sites_root = Path(settings.sites_root).resolve()
     root_path = Path(website.root_path).resolve()
     try:
-        relative_path = root_path.relative_to(sites_root).as_posix()
+        relative_path = root_path.relative_to(Path("/home")).as_posix()
     except ValueError:
-        relative_path = website.domain
+        try:
+            relative_path = root_path.relative_to(Path(settings.sites_root).resolve()).as_posix()
+        except ValueError:
+            relative_path = website.domain
     return f"/filebrowser/files/{quote(f'{relative_path}/public', safe='/._-')}"
 
 
@@ -300,11 +297,17 @@ def fix_wordpress_permissions(website_id: int, db: Session = Depends(get_db), cu
 
 
 @router.post("/filebrowser")
-def open_filebrowser(payload: FileBrowserOpen, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def open_filebrowser(payload: FileBrowserOpen, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.admin)
     website = get_owned_website(db, current_user, payload.website_id) if payload.website_id else None
     redirect = _filebrowser_redirect_for(website)
-    token = _make_filebrowser_token(current_user.username, "filebrowser-login", FILEBROWSER_LOGIN_TTL_SECONDS, redirect)
+    token = _make_filebrowser_token(
+        current_user.username,
+        "filebrowser-login",
+        FILEBROWSER_LOGIN_TTL_SECONDS,
+        redirect,
+        panel_urls.tools_base_url(request),
+    )
     return {"url": f"/api/maintenance/filebrowser-sso/{token}"}
 
 
@@ -318,14 +321,17 @@ def filebrowser_sso(token: str, request: Request, db: Session = Depends(get_db))
     redirect = payload.get("redirect") or "/filebrowser/"
     if not isinstance(redirect, str) or not redirect.startswith("/filebrowser/"):
         redirect = "/filebrowser/"
-    session_token = _make_filebrowser_token(user.username, "filebrowser-session", FILEBROWSER_SESSION_TTL_SECONDS, redirect)
-    response = RedirectResponse(redirect, status_code=status.HTTP_303_SEE_OTHER)
+    base_url = payload.get("base_url") or panel_urls.tools_base_url(request)
+    if not isinstance(base_url, str) or not (base_url.startswith("http://") or base_url.startswith("https://")):
+        base_url = panel_urls.tools_base_url(request)
+    session_token = _make_filebrowser_token(user.username, "filebrowser-session", FILEBROWSER_SESSION_TTL_SECONDS, redirect, base_url)
+    response = RedirectResponse(f"{base_url}{redirect}", status_code=status.HTTP_303_SEE_OTHER)
     response.set_cookie(
         FILEBROWSER_COOKIE,
         session_token,
         max_age=FILEBROWSER_SESSION_TTL_SECONDS,
         path="/filebrowser/",
-        secure=_is_secure_request(request),
+        secure=base_url.startswith("https://"),
         httponly=True,
         samesite="lax",
     )

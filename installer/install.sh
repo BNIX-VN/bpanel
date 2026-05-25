@@ -35,6 +35,7 @@ PHP_VERSIONS="${PHP_VERSIONS:-8.3 8.4}"
 APP_DIR="${APP_DIR:-/opt/bpanel}"
 SITES_ROOT="${SITES_ROOT:-/home/bpanel-sites}"
 BACKUP_ROOT="${BACKUP_ROOT:-/var/backups/bpanel}"
+FILEBROWSER_PORT="${FILEBROWSER_PORT:-8088}"
 ADMIN_PASSWORD=""
 
 log() {
@@ -348,7 +349,7 @@ ALLOWED_ORIGINS=${PANEL_URL}
 SITES_ROOT=${SITES_ROOT}
 BACKUP_ROOT=${BACKUP_ROOT}
 SSL_EMAIL=${SSL_EMAIL}
-FILEBROWSER_PORT=8088
+FILEBROWSER_PORT=${FILEBROWSER_PORT}
 PANEL_URL=${PANEL_URL}
 PANEL_DOMAIN=${PANEL_DOMAIN}
 PANEL_PORT=${PANEL_PORT}
@@ -416,8 +417,8 @@ RestartSec=3
 # restricted by /usr/local/sbin/bpanel-helper and /etc/sudoers.d/bpanel.
 NoNewPrivileges=false
 ProtectSystem=false
-ProtectHome=read-only
-ReadWritePaths=${APP_DIR} ${SITES_ROOT} ${BACKUP_ROOT} /etc/nginx/conf.d /tmp /var/lib/bpanel
+ProtectHome=false
+ReadWritePaths=${APP_DIR} /home ${SITES_ROOT} ${BACKUP_ROOT} /etc/nginx/conf.d /tmp /var/lib/bpanel
 PrivateTmp=true
 PrivateDevices=true
 ProtectKernelTunables=true
@@ -453,9 +454,9 @@ setup_filebrowser_service() {
   fi
   runuser -u www-data -- filebrowser -d /etc/filebrowser/database.db config set \
     --address 127.0.0.1 \
-    --port 8088 \
+    --port "$FILEBROWSER_PORT" \
     --baseURL /filebrowser \
-    --root "$SITES_ROOT" \
+    --root /home \
     --auth.method=noauth \
     --branding.name BPanelFiles >/dev/null
   if ! runuser -u www-data -- filebrowser -d /etc/filebrowser/database.db users ls 2>/dev/null | grep -q '^admin'; then
@@ -478,7 +479,7 @@ RestartSec=3
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
-ReadWritePaths=${SITES_ROOT} /etc/filebrowser /var/lib/filebrowser /tmp
+ReadWritePaths=/home ${SITES_ROOT} /etc/filebrowser /var/lib/filebrowser /tmp
 
 [Install]
 WantedBy=multi-user.target
@@ -489,9 +490,83 @@ SERVICE
 }
 
 
+write_tools_nginx_config() {
+  local api_scheme="http" tools_scheme="http" pma_secure="false" ssl_block=""
+  if [[ -n "${PANEL_SSL_CERT:-}" && -n "${PANEL_SSL_KEY:-}" && -f "${PANEL_SSL_CERT}" && -f "${PANEL_SSL_KEY}" ]]; then
+    api_scheme="https"
+    tools_scheme="https"
+    pma_secure="true"
+    printf -v ssl_block '\n    listen 443 ssl default_server;\n    ssl_certificate %s;\n    ssl_certificate_key %s;' "$PANEL_SSL_CERT" "$PANEL_SSL_KEY"
+  fi
+
+  cat >/etc/nginx/conf.d/00-bpanel-tools.conf <<NGINX
+server {
+    listen 80 default_server;${ssl_block}
+    server_name _;
+    client_max_body_size 1100M;
+
+    location = /_bpanel/filebrowser-auth {
+        internal;
+        proxy_pass ${api_scheme}://127.0.0.1:${PANEL_PORT}/api/maintenance/filebrowser-auth;
+        proxy_ssl_verify off;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header Cookie \$http_cookie;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Forwarded-Host \$host;
+    }
+
+    location /filebrowser/ {
+        auth_request /_bpanel/filebrowser-auth;
+        proxy_pass http://127.0.0.1:${FILEBROWSER_PORT:-8088};
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    location = /phpmyadmin {
+        return 301 /phpmyadmin/;
+    }
+
+    location /phpmyadmin/ {
+        alias /usr/share/phpmyadmin/;
+        index index.php;
+        try_files \$uri \$uri/ =404;
+    }
+
+    location ~ ^/phpmyadmin/(.+\.php)$ {
+        alias /usr/share/phpmyadmin/\$1;
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME /usr/share/phpmyadmin/\$1;
+        fastcgi_param SCRIPT_NAME /phpmyadmin/\$1;
+        fastcgi_pass unix:/run/php/php${PHP_DEFAULT}-fpm.sock;
+        fastcgi_read_timeout 300;
+    }
+}
+NGINX
+
+  local host
+  host="${PANEL_DOMAIN:-$SERVER_IP}"
+  [[ -n "$host" ]] || host="$(detect_server_ip)"
+  sed -i -E "s#(\$apiUrl = ')[^']+(/api/databases/phpmyadmin-sso/)'#\1${api_scheme}://127.0.0.1:${PANEL_PORT}\2'#" /usr/share/phpmyadmin/bpanel-signon.php 2>/dev/null || true
+  sed -i -E "s#('secure' => )(true|false)#\1${pma_secure}#" /etc/phpmyadmin/conf.d/bpanel-signon.php /usr/share/phpmyadmin/bpanel-signon.php 2>/dev/null || true
+  sed -i -E "s#(\$cfg\['PmaAbsoluteUri'\] = ')[^']+('#\1${tools_scheme}://${host}/phpmyadmin/\2#" /etc/phpmyadmin/conf.d/bpanel-signon.php 2>/dev/null || true
+}
+
+
 setup_phpmyadmin_sso() {
   local blowfish_secret
   blowfish_secret="$(openssl rand -hex 32)"
+  local pma_host pma_scheme pma_secure
+  pma_host="${PANEL_DOMAIN:-$SERVER_IP}"
+  [[ -n "$pma_host" ]] || pma_host="$(detect_server_ip)"
+  pma_scheme="http"
+  pma_secure="false"
+  if [[ "$ENABLE_SSL" == "yes" ]]; then
+    pma_scheme="https"
+    pma_secure="true"
+  fi
 
   cat >/etc/phpmyadmin/conf.d/bpanel-signon.php <<PHP
 <?php
@@ -503,7 +578,7 @@ setup_phpmyadmin_sso() {
     'lifetime' => 0,
     'path' => '/',
     'domain' => '',
-    'secure' => true,
+    'secure' => ${pma_secure},
     'httponly' => true,
     'samesite' => 'Lax',
 ];
@@ -512,7 +587,7 @@ setup_phpmyadmin_sso() {
 \$cfg['Servers'][\$i]['AllowNoPassword'] = false;
 \$cfg['Servers'][\$i]['only_db'] = '';
 \$cfg['SessionSavePath'] = '/var/lib/php/sessions';
-\$cfg['PmaAbsoluteUri'] = '${PANEL_URL}/phpmyadmin/';
+\$cfg['PmaAbsoluteUri'] = '${pma_scheme}://${pma_host}/phpmyadmin/';
 PHP
 
   cat >/usr/share/phpmyadmin/bpanel-signon.php <<'PHP'
@@ -525,7 +600,7 @@ session_set_cookie_params([
     'lifetime' => 0,
     'path' => '/',
     'domain' => '',
-    'secure' => true,
+    'secure' => __BPANEL_PMA_COOKIE_SECURE__,
     'httponly' => true,
     'samesite' => 'Lax',
 ]);
@@ -588,6 +663,7 @@ PHP
     api_scheme="https"
   fi
   sed -i "s#__BPANEL_API_BASE__#${api_scheme}://127.0.0.1:${PANEL_PORT}/api/databases/phpmyadmin-sso/#" /usr/share/phpmyadmin/bpanel-signon.php
+  sed -i "s#__BPANEL_PMA_COOKIE_SECURE__#${pma_secure}#" /usr/share/phpmyadmin/bpanel-signon.php
 
   chown root:www-data /etc/phpmyadmin/conf.d/bpanel-signon.php
   chmod 640 /etc/phpmyadmin/conf.d/bpanel-signon.php
@@ -597,6 +673,7 @@ PHP
 setup_nginx() {
   rm -f /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf 2>/dev/null || true
   rm -f /etc/nginx/sites-enabled/bpanel.conf /etc/nginx/sites-available/bpanel.conf 2>/dev/null || true
+  write_tools_nginx_config
   nginx -t
   systemctl reload nginx
 }
@@ -625,12 +702,17 @@ setup_ssl() {
   install -d -o root -g bpanel -m 0750 /etc/bpanel
   install -m 0640 -o root -g bpanel "/etc/letsencrypt/live/${PANEL_DOMAIN}/fullchain.pem" /etc/bpanel/panel-fullchain.pem
   install -m 0640 -o root -g bpanel "/etc/letsencrypt/live/${PANEL_DOMAIN}/privkey.pem" /etc/bpanel/panel-privkey.pem
+  PANEL_SSL_CERT=/etc/bpanel/panel-fullchain.pem
+  PANEL_SSL_KEY=/etc/bpanel/panel-privkey.pem
   sed -i \
     -e "s#^PANEL_SSL_CERT=.*#PANEL_SSL_CERT=/etc/bpanel/panel-fullchain.pem#" \
     -e "s#^PANEL_SSL_KEY=.*#PANEL_SSL_KEY=/etc/bpanel/panel-privkey.pem#" \
     -e "s#^PANEL_URL=.*#PANEL_URL=${PANEL_URL}#" \
     -e "s#^ALLOWED_ORIGINS=.*#ALLOWED_ORIGINS=${PANEL_URL}#" \
     "${APP_DIR}/backend/.env"
+  write_tools_nginx_config
+  nginx -t
+  systemctl reload nginx
   systemctl restart bpanel-api
   for _ in {1..20}; do
     if curl -kfsS "https://127.0.0.1:${PANEL_PORT}/api/health" >/dev/null 2>&1; then

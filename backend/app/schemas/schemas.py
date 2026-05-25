@@ -190,6 +190,8 @@ class WebsiteOut(BaseModel):
     owner_id: int
     root_path: str
     linux_user: Optional[str] = None
+    panel_username: Optional[str] = None
+    panel_password: Optional[str] = None
     php_version: str
     app_type: str
     ssl_enabled: bool

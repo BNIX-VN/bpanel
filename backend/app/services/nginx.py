@@ -5,6 +5,7 @@ from typing import Optional
 from jinja2 import Environment, FileSystemLoader
 
 from app.core.config import settings
+from app.services import site_users
 from app.services.shell import shell
 
 TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates" / "nginx"
@@ -211,10 +212,9 @@ def render_vhost(
         raise ValueError("Invalid domain")
     _check_app_type(app_type)
     _check_php_version(php_version)
-    sites_root = Path(settings.sites_root).resolve()
     resolved_root = Path(root_path).resolve()
-    if sites_root != resolved_root and sites_root not in resolved_root.parents:
-        raise ValueError("root_path must live under sites_root")
+    if not site_users.is_site_root_for_domain(resolved_root, domain):
+        raise ValueError("root_path must be the managed root for this domain")
     safe_custom = validate_custom_nginx(custom_directives)
 
     env = Environment(loader=FileSystemLoader(TEMPLATE_DIR), autoescape=False)

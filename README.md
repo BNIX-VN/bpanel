@@ -6,7 +6,8 @@ from a single web UI.
 
 - WordPress one-click installer (PHP 8.3 / 8.4) with WP-CLI
 - Static sites with editable per-site Nginx blocks
-- One isolated, locked Linux user per new website; PHP/WordPress vhosts get a private PHP-FPM pool
+- One isolated, locked Linux user per new website; source lives in `/home/<site-user>/<domain>/public`
+- Admin-created websites also get a matching panel user with the same site username
 - MariaDB databases with phpMyAdmin SSO (60s tokens)
 - Let's Encrypt SSL via certbot
 - File Browser integration with single sign-on
@@ -159,7 +160,7 @@ SECRET_KEY=<random-32-bytes>
 COMMAND_DRY_RUN=false
 DATABASE_URL=sqlite:////opt/bpanel/backend/bpanel.db
 ALLOWED_ORIGINS=https://panel.example.com
-SITES_ROOT=/home/bpanel-sites
+SITES_ROOT=/home/bpanel-sites  # legacy/imported sites; new sites use /home/<site-user>/<domain>
 BACKUP_ROOT=/var/backups/bpanel
 SSL_EMAIL=admin@example.com
 FILEBROWSER_PORT=8088
@@ -210,8 +211,8 @@ What the helper allows:
 - `certbot --nginx ...` for a single validated domain
 - create/delete per-site Linux users and PHP-FPM pools (`bp_*` users only)
 - `ufw status/enable/disable/allow/deny/delete`
-- fix ownership/ACLs for paths under `/home/bpanel-sites`
-- `rm -rf <path under /home/bpanel-sites>`
+- fix ownership/ACLs for managed site paths under `/home/<site-user>/<domain>` or legacy `/home/bpanel-sites`
+- `rm -rf <managed site path>`
 - WP-CLI and crontab management as the isolated site user
 
 Anything else is rejected. The helper validates domains, ports, IPs, and
@@ -234,7 +235,7 @@ intentionally uses `sudo -n /usr/local/sbin/bpanel-helper` for the narrowly
 whitelisted root operations.
 
 If the API itself were ever compromised, the attacker would be limited to:
-- writing into `/etc/nginx/conf.d/`, `/home/bpanel-sites/`, `/var/backups/bpanel/`
+- writing into `/etc/nginx/conf.d/`, managed site paths under `/home`, and `/var/backups/bpanel/`
 - running the helper subcommands above (no arbitrary code execution as root)
 
 There is no path back to root via the API process.

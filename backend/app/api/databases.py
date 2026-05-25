@@ -12,7 +12,7 @@ from app.core.permissions import Role, ensure_role
 from app.core.secrets import decrypt, encrypt
 from app.models.entities import DatabaseAccount, User, Website
 from app.schemas.schemas import DatabaseOut, DatabasePasswordUpdate
-from app.services import mariadb
+from app.services import mariadb, panel_urls
 from app.services.sso_tokens import consume_phpmyadmin_token, create_phpmyadmin_token
 
 router = APIRouter(prefix="/databases", tags=["databases"])
@@ -85,10 +85,10 @@ def consume_phpmyadmin_sso(token: str):
 
 
 @router.post("/{database_id}/phpmyadmin-sso")
-def create_phpmyadmin_sso(database_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def create_phpmyadmin_sso(database_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     item = get_accessible_database(database_id, db, current_user)
     token = create_phpmyadmin_token(item.db_user, decrypt(item.db_password), item.db_name)
-    return {"url": f"/phpmyadmin/bpanel-signon.php?bpanel_sso={token}"}
+    return {"url": f"{panel_urls.tools_base_url(request)}/phpmyadmin/bpanel-signon.php?bpanel_sso={token}"}
 
 
 @router.post("/{database_id}/password")
