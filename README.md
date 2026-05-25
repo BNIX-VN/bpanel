@@ -8,7 +8,7 @@ from a single web UI.
 - Static sites with editable per-site Nginx blocks
 - One isolated, locked Linux user per new website; source lives in `/home/<site-user>/<domain>/public`
 - Admin-created websites also get a matching panel user with the same site username
-- MariaDB databases with phpMyAdmin SSO (60s tokens)
+- MariaDB database creation and management with phpMyAdmin SSO (60s tokens)
 - Let's Encrypt SSL via certbot
 - File Browser integration with single sign-on
 - Backups: archive site files + SQL, restore, upload, download

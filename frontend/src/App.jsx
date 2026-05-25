@@ -29,6 +29,7 @@ function App() {
   const [nginxCustomEditing, setNginxCustomEditing] = useState(null); // {id, domain, content}
   const [websites, setWebsites] = useState([]);
   const [databases, setDatabases] = useState([]);
+  const [newDatabase, setNewDatabase] = useState({ website_id: '', db_name: '' });
   const [users, setUsers] = useState([]);
   const [systemInfo, setSystemInfo] = useState(null);
   const [serviceStates, setServiceStates] = useState({});
@@ -233,6 +234,7 @@ function App() {
     if (siteData) {
       setWebsites(siteData);
       if (!selectedWebsiteId && siteData[0]) setSelectedWebsiteId(String(siteData[0].id));
+      if (!newDatabase.website_id && siteData[0]) setNewDatabase(prev => ({ ...prev, website_id: String(siteData[0].id) }));
     }
     const dbData = await request('/databases');
     if (dbData) setDatabases(dbData);
@@ -391,6 +393,20 @@ function App() {
     const newPass = prompt('Enter a new database password, minimum 12 characters:');
     if (!newPass) return;
     await request(`/databases/${id}/password`, { method: 'POST', body: JSON.stringify({ password: newPass }) }, 'Changing database password...');
+  }
+
+  async function createDatabase() {
+    if (!newDatabase.website_id) { setError('Please select a website.'); return; }
+    const body = {
+      website_id: Number(newDatabase.website_id),
+      db_name: newDatabase.db_name.trim() || null,
+    };
+    const data = await request('/databases', { method: 'POST', body: JSON.stringify(body) }, 'Creating database...');
+    if (data) {
+      setNotice(`Created database ${data.db_name}\nUser: ${data.db_user}${data.db_password ? ` | Password: ${data.db_password}` : ''}`);
+      setNewDatabase(prev => ({ ...prev, db_name: '' }));
+      await refreshAll();
+    }
   }
 
   async function addCron() {
@@ -852,16 +868,29 @@ function App() {
 
   function renderDatabases() {
     return <section className="section">
-      <h2>Databases</h2>
+      <div className="section-title">
+        <h2>Databases</h2>
+        <button disabled={!!loading} onClick={refreshAll}><RefreshCw size={15}/> Refresh</button>
+      </div>
+      <div className="form-row">
+        <select value={newDatabase.website_id} onChange={e => setNewDatabase(prev => ({ ...prev, website_id: e.target.value }))}>
+          <option value="">Select website</option>
+          {websites.map(site => <option key={site.id} value={site.id}>{site.domain}</option>)}
+        </select>
+        <input value={newDatabase.db_name} onChange={e => setNewDatabase(prev => ({ ...prev, db_name: e.target.value }))} placeholder="database_name (optional)" />
+        <button disabled={!!loading || !newDatabase.website_id} onClick={createDatabase}><Plus size={15}/> Create database</button>
+      </div>
       {databases.length === 0 && <EmptyState icon={Database} message="No databases found." />}
       <div className="table">
-        {databases.map(db => <div className="row db-row" key={db.id}>
-          <span><strong>{db.db_name}</strong></span>
+        {databases.map(db => {
+          const site = websites.find(item => item.id === db.website_id);
+          return <div className="row db-row" key={db.id}>
+          <span><strong>{db.db_name}</strong>{site && <small>{site.domain}</small>}</span>
           <span style={{color:'var(--text-muted)'}}>{db.db_user}</span>
           <button disabled={!!loading} onClick={() => openPhpMyAdmin(db.id)}>phpMyAdmin</button>
           <button disabled={!!loading} onClick={() => downloadDatabase(db.id, db.db_name)}><Download size={14}/> SQL</button>
           <button disabled={!!loading} onClick={() => changeDbPassword(db.id)}><KeyRound size={14}/> Password</button>
-        </div>)}
+        </div>})}
       </div>
       <p className="hint">Click phpMyAdmin to sign in directly. Token expires after 60s.</p>
     </section>;

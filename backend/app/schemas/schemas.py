@@ -179,6 +179,18 @@ class DatabasePasswordUpdate(BaseModel):
     password: str = Field(min_length=12)
 
 
+class DatabaseCreate(BaseModel):
+    website_id: int
+    db_name: Optional[str] = Field(default=None, min_length=1, max_length=64, pattern=r"^[a-z0-9_]+$")
+
+    @field_validator("db_name", mode="before")
+    @classmethod
+    def validate_db_name(cls, value) -> Optional[str]:
+        if value is None or value == "":
+            return None
+        return str(value).strip().lower()
+
+
 class CronDelete(BaseModel):
     website_id: int
     index: int
@@ -210,6 +222,10 @@ class DatabaseOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class DatabaseCreatedOut(DatabaseOut):
+    db_password: str
 
 
 class ServiceAction(BaseModel):

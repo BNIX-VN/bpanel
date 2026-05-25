@@ -11,7 +11,7 @@ from app.core.database import get_db
 from app.core.permissions import Role, ensure_role
 from app.core.secrets import decrypt, encrypt
 from app.models.entities import DatabaseAccount, User, Website
-from app.schemas.schemas import DatabaseOut, DatabasePasswordUpdate
+from app.schemas.schemas import DatabaseCreate, DatabaseCreatedOut, DatabaseOut, DatabasePasswordUpdate
 from app.services import mariadb, panel_urls
 from app.services.sso_tokens import consume_phpmyadmin_token, create_phpmyadmin_token
 
@@ -36,6 +36,38 @@ def list_databases(db: Session = Depends(get_db), current_user: User = Depends(g
     if current_user.role not in {"super_admin", "admin"}:
         query = query.filter(Website.owner_id == current_user.id)
     return query.order_by(DatabaseAccount.id.desc()).all()
+
+
+@router.post("", response_model=DatabaseCreatedOut)
+def create_database(payload: DatabaseCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    website = db.query(Website).filter(Website.id == payload.website_id).first()
+    if not website:
+        raise HTTPException(status_code=404, detail="Website not found")
+    if website.owner_id != current_user.id:
+        ensure_role(current_user.role, Role.admin)
+    if db.query(DatabaseAccount).filter(DatabaseAccount.website_id == website.id).first():
+        raise HTTPException(status_code=409, detail="This website already has a database")
+
+    db_name = payload.db_name or mariadb.safe_db_identifier(website.domain, "db")
+    if db.query(DatabaseAccount).filter(DatabaseAccount.db_name == db_name).first():
+        raise HTTPException(status_code=409, detail="Database name already exists")
+    db_info = mariadb.create_database(website.domain, prefix="db", db_name=db_name, if_not_exists=False)
+    item = DatabaseAccount(
+        website_id=website.id,
+        db_name=db_info["db_name"],
+        db_user=db_info["db_user"],
+        db_password=encrypt(db_info["db_password"]),
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return DatabaseCreatedOut(
+        id=item.id,
+        website_id=item.website_id,
+        db_name=item.db_name,
+        db_user=item.db_user,
+        db_password=db_info["db_password"],
+    )
 
 
 @router.delete("/{database_id}")

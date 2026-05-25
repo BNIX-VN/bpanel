@@ -50,12 +50,13 @@ def _run_sql(sql: str, *, check: bool = True):
     return shell.run(_mysql_args(), check=check, input=sql, sensitive=True)
 
 
-def create_database(domain: str) -> Dict[str, str]:
-    db_name = _validate_identifier(safe_db_identifier(domain, "wp"))
-    db_user = _validate_identifier(safe_db_identifier(domain, "u"))
+def create_database(seed: str, prefix: str = "wp", db_name: str | None = None, if_not_exists: bool = True) -> Dict[str, str]:
+    db_name = _validate_identifier(db_name or safe_db_identifier(seed, prefix))
+    db_user = _validate_identifier(safe_db_identifier(db_name, "u"))
     db_password = random_password()
+    create_clause = "CREATE DATABASE IF NOT EXISTS" if if_not_exists else "CREATE DATABASE"
     sql = (
-        f"CREATE DATABASE IF NOT EXISTS {_quote_identifier(db_name)} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;\n"
+        f"{create_clause} {_quote_identifier(db_name)} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;\n"
         f"CREATE USER IF NOT EXISTS {_quote_sql_string(db_user)}@'localhost' IDENTIFIED BY {_quote_sql_string(db_password)};\n"
         f"ALTER USER {_quote_sql_string(db_user)}@'localhost' IDENTIFIED BY {_quote_sql_string(db_password)};\n"
         f"GRANT ALL PRIVILEGES ON {_quote_identifier(db_name)}.* TO {_quote_sql_string(db_user)}@'localhost';\n"

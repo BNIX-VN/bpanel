@@ -103,10 +103,16 @@ server {
     location /filebrowser/ {
         auth_request /_bpanel/filebrowser-auth;
         proxy_pass http://127.0.0.1:${filebrowser_port};
+        proxy_http_version 1.1;
+        proxy_request_buffering off;
+        proxy_buffering off;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Forwarded-Host \$host;
+        proxy_set_header X-Forwarded-Prefix /filebrowser;
+        proxy_set_header X-Original-URI \$request_uri;
     }
 
     location = /phpmyadmin { return 301 /phpmyadmin/; }
@@ -182,7 +188,11 @@ SupplementaryGroups=bpanel-sites
 ReadWritePaths=/home /home/bpanel-sites /etc/filebrowser /var/lib/filebrowser /tmp
 SERVICE
   if command -v filebrowser >/dev/null 2>&1 && [[ -f /etc/filebrowser/database.db ]]; then
-    runuser -u www-data -- filebrowser -d /etc/filebrowser/database.db config set --root /home >/dev/null 2>&1 || true
+    runuser -u www-data -- filebrowser -d /etc/filebrowser/database.db config set \
+      --root /home \
+      --address 127.0.0.1 \
+      --port "$filebrowser_port" \
+      --baseURL /filebrowser >/dev/null 2>&1 || true
   fi
   if command -v ufw >/dev/null 2>&1; then
     ufw allow "${panel_port}/tcp" >/dev/null || true
@@ -368,6 +378,25 @@ if id -u bpanel >/dev/null 2>&1; then
     "from app.core.database import run_migrations; run_migrations()"
 else
   python -c "from app.core.database import run_migrations; run_migrations()"
+fi
+
+log "Refreshing managed site permissions"
+if id -u bpanel >/dev/null 2>&1; then
+  sudo -u bpanel env HOME="$APP_DIR" BPANEL_USE_HELPER=true "$APP_DIR/backend/.venv/bin/python" - <<'PY'
+from app.core.database import SessionLocal
+from app.models.entities import Website
+from app.services import site_users
+
+with SessionLocal() as db:
+    for website in db.query(Website).all():
+        try:
+            if website.linux_user:
+                runtime_php_version = website.php_version if (website.app_type or "wordpress") == "wordpress" else None
+                site_users.ensure_site_runtime(website.domain, website.root_path, runtime_php_version)
+            site_users.fix_site_permissions(website.root_path, website.linux_user)
+        except Exception as exc:
+            print(f"WARNING: could not refresh permissions for {website.domain}: {exc}")
+PY
 fi
 
 log "Compiling backend modules"
