@@ -24,6 +24,7 @@ ALLOWED_ACTIONS=(start stop restart reload status is-active is-enabled)
 SITES_ROOT="/home/bpanel-sites"
 NGINX_CONF_DIR="/etc/nginx/conf.d"
 PHP_CONF_DIRS=(/etc/php/8.3/fpm/conf.d /etc/php/8.4/fpm/conf.d)
+BPANEL_SITES_GROUP="bpanel-sites"
 
 deny() { echo "bpanel-helper: $*" >&2; exit 1; }
 
@@ -76,6 +77,39 @@ require_port() {
 
 require_proto() {
   [[ "$1" == "tcp" || "$1" == "udp" ]] || deny "invalid protocol: $1"
+}
+
+require_php_version() {
+  [[ "$1" == "8.3" || "$1" == "8.4" ]] || deny "invalid PHP version: $1"
+}
+
+require_linux_user() {
+  [[ "$1" =~ ^bp_[a-z0-9_]{3,28}$ ]] || deny "invalid site user: $1"
+}
+
+ensure_sites_group() {
+  getent group "$BPANEL_SITES_GROUP" >/dev/null || groupadd --system "$BPANEL_SITES_GROUP"
+  usermod -aG "$BPANEL_SITES_GROUP" bpanel 2>/dev/null || true
+  usermod -aG "$BPANEL_SITES_GROUP" www-data 2>/dev/null || true
+}
+
+fix_site_tree() {
+  local target="$1" user="$2"
+  ensure_sites_group
+  require_linux_user "$user"
+  command -v setfacl >/dev/null 2>&1 || deny "setfacl not found; install the acl package"
+  chown -R "$user:$user" "$target"
+  if [[ -d "$target" ]]; then
+    find "$target" -type d -exec chmod 2750 {} +
+    find "$target" -type f -exec chmod 640 {} +
+    find "$target" -name wp-config.php -type f -exec chmod 640 {} + 2>/dev/null || true
+    setfacl -R -m "g::rwX,g:${BPANEL_SITES_GROUP}:rwX,m::rwX" "$target"
+    find "$target" -type d -exec setfacl -m "d:g::rwX,d:g:${BPANEL_SITES_GROUP}:rwX,d:m::rwX" {} +
+  else
+    chmod 640 "$target"
+    [[ "$(basename "$target")" == "wp-config.php" ]] && chmod 640 "$target"
+    setfacl -m "g:${BPANEL_SITES_GROUP}:rw" "$target"
+  fi
 }
 
 require_ip_or_cidr() {
@@ -182,12 +216,89 @@ case "$cmd" in
     ;;
 
   fix-permissions)
-    [[ $# -eq 1 ]] || deny "usage: fix-permissions <path>"
+    [[ $# -ge 1 && $# -le 2 ]] || deny "usage: fix-permissions <path> [site-user]"
     target=$(require_safe_path "$SITES_ROOT" "$1")
+    if [[ $# -eq 2 ]]; then
+      fix_site_tree "$target" "$2"
+      exit 0
+    fi
     chown -R www-data:www-data "$target"
     find "$target" -type d -exec chmod 755 {} +
     find "$target" -type f -exec chmod 644 {} +
     find "$target" -type d -name uploads -exec chmod 775 {} + 2>/dev/null || true
+    ;;
+
+  site-path-fix)
+    [[ $# -eq 2 ]] || deny "usage: site-path-fix <path> <site-user>"
+    target=$(require_safe_path "$SITES_ROOT" "$1")
+    fix_site_tree "$target" "$2"
+    ;;
+
+  site-runtime-ensure)
+    [[ $# -eq 3 ]] || deny "usage: site-runtime-ensure <site-user> <path> <php-version|none>"
+    user="$1"; path="$2"; php_version="$3"
+    require_linux_user "$user"
+    target=$(require_safe_path "$SITES_ROOT" "$path")
+    ensure_sites_group
+    if ! id -u "$user" >/dev/null 2>&1; then
+      useradd --system --home-dir "$target" --shell /usr/sbin/nologin --user-group "$user"
+    fi
+    usermod --home "$target" --shell /usr/sbin/nologin "$user" 2>/dev/null || true
+    usermod -L "$user" 2>/dev/null || true
+    install -d -o "$user" -g "$user" -m 0755 "$target" "$target/public"
+    fix_site_tree "$target" "$user"
+    if [[ "$php_version" != "none" ]]; then
+      require_php_version "$php_version"
+      pool_name="bpanel-${user}"
+      pool_file="/etc/php/${php_version}/fpm/pool.d/${pool_name}.conf"
+      for dir in /etc/php/*/fpm/pool.d; do
+        [[ -d "$dir" ]] || continue
+        old_file="$dir/${pool_name}.conf"
+        if [[ "$old_file" != "$pool_file" && -f "$old_file" ]]; then
+          rm -f "$old_file"
+          old_version="$(echo "$dir" | awk -F/ '{print $4}')"
+          systemctl reload "php${old_version}-fpm" 2>/dev/null || true
+        fi
+      done
+      cat >"$pool_file" <<POOL
+[${pool_name}]
+user = ${user}
+group = ${user}
+listen = /run/php/${pool_name}.sock
+listen.owner = www-data
+listen.group = www-data
+listen.mode = 0660
+pm = ondemand
+pm.max_children = 8
+pm.process_idle_timeout = 20s
+pm.max_requests = 500
+chdir = /
+php_admin_value[open_basedir] = ${target}:/tmp:/usr/share/php
+php_admin_value[upload_tmp_dir] = /tmp
+php_admin_value[session.save_path] = /tmp
+POOL
+      systemctl reload "php${php_version}-fpm"
+    fi
+    ;;
+
+  site-runtime-delete)
+    [[ $# -eq 2 ]] || deny "usage: site-runtime-delete <site-user> <path>"
+    user="$1"; path="$2"
+    require_linux_user "$user"
+    require_safe_path "$SITES_ROOT" "$path" >/dev/null
+    for dir in /etc/php/*/fpm/pool.d; do
+      [[ -d "$dir" ]] || continue
+      old_file="$dir/bpanel-${user}.conf"
+      if [[ -f "$old_file" ]]; then
+        rm -f "$old_file"
+        old_version="$(echo "$dir" | awk -F/ '{print $4}')"
+        systemctl reload "php${old_version}-fpm" 2>/dev/null || true
+      fi
+    done
+    crontab -r -u "$user" 2>/dev/null || true
+    pkill -u "$user" 2>/dev/null || true
+    userdel "$user" 2>/dev/null || true
+    groupdel "$user" 2>/dev/null || true
     ;;
 
   rm-site)
@@ -210,13 +321,24 @@ case "$cmd" in
     exec runuser -u www-data -- /usr/local/bin/wp "$@"
     ;;
 
+  wp-site)
+    [[ $# -ge 2 ]] || deny "usage: wp-site <site-user> <args...>"
+    user="$1"; shift
+    require_linux_user "$user"
+    exec runuser -u "$user" -- /usr/local/bin/wp "$@"
+    ;;
+
   # ---- crontab managed for www-data ------------------------------------
   cron-list)
-    exec runuser -u www-data -- crontab -l 2>/dev/null
+    user="${1:-www-data}"
+    if [[ "$user" != "www-data" ]]; then require_linux_user "$user"; fi
+    exec runuser -u "$user" -- crontab -l 2>/dev/null
     ;;
   cron-write)
     # crontab content is fed via stdin
-    exec runuser -u www-data -- crontab -
+    user="${1:-www-data}"
+    if [[ "$user" != "www-data" ]]; then require_linux_user "$user"; fi
+    exec runuser -u "$user" -- crontab -
     ;;
 
   # ---- service status (read-only, no privilege change needed but useful)

@@ -1,8 +1,11 @@
 from datetime import datetime
+from io import StringIO
 from pathlib import Path
-from typing import List, Optional
-import shutil
+import posixpath
 import tarfile
+from typing import List, Optional
+
+import paramiko
 
 from app.core.config import settings
 from app.models.entities import Website
@@ -128,3 +131,77 @@ def list_backups(domain: str) -> List[str]:
     if not backup_dir.exists():
         return []
     return [str(path) for path in sorted(backup_dir.glob("*.tar.gz"), reverse=True)]
+
+
+def _load_private_key(private_key: str, password: Optional[str] = None):
+    key_stream = StringIO(private_key)
+    key_classes = (
+        paramiko.RSAKey,
+        paramiko.ECDSAKey,
+        paramiko.Ed25519Key,
+        paramiko.DSSKey,
+    )
+    last_error = None
+    for key_class in key_classes:
+        key_stream.seek(0)
+        try:
+            return key_class.from_private_key(key_stream, password=password or None)
+        except Exception as exc:  # pragma: no cover - depends on key type
+            last_error = exc
+    raise ValueError(f"Cannot load SFTP private key: {last_error}")
+
+
+def _ensure_remote_dir(sftp, remote_dir: str) -> None:
+    remote_dir = posixpath.normpath(remote_dir or ".")
+    if remote_dir in {".", "/"}:
+        return
+    parts = [part for part in remote_dir.split("/") if part]
+    current = "/" if remote_dir.startswith("/") else "."
+    for part in parts:
+        current = posixpath.join(current, part) if current != "/" else f"/{part}"
+        try:
+            sftp.stat(current)
+        except FileNotFoundError:
+            sftp.mkdir(current)
+
+
+def upload_to_sftp(
+    local_file: str,
+    *,
+    host: str,
+    port: int,
+    username: str,
+    remote_path: str,
+    password: Optional[str] = None,
+    private_key: Optional[str] = None,
+) -> str:
+    local_path = Path(local_file).resolve()
+    if not local_path.exists() or not local_path.is_file():
+        raise FileNotFoundError("Local backup file not found")
+    if not password and not private_key:
+        raise ValueError("SFTP password or private key is required")
+
+    pkey = _load_private_key(private_key, password=password) if private_key else None
+    remote_dir = posixpath.normpath(remote_path.strip() or ".")
+    remote_file = posixpath.join(remote_dir, local_path.name)
+
+    client = paramiko.SSHClient()
+    client.load_system_host_keys()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try:
+        client.connect(
+            hostname=host,
+            port=port,
+            username=username,
+            password=password if not pkey else None,
+            pkey=pkey,
+            timeout=20,
+            banner_timeout=20,
+            auth_timeout=20,
+        )
+        with client.open_sftp() as sftp:
+            _ensure_remote_dir(sftp, remote_dir)
+            sftp.put(str(local_path), remote_file)
+    finally:
+        client.close()
+    return remote_file

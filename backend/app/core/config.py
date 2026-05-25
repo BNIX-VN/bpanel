@@ -20,6 +20,13 @@ class Settings(BaseSettings):
     ssl_email: str = ""
     redis_url: str = "redis://localhost:6379/0"
     filebrowser_port: int = 8088
+    panel_url: str = ""
+    panel_domain: str = ""
+    panel_port: int = 2222
+    panel_ssl_cert: str = ""
+    panel_ssl_key: str = ""
+    frontend_dist: str = "/opt/bpanel/frontend/dist"
+    totp_issuer: str = "BPanel"
 
     @field_validator("secret_key")
     @classmethod

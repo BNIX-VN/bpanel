@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Dict
 
 from app.core.config import settings
+from app.services import site_users
 from app.services.shell import shell
 
 
@@ -68,7 +69,16 @@ def site_root(domain: str) -> str:
     return str(Path(settings.sites_root) / domain)
 
 
-def install_wordpress(domain: str, db: Dict[str, str], title: str, admin_user: str, admin_password: str, admin_email: str) -> str:
+def install_wordpress(
+    domain: str,
+    db: Dict[str, str],
+    title: str,
+    admin_user: str,
+    admin_password: str,
+    admin_email: str,
+    php_version: str,
+    linux_user: str | None = None,
+) -> str:
     safe_user = _safe_value(admin_user, WP_USER_RE, "WordPress admin username")
     safe_title = _safe_value(title, WP_TITLE_RE, "WordPress site title")
     safe_email = _safe_value(admin_email, EMAIL_RE, "WordPress admin email")
@@ -77,16 +87,15 @@ def install_wordpress(domain: str, db: Dict[str, str], title: str, admin_user: s
 
     root = Path(site_root(domain))
     public = root / "public"
-    # Create site directory with proper ownership via the helper.
-    shell.privileged(
-        "mkdir-site",
-        helper_args=[str(root)],
-        fallback=["bash", "-lc", f"mkdir -p {public} && chown -R www-data:www-data {root}"],
-    )
+    linux_user = linux_user or site_users.ensure_site_runtime(domain, str(root), php_version)
     wp_path = f"--path={public}"
 
-    # WP-CLI runs as www-data through the helper.
-    shell.privileged("wp", helper_args=["core", "download", wp_path, "--allow-root"], fallback=["wp", "core", "download", wp_path, "--allow-root"])
+    # WP-CLI runs as this website's isolated Linux user through the helper.
+    shell.privileged(
+        "wp-site",
+        helper_args=[linux_user, "core", "download", wp_path],
+        fallback=["wp", "core", "download", wp_path],
+    )
 
     # Render wp-config.php directly to avoid leaking the DB password through
     # argv (which would be visible to other local users via /proc/<pid>/cmdline
@@ -100,10 +109,10 @@ def install_wordpress(domain: str, db: Dict[str, str], title: str, admin_user: s
         except PermissionError:
             pass
     shell.privileged(
-        "chown-www",
-        helper_args=[str(public)],
+        "site-path-fix",
+        helper_args=[str(public), linux_user],
         check=False,
-        fallback=["chown", "-R", "www-data:www-data", str(public)],
+        fallback=["chown", "-R", f"{linux_user}:{linux_user}", str(public)],
     )
 
     install_args = [
@@ -117,32 +126,22 @@ def install_wordpress(domain: str, db: Dict[str, str], title: str, admin_user: s
         "--allow-root",
     ]
     shell.privileged(
-        "wp",
-        helper_args=install_args,
+        "wp-site",
+        helper_args=[linux_user, *install_args],
         fallback=["wp", *install_args],
         input=admin_password + "\n",
         sensitive=True,
     )
 
-    fix_permissions(str(root))
+    fix_permissions(str(root), linux_user)
     return str(root)
 
 
-def fix_permissions(root_path: str):
-    return shell.privileged(
-        "fix-permissions",
-        helper_args=[root_path],
-        check=False,
-        fallback=["bash", "-lc", (
-            f"chown -R www-data:www-data {root_path} && "
-            f"find {root_path} -type d -exec chmod 755 {{}} + && "
-            f"find {root_path} -type f -exec chmod 644 {{}} + && "
-            f"find {root_path} -type d -name uploads -exec chmod 775 {{}} + 2>/dev/null || true"
-        )],
-    )
+def fix_permissions(root_path: str, linux_user: str | None = None):
+    return site_users.fix_site_permissions(root_path, linux_user)
 
 
-def wp_update(path: str, action: str):
+def wp_update(path: str, action: str, linux_user: str | None = None):
     if action == "core":
         args = ["core", "update", f"--path={path}", "--allow-root"]
     elif action == "plugins":
@@ -151,17 +150,19 @@ def wp_update(path: str, action: str):
         args = ["theme", "update", "--all", f"--path={path}", "--allow-root"]
     else:
         raise ValueError("Unsupported WordPress action")
+    if linux_user:
+        return shell.privileged("wp-site", helper_args=[linux_user, *args], fallback=["wp", *args])
     return shell.privileged("wp", helper_args=args, fallback=["wp", *args])
 
 
-def reset_admin_password(path: str, user: str, password: str):
+def reset_admin_password(path: str, user: str, password: str, linux_user: str | None = None):
     safe_user = _safe_value(user, WP_USER_RE, "WordPress username")
     if not isinstance(password, str) or len(password) < 10 or "\x00" in password:
         raise ValueError("Password must be at least 10 characters")
     args = ["user", "update", safe_user, "--user_pass=/dev/stdin", f"--path={path}", "--allow-root"]
     return shell.privileged(
-        "wp",
-        helper_args=args,
+        "wp-site" if linux_user else "wp",
+        helper_args=[linux_user, *args] if linux_user else args,
         fallback=["wp", *args],
         input=password,
         sensitive=True,

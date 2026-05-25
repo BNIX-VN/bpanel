@@ -5,7 +5,7 @@ import './style.css';
 import './file-manager.css';
 
 const API = import.meta.env.VITE_API_URL || '/api';
-const SERVICE_NAMES = ['nginx', 'php8.3-fpm', 'php8.4-fpm', 'mariadb', 'redis-server', 'filebrowser'];
+const SERVICE_NAMES = ['bpanel-api', 'nginx', 'php8.3-fpm', 'php8.4-fpm', 'mariadb', 'redis-server', 'filebrowser'];
 
 function App() {
   // Auth is now cookie-based (HttpOnly bpanel_session). The SPA does not see
@@ -15,6 +15,8 @@ function App() {
   const [bootstrapping, setBootstrapping] = useState(true);
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('');
+  const [otpCode, setOtpCode] = useState('');
+  const [needsTwoFactor, setNeedsTwoFactor] = useState(false);
   const [page, setPage] = useState('dashboard');
   const [domain, setDomain] = useState('');
   const [adminEmail, setAdminEmail] = useState('');
@@ -31,6 +33,9 @@ function App() {
   const [systemInfo, setSystemInfo] = useState(null);
   const [serviceStates, setServiceStates] = useState({});
   const [backups, setBackups] = useState([]);
+  const [sftpTargets, setSftpTargets] = useState([]);
+  const [selectedSftpTargetId, setSelectedSftpTargetId] = useState('');
+  const [newSftpTarget, setNewSftpTarget] = useState({ name: '', host: '', port: 22, username: '', password: '', private_key: '', remote_path: '/backups/bpanel' });
   const [selectedWebsiteId, setSelectedWebsiteId] = useState('');
   const [cronSchedule, setCronSchedule] = useState('0 2 * * *');
   const [cronCommand, setCronCommand] = useState('wp cron event run --due-now --allow-root');
@@ -53,6 +58,9 @@ function App() {
   const [websitePhpVersions, setWebsitePhpVersions] = useState({});
   const [assignUserId, setAssignUserId] = useState('');
   const [assignWebsiteId, setAssignWebsiteId] = useState('');
+  const [twoFactorStatus, setTwoFactorStatus] = useState(null);
+  const [twoFactorSetup, setTwoFactorSetup] = useState(null);
+  const [twoFactorCode, setTwoFactorCode] = useState('');
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState('');
@@ -78,11 +86,18 @@ function App() {
     try { localStorage.removeItem('token'); } catch {}
     setIsAuthenticated(false);
     setCurrentUser(null);
+    setNeedsTwoFactor(false);
+    setOtpCode('');
     setWebsites([]);
     setDatabases([]);
     setUsers([]);
     setServiceStates({});
     setBackups([]);
+    setSftpTargets([]);
+    setSelectedSftpTargetId('');
+    setTwoFactorStatus(null);
+    setTwoFactorSetup(null);
+    setTwoFactorCode('');
     setSelectedWebsiteId('');
     setMobileMenuOpen(false);
     setPage('dashboard');
@@ -127,7 +142,7 @@ function App() {
       if (res.ok && data?.message) setNotice(data.message);
       return res.ok ? data : null;
     } catch (err) {
-      setError(`Cannot connect to the backend API at ${API}. Check bpanel-api and the Nginx proxy.`);
+      setError(`Cannot connect to the BPanel API at ${API}. Check bpanel-api and the panel port.`);
       return null;
     } finally {
       if (label) setLoading('');
@@ -139,23 +154,29 @@ function App() {
       setError('');
       setLoading('Logging in...');
       const body = new URLSearchParams({ username, password });
+      if (needsTwoFactor || otpCode) body.set('otp', otpCode);
       const res = await fetch(`${API}/auth/login`, {
         method: 'POST',
         body,
         credentials: 'include',
       });
       const data = await res.json().catch(() => ({}));
-      if (res.ok && data.access_token) {
+      if (res.ok && data.requires_2fa) {
+        setNeedsTwoFactor(true);
+        setNotice('Enter your authentication code.');
+      } else if (res.ok && data.access_token) {
         // Don't keep the token anywhere: the HttpOnly cookie just got set by
         // the response. JS code MUST NOT touch the JWT.
         setIsAuthenticated(true);
+        setNeedsTwoFactor(false);
+        setOtpCode('');
         setNotice('Login successful.');
         await loadCurrentUser();
       } else {
         setError(data.detail || `Login failed with status ${res.status}`);
       }
     } catch (err) {
-      setError(`Cannot connect to the backend API at ${API}. Check bpanel-api and the Nginx proxy.`);
+      setError(`Cannot connect to the BPanel API at ${API}. Check bpanel-api and the panel port.`);
     } finally {
       setLoading('');
     }
@@ -234,14 +255,54 @@ function App() {
   }
 
   async function changeUserPassword(user) {
-    const password = prompt(`Enter a new password for ${user.username} (minimum 8 characters):`);
+    const password = prompt(`Enter a new password for ${user.username} (minimum 12 characters):`);
     if (!password) return;
-    if (password.length < 8) { setError('Password must be at least 8 characters.'); return; }
+    if (password.length < 12) { setError('Password must be at least 12 characters.'); return; }
     const data = await request(`/users/${user.id}/password`, { method: 'POST', body: JSON.stringify({ password }) }, `Changing password for ${user.username}...`);
     if (data?.message) setNotice(data.message);
   }
 
   async function changeMyPassword() { if (!currentUser) return; await changeUserPassword(currentUser); }
+
+  async function loadTwoFactorStatus() {
+    const data = await request('/auth/2fa/status');
+    if (data) setTwoFactorStatus(data);
+  }
+
+  async function setupTwoFactorAuth() {
+    const data = await request('/auth/2fa/setup', { method: 'POST' }, 'Preparing 2FA...');
+    if (data) {
+      setTwoFactorSetup(data);
+      setTwoFactorStatus({ enabled: false });
+    }
+  }
+
+  async function enableTwoFactorAuth() {
+    const data = await request('/auth/2fa/enable', { method: 'POST', body: JSON.stringify({ code: twoFactorCode }) }, 'Enabling 2FA...');
+    if (data) {
+      setTwoFactorStatus(data);
+      setTwoFactorSetup(null);
+      setTwoFactorCode('');
+      await loadCurrentUser();
+      setNotice('2FA enabled.');
+    }
+  }
+
+  async function disableTwoFactorAuth() {
+    const data = await request('/auth/2fa/disable', { method: 'POST', body: JSON.stringify({ code: twoFactorCode }) }, 'Disabling 2FA...');
+    if (data) {
+      setTwoFactorStatus(data);
+      setTwoFactorCode('');
+      await loadCurrentUser();
+      setNotice('2FA disabled.');
+    }
+  }
+
+  async function resetUserTwoFactor(user) {
+    if (!confirm(`Reset 2FA for ${user.username}?`)) return;
+    const data = await request(`/users/${user.id}/2fa/reset`, { method: 'POST' }, `Resetting 2FA for ${user.username}...`);
+    if (data?.message) { setNotice(data.message); await loadUsers(); }
+  }
 
   async function assignDomainToUser() {
     if (!assignWebsiteId || !assignUserId) return;
@@ -265,10 +326,11 @@ function App() {
     const data = await request('/websites', { method: 'POST', body: JSON.stringify(body) },
       installWp ? 'Creating WordPress website...' : 'Creating website...');
     if (data) {
+      const linuxUserText = data.linux_user ? `\nLinux user: ${data.linux_user}` : '';
       if (installWp) {
-        setNotice(`Created WordPress site: https://${domain}\nAdmin: ${wpAdminUser} | Password: ${wpAdminPassword || 'StrongPass123!'}`);
+        setNotice(`Created WordPress site: https://${domain}\nAdmin: ${wpAdminUser} | Password: ${wpAdminPassword || 'StrongPass123!'}${linuxUserText}`);
       } else {
-        setNotice(`Created site ${domain}. Upload your files to public/ folder.`);
+        setNotice(`Created site ${domain}. Upload your files to public/ folder.${linuxUserText}`);
       }
       if (installSslAfterCreate) await enableSsl(data.id);
       refreshAll();
@@ -391,6 +453,47 @@ function App() {
   async function listBackups() {
     const data = await request(`/maintenance/backups/${selectedWebsiteId}`);
     if (data?.items) setBackups(data.items);
+  }
+
+  async function loadSftpTargets() {
+    const data = await request('/maintenance/sftp-targets');
+    if (data) {
+      setSftpTargets(data);
+      if (!selectedSftpTargetId && data[0]) setSelectedSftpTargetId(String(data[0].id));
+    }
+  }
+
+  async function createSftpTarget() {
+    const body = {
+      ...newSftpTarget,
+      port: Number(newSftpTarget.port || 22),
+      password: newSftpTarget.password || null,
+      private_key: newSftpTarget.private_key || null,
+    };
+    const data = await request('/maintenance/sftp-targets', { method: 'POST', body: JSON.stringify(body) }, 'Saving SFTP target...');
+    if (data) {
+      setNotice(`Saved SFTP target ${data.name}`);
+      setNewSftpTarget({ name: '', host: '', port: 22, username: '', password: '', private_key: '', remote_path: '/backups/bpanel' });
+      await loadSftpTargets();
+    }
+  }
+
+  async function deleteSftpTarget(id) {
+    if (!confirm('Delete this SFTP target?')) return;
+    const data = await request(`/maintenance/sftp-targets/${id}`, { method: 'DELETE' }, 'Deleting SFTP target...');
+    if (data) await loadSftpTargets();
+  }
+
+  async function createSftpBackup() {
+    if (!selectedWebsiteId || !selectedSftpTargetId) return;
+    const data = await request('/maintenance/backup-sftp', {
+      method: 'POST',
+      body: JSON.stringify({ website_id: Number(selectedWebsiteId), target_id: Number(selectedSftpTargetId) }),
+    }, 'Creating and uploading SFTP backup...');
+    if (data?.remote_file) {
+      setNotice(`SFTP backup uploaded: ${data.remote_file}`);
+      await listBackups();
+    }
   }
 
   async function restoreBackup(file) {
@@ -560,6 +663,8 @@ function App() {
     if (isAuthenticated && page === 'system') loadSystemInfo();
     if (isAuthenticated && page === 'php') loadPhpConfig();
     if (isAuthenticated && page === 'firewall') loadFirewall();
+    if (isAuthenticated && page === 'security') loadTwoFactorStatus();
+    if (isAuthenticated && page === 'backups' && isAdmin) loadSftpTargets();
   }, [isAuthenticated, page]);
 
   useEffect(() => { setMobileMenuOpen(false); }, [page]);
@@ -574,6 +679,7 @@ function App() {
     ['cron', 'Cron', Clock],
     ['files', 'File manager', FolderOpen],
     ['backups', 'Backups', Archive],
+    ['security', 'Security', Shield],
     ...(isAdmin ? [['php', 'PHP config', Code2]] : []),
     ...(isAdmin ? [['firewall', 'Firewall', Shield]] : []),
     ['services', 'Services', Server],
@@ -648,7 +754,7 @@ function App() {
           <input value={domain} onChange={e => setDomain(e.target.value)} placeholder="domain.com" />
           <select value={siteType} onChange={e => setSiteType(e.target.value)}>
             <option value="wordpress">WordPress</option>
-            <option value="static">Static / PHP</option>
+            <option value="static">Static</option>
           </select>
           <select value={phpVersion} onChange={e => setPhpVersion(e.target.value)}>
             <option value="8.3">PHP 8.3</option>
@@ -689,6 +795,7 @@ function App() {
             <div className="site-meta">
               <span>Type <strong>{site.app_type || 'wordpress'}</strong></span>
               <span>PHP <strong>{site.php_version}</strong></span>
+              {site.linux_user && <span>Linux <strong>{site.linux_user}</strong></span>}
               <span>Status <strong>{site.status}</strong></span>
               {site.nginx_custom && <span className="badge ok">Custom Nginx</span>}
             </div>
@@ -823,6 +930,35 @@ function App() {
           </div>
         </div>)}
       </div>
+      {isAdmin && <div className="sftp-panel">
+        <div className="section-title">
+          <div><h2>SFTP backup</h2><p className="hint">Create a local archive and upload it to an SFTP target.</p></div>
+          <button disabled={!!loading} onClick={loadSftpTargets}><RefreshCw size={14}/> Targets</button>
+        </div>
+        <div className="sftp-run-row">
+          <select value={selectedSftpTargetId} onChange={e => setSelectedSftpTargetId(e.target.value)}>
+            <option value="">Select SFTP target</option>
+            {sftpTargets.map(target => <option key={target.id} value={target.id}>{target.name} - {target.host}</option>)}
+          </select>
+          <button disabled={!selectedWebsiteId || !selectedSftpTargetId || !!loading} onClick={createSftpBackup}><Upload size={14}/> Backup to SFTP</button>
+        </div>
+        <div className="sftp-form">
+          <input value={newSftpTarget.name} onChange={e => setNewSftpTarget(prev => ({ ...prev, name: e.target.value }))} placeholder="Target name" />
+          <input value={newSftpTarget.host} onChange={e => setNewSftpTarget(prev => ({ ...prev, host: e.target.value }))} placeholder="Host" />
+          <input value={newSftpTarget.port} onChange={e => setNewSftpTarget(prev => ({ ...prev, port: e.target.value }))} placeholder="22" inputMode="numeric" />
+          <input value={newSftpTarget.username} onChange={e => setNewSftpTarget(prev => ({ ...prev, username: e.target.value }))} placeholder="Username" />
+          <input value={newSftpTarget.password} onChange={e => setNewSftpTarget(prev => ({ ...prev, password: e.target.value }))} placeholder="Password" type="password" />
+          <input value={newSftpTarget.remote_path} onChange={e => setNewSftpTarget(prev => ({ ...prev, remote_path: e.target.value }))} placeholder="/backups/bpanel" />
+          <textarea value={newSftpTarget.private_key} onChange={e => setNewSftpTarget(prev => ({ ...prev, private_key: e.target.value }))} placeholder="Private key (optional)" rows={4} />
+          <button disabled={!!loading || !newSftpTarget.name || !newSftpTarget.host || !newSftpTarget.username || (!newSftpTarget.password && !newSftpTarget.private_key)} onClick={createSftpTarget}><Plus size={14}/> Save target</button>
+        </div>
+        <div className="backup-list">
+          {sftpTargets.map(target => <div className="backup-item" key={target.id}>
+            <span>{target.name} - {target.username}@{target.host}:{target.remote_path}</span>
+            <button className="danger" disabled={!!loading} onClick={() => deleteSftpTarget(target.id)}><Trash2 size={14}/></button>
+          </div>)}
+        </div>
+      </div>}
     </section>;
   }
 
@@ -843,7 +979,7 @@ function App() {
             <small>Auto-refreshes every 10s</small>
             {isAdmin && <div className="service-actions">
               <button onClick={() => runServiceAction(name, 'start')}><Play size={13}/> Start</button>
-              {name !== 'nginx' && <button onClick={() => runServiceAction(name, 'stop')}><Square size={13}/> Stop</button>}
+              {!['nginx', 'bpanel-api'].includes(name) && <button onClick={() => runServiceAction(name, 'stop')}><Square size={13}/> Stop</button>}
               <button onClick={() => runServiceAction(name, 'restart')}><RotateCcw size={13}/> Restart</button>
             </div>}
           </div>;
@@ -932,6 +1068,38 @@ function App() {
     </>;
   }
 
+  function renderSecurity() {
+    const enabled = Boolean(twoFactorStatus?.enabled || currentUser?.totp_enabled);
+    return <section className="section">
+      <div className="section-title">
+        <div><h2>Google Authenticator 2FA</h2><p className="hint">Current status: <strong>{enabled ? 'Enabled' : 'Disabled'}</strong></p></div>
+        <button disabled={!!loading} onClick={loadTwoFactorStatus}><RefreshCw size={14}/> Refresh</button>
+      </div>
+      {!enabled && <div className="security-grid">
+        <div className="info-box">
+          <strong>Setup</strong>
+          {twoFactorSetup?.qr_data_url ? <img className="qr-code" src={twoFactorSetup.qr_data_url} alt="2FA QR code" /> : <p className="hint">No setup code generated.</p>}
+          {twoFactorSetup?.secret && <code className="secret-text">{twoFactorSetup.secret}</code>}
+          <div className="actions">
+            <button disabled={!!loading} onClick={setupTwoFactorAuth}><Shield size={14}/> Generate QR</button>
+          </div>
+        </div>
+        <div className="info-box">
+          <strong>Verify</strong>
+          <input value={twoFactorCode} onChange={e => setTwoFactorCode(e.target.value)} placeholder="123456" inputMode="numeric" />
+          <button disabled={!!loading || !twoFactorSetup || !twoFactorCode} onClick={enableTwoFactorAuth}><Lock size={14}/> Enable 2FA</button>
+        </div>
+      </div>}
+      {enabled && <div className="security-grid one">
+        <div className="info-box">
+          <strong>Disable 2FA</strong>
+          <input value={twoFactorCode} onChange={e => setTwoFactorCode(e.target.value)} placeholder="123456" inputMode="numeric" />
+          <button className="danger" disabled={!!loading || !twoFactorCode} onClick={disableTwoFactorAuth}>Disable 2FA</button>
+        </div>
+      </div>}
+    </section>;
+  }
+
   function renderUsers() {
     if (!isAdmin) return <section className="section"><h2>Users</h2><p className="hint">No permission.</p></section>;
     return <>
@@ -942,7 +1110,7 @@ function App() {
         <div className="user-create-card">
           <label><span>Username</span><input value={newUser.username} onChange={e => setNewUser(prev => ({ ...prev, username: e.target.value }))} placeholder="johndoe" /></label>
           <label><span>Email</span><input value={newUser.email} onChange={e => setNewUser(prev => ({ ...prev, email: e.target.value }))} placeholder="user@domain.com" /></label>
-          <label><span>Password</span><input value={newUser.password} onChange={e => setNewUser(prev => ({ ...prev, password: e.target.value }))} placeholder="Min 8 characters" type="password" /></label>
+          <label><span>Password</span><input value={newUser.password} onChange={e => setNewUser(prev => ({ ...prev, password: e.target.value }))} placeholder="Min 12 characters" type="password" /></label>
           <label><span>Role</span><select value={newUser.role} onChange={e => setNewUser(prev => ({ ...prev, role: e.target.value }))}>
             <option value="user">User</option><option value="readonly">Readonly</option><option value="admin">Admin</option>
           </select></label>
@@ -975,9 +1143,13 @@ function App() {
           {users.map(user => <div className="row user-row" key={user.id}>
             <div className="user-main"><strong>{user.username}</strong><small>{user.email}</small></div>
             <span className="badge">{user.role}</span>
+            <span className={user.totp_enabled ? 'badge ok' : 'badge'}>{user.totp_enabled ? '2FA' : 'No 2FA'}</span>
             <span>{user.website_limit} sites</span>
             <span>{user.storage_limit_mb} MB</span>
-            <div className="row-actions"><button className="mini secondary-light" disabled={!!loading} onClick={() => changeUserPassword(user)}><KeyRound size={14}/> Password</button></div>
+            <div className="row-actions">
+              <button className="mini secondary-light" disabled={!!loading} onClick={() => changeUserPassword(user)}><KeyRound size={14}/> Password</button>
+              {user.totp_enabled && user.id !== currentUser?.id && <button className="mini secondary-light" disabled={!!loading} onClick={() => resetUserTwoFactor(user)}>Reset 2FA</button>}
+            </div>
           </div>)}
         </div>
       </section>
@@ -992,6 +1164,7 @@ function App() {
     if (page === 'cron') return renderCron();
     if (page === 'files') return renderFiles();
     if (page === 'backups') return renderBackups();
+    if (page === 'security') return renderSecurity();
     if (page === 'php') return renderPhpConfig();
     if (page === 'firewall') return renderFirewall();
     if (page === 'services') return renderServices();
@@ -1019,6 +1192,7 @@ function App() {
         <div className="login-form">
           <input value={username} onChange={e => setUsername(e.target.value)} placeholder="Username" autoComplete="username" />
           <input value={password} onChange={e => setPassword(e.target.value)} placeholder="Password" type="password" autoComplete="current-password" onKeyDown={e => { if (e.key === 'Enter') login(); }} />
+          {needsTwoFactor && <input value={otpCode} onChange={e => setOtpCode(e.target.value)} placeholder="Authentication code" inputMode="numeric" autoComplete="one-time-code" onKeyDown={e => { if (e.key === 'Enter') login(); }} />}
           <button disabled={!!loading || !username || !password} onClick={login}>{loading ? 'Logging in...' : 'Login'}</button>
         </div>
         {error && <div className="error"><AlertCircle size={16} style={{display:'inline',verticalAlign:'middle',marginRight:6}}/>{error}</div>}

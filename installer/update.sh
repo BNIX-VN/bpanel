@@ -3,8 +3,8 @@
 #
 # This script is meant to live in a checkout of the BPanel repo (e.g.
 # /opt/bpanel-source). It pulls the latest commit from origin/main, syncs the
-# source into /opt/bpanel, rebuilds the frontend, restarts the API, and reloads
-# nginx.
+# source into /opt/bpanel, rebuilds the frontend, refreshes the direct panel
+# service, restarts the API, and reloads nginx for customer vhosts.
 #
 # Usage:
 #   sudo bash installer/update.sh
@@ -50,6 +50,96 @@ done
 
 log()  { echo ""; echo "==> $1"; }
 fail() { echo "ERROR: $1" >&2; exit 1; }
+
+env_get() {
+  local file="$APP_DIR/backend/.env" key="$1"
+  [[ -f "$file" ]] || return 0
+  awk -F= -v key="$key" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "$file"
+}
+
+env_set_default() {
+  local file="$APP_DIR/backend/.env" key="$1" value="$2"
+  if ! grep -q "^${key}=" "$file"; then
+    printf '%s=%s\n' "$key" "$value" >>"$file"
+  fi
+}
+
+detect_server_ip() {
+  hostname -I 2>/dev/null | awk '{print $1}' || true
+}
+
+install_panel_runtime() {
+  local env_file="$APP_DIR/backend/.env"
+  [[ -f "$env_file" ]] || return 0
+  local panel_port panel_url server_ip
+  panel_port="$(env_get PANEL_PORT)"
+  panel_port="${panel_port:-2222}"
+  server_ip="$(detect_server_ip)"
+  panel_url="$(env_get PANEL_URL)"
+  panel_url="${panel_url:-http://${server_ip:-127.0.0.1}:${panel_port}}"
+
+  env_set_default PANEL_PORT "$panel_port"
+  env_set_default PANEL_URL "$panel_url"
+  env_set_default PANEL_DOMAIN ""
+  env_set_default PANEL_SSL_CERT ""
+  env_set_default PANEL_SSL_KEY ""
+  env_set_default FRONTEND_DIST "$APP_DIR/frontend/dist"
+  if [[ -z "$(env_get ALLOWED_ORIGINS)" ]]; then
+    env_set_default ALLOWED_ORIGINS "$panel_url"
+  fi
+
+  getent group bpanel-sites >/dev/null || groupadd --system bpanel-sites
+  if ! command -v setfacl >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1; then
+    DEBIAN_FRONTEND=noninteractive apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y acl
+  fi
+  usermod -aG bpanel-sites bpanel 2>/dev/null || true
+  usermod -aG bpanel-sites www-data 2>/dev/null || true
+  install -d -o bpanel -g bpanel-sites -m 2775 "${SITES_ROOT:-/home/bpanel-sites}"
+
+  cat >/usr/local/sbin/bpanel-api-start <<STARTER
+#!/usr/bin/env bash
+set -euo pipefail
+cd ${APP_DIR}/backend
+args=(app.main:app --host 0.0.0.0 --port "\${PANEL_PORT:-2222}" --proxy-headers --forwarded-allow-ips "*")
+if [[ -n "\${PANEL_SSL_CERT:-}" && -n "\${PANEL_SSL_KEY:-}" && -f "\${PANEL_SSL_CERT}" && -f "\${PANEL_SSL_KEY}" ]]; then
+  args+=(--ssl-certfile "\${PANEL_SSL_CERT}" --ssl-keyfile "\${PANEL_SSL_KEY}")
+fi
+exec ${APP_DIR}/backend/.venv/bin/uvicorn "\${args[@]}"
+STARTER
+  chmod 0755 /usr/local/sbin/bpanel-api-start
+  mkdir -p /etc/systemd/system/bpanel-api.service.d
+  cat >/etc/systemd/system/bpanel-api.service.d/20-panel-port.conf <<'SERVICE'
+[Service]
+ExecStart=
+ExecStart=/usr/local/sbin/bpanel-api-start
+SupplementaryGroups=www-data bpanel-sites
+SERVICE
+  mkdir -p /etc/systemd/system/filebrowser.service.d
+  cat >/etc/systemd/system/filebrowser.service.d/10-bpanel-sites.conf <<'SERVICE'
+[Service]
+SupplementaryGroups=bpanel-sites
+SERVICE
+  if command -v ufw >/dev/null 2>&1; then
+    ufw allow "${panel_port}/tcp" >/dev/null || true
+  fi
+  rm -f /etc/nginx/sites-enabled/bpanel.conf /etc/nginx/sites-available/bpanel.conf 2>/dev/null || true
+  if [[ -f /usr/share/phpmyadmin/bpanel-signon.php ]]; then
+    local scheme="http"
+    if [[ -n "$(env_get PANEL_SSL_CERT)" && -n "$(env_get PANEL_SSL_KEY)" ]]; then
+      scheme="https"
+    fi
+    sed -i -E "s#(\$apiUrl = ')[^']+(/api/databases/phpmyadmin-sso/)'#\1${scheme}://127.0.0.1:${panel_port}\2'#" /usr/share/phpmyadmin/bpanel-signon.php || true
+  fi
+}
+
+panel_healthcheck() {
+  local port
+  port="$(env_get PANEL_PORT)"
+  port="${port:-2222}"
+  curl -kfsS "https://127.0.0.1:${port}/api/health" >/dev/null 2>&1 \
+    || curl -fsS "http://127.0.0.1:${port}/api/health" >/dev/null 2>&1
+}
 
 refresh_bpanel_mariadb_grants() {
   local defaults_file="$APP_DIR/.my.cnf"
@@ -158,6 +248,8 @@ fi
 if [[ ! -f "$APP_DIR/backend/.env" ]]; then
   fail "$APP_DIR/backend/.env is missing. Run installer/install.sh first or restore .env from backup."
 fi
+log "Installing direct panel runtime on port 2222"
+install_panel_runtime
 if [[ ! -x "$APP_DIR/backend/.venv/bin/uvicorn" ]]; then
   log "Recreating Python virtualenv (was missing)"
   rm -rf "$APP_DIR/backend/.venv"
@@ -175,6 +267,12 @@ if [[ -f "$SOURCE_DIR/installer/files/bpanel-helper.sh" ]]; then
   else
     echo "  (bpanel user not found; skipping helper refresh â€” run install.sh first)"
   fi
+fi
+
+if [[ -f "$SOURCE_DIR/installer/files/bpanelctl" ]]; then
+  log "Refreshing SSH menu command: bpanel"
+  install -m 0755 -o root -g root "$SOURCE_DIR/installer/files/bpanelctl" /usr/local/sbin/bpanel
+  ln -sfn /usr/local/sbin/bpanel /usr/local/sbin/bpanelctl
 fi
 
 # --- Restore ownership so bpanel user can read/write the deploy ------------
@@ -222,9 +320,11 @@ python -m py_compile \
   app/services/wordpress.py \
   app/services/file_manager.py \
   app/services/backup.py \
+  app/services/site_users.py \
   app/services/cron.py \
   app/services/php.py \
-  app/schemas/schemas.py
+  app/schemas/schemas.py \
+  app/seed.py
 deactivate
 
 log "Restarting bpanel-api"
@@ -240,6 +340,7 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 SERVICE
 systemctl daemon-reload
 systemctl restart bpanel-api
+systemctl restart filebrowser 2>/dev/null || true
 
 # --- Frontend --------------------------------------------------------------
 log "Building frontend (clean rebuild)"
@@ -268,7 +369,7 @@ systemctl reload nginx
 # --- Health check ----------------------------------------------------------
 log "Health check"
 for _ in {1..20}; do
-  if curl -fsS http://127.0.0.1:8000/api/health >/dev/null 2>&1; then
+  if panel_healthcheck; then
     echo "API is healthy."
     echo ""
     echo "Update completed."

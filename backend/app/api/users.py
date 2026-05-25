@@ -145,6 +145,23 @@ def update_user_password(user_id: int, payload: UserPasswordUpdate, request: Req
     return {"message": f"Changed password for user {user.username}"}
 
 
+@router.post("/{user_id}/2fa/reset")
+def reset_user_two_factor(user_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.admin)
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="Use the Security page to disable your own 2FA")
+    _require_outrank(current_user.role, user.role)
+    user.totp_enabled = False
+    user.totp_secret = None
+    user.token_version = (user.token_version or 0) + 1
+    db.commit()
+    log_action(db, current_user.id, "reset_user_2fa", user.username, request=request)
+    return {"message": f"Reset 2FA for user {user.username}"}
+
+
 @router.get("/audit/log", response_model=List[AuditLogOut])
 def list_audit(
     user_id: Optional[int] = Query(default=None),

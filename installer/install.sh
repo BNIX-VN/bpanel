@@ -25,6 +25,8 @@ FRONTEND_SRC="${PROJECT_ROOT}/frontend"
 
 PANEL_URL="${PANEL_URL:-}"
 PANEL_DOMAIN=""
+PANEL_PORT="${PANEL_PORT:-2222}"
+SERVER_IP=""
 ENABLE_SSL="${ENABLE_SSL:-auto}"
 SSL_EMAIL="${SSL_EMAIL:-}"
 NODE_MAJOR="${NODE_MAJOR:-22}"
@@ -45,6 +47,19 @@ fail() {
   exit 1
 }
 
+detect_server_ip() {
+  hostname -I 2>/dev/null | awk '{print $1}' || true
+}
+
+validate_port() {
+  [[ "$1" =~ ^[0-9]{1,5}$ ]] || fail "Invalid PANEL_PORT: $1"
+  (( $1 >= 1 && $1 <= 65535 )) || fail "PANEL_PORT out of range: $1"
+}
+
+is_domain_name() {
+  [[ "$1" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]]
+}
+
 need_dir() {
   [[ -d "$1" ]] || fail "Missing directory $1. Upload backend, frontend, and installer."
 }
@@ -57,37 +72,56 @@ validate_sources() {
 }
 
 ask_panel_url() {
+  validate_port "$PANEL_PORT"
   if [[ -z "$PANEL_URL" ]]; then
-    read -rp "Enter panel URL/domain, for example https://panel.example.com or panel.example.com: " PANEL_URL
+    read -rp "Enter panel domain/URL (optional, blank = server IP:${PANEL_PORT}): " PANEL_URL
   fi
 
   PANEL_URL="${PANEL_URL%/}"
-  [[ -n "$PANEL_URL" ]] || fail "Panel URL cannot be empty"
+
+  if [[ -z "$PANEL_URL" ]]; then
+    SERVER_IP="$(detect_server_ip)"
+    [[ -n "$SERVER_IP" ]] || fail "Cannot detect server IP. Set PANEL_URL or PANEL_DOMAIN manually."
+    PANEL_DOMAIN=""
+    PANEL_URL="http://${SERVER_IP}:${PANEL_PORT}"
+    ENABLE_SSL="no"
+    return 0
+  fi
 
   if [[ "$PANEL_URL" =~ ^https?:// ]]; then
     PANEL_DOMAIN="$(echo "$PANEL_URL" | sed -E 's#^https?://([^/:]+).*#\1#')"
+    parsed_port="$(echo "$PANEL_URL" | sed -nE 's#^https?://[^/:]+:([0-9]+).*#\1#p')"
   else
     PANEL_DOMAIN="$(echo "$PANEL_URL" | sed -E 's#^([^/:]+).*#\1#')"
+    parsed_port="$(echo "$PANEL_URL" | sed -nE 's#^[^/:]+:([0-9]+).*#\1#p')"
+  fi
+  if [[ -n "${parsed_port:-}" ]]; then
+    PANEL_PORT="$parsed_port"
+    validate_port "$PANEL_PORT"
   fi
 
-  if [[ "$PANEL_DOMAIN" == "localhost" || "$PANEL_DOMAIN" == "127.0.0.1" ]]; then
+  if [[ "$PANEL_DOMAIN" == "localhost" || "$PANEL_DOMAIN" == "127.0.0.1" || "$PANEL_DOMAIN" =~ ^[0-9.]+$ ]]; then
     ENABLE_SSL="no"
-    PANEL_URL="http://${PANEL_DOMAIN}"
+    PANEL_URL="http://${PANEL_DOMAIN}:${PANEL_PORT}"
   elif [[ "$ENABLE_SSL" == "auto" ]]; then
-    read -rp "Enable Let's Encrypt SSL for ${PANEL_DOMAIN}? [Y/n]: " ssl_answer
+    if ! is_domain_name "$PANEL_DOMAIN"; then
+      fail "Invalid panel domain: $PANEL_DOMAIN"
+    fi
+    read -rp "Enable Let's Encrypt SSL for ${PANEL_DOMAIN}:${PANEL_PORT}? [Y/n]: " ssl_answer
     ssl_answer="${ssl_answer:-Y}"
     if [[ "$ssl_answer" =~ ^[Nn]$ ]]; then
       ENABLE_SSL="no"
-      PANEL_URL="http://${PANEL_DOMAIN}"
+      PANEL_URL="http://${PANEL_DOMAIN}:${PANEL_PORT}"
     else
       ENABLE_SSL="yes"
-      PANEL_URL="https://${PANEL_DOMAIN}"
+      PANEL_URL="https://${PANEL_DOMAIN}:${PANEL_PORT}"
     fi
   elif [[ "$ENABLE_SSL" == "yes" ]]; then
-    PANEL_URL="https://${PANEL_DOMAIN}"
+    is_domain_name "$PANEL_DOMAIN" || fail "Invalid panel domain: $PANEL_DOMAIN"
+    PANEL_URL="https://${PANEL_DOMAIN}:${PANEL_PORT}"
   else
     ENABLE_SSL="no"
-    PANEL_URL="http://${PANEL_DOMAIN}"
+    PANEL_URL="http://${PANEL_DOMAIN}:${PANEL_PORT}"
   fi
 
   if [[ "$ENABLE_SSL" == "yes" && -z "$SSL_EMAIL" ]]; then
@@ -99,7 +133,7 @@ ask_panel_url() {
 install_base_packages() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
-  apt-get install -y software-properties-common ca-certificates curl gnupg git nginx mariadb-server redis-server python3 python3-pip python3-venv certbot python3-certbot-nginx tar openssl unzip ufw phpmyadmin
+  apt-get install -y software-properties-common ca-certificates curl gnupg git nginx mariadb-server redis-server python3 python3-pip python3-venv certbot python3-certbot-nginx tar openssl unzip ufw phpmyadmin acl
   systemctl enable --now nginx mariadb redis-server
 }
 
@@ -230,11 +264,16 @@ build_frontend() {
 }
 
 setup_panel_user() {
+  if ! getent group bpanel-sites >/dev/null; then
+    groupadd --system bpanel-sites
+  fi
   if ! id -u bpanel >/dev/null 2>&1; then
     useradd --system --home-dir "$APP_DIR" --shell /usr/sbin/nologin --user-group bpanel
   fi
-  # bpanel needs to be in www-data group to write site files.
+  # bpanel and File Browser need controlled write access to site files.
   usermod -aG www-data bpanel || true
+  usermod -aG bpanel-sites bpanel || true
+  usermod -aG bpanel-sites www-data || true
 
   # Allow bpanel to write into /etc/nginx/conf.d (vhost files).
   install -d -o root -g bpanel -m 2775 /etc/nginx/conf.d
@@ -243,7 +282,7 @@ setup_panel_user() {
 
   # Make the panel data dirs writable by bpanel.
   install -d -o bpanel -g bpanel -m 0750 "$APP_DIR"
-  install -d -o bpanel -g www-data -m 2775 "$SITES_ROOT"
+  install -d -o bpanel -g bpanel-sites -m 2775 "$SITES_ROOT"
   install -d -o bpanel -g bpanel -m 0750 "$BACKUP_ROOT"
 
   # MariaDB: create an admin user that bpanel can use without password
@@ -282,6 +321,11 @@ install_privileged_helper() {
   visudo -c -f /etc/sudoers.d/bpanel >/dev/null
 }
 
+install_panel_cli() {
+  install -m 0755 -o root -g root "${SCRIPT_DIR}/files/bpanelctl" /usr/local/sbin/bpanel
+  ln -sfn /usr/local/sbin/bpanel /usr/local/sbin/bpanelctl
+}
+
 validate_privileged_helper() {
   sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper wp --info >/dev/null
 }
@@ -305,6 +349,12 @@ SITES_ROOT=${SITES_ROOT}
 BACKUP_ROOT=${BACKUP_ROOT}
 SSL_EMAIL=${SSL_EMAIL}
 FILEBROWSER_PORT=8088
+PANEL_URL=${PANEL_URL}
+PANEL_DOMAIN=${PANEL_DOMAIN}
+PANEL_PORT=${PANEL_PORT}
+PANEL_SSL_CERT=
+PANEL_SSL_KEY=
+FRONTEND_DIST=${APP_DIR}/frontend/dist
 ENV
 
   BPANEL_ADMIN_PASSWORD="$ADMIN_PASSWORD" python -m app.seed
@@ -322,16 +372,28 @@ ENV
 
 wait_for_backend() {
   for _ in {1..30}; do
-    if curl -fsS http://127.0.0.1:8000/api/health >/dev/null 2>&1; then
+    if curl -fsS "http://127.0.0.1:${PANEL_PORT}/api/health" >/dev/null 2>&1; then
       return 0
     fi
     sleep 1
   done
   journalctl -u bpanel-api -n 80 --no-pager || true
-  fail "bpanel-api did not respond at http://127.0.0.1:8000/api/health"
+  fail "bpanel-api did not respond at http://127.0.0.1:${PANEL_PORT}/api/health"
 }
 
 setup_systemd() {
+  cat >/usr/local/sbin/bpanel-api-start <<STARTER
+#!/usr/bin/env bash
+set -euo pipefail
+cd ${APP_DIR}/backend
+args=(app.main:app --host 0.0.0.0 --port "\${PANEL_PORT:-2222}" --proxy-headers --forwarded-allow-ips "*")
+if [[ -n "\${PANEL_SSL_CERT:-}" && -n "\${PANEL_SSL_KEY:-}" && -f "\${PANEL_SSL_CERT}" && -f "\${PANEL_SSL_KEY}" ]]; then
+  args+=(--ssl-certfile "\${PANEL_SSL_CERT}" --ssl-keyfile "\${PANEL_SSL_KEY}")
+fi
+exec ${APP_DIR}/backend/.venv/bin/uvicorn "\${args[@]}"
+STARTER
+  chmod 0755 /usr/local/sbin/bpanel-api-start
+
   cat >/etc/systemd/system/bpanel-api.service <<SERVICE
 [Unit]
 Description=BPanel API
@@ -341,12 +403,12 @@ After=network.target mariadb.service
 Type=exec
 User=bpanel
 Group=bpanel
-SupplementaryGroups=www-data
+SupplementaryGroups=www-data bpanel-sites
 WorkingDirectory=${APP_DIR}/backend
 EnvironmentFile=${APP_DIR}/backend/.env
 Environment=HOME=${APP_DIR}
 Environment=BPANEL_USE_HELPER=true
-ExecStart=${APP_DIR}/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips 127.0.0.1
+ExecStart=/usr/local/sbin/bpanel-api-start
 Restart=always
 RestartSec=3
 
@@ -409,6 +471,7 @@ After=network.target
 [Service]
 User=www-data
 Group=www-data
+SupplementaryGroups=bpanel-sites
 ExecStart=/usr/local/bin/filebrowser -d /etc/filebrowser/database.db
 Restart=always
 RestartSec=3
@@ -478,11 +541,13 @@ if (!preg_match('/^[A-Za-z0-9_-]{20,}$/', $token)) {
     exit('Invalid token');
 }
 
-$apiUrl = 'http://127.0.0.1:8000/api/databases/phpmyadmin-sso/' . rawurlencode($token);
+$apiUrl = '__BPANEL_API_BASE__' . rawurlencode($token);
 $ch = curl_init($apiUrl);
 curl_setopt_array($ch, [
     CURLOPT_RETURNTRANSFER => true,
     CURLOPT_TIMEOUT => 5,
+    CURLOPT_SSL_VERIFYPEER => false,
+    CURLOPT_SSL_VERIFYHOST => false,
     CURLOPT_HTTPHEADER => ['Accept: application/json'],
 ]);
 $response = curl_exec($ch);
@@ -518,6 +583,12 @@ header('Location: /phpmyadmin/index.php?server=1');
 exit;
 PHP
 
+  local api_scheme="http"
+  if [[ "$ENABLE_SSL" == "yes" ]]; then
+    api_scheme="https"
+  fi
+  sed -i "s#__BPANEL_API_BASE__#${api_scheme}://127.0.0.1:${PANEL_PORT}/api/databases/phpmyadmin-sso/#" /usr/share/phpmyadmin/bpanel-signon.php
+
   chown root:www-data /etc/phpmyadmin/conf.d/bpanel-signon.php
   chmod 640 /etc/phpmyadmin/conf.d/bpanel-signon.php
   chmod 644 /usr/share/phpmyadmin/bpanel-signon.php
@@ -525,115 +596,7 @@ PHP
 
 setup_nginx() {
   rm -f /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf 2>/dev/null || true
-
-  cat >/etc/nginx/sites-available/bpanel.conf <<NGINX
-server {
-  listen 80;
-  server_name ${PANEL_DOMAIN};
-
-  server_tokens off;
-  client_max_body_size 1100M;
-
-  root ${APP_DIR}/frontend/dist;
-  index index.html;
-
-  add_header X-Frame-Options "SAMEORIGIN" always;
-  add_header X-Content-Type-Options "nosniff" always;
-  add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-  add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), bluetooth=(), magnetometer=(), gyroscope=(), accelerometer=()" always;
-
-  # Hashed asset bundles can be cached for a long time.
-  location ^~ /assets/ {
-    expires 365d;
-    add_header Cache-Control "public, immutable";
-    try_files \$uri =404;
-  }
-
-  # index.html and any unhashed entry point must always be revalidated so users
-  # see the latest deployed frontend.
-  location = / {
-    add_header Cache-Control "no-store" always;
-    try_files /index.html =404;
-  }
-
-  location = /index.html {
-    add_header Cache-Control "no-store" always;
-  }
-
-  location / {
-    try_files \$uri \$uri/ /index.html;
-  }
-
-  location /api/ {
-    client_max_body_size 1100M;
-    proxy_request_buffering off;
-    proxy_pass http://127.0.0.1:8000/api/;
-    proxy_set_header Host \$host;
-    proxy_set_header X-Real-IP \$remote_addr;
-    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto \$scheme;
-    proxy_set_header X-Forwarded-Host \$host;
-    proxy_set_header X-Forwarded-Port \$server_port;
-  }
-
-  location = /filebrowser {
-    return 301 /filebrowser/;
-  }
-
-  location = /filebrowser/api/health {
-    proxy_pass http://127.0.0.1:8088/api/health;
-    proxy_set_header Host \$host;
-    proxy_set_header X-Forwarded-Proto \$scheme;
-  }
-
-  location /filebrowser/ {
-    auth_request /api/maintenance/filebrowser-auth;
-    proxy_pass http://127.0.0.1:8088/filebrowser/;
-    proxy_http_version 1.1;
-    proxy_set_header Host \$host;
-    proxy_set_header X-Real-IP \$remote_addr;
-    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto \$scheme;
-    proxy_set_header X-Forwarded-Host \$host;
-    proxy_set_header X-Forwarded-Prefix /filebrowser;
-    proxy_set_header Upgrade \$http_upgrade;
-    proxy_set_header Connection "upgrade";
-    client_max_body_size 1100M;
-    proxy_request_buffering off;
-  }
-
-  location = /phpmyadmin {
-    return 301 /phpmyadmin/;
-  }
-
-  location /phpmyadmin/ {
-    alias /usr/share/phpmyadmin/;
-    index index.php;
-    try_files \$uri \$uri/ /phpmyadmin/index.php;
-  }
-
-  location ~ ^/phpmyadmin/(.+\.php)$ {
-    alias /usr/share/phpmyadmin/\$1;
-    include fastcgi_params;
-    fastcgi_param SCRIPT_FILENAME /usr/share/phpmyadmin/\$1;
-    fastcgi_param HTTPS on;
-    fastcgi_param REQUEST_SCHEME https;
-    fastcgi_param SERVER_PORT 443;
-    fastcgi_param HTTP_X_FORWARDED_PROTO https;
-    fastcgi_param HTTP_X_FORWARDED_SSL on;
-    fastcgi_param HTTP_HOST \$host;
-    fastcgi_pass unix:/run/php/php${PHP_DEFAULT}-fpm.sock;
-  }
-
-  location ~* ^/phpmyadmin/(.+\.(?:css|js|jpg|jpeg|gif|png|ico|svg|woff|woff2|ttf|eot))$ {
-    alias /usr/share/phpmyadmin/\$1;
-    access_log off;
-    expires 7d;
-  }
-}
-NGINX
-
-  ln -sfn /etc/nginx/sites-available/bpanel.conf /etc/nginx/sites-enabled/bpanel.conf
+  rm -f /etc/nginx/sites-enabled/bpanel.conf /etc/nginx/sites-available/bpanel.conf 2>/dev/null || true
   nginx -t
   systemctl reload nginx
 }
@@ -643,6 +606,7 @@ setup_firewall() {
   ufw default allow outgoing || true
   ufw allow OpenSSH || true
   ufw allow 'Nginx Full' || true
+  ufw allow "${PANEL_PORT}/tcp" || true
 }
 
 setup_ssl() {
@@ -650,8 +614,32 @@ setup_ssl() {
     return 0
   fi
 
-  certbot --nginx -d "$PANEL_DOMAIN" --email "$SSL_EMAIL" --agree-tos --non-interactive --redirect
-  systemctl reload nginx
+  certbot certonly --standalone \
+    -d "$PANEL_DOMAIN" \
+    --email "$SSL_EMAIL" \
+    --agree-tos \
+    --non-interactive \
+    --pre-hook "systemctl stop nginx || true" \
+    --post-hook "systemctl start nginx || true" \
+    --deploy-hook "install -d -o root -g bpanel -m 0750 /etc/bpanel && install -m 0640 -o root -g bpanel /etc/letsencrypt/live/${PANEL_DOMAIN}/fullchain.pem /etc/bpanel/panel-fullchain.pem && install -m 0640 -o root -g bpanel /etc/letsencrypt/live/${PANEL_DOMAIN}/privkey.pem /etc/bpanel/panel-privkey.pem && systemctl restart bpanel-api || true"
+  install -d -o root -g bpanel -m 0750 /etc/bpanel
+  install -m 0640 -o root -g bpanel "/etc/letsencrypt/live/${PANEL_DOMAIN}/fullchain.pem" /etc/bpanel/panel-fullchain.pem
+  install -m 0640 -o root -g bpanel "/etc/letsencrypt/live/${PANEL_DOMAIN}/privkey.pem" /etc/bpanel/panel-privkey.pem
+  sed -i \
+    -e "s#^PANEL_SSL_CERT=.*#PANEL_SSL_CERT=/etc/bpanel/panel-fullchain.pem#" \
+    -e "s#^PANEL_SSL_KEY=.*#PANEL_SSL_KEY=/etc/bpanel/panel-privkey.pem#" \
+    -e "s#^PANEL_URL=.*#PANEL_URL=${PANEL_URL}#" \
+    -e "s#^ALLOWED_ORIGINS=.*#ALLOWED_ORIGINS=${PANEL_URL}#" \
+    "${APP_DIR}/backend/.env"
+  systemctl restart bpanel-api
+  for _ in {1..20}; do
+    if curl -kfsS "https://127.0.0.1:${PANEL_PORT}/api/health" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  journalctl -u bpanel-api -n 80 --no-pager || true
+  fail "bpanel-api did not respond after enabling panel SSL"
 }
 
 print_summary() {
@@ -660,6 +648,8 @@ print_summary() {
   echo "BPanel installation completed on Ubuntu 24.04"
   echo "Panel: ${PANEL_URL}"
   echo "API health: ${PANEL_URL}/api/health"
+  echo "Panel service: bpanel-api listens on port ${PANEL_PORT} without Nginx"
+  echo "SSH menu: run 'bpanel' as root"
   echo "Admin: admin / ${ADMIN_PASSWORD}"
   echo "Node.js: $(node -v)"
   echo "Default PHP: ${PHP_DEFAULT}"
@@ -668,8 +658,7 @@ print_summary() {
   echo "MariaDB: $(mariadb --version 2>/dev/null || mysql --version 2>/dev/null || echo installed)"
   echo "Backend: ${APP_DIR}/backend"
   echo "Frontend: ${APP_DIR}/frontend"
-  echo "Nginx config: /etc/nginx/sites-available/bpanel.conf"
-  echo "Firewall: UFW installed, OpenSSH and Nginx Full allowed. Enable it from the Firewall page."
+  echo "Firewall: UFW installed, OpenSSH, Nginx Full, and ${PANEL_PORT}/tcp allowed. Enable it from the Firewall page."
   echo "=================================================="
 }
 
@@ -704,6 +693,9 @@ main() {
   log "Installing privileged helper and sudoers rule"
   install_privileged_helper
 
+  log "Installing SSH maintenance menu"
+  install_panel_cli
+
   log "Validating privileged helper"
   validate_privileged_helper
 
@@ -719,7 +711,7 @@ main() {
   log "Configuring phpMyAdmin SSO"
   setup_phpmyadmin_sso
 
-  log "Configuring Nginx for ${PANEL_DOMAIN}"
+  log "Preparing Nginx for customer websites"
   setup_nginx
 
   log "Configuring firewall"

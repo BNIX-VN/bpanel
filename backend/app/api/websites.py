@@ -11,7 +11,7 @@ from app.core.permissions import Role, ensure_role
 from app.core.secrets import encrypt
 from app.models.entities import DatabaseAccount, User, Website
 from app.schemas.schemas import WebsiteCreate, WebsiteNginxCustom, WebsiteOut, WebsiteUpdate
-from app.services import mariadb, nginx, ssl, wordpress
+from app.services import mariadb, nginx, site_users, ssl, wordpress
 from app.services.audit import log_action
 
 router = APIRouter(prefix="/websites", tags=["websites"])
@@ -19,6 +19,18 @@ router = APIRouter(prefix="/websites", tags=["websites"])
 
 def _command_error(result):
     return (result.stderr or result.stdout or f"Command failed with code {result.returncode}").strip()
+
+
+def _cleanup_failed_site(root_path: str, linux_user: str | None, delete_files: bool = True) -> None:
+    try:
+        site_users.delete_site_runtime(root_path, linux_user)
+    except Exception:
+        pass
+    if delete_files:
+        try:
+            wordpress.delete_wordpress(root_path)
+        except Exception:
+            pass
 
 
 @router.post("", response_model=WebsiteOut)
@@ -38,12 +50,15 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
         raise HTTPException(status_code=403, detail="Website limit reached")
 
     install_wp = payload.install_wordpress and payload.app_type == "wordpress"
+    root_path = str(Path(settings.sites_root) / payload.domain)
+    if install_wp and (not payload.admin_email or not payload.admin_password):
+        raise HTTPException(status_code=400, detail="admin_email and admin_password are required when install_wordpress is true")
+    linux_user = None
 
     if install_wp:
-        if not payload.admin_email or not payload.admin_password:
-            raise HTTPException(status_code=400, detail="admin_email and admin_password are required when install_wordpress is true")
         db_info = mariadb.create_database(payload.domain)
         try:
+            linux_user = site_users.ensure_site_runtime(payload.domain, root_path, payload.php_version)
             root_path = wordpress.install_wordpress(
                 payload.domain,
                 db_info,
@@ -51,34 +66,51 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
                 payload.admin_user,
                 payload.admin_password,
                 str(payload.admin_email),
+                payload.php_version,
+                linux_user,
             )
         except (RuntimeError, ValueError) as exc:
             mariadb.drop_database(db_info["db_name"], db_info["db_user"])
+            _cleanup_failed_site(root_path, linux_user)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         try:
-            nginx.write_vhost(payload.domain, root_path, app_type="wordpress", php_version=payload.php_version)
+            nginx.write_vhost(
+                payload.domain,
+                root_path,
+                app_type="wordpress",
+                php_version=payload.php_version,
+                php_fpm_socket_override=site_users.php_fpm_socket(linux_user),
+            )
         except (RuntimeError, ValueError) as exc:
             mariadb.drop_database(db_info["db_name"], db_info["db_user"])
-            wordpress.delete_wordpress(root_path)
+            _cleanup_failed_site(root_path, linux_user)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_type_value = "wordpress"
     else:
-        # Just create the public/ folder skeleton and write a vhost.
-        root_path = str(Path(settings.sites_root) / payload.domain)
-        public = Path(root_path) / "public"
-        if not settings.command_dry_run:
-            public.mkdir(parents=True, exist_ok=True)
-            placeholder = public / "index.html"
-            if not placeholder.exists():
-                placeholder.write_text(
-                    f"<!doctype html><html><body><h1>{payload.domain}</h1>"
-                    "<p>Site created by BPanel. Upload your files to the public folder.</p>"
-                    "</body></html>",
-                    encoding="utf-8",
-                )
+        runtime_php_version = payload.php_version if payload.app_type == "wordpress" else None
         try:
-            nginx.write_vhost(payload.domain, root_path, app_type=payload.app_type, php_version=payload.php_version)
-        except ValueError as exc:
+            linux_user = site_users.ensure_site_runtime(payload.domain, root_path, runtime_php_version)
+            # Just create the public/ folder skeleton and write a vhost.
+            public = Path(root_path) / "public"
+            if not settings.command_dry_run:
+                placeholder = public / "index.html"
+                if not placeholder.exists():
+                    placeholder.write_text(
+                        f"<!doctype html><html><body><h1>{payload.domain}</h1>"
+                        "<p>Site created by BPanel. Upload your files to the public folder.</p>"
+                        "</body></html>",
+                        encoding="utf-8",
+                    )
+                site_users.fix_site_path(str(public), linux_user)
+            nginx.write_vhost(
+                payload.domain,
+                root_path,
+                app_type=payload.app_type,
+                php_version=payload.php_version,
+                php_fpm_socket_override=site_users.php_fpm_socket(linux_user) if runtime_php_version else None,
+            )
+        except (RuntimeError, ValueError, OSError) as exc:
+            _cleanup_failed_site(root_path, linux_user)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         db_info = None
         app_type_value = payload.app_type
@@ -87,6 +119,7 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
         domain=payload.domain,
         owner_id=owner_id,
         root_path=root_path,
+        linux_user=linux_user,
         php_version=payload.php_version,
         app_type=app_type_value,
         status="active",
@@ -135,17 +168,21 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
     if website.owner_id != current_user.id:
         ensure_role(current_user.role, Role.admin)
     if payload.php_version is not None:
-        website.php_version = payload.php_version
         try:
+            if website.linux_user and (website.app_type or "wordpress") == "wordpress":
+                site_users.ensure_site_runtime(website.domain, website.root_path, payload.php_version)
+            php_fpm_socket_override = site_users.php_fpm_socket(website.linux_user)
             nginx.rewrite_vhost(
                 website.domain,
                 website.root_path,
                 app_type=website.app_type or "wordpress",
                 php_version=payload.php_version,
                 custom_directives=website.nginx_custom or "",
+                php_fpm_socket_override=php_fpm_socket_override,
             )
-        except RuntimeError as exc:
+        except (RuntimeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=f"Cannot write Nginx config: {exc}") from exc
+        website.php_version = payload.php_version
     if payload.status is not None:
         website.status = payload.status
     if payload.owner_id is not None:
@@ -209,6 +246,7 @@ def delete_website(website_id: int, request: Request, delete_files: bool = True,
     nginx.delete_wordpress_vhost(website.domain)
     if delete_files:
         wordpress.delete_wordpress(website.root_path)
+        site_users.delete_site_runtime(website.root_path, website.linux_user)
     if db_item:
         db.delete(db_item)
     db.delete(website)
@@ -224,7 +262,12 @@ def fix_nginx_security(website_id: int, db: Session = Depends(get_db), current_u
         raise HTTPException(status_code=404, detail="Website not found")
     if website.owner_id != current_user.id:
         ensure_role(current_user.role, Role.admin)
-    target = nginx.harden_existing_wordpress_vhost(website.domain, website.root_path, website.php_version)
+    target = nginx.harden_existing_wordpress_vhost(
+        website.domain,
+        website.root_path,
+        website.php_version,
+        php_fpm_socket_override=site_users.php_fpm_socket(website.linux_user),
+    )
     log_action(db, current_user.id, "fix_nginx_security", website.domain)
     return {"message": f"Rewrote Nginx security template for {website.domain}", "path": target}
 

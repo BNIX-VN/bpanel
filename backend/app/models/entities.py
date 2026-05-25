@@ -21,6 +21,8 @@ class User(Base):
     # Bumped to invalidate previously-issued JWTs (logout-everywhere, role
     # change, password reset by admin, account disable, etc).
     token_version: Mapped[int] = mapped_column(Integer, default=0)
+    totp_secret: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     websites: Mapped[List["Website"]] = relationship(back_populates="owner")
@@ -33,6 +35,7 @@ class Website(Base):
     domain: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     root_path: Mapped[str] = mapped_column(String(500))
+    linux_user: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     php_version: Mapped[str] = mapped_column(String(16), default="8.3")
     app_type: Mapped[str] = mapped_column(String(32), default="wordpress")
     ssl_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -65,4 +68,19 @@ class AuditLog(Base):
     action: Mapped[str] = mapped_column(String(128))
     target: Mapped[str] = mapped_column(String(255))
     detail: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class SftpBackupTarget(Base):
+    __tablename__ = "sftp_backup_targets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    host: Mapped[str] = mapped_column(String(255))
+    port: Mapped[int] = mapped_column(Integer, default=22)
+    username: Mapped[str] = mapped_column(String(128))
+    password: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    private_key: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    remote_path: Mapped[str] = mapped_column(String(500), default="/backups/bpanel")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

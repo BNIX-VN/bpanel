@@ -2,7 +2,7 @@ import os
 import secrets
 import string
 
-from app.core.database import Base, SessionLocal, engine
+from app.core.database import SessionLocal, run_migrations
 from app.core.security import hash_password
 from app.models.entities import User
 
@@ -17,7 +17,7 @@ def _admin_password() -> str:
 
 
 def seed_admin():
-    Base.metadata.create_all(bind=engine)
+    run_migrations()
     db = SessionLocal()
     try:
         if not db.query(User).filter(User.username == "admin").first():

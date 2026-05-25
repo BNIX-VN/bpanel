@@ -32,6 +32,26 @@ class Token(BaseModel):
     token_type: str = "bearer"
 
 
+class LoginResponse(BaseModel):
+    access_token: Optional[str] = None
+    token_type: str = "bearer"
+    requires_2fa: bool = False
+
+
+class TwoFactorStatus(BaseModel):
+    enabled: bool
+
+
+class TwoFactorSetup(BaseModel):
+    secret: str
+    provisioning_uri: str
+    qr_data_url: str
+
+
+class TwoFactorCode(BaseModel):
+    code: str = Field(min_length=6, max_length=12)
+
+
 class UserCreate(BaseModel):
     username: str = Field(min_length=3, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")
     email: EmailStr
@@ -61,6 +81,7 @@ class UserOut(BaseModel):
     is_active: bool
     website_limit: int
     storage_limit_mb: int
+    totp_enabled: bool = False
 
     class Config:
         from_attributes = True
@@ -168,6 +189,7 @@ class WebsiteOut(BaseModel):
     domain: str
     owner_id: int
     root_path: str
+    linux_user: Optional[str] = None
     php_version: str
     app_type: str
     ssl_enabled: bool
@@ -206,6 +228,50 @@ class FirewallIpRule(BaseModel):
 
 class BackupCreate(BaseModel):
     website_id: int
+
+
+class SftpBackupTargetCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=100, pattern=r"^[A-Za-z0-9._ -]+$")
+    host: str = Field(min_length=2, max_length=255)
+    port: int = Field(default=22, ge=1, le=65535)
+    username: str = Field(min_length=1, max_length=128)
+    password: Optional[str] = Field(default=None, max_length=4096)
+    private_key: Optional[str] = Field(default=None, max_length=20000)
+    remote_path: str = Field(default="/backups/bpanel", min_length=1, max_length=500)
+
+    @field_validator("host")
+    @classmethod
+    def validate_host(cls, value: str) -> str:
+        value = value.strip()
+        if not re.fullmatch(r"[A-Za-z0-9._:-]+", value):
+            raise ValueError("Invalid SFTP host")
+        return value
+
+    @field_validator("remote_path")
+    @classmethod
+    def validate_remote_path(cls, value: str) -> str:
+        value = value.strip()
+        if "\x00" in value or "\n" in value or "\r" in value:
+            raise ValueError("Invalid remote path")
+        return value.rstrip("/") or "/"
+
+
+class SftpBackupTargetOut(BaseModel):
+    id: int
+    name: str
+    host: str
+    port: int
+    username: str
+    remote_path: str
+    is_active: bool
+
+    class Config:
+        from_attributes = True
+
+
+class SftpBackupRun(BaseModel):
+    website_id: int
+    target_id: int
 
 
 class RestoreBackup(BaseModel):

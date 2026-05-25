@@ -1,10 +1,14 @@
+import base64
 import secrets
 import time
 from collections import defaultdict, deque
+from io import BytesIO
 from threading import Lock
 from typing import Deque, Dict
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+import pyotp
+import qrcode
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
@@ -12,8 +16,9 @@ from app.api.deps import get_current_user
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import create_access_token, hash_password, needs_rehash, verify_password
+from app.core.secrets import decrypt, encrypt
 from app.models.entities import User
-from app.schemas.schemas import Token
+from app.schemas.schemas import LoginResponse, TwoFactorCode, TwoFactorSetup, TwoFactorStatus
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -48,15 +53,16 @@ def _client_key(request: Request) -> str:
 def _is_secure_request(request: Request) -> bool:
     """Decide whether to set the Secure cookie flag.
 
-    True when the inbound request was HTTPS, or when running in production
-    (the panel is always served behind nginx with a real TLS certificate).
+    True when the inbound request was HTTPS. The panel can also be served
+    directly over http://IP:2222 during first install, so production mode alone
+    must not force Secure cookies.
     """
     forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
     if forwarded_proto == "https":
         return True
     if request.url.scheme == "https":
         return True
-    return settings.app_env.lower() == "production"
+    return False
 
 
 def _set_session_cookies(response: Response, request: Request, token: str) -> str:
@@ -134,11 +140,39 @@ def _record_success(key: str) -> None:
         _login_lockouts.pop(key, None)
 
 
-@router.post("/login", response_model=Token)
+def _issue_login_session(response: Response, request: Request, user: User) -> str:
+    token_extra = {"role": user.role, "tv": user.token_version or 0}
+    token = create_access_token(user.username, token_extra)
+    _set_session_cookies(response, request, token)
+    return token
+
+
+def _get_totp_secret(user: User) -> str:
+    return decrypt(user.totp_secret or "")
+
+
+def _verify_totp(user: User, code: str) -> bool:
+    secret = _get_totp_secret(user)
+    code = (code or "").replace(" ", "").strip()
+    if not secret or not code:
+        return False
+    return pyotp.TOTP(secret).verify(code, valid_window=1)
+
+
+def _qr_data_url(uri: str) -> str:
+    image = qrcode.make(uri)
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
+
+
+@router.post("/login", response_model=LoginResponse)
 def login(
     request: Request,
     response: Response,
     form: OAuth2PasswordRequestForm = Depends(),
+    otp: str = Form(default=""),
     db: Session = Depends(get_db),
 ):
     key = _client_key(request)
@@ -158,6 +192,16 @@ def login(
             detail="Invalid username or password",
         )
 
+    if user.totp_enabled:
+        if not otp:
+            return LoginResponse(requires_2fa=True)
+        if not _verify_totp(user, otp):
+            _record_failure(key)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authentication code",
+            )
+
     _record_success(key)
     if needs_rehash(user.hashed_password):
         try:
@@ -165,15 +209,12 @@ def login(
             db.commit()
         except Exception:  # pragma: no cover
             db.rollback()
-    token_extra = {"role": user.role, "tv": user.token_version or 0}
-    token = create_access_token(user.username, token_extra)
-
-    _set_session_cookies(response, request, token)
+    token = _issue_login_session(response, request, user)
 
     # Bearer token still returned for backward compatibility with CLI tools or
     # mobile clients that cannot set cookies. Browser clients should ignore it
     # and rely on the HttpOnly cookie set above.
-    return Token(access_token=token)
+    return LoginResponse(access_token=token)
 
 
 @router.post("/logout")
@@ -217,3 +258,63 @@ def get_csrf(
         path="/",
     )
     return {"csrf_token": csrf_token}
+
+
+@router.get("/2fa/status", response_model=TwoFactorStatus)
+def two_factor_status(current_user: User = Depends(get_current_user)):
+    return TwoFactorStatus(enabled=bool(current_user.totp_enabled))
+
+
+@router.post("/2fa/setup", response_model=TwoFactorSetup)
+def setup_two_factor(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.totp_enabled:
+        raise HTTPException(status_code=400, detail="Two-factor authentication is already enabled")
+    secret = pyotp.random_base32()
+    current_user.totp_secret = encrypt(secret)
+    db.commit()
+    account_name = current_user.email or current_user.username
+    uri = pyotp.TOTP(secret).provisioning_uri(name=account_name, issuer_name=settings.totp_issuer)
+    return TwoFactorSetup(secret=secret, provisioning_uri=uri, qr_data_url=_qr_data_url(uri))
+
+
+@router.post("/2fa/enable", response_model=TwoFactorStatus)
+def enable_two_factor(
+    payload: TwoFactorCode,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not current_user.totp_secret:
+        raise HTTPException(status_code=400, detail="Set up two-factor authentication first")
+    if not _verify_totp(current_user, payload.code):
+        raise HTTPException(status_code=400, detail="Invalid authentication code")
+    if not current_user.totp_enabled:
+        current_user.totp_enabled = True
+        current_user.token_version = (current_user.token_version or 0) + 1
+        db.commit()
+        db.refresh(current_user)
+    _issue_login_session(response, request, current_user)
+    return TwoFactorStatus(enabled=True)
+
+
+@router.post("/2fa/disable", response_model=TwoFactorStatus)
+def disable_two_factor(
+    payload: TwoFactorCode,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.totp_enabled and not _verify_totp(current_user, payload.code):
+        raise HTTPException(status_code=400, detail="Invalid authentication code")
+    current_user.totp_enabled = False
+    current_user.totp_secret = None
+    current_user.token_version = (current_user.token_version or 0) + 1
+    db.commit()
+    db.refresh(current_user)
+    _issue_login_session(response, request, current_user)
+    return TwoFactorStatus(enabled=False)

@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Dict, List
 
 from app.models.entities import Website
+from app.services import site_users
 
 
 MAX_TEXT_FILE_BYTES = 2 * 1024 * 1024
@@ -102,6 +103,7 @@ def write_text_file(website: Website, relative_path: str, content: str, allow_ex
         raise ValueError("Refusing to write through a symlink")
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
+    site_users.fix_site_path(str(target.parent), website.linux_user)
     return str(target)
 
 

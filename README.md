@@ -5,15 +5,18 @@ WordPress sites, manage databases, SSL, backups, services, and a UFW firewall
 from a single web UI.
 
 - WordPress one-click installer (PHP 8.3 / 8.4) with WP-CLI
-- Static / custom PHP sites with editable per-site Nginx blocks
+- Static sites with editable per-site Nginx blocks
+- One isolated, locked Linux user per new website; PHP/WordPress vhosts get a private PHP-FPM pool
 - MariaDB databases with phpMyAdmin SSO (60s tokens)
 - Let's Encrypt SSL via certbot
 - File Browser integration with single sign-on
 - Backups: archive site files + SQL, restore, upload, download
+- SFTP backup targets for off-server backup copies
 - UFW firewall manager (allow port, allow/block IP, delete rules)
 - PHP-FPM config editor per version
 - Cron job manager with whitelisted WP-CLI commands
 - Role-based access: super_admin / admin / user / readonly
+- Google Authenticator compatible 2FA
 
 ## Tech stack
 
@@ -25,7 +28,7 @@ from a single web UI.
 
 - Ubuntu 24.04 LTS (clean install recommended)
 - Root access
-- A domain pointing to the server's public IP (for SSL on the panel)
+- Optional: a domain pointing to the server's public IP (for SSL on the panel)
 - 1 vCPU / 1 GB RAM minimum, 2 vCPU / 2 GB RAM recommended
 
 ## Install from GitHub
@@ -47,17 +50,30 @@ The installer will:
 2. Copy source to `/opt/bpanel`, build the frontend, set up the Python venv.
 3. Create the systemd service `bpanel-api`.
 4. Configure phpMyAdmin SSO and File Browser auth.
-5. Issue Let's Encrypt SSL for the panel domain (optional).
-6. Print the admin login at the end. Save it.
+5. Start the panel directly on port `2222` without relying on Nginx for login.
+6. Issue Let's Encrypt SSL for the panel domain (optional).
+7. Print the admin login at the end. Save it.
 
 You will be prompted for:
 
-- Panel URL (e.g. `https://panel.example.com`)
-- Whether to enable Let's Encrypt SSL
+- Panel domain/URL (optional; blank uses `http://SERVER_IP:2222`)
+- Whether to enable Let's Encrypt SSL for the panel domain
 - An email for SSL registration
 
-After install, open the URL printed at the end of the installer. The admin
-password is shown once — store it in a password manager.
+After install, open the URL printed at the end of the installer. If no panel
+domain was entered, use `http://SERVER_IP:2222`. The admin password is shown
+once — store it in a password manager.
+
+## SSH maintenance menu
+
+Run as root:
+
+```bash
+bpanel
+```
+
+The menu can set the panel URL/port, install SSL for the panel URL, fix runtime
+permissions, show status, and change the `admin` password.
 
 ## Update an existing install
 
@@ -69,7 +85,8 @@ sudo bash installer/update.sh
 ```
 
 The script pulls latest from GitHub, syncs source to `/opt/bpanel`, rebuilds the
-frontend, restarts the API, and reloads Nginx. Old `dist` and Vite caches are
+frontend, refreshes the direct panel service, and reloads Nginx for customer
+vhosts. Old `dist` and Vite caches are
 purged so the new bundle hash propagates to browsers.
 
 If the browser still shows the old UI, do a hard refresh (Ctrl + Shift + R) or
@@ -146,6 +163,12 @@ SITES_ROOT=/home/bpanel-sites
 BACKUP_ROOT=/var/backups/bpanel
 SSL_EMAIL=admin@example.com
 FILEBROWSER_PORT=8088
+PANEL_URL=http://SERVER_IP:2222
+PANEL_DOMAIN=
+PANEL_PORT=2222
+PANEL_SSL_CERT=
+PANEL_SSL_KEY=
+FRONTEND_DIST=/opt/bpanel/frontend/dist
 ```
 
 The backend refuses to start in production with `COMMAND_DRY_RUN=true` or
@@ -185,10 +208,11 @@ What the helper allows:
 - `systemctl start/stop/restart/reload <whitelisted service>`
 - `nginx -t`, `nginx reload`
 - `certbot --nginx ...` for a single validated domain
+- create/delete per-site Linux users and PHP-FPM pools (`bp_*` users only)
 - `ufw status/enable/disable/allow/deny/delete`
-- `chown -R www-data:www-data <path under /home/bpanel-sites>`
+- fix ownership/ACLs for paths under `/home/bpanel-sites`
 - `rm -rf <path under /home/bpanel-sites>`
-- WP-CLI as `www-data`, crontab management for `www-data`
+- WP-CLI and crontab management as the isolated site user
 
 Anything else is rejected. The helper validates domains, ports, IPs, and
 filesystem paths before invoking the real binary.
@@ -218,6 +242,7 @@ There is no path back to root via the API process.
 ## Security notes
 
 - Login is rate-limited (8 attempts / minute, lockout after 20 fails).
+- Google Authenticator compatible TOTP 2FA can be enabled per account.
 - Constant-time login path: bcrypt is verified even when the user does not
   exist, to avoid username enumeration via timing.
 - DB and WordPress passwords are passed via stdin / `--prompt`, never as

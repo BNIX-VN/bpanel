@@ -167,6 +167,16 @@ def _replace_php_fpm_socket(content: str, php_version: str) -> str:
     )
 
 
+def _replace_fastcgi_socket(content: str, socket_path: str) -> str:
+    if not re.fullmatch(r"/run/php/[A-Za-z0-9_.-]+\.sock", socket_path or ""):
+        raise ValueError("Invalid PHP-FPM socket path")
+    return re.sub(
+        r"fastcgi_pass\s+unix:[^;]+;",
+        f"fastcgi_pass unix:{socket_path};",
+        content,
+    )
+
+
 def _replace_custom_block(content: str, custom: str) -> str:
     """Swap content between BPANEL CUSTOM markers."""
     pattern = re.compile(
@@ -195,6 +205,7 @@ def render_vhost(
     app_type: str = "wordpress",
     php_version: Optional[str] = None,
     custom_directives: str = "",
+    php_fpm_socket_override: Optional[str] = None,
 ) -> str:
     if not DOMAIN_RE.fullmatch((domain or "").lower()):
         raise ValueError("Invalid domain")
@@ -209,7 +220,7 @@ def render_vhost(
     env = Environment(loader=FileSystemLoader(TEMPLATE_DIR), autoescape=False)
     template_name = "wordpress.conf.j2" if app_type == "wordpress" else "static.conf.j2"
     template = env.get_template(template_name)
-    php_fpm_socket = _php_fpm_socket(php_version)
+    php_fpm_socket = php_fpm_socket_override or _php_fpm_socket(php_version)
 
     rendered = template.render(
         domain=domain,
@@ -231,8 +242,16 @@ def write_vhost(
     app_type: str = "wordpress",
     php_version: Optional[str] = None,
     custom_directives: str = "",
+    php_fpm_socket_override: Optional[str] = None,
 ) -> str:
-    content = render_vhost(domain, root_path, app_type=app_type, php_version=php_version, custom_directives=custom_directives)
+    content = render_vhost(
+        domain,
+        root_path,
+        app_type=app_type,
+        php_version=php_version,
+        custom_directives=custom_directives,
+        php_fpm_socket_override=php_fpm_socket_override,
+    )
     target = Path(settings.nginx_sites_available) / f"{domain}.conf"
     if settings.command_dry_run:
         return content
@@ -256,9 +275,17 @@ def rewrite_vhost(
     app_type: str,
     php_version: str,
     custom_directives: str = "",
+    php_fpm_socket_override: Optional[str] = None,
 ) -> str:
     target = Path(settings.nginx_sites_available) / f"{domain}.conf"
-    content = render_vhost(domain, root_path, app_type=app_type, php_version=php_version, custom_directives=custom_directives)
+    content = render_vhost(
+        domain,
+        root_path,
+        app_type=app_type,
+        php_version=php_version,
+        custom_directives=custom_directives,
+        php_fpm_socket_override=php_fpm_socket_override,
+    )
     if settings.command_dry_run:
         return content
     if target.exists():
@@ -312,15 +339,30 @@ def set_wordpress_php_version(domain: str, php_version: str) -> str:
     return str(target)
 
 
-def harden_existing_wordpress_vhost(domain: str, root_path: str, php_version: str | None = None) -> str:
+def harden_existing_wordpress_vhost(
+    domain: str,
+    root_path: str,
+    php_version: str | None = None,
+    php_fpm_socket_override: Optional[str] = None,
+) -> str:
     target = Path(settings.nginx_sites_available) / f"{domain}.conf"
-    content = render_vhost(domain, root_path, app_type="wordpress", php_version=php_version)
+    content = render_vhost(
+        domain,
+        root_path,
+        app_type="wordpress",
+        php_version=php_version,
+        php_fpm_socket_override=php_fpm_socket_override,
+    )
     if settings.command_dry_run:
         return content
     if target.exists():
         existing = target.read_text(encoding="utf-8")
         if _has_ssl_config(existing):
-            updated = _replace_php_fpm_socket(_ensure_hsts_header(existing), php_version) if php_version else _ensure_hsts_header(existing)
+            updated = _ensure_hsts_header(existing)
+            if php_fpm_socket_override:
+                updated = _replace_fastcgi_socket(updated, php_fpm_socket_override)
+            elif php_version:
+                updated = _replace_php_fpm_socket(updated, php_version)
             target.write_text(updated, encoding="utf-8")
             shell.privileged("nginx-reload", fallback=["bash", "-lc", "nginx -t && systemctl reload nginx"])
             return str(target)

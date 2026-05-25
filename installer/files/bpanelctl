@@ -1,0 +1,293 @@
+#!/usr/bin/env bash
+# BPanel SSH maintenance menu.
+
+set -euo pipefail
+
+APP_DIR="${APP_DIR:-/opt/bpanel}"
+ENV_FILE="${APP_DIR}/backend/.env"
+SITES_ROOT="${SITES_ROOT:-/home/bpanel-sites}"
+BACKUP_ROOT="${BACKUP_ROOT:-/var/backups/bpanel}"
+DEFAULT_PANEL_PORT="2222"
+
+if [[ $EUID -ne 0 ]]; then
+  echo "Please run as root"
+  exit 1
+fi
+
+fail() { echo "ERROR: $*" >&2; exit 1; }
+
+ensure_env_file() {
+  [[ -f "$ENV_FILE" ]] || fail "$ENV_FILE not found. Run installer first."
+}
+
+env_get() {
+  local key="$1"
+  [[ -f "$ENV_FILE" ]] || return 0
+  awk -F= -v key="$key" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "$ENV_FILE"
+}
+
+env_set() {
+  local key="$1" value="$2"
+  ensure_env_file
+  local escaped
+  escaped="$(printf '%s' "$value" | sed -e 's/[&|]/\\&/g')"
+  if grep -q "^${key}=" "$ENV_FILE"; then
+    sed -i "s|^${key}=.*|${key}=${escaped}|" "$ENV_FILE"
+  else
+    printf '%s=%s\n' "$key" "$value" >>"$ENV_FILE"
+  fi
+}
+
+detect_ip() {
+  hostname -I 2>/dev/null | awk '{print $1}' || true
+}
+
+normalize_domain() {
+  local value="$1"
+  value="${value#http://}"
+  value="${value#https://}"
+  value="${value%%/*}"
+  value="${value%%:*}"
+  printf '%s' "$value"
+}
+
+validate_domain() {
+  [[ "$1" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]] \
+    || fail "Invalid domain: $1"
+}
+
+validate_port() {
+  [[ "$1" =~ ^[0-9]{1,5}$ ]] || fail "Invalid port: $1"
+  (( "$1" >= 1 && "$1" <= 65535 )) || fail "Port out of range: $1"
+}
+
+restart_panel() {
+  systemctl daemon-reload || true
+  systemctl restart bpanel-api
+}
+
+allow_panel_port() {
+  local port="$1"
+  if command -v ufw >/dev/null 2>&1; then
+    ufw allow "${port}/tcp" >/dev/null || true
+  fi
+}
+
+refresh_phpmyadmin_api_base() {
+  local signon="/usr/share/phpmyadmin/bpanel-signon.php"
+  [[ -f "$signon" ]] || return 0
+  local scheme="$1" port="$2"
+  sed -i -E "s#(\$apiUrl = ')[^']+(/api/databases/phpmyadmin-sso/)'#\1${scheme}://127.0.0.1:${port}\2'#" "$signon" || true
+}
+
+set_panel_url() {
+  ensure_env_file
+  local current_port current_domain domain host port scheme url cert key
+  current_port="$(env_get PANEL_PORT)"
+  current_port="${current_port:-$DEFAULT_PANEL_PORT}"
+  current_domain="$(env_get PANEL_DOMAIN)"
+  read -rp "Panel domain (blank for server IP): " domain
+  read -rp "Panel port [${current_port}]: " port
+  port="${port:-$current_port}"
+  validate_port "$port"
+
+  if [[ -n "$domain" ]]; then
+    domain="$(normalize_domain "$domain")"
+    validate_domain "$domain"
+    host="$domain"
+    env_set PANEL_DOMAIN "$domain"
+  else
+    host="$(detect_ip)"
+    [[ -n "$host" ]] || fail "Cannot detect server IP. Enter a panel domain instead."
+    env_set PANEL_DOMAIN ""
+  fi
+
+  cert="$(env_get PANEL_SSL_CERT)"
+  key="$(env_get PANEL_SSL_KEY)"
+  scheme="http"
+  if [[ -n "$domain" && "$current_domain" == "$domain" && -n "$cert" && -n "$key" && -f "$cert" && -f "$key" ]]; then
+    scheme="https"
+  fi
+  url="${scheme}://${host}:${port}"
+
+  env_set PANEL_PORT "$port"
+  env_set PANEL_URL "$url"
+  env_set ALLOWED_ORIGINS "$url"
+  if [[ "$scheme" == "http" ]]; then
+    env_set PANEL_SSL_CERT ""
+    env_set PANEL_SSL_KEY ""
+  fi
+  allow_panel_port "$port"
+  refresh_phpmyadmin_api_base "$scheme" "$port"
+  restart_panel
+  echo "Panel URL: $url"
+}
+
+install_panel_ssl() {
+  ensure_env_file
+  local domain email port url
+  domain="$(env_get PANEL_DOMAIN)"
+  if [[ -z "$domain" ]]; then
+    read -rp "Panel domain: " domain
+    domain="$(normalize_domain "$domain")"
+  fi
+  validate_domain "$domain"
+  email="$(env_get SSL_EMAIL)"
+  if [[ -z "$email" ]]; then
+    read -rp "Let's Encrypt email: " email
+  fi
+  [[ "$email" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]] || fail "Invalid email"
+
+  echo "Issuing certificate for $domain. Nginx may be stopped briefly for port 80 validation."
+  certbot certonly --standalone \
+    -d "$domain" \
+    --email "$email" \
+    --agree-tos \
+    --non-interactive \
+    --pre-hook "systemctl stop nginx || true" \
+    --post-hook "systemctl start nginx || true" \
+    --deploy-hook "install -d -o root -g bpanel -m 0750 /etc/bpanel && install -m 0640 -o root -g bpanel /etc/letsencrypt/live/${domain}/fullchain.pem /etc/bpanel/panel-fullchain.pem && install -m 0640 -o root -g bpanel /etc/letsencrypt/live/${domain}/privkey.pem /etc/bpanel/panel-privkey.pem && systemctl restart bpanel-api || true"
+
+  install -d -o root -g bpanel -m 0750 /etc/bpanel
+  install -m 0640 -o root -g bpanel "/etc/letsencrypt/live/${domain}/fullchain.pem" /etc/bpanel/panel-fullchain.pem
+  install -m 0640 -o root -g bpanel "/etc/letsencrypt/live/${domain}/privkey.pem" /etc/bpanel/panel-privkey.pem
+
+  port="$(env_get PANEL_PORT)"
+  port="${port:-$DEFAULT_PANEL_PORT}"
+  url="https://${domain}:${port}"
+  env_set PANEL_DOMAIN "$domain"
+  env_set PANEL_SSL_CERT "/etc/bpanel/panel-fullchain.pem"
+  env_set PANEL_SSL_KEY "/etc/bpanel/panel-privkey.pem"
+  env_set PANEL_URL "$url"
+  env_set ALLOWED_ORIGINS "$url"
+  env_set SSL_EMAIL "$email"
+  allow_panel_port "$port"
+  refresh_phpmyadmin_api_base "https" "$port"
+  restart_panel
+  echo "Panel SSL enabled: $url"
+}
+
+fix_permissions() {
+  ensure_env_file
+  getent group bpanel-sites >/dev/null || groupadd --system bpanel-sites
+  if ! command -v setfacl >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1; then
+    DEBIAN_FRONTEND=noninteractive apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y acl
+  fi
+  usermod -aG bpanel-sites bpanel 2>/dev/null || true
+  usermod -aG bpanel-sites www-data 2>/dev/null || true
+  install -d -o bpanel -g bpanel -m 0750 "$APP_DIR" "$APP_DIR/backend" "$APP_DIR/frontend"
+  install -d -o bpanel -g bpanel-sites -m 2775 "$SITES_ROOT"
+  install -d -o bpanel -g bpanel -m 0750 "$BACKUP_ROOT"
+  if [[ -d /etc/bpanel ]]; then
+    chown root:bpanel /etc/bpanel /etc/bpanel/* 2>/dev/null || true
+    chmod 0750 /etc/bpanel 2>/dev/null || true
+    chmod 0640 /etc/bpanel/* 2>/dev/null || true
+  fi
+  chown -R bpanel:bpanel "$APP_DIR/backend" "$APP_DIR/frontend" 2>/dev/null || true
+  chmod 0640 "$ENV_FILE" 2>/dev/null || true
+  if [[ -d "$APP_DIR/frontend/dist" ]]; then
+    chmod o+rX "$APP_DIR" "$APP_DIR/frontend" 2>/dev/null || true
+    chmod -R o+rX "$APP_DIR/frontend/dist"
+  fi
+  if [[ -d "$SITES_ROOT" ]]; then
+    chown bpanel:bpanel-sites "$SITES_ROOT" 2>/dev/null || true
+    chmod 2775 "$SITES_ROOT" 2>/dev/null || true
+    cd "$APP_DIR/backend"
+    runuser -u bpanel -- env HOME="$APP_DIR" BPANEL_USE_HELPER=true "$APP_DIR/backend/.venv/bin/python" - <<'PY'
+from app.core.database import SessionLocal
+from app.models.entities import Website
+from app.services import site_users
+
+db = SessionLocal()
+try:
+    for website in db.query(Website).all():
+        if website.linux_user:
+            runtime_php_version = website.php_version if (website.app_type or "wordpress") == "wordpress" else None
+            site_users.ensure_site_runtime(website.domain, website.root_path, runtime_php_version)
+        site_users.fix_site_permissions(website.root_path, website.linux_user)
+finally:
+    db.close()
+PY
+  fi
+  restart_panel
+  echo "Permissions fixed."
+}
+
+change_admin_password() {
+  ensure_env_file
+  local password confirm runner
+  read -rsp "New admin password: " password; echo
+  read -rsp "Confirm password: " confirm; echo
+  [[ "$password" == "$confirm" ]] || fail "Passwords do not match"
+  [[ ${#password} -ge 12 ]] || fail "Password must be at least 12 characters"
+
+  cd "$APP_DIR/backend"
+  if id -u bpanel >/dev/null 2>&1; then
+    runner=(runuser -u bpanel -- env "BPANEL_NEW_ADMIN_PASSWORD=$password" "$APP_DIR/backend/.venv/bin/python")
+  else
+    runner=(env "BPANEL_NEW_ADMIN_PASSWORD=$password" "$APP_DIR/backend/.venv/bin/python")
+  fi
+  "${runner[@]}" - <<'PY'
+import os
+from app.core.database import SessionLocal
+from app.core.security import hash_password
+from app.models.entities import User
+
+password = os.environ["BPANEL_NEW_ADMIN_PASSWORD"]
+db = SessionLocal()
+try:
+    user = db.query(User).filter(User.username == "admin").first()
+    if not user:
+        raise SystemExit("admin user not found")
+    user.hashed_password = hash_password(password)
+    user.token_version = (user.token_version or 0) + 1
+    db.commit()
+finally:
+    db.close()
+PY
+  echo "Admin password changed. Existing sessions were invalidated."
+}
+
+show_status() {
+  ensure_env_file
+  echo "Panel URL: $(env_get PANEL_URL)"
+  echo "Panel port: $(env_get PANEL_PORT)"
+  systemctl --no-pager --lines=0 status bpanel-api || true
+}
+
+menu() {
+  while true; do
+    echo ""
+    echo "BPanel SSH Menu"
+    echo "1) Set panel URL / port"
+    echo "2) Install SSL for panel URL"
+    echo "3) Fix permissions"
+    echo "4) Change admin password"
+    echo "5) Show panel status"
+    echo "0) Exit"
+    read -rp "Choose: " choice
+    case "$choice" in
+      1) set_panel_url ;;
+      2) install_panel_ssl ;;
+      3) fix_permissions ;;
+      4) change_admin_password ;;
+      5) show_status ;;
+      0) exit 0 ;;
+      *) echo "Invalid choice" ;;
+    esac
+  done
+}
+
+case "${1:-menu}" in
+  menu|--menu) menu ;;
+  set-panel-url|--set-panel-url) set_panel_url ;;
+  install-panel-ssl|--install-panel-ssl) install_panel_ssl ;;
+  fix-permissions|--fix-permissions) fix_permissions ;;
+  change-admin-password|--change-admin-password) change_admin_password ;;
+  status|--status) show_status ;;
+  *)
+    echo "Usage: bpanel [menu|set-panel-url|install-panel-ssl|fix-permissions|change-admin-password|status]"
+    exit 2
+    ;;
+esac

@@ -207,7 +207,7 @@ button:disabled{opacity:.55;cursor:not-allowed;box-shadow:none}
 .site-meta span{background:var(--surface);border:1px solid var(--border);border-radius:999px;padding:5px 10px;color:var(--text-muted);font-weight:600;font-size:12px}
 .site-meta strong{color:var(--text)}
 .db-row{grid-template-columns:1fr 1fr auto auto auto}
-.user-row{grid-template-columns:minmax(170px,1.5fr) auto .65fr .65fr auto;padding:12px 14px}
+.user-row{grid-template-columns:minmax(170px,1.5fr) auto auto .65fr .65fr auto;padding:12px 14px}
 .user-main{display:grid;gap:2px;min-width:0}
 .user-main strong{font-size:14px}
 .user-main small{color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -255,6 +255,19 @@ button:disabled{opacity:.55;cursor:not-allowed;box-shadow:none}
 }
 .backup-item:hover{border-color:var(--border-hover)}
 .backup-item span{font-weight:700;word-break:break-all;min-width:0}
+
+/* SFTP backups */
+.sftp-panel{display:grid;gap:12px;margin-top:18px;padding-top:16px;border-top:1px solid var(--border)}
+.sftp-run-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center}
+.sftp-form{display:grid;grid-template-columns:1fr 1fr 110px 1fr 1fr 1fr auto;gap:10px;align-items:start}
+.sftp-form textarea{grid-column:1 / -2;min-height:96px}
+.sftp-form button{align-self:stretch}
+
+/* Security */
+.security-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;margin-top:12px}
+.security-grid.one{grid-template-columns:minmax(0,420px)}
+.qr-code{width:180px;height:180px;image-rendering:crisp-edges;background:white;border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px}
+.secret-text{display:block;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px;word-break:break-all;color:var(--text)}
 
 /* Upload button */
 .upload-button{
@@ -400,7 +413,8 @@ a:hover{color:var(--primary-hover)}
   .stats-grid,.grid,.site-grid,.service-grid,.file-list{grid-template-columns:1fr;margin-bottom:12px}
   .stat-card,.card{border-radius:var(--radius-md);padding:16px}
   .stat-card strong{font-size:28px}
-  .form-row,.user-form,.user-create-card,.assign-row,.toolbar,.editor-tools,.firewall-form{grid-template-columns:1fr}
+  .form-row,.user-form,.user-create-card,.assign-row,.toolbar,.editor-tools,.firewall-form,.sftp-run-row,.sftp-form,.security-grid,.security-grid.one{grid-template-columns:1fr}
+  .sftp-form textarea{grid-column:1}
   .actions{display:grid;grid-template-columns:1fr;align-items:stretch}
   .actions button,.actions .button-link,.actions .upload-button,.actions select{width:100%;max-width:none}
   .row,.db-row,.user-row{grid-template-columns:1fr;gap:7px;padding:12px}

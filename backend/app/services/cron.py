@@ -2,6 +2,7 @@ import re
 import shlex
 
 from app.models.entities import Website
+from app.services import site_users
 from app.services.shell import shell
 
 
@@ -45,42 +46,51 @@ def add_cron(website: Website, schedule: str, command: str) -> str:
     safe_domain = _validate_domain(website.domain)
     marker = f"# bpanel:{safe_domain}"
     line = f"{safe_schedule} cd {shlex.quote(website.root_path + '/public')} && {safe_command} {marker}"
-    existing = list_cron_all()
+    cron_user = website.linux_user or "www-data"
+    if website.linux_user:
+        runtime_php_version = website.php_version if (website.app_type or "wordpress") == "wordpress" else None
+        site_users.ensure_site_runtime(website.domain, website.root_path, runtime_php_version)
+    existing = list_cron_all(cron_user)
     new_content = existing.rstrip() + ("\n" if existing.strip() else "") + line + "\n"
     shell.privileged(
         "cron-write",
+        helper_args=[cron_user],
         input=new_content,
         fallback=["bash", "-lc", "crontab -"],
     )
     return line
 
 
-def list_cron_all() -> str:
+def list_cron_all(cron_user: str = "www-data") -> str:
+    if cron_user != "www-data":
+        site_users.validate_linux_user(cron_user)
     result = shell.privileged(
         "cron-list",
+        helper_args=[cron_user],
         check=False,
         fallback=["bash", "-lc", "crontab -l 2>/dev/null || true"],
     )
     return result.stdout or ""
 
 
-def list_cron(domain: str) -> str:
+def list_cron(domain: str, cron_user: str = "www-data") -> str:
     safe_domain = _validate_domain(domain)
     marker = f"bpanel:{safe_domain}"
-    return "\n".join(line for line in list_cron_all().splitlines() if marker in line)
+    return "\n".join(line for line in list_cron_all(cron_user).splitlines() if marker in line)
 
 
-def delete_cron(domain: str, index: int) -> str:
+def delete_cron(domain: str, index: int, cron_user: str = "www-data") -> str:
     safe_domain = _validate_domain(domain)
-    matching = list_cron(safe_domain).splitlines()
+    matching = list_cron(safe_domain, cron_user).splitlines()
     if index < 0 or index >= len(matching):
         raise ValueError("Cron not found")
     target = matching[index]
-    full = list_cron_all().splitlines()
+    full = list_cron_all(cron_user).splitlines()
     new_lines = [line for line in full if line.strip() != target.strip()]
     new_content = "\n".join(new_lines) + ("\n" if new_lines else "")
     shell.privileged(
         "cron-write",
+        helper_args=[cron_user],
         input=new_content,
         fallback=["bash", "-lc", "crontab -"],
     )

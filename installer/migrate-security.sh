@@ -18,6 +18,7 @@ fi
 APP_DIR="${APP_DIR:-/opt/bpanel}"
 SITES_ROOT="${SITES_ROOT:-/home/bpanel-sites}"
 BACKUP_ROOT="${BACKUP_ROOT:-/var/backups/bpanel}"
+PANEL_PORT="${PANEL_PORT:-2222}"
 SOURCE_DIR="${SOURCE_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
 log() { echo ""; echo "==> $1"; }
@@ -26,20 +27,42 @@ fail() { echo "ERROR: $1" >&2; exit 1; }
 [[ -d "$APP_DIR/backend" ]] || fail "Missing $APP_DIR/backend"
 [[ -f "$SOURCE_DIR/installer/files/bpanel-helper.sh" ]] || fail "Missing helper file in $SOURCE_DIR/installer/files/. Pull latest source first."
 
+env_set_default() {
+  local key="$1" value="$2" file="$APP_DIR/backend/.env"
+  [[ -f "$file" ]] || return 0
+  grep -q "^${key}=" "$file" || printf '%s=%s\n' "$key" "$value" >>"$file"
+}
+
+panel_healthcheck() {
+  curl -kfsS "https://127.0.0.1:${PANEL_PORT}/api/health" >/dev/null 2>&1 \
+    || curl -fsS "http://127.0.0.1:${PANEL_PORT}/api/health" >/dev/null 2>&1
+}
+
 log "Stopping bpanel-api"
 systemctl stop bpanel-api 2>/dev/null || true
 
 log "Creating system user 'bpanel'"
+getent group bpanel-sites >/dev/null || groupadd --system bpanel-sites
+if ! command -v setfacl >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1; then
+  DEBIAN_FRONTEND=noninteractive apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y acl
+fi
 if ! id -u bpanel >/dev/null 2>&1; then
   useradd --system --home-dir "$APP_DIR" --shell /usr/sbin/nologin --user-group bpanel
 fi
 usermod -aG www-data bpanel || true
+usermod -aG bpanel-sites bpanel || true
+usermod -aG bpanel-sites www-data || true
 
 log "Installing privileged helper and sudoers rule"
 install -m 0750 -o root -g bpanel "$SOURCE_DIR/installer/files/bpanel-helper.sh" /usr/local/sbin/bpanel-helper
 install -m 0440 -o root -g root  "$SOURCE_DIR/installer/files/bpanel-sudoers"   /etc/sudoers.d/bpanel
 visudo -c -f /etc/sudoers.d/bpanel >/dev/null
 sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper wp --info >/dev/null
+if [[ -f "$SOURCE_DIR/installer/files/bpanelctl" ]]; then
+  install -m 0755 -o root -g root "$SOURCE_DIR/installer/files/bpanelctl" /usr/local/sbin/bpanel
+  ln -sfn /usr/local/sbin/bpanel /usr/local/sbin/bpanelctl
+fi
 
 log "Fixing filesystem ownership and permissions"
 # /etc/nginx/conf.d: writable by group bpanel (so bpanel can write vhost files)
@@ -49,7 +72,7 @@ chmod g+rw /etc/nginx/conf.d/*.conf 2>/dev/null || true
 
 # Site root: owned by bpanel, group www-data, setgid so new files inherit group
 mkdir -p "$SITES_ROOT"
-chown -R bpanel:www-data "$SITES_ROOT"
+chown -R bpanel:bpanel-sites "$SITES_ROOT"
 chmod 2775 "$SITES_ROOT"
 # Existing site files keep www-data ownership but group writable for bpanel via setgid
 find "$SITES_ROOT" -type d -exec chmod g+s {} + 2>/dev/null || true
@@ -96,6 +119,25 @@ fi
 
 log "Writing hardened systemd unit"
 install -d -o bpanel -g bpanel -m 0750 /var/lib/bpanel
+env_set_default PANEL_PORT "$PANEL_PORT"
+env_set_default PANEL_URL "http://$(hostname -I 2>/dev/null | awk '{print $1}'):${PANEL_PORT}"
+env_set_default PANEL_DOMAIN ""
+env_set_default PANEL_SSL_CERT ""
+env_set_default PANEL_SSL_KEY ""
+env_set_default FRONTEND_DIST "$APP_DIR/frontend/dist"
+
+cat >/usr/local/sbin/bpanel-api-start <<STARTER
+#!/usr/bin/env bash
+set -euo pipefail
+cd ${APP_DIR}/backend
+args=(app.main:app --host 0.0.0.0 --port "\${PANEL_PORT:-2222}" --proxy-headers --forwarded-allow-ips "*")
+if [[ -n "\${PANEL_SSL_CERT:-}" && -n "\${PANEL_SSL_KEY:-}" && -f "\${PANEL_SSL_CERT}" && -f "\${PANEL_SSL_KEY}" ]]; then
+  args+=(--ssl-certfile "\${PANEL_SSL_CERT}" --ssl-keyfile "\${PANEL_SSL_KEY}")
+fi
+exec ${APP_DIR}/backend/.venv/bin/uvicorn "\${args[@]}"
+STARTER
+chmod 0755 /usr/local/sbin/bpanel-api-start
+
 cat >/etc/systemd/system/bpanel-api.service <<SERVICE
 [Unit]
 Description=BPanel API
@@ -105,12 +147,12 @@ After=network.target mariadb.service
 Type=exec
 User=bpanel
 Group=bpanel
-SupplementaryGroups=www-data
+SupplementaryGroups=www-data bpanel-sites
 WorkingDirectory=${APP_DIR}/backend
 EnvironmentFile=${APP_DIR}/backend/.env
 Environment=HOME=${APP_DIR}
 Environment=BPANEL_USE_HELPER=true
-ExecStart=${APP_DIR}/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips 127.0.0.1
+ExecStart=/usr/local/sbin/bpanel-api-start
 Restart=always
 RestartSec=3
 
@@ -143,6 +185,15 @@ WantedBy=multi-user.target
 SERVICE
 
 systemctl daemon-reload
+mkdir -p /etc/systemd/system/filebrowser.service.d
+cat >/etc/systemd/system/filebrowser.service.d/10-bpanel-sites.conf <<'SERVICE'
+[Service]
+SupplementaryGroups=bpanel-sites
+SERVICE
+rm -f /etc/nginx/sites-enabled/bpanel.conf /etc/nginx/sites-available/bpanel.conf 2>/dev/null || true
+if command -v ufw >/dev/null 2>&1; then
+  ufw allow "${PANEL_PORT}/tcp" >/dev/null || true
+fi
 
 log "Updating Python deps and re-compiling"
 cd "$APP_DIR/backend"
@@ -155,10 +206,11 @@ sudo -u bpanel bash -c "
 
 log "Starting bpanel-api"
 systemctl enable --now bpanel-api
+systemctl restart filebrowser 2>/dev/null || true
 
 log "Health check"
 for _ in {1..20}; do
-  if curl -fsS http://127.0.0.1:8000/api/health >/dev/null 2>&1; then
+  if panel_healthcheck; then
     echo "API is healthy."
     echo ""
     echo "Migration complete. The API now runs as user 'bpanel' and is restricted by:"
