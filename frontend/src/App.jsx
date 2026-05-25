@@ -42,6 +42,7 @@ function App() {
   const [cronCommand, setCronCommand] = useState('wp cron event run --due-now --allow-root');
   const [filePath, setFilePath] = useState('public/wp-config.php');
   const [fileListPath, setFileListPath] = useState('public');
+  const [fileUploadDir, setFileUploadDir] = useState('public');
   const [files, setFiles] = useState([]);
   const [fileContent, setFileContent] = useState('');
   const [newUser, setNewUser] = useState({ username: '', email: '', password: '', role: 'user', website_limit: 5, storage_limit_mb: 1024 });
@@ -460,6 +461,33 @@ function App() {
       if (!res.ok || !data.url) { setError(data.detail || `Cannot open File Browser.`); return; }
       window.open(data.url, '_blank', 'noopener,noreferrer');
     } catch (err) { setError('Cannot open File Browser.'); }
+    finally { setLoading(''); }
+  }
+
+  async function uploadSiteFile(file) {
+    if (!file) return;
+    if (!selectedWebsiteId) { setError('Please select a website first.'); return; }
+    const uploadDir = fileUploadDir.trim() || 'public';
+    const form = new FormData();
+    form.append('file', file);
+    try {
+      setError('');
+      setLoading('Uploading file...');
+      const csrfToken = readCookie('bpanel_csrf');
+      const headers = csrfToken ? { 'X-CSRF-Token': csrfToken } : {};
+      const res = await fetch(`${API}/maintenance/files/${selectedWebsiteId}/upload?path=${encodeURIComponent(uploadDir)}`, {
+        method: 'POST',
+        credentials: 'include',
+        headers,
+        body: form,
+      });
+      const responseText = await res.text();
+      let data;
+      try { data = responseText ? JSON.parse(responseText) : {}; } catch { data = { detail: responseText || `HTTP ${res.status}` }; }
+      if (!res.ok) { if (handleAuthExpired(res.status, data.detail)) return; setError(data.detail || 'Upload failed.'); return; }
+      setNotice(`Uploaded ${file.name} to ${uploadDir}.`);
+      if (String(fileListPath || 'public') === uploadDir) await listFiles(uploadDir);
+    } catch (err) { setError('File upload failed.'); }
     finally { setLoading(''); }
   }
 
@@ -931,6 +959,13 @@ function App() {
           <span>Website: <strong>{currentSite.domain}</strong></span>
           <span>Root: <strong>{currentSite.root_path}/public</strong></span>
         </div>}
+        <div className="filebrowser-actions upload-actions">
+          <input value={fileUploadDir} onChange={e => setFileUploadDir(e.target.value)} placeholder="public" disabled={!selectedWebsiteId || !!loading} />
+          <label className={`upload-button ${(!selectedWebsiteId || !!loading) ? 'disabled' : ''}`}>
+            <Upload size={15}/> Upload file
+            <input type="file" disabled={!selectedWebsiteId || !!loading} onChange={e => { uploadSiteFile(e.target.files?.[0]); e.target.value = ''; }} />
+          </label>
+        </div>
         <p className="hint">Protected by BPanel session. Only admins can open it.</p>
       </div>
     </section>;

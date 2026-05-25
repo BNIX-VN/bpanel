@@ -99,7 +99,7 @@ server {
     server_name _;
     client_max_body_size 1100M;
     location = /_bpanel/filebrowser-auth { internal; proxy_pass ${api_scheme}://127.0.0.1:${port}/api/maintenance/filebrowser-auth; proxy_ssl_verify off; proxy_pass_request_body off; proxy_set_header Content-Length ""; proxy_set_header Cookie \$http_cookie; proxy_set_header X-Forwarded-Proto \$scheme; proxy_set_header X-Forwarded-Host \$host; }
-    location /filebrowser/ { auth_request /_bpanel/filebrowser-auth; proxy_pass http://127.0.0.1:${fb_port}; proxy_http_version 1.1; proxy_request_buffering off; proxy_buffering off; proxy_set_header Host \$host; proxy_set_header X-Real-IP \$remote_addr; proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for; proxy_set_header X-Forwarded-Proto \$scheme; proxy_set_header X-Forwarded-Host \$host; proxy_set_header X-Forwarded-Prefix /filebrowser; proxy_set_header X-Original-URI \$request_uri; }
+    location /filebrowser/ { auth_request /_bpanel/filebrowser-auth; auth_request_set \$filebrowser_user \$upstream_http_x_bpanel_user; proxy_pass http://127.0.0.1:${fb_port}; proxy_http_version 1.1; proxy_request_buffering off; proxy_buffering off; proxy_set_header Host \$host; proxy_set_header X-Bpanel-User \$filebrowser_user; proxy_set_header X-Real-IP \$remote_addr; proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for; proxy_set_header X-Forwarded-Proto \$scheme; proxy_set_header X-Forwarded-Host \$host; proxy_set_header X-Forwarded-Prefix /filebrowser; proxy_set_header X-Original-URI \$request_uri; }
     location = /phpmyadmin { return 301 /phpmyadmin/; }
     location /phpmyadmin/ { alias /usr/share/phpmyadmin/; index index.php; try_files \$uri \$uri/ =404; }
     location ~ ^/phpmyadmin/(.+\.php)$ { alias /usr/share/phpmyadmin/\$1; include fastcgi_params; fastcgi_param SCRIPT_FILENAME /usr/share/phpmyadmin/\$1; fastcgi_param SCRIPT_NAME /phpmyadmin/\$1; fastcgi_pass unix:/run/php/php${php_version}-fpm.sock; fastcgi_read_timeout 300; }
@@ -212,12 +212,18 @@ fix_permissions() {
   if command -v filebrowser >/dev/null 2>&1 && [[ -f /etc/filebrowser/database.db ]]; then
     local fb_config_port
     fb_config_port="$(env_get FILEBROWSER_PORT)"; fb_config_port="${fb_config_port:-8088}"
+    systemctl stop filebrowser 2>/dev/null || true
     runuser -u www-data -- filebrowser -d /etc/filebrowser/database.db config set \
       --root /home \
       --address 127.0.0.1 \
       --port "$fb_config_port" \
-      --auth.method=noauth \
+      --auth.method=proxy \
+      --auth.header X-Bpanel-User \
       --baseURL /filebrowser >/dev/null 2>&1 || true
+    if ! runuser -u www-data -- filebrowser -d /etc/filebrowser/database.db users ls 2>/dev/null | grep -q '^admin'; then
+      runuser -u www-data -- filebrowser -d /etc/filebrowser/database.db users add admin "$(openssl rand -base64 24)" --perm.admin >/dev/null 2>&1 || true
+    fi
+    systemctl start filebrowser 2>/dev/null || true
   fi
   install -d -o bpanel -g bpanel -m 0750 "$APP_DIR" "$APP_DIR/backend" "$APP_DIR/frontend"
   install -d -o bpanel -g bpanel-sites -m 2775 "$SITES_ROOT"

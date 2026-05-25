@@ -457,7 +457,8 @@ setup_filebrowser_service() {
     --port "$FILEBROWSER_PORT" \
     --baseURL /filebrowser \
     --root /home \
-    --auth.method=noauth \
+    --auth.method=proxy \
+    --auth.header X-Bpanel-User \
     --branding.name BPanelFiles >/dev/null
   if ! runuser -u www-data -- filebrowser -d /etc/filebrowser/database.db users ls 2>/dev/null | grep -q '^admin'; then
     runuser -u www-data -- filebrowser -d /etc/filebrowser/database.db users add admin "$(openssl rand -base64 24)" --perm.admin >/dev/null
@@ -518,11 +519,13 @@ server {
 
     location /filebrowser/ {
         auth_request /_bpanel/filebrowser-auth;
+        auth_request_set \$filebrowser_user \$upstream_http_x_bpanel_user;
         proxy_pass http://127.0.0.1:${FILEBROWSER_PORT:-8088};
         proxy_http_version 1.1;
         proxy_request_buffering off;
         proxy_buffering off;
         proxy_set_header Host \$host;
+        proxy_set_header X-Bpanel-User \$filebrowser_user;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;

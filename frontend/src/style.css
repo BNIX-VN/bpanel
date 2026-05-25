@@ -278,6 +278,8 @@ button:disabled{opacity:.55;cursor:not-allowed;box-shadow:none}
 }
 .upload-button:hover{background:var(--primary-hover);transform:translateY(-1px)}
 .upload-button input{position:absolute;inset:0;opacity:0;cursor:pointer}
+.upload-button.disabled{opacity:.6;cursor:not-allowed;transform:none}
+.upload-button.disabled input{cursor:not-allowed}
 
 /* Info box */
 .info-box{display:grid;gap:5px;background:var(--surface-alt);border:1px solid var(--border);border-radius:var(--radius-md);padding:14px;min-width:0}

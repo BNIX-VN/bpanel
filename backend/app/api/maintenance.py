@@ -349,7 +349,10 @@ def filebrowser_auth(request: Request, db: Session = Depends(get_db)):
     if user is None or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid File Browser session")
     ensure_role(user.role, Role.admin)
-    return Response(status_code=status.HTTP_204_NO_CONTENT, headers={"Cache-Control": "no-store"})
+    return Response(
+        status_code=status.HTTP_204_NO_CONTENT,
+        headers={"Cache-Control": "no-store", "X-Bpanel-User": "admin"},
+    )
 
 
 @router.get("/files/{website_id}")
@@ -381,6 +384,30 @@ def write_file(payload: FileWrite, db: Session = Depends(get_db), current_user: 
         target = file_manager.write_text_file(website, payload.path, payload.content, current_user.role in {"super_admin", "admin"})
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"target": target}
+
+
+@router.post("/files/{website_id}/upload")
+def upload_file(
+    website_id: int,
+    path: str = Query(default="public"),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    ensure_role(current_user.role, Role.user)
+    website = get_owned_website(db, current_user, website_id)
+    try:
+        target = file_manager.upload_file(
+            website,
+            path,
+            file.filename or "upload.bin",
+            file.file,
+            current_user.role in {"super_admin", "admin"},
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    log_action(db, current_user.id, "upload_file", website.domain, target)
     return {"target": target}
 
 

@@ -102,11 +102,13 @@ server {
 
     location /filebrowser/ {
         auth_request /_bpanel/filebrowser-auth;
+        auth_request_set \$filebrowser_user \$upstream_http_x_bpanel_user;
         proxy_pass http://127.0.0.1:${filebrowser_port};
         proxy_http_version 1.1;
         proxy_request_buffering off;
         proxy_buffering off;
         proxy_set_header Host \$host;
+        proxy_set_header X-Bpanel-User \$filebrowser_user;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
@@ -190,12 +192,17 @@ SupplementaryGroups=bpanel-sites
 ReadWritePaths=/home /home/bpanel-sites /etc/filebrowser /var/lib/filebrowser /tmp
 SERVICE
   if command -v filebrowser >/dev/null 2>&1 && [[ -f /etc/filebrowser/database.db ]]; then
+    systemctl stop filebrowser 2>/dev/null || true
     runuser -u www-data -- filebrowser -d /etc/filebrowser/database.db config set \
       --root /home \
       --address 127.0.0.1 \
       --port "$filebrowser_port" \
-      --auth.method=noauth \
+      --auth.method=proxy \
+      --auth.header X-Bpanel-User \
       --baseURL /filebrowser >/dev/null 2>&1 || true
+    if ! runuser -u www-data -- filebrowser -d /etc/filebrowser/database.db users ls 2>/dev/null | grep -q '^admin'; then
+      runuser -u www-data -- filebrowser -d /etc/filebrowser/database.db users add admin "$(openssl rand -base64 24)" --perm.admin >/dev/null 2>&1 || true
+    fi
   fi
   if command -v ufw >/dev/null 2>&1; then
     ufw allow "${panel_port}/tcp" >/dev/null || true

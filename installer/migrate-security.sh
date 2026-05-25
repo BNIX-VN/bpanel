@@ -192,12 +192,17 @@ SupplementaryGroups=bpanel-sites
 ReadWritePaths=/home ${SITES_ROOT} /etc/filebrowser /var/lib/filebrowser /tmp
 SERVICE
 if command -v filebrowser >/dev/null 2>&1 && [[ -f /etc/filebrowser/database.db ]]; then
+  systemctl stop filebrowser 2>/dev/null || true
   runuser -u www-data -- filebrowser -d /etc/filebrowser/database.db config set \
     --root /home \
     --address 127.0.0.1 \
     --port "${FILEBROWSER_PORT:-8088}" \
-    --auth.method=noauth \
+    --auth.method=proxy \
+    --auth.header X-Bpanel-User \
     --baseURL /filebrowser >/dev/null 2>&1 || true
+  if ! runuser -u www-data -- filebrowser -d /etc/filebrowser/database.db users ls 2>/dev/null | grep -q '^admin'; then
+    runuser -u www-data -- filebrowser -d /etc/filebrowser/database.db users add admin "$(openssl rand -base64 24)" --perm.admin >/dev/null 2>&1 || true
+  fi
 fi
 rm -f /etc/nginx/sites-enabled/bpanel.conf /etc/nginx/sites-available/bpanel.conf 2>/dev/null || true
 if command -v ufw >/dev/null 2>&1; then
