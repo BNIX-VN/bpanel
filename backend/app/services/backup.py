@@ -239,8 +239,10 @@ def restore_user_backup(backup_file: str, db) -> dict:
     created_user = False
     if user is None:
         email = user_info.get("email") or f"{username}@users.bpanel.test"
+        if email.endswith("@users.bpanel.test"):
+            email = f"{username}@users.bpanel.vn"
         if db.query(User).filter(User.email == email).first():
-            email = f"{username}-{secrets.token_hex(4)}@users.bpanel.test"
+            email = f"{username}-{secrets.token_hex(4)}@users.bpanel.vn"
         user = User(
             username=username,
             email=email,

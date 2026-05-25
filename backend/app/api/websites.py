@@ -20,7 +20,7 @@ router = APIRouter(prefix="/websites", tags=["websites"])
 
 
 def _panel_email_for_site_user(username: str) -> str:
-    return f"{username}@users.bpanel.test"
+    return f"{username}@users.bpanel.vn"
 
 
 def _ensure_panel_user_for_site(db: Session, username: str) -> tuple[User, str | None]:
@@ -60,7 +60,7 @@ def _delete_auto_panel_user_for_site(db: Session, website: Website, current_user
         return
     if not website.linux_user or owner.username != website.linux_user:
         return
-    if owner.role != "user" or not owner.email.endswith("@users.bpanel.test"):
+    if owner.role != "user" or not owner.email.endswith(("@users.bpanel.vn", "@users.bpanel.test")):
         return
     remaining = db.query(Website).filter(Website.owner_id == owner.id, Website.id != website.id).count()
     if remaining == 0:
