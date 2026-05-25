@@ -196,6 +196,7 @@ if command -v filebrowser >/dev/null 2>&1 && [[ -f /etc/filebrowser/database.db 
     --root /home \
     --address 127.0.0.1 \
     --port "${FILEBROWSER_PORT:-8088}" \
+    --auth.method=noauth \
     --baseURL /filebrowser >/dev/null 2>&1 || true
 fi
 rm -f /etc/nginx/sites-enabled/bpanel.conf /etc/nginx/sites-available/bpanel.conf 2>/dev/null || true

@@ -216,6 +216,7 @@ fix_permissions() {
       --root /home \
       --address 127.0.0.1 \
       --port "$fb_config_port" \
+      --auth.method=noauth \
       --baseURL /filebrowser >/dev/null 2>&1 || true
   fi
   install -d -o bpanel -g bpanel -m 0750 "$APP_DIR" "$APP_DIR/backend" "$APP_DIR/frontend"

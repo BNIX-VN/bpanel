@@ -194,6 +194,7 @@ SERVICE
       --root /home \
       --address 127.0.0.1 \
       --port "$filebrowser_port" \
+      --auth.method=noauth \
       --baseURL /filebrowser >/dev/null 2>&1 || true
   fi
   if command -v ufw >/dev/null 2>&1; then
