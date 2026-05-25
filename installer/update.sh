@@ -135,9 +135,11 @@ NGINX
 install_panel_runtime() {
   local env_file="$APP_DIR/backend/.env"
   [[ -f "$env_file" ]] || return 0
-  local panel_port panel_url server_ip
+  local panel_port panel_url server_ip filebrowser_port
   panel_port="$(env_get PANEL_PORT)"
   panel_port="${panel_port:-2222}"
+  filebrowser_port="$(env_get FILEBROWSER_PORT)"
+  filebrowser_port="${filebrowser_port:-8088}"
   server_ip="$(detect_server_ip)"
   panel_url="$(env_get PANEL_URL)"
   panel_url="${panel_url:-http://${server_ip:-127.0.0.1}:${panel_port}}"
