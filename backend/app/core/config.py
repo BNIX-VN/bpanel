@@ -19,7 +19,6 @@ class Settings(BaseSettings):
     default_php_version: str = "8.3"
     ssl_email: str = ""
     redis_url: str = "redis://localhost:6379/0"
-    filebrowser_port: int = 8088
     panel_url: str = ""
     panel_domain: str = ""
     panel_port: int = 2222

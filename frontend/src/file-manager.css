@@ -5,7 +5,7 @@
   align-items: stretch;
 }
 
-.file-browser,
+.file-panel,
 .file-editor {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -15,7 +15,7 @@
   box-shadow: none;
 }
 
-.file-browser {
+.file-panel {
   display: grid;
   gap: 0;
 }
@@ -482,7 +482,7 @@
 }
 
 @media (max-width: 760px) {
-  .file-browser {
+  .file-panel {
     padding: 10px;
   }
 
@@ -517,61 +517,5 @@
 
   .standalone-editor-actions {
     justify-content: flex-start;
-  }
-}
-
-.filebrowser-panel {
-  display: grid;
-  gap: 12px;
-  background: var(--surface-alt);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 16px;
-}
-
-.filebrowser-card {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 18px;
-  transition: var(--transition);
-}
-
-.filebrowser-card:hover {
-  border-color: var(--primary);
-  box-shadow: none;
-}
-
-.filebrowser-card svg {
-  color: var(--primary);
-  flex: 0 0 auto;
-}
-
-.filebrowser-card h3 {
-  margin: 0 0 5px;
-  font-size: 17px;
-}
-
-.filebrowser-card p {
-  margin: 0;
-  color: var(--text-muted);
-  font-size: 14px;
-}
-
-.filebrowser-actions {
-  display: grid;
-  grid-template-columns: minmax(260px, 1fr) auto;
-  gap: 10px;
-  align-items: center;
-}
-
-@media (max-width: 950px) {
-  .filebrowser-actions,
-  .filebrowser-card {
-    grid-template-columns: 1fr;
-    display: grid;
   }
 }

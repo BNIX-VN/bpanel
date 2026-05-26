@@ -19,7 +19,7 @@ fi
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 
-ALLOWED_SERVICES=(nginx mariadb redis-server filebrowser php8.3-fpm php8.4-fpm bpanel-api)
+ALLOWED_SERVICES=(nginx mariadb redis-server php8.3-fpm php8.4-fpm bpanel-api)
 ALLOWED_ACTIONS=(start stop restart reload status is-active is-enabled)
 SITES_ROOT="/home/bpanel-sites"
 HOME_ROOT="/home"

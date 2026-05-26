@@ -4,7 +4,7 @@ import time
 
 from app.services.shell import shell
 
-SUPPORTED_SERVICES = {"nginx", "php8.3-fpm", "php8.4-fpm", "mariadb", "redis-server", "filebrowser"}
+SUPPORTED_SERVICES = {"nginx", "php8.3-fpm", "php8.4-fpm", "mariadb", "redis-server"}
 SUPPORTED_ACTIONS = {"start", "stop", "restart", "reload", "status"}
 
 

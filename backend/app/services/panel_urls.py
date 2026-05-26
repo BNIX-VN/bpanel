@@ -15,9 +15,9 @@ def _request_host_without_port(request: Request) -> str:
 
 
 def tools_base_url(request: Request) -> str:
-    """Public Nginx URL for phpMyAdmin and File Browser helper routes.
+    """Public Nginx URL for phpMyAdmin helper routes.
 
-    The panel itself listens on PANEL_PORT, but these PHP/proxy tools are
+    The panel itself listens on PANEL_PORT, but phpMyAdmin is
     served by Nginx on the normal web ports. Keep generated URLs off :2222.
     """
     parsed_panel = urlparse(settings.panel_url if "://" in settings.panel_url else "")

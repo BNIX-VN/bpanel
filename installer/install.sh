@@ -35,7 +35,6 @@ PHP_VERSIONS="${PHP_VERSIONS:-8.3 8.4}"
 APP_DIR="${APP_DIR:-/opt/bpanel}"
 SITES_ROOT="${SITES_ROOT:-/home/bpanel-sites}"
 BACKUP_ROOT="${BACKUP_ROOT:-/var/backups/bpanel}"
-FILEBROWSER_PORT="${FILEBROWSER_PORT:-8088}"
 ADMIN_PASSWORD=""
 
 log() {
@@ -231,26 +230,6 @@ install_wp_cli() {
   fi
 }
 
-install_filebrowser() {
-  if ! command -v filebrowser >/dev/null 2>&1; then
-    local tmpdir arch fb_arch url
-    tmpdir="$(mktemp -d)"
-    arch="$(uname -m)"
-    case "$arch" in
-      x86_64|amd64) fb_arch="linux-amd64" ;;
-      aarch64|arm64) fb_arch="linux-arm64" ;;
-      *) fail "File Browser does not support this architecture yet: $arch" ;;
-    esac
-    url="$(curl -fsSL https://api.github.com/repos/filebrowser/filebrowser/releases/latest | python3 -c 'import json,sys; data=json.load(sys.stdin); arch=sys.argv[1]; matches=[a["browser_download_url"] for a in data.get("assets", []) if arch in a.get("name", "") and a.get("name", "").endswith(".tar.gz")]; print(matches[0] if matches else "")' "$fb_arch")"
-    [[ -n "$url" ]] || fail "Cannot find File Browser release for $fb_arch"
-    curl -fsSL "$url" -o "${tmpdir}/filebrowser.tar.gz"
-    tar -xzf "${tmpdir}/filebrowser.tar.gz" -C "$tmpdir"
-    install -m 0755 "${tmpdir}/filebrowser" /usr/local/bin/filebrowser
-    rm -rf "$tmpdir"
-  fi
-}
-
-
 copy_sources() {
   mkdir -p "$APP_DIR" "$SITES_ROOT" "$BACKUP_ROOT"
   rm -rf "${APP_DIR}/backend" "${APP_DIR}/frontend"
@@ -279,7 +258,6 @@ setup_panel_user() {
   if ! id -u bpanel >/dev/null 2>&1; then
     useradd --system --home-dir "$APP_DIR" --shell /usr/sbin/nologin --user-group bpanel
   fi
-  # bpanel and File Browser need controlled write access to site files.
   usermod -aG www-data bpanel || true
   usermod -aG bpanel-sites bpanel || true
   usermod -aG bpanel-sites www-data || true
@@ -357,7 +335,6 @@ ALLOWED_ORIGINS=${PANEL_URL}
 SITES_ROOT=${SITES_ROOT}
 BACKUP_ROOT=${BACKUP_ROOT}
 SSL_EMAIL=${SSL_EMAIL}
-FILEBROWSER_PORT=${FILEBROWSER_PORT}
 PANEL_URL=${PANEL_URL}
 PANEL_DOMAIN=${PANEL_DOMAIN}
 PANEL_PORT=${PANEL_PORT}
@@ -498,50 +475,6 @@ SERVICE
   wait_for_backend
 }
 
-setup_filebrowser_service() {
-  install -d -o www-data -g www-data -m 0750 /etc/filebrowser /var/lib/filebrowser
-  if [[ ! -f /etc/filebrowser/database.db ]]; then
-    runuser -u www-data -- filebrowser -d /etc/filebrowser/database.db config init >/dev/null
-  fi
-  runuser -u www-data -- filebrowser -d /etc/filebrowser/database.db config set \
-    --address 127.0.0.1 \
-    --port "$FILEBROWSER_PORT" \
-    --baseURL /filebrowser \
-    --root /home \
-    --auth.method=proxy \
-    --auth.header X-Bpanel-User \
-    --branding.name BPanelFiles >/dev/null
-  if ! runuser -u www-data -- filebrowser -d /etc/filebrowser/database.db users ls 2>/dev/null | grep -q '^admin'; then
-    runuser -u www-data -- filebrowser -d /etc/filebrowser/database.db users add admin "$(openssl rand -base64 24)" --perm.admin >/dev/null
-  fi
-  chown -R www-data:www-data /etc/filebrowser
-
-  cat >/etc/systemd/system/filebrowser.service <<SERVICE
-[Unit]
-Description=File Browser for BPanel
-After=network.target
-
-[Service]
-User=www-data
-Group=www-data
-SupplementaryGroups=bpanel-sites
-ExecStart=/usr/local/bin/filebrowser -d /etc/filebrowser/database.db
-Restart=always
-RestartSec=3
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=full
-ReadWritePaths=/home ${SITES_ROOT} /etc/filebrowser /var/lib/filebrowser /tmp
-
-[Install]
-WantedBy=multi-user.target
-SERVICE
-
-  systemctl daemon-reload
-  systemctl enable --now filebrowser
-}
-
-
 write_tools_nginx_config() {
   local api_scheme="http" tools_scheme="http" pma_secure="false" ssl_block=""
   if [[ -n "${PANEL_SSL_CERT:-}" && -n "${PANEL_SSL_KEY:-}" && -f "${PANEL_SSL_CERT}" && -f "${PANEL_SSL_KEY}" ]]; then
@@ -556,37 +489,6 @@ server {
     listen 80 default_server;${ssl_block}
     server_name _;
     client_max_body_size 1100M;
-
-    location = /_bpanel/filebrowser-auth {
-        internal;
-        proxy_pass ${api_scheme}://127.0.0.1:${PANEL_PORT}/api/maintenance/filebrowser-auth;
-        proxy_ssl_verify off;
-        proxy_pass_request_body off;
-        proxy_set_header Content-Length "";
-        proxy_set_header Cookie \$http_cookie;
-        proxy_set_header X-Original-URI \$request_uri;
-        proxy_set_header X-Original-Method \$request_method;
-        proxy_set_header X-Original-Content-Length \$http_content_length;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_set_header X-Forwarded-Host \$host;
-    }
-
-    location /filebrowser/ {
-        auth_request /_bpanel/filebrowser-auth;
-        auth_request_set \$filebrowser_user \$upstream_http_x_bpanel_user;
-        proxy_pass http://127.0.0.1:${FILEBROWSER_PORT:-8088};
-        proxy_http_version 1.1;
-        proxy_request_buffering off;
-        proxy_buffering off;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Bpanel-User \$filebrowser_user;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_set_header X-Forwarded-Host \$host;
-        proxy_set_header X-Forwarded-Prefix /filebrowser;
-        proxy_set_header X-Original-URI \$request_uri;
-    }
 
     location = /phpmyadmin {
         return 301 /phpmyadmin/;
@@ -829,9 +731,6 @@ main() {
   log "Installing WP-CLI"
   install_wp_cli
 
-  log "Installing File Browser"
-  install_filebrowser
-
   log "Copying source to ${APP_DIR}"
   copy_sources
 
@@ -855,9 +754,6 @@ main() {
 
   log "Creating systemd service (hardened, runs as bpanel user)"
   setup_systemd
-
-  log "Configuring File Browser"
-  setup_filebrowser_service
 
   log "Configuring phpMyAdmin SSO"
   setup_phpmyadmin_sso

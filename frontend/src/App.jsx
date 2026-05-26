@@ -16,7 +16,7 @@ import './brand.css';
 import './file-manager.css';
 
 const API = import.meta.env.VITE_API_URL || '/api';
-const SERVICE_NAMES = ['bpanel-api', 'nginx', 'php8.3-fpm', 'php8.4-fpm', 'mariadb', 'redis-server', 'filebrowser'];
+const SERVICE_NAMES = ['bpanel-api', 'nginx', 'php8.3-fpm', 'php8.4-fpm', 'mariadb', 'redis-server'];
 
 function editorParamsFromLocation() {
   const params = new URLSearchParams(window.location.search);
@@ -680,29 +680,6 @@ function App() {
     if (destination === null) return;
     const data = await request('/maintenance/files/extract', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), archive_path: path, destination_path: destination || fileListPath || 'public' }) }, 'Extracting archive...');
     if (data) { await listFiles(destination || fileListPath); await loadCurrentUser(); }
-  }
-
-  async function openFileBrowser(websiteId = selectedWebsiteId) {
-    try {
-      setError('');
-      setLoading('Opening File Browser...');
-      const targetWebsiteId = websiteId ? Number(websiteId) : null;
-      if (!targetWebsiteId && !isAdmin) { setError('Please select a website first.'); return; }
-      const csrfToken = readCookie('bpanel_csrf');
-      const headers = { 'Content-Type': 'application/json' };
-      if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
-      const res = await fetch(`${API}/maintenance/filebrowser`, {
-        method: 'POST',
-        credentials: 'include',
-        headers,
-        body: JSON.stringify({ website_id: targetWebsiteId }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (handleAuthExpired(res.status, data.detail)) return;
-      if (!res.ok || !data.url) { setError(data.detail || `Cannot open File Browser.`); return; }
-      window.open(data.url, '_blank', 'noopener,noreferrer');
-    } catch (err) { setError('Cannot open File Browser.'); }
-    finally { setLoading(''); }
   }
 
   async function openWebsiteFileManager(site) {
@@ -1467,7 +1444,7 @@ function App() {
         <button disabled={!selectedWebsiteId || !!loading} onClick={() => listFiles(fileListPath)}><RefreshCw size={14}/> Refresh</button>
       </div>
       <div className="file-manager">
-        <div className="file-browser">
+        <div className="file-panel">
           <div className="file-controls">
             <WebsiteSelect />
             {currentSite && <div className="file-meta">

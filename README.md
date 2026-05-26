@@ -10,7 +10,7 @@ from a single web UI.
 - Admin-created websites also get a matching panel user with the same site username
 - MariaDB database creation and management with phpMyAdmin SSO (60s tokens)
 - Let's Encrypt SSL via certbot
-- File Browser integration with single sign-on
+- Native BPanel file manager with upload, edit, archive, and extract support
 - Backups: archive site files + SQL, scheduled full-user backups, restore, upload, download
 - SFTP backup targets for off-server backup copies
 - UFW firewall manager (allow port, allow/block IP, delete rules)
@@ -23,7 +23,7 @@ from a single web UI.
 
 - Backend: FastAPI, SQLAlchemy, SQLite (default), Pydantic v2
 - Frontend: React 18, Vite, lucide-react
-- Server: Nginx, systemd, MariaDB, Redis, PHP-FPM, certbot, File Browser
+- Server: Nginx, systemd, MariaDB, Redis, PHP-FPM, certbot
 
 ## System requirements
 
@@ -47,10 +47,10 @@ sudo bash installer/install.sh
 The installer will:
 
 1. Install Nginx, MariaDB, Redis, PHP 8.3/8.4, Node.js 22, certbot, phpMyAdmin,
-   File Browser, WP-CLI, UFW.
+   WP-CLI, UFW.
 2. Copy source to `/opt/bpanel`, build the frontend, set up the Python venv.
 3. Create the systemd service `bpanel-api`.
-4. Configure phpMyAdmin SSO and File Browser auth.
+4. Configure phpMyAdmin SSO.
 5. Start the panel directly on port `2222` without relying on Nginx for login.
 6. Issue Let's Encrypt SSL for the panel domain (optional).
 7. Print the admin login at the end. Save it.
@@ -163,7 +163,6 @@ ALLOWED_ORIGINS=https://panel.example.com
 SITES_ROOT=/home/bpanel-sites  # legacy/imported sites; new sites use /home/<site-user>/<domain>
 BACKUP_ROOT=/var/backups/bpanel
 SSL_EMAIL=admin@example.com
-FILEBROWSER_PORT=8088
 PANEL_URL=http://SERVER_IP:2222
 PANEL_DOMAIN=
 PANEL_PORT=2222
@@ -188,7 +187,7 @@ systemctl restart bpanel-api
 nginx -t && systemctl reload nginx
 
 # Service status
-systemctl status bpanel-api filebrowser nginx mariadb php8.3-fpm
+systemctl status bpanel-api nginx mariadb php8.3-fpm
 ```
 
 ## Security model

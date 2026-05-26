@@ -68,13 +68,22 @@ detect_server_ip() {
   hostname -I 2>/dev/null | awk '{print $1}' || true
 }
 
+remove_filebrowser_runtime() {
+  systemctl disable --now filebrowser 2>/dev/null || true
+  rm -f /etc/systemd/system/filebrowser.service
+  rm -rf /etc/systemd/system/filebrowser.service.d
+  rm -rf /etc/filebrowser /var/lib/filebrowser
+  rm -f /usr/local/bin/filebrowser
+  sed -i '/^FILEBROWSER_PORT=/d' "$APP_DIR/backend/.env" 2>/dev/null || true
+  systemctl daemon-reload
+}
+
 write_tools_nginx_config() {
-  local panel_port panel_domain panel_cert panel_key filebrowser_port php_version server_ip host api_scheme tools_scheme pma_secure ssl_block
+  local panel_port panel_domain panel_cert panel_key php_version server_ip host api_scheme tools_scheme pma_secure ssl_block
   panel_port="$(env_get PANEL_PORT)"; panel_port="${panel_port:-2222}"
   panel_domain="$(env_get PANEL_DOMAIN)"
   panel_cert="$(env_get PANEL_SSL_CERT)"
   panel_key="$(env_get PANEL_SSL_KEY)"
-  filebrowser_port="$(env_get FILEBROWSER_PORT)"; filebrowser_port="${filebrowser_port:-8088}"
   php_version="${PHP_DEFAULT:-8.3}"
   server_ip="$(detect_server_ip)"
   host="${panel_domain:-$server_ip}"
@@ -88,37 +97,6 @@ server {
     listen 80 default_server;${ssl_block}
     server_name _;
     client_max_body_size 1100M;
-
-    location = /_bpanel/filebrowser-auth {
-        internal;
-        proxy_pass ${api_scheme}://127.0.0.1:${panel_port}/api/maintenance/filebrowser-auth;
-        proxy_ssl_verify off;
-        proxy_pass_request_body off;
-        proxy_set_header Content-Length "";
-        proxy_set_header Cookie \$http_cookie;
-        proxy_set_header X-Original-URI \$request_uri;
-        proxy_set_header X-Original-Method \$request_method;
-        proxy_set_header X-Original-Content-Length \$http_content_length;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_set_header X-Forwarded-Host \$host;
-    }
-
-    location /filebrowser/ {
-        auth_request /_bpanel/filebrowser-auth;
-        auth_request_set \$filebrowser_user \$upstream_http_x_bpanel_user;
-        proxy_pass http://127.0.0.1:${filebrowser_port};
-        proxy_http_version 1.1;
-        proxy_request_buffering off;
-        proxy_buffering off;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Bpanel-User \$filebrowser_user;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_set_header X-Forwarded-Host \$host;
-        proxy_set_header X-Forwarded-Prefix /filebrowser;
-        proxy_set_header X-Original-URI \$request_uri;
-    }
 
     location = /phpmyadmin { return 301 /phpmyadmin/; }
     location /phpmyadmin/ { alias /usr/share/phpmyadmin/; index index.php; try_files \$uri \$uri/ =404; }
@@ -140,11 +118,9 @@ NGINX
 install_panel_runtime() {
   local env_file="$APP_DIR/backend/.env"
   [[ -f "$env_file" ]] || return 0
-  local panel_port panel_url server_ip filebrowser_port
+  local panel_port panel_url server_ip
   panel_port="$(env_get PANEL_PORT)"
   panel_port="${panel_port:-2222}"
-  filebrowser_port="$(env_get FILEBROWSER_PORT)"
-  filebrowser_port="${filebrowser_port:-8088}"
   server_ip="$(detect_server_ip)"
   panel_url="$(env_get PANEL_URL)"
   panel_url="${panel_url:-http://${server_ip:-127.0.0.1}:${panel_port}}"
@@ -158,6 +134,8 @@ install_panel_runtime() {
   if [[ -z "$(env_get ALLOWED_ORIGINS)" ]]; then
     env_set_default ALLOWED_ORIGINS "$panel_url"
   fi
+
+  remove_filebrowser_runtime
 
   getent group bpanel-sites >/dev/null || groupadd --system bpanel-sites
   if ! command -v setfacl >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1; then
@@ -229,25 +207,6 @@ Persistent=true
 WantedBy=timers.target
 SERVICE
   systemctl daemon-reload
-  mkdir -p /etc/systemd/system/filebrowser.service.d
-  cat >/etc/systemd/system/filebrowser.service.d/10-bpanel-sites.conf <<'SERVICE'
-[Service]
-SupplementaryGroups=bpanel-sites
-ReadWritePaths=/home /home/bpanel-sites /etc/filebrowser /var/lib/filebrowser /tmp
-SERVICE
-  if command -v filebrowser >/dev/null 2>&1 && [[ -f /etc/filebrowser/database.db ]]; then
-    systemctl stop filebrowser 2>/dev/null || true
-    runuser -u www-data -- filebrowser -d /etc/filebrowser/database.db config set \
-      --root /home \
-      --address 127.0.0.1 \
-      --port "$filebrowser_port" \
-      --auth.method=proxy \
-      --auth.header X-Bpanel-User \
-      --baseURL /filebrowser >/dev/null 2>&1 || true
-    if ! runuser -u www-data -- filebrowser -d /etc/filebrowser/database.db users ls 2>/dev/null | grep -q '^admin'; then
-      runuser -u www-data -- filebrowser -d /etc/filebrowser/database.db users add admin "$(openssl rand -base64 24)" --perm.admin >/dev/null 2>&1 || true
-    fi
-  fi
   if command -v ufw >/dev/null 2>&1; then
     ufw allow "${panel_port}/tcp" >/dev/null || true
   fi
@@ -493,7 +452,6 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 SERVICE
 systemctl daemon-reload
 systemctl restart bpanel-api
-systemctl restart filebrowser 2>/dev/null || true
 
 # --- Frontend --------------------------------------------------------------
 log "Building frontend (clean rebuild)"
