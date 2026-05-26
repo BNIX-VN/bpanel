@@ -96,6 +96,16 @@ def ensure_panel_user(username: str) -> str:
     return linux_user
 
 
+def delete_panel_user(username: str) -> None:
+    linux_user = linux_user_for_panel_username(username)
+    shell.privileged(
+        "panel-user-delete",
+        helper_args=[linux_user],
+        check=False,
+        fallback=["true"],
+    )
+
+
 def ensure_site_runtime(domain: str, root_path: str, php_version: Optional[str] = None, linux_user: Optional[str] = None) -> str:
     username = validate_linux_user(linux_user) if linux_user else linux_user_for_domain(domain)
     helper_args = [username, root_path, php_version or "none"]

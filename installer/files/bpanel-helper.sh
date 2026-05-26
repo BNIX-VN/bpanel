@@ -150,6 +150,26 @@ ensure_panel_user_home() {
   chmod 0750 "$home_dir"
 }
 
+delete_panel_user_runtime() {
+  local user="$1"
+  require_linux_user "$user"
+  for dir in /etc/php/*/fpm/pool.d; do
+    [[ -d "$dir" ]] || continue
+    for pool_file in "$dir"/bpanel-${user}.conf "$dir"/bpanel-${user}-*.conf; do
+      [[ -f "$pool_file" ]] || continue
+      rm -f "$pool_file"
+      local php_version
+      php_version="$(echo "$dir" | awk -F/ '{print $4}')"
+      systemctl reload "php${php_version}-fpm" 2>/dev/null || true
+    done
+  done
+  crontab -r -u "$user" 2>/dev/null || true
+  pkill -u "$user" 2>/dev/null || true
+  userdel "$user" 2>/dev/null || true
+  groupdel "$user" 2>/dev/null || true
+  rm -rf "$HOME_ROOT/$user" 2>/dev/null || true
+}
+
 ensure_php_pool() {
   local user="$1" target="$2" php_version="$3"
   [[ "$php_version" != "none" ]] || return 0
@@ -321,6 +341,11 @@ case "$cmd" in
     ensure_panel_user_home "$1"
     ;;
 
+  panel-user-delete)
+    [[ $# -eq 1 ]] || deny "usage: panel-user-delete <site-user>"
+    delete_panel_user_runtime "$1"
+    ;;
+
   site-runtime-ensure)
     [[ $# -eq 3 ]] || deny "usage: site-runtime-ensure <site-user> <path> <php-version|none>"
     user="$1"; path="$2"; php_version="$3"
@@ -356,20 +381,7 @@ case "$cmd" in
     user="$1"; path="$2"
     require_linux_user "$user"
     require_managed_path "$path" "$user" >/dev/null
-    for dir in /etc/php/*/fpm/pool.d; do
-      [[ -d "$dir" ]] || continue
-      old_file="$dir/bpanel-${user}.conf"
-      if [[ -f "$old_file" ]]; then
-        rm -f "$old_file"
-        old_version="$(echo "$dir" | awk -F/ '{print $4}')"
-        systemctl reload "php${old_version}-fpm" 2>/dev/null || true
-      fi
-    done
-    crontab -r -u "$user" 2>/dev/null || true
-    pkill -u "$user" 2>/dev/null || true
-    userdel "$user" 2>/dev/null || true
-    groupdel "$user" 2>/dev/null || true
-    rm -rf "$HOME_ROOT/$user" 2>/dev/null || true
+    delete_panel_user_runtime "$user"
     ;;
 
   rm-site)

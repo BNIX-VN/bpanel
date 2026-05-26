@@ -1,3 +1,5 @@
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -6,7 +8,7 @@ from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.permissions import Role, ensure_role
 from app.core.security import hash_password
-from app.models.entities import AuditLog, User, Website
+from app.models.entities import AuditLog, BackupSchedule, DatabaseAccount, User, Website
 from app.schemas.schemas import (
     AuditLogOut,
     UserCreate,
@@ -15,7 +17,7 @@ from app.schemas.schemas import (
     UserUpdate,
 )
 from app.services.audit import log_action
-from app.services import site_users, storage_quota
+from app.services import mariadb, nginx, site_users, storage_quota, wordpress
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -24,6 +26,44 @@ def _user_out(user: User, db: Session) -> dict:
     data = UserOut.model_validate(user).model_dump()
     data.update(storage_quota.storage_usage_summary(db, user))
     return data
+
+
+def _decode_schedule_user_ids(raw: str | None) -> list[int]:
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        value = [item for item in raw.split(",") if item]
+    if isinstance(value, int):
+        value = [value]
+    return [int(item) for item in value if int(item) > 0]
+
+
+def _remove_user_from_backup_schedules(db: Session, user_id: int) -> None:
+    for schedule in db.query(BackupSchedule).all():
+        changed = False
+        if schedule.user_id == user_id:
+            schedule.user_id = None
+            changed = True
+        user_ids = _decode_schedule_user_ids(schedule.user_ids)
+        if user_id in user_ids:
+            user_ids = [item for item in user_ids if item != user_id]
+            schedule.user_ids = json.dumps(user_ids)
+            changed = True
+        if changed and not schedule.all_users and schedule.user_id is None and not user_ids:
+            db.delete(schedule)
+
+
+def _delete_owned_website(db: Session, website: Website) -> None:
+    db_item = db.query(DatabaseAccount).filter(DatabaseAccount.website_id == website.id).first()
+    if db_item:
+        mariadb.drop_database(db_item.db_name, db_item.db_user)
+    nginx.delete_wordpress_vhost(website.domain)
+    wordpress.delete_wordpress(website.root_path)
+    if db_item:
+        db.delete(db_item)
+    db.delete(website)
 
 
 @router.post("", response_model=UserOut)
@@ -108,16 +148,27 @@ def delete_user(user_id: int, request: Request, db: Session = Depends(get_db), c
         raise HTTPException(status_code=404, detail="User not found")
     if user.id == current_user.id:
         raise HTTPException(status_code=400, detail="Cannot delete yourself")
-    site_count = db.query(Website).filter(Website.owner_id == user.id).count()
-    if site_count:
-        raise HTTPException(
-            status_code=400,
-            detail=f"User owns {site_count} website(s); reassign them before deletion",
-        )
+    websites = db.query(Website).filter(Website.owner_id == user.id).order_by(Website.id.asc()).all()
+    deleted_domains = []
+    legacy_site_users = []
+    panel_linux_user = site_users.linux_user_for_panel_username(user.username)
+    try:
+        for website in websites:
+            if website.linux_user and website.linux_user != panel_linux_user:
+                legacy_site_users.append((website.linux_user, website.root_path))
+            _delete_owned_website(db, website)
+            deleted_domains.append(website.domain)
+        _remove_user_from_backup_schedules(db, user.id)
+        for linux_user, root_path in legacy_site_users:
+            site_users.delete_site_runtime(root_path, linux_user)
+        site_users.delete_panel_user(user.username)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    username = user.username
     db.delete(user)
     db.commit()
-    log_action(db, current_user.id, "delete_user", user.username, request=request)
-    return {"ok": True}
+    log_action(db, current_user.id, "delete_user", username, ",".join(deleted_domains), request=request)
+    return {"ok": True, "deleted_websites": deleted_domains}
 
 
 @router.post("/{user_id}/password")
