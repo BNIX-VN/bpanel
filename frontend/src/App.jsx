@@ -18,6 +18,15 @@ import './brand.css';
 const API = import.meta.env.VITE_API_URL || '/api';
 const SERVICE_NAMES = ['bpanel-api', 'nginx', 'php8.3-fpm', 'php8.4-fpm', 'mariadb', 'redis-server', 'filebrowser'];
 
+function editorParamsFromLocation() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('view') !== 'editor') return null;
+  const websiteId = params.get('website_id');
+  const path = params.get('path') || 'public/index.html';
+  if (!websiteId) return null;
+  return { websiteId: String(websiteId), path };
+}
+
 const editorTheme = EditorView.theme({
   '&': { height: '100%', backgroundColor: '#ffffff', color: '#0f172a' },
   '&.cm-focused': { outline: 'none' },
@@ -113,6 +122,7 @@ function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
   const [bootstrapping, setBootstrapping] = useState(true);
+  const [standaloneEditor] = useState(() => editorParamsFromLocation());
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('');
   const [otpCode, setOtpCode] = useState('');
@@ -144,10 +154,10 @@ function App() {
   const [sftpTargets, setSftpTargets] = useState([]);
   const [selectedSftpTargetId, setSelectedSftpTargetId] = useState('');
   const [newSftpTarget, setNewSftpTarget] = useState({ name: '', host: '', port: 22, username: '', password: '', private_key: '', remote_path: '/backups/bpanel' });
-  const [selectedWebsiteId, setSelectedWebsiteId] = useState('');
+  const [selectedWebsiteId, setSelectedWebsiteId] = useState(() => standaloneEditor?.websiteId || '');
   const [cronSchedule, setCronSchedule] = useState('0 2 * * *');
   const [cronCommand, setCronCommand] = useState('wp cron event run --due-now --allow-root');
-  const [filePath, setFilePath] = useState('public/index.html');
+  const [filePath, setFilePath] = useState(() => standaloneEditor?.path || 'public/index.html');
   const [fileListPath, setFileListPath] = useState('public');
   const [fileUploadDir, setFileUploadDir] = useState('public');
   const [files, setFiles] = useState([]);
@@ -571,10 +581,11 @@ function App() {
     if (data?.items) { setFiles(data.items); setFileListPath(path); setFileUploadDir(path || 'public'); setSelectedFilePaths([]); }
   }
 
-  async function readFile(pathOverride = filePath) {
+  async function readFile(pathOverride = filePath, websiteId = selectedWebsiteId) {
     const targetPath = pathOverride || filePath;
+    if (!websiteId || !targetPath) return;
     if (pathOverride) setFilePath(pathOverride);
-    const data = await request(`/maintenance/files/${selectedWebsiteId}/read?path=${encodeURIComponent(targetPath)}`, {}, 'Reading file...');
+    const data = await request(`/maintenance/files/${websiteId}/read?path=${encodeURIComponent(targetPath)}`, {}, 'Reading file...');
     if (data?.content !== undefined) {
       setFileContent(data.content);
       setEditorCursor({ line: 1, column: 1 });
@@ -606,6 +617,21 @@ function App() {
       URL.revokeObjectURL(url);
     } catch (err) { setError('File download failed.'); }
     finally { setLoading(''); }
+  }
+
+  function fileEditorUrl(websiteId, path) {
+    const url = new URL(window.location.href);
+    url.search = '';
+    url.hash = '';
+    url.searchParams.set('view', 'editor');
+    url.searchParams.set('website_id', String(websiteId));
+    url.searchParams.set('path', path);
+    return url.toString();
+  }
+
+  function openFileEditorTab(path, websiteId = selectedWebsiteId) {
+    if (!websiteId || !path) return;
+    window.open(fileEditorUrl(websiteId, path), '_blank', 'noopener,noreferrer');
   }
 
   async function makeFileDirectory() {
@@ -1042,6 +1068,25 @@ function App() {
   }, [isAuthenticated]);
 
   useEffect(() => {
+    if (!isAuthenticated || !standaloneEditor) return;
+    setSelectedWebsiteId(standaloneEditor.websiteId);
+    setFilePath(standaloneEditor.path);
+    readFile(standaloneEditor.path, standaloneEditor.websiteId);
+  }, [isAuthenticated, standaloneEditor]);
+
+  useEffect(() => {
+    if (!standaloneEditor || !isAuthenticated) return undefined;
+    const handler = event => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault();
+        writeFile();
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [standaloneEditor, isAuthenticated, selectedWebsiteId, filePath, fileContent]);
+
+  useEffect(() => {
     if (!isAuthenticated || page !== 'dashboard') return undefined;
     loadResourceUsage();
     const timer = setInterval(loadResourceUsage, 5000);
@@ -1454,12 +1499,12 @@ function App() {
             {files.length === 0 && <div className="empty-box">No files in this folder.</div>}
             {files.map(item => <div className={`file-item ${selectedFilePaths.includes(item.path) ? 'selected' : ''}`} key={item.path}>
               <input type="checkbox" checked={selectedFilePaths.includes(item.path)} onChange={() => toggleFileSelection(item.path)} />
-              <button className="file-name" onClick={() => item.is_dir ? listFiles(item.path) : readFile(item.path)}>
+              <button className="file-name" onClick={() => item.is_dir ? listFiles(item.path) : (isTextEditable(item) ? openFileEditorTab(item.path) : downloadFile(item.path))}>
                 {item.is_dir ? <FolderOpen size={16}/> : <FileText size={16}/>} <strong>{item.name}</strong>
               </button>
               <span className="file-size">{item.is_dir ? 'Folder' : formatBytes(item.size)}</span>
               <div className="file-row-actions">
-                {!item.is_dir && isTextEditable(item) && <button className="mini secondary-light" disabled={!!loading} onClick={() => readFile(item.path)}>Edit</button>}
+                {!item.is_dir && isTextEditable(item) && <button className="mini secondary-light" disabled={!!loading} onClick={() => openFileEditorTab(item.path)}>Edit</button>}
                 {!item.is_dir && <button className="mini secondary-light" disabled={!!loading} onClick={() => downloadFile(item.path)}><Download size={13}/></button>}
                 {isArchiveFile(item) && <button className="mini secondary-light" disabled={!!loading} onClick={() => extractArchiveFile(item.path)}>Extract</button>}
                 <button className="mini secondary-light" disabled={!!loading} onClick={() => renameFileItem(item)}>Rename</button>
@@ -1830,6 +1875,41 @@ function App() {
     </>;
   }
 
+  function renderStandaloneEditor() {
+    const editorLineCount = Math.max(1, String(fileContent || '').split('\n').length);
+    const editorMode = editorLanguage(filePath);
+    const siteLabel = currentSite?.domain || (selectedWebsiteId ? `Website #${selectedWebsiteId}` : 'Website');
+    return <main className="standalone-editor-page">
+      <header className="standalone-editor-top">
+        <div className="standalone-editor-title">
+          <strong>{filePath || 'No file selected'}</strong>
+          <span>{siteLabel}</span>
+        </div>
+        <div className="standalone-editor-actions">
+          <span className="editor-chip">{editorMode}</span>
+          <span className="editor-chip">{editorLineCount} line(s)</span>
+          <span className="editor-chip">Ln {editorCursor.line}, Col {editorCursor.column}</span>
+          <button disabled={!selectedWebsiteId || !!loading} onClick={() => readFile(filePath)}><RefreshCw size={14}/> Reload</button>
+          <button disabled={!selectedWebsiteId || !!loading} onClick={writeFile}>Save</button>
+          <button disabled={!selectedWebsiteId || !filePath || !!loading} onClick={() => downloadFile(filePath)}><Download size={14}/></button>
+          <button className="secondary-light" onClick={() => window.close()}><X size={14}/> Close</button>
+        </div>
+      </header>
+      {loading && <div className="loading">{loading}</div>}
+      {error && <div className="error"><AlertCircle size={16} style={{display:'inline',verticalAlign:'middle',marginRight:6}}/>{error}</div>}
+      {notice && <div className="notice">{notice}</div>}
+      <section className="standalone-editor-body">
+        <CodeEditor
+          value={fileContent}
+          mode={editorMode}
+          disabled={!selectedWebsiteId}
+          onChange={setFileContent}
+          onCursorChange={setEditorCursor}
+        />
+      </section>
+    </main>;
+  }
+
   function renderPage() {
     if (page === 'websites') return renderWebsites();
     if (page === 'system') return renderSystemStatus();
@@ -1874,6 +1954,8 @@ function App() {
       </section>
     </main>;
   }
+
+  if (standaloneEditor) return renderStandaloneEditor();
 
   const ActiveIcon = activeNavItem?.[2] || Home;
 

@@ -240,6 +240,90 @@
   background: #fbbf24;
 }
 
+.standalone-editor-page {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--surface-alt);
+  color: var(--text);
+}
+
+.standalone-editor-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 10px 14px;
+  flex: 0 0 auto;
+}
+
+.standalone-editor-title {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.standalone-editor-title strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+}
+
+.standalone-editor-title span {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.standalone-editor-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.standalone-editor-actions button {
+  height: 34px;
+  min-height: 34px;
+}
+
+.editor-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 9px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.standalone-editor-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 10px;
+}
+
+.standalone-editor-body .code-editor-host,
+.standalone-editor-body .code-editor-host .cm-editor {
+  height: 100%;
+  min-height: 0;
+}
+
+.standalone-editor-body .cm-editor {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
 @media (max-width: 1100px) {
   .file-manager,
   .file-editor .editor-tools {
@@ -265,6 +349,17 @@
   .code-editor-host .cm-editor {
     min-height: 520px;
     height: 520px;
+  }
+}
+
+@media (max-width: 760px) {
+  .standalone-editor-top {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .standalone-editor-actions {
+    justify-content: flex-start;
   }
 }
 
