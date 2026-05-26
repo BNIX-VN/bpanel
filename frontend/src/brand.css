@@ -57,6 +57,12 @@ button:disabled,.upload-button.disabled{background:#dbe7f7;color:#7a8ca4;border-
 .compact-btn{min-height:36px;height:36px;padding:0 11px;font-size:13px}
 .top-actions button{box-shadow:none}
 .account-pill{box-shadow:none}
+.login.logged-in{align-items:center}
+.login.logged-in .account-pill,
+.login.logged-in .top-actions button{height:34px;min-height:34px}
+.login.logged-in .account-pill{padding:0 14px;line-height:1}
+.login.logged-in .top-actions{align-items:center}
+.login.logged-in .top-actions button{padding:0 12px}
 
 .file-meta{background:#edf9ff;border-color:#b7dcff;color:var(--brand-navy)}
 .loading{background:var(--primary-light);color:var(--primary);border-color:#b7d4f7}
@@ -116,6 +122,8 @@ button:disabled,.upload-button.disabled{background:#dbe7f7;color:#7a8ca4;border-
 
 @media(max-width:950px){
   button,.button-link,.upload-button{min-height:42px;height:42px}
+  .login.logged-in .account-pill,
+  .login.logged-in .top-actions button{height:36px;min-height:36px}
   .backup-admin-panel{padding:12px;border-left-width:3px}
   .backup-panel-heading{display:grid;align-items:start;gap:10px}
   .backup-toolbar button,.backup-toolbar .upload-button,.backup-run-row button,.backup-subactions button{min-width:0;width:100%}
