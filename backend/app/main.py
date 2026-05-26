@@ -83,6 +83,14 @@ if assets_dir.exists():
     app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 
 
+@app.get("/favicon.png", include_in_schema=False)
+def favicon():
+    path = frontend_dist / "favicon.png"
+    if path.exists():
+        return FileResponse(path, media_type="image/png")
+    raise HTTPException(status_code=404, detail="Not found")
+
+
 @app.get("/{full_path:path}", include_in_schema=False)
 def serve_spa(full_path: str):
     """Serve the built React app directly from FastAPI on the panel port."""
