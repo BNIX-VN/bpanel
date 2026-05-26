@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Archive, Clock, Code2, Database, FileText, FolderOpen, Globe, Home, KeyRound, Lock, LogOut, Menu, Server, Shield, Trash2, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
+import { Archive, Clock, Code2, Cpu, Database, FileText, FolderOpen, Globe, HardDrive, Home, KeyRound, Lock, LogOut, MemoryStick, Menu, Network, Server, Shield, Trash2, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
 import './style.css';
 import './file-manager.css';
 import './brand.css';
@@ -33,6 +33,7 @@ function App() {
   const [newDatabase, setNewDatabase] = useState({ website_id: '', db_name: '' });
   const [users, setUsers] = useState([]);
   const [systemInfo, setSystemInfo] = useState(null);
+  const [resourceUsage, setResourceUsage] = useState(null);
   const [serviceStates, setServiceStates] = useState({});
   const [backups, setBackups] = useState([]);
   const [userBackups, setUserBackups] = useState([]);
@@ -100,6 +101,7 @@ function App() {
     setWebsites([]);
     setDatabases([]);
     setUsers([]);
+    setResourceUsage(null);
     setServiceStates({});
     setBackups([]);
     setUserBackups([]);
@@ -265,6 +267,11 @@ function App() {
   async function loadSystemInfo() {
     const data = await request('/services/system-info', {}, 'Loading system status...');
     if (data) setSystemInfo(data);
+  }
+
+  async function loadResourceUsage() {
+    const data = await request('/services/resource-usage');
+    if (data) setResourceUsage(data);
   }
 
   async function createUser() {
@@ -849,6 +856,13 @@ function App() {
   }, [isAuthenticated]);
 
   useEffect(() => {
+    if (!isAuthenticated || page !== 'dashboard') return undefined;
+    loadResourceUsage();
+    const timer = setInterval(loadResourceUsage, 5000);
+    return () => clearInterval(timer);
+  }, [isAuthenticated, page]);
+
+  useEffect(() => {
     if (!isAuthenticated || page !== 'services') return undefined;
     checkAllServices();
     const timer = setInterval(checkAllServices, 10000);
@@ -908,8 +922,51 @@ function App() {
     return <div className="empty-state"><Icon size={40} /><p>{message}</p></div>;
   }
 
+  function formatBytes(value) {
+    const amount = Number(value);
+    if (!Number.isFinite(amount) || amount < 0) return '--';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let size = amount;
+    let unit = 0;
+    while (size >= 1024 && unit < units.length - 1) { size /= 1024; unit += 1; }
+    return `${size >= 10 || unit === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unit]}`;
+  }
+
+  function formatPercent(value) {
+    const amount = Number(value);
+    if (!Number.isFinite(amount)) return '--';
+    return `${Math.round(amount)}%`;
+  }
+
+  function clampPercent(value) {
+    const amount = Number(value);
+    if (!Number.isFinite(amount)) return 0;
+    return Math.max(0, Math.min(100, amount));
+  }
+
+  function ResourceCard({ icon: Icon, label, value, detail, percent }) {
+    const safePercent = percent == null ? null : clampPercent(percent);
+    return <article className="resource-card">
+      <div className="resource-head"><span className="resource-icon"><Icon size={16}/></span><span>{label}</span></div>
+      <strong>{value}</strong>
+      {safePercent !== null && <div className="resource-track"><span style={{ width: `${safePercent}%` }}></span></div>}
+      <small>{detail}</small>
+    </article>;
+  }
+
   function renderDashboard() {
+    const cpu = resourceUsage?.cpu || {};
+    const memory = resourceUsage?.memory || {};
+    const disk = resourceUsage?.disk || {};
+    const network = resourceUsage?.network || {};
+    const networkTotal = (Number(network.rx_per_sec) || 0) + (Number(network.tx_per_sec) || 0);
     return <>
+      <section className="resource-grid">
+        <ResourceCard icon={Cpu} label="CPU" value={formatPercent(cpu.percent)} percent={cpu.percent} detail={cpu.load?.length ? `Load ${cpu.load.join(' / ')}` : `${cpu.cores || '--'} cores`} />
+        <ResourceCard icon={MemoryStick} label="RAM" value={formatPercent(memory.percent)} percent={memory.percent} detail={`${formatBytes(memory.used)} / ${formatBytes(memory.total)}`} />
+        <ResourceCard icon={HardDrive} label="Disk" value={formatPercent(disk.percent)} percent={disk.percent} detail={`${formatBytes(disk.used)} / ${formatBytes(disk.total)}`} />
+        <ResourceCard icon={Network} label="Network" value={`${formatBytes(networkTotal)}/s`} detail={`Down ${formatBytes(network.rx_per_sec)}/s / Up ${formatBytes(network.tx_per_sec)}/s`} />
+      </section>
       <section className="stats-grid">
         <div className="stat-card"><strong>{websites.length}</strong><span>Websites</span></div>
         <div className="stat-card"><strong>{databases.length}</strong><span>Databases</span></div>

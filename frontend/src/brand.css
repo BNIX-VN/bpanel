@@ -36,6 +36,14 @@ body{background:var(--bg);color:var(--text)}
 h1,h2{color:var(--brand-navy)}
 .site-link{display:inline-flex;align-items:center;color:var(--brand-navy);font-weight:800;text-decoration:none}
 .site-link:hover{color:var(--primary);text-decoration:underline;text-underline-offset:3px}
+.resource-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:12px}
+.resource-card{display:grid;gap:8px;min-height:116px;padding:16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);min-width:0}
+.resource-head{display:flex;align-items:center;gap:8px;color:var(--text-muted);font-size:12px;font-weight:800}
+.resource-icon{width:28px;height:28px;display:grid;place-items:center;border-radius:var(--radius-sm);background:var(--primary-light);color:var(--primary);border:1px solid #cfe0f7;flex:none}
+.resource-card strong{font-size:28px;line-height:1;color:var(--brand-navy);font-weight:800}
+.resource-track{height:7px;overflow:hidden;border-radius:999px;background:#e9f2ff;border:1px solid #d5e5fb}
+.resource-track span{display:block;height:100%;border-radius:inherit;background:var(--primary)}
+.resource-card small{color:var(--text-muted);font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
 input,select,textarea{
   border-color:var(--border);border-radius:var(--radius-sm);min-height:40px;background:var(--surface);color:var(--text);
@@ -115,6 +123,7 @@ button:disabled,.upload-button.disabled{background:#dbe7f7;color:#7a8ca4;border-
 .sftp-target-form button{min-width:122px}
 
 @media(max-width:1320px){
+  .resource-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
   .sftp-target-form{grid-template-columns:repeat(3,minmax(0,1fr)) max-content}
 }
 
@@ -139,6 +148,7 @@ button:disabled,.upload-button.disabled{background:#dbe7f7;color:#7a8ca4;border-
 }
 
 @media(max-width:560px){
+  .resource-grid{grid-template-columns:1fr}
   .backups-page .backup-item .actions{grid-template-columns:1fr}
   .backups-page .backup-item .actions .danger{width:100%}
 }

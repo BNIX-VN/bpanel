@@ -4,7 +4,7 @@ from app.api.deps import get_current_user
 from app.core.permissions import Role, ensure_role
 from app.models.entities import User
 from app.schemas.schemas import ServiceAction
-from app.services.system import install_wordpress_stack, service_action, system_info
+from app.services.system import install_wordpress_stack, resource_usage, service_action, system_info
 
 router = APIRouter(prefix="/services", tags=["services"])
 
@@ -13,6 +13,12 @@ router = APIRouter(prefix="/services", tags=["services"])
 def get_system_info(current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.readonly)
     return system_info()
+
+
+@router.get("/resource-usage")
+def get_resource_usage(current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.readonly)
+    return resource_usage()
 
 
 @router.post("/action")
