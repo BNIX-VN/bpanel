@@ -135,6 +135,11 @@ button:disabled,.upload-button.disabled{background:#dbe7f7;color:#7a8ca4;border-
   button,.button-link,.upload-button{min-height:42px;height:42px}
   .login.logged-in .account-pill,
   .login.logged-in .top-actions button{height:36px;min-height:36px}
+  .site-card>.actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;width:100%;justify-content:stretch}
+  .site-card>.actions select,
+  .site-card>.actions button,
+  .site-card>.actions .button-link,
+  .site-card>.actions .upload-button{width:100%;max-width:none;min-width:0;height:40px;min-height:40px;padding-inline:8px;flex:auto}
   .backup-admin-panel{padding:12px;border-left-width:3px}
   .backup-panel-heading{display:grid;align-items:start;gap:10px}
   .backup-toolbar button,.backup-toolbar .upload-button,.backup-run-row button,.backup-subactions button{min-width:0;width:100%}
@@ -148,7 +153,16 @@ button:disabled,.upload-button.disabled{background:#dbe7f7;color:#7a8ca4;border-
 }
 
 @media(max-width:560px){
-  .resource-grid{grid-template-columns:1fr}
+  .resource-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  .resource-card{min-height:108px;padding:12px;gap:7px}
+  .resource-head{gap:6px;font-size:11px}
+  .resource-icon{width:26px;height:26px}
+  .resource-card strong{font-size:24px}
+  .resource-track{height:6px}
+  .resource-card small{font-size:11px}
+  .site-card>.actions{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  .site-card>.actions select,
+  .site-card>.actions button{height:40px;min-height:40px;font-size:12px}
   .backups-page .backup-item .actions{grid-template-columns:1fr}
   .backups-page .backup-item .actions .danger{width:100%}
 }
