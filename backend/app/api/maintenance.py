@@ -32,7 +32,7 @@ from app.schemas.schemas import (
     UserRestoreBackup,
     WpAction,
 )
-from app.services import backup, cron, file_manager, panel_urls, php, site_users, wordpress
+from app.services import backup, cron, file_manager, panel_urls, php, site_users, storage_quota, wordpress
 from app.services.audit import log_action
 
 router = APIRouter(prefix="/maintenance", tags=["maintenance"])
@@ -207,6 +207,32 @@ def _filebrowser_request_allowed(request: Request, allowed_paths: list[str]) -> 
             requested_path = path[len(prefix):]
             return any(_filebrowser_path_in_scope(requested_path, allowed_path) for allowed_path in allowed_paths)
     return False
+
+
+def _original_filebrowser_method(request: Request) -> str:
+    return (request.headers.get("x-original-method") or request.method or "GET").upper()
+
+
+def _original_filebrowser_content_length(request: Request) -> int:
+    raw_value = request.headers.get("x-original-content-length") or "0"
+    try:
+        return max(0, int(raw_value))
+    except ValueError:
+        return 0
+
+
+def _quota_check_for_website(db: Session, website: Website):
+    owner = website.owner
+
+    def check(incoming_bytes: int, replaced_bytes: int = 0) -> None:
+        storage_quota.enforce_user_storage_quota(
+            db,
+            owner,
+            incoming_bytes=incoming_bytes,
+            replaced_bytes=replaced_bytes,
+        )
+
+    return check
 
 
 @router.post("/backup")
@@ -636,6 +662,15 @@ def filebrowser_auth(request: Request, db: Session = Depends(get_db)):
         allowed_paths = _filebrowser_allowed_paths_for_user(db, user)
         if not _filebrowser_request_allowed(request, allowed_paths):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="File Browser path not assigned to this user")
+        if _original_filebrowser_method(request) in {"POST", "PUT", "PATCH"}:
+            try:
+                storage_quota.enforce_user_storage_quota(
+                    db,
+                    user,
+                    incoming_bytes=_original_filebrowser_content_length(request),
+                )
+            except storage_quota.StorageQuotaExceeded as exc:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     return Response(
         status_code=status.HTTP_204_NO_CONTENT,
         headers={"Cache-Control": "no-store", "X-Bpanel-User": "admin"},
@@ -667,7 +702,15 @@ def write_file(payload: FileWrite, db: Session = Depends(get_db), current_user: 
     ensure_role(current_user.role, Role.end_user)
     website = get_owned_website(db, current_user, payload.website_id)
     try:
-        target = file_manager.write_text_file(website, payload.path, payload.content, is_admin_role(current_user.role))
+        target = file_manager.write_text_file(
+            website,
+            payload.path,
+            payload.content,
+            is_admin_role(current_user.role),
+            quota_check=_quota_check_for_website(db, website),
+        )
+    except storage_quota.StorageQuotaExceeded as exc:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"target": target}
@@ -690,7 +733,10 @@ def upload_file(
             file.filename or "upload.bin",
             file.file,
             is_admin_role(current_user.role),
+            quota_check=_quota_check_for_website(db, website),
         )
+    except storage_quota.StorageQuotaExceeded as exc:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     log_action(db, current_user.id, "upload_file", website.domain, target)

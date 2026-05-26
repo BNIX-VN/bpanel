@@ -245,6 +245,7 @@ function App() {
   }, []);
 
   async function refreshAll() {
+    await loadCurrentUser();
     const siteData = await request('/websites');
     if (siteData) {
       setWebsites(siteData);
@@ -463,14 +464,14 @@ function App() {
   }
 
   async function writeFile() {
-    await request('/maintenance/files/write', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), path: filePath, content: fileContent }) }, 'Saving file...');
-    listFiles(fileListPath);
+    const data = await request('/maintenance/files/write', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), path: filePath, content: fileContent }) }, 'Saving file...');
+    if (data) { await listFiles(fileListPath); await loadCurrentUser(); }
   }
 
   async function deleteFileAction(path) {
     if (!confirm(`Delete file ${path}?`)) return;
-    await request(`/maintenance/files/${selectedWebsiteId}?path=${encodeURIComponent(path)}`, { method: 'DELETE' }, 'Deleting file...');
-    listFiles(fileListPath);
+    const data = await request(`/maintenance/files/${selectedWebsiteId}?path=${encodeURIComponent(path)}`, { method: 'DELETE' }, 'Deleting file...');
+    if (data) { await listFiles(fileListPath); await loadCurrentUser(); }
   }
 
   async function openFileBrowser(websiteId = selectedWebsiteId) {
@@ -525,6 +526,7 @@ function App() {
       if (!res.ok) { if (handleAuthExpired(res.status, data.detail)) return; setError(data.detail || 'Upload failed.'); return; }
       setNotice(`Uploaded ${file.name} to ${uploadDir}.`);
       if (String(fileListPath || 'public') === uploadDir) await listFiles(uploadDir);
+      await loadCurrentUser();
     } catch (err) { setError('File upload failed.'); }
     finally { setLoading(''); }
   }
@@ -953,6 +955,19 @@ function App() {
     return Math.max(0, Math.min(100, amount));
   }
 
+  function storageLimitBytes(user) {
+    if (!user) return null;
+    if (user.storage_limit_bytes === null) return null;
+    if (user.storage_limit_bytes !== undefined) return user.storage_limit_bytes;
+    return Number(user.storage_limit_mb || 0) * 1024 * 1024;
+  }
+
+  function storageUsageText(user) {
+    const used = Number(user?.storage_used_bytes || 0);
+    const limit = storageLimitBytes(user);
+    return limit === null ? `${formatBytes(used)} / Unlimited` : `${formatBytes(used)} / ${formatBytes(limit)}`;
+  }
+
   function ResourceCard({ icon: Icon, label, value, detail, percent }) {
     const safePercent = percent == null ? null : clampPercent(percent);
     return <article className="resource-card">
@@ -980,6 +995,7 @@ function App() {
         <div className="stat-card"><strong>{websites.length}</strong><span>Websites</span></div>
         <div className="stat-card"><strong>{databases.length}</strong><span>Databases</span></div>
         <div className="stat-card"><strong>{websites.filter(s => s.ssl_enabled).length}</strong><span>SSL active</span></div>
+        {currentUser && !isAdmin && <div className="stat-card"><strong>{formatBytes(currentUser.storage_used_bytes)}</strong><span>Storage / {formatBytes(storageLimitBytes(currentUser))}</span></div>}
       </section>
       {websites.length > 0 && <section className="section">
         <h2>Quick overview</h2>
@@ -1186,6 +1202,7 @@ function App() {
         {currentSite && <div className="file-meta">
           <span>Website: <strong>{currentSite.domain}</strong></span>
           <span>Root: <strong>{currentSite.root_path}/public</strong></span>
+          {currentUser && !isAdmin && <span>Storage: <strong>{storageUsageText(currentUser)}</strong></span>}
         </div>}
         <div className="filebrowser-actions upload-actions">
           <input value={fileUploadDir} onChange={e => setFileUploadDir(e.target.value)} placeholder="public" disabled={!selectedWebsiteId || !!loading} />
@@ -1521,7 +1538,7 @@ function App() {
             <span className="badge">{roleLabel(user.role)}</span>
             <span className={user.totp_enabled ? 'badge ok' : 'badge'}>{user.totp_enabled ? '2FA' : 'No 2FA'}</span>
             <span>{user.website_limit} sites</span>
-            <span>{user.storage_limit_mb} MB</span>
+            <span>{storageUsageText(user)}</span>
             <div className="row-actions">
               <button className="mini secondary-light" disabled={!!loading} onClick={() => changeUserPassword(user)}><KeyRound size={14}/> Password</button>
               {user.totp_enabled && user.id !== currentUser?.id && <button className="mini secondary-light" disabled={!!loading} onClick={() => resetUserTwoFactor(user)}>Reset 2FA</button>}

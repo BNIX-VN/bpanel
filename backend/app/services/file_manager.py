@@ -1,10 +1,10 @@
-import os
 import shutil
 from pathlib import Path
-from typing import Dict, List
+from typing import Callable, Dict, List, Optional
 
 from app.models.entities import Website
 from app.services import site_users
+from app.services import storage_quota
 
 
 MAX_TEXT_FILE_BYTES = 2 * 1024 * 1024
@@ -98,24 +98,52 @@ def read_text_file(website: Website, relative_path: str, allow_sensitive: bool =
     return target.read_text(encoding="utf-8")
 
 
-def write_text_file(website: Website, relative_path: str, content: str, allow_executable: bool = False) -> str:
+QuotaCheck = Callable[[int, int], None]
+
+
+def _existing_file_size(path: Path) -> int:
+    if not path.exists() or not path.is_file():
+        return 0
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+
+def write_text_file(
+    website: Website,
+    relative_path: str,
+    content: str,
+    allow_executable: bool = False,
+    quota_check: Optional[QuotaCheck] = None,
+) -> str:
     target = _safe_path(website, relative_path)
     name_lower = target.name.lower()
     if name_lower in BLOCKED_WRITE_NAMES and not allow_executable:
         raise ValueError(f"Writing {target.name} requires admin permissions")
     if target.suffix.lower() in BLOCKED_WRITE_SUFFIXES and not allow_executable:
         raise ValueError("Writing executable files requires admin permissions")
-    if len(content.encode("utf-8")) > MAX_TEXT_FILE_BYTES:
+    content_size = len(content.encode("utf-8"))
+    if content_size > MAX_TEXT_FILE_BYTES:
         raise ValueError("File content is too large")
     if target.exists() and target.is_symlink():
         raise ValueError("Refusing to write through a symlink")
+    if quota_check:
+        quota_check(content_size, _existing_file_size(target))
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
     site_users.fix_site_path(str(target.parent), website.linux_user)
     return str(target)
 
 
-def upload_file(website: Website, directory_path: str, filename: str, source_file, allow_executable: bool = False) -> str:
+def upload_file(
+    website: Website,
+    directory_path: str,
+    filename: str,
+    source_file,
+    allow_executable: bool = False,
+    quota_check: Optional[QuotaCheck] = None,
+) -> str:
     target_dir = _safe_path(website, directory_path or "public")
     if target_dir.exists() and not target_dir.is_dir():
         raise ValueError("Upload target is not a directory")
@@ -130,6 +158,9 @@ def upload_file(website: Website, directory_path: str, filename: str, source_fil
         raise ValueError(f"Uploading {safe_name} requires admin permissions")
     if target.suffix.lower() in BLOCKED_WRITE_SUFFIXES and not allow_executable:
         raise ValueError("Uploading executable files requires admin permissions")
+    if quota_check:
+        upload_size = storage_quota.source_file_size(source_file)
+        quota_check(upload_size or 0, _existing_file_size(target))
     target_dir.mkdir(parents=True, exist_ok=True)
     with target.open("wb") as output:
         shutil.copyfileobj(source_file, output, length=1024 * 1024)

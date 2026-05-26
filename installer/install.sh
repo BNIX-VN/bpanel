@@ -565,6 +565,8 @@ server {
         proxy_set_header Content-Length "";
         proxy_set_header Cookie \$http_cookie;
         proxy_set_header X-Original-URI \$request_uri;
+        proxy_set_header X-Original-Method \$request_method;
+        proxy_set_header X-Original-Content-Length \$http_content_length;
         proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_set_header X-Forwarded-Host \$host;
     }

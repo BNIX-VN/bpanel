@@ -15,8 +15,15 @@ from app.schemas.schemas import (
     UserUpdate,
 )
 from app.services.audit import log_action
+from app.services import storage_quota
 
 router = APIRouter(prefix="/users", tags=["users"])
+
+
+def _user_out(user: User, db: Session) -> dict:
+    data = UserOut.model_validate(user).model_dump()
+    data.update(storage_quota.storage_usage_summary(db, user))
+    return data
 
 
 @router.post("", response_model=UserOut)
@@ -36,18 +43,18 @@ def create_user(payload: UserCreate, request: Request, db: Session = Depends(get
     db.commit()
     db.refresh(user)
     log_action(db, current_user.id, "create_user", user.username, request=request)
-    return user
+    return _user_out(user, db)
 
 
 @router.get("", response_model=List[UserOut])
 def list_users(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.admin)
-    return db.query(User).order_by(User.id.desc()).all()
+    return [_user_out(user, db) for user in db.query(User).order_by(User.id.desc()).all()]
 
 
 @router.get("/me", response_model=UserOut)
-def me(current_user: User = Depends(get_current_user)):
-    return current_user
+def me(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return _user_out(current_user, db)
 
 
 @router.patch("/{user_id}", response_model=UserOut)
@@ -84,7 +91,7 @@ def update_user(user_id: int, payload: UserUpdate, request: Request, db: Session
     db.commit()
     db.refresh(user)
     log_action(db, current_user.id, "update_user", user.username, request=request)
-    return user
+    return _user_out(user, db)
 
 
 @router.delete("/{user_id}")

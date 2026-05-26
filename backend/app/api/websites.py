@@ -11,7 +11,7 @@ from app.core.permissions import Role, ensure_role, is_admin_role
 from app.core.secrets import encrypt
 from app.models.entities import DatabaseAccount, User, Website
 from app.schemas.schemas import WebsiteCreate, WebsiteNginxCustom, WebsiteOut, WebsiteUpdate
-from app.services import mariadb, nginx, site_users, ssl, wordpress
+from app.services import mariadb, nginx, site_users, ssl, storage_quota, wordpress
 from app.services.audit import log_action
 
 router = APIRouter(prefix="/websites", tags=["websites"])
@@ -56,6 +56,12 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
         raise HTTPException(status_code=403, detail="Website limit reached")
 
     install_wp = payload.install_wordpress and payload.app_type == "wordpress"
+    create_estimate_bytes = storage_quota.WORDPRESS_SITE_ESTIMATE_BYTES if install_wp else storage_quota.STATIC_SITE_ESTIMATE_BYTES
+    try:
+        storage_quota.enforce_user_storage_quota(db, owner, incoming_bytes=create_estimate_bytes)
+    except storage_quota.StorageQuotaExceeded as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+
     root_path = site_users.site_root_for_domain(payload.domain)
     if install_wp and (not payload.admin_email or not payload.admin_password):
         raise HTTPException(status_code=400, detail="admin_email and admin_password are required when install_wordpress is true")
@@ -199,6 +205,15 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
         assigned_count = db.query(Website).filter(Website.owner_id == owner.id, Website.id != website.id).count()
         if not is_admin_role(owner.role) and assigned_count >= owner.website_limit:
             raise HTTPException(status_code=403, detail="Website limit reached")
+        if payload.owner_id != website.owner_id:
+            try:
+                storage_quota.enforce_user_storage_quota(
+                    db,
+                    owner,
+                    incoming_bytes=storage_quota.website_storage_used_bytes(website),
+                )
+            except storage_quota.StorageQuotaExceeded as exc:
+                raise HTTPException(status_code=413, detail=str(exc)) from exc
         website.owner_id = payload.owner_id
     if payload.nginx_custom is not None:
         ensure_role(current_user.role, Role.admin)

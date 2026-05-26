@@ -83,6 +83,9 @@ class UserOut(BaseModel):
     is_active: bool
     website_limit: int
     storage_limit_mb: int
+    storage_used_bytes: int = 0
+    storage_limit_bytes: Optional[int] = None
+    storage_percent: float = 0.0
     totp_enabled: bool = False
 
     class Config:
