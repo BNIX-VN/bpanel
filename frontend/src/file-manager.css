@@ -208,6 +208,7 @@
   border: 0;
   background: transparent !important;
   color: var(--text) !important;
+  font-size: 14px;
   font-weight: 500;
   justify-content: flex-start;
   box-shadow: none;
@@ -235,8 +236,8 @@
 .file-list button.file-name svg {
   color: var(--primary);
   flex: 0 0 auto;
-  width: 14px;
-  height: 14px;
+  width: 15px;
+  height: 15px;
 }
 
 .file-size {
