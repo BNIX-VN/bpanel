@@ -34,7 +34,7 @@ body{background:var(--bg);color:var(--text)}
 .section,.stat-card,.card,.site-card,.service-card,.backup-item,.info-box,.user-create-card{border-color:var(--border)}
 .section:hover,.stat-card:hover,.card:hover,.site-card:hover,.service-card:hover,.backup-item:hover{border-color:var(--border-hover)}
 h1,h2{color:var(--brand-navy)}
-.site-link{display:inline-flex;align-items:center;color:var(--brand-navy);font-weight:800;text-decoration:none}
+.site-link{display:inline-flex;align-items:center;color:var(--brand-navy);font-weight:600;text-decoration:none}
 .site-link:hover{color:var(--primary);text-decoration:underline;text-underline-offset:3px}
 .resource-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:12px}
 .resource-card{display:grid;gap:8px;min-height:116px;padding:16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);min-width:0}
