@@ -477,19 +477,22 @@ a:hover{color:var(--primary-hover)}
   .layout{display:block;min-height:100vh;margin:0}
   .content{min-height:100vh}
   .content-body{padding:12px}
-  .topbar{height:var(--topbar-height);padding:0 12px;gap:10px;border-radius:0;position:sticky;top:0}
+  .topbar{height:var(--topbar-height);padding:0 12px;gap:10px;border-radius:0;position:sticky;top:0;align-items:center}
   .page-title{flex:1 1 auto;min-width:0}
   .page-title .eyebrow{display:none}
   h1{font-size:19px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   h2{font-size:17px}
-  .mobile-nav-toggle{display:inline-flex;width:40px;height:40px;min-height:40px;padding:0;flex:none;background:var(--surface);color:var(--text);border:1px solid var(--border);margin:0;border-radius:var(--radius-sm);box-shadow:none;position:relative;top:auto;z-index:auto}
+  .mobile-nav-toggle{display:inline-grid;place-items:center;width:36px;height:36px;min-height:36px;padding:0;flex:none;background:var(--surface);color:var(--text);border:1px solid var(--border);margin:0;border-radius:var(--radius-sm);box-shadow:none;position:relative;top:auto;z-index:auto;align-self:center;line-height:1}
+  .mobile-nav-toggle svg{display:block;width:18px;height:18px}
   .mobile-nav-toggle:hover:not(:disabled){background:var(--surface-alt);color:var(--text)}
   .mobile-nav-toggle span{display:none}
   .mobile-nav-backdrop{display:block;position:fixed;inset:0;background:rgba(24,24,27,.38);z-index:35;backdrop-filter:blur(2px)}
   .sidebar{position:fixed;left:0;top:0;bottom:0;width:min(300px,88vw);height:100vh;transform:translateX(-100%);opacity:1;pointer-events:auto;transition:transform .18s ease;z-index:40;border-right:1px solid var(--border);border-radius:0;padding:0}
   .sidebar.open{transform:translateX(0)}
-  .sidebar-close{display:inline-flex;width:36px;height:36px;min-height:36px;padding:0;background:var(--surface);color:var(--text);border:1px solid var(--border);box-shadow:none;flex:none;border-radius:var(--radius-sm)}
-  .sidebar-close:hover:not(:disabled){background:var(--surface-alt);color:var(--text)}
+  .sidebar-head{height:var(--topbar-height);padding:0 12px;align-items:center}
+  .sidebar-close{display:inline-grid;place-items:center;width:32px;height:32px;min-height:32px;padding:0;background:transparent;color:var(--text-muted);border:1px solid transparent;box-shadow:none;flex:none;border-radius:var(--radius-sm);align-self:center;line-height:1}
+  .sidebar-close svg{display:block;width:17px;height:17px}
+  .sidebar-close:hover:not(:disabled){background:var(--surface-alt);color:var(--text);border-color:var(--border)}
   .login.logged-in{gap:6px;flex:0 0 auto;background:transparent;border:0;padding:0;min-width:0}
   .account-pill{padding:6px 10px;max-width:130px;border-radius:999px}
   .account-pill span{display:none}
@@ -524,6 +527,7 @@ a:hover{color:var(--primary-hover)}
   h1{font-size:18px}
   button,.button-link,.upload-button,input,select{min-height:42px}
   .mobile-nav-toggle,.top-actions button{width:34px;height:34px;min-height:34px}
+  .sidebar-close{width:32px;height:32px;min-height:32px}
   .account-pill{padding:5px 8px;max-width:100px}
   .account-pill strong{max-width:78px}
   .section,.user-create-card{padding:12px}
@@ -703,19 +707,22 @@ button:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
   .layout{display:block;min-height:100vh;margin:0}
   .content{min-height:100vh}
   .content-body{padding:12px}
-  .topbar{height:var(--topbar-height);padding:0 12px;gap:10px;border-radius:0;position:sticky;top:0}
+  .topbar{height:var(--topbar-height);padding:0 12px;gap:10px;border-radius:0;position:sticky;top:0;align-items:center}
   .page-title{flex:1 1 auto;min-width:0}
   .page-title .eyebrow{display:none}
   h1{font-size:19px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   h2{font-size:17px}
-  .mobile-nav-toggle{display:inline-flex;width:40px;height:40px;min-height:40px;padding:0;flex:none;background:var(--surface);color:var(--text);border:1px solid var(--border);margin:0;border-radius:var(--radius-sm);box-shadow:none;position:relative;top:auto;z-index:auto}
+  .mobile-nav-toggle{display:inline-grid;place-items:center;width:36px;height:36px;min-height:36px;padding:0;flex:none;background:var(--surface);color:var(--text);border:1px solid var(--border);margin:0;border-radius:var(--radius-sm);box-shadow:none;position:relative;top:auto;z-index:auto;align-self:center;line-height:1}
+  .mobile-nav-toggle svg{display:block;width:18px;height:18px}
   .mobile-nav-toggle:hover:not(:disabled){background:var(--surface-alt);color:var(--text)}
   .mobile-nav-toggle span{display:none}
   .mobile-nav-backdrop{display:block;position:fixed;inset:0;background:rgba(24,24,27,.38);z-index:35;backdrop-filter:blur(2px)}
   .sidebar{position:fixed;left:0;top:0;bottom:0;width:min(300px,88vw);height:100vh;transform:translateX(-100%);opacity:1;pointer-events:auto;transition:transform .18s ease;z-index:40;border-right:1px solid var(--border);border-radius:0;padding:0}
   .sidebar.open{transform:translateX(0)}
-  .sidebar-close{display:inline-flex;width:36px;height:36px;min-height:36px;padding:0;background:var(--surface);color:var(--text);border:1px solid var(--border);box-shadow:none;flex:none;border-radius:var(--radius-sm)}
-  .sidebar-close:hover:not(:disabled){background:var(--surface-alt);color:var(--text)}
+  .sidebar-head{height:var(--topbar-height);padding:0 12px;align-items:center}
+  .sidebar-close{display:inline-grid;place-items:center;width:32px;height:32px;min-height:32px;padding:0;background:transparent;color:var(--text-muted);border:1px solid transparent;box-shadow:none;flex:none;border-radius:var(--radius-sm);align-self:center;line-height:1}
+  .sidebar-close svg{display:block;width:17px;height:17px}
+  .sidebar-close:hover:not(:disabled){background:var(--surface-alt);color:var(--text);border-color:var(--border)}
   .login.logged-in{gap:6px;flex:0 0 auto;background:transparent;border:0;padding:0;min-width:0}
   .account-pill{padding:6px 10px;min-width:0;max-width:130px;border-radius:999px}
   .account-pill span{display:none}
@@ -750,6 +757,7 @@ button:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
   h1{font-size:18px}
   button,.button-link,.upload-button,input,select{min-height:42px}
   .mobile-nav-toggle,.top-actions button{width:34px;height:34px;min-height:34px}
+  .sidebar-close{width:32px;height:32px;min-height:32px}
   .account-pill{padding:5px 8px;max-width:100px}
   .account-pill strong{max-width:78px}
   .section,.user-create-card{padding:12px}
