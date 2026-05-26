@@ -1280,9 +1280,9 @@ function App() {
           {websites.slice(0, 4).map(site => <article className="site-card" key={site.id}>
             <div className="site-head">
               <div><a className="site-link" href={websiteUrl(site)} target="_blank" rel="noopener noreferrer">{site.domain}</a></div>
-              <span className={site.ssl_enabled ? 'badge ok' : 'badge'}>{site.ssl_enabled ? 'SSL' : 'No SSL'}</span>
             </div>
             <div className="site-meta">
+              <span className={`badge site-ssl-badge ${site.ssl_enabled ? 'ok' : ''}`}>{site.ssl_enabled ? 'SSL' : 'No SSL'}</span>
               <span>PHP <strong>{site.php_version}</strong></span>
               <span>Status <strong>{site.status}</strong></span>
             </div>
@@ -1356,9 +1356,9 @@ function App() {
                 <a className="site-link" href={websiteUrl(site)} target="_blank" rel="noopener noreferrer">{site.domain}</a>
                 <small>{site.root_path}</small>
               </div>
-              <span className={site.ssl_enabled ? 'badge ok' : 'badge'}>{site.ssl_enabled ? 'SSL OK' : 'No SSL'}</span>
             </div>
             <div className="site-meta">
+              <span className={`badge site-ssl-badge ${site.ssl_enabled ? 'ok' : ''}`}>{site.ssl_enabled ? 'SSL OK' : 'No SSL'}</span>
               <span>Type <strong>{site.app_type || 'wordpress'}</strong></span>
               <span>PHP <strong>{site.php_version}</strong></span>
               <span>Status <strong>{site.status}</strong></span>
