@@ -12,8 +12,8 @@ import { Compartment, EditorState } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
 import { Archive, Clock, Code2, Cpu, Database, FileText, FolderOpen, Globe, HardDrive, Home, KeyRound, Lock, LogOut, MemoryStick, Menu, Network, Server, Shield, Trash2, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
 import './style.css';
-import './file-manager.css';
 import './brand.css';
+import './file-manager.css';
 
 const API = import.meta.env.VITE_API_URL || '/api';
 const SERVICE_NAMES = ['bpanel-api', 'nginx', 'php8.3-fpm', 'php8.4-fpm', 'mariadb', 'redis-server', 'filebrowser'];

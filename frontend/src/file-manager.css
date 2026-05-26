@@ -7,17 +7,24 @@
 
 .file-browser,
 .file-editor {
-  background: var(--surface-alt);
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  padding: 14px;
+  padding: 12px;
   min-width: 0;
   box-shadow: none;
 }
 
+.file-browser {
+  display: grid;
+  gap: 0;
+}
+
 .file-controls {
   display: grid;
-  gap: 8px;
+  grid-template-columns: minmax(240px, 340px) minmax(0, 1fr);
+  gap: 8px 10px;
+  align-items: start;
 }
 
 .compact-actions {
@@ -32,8 +39,9 @@
 .file-toolbar {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
+  grid-column: 1 / -1;
 }
 
 .file-toolbar select {
@@ -44,16 +52,18 @@
 .file-toolbar button,
 .file-toolbar .upload-button,
 .file-toolbar select {
-  min-height: 36px;
-  height: 36px;
+  min-height: 34px;
+  height: 34px;
+  padding: 0 10px;
+  font-size: 12px;
 }
 
 .path-pill {
-  margin: 10px 0;
-  background: var(--surface);
+  margin: 0;
+  background: var(--surface-alt);
   border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 7px 12px;
+  border-radius: var(--radius-sm);
+  padding: 6px;
   color: var(--text-secondary);
   font-weight: 700;
   font-size: 13px;
@@ -65,12 +75,53 @@
   flex-wrap: wrap;
   gap: 6px;
   align-items: center;
+  grid-column: 1 / -1;
   border-radius: var(--radius-sm);
 }
 
 .crumb {
-  min-height: 28px;
-  padding: 5px 9px;
+  min-height: 30px;
+  height: 30px;
+  padding: 0 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.crumb:hover:not(:disabled) {
+  background: var(--primary-light);
+  border-color: #cfe0f7;
+  color: var(--brand-navy);
+}
+
+.crumb:disabled {
+  background: var(--primary-light);
+  border-color: #cfe0f7;
+  color: var(--primary);
+  opacity: 1;
+}
+
+.file-controls .file-meta {
+  min-height: 40px;
+  align-items: center;
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  background: var(--surface-alt);
+  border-color: var(--border);
+  color: var(--text-secondary);
+  gap: 6px 12px;
+}
+
+.file-controls .file-meta span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-controls .file-meta strong {
+  color: var(--text);
 }
 
 .file-list-header {
@@ -78,7 +129,12 @@
   justify-content: space-between;
   align-items: center;
   gap: 10px;
-  margin: 12px 0 8px;
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
   color: var(--text-muted);
   font-size: 12px;
   font-weight: 700;
@@ -90,56 +146,85 @@
   gap: 7px;
 }
 
+.file-list-header input,
+.file-item > input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  padding: 0;
+  accent-color: var(--primary);
+}
+
 .file-list {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 6px;
+  gap: 0;
   max-height: min(68vh, 760px);
   overflow: auto;
-  padding-right: 4px;
+  padding: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
 }
 
 .file-item {
   display: grid;
-  grid-template-columns: auto minmax(360px, 1fr) 110px minmax(420px, auto);
-  gap: 8px;
+  grid-template-columns: 24px minmax(240px, 1fr) 100px auto;
+  gap: 10px;
   align-items: center;
   background: var(--surface);
   color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 9px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  min-height: 44px;
+  padding: 6px 10px;
   justify-content: stretch;
   text-align: left;
   transition: var(--transition);
 }
 
+.file-item:last-child {
+  border-bottom: 0;
+}
+
 .file-item:hover {
-  border-color: var(--primary);
-  background: #eff6ff;
+  background: #f7fbff;
 }
 
 .file-item.selected {
-  border-color: var(--primary);
-  background: #eef8ff;
+  background: #eef6ff;
 }
 
-.file-name {
+.file-list button.file-name {
   display: flex;
   align-items: center;
   gap: 7px;
   min-width: 0;
+  min-height: 28px;
+  height: auto;
   padding: 0;
   border: 0;
   background: transparent;
   color: var(--text);
   justify-content: flex-start;
+  box-shadow: none;
 }
 
-.file-name strong {
+.file-list button.file-name:hover {
+  background: transparent;
+  color: var(--primary);
+}
+
+.file-list button.file-name strong {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.file-list button.file-name svg {
+  color: var(--primary);
+  flex: 0 0 auto;
 }
 
 .file-size {
@@ -156,16 +241,37 @@
 .file-row-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 6px;
-  flex-wrap: wrap;
+  gap: 5px;
+  flex-wrap: nowrap;
 }
 
 .file-row-actions .mini {
-  min-height: 30px;
-  height: 30px;
+  min-height: 28px;
+  height: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  padding: 0 8px;
+}
+
+.file-row-actions .mini.danger {
+  background: var(--surface);
+  border: 1px solid #fecaca;
+  color: var(--danger);
+  min-width: 28px;
+  width: 28px;
+  padding: 0;
+}
+
+.file-row-actions .mini.danger:hover:not(:disabled) {
+  background: #fee2e2;
+  border-color: #fca5a5;
+  color: var(--danger);
+}
+
+.file-row-actions .mini:disabled {
+  height: 28px;
+  min-height: 28px;
 }
 
 .empty-box {
@@ -279,6 +385,12 @@
   font-weight: 700;
 }
 
+.file-list .empty-box {
+  border: 0;
+  border-radius: 0;
+  padding: 28px 16px;
+}
+
 .standalone-editor-actions {
   display: flex;
   align-items: center;
@@ -326,6 +438,7 @@
 
 @media (max-width: 1100px) {
   .file-manager,
+  .file-controls,
   .file-editor .editor-tools {
     grid-template-columns: 1fr;
   }
@@ -335,13 +448,15 @@
   }
 
   .file-item {
-    grid-template-columns: auto 1fr;
+    grid-template-columns: 22px minmax(0, 1fr);
+    gap: 6px 8px;
   }
 
   .file-size,
   .file-row-actions {
     grid-column: 2;
     justify-content: flex-start;
+    flex-wrap: wrap;
   }
 
   .code-editor-frame,
@@ -353,6 +468,34 @@
 }
 
 @media (max-width: 760px) {
+  .file-browser {
+    padding: 10px;
+  }
+
+  .file-toolbar button,
+  .file-toolbar .upload-button,
+  .file-toolbar select {
+    flex: 1 1 120px;
+  }
+
+  .file-list-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .file-row-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .file-row-actions .mini,
+  .file-row-actions .mini.danger {
+    width: 100%;
+    min-width: 0;
+  }
+
   .standalone-editor-top {
     align-items: stretch;
     flex-direction: column;
