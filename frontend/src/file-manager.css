@@ -189,11 +189,11 @@
 }
 
 .file-item:hover {
-  background: #f7fbff;
+  background: var(--surface);
 }
 
 .file-item.selected {
-  background: #eef6ff;
+  background: var(--surface);
 }
 
 .file-list button.file-name {
@@ -205,15 +205,22 @@
   height: auto;
   padding: 0;
   border: 0;
-  background: transparent;
-  color: var(--text);
+  background: transparent !important;
+  color: var(--text) !important;
   justify-content: flex-start;
   box-shadow: none;
 }
 
 .file-list button.file-name:hover {
-  background: transparent;
-  color: var(--primary);
+  background: transparent !important;
+  color: var(--primary) !important;
+}
+
+.file-list button.file-name:focus,
+.file-list button.file-name:active {
+  background: transparent !important;
+  color: var(--primary) !important;
+  box-shadow: none !important;
 }
 
 .file-list button.file-name strong {
