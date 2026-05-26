@@ -1,5 +1,15 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
+import { basicSetup } from 'codemirror';
+import { indentWithTab } from '@codemirror/commands';
+import { css } from '@codemirror/lang-css';
+import { html } from '@codemirror/lang-html';
+import { javascript } from '@codemirror/lang-javascript';
+import { json } from '@codemirror/lang-json';
+import { php } from '@codemirror/lang-php';
+import { yaml } from '@codemirror/lang-yaml';
+import { Compartment, EditorState } from '@codemirror/state';
+import { EditorView, keymap } from '@codemirror/view';
 import { Archive, Clock, Code2, Cpu, Database, FileText, FolderOpen, Globe, HardDrive, Home, KeyRound, Lock, LogOut, MemoryStick, Menu, Network, Server, Shield, Trash2, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
 import './style.css';
 import './file-manager.css';
@@ -7,6 +17,95 @@ import './brand.css';
 
 const API = import.meta.env.VITE_API_URL || '/api';
 const SERVICE_NAMES = ['bpanel-api', 'nginx', 'php8.3-fpm', 'php8.4-fpm', 'mariadb', 'redis-server', 'filebrowser'];
+
+const editorTheme = EditorView.theme({
+  '&': { height: '100%', backgroundColor: '#ffffff', color: '#0f172a' },
+  '&.cm-focused': { outline: 'none' },
+  '.cm-scroller': { fontFamily: "Consolas, 'SFMono-Regular', 'Liberation Mono', Menlo, monospace", fontSize: '13px', lineHeight: '1.55' },
+  '.cm-content': { minHeight: '100%', padding: '14px 0' },
+  '.cm-line': { padding: '0 16px' },
+  '.cm-gutters': { backgroundColor: '#f6f8fb', color: '#64748b', borderRight: '1px solid #dbe4f0' },
+  '.cm-lineNumbers .cm-gutterElement': { minWidth: '44px', padding: '0 12px 0 8px' },
+  '.cm-activeLine': { backgroundColor: '#eef6ff' },
+  '.cm-activeLineGutter': { backgroundColor: '#e2efff', color: '#0b5fbd' },
+  '.cm-selectionBackground': { backgroundColor: '#bfdbfe !important' },
+  '.cm-cursor': { borderLeftColor: '#0b5fbd' },
+  '.cm-matchingBracket, .cm-nonmatchingBracket': { backgroundColor: '#dbeafe', outline: '1px solid #93c5fd' },
+});
+
+function languageExtension(mode) {
+  if (mode === 'PHP') return php();
+  if (mode === 'JavaScript') return javascript({ jsx: true, typescript: true });
+  if (mode === 'CSS') return css();
+  if (mode === 'HTML') return html();
+  if (mode === 'JSON') return json();
+  if (mode === 'YAML') return yaml();
+  return [];
+}
+
+function CodeEditor({ value, mode, disabled, onChange, onCursorChange }) {
+  const hostRef = useRef(null);
+  const viewRef = useRef(null);
+  const onChangeRef = useRef(onChange);
+  const onCursorChangeRef = useRef(onCursorChange);
+  const languageCompartmentRef = useRef(new Compartment());
+  const editableCompartmentRef = useRef(new Compartment());
+
+  useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
+  useEffect(() => { onCursorChangeRef.current = onCursorChange; }, [onCursorChange]);
+
+  useEffect(() => {
+    if (!hostRef.current) return undefined;
+    const languageCompartment = languageCompartmentRef.current;
+    const editableCompartment = editableCompartmentRef.current;
+    const view = new EditorView({
+      parent: hostRef.current,
+      state: EditorState.create({
+        doc: value || '',
+        extensions: [
+          basicSetup,
+          keymap.of([indentWithTab]),
+          editorTheme,
+          languageCompartment.of(languageExtension(mode)),
+          editableCompartment.of([EditorState.readOnly.of(!!disabled), EditorView.editable.of(!disabled)]),
+          EditorView.updateListener.of(update => {
+            if (update.docChanged) onChangeRef.current(update.state.doc.toString());
+            if (update.docChanged || update.selectionSet) {
+              const pos = update.state.selection.main.head;
+              const line = update.state.doc.lineAt(pos);
+              onCursorChangeRef.current({ line: line.number, column: pos - line.from + 1 });
+            }
+          }),
+        ],
+      }),
+    });
+    viewRef.current = view;
+    return () => { view.destroy(); viewRef.current = null; };
+  }, []);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    const current = view.state.doc.toString();
+    if (value !== current) view.dispatch({ changes: { from: 0, to: current.length, insert: value || '' } });
+  }, [value]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({ effects: languageCompartmentRef.current.reconfigure(languageExtension(mode)) });
+  }, [mode]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({
+      effects: editableCompartmentRef.current.reconfigure([EditorState.readOnly.of(!!disabled), EditorView.editable.of(!disabled)]),
+    });
+  }, [disabled]);
+
+  return <div className="code-editor-host" ref={hostRef}></div>;
+}
 
 function App() {
   // Auth is now cookie-based (HttpOnly bpanel_session). The SPA does not see
@@ -79,7 +178,6 @@ function App() {
   const [loading, setLoading] = useState('');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const noticeTimer = useRef(null);
-  const editorLineNumbersRef = useRef(null);
 
   // Auto-dismiss notices after 6 seconds
   useEffect(() => {
@@ -479,8 +577,7 @@ function App() {
     const data = await request(`/maintenance/files/${selectedWebsiteId}/read?path=${encodeURIComponent(targetPath)}`, {}, 'Reading file...');
     if (data?.content !== undefined) {
       setFileContent(data.content);
-      updateEditorCursor(data.content, 0);
-      if (editorLineNumbersRef.current) editorLineNumbersRef.current.scrollTop = 0;
+      setEditorCursor({ line: 1, column: 1 });
     }
   }
 
@@ -1040,16 +1137,6 @@ function App() {
     setSelectedFilePaths(prev => prev.length === files.length ? [] : files.map(item => item.path));
   }
 
-  function updateEditorCursor(text = fileContent, selectionStart = 0) {
-    const beforeCursor = String(text || '').slice(0, selectionStart);
-    const lines = beforeCursor.split('\n');
-    setEditorCursor({ line: lines.length, column: (lines[lines.length - 1] || '').length + 1 });
-  }
-
-  function syncEditorScroll(event) {
-    if (editorLineNumbersRef.current) editorLineNumbersRef.current.scrollTop = event.currentTarget.scrollTop;
-  }
-
   function editorLanguage(path) {
     const name = String(path || '').toLowerCase();
     if (/\.php\d?$/.test(name) || name.endsWith('.phtml')) return 'PHP';
@@ -1325,7 +1412,6 @@ function App() {
   function renderFiles() {
     const allSelected = files.length > 0 && selectedFilePaths.length === files.length;
     const editorLineCount = Math.max(1, String(fileContent || '').split('\n').length);
-    const editorLineNumbers = Array.from({ length: editorLineCount }, (_, index) => index + 1).join('\n');
     const editorMode = editorLanguage(filePath);
     return <section className="section">
       <div className="section-title">
@@ -1395,19 +1481,13 @@ function App() {
             <span>{editorLineCount} line(s)</span>
             <span>Ln {editorCursor.line}, Col {editorCursor.column}</span>
           </div>
-          <div className="editor-shell">
-            <pre ref={editorLineNumbersRef} className="editor-lines" aria-hidden="true">{editorLineNumbers}</pre>
-            <textarea
-              className="code-editor native-code-editor"
+          <div className="code-editor-frame">
+            <CodeEditor
               value={fileContent}
-              onChange={e => { setFileContent(e.target.value); updateEditorCursor(e.target.value, e.target.selectionStart); }}
-              onClick={e => updateEditorCursor(e.currentTarget.value, e.currentTarget.selectionStart)}
-              onKeyUp={e => updateEditorCursor(e.currentTarget.value, e.currentTarget.selectionStart)}
-              onSelect={e => updateEditorCursor(e.currentTarget.value, e.currentTarget.selectionStart)}
-              onScroll={syncEditorScroll}
-              spellCheck={false}
-              wrap="off"
+              mode={editorMode}
               disabled={!selectedWebsiteId}
+              onChange={setFileContent}
+              onCursorChange={setEditorCursor}
             />
           </div>
         </div>
