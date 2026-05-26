@@ -141,7 +141,6 @@ function App() {
   const [databases, setDatabases] = useState([]);
   const [newDatabase, setNewDatabase] = useState({ website_id: '', db_name: '' });
   const [users, setUsers] = useState([]);
-  const [systemInfo, setSystemInfo] = useState(null);
   const [resourceUsage, setResourceUsage] = useState(null);
   const [serviceStates, setServiceStates] = useState({});
   const [backups, setBackups] = useState([]);
@@ -375,11 +374,6 @@ function App() {
       if (!selectedBackupUserId && data[0]) setSelectedBackupUserId(String(data[0].id));
       setNewBackupSchedule(prev => (!prev.all_users && (!prev.user_ids || prev.user_ids.length === 0) && data[0]) ? ({ ...prev, user_ids: [String(data[0].id)] }) : prev);
     }
-  }
-
-  async function loadSystemInfo() {
-    const data = await request('/services/system-info', {}, 'Loading system status...');
-    if (data) setSystemInfo(data);
   }
 
   async function loadResourceUsage() {
@@ -1090,7 +1084,6 @@ function App() {
 
   useEffect(() => {
     if (isAuthenticated && page === 'users') loadUsers();
-    if (isAuthenticated && page === 'system') loadSystemInfo();
     if (isAuthenticated && page === 'php') loadPhpConfig();
     if (isAuthenticated && page === 'firewall') loadFirewall();
     if (isAuthenticated && page === 'security') loadTwoFactorStatus();
@@ -1116,9 +1109,8 @@ function App() {
     ['security', 'Security', Shield],
     ...(isAdmin ? [['php', 'PHP config', Code2]] : []),
     ...(isAdmin ? [['firewall', 'Firewall', Shield]] : []),
-    ['services', 'Services', Server],
+    ['services', 'Services Status', Server],
     ...(isAdmin ? [['users', 'Panel users', Users]] : []),
-    ['system', 'System info', Server],
   ];
 
   const currentSite = websites.find(site => String(site.id) === String(selectedWebsiteId));
@@ -1271,21 +1263,6 @@ function App() {
         <EmptyState icon={Globe} message="No websites yet. Create your first WordPress site from the Websites menu." />
       </section>}
     </>;
-  }
-
-  function renderSystemStatus() {
-    return <section className="section">
-      <div className="section-title">
-        <h2>System info</h2>
-        <button disabled={!!loading} onClick={loadSystemInfo}><RefreshCw size={15}/> Refresh</button>
-      </div>
-      {!systemInfo && <EmptyState icon={Server} message="Click Refresh to load system information." />}
-      {systemInfo && <div className="system-grid">
-        <div className="info-box"><strong>OS</strong><pre>{systemInfo.os}</pre></div>
-        <div className="info-box"><strong>Disk</strong><pre>{systemInfo.disk}</pre></div>
-        <div className="info-box"><strong>Memory</strong><pre>{systemInfo.memory}</pre></div>
-      </div>}
-    </section>;
   }
 
   function renderWebsites() {
@@ -1639,7 +1616,7 @@ function App() {
   function renderServices() {
     return <section className="section">
       <div className="section-title">
-        <h2>Services / Stack</h2>
+        <h2>Services Status</h2>
         <button disabled={!!loading} onClick={checkAllServices}><RefreshCw size={15}/> Refresh</button>
       </div>
       <div className="service-grid">
@@ -1869,7 +1846,6 @@ function App() {
 
   function renderPage() {
     if (page === 'websites') return renderWebsites();
-    if (page === 'system') return renderSystemStatus();
     if (page === 'ssl') return renderSsl();
     if (page === 'databases') return renderDatabases();
     if (page === 'cron') return renderCron();
