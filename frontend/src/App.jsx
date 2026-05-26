@@ -1463,7 +1463,7 @@ function App() {
     const allSelected = files.length > 0 && selectedFilePaths.length === files.length;
     return <section className="section">
       <div className="section-title">
-        <div><h2>File manager</h2><p className="hint">Native BPanel file tools with quota, archive, and extract support.</p></div>
+        <div><h2>File manager</h2></div>
         <button disabled={!selectedWebsiteId || !!loading} onClick={() => listFiles(fileListPath)}><RefreshCw size={14}/> Refresh</button>
       </div>
       <div className="file-manager">
