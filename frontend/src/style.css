@@ -642,8 +642,8 @@ button:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
 .user-main strong{font-size:14px}
 .user-main small{color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .row-actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}
-.site-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px}
-.site-card{display:grid;gap:12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px;min-width:0;transition:var(--transition)}
+.site-grid{display:grid;grid-template-columns:1fr;gap:12px}
+.site-card{display:grid;grid-template-columns:minmax(260px,1.4fr) minmax(250px,.9fr) auto;align-items:center;gap:14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px;min-width:0;transition:var(--transition)}
 .site-card:hover{border-color:var(--border-hover);box-shadow:none}
 .site-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
 .site-head strong{display:block;font-size:15px;color:var(--text)}
@@ -651,6 +651,9 @@ button:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
 .site-meta{display:flex;gap:7px;flex-wrap:wrap}
 .site-meta span{background:var(--surface-alt);border:1px solid var(--border);border-radius:999px;padding:5px 9px;color:var(--text-muted);font-weight:600;font-size:12px}
 .site-meta strong{color:var(--text)}
+.site-card>.actions{justify-content:flex-end;flex-wrap:nowrap}
+.site-card>.actions select{width:150px;max-width:150px;flex:0 0 150px}
+.site-card>.actions button{flex:0 0 auto}
 .toolbar{display:grid;grid-template-columns:220px 1fr auto;gap:8px;margin-bottom:10px}
 .editor-tools{display:grid;grid-template-columns:1fr auto auto auto;gap:8px;margin:10px 0}
 .actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
@@ -681,6 +684,11 @@ button:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
 .login-card{border-radius:var(--radius-lg);box-shadow:var(--shadow-lg)}
 .login-card h1{letter-spacing:0;color:var(--text)}
 .create-site-row{grid-template-columns:1.4fr 1fr 110px 1.2fr 1fr 1fr auto}
+
+@media(max-width:1250px){
+  .site-card{grid-template-columns:1fr;align-items:start}
+  .site-card>.actions{justify-content:flex-start;flex-wrap:wrap}
+}
 
 @media(max-width:1150px){
   .form-row{grid-template-columns:1fr 1fr}

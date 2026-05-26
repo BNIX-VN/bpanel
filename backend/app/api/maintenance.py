@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta, timezone
 import json
+from pathlib import Path
 from typing import Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse, RedirectResponse
@@ -142,11 +144,16 @@ def _decode_filebrowser_token(token: str, expected_kind: str) -> dict:
     return payload
 
 
-def _filebrowser_redirect_for(_website: Optional[Website]) -> str:
-    # File Browser needs its SPA to run proxy login before protected /files
-    # routes can be opened directly. Start at the app root and let users browse
-    # or use BPanel's upload control for the selected website.
-    return "/filebrowser/"
+def _filebrowser_redirect_for(website: Optional[Website]) -> str:
+    if not website:
+        return "/filebrowser/"
+    try:
+        public_path = (Path(website.root_path) / "public").resolve()
+        relative_path = public_path.relative_to(Path("/home").resolve())
+    except ValueError:
+        return "/filebrowser/"
+    encoded = "/".join(quote(part) for part in relative_path.parts)
+    return f"/filebrowser/files/{encoded}/"
 
 
 @router.post("/backup")
