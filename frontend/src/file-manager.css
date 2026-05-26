@@ -208,6 +208,7 @@
   border: 0;
   background: transparent !important;
   color: var(--text) !important;
+  font-weight: 500;
   justify-content: flex-start;
   box-shadow: none;
 }
@@ -225,6 +226,7 @@
 }
 
 .file-list button.file-name strong {
+  font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
