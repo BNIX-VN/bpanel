@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     default_php_version: str = "8.3"
     ssl_email: str = ""
     redis_url: str = "redis://localhost:6379/0"
-    rate_limit_backend: str = "memory"
+    rate_limit_backend: str = "redis"
     panel_url: str = ""
     panel_domain: str = ""
     panel_port: int = 2222
