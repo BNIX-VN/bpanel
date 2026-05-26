@@ -300,11 +300,11 @@ def restore_user_backup(backup_file: str, db) -> dict:
     user = db.query(User).filter(User.username == username).first()
     created_user = False
     if user is None:
-        email = user_info.get("email") or f"{username}@users.bpanel.test"
-        if email.endswith("@users.bpanel.test"):
-            email = f"{username}@users.bpanel.vn"
+        email = user_info.get("email") or f"{username}@users.bpanel.invalid"
+        if email.endswith(("@users.bpanel.test", "@users.bpanel.vn")):
+            email = f"{username}@users.bpanel.invalid"
         if db.query(User).filter(User.email == email).first():
-            email = f"{username}-{secrets.token_hex(4)}@users.bpanel.vn"
+            email = f"{username}-{secrets.token_hex(4)}@users.bpanel.invalid"
         user = User(
             username=username,
             email=email,

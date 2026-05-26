@@ -78,7 +78,7 @@ class UserPasswordUpdate(BaseModel):
 class UserOut(BaseModel):
     id: int
     username: str
-    email: EmailStr
+    email: str
     role: str
     is_active: bool
     website_limit: int
