@@ -1,0 +1,133 @@
+/* BNIX brand polish */
+:root{
+  --primary:#0b5fbd;
+  --primary-hover:#08498f;
+  --primary-light:#e9f2ff;
+  --brand-navy:#07356d;
+  --brand-blue:#0b5fbd;
+  --brand-yellow:#f6c431;
+  --brand-yellow-soft:#fff8db;
+  --danger:#dc2626;
+  --danger-hover:#b91c1c;
+  --text:#10223d;
+  --text-secondary:#36516e;
+  --text-muted:#6c7f99;
+  --bg:#f4f7ff;
+  --surface:#ffffff;
+  --surface-alt:#f8fbff;
+  --border:#dbe7f7;
+  --border-hover:#bcd0eb;
+  --ring:rgba(11,95,189,.16);
+  --shadow-sm:0 1px 2px rgba(7,53,109,.05);
+  --shadow-md:0 10px 28px rgba(7,53,109,.08);
+  --shadow-lg:0 20px 48px rgba(7,53,109,.12);
+}
+
+body{background:var(--bg);color:var(--text)}
+.topbar{background:rgba(255,255,255,.96);border-bottom-color:var(--border)}
+.sidebar{border-right-color:var(--border);background:var(--surface)}
+.sidebar-head{border-bottom-color:var(--border)}
+.brand-mark{position:relative;overflow:hidden;background:var(--brand-blue);color:#fff;box-shadow:inset 0 -3px 0 var(--brand-yellow)}
+.brand-mark::after{content:'';position:absolute;left:8px;right:8px;bottom:7px;height:3px;border-radius:999px;background:var(--brand-yellow)}
+.sidebar button.active{background:var(--primary-light);color:var(--primary);border-color:#cfe0f7}
+.sidebar button:hover:not(.active){background:var(--surface-alt);color:var(--brand-navy);border-color:var(--border)}
+.section,.stat-card,.card,.site-card,.service-card,.backup-item,.info-box,.user-create-card{border-color:var(--border)}
+.section:hover,.stat-card:hover,.card:hover,.site-card:hover,.service-card:hover,.backup-item:hover{border-color:var(--border-hover)}
+h1,h2{color:var(--brand-navy)}
+
+input,select,textarea{
+  border-color:var(--border);border-radius:var(--radius-sm);min-height:40px;background:var(--surface);color:var(--text);
+}
+input:focus,select:focus,textarea:focus{border-color:var(--primary);box-shadow:0 0 0 3px var(--ring)}
+select[multiple],textarea{height:auto}
+
+button,.button-link,.upload-button{
+  display:inline-flex;align-items:center;justify-content:center;gap:7px;
+  min-height:40px;height:40px;padding:0 14px;border-radius:var(--radius-sm);
+  background:var(--primary);color:#fff;border:1px solid transparent;
+  font-size:13px;font-weight:700;line-height:1;box-shadow:0 1px 1px rgba(7,53,109,.08);
+}
+button:hover:not(:disabled),.button-link:hover,.upload-button:hover{background:var(--primary-hover);color:#fff;box-shadow:0 6px 16px rgba(7,53,109,.12)}
+button:disabled,.upload-button.disabled{background:#dbe7f7;color:#7a8ca4;border-color:#cad9ee;opacity:1;box-shadow:none}
+.danger{background:var(--danger);color:#fff}
+.danger:hover:not(:disabled){background:var(--danger-hover);color:#fff}
+.secondary,.secondary-light{background:var(--surface);color:var(--brand-navy);border-color:var(--border)}
+.secondary:hover:not(:disabled),.secondary-light:hover:not(:disabled){background:var(--primary-light);color:var(--brand-navy);border-color:#cfe0f7}
+.mini{min-height:34px;height:34px;padding:0 10px;font-size:12px}
+.compact-btn{min-height:36px;height:36px;padding:0 11px;font-size:13px}
+.top-actions button{box-shadow:none}
+
+.file-meta{background:#edf9ff;border-color:#b7dcff;color:var(--brand-navy)}
+.loading{background:var(--primary-light);color:var(--primary);border-color:#b7d4f7}
+.notice{background:#f0fdf4;color:#166534;border-color:#bbf7d0}
+
+/* Backup page balance */
+.backups-page{gap:12px}
+.backups-page>h2{margin-bottom:0}
+.backup-toolbar{margin-top:2px}
+.backup-toolbar button,.backup-toolbar .upload-button{min-width:132px}
+.backup-admin-panel{
+  display:grid;gap:14px;margin-top:18px;padding:16px;
+  background:linear-gradient(180deg,#fff 0%,#fbfdff 100%);
+  border:1px solid var(--border);border-left:4px solid var(--primary);
+  border-radius:var(--radius-lg);
+}
+.backup-panel-heading{align-items:center;padding-bottom:12px;border-bottom:1px solid var(--border)}
+.backup-panel-heading h2{margin-bottom:3px;color:var(--brand-navy)}
+.backup-panel-heading>button,.backup-panel-heading>.actions button,.backup-panel-heading>.actions .upload-button{min-width:108px;height:38px;min-height:38px}
+.backup-run-row{grid-template-columns:minmax(240px,1fr) max-content;gap:10px;align-items:center}
+.user-backup-row{grid-template-columns:minmax(220px,1fr) minmax(220px,1fr) max-content}
+.backup-run-row button{min-width:142px}
+.backup-subactions{margin-top:-2px}
+.backup-subactions button{min-width:112px}
+.backups-page .backup-list{gap:8px;margin-top:2px}
+.backups-page .backup-item{
+  display:grid;grid-template-columns:minmax(0,1fr) max-content;align-items:center;gap:10px;
+  min-height:52px;padding:10px 12px;background:var(--surface);border-radius:var(--radius-lg);
+}
+.backups-page .backup-item span{font-size:13px;line-height:1.35;color:var(--text);font-weight:700}
+.backups-page .backup-item small{font-size:12px;color:var(--text-muted);font-weight:600}
+.backups-page .backup-item .actions{flex-wrap:nowrap;gap:6px;justify-content:flex-end}
+.backups-page .backup-item .actions button,.backups-page .backup-item>button{height:34px;min-height:34px;padding:0 10px;font-size:12px}
+.backups-page .backup-item .actions .danger,.backups-page .backup-item>button.danger{width:34px;min-width:34px;padding:0}
+.restore-title{margin-top:8px}
+
+.backup-schedule-form,.sftp-target-form{
+  padding:12px;background:var(--surface-alt);border:1px solid var(--border);border-radius:var(--radius-lg);
+  align-items:center;
+}
+.backup-schedule-form{grid-template-columns:130px minmax(240px,1.2fr) 140px minmax(190px,1fr) 90px max-content}
+.backup-schedule-form select[multiple]{min-height:88px;padding-block:8px}
+.schedule-toggle{height:40px;padding:0 12px;background:var(--surface);border-color:var(--border);color:var(--brand-navy)}
+.schedule-toggle input{accent-color:var(--primary)}
+.sftp-target-form{grid-template-columns:minmax(150px,1fr) minmax(150px,1fr) 96px minmax(140px,1fr) minmax(140px,1fr) minmax(180px,1.15fr) max-content}
+.sftp-form textarea{grid-column:1 / -2;min-height:88px;background:#0b2348;color:#eaf2ff;border-color:#163c72}
+.sftp-form button{align-self:center;height:40px;min-height:40px}
+.sftp-target-form button{min-width:122px}
+
+@media(max-width:1320px){
+  .sftp-target-form{grid-template-columns:repeat(3,minmax(0,1fr)) max-content}
+}
+
+@media(max-width:1200px){
+  .backup-schedule-form{grid-template-columns:130px minmax(220px,1fr) 140px minmax(180px,1fr)}
+}
+
+@media(max-width:950px){
+  button,.button-link,.upload-button{min-height:42px;height:42px}
+  .backup-admin-panel{padding:12px;border-left-width:3px}
+  .backup-panel-heading{display:grid;align-items:start;gap:10px}
+  .backup-toolbar button,.backup-toolbar .upload-button,.backup-run-row button,.backup-subactions button{min-width:0;width:100%}
+  .backup-run-row,.user-backup-row,.backup-schedule-form,.sftp-target-form{grid-template-columns:1fr}
+  .sftp-form textarea{grid-column:1;min-height:96px}
+  .backups-page .backup-item{grid-template-columns:1fr;align-items:stretch}
+  .backups-page .backup-item .actions{display:grid;grid-template-columns:1fr 1fr 42px;gap:6px}
+  .backups-page .backup-item .actions button{width:100%;height:38px;min-height:38px}
+  .backups-page .backup-item .actions .danger,.backups-page .backup-item>button.danger{width:100%;min-width:0}
+  .schedule-toggle{height:42px}
+}
+
+@media(max-width:560px){
+  .backups-page .backup-item .actions{grid-template-columns:1fr}
+  .backups-page .backup-item .actions .danger{width:100%}
+}

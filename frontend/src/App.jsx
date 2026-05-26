@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { Archive, Clock, Code2, Database, FileText, FolderOpen, Globe, Home, KeyRound, Lock, LogOut, Menu, Server, Shield, Trash2, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
 import './style.css';
 import './file-manager.css';
+import './brand.css';
 
 const API = import.meta.env.VITE_API_URL || '/api';
 const SERVICE_NAMES = ['bpanel-api', 'nginx', 'php8.3-fpm', 'php8.4-fpm', 'mariadb', 'redis-server', 'filebrowser'];
@@ -1134,11 +1135,11 @@ function App() {
       const ids = (item.user_ids && item.user_ids.length > 0) ? item.user_ids : (item.user_id ? [item.user_id] : []);
       return ids.length ? ids.map(userNameById).join(', ') : 'No users';
     };
-    return <section className="section">
+    return <section className="section backups-page">
       <h2>Backups</h2>
       <WebsiteSelect />
       <p className="hint">Backups include website source files and a database SQL export.</p>
-      <div className="actions">
+      <div className="actions backup-toolbar">
         <button disabled={!selectedWebsiteId || !!loading} onClick={createBackup}><Plus size={14}/> Create backup</button>
         <button disabled={!selectedWebsiteId || !!loading} onClick={listBackups}><RefreshCw size={14}/> Refresh</button>
         <label className="upload-button">
@@ -1157,12 +1158,12 @@ function App() {
           </div>
         </div>)}
       </div>
-      {isAdmin && <div className="sftp-panel">
-        <div className="section-title">
+      {isAdmin && <div className="sftp-panel backup-admin-panel">
+        <div className="section-title backup-panel-heading">
           <div><h2>Full user backup</h2><p className="hint">Includes the panel user, all owned websites, source files, database dumps, and restore metadata.</p></div>
           <button disabled={!!loading} onClick={() => { loadUsers(); loadBackupSchedules(); loadRestoreBackups(); }}><RefreshCw size={14}/> Refresh</button>
         </div>
-        <div className="sftp-run-row user-backup-row">
+        <div className="sftp-run-row user-backup-row backup-run-row">
           <select value={selectedBackupUserId} onChange={e => setSelectedBackupUserId(e.target.value)}>
             <option value="">Select user</option>
             {users.map(user => <option key={user.id} value={user.id}>{user.username}</option>)}
@@ -1174,7 +1175,7 @@ function App() {
           <button disabled={!selectedBackupUserId || !!loading} onClick={createUserBackup}><Archive size={14}/> Full backup</button>
         </div>
         {selectedBackupUser && <p className="hint">Current user: <strong>{selectedBackupUser.username}</strong></p>}
-        <div className="actions">
+        <div className="actions backup-subactions">
           <button disabled={!selectedBackupUserId || !!loading} onClick={() => listUserBackups()}><RefreshCw size={14}/> Backups</button>
         </div>
         <div className="backup-list">
@@ -1187,7 +1188,7 @@ function App() {
             </div>
           </div>)}
         </div>
-        <div className="section-title restore-title">
+        <div className="section-title restore-title backup-panel-heading">
           <div><h2>Restore folder</h2><p className="hint">{restoreBackupDir || '/var/backups/bpanel/users/restore'}</p></div>
           <div className="actions">
             <button disabled={!!loading} onClick={loadRestoreBackups}><RefreshCw size={14}/> Refresh</button>
@@ -1207,7 +1208,7 @@ function App() {
             </div>
           </div>)}
         </div>
-        <div className="sftp-form schedule-form">
+        <div className="sftp-form schedule-form backup-schedule-form">
           <label className="schedule-toggle">
             <input type="checkbox" checked={!!newBackupSchedule.all_users} onChange={e => setNewBackupSchedule(prev => ({ ...prev, all_users: e.target.checked }))} />
             <span>All users</span>
@@ -1233,19 +1234,19 @@ function App() {
           })}
         </div>
       </div>}
-      {isAdmin && <div className="sftp-panel">
-        <div className="section-title">
+      {isAdmin && <div className="sftp-panel backup-admin-panel">
+        <div className="section-title backup-panel-heading">
           <div><h2>SFTP backup</h2><p className="hint">Create a local archive and upload it to an SFTP target.</p></div>
           <button disabled={!!loading} onClick={loadSftpTargets}><RefreshCw size={14}/> Targets</button>
         </div>
-        <div className="sftp-run-row">
+        <div className="sftp-run-row backup-run-row">
           <select value={selectedSftpTargetId} onChange={e => setSelectedSftpTargetId(e.target.value)}>
             <option value="">Select SFTP target</option>
             {sftpTargets.map(target => <option key={target.id} value={target.id}>{target.name} - {target.host}</option>)}
           </select>
           <button disabled={!selectedWebsiteId || !selectedSftpTargetId || !!loading} onClick={createSftpBackup}><Upload size={14}/> Backup to SFTP</button>
         </div>
-        <div className="sftp-form">
+        <div className="sftp-form sftp-target-form">
           <input value={newSftpTarget.name} onChange={e => setNewSftpTarget(prev => ({ ...prev, name: e.target.value }))} placeholder="Target name" />
           <input value={newSftpTarget.host} onChange={e => setNewSftpTarget(prev => ({ ...prev, host: e.target.value }))} placeholder="Host" />
           <input value={newSftpTarget.port} onChange={e => setNewSftpTarget(prev => ({ ...prev, port: e.target.value }))} placeholder="22" inputMode="numeric" />
