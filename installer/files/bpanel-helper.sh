@@ -29,6 +29,30 @@ BPANEL_SITES_GROUP="bpanel-sites"
 
 deny() { echo "bpanel-helper: $*" >&2; exit 1; }
 
+audit_log() {
+  local quoted="" arg
+  for arg in "$@"; do
+    printf -v quoted '%s %q' "$quoted" "$arg"
+  done
+  if command -v logger >/dev/null 2>&1; then
+    logger -t bpanel-helper -- "cmd=${cmd:-unknown}${quoted}"
+  fi
+}
+
+run_ufw_ip_rule() {
+  local action="$1" network="$2" port="${3:-}" protocol="${4:-tcp}"
+  require_ip_or_cidr "$network"
+  case "$action" in
+    allow|deny) ;;
+    *) deny "invalid ufw action: $action" ;;
+  esac
+  if [[ -z "$port" ]]; then
+    exec ufw "$action" from "$network"
+  fi
+  require_port "$port"; require_proto "$protocol"
+  exec ufw "$action" from "$network" to any port "$port" proto "$protocol"
+}
+
 is_in() {
   local needle="$1"; shift
   local x
@@ -224,6 +248,7 @@ require_ip_or_cidr() {
 
 cmd="${1:-}"
 shift || true
+audit_log "$@"
 
 case "$cmd" in
 
@@ -289,21 +314,11 @@ case "$cmd" in
     ;;
   ufw-allow-ip)
     [[ $# -ge 1 && $# -le 3 ]] || deny "usage: ufw-allow-ip <ip> [port] [proto]"
-    require_ip_or_cidr "$1"
-    if [[ $# -eq 1 ]]; then
-      exec ufw allow from "$1"
-    fi
-    require_port "$2"; require_proto "${3:-tcp}"
-    exec ufw allow from "$1" to any port "$2" proto "${3:-tcp}"
+    run_ufw_ip_rule allow "$1" "${2:-}" "${3:-tcp}"
     ;;
   ufw-deny-ip)
     [[ $# -ge 1 && $# -le 3 ]] || deny "usage: ufw-deny-ip <ip> [port] [proto]"
-    require_ip_or_cidr "$1"
-    if [[ $# -eq 1 ]]; then
-      exec ufw deny from "$1"
-    fi
-    require_port "$2"; require_proto "${3:-tcp}"
-    exec ufw deny from "$1" to any port "$2" proto "${3:-tcp}"
+    run_ufw_ip_rule deny "$1" "${2:-}" "${3:-tcp}"
     ;;
   ufw-delete)
     [[ $# -eq 1 && "$1" =~ ^[0-9]+$ ]] || deny "usage: ufw-delete <number>"

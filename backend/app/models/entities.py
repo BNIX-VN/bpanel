@@ -71,6 +71,16 @@ class AuditLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class RevokedToken(Base):
+    __tablename__ = "revoked_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    jti: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    revoked_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class SftpBackupTarget(Base):
     __tablename__ = "sftp_backup_targets"
 

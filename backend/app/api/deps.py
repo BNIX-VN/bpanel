@@ -1,15 +1,15 @@
+from hmac import compare_digest
 from typing import Optional
 
 from fastapi import Cookie, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
-from hmac import compare_digest
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import ALGORITHM
-from app.models.entities import User
+from app.models.entities import RevokedToken, User
 
 
 # auto_error=False because the token may instead be in an HttpOnly cookie.
@@ -45,6 +45,7 @@ def get_current_user(
     try:
         payload = jwt.decode(token, settings.secret_key, algorithms=[ALGORITHM])
         username: Optional[str] = payload.get("sub")
+        jti: Optional[str] = payload.get("jti")
         token_version = int(payload.get("tv", 0))
         if username is None:
             raise credentials_exception
@@ -56,6 +57,11 @@ def get_current_user(
         raise credentials_exception
     if (user.token_version or 0) != token_version:
         raise credentials_exception
+    if jti and db.query(RevokedToken.id).filter(RevokedToken.jti == jti).first():
+        raise credentials_exception
+
+    request.state.jwt_payload = payload
+    request.state.jwt_token = token
 
     # When the request was authenticated via cookie (browser flow) we ALSO
     # require a CSRF token on mutating methods. Bearer auth (CLI/SDK) is

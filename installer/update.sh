@@ -131,6 +131,8 @@ install_panel_runtime() {
   env_set_default PANEL_SSL_CERT ""
   env_set_default PANEL_SSL_KEY ""
   env_set_default FRONTEND_DIST "$APP_DIR/frontend/dist"
+  env_set_default REDIS_URL "redis://localhost:6379/0"
+  env_set_default RATE_LIMIT_BACKEND "redis"
   if [[ -z "$(env_get ALLOWED_ORIGINS)" ]]; then
     env_set_default ALLOWED_ORIGINS "$panel_url"
   fi

@@ -1,3 +1,4 @@
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
@@ -43,8 +44,9 @@ def needs_rehash(hashed_password: str) -> bool:
 
 
 def create_access_token(subject: str, extra: Optional[Dict[str, Any]] = None) -> str:
-    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.access_token_expire_minutes)
-    payload: Dict[str, Any] = {"sub": subject, "exp": expire}
+    now = datetime.now(timezone.utc)
+    expire = now + timedelta(minutes=settings.access_token_expire_minutes)
+    payload: Dict[str, Any] = {"sub": subject, "exp": expire, "iat": now, "jti": secrets.token_urlsafe(32)}
     if extra:
         payload.update(extra)
     return jwt.encode(payload, settings.secret_key, algorithm=ALGORITHM)

@@ -183,6 +183,8 @@ APP_ENV=production
 SECRET_KEY=<random-32-bytes>
 COMMAND_DRY_RUN=false
 DATABASE_URL=sqlite:////opt/bpanel/backend/bpanel.db
+REDIS_URL=redis://localhost:6379/0
+RATE_LIMIT_BACKEND=redis
 ALLOWED_ORIGINS=https://panel.example.com
 SITES_ROOT=/home/bpanel-sites  # legacy/imported sites; new sites use /home/<panel-user>/<domain>
 BACKUP_ROOT=/var/backups/bpanel
@@ -268,7 +270,8 @@ There is no path back to root via the API process.
 
 ## Security notes
 
-- Login is rate-limited (8 attempts / minute, lockout after 20 fails).
+- Login is rate-limited in Redis (8 attempts / minute, lockout after 20 fails),
+  so counters are shared across uvicorn workers.
 - Google Authenticator compatible TOTP 2FA can be enabled per account.
 - Constant-time login path: bcrypt is verified even when the user does not
   exist, to avoid username enumeration via timing.
@@ -286,8 +289,12 @@ There is no path back to root via the API process.
   (`bpanel_csrf`) echoed in the `X-CSRF-Token` header. The JWT is never
   exposed to JavaScript, mitigating token theft via XSS.
 - Strict `Content-Security-Policy` (`script-src 'self'`, `frame-ancestors 'none'`).
-- `token_version` on the User row invalidates previously issued JWTs on
-  password change, role change, account disable, or explicit logout.
+- JWTs include a `jti`; revoked session IDs are stored server-side, and
+  `token_version` invalidates previously issued JWTs on password change, role
+  change, account disable, 2FA changes, or explicit logout.
+- Production installs require `RATE_LIMIT_BACKEND=redis`, reject
+  `ALLOWED_ORIGINS=*`, enforce `COMMAND_DRY_RUN=false`, and return generic
+  500 responses for unhandled errors.
 
 ## License
 

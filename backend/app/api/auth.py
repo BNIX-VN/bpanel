@@ -2,6 +2,7 @@ import base64
 import secrets
 import time
 from collections import defaultdict, deque
+from datetime import datetime
 from io import BytesIO
 from threading import Lock
 from typing import Deque, Dict
@@ -10,6 +11,8 @@ import pyotp
 import qrcode
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
+from redis import Redis
+from redis.exceptions import RedisError
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -18,7 +21,7 @@ from app.core.database import get_db
 from app.core.permissions import Role, ensure_role
 from app.core.security import create_access_token, hash_password, needs_rehash, verify_password
 from app.core.secrets import decrypt, encrypt
-from app.models.entities import User
+from app.models.entities import RevokedToken, User
 from app.schemas.schemas import LoginResponse, TwoFactorCode, TwoFactorSetup, TwoFactorStatus
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -33,18 +36,17 @@ CSRF_COOKIE = "bpanel_csrf"
 CSRF_HEADER = "X-CSRF-Token"
 
 
-# In-process sliding window rate limiter for /auth/login.
-# We key counters BOTH by client IP and by submitted username so an attacker
-# rotating IPs cannot bypass the per-account lockout, and a noisy client IP
-# cannot drown out other accounts. For a single-process deployment this is
-# enough; for multi-worker switch to Redis (which is already in the stack).
+# Login rate limiter for /auth/login. Production uses Redis so counters are
+# shared across uvicorn workers; development can opt into the in-process backend.
 _LOGIN_WINDOW_SECONDS = 60
 _LOGIN_MAX_ATTEMPTS = 8
 _LOGIN_LOCKOUT_SECONDS = 15 * 60
 _LOGIN_LOCKOUT_THRESHOLD = 20
 _login_attempts: Dict[str, Deque[float]] = defaultdict(deque)
+_login_failures: Dict[str, Deque[float]] = defaultdict(deque)
 _login_lockouts: Dict[str, float] = {}
 _login_lock = Lock()
+_redis_client = None
 
 # Pre-computed dummy bcrypt hash for constant-time fail path.
 _DUMMY_HASH = hash_password("not-a-real-password-bpanel-dummy")
@@ -106,7 +108,57 @@ def _clear_session_cookies(response: Response) -> None:
     response.delete_cookie(CSRF_COOKIE, path="/")
 
 
-def _enforce_rate_limit(key: str) -> None:
+def _rate_limit_backend() -> str:
+    return (settings.rate_limit_backend or "memory").lower()
+
+
+def _redis() -> Redis:
+    global _redis_client
+    if _redis_client is None:
+        _redis_client = Redis.from_url(settings.redis_url, decode_responses=True)
+    return _redis_client
+
+
+def _rate_limit_key(kind: str, key: str) -> str:
+    return f"bpanel:login:{kind}:{key}"
+
+
+def _rate_limit_unavailable(exc: Exception) -> HTTPException:
+    return HTTPException(status_code=503, detail="Login rate limiter is unavailable")
+
+
+def _raise_locked(retry_after: int) -> None:
+    raise HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail="Too many login attempts. Try again later.",
+        headers={"Retry-After": str(max(1, retry_after))},
+    )
+
+
+def _redis_enforce_rate_limit(key: str) -> None:
+    now = time.time()
+    attempts_key = _rate_limit_key("attempts", key)
+    lockout_key = _rate_limit_key("lockout", key)
+    try:
+        client = _redis()
+        retry_after = client.ttl(lockout_key)
+        if retry_after and retry_after > 0:
+            _raise_locked(int(retry_after))
+        pipe = client.pipeline()
+        pipe.zremrangebyscore(attempts_key, 0, now - _LOGIN_WINDOW_SECONDS)
+        pipe.zcard(attempts_key)
+        _, attempts_count = pipe.execute()
+    except RedisError as exc:
+        raise _rate_limit_unavailable(exc) from exc
+    if attempts_count >= _LOGIN_MAX_ATTEMPTS:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many login attempts. Slow down.",
+            headers={"Retry-After": str(_LOGIN_WINDOW_SECONDS)},
+        )
+
+
+def _memory_enforce_rate_limit(key: str) -> None:
     now = time.monotonic()
     with _login_lock:
         locked_until = _login_lockouts.get(key)
@@ -131,7 +183,36 @@ def _enforce_rate_limit(key: str) -> None:
             )
 
 
-def _record_failure(key: str) -> None:
+def _enforce_rate_limit(key: str) -> None:
+    if _rate_limit_backend() == "redis":
+        _redis_enforce_rate_limit(key)
+        return
+    _memory_enforce_rate_limit(key)
+
+
+def _redis_record_failure(key: str) -> None:
+    now = time.time()
+    member = f"{now}:{secrets.token_hex(8)}"
+    attempts_key = _rate_limit_key("attempts", key)
+    failures_key = _rate_limit_key("failures", key)
+    lockout_key = _rate_limit_key("lockout", key)
+    try:
+        client = _redis()
+        pipe = client.pipeline()
+        pipe.zadd(attempts_key, {member: now})
+        pipe.expire(attempts_key, _LOGIN_WINDOW_SECONDS)
+        pipe.zremrangebyscore(failures_key, 0, now - _LOGIN_LOCKOUT_SECONDS)
+        pipe.zadd(failures_key, {member: now})
+        pipe.expire(failures_key, _LOGIN_LOCKOUT_SECONDS)
+        pipe.zcard(failures_key)
+        *_, failure_count = pipe.execute()
+        if failure_count >= _LOGIN_LOCKOUT_THRESHOLD:
+            client.set(lockout_key, "1", ex=_LOGIN_LOCKOUT_SECONDS)
+    except RedisError as exc:
+        raise _rate_limit_unavailable(exc) from exc
+
+
+def _memory_record_failure(key: str) -> None:
     now = time.monotonic()
     with _login_lock:
         attempts = _login_attempts[key]
@@ -139,13 +220,40 @@ def _record_failure(key: str) -> None:
         cutoff = now - _LOGIN_WINDOW_SECONDS
         while attempts and attempts[0] < cutoff:
             attempts.popleft()
-        if len(attempts) >= _LOGIN_LOCKOUT_THRESHOLD:
+        failures = _login_failures[key]
+        failures.append(now)
+        failure_cutoff = now - _LOGIN_LOCKOUT_SECONDS
+        while failures and failures[0] < failure_cutoff:
+            failures.popleft()
+        if len(failures) >= _LOGIN_LOCKOUT_THRESHOLD:
             _login_lockouts[key] = now + _LOGIN_LOCKOUT_SECONDS
 
 
+def _record_failure(key: str) -> None:
+    if _rate_limit_backend() == "redis":
+        _redis_record_failure(key)
+        return
+    _memory_record_failure(key)
+
+
+def _redis_record_success(key: str) -> None:
+    try:
+        _redis().delete(
+            _rate_limit_key("attempts", key),
+            _rate_limit_key("failures", key),
+            _rate_limit_key("lockout", key),
+        )
+    except RedisError as exc:
+        raise _rate_limit_unavailable(exc) from exc
+
+
 def _record_success(key: str) -> None:
+    if _rate_limit_backend() == "redis":
+        _redis_record_success(key)
+        return
     with _login_lock:
         _login_attempts.pop(key, None)
+        _login_failures.pop(key, None)
         _login_lockouts.pop(key, None)
 
 
@@ -154,6 +262,25 @@ def _issue_login_session(response: Response, request: Request, user: User) -> st
     token = create_access_token(user.username, token_extra)
     _set_session_cookies(response, request, token)
     return token
+
+
+def _jwt_expiry_from_payload(payload: dict) -> datetime:
+    raw_exp = payload.get("exp")
+    if isinstance(raw_exp, (int, float)):
+        return datetime.utcfromtimestamp(raw_exp)
+    return datetime.utcnow()
+
+
+def _revoke_request_token(db: Session, request: Request, user: User) -> None:
+    payload = getattr(request.state, "jwt_payload", {}) or {}
+    jti = payload.get("jti")
+    if not jti:
+        return
+    now = datetime.utcnow()
+    db.query(RevokedToken).filter(RevokedToken.expires_at <= now).delete()
+    if db.query(RevokedToken.id).filter(RevokedToken.jti == jti).first():
+        return
+    db.add(RevokedToken(jti=jti, user_id=user.id, expires_at=_jwt_expiry_from_payload(payload), revoked_at=now))
 
 
 def _get_totp_secret(user: User) -> str:
@@ -233,16 +360,17 @@ def login(
 
 @router.post("/logout")
 def logout(
+    request: Request,
     response: Response,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Invalidate the session by clearing cookies AND bumping token_version.
 
-    Bumping token_version forces all other devices/tabs holding a JWT for this
-    user to be re-authenticated, which is the closest we get to true logout
-    without a Redis blacklist.
+    The current JWT's jti is stored server-side, and bumping token_version
+    forces all other devices/tabs holding a JWT for this user to re-authenticate.
     """
+    _revoke_request_token(db, request, current_user)
     current_user.token_version = (current_user.token_version or 0) + 1
     db.commit()
     _clear_session_cookies(response)

@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     default_php_version: str = "8.3"
     ssl_email: str = ""
     redis_url: str = "redis://localhost:6379/0"
+    rate_limit_backend: str = "memory"
     panel_url: str = ""
     panel_domain: str = ""
     panel_port: int = 2222
@@ -47,6 +48,17 @@ class Settings(BaseSettings):
                 if not origin.startswith(("http://", "https://")):
                     raise ValueError(f"ALLOWED_ORIGINS entry must include scheme: {origin}")
         return value
+
+    @field_validator("rate_limit_backend")
+    @classmethod
+    def validate_rate_limit_backend(cls, value: str, info):
+        backend = (value or "memory").strip().lower()
+        if backend not in {"memory", "redis"}:
+            raise ValueError("RATE_LIMIT_BACKEND must be 'memory' or 'redis'")
+        app_env = (info.data.get("app_env") or "development").lower()
+        if app_env == "production" and backend != "redis":
+            raise ValueError("RATE_LIMIT_BACKEND=redis is required in production")
+        return backend
 
     @property
     def cors_origins(self) -> list[str]:
