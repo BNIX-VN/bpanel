@@ -96,6 +96,7 @@ server {
         proxy_pass_request_body off;
         proxy_set_header Content-Length "";
         proxy_set_header Cookie \$http_cookie;
+        proxy_set_header X-Original-URI \$request_uri;
         proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_set_header X-Forwarded-Host \$host;
     }

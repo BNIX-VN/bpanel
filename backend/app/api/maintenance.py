@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 from typing import Optional
-from urllib.parse import quote
+from urllib.parse import quote, unquote, urlsplit
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse, RedirectResponse
@@ -14,7 +14,7 @@ from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.config import settings
 from app.core.security import ALGORITHM
-from app.core.permissions import Role, ensure_role
+from app.core.permissions import Role, ensure_role, is_admin_role
 from app.core.secrets import decrypt, encrypt
 from app.models.entities import BackupSchedule, DatabaseAccount, SftpBackupTarget, User, Website
 from app.schemas.schemas import (
@@ -144,16 +144,69 @@ def _decode_filebrowser_token(token: str, expected_kind: str) -> dict:
     return payload
 
 
-def _filebrowser_redirect_for(website: Optional[Website]) -> str:
-    if not website:
-        return "/filebrowser/"
+def _filebrowser_relative_public_path(website: Website) -> Optional[str]:
     try:
         public_path = (Path(website.root_path) / "public").resolve()
         relative_path = public_path.relative_to(Path("/home").resolve())
     except ValueError:
+        return None
+    return "/".join(relative_path.parts)
+
+
+def _filebrowser_redirect_for(website: Optional[Website]) -> str:
+    if not website:
         return "/filebrowser/"
-    encoded = "/".join(quote(part) for part in relative_path.parts)
+    relative_path = _filebrowser_relative_public_path(website)
+    if not relative_path:
+        return "/filebrowser/"
+    encoded = "/".join(quote(part) for part in relative_path.split("/"))
     return f"/filebrowser/files/{encoded}/"
+
+
+def _filebrowser_allowed_paths_for_user(db: Session, user: User) -> list[str]:
+    paths: list[str] = []
+    for website in db.query(Website).filter(Website.owner_id == user.id).all():
+        path = _filebrowser_relative_public_path(website)
+        if path:
+            paths.append(path)
+    return paths
+
+
+def _filebrowser_path_in_scope(path: str, allowed_path: str) -> bool:
+    target_parts = [part for part in path.strip("/").split("/") if part and part != "."]
+    allowed_parts = [part for part in allowed_path.strip("/").split("/") if part and part != "."]
+    if ".." in target_parts or ".." in allowed_parts:
+        return False
+    target = "/".join(target_parts)
+    allowed = "/".join(allowed_parts)
+    return bool(allowed) and (target == allowed or target.startswith(f"{allowed}/"))
+
+
+def _filebrowser_request_allowed(request: Request, allowed_paths: list[str]) -> bool:
+    original_uri = request.headers.get("x-original-uri")
+    if not original_uri:
+        return False
+    path = unquote(urlsplit(original_uri).path).rstrip("/") or "/filebrowser"
+
+    if path in {"/filebrowser", "/filebrowser/api/config", "/filebrowser/api/profile", "/filebrowser/api/renew"}:
+        return True
+    if path in {"/filebrowser/favicon.ico", "/filebrowser/favicon.svg", "/filebrowser/manifest.json"}:
+        return True
+    if path.startswith(("/filebrowser/static/", "/filebrowser/assets/", "/filebrowser/img/", "/filebrowser/css/", "/filebrowser/js/")):
+        return True
+
+    scoped_prefixes = (
+        "/filebrowser/files/",
+        "/filebrowser/api/resources/",
+        "/filebrowser/api/raw/",
+        "/filebrowser/api/search/",
+        "/filebrowser/api/tus/",
+    )
+    for prefix in scoped_prefixes:
+        if path.startswith(prefix):
+            requested_path = path[len(prefix):]
+            return any(_filebrowser_path_in_scope(requested_path, allowed_path) for allowed_path in allowed_paths)
+    return False
 
 
 @router.post("/backup")
@@ -254,7 +307,7 @@ def delete_user_restore_backup(backup_file: str, request: Request, db: Session =
 def list_user_backups(user_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     user = get_backup_user(db, current_user, user_id)
     items = backup.list_user_backups(user.username)
-    if current_user.role in {"super_admin", "admin"}:
+    if is_admin_role(current_user.role):
         items.extend(item for item in backup.list_uploaded_user_backups(user.username) if item not in items)
     return {"items": items}
 
@@ -520,8 +573,12 @@ def fix_wordpress_permissions(website_id: int, db: Session = Depends(get_db), cu
 
 @router.post("/filebrowser")
 def open_filebrowser(payload: FileBrowserOpen, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    ensure_role(current_user.role, Role.admin)
+    ensure_role(current_user.role, Role.end_user)
+    if payload.website_id is None and not is_admin_role(current_user.role):
+        raise HTTPException(status_code=400, detail="Select a website to open File Browser")
     website = get_owned_website(db, current_user, payload.website_id) if payload.website_id else None
+    if website and not is_admin_role(current_user.role) and not _filebrowser_relative_public_path(website):
+        raise HTTPException(status_code=400, detail="Website path cannot be opened in File Browser")
     redirect = _filebrowser_redirect_for(website)
     token = _make_filebrowser_token(
         current_user.username,
@@ -539,10 +596,14 @@ def filebrowser_sso(token: str, request: Request, db: Session = Depends(get_db))
     user = db.query(User).filter(User.username == payload["sub"]).first()
     if user is None or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid File Browser session")
-    ensure_role(user.role, Role.admin)
+    ensure_role(user.role, Role.end_user)
     redirect = payload.get("redirect") or "/filebrowser/"
     if not isinstance(redirect, str) or not redirect.startswith("/filebrowser/"):
         redirect = "/filebrowser/"
+    if not is_admin_role(user.role):
+        allowed_paths = _filebrowser_allowed_paths_for_user(db, user)
+        if not allowed_paths:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No website assigned")
     base_url = payload.get("base_url") or panel_urls.tools_base_url(request)
     if not isinstance(base_url, str) or not (base_url.startswith("http://") or base_url.startswith("https://")):
         base_url = panel_urls.tools_base_url(request)
@@ -570,7 +631,11 @@ def filebrowser_auth(request: Request, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == payload["sub"]).first()
     if user is None or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid File Browser session")
-    ensure_role(user.role, Role.admin)
+    ensure_role(user.role, Role.end_user)
+    if not is_admin_role(user.role):
+        allowed_paths = _filebrowser_allowed_paths_for_user(db, user)
+        if not _filebrowser_request_allowed(request, allowed_paths):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="File Browser path not assigned to this user")
     return Response(
         status_code=status.HTTP_204_NO_CONTENT,
         headers={"Cache-Control": "no-store", "X-Bpanel-User": "admin"},
@@ -590,7 +655,7 @@ def read_file(website_id: int, path: str, db: Session = Depends(get_db), current
         content = file_manager.read_text_file(
             website,
             path,
-            allow_sensitive=current_user.role in {"super_admin", "admin"},
+            allow_sensitive=is_admin_role(current_user.role),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -599,11 +664,10 @@ def read_file(website_id: int, path: str, db: Session = Depends(get_db), current
 
 @router.post("/files/write")
 def write_file(payload: FileWrite, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    # Readonly users must not write.
-    ensure_role(current_user.role, Role.user)
+    ensure_role(current_user.role, Role.end_user)
     website = get_owned_website(db, current_user, payload.website_id)
     try:
-        target = file_manager.write_text_file(website, payload.path, payload.content, current_user.role in {"super_admin", "admin"})
+        target = file_manager.write_text_file(website, payload.path, payload.content, is_admin_role(current_user.role))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"target": target}
@@ -617,7 +681,7 @@ def upload_file(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    ensure_role(current_user.role, Role.user)
+    ensure_role(current_user.role, Role.end_user)
     website = get_owned_website(db, current_user, website_id)
     try:
         target = file_manager.upload_file(
@@ -625,7 +689,7 @@ def upload_file(
             path,
             file.filename or "upload.bin",
             file.file,
-            current_user.role in {"super_admin", "admin"},
+            is_admin_role(current_user.role),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -635,10 +699,10 @@ def upload_file(
 
 @router.delete("/files/{website_id}")
 def delete_file(website_id: int, path: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    ensure_role(current_user.role, Role.user)
+    ensure_role(current_user.role, Role.end_user)
     website = get_owned_website(db, current_user, website_id)
     try:
-        target = file_manager.delete_file(website, path, current_user.role in {"super_admin", "admin"})
+        target = file_manager.delete_file(website, path, is_admin_role(current_user.role))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"deleted": target}

@@ -10,7 +10,7 @@ import logging
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
-from app.core.permissions import Role, ensure_role
+from app.core.permissions import Role, ensure_role, is_admin_role
 from app.core.secrets import decrypt, encrypt
 from app.models.entities import DatabaseAccount, User, Website
 from app.schemas.schemas import DatabaseCreate, DatabaseCreatedOut, DatabaseOut, DatabasePasswordUpdate
@@ -53,7 +53,7 @@ def get_accessible_database(database_id: int, db: Session, current_user: User) -
 @router.get("", response_model=List[DatabaseOut])
 def list_databases(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     query = db.query(DatabaseAccount).join(Website)
-    if current_user.role not in {"super_admin", "admin"}:
+    if not is_admin_role(current_user.role):
         query = query.filter(Website.owner_id == current_user.id)
     return query.order_by(DatabaseAccount.id.desc()).all()
 
@@ -92,10 +92,7 @@ def create_database(payload: DatabaseCreate, db: Session = Depends(get_db), curr
 
 @router.delete("/{database_id}")
 def delete_database_record(database_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    ensure_role(current_user.role, Role.admin)
-    item = db.query(DatabaseAccount).filter(DatabaseAccount.id == database_id).first()
-    if not item:
-        raise HTTPException(status_code=404, detail="Database not found")
+    item = get_accessible_database(database_id, db, current_user)
     mariadb.drop_database(item.db_name, item.db_user)
     db.delete(item)
     db.commit()

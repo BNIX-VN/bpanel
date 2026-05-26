@@ -9,7 +9,7 @@ from pydantic import BaseModel, EmailStr, Field, field_validator
 DOMAIN_RE = re.compile(r"^(?!-)([a-zA-Z0-9-]{1,63}\.)+[a-zA-Z]{2,}$")
 SUPPORTED_PHP_VERSIONS = {"8.3", "8.4"}
 SUPPORTED_APP_TYPES = {"wordpress", "static"}
-SUPPORTED_ROLES = {"user", "readonly", "admin", "super_admin"}
+SUPPORTED_ROLES = {"admin", "end_user"}
 SIZE_RE = re.compile(r"^\d{1,6}[KMG]?$")  # e.g. "512M", "1024M"
 
 
@@ -58,14 +58,14 @@ class UserCreate(BaseModel):
     username: str = Field(min_length=3, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")
     email: EmailStr
     password: str = Field(min_length=12, max_length=72)  # bcrypt 72-byte limit
-    role: Literal["user", "readonly", "admin", "super_admin"] = "user"
+    role: Literal["admin", "end_user"] = "end_user"
     website_limit: int = Field(default=5, ge=0, le=1000)
     storage_limit_mb: int = Field(default=1024, ge=0, le=1024 * 1024)
 
 
 class UserUpdate(BaseModel):
     email: Optional[EmailStr] = None
-    role: Optional[Literal["user", "readonly", "admin", "super_admin"]] = None
+    role: Optional[Literal["admin", "end_user"]] = None
     is_active: Optional[bool] = None
     website_limit: Optional[int] = Field(default=None, ge=0, le=1000)
     storage_limit_mb: Optional[int] = Field(default=None, ge=0, le=1024 * 1024)

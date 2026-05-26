@@ -19,24 +19,9 @@ from app.services.audit import log_action
 router = APIRouter(prefix="/users", tags=["users"])
 
 
-# Roles ranked so that callers must outrank the *target* role they are trying
-# to assign or modify. Equivalent to ROLE_LEVEL in core.permissions.
-_ROLE_RANK = {"readonly": 1, "user": 2, "admin": 3, "super_admin": 4}
-
-
-def _require_outrank(actor_role: str, target_role: str) -> None:
-    actor_rank = _ROLE_RANK.get(actor_role, 0)
-    target_rank = _ROLE_RANK.get(target_role, 0)
-    if actor_rank <= target_rank:
-        raise HTTPException(status_code=403, detail="Cannot manage users at or above your own role")
-
-
 @router.post("", response_model=UserOut)
 def create_user(payload: UserCreate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.admin)
-    # Only super_admin can mint admin/super_admin accounts.
-    if payload.role in {"admin", "super_admin"}:
-        ensure_role(current_user.role, Role.super_admin)
     if db.query(User).filter((User.username == payload.username) | (User.email == payload.email)).first():
         raise HTTPException(status_code=409, detail="User already exists")
     user = User(
@@ -71,13 +56,8 @@ def update_user(user_id: int, payload: UserUpdate, request: Request, db: Session
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    # An admin cannot manage another admin/super_admin unless they outrank them.
-    _require_outrank(current_user.role, user.role)
-
     role_changed = False
     if payload.role is not None and payload.role != user.role:
-        # Cannot promote someone to a role you do not outrank.
-        _require_outrank(current_user.role, payload.role)
         if user_id == current_user.id:
             raise HTTPException(status_code=400, detail="Cannot change your own role")
         user.role = payload.role
@@ -109,13 +89,12 @@ def update_user(user_id: int, payload: UserUpdate, request: Request, db: Session
 
 @router.delete("/{user_id}")
 def delete_user(user_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    ensure_role(current_user.role, Role.super_admin)
+    ensure_role(current_user.role, Role.admin)
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     if user.id == current_user.id:
         raise HTTPException(status_code=400, detail="Cannot delete yourself")
-    _require_outrank(current_user.role, user.role)
     site_count = db.query(Website).filter(Website.owner_id == user.id).count()
     if site_count:
         raise HTTPException(
@@ -135,8 +114,6 @@ def update_user_password(user_id: int, payload: UserPasswordUpdate, request: Req
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    if user_id != current_user.id:
-        _require_outrank(current_user.role, user.role)
     user.hashed_password = hash_password(payload.password)
     # Force re-login on all other sessions of this user.
     user.token_version = (user.token_version or 0) + 1
@@ -153,7 +130,6 @@ def reset_user_two_factor(user_id: int, request: Request, db: Session = Depends(
         raise HTTPException(status_code=404, detail="User not found")
     if user_id == current_user.id:
         raise HTTPException(status_code=400, detail="Use the Security page to disable your own 2FA")
-    _require_outrank(current_user.role, user.role)
     user.totp_enabled = False
     user.totp_secret = None
     user.token_version = (user.token_version or 0) + 1

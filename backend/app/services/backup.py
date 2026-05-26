@@ -18,6 +18,7 @@ from paramiko.ssh_exception import SSHException
 from app.core.config import settings
 from app.core.secrets import decrypt, encrypt
 from app.core.security import hash_password
+from app.core.permissions import normalize_role
 from app.models.entities import DatabaseAccount, User, Website
 from app.services import mariadb, nginx, site_users, wordpress
 from app.services.shell import shell
@@ -305,11 +306,16 @@ def restore_user_backup(backup_file: str, db) -> dict:
             email = f"{username}@users.bpanel.invalid"
         if db.query(User).filter(User.email == email).first():
             email = f"{username}-{secrets.token_hex(4)}@users.bpanel.invalid"
+        backup_role = user_info.get("role") or "end_user"
+        try:
+            role = normalize_role(backup_role).value
+        except Exception:
+            role = "end_user"
         user = User(
             username=username,
             email=email,
             hashed_password=user_info.get("hashed_password") or hash_password(secrets.token_urlsafe(18)),
-            role=user_info.get("role") if user_info.get("role") in {"user", "readonly", "admin", "super_admin"} else "user",
+            role=role,
             is_active=bool(user_info.get("is_active", True)),
             website_limit=int(user_info.get("website_limit") or 5),
             storage_limit_mb=int(user_info.get("storage_limit_mb") or 1024),

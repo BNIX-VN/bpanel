@@ -53,7 +53,7 @@ function App() {
   const [fileUploadDir, setFileUploadDir] = useState('public');
   const [files, setFiles] = useState([]);
   const [fileContent, setFileContent] = useState('');
-  const [newUser, setNewUser] = useState({ username: '', email: '', password: '', role: 'user', website_limit: 5, storage_limit_mb: 1024 });
+  const [newUser, setNewUser] = useState({ username: '', email: '', password: '', role: 'end_user', website_limit: 5, storage_limit_mb: 1024 });
   const [phpConfig, setPhpConfig] = useState({ php_version: '8.3', display_errors: 'Off', max_execution_time: 300, max_input_time: 600, max_input_vars: 10000, memory_limit: '512M', post_max_size: '1024M', upload_max_filesize: '1024M' });
   const [firewallStatus, setFirewallStatus] = useState(null);
   const [firewallPort, setFirewallPort] = useState('80');
@@ -278,7 +278,7 @@ function App() {
     const data = await request('/users', { method: 'POST', body: JSON.stringify({ ...newUser, website_limit: Number(newUser.website_limit), storage_limit_mb: Number(newUser.storage_limit_mb) }) }, 'Creating user...');
     if (data) {
       setNotice(`Created user ${data.username}`);
-      setNewUser({ username: '', email: '', password: '', role: 'user', website_limit: 5, storage_limit_mb: 1024 });
+      setNewUser({ username: '', email: '', password: '', role: 'end_user', website_limit: 5, storage_limit_mb: 1024 });
       await loadUsers();
     }
   }
@@ -289,6 +289,13 @@ function App() {
     if (password.length < 12) { setError('Password must be at least 12 characters.'); return; }
     const data = await request(`/users/${user.id}/password`, { method: 'POST', body: JSON.stringify({ password }) }, `Changing password for ${user.username}...`);
     if (data?.message) setNotice(data.message);
+  }
+
+  async function deletePanelUser(user) {
+    if (!user || user.id === currentUser?.id) return;
+    if (!confirm(`Delete panel user ${user.username}? Websites must be reassigned first.`)) return;
+    const data = await request(`/users/${user.id}`, { method: 'DELETE' }, `Deleting user ${user.username}...`);
+    if (data) { setNotice(`Deleted user ${user.username}`); await loadUsers(); }
   }
 
   async function changeMyPassword() { if (!currentUser) return; await changeUserPassword(currentUser); }
@@ -355,13 +362,10 @@ function App() {
     const data = await request('/websites', { method: 'POST', body: JSON.stringify(body) },
       installWp ? 'Creating WordPress website...' : 'Creating website...');
     if (data) {
-      const panelUserText = data.panel_username
-        ? `\nPanel user: ${data.panel_username}${data.panel_password ? ` | Password: ${data.panel_password}` : ''}`
-        : '';
       if (installWp) {
-        setNotice(`Created WordPress site: https://${domain}\nAdmin: ${wpAdminUser} | Password: ${wpAdminPassword || 'StrongPass123!'}${panelUserText}`);
+        setNotice(`Created WordPress site: https://${domain}\nAdmin: ${wpAdminUser} | Password: ${wpAdminPassword || 'StrongPass123!'}`);
       } else {
-        setNotice(`Created site ${domain}. Upload your files to public/ folder.${panelUserText}`);
+        setNotice(`Created site ${domain}. Upload your files to public/ folder.`);
       }
       if (installSslAfterCreate) await enableSsl(data.id);
       refreshAll();
@@ -474,6 +478,7 @@ function App() {
       setError('');
       setLoading('Opening File Browser...');
       const targetWebsiteId = websiteId ? Number(websiteId) : null;
+      if (!targetWebsiteId && !isAdmin) { setError('Please select a website first.'); return; }
       const csrfToken = readCookie('bpanel_csrf');
       const headers = { 'Content-Type': 'application/json' };
       if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
@@ -884,7 +889,11 @@ function App() {
 
   useEffect(() => { setMobileMenuOpen(false); }, [page]);
 
-  const isAdmin = ['super_admin', 'admin'].includes(currentUser?.role);
+  const isAdmin = currentUser?.role === 'admin';
+
+  function roleLabel(role) {
+    return role === 'admin' ? 'Admin' : 'End user';
+  }
 
   const navItems = [
     ['dashboard', 'Dashboard', Home],
@@ -898,7 +907,7 @@ function App() {
     ...(isAdmin ? [['php', 'PHP config', Code2]] : []),
     ...(isAdmin ? [['firewall', 'Firewall', Shield]] : []),
     ['services', 'Services', Server],
-    ...(isAdmin ? [['users', 'Users', Users]] : []),
+    ...(isAdmin ? [['users', 'Panel users', Users]] : []),
     ['system', 'System info', Server],
   ];
 
@@ -1068,9 +1077,9 @@ function App() {
               </select>
               <button disabled={!!loading || (websitePhpVersions[site.id] || site.php_version) === site.php_version} onClick={() => changeWebsitePhpVersion(site)}>Change PHP</button>
               <button disabled={!!loading} onClick={() => openWebsiteFileManager(site)}><FolderOpen size={14}/> Files</button>
-              <button disabled={!!loading} onClick={() => openNginxCustom(site)}><Code2 size={14}/> Nginx</button>
+              {isAdmin && <button disabled={!!loading} onClick={() => openNginxCustom(site)}><Code2 size={14}/> Nginx</button>}
               {site.app_type === 'wordpress' && <button disabled={!!loading} onClick={() => fixWordPressPermissions(site.id)}>Fix permissions</button>}
-              {isAdmin && <button className="danger" disabled={!!loading} onClick={() => deleteWebsite(site.id)}><Trash2 size={14}/> Delete</button>}
+              <button className="danger" disabled={!!loading} onClick={() => deleteWebsite(site.id)}><Trash2 size={14}/> Delete</button>
             </div>
           </article>)}
         </div>
@@ -1172,7 +1181,7 @@ function App() {
         </div>
         <div className="filebrowser-actions">
           <WebsiteSelect />
-          <button disabled={!!loading} onClick={openFileBrowser}><FolderOpen size={15}/> Open File Browser</button>
+          <button disabled={!!loading || (!selectedWebsiteId && !isAdmin)} onClick={openFileBrowser}><FolderOpen size={15}/> Open File Browser</button>
         </div>
         {currentSite && <div className="file-meta">
           <span>Website: <strong>{currentSite.domain}</strong></span>
@@ -1472,14 +1481,14 @@ function App() {
     return <>
       <section className="section">
         <div className="section-title">
-          <div><h2>Add user</h2><p className="hint">Create an account, then assign domains below.</p></div>
+          <div><h2>Add panel user</h2><p className="hint">Admin has full access. End user manages websites assigned to that account.</p></div>
         </div>
         <div className="user-create-card">
           <label><span>Username</span><input value={newUser.username} onChange={e => setNewUser(prev => ({ ...prev, username: e.target.value }))} placeholder="johndoe" /></label>
           <label><span>Email</span><input value={newUser.email} onChange={e => setNewUser(prev => ({ ...prev, email: e.target.value }))} placeholder="user@domain.com" /></label>
           <label><span>Password</span><input value={newUser.password} onChange={e => setNewUser(prev => ({ ...prev, password: e.target.value }))} placeholder="Min 12 characters" type="password" /></label>
           <label><span>Role</span><select value={newUser.role} onChange={e => setNewUser(prev => ({ ...prev, role: e.target.value }))}>
-            <option value="user">User</option><option value="readonly">Readonly</option><option value="admin">Admin</option>
+            <option value="end_user">End user</option><option value="admin">Admin</option>
           </select></label>
           <label><span>Site limit</span><input type="number" value={newUser.website_limit} onChange={e => setNewUser(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
           <label><span>Storage MB</span><input type="number" value={newUser.storage_limit_mb} onChange={e => setNewUser(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
@@ -1495,27 +1504,28 @@ function App() {
           </select>
           <select value={assignUserId} onChange={e => setAssignUserId(e.target.value)}>
             <option value="">Select user</option>
-            {users.map(user => <option key={user.id} value={user.id}>{user.username} ({user.role})</option>)}
+            {users.map(user => <option key={user.id} value={user.id}>{user.username} ({roleLabel(user.role)})</option>)}
           </select>
           <button disabled={!assignWebsiteId || !assignUserId || !!loading} onClick={assignDomainToUser}>Assign</button>
         </div>
       </section>
       <section className="section">
         <div className="section-title">
-          <h2>User list</h2>
+          <h2>Panel user list</h2>
           <button disabled={!!loading} onClick={loadUsers}><RefreshCw size={14}/> Refresh</button>
         </div>
         {users.length === 0 && <EmptyState icon={Users} message="No users found." />}
         <div className="table">
           {users.map(user => <div className="row user-row" key={user.id}>
             <div className="user-main"><strong>{user.username}</strong><small>{user.email}</small></div>
-            <span className="badge">{user.role}</span>
+            <span className="badge">{roleLabel(user.role)}</span>
             <span className={user.totp_enabled ? 'badge ok' : 'badge'}>{user.totp_enabled ? '2FA' : 'No 2FA'}</span>
             <span>{user.website_limit} sites</span>
             <span>{user.storage_limit_mb} MB</span>
             <div className="row-actions">
               <button className="mini secondary-light" disabled={!!loading} onClick={() => changeUserPassword(user)}><KeyRound size={14}/> Password</button>
               {user.totp_enabled && user.id !== currentUser?.id && <button className="mini secondary-light" disabled={!!loading} onClick={() => resetUserTwoFactor(user)}>Reset 2FA</button>}
+              {user.id !== currentUser?.id && <button className="mini danger" disabled={!!loading} onClick={() => deletePanelUser(user)}><Trash2 size={14}/></button>}
             </div>
           </div>)}
         </div>

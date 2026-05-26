@@ -26,7 +26,7 @@ def seed_admin():
                 username="admin",
                 email="admin@example.com",
                 hashed_password=hash_password(password),
-                role="super_admin",
+                role="admin",
                 website_limit=999,
                 storage_limit_mb=102400,
             ))

@@ -1,4 +1,3 @@
-import secrets
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -8,68 +7,14 @@ from typing import List
 from app.api.deps import get_current_user
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.permissions import Role, ensure_role
+from app.core.permissions import Role, ensure_role, is_admin_role
 from app.core.secrets import encrypt
-from app.core.security import hash_password
 from app.models.entities import DatabaseAccount, User, Website
 from app.schemas.schemas import WebsiteCreate, WebsiteNginxCustom, WebsiteOut, WebsiteUpdate
 from app.services import mariadb, nginx, site_users, ssl, wordpress
 from app.services.audit import log_action
 
 router = APIRouter(prefix="/websites", tags=["websites"])
-
-
-def _panel_email_for_site_user(username: str) -> str:
-    # RFC 2606 reserves the .invalid TLD for synthetic addresses that must
-    # never resolve to a real mailbox; using a real-looking domain here would
-    # leak panel-internal traffic to whoever owns that domain in the wild.
-    return f"{username}@users.bpanel.invalid"
-
-
-def _ensure_panel_user_for_site(db: Session, username: str) -> tuple[User, str | None]:
-    user = db.query(User).filter(User.username == username).first()
-    if user:
-        return user, None
-
-    password = secrets.token_urlsafe(18)
-    email = _panel_email_for_site_user(username)
-    if db.query(User).filter(User.email == email).first():
-        email = f"{username}-{secrets.token_hex(4)}@users.bpanel.invalid"
-    user = User(
-        username=username,
-        email=email,
-        hashed_password=hash_password(password),
-        role="user",
-        website_limit=1,
-        storage_limit_mb=1024,
-    )
-    db.add(user)
-    db.flush()
-    return user, password
-
-
-def _website_out_with_panel_user(website: Website, username: str | None, password: str | None) -> WebsiteOut:
-    out = WebsiteOut.model_validate(website)
-    if username:
-        out.panel_username = username
-    if password:
-        out.panel_password = password
-    return out
-
-
-def _delete_auto_panel_user_for_site(db: Session, website: Website, current_user: User) -> None:
-    owner = website.owner
-    if not owner or owner.id == current_user.id:
-        return
-    if not website.linux_user or owner.username != website.linux_user:
-        return
-    if owner.role != "user" or not owner.email.endswith(
-        ("@users.bpanel.invalid", "@users.bpanel.vn", "@users.bpanel.test")
-    ):
-        return
-    remaining = db.query(Website).filter(Website.owner_id == owner.id, Website.id != website.id).count()
-    if remaining == 0:
-        db.delete(owner)
 
 
 def _command_error(result):
@@ -93,26 +38,21 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
     """Create a website. If install_wordpress is False, only creates the domain
     folder + Nginx vhost (no DB, no WordPress files)."""
     requested_owner_id = payload.owner_id
-    if requested_owner_id and requested_owner_id != current_user.id:
+    if requested_owner_id is not None and requested_owner_id != current_user.id:
         ensure_role(current_user.role, Role.admin)
     if db.query(Website).filter(Website.domain == payload.domain).first():
         raise HTTPException(status_code=409, detail="Domain already exists")
 
-    panel_username = None
-    panel_password = None
-    if requested_owner_id:
+    if requested_owner_id is not None:
         owner = db.query(User).filter(User.id == requested_owner_id).first()
         if not owner:
             raise HTTPException(status_code=404, detail="Owner not found")
-    elif current_user.role in {"super_admin", "admin"}:
-        panel_username = site_users.linux_user_for_domain(payload.domain)
-        owner, panel_password = _ensure_panel_user_for_site(db, panel_username)
     else:
         owner = current_user
 
     owner_id = owner.id
     current_count = db.query(Website).filter(Website.owner_id == owner_id).count()
-    if current_count >= owner.website_limit:
+    if not is_admin_role(owner.role) and current_count >= owner.website_limit:
         raise HTTPException(status_code=403, detail="Website limit reached")
 
     install_wp = payload.install_wordpress and payload.app_type == "wordpress"
@@ -209,7 +149,7 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
         payload.domain,
         request=request,
     )
-    return _website_out_with_panel_user(website, panel_username, panel_password)
+    return website
 
 
 @router.post("/wordpress", response_model=WebsiteOut)
@@ -221,7 +161,7 @@ def create_wordpress(payload: WebsiteCreate, request: Request, db: Session = Dep
 
 @router.get("", response_model=List[WebsiteOut])
 def list_websites(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    if current_user.role in {"super_admin", "admin"}:
+    if is_admin_role(current_user.role):
         return db.query(Website).order_by(Website.id.desc()).all()
     return db.query(Website).filter(Website.owner_id == current_user.id).order_by(Website.id.desc()).all()
 
@@ -256,6 +196,9 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
         owner = db.query(User).filter(User.id == payload.owner_id).first()
         if not owner:
             raise HTTPException(status_code=404, detail="Owner not found")
+        assigned_count = db.query(Website).filter(Website.owner_id == owner.id, Website.id != website.id).count()
+        if not is_admin_role(owner.role) and assigned_count >= owner.website_limit:
+            raise HTTPException(status_code=403, detail="Website limit reached")
         website.owner_id = payload.owner_id
     if payload.nginx_custom is not None:
         ensure_role(current_user.role, Role.admin)
@@ -315,7 +258,6 @@ def delete_website(website_id: int, request: Request, delete_files: bool = True,
         site_users.delete_site_runtime(website.root_path, website.linux_user)
     if db_item:
         db.delete(db_item)
-    _delete_auto_panel_user_for_site(db, website, current_user)
     db.delete(website)
     db.commit()
     log_action(db, current_user.id, "delete_website", website.domain, request=request)

@@ -4,24 +4,37 @@ from fastapi import HTTPException, status
 
 
 class Role(StrEnum):
-    super_admin = "super_admin"
     admin = "admin"
-    user = "user"
-    readonly = "readonly"
+    end_user = "end_user"
 
 
-ROLE_LEVEL = {
-    Role.readonly: 1,
-    Role.user: 2,
-    Role.admin: 3,
-    Role.super_admin: 4,
+LEGACY_ROLE_ALIASES = {
+    "super_admin": Role.admin,
+    "user": Role.end_user,
+    "readonly": Role.end_user,
 }
 
 
-def ensure_role(current_role: str, minimum: Role) -> None:
+ROLE_LEVEL = {
+    Role.end_user: 1,
+    Role.admin: 2,
+}
+
+
+def normalize_role(current_role: str) -> Role:
+    if current_role in LEGACY_ROLE_ALIASES:
+        return LEGACY_ROLE_ALIASES[current_role]
     try:
-        role = Role(current_role)
+        return Role(current_role)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid role") from exc
+
+
+def is_admin_role(current_role: str) -> bool:
+    return normalize_role(current_role) == Role.admin
+
+
+def ensure_role(current_role: str, minimum: Role) -> None:
+    role = normalize_role(current_role)
     if ROLE_LEVEL.get(role, 0) < ROLE_LEVEL[minimum]:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not enough permissions")
