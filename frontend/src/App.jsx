@@ -1456,8 +1456,6 @@ function App() {
 
   function renderFiles() {
     const allSelected = files.length > 0 && selectedFilePaths.length === files.length;
-    const editorLineCount = Math.max(1, String(fileContent || '').split('\n').length);
-    const editorMode = editorLanguage(filePath);
     return <section className="section">
       <div className="section-title">
         <div><h2>File manager</h2><p className="hint">Native BPanel file tools with quota, archive, and extract support.</p></div>
@@ -1511,29 +1509,6 @@ function App() {
                 <button className="mini danger" disabled={!!loading} onClick={() => deleteFileAction(item.path)}><Trash2 size={13}/></button>
               </div>
             </div>)}
-          </div>
-        </div>
-        <div className="file-editor">
-          <div className="editor-tools">
-            <input value={filePath} onChange={e => setFilePath(e.target.value)} placeholder="public/index.html" disabled={!selectedWebsiteId || !!loading} />
-            <button disabled={!selectedWebsiteId || !!loading} onClick={() => readFile()}><FileText size={14}/> Open</button>
-            <button disabled={!selectedWebsiteId || !!loading} onClick={writeFile}>Save</button>
-            <button disabled={!selectedWebsiteId || !filePath || !!loading} onClick={() => downloadFile(filePath)}><Download size={14}/></button>
-          </div>
-          <div className="editor-status">
-            <span>Editing: <strong>{filePath || 'No file selected'}</strong></span>
-            <span>{editorMode}</span>
-            <span>{editorLineCount} line(s)</span>
-            <span>Ln {editorCursor.line}, Col {editorCursor.column}</span>
-          </div>
-          <div className="code-editor-frame">
-            <CodeEditor
-              value={fileContent}
-              mode={editorMode}
-              disabled={!selectedWebsiteId}
-              onChange={setFileContent}
-              onCursorChange={setEditorCursor}
-            />
           </div>
         </div>
       </div>

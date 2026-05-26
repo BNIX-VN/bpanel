@@ -1,6 +1,6 @@
 .file-manager {
   display: grid;
-  grid-template-columns: minmax(440px, .85fr) minmax(620px, 1.45fr);
+  grid-template-columns: 1fr;
   gap: 12px;
   align-items: stretch;
 }
@@ -94,14 +94,14 @@
   display: grid;
   grid-template-columns: 1fr;
   gap: 6px;
-  max-height: min(64vh, 720px);
+  max-height: min(68vh, 760px);
   overflow: auto;
   padding-right: 4px;
 }
 
 .file-item {
   display: grid;
-  grid-template-columns: auto minmax(260px, 1fr) 92px minmax(300px, auto);
+  grid-template-columns: auto minmax(360px, 1fr) 110px minmax(420px, auto);
   gap: 8px;
   align-items: center;
   background: var(--surface);
