@@ -1,13 +1,15 @@
 # BPanel
 
-Lightweight server management panel for Ubuntu 24.04. BPanel helps you spin up
-WordPress sites, manage databases, SSL, backups, services, and a UFW firewall
-from a single web UI.
+Lightweight hosting management panel for Ubuntu 24.04. BPanel helps you run
+WordPress, PHP, and static websites from a single clean web UI with user
+ownership, quotas, backups, SSL, services, and firewall tools built in.
 
+- Dashboard resource monitoring for CPU, RAM, disk, and network throughput
 - WordPress one-click installer (PHP 8.3 / 8.4) with WP-CLI
-- Static sites with editable per-site Nginx blocks
-- One isolated, locked Linux user per new website; source lives in `/home/<site-user>/<domain>/public`
-- Admin-created websites also get a matching panel user with the same site username
+- Static/PHP sites with editable per-site Nginx blocks
+- Panel users map to locked Linux users; website source lives in `/home/<panel-user>/<domain>/public`
+- Admin quick-login for creating sites as a selected user, plus one-owner assignment per website
+- Website count limits and BPanel soft storage quotas per end user
 - MariaDB database creation and management with phpMyAdmin SSO (60s tokens)
 - Let's Encrypt SSL via certbot
 - Native BPanel file manager with upload, edit, archive, and extract support
@@ -16,7 +18,7 @@ from a single web UI.
 - UFW firewall manager (allow port, allow/block IP, delete rules)
 - PHP-FPM config editor per version
 - Cron job manager with whitelisted WP-CLI commands
-- Role-based access: super_admin / admin / user / readonly
+- Role-based access: Admin / End user
 - Google Authenticator compatible 2FA
 
 ## Tech stack
@@ -63,7 +65,7 @@ You will be prompted for:
 
 After install, open the URL printed at the end of the installer. If no panel
 domain was entered, use `http://SERVER_IP:2222`. The admin password is shown
-once — store it in a password manager.
+once; store it in a password manager.
 
 ## SSH maintenance menu
 
@@ -97,29 +99,29 @@ open in incognito.
 
 ```
 bpanel/
-├─ backend/                    FastAPI application
-│  ├─ alembic/                 SQL schema migrations (Alembic)
-│  │  └─ versions/             Migration scripts
-│  ├─ alembic.ini              Alembic config
-│  ├─ app/
-│  │  ├─ api/                  HTTP routes
-│  │  ├─ core/                 config, db, security, permissions, secrets
-│  │  ├─ models/               SQLAlchemy entities
-│  │  ├─ schemas/              Pydantic v2 schemas
-│  │  ├─ services/             nginx, mariadb, wp, firewall, backup, etc.
-│  │  ├─ templates/nginx/      Jinja2 vhost templates
-│  │  ├─ main.py
-│  │  └─ seed.py               Seeds the first admin user
-│  ├─ tests/                   pytest smoke tests for validators
-│  └─ requirements.txt
-├─ frontend/                   React + Vite SPA
-│  └─ src/
-├─ installer/
-│  ├─ files/                   bpanel-helper.sh + sudoers rule
-│  ├─ install.sh               Full first-time install
-│  ├─ migrate-security.sh      One-shot migration to non-root + helper mode
-│  └─ update.sh                Pull from GitHub and redeploy
-└─ README.md
+|-- backend/                    FastAPI application
+|   |-- alembic/                 SQL schema migrations (Alembic)
+|   |   `-- versions/             Migration scripts
+|   |-- alembic.ini              Alembic config
+|   |-- app/
+|   |   |-- api/                  HTTP routes
+|   |   |-- core/                 config, db, security, permissions, secrets
+|   |   |-- models/               SQLAlchemy entities
+|   |   |-- schemas/              Pydantic v2 schemas
+|   |   |-- services/             nginx, mariadb, wp, firewall, backup, etc.
+|   |   |-- templates/nginx/      Jinja2 vhost templates
+|   |   |-- main.py
+|   |   `-- seed.py               Seeds the first admin user
+|   |-- tests/                   pytest smoke tests for validators
+|   `-- requirements.txt
+|-- frontend/                   React + Vite SPA
+|   `-- src/
+|-- installer/
+|   |-- files/                   bpanel-helper.sh + sudoers rule
+|   |-- install.sh               Full first-time install
+|   |-- migrate-security.sh      One-shot migration to non-root + helper mode
+|   `-- update.sh                Pull from GitHub and redeploy
+`-- README.md
 ```
 
 ## Database migrations
@@ -143,12 +145,34 @@ Existing servers that pre-date Alembic adoption are detected at startup
 
 ## Roles
 
-| Role          | Capabilities                                        |
-|---------------|-----------------------------------------------------|
-| `super_admin` | Full control including stack reinstall              |
-| `admin`       | Manage all sites, users, services, firewall, PHP    |
-| `user`        | Manage only sites assigned to them                  |
-| `readonly`    | View-only access                                    |
+| Role | Capabilities |
+|------|--------------|
+| `admin` | Full control: websites, users, ownership assignment, services, firewall, PHP config, backups, and security settings. |
+| `end_user` | Manage only websites assigned to the account, including files, databases, SSL, WordPress tools, cron, and own backups. |
+
+## User and website ownership
+
+- Each panel user also has a locked Linux user with the same normalized username.
+- New websites are created under `/home/<panel-user>/<domain>/public`.
+- If an admin creates a website without impersonating another user, the website
+  belongs to the admin account.
+- Admins can quick-login as another panel user before creating websites for
+  that account.
+- Admins can assign a website to exactly one panel user. Moving ownership also
+  moves the site path to the new Linux user and rewrites the PHP-FPM/Nginx
+  runtime configuration.
+- Deleting a panel user permanently deletes all websites, files, databases,
+  backup schedule links, cron entries, PHP-FPM pools, and Linux-user data owned
+  by that user.
+
+## Quotas
+
+- End users have a website count limit and a storage limit in MB.
+- Admin users are not storage-limited.
+- Storage usage is calculated from all websites owned by the user.
+- BPanel enforces the storage limit before site creation, upload, edit, archive,
+  extract, and ownership assignment operations.
+- This is an application-level soft quota, not an OS disk quota.
 
 ## Configuration
 
@@ -160,7 +184,7 @@ SECRET_KEY=<random-32-bytes>
 COMMAND_DRY_RUN=false
 DATABASE_URL=sqlite:////opt/bpanel/backend/bpanel.db
 ALLOWED_ORIGINS=https://panel.example.com
-SITES_ROOT=/home/bpanel-sites  # legacy/imported sites; new sites use /home/<site-user>/<domain>
+SITES_ROOT=/home/bpanel-sites  # legacy/imported sites; new sites use /home/<panel-user>/<domain>
 BACKUP_ROOT=/var/backups/bpanel
 SSL_EMAIL=admin@example.com
 PANEL_URL=http://SERVER_IP:2222
@@ -187,7 +211,7 @@ systemctl restart bpanel-api
 nginx -t && systemctl reload nginx
 
 # Service status
-systemctl status bpanel-api nginx mariadb php8.3-fpm
+systemctl status bpanel-api nginx mariadb redis-server php8.3-fpm php8.4-fpm
 ```
 
 ## Security model
@@ -197,9 +221,9 @@ The panel daemon does **not** run as root. The installer creates a system user
 
 ```
 bpanel-api  (uvicorn, user=bpanel, hardened systemd unit)
-   │
-   │  sudo -n /usr/local/sbin/bpanel-helper <subcommand> ...
-   ▼
+   |
+   |  sudo -n /usr/local/sbin/bpanel-helper <subcommand> ...
+   v
 bpanel-helper  (root, runs only whitelisted operations)
 ```
 
@@ -208,11 +232,11 @@ What the helper allows:
 - `systemctl start/stop/restart/reload <whitelisted service>`
 - `nginx -t`, `nginx reload`
 - `certbot --nginx ...` for a single validated domain
-- create/delete per-site Linux users and PHP-FPM pools (`bp_*` users only)
+- create/delete locked panel Linux users and per-user PHP-FPM pools
 - `ufw status/enable/disable/allow/deny/delete`
-- fix ownership/ACLs for managed site paths under `/home/<site-user>/<domain>` or legacy `/home/bpanel-sites`
+- fix ownership/ACLs for managed site paths under `/home/<panel-user>/<domain>` or legacy `/home/bpanel-sites`
 - `rm -rf <managed site path>`
-- WP-CLI and crontab management as the isolated site user
+- WP-CLI and crontab management as the website's Linux user
 
 Anything else is rejected. The helper validates domains, ports, IPs, and
 filesystem paths before invoking the real binary.
@@ -222,16 +246,19 @@ create per-site databases and users for WordPress installs.
 
 Additional hardening on the systemd unit:
 
-- `ProtectHome=read-only`
-- `PrivateTmp`, `PrivateDevices`, `ProtectKernelModules`, `ProtectKernelLogs`
-- `MemoryDenyWriteExecute`, `LockPersonality`
-- `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK`
-- Privileged operations stay constrained by the root-owned helper and sudoers
+- Runs as `bpanel` with only the `www-data` and `bpanel-sites` supplementary groups.
+- Uses `PrivateTmp`, `PrivateDevices`, `ProtectKernelTunables`,
+  `ProtectKernelModules`, `ProtectKernelLogs`, `ProtectControlGroups`,
+  `ProtectClock`, `ProtectHostname`, and `ProtectProc=invisible`.
+- Uses `RestrictNamespaces`, `RestrictRealtime`, `LockPersonality`,
+  `MemoryDenyWriteExecute`, `SystemCallArchitectures=native`, and
+  `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK`.
+- Drops ambient capabilities with `CapabilityBoundingSet=~`.
 
-`NoNewPrivileges`, `ProtectSystem=strict`, `RestrictSUIDSGID`, broad syscall
-deny-lists, and capability bounding must not block the helper: `bpanel-api`
-intentionally uses `sudo -n /usr/local/sbin/bpanel-helper` for the narrowly
-whitelisted root operations.
+`NoNewPrivileges=false`, `ProtectSystem=false`, `ProtectHome=false`, and
+`RestrictSUIDSGID=false` are intentional because the API must invoke the sudo
+helper and manage website files under `/home`. Privileged operations stay
+constrained by the root-owned helper and sudoers allowlist.
 
 If the API itself were ever compromised, the attacker would be limited to:
 - writing into `/etc/nginx/conf.d/`, managed site paths under `/home`, and `/var/backups/bpanel/`
@@ -264,4 +291,4 @@ There is no path back to root via the API process.
 
 ## License
 
-MIT — see LICENSE.
+MIT - see LICENSE.
