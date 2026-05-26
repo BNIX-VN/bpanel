@@ -482,32 +482,153 @@
 }
 
 @media (max-width: 760px) {
+  .file-manager {
+    max-width: 100%;
+    overflow: hidden;
+  }
+
   .file-panel {
-    padding: 10px;
+    max-width: 100%;
+    overflow: hidden;
+    padding: 8px;
+  }
+
+  .file-controls {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 7px;
+    min-width: 0;
+  }
+
+  .file-controls > * {
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .file-controls select {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .file-controls .file-meta {
+    display: grid;
+    gap: 3px;
+    min-height: 0;
+    padding: 7px 8px;
+  }
+
+  .file-controls .file-meta span {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.45;
+  }
+
+  .path-pill.breadcrumb-line {
+    flex-wrap: nowrap;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .crumb {
+    flex: 0 0 auto;
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .file-toolbar {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    width: 100%;
   }
 
   .file-toolbar button,
   .file-toolbar .upload-button,
   .file-toolbar select {
-    flex: 1 1 120px;
+    flex: none;
+    width: 100%;
+    min-width: 0;
+    padding: 0 6px;
+    font-size: 12px;
   }
 
   .file-list-header {
+    align-items: center;
+    flex-direction: row;
+    gap: 8px;
+  }
+
+  .file-list {
+    max-height: none;
+    overflow-x: hidden;
+    overflow-y: visible;
+  }
+
+  .file-item {
+    grid-template-columns: 18px minmax(0, 1fr);
+    gap: 4px 8px;
+    min-height: 0;
+    padding: 8px;
+    align-items: start;
+  }
+
+  .file-item > input[type=checkbox] {
+    grid-column: 1;
+    grid-row: 1;
+    margin-top: 4px;
+  }
+
+  .file-list button.file-name {
+    grid-column: 2;
+    grid-row: 1;
     align-items: flex-start;
-    flex-direction: column;
-    gap: 5px;
+    max-width: 100%;
+    min-height: 24px;
+    line-height: 1.35;
+  }
+
+  .file-list button.file-name strong {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.35;
+  }
+
+  .file-list button.file-name svg {
+    margin-top: 2px;
+  }
+
+  .file-size {
+    grid-column: 2;
+    grid-row: 2;
   }
 
   .file-row-actions {
+    grid-column: 2;
+    grid-row: 3;
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 5px;
     width: 100%;
   }
 
   .file-row-actions .mini,
   .file-row-actions .mini.danger {
+    height: 30px;
+    min-height: 30px;
+    overflow: hidden;
+    padding: 0 6px;
+    text-overflow: ellipsis;
     width: 100%;
     min-width: 0;
+  }
+
+  .file-row-actions .mini.danger {
+    padding: 0;
   }
 
   .standalone-editor-top {
