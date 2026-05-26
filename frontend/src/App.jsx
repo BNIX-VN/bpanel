@@ -55,6 +55,7 @@ function App() {
   const [fileContent, setFileContent] = useState('');
   const [selectedFilePaths, setSelectedFilePaths] = useState([]);
   const [archiveFormat, setArchiveFormat] = useState('zip');
+  const [editorCursor, setEditorCursor] = useState({ line: 1, column: 1 });
   const [newUser, setNewUser] = useState({ username: '', email: '', password: '', role: 'end_user', website_limit: 5, storage_limit_mb: 1024 });
   const [phpConfig, setPhpConfig] = useState({ php_version: '8.3', display_errors: 'Off', max_execution_time: 300, max_input_time: 600, max_input_vars: 10000, memory_limit: '512M', post_max_size: '1024M', upload_max_filesize: '1024M' });
   const [firewallStatus, setFirewallStatus] = useState(null);
@@ -78,6 +79,7 @@ function App() {
   const [loading, setLoading] = useState('');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const noticeTimer = useRef(null);
+  const editorLineNumbersRef = useRef(null);
 
   // Auto-dismiss notices after 6 seconds
   useEffect(() => {
@@ -475,7 +477,11 @@ function App() {
     const targetPath = pathOverride || filePath;
     if (pathOverride) setFilePath(pathOverride);
     const data = await request(`/maintenance/files/${selectedWebsiteId}/read?path=${encodeURIComponent(targetPath)}`, {}, 'Reading file...');
-    if (data?.content !== undefined) setFileContent(data.content);
+    if (data?.content !== undefined) {
+      setFileContent(data.content);
+      updateEditorCursor(data.content, 0);
+      if (editorLineNumbersRef.current) editorLineNumbersRef.current.scrollTop = 0;
+    }
   }
 
   async function writeFile() {
@@ -1034,6 +1040,28 @@ function App() {
     setSelectedFilePaths(prev => prev.length === files.length ? [] : files.map(item => item.path));
   }
 
+  function updateEditorCursor(text = fileContent, selectionStart = 0) {
+    const beforeCursor = String(text || '').slice(0, selectionStart);
+    const lines = beforeCursor.split('\n');
+    setEditorCursor({ line: lines.length, column: (lines[lines.length - 1] || '').length + 1 });
+  }
+
+  function syncEditorScroll(event) {
+    if (editorLineNumbersRef.current) editorLineNumbersRef.current.scrollTop = event.currentTarget.scrollTop;
+  }
+
+  function editorLanguage(path) {
+    const name = String(path || '').toLowerCase();
+    if (/\.php\d?$/.test(name) || name.endsWith('.phtml')) return 'PHP';
+    if (/\.(js|jsx|ts|tsx)$/.test(name)) return 'JavaScript';
+    if (/\.css$/.test(name)) return 'CSS';
+    if (/\.html?$/.test(name)) return 'HTML';
+    if (/\.json$/.test(name)) return 'JSON';
+    if (/\.ya?ml$/.test(name)) return 'YAML';
+    if (/\.(conf|ini|env|htaccess)$/.test(name)) return 'Config';
+    return 'Text';
+  }
+
   function WebsiteSelect() {
     return <select value={selectedWebsiteId} onChange={e => setSelectedWebsiteId(e.target.value)}>
       <option value="">-- Select website --</option>
@@ -1296,6 +1324,9 @@ function App() {
 
   function renderFiles() {
     const allSelected = files.length > 0 && selectedFilePaths.length === files.length;
+    const editorLineCount = Math.max(1, String(fileContent || '').split('\n').length);
+    const editorLineNumbers = Array.from({ length: editorLineCount }, (_, index) => index + 1).join('\n');
+    const editorMode = editorLanguage(filePath);
     return <section className="section">
       <div className="section-title">
         <div><h2>File manager</h2><p className="hint">Native BPanel file tools with quota, archive, and extract support.</p></div>
@@ -1358,8 +1389,27 @@ function App() {
             <button disabled={!selectedWebsiteId || !!loading} onClick={writeFile}>Save</button>
             <button disabled={!selectedWebsiteId || !filePath || !!loading} onClick={() => downloadFile(filePath)}><Download size={14}/></button>
           </div>
-          <div className="file-meta"><span>Editing: <strong>{filePath || 'No file selected'}</strong></span></div>
-          <textarea className="code-editor" value={fileContent} onChange={e => setFileContent(e.target.value)} spellCheck={false} disabled={!selectedWebsiteId} />
+          <div className="editor-status">
+            <span>Editing: <strong>{filePath || 'No file selected'}</strong></span>
+            <span>{editorMode}</span>
+            <span>{editorLineCount} line(s)</span>
+            <span>Ln {editorCursor.line}, Col {editorCursor.column}</span>
+          </div>
+          <div className="editor-shell">
+            <pre ref={editorLineNumbersRef} className="editor-lines" aria-hidden="true">{editorLineNumbers}</pre>
+            <textarea
+              className="code-editor native-code-editor"
+              value={fileContent}
+              onChange={e => { setFileContent(e.target.value); updateEditorCursor(e.target.value, e.target.selectionStart); }}
+              onClick={e => updateEditorCursor(e.currentTarget.value, e.currentTarget.selectionStart)}
+              onKeyUp={e => updateEditorCursor(e.currentTarget.value, e.currentTarget.selectionStart)}
+              onSelect={e => updateEditorCursor(e.currentTarget.value, e.currentTarget.selectionStart)}
+              onScroll={syncEditorScroll}
+              spellCheck={false}
+              wrap="off"
+              disabled={!selectedWebsiteId}
+            />
+          </div>
         </div>
       </div>
     </section>;
