@@ -57,6 +57,14 @@ validate_port() {
   (( $1 >= 1 && $1 <= 65535 )) || fail "PANEL_PORT out of range: $1"
 }
 
+detect_ssh_ports() {
+  if command -v sshd >/dev/null 2>&1; then
+    sshd -T 2>/dev/null | awk '$1 == "port" {print $2}' | sort -nu
+    return 0
+  fi
+  awk '$1 == "Port" && $2 ~ /^[0-9]+$/ {print $2}' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null | sort -nu
+}
+
 is_domain_name() {
   [[ "$1" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]]
 }
@@ -734,8 +742,14 @@ setup_firewall() {
   ufw default deny incoming || true
   ufw default allow outgoing || true
   ufw allow OpenSSH || true
+  ufw allow 22/tcp || true
+  while read -r ssh_port; do
+    [[ -n "$ssh_port" ]] || continue
+    ufw allow "${ssh_port}/tcp" || true
+  done < <(detect_ssh_ports)
   ufw allow 'Nginx Full' || true
   ufw allow "${PANEL_PORT}/tcp" || true
+  ufw --force enable || true
 }
 
 setup_ssl() {
@@ -792,7 +806,7 @@ print_summary() {
   echo "MariaDB: $(mariadb --version 2>/dev/null || mysql --version 2>/dev/null || echo installed)"
   echo "Backend: ${APP_DIR}/backend"
   echo "Frontend: ${APP_DIR}/frontend"
-  echo "Firewall: UFW installed, OpenSSH, Nginx Full, and ${PANEL_PORT}/tcp allowed. Enable it from the Firewall page."
+  echo "Firewall: UFW enabled with OpenSSH, Nginx Full, and ${PANEL_PORT}/tcp allowed."
   echo "=================================================="
 }
 
