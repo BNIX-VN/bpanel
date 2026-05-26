@@ -1,7 +1,7 @@
 .file-manager {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 12px;
+  gap: 8px;
   align-items: stretch;
 }
 
@@ -10,7 +10,7 @@
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  padding: 12px;
+  padding: 10px;
   min-width: 0;
   box-shadow: none;
 }
@@ -23,7 +23,7 @@
 .file-controls {
   display: grid;
   grid-template-columns: minmax(240px, 340px) minmax(0, 1fr);
-  gap: 8px 10px;
+  gap: 6px 8px;
   align-items: start;
 }
 
@@ -39,22 +39,22 @@
 .file-toolbar {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 5px;
   align-items: center;
   grid-column: 1 / -1;
 }
 
 .file-toolbar select {
   width: auto;
-  min-width: 96px;
+  min-width: 84px;
 }
 
 .file-toolbar button,
 .file-toolbar .upload-button,
 .file-toolbar select {
-  min-height: 34px;
-  height: 34px;
-  padding: 0 10px;
+  min-height: 30px;
+  height: 30px;
+  padding: 0 9px;
   font-size: 12px;
 }
 
@@ -63,26 +63,26 @@
   background: var(--surface-alt);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 6px;
+  padding: 4px;
   color: var(--text-secondary);
   font-weight: 700;
-  font-size: 13px;
+  font-size: 12px;
   word-break: break-all;
 }
 
 .breadcrumb-line {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 4px;
   align-items: center;
   grid-column: 1 / -1;
   border-radius: var(--radius-sm);
 }
 
 .crumb {
-  min-height: 30px;
-  height: 30px;
-  padding: 0 10px;
+  min-height: 26px;
+  height: 26px;
+  padding: 0 8px;
   background: var(--surface);
   border: 1px solid var(--border);
   color: var(--text-secondary);
@@ -103,14 +103,15 @@
 }
 
 .file-controls .file-meta {
-  min-height: 40px;
+  min-height: 34px;
   align-items: center;
   border-radius: var(--radius-sm);
-  padding: 8px 10px;
+  padding: 6px 8px;
   background: var(--surface-alt);
   border-color: var(--border);
   color: var(--text-secondary);
-  gap: 6px 12px;
+  gap: 4px 10px;
+  font-size: 12px;
 }
 
 .file-controls .file-meta span {
@@ -128,9 +129,9 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 10px;
-  margin: 10px 0 0;
-  padding: 8px 10px;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding: 6px 8px;
   background: var(--surface-alt);
   border: 1px solid var(--border);
   border-bottom: 0;
@@ -143,13 +144,13 @@
 .file-list-header label {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
 }
 
 .file-list-header input,
 .file-item > input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   min-height: 0;
   padding: 0;
   accent-color: var(--primary);
@@ -169,16 +170,16 @@
 
 .file-item {
   display: grid;
-  grid-template-columns: 24px minmax(240px, 1fr) 100px auto;
-  gap: 10px;
+  grid-template-columns: 20px minmax(240px, 1fr) 82px auto;
+  gap: 8px;
   align-items: center;
   background: var(--surface);
   color: var(--text);
   border: 0;
   border-bottom: 1px solid var(--border);
   border-radius: 0;
-  min-height: 44px;
-  padding: 6px 10px;
+  min-height: 36px;
+  padding: 4px 8px;
   justify-content: stretch;
   text-align: left;
   transition: var(--transition);
@@ -199,9 +200,9 @@
 .file-list button.file-name {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
   min-width: 0;
-  min-height: 28px;
+  min-height: 24px;
   height: auto;
   padding: 0;
   border: 0;
@@ -232,10 +233,12 @@
 .file-list button.file-name svg {
   color: var(--primary);
   flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
 }
 
 .file-size {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-muted);
   font-weight: 700;
   white-space: nowrap;
@@ -248,25 +251,25 @@
 .file-row-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 5px;
+  gap: 4px;
   flex-wrap: nowrap;
 }
 
 .file-row-actions .mini {
-  min-height: 28px;
-  height: 28px;
+  min-height: 26px;
+  height: 26px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 0 8px;
+  padding: 0 7px;
 }
 
 .file-row-actions .mini.danger {
   background: var(--surface);
   border: 1px solid #fecaca;
   color: var(--danger);
-  min-width: 28px;
-  width: 28px;
+  min-width: 26px;
+  width: 26px;
   padding: 0;
 }
 
@@ -277,8 +280,8 @@
 }
 
 .file-row-actions .mini:disabled {
-  height: 28px;
-  min-height: 28px;
+  height: 26px;
+  min-height: 26px;
 }
 
 .empty-box {
