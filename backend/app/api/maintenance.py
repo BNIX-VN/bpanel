@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta, timezone
 import json
+import tarfile
+import zipfile
 from pathlib import Path
 from typing import Optional
 from urllib.parse import quote, unquote, urlsplit
@@ -42,6 +44,37 @@ class FileWrite(BaseModel):
     website_id: int
     path: str
     content: str
+
+
+class FileMkdir(BaseModel):
+    website_id: int
+    path: str = "public"
+    name: str
+
+
+class FileRename(BaseModel):
+    website_id: int
+    path: str
+    new_name: str
+
+
+class FileBulkDelete(BaseModel):
+    website_id: int
+    paths: list[str]
+
+
+class FileArchive(BaseModel):
+    website_id: int
+    base_path: str = "public"
+    paths: list[str]
+    output_name: str = ""
+    format: str = "zip"
+
+
+class FileExtract(BaseModel):
+    website_id: int
+    archive_path: str
+    destination_path: str = ""
 
 
 class FileBrowserOpen(BaseModel):
@@ -695,6 +728,94 @@ def read_file(website_id: int, path: str, db: Session = Depends(get_db), current
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"content": content}
+
+
+@router.get("/files/{website_id}/download")
+def download_file(website_id: int, path: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    website = get_owned_website(db, current_user, website_id)
+    try:
+        target = file_manager.download_file_path(website, path, allow_sensitive=is_admin_role(current_user.role))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return FileResponse(str(target), filename=target.name)
+
+
+@router.post("/files/mkdir")
+def make_directory(payload: FileMkdir, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.end_user)
+    website = get_owned_website(db, current_user, payload.website_id)
+    try:
+        target = file_manager.make_directory(website, payload.path, payload.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    log_action(db, current_user.id, "mkdir", website.domain, target)
+    return {"target": target}
+
+
+@router.post("/files/rename")
+def rename_entry(payload: FileRename, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.end_user)
+    website = get_owned_website(db, current_user, payload.website_id)
+    try:
+        target = file_manager.rename_entry(website, payload.path, payload.new_name, is_admin_role(current_user.role))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    log_action(db, current_user.id, "rename_file", website.domain, target)
+    return {"target": target}
+
+
+@router.post("/files/delete")
+def delete_entries(payload: FileBulkDelete, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.end_user)
+    website = get_owned_website(db, current_user, payload.website_id)
+    try:
+        deleted = file_manager.delete_entries(website, payload.paths, is_admin_role(current_user.role))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    log_action(db, current_user.id, "delete_files", website.domain, ",".join(payload.paths[:20]))
+    return {"deleted": deleted}
+
+
+@router.post("/files/archive")
+def archive_entries(payload: FileArchive, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.end_user)
+    website = get_owned_website(db, current_user, payload.website_id)
+    try:
+        target = file_manager.archive_entries(
+            website,
+            payload.base_path,
+            payload.paths,
+            payload.output_name,
+            payload.format,
+            allow_sensitive=is_admin_role(current_user.role),
+            quota_check=_quota_check_for_website(db, website),
+        )
+    except storage_quota.StorageQuotaExceeded as exc:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    log_action(db, current_user.id, "archive_files", website.domain, target)
+    return {"target": target}
+
+
+@router.post("/files/extract")
+def extract_archive(payload: FileExtract, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.end_user)
+    website = get_owned_website(db, current_user, payload.website_id)
+    try:
+        target = file_manager.extract_archive(
+            website,
+            payload.archive_path,
+            payload.destination_path,
+            is_admin_role(current_user.role),
+            quota_check=_quota_check_for_website(db, website),
+        )
+    except storage_quota.StorageQuotaExceeded as exc:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(exc)) from exc
+    except (ValueError, zipfile.BadZipFile, tarfile.TarError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    log_action(db, current_user.id, "extract_archive", website.domain, payload.archive_path)
+    return {"target": target}
 
 
 @router.post("/files/write")

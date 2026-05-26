@@ -48,11 +48,13 @@ function App() {
   const [selectedWebsiteId, setSelectedWebsiteId] = useState('');
   const [cronSchedule, setCronSchedule] = useState('0 2 * * *');
   const [cronCommand, setCronCommand] = useState('wp cron event run --due-now --allow-root');
-  const [filePath, setFilePath] = useState('public/wp-config.php');
+  const [filePath, setFilePath] = useState('public/index.html');
   const [fileListPath, setFileListPath] = useState('public');
   const [fileUploadDir, setFileUploadDir] = useState('public');
   const [files, setFiles] = useState([]);
   const [fileContent, setFileContent] = useState('');
+  const [selectedFilePaths, setSelectedFilePaths] = useState([]);
+  const [archiveFormat, setArchiveFormat] = useState('zip');
   const [newUser, setNewUser] = useState({ username: '', email: '', password: '', role: 'end_user', website_limit: 5, storage_limit_mb: 1024 });
   const [phpConfig, setPhpConfig] = useState({ php_version: '8.3', display_errors: 'Off', max_execution_time: 300, max_input_time: 600, max_input_vars: 10000, memory_limit: '512M', post_max_size: '1024M', upload_max_filesize: '1024M' });
   const [firewallStatus, setFirewallStatus] = useState(null);
@@ -463,9 +465,10 @@ function App() {
     await request('/maintenance/cron', { method: 'DELETE', body: JSON.stringify({ website_id: Number(selectedWebsiteId), index }) }, 'Deleting cron job...');
   }
 
-  async function listFiles(path = fileListPath) {
-    const data = await request(`/maintenance/files/${selectedWebsiteId}?path=${encodeURIComponent(path)}`, {}, 'Loading file list...');
-    if (data?.items) { setFiles(data.items); setFileListPath(path); }
+  async function listFiles(path = fileListPath, websiteId = selectedWebsiteId) {
+    if (!websiteId) return;
+    const data = await request(`/maintenance/files/${websiteId}?path=${encodeURIComponent(path)}`, {}, 'Loading file list...');
+    if (data?.items) { setFiles(data.items); setFileListPath(path); setFileUploadDir(path || 'public'); setSelectedFilePaths([]); }
   }
 
   async function readFile(pathOverride = filePath) {
@@ -482,8 +485,67 @@ function App() {
 
   async function deleteFileAction(path) {
     if (!confirm(`Delete file ${path}?`)) return;
-    const data = await request(`/maintenance/files/${selectedWebsiteId}?path=${encodeURIComponent(path)}`, { method: 'DELETE' }, 'Deleting file...');
+    const data = await request('/maintenance/files/delete', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), paths: [path] }) }, 'Deleting file...');
     if (data) { await listFiles(fileListPath); await loadCurrentUser(); }
+  }
+
+  async function downloadFile(path) {
+    if (!selectedWebsiteId || !path) return;
+    try {
+      setError(''); setLoading('Downloading file...');
+      const res = await fetch(`${API}/maintenance/files/${selectedWebsiteId}/download?path=${encodeURIComponent(path)}`, { credentials: 'include' });
+      if (!res.ok) { const data = await res.json().catch(() => ({})); if (handleAuthExpired(res.status, data.detail)) return; setError(data.detail || 'Download failed.'); return; }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url; link.download = path.split('/').pop() || 'download';
+      document.body.appendChild(link); link.click(); link.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) { setError('File download failed.'); }
+    finally { setLoading(''); }
+  }
+
+  async function makeFileDirectory() {
+    if (!selectedWebsiteId) return;
+    const name = prompt('Folder name:');
+    if (!name) return;
+    const data = await request('/maintenance/files/mkdir', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), path: fileListPath || 'public', name }) }, 'Creating folder...');
+    if (data) await listFiles(fileListPath);
+  }
+
+  async function renameFileItem(item) {
+    if (!item) return;
+    const newName = prompt('New name:', item.name);
+    if (!newName || newName === item.name) return;
+    const data = await request('/maintenance/files/rename', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), path: item.path, new_name: newName }) }, 'Renaming...');
+    if (data) await listFiles(fileListPath);
+  }
+
+  async function deleteSelectedFiles() {
+    if (selectedFilePaths.length === 0) return;
+    if (!confirm(`Delete ${selectedFilePaths.length} selected item(s)?`)) return;
+    const data = await request('/maintenance/files/delete', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), paths: selectedFilePaths }) }, 'Deleting selected files...');
+    if (data) { await listFiles(fileListPath); await loadCurrentUser(); }
+  }
+
+  async function archiveSelectedFiles() {
+    if (selectedFilePaths.length === 0) return;
+    const ext = archiveFormat === 'tar.gz' ? 'tar.gz' : 'zip';
+    const outputName = prompt('Archive file name:', `archive-${Date.now()}.${ext}`);
+    if (!outputName) return;
+    const data = await request('/maintenance/files/archive', {
+      method: 'POST',
+      body: JSON.stringify({ website_id: Number(selectedWebsiteId), base_path: fileListPath || 'public', paths: selectedFilePaths, output_name: outputName, format: archiveFormat }),
+    }, 'Creating archive...');
+    if (data) { await listFiles(fileListPath); await loadCurrentUser(); }
+  }
+
+  async function extractArchiveFile(path) {
+    if (!path) return;
+    const destination = prompt('Extract to folder:', fileListPath || 'public');
+    if (destination === null) return;
+    const data = await request('/maintenance/files/extract', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), archive_path: path, destination_path: destination || fileListPath || 'public' }) }, 'Extracting archive...');
+    if (data) { await listFiles(destination || fileListPath); await loadCurrentUser(); }
   }
 
   async function openFileBrowser(websiteId = selectedWebsiteId) {
@@ -511,8 +573,10 @@ function App() {
 
   async function openWebsiteFileManager(site) {
     setSelectedWebsiteId(String(site.id));
+    setPage('files');
+    setFileListPath('public');
     setFileUploadDir('public');
-    await openFileBrowser(site.id);
+    await listFiles('public', site.id);
   }
 
   async function uploadSiteFile(file) {
@@ -890,6 +954,8 @@ function App() {
 
   useEffect(() => { if (selectedWebsiteId && page === 'backups') listBackups(); }, [selectedWebsiteId, page]);
 
+  useEffect(() => { if (selectedWebsiteId && page === 'files') listFiles('public'); }, [selectedWebsiteId, page]);
+
   useEffect(() => { if (selectedBackupUserId && page === 'backups') listUserBackups(selectedBackupUserId); }, [selectedBackupUserId, page]);
 
   useEffect(() => {
@@ -932,6 +998,40 @@ function App() {
     const value = (site?.domain || '').trim();
     if (/^https?:\/\//i.test(value)) return value;
     return `${site?.ssl_enabled ? 'https' : 'http'}://${value}`;
+  }
+
+  function parentFilePath(path) {
+    const parts = String(path || '').split('/').filter(Boolean);
+    parts.pop();
+    return parts.join('/') || 'public';
+  }
+
+  function fileBreadcrumbs(path) {
+    const parts = String(path || 'public').split('/').filter(Boolean);
+    let current = '';
+    return parts.map(part => {
+      current = current ? `${current}/${part}` : part;
+      return { label: part, path: current };
+    });
+  }
+
+  function isArchiveFile(item) {
+    const name = (item?.name || '').toLowerCase();
+    return !item?.is_dir && (name.endsWith('.zip') || name.endsWith('.tar.gz') || name.endsWith('.tgz'));
+  }
+
+  function isTextEditable(item) {
+    if (!item || item.is_dir) return false;
+    const name = (item.name || '').toLowerCase();
+    return /\.(txt|md|json|css|js|jsx|ts|tsx|html|htm|xml|yml|yaml|ini|conf|log|php)$/.test(name) || !name.includes('.');
+  }
+
+  function toggleFileSelection(path) {
+    setSelectedFilePaths(prev => prev.includes(path) ? prev.filter(item => item !== path) : [...prev, path]);
+  }
+
+  function toggleAllFiles() {
+    setSelectedFilePaths(prev => prev.length === files.length ? [] : files.map(item => item.path));
   }
 
   function WebsiteSelect() {
@@ -1195,35 +1295,72 @@ function App() {
   }
 
   function renderFiles() {
+    const allSelected = files.length > 0 && selectedFilePaths.length === files.length;
     return <section className="section">
       <div className="section-title">
-        <div><h2>File manager</h2><p className="hint">Use File Browser for uploads, downloads, editing, and source management.</p></div>
+        <div><h2>File manager</h2><p className="hint">Native BPanel file tools with quota, archive, and extract support.</p></div>
+        <button disabled={!selectedWebsiteId || !!loading} onClick={() => listFiles(fileListPath)}><RefreshCw size={14}/> Refresh</button>
       </div>
-      <div className="filebrowser-panel">
-        <div className="filebrowser-card">
-          <FolderOpen size={38} />
-          <div>
-            <h3>File Browser</h3>
-            <p>Select a website to open its <code>public</code> folder, or leave blank to browse all.</p>
+      <div className="file-manager">
+        <div className="file-browser">
+          <div className="file-controls">
+            <WebsiteSelect />
+            {currentSite && <div className="file-meta">
+              <span>Website: <strong>{currentSite.domain}</strong></span>
+              <span>Root: <strong>{currentSite.root_path}/{fileListPath}</strong></span>
+              {currentUser && !isAdmin && <span>Storage: <strong>{storageUsageText(currentUser)}</strong></span>}
+            </div>}
+            <div className="path-pill breadcrumb-line">
+              <button className="crumb" disabled={!selectedWebsiteId || fileListPath === 'public'} onClick={() => listFiles('public')}>public</button>
+              {fileBreadcrumbs(fileListPath).filter(crumb => crumb.path !== 'public').map(crumb => <button className="crumb" key={crumb.path} onClick={() => listFiles(crumb.path)}>{crumb.label}</button>)}
+            </div>
+            <div className="file-toolbar">
+              <button disabled={!selectedWebsiteId || fileListPath === 'public' || !!loading} onClick={() => listFiles(parentFilePath(fileListPath))}>Up</button>
+              <button disabled={!selectedWebsiteId || !!loading} onClick={makeFileDirectory}><Plus size={14}/> Folder</button>
+              <label className={`upload-button ${(!selectedWebsiteId || !!loading) ? 'disabled' : ''}`}>
+                <Upload size={14}/> Upload
+                <input type="file" disabled={!selectedWebsiteId || !!loading} onChange={e => { uploadSiteFile(e.target.files?.[0]); e.target.value = ''; }} />
+              </label>
+              <select value={archiveFormat} onChange={e => setArchiveFormat(e.target.value)} disabled={!selectedWebsiteId || !!loading}>
+                <option value="zip">zip</option>
+                <option value="tar.gz">tar.gz</option>
+              </select>
+              <button disabled={selectedFilePaths.length === 0 || !!loading} onClick={archiveSelectedFiles}><Archive size={14}/> Archive</button>
+              <button className="danger" disabled={selectedFilePaths.length === 0 || !!loading} onClick={deleteSelectedFiles}><Trash2 size={14}/> Delete</button>
+            </div>
+          </div>
+          <div className="file-list-header">
+            <label><input type="checkbox" checked={allSelected} onChange={toggleAllFiles} disabled={files.length === 0} /> Select</label>
+            <span>{files.length} item(s)</span>
+          </div>
+          <div className="file-list">
+            {files.length === 0 && <div className="empty-box">No files in this folder.</div>}
+            {files.map(item => <div className={`file-item ${selectedFilePaths.includes(item.path) ? 'selected' : ''}`} key={item.path}>
+              <input type="checkbox" checked={selectedFilePaths.includes(item.path)} onChange={() => toggleFileSelection(item.path)} />
+              <button className="file-name" onClick={() => item.is_dir ? listFiles(item.path) : readFile(item.path)}>
+                {item.is_dir ? <FolderOpen size={16}/> : <FileText size={16}/>} <strong>{item.name}</strong>
+              </button>
+              <span className="file-size">{item.is_dir ? 'Folder' : formatBytes(item.size)}</span>
+              <div className="file-row-actions">
+                {!item.is_dir && isTextEditable(item) && <button className="mini secondary-light" disabled={!!loading} onClick={() => readFile(item.path)}>Edit</button>}
+                {!item.is_dir && <button className="mini secondary-light" disabled={!!loading} onClick={() => downloadFile(item.path)}><Download size={13}/></button>}
+                {isArchiveFile(item) && <button className="mini secondary-light" disabled={!!loading} onClick={() => extractArchiveFile(item.path)}>Extract</button>}
+                <button className="mini secondary-light" disabled={!!loading} onClick={() => renameFileItem(item)}>Rename</button>
+                <button className="mini danger" disabled={!!loading} onClick={() => deleteFileAction(item.path)}><Trash2 size={13}/></button>
+              </div>
+            </div>)}
           </div>
         </div>
-        <div className="filebrowser-actions">
-          <WebsiteSelect />
-          <button disabled={!!loading || (!selectedWebsiteId && !isAdmin)} onClick={openFileBrowser}><FolderOpen size={15}/> Open File Browser</button>
+        <div className="file-editor">
+          <div className="editor-tools">
+            <input value={filePath} onChange={e => setFilePath(e.target.value)} placeholder="public/index.html" disabled={!selectedWebsiteId || !!loading} />
+            <button disabled={!selectedWebsiteId || !!loading} onClick={() => readFile()}><FileText size={14}/> Open</button>
+            <button disabled={!selectedWebsiteId || !!loading} onClick={writeFile}>Save</button>
+            <button disabled={!selectedWebsiteId || !filePath || !!loading} onClick={() => downloadFile(filePath)}><Download size={14}/></button>
+          </div>
+          <div className="file-meta"><span>Editing: <strong>{filePath || 'No file selected'}</strong></span></div>
+          <textarea className="code-editor" value={fileContent} onChange={e => setFileContent(e.target.value)} spellCheck={false} disabled={!selectedWebsiteId} />
         </div>
-        {currentSite && <div className="file-meta">
-          <span>Website: <strong>{currentSite.domain}</strong></span>
-          <span>Root: <strong>{currentSite.root_path}/public</strong></span>
-          {currentUser && !isAdmin && <span>Storage: <strong>{storageUsageText(currentUser)}</strong></span>}
-        </div>}
-        <div className="filebrowser-actions upload-actions">
-          <input value={fileUploadDir} onChange={e => setFileUploadDir(e.target.value)} placeholder="public" disabled={!selectedWebsiteId || !!loading} />
-          <label className={`upload-button ${(!selectedWebsiteId || !!loading) ? 'disabled' : ''}`}>
-            <Upload size={15}/> Upload file
-            <input type="file" disabled={!selectedWebsiteId || !!loading} onChange={e => { uploadSiteFile(e.target.files?.[0]); e.target.value = ''; }} />
-          </label>
-        </div>
-        <p className="hint">Protected by BPanel session. Only admins can open it.</p>
       </div>
     </section>;
   }

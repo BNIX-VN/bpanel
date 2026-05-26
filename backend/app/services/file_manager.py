@@ -1,6 +1,10 @@
 import shutil
+import stat
+import tarfile
+import time
+import zipfile
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, Iterable, List, Optional
 
 from app.models.entities import Website
 from app.services import site_users
@@ -8,6 +12,8 @@ from app.services import storage_quota
 
 
 MAX_TEXT_FILE_BYTES = 2 * 1024 * 1024
+MAX_ARCHIVE_ITEMS = 10000
+MAX_ARCHIVE_UNCOMPRESSED_BYTES = 5 * 1024 * 1024 * 1024
 BLOCKED_WRITE_SUFFIXES = {
     ".php", ".phtml", ".phar", ".pht", ".php3", ".php4", ".php5", ".php7", ".php8",
     ".cgi", ".pl", ".py", ".sh", ".exe", ".dll", ".so",
@@ -15,7 +21,7 @@ BLOCKED_WRITE_SUFFIXES = {
 }
 # Filenames that bypass suffix rules (no extension) but are still dangerous.
 BLOCKED_WRITE_NAMES = {".user.ini", ".env", ".htaccess", ".htpasswd", "wp-config.php"}
-SENSITIVE_READ_NAMES = {".user.ini", ".env", "wp-config.php", ".htpasswd"}
+SENSITIVE_READ_NAMES = {".user.ini", ".env", ".htaccess", ".htpasswd", "wp-config.php"}
 
 
 def _safe_upload_name(filename: str) -> str:
@@ -23,6 +29,72 @@ def _safe_upload_name(filename: str) -> str:
     if not name or name in {".", ".."} or "\x00" in name:
         raise ValueError("Invalid filename")
     return name
+
+
+def _safe_entry_name(name: str) -> str:
+    safe_name = _safe_upload_name(name)
+    if safe_name in {"/", "\\"}:
+        raise ValueError("Invalid filename")
+    return safe_name
+
+
+def _assert_write_allowed(path: Path, action: str, allow_executable: bool = False) -> None:
+    if allow_executable:
+        return
+    name_lower = path.name.lower()
+    if name_lower in BLOCKED_WRITE_NAMES:
+        raise ValueError(f"{action} {path.name} requires admin permissions")
+    if path.suffix.lower() in BLOCKED_WRITE_SUFFIXES:
+        raise ValueError(f"{action} executable files requires admin permissions")
+
+
+def _assert_sensitive_read_allowed(path: Path, action: str, allow_sensitive: bool = False) -> None:
+    if allow_sensitive:
+        return
+    if path.name.lower() in SENSITIVE_READ_NAMES:
+        raise ValueError(f"{action} {path.name} requires admin permissions")
+
+
+def _assert_tree_write_allowed(path: Path, action: str, allow_executable: bool = False) -> None:
+    if path.is_symlink():
+        raise ValueError("Symlinks are not allowed")
+    if path.is_dir():
+        for item in path.rglob("*"):
+            if item.is_symlink():
+                raise ValueError("Symlinks are not allowed")
+            if item.is_file():
+                _assert_write_allowed(item, action, allow_executable)
+        return
+    _assert_write_allowed(path, action, allow_executable)
+
+
+def _assert_tree_read_allowed(path: Path, action: str, allow_sensitive: bool = False) -> None:
+    if path.is_symlink():
+        raise ValueError("Symlinks are not allowed")
+    if path.is_dir():
+        for item in path.rglob("*"):
+            if item.is_symlink():
+                raise ValueError("Symlinks are not allowed")
+            if item.is_file():
+                _assert_sensitive_read_allowed(item, action, allow_sensitive)
+        return
+    _assert_sensitive_read_allowed(path, action, allow_sensitive)
+
+
+def _clean_relative_path(path: str) -> str:
+    if "\x00" in (path or ""):
+        raise ValueError("Invalid path")
+    normalized = (path or "").replace("\\", "/")
+    if normalized.startswith("/") or ":" in normalized.split("/", 1)[0]:
+        raise ValueError("Path escapes website root")
+    parts = []
+    for part in normalized.split("/"):
+        if not part or part == ".":
+            continue
+        if part == "..":
+            raise ValueError("Path escapes website root")
+        parts.append(part)
+    return "/".join(parts)
 
 
 def _safe_path(website: Website, relative_path: str) -> Path:
@@ -63,6 +135,21 @@ def _safe_path(website: Website, relative_path: str) -> Path:
     return target
 
 
+def _relative_to_root(website: Website, path: Path) -> str:
+    return str(path.relative_to(Path(website.root_path).resolve())).replace("\\", "/")
+
+
+def _entry_info(website: Website, item: Path) -> Dict:
+    item_stat = item.stat()
+    return {
+        "name": item.name,
+        "path": _relative_to_root(website, item),
+        "is_dir": item.is_dir(),
+        "size": item_stat.st_size,
+        "modified": int(item_stat.st_mtime),
+    }
+
+
 def list_files(website: Website, relative_path: str = "") -> List[Dict]:
     target = _safe_path(website, relative_path)
     if not target.exists() or not target.is_dir():
@@ -73,16 +160,38 @@ def list_files(website: Website, relative_path: str = "") -> List[Dict]:
         if item.is_symlink():
             continue
         try:
-            rel = str(item.relative_to(Path(website.root_path)))
-        except ValueError:
+            items.append(_entry_info(website, item))
+        except (OSError, ValueError):
             continue
-        items.append({
-            "name": item.name,
-            "path": rel,
-            "is_dir": item.is_dir(),
-            "size": item.stat().st_size,
-        })
-    return items
+    return sorted(items, key=lambda entry: (not entry["is_dir"], entry["name"].lower()))
+
+
+def make_directory(website: Website, parent_path: str, name: str) -> str:
+    parent = _safe_path(website, parent_path or "public")
+    if not parent.exists() or not parent.is_dir():
+        raise ValueError("Parent directory not found")
+    target = parent / _safe_entry_name(name)
+    if target.exists():
+        raise ValueError("File or folder already exists")
+    target.mkdir()
+    site_users.fix_site_path(str(target), website.linux_user)
+    return str(target)
+
+
+def rename_entry(website: Website, relative_path: str, new_name: str, allow_executable: bool = False) -> str:
+    source = _safe_path(website, relative_path)
+    if not source.exists():
+        raise ValueError("File or folder not found")
+    if source == Path(website.root_path).resolve():
+        raise ValueError("Cannot rename website root")
+    target = source.parent / _safe_entry_name(new_name)
+    if target.exists():
+        raise ValueError("Target already exists")
+    _assert_tree_write_allowed(source, "Renaming", allow_executable)
+    _assert_write_allowed(target, "Renaming", allow_executable)
+    source.rename(target)
+    site_users.fix_site_path(str(target), website.linux_user)
+    return str(target)
 
 
 def read_text_file(website: Website, relative_path: str, allow_sensitive: bool = False) -> str:
@@ -118,11 +227,7 @@ def write_text_file(
     quota_check: Optional[QuotaCheck] = None,
 ) -> str:
     target = _safe_path(website, relative_path)
-    name_lower = target.name.lower()
-    if name_lower in BLOCKED_WRITE_NAMES and not allow_executable:
-        raise ValueError(f"Writing {target.name} requires admin permissions")
-    if target.suffix.lower() in BLOCKED_WRITE_SUFFIXES and not allow_executable:
-        raise ValueError("Writing executable files requires admin permissions")
+    _assert_write_allowed(target, "Writing", allow_executable)
     content_size = len(content.encode("utf-8"))
     if content_size > MAX_TEXT_FILE_BYTES:
         raise ValueError("File content is too large")
@@ -153,11 +258,7 @@ def upload_file(
     target = target_dir / safe_name
     if target.exists() and target.is_symlink():
         raise ValueError("Refusing to overwrite a symlink")
-    name_lower = safe_name.lower()
-    if name_lower in BLOCKED_WRITE_NAMES and not allow_executable:
-        raise ValueError(f"Uploading {safe_name} requires admin permissions")
-    if target.suffix.lower() in BLOCKED_WRITE_SUFFIXES and not allow_executable:
-        raise ValueError("Uploading executable files requires admin permissions")
+    _assert_write_allowed(target, "Uploading", allow_executable)
     if quota_check:
         upload_size = storage_quota.source_file_size(source_file)
         quota_check(upload_size or 0, _existing_file_size(target))
@@ -172,10 +273,254 @@ def delete_file(website: Website, relative_path: str, allow_executable: bool = F
     target = _safe_path(website, relative_path)
     if target.is_dir():
         raise ValueError("Cannot delete directory")
-    name_lower = target.name.lower()
-    if name_lower in BLOCKED_WRITE_NAMES and not allow_executable:
-        raise ValueError(f"Deleting {target.name} requires admin permissions")
-    if target.suffix.lower() in BLOCKED_WRITE_SUFFIXES and not allow_executable:
-        raise ValueError("Deleting executable files requires admin permissions")
+    _assert_write_allowed(target, "Deleting", allow_executable)
     target.unlink(missing_ok=True)
     return str(target)
+
+
+def delete_entries(website: Website, paths: Iterable[str], allow_executable: bool = False) -> List[str]:
+    deleted = []
+    root = Path(website.root_path).resolve()
+    targets = []
+    for relative_path in paths:
+        target = _safe_path(website, relative_path)
+        if not target.exists():
+            raise ValueError("File or folder not found")
+        if target == root:
+            raise ValueError("Cannot delete website root")
+        if target.is_symlink():
+            raise ValueError("Symlinks are not allowed")
+        _assert_tree_write_allowed(target, "Deleting", allow_executable)
+        targets.append(target)
+
+    deleted_dirs = []
+    for target in targets:
+        if any(parent in target.parents for parent in deleted_dirs):
+            continue
+        if target.is_dir():
+            shutil.rmtree(target)
+            deleted_dirs.append(target)
+        else:
+            target.unlink(missing_ok=True)
+        deleted.append(str(target))
+    return deleted
+
+
+def _total_size(paths: Iterable[Path]) -> int:
+    total = 0
+    for path in paths:
+        if path.is_dir():
+            total += storage_quota.path_usage_bytes(path)
+        elif path.is_file():
+            total += path.stat().st_size
+    return total
+
+
+def _archive_output_name(output_name: str, archive_format: str) -> str:
+    name = _safe_entry_name(output_name or f"archive-{int(time.time())}")
+    if archive_format == "zip":
+        return name if name.lower().endswith(".zip") else f"{name}.zip"
+    if archive_format == "tar.gz":
+        return name if name.lower().endswith(".tar.gz") else f"{name}.tar.gz"
+    raise ValueError("Unsupported archive format")
+
+
+def _archive_arcname(base: Path, path: Path) -> str:
+    try:
+        relative = path.relative_to(base)
+    except ValueError as exc:
+        raise ValueError("Archive items must be inside the current folder") from exc
+    arcname = str(relative).replace("\\", "/")
+    if not arcname:
+        raise ValueError("Cannot archive the current folder into itself")
+    return arcname
+
+
+def archive_entries(
+    website: Website,
+    base_path: str,
+    paths: Iterable[str],
+    output_name: str,
+    archive_format: str = "zip",
+    allow_sensitive: bool = False,
+    quota_check: Optional[QuotaCheck] = None,
+) -> str:
+    base = _safe_path(website, base_path or "public")
+    if not base.exists() or not base.is_dir():
+        raise ValueError("Archive directory not found")
+    selected = [_safe_path(website, path) for path in paths]
+    if not selected:
+        raise ValueError("Select files or folders to archive")
+    for path in selected:
+        if not path.exists():
+            raise ValueError("File or folder not found")
+        if path.is_symlink():
+            raise ValueError("Symlinks are not allowed")
+        _assert_tree_read_allowed(path, "Archiving", allow_sensitive)
+        _archive_arcname(base, path)
+    output_path = base / _archive_output_name(output_name, archive_format)
+    if output_path.exists():
+        raise ValueError("Archive output already exists")
+    for path in selected:
+        if path == output_path or (path.is_dir() and path in output_path.parents):
+            raise ValueError("Archive output cannot be inside a selected folder")
+    if quota_check:
+        quota_check(_total_size(selected), 0)
+    if archive_format == "zip":
+        with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for path in selected:
+                if path.is_dir():
+                    archive.writestr(f"{_archive_arcname(base, path).rstrip('/')}/", b"")
+                    for item in path.rglob("*"):
+                        if item.is_symlink():
+                            continue
+                        if item.is_dir():
+                            archive.writestr(f"{_archive_arcname(base, item).rstrip('/')}/", b"")
+                            continue
+                        if item.is_file():
+                            archive.write(item, arcname=_archive_arcname(base, item))
+                elif path.is_file():
+                    archive.write(path, arcname=_archive_arcname(base, path))
+    else:
+        with tarfile.open(output_path, "w:gz") as archive:
+            for path in selected:
+                archive.add(
+                    path,
+                    arcname=_archive_arcname(base, path),
+                    recursive=True,
+                    filter=lambda member: None if (member.issym() or member.islnk() or member.isdev()) else member,
+                )
+    site_users.fix_site_path(str(output_path), website.linux_user)
+    return str(output_path)
+
+
+def _validate_archive_destination(base: Path, member_name: str) -> Path:
+    clean = _clean_relative_path(member_name)
+    if not clean:
+        raise ValueError("Invalid archive member path")
+    target = (base / clean).resolve()
+    if base != target and base not in target.parents:
+        raise ValueError("Archive contains unsafe paths")
+    return target
+
+
+def _zip_uncompressed_size(archive: zipfile.ZipFile, destination: Path, allow_executable: bool = False) -> int:
+    total = 0
+    for index, info in enumerate(archive.infolist(), start=1):
+        if index > MAX_ARCHIVE_ITEMS:
+            raise ValueError("Archive has too many files")
+        mode = (info.external_attr >> 16) & 0o170000
+        if stat.S_ISLNK(mode):
+            raise ValueError("Archive symlinks are not allowed")
+        target = _validate_archive_destination(destination, info.filename)
+        if target.exists() and target.is_symlink():
+            raise ValueError("Refusing to overwrite a symlink")
+        if info.is_dir():
+            if target.exists() and not target.is_dir():
+                raise ValueError("Archive directory conflicts with an existing file")
+            continue
+        if target.exists() and target.is_dir():
+            raise ValueError("Archive file conflicts with an existing directory")
+        _assert_write_allowed(target, "Extracting", allow_executable)
+        total += info.file_size
+        if total > MAX_ARCHIVE_UNCOMPRESSED_BYTES:
+            raise ValueError("Archive is too large")
+    return total
+
+
+def _tar_uncompressed_size(archive: tarfile.TarFile, destination: Path, allow_executable: bool = False) -> int:
+    total = 0
+    for index, member in enumerate(archive.getmembers(), start=1):
+        if index > MAX_ARCHIVE_ITEMS:
+            raise ValueError("Archive has too many files")
+        if member.issym() or member.islnk() or member.isdev():
+            raise ValueError("Archive links and devices are not allowed")
+        target = _validate_archive_destination(destination, member.name)
+        if target.exists() and target.is_symlink():
+            raise ValueError("Refusing to overwrite a symlink")
+        if member.isdir():
+            if target.exists() and not target.is_dir():
+                raise ValueError("Archive directory conflicts with an existing file")
+            continue
+        if not member.isfile():
+            raise ValueError("Archive contains unsupported entries")
+        if target.exists() and target.is_dir():
+            raise ValueError("Archive file conflicts with an existing directory")
+        _assert_write_allowed(target, "Extracting", allow_executable)
+        total += member.size
+        if total > MAX_ARCHIVE_UNCOMPRESSED_BYTES:
+            raise ValueError("Archive is too large")
+    return total
+
+
+def _extract_zip_archive(archive: zipfile.ZipFile, destination: Path) -> None:
+    for info in archive.infolist():
+        target = _validate_archive_destination(destination, info.filename)
+        if info.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with archive.open(info) as source, target.open("wb") as output:
+                shutil.copyfileobj(source, output, length=1024 * 1024)
+        except RuntimeError as exc:
+            raise ValueError("Archive entry cannot be extracted") from exc
+
+
+def _extract_tar_archive(archive: tarfile.TarFile, destination: Path) -> None:
+    for member in archive.getmembers():
+        target = _validate_archive_destination(destination, member.name)
+        if member.isdir():
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+        source = archive.extractfile(member)
+        if source is None:
+            raise ValueError("Archive entry cannot be extracted")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with source, target.open("wb") as output:
+            shutil.copyfileobj(source, output, length=1024 * 1024)
+
+
+def extract_archive(
+    website: Website,
+    archive_path: str,
+    destination_path: str = "",
+    allow_executable: bool = False,
+    quota_check: Optional[QuotaCheck] = None,
+) -> str:
+    archive_file = _safe_path(website, archive_path)
+    if not archive_file.exists() or not archive_file.is_file():
+        raise ValueError("Archive not found")
+    if archive_file.is_symlink():
+        raise ValueError("Symlinks are not allowed")
+    destination = _safe_path(website, destination_path or str(Path(archive_path).parent))
+    if not destination.exists() or not destination.is_dir():
+        raise ValueError("Extract destination not found")
+
+    suffix = archive_file.name.lower()
+    if suffix.endswith(".zip"):
+        with zipfile.ZipFile(archive_file) as archive:
+            incoming = _zip_uncompressed_size(archive, destination, allow_executable)
+            if quota_check:
+                quota_check(incoming, 0)
+            _extract_zip_archive(archive, destination)
+    elif suffix.endswith(".tar.gz") or suffix.endswith(".tgz"):
+        with tarfile.open(archive_file, "r:gz") as archive:
+            incoming = _tar_uncompressed_size(archive, destination, allow_executable)
+            if quota_check:
+                quota_check(incoming, 0)
+            _extract_tar_archive(archive, destination)
+    else:
+        raise ValueError("Only .zip, .tar.gz, and .tgz archives can be extracted")
+    site_users.fix_site_path(str(destination), website.linux_user)
+    return str(destination)
+
+
+def download_file_path(website: Website, relative_path: str, allow_sensitive: bool = False) -> Path:
+    target = _safe_path(website, relative_path)
+    if not target.exists() or not target.is_file():
+        raise ValueError("File not found")
+    if target.is_symlink():
+        raise ValueError("Symlinks are not allowed")
+    _assert_sensitive_read_allowed(target, "Downloading", allow_sensitive)
+    return target
