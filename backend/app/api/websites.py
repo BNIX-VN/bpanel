@@ -20,7 +20,10 @@ router = APIRouter(prefix="/websites", tags=["websites"])
 
 
 def _panel_email_for_site_user(username: str) -> str:
-    return f"{username}@users.bpanel.vn"
+    # RFC 2606 reserves the .invalid TLD for synthetic addresses that must
+    # never resolve to a real mailbox; using a real-looking domain here would
+    # leak panel-internal traffic to whoever owns that domain in the wild.
+    return f"{username}@users.bpanel.invalid"
 
 
 def _ensure_panel_user_for_site(db: Session, username: str) -> tuple[User, str | None]:
@@ -31,7 +34,7 @@ def _ensure_panel_user_for_site(db: Session, username: str) -> tuple[User, str |
     password = secrets.token_urlsafe(18)
     email = _panel_email_for_site_user(username)
     if db.query(User).filter(User.email == email).first():
-        email = f"{username}-{secrets.token_hex(4)}@users.bpanel.test"
+        email = f"{username}-{secrets.token_hex(4)}@users.bpanel.invalid"
     user = User(
         username=username,
         email=email,
@@ -60,7 +63,9 @@ def _delete_auto_panel_user_for_site(db: Session, website: Website, current_user
         return
     if not website.linux_user or owner.username != website.linux_user:
         return
-    if owner.role != "user" or not owner.email.endswith(("@users.bpanel.vn", "@users.bpanel.test")):
+    if owner.role != "user" or not owner.email.endswith(
+        ("@users.bpanel.invalid", "@users.bpanel.vn", "@users.bpanel.test")
+    ):
         return
     remaining = db.query(Website).filter(Website.owner_id == owner.id, Website.id != website.id).count()
     if remaining == 0:

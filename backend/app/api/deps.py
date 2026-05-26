@@ -2,6 +2,7 @@ from typing import Optional
 
 from fastapi import Cookie, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
+from hmac import compare_digest
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
@@ -64,7 +65,13 @@ def get_current_user(
         if request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}:
             csrf_cookie = request.cookies.get("bpanel_csrf")
             csrf_header = request.headers.get("x-csrf-token")
-            if not csrf_cookie or not csrf_header or csrf_cookie != csrf_header:
+            # Constant-time compare to avoid leaking the cookie value via
+            # response-time differences. Both inputs must exist.
+            if (
+                not csrf_cookie
+                or not csrf_header
+                or not compare_digest(csrf_cookie, csrf_header)
+            ):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="CSRF token missing or invalid",

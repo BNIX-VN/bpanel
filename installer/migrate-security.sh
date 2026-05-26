@@ -128,9 +128,12 @@ env_set_default FRONTEND_DIST "$APP_DIR/frontend/dist"
 
 cat >/usr/local/sbin/bpanel-api-start <<STARTER
 #!/usr/bin/env bash
+# Trusted forwarders: only the local Nginx (127.0.0.1) is allowed to set
+# X-Forwarded-For / X-Forwarded-Proto. Anything else (direct hits on
+# 0.0.0.0:2222) cannot spoof the audit log IP or the login rate-limit key.
 set -euo pipefail
 cd ${APP_DIR}/backend
-args=(app.main:app --host 0.0.0.0 --port "\${PANEL_PORT:-2222}" --proxy-headers --forwarded-allow-ips "*")
+args=(app.main:app --host 0.0.0.0 --port "\${PANEL_PORT:-2222}" --proxy-headers --forwarded-allow-ips "127.0.0.1")
 if [[ -n "\${PANEL_SSL_CERT:-}" && -n "\${PANEL_SSL_KEY:-}" && -f "\${PANEL_SSL_CERT}" && -f "\${PANEL_SSL_KEY}" ]]; then
   args+=(--ssl-certfile "\${PANEL_SSL_CERT}" --ssl-keyfile "\${PANEL_SSL_KEY}")
 fi

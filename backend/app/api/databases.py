@@ -5,6 +5,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from starlette.background import BackgroundTask
 from sqlalchemy.orm import Session
 from typing import List
+import ipaddress
+import logging
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
@@ -13,9 +15,27 @@ from app.core.secrets import decrypt, encrypt
 from app.models.entities import DatabaseAccount, User, Website
 from app.schemas.schemas import DatabaseCreate, DatabaseCreatedOut, DatabaseOut, DatabasePasswordUpdate
 from app.services import mariadb, panel_urls
+from app.services.audit import log_action
 from app.services.sso_tokens import consume_phpmyadmin_token, create_phpmyadmin_token
 
 router = APIRouter(prefix="/databases", tags=["databases"])
+
+logger = logging.getLogger("bpanel.databases")
+
+
+def _is_loopback_peer(request: Request) -> bool:
+    """Return True if the immediate TCP peer is loopback.
+
+    With ``--forwarded-allow-ips 127.0.0.1`` (see installer/install.sh) any
+    X-Forwarded-For from a non-trusted peer is dropped, so request.client.host
+    is the real connecting address.
+    """
+    if not request.client:
+        return False
+    try:
+        return ipaddress.ip_address(request.client.host).is_loopback
+    except ValueError:
+        return False
 
 
 def get_accessible_database(database_id: int, db: Session, current_user: User) -> DatabaseAccount:
@@ -102,14 +122,20 @@ def download_database(database_id: int, db: Session = Depends(get_db), current_u
 
 
 @router.get("/phpmyadmin-sso/{token}")
-def consume_phpmyadmin_sso(token: str):
+def consume_phpmyadmin_sso(token: str, request: Request):
     """Consume a one-shot phpMyAdmin SSO token.
 
-    Security model: 256-bit token entropy (secrets.token_urlsafe(32)), one-shot
-    (file removed on read), TTL 60 seconds. The previous IP whitelist was a
-    no-op because uvicorn was not configured with proxy headers, so we now
-    rely entirely on token secrecy.
+    Security model:
+      * 256-bit token entropy (secrets.token_urlsafe(32)).
+      * One-shot (file removed on read), TTL 60 seconds.
+      * Restricted to loopback callers. The phpMyAdmin signon script always
+        curls ``http(s)://127.0.0.1:<port>/api/...`` from the same host, so a
+        legitimate request never has a remote peer.
     """
+    if not _is_loopback_peer(request):
+        peer = request.client.host if request.client else "unknown"
+        logger.warning("phpmyadmin-sso non-loopback access attempt from %s", peer)
+        raise HTTPException(status_code=404, detail="Invalid or expired token")
     data = consume_phpmyadmin_token(token)
     if not data:
         raise HTTPException(status_code=404, detail="Invalid or expired token")
@@ -120,6 +146,13 @@ def consume_phpmyadmin_sso(token: str):
 def create_phpmyadmin_sso(database_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     item = get_accessible_database(database_id, db, current_user)
     token = create_phpmyadmin_token(item.db_user, decrypt(item.db_password), item.db_name)
+    log_action(
+        db,
+        current_user.id,
+        "phpmyadmin_sso",
+        f"db={item.db_name}",
+        request=request,
+    )
     return {"url": f"{panel_urls.tools_base_url(request)}/phpmyadmin/bpanel-signon.php?bpanel_sso={token}"}
 
 

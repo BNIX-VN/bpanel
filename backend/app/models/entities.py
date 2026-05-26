@@ -83,6 +83,11 @@ class SftpBackupTarget(Base):
     private_key: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     remote_path: Mapped[str] = mapped_column(String(500), default="/backups/bpanel")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # TOFU host key pinning so the second SSH connection on cannot be silently
+    # MITM'd. Populated on first successful connect (or by an explicit rotate
+    # action) and verified on every connect afterwards.
+    host_key_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    host_key_fingerprint: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 

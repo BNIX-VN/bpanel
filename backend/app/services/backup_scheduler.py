@@ -46,7 +46,7 @@ def _upload_if_configured(db, schedule: BackupSchedule, archive: str) -> str:
     target = db.query(SftpBackupTarget).filter(SftpBackupTarget.id == schedule.target_id, SftpBackupTarget.is_active == True).first()  # noqa: E712
     if not target:
         raise ValueError("SFTP target not found")
-    remote_file = backup.upload_to_sftp(
+    result = backup.upload_to_sftp(
         archive,
         host=target.host,
         port=target.port,
@@ -54,8 +54,14 @@ def _upload_if_configured(db, schedule: BackupSchedule, archive: str) -> str:
         password=decrypt(target.password) if target.password else None,
         private_key=decrypt(target.private_key) if target.private_key else None,
         remote_path=target.remote_path,
+        expected_host_key_type=target.host_key_type,
+        expected_host_key_fingerprint=target.host_key_fingerprint,
     )
-    return f"{target.name}:{remote_file}"
+    if not target.host_key_fingerprint and result.get("host_key_fingerprint"):
+        target.host_key_type = result["host_key_type"]
+        target.host_key_fingerprint = result["host_key_fingerprint"]
+        db.commit()
+    return f"{target.name}:{result['remote_file']}"
 
 
 def _decode_user_ids(raw: str | None) -> list[int]:
@@ -85,7 +91,7 @@ def _schedule_users(db, schedule: BackupSchedule) -> list[User]:
 
 def _short_message(parts: list[str]) -> str:
     message = "; ".join(parts)
-    return message[:1000]
+    return message[:4000]
 
 
 def run_due_schedules(now: datetime | None = None) -> int:

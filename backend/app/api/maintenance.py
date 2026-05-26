@@ -74,7 +74,7 @@ def upload_archive_to_target(db: Session, target_id: int, archive: str) -> tuple
     if not target or not target.is_active:
         raise HTTPException(status_code=404, detail="SFTP target not found")
     try:
-        remote_file = backup.upload_to_sftp(
+        result = backup.upload_to_sftp(
             archive,
             host=target.host,
             port=target.port,
@@ -82,10 +82,18 @@ def upload_archive_to_target(db: Session, target_id: int, archive: str) -> tuple
             password=decrypt(target.password) if target.password else None,
             private_key=decrypt(target.private_key) if target.private_key else None,
             remote_path=target.remote_path,
+            expected_host_key_type=target.host_key_type,
+            expected_host_key_fingerprint=target.host_key_fingerprint,
         )
+    except backup.SftpHostKeyMismatch as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    return target.name, remote_file
+    if not target.host_key_fingerprint and result.get("host_key_fingerprint"):
+        target.host_key_type = result["host_key_type"]
+        target.host_key_fingerprint = result["host_key_fingerprint"]
+        db.commit()
+    return target.name, result["remote_file"]
 
 
 def _save_user_restore_upload(file: UploadFile) -> dict:
@@ -418,7 +426,7 @@ def create_sftp_backup(
     db_item = db.query(DatabaseAccount).filter(DatabaseAccount.website_id == website.id).first()
     archive = backup.create_backup(website, db_item.db_name if db_item else None)
     try:
-        remote_file = backup.upload_to_sftp(
+        result = backup.upload_to_sftp(
             archive,
             host=target.host,
             port=target.port,
@@ -426,9 +434,18 @@ def create_sftp_backup(
             password=decrypt(target.password) if target.password else None,
             private_key=decrypt(target.private_key) if target.private_key else None,
             remote_path=target.remote_path,
+            expected_host_key_type=target.host_key_type,
+            expected_host_key_fingerprint=target.host_key_fingerprint,
         )
+    except backup.SftpHostKeyMismatch as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    if not target.host_key_fingerprint and result.get("host_key_fingerprint"):
+        target.host_key_type = result["host_key_type"]
+        target.host_key_fingerprint = result["host_key_fingerprint"]
+        db.commit()
+    remote_file = result["remote_file"]
     log_action(db, current_user.id, "backup_sftp", website.domain, f"{target.name}:{remote_file}", request=request)
     return {"backup_file": archive, "remote_file": remote_file, "target": target.name}
 

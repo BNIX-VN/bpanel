@@ -33,7 +33,10 @@ CSRF_HEADER = "X-CSRF-Token"
 
 
 # In-process sliding window rate limiter for /auth/login.
-# For a single-process deployment this is enough; for multi-worker switch to Redis.
+# We key counters BOTH by client IP and by submitted username so an attacker
+# rotating IPs cannot bypass the per-account lockout, and a noisy client IP
+# cannot drown out other accounts. For a single-process deployment this is
+# enough; for multi-worker switch to Redis (which is already in the stack).
 _LOGIN_WINDOW_SECONDS = 60
 _LOGIN_MAX_ATTEMPTS = 8
 _LOGIN_LOCKOUT_SECONDS = 15 * 60
@@ -48,6 +51,11 @@ _DUMMY_HASH = hash_password("not-a-real-password-bpanel-dummy")
 
 def _client_key(request: Request) -> str:
     return request.client.host if request.client else "unknown"
+
+
+def _username_key(username: str) -> str:
+    name = (username or "").strip().lower()
+    return f"user:{name}" if name else "user:_unknown"
 
 
 def _is_secure_request(request: Request) -> bool:
@@ -175,8 +183,10 @@ def login(
     otp: str = Form(default=""),
     db: Session = Depends(get_db),
 ):
-    key = _client_key(request)
-    _enforce_rate_limit(key)
+    ip_key = _client_key(request)
+    user_key = _username_key(form.username)
+    _enforce_rate_limit(ip_key)
+    _enforce_rate_limit(user_key)
 
     user = db.query(User).filter(User.username == form.username).first()
     if user and user.is_active:
@@ -186,7 +196,8 @@ def login(
         password_ok = False
 
     if not user or not user.is_active or not password_ok:
-        _record_failure(key)
+        _record_failure(ip_key)
+        _record_failure(user_key)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password",
@@ -196,13 +207,15 @@ def login(
         if not otp:
             return LoginResponse(requires_2fa=True)
         if not _verify_totp(user, otp):
-            _record_failure(key)
+            _record_failure(ip_key)
+            _record_failure(user_key)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid authentication code",
             )
 
-    _record_success(key)
+    _record_success(ip_key)
+    _record_success(user_key)
     if needs_rehash(user.hashed_password):
         try:
             user.hashed_password = hash_password(form.password)

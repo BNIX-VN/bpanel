@@ -361,6 +361,8 @@ class SftpBackupTargetOut(BaseModel):
     username: str
     remote_path: str
     is_active: bool
+    host_key_type: Optional[str] = None
+    host_key_fingerprint: Optional[str] = None
 
     class Config:
         from_attributes = True

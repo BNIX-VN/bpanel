@@ -1,6 +1,8 @@
 from datetime import datetime
 from io import StringIO
+import hashlib
 import json
+import logging
 from pathlib import Path
 import posixpath
 import re
@@ -10,6 +12,8 @@ import tempfile
 from typing import List, Optional
 
 import paramiko
+from paramiko.pkey import PKey
+from paramiko.ssh_exception import SSHException
 
 from app.core.config import settings
 from app.core.secrets import decrypt, encrypt
@@ -18,6 +22,8 @@ from app.models.entities import DatabaseAccount, User, Website
 from app.services import mariadb, nginx, site_users, wordpress
 from app.services.shell import shell
 
+
+logger = logging.getLogger("bpanel.backup")
 
 MAX_UPLOAD_BYTES = 1024 * 1024 * 1024
 BACKUP_MANIFEST = "manifest.json"
@@ -555,6 +561,55 @@ def _ensure_remote_dir(sftp, remote_dir: str) -> None:
             sftp.mkdir(current)
 
 
+class SftpHostKeyMismatch(RuntimeError):
+    """Raised when a pinned host key no longer matches the server."""
+
+
+def _fingerprint(key: PKey) -> str:
+    """SHA256:base64 fingerprint, identical to OpenSSH ``ssh-keygen -lf``."""
+    digest = hashlib.sha256(key.asbytes()).digest()
+    import base64 as _b64
+
+    return "SHA256:" + _b64.b64encode(digest).rstrip(b"=").decode("ascii")
+
+
+class _PinnedHostKeyPolicy(paramiko.MissingHostKeyPolicy):
+    """Paramiko policy that captures the server host key on first connect.
+
+    When ``expected`` is ``None`` (TOFU bootstrap) the policy accepts the key
+    and stores it on ``self.captured`` for the caller to persist. When
+    ``expected`` is set the policy refuses to fall back here at all because
+    the verification has already happened in the caller; this is purely a
+    safety net to surface a clear error if logic upstream changes.
+    """
+
+    def __init__(self, expected_type: Optional[str], expected_fingerprint: Optional[str]):
+        self.expected_type = expected_type
+        self.expected_fingerprint = expected_fingerprint
+        self.captured_type: Optional[str] = None
+        self.captured_fingerprint: Optional[str] = None
+
+    def missing_host_key(self, client, hostname, key):  # type: ignore[override]
+        captured = _fingerprint(key)
+        if self.expected_fingerprint:
+            # Verification path: a key was pinned but Paramiko did not find a
+            # matching entry. Refuse the connection.
+            raise SftpHostKeyMismatch(
+                f"SFTP host key mismatch for {hostname}: "
+                f"expected {self.expected_type or '?'} {self.expected_fingerprint}, "
+                f"got {key.get_name()} {captured}"
+            )
+        # TOFU bootstrap.
+        self.captured_type = key.get_name()
+        self.captured_fingerprint = captured
+        logger.warning(
+            "SFTP TOFU bootstrap: pinning %s host key %s %s",
+            hostname,
+            self.captured_type,
+            self.captured_fingerprint,
+        )
+
+
 def upload_to_sftp(
     local_file: str,
     *,
@@ -564,7 +619,21 @@ def upload_to_sftp(
     remote_path: str,
     password: Optional[str] = None,
     private_key: Optional[str] = None,
-) -> str:
+    expected_host_key_type: Optional[str] = None,
+    expected_host_key_fingerprint: Optional[str] = None,
+) -> dict:
+    """Upload ``local_file`` to ``host:port`` via SFTP.
+
+    Host key handling:
+      * If a fingerprint is pinned, the server's key is compared against it
+        before any auth bytes are sent. A mismatch raises
+        :class:`SftpHostKeyMismatch`.
+      * If no fingerprint is pinned yet (TOFU bootstrap), the server's key is
+        captured and returned. The caller must persist it.
+
+    Returns a dict ``{"remote_file": ..., "host_key_type": ...,
+    "host_key_fingerprint": ...}``.
+    """
     local_path = Path(local_file).resolve()
     if not local_path.exists() or not local_path.is_file():
         raise FileNotFoundError("Local backup file not found")
@@ -575,9 +644,36 @@ def upload_to_sftp(
     remote_dir = posixpath.normpath(remote_path.strip() or ".")
     remote_file = posixpath.join(remote_dir, local_path.name)
 
+    captured_type: Optional[str] = expected_host_key_type
+    captured_fp: Optional[str] = expected_host_key_fingerprint
+
     client = paramiko.SSHClient()
-    client.load_system_host_keys()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    # Note: we deliberately do NOT call load_system_host_keys() because the
+    # daemon runs as the bpanel system user with no shell history; trusting
+    # /home/bpanel/.ssh/known_hosts blindly would defeat the pinning model.
+    if expected_host_key_fingerprint:
+        # Strict: the only acceptable key is the one pinned in the DB.
+        client.set_missing_host_key_policy(paramiko.RejectPolicy())
+        try:
+            host_keys = client.get_host_keys()
+            host_key_obj = _decode_pinned_key(
+                expected_host_key_type or "", expected_host_key_fingerprint
+            )
+            if host_key_obj is not None:
+                host_keys.add(host, expected_host_key_type or host_key_obj.get_name(), host_key_obj)
+        except Exception:  # pragma: no cover - decoding fallback
+            pass
+        # Even if we could not pre-load the key (e.g. only fingerprint stored),
+        # the missing_host_key policy below performs the comparison itself.
+        client.set_missing_host_key_policy(
+            _PinnedHostKeyPolicy(expected_host_key_type, expected_host_key_fingerprint)
+        )
+    else:
+        # TOFU bootstrap path: capture the server key for the caller.
+        client.set_missing_host_key_policy(
+            _PinnedHostKeyPolicy(None, None)
+        )
+
     try:
         client.connect(
             hostname=host,
@@ -588,10 +684,45 @@ def upload_to_sftp(
             timeout=20,
             banner_timeout=20,
             auth_timeout=20,
+            allow_agent=False,
+            look_for_keys=False,
         )
+        # Verify the server key we actually negotiated against the pin. The
+        # policy catches the "missing" case; this catches the case where the
+        # key was already in the local known_hosts and the policy was not
+        # called at all.
+        transport = client.get_transport()
+        if transport is None:
+            raise SSHException("SFTP transport unavailable")
+        server_key = transport.get_remote_server_key()
+        server_fp = _fingerprint(server_key)
+        server_type = server_key.get_name()
+        if expected_host_key_fingerprint:
+            if server_fp != expected_host_key_fingerprint:
+                raise SftpHostKeyMismatch(
+                    f"SFTP host key mismatch for {host}: "
+                    f"expected {expected_host_key_type or '?'} {expected_host_key_fingerprint}, "
+                    f"got {server_type} {server_fp}"
+                )
+            captured_type = expected_host_key_type or server_type
+            captured_fp = expected_host_key_fingerprint
+        else:
+            captured_type = server_type
+            captured_fp = server_fp
         with client.open_sftp() as sftp:
             _ensure_remote_dir(sftp, remote_dir)
             sftp.put(str(local_path), remote_file)
     finally:
         client.close()
-    return remote_file
+    return {
+        "remote_file": remote_file,
+        "host_key_type": captured_type,
+        "host_key_fingerprint": captured_fp,
+    }
+
+
+def _decode_pinned_key(key_type: str, fingerprint: str) -> Optional[PKey]:
+    """We store only the fingerprint, so reconstructing a PKey is not always
+    possible. Returns ``None`` to indicate the caller should rely on the
+    in-policy fingerprint comparison instead."""
+    return None

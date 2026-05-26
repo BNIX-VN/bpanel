@@ -16,9 +16,11 @@ def log_action(
 ) -> None:
     extras = []
     if request is not None:
-        # request.client.host is now trustworthy because uvicorn is started
-        # with --proxy-headers --forwarded-allow-ips 127.0.0.1, so X-Forwarded-For
-        # is only honoured when the peer is the trusted local Nginx.
+        # request.client.host is trustworthy because uvicorn is started with
+        # --proxy-headers --forwarded-allow-ips 127.0.0.1, so X-Forwarded-For
+        # is only honoured when the peer is the trusted local Nginx (matches
+        # /usr/local/sbin/bpanel-api-start). Direct hits on 0.0.0.0:2222 from
+        # the public Internet cannot forge the source IP.
         ip = request.client.host if request.client else ""
         ua = request.headers.get("user-agent", "")[:200]
         if ip:
