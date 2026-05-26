@@ -1498,40 +1498,49 @@ function App() {
 
   const ActiveIcon = activeNavItem?.[2] || Home;
 
-  return <main>
-    <section className="topbar">
-      <div>
-        <p className="eyebrow">Server Management Panel</p>
-        <h1>BPanel</h1>
-      </div>
-      <div className="login logged-in">
-        <div className="account-pill"><span>Logged in as</span><strong>{currentUser?.username || username}</strong></div>
-        <div className="top-actions">
-          <button className="secondary compact-btn" onClick={changeMyPassword} aria-label="Change password" title="Change password"><KeyRound size={15}/><span className="btn-label">Password</span></button>
-          <button className="secondary compact-btn" onClick={logout} aria-label="Logout" title="Logout"><LogOut size={15}/><span className="btn-label">Logout</span></button>
-        </div>
-      </div>
-    </section>
-
-    <button className="mobile-nav-toggle" onClick={() => setMobileMenuOpen(o => !o)} aria-expanded={mobileMenuOpen} aria-label="Toggle navigation">
-      <Menu size={20}/><span><ActiveIcon size={17}/>{activeNavItem?.[1] || 'Menu'}</span>
-    </button>
-
+  return <main className="app-shell">
     <section className="layout">
       {mobileMenuOpen && <div className="mobile-nav-backdrop" onClick={() => setMobileMenuOpen(false)} aria-hidden="true"></div>}
       <aside className={`sidebar ${mobileMenuOpen ? 'open' : ''}`} role="navigation" aria-label="Main navigation">
         <div className="sidebar-head">
+          <div className="sidebar-brand">
+            <span className="brand-mark">BP</span>
+            <div>
+              <strong>BPanel</strong>
+              <small>Server Panel</small>
+            </div>
+          </div>
           <button className="sidebar-close" onClick={() => setMobileMenuOpen(false)} aria-label="Close menu"><X size={18}/></button>
         </div>
-        {navItems.map(([key, label, Icon]) => <button key={key} className={page === key ? 'active' : ''} onClick={() => setPage(key)} aria-current={page === key ? 'page' : undefined}>
-          <Icon size={17}/>{label}
-        </button>)}
+        <nav className="sidebar-nav">
+          {navItems.map(([key, label, Icon]) => <button key={key} className={page === key ? 'active' : ''} onClick={() => { setPage(key); setMobileMenuOpen(false); }} aria-current={page === key ? 'page' : undefined}>
+            <Icon size={17}/>{label}
+          </button>)}
+        </nav>
       </aside>
       <div className="content">
-        {renderPage()}
-        {loading && <div className="loading"><span></span>{loading}</div>}
-        {error && <div className="error">{error}</div>}
-        {notice && <div className="notice">{notice}</div>}
+        <section className="topbar">
+          <button className="mobile-nav-toggle" onClick={() => setMobileMenuOpen(o => !o)} aria-expanded={mobileMenuOpen} aria-label="Toggle navigation">
+            <Menu size={20}/><span><ActiveIcon size={17}/>{activeNavItem?.[1] || 'Menu'}</span>
+          </button>
+          <div className="page-title">
+            <p className="eyebrow">Server Management Panel</p>
+            <h1>{activeNavItem?.[1] || 'BPanel'}</h1>
+          </div>
+          <div className="login logged-in">
+            <div className="account-pill"><span>Logged in as</span><strong>{currentUser?.username || username}</strong></div>
+            <div className="top-actions">
+              <button className="secondary compact-btn" onClick={changeMyPassword} aria-label="Change password" title="Change password"><KeyRound size={15}/><span className="btn-label">Password</span></button>
+              <button className="secondary compact-btn" onClick={logout} aria-label="Logout" title="Logout"><LogOut size={15}/><span className="btn-label">Logout</span></button>
+            </div>
+          </div>
+        </section>
+        <div className="content-body">
+          {renderPage()}
+          {loading && <div className="loading"><span></span>{loading}</div>}
+          {error && <div className="error">{error}</div>}
+          {notice && <div className="notice">{notice}</div>}
+        </div>
       </div>
     </section>
   </main>;
