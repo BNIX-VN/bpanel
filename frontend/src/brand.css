@@ -137,6 +137,8 @@ button:disabled,.upload-button.disabled{background:#dbe7f7;color:#7a8ca4;border-
   .login.logged-in .top-actions button{height:36px;min-height:36px}
   .mobile-nav-toggle{display:flex;align-items:center;justify-content:center}
   button.sidebar-close{display:flex;align-items:center;justify-content:flex-end}
+  .user-row .row-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;width:100%;justify-content:stretch}
+  .user-row .row-actions button{width:100%;height:40px;min-height:40px;padding-inline:8px}
   .site-card>.actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;width:100%;justify-content:stretch}
   .site-card>.actions select,
   .site-card>.actions button,
@@ -165,6 +167,8 @@ button:disabled,.upload-button.disabled{background:#dbe7f7;color:#7a8ca4;border-
   .site-card>.actions{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
   .site-card>.actions select,
   .site-card>.actions button{height:40px;min-height:40px;font-size:12px}
+  .user-row .row-actions{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  .user-row .row-actions button{height:40px;min-height:40px;font-size:12px}
   .backups-page .backup-item .actions{grid-template-columns:1fr}
   .backups-page .backup-item .actions .danger{width:100%}
 }
