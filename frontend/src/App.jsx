@@ -461,10 +461,11 @@ function App() {
     listFiles(fileListPath);
   }
 
-  async function openFileBrowser() {
+  async function openFileBrowser(websiteId = selectedWebsiteId) {
     try {
       setError('');
       setLoading('Opening File Browser...');
+      const targetWebsiteId = websiteId ? Number(websiteId) : null;
       const csrfToken = readCookie('bpanel_csrf');
       const headers = { 'Content-Type': 'application/json' };
       if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
@@ -472,7 +473,7 @@ function App() {
         method: 'POST',
         credentials: 'include',
         headers,
-        body: JSON.stringify({ website_id: selectedWebsiteId ? Number(selectedWebsiteId) : null }),
+        body: JSON.stringify({ website_id: targetWebsiteId }),
       });
       const data = await res.json().catch(() => ({}));
       if (handleAuthExpired(res.status, data.detail)) return;
@@ -480,6 +481,12 @@ function App() {
       window.open(data.url, '_blank', 'noopener,noreferrer');
     } catch (err) { setError('Cannot open File Browser.'); }
     finally { setLoading(''); }
+  }
+
+  async function openWebsiteFileManager(site) {
+    setSelectedWebsiteId(String(site.id));
+    setFileUploadDir('public');
+    await openFileBrowser(site.id);
   }
 
   async function uploadSiteFile(file) {
@@ -996,6 +1003,7 @@ function App() {
                 <option value="8.3">PHP 8.3</option><option value="8.4">PHP 8.4</option>
               </select>
               <button disabled={!!loading || (websitePhpVersions[site.id] || site.php_version) === site.php_version} onClick={() => changeWebsitePhpVersion(site)}>Change PHP</button>
+              <button disabled={!!loading} onClick={() => openWebsiteFileManager(site)}><FolderOpen size={14}/> Files</button>
               <button disabled={!!loading} onClick={() => openNginxCustom(site)}><Code2 size={14}/> Nginx</button>
               {site.app_type === 'wordpress' && <button disabled={!!loading} onClick={() => fixWordPressPermissions(site.id)}>Fix permissions</button>}
               {isAdmin && <button className="danger" disabled={!!loading} onClick={() => deleteWebsite(site.id)}><Trash2 size={14}/> Delete</button>}
