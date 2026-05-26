@@ -252,8 +252,9 @@ There is no path back to root via the API process.
 - Custom Nginx blocks are validated: braces must balance, dangerous directives
   (`server {`, `http {`, `events {`, `include`, `load_module`, `user`, `lua_*`,
   `proxy_pass`, `alias`, `*_log`, `ssl_*`) are rejected, max 16 KB.
-- File manager rejects symlinks anywhere in the path. `wp-config.php`,
-  `.user.ini`, `.env`, `.htaccess` are admin-only.
+- File manager rejects symlinks anywhere in the path. Website owners can manage
+  their own deploy sources, including PHP, `.htaccess`, `.env`, and
+  `wp-config.php`, with quota and ownership checks enforced by BPanel.
 - Path traversal is blocked at every layer that touches the filesystem.
 - Auth uses HttpOnly cookies (`bpanel_session`) plus a CSRF token cookie
   (`bpanel_csrf`) echoed in the `X-CSRF-Token` header. The JWT is never

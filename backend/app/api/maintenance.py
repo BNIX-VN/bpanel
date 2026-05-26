@@ -803,8 +803,6 @@ def extract_archive(payload: FileExtract, db: Session = Depends(get_db), current
     ensure_role(current_user.role, Role.end_user)
     website = get_owned_website(db, current_user, payload.website_id)
     try:
-        # Website owners need to extract deploy packages that commonly contain
-        # PHP, .htaccess, and other executable web assets.
         target = file_manager.extract_archive(
             website,
             payload.archive_path,

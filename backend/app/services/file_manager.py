@@ -14,14 +14,11 @@ from app.services import storage_quota
 MAX_TEXT_FILE_BYTES = 2 * 1024 * 1024
 MAX_ARCHIVE_ITEMS = 10000
 MAX_ARCHIVE_UNCOMPRESSED_BYTES = 5 * 1024 * 1024 * 1024
-BLOCKED_WRITE_SUFFIXES = {
-    ".php", ".phtml", ".phar", ".pht", ".php3", ".php4", ".php5", ".php7", ".php8",
-    ".cgi", ".pl", ".py", ".sh", ".exe", ".dll", ".so",
-    ".htaccess", ".htpasswd",
-}
-# Filenames that bypass suffix rules (no extension) but are still dangerous.
-BLOCKED_WRITE_NAMES = {".user.ini", ".env", ".htaccess", ".htpasswd", "wp-config.php"}
-SENSITIVE_READ_NAMES = {".user.ini", ".env", ".htaccess", ".htpasswd", "wp-config.php"}
+# Website ownership is the permission boundary. End users must be able to deploy
+# real web sources, including PHP, .htaccess, .env, and wp-config.php.
+BLOCKED_WRITE_SUFFIXES: set[str] = set()
+BLOCKED_WRITE_NAMES: set[str] = set()
+SENSITIVE_READ_NAMES: set[str] = set()
 
 
 def _safe_upload_name(filename: str) -> str:
