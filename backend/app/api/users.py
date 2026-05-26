@@ -15,7 +15,7 @@ from app.schemas.schemas import (
     UserUpdate,
 )
 from app.services.audit import log_action
-from app.services import storage_quota
+from app.services import site_users, storage_quota
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -31,6 +31,12 @@ def create_user(payload: UserCreate, request: Request, db: Session = Depends(get
     ensure_role(current_user.role, Role.admin)
     if db.query(User).filter((User.username == payload.username) | (User.email == payload.email)).first():
         raise HTTPException(status_code=409, detail="User already exists")
+    try:
+        site_users.ensure_panel_user(payload.username)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     user = User(
         username=payload.username,
         email=payload.email,

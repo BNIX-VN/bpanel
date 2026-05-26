@@ -447,7 +447,7 @@ with SessionLocal() as db:
         try:
             if website.linux_user:
                 runtime_php_version = website.php_version if (website.app_type or "wordpress") == "wordpress" else None
-                site_users.ensure_site_runtime(website.domain, website.root_path, runtime_php_version)
+                site_users.ensure_site_runtime(website.domain, website.root_path, runtime_php_version, website.linux_user)
             site_users.fix_site_permissions(website.root_path, website.linux_user)
         except Exception as exc:
             print(f"WARNING: could not refresh permissions for {website.domain}: {exc}")
@@ -472,6 +472,7 @@ python -m py_compile \
   app/services/file_manager.py \
   app/services/backup.py \
   app/services/backup_scheduler.py \
+  app/services/storage_quota.py \
   app/services/site_users.py \
   app/services/cron.py \
   app/services/php.py \

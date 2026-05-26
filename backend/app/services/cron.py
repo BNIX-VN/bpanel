@@ -49,7 +49,7 @@ def add_cron(website: Website, schedule: str, command: str) -> str:
     cron_user = website.linux_user or "www-data"
     if website.linux_user:
         runtime_php_version = website.php_version if (website.app_type or "wordpress") == "wordpress" else None
-        site_users.ensure_site_runtime(website.domain, website.root_path, runtime_php_version)
+        site_users.ensure_site_runtime(website.domain, website.root_path, runtime_php_version, website.linux_user)
     existing = list_cron_all(cron_user)
     new_content = existing.rstrip() + ("\n" if existing.strip() else "") + line + "\n"
     shell.privileged(

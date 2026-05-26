@@ -253,7 +253,7 @@ def restore_backup(payload: RestoreBackup, db: Session = Depends(get_db), curren
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if website.linux_user:
         runtime_php_version = website.php_version if (website.app_type or "wordpress") == "wordpress" else None
-        site_users.ensure_site_runtime(website.domain, website.root_path, runtime_php_version)
+        site_users.ensure_site_runtime(website.domain, website.root_path, runtime_php_version, website.linux_user)
     wordpress.fix_permissions(website.root_path, website.linux_user)
     log_action(db, current_user.id, "restore", website.domain, payload.backup_file)
     return {"restored_to": path}
@@ -591,7 +591,7 @@ def fix_wordpress_permissions(website_id: int, db: Session = Depends(get_db), cu
     website = get_owned_website(db, current_user, website_id)
     if website.linux_user:
         runtime_php_version = website.php_version if (website.app_type or "wordpress") == "wordpress" else None
-        site_users.ensure_site_runtime(website.domain, website.root_path, runtime_php_version)
+        site_users.ensure_site_runtime(website.domain, website.root_path, runtime_php_version, website.linux_user)
     wordpress.fix_permissions(website.root_path, website.linux_user)
     log_action(db, current_user.id, "fix_permissions", website.domain, website.root_path)
     return {"message": f"Fixed permissions for {website.domain}", "root_path": website.root_path}

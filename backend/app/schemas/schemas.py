@@ -11,6 +11,11 @@ SUPPORTED_PHP_VERSIONS = {"8.3", "8.4"}
 SUPPORTED_APP_TYPES = {"wordpress", "static"}
 SUPPORTED_ROLES = {"admin", "end_user"}
 SIZE_RE = re.compile(r"^\d{1,6}[KMG]?$")  # e.g. "512M", "1024M"
+RESERVED_LINUX_USERNAMES = {
+    "root", "daemon", "bin", "sys", "sync", "games", "man", "lp", "mail",
+    "news", "uucp", "proxy", "www-data", "backup", "list", "irc", "_apt",
+    "nobody", "bpanel", "bpanel-sites", "mysql", "redis", "nginx",
+}
 
 
 def _validate_php_version(value: Optional[str]) -> Optional[str]:
@@ -55,12 +60,19 @@ class TwoFactorCode(BaseModel):
 
 
 class UserCreate(BaseModel):
-    username: str = Field(min_length=3, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")
+    username: str = Field(min_length=3, max_length=32, pattern=r"^[a-z_][a-z0-9_-]{2,31}$")
     email: EmailStr
     password: str = Field(min_length=12, max_length=72)  # bcrypt 72-byte limit
     role: Literal["admin", "end_user"] = "end_user"
     website_limit: int = Field(default=5, ge=0, le=1000)
     storage_limit_mb: int = Field(default=1024, ge=0, le=1024 * 1024)
+
+    @field_validator("username")
+    @classmethod
+    def validate_linux_safe_username(cls, value: str) -> str:
+        if value in RESERVED_LINUX_USERNAMES:
+            raise ValueError("username is reserved by the system")
+        return value
 
 
 class UserUpdate(BaseModel):

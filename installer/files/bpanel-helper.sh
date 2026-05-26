@@ -85,7 +85,11 @@ require_php_version() {
 }
 
 require_linux_user() {
-  [[ "$1" =~ ^bp_[a-z0-9_]{3,28}$ ]] || deny "invalid site user: $1"
+  [[ "$1" =~ ^[a-z_][a-z0-9_-]{2,31}$ ]] || deny "invalid site user: $1"
+  case "$1" in
+    root|daemon|bin|sys|sync|games|man|lp|mail|news|uucp|proxy|www-data|backup|list|irc|_apt|nobody|bpanel|bpanel-sites|mysql|redis|nginx)
+      deny "reserved site user: $1" ;;
+  esac
 }
 
 require_site_domain_segment() {
@@ -111,7 +115,7 @@ require_managed_path() {
   else
     case "$resolved/" in
       "$SITES_ROOT"/*) ;;
-      "$HOME_ROOT"/bp_*/*)
+      "$HOME_ROOT"/*/*)
         first_part="${resolved#${HOME_ROOT}/}"
         first_part="${first_part%%/*}"
         require_linux_user "$first_part"
@@ -129,6 +133,49 @@ ensure_sites_group() {
   getent group "$BPANEL_SITES_GROUP" >/dev/null || groupadd --system "$BPANEL_SITES_GROUP"
   usermod -aG "$BPANEL_SITES_GROUP" bpanel 2>/dev/null || true
   usermod -aG "$BPANEL_SITES_GROUP" www-data 2>/dev/null || true
+}
+
+ensure_panel_user_home() {
+  local user="$1" home_dir="$HOME_ROOT/$1"
+  ensure_sites_group
+  require_linux_user "$user"
+  getent group "$user" >/dev/null || groupadd --system "$user"
+  if ! id -u "$user" >/dev/null 2>&1; then
+    useradd --system --home-dir "$home_dir" --shell /usr/sbin/nologin --gid "$user" "$user"
+  fi
+  usermod --home "$home_dir" --shell /usr/sbin/nologin --gid "$user" "$user" 2>/dev/null || true
+  usermod -L "$user" 2>/dev/null || true
+  mkdir -p "$home_dir"
+  chown "$user:$BPANEL_SITES_GROUP" "$home_dir"
+  chmod 0750 "$home_dir"
+}
+
+ensure_php_pool() {
+  local user="$1" target="$2" php_version="$3"
+  [[ "$php_version" != "none" ]] || return 0
+  require_linux_user "$user"
+  require_php_version "$php_version"
+  local pool_suffix="${php_version//./_}"
+  local pool_name="bpanel-${user}-${pool_suffix}"
+  local pool_file="/etc/php/${php_version}/fpm/pool.d/${pool_name}.conf"
+  cat >"$pool_file" <<POOL
+[${pool_name}]
+user = ${user}
+group = ${user}
+listen = /run/php/${pool_name}.sock
+listen.owner = www-data
+listen.group = www-data
+listen.mode = 0660
+pm = ondemand
+pm.max_children = 8
+pm.process_idle_timeout = 20s
+pm.max_requests = 500
+chdir = /
+php_admin_value[open_basedir] = ${target}:/tmp:/usr/share/php
+php_admin_value[upload_tmp_dir] = /tmp
+php_admin_value[session.save_path] = /tmp
+POOL
+  systemctl reload "php${php_version}-fpm"
 }
 
 fix_site_tree() {
@@ -269,56 +316,39 @@ case "$cmd" in
     fix_site_tree "$target" "$2"
     ;;
 
+  panel-user-ensure)
+    [[ $# -eq 1 ]] || deny "usage: panel-user-ensure <site-user>"
+    ensure_panel_user_home "$1"
+    ;;
+
   site-runtime-ensure)
     [[ $# -eq 3 ]] || deny "usage: site-runtime-ensure <site-user> <path> <php-version|none>"
     user="$1"; path="$2"; php_version="$3"
     require_linux_user "$user"
     target=$(require_managed_path "$path" "$user")
-    home_dir="$HOME_ROOT/$user"
-    ensure_sites_group
-    if ! id -u "$user" >/dev/null 2>&1; then
-      useradd --system --home-dir "$home_dir" --shell /usr/sbin/nologin --user-group "$user"
-    fi
-    usermod --home "$home_dir" --shell /usr/sbin/nologin "$user" 2>/dev/null || true
-    usermod -L "$user" 2>/dev/null || true
-    mkdir -p "$home_dir" "$target/public"
-    chown "$user:$BPANEL_SITES_GROUP" "$home_dir"
-    chmod 0750 "$home_dir"
+    ensure_panel_user_home "$user"
+    mkdir -p "$target/public"
     chown "$user:$user" "$target" "$target/public"
     chmod 0755 "$target" "$target/public"
     fix_site_tree "$target" "$user"
-    if [[ "$php_version" != "none" ]]; then
-      require_php_version "$php_version"
-      pool_name="bpanel-${user}"
-      pool_file="/etc/php/${php_version}/fpm/pool.d/${pool_name}.conf"
-      for dir in /etc/php/*/fpm/pool.d; do
-        [[ -d "$dir" ]] || continue
-        old_file="$dir/${pool_name}.conf"
-        if [[ "$old_file" != "$pool_file" && -f "$old_file" ]]; then
-          rm -f "$old_file"
-          old_version="$(echo "$dir" | awk -F/ '{print $4}')"
-          systemctl reload "php${old_version}-fpm" 2>/dev/null || true
-        fi
-      done
-      cat >"$pool_file" <<POOL
-[${pool_name}]
-user = ${user}
-group = ${user}
-listen = /run/php/${pool_name}.sock
-listen.owner = www-data
-listen.group = www-data
-listen.mode = 0660
-pm = ondemand
-pm.max_children = 8
-pm.process_idle_timeout = 20s
-pm.max_requests = 500
-chdir = /
-php_admin_value[open_basedir] = ${target}:/tmp:/usr/share/php
-php_admin_value[upload_tmp_dir] = /tmp
-php_admin_value[session.save_path] = /tmp
-POOL
-      systemctl reload "php${php_version}-fpm"
+    ensure_php_pool "$user" "$target" "$php_version"
+    ;;
+
+  site-runtime-move)
+    [[ $# -eq 4 ]] || deny "usage: site-runtime-move <site-user> <old-path> <new-path> <php-version|none>"
+    user="$1"; old_path="$2"; new_path="$3"; php_version="$4"
+    require_linux_user "$user"
+    old_target=$(require_managed_path "$old_path")
+    new_target=$(require_managed_path "$new_path" "$user")
+    ensure_panel_user_home "$user"
+    if [[ "$old_target" != "$new_target" ]]; then
+      [[ ! -e "$new_target" ]] || deny "target path already exists: $new_target"
+      mkdir -p "$(dirname "$new_target")"
+      mv "$old_target" "$new_target"
     fi
+    mkdir -p "$new_target/public"
+    fix_site_tree "$new_target" "$user"
+    ensure_php_pool "$user" "$new_target" "$php_version"
     ;;
 
   site-runtime-delete)
@@ -345,7 +375,8 @@ POOL
   rm-site)
     [[ $# -eq 1 ]] || deny "usage: rm-site <path>"
     target=$(require_managed_path "$1")
-    [[ "$target" == "$SITES_ROOT" || "$target" =~ ^${HOME_ROOT}/bp_[a-z0-9_]{3,28}$ ]] && deny "refusing to delete a site root container"
+    relative="${target#${HOME_ROOT}/}"
+    [[ "$target" == "$SITES_ROOT" || "$relative" != */* ]] && deny "refusing to delete a site root container"
     exec rm -rf "$target"
     ;;
 

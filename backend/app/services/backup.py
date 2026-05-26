@@ -323,6 +323,7 @@ def restore_user_backup(backup_file: str, db) -> dict:
         db.add(user)
         db.flush()
         created_user = True
+    site_users.ensure_panel_user(user.username)
 
     restored_websites = []
     with tempfile.TemporaryDirectory(prefix="bpanel-user-restore-") as tmp:
@@ -335,10 +336,10 @@ def restore_user_backup(backup_file: str, db) -> dict:
             app_type = site_info.get("app_type") or "wordpress"
             if app_type not in {"wordpress", "static"}:
                 app_type = "wordpress"
-            linux_user = site_users.linux_user_for_domain(domain)
-            root_path = site_users.site_root_for_domain(domain)
+            linux_user = site_users.linux_user_for_panel_username(user.username)
+            root_path = site_users.site_root_for_panel_user(user.username, domain)
             runtime_php_version = php_version if app_type == "wordpress" else None
-            site_users.ensure_site_runtime(domain, root_path, runtime_php_version)
+            site_users.ensure_site_runtime(domain, root_path, runtime_php_version, linux_user)
             _safe_extract_prefix(archive, f"sites/{domain}/site", Path(root_path).resolve())
 
             website = db.query(Website).filter(Website.domain == domain).first()
@@ -403,7 +404,7 @@ def restore_user_backup(backup_file: str, db) -> dict:
                 app_type=app_type,
                 php_version=php_version,
                 custom_directives=website.nginx_custom or "",
-                php_fpm_socket_override=site_users.php_fpm_socket(linux_user) if runtime_php_version else None,
+                php_fpm_socket_override=site_users.php_fpm_socket(linux_user, php_version) if runtime_php_version else None,
             )
             wordpress.fix_permissions(root_path, linux_user)
             restored_websites.append({"domain": domain, "created": created_site})

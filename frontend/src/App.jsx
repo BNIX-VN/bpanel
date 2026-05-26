@@ -299,6 +299,18 @@ function App() {
     if (data) { setNotice(`Deleted user ${user.username}`); await loadUsers(); }
   }
 
+  async function quickLoginUser(user) {
+    if (!user) return;
+    if (!confirm(`Login as ${user.username}? New websites will belong to this user.`)) return;
+    const data = await request(`/auth/impersonate/${user.id}`, { method: 'POST' }, `Logging in as ${user.username}...`);
+    if (data?.access_token) {
+      setNotice(`Logged in as ${user.username}.`);
+      await loadCurrentUser();
+      setPage('websites');
+      await refreshAll();
+    }
+  }
+
   async function changeMyPassword() { if (!currentUser) return; await changeUserPassword(currentUser); }
 
   async function loadTwoFactorStatus() {
@@ -1498,10 +1510,10 @@ function App() {
     return <>
       <section className="section">
         <div className="section-title">
-          <div><h2>Add panel user</h2><p className="hint">Admin has full access. End user manages websites assigned to that account.</p></div>
+          <div><h2>Add panel user</h2><p className="hint">Panel username is also the Linux user. Login as a user before creating websites for that account.</p></div>
         </div>
         <div className="user-create-card">
-          <label><span>Username</span><input value={newUser.username} onChange={e => setNewUser(prev => ({ ...prev, username: e.target.value }))} placeholder="johndoe" /></label>
+          <label><span>Username</span><input value={newUser.username} onChange={e => setNewUser(prev => ({ ...prev, username: e.target.value.toLowerCase() }))} placeholder="johndoe" /></label>
           <label><span>Email</span><input value={newUser.email} onChange={e => setNewUser(prev => ({ ...prev, email: e.target.value }))} placeholder="user@domain.com" /></label>
           <label><span>Password</span><input value={newUser.password} onChange={e => setNewUser(prev => ({ ...prev, password: e.target.value }))} placeholder="Min 12 characters" type="password" /></label>
           <label><span>Role</span><select value={newUser.role} onChange={e => setNewUser(prev => ({ ...prev, role: e.target.value }))}>
@@ -1540,6 +1552,7 @@ function App() {
             <span>{user.website_limit} sites</span>
             <span>{storageUsageText(user)}</span>
             <div className="row-actions">
+              <button className="mini secondary-light" disabled={!!loading} onClick={() => quickLoginUser(user)}>Login as</button>
               <button className="mini secondary-light" disabled={!!loading} onClick={() => changeUserPassword(user)}><KeyRound size={14}/> Password</button>
               {user.totp_enabled && user.id !== currentUser?.id && <button className="mini secondary-light" disabled={!!loading} onClick={() => resetUserTwoFactor(user)}>Reset 2FA</button>}
               {user.id !== currentUser?.id && <button className="mini danger" disabled={!!loading} onClick={() => deletePanelUser(user)}><Trash2 size={14}/></button>}

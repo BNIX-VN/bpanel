@@ -22,10 +22,6 @@ def _command_error(result):
 
 
 def _cleanup_failed_site(root_path: str, linux_user: str | None, delete_files: bool = True) -> None:
-    try:
-        site_users.delete_site_runtime(root_path, linux_user)
-    except Exception:
-        pass
     if delete_files:
         try:
             wordpress.delete_wordpress(root_path)
@@ -62,15 +58,15 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
     except storage_quota.StorageQuotaExceeded as exc:
         raise HTTPException(status_code=413, detail=str(exc)) from exc
 
-    root_path = site_users.site_root_for_domain(payload.domain)
+    linux_user = site_users.linux_user_for_panel_username(owner.username)
+    root_path = site_users.site_root_for_panel_user(owner.username, payload.domain)
     if install_wp and (not payload.admin_email or not payload.admin_password):
         raise HTTPException(status_code=400, detail="admin_email and admin_password are required when install_wordpress is true")
-    linux_user = None
 
     if install_wp:
         db_info = mariadb.create_database(payload.domain)
         try:
-            linux_user = site_users.ensure_site_runtime(payload.domain, root_path, payload.php_version)
+            linux_user = site_users.ensure_site_runtime(payload.domain, root_path, payload.php_version, linux_user)
             root_path = wordpress.install_wordpress(
                 payload.domain,
                 db_info,
@@ -91,7 +87,7 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
                 root_path,
                 app_type="wordpress",
                 php_version=payload.php_version,
-                php_fpm_socket_override=site_users.php_fpm_socket(linux_user),
+                php_fpm_socket_override=site_users.php_fpm_socket(linux_user, payload.php_version),
             )
         except (RuntimeError, ValueError) as exc:
             mariadb.drop_database(db_info["db_name"], db_info["db_user"])
@@ -101,7 +97,7 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
     else:
         runtime_php_version = payload.php_version if payload.app_type == "wordpress" else None
         try:
-            linux_user = site_users.ensure_site_runtime(payload.domain, root_path, runtime_php_version)
+            linux_user = site_users.ensure_site_runtime(payload.domain, root_path, runtime_php_version, linux_user)
             # Just create the public/ folder skeleton and write a vhost.
             public = Path(root_path) / "public"
             if not settings.command_dry_run:
@@ -119,7 +115,7 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
                 root_path,
                 app_type=payload.app_type,
                 php_version=payload.php_version,
-                php_fpm_socket_override=site_users.php_fpm_socket(linux_user) if runtime_php_version else None,
+                php_fpm_socket_override=site_users.php_fpm_socket(linux_user, payload.php_version) if runtime_php_version else None,
             )
         except (RuntimeError, ValueError, OSError) as exc:
             _cleanup_failed_site(root_path, linux_user)
@@ -182,8 +178,8 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
     if payload.php_version is not None:
         try:
             if website.linux_user and (website.app_type or "wordpress") == "wordpress":
-                site_users.ensure_site_runtime(website.domain, website.root_path, payload.php_version)
-            php_fpm_socket_override = site_users.php_fpm_socket(website.linux_user)
+                site_users.ensure_site_runtime(website.domain, website.root_path, payload.php_version, website.linux_user)
+            php_fpm_socket_override = site_users.php_fpm_socket(website.linux_user, payload.php_version)
             nginx.rewrite_vhost(
                 website.domain,
                 website.root_path,
@@ -212,8 +208,24 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
                     owner,
                     incoming_bytes=storage_quota.website_storage_used_bytes(website),
                 )
+                new_linux_user = site_users.linux_user_for_panel_username(owner.username)
+                new_root_path = site_users.site_root_for_panel_user(owner.username, website.domain)
+                runtime_php_version = website.php_version if (website.app_type or "wordpress") == "wordpress" else None
+                site_users.move_site_runtime(website.root_path, new_root_path, new_linux_user, runtime_php_version)
+                nginx.rewrite_vhost(
+                    website.domain,
+                    new_root_path,
+                    app_type=website.app_type or "wordpress",
+                    php_version=website.php_version,
+                    custom_directives=website.nginx_custom or "",
+                    php_fpm_socket_override=site_users.php_fpm_socket(new_linux_user, website.php_version) if runtime_php_version else None,
+                )
+                website.root_path = new_root_path
+                website.linux_user = new_linux_user
             except storage_quota.StorageQuotaExceeded as exc:
                 raise HTTPException(status_code=413, detail=str(exc)) from exc
+            except (RuntimeError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
         website.owner_id = payload.owner_id
     if payload.nginx_custom is not None:
         ensure_role(current_user.role, Role.admin)
@@ -270,7 +282,6 @@ def delete_website(website_id: int, request: Request, delete_files: bool = True,
     nginx.delete_wordpress_vhost(website.domain)
     if delete_files:
         wordpress.delete_wordpress(website.root_path)
-        site_users.delete_site_runtime(website.root_path, website.linux_user)
     if db_item:
         db.delete(db_item)
     db.delete(website)
@@ -290,7 +301,7 @@ def fix_nginx_security(website_id: int, db: Session = Depends(get_db), current_u
         website.domain,
         website.root_path,
         website.php_version,
-        php_fpm_socket_override=site_users.php_fpm_socket(website.linux_user),
+        php_fpm_socket_override=site_users.php_fpm_socket(website.linux_user, website.php_version),
     )
     log_action(db, current_user.id, "fix_nginx_security", website.domain)
     return {"message": f"Rewrote Nginx security template for {website.domain}", "path": target}

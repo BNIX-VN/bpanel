@@ -253,7 +253,7 @@ try:
     for website in db.query(Website).all():
         if website.linux_user:
             runtime_php_version = website.php_version if (website.app_type or "wordpress") == "wordpress" else None
-            site_users.ensure_site_runtime(website.domain, website.root_path, runtime_php_version)
+            site_users.ensure_site_runtime(website.domain, website.root_path, runtime_php_version, website.linux_user)
         site_users.fix_site_permissions(website.root_path, website.linux_user)
 finally:
     db.close()
