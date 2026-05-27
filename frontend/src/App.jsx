@@ -1795,8 +1795,8 @@ function App() {
             <div className="user-main"><strong>{user.username}</strong><small>{user.email}</small></div>
             <span className="badge">{roleLabel(user.role)}</span>
             <span className={user.totp_enabled ? 'badge ok' : 'badge'}>{user.totp_enabled ? '2FA' : 'No 2FA'}</span>
-            <span>{user.website_limit} sites</span>
-            <span>{storageUsageText(user)}</span>
+            <span className="user-metric"><Globe size={13}/>{user.website_limit} sites</span>
+            <span className="user-metric"><HardDrive size={13}/>{storageUsageText(user)}</span>
             <div className="row-actions">
               <button className="mini secondary-light" disabled={!!loading} onClick={() => quickLoginUser(user)}>Login as</button>
               <button className="mini secondary-light" disabled={!!loading} onClick={() => changeUserPassword(user)}><KeyRound size={14}/> Password</button>
