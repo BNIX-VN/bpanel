@@ -2,6 +2,7 @@ import re
 from datetime import datetime
 import json
 from typing import Literal, Optional
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
@@ -11,6 +12,7 @@ SUPPORTED_PHP_VERSIONS = {"8.3", "8.4"}
 SUPPORTED_APP_TYPES = {"wordpress", "static"}
 SUPPORTED_ROLES = {"admin", "end_user"}
 SIZE_RE = re.compile(r"^\d{1,6}[KMG]?$")  # e.g. "512M", "1024M"
+PANEL_HOST_RE = re.compile(r"^(?:localhost|(?:\d{1,3}\.){3}\d{1,3}|(?:(?!-)[a-zA-Z0-9-]{1,63}\.)+[a-zA-Z]{2,})$")
 RESERVED_LINUX_USERNAMES = {
     "root", "daemon", "bin", "sys", "sync", "games", "man", "lp", "mail",
     "news", "uucp", "proxy", "www-data", "backup", "list", "irc", "_apt",
@@ -31,6 +33,28 @@ def _validate_app_type(value: Optional[str]) -> Optional[str]:
         return value
     if value not in SUPPORTED_APP_TYPES:
         raise ValueError(f"Unsupported app type. Allowed: {sorted(SUPPORTED_APP_TYPES)}")
+    return value
+
+
+def _validate_panel_url(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return value
+    value = value.strip()
+    if not value:
+        return value
+    test_value = value if "://" in value else f"http://{value}"
+    parsed = urlparse(test_value)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("panel_url must start with http:// or https://")
+    host = parsed.hostname or ""
+    if not PANEL_HOST_RE.fullmatch(host):
+        raise ValueError("panel_url host must be a domain name or IPv4 address")
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("panel_url port is invalid") from exc
+    if port is not None and not 1 <= port <= 65535:
+        raise ValueError("panel_url port is out of range")
     return value
 
 
@@ -248,6 +272,48 @@ class DatabaseCreatedOut(DatabaseOut):
 class ServiceAction(BaseModel):
     name: str
     action: str
+
+
+class PanelSettingsOut(BaseModel):
+    app_name: str = "BPanel"
+    panel_url: str = ""
+    logo_url: str = ""
+    favicon_url: str = "/favicon.png"
+    ssl_enabled: bool = False
+    message: Optional[str] = None
+
+
+class PanelSettingsUpdate(BaseModel):
+    app_name: Optional[str] = Field(default=None, min_length=2, max_length=80)
+    panel_url: Optional[str] = Field(default=None, max_length=255)
+
+    @field_validator("app_name")
+    @classmethod
+    def validate_app_name(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        value = value.strip()
+        if not value:
+            raise ValueError("app_name is required")
+        return value
+
+    @field_validator("panel_url")
+    @classmethod
+    def validate_panel_url(cls, value: Optional[str]) -> Optional[str]:
+        return _validate_panel_url(value)
+
+
+class PanelSslInstall(BaseModel):
+    panel_url: str = Field(min_length=3, max_length=255)
+    email: EmailStr
+
+    @field_validator("panel_url")
+    @classmethod
+    def validate_panel_url(cls, value: str) -> str:
+        validated = _validate_panel_url(value)
+        if not validated:
+            raise ValueError("panel_url is required")
+        return validated
 
 
 class FirewallPortRule(BaseModel):

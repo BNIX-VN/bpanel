@@ -10,7 +10,7 @@ import { php } from '@codemirror/lang-php';
 import { yaml } from '@codemirror/lang-yaml';
 import { Compartment, EditorState } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
-import { Archive, Clock, Code2, Cpu, Database, FileText, FolderOpen, Globe, HardDrive, Home, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Network, Server, Shield, Trash2, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
+import { Archive, Clock, Code2, Cpu, Database, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Network, Server, Settings as SettingsIcon, Shield, Trash2, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
 import './style.css';
 import './brand.css';
 import './file-manager.css';
@@ -186,6 +186,11 @@ function App() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState('');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [panelSettings, setPanelSettings] = useState({ app_name: 'BPanel', panel_url: '', logo_url: '', favicon_url: '/favicon.png', ssl_enabled: false });
+  const [panelSettingsForm, setPanelSettingsForm] = useState({ app_name: 'BPanel', panel_url: '' });
+  const [panelLogoFile, setPanelLogoFile] = useState(null);
+  const [panelFaviconFile, setPanelFaviconFile] = useState(null);
+  const [panelSslEmail, setPanelSslEmail] = useState('');
   const noticeTimer = useRef(null);
 
   // Auto-dismiss notices after 6 seconds
@@ -245,7 +250,8 @@ function App() {
       setError('');
       if (label) setLoading(label);
       const method = (options.method || 'GET').toUpperCase();
-      const headers = {
+      const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
+      const headers = isFormData ? { ...(options.headers || {}) } : {
         'Content-Type': 'application/json',
         ...(options.headers || {}),
       };
@@ -269,7 +275,7 @@ function App() {
       if (res.ok && data?.message) setNotice(data.message);
       return res.ok ? data : null;
     } catch (err) {
-      setError(`Cannot connect to the BPanel API at ${API}. Check bpanel-api and the panel port.`);
+      setError(`Cannot connect to the ${panelSettings.app_name || 'BPanel'} API at ${API}. Check bpanel-api and the panel port.`);
       return null;
     } finally {
       if (label) setLoading('');
@@ -303,7 +309,7 @@ function App() {
         setError(data.detail || `Login failed with status ${res.status}`);
       }
     } catch (err) {
-      setError(`Cannot connect to the BPanel API at ${API}. Check bpanel-api and the panel port.`);
+      setError(`Cannot connect to the ${panelSettings.app_name || 'BPanel'} API at ${API}. Check bpanel-api and the panel port.`);
     } finally {
       setLoading('');
     }
@@ -339,6 +345,69 @@ function App() {
     }
   }
 
+  async function loadPanelSettings() {
+    try {
+      const res = await fetch(`${API}/panel-settings/public`, { credentials: 'include' });
+      if (!res.ok) return null;
+      const data = await res.json();
+      const panelUrl = data.panel_url || `${window.location.protocol}//${window.location.host}`;
+      setPanelSettings(data);
+      setPanelSettingsForm({ app_name: data.app_name || 'BPanel', panel_url: panelUrl });
+      return data;
+    } catch {
+      return null;
+    }
+  }
+
+  async function savePanelSettings() {
+    const data = await request('/panel-settings', {
+      method: 'PATCH',
+      body: JSON.stringify(panelSettingsForm),
+    }, 'Saving panel settings...');
+    if (data) {
+      setPanelSettings(data);
+      setPanelSettingsForm({ app_name: data.app_name || 'BPanel', panel_url: data.panel_url || `${window.location.protocol}//${window.location.host}` });
+      setNotice('Panel settings updated. The panel may restart if the URL changed.');
+    }
+  }
+
+  async function uploadPanelAsset(kind) {
+    const file = kind === 'logo' ? panelLogoFile : panelFaviconFile;
+    if (!file) return;
+    const body = new FormData();
+    body.append('file', file);
+    const data = await request(`/panel-settings/${kind}`, { method: 'POST', body }, `Uploading ${kind}...`);
+    if (data) {
+      setPanelSettings(data);
+      setPanelSettingsForm({ app_name: data.app_name || 'BPanel', panel_url: data.panel_url || `${window.location.protocol}//${window.location.host}` });
+      if (kind === 'logo') setPanelLogoFile(null);
+      if (kind === 'favicon') setPanelFaviconFile(null);
+    }
+  }
+
+  async function installPanelSsl() {
+    const data = await request('/panel-settings/ssl', {
+      method: 'POST',
+      body: JSON.stringify({ panel_url: panelSettingsForm.panel_url, email: panelSslEmail }),
+    }, 'Installing panel SSL...');
+    if (data) {
+      setPanelSettings(data);
+      setPanelSettingsForm({ app_name: data.app_name || 'BPanel', panel_url: data.panel_url || `${window.location.protocol}//${window.location.host}` });
+      setNotice(data.message || 'Panel SSL installed. The panel may restart in a moment.');
+    }
+  }
+
+  function brandInitials(value = panelSettings.app_name) {
+    const words = String(value || 'BPanel').trim().split(/\s+/).filter(Boolean);
+    const initials = words.length > 1 ? `${words[0][0]}${words[1][0]}` : words[0]?.slice(0, 2);
+    return (initials || 'BP').toUpperCase();
+  }
+
+  function renderBrandMark(extraClass = '') {
+    const classes = ['brand-mark', panelSettings.logo_url ? 'has-logo' : '', extraClass].filter(Boolean).join(' ');
+    return <span className={classes}>{panelSettings.logo_url ? <img src={panelSettings.logo_url} alt="" /> : brandInitials()}</span>;
+  }
+
   // Bootstrap: try to restore session from the HttpOnly cookie (set previously
   // and still valid). If /users/me returns 200 we are authenticated.
   useEffect(() => {
@@ -354,6 +423,24 @@ function App() {
       finally { setBootstrapping(false); }
     })();
   }, []);
+
+  useEffect(() => { loadPanelSettings(); }, []);
+
+  useEffect(() => {
+    const appName = panelSettings.app_name || 'BPanel';
+    document.title = appName;
+    let link = document.querySelector('link[rel="icon"]');
+    if (!link) {
+      link = document.createElement('link');
+      link.rel = 'icon';
+      document.head.appendChild(link);
+    }
+    link.href = panelSettings.favicon_url || '/favicon.png';
+  }, [panelSettings]);
+
+  useEffect(() => {
+    if (!panelSslEmail && currentUser?.email) setPanelSslEmail(currentUser.email);
+  }, [currentUser?.email, panelSslEmail]);
 
   async function refreshAll() {
     await loadCurrentUser();
@@ -1087,6 +1174,7 @@ function App() {
     if (isAuthenticated && page === 'php') loadPhpConfig();
     if (isAuthenticated && page === 'firewall') loadFirewall();
     if (isAuthenticated && page === 'security') loadTwoFactorStatus();
+    if (isAuthenticated && page === 'settings') loadPanelSettings();
     if (isAuthenticated && page === 'backups' && isAdmin) { loadUsers(); loadSftpTargets(); loadBackupSchedules(); loadRestoreBackups(); }
   }, [isAuthenticated, page]);
 
@@ -1111,6 +1199,7 @@ function App() {
     ...(isAdmin ? [['firewall', 'Firewall', Shield]] : []),
     ['services', 'Services Status', Server],
     ...(isAdmin ? [['users', 'Panel users', Users]] : []),
+    ...(isAdmin ? [['settings', 'Settings', SettingsIcon]] : []),
   ];
 
   const currentSite = websites.find(site => String(site.id) === String(selectedWebsiteId));
@@ -1751,6 +1840,51 @@ function App() {
     </section>;
   }
 
+  function renderPanelSettings() {
+    if (!isAdmin) return <section className="section"><h2>Settings</h2><p className="hint">No permission.</p></section>;
+    return <>
+      <section className="section">
+        <div className="section-title">
+          <div><h2>Panel settings</h2><p className="hint">Branding and public panel URL.</p></div>
+          <button disabled={!!loading} onClick={loadPanelSettings}><RefreshCw size={14}/> Refresh</button>
+        </div>
+        <div className="panel-settings-grid">
+          <label><span>Panel name</span><input value={panelSettingsForm.app_name} onChange={e => setPanelSettingsForm(prev => ({ ...prev, app_name: e.target.value }))} placeholder="BPanel" /></label>
+          <label><span>Panel URL</span><input value={panelSettingsForm.panel_url} onChange={e => setPanelSettingsForm(prev => ({ ...prev, panel_url: e.target.value }))} placeholder="https://panel.domain.com:2222" /></label>
+          <button disabled={!!loading || !panelSettingsForm.app_name} onClick={savePanelSettings}><SettingsIcon size={14}/> Save settings</button>
+        </div>
+      </section>
+      <section className="section">
+        <div className="section-title">
+          <div><h2>Brand assets</h2><p className="hint">Upload PNG, JPG, WEBP, or ICO files up to 1 MB.</p></div>
+        </div>
+        <div className="brand-asset-grid">
+          <div className="brand-asset-card">
+            <div className="brand-preview">{renderBrandMark('settings-brand-mark')}</div>
+            <label><span>Logo</span><input type="file" accept="image/png,image/jpeg,image/webp,image/x-icon" onChange={e => setPanelLogoFile(e.target.files?.[0] || null)} /></label>
+            <button disabled={!!loading || !panelLogoFile} onClick={() => uploadPanelAsset('logo')}><Upload size={14}/> Upload logo</button>
+          </div>
+          <div className="brand-asset-card">
+            <div className="brand-preview favicon-preview">{panelSettings.favicon_url ? <img src={panelSettings.favicon_url} alt="" /> : <Image size={28}/>}</div>
+            <label><span>Favicon</span><input type="file" accept="image/png,image/jpeg,image/webp,image/x-icon" onChange={e => setPanelFaviconFile(e.target.files?.[0] || null)} /></label>
+            <button disabled={!!loading || !panelFaviconFile} onClick={() => uploadPanelAsset('favicon')}><Upload size={14}/> Upload favicon</button>
+          </div>
+        </div>
+      </section>
+      <section className="section">
+        <div className="section-title">
+          <div><h2>Panel SSL</h2><p className="hint">Use a domain that already points to this VPS.</p></div>
+          <span className={panelSettings.ssl_enabled ? 'badge ok' : 'badge'}>{panelSettings.ssl_enabled ? 'SSL enabled' : 'SSL not active'}</span>
+        </div>
+        <div className="panel-settings-grid panel-ssl-grid">
+          <label><span>Panel URL</span><input value={panelSettingsForm.panel_url} onChange={e => setPanelSettingsForm(prev => ({ ...prev, panel_url: e.target.value }))} placeholder="https://panel.domain.com:2222" /></label>
+          <label><span>Let's Encrypt email</span><input value={panelSslEmail} onChange={e => setPanelSslEmail(e.target.value)} placeholder="admin@domain.com" type="email" /></label>
+          <button disabled={!!loading || !panelSettingsForm.panel_url || !panelSslEmail} onClick={installPanelSsl}><Lock size={14}/> Install SSL</button>
+        </div>
+      </section>
+    </>;
+  }
+
   function renderUsers() {
     if (!isAdmin) return <section className="section"><h2>Users</h2><p className="hint">No permission.</p></section>;
     return <>
@@ -1855,6 +1989,7 @@ function App() {
     if (page === 'php') return renderPhpConfig();
     if (page === 'firewall') return renderFirewall();
     if (page === 'services') return renderServices();
+    if (page === 'settings') return renderPanelSettings();
     if (page === 'users') return renderUsers();
     return renderDashboard();
   }
@@ -1863,7 +1998,7 @@ function App() {
   if (bootstrapping) {
     return <main className="login-page">
       <section className="login-card">
-        <div><p className="eyebrow">BPanel</p><h1>Loading…</h1></div>
+        <div className="login-brand">{renderBrandMark('login-brand-mark')}<div><p className="eyebrow">{panelSettings.app_name || 'BPanel'}</p><h1>Loading…</h1></div></div>
       </section>
     </main>;
   }
@@ -1871,10 +2006,13 @@ function App() {
   if (!isAuthenticated) {
     return <main className="login-page">
       <section className="login-card">
-        <div>
-          <p className="eyebrow">Server Management Panel</p>
-          <h1>BPanel</h1>
-          <p className="hint">Manage websites, databases, backups, SSL, and services.</p>
+        <div className="login-brand">
+          {renderBrandMark('login-brand-mark')}
+          <div>
+            <p className="eyebrow">Server Management Panel</p>
+            <h1>{panelSettings.app_name || 'BPanel'}</h1>
+            <p className="hint">Manage websites, databases, backups, SSL, and services.</p>
+          </div>
         </div>
         <div className="login-form">
           <input value={username} onChange={e => setUsername(e.target.value)} placeholder="Username" autoComplete="username" />
@@ -1898,9 +2036,9 @@ function App() {
       <aside className={`sidebar ${mobileMenuOpen ? 'open' : ''}`} role="navigation" aria-label="Main navigation">
         <div className="sidebar-head">
           <div className="sidebar-brand">
-            <span className="brand-mark">BP</span>
+            {renderBrandMark()}
             <div>
-              <strong>BPanel</strong>
+              <strong>{panelSettings.app_name || 'BPanel'}</strong>
               <small>Server Panel</small>
             </div>
           </div>
@@ -1919,7 +2057,7 @@ function App() {
           </button>
           <div className="page-title">
             <p className="eyebrow">Server Management Panel</p>
-            <h1>{activeNavItem?.[1] || 'BPanel'}</h1>
+            <h1>{activeNavItem?.[1] || panelSettings.app_name || 'BPanel'}</h1>
           </div>
           <div className="login logged-in">
             <div className="account-pill"><span>Logged in as</span><strong>{currentUser?.username || username}</strong></div>

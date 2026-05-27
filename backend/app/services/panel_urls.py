@@ -4,6 +4,7 @@ from urllib.parse import urlparse
 from fastapi import Request
 
 from app.core.config import settings
+from app.services import panel_settings
 
 
 def _request_host_without_port(request: Request) -> str:
@@ -20,7 +21,8 @@ def tools_base_url(request: Request) -> str:
     The panel itself listens on PANEL_PORT, but phpMyAdmin is
     served by Nginx on the normal web ports. Keep generated URLs off :2222.
     """
-    parsed_panel = urlparse(settings.panel_url if "://" in settings.panel_url else "")
+    current_panel_url = panel_settings.current_settings().get("panel_url") or settings.panel_url
+    parsed_panel = urlparse(current_panel_url if "://" in current_panel_url else "")
     host = settings.panel_domain or parsed_panel.hostname or _request_host_without_port(request)
     has_panel_cert = (
         bool(settings.panel_ssl_cert)

@@ -6,9 +6,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import auth, databases, firewall, maintenance, services, users, websites
+from app.api import auth, databases, firewall, maintenance, panel_settings as panel_settings_api, services, users, websites
 from app.core.config import settings
 from app.core.database import run_migrations
+from app.services import panel_settings as panel_brand_settings
 
 run_migrations()
 
@@ -86,11 +87,12 @@ app.include_router(databases.router, prefix="/api")
 app.include_router(firewall.router, prefix="/api")
 app.include_router(services.router, prefix="/api")
 app.include_router(maintenance.router, prefix="/api")
+app.include_router(panel_settings_api.router, prefix="/api")
 
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "name": "BPanel"}
+    return {"status": "ok", "name": panel_brand_settings.current_settings().get("app_name") or "BPanel"}
 
 
 frontend_dist = Path(settings.frontend_dist)
@@ -101,10 +103,21 @@ if assets_dir.exists():
 
 @app.get("/favicon.png", include_in_schema=False)
 def favicon():
+    custom = panel_brand_settings.current_settings().get("favicon_url") or ""
+    if custom.startswith("/brand-assets/"):
+        filename = custom.split("/brand-assets/", 1)[1].split("?", 1)[0]
+        path, media_type = panel_brand_settings.asset_path(filename)
+        return FileResponse(path, media_type=media_type)
     path = frontend_dist / "favicon.png"
     if path.exists():
         return FileResponse(path, media_type="image/png")
     raise HTTPException(status_code=404, detail="Not found")
+
+
+@app.get("/brand-assets/{filename}", include_in_schema=False)
+def brand_asset(filename: str):
+    path, media_type = panel_brand_settings.asset_path(filename)
+    return FileResponse(path, media_type=media_type)
 
 
 @app.get("/{full_path:path}", include_in_schema=False)

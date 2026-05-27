@@ -425,9 +425,11 @@ python -m py_compile \
   app/api/maintenance.py \
   app/api/firewall.py \
   app/api/services.py \
+  app/api/panel_settings.py \
   app/services/firewall.py \
   app/services/nginx.py \
   app/services/panel_urls.py \
+  app/services/panel_settings.py \
   app/services/mariadb.py \
   app/services/wordpress.py \
   app/services/file_manager.py \

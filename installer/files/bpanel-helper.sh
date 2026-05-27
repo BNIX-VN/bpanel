@@ -26,8 +26,105 @@ HOME_ROOT="/home"
 NGINX_CONF_DIR="/etc/nginx/conf.d"
 PHP_CONF_DIRS=(/etc/php/8.3/fpm/conf.d /etc/php/8.4/fpm/conf.d)
 BPANEL_SITES_GROUP="bpanel-sites"
+APP_DIR="/opt/bpanel"
+ENV_FILE="${APP_DIR}/backend/.env"
+DEFAULT_PANEL_PORT="2222"
 
 deny() { echo "bpanel-helper: $*" >&2; exit 1; }
+
+env_get() {
+  local key="$1"
+  [[ -f "$ENV_FILE" ]] || return 0
+  awk -F= -v key="$key" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "$ENV_FILE"
+}
+
+env_set() {
+  local key="$1" value="$2" escaped
+  [[ -f "$ENV_FILE" ]] || deny "$ENV_FILE not found"
+  escaped="$(printf '%s' "$value" | sed -e 's/[&|]/\\&/g')"
+  if grep -q "^${key}=" "$ENV_FILE"; then
+    sed -i "s|^${key}=.*|${key}=${escaped}|" "$ENV_FILE"
+  else
+    printf '%s=%s\n' "$key" "$value" >>"$ENV_FILE"
+  fi
+}
+
+detect_ip() {
+  hostname -I 2>/dev/null | awk '{print $1}' || true
+}
+
+is_ipv4() {
+  local value="$1" part
+  local -a parts
+  [[ "$value" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+  IFS=. read -r -a parts <<<"$value"
+  for part in "${parts[@]}"; do
+    (( 10#$part >= 0 && 10#$part <= 255 )) || return 1
+  done
+}
+
+is_domain() {
+  [[ "$1" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]]
+}
+
+require_panel_scheme() {
+  [[ "$1" == "http" || "$1" == "https" ]] || deny "invalid panel scheme: $1"
+}
+
+require_panel_host() {
+  local host="$1"
+  if is_domain "$host" || is_ipv4 "$host" || [[ "$host" == "localhost" ]]; then
+    return 0
+  fi
+  deny "invalid panel host: $host"
+}
+
+allow_panel_port() {
+  local port="$1"
+  if command -v ufw >/dev/null 2>&1; then
+    ufw allow "${port}/tcp" >/dev/null || true
+  fi
+}
+
+schedule_panel_restart() {
+  local unit
+  systemctl daemon-reload || true
+  if command -v systemd-run >/dev/null 2>&1; then
+    unit="bpanel-api-delayed-restart-$(date +%s)"
+    systemd-run --unit="$unit" --on-active=2s /bin/systemctl restart bpanel-api >/dev/null 2>&1 || true
+  else
+    (sleep 2; systemctl restart bpanel-api >/dev/null 2>&1 || true) >/dev/null 2>&1 &
+  fi
+}
+
+refresh_tools_nginx() {
+  local port cert key domain host api_scheme tools_scheme pma_secure ssl_block php_version
+  port="$(env_get PANEL_PORT)"; port="${port:-$DEFAULT_PANEL_PORT}"
+  cert="$(env_get PANEL_SSL_CERT)"; key="$(env_get PANEL_SSL_KEY)"
+  domain="$(env_get PANEL_DOMAIN)"; host="${domain:-$(detect_ip)}"
+  php_version="${PHP_DEFAULT:-8.3}"
+  api_scheme="http"; tools_scheme="http"; pma_secure="false"; ssl_block=""
+  if [[ -n "$cert" && -n "$key" && -f "$cert" && -f "$key" ]]; then
+    api_scheme="https"; tools_scheme="https"; pma_secure="true"
+    printf -v ssl_block '\n    listen 443 ssl default_server;\n    ssl_certificate %s;\n    ssl_certificate_key %s;' "$cert" "$key"
+  fi
+  rm -f /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf 2>/dev/null || true
+  cat >/etc/nginx/conf.d/00-bpanel-tools.conf <<NGINX
+server {
+    listen 80 default_server;${ssl_block}
+    server_name _;
+    client_max_body_size 1100M;
+    location = /phpmyadmin { return 301 /phpmyadmin/; }
+    location /phpmyadmin/ { alias /usr/share/phpmyadmin/; index index.php; try_files \$uri \$uri/ =404; }
+    location ~ ^/phpmyadmin/(.+\.php)$ { alias /usr/share/phpmyadmin/\$1; include fastcgi_params; fastcgi_param SCRIPT_FILENAME /usr/share/phpmyadmin/\$1; fastcgi_param SCRIPT_NAME /phpmyadmin/\$1; fastcgi_pass unix:/run/php/php${php_version}-fpm.sock; fastcgi_read_timeout 300; }
+}
+NGINX
+  sed -i -E "s#(\$apiUrl = ')[^']+(/api/databases/phpmyadmin-sso/)'#\1${api_scheme}://127.0.0.1:${port}\2'#" /usr/share/phpmyadmin/bpanel-signon.php 2>/dev/null || true
+  sed -i -E "s#('secure' => )(true|false)#\1${pma_secure}#" /etc/phpmyadmin/conf.d/bpanel-signon.php /usr/share/phpmyadmin/bpanel-signon.php 2>/dev/null || true
+  [[ -n "$host" ]] && sed -i -E "s#(\$cfg\['PmaAbsoluteUri'\] = ')[^']+('#\1${tools_scheme}://${host}/phpmyadmin/\2#" /etc/phpmyadmin/conf.d/bpanel-signon.php 2>/dev/null || true
+  nginx -t
+  systemctl reload nginx || true
+}
 
 audit_log() {
   local quoted="" arg
@@ -273,6 +370,61 @@ case "$cmd" in
   nginx-reload)
     nginx -t
     exec systemctl reload nginx
+    ;;
+
+  # ---- panel runtime ----------------------------------------------------
+  panel-url-set)
+    [[ $# -eq 3 ]] || deny "usage: panel-url-set <http|https> <host> <port>"
+    scheme="$1"; host="$2"; port="$3"
+    require_panel_scheme "$scheme"
+    require_panel_host "$host"
+    require_port "$port"
+    env_set PANEL_PORT "$port"
+    env_set PANEL_URL "${scheme}://${host}:${port}"
+    env_set ALLOWED_ORIGINS "${scheme}://${host}:${port}"
+    if is_domain "$host"; then
+      env_set PANEL_DOMAIN "$host"
+    else
+      env_set PANEL_DOMAIN ""
+    fi
+    if [[ "$scheme" == "http" ]]; then
+      env_set PANEL_SSL_CERT ""
+      env_set PANEL_SSL_KEY ""
+    fi
+    allow_panel_port "$port"
+    refresh_tools_nginx
+    schedule_panel_restart
+    echo "Panel URL: ${scheme}://${host}:${port}"
+    ;;
+
+  panel-ssl-install)
+    [[ $# -eq 3 ]] || deny "usage: panel-ssl-install <domain> <port> <email>"
+    domain="$1"; port="$2"; email="$3"
+    require_domain "$domain"
+    require_port "$port"
+    require_email "$email"
+    certbot certonly --standalone \
+      -d "$domain" \
+      --email "$email" \
+      --agree-tos \
+      --non-interactive \
+      --pre-hook "systemctl stop nginx || true" \
+      --post-hook "systemctl start nginx || true" \
+      --deploy-hook "install -d -o root -g bpanel -m 0750 /etc/bpanel && install -m 0640 -o root -g bpanel /etc/letsencrypt/live/${domain}/fullchain.pem /etc/bpanel/panel-fullchain.pem && install -m 0640 -o root -g bpanel /etc/letsencrypt/live/${domain}/privkey.pem /etc/bpanel/panel-privkey.pem"
+    install -d -o root -g bpanel -m 0750 /etc/bpanel
+    install -m 0640 -o root -g bpanel "/etc/letsencrypt/live/${domain}/fullchain.pem" /etc/bpanel/panel-fullchain.pem
+    install -m 0640 -o root -g bpanel "/etc/letsencrypt/live/${domain}/privkey.pem" /etc/bpanel/panel-privkey.pem
+    env_set PANEL_DOMAIN "$domain"
+    env_set PANEL_PORT "$port"
+    env_set PANEL_SSL_CERT "/etc/bpanel/panel-fullchain.pem"
+    env_set PANEL_SSL_KEY "/etc/bpanel/panel-privkey.pem"
+    env_set PANEL_URL "https://${domain}:${port}"
+    env_set ALLOWED_ORIGINS "https://${domain}:${port}"
+    env_set SSL_EMAIL "$email"
+    allow_panel_port "$port"
+    refresh_tools_nginx
+    schedule_panel_restart
+    echo "Panel SSL enabled: https://${domain}:${port}"
     ;;
 
   # ---- certbot ----------------------------------------------------------
