@@ -10,7 +10,8 @@ import { php } from '@codemirror/lang-php';
 import { yaml } from '@codemirror/lang-yaml';
 import { Compartment, EditorState } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
-import { Archive, Clock, Code2, Cpu, Database, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Network, Server, Settings as SettingsIcon, Shield, Trash2, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
+import { Archive, Clock, Code2, Cpu, Database, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Network, Server, Settings as SettingsIcon, Shield, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
+import { Terminal } from './components/Terminal';
 import './style.css';
 import './brand.css';
 import './file-manager.css';
@@ -138,6 +139,7 @@ function App() {
   const [installWordPress, setInstallWordPress] = useState(true);
   const [nginxCustomEditing, setNginxCustomEditing] = useState(null); // {id, domain, content}
   const [logViewer, setLogViewer] = useState(null); // {id, domain, kind, lines, path, content, exists}
+  const [terminalViewer, setTerminalViewer] = useState(null); // {id, domain}
   const [websites, setWebsites] = useState([]);
   const [databases, setDatabases] = useState([]);
   const [newDatabase, setNewDatabase] = useState({ website_id: '', db_name: '' });
@@ -685,6 +687,10 @@ function App() {
   async function openWebsiteLogs(site) {
     setLogViewer({ id: site.id, domain: site.domain, kind: 'access', lines: 200, path: '', content: '', exists: true });
     await loadWebsiteLog(site, 'access', 200, site.domain);
+  }
+
+  function openWebsiteTerminal(site) {
+    setTerminalViewer({ id: site.id, domain: site.domain });
   }
 
   async function toggleWebsiteWaf(site) {
@@ -1532,6 +1538,7 @@ function App() {
               {site.app_type !== 'static' && <button disabled={!!loading || (websitePhpVersions[site.id] || site.php_version) === site.php_version} onClick={() => changeWebsitePhpVersion(site)}>Change PHP</button>}
               <button disabled={!!loading} onClick={() => openWebsiteFileManager(site)}><FolderOpen size={14}/> Files</button>
               <button disabled={!!loading} onClick={() => openWebsiteLogs(site)}><FileText size={14}/> Logs</button>
+              <button disabled={!!loading} onClick={() => openWebsiteTerminal(site)}><TerminalIcon size={14}/> Terminal</button>
               {isAdmin && <button disabled={!!loading} onClick={() => openNginxCustom(site)}><Code2 size={14}/> Nginx</button>}
               {isAdmin && <button disabled={!!loading} onClick={() => toggleWebsiteWaf(site)}><Shield size={14}/> {site.waf_enabled ? 'WAF off' : 'WAF on'}</button>}
               {site.app_type === 'wordpress' && <button disabled={!!loading} onClick={() => fixWordPressPermissions(site.id)}>Fix permissions</button>}
@@ -1587,6 +1594,15 @@ function App() {
           <button disabled={!!loading} onClick={() => loadWebsiteLog(logViewer.id, logViewer.kind, logViewer.lines, logViewer.domain)}><RefreshCw size={14}/> Refresh</button>
         </div>
         <pre className="log-output">{logViewer.exists ? (logViewer.content || 'Log is empty.') : 'Log file has not been created yet.'}</pre>
+      </section>}
+      {terminalViewer && <section className="section terminal-modal">
+        <div className="section-title">
+          <h2>Terminal - {terminalViewer.domain}</h2>
+          <button className="secondary-light" onClick={() => setTerminalViewer(null)}><X size={14}/> Close</button>
+        </div>
+        <div style={{ height: '500px', marginTop: '8px' }}>
+          <Terminal websiteId={terminalViewer.id} />
+        </div>
       </section>}
     </>;
   }

@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import auth, databases, firewall, maintenance, panel_settings as panel_settings_api, services, updates, users, waf, websites
+from app.api import auth, databases, firewall, maintenance, panel_settings as panel_settings_api, services, terminal, updates, users, waf, websites
 from app.core.config import settings
 from app.core.database import run_migrations
 from app.services import panel_settings as panel_brand_settings
@@ -68,7 +68,7 @@ async def security_headers(request, call_next):
         "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data:; "
         "font-src 'self' data:; "
-        "connect-src 'self'; "
+        "connect-src 'self' ws: wss:; "
         "frame-ancestors 'none'; "
         "base-uri 'self'; "
         "form-action 'self'",
@@ -90,6 +90,7 @@ app.include_router(updates.router, prefix="/api")
 app.include_router(waf.router, prefix="/api")
 app.include_router(maintenance.router, prefix="/api")
 app.include_router(panel_settings_api.router, prefix="/api")
+app.include_router(terminal.router, prefix="/api")
 
 
 @app.get("/api/health")

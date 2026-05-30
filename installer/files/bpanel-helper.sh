@@ -856,6 +856,35 @@ case "$cmd" in
     exec systemctl status "$1" --no-pager
     ;;
 
+  # ---- terminal command execution as site user -------------------------
+  terminal-exec)
+    # Execute a whitelisted command as the site user
+    # Args: <site-user> <command> [args...]
+    [[ $# -ge 2 ]] || deny "usage: terminal-exec <site-user> <command> [args...]"
+    user="$1"; shift
+    cmd="$1"; shift
+    require_linux_user "$user"
+
+    # Whitelist of allowed commands for terminal access
+    case "$cmd" in
+      php|composer|node|npm|npx|yarn|git|phpunit)
+        exec runuser -u "$user" -- env HOME="$HOME_ROOT/$user" PATH="/usr/local/bin:/usr/bin:/bin" "$cmd" "$@"
+        ;;
+      ls|cat|mkdir|rm|cp|mv|chmod|chown|pwd|echo|cd|touch|grep|find|tar|zip|unzip|curl|wget|diff|head|tail|less)
+        exec runuser -u "$user" -- env HOME="$HOME_ROOT/$user" PATH="/usr/local/bin:/usr/bin:/bin" "$cmd" "$@"
+        ;;
+      artisan)
+        # artisan is a PHP script, executed via php
+        exec runuser -u "$user" -- env HOME="$HOME_ROOT/$user" PATH="/usr/local/bin:/usr/bin:/bin" php "$cmd" "$@"
+        ;;
+      *)
+        echo "Command not allowed: $cmd" >&2
+        echo "Allowed commands: php, composer, artisan, node, npm, npx, yarn, git, phpunit, ls, cat, mkdir, rm, cp, mv, chmod, chown, pwd, echo, touch, grep, find, tar, zip, unzip, curl, wget, diff, head, tail, less" >&2
+        exit 126
+        ;;
+    esac
+    ;;
+
   *)
     deny "unknown command: $cmd"
     ;;
