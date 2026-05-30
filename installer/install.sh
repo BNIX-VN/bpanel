@@ -223,6 +223,34 @@ install_php() {
   update-alternatives --set php "/usr/bin/php${PHP_DEFAULT}" || true
 }
 
+install_waf_engine() {
+  export DEBIAN_FRONTEND=noninteractive
+  if ! dpkg -s libnginx-mod-http-modsecurity >/dev/null 2>&1; then
+    apt-get update
+    apt-get install -y libnginx-mod-http-modsecurity modsecurity-crs libmodsecurity3 || \
+      apt-get install -y libnginx-mod-http-modsecurity libmodsecurity3
+  fi
+  install -d -o root -g root -m 0755 /etc/nginx/modsec /etc/nginx/modsec/comodo
+  if [[ -f /etc/modsecurity/modsecurity.conf-recommended && ! -f /etc/modsecurity/modsecurity.conf ]]; then
+    cp /etc/modsecurity/modsecurity.conf-recommended /etc/modsecurity/modsecurity.conf
+  fi
+  if [[ -f /etc/modsecurity/modsecurity.conf ]]; then
+    sed -i -E 's/^SecRuleEngine .*/SecRuleEngine On/' /etc/modsecurity/modsecurity.conf
+  fi
+  if [[ -f /usr/share/nginx/modules-available/mod-http-modsecurity.conf ]]; then
+    install -d /etc/nginx/modules-enabled
+    ln -sfn /usr/share/nginx/modules-available/mod-http-modsecurity.conf /etc/nginx/modules-enabled/50-mod-http-modsecurity.conf
+  fi
+  cat >/etc/nginx/modsec/bpanel-main.conf <<'MODSEC'
+IncludeOptional /etc/modsecurity/*.conf
+IncludeOptional /usr/share/modsecurity-crs/owasp-crs.load
+IncludeOptional /etc/nginx/modsec/comodo/*.conf
+IncludeOptional /etc/nginx/modsec/comodo/rules/*.conf
+MODSEC
+  nginx -t
+  systemctl reload nginx || true
+}
+
 install_wp_cli() {
   if ! command -v wp >/dev/null 2>&1; then
     curl -fsSL -o /usr/local/bin/wp https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
@@ -729,6 +757,11 @@ main() {
 
   log "Installing PHP ${PHP_VERSIONS} from Ondrej PPA"
   install_php
+
+  log "Installing Nginx ModSecurity WAF engine"
+  if ! install_waf_engine; then
+    echo "WARNING: WAF engine installation failed; continuing without ModSecurity."
+  fi
 
   log "Installing WP-CLI"
   install_wp_cli

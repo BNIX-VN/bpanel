@@ -17,7 +17,7 @@ ownership, quotas, backups, SSL, services, and firewall tools built in.
 - SFTP backup targets for off-server backup copies
 - UFW firewall manager (allow port, allow/block IP, delete rules)
 - Update controls for apt-based OS packages and BPanel source updates
-- Optional Nginx ModSecurity/WAF integration with per-site toggles
+- Nginx ModSecurity/WAF engine installed by default, with per-site toggles
 - PHP-FPM config editor per version
 - Cron job manager with whitelisted WP-CLI commands
 - Role-based access: Admin / End user
@@ -27,7 +27,7 @@ ownership, quotas, backups, SSL, services, and firewall tools built in.
 
 - Backend: FastAPI, SQLAlchemy, SQLite (default), Pydantic v2
 - Frontend: React 18, Vite, lucide-react
-- Server: Nginx, optional ModSecurity/WAF, systemd, MariaDB, Redis, PHP-FPM, certbot
+- Server: Nginx, ModSecurity/WAF, systemd, MariaDB, Redis, PHP-FPM, certbot
 
 ## System requirements
 

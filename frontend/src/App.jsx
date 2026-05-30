@@ -194,7 +194,6 @@ function App() {
   const [updatesStatus, setUpdatesStatus] = useState(null);
   const [osAutoUpdate, setOsAutoUpdate] = useState({ enabled: true, mode: 'security', auto_reboot: false });
   const [panelAutoUpdate, setPanelAutoUpdate] = useState({ enabled: true, time: '03:30' });
-  const [wafStatus, setWafStatus] = useState(null);
   const noticeTimer = useRef(null);
 
   // Auto-dismiss notices after 6 seconds
@@ -1169,21 +1168,6 @@ function App() {
     if (data) { setNotice((data.stdout || data.stderr || 'Panel auto update saved.').trim()); await loadUpdates(); }
   }
 
-  async function loadWafStatus() {
-    const data = await request('/waf/status', {}, 'Loading WAF status...');
-    if (data) setWafStatus(data);
-  }
-
-  async function installWaf() {
-    const data = await request('/waf/install', { method: 'POST' }, 'Installing WAF engine...');
-    if (data) { setNotice((data.stdout || data.stderr || 'WAF installed.').trim()); await loadWafStatus(); }
-  }
-
-  async function updateWafRules() {
-    const data = await request('/waf/update-rules', { method: 'POST' }, 'Updating WAF rules...');
-    if (data) { setNotice((data.stdout || data.stderr || 'WAF rules updated.').trim()); await loadWafStatus(); }
-  }
-
   useEffect(() => {
     if (isAuthenticated) {
       refreshAll();
@@ -1236,7 +1220,6 @@ function App() {
     if (isAuthenticated && page === 'security') loadTwoFactorStatus();
     if (isAuthenticated && page === 'settings') loadPanelSettings();
     if (isAuthenticated && page === 'updates' && currentUser?.role === 'admin') loadUpdates();
-    if (isAuthenticated && page === 'waf' && currentUser?.role === 'admin') loadWafStatus();
     if (isAuthenticated && page === 'backups' && currentUser?.role === 'admin') { loadUsers(); loadSftpTargets(); loadBackupSchedules(); loadRestoreBackups(); }
   }, [isAuthenticated, page, currentUser?.role]);
 
@@ -1259,7 +1242,6 @@ function App() {
     ['security', 'Security', Shield],
     ...(isAdmin ? [['php', 'PHP config', Code2]] : []),
     ...(isAdmin ? [['firewall', 'Firewall', Shield]] : []),
-    ...(isAdmin ? [['waf', 'WAF', Shield]] : []),
     ...(isAdmin ? [['updates', 'Updates', RefreshCw]] : []),
     ['services', 'Services Status', Server],
     ...(isAdmin ? [['users', 'Panel users', Users]] : []),
@@ -1913,22 +1895,6 @@ function App() {
     </>;
   }
 
-  function renderWaf() {
-    if (!isAdmin) return <section className="section"><h2>WAF</h2><p className="hint">No permission.</p></section>;
-    const statusText = wafStatus?.stdout || wafStatus?.stderr || 'Click Refresh to load WAF status.';
-    return <section className="section">
-      <div className="section-title">
-        <div><h2>WAF</h2><p className="hint">Installs ModSecurity for Nginx and loads rules from <code>/etc/nginx/modsec/bpanel-main.conf</code>.</p></div>
-        <button disabled={!!loading} onClick={loadWafStatus}><RefreshCw size={14}/> Refresh</button>
-      </div>
-      <div className="actions">
-        <button disabled={!!loading} onClick={installWaf}><Shield size={14}/> Install engine</button>
-        <button disabled={!!loading} onClick={updateWafRules}><RefreshCw size={14}/> Update rules</button>
-      </div>
-      <div className="info-box firewall-status"><strong>WAF status</strong><pre>{statusText}</pre></div>
-    </section>;
-  }
-
   function renderSecurity() {
     const enabled = Boolean(twoFactorStatus?.enabled || currentUser?.totp_enabled);
     return <section className="section">
@@ -2109,7 +2075,6 @@ function App() {
     if (page === 'security') return renderSecurity();
     if (page === 'php') return renderPhpConfig();
     if (page === 'firewall') return renderFirewall();
-    if (page === 'waf') return renderWaf();
     if (page === 'updates') return renderUpdates();
     if (page === 'services') return renderServices();
     if (page === 'settings') return renderPanelSettings();

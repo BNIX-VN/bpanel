@@ -235,9 +235,11 @@ run_panel_update() {
 
 install_waf_engine() {
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update
-  apt-get install -y libnginx-mod-http-modsecurity modsecurity-crs libmodsecurity3 || \
-    apt-get install -y libnginx-mod-http-modsecurity libmodsecurity3
+  if ! dpkg -s libnginx-mod-http-modsecurity >/dev/null 2>&1; then
+    apt-get update
+    apt-get install -y libnginx-mod-http-modsecurity modsecurity-crs libmodsecurity3 || \
+      apt-get install -y libnginx-mod-http-modsecurity libmodsecurity3
+  fi
   install -d -o root -g root -m 0755 /etc/nginx/modsec /etc/nginx/modsec/comodo
   if [[ -f /etc/modsecurity/modsecurity.conf-recommended && ! -f /etc/modsecurity/modsecurity.conf ]]; then
     cp /etc/modsecurity/modsecurity.conf-recommended /etc/modsecurity/modsecurity.conf

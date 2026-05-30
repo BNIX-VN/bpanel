@@ -366,6 +366,14 @@ if [[ -f "$SOURCE_DIR/installer/files/bpanelctl" ]]; then
   ln -sfn /usr/local/sbin/bpanel /usr/local/sbin/bpanelctl
 fi
 
+log "Ensuring Nginx ModSecurity WAF engine is installed"
+if id -u bpanel >/dev/null 2>&1; then
+  sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper waf-install || \
+    echo "WARNING: WAF engine installation failed; continuing without ModSecurity."
+else
+  echo "  (bpanel user not found; skipping WAF install - run install.sh first)"
+fi
+
 # --- Restore ownership so bpanel user can read/write the deploy ------------
 if id -u bpanel >/dev/null 2>&1; then
   chown -R bpanel:bpanel "$APP_DIR/backend" "$APP_DIR/frontend" 2>/dev/null || true
