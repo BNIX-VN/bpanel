@@ -287,6 +287,33 @@ def set_website_nginx_config(website_id: int, payload: WebsiteNginxConfig, reque
     return website
 
 
+@router.post("/{website_id}/nginx-config/reset", response_model=WebsiteOut)
+def reset_website_nginx_config(website_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.admin)
+    website = db.query(Website).filter(Website.id == website_id).first()
+    if not website:
+        raise HTTPException(status_code=404, detail="Website not found")
+    app_type = website.app_type or "wordpress"
+    runtime_php_version = website.php_version if app_type in {"wordpress", "php"} else None
+    try:
+        nginx.rewrite_vhost(
+            website.domain,
+            website.root_path,
+            app_type=app_type,
+            php_version=website.php_version,
+            custom_directives="",
+            php_fpm_socket_override=site_users.php_fpm_socket(website.linux_user, website.php_version) if runtime_php_version else None,
+            waf_enabled=website.waf_enabled,
+        )
+    except (RuntimeError, ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    website.nginx_custom = ""
+    db.commit()
+    db.refresh(website)
+    log_action(db, current_user.id, "reset_nginx_config", website.domain, request=request)
+    return website
+
+
 @router.patch("/{website_id}/waf", response_model=WebsiteOut)
 def set_website_waf(website_id: int, payload: WebsiteWafUpdate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.admin)

@@ -620,6 +620,17 @@ function App() {
     }
   }
 
+  async function resetNginxDefault() {
+    if (!nginxCustomEditing) return;
+    if (!confirm(`Reset Nginx config for ${nginxCustomEditing.domain} to the BPanel default template?`)) return;
+    const data = await request(`/websites/${nginxCustomEditing.id}/nginx-config/reset`, { method: 'POST' }, 'Resetting Nginx config...');
+    if (data) {
+      setNotice(`Reset Nginx config for ${nginxCustomEditing.domain}.`);
+      setNginxCustomEditing(null);
+      await refreshAll();
+    }
+  }
+
   async function loadWebsiteLog(siteOrId = logViewer?.id, kind = logViewer?.kind || 'access', lines = logViewer?.lines || 200, domainLabel = logViewer?.domain || '') {
     const websiteId = typeof siteOrId === 'object' ? siteOrId.id : siteOrId;
     const domainName = typeof siteOrId === 'object' ? siteOrId.domain : domainLabel;
@@ -1516,6 +1527,7 @@ function App() {
         <p className="hint">Use care with <code>listen</code>, <code>root</code>, SSL paths, and upstream directives; this editor writes the production vhost.</p>
         <div className="actions">
           <button disabled={!!loading} onClick={saveNginxCustom}>Save and reload Nginx</button>
+          <button className="secondary-light" disabled={!!loading} onClick={resetNginxDefault}><RotateCcw size={14}/> Reset default</button>
           <button className="secondary-light" disabled={!!loading} onClick={() => setNginxCustomEditing(null)}>Cancel</button>
         </div>
       </section>}
