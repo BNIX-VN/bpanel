@@ -522,6 +522,24 @@ function App() {
         : { method: 'POST' },
       `Logging in as ${user.username}...`,
     );
+    // Handle case where backend says 2FA is required (e.g., stale user object).
+    if (data?.requires_2fa) {
+      const code = prompt(`Enter the 6-digit code from your authenticator to confirm impersonation of ${user.username}:`);
+      if (!code) return;
+      const retryBody = new URLSearchParams({ otp: code.trim() });
+      const retryData = await request(
+        `/auth/impersonate/${user.id}`,
+        { method: 'POST', body: retryBody, headers: { 'Content-Type': 'application/x-www-form-urlencoded' } },
+        `Logging in as ${user.username}...`,
+      );
+      if (retryData?.access_token) {
+        setNotice(`Logged in as ${user.username}.`);
+        await loadCurrentUser();
+        setPage('websites');
+        await refreshAll();
+      }
+      return;
+    }
     if (data?.access_token) {
       setNotice(`Logged in as ${user.username}.`);
       await loadCurrentUser();

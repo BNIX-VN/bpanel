@@ -434,13 +434,27 @@ def create_sftp_backup(
     db_item = db.query(DatabaseAccount).filter(DatabaseAccount.website_id == website.id).first()
     archive = backup.create_backup(website, db_item.db_name if db_item else None)
     try:
+        password = decrypt(target.password) if target.password else None
+    except RuntimeError:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to access stored SFTP password; please re-save the target in panel settings",
+        )
+    try:
+        private_key = decrypt(target.private_key) if target.private_key else None
+    except RuntimeError:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to access stored SFTP private key; please re-save the target in panel settings",
+        )
+    try:
         result = backup.upload_to_sftp(
             archive,
             host=target.host,
             port=target.port,
             username=target.username,
-            password=decrypt(target.password) if target.password else None,
-            private_key=decrypt(target.private_key) if target.private_key else None,
+            password=password,
+            private_key=private_key,
             remote_path=target.remote_path,
             expected_host_key_type=target.host_key_type,
             expected_host_key_fingerprint=target.host_key_fingerprint,

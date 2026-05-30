@@ -28,7 +28,7 @@ from app.services.audit import log_action
 # Hard caps for credentials submitted to /auth/login. bcrypt accepts at most
 # 72 bytes anyway and we never want to spend CPU comparing absurd payloads.
 _MAX_USERNAME_LEN = 64
-_MAX_PASSWORD_LEN = 128
+_MAX_PASSWORD_LEN = 72
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -235,6 +235,8 @@ def _memory_record_failure(key: str, *, apply_lockout: bool) -> None:
     with _login_lock:
         attempts = _login_attempts[key]
         attempts.append(now)
+        # Always clean up old attempts — do this before the apply_lockout guard
+        # so the list doesn't grow unbounded when lockout is not applied.
         cutoff = now - _LOGIN_WINDOW_SECONDS
         while attempts and attempts[0] < cutoff:
             attempts.popleft()
@@ -426,6 +428,11 @@ def impersonate_user(
     impersonation with the actor and target identities.
     """
     ensure_role(current_user.role, Role.admin)
+
+    # Rate-limit impersonation attempts to prevent enumeration of user IDs.
+    _enforce_rate_limit(_client_key(request))
+    _enforce_rate_limit(_username_key(current_user.username))
+
     target_user = db.query(User).filter(User.id == user_id).first()
     if target_user is None or not target_user.is_active:
         raise HTTPException(status_code=404, detail="User not found or inactive")
@@ -440,12 +447,14 @@ def impersonate_user(
                 detail="Two-factor authentication code required",
             )
         if not _verify_totp(current_user, otp):
+            _record_failure(_client_key(request), apply_lockout=True)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid authentication code",
             )
 
-    token = _issue_login_session(response, request, target_user)
+    # Audit log must be written before the session is issued so a DB failure
+    # doesn't leave an impersonation succeeded with no audit trail.
     log_action(
         db,
         current_user.id,
@@ -454,6 +463,7 @@ def impersonate_user(
         detail=f"target_user_id={target_user.id} target_role={target_user.role}",
         request=request,
     )
+    token = _issue_login_session(response, request, target_user)
     return LoginResponse(access_token=token)
 
 

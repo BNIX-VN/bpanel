@@ -46,13 +46,25 @@ def _upload_if_configured(db, schedule: BackupSchedule, archive: str) -> str:
     target = db.query(SftpBackupTarget).filter(SftpBackupTarget.id == schedule.target_id, SftpBackupTarget.is_active == True).first()  # noqa: E712
     if not target:
         raise ValueError("SFTP target not found")
+    try:
+        password = decrypt(target.password) if target.password else None
+    except RuntimeError:
+        raise RuntimeError(
+            "Failed to decrypt SFTP target password; please re-save the target in panel settings"
+        )
+    try:
+        private_key = decrypt(target.private_key) if target.private_key else None
+    except RuntimeError:
+        raise RuntimeError(
+            "Failed to decrypt SFTP target private key; please re-save the target in panel settings"
+        )
     result = backup.upload_to_sftp(
         archive,
         host=target.host,
         port=target.port,
         username=target.username,
-        password=decrypt(target.password) if target.password else None,
-        private_key=decrypt(target.private_key) if target.private_key else None,
+        password=password,
+        private_key=private_key,
         remote_path=target.remote_path,
         expected_host_key_type=target.host_key_type,
         expected_host_key_fingerprint=target.host_key_fingerprint,

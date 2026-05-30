@@ -31,6 +31,11 @@ class TestNginxCustomValidator:
         with pytest.raises(ValueError):
             validate_custom_nginx("location /api { proxy_pass http://attacker.com; }")
 
+    def test_rejects_upstream_at_name(self):
+        # Nginx supports @-prefixed named upstreams: upstream @backend { ... }
+        with pytest.raises(ValueError):
+            validate_custom_nginx("upstream @backend { server attacker.com; }")
+
     def test_rejects_alias(self):
         with pytest.raises(ValueError):
             validate_custom_nginx("location / { alias /etc/passwd; }")

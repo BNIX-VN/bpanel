@@ -106,10 +106,14 @@ def create_user_backup(user: User, db) -> str:
                 if settings.command_dry_run and not sql_path.exists():
                     sql_path.write_text(f"-- DRY RUN database dump for {db_item.db_name}\n", encoding="utf-8")
                 sql_files[website.domain] = sql_path
+                try:
+                    db_password = decrypt(db_item.db_password)
+                except RuntimeError:
+                    db_password = ""
                 site_entry["database"] = {
                     "db_name": db_item.db_name,
                     "db_user": db_item.db_user,
-                    "db_password": decrypt(db_item.db_password),
+                    "db_password": db_password,
                     "sql_member": f"databases/{sql_name}",
                 }
             manifest["websites"].append(site_entry)

@@ -142,7 +142,14 @@ def consume_phpmyadmin_sso(token: str, request: Request):
 @router.post("/{database_id}/phpmyadmin-sso")
 def create_phpmyadmin_sso(database_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     item = get_accessible_database(database_id, db, current_user)
-    token = create_phpmyadmin_token(item.db_user, decrypt(item.db_password), item.db_name)
+    try:
+        db_password = decrypt(item.db_password)
+    except RuntimeError:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to access stored database password; please re-save the password in panel settings",
+        )
+    token = create_phpmyadmin_token(item.db_user, db_password, item.db_name)
     log_action(
         db,
         current_user.id,

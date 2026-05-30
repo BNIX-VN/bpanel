@@ -1,9 +1,13 @@
+import logging
 from typing import Optional
 
 from fastapi import Request
 from sqlalchemy.orm import Session
 
 from app.models.entities import AuditLog
+
+
+logger = logging.getLogger("bpanel.audit")
 
 
 def log_action(
@@ -33,4 +37,8 @@ def log_action(
         else:
             detail = " ".join(extras)
     db.add(AuditLog(user_id=user_id, action=action, target=target, detail=detail))
-    db.commit()
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to write audit log: action=%s target=%s", action, target)

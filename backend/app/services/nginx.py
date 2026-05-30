@@ -45,7 +45,7 @@ DANGEROUS_BLOCKS = re.compile(
     r"http\s*\{|"
     r"events\s*\{|"
     r"stream\s*\{|"
-    r"upstream\s+[A-Za-z0-9_]+\s*\{"
+    r"upstream\s+[@A-Za-z0-9_][A-Za-z0-9_]*\s*\{"
     r")"
 )
 
