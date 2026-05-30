@@ -480,6 +480,12 @@ echo "Built bundle: ${HASHED:-unknown}"
 chmod o+rX "$APP_DIR" "$APP_DIR/frontend" 2>/dev/null || true
 chmod -R o+rX "$APP_DIR/frontend/dist"
 
+# The API mounts /assets only when the built directory exists at process start.
+# Restart once more after the clean frontend rebuild so newly hashed JS/CSS
+# files are served as static assets instead of falling through to index.html.
+log "Restarting bpanel-api after frontend build"
+systemctl restart bpanel-api
+
 # --- Reload Nginx ----------------------------------------------------------
 log "Reloading nginx"
 nginx -t
