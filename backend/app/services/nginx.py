@@ -302,6 +302,7 @@ def _replace_fastcgi_cache_blocks(content: str, enabled: bool = True) -> str:
     )
     cleaned = server_pattern.sub("", content)
     cleaned = location_pattern.sub("", cleaned)
+    cleaned = re.sub(r"\n?\s*add_header\s+X-FastCGI-Cache\s+[^;]+;", "", cleaned)
     if not enabled:
         return cleaned.rstrip() + "\n"
     if "fastcgi_pass" not in cleaned:
