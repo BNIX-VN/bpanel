@@ -1,6 +1,11 @@
 import json
+import logging
+import threading
 import tarfile
+import uuid
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
@@ -9,7 +14,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
-from app.core.database import get_db
+from app.core.database import SessionLocal, get_db
 from app.core.permissions import Role, ensure_role, is_admin_role
 from app.core.secrets import decrypt, encrypt
 from app.models.entities import BackupSchedule, DatabaseAccount, SftpBackupTarget, User, Website
@@ -32,6 +37,13 @@ from app.services import backup, cron, file_manager, php, site_users, storage_qu
 from app.services.audit import log_action
 
 router = APIRouter(prefix="/maintenance", tags=["maintenance"])
+logger = logging.getLogger(__name__)
+
+
+FILE_JOB_LIMIT = 50
+_file_job_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="bpanel-file-job")
+_file_jobs: dict[str, dict] = {}
+_file_jobs_lock = threading.Lock()
 
 
 class FileWrite(BaseModel):
@@ -46,10 +58,22 @@ class FileMkdir(BaseModel):
     name: str
 
 
+class FileCreate(BaseModel):
+    website_id: int
+    path: str = ""
+    name: str
+
+
 class FileRename(BaseModel):
     website_id: int
     path: str
     new_name: str
+
+
+class FileChmod(BaseModel):
+    website_id: int
+    path: str
+    mode: str
 
 
 class FileBulkDelete(BaseModel):
@@ -69,6 +93,137 @@ class FileExtract(BaseModel):
     website_id: int
     archive_path: str
     destination_path: str = ""
+
+
+def _now_iso() -> str:
+    return datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+
+def _public_file_job(job: dict) -> dict:
+    return {
+        "job_id": job["job_id"],
+        "kind": job["kind"],
+        "status": job["status"],
+        "website_id": job["website_id"],
+        "archive_path": job.get("archive_path", ""),
+        "destination_path": job.get("destination_path", ""),
+        "target": job.get("target", ""),
+        "message": job.get("message", ""),
+        "error": job.get("error", ""),
+        "created_at": job.get("created_at", ""),
+        "started_at": job.get("started_at", ""),
+        "finished_at": job.get("finished_at", ""),
+    }
+
+
+def _set_file_job(job_id: str, **updates) -> None:
+    with _file_jobs_lock:
+        job = _file_jobs.get(job_id)
+        if not job:
+            return
+        job.update(updates)
+
+
+def _remember_file_job(job: dict) -> dict:
+    with _file_jobs_lock:
+        _file_jobs[job["job_id"]] = job
+        if len(_file_jobs) > FILE_JOB_LIMIT:
+            old_ids = sorted(_file_jobs, key=lambda item: _file_jobs[item].get("created_at", ""))
+            for old_id in old_ids[: len(_file_jobs) - FILE_JOB_LIMIT]:
+                if _file_jobs[old_id].get("status") not in {"queued", "running"}:
+                    _file_jobs.pop(old_id, None)
+    return _public_file_job(job)
+
+
+def _get_file_job(job_id: str) -> dict | None:
+    with _file_jobs_lock:
+        job = _file_jobs.get(job_id)
+        return dict(job) if job else None
+
+
+def _list_file_jobs(current_user: User, website_id: int | None = None) -> list[dict]:
+    with _file_jobs_lock:
+        jobs = [dict(job) for job in _file_jobs.values()]
+    visible = []
+    for job in jobs:
+        if job.get("user_id") != current_user.id and not is_admin_role(current_user.role):
+            continue
+        if website_id is not None and job.get("website_id") != website_id:
+            continue
+        visible.append(_public_file_job(job))
+    return sorted(visible, key=lambda item: item.get("created_at", ""), reverse=True)[:10]
+
+
+
+def _run_extract_job(job_id: str, user_id: int, website_id: int, archive_path: str, destination_path: str, allow_executable: bool) -> None:
+    _set_file_job(job_id, status="running", started_at=_now_iso(), message="Extracting archive")
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.id == user_id).first()
+        website = db.query(Website).filter(Website.id == website_id).first()
+        if not user or not user.is_active:
+            raise ValueError("User not found")
+        if not website:
+            raise ValueError("Website not found")
+        if website.owner_id != user.id and not is_admin_role(user.role):
+            raise ValueError("Access denied")
+        target = file_manager.extract_archive(
+            website,
+            archive_path,
+            destination_path,
+            allow_executable,
+            quota_check=_quota_check_for_website(db, website),
+        )
+        log_action(db, user.id, "extract_archive", website.domain, archive_path)
+        _set_file_job(
+            job_id,
+            status="done",
+            target=target,
+            message="Extraction completed",
+            finished_at=_now_iso(),
+        )
+    except Exception as exc:
+        db.rollback()
+        logger.exception("File extract job failed: job_id=%s website_id=%s", job_id, website_id)
+        _set_file_job(
+            job_id,
+            status="error",
+            error=str(exc),
+            message="Extraction failed",
+            finished_at=_now_iso(),
+        )
+    finally:
+        db.close()
+
+
+def _queue_extract_job(user: User, website: Website, archive_path: str, destination_path: str, allow_executable: bool) -> dict:
+    job_id = uuid.uuid4().hex
+    job = {
+        "job_id": job_id,
+        "kind": "extract_archive",
+        "status": "queued",
+        "user_id": user.id,
+        "website_id": website.id,
+        "archive_path": archive_path,
+        "destination_path": destination_path,
+        "target": "",
+        "message": "Extraction queued",
+        "error": "",
+        "created_at": _now_iso(),
+        "started_at": "",
+        "finished_at": "",
+    }
+    public_job = _remember_file_job(job)
+    _file_job_executor.submit(
+        _run_extract_job,
+        job_id,
+        user.id,
+        website.id,
+        archive_path,
+        destination_path,
+        allow_executable,
+    )
+    return public_job
 
 
 def get_owned_website(db: Session, current_user: User, website_id: int) -> Website:
@@ -533,6 +688,21 @@ def fix_wordpress_permissions(website_id: int, db: Session = Depends(get_db), cu
     return {"message": f"Fixed permissions for {website.domain}", "root_path": website.root_path}
 
 
+@router.get("/files/jobs")
+def list_file_jobs(website_id: int | None = Query(default=None), current_user: User = Depends(get_current_user)):
+    return {"jobs": _list_file_jobs(current_user, website_id)}
+
+
+@router.get("/files/jobs/{job_id}")
+def get_file_job(job_id: str, current_user: User = Depends(get_current_user)):
+    job = _get_file_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="File job not found")
+    if job.get("user_id") != current_user.id and not is_admin_role(current_user.role):
+        raise HTTPException(status_code=403, detail="Access denied")
+    return _public_file_job(job)
+
+
 @router.get("/files/{website_id}")
 def list_files(website_id: int, path: str = Query(default=""), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     website = get_owned_website(db, current_user, website_id)
@@ -575,6 +745,26 @@ def make_directory(payload: FileMkdir, db: Session = Depends(get_db), current_us
     return {"target": target}
 
 
+@router.post("/files/create")
+def create_file(payload: FileCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.end_user)
+    website = get_owned_website(db, current_user, payload.website_id)
+    try:
+        target = file_manager.create_text_file(
+            website,
+            payload.path,
+            payload.name,
+            is_admin_role(current_user.role),
+            quota_check=_quota_check_for_website(db, website),
+        )
+    except storage_quota.StorageQuotaExceeded as exc:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    log_action(db, current_user.id, "create_file", website.domain, target)
+    return {"target": target}
+
+
 @router.post("/files/rename")
 def rename_entry(payload: FileRename, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.end_user)
@@ -585,6 +775,18 @@ def rename_entry(payload: FileRename, db: Session = Depends(get_db), current_use
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     log_action(db, current_user.id, "rename_file", website.domain, target)
     return {"target": target}
+
+
+@router.post("/files/chmod")
+def chmod_entry(payload: FileChmod, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.end_user)
+    website = get_owned_website(db, current_user, payload.website_id)
+    try:
+        target = file_manager.chmod_entry(website, payload.path, payload.mode)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    log_action(db, current_user.id, "chmod_file", website.domain, f"{target} {payload.mode}")
+    return {"target": target, "mode": payload.mode}
 
 
 @router.post("/files/delete")
@@ -625,20 +827,15 @@ def archive_entries(payload: FileArchive, db: Session = Depends(get_db), current
 def extract_archive(payload: FileExtract, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.end_user)
     website = get_owned_website(db, current_user, payload.website_id)
-    try:
-        target = file_manager.extract_archive(
-            website,
-            payload.archive_path,
-            payload.destination_path,
-            True,
-            quota_check=_quota_check_for_website(db, website),
-        )
-    except storage_quota.StorageQuotaExceeded as exc:
-        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(exc)) from exc
-    except (ValueError, zipfile.BadZipFile, tarfile.TarError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    log_action(db, current_user.id, "extract_archive", website.domain, payload.archive_path)
-    return {"target": target}
+    job = _queue_extract_job(
+        current_user,
+        website,
+        payload.archive_path,
+        payload.destination_path,
+        True,
+    )
+    log_action(db, current_user.id, "extract_archive_queued", website.domain, payload.archive_path)
+    return {**job, "message": "Extraction started in the background"}
 
 
 @router.post("/files/write")

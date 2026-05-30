@@ -2,6 +2,7 @@
 
 import pytest
 
+from app.services import terminal as terminal_service
 from app.services.terminal import (
     ALLOWED_COMMANDS,
     MAX_OUTPUT_BYTES,
@@ -10,6 +11,8 @@ from app.services.terminal import (
     exec_batch,
     exec_command,
     is_command_allowed,
+    resolve_cwd,
+    split_command,
 )
 
 
@@ -80,6 +83,20 @@ class TestIsCommandAllowed:
         """Artisan should be allowed (it's a PHP script executed via php)."""
         assert is_command_allowed("artisan")
 
+    def test_multi_word_command(self):
+        """Only the executable is checked; args are passed without a shell."""
+        assert is_command_allowed("php artisan migrate --force")
+        assert split_command("composer create-project laravel/laravel .") == [
+            "composer",
+            "create-project",
+            "laravel/laravel",
+            ".",
+        ]
+
+    def test_invalid_shell_syntax(self):
+        """Malformed quoting is rejected before reaching the helper."""
+        assert not is_command_allowed("composer install '")
+
     def test_phpunit_command(self):
         """PHPUnit should be allowed."""
         assert is_command_allowed("phpunit")
@@ -126,3 +143,44 @@ class TestCommandResult:
         result = CommandResult(exit_code=1, stdout="", stderr="error message")
         assert result.exit_code == 1
         assert result.stderr == "error message"
+
+
+class TestExecCommand:
+    def test_exec_passes_cwd_and_split_argv(self, monkeypatch):
+        captured = {}
+
+        def fake_privileged(helper_command, helper_args=None, check=True, **kwargs):
+            captured["helper_command"] = helper_command
+            captured["helper_args"] = helper_args
+            captured["check"] = check
+            return type("Result", (), {"returncode": 0, "stdout": "ok", "stderr": ""})()
+
+        monkeypatch.setattr(terminal_service.shell, "privileged", fake_privileged)
+        result = exec_command("siteuser", "php artisan migrate --force", cwd="/home/siteuser/example.com")
+
+        assert result.exit_code == 0
+        assert captured == {
+            "helper_command": "terminal-exec",
+            "helper_args": ["siteuser", "/home/siteuser/example.com", "php", "artisan", "migrate", "--force"],
+            "check": False,
+        }
+
+    def test_exec_rejects_cd_outside_session(self):
+        result = exec_command("siteuser", "cd public", cwd="/home/siteuser/example.com")
+        assert result.exit_code == 2
+
+
+class TestResolveCwd:
+    def test_resolve_inside_site(self, tmp_path):
+        root = tmp_path / "example.com"
+        public = root / "public"
+        public.mkdir(parents=True)
+        assert resolve_cwd(str(root), str(root), "public") == str(public.resolve())
+
+    def test_rejects_outside_site(self, tmp_path):
+        root = tmp_path / "example.com"
+        other = tmp_path / "other"
+        root.mkdir()
+        other.mkdir()
+        with pytest.raises(ValueError):
+            resolve_cwd(str(root), str(root), "../other")

@@ -1,54 +1,93 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Terminal as XTerminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 
+function normalizeOutput(value) {
+  return String(value || '').replace(/\r?\n/g, '\r\n');
+}
+
+function shortPath(path) {
+  const parts = String(path || '').split('/').filter(Boolean);
+  if (parts.length >= 2) return `${parts.at(-2)}/${parts.at(-1)}`;
+  return parts.at(-1) || '~';
+}
+
 export function Terminal({ websiteId }) {
   const containerRef = useRef(null);
   const termRef = useRef(null);
+  const fitRef = useRef(null);
   const wsRef = useRef(null);
-  const [connected, setConnected] = useState(false);
-  const [error, setError] = useState(null);
+  const lineRef = useRef('');
+  const cursorRef = useRef(0);
+  const promptRef = useRef('$ ');
   const historyRef = useRef([]);
   const historyIndexRef = useRef(-1);
+  const [connected, setConnected] = useState(false);
+  const [error, setError] = useState(null);
+
+  const writePrompt = useCallback(() => {
+    termRef.current?.write(promptRef.current);
+  }, []);
+
+  const redrawLine = useCallback(() => {
+    const term = termRef.current;
+    if (!term) return;
+    term.write('\r\x1b[K');
+    term.write(promptRef.current + lineRef.current);
+    const back = lineRef.current.length - cursorRef.current;
+    if (back > 0) term.write('\b'.repeat(back));
+  }, []);
+
+  const disconnect = useCallback(() => {
+    wsRef.current?.close(1000);
+    wsRef.current = null;
+    setConnected(false);
+  }, []);
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
-
-    // Use relative URL with cookies (browser sends cookies automatically)
-    const wsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api/terminal/ws/${websiteId}`;
-    const ws = new WebSocket(wsUrl);
-    // Important: for cross-origin WebSocket with cookies, we need credentials
-    ws.withCredentials = true;
+    const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${scheme}//${window.location.host}/api/terminal/ws/${websiteId}`);
     wsRef.current = ws;
 
     ws.onopen = () => {
       setConnected(true);
       setError(null);
-      termRef.current?.write('\x1b[1;32mConnected to terminal\x1b[0m\r\n\r\n');
+      termRef.current?.write('\x1b[1;32mConnected\x1b[0m\r\n');
+      writePrompt();
     };
 
-    ws.onmessage = (e) => {
+    ws.onmessage = (event) => {
+      let msg;
       try {
-        const msg = JSON.parse(e.data);
-        if (msg.type === 'output') {
-          termRef.current?.write(msg.data);
-        } else if (msg.type === 'exit') {
-          termRef.current?.write(`\r\n\x1b[33m[exit code: ${msg.code}]\x1b[0m\r\n`);
-        } else if (msg.type === 'pong') {
-          // Heartbeat response
-        } else if (msg.type === 'error') {
-          termRef.current?.write(`\x1b[31mError: ${msg.data}\x1b[0m\r\n`);
-        }
+        msg = JSON.parse(event.data);
       } catch {
-        // Raw output (for non-JSON fallback)
-        termRef.current?.write(e.data);
+        termRef.current?.write(normalizeOutput(event.data));
+        return;
+      }
+
+      if (msg.type === 'output') {
+        termRef.current?.write(normalizeOutput(msg.data));
+      } else if (msg.type === 'exit') {
+        if (Number(msg.code) !== 0) {
+          termRef.current?.write(`\r\n\x1b[33m[exit code: ${msg.code}]\x1b[0m\r\n`);
+        }
+        writePrompt();
+      } else if (msg.type === 'cwd') {
+        promptRef.current = `${shortPath(msg.data)} $ `;
+      } else if (msg.type === 'clear') {
+        termRef.current?.clear();
+      } else if (msg.type === 'error') {
+        termRef.current?.write(`\x1b[31m${normalizeOutput(msg.data)}\x1b[0m\r\n`);
+        writePrompt();
       }
     };
 
-    ws.onclose = (e) => {
+    ws.onclose = (event) => {
       setConnected(false);
-      if (e.code !== 1000) {
+      wsRef.current = null;
+      if (event.code !== 1000) {
         termRef.current?.write('\r\n\x1b[31mDisconnected\x1b[0m\r\n');
       }
     };
@@ -57,168 +96,169 @@ export function Terminal({ websiteId }) {
       setError('Connection failed');
       setConnected(false);
     };
-  }, [websiteId, token]);
-
-  const disconnect = useCallback(() => {
-    wsRef.current?.close(1000);
-    wsRef.current = null;
-    setConnected(false);
-  }, []);
+  }, [websiteId, writePrompt]);
 
   useEffect(() => {
-    if (!containerRef.current) return;
+    if (!containerRef.current) return undefined;
 
     const term = new XTerminal({
       cursorBlink: true,
       cursorStyle: 'block',
       fontSize: 14,
-      fontFamily: '"Cascadia Code", "Fira Code", "Monaco", "Courier New", monospace',
+      fontFamily: 'Consolas, "Cascadia Code", "Fira Code", monospace',
+      scrollback: 2000,
       theme: {
-        background: '#1e1e1e',
-        foreground: '#d4d4d4',
+        background: '#1f2428',
+        foreground: '#e5e7eb',
         cursor: '#ffffff',
-        cursorAccent: '#1e1e1e',
-        selectionBackground: '#264f78',
-        black: '#1e1e1e',
-        red: '#f44747',
-        green: '#6a9955',
-        yellow: '#dcdcaa',
-        blue: '#569cd6',
-        magenta: '#c586c0',
-        cyan: '#4ec9b0',
-        white: '#d4d4d4',
-        brightBlack: '#808080',
-        brightRed: '#f44747',
-        brightGreen: '#6a9955',
-        brightYellow: '#dcdcaa',
-        brightBlue: '#569cd6',
-        brightMagenta: '#c586c0',
-        brightCyan: '#4ec9b0',
+        selectionBackground: '#315a7c',
+        black: '#1f2428',
+        red: '#ef4444',
+        green: '#22c55e',
+        yellow: '#eab308',
+        blue: '#60a5fa',
+        magenta: '#c084fc',
+        cyan: '#2dd4bf',
+        white: '#e5e7eb',
+        brightBlack: '#6b7280',
+        brightRed: '#f87171',
+        brightGreen: '#4ade80',
+        brightYellow: '#facc15',
+        brightBlue: '#93c5fd',
+        brightMagenta: '#d8b4fe',
+        brightCyan: '#5eead4',
         brightWhite: '#ffffff',
       },
-      scrollback: 1000,
-      allowProposedApi: true,
     });
 
-    const fitAddon = new FitAddon();
-    term.loadAddon(fitAddon);
+    const fit = new FitAddon();
+    fitRef.current = fit;
+    term.loadAddon(fit);
     term.open(containerRef.current);
-    fitAddon.fit();
-
     termRef.current = term;
 
-    // Handle resize
-    const handleResize = () => {
-      fitAddon.fit();
+    let resizeFrame = 0;
+    const fitTerminal = () => {
+      resizeFrame = 0;
+      fit.fit();
       if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({
-          type: 'resize',
-          cols: term.cols,
-          rows: term.rows,
-        }));
+        wsRef.current.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
       }
     };
-    window.addEventListener('resize', handleResize);
+    const scheduleFit = () => {
+      if (resizeFrame) window.cancelAnimationFrame(resizeFrame);
+      resizeFrame = window.requestAnimationFrame(fitTerminal);
+    };
+    const resizeObserver = typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(scheduleFit)
+      : null;
 
-    // Handle user input
-    let currentLine = '';
-    let cursorPos = 0;
+    resizeObserver?.observe(containerRef.current);
+    scheduleFit();
+    const onResize = scheduleFit;
+    window.addEventListener('resize', onResize);
 
     term.onData((data) => {
-      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-        // Not connected - try to connect
-        if (data === '\r' || data === '\n') {
-          term.write('\r\n\x1b[31mNot connected. Click Connect to start.\x1b[0m\r\n');
-          currentLine = '';
-          cursorPos = 0;
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        if (data === '\r') term.write('\r\n\x1b[31mNot connected.\x1b[0m\r\n');
+        return;
+      }
+
+      if (data === '\r') {
+        const command = lineRef.current;
+        term.write('\r\n');
+        if (command.trim()) {
+          historyRef.current = [command, ...historyRef.current.filter(item => item !== command)].slice(0, 50);
+        }
+        historyIndexRef.current = -1;
+        lineRef.current = '';
+        cursorRef.current = 0;
+        ws.send(JSON.stringify({ type: 'input', data: command }));
+        return;
+      }
+
+      if (data === '\u007f' || data === '\b') {
+        if (cursorRef.current > 0) {
+          lineRef.current = lineRef.current.slice(0, cursorRef.current - 1) + lineRef.current.slice(cursorRef.current);
+          cursorRef.current -= 1;
+          redrawLine();
         }
         return;
       }
 
-      const code = data.charCodeAt(0);
+      if (data === '\x1b[A') {
+        if (historyIndexRef.current < historyRef.current.length - 1) {
+          historyIndexRef.current += 1;
+          lineRef.current = historyRef.current[historyIndexRef.current] || '';
+          cursorRef.current = lineRef.current.length;
+          redrawLine();
+        }
+        return;
+      }
 
-      if (code === 13) { // Enter
-        const cmd = currentLine.trim();
-        if (cmd) {
-          historyRef.current = [cmd, ...historyRef.current.slice(0, 49)];
+      if (data === '\x1b[B') {
+        if (historyIndexRef.current > 0) {
+          historyIndexRef.current -= 1;
+          lineRef.current = historyRef.current[historyIndexRef.current] || '';
+        } else {
           historyIndexRef.current = -1;
+          lineRef.current = '';
         }
-        wsRef.current.send(JSON.stringify({ type: 'input', data: cmd + '\n' }));
-        currentLine = '';
-        cursorPos = 0;
-      } else if (code === 127 || code === 8) { // Backspace
-        if (cursorPos > 0) {
-          currentLine = currentLine.slice(0, cursorPos - 1) + currentLine.slice(cursorPos);
-          cursorPos--;
-          term.write('\b \b');
-          if (cursorPos < currentLine.length) {
-            term.write(currentLine.slice(cursorPos) + ' ');
-            for (let i = 0; i <= currentLine.length - cursorPos; i++) {
-              term.write('\b');
-            }
-          }
+        cursorRef.current = lineRef.current.length;
+        redrawLine();
+        return;
+      }
+
+      if (data === '\x1b[D') {
+        if (cursorRef.current > 0) {
+          cursorRef.current -= 1;
+          term.write('\b');
         }
-      } else if (code === 27) { // Escape sequences (arrows)
-        const seq = data;
-        if (seq === '\x1b[A') { // Up - history
-          if (historyIndexRef.current < historyRef.current.length - 1) {
-            historyIndexRef.current++;
-            const histCmd = historyRef.current[historyIndexRef.current];
-            // Clear current line
-            term.write('\r\x1b[K');
-            term.write(`$ ${histCmd}`);
-            currentLine = histCmd;
-            cursorPos = currentLine.length;
-          }
-        } else if (seq === '\x1b[B') { // Down
-          if (historyIndexRef.current > 0) {
-            historyIndexRef.current--;
-            const histCmd = historyRef.current[historyIndexRef.current];
-            term.write('\r\x1b[K');
-            term.write(`$ ${histCmd}`);
-            currentLine = histCmd;
-            cursorPos = currentLine.length;
-          } else if (historyIndexRef.current === 0) {
-            historyIndexRef.current = -1;
-            term.write('\r\x1b[K');
-            term.write('$ ');
-            currentLine = '';
-            cursorPos = 0;
-          }
+        return;
+      }
+
+      if (data === '\x1b[C') {
+        if (cursorRef.current < lineRef.current.length) {
+          term.write(lineRef.current[cursorRef.current]);
+          cursorRef.current += 1;
         }
-      } else if (code >= 32) { // Printable characters
-        currentLine = currentLine.slice(0, cursorPos) + data + currentLine.slice(cursorPos);
-        cursorPos += data.length;
-        term.write(data);
-        if (cursorPos < currentLine.length) {
-          term.write(currentLine.slice(cursorPos));
-          for (let i = 0; i < currentLine.length - cursorPos; i++) {
-            term.write('\b');
-          }
-        }
+        return;
+      }
+
+      if (data === '\x03') {
+        term.write('^C\r\n');
+        lineRef.current = '';
+        cursorRef.current = 0;
+        writePrompt();
+        return;
+      }
+
+      if (data >= ' ') {
+        lineRef.current = lineRef.current.slice(0, cursorRef.current) + data + lineRef.current.slice(cursorRef.current);
+        cursorRef.current += data.length;
+        redrawLine();
       }
     });
 
-    // Cleanup
+    connect();
+
     return () => {
-      window.removeEventListener('resize', handleResize);
+      window.removeEventListener('resize', onResize);
+      resizeObserver?.disconnect();
+      if (resizeFrame) window.cancelAnimationFrame(resizeFrame);
       disconnect();
       term.dispose();
       termRef.current = null;
+      fitRef.current = null;
     };
-  }, [connect, disconnect]);
+  }, [connect, disconnect, redrawLine, writePrompt]);
 
   return (
     <div className="terminal-wrapper">
       <div className="terminal-toolbar">
         <span className="terminal-status">
-          {connected ? (
-            <span className="status-connected">● Connected</span>
-          ) : error ? (
-            <span className="status-error">✕ {error}</span>
-          ) : (
-            <span className="status-disconnected">○ Disconnected</span>
-          )}
+          {connected ? <span className="status-connected">Connected</span> : error ? <span className="status-error">{error}</span> : <span className="status-disconnected">Disconnected</span>}
         </span>
         {connected ? (
           <button onClick={disconnect} className="terminal-btn disconnect">Disconnect</button>
@@ -226,59 +266,23 @@ export function Terminal({ websiteId }) {
           <button onClick={connect} className="terminal-btn connect">Connect</button>
         )}
       </div>
-      <div ref={containerRef} className="terminal-container" />
+      <div className="terminal-container">
+        <div ref={containerRef} className="terminal-fit" />
+      </div>
       <style>{`
-        .terminal-wrapper {
-          display: flex;
-          flex-direction: column;
-          height: 100%;
-          background: #1e1e1e;
-          border-radius: 8px;
-          overflow: hidden;
-        }
-        .terminal-toolbar {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          padding: 8px 12px;
-          background: #252526;
-          border-bottom: 1px solid #3c3c3c;
-        }
-        .terminal-status {
-          font-size: 13px;
-          font-family: monospace;
-        }
-        .status-connected { color: #6a9955; }
-        .status-disconnected { color: #808080; }
-        .status-error { color: #f44747; }
-        .terminal-btn {
-          padding: 4px 12px;
-          border: none;
-          border-radius: 4px;
-          font-size: 12px;
-          cursor: pointer;
-          transition: opacity 0.2s;
-        }
-        .terminal-btn:hover { opacity: 0.8; }
-        .terminal-btn.connect {
-          background: #0e639c;
-          color: white;
-        }
-        .terminal-btn.disconnect {
-          background: #c9392c;
-          color: white;
-        }
-        .terminal-container {
-          flex: 1;
-          padding: 8px;
-          overflow: hidden;
-        }
-        .terminal-container .xterm {
-          height: 100%;
-        }
-        .terminal-container .xterm-viewport {
-          overflow-y: auto !important;
-        }
+        .terminal-wrapper { display:flex; flex-direction:column; height:100%; background:#1f2428; border-radius:8px; overflow:hidden; }
+        .terminal-toolbar { display:flex; justify-content:space-between; align-items:center; padding:8px 12px; background:#252b31; border-bottom:1px solid #39424c; }
+        .terminal-status { font-size:13px; font-family:Consolas, monospace; }
+        .status-connected { color:#4ade80; }
+        .status-disconnected { color:#9ca3af; }
+        .status-error { color:#f87171; }
+        .terminal-btn { padding:4px 12px; border:0; border-radius:4px; font-size:12px; cursor:pointer; }
+        .terminal-btn.connect { background:#2563eb; color:white; }
+        .terminal-btn.disconnect { background:#dc2626; color:white; }
+        .terminal-container { flex:1; min-height:0; padding:8px; overflow:hidden; }
+        .terminal-fit { width:100%; height:100%; min-height:0; overflow:hidden; }
+        .terminal-fit .xterm { width:100%; height:100%; }
+        .terminal-fit .xterm-viewport { overflow-y:auto !important; }
       `}</style>
     </div>
   );

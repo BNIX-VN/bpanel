@@ -123,6 +123,14 @@ fastcgi_cache_key "$scheme$request_method$host$request_uri";
 NGINX
 }
 
+ensure_terminal_tools() {
+  if ! command -v composer >/dev/null 2>&1; then
+    log "Installing Composer for per-site terminal workflows"
+    DEBIAN_FRONTEND=noninteractive apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y composer
+  fi
+}
+
 install_panel_runtime() {
   local env_file="$APP_DIR/backend/.env"
   [[ -f "$env_file" ]] || return 0
@@ -171,13 +179,18 @@ exec ${APP_DIR}/backend/.venv/bin/uvicorn "\${args[@]}"
 STARTER
   chmod 0755 /usr/local/sbin/bpanel-api-start
   mkdir -p /etc/systemd/system/bpanel-api.service.d
-  cat >/etc/systemd/system/bpanel-api.service.d/20-panel-port.conf <<'SERVICE'
+  cat >/etc/systemd/system/bpanel-api.service.d/20-panel-port.conf <<SERVICE
 [Service]
+WorkingDirectory=${APP_DIR}/backend
+EnvironmentFile=
+EnvironmentFile=${APP_DIR}/backend/.env
+Environment=HOME=${APP_DIR}
 ExecStart=
 ExecStart=/usr/local/sbin/bpanel-api-start
 SupplementaryGroups=www-data bpanel-sites
 ProtectHome=false
-ReadWritePaths=/home /home/bpanel-sites /var/backups/bpanel /etc/nginx/conf.d /tmp /var/lib/bpanel
+ReadWritePaths=
+ReadWritePaths=${APP_DIR} /home /home/bpanel-sites /var/backups/bpanel /etc/nginx/conf.d /tmp /var/lib/bpanel
 SERVICE
   cat >/etc/systemd/system/bpanel-backup-scheduler.service <<SERVICE
 [Unit]
@@ -351,8 +364,15 @@ log "Installing direct panel runtime on port 2222"
 install_panel_runtime
 log "Configuring Nginx FastCGI cache"
 configure_fastcgi_cache
+ensure_terminal_tools
+venv_needs_recreate=false
 if [[ ! -x "$APP_DIR/backend/.venv/bin/uvicorn" ]]; then
-  log "Recreating Python virtualenv (was missing)"
+  venv_needs_recreate=true
+elif ! head -n1 "$APP_DIR/backend/.venv/bin/uvicorn" 2>/dev/null | grep -Fq "$APP_DIR/backend/.venv"; then
+  venv_needs_recreate=true
+fi
+if [[ "$venv_needs_recreate" == "true" ]]; then
+  log "Recreating Python virtualenv (missing or stale path)"
   rm -rf "$APP_DIR/backend/.venv"
   python3 -m venv "$APP_DIR/backend/.venv"
 fi
@@ -362,6 +382,7 @@ if [[ -f "$SOURCE_DIR/installer/files/bpanel-helper.sh" ]]; then
   log "Refreshing /usr/local/sbin/bpanel-helper and /etc/sudoers.d/bpanel"
   if id -u bpanel >/dev/null 2>&1; then
     install -m 0750 -o root -g bpanel "$SOURCE_DIR/installer/files/bpanel-helper.sh" /usr/local/sbin/bpanel-helper
+    sed -i "s#^APP_DIR=\"/opt/bpanel\"#APP_DIR=\"${APP_DIR}\"#" /usr/local/sbin/bpanel-helper
     install -m 0440 -o root -g root  "$SOURCE_DIR/installer/files/bpanel-sudoers"   /etc/sudoers.d/bpanel
     visudo -c -f /etc/sudoers.d/bpanel >/dev/null
     sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper wp --info >/dev/null
@@ -374,6 +395,7 @@ if [[ -f "$SOURCE_DIR/installer/files/bpanelctl" ]]; then
   log "Refreshing SSH menu command: bpanel"
   install -m 0755 -o root -g root "$SOURCE_DIR/installer/files/bpanelctl" /usr/local/sbin/bpanel
   ln -sfn /usr/local/sbin/bpanel /usr/local/sbin/bpanelctl
+  sed -i "s#APP_DIR=\"\${APP_DIR:-/opt/bpanel}\"#APP_DIR=\"\${APP_DIR:-${APP_DIR}}\"#" /usr/local/sbin/bpanel /usr/local/sbin/bpanelctl 2>/dev/null || true
 fi
 
 log "Ensuring Nginx ModSecurity WAF engine is installed"

@@ -141,7 +141,7 @@ ask_panel_url() {
 install_base_packages() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
-  apt-get install -y software-properties-common ca-certificates curl gnupg git nginx mariadb-server redis-server python3 python3-pip python3-venv certbot python3-certbot-nginx tar openssl unzip ufw phpmyadmin acl
+  apt-get install -y software-properties-common ca-certificates curl gnupg git composer nginx mariadb-server redis-server python3 python3-pip python3-venv certbot python3-certbot-nginx tar openssl unzip ufw phpmyadmin acl
   systemctl enable --now nginx mariadb redis-server
 }
 
@@ -355,6 +355,7 @@ MYCNF
 
 install_privileged_helper() {
   install -m 0750 -o root -g bpanel "${SCRIPT_DIR}/files/bpanel-helper.sh" /usr/local/sbin/bpanel-helper
+  sed -i "s#^APP_DIR=\"/opt/bpanel\"#APP_DIR=\"${APP_DIR}\"#" /usr/local/sbin/bpanel-helper
   install -m 0440 -o root -g root "${SCRIPT_DIR}/files/bpanel-sudoers" /etc/sudoers.d/bpanel
   visudo -c -f /etc/sudoers.d/bpanel >/dev/null
 }
@@ -362,6 +363,7 @@ install_privileged_helper() {
 install_panel_cli() {
   install -m 0755 -o root -g root "${SCRIPT_DIR}/files/bpanelctl" /usr/local/sbin/bpanel
   ln -sfn /usr/local/sbin/bpanel /usr/local/sbin/bpanelctl
+  sed -i "s#APP_DIR=\"\${APP_DIR:-/opt/bpanel}\"#APP_DIR=\"\${APP_DIR:-${APP_DIR}}\"#" /usr/local/sbin/bpanel /usr/local/sbin/bpanelctl 2>/dev/null || true
 }
 
 validate_privileged_helper() {

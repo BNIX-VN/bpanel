@@ -1,50 +1,53 @@
 """Terminal API endpoints."""
 
-from typing import Annotated, Optional
+import json
 
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from jose import JWTError, jwt
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.api.deps import get_current_user
 from app.core.config import settings
 from app.core.database import get_db
-from app.models.entities import User, Website
+from app.core.permissions import Role, ensure_role, is_admin_role
+from app.core.security import ALGORITHM
+from app.models.entities import RevokedToken, User, Website
 from app.services import terminal
 
 router = APIRouter(prefix="/terminal", tags=["terminal"])
 
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token", auto_error=False)
+def _origin_allowed(websocket: WebSocket) -> bool:
+    origin = (websocket.headers.get("origin") or "").rstrip("/")
+    if not origin:
+        return True
+    allowed = {item.rstrip("/") for item in settings.cors_origins}
+    if settings.panel_url:
+        allowed.add(settings.panel_url.rstrip("/"))
+    return not allowed or origin in allowed
 
 
-async def get_current_user_ws(
-    token: Annotated[str, Depends(oauth2_scheme)],
-    db: Session = Depends(get_db),
-) -> User:
-    """Get current user from JWT token (for WebSocket auth)."""
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
+def _current_user_from_session_cookie(websocket: WebSocket, db: Session) -> User | None:
+    token = websocket.cookies.get("bpanel_session")
     if not token:
-        raise credentials_exception
+        return None
     try:
-        payload = jwt.decode(
-            token,
-            settings.secret_key,
-            algorithms=["HS256"],
-        )
-        user_id: int = payload.get("sub")
-        if user_id is None:
-            raise credentials_exception
-    except JWTError:
-        raise credentials_exception
-    user = db.query(User).filter(User.id == user_id).first()
-    if user is None:
-        raise credentials_exception
+        payload = jwt.decode(token, settings.secret_key, algorithms=[ALGORITHM])
+        username = payload.get("sub")
+        token_version = int(payload.get("tv", 0))
+        jti = payload.get("jti")
+        if not username:
+            return None
+    except (JWTError, ValueError):
+        return None
+    user = db.query(User).filter(User.username == username).first()
+    if user is None or not user.is_active:
+        return None
+    if (user.token_version or 0) != token_version:
+        return None
+    if jti and db.query(RevokedToken.id).filter(RevokedToken.jti == jti).first():
+        return None
     return user
 
 
@@ -59,7 +62,6 @@ async def get_user_website(
         raise HTTPException(status_code=404, detail="Website not found")
     # Check ownership or admin role
     if website.owner_id != current_user.id:
-        from app.core.permissions import Role, ensure_role
         ensure_role(current_user.role, Role.admin)
     return website
 
@@ -83,7 +85,7 @@ async def exec_command(
     website_id: int,
     request: TerminalExecRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user_ws),
+    current_user: User = Depends(get_current_user),
 ):
     """Execute a single command as the website user.
 
@@ -109,7 +111,7 @@ async def exec_command(
 
 @router.get("/allowed-commands")
 async def list_allowed_commands(
-    current_user: User = Depends(get_current_user_ws),
+    current_user: User = Depends(get_current_user),
 ):
     """List all allowed commands for terminal access."""
     return {"commands": sorted(terminal.ALLOWED_COMMANDS)}
@@ -134,36 +136,13 @@ async def terminal_websocket(
     - Server -> Client: {"type": "exit", "code": 0}
     - Server -> Client: {"type": "pong"}
     """
-    from jose import jwt
-    from app.core.database import SessionLocal
-
-    # Authenticate via cookie
-    session_cookie = websocket.cookies.get("bpanel_session")
-    if not session_cookie:
-        await websocket.close(code=4001, reason="No session cookie")
+    if not _origin_allowed(websocket):
+        await websocket.close(code=4003, reason="Origin not allowed")
         return
 
-    try:
-        # Use a separate db session for WebSocket
-        db_ws = SessionLocal()
-        try:
-            payload = jwt.decode(
-                session_cookie,
-                settings.secret_key,
-                algorithms=["HS256"],
-            )
-            user_id = payload.get("sub")
-            if not user_id:
-                await websocket.close(code=4001, reason="Invalid session")
-                return
-            current_user = db_ws.query(User).filter(User.id == user_id).first()
-            if not current_user:
-                await websocket.close(code=4001, reason="User not found")
-                return
-        finally:
-            db_ws.close()
-    except JWTError:
-        await websocket.close(code=4001, reason="Invalid session")
+    current_user = _current_user_from_session_cookie(websocket, db)
+    if not current_user:
+        await websocket.close(code=4001, reason="No session cookie")
         return
 
     # Get website
@@ -173,20 +152,21 @@ async def terminal_websocket(
         return
 
     # Check ownership
-    if website.owner_id != current_user.id:
-        from app.core.permissions import Role
-        if current_user.role != Role.admin:
-            await websocket.close(code=4003, reason="Access denied")
-            return
+    if website.owner_id != current_user.id and not is_admin_role(current_user.role):
+        await websocket.close(code=4003, reason="Access denied")
+        return
+
+    if not website.linux_user:
+        await websocket.close(code=4004, reason="Website runtime user is missing")
+        return
 
     await websocket.accept()
+    cwd = website.root_path
+    await websocket.send_json({"type": "cwd", "data": cwd})
 
-    # Track active sessions for this website
-    # In production, this should use Redis or similar for multi-process coordination
     try:
         while True:
             message = await websocket.receive_text()
-            import json
 
             try:
                 msg = json.loads(message)
@@ -202,13 +182,41 @@ async def terminal_websocket(
             if msg_type == "ping":
                 await websocket.send_json({"type": "pong"})
             elif msg_type == "input":
-                command = msg.get("data", "").strip()
+                command = (msg.get("data", "") or "").strip()
                 if not command:
+                    await websocket.send_json({"type": "exit", "code": 0})
                     continue
+                if command in {"clear", "cls"}:
+                    await websocket.send_json({"type": "clear"})
+                    await websocket.send_json({"type": "exit", "code": 0})
+                    continue
+
+                try:
+                    argv = terminal.split_command(command)
+                except ValueError as exc:
+                    await websocket.send_json({"type": "output", "data": f"{exc}\r\n"})
+                    await websocket.send_json({"type": "exit", "code": 2})
+                    continue
+
+                if argv[0] == "cd":
+                    if len(argv) > 2:
+                        await websocket.send_json({"type": "output", "data": "usage: cd [path]\r\n"})
+                        await websocket.send_json({"type": "exit", "code": 2})
+                        continue
+                    try:
+                        cwd = terminal.resolve_cwd(website.root_path, cwd, argv[1] if len(argv) == 2 else "")
+                    except ValueError as exc:
+                        await websocket.send_json({"type": "output", "data": f"{exc}\r\n"})
+                        await websocket.send_json({"type": "exit", "code": 1})
+                        continue
+                    await websocket.send_json({"type": "cwd", "data": cwd})
+                    await websocket.send_json({"type": "exit", "code": 0})
+                    continue
+
                 result = terminal.exec_command(
                     website.linux_user,
                     command,
-                    cwd=website.root_path,
+                    cwd=cwd,
                 )
                 await websocket.send_json({
                     "type": "output",

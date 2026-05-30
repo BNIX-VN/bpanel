@@ -56,12 +56,14 @@ usermod -aG bpanel-sites www-data || true
 
 log "Installing privileged helper and sudoers rule"
 install -m 0750 -o root -g bpanel "$SOURCE_DIR/installer/files/bpanel-helper.sh" /usr/local/sbin/bpanel-helper
+sed -i "s#^APP_DIR=\"/opt/bpanel\"#APP_DIR=\"${APP_DIR}\"#" /usr/local/sbin/bpanel-helper
 install -m 0440 -o root -g root  "$SOURCE_DIR/installer/files/bpanel-sudoers"   /etc/sudoers.d/bpanel
 visudo -c -f /etc/sudoers.d/bpanel >/dev/null
 sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper wp --info >/dev/null
 if [[ -f "$SOURCE_DIR/installer/files/bpanelctl" ]]; then
   install -m 0755 -o root -g root "$SOURCE_DIR/installer/files/bpanelctl" /usr/local/sbin/bpanel
   ln -sfn /usr/local/sbin/bpanel /usr/local/sbin/bpanelctl
+  sed -i "s#APP_DIR=\"\${APP_DIR:-/opt/bpanel}\"#APP_DIR=\"\${APP_DIR:-${APP_DIR}}\"#" /usr/local/sbin/bpanel /usr/local/sbin/bpanelctl 2>/dev/null || true
 fi
 
 log "Fixing filesystem ownership and permissions"

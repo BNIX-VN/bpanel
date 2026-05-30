@@ -58,6 +58,60 @@
   font-size: 12px;
 }
 
+.file-job-list {
+  display: grid;
+  gap: 5px;
+  grid-column: 1 / -1;
+}
+
+.file-job {
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-alt);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.file-job svg {
+  flex: none;
+  color: var(--primary);
+}
+
+.file-job span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-job small {
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.file-job.done {
+  border-color: var(--success-border);
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.file-job.error {
+  border-color: #fecaca;
+  background: #fff1f2;
+  color: var(--danger);
+}
+
 .path-pill {
   margin: 0;
   background: var(--surface-alt);
@@ -170,7 +224,7 @@
 
 .file-item {
   display: grid;
-  grid-template-columns: 20px minmax(240px, 1fr) 82px auto;
+  grid-template-columns: 20px minmax(240px, 1fr) 52px 82px auto;
   gap: 8px;
   align-items: center;
   background: var(--surface);
@@ -244,6 +298,14 @@
 .file-size {
   font-size: 11px;
   color: var(--text-muted);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.file-mode {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: Consolas, 'SFMono-Regular', 'Liberation Mono', Menlo, monospace;
   font-weight: 700;
   white-space: nowrap;
 }
@@ -467,6 +529,7 @@
   }
 
   .file-size,
+  .file-mode,
   .file-row-actions {
     grid-column: 2;
     justify-content: flex-start;
@@ -605,6 +668,12 @@
   .file-size {
     grid-column: 2;
     grid-row: 2;
+  }
+
+  .file-mode {
+    grid-column: 2;
+    grid-row: 2;
+    justify-self: end;
   }
 
   .file-row-actions {

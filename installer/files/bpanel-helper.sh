@@ -440,6 +440,18 @@ require_managed_path() {
   echo "$resolved"
 }
 
+require_terminal_cwd() {
+  local path="$1" user="$2" resolved
+  require_linux_user "$user"
+  resolved=$(require_safe_path "$HOME_ROOT" "$path")
+  case "$resolved" in
+    "$HOME_ROOT/$user"|"$HOME_ROOT/$user"/*|"$SITES_ROOT"/*) ;;
+    *) deny "terminal cwd is not owned by site user $user: $resolved" ;;
+  esac
+  [[ -d "$resolved" ]] || deny "terminal cwd is not a directory: $resolved"
+  echo "$resolved"
+}
+
 ensure_sites_group() {
   getent group "$BPANEL_SITES_GROUP" >/dev/null || groupadd --system "$BPANEL_SITES_GROUP"
   usermod -aG "$BPANEL_SITES_GROUP" bpanel 2>/dev/null || true
@@ -755,6 +767,33 @@ case "$cmd" in
     fix_site_tree "$target" "$2"
     ;;
 
+  site-file-write)
+    [[ $# -eq 3 ]] || deny "usage: site-file-write <site-user> <site-root> <relative-path>"
+    user="$1"; root_arg="$2"; rel_arg="$3"
+    require_linux_user "$user"
+    root_target=$(require_managed_path "$root_arg" "$user")
+    case "$rel_arg" in
+      ""|"/"|/*|*$'\n'*|".."|"../"*|*"/.."|*"/../"*) deny "unsafe relative path: $rel_arg" ;;
+    esac
+    target=$(require_safe_path "$root_target" "$root_target/$rel_arg")
+    [[ -d "$target" ]] && deny "cannot write a directory: $target"
+    [[ -L "$target" ]] && deny "refusing to write through a symlink: $target"
+    parent=$(dirname -- "$target")
+    mkdir -p -- "$parent"
+    chown "$user:$user" "$parent"
+    existing_mode=""
+    if [[ -e "$target" ]]; then
+      existing_mode=$(stat -c '%a' -- "$target")
+    fi
+    base=$(basename -- "$target")
+    tmp="$parent/.${base}.bpanel-write-$$"
+    rm -f -- "$tmp"
+    cat >"$tmp"
+    chown "$user:$user" "$tmp"
+    chmod "${existing_mode:-0644}" "$tmp"
+    mv -f -- "$tmp" "$target"
+    ;;
+
   panel-user-ensure)
     [[ $# -eq 1 ]] || deny "usage: panel-user-ensure <site-user>"
     ensure_panel_user_home "$1"
@@ -859,27 +898,39 @@ case "$cmd" in
   # ---- terminal command execution as site user -------------------------
   terminal-exec)
     # Execute a whitelisted command as the site user
-    # Args: <site-user> <command> [args...]
-    [[ $# -ge 2 ]] || deny "usage: terminal-exec <site-user> <command> [args...]"
-    user="$1"; shift
+    # Args: <site-user> <cwd> <command> [args...]
+    [[ $# -ge 3 ]] || deny "usage: terminal-exec <site-user> <cwd> <command> [args...]"
+    user="$1"; cwd_arg="$2"; shift 2
     cmd="$1"; shift
     require_linux_user "$user"
+    id -u "$user" >/dev/null 2>&1 || deny "site user does not exist: $user"
+    target=$(require_terminal_cwd "$cwd_arg" "$user")
+
+    install -d -o "$user" -g "$user" -m 0700 "$HOME_ROOT/$user/.composer" "$HOME_ROOT/$user/.npm"
+    cd "$target"
+    terminal_env=(
+      "HOME=$HOME_ROOT/$user"
+      "COMPOSER_HOME=$HOME_ROOT/$user/.composer"
+      "npm_config_cache=$HOME_ROOT/$user/.npm"
+      "PATH=/usr/local/bin:/usr/bin:/bin"
+    )
 
     # Whitelist of allowed commands for terminal access
     case "$cmd" in
       php|composer|node|npm|npx|yarn|git|phpunit)
-        exec runuser -u "$user" -- env HOME="$HOME_ROOT/$user" PATH="/usr/local/bin:/usr/bin:/bin" "$cmd" "$@"
+        exec runuser -u "$user" -- env "${terminal_env[@]}" "$cmd" "$@"
         ;;
-      ls|cat|mkdir|rm|cp|mv|chmod|chown|pwd|echo|cd|touch|grep|find|tar|zip|unzip|curl|wget|diff|head|tail|less)
-        exec runuser -u "$user" -- env HOME="$HOME_ROOT/$user" PATH="/usr/local/bin:/usr/bin:/bin" "$cmd" "$@"
+      ls|cat|mkdir|rm|cp|mv|chmod|chown|pwd|echo|touch|grep|find|tar|zip|unzip|curl|wget|diff|head|tail|less|du|df|date|whoami|which|clear)
+        exec runuser -u "$user" -- env "${terminal_env[@]}" "$cmd" "$@"
         ;;
       artisan)
         # artisan is a PHP script, executed via php
-        exec runuser -u "$user" -- env HOME="$HOME_ROOT/$user" PATH="/usr/local/bin:/usr/bin:/bin" php "$cmd" "$@"
+        [[ -f artisan ]] || deny "artisan not found in $target"
+        exec runuser -u "$user" -- env "${terminal_env[@]}" php artisan "$@"
         ;;
       *)
         echo "Command not allowed: $cmd" >&2
-        echo "Allowed commands: php, composer, artisan, node, npm, npx, yarn, git, phpunit, ls, cat, mkdir, rm, cp, mv, chmod, chown, pwd, echo, touch, grep, find, tar, zip, unzip, curl, wget, diff, head, tail, less" >&2
+        echo "Allowed commands: php, composer, artisan, node, npm, npx, yarn, git, phpunit, ls, cat, mkdir, rm, cp, mv, chmod, chown, pwd, echo, touch, grep, find, tar, zip, unzip, curl, wget, diff, head, tail, less, du, df, date, whoami, which, clear" >&2
         exit 126
         ;;
     esac

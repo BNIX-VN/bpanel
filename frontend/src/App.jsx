@@ -8,8 +8,8 @@ import { javascript } from '@codemirror/lang-javascript';
 import { json } from '@codemirror/lang-json';
 import { php } from '@codemirror/lang-php';
 import { yaml } from '@codemirror/lang-yaml';
-import { Compartment, EditorState } from '@codemirror/state';
-import { EditorView, keymap } from '@codemirror/view';
+import { Compartment, EditorState, RangeSetBuilder } from '@codemirror/state';
+import { Decoration, EditorView, keymap, ViewPlugin } from '@codemirror/view';
 import { Archive, Clock, Code2, Cpu, Database, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Network, Server, Settings as SettingsIcon, Shield, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
 import { Terminal } from './components/Terminal';
 import './style.css';
@@ -18,6 +18,8 @@ import './file-manager.css';
 
 const API = import.meta.env.VITE_API_URL || '/api';
 const SERVICE_NAMES = ['bpanel-api', 'nginx', 'php8.3-fpm', 'php8.4-fpm', 'mariadb', 'redis-server'];
+const EDITOR_SELECTION_CLASS = 'cm-bpanel-selected-text';
+const editorSelectionDecoration = Decoration.mark({ class: EDITOR_SELECTION_CLASS });
 
 function editorParamsFromLocation() {
   const params = new URLSearchParams(window.location.search);
@@ -38,9 +40,39 @@ const editorTheme = EditorView.theme({
   '.cm-lineNumbers .cm-gutterElement': { minWidth: '44px', padding: '0 12px 0 8px' },
   '.cm-activeLine': { backgroundColor: '#eef6ff' },
   '.cm-activeLineGutter': { backgroundColor: '#e2efff', color: '#0b5fbd' },
-  '.cm-selectionBackground': { backgroundColor: '#bfdbfe !important' },
+  '.cm-selectionBackground, &.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground': { backgroundColor: '#2563eb !important' },
+  [`.${EDITOR_SELECTION_CLASS}`]: { backgroundColor: '#2563eb !important', color: '#ffffff !important', WebkitTextFillColor: '#ffffff !important' },
   '.cm-cursor': { borderLeftColor: '#0b5fbd' },
   '.cm-matchingBracket, .cm-nonmatchingBracket': { backgroundColor: '#dbeafe', outline: '1px solid #93c5fd' },
+});
+
+function buildEditorSelectionDecorations(view) {
+  const builder = new RangeSetBuilder();
+  for (const range of view.state.selection.ranges) {
+    if (range.empty) continue;
+    for (const visible of view.visibleRanges) {
+      if (visible.to <= range.from) continue;
+      if (visible.from >= range.to) break;
+      const from = Math.max(range.from, visible.from);
+      const to = Math.min(range.to, visible.to);
+      if (from < to) builder.add(from, to, editorSelectionDecoration);
+    }
+  }
+  return builder.finish();
+}
+
+const editorSelectionHighlighter = ViewPlugin.fromClass(class {
+  constructor(view) {
+    this.decorations = buildEditorSelectionDecorations(view);
+  }
+
+  update(update) {
+    if (update.docChanged || update.selectionSet || update.viewportChanged) {
+      this.decorations = buildEditorSelectionDecorations(update.view);
+    }
+  }
+}, {
+  decorations: plugin => plugin.decorations,
 });
 
 function languageExtension(mode) {
@@ -163,6 +195,7 @@ function App() {
   const [fileListPath, setFileListPath] = useState('public');
   const [fileUploadDir, setFileUploadDir] = useState('public');
   const [files, setFiles] = useState([]);
+  const [fileJobs, setFileJobs] = useState([]);
   const [fileContent, setFileContent] = useState('');
   const [selectedFilePaths, setSelectedFilePaths] = useState([]);
   const [archiveFormat, setArchiveFormat] = useState('zip');
@@ -755,7 +788,7 @@ function App() {
   async function listFiles(path = fileListPath, websiteId = selectedWebsiteId) {
     if (!websiteId) return;
     const data = await request(`/maintenance/files/${websiteId}?path=${encodeURIComponent(path)}`, {}, 'Loading file list...');
-    if (data?.items) { setFiles(data.items); setFileListPath(path); setFileUploadDir(path || 'public'); setSelectedFilePaths([]); }
+    if (data?.items) { setFiles(data.items); setFileListPath(path); setFileUploadDir(path || ''); setSelectedFilePaths([]); }
   }
 
   async function readFile(pathOverride = filePath, websiteId = selectedWebsiteId) {
@@ -815,8 +848,20 @@ function App() {
     if (!selectedWebsiteId) return;
     const name = prompt('Folder name:');
     if (!name) return;
-    const data = await request('/maintenance/files/mkdir', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), path: fileListPath || 'public', name }) }, 'Creating folder...');
+    const data = await request('/maintenance/files/mkdir', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), path: fileListPath || '', name }) }, 'Creating folder...');
     if (data) await listFiles(fileListPath);
+  }
+
+  async function makeFile() {
+    if (!selectedWebsiteId) return;
+    const name = prompt('File name:', 'new-file.txt');
+    if (!name) return;
+    const data = await request('/maintenance/files/create', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), path: fileListPath || '', name }) }, 'Creating file...');
+    if (data) {
+      await listFiles(fileListPath);
+      const newPath = [fileListPath, name].filter(Boolean).join('/');
+      openFileEditorTab(newPath);
+    }
   }
 
   async function renameFileItem(item) {
@@ -824,6 +869,15 @@ function App() {
     const newName = prompt('New name:', item.name);
     if (!newName || newName === item.name) return;
     const data = await request('/maintenance/files/rename', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), path: item.path, new_name: newName }) }, 'Renaming...');
+    if (data) await listFiles(fileListPath);
+  }
+
+  async function chmodFileItem(item) {
+    if (!item) return;
+    const currentMode = item.mode || (item.is_dir ? '755' : '644');
+    const mode = prompt('Mode (octal, e.g. 644 or 755):', currentMode);
+    if (!mode || mode === currentMode) return;
+    const data = await request('/maintenance/files/chmod', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), path: item.path, mode }) }, 'Changing permissions...');
     if (data) await listFiles(fileListPath);
   }
 
@@ -841,18 +895,77 @@ function App() {
     if (!outputName) return;
     const data = await request('/maintenance/files/archive', {
       method: 'POST',
-      body: JSON.stringify({ website_id: Number(selectedWebsiteId), base_path: fileListPath || 'public', paths: selectedFilePaths, output_name: outputName, format: archiveFormat }),
+      body: JSON.stringify({ website_id: Number(selectedWebsiteId), base_path: fileListPath || '', paths: selectedFilePaths, output_name: outputName, format: archiveFormat }),
     }, 'Creating archive...');
     if (data) { await listFiles(fileListPath); await loadCurrentUser(); }
   }
 
+  function upsertFileJob(job) {
+    if (!job?.job_id) return;
+    setFileJobs(prev => [job, ...prev.filter(item => item.job_id !== job.job_id)].slice(0, 6));
+  }
+
+  async function loadFileJob(jobId) {
+    try {
+      const res = await fetch(`${API}/maintenance/files/jobs/${jobId}`, { credentials: 'include' });
+      const text = await res.text();
+      let data;
+      try { data = text ? JSON.parse(text) : {}; } catch { data = { detail: text || `HTTP ${res.status}` }; }
+      if (!res.ok && handleAuthExpired(res.status, data.detail)) return null;
+      if (!res.ok) return null;
+      return data;
+    } catch {
+      return null;
+    }
+  }
+
+  async function loadFileJobs(websiteId = selectedWebsiteId) {
+    if (!websiteId) return;
+    const data = await request(`/maintenance/files/jobs?website_id=${encodeURIComponent(websiteId)}`);
+    if (data?.jobs) {
+      setFileJobs(prev => [
+        ...data.jobs,
+        ...prev.filter(job => String(job.website_id) !== String(websiteId)),
+      ].slice(0, 6));
+    }
+  }
+
   async function extractArchiveFile(path) {
     if (!path) return;
-    const destination = prompt('Extract to folder:', fileListPath || 'public');
+    const destination = prompt('Extract to folder:', fileListPath || '.');
     if (destination === null) return;
-    const data = await request('/maintenance/files/extract', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), archive_path: path, destination_path: destination || fileListPath || 'public' }) }, 'Extracting archive...');
-    if (data) { await listFiles(destination || fileListPath); await loadCurrentUser(); }
+    const targetPath = destination || fileListPath || '.';
+    const data = await request('/maintenance/files/extract', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), archive_path: path, destination_path: targetPath }) }, 'Starting extraction...');
+    if (data?.job_id) upsertFileJob(data);
+    else if (data) { await listFiles(targetPath === '.' ? '' : targetPath); await loadCurrentUser(); }
   }
+
+  useEffect(() => {
+    const activeJobs = fileJobs.filter(job => ['queued', 'running'].includes(job.status));
+    if (activeJobs.length === 0) return undefined;
+
+    const poll = async () => {
+      for (const job of activeJobs) {
+        const data = await loadFileJob(job.job_id);
+        if (!data) continue;
+        upsertFileJob(data);
+        if (data.status === 'done') {
+          setNotice(data.message || 'Extraction completed');
+          await listFiles(data.destination_path || fileListPath);
+          await loadCurrentUser();
+        } else if (data.status === 'error') {
+          setError(data.error || 'Extraction failed');
+        }
+      }
+    };
+
+    const timer = window.setInterval(poll, 3000);
+    return () => window.clearInterval(timer);
+  }, [fileJobs]);
+
+  useEffect(() => {
+    if (page === 'files' && selectedWebsiteId) loadFileJobs(selectedWebsiteId);
+  }, [page, selectedWebsiteId]);
 
   async function openWebsiteFileManager(site) {
     setSelectedWebsiteId(String(site.id));
@@ -865,7 +978,7 @@ function App() {
   async function uploadSiteFile(file) {
     if (!file) return;
     if (!selectedWebsiteId) { setError('Please select a website first.'); return; }
-    const uploadDir = fileUploadDir.trim() || 'public';
+    const uploadDir = fileUploadDir.trim();
     const form = new FormData();
     form.append('file', file);
     try {
@@ -883,8 +996,8 @@ function App() {
       let data;
       try { data = responseText ? JSON.parse(responseText) : {}; } catch { data = { detail: responseText || `HTTP ${res.status}` }; }
       if (!res.ok) { if (handleAuthExpired(res.status, data.detail)) return; setError(data.detail || 'Upload failed.'); return; }
-      setNotice(`Uploaded ${file.name} to ${uploadDir}.`);
-      if (String(fileListPath || 'public') === uploadDir) await listFiles(uploadDir);
+      setNotice(`Uploaded ${file.name} to ${uploadDir || 'site root'}.`);
+      if (String(fileListPath || '') === uploadDir) await listFiles(uploadDir);
       await loadCurrentUser();
     } catch (err) { setError('File upload failed.'); }
     finally { setLoading(''); }
@@ -1334,11 +1447,11 @@ function App() {
   function parentFilePath(path) {
     const parts = String(path || '').split('/').filter(Boolean);
     parts.pop();
-    return parts.join('/') || 'public';
+    return parts.join('/');
   }
 
   function fileBreadcrumbs(path) {
-    const parts = String(path || 'public').split('/').filter(Boolean);
+    const parts = String(path || '').split('/').filter(Boolean);
     let current = '';
     return parts.map(part => {
       current = current ? `${current}/${part}` : part;
@@ -1354,7 +1467,8 @@ function App() {
   function isTextEditable(item) {
     if (!item || item.is_dir) return false;
     const name = (item.name || '').toLowerCase();
-    return /\.(txt|md|json|css|js|jsx|ts|tsx|html|htm|xml|yml|yaml|ini|conf|log|php)$/.test(name) || !name.includes('.');
+    const editableDotfiles = new Set(['.env', '.env.example', '.htaccess', '.user.ini', '.gitignore', '.gitattributes']);
+    return editableDotfiles.has(name) || /\.(txt|md|json|css|js|jsx|ts|tsx|html|htm|xml|yml|yaml|ini|conf|log|php|env|htaccess)$/.test(name) || !name.includes('.');
   }
 
   function toggleFileSelection(path) {
@@ -1666,6 +1780,7 @@ function App() {
 
   function renderFiles() {
     const allSelected = files.length > 0 && selectedFilePaths.length === files.length;
+    const visibleFileJobs = fileJobs.filter(job => String(job.website_id) === String(selectedWebsiteId)).slice(0, 4);
     return <section className="section">
       <div className="section-title">
         <div><h2>File manager</h2></div>
@@ -1677,16 +1792,17 @@ function App() {
             <WebsiteSelect />
             {currentSite && <div className="file-meta">
               <span>Website: <strong>{currentSite.domain}</strong></span>
-              <span>Root: <strong>{currentSite.root_path}/{fileListPath}</strong></span>
+              <span>Root: <strong>{currentSite.root_path}{fileListPath ? `/${fileListPath}` : ''}</strong></span>
               {currentUser && !isAdmin && <span>Storage: <strong>{storageUsageText(currentUser)}</strong></span>}
             </div>}
             <div className="path-pill breadcrumb-line">
-              <button className="crumb" disabled={!selectedWebsiteId || fileListPath === 'public'} onClick={() => listFiles('public')}>public</button>
-              {fileBreadcrumbs(fileListPath).filter(crumb => crumb.path !== 'public').map(crumb => <button className="crumb" key={crumb.path} onClick={() => listFiles(crumb.path)}>{crumb.label}</button>)}
+              <button className="crumb" disabled={!selectedWebsiteId || fileListPath === ''} onClick={() => listFiles('')}>root</button>
+              {fileBreadcrumbs(fileListPath).map(crumb => <button className="crumb" key={crumb.path} onClick={() => listFiles(crumb.path)}>{crumb.label}</button>)}
             </div>
             <div className="file-toolbar">
-              <button disabled={!selectedWebsiteId || fileListPath === 'public' || !!loading} onClick={() => listFiles(parentFilePath(fileListPath))}>Up</button>
+              <button disabled={!selectedWebsiteId || fileListPath === '' || !!loading} onClick={() => listFiles(parentFilePath(fileListPath))}>Up</button>
               <button disabled={!selectedWebsiteId || !!loading} onClick={makeFileDirectory}><Plus size={14}/> Folder</button>
+              <button disabled={!selectedWebsiteId || !!loading} onClick={makeFile}><FileText size={14}/> File</button>
               <label className={`upload-button ${(!selectedWebsiteId || !!loading) ? 'disabled' : ''}`}>
                 <Upload size={14}/> Upload
                 <input type="file" disabled={!selectedWebsiteId || !!loading} onChange={e => { uploadSiteFile(e.target.files?.[0]); e.target.value = ''; }} />
@@ -1698,6 +1814,13 @@ function App() {
               <button disabled={selectedFilePaths.length === 0 || !!loading} onClick={archiveSelectedFiles}><Archive size={14}/> Archive</button>
               <button className="danger" disabled={selectedFilePaths.length === 0 || !!loading} onClick={deleteSelectedFiles}><Trash2 size={14}/> Delete</button>
             </div>
+            {visibleFileJobs.length > 0 && <div className="file-job-list">
+              {visibleFileJobs.map(job => <div className={`file-job ${job.status}`} key={job.job_id}>
+                <Clock size={14}/>
+                <span><strong>{job.archive_path?.split('/').pop() || 'Archive'}</strong> {job.status === 'done' ? 'completed' : job.status === 'error' ? 'failed' : job.status}</span>
+                {job.error && <small>{job.error}</small>}
+              </div>)}
+            </div>}
           </div>
           <div className="file-list-header">
             <label><input type="checkbox" checked={allSelected} onChange={toggleAllFiles} disabled={files.length === 0} /> Select</label>
@@ -1710,11 +1833,13 @@ function App() {
               <button className="file-name" onClick={() => item.is_dir ? listFiles(item.path) : (isTextEditable(item) ? openFileEditorTab(item.path) : downloadFile(item.path))}>
                 {item.is_dir ? <FolderOpen size={16}/> : <FileText size={16}/>} <strong>{item.name}</strong>
               </button>
+              <span className="file-mode">{item.mode || '---'}</span>
               <span className="file-size">{item.is_dir ? 'Folder' : formatBytes(item.size)}</span>
               <div className="file-row-actions">
                 {!item.is_dir && isTextEditable(item) && <button className="mini secondary-light" disabled={!!loading} onClick={() => openFileEditorTab(item.path)}>Edit</button>}
                 {!item.is_dir && <button className="mini secondary-light" disabled={!!loading} onClick={() => downloadFile(item.path)}><Download size={13}/></button>}
                 {isArchiveFile(item) && <button className="mini secondary-light" disabled={!!loading} onClick={() => extractArchiveFile(item.path)}>Extract</button>}
+                <button className="mini secondary-light" disabled={!!loading} onClick={() => chmodFileItem(item)}>Chmod</button>
                 <button className="mini secondary-light" disabled={!!loading} onClick={() => renameFileItem(item)}>Rename</button>
                 <button className="mini danger" disabled={!!loading} onClick={() => deleteFileAction(item.path)}><Trash2 size={13}/></button>
               </div>

@@ -1,14 +1,18 @@
 """Terminal service - executes commands as website user.
 
-Commands are executed via bpanel-helper runuser trampoline for per-user
-isolation. Only whitelisted commands are allowed for security.
+Commands are executed through the bpanel-helper runuser trampoline for
+per-user isolation. We split commands into argv locally and pass them to the
+helper without invoking a shell, so separators, pipes, and globs are treated as
+ordinary arguments instead of shell syntax.
 """
 
+import os
 import shlex
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional, Set
 
-from app.services import shell
+from app.services.shell import shell
 
 # Whitelist of allowed commands for terminal access
 ALLOWED_COMMANDS: Set[str] = {
@@ -32,6 +36,7 @@ ALLOWED_COMMANDS: Set[str] = {
     "pwd",
     "echo",
     "cd",
+    "clear",
     "touch",
     "grep",
     "find",
@@ -44,7 +49,16 @@ ALLOWED_COMMANDS: Set[str] = {
     "head",
     "tail",
     "less",
+    "du",
+    "df",
+    "date",
+    "whoami",
+    "which",
 }
+
+# Maximum command line length. This keeps accidental paste storms out of the
+# helper boundary while still leaving plenty of room for Composer/NPM flags.
+MAX_COMMAND_CHARS = 4096
 
 # Maximum output size in bytes (1MB)
 MAX_OUTPUT_BYTES = 1024 * 1024
@@ -65,6 +79,22 @@ class CommandResult:
     stderr: str
 
 
+def split_command(command: str) -> list[str]:
+    """Split a user command into argv without invoking a shell."""
+    command = (command or "").strip()
+    if not command:
+        raise ValueError("Empty command")
+    if len(command) > MAX_COMMAND_CHARS:
+        raise ValueError(f"Command is too long; max {MAX_COMMAND_CHARS} characters")
+    try:
+        parts = shlex.split(command)
+    except ValueError as exc:
+        raise ValueError(f"Invalid command syntax: {exc}") from exc
+    if not parts:
+        raise ValueError("Empty command")
+    return parts
+
+
 def is_command_allowed(command: str) -> bool:
     """Check if the command's main executable is in the whitelist.
 
@@ -74,10 +104,35 @@ def is_command_allowed(command: str) -> bool:
     Returns:
         True if the command is allowed, False otherwise.
     """
-    parts = shlex.split(command)
-    if not parts:
+    try:
+        parts = split_command(command)
+    except ValueError:
         return False
     return parts[0] in ALLOWED_COMMANDS
+
+
+def resolve_cwd(site_root: str, current_cwd: str, target: str) -> str:
+    """Resolve a cd target, keeping the session inside one website root."""
+    root = Path(site_root).resolve(strict=False)
+    current = Path(current_cwd or site_root).resolve(strict=False)
+    target = (target or "").strip()
+    if target in {"", "~"}:
+        candidate = root
+    else:
+        raw = Path(target)
+        candidate = raw if raw.is_absolute() else current / raw
+    resolved = candidate.resolve(strict=False)
+    try:
+        common = os.path.commonpath([str(root), str(resolved)])
+    except ValueError as exc:
+        raise ValueError("Path is outside this website") from exc
+    if common != str(root):
+        raise ValueError("Path is outside this website")
+    if not resolved.exists():
+        raise ValueError(f"No such directory: {target}")
+    if not resolved.is_dir():
+        raise ValueError(f"Not a directory: {target}")
+    return str(resolved)
 
 
 def _truncate_output(output: str, max_bytes: int = MAX_OUTPUT_BYTES) -> str:
@@ -109,20 +164,26 @@ def exec_command(
     Raises:
         RuntimeError: If the command is not allowed or execution fails.
     """
-    # Validate command
-    if not is_command_allowed(command):
+    try:
+        argv = split_command(command)
+    except ValueError as exc:
+        return CommandResult(exit_code=2, stdout="", stderr=str(exc))
+
+    if argv[0] not in ALLOWED_COMMANDS:
         return CommandResult(
             exit_code=126,
             stdout="",
             stderr=f"Command not allowed. Allowed commands: {', '.join(sorted(ALLOWED_COMMANDS))}",
         )
 
-    # Build the command
-    # We pass the command as a single string to the helper
-    # The helper will execute it via: runuser -u {user} -- env HOME=$HOME {command}
+    if argv[0] == "cd":
+        return CommandResult(exit_code=2, stdout="", stderr="cd is handled by the interactive terminal session")
+
+    working_dir = cwd or f"/home/{linux_user}"
+
     result = shell.privileged(
         "terminal-exec",
-        helper_args=[linux_user, command],
+        helper_args=[linux_user, working_dir, *argv],
         check=False,
     )
 
