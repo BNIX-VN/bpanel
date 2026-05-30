@@ -1,6 +1,7 @@
 """Terminal API endpoints."""
 
 import json
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from jose import JWTError, jwt
@@ -140,10 +141,51 @@ async def terminal_websocket(
         await websocket.close(code=4003, reason="Origin not allowed")
         return
 
-    current_user = _current_user_from_session_cookie(websocket, db)
-    if not current_user:
+    # Get token and validate step by step for better error messages
+    token = websocket.cookies.get("bpanel_session")
+    if not token:
         await websocket.close(code=4001, reason="No session cookie")
         return
+
+    # Decode and validate JWT
+    try:
+        payload = jwt.decode(token, settings.secret_key, algorithms=[ALGORITHM])
+        username = payload.get("sub")
+        token_version = int(payload.get("tv", 0))
+        jti = payload.get("jti")
+        if not username:
+            await websocket.close(code=4001, reason="Invalid token: missing username")
+            return
+    except jwt.ExpiredSignatureError:
+        await websocket.close(code=4001, reason="Session expired")
+        return
+    except jwt.JWTClaimsError:
+        await websocket.close(code=4001, reason="Invalid token: claims error")
+        return
+    except JWTError:
+        await websocket.close(code=4001, reason="Invalid token")
+        return
+
+    # Check user exists and is active
+    user = db.query(User).filter(User.username == username).first()
+    if user is None:
+        await websocket.close(code=4001, reason="User not found")
+        return
+    if not user.is_active:
+        await websocket.close(code=4001, reason="User account is disabled")
+        return
+
+    # Check token version
+    if (user.token_version or 0) != token_version:
+        await websocket.close(code=4001, reason="Session invalidated")
+        return
+
+    # Check if token is revoked
+    if jti and db.query(RevokedToken.id).filter(RevokedToken.jti == jti).first():
+        await websocket.close(code=4001, reason="Session revoked")
+        return
+
+    current_user = user
 
     # Get website
     website = db.query(Website).filter(Website.id == website_id).first()
@@ -160,8 +202,13 @@ async def terminal_websocket(
         await websocket.close(code=4004, reason="Website runtime user is missing")
         return
 
+    root_path = Path(website.root_path)
+    if not root_path.exists() or not root_path.is_dir():
+        await websocket.close(code=4005, reason="Website root path does not exist or is not accessible")
+        return
+
     await websocket.accept()
-    cwd = website.root_path
+    cwd = str(root_path)
     await websocket.send_json({"type": "cwd", "data": cwd})
 
     try:

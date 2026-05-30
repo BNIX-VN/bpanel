@@ -164,6 +164,13 @@ def exec_command(
     Raises:
         RuntimeError: If the command is not allowed or execution fails.
     """
+    if not linux_user:
+        return CommandResult(
+            exit_code=1,
+            stdout="",
+            stderr="Website has no runtime user configured",
+        )
+
     try:
         argv = split_command(command)
     except ValueError as exc:

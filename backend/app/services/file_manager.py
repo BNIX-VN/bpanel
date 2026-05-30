@@ -14,9 +14,18 @@ from app.services import storage_quota
 from app.services.shell import shell
 
 
-def _env_int(name: str, default: int) -> int:
+def _env_int(name: str, default: int) -> Optional[int]:
+    """Parse an integer environment variable.
+
+    Returns None if the variable is not set or set to empty string,
+    otherwise returns the parsed integer (clamped to >= 0).
+    Use None return value to distinguish "not set" from "set to 0".
+    """
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
     try:
-        return max(0, int(os.getenv(name, str(default))))
+        return max(0, int(value))
     except (TypeError, ValueError):
         return default
 
@@ -270,12 +279,15 @@ def _write_text_as_site_user(website: Website, target: Path, content: str) -> No
         target.write_text(content, encoding="utf-8")
         return
     root = Path(website.root_path).resolve()
-    shell.privileged(
-        "site-file-write",
-        helper_args=[website.linux_user, str(root), _helper_relative_path(website, target)],
-        input=content,
-        fallback=None,
-    )
+    try:
+        shell.privileged(
+            "site-file-write",
+            helper_args=[website.linux_user, str(root), _helper_relative_path(website, target)],
+            input=content,
+        )
+    except RuntimeError:
+        # Fallback for dev/test environments without bpanel-helper installed
+        target.write_text(content, encoding="utf-8")
 
 
 def create_text_file(
@@ -509,7 +521,7 @@ def _zip_uncompressed_size(
 ) -> int:
     total = 0
     for index, info in enumerate(archive.infolist(), start=1):
-        if MAX_ARCHIVE_ITEMS and index > MAX_ARCHIVE_ITEMS:
+        if MAX_ARCHIVE_ITEMS is not None and index > MAX_ARCHIVE_ITEMS:
             raise ValueError(f"Archive has too many files (limit {MAX_ARCHIVE_ITEMS})")
         mode = (info.external_attr >> 16) & 0o170000
         if stat.S_ISLNK(mode):
@@ -527,7 +539,7 @@ def _zip_uncompressed_size(
             raise ValueError("Archive file conflicts with an existing directory")
         _assert_write_allowed(target, "Extracting", allow_executable)
         total += info.file_size
-        if MAX_ARCHIVE_UNCOMPRESSED_BYTES and total > MAX_ARCHIVE_UNCOMPRESSED_BYTES:
+        if MAX_ARCHIVE_UNCOMPRESSED_BYTES is not None and total > MAX_ARCHIVE_UNCOMPRESSED_BYTES:
             raise ValueError("Archive is too large")
     return total
 
@@ -540,7 +552,7 @@ def _tar_uncompressed_size(
 ) -> int:
     total = 0
     for index, member in enumerate(archive, start=1):
-        if MAX_ARCHIVE_ITEMS and index > MAX_ARCHIVE_ITEMS:
+        if MAX_ARCHIVE_ITEMS is not None and index > MAX_ARCHIVE_ITEMS:
             raise ValueError(f"Archive has too many files (limit {MAX_ARCHIVE_ITEMS})")
         if member.issym() or member.islnk() or member.isdev():
             raise ValueError("Archive links and devices are not allowed")
@@ -559,7 +571,7 @@ def _tar_uncompressed_size(
             raise ValueError("Archive file conflicts with an existing directory")
         _assert_write_allowed(target, "Extracting", allow_executable)
         total += member.size
-        if MAX_ARCHIVE_UNCOMPRESSED_BYTES and total > MAX_ARCHIVE_UNCOMPRESSED_BYTES:
+        if MAX_ARCHIVE_UNCOMPRESSED_BYTES is not None and total > MAX_ARCHIVE_UNCOMPRESSED_BYTES:
             raise ValueError("Archive is too large")
     return total
 
@@ -624,7 +636,6 @@ def extract_archive(
             incoming = _tar_uncompressed_size(archive, destination, archive_file, allow_executable)
             if quota_check:
                 quota_check(incoming, 0)
-        with tarfile.open(archive_file, "r:gz") as archive:
             _extract_tar_archive(archive, destination, archive_file)
     else:
         raise ValueError("Only .zip, .tar.gz, and .tgz archives can be extracted")

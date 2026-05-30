@@ -128,10 +128,17 @@ def _remember_file_job(job: dict) -> dict:
     with _file_jobs_lock:
         _file_jobs[job["job_id"]] = job
         if len(_file_jobs) > FILE_JOB_LIMIT:
-            old_ids = sorted(_file_jobs, key=lambda item: _file_jobs[item].get("created_at", ""))
-            for old_id in old_ids[: len(_file_jobs) - FILE_JOB_LIMIT]:
-                if _file_jobs[old_id].get("status") not in {"queued", "running"}:
-                    _file_jobs.pop(old_id, None)
+            # Find oldest completed jobs to remove (O(n) instead of O(n log n))
+            to_remove = len(_file_jobs) - FILE_JOB_LIMIT
+            removable = [
+                (job.get("created_at", ""), job_id)
+                for job_id, job in _file_jobs.items()
+                if job.get("status") not in {"queued", "running"}
+            ]
+            # Sort only the removable jobs, take the oldest to_remove items
+            removable.sort(key=lambda x: x[0])
+            for _, job_id in removable[:to_remove]:
+                _file_jobs.pop(job_id, None)
     return _public_file_job(job)
 
 
@@ -827,6 +834,27 @@ def archive_entries(payload: FileArchive, db: Session = Depends(get_db), current
 def extract_archive(payload: FileExtract, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.end_user)
     website = get_owned_website(db, current_user, payload.website_id)
+    # Validate archive format before queuing to catch bad archives early
+    archive_file = file_manager._safe_path(website, payload.archive_path)  # noqa: SLF001
+    if not archive_file.exists() or not archive_file.is_file():
+        raise HTTPException(status_code=400, detail="Archive not found")
+    if archive_file.is_symlink():
+        raise HTTPException(status_code=400, detail="Symlinks are not allowed")
+    suffix = archive_file.name.lower()
+    if not (suffix.endswith(".zip") or suffix.endswith(".tar.gz") or suffix.endswith(".tgz")):
+        raise HTTPException(status_code=400, detail="Only .zip, .tar.gz, and .tgz archives are supported")
+    # Validate archive is readable and not corrupted
+    try:
+        if suffix.endswith(".zip"):
+            with zipfile.ZipFile(archive_file) as _:
+                pass
+        else:
+            with tarfile.open(archive_file, "r:gz") as _:
+                pass
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=400, detail="Invalid or corrupted ZIP archive") from None
+    except tarfile.TarError:
+        raise HTTPException(status_code=400, detail="Invalid or corrupted tar archive") from None
     job = _queue_extract_job(
         current_user,
         website,

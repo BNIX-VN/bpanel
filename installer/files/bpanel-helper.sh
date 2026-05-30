@@ -907,7 +907,9 @@ case "$cmd" in
     target=$(require_terminal_cwd "$cwd_arg" "$user")
 
     install -d -o "$user" -g "$user" -m 0700 "$HOME_ROOT/$user/.composer" "$HOME_ROOT/$user/.npm"
-    cd "$target"
+    # Validate cwd exists immediately before cd to avoid TOCTOU
+    [[ -d "$target" ]] || deny "working directory does not exist: $target"
+    cd "$target" || deny "failed to change to working directory: $target"
     terminal_env=(
       "HOME=$HOME_ROOT/$user"
       "COMPOSER_HOME=$HOME_ROOT/$user/.composer"
