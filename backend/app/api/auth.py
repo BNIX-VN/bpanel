@@ -23,6 +23,12 @@ from app.core.security import create_access_token, hash_password, needs_rehash, 
 from app.core.secrets import decrypt, encrypt
 from app.models.entities import RevokedToken, User
 from app.schemas.schemas import LoginResponse, TwoFactorCode, TwoFactorSetup, TwoFactorStatus
+from app.services.audit import log_action
+
+# Hard caps for credentials submitted to /auth/login. bcrypt accepts at most
+# 72 bytes anyway and we never want to spend CPU comparing absurd payloads.
+_MAX_USERNAME_LEN = 64
+_MAX_PASSWORD_LEN = 128
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -190,7 +196,16 @@ def _enforce_rate_limit(key: str) -> None:
     _memory_enforce_rate_limit(key)
 
 
-def _redis_record_failure(key: str) -> None:
+def _redis_record_failure(key: str, *, apply_lockout: bool) -> None:
+    """Record a login failure for ``key``.
+
+    The short-window rate limit (``attempts_key``) always applies, so a single
+    source cannot blast through more than ``_LOGIN_MAX_ATTEMPTS`` per minute.
+    The long-window hard lockout (``lockout_key``) only applies when
+    ``apply_lockout=True`` — used for IP keys, NOT for username keys, so
+    attackers cannot lock out a specific account by submitting wrong
+    passwords from many IPs (account-DoS).
+    """
     now = time.time()
     member = f"{now}:{secrets.token_hex(8)}"
     attempts_key = _rate_limit_key("attempts", key)
@@ -201,18 +216,21 @@ def _redis_record_failure(key: str) -> None:
         pipe = client.pipeline()
         pipe.zadd(attempts_key, {member: now})
         pipe.expire(attempts_key, _LOGIN_WINDOW_SECONDS)
-        pipe.zremrangebyscore(failures_key, 0, now - _LOGIN_LOCKOUT_SECONDS)
-        pipe.zadd(failures_key, {member: now})
-        pipe.expire(failures_key, _LOGIN_LOCKOUT_SECONDS)
-        pipe.zcard(failures_key)
-        *_, failure_count = pipe.execute()
-        if failure_count >= _LOGIN_LOCKOUT_THRESHOLD:
-            client.set(lockout_key, "1", ex=_LOGIN_LOCKOUT_SECONDS)
+        if apply_lockout:
+            pipe.zremrangebyscore(failures_key, 0, now - _LOGIN_LOCKOUT_SECONDS)
+            pipe.zadd(failures_key, {member: now})
+            pipe.expire(failures_key, _LOGIN_LOCKOUT_SECONDS)
+            pipe.zcard(failures_key)
+            *_, failure_count = pipe.execute()
+            if failure_count >= _LOGIN_LOCKOUT_THRESHOLD:
+                client.set(lockout_key, "1", ex=_LOGIN_LOCKOUT_SECONDS)
+        else:
+            pipe.execute()
     except RedisError as exc:
         raise _rate_limit_unavailable(exc) from exc
 
 
-def _memory_record_failure(key: str) -> None:
+def _memory_record_failure(key: str, *, apply_lockout: bool) -> None:
     now = time.monotonic()
     with _login_lock:
         attempts = _login_attempts[key]
@@ -220,6 +238,8 @@ def _memory_record_failure(key: str) -> None:
         cutoff = now - _LOGIN_WINDOW_SECONDS
         while attempts and attempts[0] < cutoff:
             attempts.popleft()
+        if not apply_lockout:
+            return
         failures = _login_failures[key]
         failures.append(now)
         failure_cutoff = now - _LOGIN_LOCKOUT_SECONDS
@@ -229,11 +249,11 @@ def _memory_record_failure(key: str) -> None:
             _login_lockouts[key] = now + _LOGIN_LOCKOUT_SECONDS
 
 
-def _record_failure(key: str) -> None:
+def _record_failure(key: str, *, apply_lockout: bool = True) -> None:
     if _rate_limit_backend() == "redis":
-        _redis_record_failure(key)
+        _redis_record_failure(key, apply_lockout=apply_lockout)
         return
-    _memory_record_failure(key)
+    _memory_record_failure(key, apply_lockout=apply_lockout)
 
 
 def _redis_record_success(key: str) -> None:
@@ -311,9 +331,21 @@ def login(
     otp: str = Form(default=""),
     db: Session = Depends(get_db),
 ):
+    # Reject oversize credentials early — protects bcrypt and avoids using a
+    # huge string as a rate-limit/lockout key.
+    if len(form.username) > _MAX_USERNAME_LEN or len(form.password) > _MAX_PASSWORD_LEN:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid username or password",
+        )
+
     ip_key = _client_key(request)
     user_key = _username_key(form.username)
+    # IP key gets full lockout (slow attacker from one source).
     _enforce_rate_limit(ip_key)
+    # Username key only enforces the short-window rate limit; the lockout
+    # check is intentionally skipped so an attacker cannot DoS a known
+    # account by spraying wrong passwords from many IPs.
     _enforce_rate_limit(user_key)
 
     user = db.query(User).filter(User.username == form.username).first()
@@ -324,8 +356,8 @@ def login(
         password_ok = False
 
     if not user or not user.is_active or not password_ok:
-        _record_failure(ip_key)
-        _record_failure(user_key)
+        _record_failure(ip_key, apply_lockout=True)
+        _record_failure(user_key, apply_lockout=False)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password",
@@ -335,8 +367,8 @@ def login(
         if not otp:
             return LoginResponse(requires_2fa=True)
         if not _verify_totp(user, otp):
-            _record_failure(ip_key)
-            _record_failure(user_key)
+            _record_failure(ip_key, apply_lockout=True)
+            _record_failure(user_key, apply_lockout=False)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid authentication code",
@@ -382,14 +414,46 @@ def impersonate_user(
     user_id: int,
     request: Request,
     response: Response,
+    otp: str = Form(default=""),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """Issue a session cookie for ``user_id`` while the caller stays admin.
+
+    Impersonation is a high-trust operation: it bypasses normal auth for the
+    target account. We therefore (1) require the admin to re-prove possession
+    of their TOTP if 2FA is enabled, and (2) audit-log every successful
+    impersonation with the actor and target identities.
+    """
     ensure_role(current_user.role, Role.admin)
     target_user = db.query(User).filter(User.id == user_id).first()
     if target_user is None or not target_user.is_active:
         raise HTTPException(status_code=404, detail="User not found or inactive")
+
+    # Re-prompt TOTP for admins that have 2FA. Refusing without a code keeps
+    # the feature usable from the SPA (which can pop a modal on 401) while
+    # blocking session-stealing attackers who don't have the admin's phone.
+    if current_user.totp_enabled:
+        if not otp:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Two-factor authentication code required",
+            )
+        if not _verify_totp(current_user, otp):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authentication code",
+            )
+
     token = _issue_login_session(response, request, target_user)
+    log_action(
+        db,
+        current_user.id,
+        "auth.impersonate",
+        target_user.username,
+        detail=f"target_user_id={target_user.id} target_role={target_user.role}",
+        request=request,
+    )
     return LoginResponse(access_token=token)
 
 

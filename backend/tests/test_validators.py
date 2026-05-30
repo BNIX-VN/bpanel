@@ -51,13 +51,45 @@ class TestNginxCustomValidator:
         with pytest.raises(ValueError):
             validate_custom_nginx("load_module modules/ngx_http_evil_module.so;")
 
+    def test_rejects_return_directive(self):
+        with pytest.raises(ValueError):
+            validate_custom_nginx("return 302 https://attacker.example/;")
+
+    def test_rejects_error_page(self):
+        with pytest.raises(ValueError):
+            validate_custom_nginx("error_page 404 https://attacker.example/;")
+
+    def test_rejects_rewrite(self):
+        with pytest.raises(ValueError):
+            validate_custom_nginx("rewrite ^/(.*)$ /$1 last;")
+
+    def test_rejects_add_header(self):
+        # add_header lets a tenant override security headers (HSTS, CSP)
+        # set by the panel; force them to use the dedicated UI instead.
+        with pytest.raises(ValueError):
+            validate_custom_nginx("add_header X-Foo bar;")
+
+    def test_rejects_auth_request(self):
+        with pytest.raises(ValueError):
+            validate_custom_nginx("auth_request /verify;")
+
+    def test_rejects_sub_filter(self):
+        with pytest.raises(ValueError):
+            validate_custom_nginx('sub_filter "</body>" "<script>x</script></body>";')
+
+    def test_rejects_try_files(self):
+        with pytest.raises(ValueError):
+            validate_custom_nginx("try_files /etc/passwd =404;")
+
     def test_rejects_unbalanced_braces(self):
         with pytest.raises(ValueError):
             validate_custom_nginx("location / {")
 
     def test_accepts_safe_block(self):
-        result = validate_custom_nginx("add_header X-Foo bar;")
-        assert "add_header" in result
+        # Plain client_max_body_size is still allowed; it's a tunable that
+        # cannot redirect, rewrite, or read files outside the site root.
+        result = validate_custom_nginx("client_max_body_size 32m;")
+        assert "client_max_body_size" in result
 
     def test_empty_is_ok(self):
         assert validate_custom_nginx("") == ""

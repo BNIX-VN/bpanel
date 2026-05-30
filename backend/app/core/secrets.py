@@ -42,21 +42,32 @@ def encrypt(plaintext: str) -> str:
 
 
 def decrypt(stored: Optional[str]) -> str:
-    """Decrypt a stored value. Plaintext-legacy values pass through unchanged
-    so existing rows keep working until rotated on next password change.
+    """Decrypt a stored value.
 
-    A warning is logged whenever the legacy passthrough is taken so we can
-    detect rows that should have been re-encrypted by now.
+    Behaviour:
+    - Empty/None → returns "".
+    - Values prefixed with ``fernet:`` → decrypted normally; bad ciphertext
+      raises ``RuntimeError`` (typically caused by SECRET_KEY rotation).
+    - Values without the prefix are legacy plaintext from before encryption
+      was introduced. We refuse to read them by default so any forgotten row
+      surfaces immediately. Set ``STRICT_DECRYPT=false`` in the environment
+      to temporarily allow passthrough during a migration window.
     """
     if not stored:
         return stored or ""
     if not stored.startswith(_ENCRYPTED_PREFIX):
-        logger.warning(
-            "secrets.decrypt(): legacy plaintext value detected (length=%d). "
-            "Re-save the secret to encrypt it at rest.",
-            len(stored),
+        if not getattr(settings, "strict_decrypt", True):
+            logger.warning(
+                "secrets.decrypt(): legacy plaintext value detected (length=%d). "
+                "Re-save the secret to encrypt it at rest.",
+                len(stored),
+            )
+            return stored
+        raise RuntimeError(
+            "secrets.decrypt(): refusing to read legacy plaintext value. "
+            "Re-save the affected record to encrypt it, or temporarily set "
+            "STRICT_DECRYPT=false to migrate."
         )
-        return stored
     payload = stored[len(_ENCRYPTED_PREFIX):]
     try:
         return _fernet.decrypt(payload.encode("utf-8")).decode("utf-8")

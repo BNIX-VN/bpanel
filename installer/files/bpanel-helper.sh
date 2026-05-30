@@ -479,6 +479,8 @@ delete_panel_user_runtime() {
   userdel "$user" 2>/dev/null || true
   groupdel "$user" 2>/dev/null || true
   rm -rf "$HOME_ROOT/$user" 2>/dev/null || true
+  rm -rf "/var/lib/php/sessions/$user" 2>/dev/null || true
+  rm -rf "/var/lib/php/uploads/$user" 2>/dev/null || true
 }
 
 ensure_php_pool() {
@@ -489,6 +491,15 @@ ensure_php_pool() {
   local pool_suffix="${php_version//./_}"
   local pool_name="bpanel-${user}-${pool_suffix}"
   local pool_file="/etc/php/${php_version}/fpm/pool.d/${pool_name}.conf"
+  # Per-user dirs for sessions/uploads. Sharing /tmp across pools lets one
+  # site read another's session files (mode 0600 helps but only inside the
+  # same uid; uploads land world-writable on tmpfs). Using 0700 dirs owned
+  # by the pool's Linux user contains the data inside the site's trust
+  # boundary.
+  local sess_dir="/var/lib/php/sessions/${user}"
+  local upload_dir="/var/lib/php/uploads/${user}"
+  install -d -o "$user" -g "$user" -m 0700 "$sess_dir"
+  install -d -o "$user" -g "$user" -m 0700 "$upload_dir"
   cat >"$pool_file" <<POOL
 [${pool_name}]
 user = ${user}
@@ -502,9 +513,9 @@ pm.max_children = 8
 pm.process_idle_timeout = 20s
 pm.max_requests = 500
 chdir = /
-php_admin_value[open_basedir] = ${target}:/tmp:/usr/share/php
-php_admin_value[upload_tmp_dir] = /tmp
-php_admin_value[session.save_path] = /tmp
+php_admin_value[open_basedir] = ${target}:${sess_dir}:${upload_dir}:/usr/share/php
+php_admin_value[upload_tmp_dir] = ${upload_dir}
+php_admin_value[session.save_path] = ${sess_dir}
 POOL
   systemctl reload "php${php_version}-fpm"
 }

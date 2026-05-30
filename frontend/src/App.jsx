@@ -506,7 +506,22 @@ function App() {
   async function quickLoginUser(user) {
     if (!user) return;
     if (!confirm(`Login as ${user.username}? New websites will belong to this user.`)) return;
-    const data = await request(`/auth/impersonate/${user.id}`, { method: 'POST' }, `Logging in as ${user.username}...`);
+    // Impersonation re-prompts TOTP when the calling admin has 2FA enabled.
+    // Try without the code first; if the backend says one is required, ask
+    // and resend. Sending the OTP via FormData keeps it out of the URL.
+    let body;
+    if (currentUser?.totp_enabled) {
+      const code = prompt(`Enter the 6-digit code from your authenticator to confirm impersonation of ${user.username}:`);
+      if (!code) return;
+      body = new URLSearchParams({ otp: code.trim() });
+    }
+    const data = await request(
+      `/auth/impersonate/${user.id}`,
+      body
+        ? { method: 'POST', body, headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+        : { method: 'POST' },
+      `Logging in as ${user.username}...`,
+    );
     if (data?.access_token) {
       setNotice(`Logged in as ${user.username}.`);
       await loadCurrentUser();

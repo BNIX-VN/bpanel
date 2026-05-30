@@ -27,6 +27,12 @@ class Settings(BaseSettings):
     panel_ssl_key: str = ""
     frontend_dist: str = "/opt/bpanel/frontend/dist"
     totp_issuer: str = "BPanel"
+    # When true, ``app.core.secrets.decrypt`` refuses to read legacy plaintext
+    # values (the deprecated migration grace path). Production should leave
+    # this True so any unmigrated row surfaces as a hard error instead of
+    # silently leaking through. Set STRICT_DECRYPT=false during a one-shot
+    # migration window only.
+    strict_decrypt: bool = True
 
     @field_validator("secret_key")
     @classmethod

