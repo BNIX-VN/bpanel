@@ -8,8 +8,8 @@ import { javascript } from '@codemirror/lang-javascript';
 import { json } from '@codemirror/lang-json';
 import { php } from '@codemirror/lang-php';
 import { yaml } from '@codemirror/lang-yaml';
-import { Compartment, EditorState, RangeSetBuilder } from '@codemirror/state';
-import { Decoration, EditorView, keymap, ViewPlugin } from '@codemirror/view';
+import { Compartment, EditorState } from '@codemirror/state';
+import { EditorView, keymap } from '@codemirror/view';
 import { Archive, Clock, Code2, Cpu, Database, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Network, Server, Settings as SettingsIcon, Shield, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
 import { Terminal } from './components/Terminal';
 import './style.css';
@@ -18,8 +18,6 @@ import './file-manager.css';
 
 const API = import.meta.env.VITE_API_URL || '/api';
 const SERVICE_NAMES = ['bpanel-api', 'nginx', 'php8.3-fpm', 'php8.4-fpm', 'mariadb', 'redis-server'];
-const EDITOR_SELECTION_CLASS = 'cm-bpanel-selected-text';
-const editorSelectionDecoration = Decoration.mark({ class: EDITOR_SELECTION_CLASS });
 
 function editorParamsFromLocation() {
   const params = new URLSearchParams(window.location.search);
@@ -40,39 +38,9 @@ const editorTheme = EditorView.theme({
   '.cm-lineNumbers .cm-gutterElement': { minWidth: '44px', padding: '0 12px 0 8px' },
   '.cm-activeLine': { backgroundColor: '#eef6ff' },
   '.cm-activeLineGutter': { backgroundColor: '#e2efff', color: '#0b5fbd' },
-  '.cm-selectionBackground, &.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground': { backgroundColor: '#2563eb !important' },
-  [`.${EDITOR_SELECTION_CLASS}`]: { backgroundColor: '#2563eb !important', color: '#ffffff !important', WebkitTextFillColor: '#ffffff !important' },
+  '.cm-selectionBackground': { backgroundColor: '#2563eb !important' },
   '.cm-cursor': { borderLeftColor: '#0b5fbd' },
   '.cm-matchingBracket, .cm-nonmatchingBracket': { backgroundColor: '#dbeafe', outline: '1px solid #93c5fd' },
-});
-
-function buildEditorSelectionDecorations(view) {
-  const builder = new RangeSetBuilder();
-  for (const range of view.state.selection.ranges) {
-    if (range.empty) continue;
-    for (const visible of view.visibleRanges) {
-      if (visible.to <= range.from) continue;
-      if (visible.from >= range.to) break;
-      const from = Math.max(range.from, visible.from);
-      const to = Math.min(range.to, visible.to);
-      if (from < to) builder.add(from, to, editorSelectionDecoration);
-    }
-  }
-  return builder.finish();
-}
-
-const editorSelectionHighlighter = ViewPlugin.fromClass(class {
-  constructor(view) {
-    this.decorations = buildEditorSelectionDecorations(view);
-  }
-
-  update(update) {
-    if (update.docChanged || update.selectionSet || update.viewportChanged) {
-      this.decorations = buildEditorSelectionDecorations(update.view);
-    }
-  }
-}, {
-  decorations: plugin => plugin.decorations,
 });
 
 function languageExtension(mode) {
