@@ -618,6 +618,7 @@ button:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
 .section:hover{border-color:var(--border-hover);box-shadow:none}
 .section-title{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;min-width:0}
 .section-title h2{margin-bottom:4px}
+.nginx-config-title h2 + h2{display:none}
 .hint{color:var(--text-muted);margin:0;font-size:13px;line-height:1.5}
 .stats-grid,.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:16px}
 .stat-card,.card{background:var(--surface);color:var(--text);border-radius:var(--radius-lg);padding:18px;box-shadow:none;min-width:0;border:1px solid var(--border);transition:var(--transition)}

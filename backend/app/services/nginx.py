@@ -11,8 +11,13 @@ from app.services.shell import shell
 TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates" / "nginx"
 
 ALLOWED_PHP_VERSIONS = {"8.3", "8.4"}
-ALLOWED_APP_TYPES = {"wordpress", "static"}
+ALLOWED_APP_TYPES = {"wordpress", "php", "static"}
 DOMAIN_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+")
+MAX_FULL_CONFIG_BYTES = 128 * 1024
+WAF_BLOCK = """    # BPANEL WAF BEGIN
+    modsecurity on;
+    modsecurity_rules_file /etc/nginx/modsec/bpanel-main.conf;
+    # BPANEL WAF END"""
 
 # Directives that must never appear inside a per-site custom block.
 # This is a conservative deny-list; safer than allow-list because nginx has
@@ -70,6 +75,13 @@ def _check_app_type(app_type: str) -> str:
     return app_type
 
 
+def _vhost_path(domain: str) -> Path:
+    safe_domain = (domain or "").lower()
+    if not DOMAIN_RE.fullmatch(safe_domain):
+        raise ValueError("Invalid domain")
+    return Path(settings.nginx_sites_available) / f"{safe_domain}.conf"
+
+
 def validate_custom_nginx(content: Optional[str]) -> str:
     """Sanitize and validate a custom nginx block before rendering it inside a server { } scope."""
     if not content:
@@ -94,6 +106,19 @@ def validate_custom_nginx(content: Optional[str]) -> str:
         )
     if "\x00" in text:
         raise ValueError("Custom nginx block contains a NUL byte")
+    return text
+
+
+def validate_full_nginx_config(content: Optional[str]) -> str:
+    if content is None:
+        raise ValueError("Nginx config is required")
+    text = content.replace("\r\n", "\n").strip() + "\n"
+    if len(text.encode("utf-8")) > MAX_FULL_CONFIG_BYTES:
+        raise ValueError("Nginx config is too large")
+    if "\x00" in text:
+        raise ValueError("Nginx config contains a NUL byte")
+    if "server" not in text or "{" not in text:
+        raise ValueError("Nginx config must contain a server block")
     return text
 
 
@@ -200,6 +225,34 @@ def _replace_custom_block(content: str, custom: str) -> str:
     )
 
 
+def _replace_waf_block(content: str, enabled: bool) -> str:
+    pattern = re.compile(
+        r"\n?    # BPANEL WAF BEGIN\n.*?\n    # BPANEL WAF END",
+        re.DOTALL,
+    )
+    cleaned = pattern.sub("", content)
+    if not enabled:
+        return cleaned.rstrip() + "\n"
+    if "    server_tokens off;" in cleaned:
+        return cleaned.replace("    server_tokens off;", f"    server_tokens off;\n{WAF_BLOCK}", 1)
+    if "    server_name " in cleaned:
+        return re.sub(r"(    server_name [^;]+;)", f"\\1\n{WAF_BLOCK}", cleaned, count=1)
+    match = re.search(r"server\s*\{", cleaned)
+    if match:
+        insert_at = match.end()
+        return cleaned[:insert_at] + "\n" + WAF_BLOCK + cleaned[insert_at:]
+    raise ValueError("Cannot find server block for WAF directives")
+
+
+def _test_and_reload(target: Path, old_content: Optional[str]) -> None:
+    test = shell.privileged("nginx-test", check=False, fallback=["nginx", "-t"])
+    if test.returncode != 0:
+        if old_content is not None:
+            target.write_text(old_content, encoding="utf-8")
+        raise RuntimeError((test.stderr or test.stdout or "nginx -t failed").strip())
+    shell.privileged("nginx-reload", fallback=["bash", "-lc", "nginx -t && systemctl reload nginx"])
+
+
 def render_vhost(
     domain: str,
     root_path: str,
@@ -207,6 +260,7 @@ def render_vhost(
     php_version: Optional[str] = None,
     custom_directives: str = "",
     php_fpm_socket_override: Optional[str] = None,
+    waf_enabled: bool = False,
 ) -> str:
     if not DOMAIN_RE.fullmatch((domain or "").lower()):
         raise ValueError("Invalid domain")
@@ -218,7 +272,11 @@ def render_vhost(
     safe_custom = validate_custom_nginx(custom_directives)
 
     env = Environment(loader=FileSystemLoader(TEMPLATE_DIR), autoescape=False)
-    template_name = "wordpress.conf.j2" if app_type == "wordpress" else "static.conf.j2"
+    template_name = {
+        "wordpress": "wordpress.conf.j2",
+        "php": "php.conf.j2",
+        "static": "static.conf.j2",
+    }[app_type]
     template = env.get_template(template_name)
     php_fpm_socket = php_fpm_socket_override or _php_fpm_socket(php_version)
 
@@ -227,6 +285,7 @@ def render_vhost(
         root_path=str(resolved_root),
         php_fpm_socket=php_fpm_socket,
         custom_directives=safe_custom,
+        waf_enabled=bool(waf_enabled),
     )
     return rendered
 
@@ -243,6 +302,7 @@ def write_vhost(
     php_version: Optional[str] = None,
     custom_directives: str = "",
     php_fpm_socket_override: Optional[str] = None,
+    waf_enabled: bool = False,
 ) -> str:
     content = render_vhost(
         domain,
@@ -251,8 +311,9 @@ def write_vhost(
         php_version=php_version,
         custom_directives=custom_directives,
         php_fpm_socket_override=php_fpm_socket_override,
+        waf_enabled=waf_enabled,
     )
-    target = Path(settings.nginx_sites_available) / f"{domain}.conf"
+    target = _vhost_path(domain)
     if settings.command_dry_run:
         return content
     if target.exists():
@@ -276,8 +337,9 @@ def rewrite_vhost(
     php_version: str,
     custom_directives: str = "",
     php_fpm_socket_override: Optional[str] = None,
+    waf_enabled: bool = False,
 ) -> str:
-    target = Path(settings.nginx_sites_available) / f"{domain}.conf"
+    target = _vhost_path(domain)
     content = render_vhost(
         domain,
         root_path,
@@ -285,6 +347,7 @@ def rewrite_vhost(
         php_version=php_version,
         custom_directives=custom_directives,
         php_fpm_socket_override=php_fpm_socket_override,
+        waf_enabled=waf_enabled,
     )
     if settings.command_dry_run:
         return content
@@ -295,12 +358,7 @@ def rewrite_vhost(
             content = _merge_certbot_ssl_config(content, existing)
     old_content = target.read_text(encoding="utf-8") if target.exists() else None
     target.write_text(content, encoding="utf-8")
-    test = shell.privileged("nginx-test", check=False, fallback=["nginx", "-t"])
-    if test.returncode != 0:
-        if old_content is not None:
-            target.write_text(old_content, encoding="utf-8")
-        raise RuntimeError((test.stderr or test.stdout or "nginx -t failed").strip())
-    shell.privileged("nginx-reload", fallback=["bash", "-lc", "nginx -t && systemctl reload nginx"])
+    _test_and_reload(target, old_content)
     return str(target)
 
 
@@ -309,7 +367,7 @@ def rewrite_wordpress_vhost(domain: str, root_path: str, php_version: str) -> st
 
 
 def update_custom_block(domain: str, custom_directives: str) -> str:
-    target = Path(settings.nginx_sites_available) / f"{domain}.conf"
+    target = _vhost_path(domain)
     safe_custom = validate_custom_nginx(custom_directives)
     if settings.command_dry_run:
         return safe_custom
@@ -319,16 +377,12 @@ def update_custom_block(domain: str, custom_directives: str) -> str:
     new_content = _replace_custom_block(existing, safe_custom)
     target.with_suffix(target.suffix + ".bak").write_text(existing, encoding="utf-8")
     target.write_text(new_content, encoding="utf-8")
-    test = shell.privileged("nginx-test", check=False, fallback=["nginx", "-t"])
-    if test.returncode != 0:
-        target.write_text(existing, encoding="utf-8")
-        raise RuntimeError((test.stderr or test.stdout or "nginx -t failed").strip())
-    shell.privileged("nginx-reload", fallback=["bash", "-lc", "nginx -t && systemctl reload nginx"])
+    _test_and_reload(target, existing)
     return str(target)
 
 
 def set_wordpress_php_version(domain: str, php_version: str) -> str:
-    target = Path(settings.nginx_sites_available) / f"{domain}.conf"
+    target = _vhost_path(domain)
     if settings.command_dry_run:
         return _php_fpm_socket(php_version)
     if not target.exists():
@@ -344,14 +398,16 @@ def harden_existing_wordpress_vhost(
     root_path: str,
     php_version: str | None = None,
     php_fpm_socket_override: Optional[str] = None,
+    waf_enabled: bool = False,
 ) -> str:
-    target = Path(settings.nginx_sites_available) / f"{domain}.conf"
+    target = _vhost_path(domain)
     content = render_vhost(
         domain,
         root_path,
         app_type="wordpress",
         php_version=php_version,
         php_fpm_socket_override=php_fpm_socket_override,
+        waf_enabled=waf_enabled,
     )
     if settings.command_dry_run:
         return content
@@ -363,6 +419,7 @@ def harden_existing_wordpress_vhost(
                 updated = _replace_fastcgi_socket(updated, php_fpm_socket_override)
             elif php_version:
                 updated = _replace_php_fpm_socket(updated, php_version)
+            updated = _replace_waf_block(updated, waf_enabled)
             target.write_text(updated, encoding="utf-8")
             shell.privileged("nginx-reload", fallback=["bash", "-lc", "nginx -t && systemctl reload nginx"])
             return str(target)
@@ -372,9 +429,44 @@ def harden_existing_wordpress_vhost(
 
 
 def delete_wordpress_vhost(domain: str):
-    target = Path(settings.nginx_sites_available) / f"{domain}.conf"
+    target = _vhost_path(domain)
     if settings.command_dry_run:
         return str(target)
     target.unlink(missing_ok=True)
     shell.privileged("nginx-reload", fallback=["bash", "-lc", "nginx -t && systemctl reload nginx"])
+    return str(target)
+
+
+def read_vhost_config(domain: str) -> str:
+    target = _vhost_path(domain)
+    if not target.exists():
+        raise FileNotFoundError(str(target))
+    return target.read_text(encoding="utf-8")
+
+
+def update_full_config(domain: str, content: str) -> str:
+    target = _vhost_path(domain)
+    safe_content = validate_full_nginx_config(content)
+    if settings.command_dry_run:
+        return safe_content
+    if not target.exists():
+        raise FileNotFoundError(str(target))
+    existing = target.read_text(encoding="utf-8")
+    target.with_suffix(target.suffix + ".bak").write_text(existing, encoding="utf-8")
+    target.write_text(safe_content, encoding="utf-8")
+    _test_and_reload(target, existing)
+    return str(target)
+
+
+def update_waf_block(domain: str, enabled: bool) -> str:
+    target = _vhost_path(domain)
+    if settings.command_dry_run:
+        return _replace_waf_block("server {\n    server_name example.com;\n}\n", enabled)
+    if not target.exists():
+        raise FileNotFoundError(str(target))
+    existing = target.read_text(encoding="utf-8")
+    new_content = _replace_waf_block(existing, enabled)
+    target.with_suffix(target.suffix + ".bak").write_text(existing, encoding="utf-8")
+    target.write_text(new_content, encoding="utf-8")
+    _test_and_reload(target, existing)
     return str(target)

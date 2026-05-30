@@ -6,6 +6,13 @@ server {
 
     server_tokens off;
 
+{% if waf_enabled %}
+    # BPANEL WAF BEGIN
+    modsecurity on;
+    modsecurity_rules_file /etc/nginx/modsec/bpanel-main.conf;
+    # BPANEL WAF END
+{% endif %}
+
     access_log /var/log/nginx/{{ domain }}.access.log;
     error_log /var/log/nginx/{{ domain }}.error.log;
 

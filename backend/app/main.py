@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import auth, databases, firewall, maintenance, panel_settings as panel_settings_api, services, users, websites
+from app.api import auth, databases, firewall, maintenance, panel_settings as panel_settings_api, services, updates, users, waf, websites
 from app.core.config import settings
 from app.core.database import run_migrations
 from app.services import panel_settings as panel_brand_settings
@@ -86,6 +86,8 @@ app.include_router(websites.router, prefix="/api")
 app.include_router(databases.router, prefix="/api")
 app.include_router(firewall.router, prefix="/api")
 app.include_router(services.router, prefix="/api")
+app.include_router(updates.router, prefix="/api")
+app.include_router(waf.router, prefix="/api")
 app.include_router(maintenance.router, prefix="/api")
 app.include_router(panel_settings_api.router, prefix="/api")
 

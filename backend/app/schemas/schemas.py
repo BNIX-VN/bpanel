@@ -9,7 +9,7 @@ from pydantic import BaseModel, EmailStr, Field, field_validator
 
 DOMAIN_RE = re.compile(r"^(?!-)([a-zA-Z0-9-]{1,63}\.)+[a-zA-Z]{2,}$")
 SUPPORTED_PHP_VERSIONS = {"8.3", "8.4"}
-SUPPORTED_APP_TYPES = {"wordpress", "static"}
+SUPPORTED_APP_TYPES = {"wordpress", "php", "static"}
 SUPPORTED_ROLES = {"admin", "end_user"}
 SIZE_RE = re.compile(r"^\d{1,6}[KMG]?$")  # e.g. "512M", "1024M"
 PANEL_HOST_RE = re.compile(r"^(?:localhost|(?:\d{1,3}\.){3}\d{1,3}|(?:(?!-)[a-zA-Z0-9-]{1,63}\.)+[a-zA-Z]{2,})$")
@@ -195,6 +195,7 @@ class WebsiteUpdate(BaseModel):
     status: Optional[str] = None
     owner_id: Optional[int] = None
     nginx_custom: Optional[str] = None
+    waf_enabled: Optional[bool] = None
 
     @field_validator("php_version")
     @classmethod
@@ -214,6 +215,40 @@ class WebsiteUpdate(BaseModel):
 
 class WebsiteNginxCustom(BaseModel):
     nginx_custom: str = ""
+
+
+class WebsiteNginxConfig(BaseModel):
+    nginx_config: str = Field(default="", max_length=128 * 1024)
+
+    @field_validator("nginx_config")
+    @classmethod
+    def validate_nginx_config(cls, value: str) -> str:
+        if "\x00" in value:
+            raise ValueError("nginx_config contains a NUL byte")
+        return value.replace("\r\n", "\n").strip() + "\n"
+
+
+class WebsiteWafUpdate(BaseModel):
+    waf_enabled: bool
+
+
+class SystemAutoUpdateConfig(BaseModel):
+    enabled: bool = True
+    mode: Literal["security", "all"] = "security"
+    auto_reboot: bool = False
+
+
+class PanelAutoUpdateConfig(BaseModel):
+    enabled: bool = True
+    time: str = Field(default="03:30", pattern=r"^\d{2}:\d{2}$")
+
+    @field_validator("time")
+    @classmethod
+    def validate_time(cls, value: str) -> str:
+        hour, minute = value.split(":", 1)
+        if int(hour) > 23 or int(minute) > 59:
+            raise ValueError("time must be HH:MM")
+        return value
 
 
 class DatabasePasswordUpdate(BaseModel):
@@ -250,6 +285,7 @@ class WebsiteOut(BaseModel):
     ssl_enabled: bool
     status: str
     nginx_custom: str = ""
+    waf_enabled: bool = False
 
     class Config:
         from_attributes = True

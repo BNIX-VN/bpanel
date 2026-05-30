@@ -174,7 +174,7 @@ def restore_backup(payload: RestoreBackup, db: Session = Depends(get_db), curren
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if website.linux_user:
-        runtime_php_version = website.php_version if (website.app_type or "wordpress") == "wordpress" else None
+        runtime_php_version = website.php_version if (website.app_type or "wordpress") in {"wordpress", "php"} else None
         site_users.ensure_site_runtime(website.domain, website.root_path, runtime_php_version, website.linux_user)
     wordpress.fix_permissions(website.root_path, website.linux_user)
     log_action(db, current_user.id, "restore", website.domain, payload.backup_file)
@@ -512,7 +512,7 @@ def wordpress_action(payload: WpAction, db: Session = Depends(get_db), current_u
 def fix_wordpress_permissions(website_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     website = get_owned_website(db, current_user, website_id)
     if website.linux_user:
-        runtime_php_version = website.php_version if (website.app_type or "wordpress") == "wordpress" else None
+        runtime_php_version = website.php_version if (website.app_type or "wordpress") in {"wordpress", "php"} else None
         site_users.ensure_site_runtime(website.domain, website.root_path, runtime_php_version, website.linux_user)
     wordpress.fix_permissions(website.root_path, website.linux_user)
     log_action(db, current_user.id, "fix_permissions", website.domain, website.root_path)

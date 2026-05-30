@@ -191,6 +191,10 @@ function App() {
   const [panelLogoFile, setPanelLogoFile] = useState(null);
   const [panelFaviconFile, setPanelFaviconFile] = useState(null);
   const [panelSslEmail, setPanelSslEmail] = useState('');
+  const [updatesStatus, setUpdatesStatus] = useState(null);
+  const [osAutoUpdate, setOsAutoUpdate] = useState({ enabled: true, mode: 'security', auto_reboot: false });
+  const [panelAutoUpdate, setPanelAutoUpdate] = useState({ enabled: true, time: '03:30' });
+  const [wafStatus, setWafStatus] = useState(null);
   const noticeTimer = useRef(null);
 
   // Auto-dismiss notices after 6 seconds
@@ -230,6 +234,8 @@ function App() {
     setTwoFactorStatus(null);
     setTwoFactorSetup(null);
     setTwoFactorCode('');
+    setUpdatesStatus(null);
+    setWafStatus(null);
     setSelectedWebsiteId('');
     setMobileMenuOpen(false);
     setPage('dashboard');
@@ -595,22 +601,34 @@ function App() {
   }
 
   async function openNginxCustom(site) {
-    const data = await request(`/websites/${site.id}/nginx-custom`, {}, 'Loading custom Nginx...');
+    const data = await request(`/websites/${site.id}/nginx-config`, {}, 'Loading Nginx config...');
     if (data !== null) {
-      setNginxCustomEditing({ id: site.id, domain: site.domain, content: data?.nginx_custom || '' });
+      setNginxCustomEditing({ id: site.id, domain: site.domain, content: data?.nginx_config || '' });
     }
   }
 
   async function saveNginxCustom() {
     if (!nginxCustomEditing) return;
-    const data = await request(`/websites/${nginxCustomEditing.id}/nginx-custom`, {
+    const data = await request(`/websites/${nginxCustomEditing.id}/nginx-config`, {
       method: 'PUT',
-      body: JSON.stringify({ nginx_custom: nginxCustomEditing.content }),
-    }, 'Applying custom Nginx and reloading...');
+      body: JSON.stringify({ nginx_config: nginxCustomEditing.content }),
+    }, 'Applying Nginx config and reloading...');
     if (data) {
-      setNotice(`Updated custom Nginx for ${nginxCustomEditing.domain}`);
+      setNotice(`Updated Nginx config for ${nginxCustomEditing.domain}`);
       setNginxCustomEditing(null);
       refreshAll();
+    }
+  }
+
+  async function toggleWebsiteWaf(site) {
+    const next = !site.waf_enabled;
+    const data = await request(`/websites/${site.id}/waf`, {
+      method: 'PATCH',
+      body: JSON.stringify({ waf_enabled: next }),
+    }, `${next ? 'Enabling' : 'Disabling'} WAF for ${site.domain}...`);
+    if (data) {
+      setNotice(`${next ? 'Enabled' : 'Disabled'} WAF for ${site.domain}.`);
+      await refreshAll();
     }
   }
 
@@ -1124,6 +1142,48 @@ function App() {
     setFirewallDeleteNumber('');
   }
 
+  async function loadUpdates() {
+    const data = await request('/updates/status', {}, 'Loading update status...');
+    if (data) setUpdatesStatus(data);
+  }
+
+  async function runOsUpdate() {
+    if (!confirm('Run apt-get update && apt-get upgrade now?')) return;
+    const data = await request('/updates/os/run', { method: 'POST' }, 'Updating OS packages...');
+    if (data) { setNotice((data.stdout || data.stderr || 'OS update finished.').trim()); await loadUpdates(); }
+  }
+
+  async function saveOsAutoUpdate() {
+    const data = await request('/updates/os/auto', { method: 'POST', body: JSON.stringify(osAutoUpdate) }, 'Saving OS auto update...');
+    if (data) { setNotice((data.stdout || data.stderr || 'OS auto update saved.').trim()); await loadUpdates(); }
+  }
+
+  async function runPanelUpdate() {
+    if (!confirm('Update BPanel from GitHub now? The API may restart.')) return;
+    const data = await request('/updates/panel/run', { method: 'POST' }, 'Updating BPanel...');
+    if (data) setNotice((data.stdout || data.stderr || 'Panel update finished.').trim());
+  }
+
+  async function savePanelAutoUpdate() {
+    const data = await request('/updates/panel/auto', { method: 'POST', body: JSON.stringify(panelAutoUpdate) }, 'Saving panel auto update...');
+    if (data) { setNotice((data.stdout || data.stderr || 'Panel auto update saved.').trim()); await loadUpdates(); }
+  }
+
+  async function loadWafStatus() {
+    const data = await request('/waf/status', {}, 'Loading WAF status...');
+    if (data) setWafStatus(data);
+  }
+
+  async function installWaf() {
+    const data = await request('/waf/install', { method: 'POST' }, 'Installing WAF engine...');
+    if (data) { setNotice((data.stdout || data.stderr || 'WAF installed.').trim()); await loadWafStatus(); }
+  }
+
+  async function updateWafRules() {
+    const data = await request('/waf/update-rules', { method: 'POST' }, 'Updating WAF rules...');
+    if (data) { setNotice((data.stdout || data.stderr || 'WAF rules updated.').trim()); await loadWafStatus(); }
+  }
+
   useEffect(() => {
     if (isAuthenticated) {
       refreshAll();
@@ -1175,8 +1235,10 @@ function App() {
     if (isAuthenticated && page === 'firewall') loadFirewall();
     if (isAuthenticated && page === 'security') loadTwoFactorStatus();
     if (isAuthenticated && page === 'settings') loadPanelSettings();
-    if (isAuthenticated && page === 'backups' && isAdmin) { loadUsers(); loadSftpTargets(); loadBackupSchedules(); loadRestoreBackups(); }
-  }, [isAuthenticated, page]);
+    if (isAuthenticated && page === 'updates' && currentUser?.role === 'admin') loadUpdates();
+    if (isAuthenticated && page === 'waf' && currentUser?.role === 'admin') loadWafStatus();
+    if (isAuthenticated && page === 'backups' && currentUser?.role === 'admin') { loadUsers(); loadSftpTargets(); loadBackupSchedules(); loadRestoreBackups(); }
+  }, [isAuthenticated, page, currentUser?.role]);
 
   useEffect(() => { setMobileMenuOpen(false); }, [page]);
 
@@ -1197,6 +1259,8 @@ function App() {
     ['security', 'Security', Shield],
     ...(isAdmin ? [['php', 'PHP config', Code2]] : []),
     ...(isAdmin ? [['firewall', 'Firewall', Shield]] : []),
+    ...(isAdmin ? [['waf', 'WAF', Shield]] : []),
+    ...(isAdmin ? [['updates', 'Updates', RefreshCw]] : []),
     ['services', 'Services Status', Server],
     ...(isAdmin ? [['users', 'Panel users', Users]] : []),
     ...(isAdmin ? [['settings', 'Settings', SettingsIcon]] : []),
@@ -1363,7 +1427,8 @@ function App() {
           <input value={domain} onChange={e => setDomain(e.target.value)} placeholder="domain.com" />
           <select value={siteType} onChange={e => setSiteType(e.target.value)}>
             <option value="wordpress">WordPress</option>
-            <option value="static">Static</option>
+            <option value="php">Static/PHP</option>
+            <option value="static">Static only</option>
           </select>
           <select value={phpVersion} onChange={e => setPhpVersion(e.target.value)}>
             <option value="8.3">PHP 8.3</option>
@@ -1384,7 +1449,9 @@ function App() {
         </label>
         <p className="hint">{wpFieldsEnabled
           ? 'WordPress will be installed and the panel will show the URL, admin account, and password after creation.'
-          : 'A plain Nginx vhost will be created with public/ folder. Upload your files via File Manager.'}</p>
+          : siteType === 'php'
+            ? 'A PHP-FPM vhost will be created with public/ folder. Upload your PHP or static files via File Manager.'
+            : 'A static-only Nginx vhost will be created. PHP files can be uploaded but will not execute.'}</p>
       </section>
       <section className="section">
         <div className="section-title">
@@ -1406,14 +1473,16 @@ function App() {
               <span>PHP <strong>{site.php_version}</strong></span>
               <span>Status <strong>{site.status}</strong></span>
               {site.nginx_custom && <span className="badge ok">Custom Nginx</span>}
+              {site.waf_enabled && <span className="badge ok">WAF</span>}
             </div>
             <div className="actions">
-              <select value={websitePhpVersions[site.id] || site.php_version || '8.3'} onChange={e => setWebsitePhpVersions(prev => ({ ...prev, [site.id]: e.target.value }))}>
+              {site.app_type !== 'static' && <select value={websitePhpVersions[site.id] || site.php_version || '8.3'} onChange={e => setWebsitePhpVersions(prev => ({ ...prev, [site.id]: e.target.value }))}>
                 <option value="8.3">PHP 8.3</option><option value="8.4">PHP 8.4</option>
-              </select>
-              <button disabled={!!loading || (websitePhpVersions[site.id] || site.php_version) === site.php_version} onClick={() => changeWebsitePhpVersion(site)}>Change PHP</button>
+              </select>}
+              {site.app_type !== 'static' && <button disabled={!!loading || (websitePhpVersions[site.id] || site.php_version) === site.php_version} onClick={() => changeWebsitePhpVersion(site)}>Change PHP</button>}
               <button disabled={!!loading} onClick={() => openWebsiteFileManager(site)}><FolderOpen size={14}/> Files</button>
               {isAdmin && <button disabled={!!loading} onClick={() => openNginxCustom(site)}><Code2 size={14}/> Nginx</button>}
+              {isAdmin && <button disabled={!!loading} onClick={() => toggleWebsiteWaf(site)}><Shield size={14}/> {site.waf_enabled ? 'WAF off' : 'WAF on'}</button>}
               {site.app_type === 'wordpress' && <button disabled={!!loading} onClick={() => fixWordPressPermissions(site.id)}>Fix permissions</button>}
               <button className="danger" disabled={!!loading} onClick={() => deleteWebsite(site.id)}><Trash2 size={14}/> Delete</button>
             </div>
@@ -1422,9 +1491,10 @@ function App() {
       </section>
       {nginxCustomEditing && <section className="section nginx-modal">
         <div className="section-title">
-          <div>
+          <div className="nginx-config-title">
+            <h2>Nginx config - {nginxCustomEditing.domain}</h2>
             <h2>Custom Nginx — {nginxCustomEditing.domain}</h2>
-            <p className="hint">Lines you add here are inserted inside this site's <code>server &#123; ... &#125;</code> block.</p>
+            <p className="hint">Edit the full vhost file. BPanel tests Nginx and rolls back if validation fails.</p>
           </div>
           <button className="secondary-light" onClick={() => setNginxCustomEditing(null)}><X size={14}/> Close</button>
         </div>
@@ -1432,11 +1502,11 @@ function App() {
           className="code-editor"
           value={nginxCustomEditing.content}
           onChange={e => setNginxCustomEditing(prev => ({ ...prev, content: e.target.value }))}
-          placeholder={`# Examples:\nlocation /api/ {\n    proxy_pass http://127.0.0.1:8080;\n}\n\nrewrite ^/old-path$ /new-path permanent;`}
+          placeholder={`server {\n    listen 80;\n    server_name ${nginxCustomEditing.domain};\n}`}
           spellCheck={false}
           rows={14}
         />
-        <p className="hint">Disallowed: <code>server &#123;</code>, <code>http &#123;</code>, <code>events &#123;</code>, <code>include</code>, <code>load_module</code>, <code>user</code>. Keep braces balanced.</p>
+        <p className="hint">Use care with <code>listen</code>, <code>root</code>, SSL paths, and upstream directives; this editor writes the production vhost.</p>
         <div className="actions">
           <button disabled={!!loading} onClick={saveNginxCustom}>Save and reload Nginx</button>
           <button className="secondary-light" disabled={!!loading} onClick={() => setNginxCustomEditing(null)}>Cancel</button>
@@ -1808,6 +1878,57 @@ function App() {
     </>;
   }
 
+  function renderUpdates() {
+    if (!isAdmin) return <section className="section"><h2>Updates</h2><p className="hint">No permission.</p></section>;
+    const statusText = updatesStatus?.stdout || updatesStatus?.stderr || 'Click Refresh to load update status.';
+    return <>
+      <section className="section">
+        <div className="section-title">
+          <div><h2>Updates</h2><p className="hint">OS packages use apt; panel updates use <code>installer/update.sh</code>.</p></div>
+          <button disabled={!!loading} onClick={loadUpdates}><RefreshCw size={14}/> Refresh</button>
+        </div>
+        <div className="actions">
+          <button disabled={!!loading} onClick={runOsUpdate}><RefreshCw size={14}/> Update OS now</button>
+          <button disabled={!!loading} onClick={runPanelUpdate}><RotateCcw size={14}/> Update panel now</button>
+        </div>
+        <div className="info-box firewall-status"><strong>Status</strong><pre>{statusText}</pre></div>
+      </section>
+      <section className="section">
+        <h2>Auto Update OS</h2>
+        <div className="firewall-form">
+          <label><span>Enabled</span><select value={osAutoUpdate.enabled ? 'on' : 'off'} onChange={e => setOsAutoUpdate(prev => ({ ...prev, enabled: e.target.value === 'on' }))}><option value="on">On</option><option value="off">Off</option></select></label>
+          <label><span>Mode</span><select value={osAutoUpdate.mode} onChange={e => setOsAutoUpdate(prev => ({ ...prev, mode: e.target.value }))}><option value="security">Security</option><option value="all">All packages</option></select></label>
+          <label><span>Auto reboot</span><select value={osAutoUpdate.auto_reboot ? 'on' : 'off'} onChange={e => setOsAutoUpdate(prev => ({ ...prev, auto_reboot: e.target.value === 'on' }))}><option value="off">Off</option><option value="on">On</option></select></label>
+          <button disabled={!!loading} onClick={saveOsAutoUpdate}>Save OS auto update</button>
+        </div>
+      </section>
+      <section className="section">
+        <h2>Auto Update Panel</h2>
+        <div className="firewall-form">
+          <label><span>Enabled</span><select value={panelAutoUpdate.enabled ? 'on' : 'off'} onChange={e => setPanelAutoUpdate(prev => ({ ...prev, enabled: e.target.value === 'on' }))}><option value="on">On</option><option value="off">Off</option></select></label>
+          <label><span>Daily time</span><input value={panelAutoUpdate.time} onChange={e => setPanelAutoUpdate(prev => ({ ...prev, time: e.target.value }))} placeholder="03:30" /></label>
+          <button disabled={!!loading} onClick={savePanelAutoUpdate}>Save panel auto update</button>
+        </div>
+      </section>
+    </>;
+  }
+
+  function renderWaf() {
+    if (!isAdmin) return <section className="section"><h2>WAF</h2><p className="hint">No permission.</p></section>;
+    const statusText = wafStatus?.stdout || wafStatus?.stderr || 'Click Refresh to load WAF status.';
+    return <section className="section">
+      <div className="section-title">
+        <div><h2>WAF</h2><p className="hint">Installs ModSecurity for Nginx and loads rules from <code>/etc/nginx/modsec/bpanel-main.conf</code>.</p></div>
+        <button disabled={!!loading} onClick={loadWafStatus}><RefreshCw size={14}/> Refresh</button>
+      </div>
+      <div className="actions">
+        <button disabled={!!loading} onClick={installWaf}><Shield size={14}/> Install engine</button>
+        <button disabled={!!loading} onClick={updateWafRules}><RefreshCw size={14}/> Update rules</button>
+      </div>
+      <div className="info-box firewall-status"><strong>WAF status</strong><pre>{statusText}</pre></div>
+    </section>;
+  }
+
   function renderSecurity() {
     const enabled = Boolean(twoFactorStatus?.enabled || currentUser?.totp_enabled);
     return <section className="section">
@@ -1988,6 +2109,8 @@ function App() {
     if (page === 'security') return renderSecurity();
     if (page === 'php') return renderPhpConfig();
     if (page === 'firewall') return renderFirewall();
+    if (page === 'waf') return renderWaf();
+    if (page === 'updates') return renderUpdates();
     if (page === 'services') return renderServices();
     if (page === 'settings') return renderPanelSettings();
     if (page === 'users') return renderUsers();

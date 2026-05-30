@@ -407,7 +407,7 @@ with SessionLocal() as db:
     for website in db.query(Website).all():
         try:
             if website.linux_user:
-                runtime_php_version = website.php_version if (website.app_type or "wordpress") == "wordpress" else None
+                runtime_php_version = website.php_version if (website.app_type or "wordpress") in {"wordpress", "php"} else None
                 site_users.ensure_site_runtime(website.domain, website.root_path, runtime_php_version, website.linux_user)
             site_users.fix_site_permissions(website.root_path, website.linux_user)
         except Exception as exc:
@@ -425,11 +425,15 @@ python -m py_compile \
   app/api/maintenance.py \
   app/api/firewall.py \
   app/api/services.py \
+  app/api/updates.py \
+  app/api/waf.py \
   app/api/panel_settings.py \
   app/services/firewall.py \
   app/services/nginx.py \
   app/services/panel_urls.py \
   app/services/panel_settings.py \
+  app/services/updates.py \
+  app/services/waf.py \
   app/services/mariadb.py \
   app/services/wordpress.py \
   app/services/file_manager.py \

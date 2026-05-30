@@ -10,7 +10,7 @@ from app.core.database import get_db
 from app.core.permissions import Role, ensure_role, is_admin_role
 from app.core.secrets import encrypt
 from app.models.entities import DatabaseAccount, User, Website
-from app.schemas.schemas import WebsiteCreate, WebsiteNginxCustom, WebsiteOut, WebsiteUpdate
+from app.schemas.schemas import WebsiteCreate, WebsiteNginxConfig, WebsiteNginxCustom, WebsiteOut, WebsiteUpdate, WebsiteWafUpdate
 from app.services import mariadb, nginx, site_users, ssl, storage_quota, wordpress
 from app.services.audit import log_action
 
@@ -95,7 +95,8 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_type_value = "wordpress"
     else:
-        runtime_php_version = payload.php_version if payload.app_type == "wordpress" else None
+        app_type_value = "php" if payload.app_type == "wordpress" else payload.app_type
+        runtime_php_version = payload.php_version if app_type_value in {"wordpress", "php"} else None
         try:
             linux_user = site_users.ensure_site_runtime(payload.domain, root_path, runtime_php_version, linux_user)
             # Just create the public/ folder skeleton and write a vhost.
@@ -113,7 +114,7 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
             nginx.write_vhost(
                 payload.domain,
                 root_path,
-                app_type=payload.app_type,
+                app_type=app_type_value,
                 php_version=payload.php_version,
                 php_fpm_socket_override=site_users.php_fpm_socket(linux_user, payload.php_version) if runtime_php_version else None,
             )
@@ -121,7 +122,6 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
             _cleanup_failed_site(root_path, linux_user)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         db_info = None
-        app_type_value = payload.app_type
 
     website = Website(
         domain=payload.domain,
@@ -177,9 +177,10 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
         ensure_role(current_user.role, Role.admin)
     if payload.php_version is not None:
         try:
-            if website.linux_user and (website.app_type or "wordpress") == "wordpress":
+            runtime_php_version = payload.php_version if (website.app_type or "wordpress") in {"wordpress", "php"} else None
+            if website.linux_user and runtime_php_version:
                 site_users.ensure_site_runtime(website.domain, website.root_path, payload.php_version, website.linux_user)
-            php_fpm_socket_override = site_users.php_fpm_socket(website.linux_user, payload.php_version)
+            php_fpm_socket_override = site_users.php_fpm_socket(website.linux_user, payload.php_version) if runtime_php_version else None
             nginx.rewrite_vhost(
                 website.domain,
                 website.root_path,
@@ -187,6 +188,7 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
                 php_version=payload.php_version,
                 custom_directives=website.nginx_custom or "",
                 php_fpm_socket_override=php_fpm_socket_override,
+                waf_enabled=website.waf_enabled,
             )
         except (RuntimeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=f"Cannot write Nginx config: {exc}") from exc
@@ -210,7 +212,7 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
                 )
                 new_linux_user = site_users.linux_user_for_panel_username(owner.username)
                 new_root_path = site_users.site_root_for_panel_user(owner.username, website.domain)
-                runtime_php_version = website.php_version if (website.app_type or "wordpress") == "wordpress" else None
+                runtime_php_version = website.php_version if (website.app_type or "wordpress") in {"wordpress", "php"} else None
                 site_users.move_site_runtime(website.root_path, new_root_path, new_linux_user, runtime_php_version)
                 nginx.rewrite_vhost(
                     website.domain,
@@ -219,6 +221,7 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
                     php_version=website.php_version,
                     custom_directives=website.nginx_custom or "",
                     php_fpm_socket_override=site_users.php_fpm_socket(new_linux_user, website.php_version) if runtime_php_version else None,
+                    waf_enabled=website.waf_enabled,
                 )
                 website.root_path = new_root_path
                 website.linux_user = new_linux_user
@@ -231,9 +234,16 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
         ensure_role(current_user.role, Role.admin)
         try:
             nginx.update_custom_block(website.domain, payload.nginx_custom)
-        except (RuntimeError, ValueError) as exc:
+        except (RuntimeError, ValueError, FileNotFoundError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         website.nginx_custom = payload.nginx_custom
+    if payload.waf_enabled is not None:
+        ensure_role(current_user.role, Role.admin)
+        try:
+            nginx.update_waf_block(website.domain, payload.waf_enabled)
+        except (RuntimeError, ValueError, FileNotFoundError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        website.waf_enabled = payload.waf_enabled
     db.commit()
     db.refresh(website)
     log_action(db, current_user.id, "update_website", website.domain)
@@ -248,6 +258,49 @@ def get_website_nginx_custom(website_id: int, db: Session = Depends(get_db), cur
     if website.owner_id != current_user.id:
         ensure_role(current_user.role, Role.admin)
     return WebsiteNginxCustom(nginx_custom=website.nginx_custom or "")
+
+
+@router.get("/{website_id}/nginx-config", response_model=WebsiteNginxConfig)
+def get_website_nginx_config(website_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.admin)
+    website = db.query(Website).filter(Website.id == website_id).first()
+    if not website:
+        raise HTTPException(status_code=404, detail="Website not found")
+    try:
+        return WebsiteNginxConfig(nginx_config=nginx.read_vhost_config(website.domain))
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.put("/{website_id}/nginx-config", response_model=WebsiteOut)
+def set_website_nginx_config(website_id: int, payload: WebsiteNginxConfig, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.admin)
+    website = db.query(Website).filter(Website.id == website_id).first()
+    if not website:
+        raise HTTPException(status_code=404, detail="Website not found")
+    try:
+        nginx.update_full_config(website.domain, payload.nginx_config)
+    except (RuntimeError, ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    log_action(db, current_user.id, "update_nginx_config", website.domain, request=request)
+    return website
+
+
+@router.patch("/{website_id}/waf", response_model=WebsiteOut)
+def set_website_waf(website_id: int, payload: WebsiteWafUpdate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.admin)
+    website = db.query(Website).filter(Website.id == website_id).first()
+    if not website:
+        raise HTTPException(status_code=404, detail="Website not found")
+    try:
+        nginx.update_waf_block(website.domain, payload.waf_enabled)
+    except (RuntimeError, ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    website.waf_enabled = payload.waf_enabled
+    db.commit()
+    db.refresh(website)
+    log_action(db, current_user.id, "update_waf", website.domain, "enabled" if payload.waf_enabled else "disabled", request=request)
+    return website
 
 
 @router.put("/{website_id}/nginx-custom", response_model=WebsiteOut)
@@ -302,6 +355,7 @@ def fix_nginx_security(website_id: int, db: Session = Depends(get_db), current_u
         website.root_path,
         website.php_version,
         php_fpm_socket_override=site_users.php_fpm_socket(website.linux_user, website.php_version),
+        waf_enabled=website.waf_enabled,
     )
     log_action(db, current_user.id, "fix_nginx_security", website.domain)
     return {"message": f"Rewrote Nginx security template for {website.domain}", "path": target}

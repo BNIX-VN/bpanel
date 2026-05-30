@@ -14,7 +14,7 @@ os.environ.setdefault("COMMAND_DRY_RUN", "true")
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ""))
 
-from app.services.nginx import validate_custom_nginx  # noqa: E402
+from app.services.nginx import render_vhost, validate_custom_nginx, validate_full_nginx_config  # noqa: E402
 from app.services.mariadb import _validate_identifier  # noqa: E402
 
 
@@ -61,6 +61,18 @@ class TestNginxCustomValidator:
 
     def test_empty_is_ok(self):
         assert validate_custom_nginx("") == ""
+
+    def test_full_config_accepts_server_block(self):
+        assert "server" in validate_full_nginx_config("server { listen 80; }")
+
+    def test_full_config_rejects_nul(self):
+        with pytest.raises(ValueError):
+            validate_full_nginx_config("server {\x00}")
+
+    def test_php_app_renders_fastcgi(self):
+        content = render_vhost("example.com", "/home/testuser/example.com", app_type="php", php_version="8.3")
+        assert "fastcgi_pass" in content
+        assert "wp-config.php" not in content
 
 
 class TestMariaDBIdentifier:

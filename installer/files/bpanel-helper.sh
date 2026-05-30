@@ -29,6 +29,7 @@ BPANEL_SITES_GROUP="bpanel-sites"
 APP_DIR="/opt/bpanel"
 ENV_FILE="${APP_DIR}/backend/.env"
 DEFAULT_PANEL_PORT="2222"
+SOURCE_DIR="/opt/bpanel-source"
 
 deny() { echo "bpanel-helper: $*" >&2; exit 1; }
 
@@ -86,6 +87,14 @@ allow_panel_port() {
   fi
 }
 
+require_time_hhmm() {
+  local value="$1" hour minute
+  [[ "$value" =~ ^[0-9]{2}:[0-9]{2}$ ]] || deny "invalid time: $value"
+  hour="${value%%:*}"; minute="${value##*:}"
+  (( 10#$hour >= 0 && 10#$hour <= 23 )) || deny "invalid hour: $hour"
+  (( 10#$minute >= 0 && 10#$minute <= 59 )) || deny "invalid minute: $minute"
+}
+
 schedule_panel_restart() {
   local unit
   systemctl daemon-reload || true
@@ -124,6 +133,146 @@ NGINX
   [[ -n "$host" ]] && sed -i -E "s#(\$cfg\['PmaAbsoluteUri'\] = ')[^']+('#\1${tools_scheme}://${host}/phpmyadmin/\2#" /etc/phpmyadmin/conf.d/bpanel-signon.php 2>/dev/null || true
   nginx -t
   systemctl reload nginx || true
+}
+
+configure_unattended_upgrades() {
+  local enabled="$1" mode="$2" reboot="$3" origins
+  [[ "$enabled" == "on" || "$enabled" == "off" ]] || deny "enabled must be on/off"
+  [[ "$mode" == "security" || "$mode" == "all" ]] || deny "mode must be security/all"
+  [[ "$reboot" == "on" || "$reboot" == "off" ]] || deny "auto reboot must be on/off"
+
+  DEBIAN_FRONTEND=noninteractive apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y unattended-upgrades apt-listchanges
+
+  if [[ "$enabled" == "off" ]]; then
+    cat >/etc/apt/apt.conf.d/20auto-upgrades <<'APT'
+APT::Periodic::Update-Package-Lists "0";
+APT::Periodic::Unattended-Upgrade "0";
+APT
+    systemctl disable --now unattended-upgrades.service 2>/dev/null || true
+    echo "OS auto updates disabled"
+    return 0
+  fi
+
+  origins='        "${distro_id}:${distro_codename}-security";'
+  if [[ "$mode" == "all" ]]; then
+    origins='        "${distro_id}:${distro_codename}";
+        "${distro_id}:${distro_codename}-updates";
+        "${distro_id}:${distro_codename}-security";'
+  fi
+
+  cat >/etc/apt/apt.conf.d/20auto-upgrades <<'APT'
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+APT::Periodic::AutocleanInterval "7";
+APT
+  cat >/etc/apt/apt.conf.d/51bpanel-unattended-upgrades <<APT
+Unattended-Upgrade::Allowed-Origins {
+${origins}
+};
+Unattended-Upgrade::Remove-Unused-Dependencies "true";
+Unattended-Upgrade::Automatic-Reboot "$([[ "$reboot" == "on" ]] && echo true || echo false)";
+Unattended-Upgrade::Automatic-Reboot-Time "03:00";
+APT
+  systemctl enable --now unattended-upgrades.service 2>/dev/null || true
+  echo "OS auto updates enabled (${mode}, reboot=${reboot})"
+}
+
+run_os_update() {
+  export DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none
+  apt-get update
+  apt-get \
+    -o Dpkg::Options::=--force-confdef \
+    -o Dpkg::Options::=--force-confold \
+    upgrade -y
+}
+
+write_panel_auto_update_timer() {
+  local enabled="$1" time_value="$2"
+  [[ "$enabled" == "on" || "$enabled" == "off" ]] || deny "enabled must be on/off"
+  require_time_hhmm "$time_value"
+  if [[ "$enabled" == "off" ]]; then
+    systemctl disable --now bpanel-auto-update.timer 2>/dev/null || true
+    rm -f /etc/systemd/system/bpanel-auto-update.service /etc/systemd/system/bpanel-auto-update.timer
+    systemctl daemon-reload
+    echo "Panel auto update disabled"
+    return 0
+  fi
+  [[ -f "${SOURCE_DIR}/installer/update.sh" ]] || deny "missing ${SOURCE_DIR}/installer/update.sh"
+  cat >/etc/systemd/system/bpanel-auto-update.service <<SERVICE
+[Unit]
+Description=Update BPanel from GitHub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=SOURCE_DIR=${SOURCE_DIR}
+Environment=APP_DIR=${APP_DIR}
+ExecStart=/bin/bash ${SOURCE_DIR}/installer/update.sh
+SERVICE
+  cat >/etc/systemd/system/bpanel-auto-update.timer <<TIMER
+[Unit]
+Description=Run BPanel auto update daily
+
+[Timer]
+OnCalendar=*-*-* ${time_value}:00
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target
+TIMER
+  systemctl daemon-reload
+  systemctl enable --now bpanel-auto-update.timer
+  echo "Panel auto update enabled at ${time_value}"
+}
+
+run_panel_update() {
+  [[ -f "${SOURCE_DIR}/installer/update.sh" ]] || deny "missing ${SOURCE_DIR}/installer/update.sh"
+  exec /bin/bash "${SOURCE_DIR}/installer/update.sh"
+}
+
+install_waf_engine() {
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update
+  apt-get install -y libnginx-mod-http-modsecurity modsecurity-crs libmodsecurity3 || \
+    apt-get install -y libnginx-mod-http-modsecurity libmodsecurity3
+  install -d -o root -g root -m 0755 /etc/nginx/modsec /etc/nginx/modsec/comodo
+  if [[ -f /etc/modsecurity/modsecurity.conf-recommended && ! -f /etc/modsecurity/modsecurity.conf ]]; then
+    cp /etc/modsecurity/modsecurity.conf-recommended /etc/modsecurity/modsecurity.conf
+  fi
+  if [[ -f /etc/modsecurity/modsecurity.conf ]]; then
+    sed -i -E 's/^SecRuleEngine .*/SecRuleEngine On/' /etc/modsecurity/modsecurity.conf
+  fi
+  if [[ -f /usr/share/nginx/modules-available/mod-http-modsecurity.conf ]]; then
+    install -d /etc/nginx/modules-enabled
+    ln -sfn /usr/share/nginx/modules-available/mod-http-modsecurity.conf /etc/nginx/modules-enabled/50-mod-http-modsecurity.conf
+  fi
+  cat >/etc/nginx/modsec/bpanel-main.conf <<'MODSEC'
+IncludeOptional /etc/modsecurity/*.conf
+IncludeOptional /usr/share/modsecurity-crs/owasp-crs.load
+IncludeOptional /etc/nginx/modsec/comodo/*.conf
+IncludeOptional /etc/nginx/modsec/comodo/rules/*.conf
+MODSEC
+  nginx -t
+  systemctl reload nginx
+  echo "WAF engine installed. Put Comodo/CWAF rule files under /etc/nginx/modsec/comodo/ if your Comodo account provides them."
+}
+
+waf_status() {
+  echo "ModSecurity module:"
+  if nginx -V 2>&1 | grep -qi modsecurity || [[ -e /etc/nginx/modules-enabled/50-mod-http-modsecurity.conf ]]; then
+    echo "  installed"
+  else
+    echo "  not installed"
+  fi
+  echo "Rules file:"
+  [[ -f /etc/nginx/modsec/bpanel-main.conf ]] && echo "  /etc/nginx/modsec/bpanel-main.conf" || echo "  missing"
+  echo "Comodo rules:"
+  find /etc/nginx/modsec/comodo -type f 2>/dev/null | head -20 || true
+  echo "Timers:"
+  systemctl list-timers bpanel-auto-update.timer apt-daily-upgrade.timer --no-pager 2>/dev/null || true
 }
 
 audit_log() {
@@ -370,6 +519,57 @@ case "$cmd" in
   nginx-reload)
     nginx -t
     exec systemctl reload nginx
+    ;;
+
+  # ---- updates ----------------------------------------------------------
+  updates-status)
+    echo "APT upgradable packages:"
+    apt list --upgradable 2>/dev/null | sed -n '1,60p' || true
+    echo ""
+    echo "Unattended upgrades:"
+    systemctl is-enabled unattended-upgrades.service 2>/dev/null || true
+    systemctl is-active unattended-upgrades.service 2>/dev/null || true
+    echo ""
+    echo "Panel auto update timer:"
+    systemctl is-enabled bpanel-auto-update.timer 2>/dev/null || true
+    systemctl list-timers bpanel-auto-update.timer apt-daily-upgrade.timer --no-pager 2>/dev/null || true
+    ;;
+
+  updates-os-run)
+    run_os_update
+    ;;
+
+  updates-os-auto)
+    [[ $# -eq 3 ]] || deny "usage: updates-os-auto <on|off> <security|all> <on|off>"
+    configure_unattended_upgrades "$1" "$2" "$3"
+    ;;
+
+  updates-panel-run)
+    run_panel_update
+    ;;
+
+  updates-panel-auto)
+    [[ $# -eq 2 ]] || deny "usage: updates-panel-auto <on|off> <HH:MM>"
+    write_panel_auto_update_timer "$1" "$2"
+    ;;
+
+  # ---- WAF --------------------------------------------------------------
+  waf-status)
+    waf_status
+    ;;
+
+  waf-install)
+    install_waf_engine
+    ;;
+
+  waf-update)
+    if [[ -x /usr/local/cwaf/scripts/updater.pl ]]; then
+      exec /usr/local/cwaf/scripts/updater.pl
+    fi
+    if [[ -x /etc/nginx/modsec/comodo/update.sh ]]; then
+      exec /etc/nginx/modsec/comodo/update.sh
+    fi
+    echo "No Comodo rule updater found. Install the Comodo/CWAF updater or place rules in /etc/nginx/modsec/comodo/."
     ;;
 
   # ---- panel runtime ----------------------------------------------------

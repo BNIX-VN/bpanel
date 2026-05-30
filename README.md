@@ -6,7 +6,7 @@ ownership, quotas, backups, SSL, services, and firewall tools built in.
 
 - Dashboard resource monitoring for CPU, RAM, disk, and network throughput
 - WordPress one-click installer (PHP 8.3 / 8.4) with WP-CLI
-- Static/PHP sites with editable per-site Nginx blocks
+- WordPress, Static/PHP, and Static-only sites with editable full Nginx vhosts
 - Panel users map to locked Linux users; website source lives in `/home/<panel-user>/<domain>/public`
 - Admin quick-login for creating sites as a selected user, plus one-owner assignment per website
 - Website count limits and BPanel soft storage quotas per end user
@@ -16,6 +16,8 @@ ownership, quotas, backups, SSL, services, and firewall tools built in.
 - Backups: archive site files + SQL, scheduled full-user backups, restore, upload, download
 - SFTP backup targets for off-server backup copies
 - UFW firewall manager (allow port, allow/block IP, delete rules)
+- Update controls for apt-based OS packages and BPanel source updates
+- Optional Nginx ModSecurity/WAF integration with per-site toggles
 - PHP-FPM config editor per version
 - Cron job manager with whitelisted WP-CLI commands
 - Role-based access: Admin / End user
@@ -25,7 +27,7 @@ ownership, quotas, backups, SSL, services, and firewall tools built in.
 
 - Backend: FastAPI, SQLAlchemy, SQLite (default), Pydantic v2
 - Frontend: React 18, Vite, lucide-react
-- Server: Nginx, systemd, MariaDB, Redis, PHP-FPM, certbot
+- Server: Nginx, optional ModSecurity/WAF, systemd, MariaDB, Redis, PHP-FPM, certbot
 
 ## System requirements
 
