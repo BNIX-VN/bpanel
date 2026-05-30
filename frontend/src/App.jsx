@@ -36,12 +36,12 @@ const editorTheme = EditorView.theme({
   '.cm-line': { padding: '0 16px' },
   '.cm-gutters': { backgroundColor: '#f6f8fb', color: '#64748b', borderRight: '1px solid #dbe4f0' },
   '.cm-lineNumbers .cm-gutterElement': { minWidth: '44px', padding: '0 12px 0 8px' },
-  '.cm-activeLine': { backgroundColor: '#eef6ff' },
+  // Đặt nền active line trong suốt để không che mất selection layer (vốn nằm dưới content trong CM6)
+  '.cm-activeLine': { backgroundColor: 'transparent' },
   '.cm-activeLineGutter': { backgroundColor: '#e2efff', color: '#0b5fbd' },
-  // Đặt selection layer lên trên content để mọi vùng chọn (kể cả trong active line) đều hiển thị
-  '.cm-selectionLayer': { zIndex: '1' },
-  '.cm-selectionBackground': { backgroundColor: 'rgba(37, 99, 235, 0.35) !important' },
-  '&.cm-focused .cm-selectionBackground': { backgroundColor: 'rgba(37, 99, 235, 0.45) !important' },
+  // Selection: dùng màu đặc đủ tương phản, rectangle nằm sau text nên text vẫn hiện rõ
+  '.cm-selectionBackground, ::selection': { backgroundColor: '#bcd4ff !important' },
+  '&.cm-focused .cm-selectionBackground, &.cm-focused ::selection': { backgroundColor: '#9cc0ff !important' },
   '.cm-cursor': { borderLeftColor: '#0b5fbd' },
   '.cm-matchingBracket, .cm-nonmatchingBracket': { backgroundColor: '#dbeafe', outline: '1px solid #93c5fd' },
 }, { dark: false });
