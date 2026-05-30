@@ -38,7 +38,10 @@ const editorTheme = EditorView.theme({
   '.cm-lineNumbers .cm-gutterElement': { minWidth: '44px', padding: '0 12px 0 8px' },
   '.cm-activeLine': { backgroundColor: '#eef6ff' },
   '.cm-activeLineGutter': { backgroundColor: '#e2efff', color: '#0b5fbd' },
-  '.cm-selectionBackground': { backgroundColor: '#2563eb !important' },
+  // Đặt selection layer lên trên content để mọi vùng chọn (kể cả trong active line) đều hiển thị
+  '.cm-selectionLayer': { zIndex: '1' },
+  '.cm-selectionBackground': { backgroundColor: 'rgba(37, 99, 235, 0.35) !important' },
+  '&.cm-focused .cm-selectionBackground': { backgroundColor: 'rgba(37, 99, 235, 0.45) !important' },
   '.cm-cursor': { borderLeftColor: '#0b5fbd' },
   '.cm-matchingBracket, .cm-nonmatchingBracket': { backgroundColor: '#dbeafe', outline: '1px solid #93c5fd' },
 }, { dark: false });

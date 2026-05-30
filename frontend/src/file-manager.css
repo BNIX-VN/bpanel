@@ -414,23 +414,30 @@
   overflow: auto;
 }
 
-/* Selection styling - nền xanh chữ trắng */
+/* Selection styling - nền xanh bán trong suốt, hoạt động cả khi chọn vùng nhỏ trong cùng 1 dòng.
+   Mặc định CodeMirror 6 đặt .cm-selectionLayer ở z-index -1 nên background của
+   .cm-activeLine sẽ che mất vùng selection ngắn -> phải nâng layer này lên trên. */
+.code-editor-host .cm-editor .cm-selectionLayer {
+  z-index: 1 !important;
+}
+
 .code-editor-host .cm-content ::selection,
 .code-editor-host .cm-content *::selection {
-  background-color: #2563eb !important;
-  color: #ffffff !important;
+  background-color: rgba(37, 99, 235, 0.35) !important;
 }
 
-.code-editor-host .cm-editor .cm-selectionBackground {
-  background-color: #2563eb !important;
+.code-editor-host .cm-editor .cm-selectionBackground,
+.code-editor-host .cm-editor .cm-selectionLayer .cm-selectionBackground {
+  background-color: rgba(37, 99, 235, 0.35) !important;
 }
 
-.code-editor-host .cm-editor.cm-focused .cm-selectionBackground {
-  background-color: #2563eb !important;
+.code-editor-host .cm-editor.cm-focused .cm-selectionBackground,
+.code-editor-host .cm-editor.cm-focused .cm-selectionLayer .cm-selectionBackground {
+  background-color: rgba(37, 99, 235, 0.45) !important;
 }
 
 .code-editor-host .cm-editor .cm-selectionLayer span {
-  background-color: #2563eb !important;
+  background-color: rgba(37, 99, 235, 0.45) !important;
 }
 
 .code-editor-host .cm-searchMatch {
