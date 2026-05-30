@@ -233,6 +233,24 @@ run_panel_update() {
   exec /bin/bash "${SOURCE_DIR}/installer/update.sh"
 }
 
+write_modsec_main_conf() {
+  {
+    [[ -f /etc/modsecurity/modsecurity.conf ]] && echo "Include /etc/modsecurity/modsecurity.conf"
+    [[ -f /etc/modsecurity/crs/crs-setup.conf ]] && echo "Include /etc/modsecurity/crs/crs-setup.conf"
+    [[ -f /etc/modsecurity/crs/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf ]] && echo "Include /etc/modsecurity/crs/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf"
+    if compgen -G "/usr/share/modsecurity-crs/rules/*.conf" >/dev/null; then
+      echo "Include /usr/share/modsecurity-crs/rules/*.conf"
+    fi
+    [[ -f /etc/modsecurity/crs/RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf ]] && echo "Include /etc/modsecurity/crs/RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf"
+    if compgen -G "/etc/nginx/modsec/comodo/*.conf" >/dev/null; then
+      echo "Include /etc/nginx/modsec/comodo/*.conf"
+    fi
+    if compgen -G "/etc/nginx/modsec/comodo/rules/*.conf" >/dev/null; then
+      echo "Include /etc/nginx/modsec/comodo/rules/*.conf"
+    fi
+  } >/etc/nginx/modsec/bpanel-main.conf
+}
+
 install_waf_engine() {
   export DEBIAN_FRONTEND=noninteractive
   if ! dpkg -s libnginx-mod-http-modsecurity >/dev/null 2>&1; then
@@ -251,12 +269,7 @@ install_waf_engine() {
     install -d /etc/nginx/modules-enabled
     ln -sfn /usr/share/nginx/modules-available/mod-http-modsecurity.conf /etc/nginx/modules-enabled/50-mod-http-modsecurity.conf
   fi
-  cat >/etc/nginx/modsec/bpanel-main.conf <<'MODSEC'
-IncludeOptional /etc/modsecurity/*.conf
-IncludeOptional /usr/share/modsecurity-crs/owasp-crs.load
-IncludeOptional /etc/nginx/modsec/comodo/*.conf
-IncludeOptional /etc/nginx/modsec/comodo/rules/*.conf
-MODSEC
+  write_modsec_main_conf
   nginx -t
   systemctl reload nginx
   echo "WAF engine installed. Put Comodo/CWAF rule files under /etc/nginx/modsec/comodo/ if your Comodo account provides them."
@@ -771,14 +784,14 @@ case "$cmd" in
   # ---- WP-CLI as www-data ----------------------------------------------
   wp)
     [[ $# -ge 1 ]] || deny "usage: wp <args...>"
-    exec runuser -u www-data -- /usr/local/bin/wp "$@"
+    exec runuser -u www-data -- env HOME=/var/www WP_CLI_PHP_ARGS='-d pcre.jit=0' php -d pcre.jit=0 /usr/local/bin/wp "$@"
     ;;
 
   wp-site)
     [[ $# -ge 2 ]] || deny "usage: wp-site <site-user> <args...>"
     user="$1"; shift
     require_linux_user "$user"
-    exec runuser -u "$user" -- /usr/local/bin/wp "$@"
+    exec runuser -u "$user" -- env HOME="$HOME_ROOT/$user" WP_CLI_PHP_ARGS='-d pcre.jit=0' php -d pcre.jit=0 /usr/local/bin/wp "$@"
     ;;
 
   # ---- crontab managed for www-data ------------------------------------

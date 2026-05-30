@@ -78,6 +78,7 @@ def install_wordpress(
     admin_email: str,
     php_version: str,
     linux_user: str | None = None,
+    root_path: str | None = None,
 ) -> str:
     safe_user = _safe_value(admin_user, WP_USER_RE, "WordPress admin username")
     safe_title = _safe_value(title, WP_TITLE_RE, "WordPress site title")
@@ -85,7 +86,7 @@ def install_wordpress(
     if not isinstance(admin_password, str) or len(admin_password) < 10 or "\x00" in admin_password:
         raise ValueError("WordPress admin password must be at least 10 characters")
 
-    root = Path(site_root(domain))
+    root = Path(root_path or site_root(domain))
     public = root / "public"
     linux_user = linux_user or site_users.ensure_site_runtime(domain, str(root), php_version)
     wp_path = f"--path={public}"

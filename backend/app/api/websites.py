@@ -76,6 +76,7 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
                 str(payload.admin_email),
                 payload.php_version,
                 linux_user,
+                root_path=root_path,
             )
         except (RuntimeError, ValueError) as exc:
             mariadb.drop_database(db_info["db_name"], db_info["db_user"])
