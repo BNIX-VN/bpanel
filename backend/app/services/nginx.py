@@ -12,6 +12,7 @@ TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates" / "nginx"
 
 ALLOWED_PHP_VERSIONS = {"8.3", "8.4"}
 ALLOWED_APP_TYPES = {"wordpress", "php", "static"}
+ALLOWED_LOG_KINDS = {"access", "error"}
 DOMAIN_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+")
 MAX_FULL_CONFIG_BYTES = 128 * 1024
 WAF_BLOCK = """    # BPANEL WAF BEGIN
@@ -80,6 +81,35 @@ def _vhost_path(domain: str) -> Path:
     if not DOMAIN_RE.fullmatch(safe_domain):
         raise ValueError("Invalid domain")
     return Path(settings.nginx_sites_available) / f"{safe_domain}.conf"
+
+
+def _safe_domain(domain: str) -> str:
+    safe_domain = (domain or "").strip().lower()
+    if not DOMAIN_RE.fullmatch(safe_domain):
+        raise ValueError("Invalid domain")
+    return safe_domain
+
+
+def _check_log_kind(kind: str) -> str:
+    if kind not in ALLOWED_LOG_KINDS:
+        raise ValueError("Log kind must be access or error")
+    return kind
+
+
+def _check_tail_lines(lines: int) -> int:
+    try:
+        value = int(lines)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Log lines must be a number") from exc
+    if value < 1 or value > 5000:
+        raise ValueError("Log lines must be between 1 and 5000")
+    return value
+
+
+def _log_path(domain: str, kind: str) -> Path:
+    safe_domain = _safe_domain(domain)
+    safe_kind = _check_log_kind(kind)
+    return Path("/var/log/nginx") / f"{safe_domain}.{safe_kind}.log"
 
 
 def validate_custom_nginx(content: Optional[str]) -> str:
@@ -442,6 +472,30 @@ def read_vhost_config(domain: str) -> str:
     if not target.exists():
         raise FileNotFoundError(str(target))
     return target.read_text(encoding="utf-8")
+
+
+def read_site_log(domain: str, kind: str = "access", lines: int = 200) -> dict:
+    safe_domain = _safe_domain(domain)
+    safe_kind = _check_log_kind(kind)
+    safe_lines = _check_tail_lines(lines)
+    path = _log_path(safe_domain, safe_kind)
+    result = shell.privileged(
+        "site-log-read",
+        helper_args=[safe_domain, safe_kind, str(safe_lines)],
+        check=False,
+        fallback=["tail", "-n", str(safe_lines), str(path)],
+    )
+    missing = "BPANEL_LOG_MISSING=1" in (result.stderr or "")
+    if result.returncode != 0 and not missing:
+        raise RuntimeError((result.stderr or result.stdout or "Cannot read log file").strip())
+    return {
+        "domain": safe_domain,
+        "kind": safe_kind,
+        "path": str(path),
+        "lines": safe_lines,
+        "content": result.stdout or "",
+        "exists": not missing,
+    }
 
 
 def update_full_config(domain: str, content: str) -> str:

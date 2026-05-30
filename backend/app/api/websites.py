@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 from typing import List
 
@@ -10,7 +10,7 @@ from app.core.database import get_db
 from app.core.permissions import Role, ensure_role, is_admin_role
 from app.core.secrets import encrypt
 from app.models.entities import DatabaseAccount, User, Website
-from app.schemas.schemas import WebsiteCreate, WebsiteNginxConfig, WebsiteNginxCustom, WebsiteOut, WebsiteUpdate, WebsiteWafUpdate
+from app.schemas.schemas import WebsiteCreate, WebsiteLogOut, WebsiteNginxConfig, WebsiteNginxCustom, WebsiteOut, WebsiteUpdate, WebsiteWafUpdate
 from app.services import mariadb, nginx, site_users, ssl, storage_quota, wordpress
 from app.services.audit import log_action
 
@@ -302,6 +302,25 @@ def set_website_waf(website_id: int, payload: WebsiteWafUpdate, request: Request
     db.refresh(website)
     log_action(db, current_user.id, "update_waf", website.domain, "enabled" if payload.waf_enabled else "disabled", request=request)
     return website
+
+
+@router.get("/{website_id}/logs", response_model=WebsiteLogOut)
+def get_website_log(
+    website_id: int,
+    kind: str = Query(default="access", pattern="^(access|error)$"),
+    lines: int = Query(default=200, ge=1, le=5000),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    website = db.query(Website).filter(Website.id == website_id).first()
+    if not website:
+        raise HTTPException(status_code=404, detail="Website not found")
+    if website.owner_id != current_user.id:
+        ensure_role(current_user.role, Role.admin)
+    try:
+        return nginx.read_site_log(website.domain, kind, lines)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.put("/{website_id}/nginx-custom", response_model=WebsiteOut)

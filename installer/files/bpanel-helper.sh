@@ -363,6 +363,11 @@ require_port() {
   (( $1 >= 1 && $1 <= 65535 )) || deny "port out of range: $1"
 }
 
+require_tail_lines() {
+  [[ "$1" =~ ^[0-9]{1,4}$ ]] || deny "invalid log line count: $1"
+  (( $1 >= 1 && $1 <= 5000 )) || deny "log line count out of range: $1"
+}
+
 require_proto() {
   [[ "$1" == "tcp" || "$1" == "udp" ]] || deny "invalid protocol: $1"
 }
@@ -382,6 +387,25 @@ require_linux_user() {
 require_site_domain_segment() {
   [[ "$1" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]] \
     || deny "invalid site domain path segment: $1"
+}
+
+read_site_log() {
+  local domain="$1" kind="$2" lines="$3" path resolved
+  require_domain "$domain"
+  [[ "$kind" == "access" || "$kind" == "error" ]] || deny "invalid log kind: $kind"
+  require_tail_lines "$lines"
+  path="/var/log/nginx/${domain}.${kind}.log"
+  resolved=$(readlink -m "$path") || deny "cannot resolve log path"
+  case "$resolved" in
+    /var/log/nginx/*) ;;
+    *) deny "log path outside /var/log/nginx: $resolved" ;;
+  esac
+  echo "BPANEL_LOG_PATH=$resolved" >&2
+  if [[ ! -f "$resolved" ]]; then
+    echo "BPANEL_LOG_MISSING=1" >&2
+    return 0
+  fi
+  tail -n "$lines" -- "$resolved"
 }
 
 require_managed_path() {
@@ -781,6 +805,11 @@ case "$cmd" in
     target=$(require_managed_path "$1")
     install -d -o www-data -g www-data -m 0775 "$target"
     install -d -o www-data -g www-data -m 0775 "$target/public"
+    ;;
+
+  site-log-read)
+    [[ $# -eq 3 ]] || deny "usage: site-log-read <domain> <access|error> <lines>"
+    read_site_log "$1" "$2" "$3"
     ;;
 
   # ---- WP-CLI as www-data ----------------------------------------------

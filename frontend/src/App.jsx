@@ -137,6 +137,7 @@ function App() {
   const [installSslAfterCreate, setInstallSslAfterCreate] = useState(false);
   const [installWordPress, setInstallWordPress] = useState(true);
   const [nginxCustomEditing, setNginxCustomEditing] = useState(null); // {id, domain, content}
+  const [logViewer, setLogViewer] = useState(null); // {id, domain, kind, lines, path, content, exists}
   const [websites, setWebsites] = useState([]);
   const [databases, setDatabases] = useState([]);
   const [newDatabase, setNewDatabase] = useState({ website_id: '', db_name: '' });
@@ -234,7 +235,7 @@ function App() {
     setTwoFactorSetup(null);
     setTwoFactorCode('');
     setUpdatesStatus(null);
-    setWafStatus(null);
+    setLogViewer(null);
     setSelectedWebsiteId('');
     setMobileMenuOpen(false);
     setPage('dashboard');
@@ -617,6 +618,29 @@ function App() {
       setNginxCustomEditing(null);
       refreshAll();
     }
+  }
+
+  async function loadWebsiteLog(siteOrId = logViewer?.id, kind = logViewer?.kind || 'access', lines = logViewer?.lines || 200, domainLabel = logViewer?.domain || '') {
+    const websiteId = typeof siteOrId === 'object' ? siteOrId.id : siteOrId;
+    const domainName = typeof siteOrId === 'object' ? siteOrId.domain : domainLabel;
+    if (!websiteId) return;
+    const data = await request(`/websites/${websiteId}/logs?kind=${encodeURIComponent(kind)}&lines=${encodeURIComponent(lines)}`, {}, `Loading ${kind} log...`);
+    if (data) {
+      setLogViewer({
+        id: websiteId,
+        domain: data.domain || domainName,
+        kind: data.kind || kind,
+        lines: data.lines || lines,
+        path: data.path || '',
+        content: data.content || '',
+        exists: !!data.exists,
+      });
+    }
+  }
+
+  async function openWebsiteLogs(site) {
+    setLogViewer({ id: site.id, domain: site.domain, kind: 'access', lines: 200, path: '', content: '', exists: true });
+    await loadWebsiteLog(site, 'access', 200, site.domain);
   }
 
   async function toggleWebsiteWaf(site) {
@@ -1463,6 +1487,7 @@ function App() {
               </select>}
               {site.app_type !== 'static' && <button disabled={!!loading || (websitePhpVersions[site.id] || site.php_version) === site.php_version} onClick={() => changeWebsitePhpVersion(site)}>Change PHP</button>}
               <button disabled={!!loading} onClick={() => openWebsiteFileManager(site)}><FolderOpen size={14}/> Files</button>
+              <button disabled={!!loading} onClick={() => openWebsiteLogs(site)}><FileText size={14}/> Logs</button>
               {isAdmin && <button disabled={!!loading} onClick={() => openNginxCustom(site)}><Code2 size={14}/> Nginx</button>}
               {isAdmin && <button disabled={!!loading} onClick={() => toggleWebsiteWaf(site)}><Shield size={14}/> {site.waf_enabled ? 'WAF off' : 'WAF on'}</button>}
               {site.app_type === 'wordpress' && <button disabled={!!loading} onClick={() => fixWordPressPermissions(site.id)}>Fix permissions</button>}
@@ -1493,6 +1518,30 @@ function App() {
           <button disabled={!!loading} onClick={saveNginxCustom}>Save and reload Nginx</button>
           <button className="secondary-light" disabled={!!loading} onClick={() => setNginxCustomEditing(null)}>Cancel</button>
         </div>
+      </section>}
+      {logViewer && <section className="section nginx-modal log-viewer">
+        <div className="section-title">
+          <div className="nginx-config-title">
+            <h2>Nginx logs - {logViewer.domain}</h2>
+            <p className="hint">{logViewer.path || `/var/log/nginx/${logViewer.domain}.${logViewer.kind}.log`}</p>
+          </div>
+          <button className="secondary-light" onClick={() => setLogViewer(null)}><X size={14}/> Close</button>
+        </div>
+        <div className="log-toolbar">
+          <div className="segmented-control">
+            <button className={logViewer.kind === 'access' ? 'active' : ''} disabled={!!loading} onClick={() => loadWebsiteLog(logViewer.id, 'access', logViewer.lines, logViewer.domain)}>Access</button>
+            <button className={logViewer.kind === 'error' ? 'active' : ''} disabled={!!loading} onClick={() => loadWebsiteLog(logViewer.id, 'error', logViewer.lines, logViewer.domain)}>Error</button>
+          </div>
+          <select value={logViewer.lines} onChange={e => loadWebsiteLog(logViewer.id, logViewer.kind, Number(e.target.value), logViewer.domain)} disabled={!!loading}>
+            <option value={100}>100 lines</option>
+            <option value={200}>200 lines</option>
+            <option value={500}>500 lines</option>
+            <option value={1000}>1000 lines</option>
+            <option value={2000}>2000 lines</option>
+          </select>
+          <button disabled={!!loading} onClick={() => loadWebsiteLog(logViewer.id, logViewer.kind, logViewer.lines, logViewer.domain)}><RefreshCw size={14}/> Refresh</button>
+        </div>
+        <pre className="log-output">{logViewer.exists ? (logViewer.content || 'Log is empty.') : 'Log file has not been created yet.'}</pre>
       </section>}
     </>;
   }

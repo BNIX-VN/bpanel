@@ -232,6 +232,15 @@ class WebsiteWafUpdate(BaseModel):
     waf_enabled: bool
 
 
+class WebsiteLogOut(BaseModel):
+    domain: str
+    kind: Literal["access", "error"]
+    path: str
+    lines: int
+    content: str = ""
+    exists: bool = False
+
+
 class SystemAutoUpdateConfig(BaseModel):
     enabled: bool = True
     mode: Literal["security", "all"] = "security"
