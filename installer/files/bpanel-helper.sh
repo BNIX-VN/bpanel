@@ -236,6 +236,8 @@ run_panel_update() {
 write_modsec_main_conf() {
   {
     [[ -f /etc/modsecurity/modsecurity.conf ]] && echo "Include /etc/modsecurity/modsecurity.conf"
+    echo "SecRuleEngine On"
+    echo "SecRequestBodyAccess On"
     [[ -f /etc/modsecurity/crs/crs-setup.conf ]] && echo "Include /etc/modsecurity/crs/crs-setup.conf"
     [[ -f /etc/modsecurity/crs/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf ]] && echo "Include /etc/modsecurity/crs/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf"
     if compgen -G "/usr/share/modsecurity-crs/rules/*.conf" >/dev/null; then
