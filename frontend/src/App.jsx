@@ -41,6 +41,11 @@ const editorTheme = EditorView.theme({
   '.cm-selectionBackground': { backgroundColor: '#2563eb !important' },
   '.cm-cursor': { borderLeftColor: '#0b5fbd' },
   '.cm-matchingBracket, .cm-nonmatchingBracket': { backgroundColor: '#dbeafe', outline: '1px solid #93c5fd' },
+  // Native browser selection styling - nền xanh chữ trắng
+  '& ::selection': { backgroundColor: '#2563eb', color: '#ffffff' },
+  '& .cm-selectionBackground ::selection': { backgroundColor: '#2563eb', color: '#ffffff' },
+  '.cm-content ::selection': { backgroundColor: '#2563eb', color: '#ffffff' },
+  '.cm-line ::selection': { backgroundColor: '#2563eb', color: '#ffffff' },
 });
 
 function languageExtension(mode) {
