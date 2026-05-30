@@ -115,6 +115,14 @@ NGINX
   [[ -n "$host" ]] && sed -i -E "s#(\$cfg\['PmaAbsoluteUri'\] = ')[^']+('#\1${tools_scheme}://${host}/phpmyadmin/\2#" /etc/phpmyadmin/conf.d/bpanel-signon.php 2>/dev/null || true
 }
 
+configure_fastcgi_cache() {
+  install -d -o www-data -g www-data -m 0755 /var/cache/nginx/bpanel-fastcgi
+  cat >/etc/nginx/conf.d/00-bpanel-fastcgi-cache.conf <<'NGINX'
+fastcgi_cache_path /var/cache/nginx/bpanel-fastcgi levels=1:2 keys_zone=BPANEL_FASTCGI:100m inactive=60m max_size=512m use_temp_path=off;
+fastcgi_cache_key "$scheme$request_method$host$request_uri";
+NGINX
+}
+
 install_panel_runtime() {
   local env_file="$APP_DIR/backend/.env"
   [[ -f "$env_file" ]] || return 0
@@ -341,6 +349,8 @@ if [[ ! -f "$APP_DIR/backend/.env" ]]; then
 fi
 log "Installing direct panel runtime on port 2222"
 install_panel_runtime
+log "Configuring Nginx FastCGI cache"
+configure_fastcgi_cache
 if [[ ! -x "$APP_DIR/backend/.venv/bin/uvicorn" ]]; then
   log "Recreating Python virtualenv (was missing)"
   rm -rf "$APP_DIR/backend/.venv"
@@ -409,7 +419,7 @@ if id -u bpanel >/dev/null 2>&1; then
   sudo -u bpanel env HOME="$APP_DIR" BPANEL_USE_HELPER=true "$APP_DIR/backend/.venv/bin/python" - <<'PY'
 from app.core.database import SessionLocal
 from app.models.entities import Website
-from app.services import site_users
+from app.services import nginx, site_users
 
 with SessionLocal() as db:
     for website in db.query(Website).all():
@@ -418,6 +428,8 @@ with SessionLocal() as db:
                 runtime_php_version = website.php_version if (website.app_type or "wordpress") in {"wordpress", "php"} else None
                 site_users.ensure_site_runtime(website.domain, website.root_path, runtime_php_version, website.linux_user)
             site_users.fix_site_permissions(website.root_path, website.linux_user)
+            if (website.app_type or "wordpress") == "wordpress":
+                nginx.ensure_wordpress_fastcgi_cache(website.domain)
         except Exception as exc:
             print(f"WARNING: could not refresh permissions for {website.domain}: {exc}")
 PY

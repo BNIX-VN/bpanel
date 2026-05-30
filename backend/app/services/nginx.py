@@ -19,6 +19,23 @@ WAF_BLOCK = """    # BPANEL WAF BEGIN
     modsecurity on;
     modsecurity_rules_file /etc/nginx/modsec/bpanel-main.conf;
     # BPANEL WAF END"""
+FASTCGI_CACHE_SERVER_BLOCK = """    # BPANEL FASTCGI CACHE SERVER BEGIN
+    set $bpanel_skip_cache 0;
+    if ($request_method = POST) { set $bpanel_skip_cache 1; }
+    if ($query_string != "") { set $bpanel_skip_cache 1; }
+    if ($request_uri ~* "/wp-admin/|/wp-login.php|/xmlrpc.php|wp-.*.php|/feed/|sitemap(_index)?\\.xml") { set $bpanel_skip_cache 1; }
+    if ($http_cookie ~* "comment_author|wordpress_[a-f0-9]+|wordpress_logged_in|wp-postpass|woocommerce_items_in_cart|woocommerce_cart_hash|wp_woocommerce_session|edd_items_in_cart") { set $bpanel_skip_cache 1; }
+    add_header X-FastCGI-Cache $upstream_cache_status always;
+    # BPANEL FASTCGI CACHE SERVER END"""
+FASTCGI_CACHE_LOCATION_BLOCK = """        # BPANEL FASTCGI CACHE LOCATION BEGIN
+        fastcgi_cache BPANEL_FASTCGI;
+        fastcgi_cache_valid 200 301 302 10m;
+        fastcgi_cache_valid 404 1m;
+        fastcgi_cache_bypass $bpanel_skip_cache;
+        fastcgi_no_cache $bpanel_skip_cache;
+        fastcgi_cache_lock on;
+        fastcgi_cache_use_stale error timeout invalid_header updating http_500 http_503;
+        # BPANEL FASTCGI CACHE LOCATION END"""
 
 # Directives that must never appear inside a per-site custom block.
 # This is a conservative deny-list; safer than allow-list because nginx has
@@ -274,6 +291,54 @@ def _replace_waf_block(content: str, enabled: bool) -> str:
     raise ValueError("Cannot find server block for WAF directives")
 
 
+def _replace_fastcgi_cache_blocks(content: str, enabled: bool = True) -> str:
+    server_pattern = re.compile(
+        r"\n?    # BPANEL FASTCGI CACHE SERVER BEGIN\n.*?\n    # BPANEL FASTCGI CACHE SERVER END",
+        re.DOTALL,
+    )
+    location_pattern = re.compile(
+        r"\n?        # BPANEL FASTCGI CACHE LOCATION BEGIN\n.*?\n        # BPANEL FASTCGI CACHE LOCATION END",
+        re.DOTALL,
+    )
+    cleaned = server_pattern.sub("", content)
+    cleaned = location_pattern.sub("", cleaned)
+    if not enabled:
+        return cleaned.rstrip() + "\n"
+    if "fastcgi_pass" not in cleaned:
+        raise ValueError("Cannot find a PHP FastCGI location")
+
+    if "    client_max_body_size " in cleaned:
+        cleaned = re.sub(
+            r"(    client_max_body_size [^;]+;)",
+            lambda match: f"{match.group(1)}\n\n{FASTCGI_CACHE_SERVER_BLOCK}",
+            cleaned,
+            count=1,
+        )
+    elif "    server_tokens off;" in cleaned:
+        cleaned = cleaned.replace("    server_tokens off;", f"    server_tokens off;\n\n{FASTCGI_CACHE_SERVER_BLOCK}", 1)
+    else:
+        cleaned = re.sub(
+            r"(    server_name [^;]+;)",
+            lambda match: f"{match.group(1)}\n\n{FASTCGI_CACHE_SERVER_BLOCK}",
+            cleaned,
+            count=1,
+        )
+
+    if re.search(r"fastcgi_read_timeout\s+[^;]+;", cleaned):
+        return re.sub(
+            r"(        fastcgi_read_timeout\s+[^;]+;)",
+            lambda match: f"{match.group(1)}\n{FASTCGI_CACHE_LOCATION_BLOCK}",
+            cleaned,
+            count=1,
+        )
+    return re.sub(
+        r"(        fastcgi_pass\s+[^;]+;)",
+        lambda match: f"{match.group(1)}\n{FASTCGI_CACHE_LOCATION_BLOCK}",
+        cleaned,
+        count=1,
+    )
+
+
 def _test_and_reload(target: Path, old_content: Optional[str]) -> None:
     test = shell.privileged("nginx-test", check=False, fallback=["nginx", "-t"])
     if test.returncode != 0:
@@ -520,6 +585,25 @@ def update_waf_block(domain: str, enabled: bool) -> str:
         raise FileNotFoundError(str(target))
     existing = target.read_text(encoding="utf-8")
     new_content = _replace_waf_block(existing, enabled)
+    target.with_suffix(target.suffix + ".bak").write_text(existing, encoding="utf-8")
+    target.write_text(new_content, encoding="utf-8")
+    _test_and_reload(target, existing)
+    return str(target)
+
+
+def ensure_wordpress_fastcgi_cache(domain: str) -> str:
+    target = _vhost_path(domain)
+    if settings.command_dry_run:
+        return _replace_fastcgi_cache_blocks(
+            "server {\n    server_name example.com;\n    client_max_body_size 1100M;\n    location ~ \\.php$ {\n        fastcgi_pass unix:/run/php/php8.3-fpm.sock;\n        fastcgi_read_timeout 300;\n    }\n}\n",
+            True,
+        )
+    if not target.exists():
+        raise FileNotFoundError(str(target))
+    existing = target.read_text(encoding="utf-8")
+    new_content = _replace_fastcgi_cache_blocks(existing, True)
+    if new_content == existing:
+        return str(target)
     target.with_suffix(target.suffix + ".bak").write_text(existing, encoding="utf-8")
     target.write_text(new_content, encoding="utf-8")
     _test_and_reload(target, existing)

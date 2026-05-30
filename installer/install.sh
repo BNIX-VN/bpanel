@@ -223,6 +223,14 @@ install_php() {
   update-alternatives --set php "/usr/bin/php${PHP_DEFAULT}" || true
 }
 
+configure_fastcgi_cache() {
+  install -d -o www-data -g www-data -m 0755 /var/cache/nginx/bpanel-fastcgi
+  cat >/etc/nginx/conf.d/00-bpanel-fastcgi-cache.conf <<'NGINX'
+fastcgi_cache_path /var/cache/nginx/bpanel-fastcgi levels=1:2 keys_zone=BPANEL_FASTCGI:100m inactive=60m max_size=512m use_temp_path=off;
+fastcgi_cache_key "$scheme$request_method$host$request_uri";
+NGINX
+}
+
 write_modsec_main_conf() {
   {
     [[ -f /etc/modsecurity/modsecurity.conf ]] && echo "Include /etc/modsecurity/modsecurity.conf"
@@ -772,6 +780,9 @@ main() {
 
   log "Installing PHP ${PHP_VERSIONS} from Ondrej PPA"
   install_php
+
+  log "Configuring Nginx FastCGI cache"
+  configure_fastcgi_cache
 
   log "Installing Nginx ModSecurity WAF engine"
   if ! install_waf_engine; then
