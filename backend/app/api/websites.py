@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from jinja2 import Environment, FileSystemLoader
 from sqlalchemy.orm import Session
 from typing import List
 
@@ -13,6 +14,8 @@ from app.models.entities import DatabaseAccount, User, Website
 from app.schemas.schemas import WebsiteCreate, WebsiteLogOut, WebsiteNginxConfig, WebsiteNginxCustom, WebsiteOut, WebsiteUpdate, WebsiteWafUpdate
 from app.services import mariadb, nginx, site_users, ssl, storage_quota, wordpress
 from app.services.audit import log_action
+
+_PLACEHOLDER_TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates" / "nginx"
 
 router = APIRouter(prefix="/websites", tags=["websites"])
 
@@ -105,12 +108,9 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
             if not settings.command_dry_run:
                 placeholder = public / "index.html"
                 if not placeholder.exists():
-                    placeholder.write_text(
-                        f"<!doctype html><html><body><h1>{payload.domain}</h1>"
-                        "<p>Site created by BPanel. Upload your files to the public folder.</p>"
-                        "</body></html>",
-                        encoding="utf-8",
-                    )
+                    env = Environment(loader=FileSystemLoader(_PLACEHOLDER_TEMPLATE_DIR), autoescape=False)
+                    tmpl = env.get_template("placeholder.html.j2")
+                    placeholder.write_text(tmpl.render(domain=payload.domain), encoding="utf-8")
                 site_users.fix_site_path(str(public), linux_user)
             nginx.write_vhost(
                 payload.domain,
