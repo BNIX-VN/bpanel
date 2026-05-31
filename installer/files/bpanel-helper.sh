@@ -230,7 +230,26 @@ TIMER
 
 run_panel_update() {
   [[ -f "${SOURCE_DIR}/installer/update.sh" ]] || deny "missing ${SOURCE_DIR}/installer/update.sh"
-  exec /bin/bash "${SOURCE_DIR}/installer/update.sh"
+  local unit="bpanel-panel-update"
+  if systemctl is-active --quiet "${unit}.service"; then
+    echo "Panel update is already running: ${unit}.service"
+    return 0
+  fi
+  if command -v systemd-run >/dev/null 2>&1; then
+    systemd-run \
+      --unit="$unit" \
+      --collect \
+      --description="Update BPanel from GitHub" \
+      --property="Environment=SOURCE_DIR=${SOURCE_DIR}" \
+      --property="Environment=APP_DIR=${APP_DIR}" \
+      /bin/bash "${SOURCE_DIR}/installer/update.sh"
+    echo "Panel update started: ${unit}.service"
+    echo "Check progress: journalctl -u ${unit}.service -f"
+    return 0
+  fi
+  nohup env SOURCE_DIR="$SOURCE_DIR" APP_DIR="$APP_DIR" /bin/bash "${SOURCE_DIR}/installer/update.sh" \
+    >/var/log/bpanel-panel-update.log 2>&1 &
+  echo "Panel update started in background. Log: /var/log/bpanel-panel-update.log"
 }
 
 write_modsec_main_conf() {
@@ -678,6 +697,10 @@ case "$cmd" in
     echo "Panel auto update timer:"
     systemctl is-enabled bpanel-auto-update.timer 2>/dev/null || true
     systemctl list-timers bpanel-auto-update.timer apt-daily-upgrade.timer --no-pager 2>/dev/null || true
+    echo ""
+    echo "Panel update service:"
+    systemctl is-active bpanel-panel-update.service 2>/dev/null || true
+    journalctl -u bpanel-panel-update.service -n 20 --no-pager 2>/dev/null || true
     ;;
 
   updates-os-run)
