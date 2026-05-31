@@ -519,13 +519,25 @@ systemctl restart bpanel-api
 # --- Frontend --------------------------------------------------------------
 log "Building frontend (clean rebuild)"
 cd "$APP_DIR/frontend"
+
+# Check Node.js availability
+if ! command -v node >/dev/null 2>&1; then
+  log "WARNING: Node.js not found, installing..."
+  DEBIAN_FRONTEND=noninteractive apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs npm
+fi
+echo "Node version: $(node --version)"
+echo "npm version: $(npm --version)"
+
 rm -rf dist .vite node_modules/.vite
 
 if [[ ! -d node_modules ]] || [[ package.json -nt node_modules ]]; then
+  log "Installing npm dependencies..."
   rm -rf node_modules package-lock.json
   npm install
 fi
-VITE_API_URL=/api npm run build
+log "Building frontend with VITE_API_URL=/api..."
+VITE_API_URL=/api npm run build 2>&1 || { log "BUILD FAILED"; exit 1; }
 
 [[ -f dist/index.html ]] || fail "Frontend build failed: dist/index.html missing"
 HASHED=$(grep -oE 'index-[a-zA-Z0-9_-]+\.js' dist/index.html | head -n1 || true)
