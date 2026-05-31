@@ -677,6 +677,8 @@ def install_php_version(php_version: str, current_user: User = Depends(get_curre
         result = php.install_php(php_version)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     return result
 
 

@@ -46,3 +46,24 @@ def test_update_php_ini_writes_through_helper(monkeypatch):
     assert captured["helper_args"] == ["8.2"]
     assert "memory_limit = 768M" in captured["input"]
     assert "systemctl restart php$1-fpm" in captured["fallback"][2]
+
+
+def test_install_php_repairs_existing_version(monkeypatch):
+    captured = {}
+
+    def fake_privileged(helper_command, helper_args=None, fallback=None, **kwargs):
+        captured.update({"helper_command": helper_command, "helper_args": helper_args, "fallback": fallback})
+        return SimpleNamespace(stdout="ok", stderr="", returncode=0)
+
+    monkeypatch.setattr(php.settings, "command_dry_run", False)
+    monkeypatch.setattr(php.shell, "privileged", fake_privileged)
+    monkeypatch.setattr(php.Path, "exists", lambda self: str(self).replace("\\", "/") == "/etc/php/8.3/fpm/php-fpm.conf")
+
+    result = php.install_php("8.3")
+
+    assert result["status"] == "ensured"
+    assert result["output"] == "ok"
+    assert captured["helper_command"] == "php-install"
+    assert captured["helper_args"] == ["8.3"]
+    assert "php8.3-intl" in captured["fallback"]
+    assert "php8.3-imagick" in captured["fallback"]

@@ -1323,6 +1323,12 @@ function App() {
     if (data) { setNotice(`PHP ${version} installed successfully.`); await loadPhpVersions(); }
   }
 
+  async function repairPhpExtensions(version) {
+    if (!confirm(`Repair PHP ${version} extensions? This will install the BPanel extension set and reload php${version}-fpm.`)) return;
+    const data = await request(`/maintenance/php-versions/${version}/install`, { method: 'POST' }, `Repairing PHP ${version} extensions...`);
+    if (data) { setNotice(`PHP ${version} extensions repaired.`); await loadPhpVersions(); }
+  }
+
   async function loadFirewall() {
     const data = await request('/firewall/status', {}, 'Loading firewall...');
     if (data) setFirewallStatus(data);
@@ -2071,6 +2077,12 @@ function App() {
         <h3>Install PHP</h3>
         <div className="php-install-grid">
           {notInstalled.map(v => <button key={v} disabled={!!loading} onClick={() => installPhpVersion(v)}>+ PHP {v}</button>)}
+        </div>
+      </div>}
+      {phpVersions.installed.length > 0 && <div className="user-create-card" style={{ marginTop: 16 }}>
+        <h3>Repair PHP extensions</h3>
+        <div className="php-install-grid">
+          {phpVersions.installed.map(v => <button key={v} disabled={!!loading} onClick={() => repairPhpExtensions(v)}>PHP {v}</button>)}
         </div>
       </div>}
     </section>;
