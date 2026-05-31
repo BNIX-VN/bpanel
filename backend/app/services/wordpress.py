@@ -50,7 +50,6 @@ def _render_wp_config(db_name: str, db_user: str, db_password: str) -> str:
         f"{_generate_wp_salts()}\n"
         "\n"
         "define('WP_DEBUG', false);\n"
-        "define('DISALLOW_FILE_EDIT', true);\n"
         "if ( ! defined('ABSPATH') ) {\n"
         "    define('ABSPATH', __DIR__ . '/');\n"
         "}\n"
