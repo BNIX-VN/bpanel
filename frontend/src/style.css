@@ -641,6 +641,7 @@ button:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
 .user-form label span,.user-create-card label span{font-size:12px;text-transform:none;letter-spacing:0;color:var(--text-muted)}
 .user-create-card{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px}
 .user-create-card button{align-self:end}
+.user-create-card .php-install-grid{display:flex;flex-wrap:wrap;gap:8px;grid-column:1/-1}
 .assign-row{display:grid;grid-template-columns:1fr 1fr auto;gap:10px}
 .check-line{display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px;color:var(--text-secondary)}
 .check-line input{width:18px;height:18px;min-height:0;flex:none;accent-color:var(--primary)}
