@@ -88,6 +88,29 @@ def test_chmod_entry_updates_mode(tmp_path):
     assert file_manager.list_files(_website(root), "public_html")[0]["mode"] == "600"
 
 
+def test_chmod_entry_accepts_read_only_file_mode(tmp_path):
+    root = tmp_path / "site"
+    public = root / "public_html"
+    public.mkdir(parents=True)
+    target = public / "index.php"
+    target.write_text("<?php echo 'ok';\n", encoding="utf-8")
+
+    file_manager.chmod_entry(_website(root), "public_html/index.php", "444")
+
+    assert stat.S_IMODE(target.stat().st_mode) == 0o444
+
+
+def test_chmod_entry_rejects_executable_file_mode(tmp_path):
+    root = tmp_path / "site"
+    public = root / "public_html"
+    public.mkdir(parents=True)
+    target = public / "index.php"
+    target.write_text("<?php echo 'ok';\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="execute bits"):
+        file_manager.chmod_entry(_website(root), "public_html/index.php", "755")
+
+
 def test_copy_entries_copies_files_and_folders(tmp_path):
     root = tmp_path / "site"
     public = root / "public_html"

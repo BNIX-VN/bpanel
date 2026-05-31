@@ -223,17 +223,24 @@ def chmod_entry(website: Website, relative_path: str, mode: str) -> str:
     numeric_mode = int(clean_mode, 8)
     if numeric_mode > 0o7777:
         raise ValueError("Mode is out of range")
-    # Enforce sensible defaults: files=644, dirs=755. Block world-writable and dangerous modes.
     is_dir = target.is_dir()
     if is_dir:
-        # Directory: owner rwx (7), group r-x (5), other r-x (5)
-        valid_modes = {0o755, 0o750, 0o700, 0o775, 0o770}
+        if numeric_mode & 0o1000 or numeric_mode & 0o4000:
+            raise ValueError("Directory mode cannot include sticky or setuid bits")
+        if numeric_mode & 0o002:
+            raise ValueError("Directory mode cannot be world-writable")
+        if not numeric_mode & 0o100:
+            raise ValueError("Directory owner must have execute permission")
+        for read_bit, execute_bit in ((0o400, 0o100), (0o040, 0o010), (0o004, 0o001)):
+            if numeric_mode & read_bit and not numeric_mode & execute_bit:
+                raise ValueError("Directory read permission requires execute permission")
     else:
-        # File: owner rw- (6), group r-- (4), other r-- (4)
-        valid_modes = {0o644, 0o640, 0o600, 0o664, 0o660}
-    if numeric_mode not in valid_modes:
-        default = "755" if is_dir else "644"
-        raise ValueError(f"Mode must be one of: {', '.join(oct(m)[2:] for m in sorted(valid_modes))}. Suggested: {default}")
+        if numeric_mode & 0o7000:
+            raise ValueError("File mode cannot include special bits")
+        if numeric_mode & 0o111:
+            raise ValueError("File mode cannot include execute bits")
+        if numeric_mode & 0o002:
+            raise ValueError("File mode cannot be world-writable")
     if website.linux_user:
         root = Path(website.root_path).resolve()
         relative = str(target.relative_to(root)).replace("\\", "/") if target != root else "."
