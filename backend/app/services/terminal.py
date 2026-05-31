@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Set
 
+from app.services import site_users
 from app.services.shell import shell
 
 # Whitelist of allowed commands for terminal access
@@ -133,6 +134,20 @@ def resolve_cwd(site_root: str, current_cwd: str, target: str) -> str:
     if not resolved.is_dir():
         raise ValueError(f"Not a directory: {target}")
     return str(resolved)
+
+
+def default_cwd(site_root: str) -> str:
+    """Return the terminal start directory for a website.
+
+    End-user web files live in public_html. Start there when it exists, while
+    still allowing the session to cd back to the website root for framework
+    commands like Composer or Artisan.
+    """
+    root = Path(site_root).resolve(strict=False)
+    document_root = site_users.document_root(root).resolve(strict=False)
+    if document_root.exists() and document_root.is_dir():
+        return str(document_root)
+    return str(root)
 
 
 def _truncate_output(output: str, max_bytes: int = MAX_OUTPUT_BYTES) -> str:

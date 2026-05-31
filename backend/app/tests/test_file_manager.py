@@ -2,6 +2,8 @@ import io
 import stat
 import tarfile
 
+import pytest
+
 from app.models.entities import Website
 from app.services import file_manager
 
@@ -12,7 +14,7 @@ def _website(root):
 
 def test_tar_validation_allows_more_than_legacy_file_limit(tmp_path):
     archive_path = tmp_path / "many.tar.gz"
-    destination = tmp_path / "public"
+    destination = tmp_path / "public_html"
     destination.mkdir()
 
     with tarfile.open(archive_path, "w:gz") as archive:
@@ -27,7 +29,7 @@ def test_tar_validation_allows_more_than_legacy_file_limit(tmp_path):
 
 def test_extract_tar_reopens_after_validation(tmp_path):
     root = tmp_path / "site"
-    public = root / "public"
+    public = root / "public_html"
     public.mkdir(parents=True)
     archive_path = public / "site.tar.gz"
     content = b"hello from archive"
@@ -39,8 +41,8 @@ def test_extract_tar_reopens_after_validation(tmp_path):
 
     file_manager.extract_archive(
         _website(root),
-        "public/site.tar.gz",
-        "public",
+        "public_html/site.tar.gz",
+        "public_html",
         allow_executable=True,
     )
 
@@ -49,7 +51,7 @@ def test_extract_tar_reopens_after_validation(tmp_path):
 
 def test_extract_tar_does_not_overwrite_source_archive(tmp_path):
     root = tmp_path / "site"
-    public = root / "public"
+    public = root / "public_html"
     public.mkdir(parents=True)
     archive_path = public / "site.tar.gz"
 
@@ -63,8 +65,8 @@ def test_extract_tar_does_not_overwrite_source_archive(tmp_path):
 
     file_manager.extract_archive(
         _website(root),
-        "public/site.tar.gz",
-        "public",
+        "public_html/site.tar.gz",
+        "public_html",
         allow_executable=True,
     )
 
@@ -75,12 +77,74 @@ def test_extract_tar_does_not_overwrite_source_archive(tmp_path):
 
 def test_chmod_entry_updates_mode(tmp_path):
     root = tmp_path / "site"
-    public = root / "public"
+    public = root / "public_html"
     public.mkdir(parents=True)
     target = public / ".env"
     target.write_text("APP_ENV=local\n", encoding="utf-8")
 
-    file_manager.chmod_entry(_website(root), "public/.env", "600")
+    file_manager.chmod_entry(_website(root), "public_html/.env", "600")
 
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
-    assert file_manager.list_files(_website(root), "public")[0]["mode"] == "600"
+    assert file_manager.list_files(_website(root), "public_html")[0]["mode"] == "600"
+
+
+def test_copy_entries_copies_files_and_folders(tmp_path):
+    root = tmp_path / "site"
+    public = root / "public_html"
+    public.mkdir(parents=True)
+    (public / "index.php").write_text("hello", encoding="utf-8")
+    (public / "assets").mkdir()
+    (public / "assets" / "app.css").write_text("body{}", encoding="utf-8")
+    destination = root / "copies"
+    destination.mkdir()
+
+    copied = file_manager.copy_entries(
+        _website(root),
+        ["public_html/index.php", "public_html/assets"],
+        "copies",
+        allow_executable=True,
+    )
+
+    assert len(copied) == 2
+    assert (destination / "index.php").read_text(encoding="utf-8") == "hello"
+    assert (destination / "assets" / "app.css").read_text(encoding="utf-8") == "body{}"
+    assert (public / "index.php").exists()
+
+
+def test_move_entries_moves_files_and_folders(tmp_path):
+    root = tmp_path / "site"
+    public = root / "public_html"
+    public.mkdir(parents=True)
+    (public / "index.php").write_text("hello", encoding="utf-8")
+    (public / "assets").mkdir()
+    (public / "assets" / "app.css").write_text("body{}", encoding="utf-8")
+    destination = root / "moved"
+    destination.mkdir()
+
+    moved = file_manager.move_entries(
+        _website(root),
+        ["public_html/index.php", "public_html/assets"],
+        "moved",
+        allow_executable=True,
+    )
+
+    assert len(moved) == 2
+    assert (destination / "index.php").read_text(encoding="utf-8") == "hello"
+    assert (destination / "assets" / "app.css").read_text(encoding="utf-8") == "body{}"
+    assert not (public / "index.php").exists()
+    assert not (public / "assets").exists()
+
+
+def test_move_entries_rejects_folder_into_itself(tmp_path):
+    root = tmp_path / "site"
+    public = root / "public_html"
+    nested = public / "assets" / "nested"
+    nested.mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="folder into itself"):
+        file_manager.move_entries(
+            _website(root),
+            ["public_html/assets"],
+            "public_html/assets/nested",
+            allow_executable=True,
+        )

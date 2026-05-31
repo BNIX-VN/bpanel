@@ -345,6 +345,9 @@ def restore_user_backup(backup_file: str, db) -> dict:
             runtime_php_version = php_version if app_type == "wordpress" else None
             site_users.ensure_site_runtime(domain, root_path, runtime_php_version, linux_user)
             _safe_extract_prefix(archive, f"sites/{domain}/site", Path(root_path).resolve())
+            # Backups from older BPanel releases may contain public/. Normalize
+            # the document root after extraction before rewriting the vhost.
+            site_users.ensure_site_runtime(domain, root_path, runtime_php_version, linux_user)
 
             website = db.query(Website).filter(Website.domain == domain).first()
             created_site = False

@@ -10,6 +10,7 @@ from app.services.terminal import (
     _truncate_output,
     exec_batch,
     exec_command,
+    default_cwd,
     is_command_allowed,
     resolve_cwd,
     split_command,
@@ -166,16 +167,27 @@ class TestExecCommand:
         }
 
     def test_exec_rejects_cd_outside_session(self):
-        result = exec_command("siteuser", "cd public", cwd="/home/siteuser/example.com")
+        result = exec_command("siteuser", "cd public_html", cwd="/home/siteuser/example.com")
         assert result.exit_code == 2
 
 
 class TestResolveCwd:
+    def test_default_cwd_prefers_public_html(self, tmp_path):
+        root = tmp_path / "example.com"
+        public = root / "public_html"
+        public.mkdir(parents=True)
+        assert default_cwd(str(root)) == str(public.resolve())
+
+    def test_default_cwd_falls_back_to_site_root(self, tmp_path):
+        root = tmp_path / "example.com"
+        root.mkdir()
+        assert default_cwd(str(root)) == str(root.resolve())
+
     def test_resolve_inside_site(self, tmp_path):
         root = tmp_path / "example.com"
-        public = root / "public"
+        public = root / "public_html"
         public.mkdir(parents=True)
-        assert resolve_cwd(str(root), str(root), "public") == str(public.resolve())
+        assert resolve_cwd(str(root), str(root), "public_html") == str(public.resolve())
 
     def test_rejects_outside_site(self, tmp_path):
         root = tmp_path / "example.com"

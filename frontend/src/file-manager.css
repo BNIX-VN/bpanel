@@ -405,50 +405,70 @@
 }
 
 .code-editor-host,
-.code-editor-host .cm-editor {
+.code-editor-host .ace_editor {
   min-height: min(74vh, 820px);
   height: min(74vh, 820px);
 }
 
-.code-editor-host .cm-scroller {
+.code-editor-host .ace_scroller {
   overflow: auto;
 }
 
-/* Selection styling cho CodeMirror.
-   CM6 đặt .cm-selectionLayer ở DƯỚI .cm-content (text) nên nếu .cm-activeLine có nền đặc
-   thì vùng chọn nhỏ trong dòng đang active sẽ bị che. Cách an toàn nhất: ép active-line
-   trong suốt, dùng màu selection đặc đủ tương phản. */
-.code-editor-host .cm-editor .cm-activeLine,
-.code-editor-host .cm-editor .cm-line.cm-activeLine {
-  background-color: transparent !important;
+/* Ace editor replacement for CodeMirror. */
+.code-editor-host .ace_editor {
+  background: #ffffff;
+  color: #0f172a;
+  font: 13px/1.55 Consolas, 'SFMono-Regular', 'Liberation Mono', Menlo, monospace;
 }
 
-.code-editor-host .cm-content ::selection,
-.code-editor-host .cm-content *::selection {
-  background-color: #bcd4ff !important;
-  color: inherit !important;
+.code-editor-host .ace_gutter {
+  background: #f6f8fb;
+  color: #64748b;
+  border-right: 1px solid #dbe4f0;
 }
 
-.code-editor-host .cm-editor .cm-selectionBackground,
-.code-editor-host .cm-editor .cm-selectionLayer .cm-selectionBackground {
-  background-color: #bcd4ff !important;
+.code-editor-host .ace_marker-layer .ace_active-line,
+.code-editor-host .ace_gutter-active-line {
+  background: #edf6ff;
 }
 
-.code-editor-host .cm-editor.cm-focused .cm-selectionBackground,
-.code-editor-host .cm-editor.cm-focused .cm-selectionLayer .cm-selectionBackground {
-  background-color: #9cc0ff !important;
+.code-editor-host .ace_marker-layer .ace_selection {
+  background: #2f6feb !important;
+  opacity: .38;
 }
 
-.code-editor-host .cm-editor .cm-selectionLayer span {
-  background-color: #9cc0ff !important;
+.code-editor-host .ace_marker-layer .ace_selected-word {
+  border: 1px solid #2f6feb;
 }
 
-.code-editor-host .cm-searchMatch {
-  background: #fde68a;
+/* Search match highlighting for ext-searchbox */
+.code-editor-host .ace_search {
+  background: #f6f8fb;
+  border: 1px solid #dbe4f0;
+  border-radius: 4px;
+  padding: 4px 8px;
 }
-
-.code-editor-host .cm-searchMatch-selected {
-  background: #fbbf24;
+.code-editor-host .ace_search_field {
+  background: #ffffff;
+  border: 1px solid #dbe4f0;
+  border-radius: 3px;
+  padding: 2px 6px;
+}
+.code-editor-host .ace_searchbtn {
+  background: transparent;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.code-editor-host .ace_searchbtn:hover {
+  color: #0f172a;
+}
+.code-editor-host .ace_replace {
+  background: #ffffff;
+  border: 1px solid #dbe4f0;
+  border-radius: 3px;
+  padding: 2px 6px;
 }
 
 .standalone-editor-page {
@@ -530,12 +550,12 @@
 }
 
 .standalone-editor-body .code-editor-host,
-.standalone-editor-body .code-editor-host .cm-editor {
+.standalone-editor-body .code-editor-host .ace_editor {
   height: 100%;
   min-height: 0;
 }
 
-.standalone-editor-body .cm-editor {
+.standalone-editor-body .ace_editor {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   overflow: hidden;
@@ -567,7 +587,7 @@
 
   .code-editor-frame,
   .code-editor-host,
-  .code-editor-host .cm-editor {
+  .code-editor-host .ace_editor {
     min-height: 520px;
     height: 520px;
   }

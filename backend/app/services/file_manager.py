@@ -184,7 +184,7 @@ def list_files(website: Website, relative_path: str = "") -> List[Dict]:
 
 
 def make_directory(website: Website, parent_path: str, name: str) -> str:
-    parent = _safe_path(website, parent_path or "public")
+    parent = _safe_path(website, parent_path or site_users.PUBLIC_DIR)
     if not parent.exists() or not parent.is_dir():
         raise ValueError("Parent directory not found")
     target = parent / _safe_entry_name(name)
@@ -223,6 +223,17 @@ def chmod_entry(website: Website, relative_path: str, mode: str) -> str:
     numeric_mode = int(clean_mode, 8)
     if numeric_mode > 0o7777:
         raise ValueError("Mode is out of range")
+    # Enforce sensible defaults: files=644, dirs=755. Block world-writable and dangerous modes.
+    is_dir = target.is_dir()
+    if is_dir:
+        # Directory: owner rwx (7), group r-x (5), other r-x (5)
+        valid_modes = {0o755, 0o750, 0o700, 0o775, 0o770}
+    else:
+        # File: owner rw- (6), group r-- (4), other r-- (4)
+        valid_modes = {0o644, 0o640, 0o600, 0o664, 0o660}
+    if numeric_mode not in valid_modes:
+        default = "755" if is_dir else "644"
+        raise ValueError(f"Mode must be one of: {', '.join(oct(m)[2:] for m in sorted(valid_modes))}. Suggested: {default}")
     if website.linux_user:
         root = Path(website.root_path).resolve()
         relative = str(target.relative_to(root)).replace("\\", "/") if target != root else "."
@@ -346,7 +357,7 @@ def upload_file(
     allow_executable: bool = False,
     quota_check: Optional[QuotaCheck] = None,
 ) -> str:
-    target_dir = _safe_path(website, directory_path or "public")
+    target_dir = _safe_path(website, directory_path or site_users.PUBLIC_DIR)
     if target_dir.exists() and not target_dir.is_dir():
         raise ValueError("Upload target is not a directory")
     if target_dir.is_symlink():
@@ -411,6 +422,100 @@ def delete_entries(website: Website, paths: Iterable[str], allow_executable: boo
     return deleted
 
 
+def _transfer_sources(website: Website, paths: Iterable[str], action: str, allow_executable: bool, allow_sensitive: bool) -> list[Path]:
+    root = Path(website.root_path).resolve()
+    sources = []
+    for relative_path in paths:
+        source = _safe_path(website, relative_path)
+        if not source.exists():
+            raise ValueError("File or folder not found")
+        if source == root:
+            raise ValueError(f"Cannot {action.lower()} website root")
+        if source.is_symlink():
+            raise ValueError("Symlinks are not allowed")
+        if action == "Copying":
+            _assert_tree_read_allowed(source, action, allow_sensitive)
+            _assert_tree_write_allowed(source, action, allow_executable)
+        else:
+            _assert_tree_write_allowed(source, action, allow_executable)
+        sources.append(source)
+    if not sources:
+        raise ValueError("Select files or folders first")
+
+    top_level = []
+    for source in sorted(dict.fromkeys(sources), key=lambda item: len(item.parts)):
+        if any(parent.is_dir() and parent in source.parents for parent in top_level):
+            continue
+        top_level.append(source)
+    return top_level
+
+
+def _transfer_destination(website: Website, destination_path: str) -> Path:
+    destination = _safe_path(website, destination_path or site_users.PUBLIC_DIR)
+    if not destination.exists() or not destination.is_dir():
+        raise ValueError("Destination folder not found")
+    if destination.is_symlink():
+        raise ValueError("Symlinks are not allowed")
+    return destination
+
+
+def _assert_transfer_target(source: Path, destination: Path, target: Path, action: str) -> None:
+    if source.is_dir() and (destination == source or source in destination.parents):
+        raise ValueError(f"Cannot {action.lower()} a folder into itself")
+    if target.exists() or target.is_symlink():
+        raise ValueError(f"Target already exists: {target.name}")
+
+
+def copy_entries(
+    website: Website,
+    paths: Iterable[str],
+    destination_path: str,
+    allow_executable: bool = False,
+    allow_sensitive: bool = False,
+    quota_check: Optional[QuotaCheck] = None,
+) -> List[str]:
+    sources = _transfer_sources(website, paths, "Copying", allow_executable, allow_sensitive)
+    destination = _transfer_destination(website, destination_path)
+    targets = [destination / source.name for source in sources]
+    for source, target in zip(sources, targets):
+        _assert_transfer_target(source, destination, target, "copy")
+        _assert_write_allowed(target, "Copying", allow_executable)
+    if quota_check:
+        quota_check(_total_size(sources), 0)
+
+    copied = []
+    for source, target in zip(sources, targets):
+        if source.is_dir():
+            shutil.copytree(source, target, copy_function=shutil.copy2)
+        else:
+            shutil.copy2(source, target)
+        site_users.fix_site_path(str(target), website.linux_user)
+        copied.append(str(target))
+    return copied
+
+
+def move_entries(
+    website: Website,
+    paths: Iterable[str],
+    destination_path: str,
+    allow_executable: bool = False,
+    allow_sensitive: bool = False,
+) -> List[str]:
+    sources = _transfer_sources(website, paths, "Moving", allow_executable, allow_sensitive)
+    destination = _transfer_destination(website, destination_path)
+    targets = [destination / source.name for source in sources]
+    for source, target in zip(sources, targets):
+        _assert_transfer_target(source, destination, target, "move")
+        _assert_write_allowed(target, "Moving", allow_executable)
+
+    moved = []
+    for source, target in zip(sources, targets):
+        shutil.move(str(source), str(target))
+        site_users.fix_site_path(str(target), website.linux_user)
+        moved.append(str(target))
+    return moved
+
+
 def _total_size(paths: Iterable[Path]) -> int:
     total = 0
     for path in paths:
@@ -450,7 +555,7 @@ def archive_entries(
     allow_sensitive: bool = False,
     quota_check: Optional[QuotaCheck] = None,
 ) -> str:
-    base = _safe_path(website, base_path or "public")
+    base = _safe_path(website, base_path or site_users.PUBLIC_DIR)
     if not base.exists() or not base.is_dir():
         raise ValueError("Archive directory not found")
     selected = [_safe_path(website, path) for path in paths]

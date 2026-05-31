@@ -21,6 +21,8 @@ export function Terminal({ websiteId }) {
   const lineRef = useRef('');
   const cursorRef = useRef(0);
   const promptRef = useRef('$ ');
+  const promptVisibleRef = useRef(false);
+  const runningRef = useRef(false);
   const historyRef = useRef([]);
   const historyIndexRef = useRef(-1);
   const [connected, setConnected] = useState(false);
@@ -28,6 +30,7 @@ export function Terminal({ websiteId }) {
 
   const writePrompt = useCallback(() => {
     termRef.current?.write(promptRef.current);
+    promptVisibleRef.current = true;
   }, []);
 
   const redrawLine = useCallback(() => {
@@ -54,8 +57,11 @@ export function Terminal({ websiteId }) {
     ws.onopen = () => {
       setConnected(true);
       setError(null);
+      lineRef.current = '';
+      cursorRef.current = 0;
+      runningRef.current = false;
+      promptVisibleRef.current = false;
       termRef.current?.write('\x1b[1;32mConnected\x1b[0m\r\n');
-      writePrompt();
     };
 
     ws.onmessage = (event) => {
@@ -70,12 +76,14 @@ export function Terminal({ websiteId }) {
       if (msg.type === 'output') {
         termRef.current?.write(normalizeOutput(msg.data));
       } else if (msg.type === 'exit') {
+        runningRef.current = false;
         if (Number(msg.code) !== 0) {
           termRef.current?.write(`\r\n\x1b[33m[exit code: ${msg.code}]\x1b[0m\r\n`);
         }
         writePrompt();
       } else if (msg.type === 'cwd') {
         promptRef.current = `${shortPath(msg.data)} $ `;
+        if (!runningRef.current && !promptVisibleRef.current) writePrompt();
       } else if (msg.type === 'clear') {
         termRef.current?.clear();
       } else if (msg.type === 'error') {
@@ -174,6 +182,8 @@ export function Terminal({ websiteId }) {
         historyIndexRef.current = -1;
         lineRef.current = '';
         cursorRef.current = 0;
+        runningRef.current = true;
+        promptVisibleRef.current = false;
         ws.send(JSON.stringify({ type: 'input', data: command }));
         return;
       }

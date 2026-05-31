@@ -54,7 +54,7 @@ class FileWrite(BaseModel):
 
 class FileMkdir(BaseModel):
     website_id: int
-    path: str = "public"
+    path: str = site_users.PUBLIC_DIR
     name: str
 
 
@@ -81,9 +81,15 @@ class FileBulkDelete(BaseModel):
     paths: list[str]
 
 
+class FileTransfer(BaseModel):
+    website_id: int
+    paths: list[str]
+    destination_path: str = site_users.PUBLIC_DIR
+
+
 class FileArchive(BaseModel):
     website_id: int
-    base_path: str = "public"
+    base_path: str = site_users.PUBLIC_DIR
     paths: list[str]
     output_name: str = ""
     format: str = "zip"
@@ -680,7 +686,7 @@ def delete_cron(payload: CronDelete, db: Session = Depends(get_db), current_user
 @router.post("/wordpress")
 def wordpress_action(payload: WpAction, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     website = get_owned_website(db, current_user, payload.website_id)
-    result = wordpress.wp_update(f"{website.root_path}/public", payload.action, website.linux_user)
+    result = wordpress.wp_update(str(site_users.document_root(website.root_path)), payload.action, website.linux_user)
     return result.__dict__
 
 
@@ -808,6 +814,44 @@ def delete_entries(payload: FileBulkDelete, db: Session = Depends(get_db), curre
     return {"deleted": deleted}
 
 
+@router.post("/files/copy")
+def copy_entries(payload: FileTransfer, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.end_user)
+    website = get_owned_website(db, current_user, payload.website_id)
+    try:
+        copied = file_manager.copy_entries(
+            website,
+            payload.paths,
+            payload.destination_path,
+            allow_executable=is_admin_role(current_user.role),
+            allow_sensitive=is_admin_role(current_user.role),
+            quota_check=_quota_check_for_website(db, website),
+        )
+    except storage_quota.StorageQuotaExceeded as exc:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    log_action(db, current_user.id, "copy_files", website.domain, f"{','.join(payload.paths[:20])} -> {payload.destination_path}")
+    return {"copied": copied}
+
+
+@router.post("/files/move")
+def move_entries(payload: FileTransfer, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.end_user)
+    website = get_owned_website(db, current_user, payload.website_id)
+    try:
+        moved = file_manager.move_entries(
+            website,
+            payload.paths,
+            payload.destination_path,
+            allow_executable=is_admin_role(current_user.role),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    log_action(db, current_user.id, "move_files", website.domain, f"{','.join(payload.paths[:20])} -> {payload.destination_path}")
+    return {"moved": moved}
+
+
 @router.post("/files/archive")
 def archive_entries(payload: FileArchive, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.end_user)
@@ -888,7 +932,7 @@ def write_file(payload: FileWrite, db: Session = Depends(get_db), current_user: 
 @router.post("/files/{website_id}/upload")
 def upload_file(
     website_id: int,
-    path: str = Query(default="public"),
+    path: str = Query(default=site_users.PUBLIC_DIR),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),

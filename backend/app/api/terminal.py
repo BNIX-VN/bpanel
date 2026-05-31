@@ -100,7 +100,7 @@ async def exec_command(
     result = terminal.exec_command(
         website.linux_user,
         request.command,
-        cwd=website.root_path,
+        cwd=terminal.default_cwd(website.root_path),
     )
 
     return TerminalExecResponse(
@@ -208,7 +208,7 @@ async def terminal_websocket(
         return
 
     await websocket.accept()
-    cwd = str(root_path)
+    cwd = terminal.default_cwd(website.root_path)
     await websocket.send_json({"type": "cwd", "data": cwd})
 
     try:

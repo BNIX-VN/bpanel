@@ -10,6 +10,8 @@ from app.services.shell import shell
 LINUX_USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{2,31}$")
 DOMAIN_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$")
 HOME_ROOT = Path("/home")
+PUBLIC_DIR = "public_html"
+LEGACY_PUBLIC_DIR = "public"
 RESERVED_LINUX_USERS = {
     "root", "daemon", "bin", "sys", "sync", "games", "man", "lp", "mail",
     "news", "uucp", "proxy", "www-data", "backup", "list", "irc", "_apt",
@@ -53,6 +55,10 @@ def site_root_for_domain(domain: str) -> str:
 
 def site_root_for_panel_user(username: str, domain: str) -> str:
     return str(HOME_ROOT / linux_user_for_panel_username(username) / domain.strip().lower())
+
+
+def document_root(root_path: str | Path) -> Path:
+    return Path(root_path) / PUBLIC_DIR
 
 
 def is_managed_site_path(path: str | Path) -> bool:
@@ -112,7 +118,7 @@ def ensure_site_runtime(domain: str, root_path: str, php_version: Optional[str] 
     shell.privileged(
         "site-runtime-ensure",
         helper_args=helper_args,
-        fallback=["mkdir", "-p", str(Path(root_path) / "public")],
+        fallback=["mkdir", "-p", str(document_root(root_path))],
     )
     return username
 

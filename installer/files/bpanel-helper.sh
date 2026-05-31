@@ -810,9 +810,15 @@ case "$cmd" in
     require_linux_user "$user"
     target=$(require_managed_path "$path" "$user")
     ensure_panel_user_home "$user"
-    mkdir -p "$target/public"
-    chown "$user:$user" "$target" "$target/public"
-    chmod 0755 "$target" "$target/public"
+    if [[ -d "$target/public" && ! -e "$target/public_html" ]]; then
+      mv "$target/public" "$target/public_html"
+    elif [[ -d "$target/public" && -d "$target/public_html" && -z "$(find "$target/public_html" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+      rmdir "$target/public_html"
+      mv "$target/public" "$target/public_html"
+    fi
+    mkdir -p "$target/public_html"
+    chown "$user:$user" "$target" "$target/public_html"
+    chmod 0755 "$target" "$target/public_html"
     fix_site_tree "$target" "$user"
     ensure_php_pool "$user" "$target" "$php_version"
     ;;
@@ -829,7 +835,10 @@ case "$cmd" in
       mkdir -p "$(dirname "$new_target")"
       mv "$old_target" "$new_target"
     fi
-    mkdir -p "$new_target/public"
+    if [[ -d "$new_target/public" && ! -e "$new_target/public_html" ]]; then
+      mv "$new_target/public" "$new_target/public_html"
+    fi
+    mkdir -p "$new_target/public_html"
     fix_site_tree "$new_target" "$user"
     ensure_php_pool "$user" "$new_target" "$php_version"
     ;;
@@ -854,7 +863,7 @@ case "$cmd" in
     [[ $# -eq 1 ]] || deny "usage: mkdir-site <path>"
     target=$(require_managed_path "$1")
     install -d -o www-data -g www-data -m 0775 "$target"
-    install -d -o www-data -g www-data -m 0775 "$target/public"
+    install -d -o www-data -g www-data -m 0775 "$target/public_html"
     ;;
 
   site-log-read)

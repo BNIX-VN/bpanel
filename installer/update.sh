@@ -450,8 +450,17 @@ with SessionLocal() as db:
                 runtime_php_version = website.php_version if (website.app_type or "wordpress") in {"wordpress", "php"} else None
                 site_users.ensure_site_runtime(website.domain, website.root_path, runtime_php_version, website.linux_user)
             site_users.fix_site_permissions(website.root_path, website.linux_user)
-            if (website.app_type or "wordpress") == "wordpress":
-                nginx.ensure_wordpress_fastcgi_cache(website.domain)
+            app_type = website.app_type or "wordpress"
+            runtime_php_version = website.php_version if app_type in {"wordpress", "php"} else None
+            nginx.rewrite_vhost(
+                website.domain,
+                website.root_path,
+                app_type=app_type,
+                php_version=website.php_version,
+                custom_directives=website.nginx_custom or "",
+                php_fpm_socket_override=site_users.php_fpm_socket(website.linux_user, website.php_version) if runtime_php_version else None,
+                waf_enabled=website.waf_enabled,
+            )
         except Exception as exc:
             print(f"WARNING: could not refresh permissions for {website.domain}: {exc}")
 PY

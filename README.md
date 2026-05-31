@@ -7,7 +7,7 @@ ownership, quotas, backups, SSL, services, and firewall tools built in.
 - Dashboard resource monitoring for CPU, RAM, disk, and network throughput
 - WordPress one-click installer (PHP 8.3 / 8.4) with WP-CLI
 - WordPress, Static/PHP, and Static-only sites with editable full Nginx vhosts
-- Panel users map to locked Linux users; website source lives in `/home/<panel-user>/<domain>/public`
+- Panel users map to locked Linux users; website source lives in `/home/<panel-user>/<domain>/public_html`
 - Admin quick-login for creating sites as a selected user, plus one-owner assignment per website
 - Website count limits and BPanel soft storage quotas per end user
 - MariaDB database creation and management with phpMyAdmin SSO (60s tokens)
@@ -155,7 +155,7 @@ Existing servers that pre-date Alembic adoption are detected at startup
 ## User and website ownership
 
 - Each panel user also has a locked Linux user with the same normalized username.
-- New websites are created under `/home/<panel-user>/<domain>/public`.
+- New websites are created under `/home/<panel-user>/<domain>/public_html`.
 - If an admin creates a website without impersonating another user, the website
   belongs to the admin account.
 - Admins can quick-login as another panel user before creating websites for

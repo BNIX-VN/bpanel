@@ -87,7 +87,7 @@ def install_wordpress(
         raise ValueError("WordPress admin password must be at least 10 characters")
 
     root = Path(root_path or site_root(domain))
-    public = root / "public"
+    public = site_users.document_root(root)
     linux_user = linux_user or site_users.ensure_site_runtime(domain, str(root), php_version)
     wp_path = f"--path={public}"
 

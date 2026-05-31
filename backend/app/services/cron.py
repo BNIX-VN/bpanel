@@ -45,7 +45,7 @@ def add_cron(website: Website, schedule: str, command: str) -> str:
     safe_command = _validate_command(command)
     safe_domain = _validate_domain(website.domain)
     marker = f"# bpanel:{safe_domain}"
-    line = f"{safe_schedule} cd {shlex.quote(website.root_path + '/public')} && {safe_command} {marker}"
+    line = f"{safe_schedule} cd {shlex.quote(str(site_users.document_root(website.root_path)))} && {safe_command} {marker}"
     cron_user = website.linux_user or "www-data"
     if website.linux_user:
         runtime_php_version = website.php_version if (website.app_type or "wordpress") == "wordpress" else None

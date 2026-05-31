@@ -227,7 +227,7 @@ fix_permissions() {
     runuser -u bpanel -- env HOME="$APP_DIR" BPANEL_USE_HELPER=true "$APP_DIR/backend/.venv/bin/python" - <<'PY'
 from app.core.database import SessionLocal
 from app.models.entities import Website
-from app.services import site_users
+from app.services import nginx, site_users
 
 db = SessionLocal()
 try:
@@ -236,6 +236,17 @@ try:
             runtime_php_version = website.php_version if (website.app_type or "wordpress") in {"wordpress", "php"} else None
             site_users.ensure_site_runtime(website.domain, website.root_path, runtime_php_version, website.linux_user)
         site_users.fix_site_permissions(website.root_path, website.linux_user)
+        app_type = website.app_type or "wordpress"
+        runtime_php_version = website.php_version if app_type in {"wordpress", "php"} else None
+        nginx.rewrite_vhost(
+            website.domain,
+            website.root_path,
+            app_type=app_type,
+            php_version=website.php_version,
+            custom_directives=website.nginx_custom or "",
+            php_fpm_socket_override=site_users.php_fpm_socket(website.linux_user, website.php_version) if runtime_php_version else None,
+            waf_enabled=website.waf_enabled,
+        )
 finally:
     db.close()
 PY

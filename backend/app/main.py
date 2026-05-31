@@ -1,4 +1,5 @@
 import logging
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -12,6 +13,9 @@ from app.core.database import run_migrations
 from app.services import panel_settings as panel_brand_settings
 
 run_migrations()
+
+# Secure default umask: files get 644 (-rw-r--r--), dirs get 755 (rwxr-xr-x)
+os.umask(0o022)
 
 logger = logging.getLogger("bpanel")
 

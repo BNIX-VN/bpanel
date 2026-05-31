@@ -1,16 +1,17 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
-import { basicSetup } from 'codemirror';
-import { indentWithTab } from '@codemirror/commands';
-import { css } from '@codemirror/lang-css';
-import { html } from '@codemirror/lang-html';
-import { javascript } from '@codemirror/lang-javascript';
-import { json } from '@codemirror/lang-json';
-import { php } from '@codemirror/lang-php';
-import { yaml } from '@codemirror/lang-yaml';
-import { Compartment, EditorState } from '@codemirror/state';
-import { EditorView, keymap } from '@codemirror/view';
-import { Archive, Clock, Code2, Cpu, Database, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Network, Server, Settings as SettingsIcon, Shield, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
+import ace from 'ace-builds/src-noconflict/ace';
+import 'ace-builds/src-noconflict/ext-language_tools';
+import 'ace-builds/src-noconflict/ext-searchbox';
+import 'ace-builds/src-noconflict/mode-css';
+import 'ace-builds/src-noconflict/mode-html';
+import 'ace-builds/src-noconflict/mode-javascript';
+import 'ace-builds/src-noconflict/mode-json';
+import 'ace-builds/src-noconflict/mode-php';
+import 'ace-builds/src-noconflict/mode-text';
+import 'ace-builds/src-noconflict/mode-yaml';
+import 'ace-builds/src-noconflict/theme-textmate';
+import { Archive, Clock, Code2, Copy, Cpu, Database, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, MoveRight, Network, Server, Settings as SettingsIcon, Shield, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
 import { Terminal } from './components/Terminal';
 import './style.css';
 import './brand.css';
@@ -23,98 +24,109 @@ function editorParamsFromLocation() {
   const params = new URLSearchParams(window.location.search);
   if (params.get('view') !== 'editor') return null;
   const websiteId = params.get('website_id');
-  const path = params.get('path') || 'public/index.html';
+  const path = params.get('path') || 'public_html/index.html';
   if (!websiteId) return null;
   return { websiteId: String(websiteId), path };
 }
 
-const editorTheme = EditorView.theme({
-  '&': { height: '100%', backgroundColor: '#ffffff', color: '#0f172a' },
-  '&.cm-focused': { outline: 'none' },
-  '.cm-scroller': { fontFamily: "Consolas, 'SFMono-Regular', 'Liberation Mono', Menlo, monospace", fontSize: '13px', lineHeight: '1.55' },
-  '.cm-content': { minHeight: '100%', padding: '14px 0' },
-  '.cm-line': { padding: '0 16px' },
-  '.cm-gutters': { backgroundColor: '#f6f8fb', color: '#64748b', borderRight: '1px solid #dbe4f0' },
-  '.cm-lineNumbers .cm-gutterElement': { minWidth: '44px', padding: '0 12px 0 8px' },
-  // Đặt nền active line trong suốt để không che mất selection layer (vốn nằm dưới content trong CM6)
-  '.cm-activeLine': { backgroundColor: 'transparent' },
-  '.cm-activeLineGutter': { backgroundColor: '#e2efff', color: '#0b5fbd' },
-  // Selection: dùng màu đặc đủ tương phản, rectangle nằm sau text nên text vẫn hiện rõ
-  '.cm-selectionBackground, ::selection': { backgroundColor: '#bcd4ff !important' },
-  '&.cm-focused .cm-selectionBackground, &.cm-focused ::selection': { backgroundColor: '#9cc0ff !important' },
-  '.cm-cursor': { borderLeftColor: '#0b5fbd' },
-  '.cm-matchingBracket, .cm-nonmatchingBracket': { backgroundColor: '#dbeafe', outline: '1px solid #93c5fd' },
-}, { dark: false });
-
-function languageExtension(mode) {
-  if (mode === 'PHP') return php();
-  if (mode === 'JavaScript') return javascript({ jsx: true, typescript: true });
-  if (mode === 'CSS') return css();
-  if (mode === 'HTML') return html();
-  if (mode === 'JSON') return json();
-  if (mode === 'YAML') return yaml();
-  return [];
+function aceModeName(mode) {
+  if (mode === 'PHP') return 'php';
+  if (mode === 'JavaScript') return 'javascript';
+  if (mode === 'CSS') return 'css';
+  if (mode === 'HTML') return 'html';
+  if (mode === 'JSON') return 'json';
+  if (mode === 'YAML') return 'yaml';
+  if (mode === 'Config') return 'ini'; // .env, .htaccess, .ini, .conf -> Ace's ini mode
+  return 'text';
 }
 
 function CodeEditor({ value, mode, disabled, onChange, onCursorChange }) {
   const hostRef = useRef(null);
-  const viewRef = useRef(null);
+  const editorRef = useRef(null);
+  const suppressChangeRef = useRef(false);
   const onChangeRef = useRef(onChange);
   const onCursorChangeRef = useRef(onCursorChange);
-  const languageCompartmentRef = useRef(new Compartment());
-  const editableCompartmentRef = useRef(new Compartment());
 
   useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
   useEffect(() => { onCursorChangeRef.current = onCursorChange; }, [onCursorChange]);
 
   useEffect(() => {
     if (!hostRef.current) return undefined;
-    const languageCompartment = languageCompartmentRef.current;
-    const editableCompartment = editableCompartmentRef.current;
-    const view = new EditorView({
-      parent: hostRef.current,
-      state: EditorState.create({
-        doc: value || '',
-        extensions: [
-          basicSetup,
-          keymap.of([indentWithTab]),
-          editorTheme,
-          languageCompartment.of(languageExtension(mode)),
-          editableCompartment.of([EditorState.readOnly.of(!!disabled), EditorView.editable.of(!disabled)]),
-          EditorView.updateListener.of(update => {
-            if (update.docChanged) onChangeRef.current(update.state.doc.toString());
-            if (update.docChanged || update.selectionSet) {
-              const pos = update.state.selection.main.head;
-              const line = update.state.doc.lineAt(pos);
-              onCursorChangeRef.current({ line: line.number, column: pos - line.from + 1 });
-            }
-          }),
-        ],
-      }),
+    const editor = ace.edit(hostRef.current, {
+      mode: `ace/mode/${aceModeName(mode)}`,
+      theme: 'ace/theme/textmate',
+      value: value || '',
+      readOnly: !!disabled,
+      showPrintMargin: false,
+      highlightActiveLine: true,
+      fontSize: 13,
+      tabSize: 2,
+      useSoftTabs: true,
+      wrap: false,
     });
-    viewRef.current = view;
-    return () => { view.destroy(); viewRef.current = null; };
+
+    editor.setOptions({
+      enableBasicAutocompletion: true,
+      enableLiveAutocompletion: true,
+      enableMatchBrackets: true,
+      enableSnippets: false,
+      fontFamily: "Consolas, 'SFMono-Regular', 'Liberation Mono', Menlo, monospace",
+    });
+    editor.session.setUseWorker(false);
+    editor.session.setNewLineMode('unix');
+
+    let destroyed = false;
+    const reportCursor = () => {
+      if (destroyed || !editorRef.current || !onCursorChangeRef.current) return;
+      const pos = editorRef.current.getCursorPosition();
+      onCursorChangeRef.current({ line: pos.row + 1, column: pos.column + 1 });
+    };
+    const handleChange = () => {
+      if (destroyed || !editorRef.current) return;
+      if (!suppressChangeRef.current) {
+        if (onChangeRef.current) onChangeRef.current(editorRef.current.getValue());
+      }
+      // Only report cursor on explicit cursor moves, not on every content change
+    };
+
+    editor.session.on('change', handleChange);
+    editor.selection.on('changeCursor', reportCursor);
+    editorRef.current = editor;
+    reportCursor();
+
+    return () => {
+      destroyed = true;
+      editor.session.off('change', handleChange);
+      editor.selection.off('changeCursor', reportCursor);
+      editor.destroy();
+      editorRef.current = null;
+      if (hostRef.current) hostRef.current.textContent = '';
+    };
   }, []);
 
   useEffect(() => {
-    const view = viewRef.current;
-    if (!view) return;
-    const current = view.state.doc.toString();
-    if (value !== current) view.dispatch({ changes: { from: 0, to: current.length, insert: value || '' } });
+    const editor = editorRef.current;
+    if (!editor) return;
+    const nextValue = value || '';
+    if (nextValue === editor.getValue()) return;
+    const cursor = editor.getCursorPosition();
+    suppressChangeRef.current = true;
+    editor.setValue(nextValue, -1);
+    const newRow = Math.max(0, Math.min(cursor.row, editor.session.getLength() - 1));
+    editor.moveCursorTo(newRow, cursor.column);
+    suppressChangeRef.current = false;
   }, [value]);
 
   useEffect(() => {
-    const view = viewRef.current;
-    if (!view) return;
-    view.dispatch({ effects: languageCompartmentRef.current.reconfigure(languageExtension(mode)) });
+    const editor = editorRef.current;
+    if (!editor) return;
+    editor.session.setMode(`ace/mode/${aceModeName(mode)}`);
   }, [mode]);
 
   useEffect(() => {
-    const view = viewRef.current;
-    if (!view) return;
-    view.dispatch({
-      effects: editableCompartmentRef.current.reconfigure([EditorState.readOnly.of(!!disabled), EditorView.editable.of(!disabled)]),
-    });
+    const editor = editorRef.current;
+    if (!editor) return;
+    editor.setReadOnly(!!disabled);
   }, [disabled]);
 
   return <div className="code-editor-host" ref={hostRef}></div>;
@@ -162,9 +174,9 @@ function App() {
   const [selectedWebsiteId, setSelectedWebsiteId] = useState(() => standaloneEditor?.websiteId || '');
   const [cronSchedule, setCronSchedule] = useState('0 2 * * *');
   const [cronCommand, setCronCommand] = useState('wp cron event run --due-now --allow-root');
-  const [filePath, setFilePath] = useState(() => standaloneEditor?.path || 'public/index.html');
-  const [fileListPath, setFileListPath] = useState('public');
-  const [fileUploadDir, setFileUploadDir] = useState('public');
+  const [filePath, setFilePath] = useState(() => standaloneEditor?.path || 'public_html/index.html');
+  const [fileListPath, setFileListPath] = useState('public_html');
+  const [fileUploadDir, setFileUploadDir] = useState('public_html');
   const [files, setFiles] = useState([]);
   const [fileJobs, setFileJobs] = useState([]);
   const [fileContent, setFileContent] = useState('');
@@ -621,7 +633,7 @@ function App() {
       if (installWp) {
         setNotice(`Created WordPress site: https://${domain}\nAdmin: ${wpAdminUser} | Password: ${wpAdminPassword || 'StrongPass123!'}`);
       } else {
-        setNotice(`Created site ${domain}. Upload your files to public/ folder.`);
+        setNotice(`Created site ${domain}. Upload your files to public_html/ folder.`);
       }
       if (installSslAfterCreate) await enableSsl(data.id);
       refreshAll();
@@ -859,6 +871,37 @@ function App() {
     if (data) { await listFiles(fileListPath); await loadCurrentUser(); }
   }
 
+  async function transferFileItems(action, paths) {
+    if (!selectedWebsiteId || !paths?.length) return;
+    const verb = action === 'copy' ? 'Copy' : 'Move';
+    const destination = prompt(`${verb} to folder:`, fileListPath || 'public_html');
+    if (destination === null) return;
+    const targetPath = destination.trim() || fileListPath || 'public_html';
+    const data = await request(`/maintenance/files/${action}`, {
+      method: 'POST',
+      body: JSON.stringify({ website_id: Number(selectedWebsiteId), paths, destination_path: targetPath }),
+    }, `${verb}ing files...`);
+    if (data) { await listFiles(fileListPath); await loadCurrentUser(); }
+  }
+
+  async function copySelectedFiles() {
+    await transferFileItems('copy', selectedFilePaths);
+  }
+
+  async function moveSelectedFiles() {
+    await transferFileItems('move', selectedFilePaths);
+  }
+
+  async function copyFileItem(item) {
+    if (!item) return;
+    await transferFileItems('copy', [item.path]);
+  }
+
+  async function moveFileItem(item) {
+    if (!item) return;
+    await transferFileItems('move', [item.path]);
+  }
+
   async function archiveSelectedFiles() {
     if (selectedFilePaths.length === 0) return;
     const ext = archiveFormat === 'tar.gz' ? 'tar.gz' : 'zip';
@@ -941,9 +984,9 @@ function App() {
   async function openWebsiteFileManager(site) {
     setSelectedWebsiteId(String(site.id));
     setPage('files');
-    setFileListPath('public');
-    setFileUploadDir('public');
-    await listFiles('public', site.id);
+    setFileListPath('public_html');
+    setFileUploadDir('public_html');
+    await listFiles('public_html', site.id);
   }
 
   async function uploadSiteFile(file) {
@@ -1367,7 +1410,7 @@ function App() {
 
   useEffect(() => { if (selectedWebsiteId && page === 'backups') listBackups(); }, [selectedWebsiteId, page]);
 
-  useEffect(() => { if (selectedWebsiteId && page === 'files') listFiles('public'); }, [selectedWebsiteId, page]);
+  useEffect(() => { if (selectedWebsiteId && page === 'files') listFiles('public_html'); }, [selectedWebsiteId, page]);
 
   useEffect(() => { if (selectedBackupUserId && page === 'backups') listUserBackups(selectedBackupUserId); }, [selectedBackupUserId, page]);
 
@@ -1591,7 +1634,7 @@ function App() {
         <p className="hint">{wpFieldsEnabled
           ? 'WordPress will be installed and the panel will show the URL, admin account, and password after creation.'
           : siteType === 'php'
-            ? 'A PHP-FPM vhost will be created with public/ folder. Upload your PHP or static files via File Manager.'
+            ? 'A PHP-FPM vhost will be created with public_html/ folder. Upload your PHP or static files via File Manager.'
             : 'A static-only Nginx vhost will be created. PHP files can be uploaded but will not execute.'}</p>
       </section>
       <section className="section">
@@ -1782,6 +1825,8 @@ function App() {
                 <option value="zip">zip</option>
                 <option value="tar.gz">tar.gz</option>
               </select>
+              <button disabled={selectedFilePaths.length === 0 || !!loading} onClick={copySelectedFiles}><Copy size={14}/> Copy</button>
+              <button disabled={selectedFilePaths.length === 0 || !!loading} onClick={moveSelectedFiles}><MoveRight size={14}/> Move</button>
               <button disabled={selectedFilePaths.length === 0 || !!loading} onClick={archiveSelectedFiles}><Archive size={14}/> Archive</button>
               <button className="danger" disabled={selectedFilePaths.length === 0 || !!loading} onClick={deleteSelectedFiles}><Trash2 size={14}/> Delete</button>
             </div>
@@ -1811,6 +1856,8 @@ function App() {
                 {!item.is_dir && <button className="mini secondary-light" disabled={!!loading} onClick={() => downloadFile(item.path)}><Download size={13}/></button>}
                 {isArchiveFile(item) && <button className="mini secondary-light" disabled={!!loading} onClick={() => extractArchiveFile(item.path)}>Extract</button>}
                 <button className="mini secondary-light" disabled={!!loading} onClick={() => chmodFileItem(item)}>Chmod</button>
+                <button className="mini secondary-light" title="Copy" aria-label="Copy" disabled={!!loading} onClick={() => copyFileItem(item)}><Copy size={13}/></button>
+                <button className="mini secondary-light" title="Move" aria-label="Move" disabled={!!loading} onClick={() => moveFileItem(item)}><MoveRight size={13}/></button>
                 <button className="mini secondary-light" disabled={!!loading} onClick={() => renameFileItem(item)}>Rename</button>
                 <button className="mini danger" disabled={!!loading} onClick={() => deleteFileAction(item.path)}><Trash2 size={13}/></button>
               </div>

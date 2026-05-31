@@ -103,8 +103,8 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
         runtime_php_version = payload.php_version if app_type_value in {"wordpress", "php"} else None
         try:
             linux_user = site_users.ensure_site_runtime(payload.domain, root_path, runtime_php_version, linux_user)
-            # Just create the public/ folder skeleton and write a vhost.
-            public = Path(root_path) / "public"
+            # Just create the public_html/ folder skeleton and write a vhost.
+            public = site_users.document_root(root_path)
             if not settings.command_dry_run:
                 placeholder = public / "index.html"
                 if not placeholder.exists():
