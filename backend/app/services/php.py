@@ -88,20 +88,21 @@ def list_installed_php() -> list[str]:
 def install_php(php_version: str) -> dict:
     """Install a PHP version via apt."""
     if php_version not in SUPPORTED_PHP_VERSIONS:
-        raise ValueError(f"Unsupported PHP version. Allowed: {sorted(SUPPORTED_PHP_VERSIONS)}")
+        allowed = ", ".join(sorted(SUPPORTED_PHP_VERSIONS))
+        raise ValueError(f"Unsupported PHP version. Allowed: {allowed}")
 
     # Check if already installed
-    for p in shell.run("ls -d /etc/php/*/fpm/php-fpm.conf 2>/dev/null || true").stdout.splitlines():
-        if f"/etc/php/{php_version}/" in p:
-            raise ValueError(f"PHP {php_version} is already installed")
+    import os
+    if os.path.exists(f"/etc/php/{php_version}/fpm/php-fpm.conf"):
+        raise ValueError(f"PHP {php_version} is already installed")
 
     if settings.command_dry_run:
         return {"status": "dry_run", "message": f"Would install php{php_version}-fpm"}
 
     # Install PHP-FPM via bpanel-helper
-    shell.privileged(
+    result = shell.privileged(
         "php-install",
         helper_args=[php_version],
-        fallback=["apt-get", "install", "-y", f"php{php_version}-fpm", f"php{php_version}-cli", f"php{php_version}-mysql", f"php{php_version}-curl", f"php{php_version}-gd", f"php{php_version}-mbstring", f"php{php_version}-xml", f"php{php_version}-zip", f"php{php_version}-bcmath"],
+        fallback=["apt-get", "install", "-y", f"php{php_version}-fpm"],
     )
-    return {"status": "installed", "version": php_version}
+    return {"status": "installed", "version": php_version, "output": result.stdout}
