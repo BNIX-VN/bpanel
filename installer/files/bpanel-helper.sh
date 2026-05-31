@@ -301,26 +301,106 @@ install_php_version() {
   export DEBIAN_FRONTEND=noninteractive
   require_php_version "$version"
   if [[ -f /etc/php/"$version"/fpm/php-fpm.conf ]]; then
-    echo "PHP $version is already installed"
-    return 0
+    echo "PHP $version is already installed; ensuring BPanel extension set..."
   fi
-  # Add ondrej/php PPA only for older PHP versions (5.6, 7.4, 8.0)
-  # PHP 8.1+ are available in default Ubuntu repos
-  if [[ "$version" =~ ^(5\.6|7\.4|8\.0)$ ]]; then
+  if ! apt-cache show "php${version}-fpm" >/dev/null 2>&1; then
     if ! grep -q "ondrej/php" /etc/apt/sources.list.d/*.list 2>/dev/null; then
       echo "Adding ondrej/php PPA for PHP $version..."
       apt-get update
       apt-get install -y software-properties-common || true
       add-apt-repository -y ppa:ondrej/php 2>/dev/null || true
-      apt-get update
     fi
+    apt-get update
   fi
   echo "Installing PHP $version..."
-  apt-get install -y "php${version}-fpm" "php${version}-cli" "php${version}-mysql" "php${version}-curl" "php${version}-gd" "php${version}-mbstring" "php${version}-xml" "php${version}-zip" "php${version}-bcmath" || { echo "Failed to install PHP $version"; return 1; }
+  local packages=(
+    "php${version}"
+    "php${version}-fpm"
+    "php${version}-cli"
+    "php${version}-mysql"
+    "php${version}-curl"
+    "php${version}-gd"
+    "php${version}-mbstring"
+    "php${version}-xml"
+    "php${version}-zip"
+    "php${version}-opcache"
+    "php${version}-intl"
+    "php${version}-bcmath"
+    "php${version}-redis"
+    "php${version}-imagick"
+  )
+  local available_packages=() missing_packages=() package
+  for package in "${packages[@]}"; do
+    if apt-cache show "$package" >/dev/null 2>&1; then
+      available_packages+=("$package")
+    else
+      missing_packages+=("$package")
+    fi
+  done
+  if [[ ${#missing_packages[@]} -gt 0 ]]; then
+    echo "Skipping PHP packages not available in repo: ${missing_packages[*]}"
+  fi
+  [[ ${#available_packages[@]} -gt 0 ]] || deny "No package found for PHP ${version}"
+  apt-get install -y "${available_packages[@]}" || { echo "Failed to install PHP $version"; return 1; }
+  install_ioncube_loader "$version"
   # Enable and start PHP-FPM
   systemctl enable "php${version}-fpm" 2>/dev/null || true
   systemctl start "php${version}-fpm" 2>/dev/null || true
   echo "PHP $version installed successfully"
+}
+
+install_ioncube_loader() {
+  local version="$1" arch url tmp archive loader target_dir target loader_ini_dir
+  require_php_version "$version"
+  arch="$(dpkg --print-architecture 2>/dev/null || uname -m)"
+  case "$arch" in
+    amd64|x86_64)
+      url="https://downloads.ioncube.com/loader_downloads/ioncube_loaders_lin_x86-64.tar.gz"
+      ;;
+    *)
+      echo "Skipping ionCube Loader: unsupported architecture ${arch}"
+      return 0
+      ;;
+  esac
+
+  apt-get install -y ca-certificates curl tar >/dev/null
+  tmp="$(mktemp -d)" || deny "cannot create ionCube temporary directory"
+  archive="${tmp}/ioncube_loaders.tar.gz"
+  if ! curl -fsSL "$url" -o "$archive"; then
+    rm -rf -- "$tmp"
+    deny "failed to download ionCube Loader"
+  fi
+  if ! tar -xzf "$archive" -C "$tmp"; then
+    rm -rf -- "$tmp"
+    deny "failed to unpack ionCube Loader"
+  fi
+  loader="${tmp}/ioncube/ioncube_loader_lin_${version}.so"
+  if [[ ! -f "$loader" ]]; then
+    rm -rf -- "$tmp"
+    echo "Skipping ionCube Loader: no loader found for PHP ${version}"
+    return 0
+  fi
+
+  target_dir="/usr/local/ioncube"
+  target="${target_dir}/ioncube_loader_lin_${version}.so"
+  install -d -o root -g root -m 0755 "$target_dir"
+  install -m 0644 -o root -g root "$loader" "$target"
+  rm -rf -- "$tmp"
+
+  for loader_ini_dir in /etc/php/"$version"/cli/conf.d /etc/php/"$version"/fpm/conf.d; do
+    [[ -d "$loader_ini_dir" ]] || continue
+    printf 'zend_extension=%s\n' "$target" >"${loader_ini_dir}/00-ioncube.ini"
+    chown root:root "${loader_ini_dir}/00-ioncube.ini"
+    chmod 0644 "${loader_ini_dir}/00-ioncube.ini"
+  done
+
+  if command -v "php${version}" >/dev/null 2>&1; then
+    if ! "php${version}" -v 2>&1 | grep -qi 'ionCube'; then
+      rm -f /etc/php/"$version"/cli/conf.d/00-ioncube.ini /etc/php/"$version"/fpm/conf.d/00-ioncube.ini
+      deny "ionCube Loader failed to load for PHP ${version}"
+    fi
+  fi
+  echo "ionCube Loader enabled for PHP ${version}"
 }
 
 validate_php_config_file() {

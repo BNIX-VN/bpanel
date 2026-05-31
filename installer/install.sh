@@ -158,6 +158,59 @@ NODE
   npm --version
 }
 
+install_ioncube_loader() {
+  local version="$1" arch url tmp archive loader target_dir target loader_ini_dir
+  arch="$(dpkg --print-architecture 2>/dev/null || uname -m)"
+  case "$arch" in
+    amd64|x86_64)
+      url="https://downloads.ioncube.com/loader_downloads/ioncube_loaders_lin_x86-64.tar.gz"
+      ;;
+    *)
+      echo "Skipping ionCube Loader: unsupported architecture ${arch}"
+      return 0
+      ;;
+  esac
+
+  apt-get install -y ca-certificates curl tar >/dev/null
+  tmp="$(mktemp -d)" || fail "Cannot create ionCube temporary directory"
+  archive="${tmp}/ioncube_loaders.tar.gz"
+  if ! curl -fsSL "$url" -o "$archive"; then
+    rm -rf -- "$tmp"
+    fail "Failed to download ionCube Loader"
+  fi
+  if ! tar -xzf "$archive" -C "$tmp"; then
+    rm -rf -- "$tmp"
+    fail "Failed to unpack ionCube Loader"
+  fi
+  loader="${tmp}/ioncube/ioncube_loader_lin_${version}.so"
+  if [[ ! -f "$loader" ]]; then
+    rm -rf -- "$tmp"
+    echo "Skipping ionCube Loader: no loader found for PHP ${version}"
+    return 0
+  fi
+
+  target_dir="/usr/local/ioncube"
+  target="${target_dir}/ioncube_loader_lin_${version}.so"
+  install -d -o root -g root -m 0755 "$target_dir"
+  install -m 0644 -o root -g root "$loader" "$target"
+  rm -rf -- "$tmp"
+
+  for loader_ini_dir in /etc/php/"$version"/cli/conf.d /etc/php/"$version"/fpm/conf.d; do
+    [[ -d "$loader_ini_dir" ]] || continue
+    printf 'zend_extension=%s\n' "$target" >"${loader_ini_dir}/00-ioncube.ini"
+    chown root:root "${loader_ini_dir}/00-ioncube.ini"
+    chmod 0644 "${loader_ini_dir}/00-ioncube.ini"
+  done
+
+  if command -v "php${version}" >/dev/null 2>&1; then
+    if ! "php${version}" -v 2>&1 | grep -qi 'ionCube'; then
+      rm -f /etc/php/"$version"/cli/conf.d/00-ioncube.ini /etc/php/"$version"/fpm/conf.d/00-ioncube.ini
+      fail "ionCube Loader failed to load for PHP ${version}"
+    fi
+  fi
+  echo "ionCube Loader enabled for PHP ${version}"
+}
+
 install_php() {
   add-apt-repository -y ppa:ondrej/php
   apt-get update
@@ -203,6 +256,7 @@ install_php() {
     fi
 
     apt-get install -y "${available_packages[@]}"
+    install_ioncube_loader "$version"
 
     ini_file="/etc/php/${version}/fpm/php.ini"
     if [[ -f "$ini_file" ]]; then
