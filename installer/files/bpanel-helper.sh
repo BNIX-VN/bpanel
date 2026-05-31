@@ -280,24 +280,27 @@ install_waf_engine() {
 install_php_version() {
   local version="$1"
   export DEBIAN_FRONTEND=noninteractive
-  [[ "$version" =~ ^(5\.6|7\.4|8\.0|8\.1|8\.2|8\.3|8\.4)$ ]] || deny "unsupported PHP version: $version"
+  [[ "$version" =~ ^(5\.6|7\.4|8\.0|8\.1|8\.2|8\.3|8\.4|8\.5)$ ]] || deny "unsupported PHP version: $version"
   if [[ -f /etc/php/"$version"/fpm/php-fpm.conf ]]; then
     echo "PHP $version is already installed"
     return 0
   fi
-  # Add ondrej/php PPA for older PHP versions if not already added
-  if [[ "$version" != "8.3" && "$version" != "8.4" ]]; then
+  # Add ondrej/php PPA only for older PHP versions (5.6, 7.4, 8.0)
+  # PHP 8.1+ are available in default Ubuntu repos
+  if [[ "$version" =~ ^(5\.6|7\.4|8\.0)$ ]]; then
     if ! grep -q "ondrej/php" /etc/apt/sources.list.d/*.list 2>/dev/null; then
+      echo "Adding ondrej/php PPA for PHP $version..."
       apt-get update
-      apt-get install -y software-properties-common
+      apt-get install -y software-properties-common || true
       add-apt-repository -y ppa:ondrej/php 2>/dev/null || true
       apt-get update
     fi
   fi
-  apt-get install -y "php${version}-fpm" "php${version}-cli" "php${version}-mysql" "php${version}-curl" "php${version}-gd" "php${version}-mbstring" "php${version}-xml" "php${version}-zip" "php${version}-bcmath"
+  echo "Installing PHP $version..."
+  apt-get install -y "php${version}-fpm" "php${version}-cli" "php${version}-mysql" "php${version}-curl" "php${version}-gd" "php${version}-mbstring" "php${version}-xml" "php${version}-zip" "php${version}-bcmath" || { echo "Failed to install PHP $version"; return 1; }
   # Enable and start PHP-FPM
-  systemctl enable "php${version}-fpm"
-  systemctl start "php${version}-fpm" || true
+  systemctl enable "php${version}-fpm" 2>/dev/null || true
+  systemctl start "php${version}-fpm" 2>/dev/null || true
   echo "PHP $version installed successfully"
 }
 
