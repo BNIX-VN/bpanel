@@ -656,6 +656,8 @@ def update_php_config(payload: PhpConfigUpdate, current_user: User = Depends(get
         target = php.update_php_ini(payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     return {"target": target}
 
 

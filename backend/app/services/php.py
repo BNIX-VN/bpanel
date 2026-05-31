@@ -32,11 +32,17 @@ def update_php_ini(payload: PhpConfigUpdate) -> str:
     target = Path(f"/etc/php/{php_version}/fpm/conf.d/99-bpanel.ini")
     if settings.command_dry_run:
         return content
-    target.write_text(content, encoding="utf-8")
     shell.privileged(
-        "systemctl",
-        helper_args=[f"php{php_version}-fpm", "restart"],
-        fallback=["systemctl", "restart", f"php{php_version}-fpm"],
+        "php-config-write",
+        helper_args=[php_version],
+        input=content,
+        fallback=[
+            "bash",
+            "-lc",
+            "cat > /etc/php/$1/fpm/conf.d/99-bpanel.ini && systemctl restart php$1-fpm",
+            "bpanel-php-config-write",
+            php_version,
+        ],
     )
     return str(target)
 

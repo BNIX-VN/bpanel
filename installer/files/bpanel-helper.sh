@@ -24,7 +24,7 @@ ALLOWED_ACTIONS=(start stop restart reload status is-active is-enabled)
 SITES_ROOT="/home/bpanel-sites"
 HOME_ROOT="/home"
 NGINX_CONF_DIR="/etc/nginx/conf.d"
-PHP_CONF_DIRS=(/etc/php/8.3/fpm/conf.d /etc/php/8.4/fpm/conf.d)
+PHP_CONF_DIRS=(/etc/php/{5.6,7.4,8.0,8.1,8.2,8.3,8.4,8.5}/fpm/conf.d)
 BPANEL_SITES_GROUP="bpanel-sites"
 APP_DIR="/opt/bpanel"
 ENV_FILE="${APP_DIR}/backend/.env"
@@ -280,7 +280,7 @@ install_waf_engine() {
 install_php_version() {
   local version="$1"
   export DEBIAN_FRONTEND=noninteractive
-  [[ "$version" =~ ^(5\.6|7\.4|8\.0|8\.1|8\.2|8\.3|8\.4|8\.5)$ ]] || deny "unsupported PHP version: $version"
+  require_php_version "$version"
   if [[ -f /etc/php/"$version"/fpm/php-fpm.conf ]]; then
     echo "PHP $version is already installed"
     return 0
@@ -302,6 +302,60 @@ install_php_version() {
   systemctl enable "php${version}-fpm" 2>/dev/null || true
   systemctl start "php${version}-fpm" 2>/dev/null || true
   echo "PHP $version installed successfully"
+}
+
+validate_php_config_file() {
+  local file="$1" line key value
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -z "$line" ]] && continue
+    case "$line" in *$'\r'*) deny "PHP config contains a carriage return" ;; esac
+    [[ "$line" == *"="* ]] || deny "invalid PHP config line: $line"
+    key="$(printf '%s' "${line%%=*}" | xargs)"
+    value="$(printf '%s' "${line#*=}" | xargs)"
+    case "$key" in
+      display_errors)
+        [[ "$value" == "On" || "$value" == "Off" ]] || deny "invalid display_errors value"
+        ;;
+      memory_limit|upload_max_filesize|post_max_size)
+        [[ "$value" =~ ^[0-9]{1,6}[KMG]?$ ]] || deny "invalid PHP size value for $key"
+        ;;
+      max_execution_time|max_input_time)
+        [[ "$value" =~ ^[0-9]{1,4}$ ]] || deny "invalid integer value for $key"
+        (( 10#$value >= 1 && 10#$value <= 3600 )) || deny "$key out of range"
+        ;;
+      max_input_vars)
+        [[ "$value" =~ ^[0-9]{1,7}$ ]] || deny "invalid integer value for $key"
+        (( 10#$value >= 100 && 10#$value <= 1000000 )) || deny "max_input_vars out of range"
+        ;;
+      *)
+        deny "unsupported PHP config directive: $key"
+        ;;
+    esac
+  done <"$file"
+}
+
+write_php_config() {
+  local version="$1" conf_dir target tmp size
+  require_php_version "$version"
+  conf_dir="/etc/php/${version}/fpm/conf.d"
+  target="${conf_dir}/99-bpanel.ini"
+  [[ -d "$conf_dir" ]] || deny "PHP FPM config directory not found: $conf_dir"
+  tmp="$(mktemp "${conf_dir}/.99-bpanel.ini.XXXXXX")" || deny "cannot create temporary PHP config"
+  if ! cat >"$tmp"; then
+    rm -f -- "$tmp"
+    deny "failed to read PHP config"
+  fi
+  size="$(wc -c <"$tmp" | tr -d '[:space:]')"
+  if (( size <= 0 || size > 8192 )); then
+    rm -f -- "$tmp"
+    deny "PHP config size out of range"
+  fi
+  validate_php_config_file "$tmp"
+  chown root:root "$tmp"
+  chmod 0644 "$tmp"
+  mv -f -- "$tmp" "$target"
+  systemctl restart "php${version}-fpm"
+  echo "PHP ${version} config updated: ${target}"
 }
 
 waf_status() {
@@ -400,7 +454,7 @@ require_proto() {
 }
 
 require_php_version() {
-  [[ "$1" == "8.3" || "$1" == "8.4" ]] || deny "invalid PHP version: $1"
+  [[ "$1" =~ ^(5\.6|7\.4|8\.0|8\.1|8\.2|8\.3|8\.4|8\.5)$ ]] || deny "invalid PHP version: $1"
 }
 
 require_linux_user() {
@@ -667,6 +721,11 @@ case "$cmd" in
   php-install)
     [[ $# -eq 1 ]] || deny "usage: php-install <version>"
     install_php_version "$1"
+    ;;
+
+  php-config-write)
+    [[ $# -eq 1 ]] || deny "usage: php-config-write <version>"
+    write_php_config "$1"
     ;;
 
   # ---- panel runtime ----------------------------------------------------

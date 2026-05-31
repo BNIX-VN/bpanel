@@ -505,7 +505,7 @@ class RestoreBackup(BaseModel):
 
 
 class PhpConfigUpdate(BaseModel):
-    php_version: Literal["8.3", "8.4"] = "8.3"
+    php_version: str = "8.3"
     display_errors: Literal["On", "Off"] = "Off"
     memory_limit: str = "512M"
     upload_max_filesize: str = "1024M"
@@ -513,6 +513,11 @@ class PhpConfigUpdate(BaseModel):
     max_execution_time: int = Field(default=300, ge=1, le=3600)
     max_input_time: int = Field(default=600, ge=1, le=3600)
     max_input_vars: int = Field(default=10000, ge=100, le=1_000_000)
+
+    @field_validator("php_version")
+    @classmethod
+    def validate_php_version(cls, value: str) -> str:
+        return _validate_php_version(value) or "8.3"
 
     @field_validator("memory_limit", "upload_max_filesize", "post_max_size")
     @classmethod
