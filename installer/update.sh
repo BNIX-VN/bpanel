@@ -110,9 +110,9 @@ server {
     }
 }
 NGINX
-  sed -i -E "s#(\$apiUrl = ')[^']+(/api/databases/phpmyadmin-sso/)'#\1${api_scheme}://127.0.0.1:${panel_port}\2'#" /usr/share/phpmyadmin/bpanel-signon.php 2>/dev/null || true
+  sed -i -E "/api\/databases\/phpmyadmin-sso/s#'[^']+/api/databases/phpmyadmin-sso/'#'${api_scheme}://127.0.0.1:${panel_port}/api/databases/phpmyadmin-sso/'#" /usr/share/phpmyadmin/bpanel-signon.php 2>/dev/null || true
   sed -i -E "s#('secure' => )(true|false)#\1${pma_secure}#" /etc/phpmyadmin/conf.d/bpanel-signon.php /usr/share/phpmyadmin/bpanel-signon.php 2>/dev/null || true
-  [[ -n "$host" ]] && sed -i -E "s#(\$cfg\['PmaAbsoluteUri'\] = ')[^']+('#\1${tools_scheme}://${host}/phpmyadmin/\2#" /etc/phpmyadmin/conf.d/bpanel-signon.php 2>/dev/null || true
+  [[ -n "$host" ]] && sed -i -E "/PmaAbsoluteUri/s#'https?://[^']+/phpmyadmin/'#'${tools_scheme}://${host}/phpmyadmin/'#" /etc/phpmyadmin/conf.d/bpanel-signon.php 2>/dev/null || true
 }
 
 configure_fastcgi_cache() {
@@ -241,7 +241,7 @@ SERVICE
     if [[ -n "$(env_get PANEL_SSL_CERT)" && -n "$(env_get PANEL_SSL_KEY)" ]]; then
       scheme="https"
     fi
-    sed -i -E "s#(\$apiUrl = ')[^']+(/api/databases/phpmyadmin-sso/)'#\1${scheme}://127.0.0.1:${panel_port}\2'#" /usr/share/phpmyadmin/bpanel-signon.php || true
+    sed -i -E "/api\/databases\/phpmyadmin-sso/s#'[^']+/api/databases/phpmyadmin-sso/'#'${scheme}://127.0.0.1:${panel_port}/api/databases/phpmyadmin-sso/'#" /usr/share/phpmyadmin/bpanel-signon.php || true
   fi
 }
 

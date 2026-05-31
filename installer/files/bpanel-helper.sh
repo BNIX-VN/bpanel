@@ -128,9 +128,9 @@ server {
     location ~ ^/phpmyadmin/(.+\.php)$ { alias /usr/share/phpmyadmin/\$1; include fastcgi_params; fastcgi_param SCRIPT_FILENAME /usr/share/phpmyadmin/\$1; fastcgi_param SCRIPT_NAME /phpmyadmin/\$1; fastcgi_pass unix:/run/php/php${php_version}-fpm.sock; fastcgi_read_timeout 300; }
 }
 NGINX
-  sed -i -E "s#(\$apiUrl = ')[^']+(/api/databases/phpmyadmin-sso/)'#\1${api_scheme}://127.0.0.1:${port}\2'#" /usr/share/phpmyadmin/bpanel-signon.php 2>/dev/null || true
+  sed -i -E "/api\/databases\/phpmyadmin-sso/s#'[^']+/api/databases/phpmyadmin-sso/'#'${api_scheme}://127.0.0.1:${port}/api/databases/phpmyadmin-sso/'#" /usr/share/phpmyadmin/bpanel-signon.php 2>/dev/null || true
   sed -i -E "s#('secure' => )(true|false)#\1${pma_secure}#" /etc/phpmyadmin/conf.d/bpanel-signon.php /usr/share/phpmyadmin/bpanel-signon.php 2>/dev/null || true
-  [[ -n "$host" ]] && sed -i -E "s#(\$cfg\['PmaAbsoluteUri'\] = ')[^']+('#\1${tools_scheme}://${host}/phpmyadmin/\2#" /etc/phpmyadmin/conf.d/bpanel-signon.php 2>/dev/null || true
+  [[ -n "$host" ]] && sed -i -E "/PmaAbsoluteUri/s#'https?://[^']+/phpmyadmin/'#'${tools_scheme}://${host}/phpmyadmin/'#" /etc/phpmyadmin/conf.d/bpanel-signon.php 2>/dev/null || true
   nginx -t
   systemctl reload nginx || true
 }

@@ -77,7 +77,7 @@ refresh_phpmyadmin_api_base() {
   local signon="/usr/share/phpmyadmin/bpanel-signon.php"
   [[ -f "$signon" ]] || return 0
   local scheme="$1" port="$2"
-  sed -i -E "s#(\$apiUrl = ')[^']+(/api/databases/phpmyadmin-sso/)'#\1${scheme}://127.0.0.1:${port}\2'#" "$signon" || true
+  sed -i -E "/api\/databases\/phpmyadmin-sso/s#'[^']+/api/databases/phpmyadmin-sso/'#'${scheme}://127.0.0.1:${port}/api/databases/phpmyadmin-sso/'#" "$signon" || true
 }
 
 refresh_tools_nginx() {
@@ -104,7 +104,7 @@ server {
 NGINX
   refresh_phpmyadmin_api_base "$api_scheme" "$port"
   sed -i -E "s#('secure' => )(true|false)#\1${pma_secure}#" /etc/phpmyadmin/conf.d/bpanel-signon.php /usr/share/phpmyadmin/bpanel-signon.php 2>/dev/null || true
-  [[ -n "$host" ]] && sed -i -E "s#(\$cfg\['PmaAbsoluteUri'\] = ')[^']+('#\1${tools_scheme}://${host}/phpmyadmin/\2#" /etc/phpmyadmin/conf.d/bpanel-signon.php 2>/dev/null || true
+  [[ -n "$host" ]] && sed -i -E "/PmaAbsoluteUri/s#'https?://[^']+/phpmyadmin/'#'${tools_scheme}://${host}/phpmyadmin/'#" /etc/phpmyadmin/conf.d/bpanel-signon.php 2>/dev/null || true
   nginx -t && systemctl reload nginx || true
 }
 
