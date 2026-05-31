@@ -10,7 +10,7 @@ from app.services.shell import shell
 
 TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates" / "nginx"
 
-ALLOWED_PHP_VERSIONS = {"8.3", "8.4"}
+ALLOWED_PHP_VERSIONS = {"5.6", "7.4", "8.0", "8.1", "8.2", "8.3", "8.4"}
 ALLOWED_APP_TYPES = {"wordpress", "php", "static"}
 ALLOWED_LOG_KINDS = {"access", "error"}
 DOMAIN_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+")

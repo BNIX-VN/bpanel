@@ -277,6 +277,30 @@ install_waf_engine() {
   echo "WAF engine installed. Put Comodo/CWAF rule files under /etc/nginx/modsec/comodo/ if your Comodo account provides them."
 }
 
+install_php_version() {
+  local version="$1"
+  export DEBIAN_FRONTEND=noninteractive
+  [[ "$version" =~ ^(5\.6|7\.4|8\.0|8\.1|8\.2|8\.3|8\.4)$ ]] || deny "unsupported PHP version: $version"
+  if [[ -f /etc/php/"$version"/fpm/php-fpm.conf ]]; then
+    echo "PHP $version is already installed"
+    return 0
+  fi
+  # Add ondrej/php PPA for older PHP versions if not already added
+  if [[ "$version" != "8.3" && "$version" != "8.4" ]]; then
+    if ! grep -q "ondrej/php" /etc/apt/sources.list.d/*.list 2>/dev/null; then
+      apt-get update
+      apt-get install -y software-properties-common
+      add-apt-repository -y ppa:ondrej/php 2>/dev/null || true
+      apt-get update
+    fi
+  fi
+  apt-get install -y "php${version}-fpm" "php${version}-cli" "php${version}-mysql" "php${version}-curl" "php${version}-gd" "php${version}-mbstring" "php${version}-xml" "php${version}-zip" "php${version}-bcmath"
+  # Enable and start PHP-FPM
+  systemctl enable "php${version}-fpm"
+  systemctl start "php${version}-fpm" || true
+  echo "PHP $version installed successfully"
+}
+
 waf_status() {
   echo "ModSecurity module:"
   if nginx -V 2>&1 | grep -qi modsecurity || [[ -e /etc/nginx/modules-enabled/50-mod-http-modsecurity.conf ]]; then
@@ -634,6 +658,12 @@ case "$cmd" in
       exec /etc/nginx/modsec/comodo/update.sh
     fi
     echo "No Comodo rule updater found. Install the Comodo/CWAF updater or place rules in /etc/nginx/modsec/comodo/."
+    ;;
+
+  # ---- PHP installation --------------------------------------------------
+  php-install)
+    [[ $# -eq 1 ]] || deny "usage: php-install <version>"
+    install_php_version "$1"
     ;;
 
   # ---- panel runtime ----------------------------------------------------

@@ -185,6 +185,7 @@ function App() {
   const [editorCursor, setEditorCursor] = useState({ line: 1, column: 1 });
   const [newUser, setNewUser] = useState({ username: '', email: '', password: '', role: 'end_user', website_limit: 5, storage_limit_mb: 1024 });
   const [phpConfig, setPhpConfig] = useState({ php_version: '8.3', display_errors: 'Off', max_execution_time: 300, max_input_time: 600, max_input_vars: 10000, memory_limit: '512M', post_max_size: '1024M', upload_max_filesize: '1024M' });
+  const [phpVersions, setPhpVersions] = useState({ installed: ['8.3', '8.4'], supported: ['5.6', '7.4', '8.0', '8.1', '8.2', '8.3', '8.4'] });
   const [firewallStatus, setFirewallStatus] = useState(null);
   const [firewallPort, setFirewallPort] = useState('80');
   const [firewallProtocol, setFirewallProtocol] = useState('tcp');
@@ -476,6 +477,7 @@ function App() {
     }
     const dbData = await request('/databases');
     if (dbData) setDatabases(dbData);
+    if (isAdmin) await loadPhpVersions();
   }
 
   async function loadUsers() {
@@ -1310,6 +1312,17 @@ function App() {
     if (data?.target) { setNotice(`Updated PHP config: ${data.target}`); await loadPhpConfig(phpConfig.php_version); }
   }
 
+  async function loadPhpVersions() {
+    const data = await request('/maintenance/php-versions', {}, 'Loading PHP versions...');
+    if (data) setPhpVersions(data);
+  }
+
+  async function installPhpVersion(version) {
+    if (!confirm(`Install PHP ${version}? This will install php${version}-fpm via apt.`)) return;
+    const data = await request(`/maintenance/php-versions/${version}/install`, { method: 'POST' }, `Installing PHP ${version}...`);
+    if (data) { setNotice(`PHP ${version} installed successfully.`); await loadPhpVersions(); }
+  }
+
   async function loadFirewall() {
     const data = await request('/firewall/status', {}, 'Loading firewall...');
     if (data) setFirewallStatus(data);
@@ -1615,8 +1628,7 @@ function App() {
             <option value="static">Static only</option>
           </select>
           <select value={phpVersion} onChange={e => setPhpVersion(e.target.value)}>
-            <option value="8.3">PHP 8.3</option>
-            <option value="8.4">PHP 8.4</option>
+            {phpVersions.installed.map(v => <option key={v} value={v}>PHP {v}</option>)}
           </select>
           <input value={adminEmail} onChange={e => setAdminEmail(e.target.value)} placeholder="admin@domain.com" disabled={!wpFieldsEnabled} />
           <input value={wpAdminUser} onChange={e => setWpAdminUser(e.target.value)} placeholder="WP admin user" disabled={!wpFieldsEnabled} />
@@ -1661,7 +1673,7 @@ function App() {
             </div>
             <div className="actions">
               {site.app_type !== 'static' && <select value={websitePhpVersions[site.id] || site.php_version || '8.3'} onChange={e => setWebsitePhpVersions(prev => ({ ...prev, [site.id]: e.target.value }))}>
-                <option value="8.3">PHP 8.3</option><option value="8.4">PHP 8.4</option>
+                {phpVersions.installed.map(v => <option key={v} value={v}>PHP {v}</option>)}
               </select>}
               {site.app_type !== 'static' && <button disabled={!!loading || (websitePhpVersions[site.id] || site.php_version) === site.php_version} onClick={() => changeWebsitePhpVersion(site)}>Change PHP</button>}
               <button disabled={!!loading} onClick={() => openWebsiteFileManager(site)}><FolderOpen size={14}/> Files</button>
@@ -2035,13 +2047,21 @@ function App() {
 
   function renderPhpConfig() {
     if (!isAdmin) return <section className="section"><h2>PHP config</h2><p className="hint">You do not have permission to edit PHP config.</p></section>;
+    const notInstalled = phpVersions.supported.filter(v => !phpVersions.installed.includes(v));
     return <section className="section">
       <div className="section-title">
         <div><h2>PHP Configuration</h2><p className="hint">Edit <code>99-bpanel.ini</code> then restart the matching PHP-FPM service.</p></div>
       </div>
+      {notInstalled.length > 0 && <div className="user-create-card" style={{ marginBottom: 16 }}>
+        <h3>Install PHP versions</h3>
+        <p className="hint">The following PHP versions are available but not installed:</p>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+          {notInstalled.map(v => <button key={v} disabled={!!loading} onClick={() => installPhpVersion(v)}>Install PHP {v}</button>)}
+        </div>
+      </div>}
       <div className="user-create-card">
         <label><span>PHP version</span><select value={phpConfig.php_version} onChange={e => { const v = e.target.value; setPhpConfig(prev => ({ ...prev, php_version: v })); loadPhpConfig(v); }}>
-          <option value="8.3">PHP 8.3</option><option value="8.4">PHP 8.4</option>
+          {phpVersions.installed.map(v => <option key={v} value={v}>PHP {v}</option>)}
         </select></label>
         <label><span>display_errors</span><select value={phpConfig.display_errors} onChange={e => setPhpConfig(prev => ({ ...prev, display_errors: e.target.value }))}>
           <option value="Off">Off (production)</option><option value="On">On (debug)</option>

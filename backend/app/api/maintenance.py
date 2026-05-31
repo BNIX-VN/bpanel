@@ -659,6 +659,25 @@ def update_php_config(payload: PhpConfigUpdate, current_user: User = Depends(get
     return {"target": target}
 
 
+@router.get("/php-versions")
+def get_php_versions(current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.admin)
+    return {
+        "installed": php.list_installed_php(),
+        "supported": list(php.SUPPORTED_PHP_VERSIONS),
+    }
+
+
+@router.post("/php-versions/{php_version}/install")
+def install_php_version(php_version: str, current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.admin)
+    try:
+        result = php.install_php(php_version)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return result
+
+
 @router.post("/cron")
 def add_cron(payload: CronCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     website = get_owned_website(db, current_user, payload.website_id)
