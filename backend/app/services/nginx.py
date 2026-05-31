@@ -385,7 +385,7 @@ def render_vhost(
     php_version: Optional[str] = None,
     custom_directives: str = "",
     php_fpm_socket_override: Optional[str] = None,
-    waf_enabled: bool = False,
+    waf_enabled: bool = True,
 ) -> str:
     if not DOMAIN_RE.fullmatch((domain or "").lower()):
         raise ValueError("Invalid domain")
@@ -427,7 +427,7 @@ def write_vhost(
     php_version: Optional[str] = None,
     custom_directives: str = "",
     php_fpm_socket_override: Optional[str] = None,
-    waf_enabled: bool = False,
+    waf_enabled: bool = True,
 ) -> str:
     content = render_vhost(
         domain,
@@ -462,7 +462,7 @@ def rewrite_vhost(
     php_version: str,
     custom_directives: str = "",
     php_fpm_socket_override: Optional[str] = None,
-    waf_enabled: bool = False,
+    waf_enabled: bool = True,
 ) -> str:
     target = _vhost_path(domain)
     content = render_vhost(
@@ -523,7 +523,7 @@ def harden_existing_wordpress_vhost(
     root_path: str,
     php_version: str | None = None,
     php_fpm_socket_override: Optional[str] = None,
-    waf_enabled: bool = False,
+    waf_enabled: bool = True,
 ) -> str:
     target = _vhost_path(domain)
     content = render_vhost(

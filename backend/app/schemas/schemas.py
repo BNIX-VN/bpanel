@@ -294,7 +294,7 @@ class WebsiteOut(BaseModel):
     ssl_enabled: bool
     status: str
     nginx_custom: str = ""
-    waf_enabled: bool = False
+    waf_enabled: bool = True
 
     class Config:
         from_attributes = True
