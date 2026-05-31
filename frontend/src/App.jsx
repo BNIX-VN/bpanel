@@ -2050,15 +2050,8 @@ function App() {
     const notInstalled = phpVersions.supported.filter(v => !phpVersions.installed.includes(v));
     return <section className="section">
       <div className="section-title">
-        <div><h2>PHP Configuration</h2><p className="hint">Edit <code>99-bpanel.ini</code> then restart the matching PHP-FPM service.</p></div>
+        <div><h2>PHP Configuration</h2></div>
       </div>
-      {notInstalled.length > 0 && <div className="user-create-card" style={{ marginBottom: 16 }}>
-        <h3>Install PHP versions</h3>
-        <p className="hint">The following PHP versions are available but not installed:</p>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
-          {notInstalled.map(v => <button key={v} disabled={!!loading} onClick={() => installPhpVersion(v)}>Install PHP {v}</button>)}
-        </div>
-      </div>}
       <div className="user-create-card">
         <label><span>PHP version</span><select value={phpConfig.php_version} onChange={e => { const v = e.target.value; setPhpConfig(prev => ({ ...prev, php_version: v })); loadPhpConfig(v); }}>
           {phpVersions.installed.map(v => <option key={v} value={v}>PHP {v}</option>)}
@@ -2072,9 +2065,14 @@ function App() {
         <label><span>memory_limit</span><input value={phpConfig.memory_limit} onChange={e => setPhpConfig(prev => ({ ...prev, memory_limit: e.target.value }))} placeholder="512M" /></label>
         <label><span>post_max_size</span><input value={phpConfig.post_max_size} onChange={e => setPhpConfig(prev => ({ ...prev, post_max_size: e.target.value }))} placeholder="1024M" /></label>
         <label><span>upload_max_filesize</span><input value={phpConfig.upload_max_filesize} onChange={e => setPhpConfig(prev => ({ ...prev, upload_max_filesize: e.target.value }))} placeholder="1024M" /></label>
-        <button disabled={!!loading} onClick={updatePhpConfig}>Save PHP config</button>
+        <button disabled={!!loading} onClick={updatePhpConfig}>Save</button>
       </div>
-      <p className="hint">Note: <code>post_max_size</code> should be ≥ <code>upload_max_filesize</code>.</p>
+      {notInstalled.length > 0 && <div className="user-create-card" style={{ marginTop: 16 }}>
+        <h3>Install PHP</h3>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {notInstalled.map(v => <button key={v} disabled={!!loading} onClick={() => installPhpVersion(v)}>+ PHP {v}</button>)}
+        </div>
+      </div>}
     </section>;
   }
 
