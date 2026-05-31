@@ -333,22 +333,26 @@ log "Syncing source to $APP_DIR"
 mkdir -p "$APP_DIR"
 
 if command -v rsync >/dev/null 2>&1; then
-  # --filter='P ...' (protect) keeps the destination file even when --delete
+  # --filter='protect ...' keeps the destination file even when --delete
   # would otherwise remove it because the source side doesn't have it. We use
   # this for runtime artefacts that the installer creates: .env, .venv,
   # bpanel.db, .my.cnf.
   rsync -a --delete \
-    --filter='P /.env' \
-    --filter='P /.venv/***' \
-    --filter='P /bpanel.db' \
-    --filter='P /.my.cnf' \
+    --filter='protect /.env' \
+    --filter='protect /.venv' \
+    --filter='protect /.venv/**' \
+    --filter='protect /bpanel.db' \
+    --filter='protect /.my.cnf' \
     --exclude '__pycache__/' \
     --exclude '*.pyc' \
     "$SOURCE_DIR/backend/" "$APP_DIR/backend/"
   rsync -a --delete \
-    --filter='P /node_modules/***' \
-    --filter='P /dist/***' \
-    --filter='P /.vite/***' \
+    --filter='protect /node_modules' \
+    --filter='protect /node_modules/**' \
+    --filter='protect /dist' \
+    --filter='protect /dist/**' \
+    --filter='protect /.vite' \
+    --filter='protect /.vite/**' \
     "$SOURCE_DIR/frontend/" "$APP_DIR/frontend/"
 else
   cp -r "$SOURCE_DIR/backend/."  "$APP_DIR/backend/"
