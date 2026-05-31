@@ -14,8 +14,10 @@ def _safe_ini_value(value: str) -> str:
 
 
 def update_php_ini(payload: PhpConfigUpdate) -> str:
-    if payload.php_version not in SUPPORTED_PHP_VERSIONS:
-        raise ValueError(f"Unsupported PHP version. Allowed: {sorted(SUPPORTED_PHP_VERSIONS)}")
+    php_version = payload.php_version
+    if php_version not in SUPPORTED_PHP_VERSIONS:
+        allowed = ", ".join(sorted(SUPPORTED_PHP_VERSIONS))
+        raise ValueError(f"Unsupported PHP version. Allowed: {allowed}")
     display_errors = "On" if str(payload.display_errors).lower() in {"1", "true", "on", "yes"} else "Off"
     content = "\n".join([
         f"display_errors = {display_errors}",
@@ -27,7 +29,6 @@ def update_php_ini(payload: PhpConfigUpdate) -> str:
         f"max_input_vars = {int(payload.max_input_vars)}",
         "",
     ])
-    php_version = payload.php_version
     target = Path(f"/etc/php/{php_version}/fpm/conf.d/99-bpanel.ini")
     if settings.command_dry_run:
         return content
@@ -53,7 +54,8 @@ PHP_CONFIG_KEYS = {
 
 def read_php_ini(php_version: str) -> dict:
     if php_version not in SUPPORTED_PHP_VERSIONS:
-        raise ValueError(f"Unsupported PHP version. Allowed: {sorted(SUPPORTED_PHP_VERSIONS)}")
+        allowed = ", ".join(sorted(SUPPORTED_PHP_VERSIONS))
+        raise ValueError(f"Unsupported PHP version. Allowed: {allowed}")
     values = dict(PHP_CONFIG_KEYS)
     for path in [
         Path(f"/etc/php/{php_version}/fpm/php.ini"),
