@@ -325,7 +325,7 @@ button:disabled{opacity:.55;cursor:not-allowed;box-shadow:none}
 .error{
   margin-bottom:16px;background:#fef2f2;color:#991b1b;
   border:1px solid #fecaca;border-radius:var(--radius-md);
-  padding:12px 16px;font-weight:600;
+  padding:12px 16px;font-weight:600;white-space:pre-wrap;
   animation:shake .4s ease;
 }
 @keyframes shake{

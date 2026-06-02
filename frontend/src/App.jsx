@@ -40,6 +40,35 @@ function aceModeName(mode) {
   return 'text';
 }
 
+function formatApiError(detail, fallback = 'Request failed.') {
+  if (detail === null || detail === undefined || detail === '') return fallback;
+  if (typeof detail === 'string') return detail.replace(/^Value error,\s*/i, '') || fallback;
+  if (typeof detail === 'number' || typeof detail === 'boolean') return String(detail);
+
+  if (Array.isArray(detail)) {
+    const messages = detail.map(item => formatApiErrorItem(item)).filter(Boolean);
+    return messages.length ? messages.join('\n') : fallback;
+  }
+
+  if (typeof detail === 'object') {
+    if (detail.detail !== undefined) return formatApiError(detail.detail, fallback);
+    if (detail.message !== undefined) return formatApiError(detail.message, fallback);
+    if (detail.msg !== undefined) return formatApiError(detail.msg, fallback);
+    try { return JSON.stringify(detail); } catch { return fallback; }
+  }
+
+  return fallback;
+}
+
+function formatApiErrorItem(item) {
+  if (!item || typeof item !== 'object') return formatApiError(item, '');
+  const message = formatApiError(item.msg ?? item.message ?? item.detail, 'Invalid value');
+  const loc = Array.isArray(item.loc)
+    ? item.loc.filter(part => part !== 'body' && part !== 'query' && part !== 'path').join('.')
+    : '';
+  return loc ? `${loc}: ${message}` : message;
+}
+
 function CodeEditor({ value, mode, disabled, onChange, onCursorChange }) {
   const hostRef = useRef(null);
   const editorRef = useRef(null);
@@ -296,7 +325,7 @@ function App() {
       let data;
       try { data = text ? JSON.parse(text) : {}; } catch { data = { detail: text || `HTTP ${res.status}` }; }
       if (!res.ok && handleAuthExpired(res.status, data.detail)) return null;
-      if (!res.ok) setError(data.detail || `Request failed with status ${res.status}`);
+      if (!res.ok) setError(formatApiError(data.detail, `Request failed with status ${res.status}`));
       if (res.ok && data?.message) setNotice(data.message);
       return res.ok ? data : null;
     } catch (err) {
@@ -331,7 +360,7 @@ function App() {
         setNotice('Login successful.');
         await loadCurrentUser();
       } else {
-        setError(data.detail || `Login failed with status ${res.status}`);
+        setError(formatApiError(data.detail, `Login failed with status ${res.status}`));
       }
     } catch (err) {
       setError(`Cannot connect to the ${panelSettings.app_name || 'BPanel'} API at ${API}. Check bpanel-api and the panel port.`);
@@ -617,25 +646,27 @@ function App() {
   }
 
   async function createWordPress() {
-    if (!domain) { setError('Please enter a domain name.'); return; }
+    const cleanDomain = domain.trim().toLowerCase();
+    const cleanAdminEmail = adminEmail.trim();
+    if (!cleanDomain) { setError('Please enter a domain name.'); return; }
     const installWp = siteType === 'wordpress' && installWordPress;
     const body = {
-      domain,
+      domain: cleanDomain,
       php_version: phpVersion,
       app_type: siteType,
       install_wordpress: installWp,
-      title: domain,
+      title: cleanDomain,
       admin_user: wpAdminUser,
-      admin_email: adminEmail || `admin@${domain}`,
+      admin_email: cleanAdminEmail || `admin@${cleanDomain}`,
       admin_password: wpAdminPassword || (installWp ? 'StrongPass123!' : ''),
     };
     const data = await request('/websites', { method: 'POST', body: JSON.stringify(body) },
       installWp ? 'Creating WordPress website...' : 'Creating website...');
     if (data) {
       if (installWp) {
-        setNotice(`Created WordPress site: https://${domain}\nAdmin: ${wpAdminUser} | Password: ${wpAdminPassword || 'StrongPass123!'}`);
+        setNotice(`Created WordPress site: https://${cleanDomain}\nAdmin: ${wpAdminUser} | Password: ${wpAdminPassword || 'StrongPass123!'}`);
       } else {
-        setNotice(`Created site ${domain}. Upload your files to public_html/ folder.`);
+        setNotice(`Created site ${cleanDomain}. Upload your files to public_html/ folder.`);
       }
       if (installSslAfterCreate) await enableSsl(data.id);
       refreshAll();
@@ -803,7 +834,7 @@ function App() {
     try {
       setError(''); setLoading('Downloading file...');
       const res = await fetch(`${API}/maintenance/files/${selectedWebsiteId}/download?path=${encodeURIComponent(path)}`, { credentials: 'include' });
-      if (!res.ok) { const data = await res.json().catch(() => ({})); if (handleAuthExpired(res.status, data.detail)) return; setError(data.detail || 'Download failed.'); return; }
+      if (!res.ok) { const data = await res.json().catch(() => ({})); if (handleAuthExpired(res.status, data.detail)) return; setError(formatApiError(data.detail, 'Download failed.')); return; }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -970,7 +1001,7 @@ function App() {
           await listFiles(data.destination_path || fileListPath);
           await loadCurrentUser();
         } else if (data.status === 'error') {
-          setError(data.error || 'Extraction failed');
+          setError(formatApiError(data.error, 'Extraction failed'));
         }
       }
     };
@@ -1011,7 +1042,7 @@ function App() {
       const responseText = await res.text();
       let data;
       try { data = responseText ? JSON.parse(responseText) : {}; } catch { data = { detail: responseText || `HTTP ${res.status}` }; }
-      if (!res.ok) { if (handleAuthExpired(res.status, data.detail)) return; setError(data.detail || 'Upload failed.'); return; }
+      if (!res.ok) { if (handleAuthExpired(res.status, data.detail)) return; setError(formatApiError(data.detail, 'Upload failed.')); return; }
       setNotice(`Uploaded ${file.name} to ${uploadDir || 'site root'}.`);
       if (String(fileListPath || '') === uploadDir) await listFiles(uploadDir);
       await loadCurrentUser();
@@ -1135,7 +1166,7 @@ function App() {
     try {
       setError(''); setLoading('Downloading backup...');
       const res = await fetch(`${API}/maintenance/backups/${selectedWebsiteId}/download?backup_file=${encodeURIComponent(file)}`, { credentials: 'include' });
-      if (!res.ok) { const data = await res.json().catch(() => ({})); if (handleAuthExpired(res.status, data.detail)) return; setError(data.detail || 'Download failed.'); return; }
+      if (!res.ok) { const data = await res.json().catch(() => ({})); if (handleAuthExpired(res.status, data.detail)) return; setError(formatApiError(data.detail, 'Download failed.')); return; }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -1151,7 +1182,7 @@ function App() {
     try {
       setError(''); setLoading('Downloading full user backup...');
       const res = await fetch(`${API}/maintenance/user-backups-download?backup_file=${encodeURIComponent(file)}`, { credentials: 'include' });
-      if (!res.ok) { const data = await res.json().catch(() => ({})); if (handleAuthExpired(res.status, data.detail)) return; setError(data.detail || 'Download failed.'); return; }
+      if (!res.ok) { const data = await res.json().catch(() => ({})); if (handleAuthExpired(res.status, data.detail)) return; setError(formatApiError(data.detail, 'Download failed.')); return; }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -1211,7 +1242,7 @@ function App() {
       const responseText = await res.text();
       let data;
       try { data = responseText ? JSON.parse(responseText) : {}; } catch { data = { detail: responseText || `HTTP ${res.status}` }; }
-      if (!res.ok) { if (handleAuthExpired(res.status, data.detail)) return; setError(data.detail || 'Upload failed.'); return; }
+      if (!res.ok) { if (handleAuthExpired(res.status, data.detail)) return; setError(formatApiError(data.detail, 'Upload failed.')); return; }
       setNotice(`Uploaded ${data.items?.length || selectedFiles.length} full user backup file(s).`);
       await loadRestoreBackups();
       await listUserBackups();
@@ -1231,7 +1262,7 @@ function App() {
       });
       const data = await res.json().catch(() => ({}));
       if (handleAuthExpired(res.status, data.detail)) return;
-      if (!res.ok || !data.url) { setError(data.detail || 'Cannot open phpMyAdmin.'); return; }
+      if (!res.ok || !data.url) { setError(formatApiError(data.detail, 'Cannot open phpMyAdmin.')); return; }
       window.open(data.url, '_blank', 'noopener,noreferrer');
     } catch (err) { setError('Cannot open phpMyAdmin.'); }
     finally { setLoading(''); }
@@ -1241,7 +1272,7 @@ function App() {
     try {
       setError(''); setLoading('Downloading database...');
       const res = await fetch(`${API}/databases/${databaseId}/download`, { credentials: 'include' });
-      if (!res.ok) { const data = await res.json().catch(() => ({})); if (handleAuthExpired(res.status, data.detail)) return; setError(data.detail || 'Download failed.'); return; }
+      if (!res.ok) { const data = await res.json().catch(() => ({})); if (handleAuthExpired(res.status, data.detail)) return; setError(formatApiError(data.detail, 'Download failed.')); return; }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -1276,7 +1307,7 @@ function App() {
       const responseText = await res.text();
       let data;
       try { data = responseText ? JSON.parse(responseText) : {}; } catch { data = { detail: responseText || `HTTP ${res.status}` }; }
-      if (!res.ok) { if (handleAuthExpired(res.status, data.detail)) return; setError(data.detail || 'Upload failed.'); return; }
+      if (!res.ok) { if (handleAuthExpired(res.status, data.detail)) return; setError(formatApiError(data.detail, 'Upload failed.')); return; }
       if (data.backup_file) { setNotice(`Uploaded backup: ${data.backup_file}`); await listBackups(); }
     } catch (err) { setError('Upload backup failed.'); }
     finally { setLoading(''); }
@@ -2334,8 +2365,8 @@ function App() {
         </div>
       </header>
       {loading && <div className="loading">{loading}</div>}
-      {error && <div className="error"><AlertCircle size={16} style={{display:'inline',verticalAlign:'middle',marginRight:6}}/>{error}</div>}
-      {notice && <div className="notice">{notice}</div>}
+      {error && <div className="error"><AlertCircle size={16} style={{display:'inline',verticalAlign:'middle',marginRight:6}}/>{formatApiError(error, '')}</div>}
+      {notice && <div className="notice">{formatApiError(notice, '')}</div>}
       <section className="standalone-editor-body">
         <CodeEditor
           value={fileContent}
@@ -2391,8 +2422,8 @@ function App() {
           {needsTwoFactor && <input value={otpCode} onChange={e => setOtpCode(e.target.value)} placeholder="Authentication code" inputMode="numeric" autoComplete="one-time-code" onKeyDown={e => { if (e.key === 'Enter') login(); }} />}
           <button disabled={!!loading || !username || !password} onClick={login}>{loading ? 'Logging in...' : 'Login'}</button>
         </div>
-        {error && <div className="error"><AlertCircle size={16} style={{display:'inline',verticalAlign:'middle',marginRight:6}}/>{error}</div>}
-        {notice && <div className="notice">{notice}</div>}
+        {error && <div className="error"><AlertCircle size={16} style={{display:'inline',verticalAlign:'middle',marginRight:6}}/>{formatApiError(error, '')}</div>}
+        {notice && <div className="notice">{formatApiError(notice, '')}</div>}
       </section>
     </main>;
   }
@@ -2441,8 +2472,8 @@ function App() {
         <div className="content-body">
           {renderPage()}
           {loading && <div className="loading"><span></span>{loading}</div>}
-          {error && <div className="error">{error}</div>}
-          {notice && <div className="notice">{notice}</div>}
+          {error && <div className="error">{formatApiError(error, '')}</div>}
+          {notice && <div className="notice">{formatApiError(notice, '')}</div>}
         </div>
       </div>
     </section>
