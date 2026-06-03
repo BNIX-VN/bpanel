@@ -191,6 +191,7 @@ function App() {
   const [resourceUsage, setResourceUsage] = useState(null);
   const [serviceStates, setServiceStates] = useState({});
   const [backups, setBackups] = useState([]);
+  const [backupJobs, setBackupJobs] = useState([]);
   const [userBackups, setUserBackups] = useState([]);
   const [restoreBackups, setRestoreBackups] = useState([]);
   const [restoreBackupDir, setRestoreBackupDir] = useState('');
@@ -201,8 +202,9 @@ function App() {
   const [selectedSftpTargetId, setSelectedSftpTargetId] = useState('');
   const [newSftpTarget, setNewSftpTarget] = useState({ name: '', host: '', port: 22, username: '', password: '', private_key: '', remote_path: '/backups/bpanel' });
   const [selectedWebsiteId, setSelectedWebsiteId] = useState(() => standaloneEditor?.websiteId || '');
-  const [cronSchedule, setCronSchedule] = useState('0 2 * * *');
-  const [cronCommand, setCronCommand] = useState('wp cron event run --due-now --allow-root');
+  const [cronSchedule, setCronSchedule] = useState('*/15 * * * *');
+  const [cronCommand, setCronCommand] = useState('wp cron event run --due-now');
+  const [cronItems, setCronItems] = useState([]);
   const [filePath, setFilePath] = useState(() => standaloneEditor?.path || 'public_html/index.html');
   const [fileListPath, setFileListPath] = useState('public_html');
   const [fileUploadDir, setFileUploadDir] = useState('public_html');
@@ -235,8 +237,8 @@ function App() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState('');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [panelSettings, setPanelSettings] = useState({ app_name: 'BPanel', panel_url: '', logo_url: '', favicon_url: '/favicon.png', ssl_enabled: false });
-  const [panelSettingsForm, setPanelSettingsForm] = useState({ app_name: 'BPanel', panel_url: '' });
+  const [panelSettings, setPanelSettings] = useState({ app_name: 'BPanel', panel_url: '', panel_hostname: '', panel_port: 2222, logo_url: '', favicon_url: '/favicon.png', ssl_enabled: false });
+  const [panelSettingsForm, setPanelSettingsForm] = useState({ app_name: 'BPanel', panel_hostname: '', panel_port: 2222 });
   const [panelLogoFile, setPanelLogoFile] = useState(null);
   const [panelFaviconFile, setPanelFaviconFile] = useState(null);
   const [panelSslEmail, setPanelSslEmail] = useState('');
@@ -259,6 +261,38 @@ function App() {
     return match ? decodeURIComponent(match[1]) : '';
   }
 
+  function currentPanelHost() {
+    return window.location.hostname || '';
+  }
+
+  function currentPanelPort() {
+    const port = Number(window.location.port || 2222);
+    return Number.isFinite(port) && port > 0 ? port : 2222;
+  }
+
+  function formFromPanelSettings(data = {}) {
+    let hostname = data.panel_hostname || currentPanelHost();
+    let port = Number(data.panel_port || currentPanelPort());
+    if ((!hostname || !port) && data.panel_url) {
+      try {
+        const parsed = new URL(data.panel_url);
+        hostname = hostname || parsed.hostname;
+        port = port || Number(parsed.port || 2222);
+      } catch {}
+    }
+    return {
+      app_name: data.app_name || 'BPanel',
+      panel_hostname: hostname,
+      panel_port: Number.isFinite(port) && port > 0 ? port : 2222,
+    };
+  }
+
+  function panelHostPortLabel() {
+    const host = panelSettingsForm.panel_hostname || currentPanelHost();
+    const port = panelSettingsForm.panel_port || currentPanelPort();
+    return host ? `${host}:${port}` : `:${port}`;
+  }
+
   function clearSession(message = 'Your session expired. Please log in again.') {
     // Old localStorage token from a previous deploy: nuke it for safety.
     try { localStorage.removeItem('token'); } catch {}
@@ -272,6 +306,8 @@ function App() {
     setResourceUsage(null);
     setServiceStates({});
     setBackups([]);
+    setBackupJobs([]);
+    setCronItems([]);
     setUserBackups([]);
     setRestoreBackups([]);
     setRestoreBackupDir('');
@@ -404,9 +440,8 @@ function App() {
       const res = await fetch(`${API}/panel-settings/public`, { credentials: 'include' });
       if (!res.ok) return null;
       const data = await res.json();
-      const panelUrl = data.panel_url || `${window.location.protocol}//${window.location.host}`;
       setPanelSettings(data);
-      setPanelSettingsForm({ app_name: data.app_name || 'BPanel', panel_url: panelUrl });
+      setPanelSettingsForm(formFromPanelSettings(data));
       return data;
     } catch {
       return null;
@@ -416,12 +451,12 @@ function App() {
   async function savePanelSettings() {
     const data = await request('/panel-settings', {
       method: 'PATCH',
-      body: JSON.stringify(panelSettingsForm),
+      body: JSON.stringify({ ...panelSettingsForm, panel_port: Number(panelSettingsForm.panel_port || 2222) }),
     }, 'Saving panel settings...');
     if (data) {
       setPanelSettings(data);
-      setPanelSettingsForm({ app_name: data.app_name || 'BPanel', panel_url: data.panel_url || `${window.location.protocol}//${window.location.host}` });
-      setNotice('Panel settings updated. The panel may restart if the URL changed.');
+      setPanelSettingsForm(formFromPanelSettings(data));
+      setNotice('Panel settings updated. The panel may restart if the hostname or port changed.');
     }
   }
 
@@ -433,7 +468,7 @@ function App() {
     const data = await request(`/panel-settings/${kind}`, { method: 'POST', body }, `Uploading ${kind}...`);
     if (data) {
       setPanelSettings(data);
-      setPanelSettingsForm({ app_name: data.app_name || 'BPanel', panel_url: data.panel_url || `${window.location.protocol}//${window.location.host}` });
+      setPanelSettingsForm(formFromPanelSettings(data));
       if (kind === 'logo') setPanelLogoFile(null);
       if (kind === 'favicon') setPanelFaviconFile(null);
     }
@@ -442,11 +477,11 @@ function App() {
   async function installPanelSsl() {
     const data = await request('/panel-settings/ssl', {
       method: 'POST',
-      body: JSON.stringify({ panel_url: panelSettingsForm.panel_url, email: panelSslEmail }),
+      body: JSON.stringify({ panel_hostname: panelSettingsForm.panel_hostname, panel_port: Number(panelSettingsForm.panel_port || 2222), email: panelSslEmail }),
     }, 'Installing panel SSL...');
     if (data) {
       setPanelSettings(data);
-      setPanelSettingsForm({ app_name: data.app_name || 'BPanel', panel_url: data.panel_url || `${window.location.protocol}//${window.location.host}` });
+      setPanelSettingsForm(formFromPanelSettings(data));
       setNotice(data.message || 'Panel SSL installed. The panel may restart in a moment.');
     }
   }
@@ -792,13 +827,28 @@ function App() {
   }
 
   async function addCron() {
-    await request('/maintenance/cron', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), schedule: cronSchedule, command: cronCommand }) }, 'Adding cron job...');
+    const data = await request('/maintenance/cron', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), schedule: cronSchedule, command: cronCommand }) }, 'Adding cron job...');
+    if (data) {
+      setNotice('Cron job added.');
+      await listCron();
+    }
   }
 
-  async function deleteCron() {
-    const index = Number(prompt('Enter the cron index to delete, starting from 0:'));
+  async function listCron() {
+    if (!selectedWebsiteId) return;
+    const data = await request(`/maintenance/cron/${selectedWebsiteId}`, {}, 'Loading cron jobs...');
+    if (data?.items) setCronItems(data.items);
+  }
+
+  async function deleteCron(index) {
+    if (!confirm(`Delete cron #${index}?`)) return;
+    index = Number(index);
     if (Number.isNaN(index)) return;
-    await request('/maintenance/cron', { method: 'DELETE', body: JSON.stringify({ website_id: Number(selectedWebsiteId), index }) }, 'Deleting cron job...');
+    const data = await request('/maintenance/cron', { method: 'DELETE', body: JSON.stringify({ website_id: Number(selectedWebsiteId), index }) }, 'Deleting cron job...');
+    if (data) {
+      setNotice('Cron job deleted.');
+      await listCron();
+    }
   }
 
   async function listFiles(path = fileListPath, websiteId = selectedWebsiteId) {
@@ -1051,13 +1101,37 @@ function App() {
   }
 
   async function createBackup() {
-    const data = await request('/maintenance/backup', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId) }) }, 'Creating backup...');
-    if (data?.backup_file) { setNotice(`Created backup: ${data.backup_file}`); await listBackups(); }
+    const data = await request('/maintenance/backup', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId) }) }, 'Queueing backup...');
+    if (data?.job_id) { setNotice('Backup queued. It will keep running on the server.'); await loadBackupJobs(); }
+    else if (data?.backup_file) { setNotice(`Created backup: ${data.backup_file}`); await listBackups(); }
   }
 
   async function listBackups() {
     const data = await request(`/maintenance/backups/${selectedWebsiteId}`);
     if (data?.items) setBackups(data.items);
+  }
+
+  async function loadBackupJobs() {
+    const data = await request('/maintenance/backup-jobs');
+    if (data?.jobs) {
+      const hasActive = data.jobs.some(job => ['queued', 'running'].includes(job.status));
+      setBackupJobs(prev => {
+        const hadActive = prev.some(job => ['queued', 'running'].includes(job.status));
+        if (hadActive && !hasActive) {
+          setTimeout(() => {
+            if (selectedWebsiteId) listBackups();
+            if (selectedBackupUserId) listUserBackups(selectedBackupUserId);
+          }, 0);
+        }
+        return data.jobs;
+      });
+    }
+  }
+
+  async function refreshBackupArea() {
+    await listBackups();
+    await loadBackupJobs();
+    if (selectedBackupUserId) await listUserBackups(selectedBackupUserId);
   }
 
   async function listUserBackups(userId = selectedBackupUserId) {
@@ -1072,8 +1146,9 @@ function App() {
       user_id: Number(selectedBackupUserId),
       target_id: selectedSftpTargetId ? Number(selectedSftpTargetId) : null,
     };
-    const data = await request('/maintenance/user-backup', { method: 'POST', body: JSON.stringify(body) }, 'Creating full user backup...');
-    if (data?.backup_file) {
+    const data = await request('/maintenance/user-backup', { method: 'POST', body: JSON.stringify(body) }, 'Queueing full user backup...');
+    if (data?.job_id) { setNotice('Full user backup queued. It will keep running on the server.'); await loadBackupJobs(); }
+    else if (data?.backup_file) {
       setNotice(data.remote_file ? `Full user backup uploaded: ${data.remote_file}` : `Created full user backup: ${data.backup_file}`);
       await listUserBackups();
     }
@@ -1149,8 +1224,11 @@ function App() {
     const data = await request('/maintenance/backup-sftp', {
       method: 'POST',
       body: JSON.stringify({ website_id: Number(selectedWebsiteId), target_id: Number(selectedSftpTargetId) }),
-    }, 'Creating and uploading SFTP backup...');
-    if (data?.remote_file) {
+    }, 'Queueing SFTP backup...');
+    if (data?.job_id) {
+      setNotice('SFTP backup queued. It will keep running on the server.');
+      await loadBackupJobs();
+    } else if (data?.remote_file) {
       setNotice(`SFTP backup uploaded: ${data.remote_file}`);
       await listBackups();
     }
@@ -1343,6 +1421,18 @@ function App() {
     if (data?.target) { setNotice(`Updated PHP config: ${data.target}`); await loadPhpConfig(phpConfig.php_version); }
   }
 
+  async function restorePhpDefaults() {
+    if (!confirm(`Restore default PHP ${phpConfig.php_version} values?`)) return;
+    const data = await request('/maintenance/php-config/defaults', {
+      method: 'POST',
+      body: JSON.stringify({ php_version: phpConfig.php_version }),
+    }, 'Restoring PHP defaults...');
+    if (data?.values) {
+      setPhpConfig(prev => ({ ...prev, ...data.values }));
+      setNotice(`Restored PHP ${phpConfig.php_version} defaults.`);
+    }
+  }
+
   async function loadPhpVersions() {
     const data = await request('/maintenance/php-versions', {}, 'Loading PHP versions...');
     if (data) setPhpVersions(data);
@@ -1385,10 +1475,11 @@ function App() {
     if (!confirm(`Block ${firewallBlockIp || 'this IP'}?`)) return;
     await runFirewallAction('/firewall/block-ip', { method: 'POST', body: JSON.stringify({ ip: firewallBlockIp, port: firewallBlockPort || null, protocol: firewallBlockProtocol }) }, 'Blocking IP...');
   }
-  async function deleteFirewallRule() {
-    if (!firewallDeleteNumber) return;
-    if (!confirm(`Delete UFW rule #${firewallDeleteNumber}?`)) return;
-    await runFirewallAction(`/firewall/rules/${encodeURIComponent(firewallDeleteNumber)}`, { method: 'DELETE' }, 'Deleting rule...');
+  async function deleteFirewallRule(numberOverride = firewallDeleteNumber) {
+    const ruleNumber = String(numberOverride || '').trim();
+    if (!ruleNumber) return;
+    if (!confirm(`Delete UFW rule #${ruleNumber}?`)) return;
+    await runFirewallAction(`/firewall/rules/${encodeURIComponent(ruleNumber)}`, { method: 'DELETE' }, 'Deleting rule...');
     setFirewallDeleteNumber('');
   }
 
@@ -1399,8 +1490,8 @@ function App() {
 
   async function runOsUpdate() {
     if (!confirm('Run apt-get update && apt-get upgrade now?')) return;
-    const data = await request('/updates/os/run', { method: 'POST' }, 'Updating OS packages...');
-    if (data) { setNotice((data.stdout || data.stderr || 'OS update finished.').trim()); await loadUpdates(); }
+    const data = await request('/updates/os/run', { method: 'POST' }, 'Starting OS update task...');
+    if (data) { setNotice((data.stdout || data.stderr || 'OS update task started.').trim()); await loadUpdates(); }
   }
 
   async function saveOsAutoUpdate() {
@@ -1410,8 +1501,8 @@ function App() {
 
   async function runPanelUpdate() {
     if (!confirm('Update BPanel from GitHub now? The API may restart.')) return;
-    const data = await request('/updates/panel/run', { method: 'POST' }, 'Updating BPanel...');
-    if (data) setNotice((data.stdout || data.stderr || 'Panel update finished.').trim());
+    const data = await request('/updates/panel/run', { method: 'POST' }, 'Starting BPanel update task...');
+    if (data) setNotice((data.stdout || data.stderr || 'Panel update task started.').trim());
   }
 
   async function savePanelAutoUpdate() {
@@ -1458,11 +1549,20 @@ function App() {
     return () => clearInterval(timer);
   }, [isAuthenticated, page]);
 
-  useEffect(() => { if (selectedWebsiteId && page === 'backups') listBackups(); }, [selectedWebsiteId, page]);
+  useEffect(() => { if (selectedWebsiteId && page === 'backups') { listBackups(); loadBackupJobs(); } }, [selectedWebsiteId, page]);
+
+  useEffect(() => { if (selectedWebsiteId && page === 'cron') listCron(); }, [selectedWebsiteId, page]);
 
   useEffect(() => { if (selectedWebsiteId && page === 'files') listFiles('public_html'); }, [selectedWebsiteId, page]);
 
   useEffect(() => { if (selectedBackupUserId && page === 'backups') listUserBackups(selectedBackupUserId); }, [selectedBackupUserId, page]);
+
+  useEffect(() => {
+    if (!isAuthenticated || page !== 'backups') return undefined;
+    loadBackupJobs();
+    const timer = setInterval(loadBackupJobs, 5000);
+    return () => clearInterval(timer);
+  }, [isAuthenticated, page, selectedWebsiteId, selectedBackupUserId]);
 
   useEffect(() => {
     if (isAuthenticated && page === 'users') loadUsers();
@@ -1829,14 +1929,23 @@ function App() {
 
   function renderCron() {
     return <section className="section">
-      <h2>Cron manager</h2>
-      <WebsiteSelect />
-      <input value={cronSchedule} onChange={e => setCronSchedule(e.target.value)} placeholder="0 2 * * *" />
-      <input value={cronCommand} onChange={e => setCronCommand(e.target.value)} placeholder="wp cron event run --due-now --allow-root" />
-      <div className="actions">
+      <div className="section-title">
+        <div><h2>Cron manager</h2></div>
+        <button disabled={!selectedWebsiteId || !!loading} onClick={listCron}><RefreshCw size={14}/> Refresh</button>
+      </div>
+      <div className="cron-form">
+        <WebsiteSelect />
+        <input value={cronSchedule} onChange={e => setCronSchedule(e.target.value)} placeholder="*/15 * * * *" />
+        <input value={cronCommand} onChange={e => setCronCommand(e.target.value)} placeholder="wp cron event run --due-now" />
         <button disabled={!selectedWebsiteId || !!loading} onClick={addCron}><Plus size={14}/> Add cron</button>
-        <button disabled={!selectedWebsiteId || !!loading} onClick={deleteCron}><Trash2 size={14}/> Delete cron</button>
-        <button disabled={!selectedWebsiteId || !!loading} onClick={() => request(`/maintenance/cron/${selectedWebsiteId}`)}>View cron</button>
+      </div>
+      <div className="cron-list">
+        {selectedWebsiteId && cronItems.length === 0 && <EmptyState icon={Clock} message="No cron jobs found for this website." />}
+        {cronItems.map(item => <div className="cron-item" key={`${item.index}-${item.line}`}>
+          <span className="badge">#{item.index}</span>
+          <span><strong>{item.schedule}</strong><small>{item.command || item.line}</small></span>
+          <button className="mini danger" disabled={!!loading} onClick={() => deleteCron(item.index)}><Trash2 size={13}/></button>
+        </div>)}
       </div>
     </section>;
   }
@@ -1925,18 +2034,27 @@ function App() {
       const ids = (item.user_ids && item.user_ids.length > 0) ? item.user_ids : (item.user_id ? [item.user_id] : []);
       return ids.length ? ids.map(userNameById).join(', ') : 'No users';
     };
+    const jobTitle = job => ({ site_backup: 'Website backup', user_backup: 'Full user backup', sftp_backup: 'SFTP backup' }[job.kind] || 'Backup task');
+    const jobDetail = job => job.error || job.remote_file || job.backup_file || job.message || job.status;
     return <section className="section backups-page">
       <h2>Backups</h2>
       <WebsiteSelect />
       <p className="hint">Backups include website source files and a database SQL export.</p>
       <div className="actions backup-toolbar">
         <button disabled={!selectedWebsiteId || !!loading} onClick={createBackup}><Plus size={14}/> Create backup</button>
-        <button disabled={!selectedWebsiteId || !!loading} onClick={listBackups}><RefreshCw size={14}/> Refresh</button>
+        <button disabled={!selectedWebsiteId || !!loading} onClick={refreshBackupArea}><RefreshCw size={14}/> Refresh</button>
         <label className="upload-button">
           <Upload size={14}/> Upload backup
           <input type="file" accept=".tar.gz,application/gzip" onChange={e => { uploadBackup(e.target.files?.[0]); e.target.value = ''; }} />
         </label>
       </div>
+      {backupJobs.length > 0 && <div className="backup-job-list">
+        {backupJobs.map(job => <div className={`backup-job ${job.status}`} key={job.job_id}>
+          <Clock size={14}/>
+          <span><strong>{jobTitle(job)}</strong><small>{jobDetail(job)}</small></span>
+          <span className={job.status === 'done' ? 'badge ok' : job.status === 'error' ? 'badge bad' : 'badge'}>{job.status}</span>
+        </div>)}
+      </div>}
       {backups.length === 0 && selectedWebsiteId && <EmptyState icon={Archive} message="No backups found for this website." />}
       <div className="backup-list">
         {backups.map(file => <div className="backup-item" key={file}>
@@ -2102,6 +2220,7 @@ function App() {
         <label><span>memory_limit</span><input value={phpConfig.memory_limit} onChange={e => setPhpConfig(prev => ({ ...prev, memory_limit: e.target.value }))} placeholder="512M" /></label>
         <label><span>post_max_size</span><input value={phpConfig.post_max_size} onChange={e => setPhpConfig(prev => ({ ...prev, post_max_size: e.target.value }))} placeholder="1024M" /></label>
         <label><span>upload_max_filesize</span><input value={phpConfig.upload_max_filesize} onChange={e => setPhpConfig(prev => ({ ...prev, upload_max_filesize: e.target.value }))} placeholder="1024M" /></label>
+        <button className="secondary-light" disabled={!!loading} onClick={restorePhpDefaults}><RotateCcw size={14}/> Restore defaults</button>
         <button disabled={!!loading} onClick={updatePhpConfig}>Save</button>
       </div>
       {notInstalled.length > 0 && <div className="user-create-card" style={{ marginTop: 16 }}>
@@ -2121,6 +2240,7 @@ function App() {
 
   function renderFirewall() {
     if (!isAdmin) return <section className="section"><h2>Firewall</h2><p className="hint">No permission.</p></section>;
+    const rules = firewallStatus?.rules || [];
     return <>
       <section className="section">
         <div className="section-title">
@@ -2136,6 +2256,13 @@ function App() {
           <strong>UFW status</strong>
           <pre>{firewallStatus?.stdout || firewallStatus?.stderr || 'Click Refresh to load status.'}</pre>
         </div>
+        {rules.length > 0 && <div className="firewall-rule-list">
+          {rules.map(rule => <div className="firewall-rule" key={rule.number}>
+            <span className="badge">#{rule.number}</span>
+            <span><strong>{rule.to}</strong><small>{rule.action} {rule.direction} from {rule.from}</small></span>
+            {rule.protected ? <span className="badge">Default</span> : <button className="mini danger" disabled={!!loading} onClick={() => deleteFirewallRule(rule.number)}><Trash2 size={13}/></button>}
+          </div>)}
+        </div>}
       </section>
       <section className="section">
         <h2>Open port</h2>
@@ -2246,13 +2373,14 @@ function App() {
     return <>
       <section className="section">
         <div className="section-title">
-          <div><h2>Panel settings</h2><p className="hint">Branding and public panel URL.</p></div>
+          <div><h2>Panel settings</h2><p className="hint">Branding, hostname, and panel port.</p></div>
           <button disabled={!!loading} onClick={loadPanelSettings}><RefreshCw size={14}/> Refresh</button>
         </div>
         <div className="panel-settings-grid">
           <label><span>Panel name</span><input value={panelSettingsForm.app_name} onChange={e => setPanelSettingsForm(prev => ({ ...prev, app_name: e.target.value }))} placeholder="BPanel" /></label>
-          <label><span>Panel URL</span><input value={panelSettingsForm.panel_url} onChange={e => setPanelSettingsForm(prev => ({ ...prev, panel_url: e.target.value }))} placeholder="https://panel.domain.com:2222" /></label>
-          <button disabled={!!loading || !panelSettingsForm.app_name} onClick={savePanelSettings}><SettingsIcon size={14}/> Save settings</button>
+          <label><span>Panel hostname</span><input value={panelSettingsForm.panel_hostname} onChange={e => setPanelSettingsForm(prev => ({ ...prev, panel_hostname: e.target.value }))} placeholder="panel.domain.com" /></label>
+          <label><span>Panel port</span><input value={panelSettingsForm.panel_port} onChange={e => setPanelSettingsForm(prev => ({ ...prev, panel_port: e.target.value }))} placeholder="2222" inputMode="numeric" /></label>
+          <button disabled={!!loading || !panelSettingsForm.app_name || !panelSettingsForm.panel_hostname || !panelSettingsForm.panel_port} onClick={savePanelSettings}><SettingsIcon size={14}/> Save settings</button>
         </div>
       </section>
       <section className="section">
@@ -2274,13 +2402,12 @@ function App() {
       </section>
       <section className="section">
         <div className="section-title">
-          <div><h2>Panel SSL</h2><p className="hint">Use a domain that already points to this VPS.</p></div>
+          <div><h2>Panel SSL</h2><p className="hint">Use a domain that already points to this VPS. Target: <strong>{panelHostPortLabel()}</strong></p></div>
           <span className={panelSettings.ssl_enabled ? 'badge ok' : 'badge'}>{panelSettings.ssl_enabled ? 'SSL enabled' : 'SSL not active'}</span>
         </div>
         <div className="panel-settings-grid panel-ssl-grid">
-          <label><span>Panel URL</span><input value={panelSettingsForm.panel_url} onChange={e => setPanelSettingsForm(prev => ({ ...prev, panel_url: e.target.value }))} placeholder="https://panel.domain.com:2222" /></label>
           <label><span>Let's Encrypt email</span><input value={panelSslEmail} onChange={e => setPanelSslEmail(e.target.value)} placeholder="admin@domain.com" type="email" /></label>
-          <button disabled={!!loading || !panelSettingsForm.panel_url || !panelSslEmail} onClick={installPanelSsl}><Lock size={14}/> Install SSL</button>
+          <button disabled={!!loading || !panelSettingsForm.panel_hostname || !panelSettingsForm.panel_port || !panelSslEmail} onClick={installPanelSsl}><Lock size={14}/> Install SSL</button>
         </div>
       </section>
     </>;

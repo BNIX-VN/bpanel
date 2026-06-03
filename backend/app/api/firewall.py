@@ -17,10 +17,16 @@ def _result(result):
     return result.__dict__
 
 
+def _status_result(result):
+    data = _result(result)
+    data["rules"] = firewall.parse_numbered_rules(result.stdout)
+    return data
+
+
 @router.get("/status")
 def get_status(current_user: User = Depends(get_current_user)):
     _require_admin(current_user)
-    return _result(firewall.status())
+    return _status_result(firewall.status())
 
 
 @router.post("/enable")

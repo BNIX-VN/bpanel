@@ -13,7 +13,11 @@ def run_os_update():
     return shell.privileged(
         "updates-os-run",
         check=False,
-        fallback=["bash", "-lc", "apt-get update && apt-get upgrade -y"],
+        fallback=[
+            "bash",
+            "-lc",
+            "nohup bash -lc 'apt-get update && apt-get upgrade -y' >/tmp/bpanel-os-update.log 2>&1 & echo OS update started in background. Log: /tmp/bpanel-os-update.log",
+        ],
     )
 
 

@@ -64,6 +64,27 @@ def is_domain(host: str) -> bool:
     return bool(DOMAIN_RE.fullmatch((host or "").lower()))
 
 
+def normalize_panel_hostname(value: str) -> str:
+    host = (value or "").strip().lower().rstrip(".")
+    if not host:
+        raise ValueError("Panel hostname is required")
+    if "://" in host or "/" in host or ":" in host:
+        raise ValueError("Panel hostname must not include a scheme, port, or path")
+    if not is_domain(host) and not _is_ipv4(host) and host != "localhost":
+        raise ValueError("Panel hostname must be a domain name or IPv4 address")
+    return host
+
+
+def normalize_panel_port(value: int | str | None) -> int:
+    try:
+        port = int(value or settings.panel_port or 2222)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Panel port is invalid") from exc
+    if port < 1 or port > 65535:
+        raise ValueError("Panel port is out of range")
+    return port
+
+
 def normalize_panel_url(value: str) -> str:
     value = (value or "").strip()
     if not value:
@@ -75,12 +96,18 @@ def normalize_panel_url(value: str) -> str:
     host = (parsed.hostname or "").lower()
     if scheme not in {"http", "https"}:
         raise ValueError("Panel URL must start with http:// or https://")
-    if not host or (not is_domain(host) and not _is_ipv4(host) and host != "localhost"):
-        raise ValueError("Panel URL host must be a domain name or IPv4 address")
-    port = parsed.port or settings.panel_port or 2222
-    if port < 1 or port > 65535:
-        raise ValueError("Panel URL port is out of range")
+    host = normalize_panel_hostname(host)
+    port = normalize_panel_port(parsed.port or settings.panel_port or 2222)
     return f"{scheme}://{host}:{port}"
+
+
+def panel_url_from_parts(hostname: str, port: int | str | None, scheme: str | None = None) -> str:
+    safe_scheme = (scheme or "http").lower()
+    if safe_scheme not in {"http", "https"}:
+        raise ValueError("Panel URL scheme must be http or https")
+    host = normalize_panel_hostname(hostname)
+    safe_port = normalize_panel_port(port)
+    return f"{safe_scheme}://{host}:{safe_port}"
 
 
 def parse_panel_url(value: str) -> tuple[str, str, int]:
@@ -101,30 +128,55 @@ def current_settings() -> dict:
     data = _read_raw()
     app_name = (data.get("app_name") or settings.app_name or "BPanel").strip() or "BPanel"
     panel_url = data.get("panel_url") or settings.panel_url or ""
+    panel_hostname = ""
+    panel_port = settings.panel_port or 2222
+    if panel_url:
+        try:
+            _scheme, panel_hostname, panel_port = parse_panel_url(panel_url)
+        except ValueError:
+            panel_hostname = ""
+            panel_port = settings.panel_port or 2222
     ssl_enabled = panel_url.startswith("https://") and has_panel_certificate()
     return {
         "app_name": app_name,
         "panel_url": panel_url,
+        "panel_hostname": panel_hostname,
+        "panel_port": panel_port,
         "logo_url": _asset_url(data.get("logo_filename")),
         "favicon_url": _asset_url(data.get("favicon_filename")) or "/favicon.png",
         "ssl_enabled": ssl_enabled,
     }
 
 
-def update_settings(app_name: str | None = None, panel_url: str | None = None) -> dict:
+def update_settings(
+    app_name: str | None = None,
+    panel_hostname: str | None = None,
+    panel_port: int | None = None,
+    panel_url: str | None = None,
+) -> dict:
     data = _read_raw()
     if app_name is not None:
         value = app_name.strip()
         if not 2 <= len(value) <= 80:
             raise ValueError("Panel name must be 2-80 characters")
         data["app_name"] = value
-    if panel_url is not None and panel_url.strip():
-        normalized = normalize_panel_url(panel_url)
+    if (panel_hostname is not None and panel_hostname.strip()) or panel_port is not None or (panel_url is not None and panel_url.strip()):
+        existing_url = data.get("panel_url") or settings.panel_url or ""
+        existing_normalized = normalize_panel_url(existing_url) if existing_url else ""
+        existing_scheme, existing_host, existing_port = parse_panel_url(existing_normalized) if existing_normalized else ("http", "", settings.panel_port or 2222)
+        if panel_hostname is not None and panel_hostname.strip():
+            normalized = panel_url_from_parts(panel_hostname, panel_port if panel_port is not None else existing_port, existing_scheme)
+        elif panel_port is not None and existing_normalized:
+            normalized = panel_url_from_parts(existing_host, panel_port, existing_scheme)
+        elif panel_url is not None and panel_url.strip():
+            normalized = normalize_panel_url(panel_url)
+        else:
+            normalized = existing_normalized
+        if not normalized:
+            raise ValueError("Panel hostname is required")
         scheme, host, port = parse_panel_url(normalized)
         if scheme == "https" and not has_panel_certificate():
             raise ValueError("Use Install SSL before saving an HTTPS panel URL")
-        existing_url = data.get("panel_url") or settings.panel_url or ""
-        existing_normalized = normalize_panel_url(existing_url) if existing_url else ""
         if normalized != existing_normalized:
             result = shell.privileged(
                 "panel-url-set",
@@ -186,8 +238,13 @@ def asset_path(filename: str) -> tuple[Path, str]:
     return path, media_type
 
 
-def install_panel_ssl(panel_url: str, email: str) -> dict:
-    normalized = normalize_panel_url(panel_url)
+def install_panel_ssl(email: str, panel_hostname: str | None = None, panel_port: int | None = None, panel_url: str | None = None) -> dict:
+    if panel_hostname:
+        normalized = panel_url_from_parts(panel_hostname, panel_port, "http")
+    elif panel_url:
+        normalized = normalize_panel_url(panel_url)
+    else:
+        raise ValueError("Panel hostname is required")
     _scheme, host, port = parse_panel_url(normalized)
     if not is_domain(host):
         raise ValueError("Panel SSL requires a domain name, not an IP address")

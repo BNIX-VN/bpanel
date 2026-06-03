@@ -178,13 +178,34 @@ APT
   echo "OS auto updates enabled (${mode}, reboot=${reboot})"
 }
 
-run_os_update() {
+run_os_update_now() {
   export DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none
   apt-get update
   apt-get \
     -o Dpkg::Options::=--force-confdef \
     -o Dpkg::Options::=--force-confold \
     upgrade -y
+}
+
+run_os_update() {
+  local unit="bpanel-os-update"
+  if systemctl is-active --quiet "${unit}.service"; then
+    echo "OS update is already running: ${unit}.service"
+    return 0
+  fi
+  if command -v systemd-run >/dev/null 2>&1; then
+    systemd-run \
+      --unit="$unit" \
+      --collect \
+      --description="Update OS packages for BPanel" \
+      /bin/bash -lc 'export DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none; apt-get update; apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade -y'
+    echo "OS update started: ${unit}.service"
+    echo "Check progress: journalctl -u ${unit}.service -f"
+    return 0
+  fi
+  nohup /bin/bash -lc 'export DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none; apt-get update; apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade -y' \
+    >/var/log/bpanel-os-update.log 2>&1 &
+  echo "OS update started in background. Log: /var/log/bpanel-os-update.log"
 }
 
 write_panel_auto_update_timer() {
@@ -778,6 +799,10 @@ case "$cmd" in
     systemctl is-enabled bpanel-auto-update.timer 2>/dev/null || true
     systemctl list-timers bpanel-auto-update.timer apt-daily-upgrade.timer --no-pager 2>/dev/null || true
     echo ""
+    echo "OS update service:"
+    systemctl is-active bpanel-os-update.service 2>/dev/null || true
+    journalctl -u bpanel-os-update.service -n 20 --no-pager 2>/dev/null || true
+    echo ""
     echo "Panel update service:"
     systemctl is-active bpanel-panel-update.service 2>/dev/null || true
     journalctl -u bpanel-panel-update.service -n 20 --no-pager 2>/dev/null || true
@@ -907,7 +932,7 @@ case "$cmd" in
 
   # ---- ufw --------------------------------------------------------------
   ufw-status)
-    exec ufw status verbose numbered
+    exec ufw status numbered
     ;;
   ufw-enable)
     exec ufw --force enable

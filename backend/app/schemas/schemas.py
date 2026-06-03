@@ -58,6 +58,19 @@ def _validate_panel_url(value: Optional[str]) -> Optional[str]:
     return value
 
 
+def _validate_panel_hostname(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return value
+    value = value.strip().lower().rstrip(".")
+    if not value:
+        return value
+    if "://" in value or "/" in value or ":" in value:
+        raise ValueError("panel_hostname must be a hostname or IPv4 address only")
+    if not PANEL_HOST_RE.fullmatch(value):
+        raise ValueError("panel_hostname must be a domain name or IPv4 address")
+    return value
+
+
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -322,6 +335,8 @@ class ServiceAction(BaseModel):
 class PanelSettingsOut(BaseModel):
     app_name: str = "BPanel"
     panel_url: str = ""
+    panel_hostname: str = ""
+    panel_port: int = 2222
     logo_url: str = ""
     favicon_url: str = "/favicon.png"
     ssl_enabled: bool = False
@@ -330,6 +345,10 @@ class PanelSettingsOut(BaseModel):
 
 class PanelSettingsUpdate(BaseModel):
     app_name: Optional[str] = Field(default=None, min_length=2, max_length=80)
+    panel_hostname: Optional[str] = Field(default=None, max_length=255)
+    panel_port: Optional[int] = Field(default=None, ge=1, le=65535)
+    # Legacy API clients may still send a full URL. The UI now sends only
+    # panel_hostname and panel_port to avoid malformed public URLs.
     panel_url: Optional[str] = Field(default=None, max_length=255)
 
     @field_validator("app_name")
@@ -347,18 +366,28 @@ class PanelSettingsUpdate(BaseModel):
     def validate_panel_url(cls, value: Optional[str]) -> Optional[str]:
         return _validate_panel_url(value)
 
+    @field_validator("panel_hostname")
+    @classmethod
+    def validate_panel_hostname(cls, value: Optional[str]) -> Optional[str]:
+        return _validate_panel_hostname(value)
+
 
 class PanelSslInstall(BaseModel):
-    panel_url: str = Field(min_length=3, max_length=255)
+    panel_hostname: Optional[str] = Field(default=None, min_length=3, max_length=255)
+    panel_port: int = Field(default=2222, ge=1, le=65535)
+    panel_url: Optional[str] = Field(default=None, min_length=3, max_length=255)
     email: EmailStr
 
     @field_validator("panel_url")
     @classmethod
-    def validate_panel_url(cls, value: str) -> str:
+    def validate_panel_url(cls, value: Optional[str]) -> Optional[str]:
         validated = _validate_panel_url(value)
-        if not validated:
-            raise ValueError("panel_url is required")
         return validated
+
+    @field_validator("panel_hostname")
+    @classmethod
+    def validate_panel_hostname(cls, value: Optional[str]) -> Optional[str]:
+        return _validate_panel_hostname(value)
 
 
 class FirewallPortRule(BaseModel):
@@ -532,6 +561,15 @@ class CronCreate(BaseModel):
     website_id: int
     schedule: str
     command: str
+
+
+class PhpConfigRestore(BaseModel):
+    php_version: str = "8.3"
+
+    @field_validator("php_version")
+    @classmethod
+    def validate_php_version(cls, value: str) -> str:
+        return _validate_php_version(value) or "8.3"
 
 
 class WpAction(BaseModel):

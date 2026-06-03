@@ -40,6 +40,17 @@ def _validate_command(command: str) -> str:
     return " ".join(shlex.quote(arg) for arg in [*normalized, "--allow-root"])
 
 
+def _parse_cron_line(index: int, line: str) -> dict:
+    parts = line.split(maxsplit=5)
+    schedule = " ".join(parts[:5]) if len(parts) >= 5 else ""
+    command = parts[5] if len(parts) >= 6 else ""
+    command = re.sub(r"\s+#\s*bpanel:[^\s]+\s*$", "", command).strip()
+    if command.startswith("cd ") and " && " in command:
+        command = command.split(" && ", 1)[1].strip()
+    command = command.replace(" --allow-root", "").strip()
+    return {"index": index, "schedule": schedule, "command": command, "line": line}
+
+
 def add_cron(website: Website, schedule: str, command: str) -> str:
     safe_schedule = _validate_schedule(schedule)
     safe_command = _validate_command(command)
@@ -77,6 +88,10 @@ def list_cron(domain: str, cron_user: str = "www-data") -> str:
     safe_domain = _validate_domain(domain)
     marker = f"bpanel:{safe_domain}"
     return "\n".join(line for line in list_cron_all(cron_user).splitlines() if marker in line)
+
+
+def list_cron_entries(domain: str, cron_user: str = "www-data") -> list[dict]:
+    return [_parse_cron_line(index, line) for index, line in enumerate(list_cron(domain, cron_user).splitlines())]
 
 
 def delete_cron(domain: str, index: int, cron_user: str = "www-data") -> str:

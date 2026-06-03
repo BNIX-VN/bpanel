@@ -41,10 +41,10 @@ ownership, quotas, backups, SSL, services, and firewall tools built in.
 Run as root on a fresh Ubuntu 24.04 server:
 
 ```bash
-apt-get update && apt-get install -y git
-git clone https://github.com/BNIX-VN/bpanel.git /opt/bpanel-source
-cd /opt/bpanel-source
-chmod +x installer/install.sh installer/update.sh
+apt-get update;apt-get install -y git;\
+git clone https://github.com/BNIX-VN/bpanel.git /opt/bpanel-source;\
+cd /opt/bpanel-source;\
+chmod +x installer/install.sh installer/update.sh;\
 sudo bash installer/install.sh
 ```
 
@@ -57,17 +57,18 @@ The installer will:
 4. Configure phpMyAdmin SSO.
 5. Start the panel directly on port `2222` without relying on Nginx for login.
 6. Issue Let's Encrypt SSL for the panel domain (optional).
-7. Print the admin login at the end. Save it.
+7. Print the admin login and save it to `/root/login.txt`.
 
 You will be prompted for:
 
-- Panel domain/URL (optional; blank uses `http://SERVER_IP:2222`)
+- Panel hostname (optional; blank uses the server IP)
+- Panel port (default `2222`)
 - Whether to enable Let's Encrypt SSL for the panel domain
 - An email for SSL registration
 
 After install, open the URL printed at the end of the installer. If no panel
 domain was entered, use `http://SERVER_IP:2222`. The admin password is shown
-once; store it in a password manager.
+at the end and saved to `/root/login.txt`; store it in a password manager.
 
 ## SSH maintenance menu
 

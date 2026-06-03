@@ -24,6 +24,7 @@ BACKEND_SRC="${PROJECT_ROOT}/backend"
 FRONTEND_SRC="${PROJECT_ROOT}/frontend"
 
 PANEL_URL="${PANEL_URL:-}"
+PANEL_HOSTNAME="${PANEL_HOSTNAME:-}"
 PANEL_DOMAIN=""
 PANEL_PORT="${PANEL_PORT:-2222}"
 SERVER_IP=""
@@ -81,32 +82,51 @@ validate_sources() {
 
 ask_panel_url() {
   validate_port "$PANEL_PORT"
-  if [[ -z "$PANEL_URL" ]]; then
-    read -rp "Enter panel domain/URL (optional, blank = server IP:${PANEL_PORT}): " PANEL_URL
+  if [[ -n "$PANEL_URL" ]]; then
+    PANEL_URL="${PANEL_URL%/}"
+    if [[ "$PANEL_URL" =~ ^https?:// ]]; then
+      PANEL_HOSTNAME="$(echo "$PANEL_URL" | sed -E 's#^https?://([^/:]+).*#\1#')"
+      parsed_port="$(echo "$PANEL_URL" | sed -nE 's#^https?://[^/:]+:([0-9]+).*#\1#p')"
+    else
+      PANEL_HOSTNAME="$(echo "$PANEL_URL" | sed -E 's#^([^/:]+).*#\1#')"
+      parsed_port="$(echo "$PANEL_URL" | sed -nE 's#^[^/:]+:([0-9]+).*#\1#p')"
+    fi
+    if [[ -n "${parsed_port:-}" ]]; then
+      PANEL_PORT="$parsed_port"
+      validate_port "$PANEL_PORT"
+    fi
   fi
 
-  PANEL_URL="${PANEL_URL%/}"
+  if [[ -z "$PANEL_HOSTNAME" ]]; then
+    read -rp "Enter panel hostname (optional, blank = server IP): " PANEL_HOSTNAME
+  fi
+  PANEL_HOSTNAME="${PANEL_HOSTNAME#http://}"
+  PANEL_HOSTNAME="${PANEL_HOSTNAME#https://}"
+  PANEL_HOSTNAME="${PANEL_HOSTNAME%%/*}"
+  if [[ "$PANEL_HOSTNAME" == *:* ]]; then
+    parsed_port="${PANEL_HOSTNAME##*:}"
+    PANEL_HOSTNAME="${PANEL_HOSTNAME%%:*}"
+    [[ -n "$parsed_port" ]] && PANEL_PORT="$parsed_port"
+    validate_port "$PANEL_PORT"
+  fi
+  if [[ -z "${PANEL_URL:-}" ]]; then
+    read -rp "Enter panel port [${PANEL_PORT}]: " panel_port_answer
+    if [[ -n "$panel_port_answer" ]]; then
+      PANEL_PORT="$panel_port_answer"
+      validate_port "$PANEL_PORT"
+    fi
+  fi
 
-  if [[ -z "$PANEL_URL" ]]; then
+  if [[ -z "$PANEL_HOSTNAME" ]]; then
     SERVER_IP="$(detect_server_ip)"
-    [[ -n "$SERVER_IP" ]] || fail "Cannot detect server IP. Set PANEL_URL or PANEL_DOMAIN manually."
+    [[ -n "$SERVER_IP" ]] || fail "Cannot detect server IP. Set PANEL_HOSTNAME manually."
     PANEL_DOMAIN=""
     PANEL_URL="http://${SERVER_IP}:${PANEL_PORT}"
     ENABLE_SSL="no"
     return 0
   fi
 
-  if [[ "$PANEL_URL" =~ ^https?:// ]]; then
-    PANEL_DOMAIN="$(echo "$PANEL_URL" | sed -E 's#^https?://([^/:]+).*#\1#')"
-    parsed_port="$(echo "$PANEL_URL" | sed -nE 's#^https?://[^/:]+:([0-9]+).*#\1#p')"
-  else
-    PANEL_DOMAIN="$(echo "$PANEL_URL" | sed -E 's#^([^/:]+).*#\1#')"
-    parsed_port="$(echo "$PANEL_URL" | sed -nE 's#^[^/:]+:([0-9]+).*#\1#p')"
-  fi
-  if [[ -n "${parsed_port:-}" ]]; then
-    PANEL_PORT="$parsed_port"
-    validate_port "$PANEL_PORT"
-  fi
+  PANEL_DOMAIN="$PANEL_HOSTNAME"
 
   if [[ "$PANEL_DOMAIN" == "localhost" || "$PANEL_DOMAIN" == "127.0.0.1" || "$PANEL_DOMAIN" =~ ^[0-9.]+$ ]]; then
     ENABLE_SSL="no"
@@ -813,6 +833,7 @@ print_summary() {
   echo "Panel service: bpanel-api listens on port ${PANEL_PORT} without Nginx"
   echo "SSH menu: run 'bpanel' as root"
   echo "Admin: admin / ${ADMIN_PASSWORD}"
+  echo "Login info saved to: /root/login.txt"
   echo "Node.js: $(node -v)"
   echo "Default PHP: ${PHP_DEFAULT}"
   echo "Installed PHP versions: ${PHP_VERSIONS}"
@@ -822,6 +843,20 @@ print_summary() {
   echo "Frontend: ${APP_DIR}/frontend"
   echo "Firewall: UFW enabled with OpenSSH, Nginx Full, and ${PANEL_PORT}/tcp allowed."
   echo "=================================================="
+}
+
+write_login_info() {
+  cat >/root/login.txt <<INFO
+BPanel login
+Panel: ${PANEL_URL}
+API health: ${PANEL_URL}/api/health
+Username: admin
+Password: ${ADMIN_PASSWORD}
+Panel service: bpanel-api
+Panel port: ${PANEL_PORT}
+Installed at: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+INFO
+  chmod 600 /root/login.txt
 }
 
 main() {
@@ -883,6 +918,8 @@ main() {
 
   log "Configuring SSL"
   setup_ssl
+
+  write_login_info
 
   print_summary
 }

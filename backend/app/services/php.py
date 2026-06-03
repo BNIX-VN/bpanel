@@ -58,6 +58,26 @@ PHP_CONFIG_KEYS = {
 }
 
 
+def default_php_config(php_version: str) -> dict:
+    if php_version not in SUPPORTED_PHP_VERSIONS:
+        allowed = ", ".join(sorted(SUPPORTED_PHP_VERSIONS))
+        raise ValueError(f"Unsupported PHP version. Allowed: {allowed}")
+    return {
+        "php_version": php_version,
+        "display_errors": PHP_CONFIG_KEYS["display_errors"],
+        "memory_limit": PHP_CONFIG_KEYS["memory_limit"],
+        "upload_max_filesize": PHP_CONFIG_KEYS["upload_max_filesize"],
+        "post_max_size": PHP_CONFIG_KEYS["post_max_size"],
+        "max_execution_time": int(PHP_CONFIG_KEYS["max_execution_time"]),
+        "max_input_time": int(PHP_CONFIG_KEYS["max_input_time"]),
+        "max_input_vars": int(PHP_CONFIG_KEYS["max_input_vars"]),
+    }
+
+
+def restore_default_php_ini(php_version: str) -> str:
+    return update_php_ini(PhpConfigUpdate(**default_php_config(php_version)))
+
+
 def read_php_ini(php_version: str) -> dict:
     if php_version not in SUPPORTED_PHP_VERSIONS:
         allowed = ", ".join(sorted(SUPPORTED_PHP_VERSIONS))

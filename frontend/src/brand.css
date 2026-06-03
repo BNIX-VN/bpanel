@@ -53,12 +53,20 @@ h1,h2{color:var(--brand-navy)}
 .resource-card small{color:var(--text-muted);font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .user-metric{display:inline-flex;align-items:center;gap:6px;min-height:28px;padding:0 10px;background:var(--surface-alt);border:1px solid var(--border);border-radius:999px;color:var(--text-secondary);font-size:12px;font-weight:700;line-height:1;white-space:nowrap}
 .user-metric svg{width:13px;height:13px;flex:none;color:var(--primary)}
-.panel-settings-grid{display:grid;grid-template-columns:minmax(240px,1fr) minmax(280px,1.3fr) max-content;gap:10px;align-items:end}
+.panel-settings-grid{display:grid;grid-template-columns:minmax(190px,1fr) minmax(220px,1.2fr) 120px max-content;gap:10px;align-items:end}
 .brand-asset-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
 .brand-asset-card{display:grid;grid-template-columns:76px minmax(0,1fr) max-content;gap:10px;align-items:center;padding:12px;background:var(--surface-alt);border:1px solid var(--border);border-radius:var(--radius-lg);min-width:0}
 .brand-preview{width:60px;height:60px;display:grid;place-items:center;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden}
 .favicon-preview img{width:32px;height:32px;object-fit:contain}
-.panel-ssl-grid{grid-template-columns:minmax(280px,1fr) minmax(220px,.8fr) max-content}
+.panel-ssl-grid{grid-template-columns:minmax(220px,.8fr) max-content}
+
+.cron-form{display:grid;grid-template-columns:minmax(220px,1fr) 150px minmax(260px,1.4fr) max-content;gap:10px;align-items:end}
+.cron-list,.backup-job-list,.firewall-rule-list{display:grid;gap:8px;margin-top:4px}
+.cron-item,.backup-job,.firewall-rule{display:grid;grid-template-columns:auto minmax(0,1fr) max-content;gap:10px;align-items:center;padding:10px 12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);min-width:0}
+.cron-item span:not(.badge),.backup-job span:not(.badge),.firewall-rule span:not(.badge){min-width:0;font-size:13px;line-height:1.35;font-weight:700;color:var(--text)}
+.cron-item small,.backup-job small,.firewall-rule small{display:block;margin-top:3px;color:var(--text-muted);font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.backup-job.running,.backup-job.queued{border-color:#bfdbfe;background:#f8fbff}
+.backup-job.error{border-color:#fecaca;background:#fff7f7}
 
 input,select,textarea{
   border-color:var(--border);border-radius:var(--radius-sm);min-height:40px;background:var(--surface);color:var(--text);
@@ -137,9 +145,20 @@ button:disabled,.upload-button.disabled{background:#dbe7f7;color:#7a8ca4;border-
 .sftp-form button{align-self:center;height:40px;min-height:40px}
 .sftp-target-form button{min-width:122px}
 
+@media(max-width:1450px){
+  .create-site-row{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .create-site-row button{width:100%}
+  .site-card{grid-template-columns:1fr;align-items:start}
+  .site-card>.actions{justify-content:flex-start;flex-wrap:wrap}
+}
+
 @media(max-width:1320px){
   .resource-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
   .sftp-target-form{grid-template-columns:repeat(3,minmax(0,1fr)) max-content}
+  .cron-form{grid-template-columns:1fr 150px}
+  .cron-form input:nth-of-type(2){grid-column:1 / -1}
+  .panel-settings-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .panel-settings-grid button{width:100%}
 }
 
 @media(max-width:1200px){
@@ -152,7 +171,10 @@ button:disabled,.upload-button.disabled{background:#dbe7f7;color:#7a8ca4;border-
   .login.logged-in .top-actions button{height:36px;min-height:36px}
   .mobile-nav-toggle{display:flex;align-items:center;justify-content:center}
   button.sidebar-close{display:flex;align-items:center;justify-content:flex-end}
-  .panel-settings-grid,.panel-ssl-grid{grid-template-columns:1fr}
+  .panel-settings-grid,.panel-ssl-grid,.cron-form{grid-template-columns:1fr}
+  .cron-form input:nth-of-type(2){grid-column:auto}
+  .cron-item,.backup-job,.firewall-rule{grid-template-columns:auto minmax(0,1fr);align-items:start}
+  .cron-item button,.firewall-rule button,.backup-job>.badge{grid-column:1 / -1;width:100%}
   .brand-asset-grid{grid-template-columns:1fr}
   .brand-asset-card{grid-template-columns:64px minmax(0,1fr);align-items:center}
   .brand-asset-card button{grid-column:1 / -1;width:100%}

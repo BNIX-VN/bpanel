@@ -25,6 +25,7 @@ from app.schemas.schemas import (
     CronCreate,
     CronDelete,
     PhpConfigUpdate,
+    PhpConfigRestore,
     RestoreBackup,
     SftpBackupRun,
     SftpBackupTargetCreate,
@@ -44,6 +45,11 @@ FILE_JOB_LIMIT = 50
 _file_job_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="bpanel-file-job")
 _file_jobs: dict[str, dict] = {}
 _file_jobs_lock = threading.Lock()
+
+BACKUP_JOB_LIMIT = 50
+_backup_job_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="bpanel-backup-job")
+_backup_jobs: dict[str, dict] = {}
+_backup_jobs_lock = threading.Lock()
 
 
 class FileWrite(BaseModel):
@@ -167,6 +173,85 @@ def _list_file_jobs(current_user: User, website_id: int | None = None) -> list[d
     return sorted(visible, key=lambda item: item.get("created_at", ""), reverse=True)[:10]
 
 
+def _public_backup_job(job: dict) -> dict:
+    return {
+        "job_id": job["job_id"],
+        "kind": job["kind"],
+        "status": job["status"],
+        "website_id": job.get("website_id"),
+        "user_id": job.get("target_user_id"),
+        "target_id": job.get("target_id"),
+        "backup_file": job.get("backup_file", ""),
+        "remote_file": job.get("remote_file", ""),
+        "target": job.get("target", ""),
+        "message": job.get("message", ""),
+        "error": job.get("error", ""),
+        "created_at": job.get("created_at", ""),
+        "started_at": job.get("started_at", ""),
+        "finished_at": job.get("finished_at", ""),
+    }
+
+
+def _set_backup_job(job_id: str, **updates) -> None:
+    with _backup_jobs_lock:
+        job = _backup_jobs.get(job_id)
+        if not job:
+            return
+        job.update(updates)
+
+
+def _remember_backup_job(job: dict) -> dict:
+    with _backup_jobs_lock:
+        _backup_jobs[job["job_id"]] = job
+        if len(_backup_jobs) > BACKUP_JOB_LIMIT:
+            to_remove = len(_backup_jobs) - BACKUP_JOB_LIMIT
+            removable = [
+                (job.get("created_at", ""), job_id)
+                for job_id, job in _backup_jobs.items()
+                if job.get("status") not in {"queued", "running"}
+            ]
+            removable.sort(key=lambda x: x[0])
+            for _, job_id in removable[:to_remove]:
+                _backup_jobs.pop(job_id, None)
+    return _public_backup_job(job)
+
+
+def _get_backup_job(job_id: str) -> dict | None:
+    with _backup_jobs_lock:
+        job = _backup_jobs.get(job_id)
+        return dict(job) if job else None
+
+
+def _list_backup_jobs(current_user: User) -> list[dict]:
+    with _backup_jobs_lock:
+        jobs = [dict(job) for job in _backup_jobs.values()]
+    visible = []
+    for job in jobs:
+        if job.get("request_user_id") != current_user.id and not is_admin_role(current_user.role):
+            continue
+        visible.append(_public_backup_job(job))
+    return sorted(visible, key=lambda item: item.get("created_at", ""), reverse=True)[:12]
+
+
+def _queue_backup_job(current_user: User, kind: str, message: str, **extra) -> dict:
+    job = {
+        "job_id": uuid.uuid4().hex,
+        "kind": kind,
+        "status": "queued",
+        "request_user_id": current_user.id,
+        "message": message,
+        "error": "",
+        "backup_file": "",
+        "remote_file": "",
+        "target": "",
+        "created_at": _now_iso(),
+        "started_at": "",
+        "finished_at": "",
+        **extra,
+    }
+    return _remember_backup_job(job)
+
+
 
 def _run_extract_job(job_id: str, user_id: int, website_id: int, archive_path: str, destination_path: str, allow_executable: bool) -> None:
     _set_file_job(job_id, status="running", started_at=_now_iso(), message="Extracting archive")
@@ -284,6 +369,125 @@ def upload_archive_to_target(db: Session, target_id: int, archive: str) -> tuple
     return target.name, result["remote_file"]
 
 
+def _run_site_backup_job(job_id: str, request_user_id: int, website_id: int) -> None:
+    _set_backup_job(job_id, status="running", started_at=_now_iso(), message="Creating website backup")
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.id == request_user_id).first()
+        if not user or not user.is_active:
+            raise ValueError("User not found")
+        website = get_owned_website(db, user, website_id)
+        db_item = db.query(DatabaseAccount).filter(DatabaseAccount.website_id == website.id).first()
+        archive = backup.create_backup(website, db_item.db_name if db_item else None)
+        log_action(db, user.id, "backup", website.domain, archive)
+        _set_backup_job(
+            job_id,
+            status="done",
+            backup_file=archive,
+            message="Website backup completed",
+            finished_at=_now_iso(),
+        )
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Website backup job failed: job_id=%s website_id=%s", job_id, website_id)
+        _set_backup_job(job_id, status="error", error=str(exc), message="Website backup failed", finished_at=_now_iso())
+    finally:
+        db.close()
+
+
+def _run_user_backup_job(job_id: str, request_user_id: int, target_user_id: int, target_id: int | None) -> None:
+    _set_backup_job(job_id, status="running", started_at=_now_iso(), message="Creating full user backup")
+    db = SessionLocal()
+    try:
+        request_user = db.query(User).filter(User.id == request_user_id).first()
+        if not request_user or not request_user.is_active:
+            raise ValueError("User not found")
+        user = get_backup_user(db, request_user, target_user_id)
+        archive = backup.create_user_backup(user, db)
+        remote_file = ""
+        target_name = ""
+        if target_id:
+            ensure_role(request_user.role, Role.admin)
+            target_name, remote_file = upload_archive_to_target(db, target_id, archive)
+        detail = f"{archive}" + (f" -> {target_name}:{remote_file}" if remote_file else "")
+        log_action(db, request_user.id, "backup_user", user.username, detail)
+        _set_backup_job(
+            job_id,
+            status="done",
+            backup_file=archive,
+            remote_file=remote_file,
+            target=target_name,
+            message="Full user backup completed",
+            finished_at=_now_iso(),
+        )
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Full user backup job failed: job_id=%s user_id=%s", job_id, target_user_id)
+        _set_backup_job(job_id, status="error", error=str(exc), message="Full user backup failed", finished_at=_now_iso())
+    finally:
+        db.close()
+
+
+def _run_sftp_backup_job(job_id: str, request_user_id: int, website_id: int, target_id: int) -> None:
+    _set_backup_job(job_id, status="running", started_at=_now_iso(), message="Creating and uploading SFTP backup")
+    db = SessionLocal()
+    try:
+        request_user = db.query(User).filter(User.id == request_user_id).first()
+        if not request_user or not request_user.is_active:
+            raise ValueError("User not found")
+        ensure_role(request_user.role, Role.admin)
+        website = get_owned_website(db, request_user, website_id)
+        db_item = db.query(DatabaseAccount).filter(DatabaseAccount.website_id == website.id).first()
+        archive = backup.create_backup(website, db_item.db_name if db_item else None)
+        target_name, remote_file = upload_archive_to_target(db, target_id, archive)
+        log_action(db, request_user.id, "backup_sftp", website.domain, f"{target_name}:{remote_file}")
+        _set_backup_job(
+            job_id,
+            status="done",
+            backup_file=archive,
+            remote_file=remote_file,
+            target=target_name,
+            message="SFTP backup completed",
+            finished_at=_now_iso(),
+        )
+    except Exception as exc:
+        db.rollback()
+        logger.exception("SFTP backup job failed: job_id=%s website_id=%s", job_id, website_id)
+        _set_backup_job(job_id, status="error", error=str(exc), message="SFTP backup failed", finished_at=_now_iso())
+    finally:
+        db.close()
+
+
+def _queue_site_backup(current_user: User, website: Website) -> dict:
+    job = _queue_backup_job(current_user, "site_backup", "Website backup queued", website_id=website.id)
+    _backup_job_executor.submit(_run_site_backup_job, job["job_id"], current_user.id, website.id)
+    return job
+
+
+def _queue_user_backup(current_user: User, user: User, target_id: int | None) -> dict:
+    job = _queue_backup_job(
+        current_user,
+        "user_backup",
+        "Full user backup queued",
+        target_user_id=user.id,
+        target_id=target_id,
+    )
+    _backup_job_executor.submit(_run_user_backup_job, job["job_id"], current_user.id, user.id, target_id)
+    return job
+
+
+def _queue_sftp_backup(current_user: User, website: Website, target_id: int) -> dict:
+    job = _queue_backup_job(
+        current_user,
+        "sftp_backup",
+        "SFTP backup queued",
+        website_id=website.id,
+        target_id=target_id,
+    )
+    _backup_job_executor.submit(_run_sftp_backup_job, job["job_id"], current_user.id, website.id, target_id)
+    return job
+
+
 def _save_user_restore_upload(file: UploadFile) -> dict:
     target = ""
     try:
@@ -328,10 +532,22 @@ def _quota_check_for_website(db: Session, website: Website):
 @router.post("/backup")
 def create_backup(payload: BackupCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     website = get_owned_website(db, current_user, payload.website_id)
-    db_item = db.query(DatabaseAccount).filter(DatabaseAccount.website_id == website.id).first()
-    archive = backup.create_backup(website, db_item.db_name if db_item else None)
-    log_action(db, current_user.id, "backup", website.domain, archive)
-    return {"backup_file": archive}
+    return _queue_site_backup(current_user, website)
+
+
+@router.get("/backup-jobs")
+def list_backup_jobs(current_user: User = Depends(get_current_user)):
+    return {"jobs": _list_backup_jobs(current_user)}
+
+
+@router.get("/backup-jobs/{job_id}")
+def get_backup_job(job_id: str, current_user: User = Depends(get_current_user)):
+    job = _get_backup_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Backup job not found")
+    if job.get("request_user_id") != current_user.id and not is_admin_role(current_user.role):
+        raise HTTPException(status_code=403, detail="Access denied")
+    return _public_backup_job(job)
 
 
 @router.post("/restore")
@@ -431,15 +647,13 @@ def list_user_backups(user_id: int, db: Session = Depends(get_db), current_user:
 @router.post("/user-backup")
 def create_user_backup(payload: UserBackupCreate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     user = get_backup_user(db, current_user, payload.user_id)
-    archive = backup.create_user_backup(user, db)
-    remote_file = None
-    target_name = None
     if payload.target_id:
         ensure_role(current_user.role, Role.admin)
-        target_name, remote_file = upload_archive_to_target(db, payload.target_id, archive)
-    detail = f"{archive}" + (f" -> {target_name}:{remote_file}" if remote_file else "")
-    log_action(db, current_user.id, "backup_user", user.username, detail, request=request)
-    return {"backup_file": archive, "remote_file": remote_file, "target": target_name}
+        target_exists = db.query(SftpBackupTarget).filter(SftpBackupTarget.id == payload.target_id, SftpBackupTarget.is_active == True).first()  # noqa: E712
+        if not target_exists:
+            raise HTTPException(status_code=404, detail="SFTP target not found")
+    log_action(db, current_user.id, "queue_backup_user", user.username, request=request)
+    return _queue_user_backup(current_user, user, payload.target_id)
 
 
 @router.get("/user-backups-download")
@@ -599,45 +813,8 @@ def create_sftp_backup(
     target = db.query(SftpBackupTarget).filter(SftpBackupTarget.id == payload.target_id).first()
     if not target or not target.is_active:
         raise HTTPException(status_code=404, detail="SFTP target not found")
-    db_item = db.query(DatabaseAccount).filter(DatabaseAccount.website_id == website.id).first()
-    archive = backup.create_backup(website, db_item.db_name if db_item else None)
-    try:
-        password = decrypt(target.password) if target.password else None
-    except RuntimeError:
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to access stored SFTP password; please re-save the target in panel settings",
-        )
-    try:
-        private_key = decrypt(target.private_key) if target.private_key else None
-    except RuntimeError:
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to access stored SFTP private key; please re-save the target in panel settings",
-        )
-    try:
-        result = backup.upload_to_sftp(
-            archive,
-            host=target.host,
-            port=target.port,
-            username=target.username,
-            password=password,
-            private_key=private_key,
-            remote_path=target.remote_path,
-            expected_host_key_type=target.host_key_type,
-            expected_host_key_fingerprint=target.host_key_fingerprint,
-        )
-    except backup.SftpHostKeyMismatch as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-    if not target.host_key_fingerprint and result.get("host_key_fingerprint"):
-        target.host_key_type = result["host_key_type"]
-        target.host_key_fingerprint = result["host_key_fingerprint"]
-        db.commit()
-    remote_file = result["remote_file"]
-    log_action(db, current_user.id, "backup_sftp", website.domain, f"{target.name}:{remote_file}", request=request)
-    return {"backup_file": archive, "remote_file": remote_file, "target": target.name}
+    log_action(db, current_user.id, "queue_backup_sftp", website.domain, target.name, request=request)
+    return _queue_sftp_backup(current_user, website, target.id)
 
 
 @router.get("/php-config")
@@ -659,6 +836,19 @@ def update_php_config(payload: PhpConfigUpdate, current_user: User = Depends(get
     except (OSError, RuntimeError) as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return {"target": target}
+
+
+@router.post("/php-config/defaults")
+def restore_php_config_defaults(payload: PhpConfigRestore, current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.admin)
+    try:
+        target = php.restore_default_php_ini(payload.php_version)
+        values = php.default_php_config(payload.php_version)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {"target": target, "values": values}
 
 
 @router.get("/php-versions")
@@ -689,19 +879,23 @@ def add_cron(payload: CronCreate, db: Session = Depends(get_db), current_user: U
         line = cron.add_cron(website, payload.schedule, payload.command)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    log_action(db, current_user.id, "add_cron", website.domain, line)
     return {"line": line}
 
 
 @router.get("/cron/{website_id}")
 def list_cron(website_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     website = get_owned_website(db, current_user, website_id)
-    return {"items": cron.list_cron(website.domain, website.linux_user or "www-data")}
+    return {"items": cron.list_cron_entries(website.domain, website.linux_user or "www-data")}
 
 
 @router.delete("/cron")
 def delete_cron(payload: CronDelete, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     website = get_owned_website(db, current_user, payload.website_id)
-    line = cron.delete_cron(website.domain, payload.index, website.linux_user or "www-data")
+    try:
+        line = cron.delete_cron(website.domain, payload.index, website.linux_user or "www-data")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     log_action(db, current_user.id, "delete_cron", website.domain, line)
     return {"deleted": line}
 

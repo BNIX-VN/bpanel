@@ -33,7 +33,12 @@ def update_panel_settings(
 ):
     ensure_role(current_user.role, Role.admin)
     try:
-        result = panel_settings.update_settings(payload.app_name, payload.panel_url)
+        result = panel_settings.update_settings(
+            payload.app_name,
+            payload.panel_hostname,
+            payload.panel_port,
+            payload.panel_url,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -83,10 +88,15 @@ def install_panel_ssl(
 ):
     ensure_role(current_user.role, Role.admin)
     try:
-        result = panel_settings.install_panel_ssl(payload.panel_url, payload.email)
+        result = panel_settings.install_panel_ssl(
+            str(payload.email),
+            panel_hostname=payload.panel_hostname,
+            panel_port=payload.panel_port,
+            panel_url=payload.panel_url,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    log_action(db, current_user.id, "install_panel_ssl", payload.panel_url, request=request)
+    log_action(db, current_user.id, "install_panel_ssl", result.get("panel_url") or payload.panel_hostname or "panel", request=request)
     return result
