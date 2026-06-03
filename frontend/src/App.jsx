@@ -25,6 +25,16 @@ const HTTP_FLOOD_DEFAULTS = {
   access_limit_burst: 100,
   connection_limit: 60,
 };
+const PHP_VERSION_ORDER = ['5.6', '7.4', '8.0', '8.1', '8.2', '8.3', '8.4', '8.5'];
+
+function sortPhpVersions(versions = []) {
+  return [...versions].sort((a, b) => {
+    const ai = PHP_VERSION_ORDER.indexOf(a);
+    const bi = PHP_VERSION_ORDER.indexOf(b);
+    if (ai !== -1 || bi !== -1) return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+    return String(a).localeCompare(String(b), undefined, { numeric: true });
+  });
+}
 
 function normalizeHttpFloodConfig(config = {}) {
   let value = config;
@@ -1537,7 +1547,10 @@ function App() {
 
   async function loadPhpVersions() {
     const data = await request('/maintenance/php-versions', {}, 'Loading PHP versions...');
-    if (data) setPhpVersions(data);
+    if (data) setPhpVersions({
+      installed: sortPhpVersions(data.installed || []),
+      supported: sortPhpVersions(data.supported || []),
+    });
   }
 
   async function installPhpVersion(version) {
@@ -2439,7 +2452,7 @@ function App() {
 
   function renderPhpConfig() {
     if (!isAdmin) return <section className="section"><h2>PHP config</h2><p className="hint">You do not have permission to edit PHP config.</p></section>;
-    const notInstalled = phpVersions.supported.filter(v => !phpVersions.installed.includes(v));
+    const notInstalled = sortPhpVersions(phpVersions.supported.filter(v => !phpVersions.installed.includes(v)));
     return <section className="section">
       <div className="section-title">
         <div><h2>PHP Configuration</h2></div>

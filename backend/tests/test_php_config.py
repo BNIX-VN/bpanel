@@ -22,6 +22,10 @@ def test_php_config_accepts_all_supported_versions():
         PhpConfigUpdate(php_version="9.9")
 
 
+def test_supported_php_versions_keep_display_order():
+    assert list(php.SUPPORTED_PHP_VERSIONS) == ["5.6", "7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5"]
+
+
 def test_update_php_ini_writes_through_helper(monkeypatch):
     captured = {}
 
