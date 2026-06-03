@@ -347,8 +347,8 @@ class PanelSettingsUpdate(BaseModel):
     app_name: Optional[str] = Field(default=None, min_length=2, max_length=80)
     panel_hostname: Optional[str] = Field(default=None, max_length=255)
     panel_port: Optional[int] = Field(default=None, ge=1, le=65535)
-    # Legacy API clients may still send a full URL. The UI now sends only
-    # panel_hostname and panel_port to avoid malformed public URLs.
+    # Legacy API clients may still send these fields. The panel port is locked
+    # after install; updates preserve the existing port and only change host/scheme.
     panel_url: Optional[str] = Field(default=None, max_length=255)
 
     @field_validator("app_name")

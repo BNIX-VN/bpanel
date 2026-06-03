@@ -63,11 +63,12 @@ def document_root(root_path: str | Path) -> Path:
 
 def is_managed_site_path(path: str | Path) -> bool:
     resolved = Path(path).resolve()
+    home_root = HOME_ROOT.resolve()
     legacy_root = Path(settings.sites_root).resolve()
     if legacy_root == resolved or legacy_root in resolved.parents:
         return True
     try:
-        relative = resolved.relative_to(HOME_ROOT)
+        relative = resolved.relative_to(home_root)
     except ValueError:
         return False
     parts = relative.parts
@@ -76,11 +77,12 @@ def is_managed_site_path(path: str | Path) -> bool:
 
 def is_site_root_for_domain(path: str | Path, domain: str) -> bool:
     resolved = Path(path).resolve()
+    home_root = HOME_ROOT.resolve()
     legacy_root = Path(settings.sites_root).resolve()
     if resolved == legacy_root / domain:
         return True
     try:
-        relative = resolved.relative_to(HOME_ROOT)
+        relative = resolved.relative_to(home_root)
     except ValueError:
         return False
     parts = relative.parts

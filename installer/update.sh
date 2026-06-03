@@ -64,6 +64,15 @@ env_set_default() {
   fi
 }
 
+ufw_panel_allow_port() {
+  local port="$1"
+  [[ "$port" =~ ^[0-9]+$ ]] || return 0
+  ufw insert 1 allow "${port}/tcp" comment "bpanel:PanelZone" >/dev/null 2>&1 \
+    || ufw insert 1 allow "${port}/tcp" >/dev/null 2>&1 \
+    || ufw allow "${port}/tcp" >/dev/null 2>&1 \
+    || true
+}
+
 detect_server_ip() {
   hostname -I 2>/dev/null | awk '{print $1}' || true
 }
@@ -231,7 +240,9 @@ WantedBy=timers.target
 SERVICE
   systemctl daemon-reload
   if command -v ufw >/dev/null 2>&1; then
-    ufw allow "${panel_port}/tcp" >/dev/null || true
+    for default_port in 80 443 465 587 2222 "${panel_port}"; do
+      ufw_panel_allow_port "$default_port"
+    done
   fi
   rm -f /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf 2>/dev/null || true
   rm -f /etc/nginx/sites-enabled/bpanel.conf /etc/nginx/sites-available/bpanel.conf 2>/dev/null || true

@@ -24,10 +24,19 @@ def test_firewall_numbered_rules_mark_defaults_protected(monkeypatch):
     rules = firewall.parse_numbered_rules(
         "[ 1] 22/tcp                     ALLOW IN    Anywhere\n"
         "[ 2] 2222/tcp                   ALLOW IN    Anywhere\n"
-        "[ 3] 5.6.7.8                    DENY IN     Anywhere"
+        "[ 3] 465/tcp                    ALLOW IN    Anywhere\n"
+        "[ 4] 443/tcp                    DENY IN     Anywhere\n"
+        "[ 5] 5.6.7.8                    DENY IN     Anywhere # bpanel:UserZone\n"
+        "[ 6] 80/tcp                     ALLOW IN    Anywhere # bpanel:UserZone"
     )
 
-    assert [rule["number"] for rule in rules] == [1, 2, 3]
+    assert [rule["id"] for rule in rules] == [1, 2, 3, 4, 5, 6]
     assert rules[0]["protected"] is True
     assert rules[1]["protected"] is True
-    assert rules[2]["protected"] is False
+    assert rules[2]["protected"] is True
+    assert rules[3]["protected"] is False
+    assert rules[4]["protected"] is False
+    assert rules[5]["protected"] is False
+    assert rules[0]["zone"] == "PanelZone"
+    assert rules[4]["zone"] == "UserZone"
+    assert rules[4]["from"] == "Anywhere"

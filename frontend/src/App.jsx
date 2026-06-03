@@ -226,7 +226,6 @@ function App() {
   const [firewallBlockIp, setFirewallBlockIp] = useState('');
   const [firewallBlockPort, setFirewallBlockPort] = useState('');
   const [firewallBlockProtocol, setFirewallBlockProtocol] = useState('tcp');
-  const [firewallDeleteNumber, setFirewallDeleteNumber] = useState('');
   const [websitePhpVersions, setWebsitePhpVersions] = useState({});
   const [assignUserId, setAssignUserId] = useState('');
   const [assignWebsiteId, setAssignWebsiteId] = useState('');
@@ -451,12 +450,12 @@ function App() {
   async function savePanelSettings() {
     const data = await request('/panel-settings', {
       method: 'PATCH',
-      body: JSON.stringify({ ...panelSettingsForm, panel_port: Number(panelSettingsForm.panel_port || 2222) }),
+      body: JSON.stringify({ app_name: panelSettingsForm.app_name, panel_hostname: panelSettingsForm.panel_hostname }),
     }, 'Saving panel settings...');
     if (data) {
       setPanelSettings(data);
       setPanelSettingsForm(formFromPanelSettings(data));
-      setNotice('Panel settings updated. The panel may restart if the hostname or port changed.');
+      setNotice('Panel settings updated. The panel may restart if the hostname changed.');
     }
   }
 
@@ -1475,12 +1474,11 @@ function App() {
     if (!confirm(`Block ${firewallBlockIp || 'this IP'}?`)) return;
     await runFirewallAction('/firewall/block-ip', { method: 'POST', body: JSON.stringify({ ip: firewallBlockIp, port: firewallBlockPort || null, protocol: firewallBlockProtocol }) }, 'Blocking IP...');
   }
-  async function deleteFirewallRule(numberOverride = firewallDeleteNumber) {
+  async function deleteFirewallRule(numberOverride) {
     const ruleNumber = String(numberOverride || '').trim();
     if (!ruleNumber) return;
     if (!confirm(`Delete UFW rule #${ruleNumber}?`)) return;
     await runFirewallAction(`/firewall/rules/${encodeURIComponent(ruleNumber)}`, { method: 'DELETE' }, 'Deleting rule...');
-    setFirewallDeleteNumber('');
   }
 
   async function loadUpdates() {
@@ -1761,8 +1759,7 @@ function App() {
           <input value={domain} onChange={e => setDomain(e.target.value)} placeholder="domain.com" />
           <select value={siteType} onChange={e => setSiteType(e.target.value)}>
             <option value="wordpress">WordPress</option>
-            <option value="php">Static/PHP</option>
-            <option value="static">Static only</option>
+            <option value="php">PHP</option>
           </select>
           <select value={phpVersion} onChange={e => setPhpVersion(e.target.value)}>
             {phpVersions.installed.map(v => <option key={v} value={v}>PHP {v}</option>)}
@@ -1782,9 +1779,7 @@ function App() {
         </label>
         <p className="hint">{wpFieldsEnabled
           ? 'WordPress will be installed and the panel will show the URL, admin account, and password after creation.'
-          : siteType === 'php'
-            ? 'A PHP-FPM vhost will be created with public_html/ folder. Upload your PHP or static files via File Manager.'
-            : 'A static-only Nginx vhost will be created. PHP files can be uploaded but will not execute.'}</p>
+          : 'A PHP-FPM vhost will be created with public_html/ folder. Upload your PHP, HTML, or static files via File Manager.'}</p>
       </section>
       <section className="section">
         <div className="section-title">
@@ -1818,7 +1813,6 @@ function App() {
               <button disabled={!!loading} onClick={() => openWebsiteTerminal(site)}><TerminalIcon size={14}/> Terminal</button>
               {isAdmin && <button disabled={!!loading} onClick={() => openNginxCustom(site)}><Code2 size={14}/> Nginx</button>}
               {isAdmin && <button disabled={!!loading} onClick={() => toggleWebsiteWaf(site)}><Shield size={14}/> {site.waf_enabled ? 'WAF off' : 'WAF on'}</button>}
-              {site.app_type === 'wordpress' && <button disabled={!!loading} onClick={() => fixWordPressPermissions(site.id)}>Fix permissions</button>}
               <button className="danger" disabled={!!loading} onClick={() => deleteWebsite(site.id)}><Trash2 size={14}/> Delete</button>
             </div>
           </article>)}
@@ -2241,6 +2235,10 @@ function App() {
   function renderFirewall() {
     if (!isAdmin) return <section className="section"><h2>Firewall</h2><p className="hint">No permission.</p></section>;
     const rules = firewallStatus?.rules || [];
+    const rawFirewallText = firewallStatus?.stderr || firewallStatus?.stdout || '';
+    const firewallSummary = rawFirewallText
+      ? rawFirewallText.split('\n').map(line => line.trim()).filter(line => line && !/^\[\s*\d+\]/.test(line) && !/^To\s+Action\s+From/i.test(line) && !/^-{3,}/.test(line))[0] || 'Rule list loaded.'
+      : 'Click Refresh to load status.';
     return <>
       <section className="section">
         <div className="section-title">
@@ -2254,13 +2252,16 @@ function App() {
         </div>
         <div className="info-box firewall-status">
           <strong>UFW status</strong>
-          <pre>{firewallStatus?.stdout || firewallStatus?.stderr || 'Click Refresh to load status.'}</pre>
+          <p className="hint">{firewallSummary}</p>
         </div>
         {rules.length > 0 && <div className="firewall-rule-list">
           {rules.map(rule => <div className="firewall-rule" key={rule.number}>
             <span className="badge">#{rule.number}</span>
             <span><strong>{rule.to}</strong><small>{rule.action} {rule.direction} from {rule.from}</small></span>
-            {rule.protected ? <span className="badge">Default</span> : <button className="mini danger" disabled={!!loading} onClick={() => deleteFirewallRule(rule.number)}><Trash2 size={13}/></button>}
+            <span className="firewall-rule-actions">
+              <span className="badge">{rule.zone || (rule.protected ? 'PanelZone' : 'UserZone')}</span>
+              {!rule.protected && <button className="mini danger" disabled={!!loading} onClick={() => deleteFirewallRule(rule.number)}><Trash2 size={13}/></button>}
+            </span>
           </div>)}
         </div>}
       </section>
@@ -2289,14 +2290,6 @@ function App() {
           <label><span>Protocol</span><select value={firewallBlockProtocol} onChange={e => setFirewallBlockProtocol(e.target.value)}><option value="tcp">TCP</option><option value="udp">UDP</option></select></label>
           <button className="danger" disabled={!!loading || !firewallBlockIp} onClick={blockFirewallIp}>Block</button>
         </div>
-      </section>
-      <section className="section">
-        <h2>Delete rule</h2>
-        <div className="firewall-form">
-          <label><span>Rule #</span><input value={firewallDeleteNumber} onChange={e => setFirewallDeleteNumber(e.target.value)} placeholder="1" inputMode="numeric" /></label>
-          <button className="danger" disabled={!!loading || !firewallDeleteNumber} onClick={deleteFirewallRule}>Delete rule</button>
-        </div>
-        <p className="hint">Rule numbers change after each delete. Refresh status first.</p>
       </section>
     </>;
   }
@@ -2373,14 +2366,14 @@ function App() {
     return <>
       <section className="section">
         <div className="section-title">
-          <div><h2>Panel settings</h2><p className="hint">Branding, hostname, and panel port.</p></div>
+          <div><h2>Panel settings</h2><p className="hint">Branding and hostname.</p></div>
           <button disabled={!!loading} onClick={loadPanelSettings}><RefreshCw size={14}/> Refresh</button>
         </div>
-        <div className="panel-settings-grid">
+        <div className="panel-settings-grid panel-settings-compact">
           <label><span>Panel name</span><input value={panelSettingsForm.app_name} onChange={e => setPanelSettingsForm(prev => ({ ...prev, app_name: e.target.value }))} placeholder="BPanel" /></label>
           <label><span>Panel hostname</span><input value={panelSettingsForm.panel_hostname} onChange={e => setPanelSettingsForm(prev => ({ ...prev, panel_hostname: e.target.value }))} placeholder="panel.domain.com" /></label>
-          <label><span>Panel port</span><input value={panelSettingsForm.panel_port} onChange={e => setPanelSettingsForm(prev => ({ ...prev, panel_port: e.target.value }))} placeholder="2222" inputMode="numeric" /></label>
-          <button disabled={!!loading || !panelSettingsForm.app_name || !panelSettingsForm.panel_hostname || !panelSettingsForm.panel_port} onClick={savePanelSettings}><SettingsIcon size={14}/> Save settings</button>
+          <label className="check-line panel-ssl-status"><input type="checkbox" checked={!!panelSettings.ssl_enabled} readOnly disabled /> {panelSettings.ssl_enabled ? 'SSL installed' : 'SSL not installed'}</label>
+          <button disabled={!!loading || !panelSettingsForm.app_name || !panelSettingsForm.panel_hostname} onClick={savePanelSettings}><SettingsIcon size={14}/> Save settings</button>
         </div>
       </section>
       <section className="section">

@@ -154,22 +154,22 @@ def update_settings(
     panel_port: int | None = None,
     panel_url: str | None = None,
 ) -> dict:
+    del panel_port  # The panel port is install-time only; settings can change hostname/branding.
     data = _read_raw()
     if app_name is not None:
         value = app_name.strip()
         if not 2 <= len(value) <= 80:
             raise ValueError("Panel name must be 2-80 characters")
         data["app_name"] = value
-    if (panel_hostname is not None and panel_hostname.strip()) or panel_port is not None or (panel_url is not None and panel_url.strip()):
+    if (panel_hostname is not None and panel_hostname.strip()) or (panel_url is not None and panel_url.strip()):
         existing_url = data.get("panel_url") or settings.panel_url or ""
         existing_normalized = normalize_panel_url(existing_url) if existing_url else ""
         existing_scheme, existing_host, existing_port = parse_panel_url(existing_normalized) if existing_normalized else ("http", "", settings.panel_port or 2222)
         if panel_hostname is not None and panel_hostname.strip():
-            normalized = panel_url_from_parts(panel_hostname, panel_port if panel_port is not None else existing_port, existing_scheme)
-        elif panel_port is not None and existing_normalized:
-            normalized = panel_url_from_parts(existing_host, panel_port, existing_scheme)
+            normalized = panel_url_from_parts(panel_hostname, existing_port, existing_scheme)
         elif panel_url is not None and panel_url.strip():
-            normalized = normalize_panel_url(panel_url)
+            requested_scheme, requested_host, _requested_port = parse_panel_url(panel_url)
+            normalized = panel_url_from_parts(requested_host, existing_port, requested_scheme)
         else:
             normalized = existing_normalized
         if not normalized:

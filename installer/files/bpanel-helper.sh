@@ -83,8 +83,26 @@ require_panel_host() {
 allow_panel_port() {
   local port="$1"
   if command -v ufw >/dev/null 2>&1; then
-    ufw allow "${port}/tcp" >/dev/null || true
+    ufw_panel_allow_port "$port"
   fi
+}
+
+ufw_panel_allow_port() {
+  local port="$1"
+  require_port "$port"
+  ufw insert 1 allow "${port}/tcp" comment "bpanel:PanelZone" >/dev/null 2>&1 \
+    || ufw insert 1 allow "${port}/tcp" >/dev/null 2>&1 \
+    || ufw allow "${port}/tcp" >/dev/null 2>&1 \
+    || true
+}
+
+ufw_panel_allow_app() {
+  local app="$1"
+  [[ "$app" == "OpenSSH" || "$app" == "Nginx Full" ]] || deny "invalid panel firewall app: $app"
+  ufw insert 1 allow "$app" comment "bpanel:PanelZone" >/dev/null 2>&1 \
+    || ufw insert 1 allow "$app" >/dev/null 2>&1 \
+    || ufw allow "$app" >/dev/null 2>&1 \
+    || true
 }
 
 require_time_hhmm() {
@@ -511,10 +529,13 @@ run_ufw_ip_rule() {
     *) deny "invalid ufw action: $action" ;;
   esac
   if [[ -z "$port" ]]; then
-    exec ufw "$action" from "$network"
+    ufw "$action" from "$network" comment "bpanel:UserZone" \
+      || ufw "$action" from "$network"
+    return 0
   fi
   require_port "$port"; require_proto "$protocol"
-  exec ufw "$action" from "$network" to any port "$port" proto "$protocol"
+  ufw "$action" from "$network" to any port "$port" proto "$protocol" comment "bpanel:UserZone" \
+    || ufw "$action" from "$network" to any port "$port" proto "$protocol"
 }
 
 is_in() {
@@ -946,7 +967,12 @@ case "$cmd" in
   ufw-allow-port)
     [[ $# -eq 2 ]] || deny "usage: ufw-allow-port <port> <proto>"
     require_port "$1"; require_proto "$2"
-    exec ufw allow "${1}/${2}"
+    ufw allow "${1}/${2}" comment "bpanel:UserZone" \
+      || ufw allow "${1}/${2}"
+    ;;
+  ufw-panel-allow-port)
+    [[ $# -eq 1 ]] || deny "usage: ufw-panel-allow-port <port>"
+    ufw_panel_allow_port "$1"
     ;;
   ufw-allow-ip)
     [[ $# -ge 1 && $# -le 3 ]] || deny "usage: ufw-allow-ip <ip> [port] [proto]"

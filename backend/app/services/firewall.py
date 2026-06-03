@@ -9,6 +9,22 @@ from app.services.shell import CommandResult, shell
 PORT_RE = re.compile(r"^[0-9]{1,5}$")
 PROTOCOLS = {"tcp", "udp"}
 NUMBERED_RULE_RE = re.compile(r"^\[\s*(\d+)\]\s+(.+?)\s{2,}(ALLOW|DENY|REJECT|LIMIT)\s+(IN|OUT)\s+(.+)$", re.I)
+DEFAULT_PROTECTED_PORTS = {22, 80, 443, 465, 587, 2222}
+PANEL_ZONE = "PanelZone"
+USER_ZONE = "UserZone"
+
+
+def _strip_zone_comment(value: str) -> str:
+    return re.sub(r"\s*(?:#|\()?\s*bpanel:(?:PanelZone|UserZone)\)?", "", value, flags=re.I).strip()
+
+
+def _zone_from_values(*values: str) -> str | None:
+    joined = " ".join(values).lower()
+    if "bpanel:panelzone" in joined:
+        return PANEL_ZONE
+    if "bpanel:userzone" in joined:
+        return USER_ZONE
+    return None
 
 
 def _validate_protocol(protocol: str) -> str:
@@ -49,13 +65,17 @@ def parse_numbered_rules(output: str) -> list[dict]:
             continue
         number, to_value, action, direction, from_value = match.groups()
         rule = {
+            "id": int(number),
             "number": int(number),
-            "to": to_value.strip(),
+            "to": _strip_zone_comment(to_value),
             "action": action.upper(),
             "direction": direction.upper(),
-            "from": from_value.strip(),
+            "from": _strip_zone_comment(from_value),
         }
-        rule["protected"] = is_protected_rule(rule)
+        protected_default = is_protected_rule(rule)
+        explicit_zone = _zone_from_values(to_value, from_value)
+        rule["zone"] = explicit_zone or (PANEL_ZONE if protected_default else USER_ZONE)
+        rule["protected"] = rule["zone"] == PANEL_ZONE
         rules.append(rule)
     return rules
 
@@ -64,9 +84,13 @@ def is_protected_rule(rule: dict) -> bool:
     if (rule.get("action") or "").upper() != "ALLOW":
         return False
     target = (rule.get("to") or "").lower()
-    if "openssh" in target or "nginx full" in target:
+    if "openssh" in target or "nginx full" in target or "nginx http" in target or "nginx https" in target:
         return True
-    protected_ports = {22, 80, 443, int(settings.panel_port or 2222)}
+    protected_ports = set(DEFAULT_PROTECTED_PORTS)
+    try:
+        protected_ports.add(int(settings.panel_port or 2222))
+    except (TypeError, ValueError):
+        pass
     for value in re.findall(r"\d{1,5}", target):
         try:
             if int(value) in protected_ports:
@@ -138,7 +162,7 @@ def delete_rule(number: int) -> CommandResult:
     rules = parse_numbered_rules(status().stdout)
     selected = next((rule for rule in rules if rule["number"] == number), None)
     if selected and selected.get("protected"):
-        raise ValueError("Default SSH, web, and panel firewall rules cannot be deleted")
+        raise ValueError("Default panel, mail, web, and SSH firewall rules cannot be deleted")
     return shell.privileged(
         "ufw-delete",
         helper_args=[str(number)],

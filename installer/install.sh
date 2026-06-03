@@ -773,16 +773,34 @@ setup_nginx() {
 }
 
 setup_firewall() {
+  ufw_panel_allow_port() {
+    local port="$1"
+    [[ "$port" =~ ^[0-9]+$ ]] || return 0
+    ufw insert 1 allow "${port}/tcp" comment "bpanel:PanelZone" >/dev/null 2>&1 \
+      || ufw insert 1 allow "${port}/tcp" >/dev/null 2>&1 \
+      || ufw allow "${port}/tcp" >/dev/null 2>&1 \
+      || true
+  }
+  ufw_panel_allow_app() {
+    local app="$1"
+    ufw insert 1 allow "$app" comment "bpanel:PanelZone" >/dev/null 2>&1 \
+      || ufw insert 1 allow "$app" >/dev/null 2>&1 \
+      || ufw allow "$app" >/dev/null 2>&1 \
+      || true
+  }
+
   ufw default deny incoming || true
   ufw default allow outgoing || true
-  ufw allow OpenSSH || true
-  ufw allow 22/tcp || true
+  ufw_panel_allow_app OpenSSH
+  ufw_panel_allow_port 22
   while read -r ssh_port; do
     [[ -n "$ssh_port" ]] || continue
-    ufw allow "${ssh_port}/tcp" || true
+    ufw_panel_allow_port "$ssh_port"
   done < <(detect_ssh_ports)
-  ufw allow 'Nginx Full' || true
-  ufw allow "${PANEL_PORT}/tcp" || true
+  ufw_panel_allow_app 'Nginx Full'
+  for default_port in 80 443 465 587 2222 "${PANEL_PORT}"; do
+    ufw_panel_allow_port "$default_port"
+  done
   ufw --force enable || true
 }
 

@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api import auth, databases, firewall, maintenance, panel_settings as panel_settings_api, services, terminal, updates, users, waf, websites
 from app.core.config import settings
 from app.core.database import run_migrations
+from app.core.version import APP_VERSION
 from app.services import panel_settings as panel_brand_settings
 
 run_migrations()
@@ -19,7 +20,7 @@ os.umask(0o022)
 
 logger = logging.getLogger("bpanel")
 
-app = FastAPI(title="BPanel API", version="0.1.0")
+app = FastAPI(title="BPanel API", version=APP_VERSION)
 
 # Refuse to start in production with unsafe defaults.
 if settings.app_env.lower() == "production":
@@ -99,7 +100,11 @@ app.include_router(terminal.router, prefix="/api")
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "name": panel_brand_settings.current_settings().get("app_name") or "BPanel"}
+    return {
+        "status": "ok",
+        "name": panel_brand_settings.current_settings().get("app_name") or "BPanel",
+        "version": APP_VERSION,
+    }
 
 
 frontend_dist = Path(settings.frontend_dist)

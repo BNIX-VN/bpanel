@@ -1,12 +1,12 @@
 # BPanel
 
 Lightweight hosting management panel for Ubuntu 24.04. BPanel helps you run
-WordPress, PHP, and static websites from a single clean web UI with user
+WordPress and PHP websites from a single clean web UI with user
 ownership, quotas, backups, SSL, services, and firewall tools built in.
 
 - Dashboard resource monitoring for CPU, RAM, disk, and network throughput
 - WordPress one-click installer (PHP 8.3 / 8.4) with WP-CLI
-- WordPress, Static/PHP, and Static-only sites with editable full Nginx vhosts
+- WordPress and PHP sites with editable full Nginx vhosts
 - Panel users map to locked Linux users; website source lives in `/home/<panel-user>/<domain>/public_html`
 - Admin quick-login for creating sites as a selected user, plus one-owner assignment per website
 - Website count limits and BPanel soft storage quotas per end user
@@ -15,7 +15,7 @@ ownership, quotas, backups, SSL, services, and firewall tools built in.
 - Native BPanel file manager with upload, edit, archive, and extract support
 - Backups: archive site files + SQL, scheduled full-user backups, restore, upload, download
 - SFTP backup targets for off-server backup copies
-- UFW firewall manager (allow port, allow/block IP, delete rules)
+- UFW firewall manager with protected panel/web/mail defaults and user rules below them
 - Update controls for apt-based OS packages and BPanel source updates
 - Nginx ModSecurity/WAF engine installed by default, with per-site toggles
 - PHP-FPM config editor per version
@@ -28,6 +28,13 @@ ownership, quotas, backups, SSL, services, and firewall tools built in.
 - Backend: FastAPI, SQLAlchemy, SQLite (default), Pydantic v2
 - Frontend: React 18, Vite, lucide-react
 - Server: Nginx, ModSecurity/WAF, systemd, MariaDB, Redis, PHP-FPM, certbot
+
+## Versioning
+
+Current release: `1.00.0001`.
+
+BPanel versions use `xx.yy.zzzz`: `xx` for major/release changes, `yy` for
+feature updates in the same release line, and `zzzz` for bugfix builds.
 
 ## System requirements
 
