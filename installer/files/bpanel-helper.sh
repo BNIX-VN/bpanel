@@ -90,6 +90,7 @@ allow_panel_port() {
 ufw_panel_allow_port() {
   local port="$1"
   require_port "$port"
+  ufw --force delete allow "${port}/tcp" >/dev/null 2>&1 || true
   ufw insert 1 allow "${port}/tcp" comment "bpanel:PanelZone" >/dev/null 2>&1 \
     || ufw insert 1 allow "${port}/tcp" >/dev/null 2>&1 \
     || ufw allow "${port}/tcp" >/dev/null 2>&1 \
