@@ -226,6 +226,7 @@ function App() {
   const [firewallBlockIp, setFirewallBlockIp] = useState('');
   const [firewallBlockPort, setFirewallBlockPort] = useState('');
   const [firewallBlockProtocol, setFirewallBlockProtocol] = useState('tcp');
+  const [firewallDeleteNumber, setFirewallDeleteNumber] = useState('');
   const [websitePhpVersions, setWebsitePhpVersions] = useState({});
   const [assignUserId, setAssignUserId] = useState('');
   const [assignWebsiteId, setAssignWebsiteId] = useState('');
@@ -238,6 +239,7 @@ function App() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [panelSettings, setPanelSettings] = useState({ app_name: 'BPanel', panel_url: '', panel_hostname: '', panel_port: 2222, logo_url: '', favicon_url: '/favicon.png', ssl_enabled: false });
   const [panelSettingsForm, setPanelSettingsForm] = useState({ app_name: 'BPanel', panel_hostname: '', panel_port: 2222 });
+  const [appVersion, setAppVersion] = useState('');
   const [panelLogoFile, setPanelLogoFile] = useState(null);
   const [panelFaviconFile, setPanelFaviconFile] = useState(null);
   const [panelSslEmail, setPanelSslEmail] = useState('');
@@ -447,6 +449,15 @@ function App() {
     }
   }
 
+  async function loadAppVersion() {
+    try {
+      const res = await fetch(`${API}/health`, { credentials: 'include' });
+      if (!res.ok) return;
+      const data = await res.json();
+      setAppVersion(data.version || '');
+    } catch {}
+  }
+
   async function savePanelSettings() {
     const data = await request('/panel-settings', {
       method: 'PATCH',
@@ -512,7 +523,7 @@ function App() {
     })();
   }, []);
 
-  useEffect(() => { loadPanelSettings(); }, []);
+  useEffect(() => { loadPanelSettings(); loadAppVersion(); }, []);
 
   useEffect(() => {
     const appName = panelSettings.app_name || 'BPanel';
@@ -1474,11 +1485,12 @@ function App() {
     if (!confirm(`Block ${firewallBlockIp || 'this IP'}?`)) return;
     await runFirewallAction('/firewall/block-ip', { method: 'POST', body: JSON.stringify({ ip: firewallBlockIp, port: firewallBlockPort || null, protocol: firewallBlockProtocol }) }, 'Blocking IP...');
   }
-  async function deleteFirewallRule(numberOverride) {
+  async function deleteFirewallRule(numberOverride = firewallDeleteNumber) {
     const ruleNumber = String(numberOverride || '').trim();
     if (!ruleNumber) return;
     if (!confirm(`Delete UFW rule #${ruleNumber}?`)) return;
     await runFirewallAction(`/firewall/rules/${encodeURIComponent(ruleNumber)}`, { method: 'DELETE' }, 'Deleting rule...');
+    setFirewallDeleteNumber('');
   }
 
   async function loadUpdates() {
@@ -2234,11 +2246,7 @@ function App() {
 
   function renderFirewall() {
     if (!isAdmin) return <section className="section"><h2>Firewall</h2><p className="hint">No permission.</p></section>;
-    const rules = firewallStatus?.rules || [];
-    const rawFirewallText = firewallStatus?.stderr || firewallStatus?.stdout || '';
-    const firewallSummary = rawFirewallText
-      ? rawFirewallText.split('\n').map(line => line.trim()).filter(line => line && !/^\[\s*\d+\]/.test(line) && !/^To\s+Action\s+From/i.test(line) && !/^-{3,}/.test(line))[0] || 'Rule list loaded.'
-      : 'Click Refresh to load status.';
+    const firewallText = firewallStatus?.stdout || firewallStatus?.stderr || 'Click Refresh to load status.';
     return <>
       <section className="section">
         <div className="section-title">
@@ -2252,18 +2260,12 @@ function App() {
         </div>
         <div className="info-box firewall-status">
           <strong>UFW status</strong>
-          <p className="hint">{firewallSummary}</p>
+          <pre>{firewallText}</pre>
+          <div className="firewall-delete-inline">
+            <label><span>Delete UserZone #</span><input value={firewallDeleteNumber} onChange={e => setFirewallDeleteNumber(e.target.value)} placeholder="12" inputMode="numeric" /></label>
+            <button className="danger" disabled={!!loading || !firewallDeleteNumber} onClick={() => deleteFirewallRule()}>Delete</button>
+          </div>
         </div>
-        {rules.length > 0 && <div className="firewall-rule-list">
-          {rules.map(rule => <div className="firewall-rule" key={rule.number}>
-            <span className="badge">#{rule.number}</span>
-            <span><strong>{rule.to}</strong><small>{rule.action} {rule.direction} from {rule.from}</small></span>
-            <span className="firewall-rule-actions">
-              <span className="badge">{rule.zone || (rule.protected ? 'PanelZone' : 'UserZone')}</span>
-              {!rule.protected && <button className="mini danger" disabled={!!loading} onClick={() => deleteFirewallRule(rule.number)}><Trash2 size={13}/></button>}
-            </span>
-          </div>)}
-        </div>}
       </section>
       <section className="section">
         <h2>Open port</h2>
@@ -2571,6 +2573,7 @@ function App() {
             <Icon size={17}/>{label}
           </button>)}
         </nav>
+        {appVersion && <div className="sidebar-version">v{appVersion}</div>}
       </aside>
       <div className="content">
         <section className="topbar">

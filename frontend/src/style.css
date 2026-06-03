@@ -587,11 +587,12 @@ main{width:100%;max-width:none;min-height:100vh;margin:0;padding:0;background:va
 .brand-mark{width:34px;height:34px;display:grid;place-items:center;border-radius:var(--radius-md);background:var(--primary);color:#fff;font-size:12px;font-weight:800;flex:none}
 .sidebar-brand strong{display:block;padding:0;color:var(--text);font-size:15px;font-weight:700;line-height:1.2;text-transform:none;letter-spacing:0}
 .sidebar-brand small{display:block;color:var(--text-muted);font-size:12px;line-height:1.2;white-space:nowrap}
-.sidebar-nav{display:grid;gap:2px;padding:12px 10px}
+.sidebar-nav{display:grid;gap:2px;padding:12px 10px;flex:1;align-content:start}
 .sidebar button{justify-content:flex-start;background:transparent;color:var(--text-secondary);box-shadow:none;padding:9px 10px;width:100%;border-radius:var(--radius-sm);font-weight:500;min-height:38px;border:1px solid transparent}
 .sidebar button:hover:not(.active){background:var(--surface-alt);color:var(--text);transform:none;box-shadow:none}
 .sidebar button.active{background:var(--surface-alt);color:var(--text);font-weight:700;box-shadow:none}
 .sidebar-close{display:none}
+.sidebar-version{margin:auto 12px 12px;padding:8px 10px;color:var(--text-muted);font-size:12px;font-weight:700;line-height:1;text-align:left}
 .mobile-nav-toggle,.mobile-nav-backdrop{display:none}
 
 .topbar{position:sticky;top:0;z-index:20;height:var(--topbar-height);display:flex;align-items:center;justify-content:space-between;gap:16px;background:rgba(255,255,255,.94);color:var(--text);border:0;border-bottom:1px solid var(--border);border-radius:0;padding:0 24px;box-shadow:none;backdrop-filter:blur(12px);overflow:visible}
@@ -692,6 +693,10 @@ button:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
 .backup-item,.info-box{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);box-shadow:none}
 .backup-item:hover{border-color:var(--border-hover);background:var(--surface-alt)}
 .firewall-form span{font-weight:600;color:var(--text-muted);font-size:13px}
+.firewall-status pre{max-height:320px;overflow:auto;margin:0;white-space:pre}
+.firewall-delete-inline{display:grid;grid-template-columns:minmax(140px,1fr) max-content;gap:10px;align-items:end;margin-top:8px;max-width:420px}
+.firewall-delete-inline label{display:grid;gap:6px;font-weight:600;color:var(--text-secondary)}
+.firewall-delete-inline span{font-weight:600;color:var(--text-muted);font-size:13px}
 .loading{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;border-radius:var(--radius-lg);box-shadow:none}
 .error{background:#fef2f2;color:#991b1b;border:1px solid #fecaca;border-radius:var(--radius-lg)}
 .notice{background:var(--success-bg);color:#166534;border:1px solid var(--success-border);border-radius:var(--radius-lg)}
@@ -745,6 +750,7 @@ button:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
   .stat-card,.card{padding:16px;border-radius:var(--radius-lg)}
   .stat-card strong{font-size:28px}
   .form-row,.user-form,.user-create-card,.assign-row,.toolbar,.editor-tools,.firewall-form,.sftp-run-row,.sftp-form,.security-grid,.security-grid.one,.create-site-row{grid-template-columns:1fr}
+  .firewall-delete-inline{grid-template-columns:1fr;max-width:none}
   .sftp-form textarea{grid-column:1}
   .actions{display:grid;grid-template-columns:1fr;align-items:stretch}
   .actions button,.actions .button-link,.actions .upload-button,.actions select{width:100%;max-width:none}
