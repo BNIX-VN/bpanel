@@ -459,7 +459,7 @@ if id -u bpanel >/dev/null 2>&1; then
   sudo -u bpanel env HOME="$APP_DIR" BPANEL_USE_HELPER=true "$APP_DIR/backend/.venv/bin/python" - <<'PY'
 from app.core.database import SessionLocal
 from app.models.entities import Website
-from app.services import nginx, site_users
+from app.services import nginx, site_users, waf
 
 with SessionLocal() as db:
     for website in db.query(Website).all():
@@ -468,6 +468,9 @@ with SessionLocal() as db:
                 runtime_php_version = website.php_version if (website.app_type or "wordpress") in {"wordpress", "php"} else None
                 site_users.ensure_site_runtime(website.domain, website.root_path, runtime_php_version, website.linux_user)
             site_users.fix_site_permissions(website.root_path, website.linux_user)
+            result = waf.sync_website_rules(website)
+            if result.returncode != 0:
+                print(f"WARNING: could not refresh WAF rules for {website.domain}: {result.stderr or result.stdout}")
             app_type = website.app_type or "wordpress"
             runtime_php_version = website.php_version if app_type in {"wordpress", "php"} else None
             nginx.rewrite_vhost(

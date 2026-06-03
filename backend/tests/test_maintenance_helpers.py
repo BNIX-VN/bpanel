@@ -7,7 +7,8 @@ os.environ.setdefault("COMMAND_DRY_RUN", "true")
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ""))
 
-from app.services import cron, firewall  # noqa: E402
+from app.models.entities import Website  # noqa: E402
+from app.services import cron, firewall, waf  # noqa: E402
 
 
 def test_cron_line_parser_strips_bpanel_wrapper():
@@ -16,6 +17,26 @@ def test_cron_line_parser_strips_bpanel_wrapper():
     assert item["index"] == 0
     assert item["schedule"] == "*/15 * * * *"
     assert item["command"] == "wp cron event run --due-now"
+
+
+def test_cron_user_for_website_uses_site_owner_from_home_path():
+    website = Website(domain="example.com", root_path="/home/client/example.com", linux_user="")
+
+    assert cron.cron_user_for_website(website) == "client"
+
+
+def test_waf_site_rules_render_selected_defaults_and_custom_rules():
+    content = waf.render_site_rules(
+        "example.com",
+        ["general-sensitive-files", "wordpress-sensitive-files"],
+        "SecRule REQUEST_URI \"@streq /private\" \"id:1001999,phase:1,deny,status:403\"",
+    )
+
+    assert "Include /etc/nginx/modsec/bpanel-base.conf" in content
+    assert "general-sensitive-files" in content
+    assert "wordpress-sensitive-files" in content
+    assert "general-path-traversal" not in content
+    assert "id:1001999" in content
 
 
 def test_firewall_numbered_rules_mark_defaults_protected(monkeypatch):

@@ -555,10 +555,18 @@ a:hover{color:var(--primary-hover)}
 .waf-rules-grid{grid-template-columns:repeat(2,minmax(0,1fr));align-items:start}
 .waf-rule-panel{display:grid;gap:10px;min-width:0}
 .waf-site-list{margin-top:4px}
+.waf-website-selector{grid-template-columns:minmax(240px,1fr) max-content}
+.waf-default-groups{display:grid;gap:10px;max-height:620px;overflow:auto;padding-right:4px}
+.waf-rule-group{display:grid;gap:8px;border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px;background:var(--surface-alt)}
+.waf-rule-group h3{margin:0;font-size:14px;color:var(--text)}
+.waf-rule-toggle{display:grid;grid-template-columns:20px minmax(0,1fr);gap:8px;align-items:start;padding:8px;border-radius:var(--radius-sm);background:var(--surface)}
+.waf-rule-toggle input{width:18px;height:18px;min-height:18px;margin:1px 0 0;accent-color:var(--primary)}
+.waf-rule-toggle span{display:grid;gap:3px;min-width:0}
+.waf-rule-toggle small{color:var(--text-muted);line-height:1.35}
 
 @media(max-width:950px){
   .site-stack,.waf-rules-grid{grid-template-columns:1fr}
-  .firewall-blocklist-form{grid-template-columns:1fr}
+  .firewall-blocklist-form,.waf-website-selector{grid-template-columns:1fr}
 }
 @media(max-width:1150px){.create-site-row{grid-template-columns:1fr 1fr}}
 @media(max-width:950px){.create-site-row{grid-template-columns:1fr}}

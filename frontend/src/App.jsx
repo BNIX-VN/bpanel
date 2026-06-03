@@ -205,6 +205,7 @@ function App() {
   const [cronSchedule, setCronSchedule] = useState('*/15 * * * *');
   const [cronCommand, setCronCommand] = useState('');
   const [cronItems, setCronItems] = useState([]);
+  const [cronUser, setCronUser] = useState('');
   const [filePath, setFilePath] = useState(() => standaloneEditor?.path || 'public_html/index.html');
   const [fileListPath, setFileListPath] = useState('public_html');
   const [fileUploadDir, setFileUploadDir] = useState('public_html');
@@ -231,6 +232,8 @@ function App() {
   const [firewallBlocklistUrl, setFirewallBlocklistUrl] = useState('');
   const [wafRules, setWafRules] = useState({ status: null, default_rules: '', custom_rules: '' });
   const [wafCustomRules, setWafCustomRules] = useState('');
+  const [selectedWafWebsiteId, setSelectedWafWebsiteId] = useState('');
+  const [wafSiteConfig, setWafSiteConfig] = useState(null);
   const [websitePhpVersions, setWebsitePhpVersions] = useState({});
   const [assignUserId, setAssignUserId] = useState('');
   const [assignWebsiteId, setAssignWebsiteId] = useState('');
@@ -324,6 +327,7 @@ function App() {
     setBackups([]);
     setBackupJobs([]);
     setCronItems([]);
+    setCronUser('');
     setUserBackups([]);
     setRestoreBackups([]);
     setRestoreBackupDir('');
@@ -338,6 +342,8 @@ function App() {
     setFirewallBlocklists(null);
     setWafRules({ status: null, default_rules: '', custom_rules: '' });
     setWafCustomRules('');
+    setSelectedWafWebsiteId('');
+    setWafSiteConfig(null);
     setLogViewer(null);
     setNginxCustomEditing(null);
     setTerminalViewer(null);
@@ -854,6 +860,7 @@ function App() {
     if (data) {
       setNotice(`${next ? 'Enabled' : 'Disabled'} WAF for ${site.domain}.`);
       await refreshAll();
+      if (String(selectedWafWebsiteId) === String(site.id)) await loadWebsiteWafConfig(site.id, false);
     }
   }
 
@@ -897,7 +904,8 @@ function App() {
   async function addCron() {
     const data = await request('/maintenance/cron', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), schedule: cronSchedule, command: cronCommand }) }, 'Adding cron job...');
     if (data) {
-      setNotice('Cron job added.');
+      if (data.cron_user) setCronUser(data.cron_user);
+      setNotice(`Cron job added${data.cron_user ? ` as ${data.cron_user}` : ''}.`);
       await listCron();
     }
   }
@@ -906,6 +914,7 @@ function App() {
     if (!selectedWebsiteId) return;
     const data = await request(`/maintenance/cron/${selectedWebsiteId}`, {}, 'Loading cron jobs...');
     if (data?.items) setCronItems(data.items);
+    if (data?.cron_user) setCronUser(data.cron_user);
   }
 
   async function deleteCron(index) {
@@ -914,6 +923,7 @@ function App() {
     if (Number.isNaN(index)) return;
     const data = await request('/maintenance/cron', { method: 'DELETE', body: JSON.stringify({ website_id: Number(selectedWebsiteId), index }) }, 'Deleting cron job...');
     if (data) {
+      if (data.cron_user) setCronUser(data.cron_user);
       setNotice('Cron job deleted.');
       await listCron();
     }
@@ -1599,31 +1609,48 @@ function App() {
     const data = await request('/waf/rules', {}, 'Loading WAF rules...');
     if (data) {
       setWafRules(data);
+      const firstWebsiteId = selectedWafWebsiteId || selectedWebsiteId || websites[0]?.id || '';
+      if (firstWebsiteId) {
+        setSelectedWafWebsiteId(String(firstWebsiteId));
+        await loadWebsiteWafConfig(firstWebsiteId, false);
+      }
+    }
+  }
+
+  async function loadWebsiteWafConfig(websiteId = selectedWafWebsiteId, showLoading = true) {
+    if (!websiteId) { setWafSiteConfig(null); return; }
+    const data = await request(`/waf/websites/${websiteId}`, {}, showLoading ? 'Loading website WAF...' : '');
+    if (data) {
+      setSelectedWafWebsiteId(String(websiteId));
+      setWafSiteConfig(data);
       setWafCustomRules(data.custom_rules || '');
     }
   }
 
-  async function installWafEngine() {
-    const data = await request('/waf/install', { method: 'POST' }, 'Installing WAF engine...');
-    if (data) {
-      setNotice((data.stdout || data.stderr || 'WAF engine installed.').trim());
-      await loadWafRules();
-    }
+  function toggleWafDefaultRule(ruleId, enabled) {
+    setWafSiteConfig(prev => {
+      if (!prev) return prev;
+      const current = new Set(prev.enabled_rule_ids || []);
+      if (enabled) current.add(ruleId); else current.delete(ruleId);
+      return {
+        ...prev,
+        enabled_rule_ids: Array.from(current),
+        default_rules: (prev.default_rules || []).map(rule => rule.id === ruleId ? { ...rule, enabled } : rule),
+      };
+    });
   }
 
-  async function updateWafRuleFiles() {
-    const data = await request('/waf/update-rules', { method: 'POST' }, 'Updating WAF rules...');
+  async function saveWebsiteWafRules() {
+    if (!selectedWafWebsiteId || !wafSiteConfig) return;
+    const data = await request(`/waf/websites/${selectedWafWebsiteId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ enabled_rule_ids: wafSiteConfig.enabled_rule_ids || [], custom_rules: wafCustomRules }),
+    }, 'Saving website WAF rules...');
     if (data) {
-      setNotice((data.stdout || data.stderr || 'WAF rules updated.').trim());
-      await loadWafRules();
-    }
-  }
-
-  async function saveWafCustomRuleFile() {
-    const data = await request('/waf/rules/custom', { method: 'PUT', body: JSON.stringify({ content: wafCustomRules }) }, 'Saving WAF custom rules...');
-    if (data) {
-      setNotice((data.stdout || data.stderr || 'WAF custom rules saved.').trim());
-      await loadWafRules();
+      setWafSiteConfig(data);
+      setWafCustomRules(data.custom_rules || '');
+      setNotice(data.message || 'Website WAF rules saved.');
+      await refreshAll();
     }
   }
 
@@ -1718,6 +1745,11 @@ function App() {
     if (isAuthenticated && page === 'updates' && currentUser?.role === 'admin') loadUpdates();
     if (isAuthenticated && page === 'backups' && currentUser?.role === 'admin') { loadUsers(); loadSftpTargets(); loadBackupSchedules(); loadRestoreBackups(); }
   }, [isAuthenticated, page, currentUser?.role]);
+
+  useEffect(() => {
+    if (!isAuthenticated || page !== 'waf' || selectedWafWebsiteId || websites.length === 0) return;
+    loadWebsiteWafConfig(websites[0].id, false);
+  }, [isAuthenticated, page, selectedWafWebsiteId, websites.length]);
 
   useEffect(() => { setMobileMenuOpen(false); }, [page]);
 
@@ -2086,6 +2118,7 @@ function App() {
         <input value={cronCommand} onChange={e => setCronCommand(e.target.value)} placeholder="command" />
         <button disabled={!selectedWebsiteId || !!loading} onClick={addCron}><Plus size={14}/> Add cron</button>
       </div>
+      {selectedWebsiteId && <p className="hint">Cron runs as <strong>{cronUser || currentSite?.linux_user || 'www-data'}</strong> for the selected website.</p>}
       <div className="cron-list">
         {selectedWebsiteId && cronItems.length === 0 && <EmptyState icon={Clock} message="No cron jobs found for this website." />}
         {cronItems.map(item => <div className="cron-item" key={`${item.index}-${item.line}`}>
@@ -2454,42 +2487,61 @@ function App() {
   function renderWaf() {
     if (!isAdmin) return <section className="section"><h2>WAF</h2><p className="hint">No permission.</p></section>;
     const statusText = wafRules.status?.stdout || wafRules.status?.stderr || 'Click Refresh to load WAF status.';
+    const selectedSite = websites.find(site => String(site.id) === String(selectedWafWebsiteId));
+    const groupedRules = (wafSiteConfig?.default_rules || wafRules.default_rule_definitions || []).reduce((groups, rule) => {
+      const category = rule.category || 'General';
+      groups[category] = groups[category] || [];
+      groups[category].push(rule);
+      return groups;
+    }, {});
     return <>
       <section className="section">
         <div className="section-title">
-          <div><h2>WAF</h2><p className="hint">Default rules block common dangerous probes; custom rules are included after the default rules.</p></div>
+          <div><h2>WAF</h2><p className="hint">WAF engine is installed by the panel. Rules are configured per website.</p></div>
           <button disabled={!!loading} onClick={loadWafRules}><RefreshCw size={14}/> Refresh</button>
-        </div>
-        <div className="actions">
-          <button disabled={!!loading} onClick={installWafEngine}><Shield size={14}/> Install engine</button>
-          <button className="secondary-light" disabled={!!loading} onClick={updateWafRuleFiles}><RefreshCw size={14}/> Update rules</button>
         </div>
         <div className="info-box firewall-status"><strong>Status</strong><pre>{statusText}</pre></div>
       </section>
       <section className="section">
         <div className="section-title"><h2>Website WAF</h2></div>
         {websites.length === 0 && <EmptyState icon={Globe} message="No websites yet." />}
+        {websites.length > 0 && <div className="firewall-form waf-website-selector">
+          <label><span>Website</span><select value={selectedWafWebsiteId} onChange={e => loadWebsiteWafConfig(e.target.value)}>
+            <option value="">Select website</option>
+            {websites.map(site => <option key={site.id} value={site.id}>{site.domain}</option>)}
+          </select></label>
+          <button disabled={!selectedWafWebsiteId || !!loading} onClick={() => selectedSite && toggleWebsiteWaf(selectedSite)}><Shield size={14}/> {selectedSite?.waf_enabled ? 'Disable WAF' : 'Enable WAF'}</button>
+        </div>}
         <div className="table waf-site-list">
           {websites.map(site => <div className="firewall-rule" key={site.id}>
             <span><strong>{site.domain}</strong></span>
             <div className="firewall-rule-actions">
               <span className={site.waf_enabled ? 'badge ok' : 'badge'}>{site.waf_enabled ? 'Enabled' : 'Disabled'}</span>
-              <button disabled={!!loading} onClick={() => toggleWebsiteWaf(site)}><Shield size={14}/> {site.waf_enabled ? 'Disable' : 'Enable'}</button>
+              <button disabled={!!loading} onClick={() => loadWebsiteWafConfig(site.id)}>Rules</button>
             </div>
           </div>)}
         </div>
       </section>
-      <section className="section waf-rules-grid">
+      {wafSiteConfig && <section className="section waf-rules-grid">
         <div className="waf-rule-panel">
-          <div className="section-title"><h2>Default rules</h2></div>
-          <textarea className="code-editor" value={wafRules.default_rules || ''} readOnly rows={14} spellCheck={false} />
+          <div className="section-title"><h2>Default rules - {wafSiteConfig.domain}</h2></div>
+          <div className="waf-default-groups">
+            {Object.entries(groupedRules).map(([category, rules]) => <div className="waf-rule-group" key={category}>
+              <h3>{category}</h3>
+              {rules.map(rule => <label className="waf-rule-toggle" key={rule.id}>
+                <input type="checkbox" checked={!!rule.enabled} onChange={e => toggleWafDefaultRule(rule.id, e.target.checked)} />
+                <span><strong>{rule.title}</strong><small>{rule.description}</small></span>
+              </label>)}
+            </div>)}
+          </div>
         </div>
         <div className="waf-rule-panel">
-          <div className="section-title"><h2>Custom rules</h2></div>
+          <div className="section-title"><h2>Custom rules - {wafSiteConfig.domain}</h2></div>
           <textarea className="code-editor" value={wafCustomRules} onChange={e => setWafCustomRules(e.target.value)} rows={14} spellCheck={false} placeholder="SecRule ..." />
-          <div className="actions"><button disabled={!!loading} onClick={saveWafCustomRuleFile}>Save custom rules</button></div>
+          <p className="hint">Saved into {wafSiteConfig.rules_file}</p>
+          <div className="actions"><button disabled={!!loading} onClick={saveWebsiteWafRules}>Save website WAF rules</button></div>
         </div>
-      </section>
+      </section>}
     </>;
   }
 

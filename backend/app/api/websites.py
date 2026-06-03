@@ -12,7 +12,7 @@ from app.core.permissions import Role, ensure_role, is_admin_role
 from app.core.secrets import encrypt
 from app.models.entities import DatabaseAccount, User, Website
 from app.schemas.schemas import WebsiteCreate, WebsiteLogOut, WebsiteNginxConfig, WebsiteNginxCustom, WebsiteOut, WebsiteUpdate, WebsiteWafUpdate
-from app.services import mariadb, nginx, site_users, ssl, storage_quota, wordpress
+from app.services import mariadb, nginx, site_users, ssl, storage_quota, waf, wordpress
 from app.services.audit import log_action
 
 _PLACEHOLDER_TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates" / "nginx"
@@ -30,6 +30,12 @@ def _cleanup_failed_site(root_path: str, linux_user: str | None, delete_files: b
             wordpress.delete_wordpress(root_path)
         except Exception:
             pass
+
+
+def _ensure_default_waf_file(domain: str) -> None:
+    result = waf.sync_site_rules(domain, [rule["id"] for rule in waf.DEFAULT_RULES], "")
+    if result.returncode != 0:
+        raise HTTPException(status_code=400, detail=_command_error(result))
 
 
 @router.post("", response_model=WebsiteOut)
@@ -86,6 +92,7 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
             _cleanup_failed_site(root_path, linux_user)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         try:
+            _ensure_default_waf_file(payload.domain)
             nginx.write_vhost(
                 payload.domain,
                 root_path,
@@ -112,6 +119,7 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
                     tmpl = env.get_template("placeholder.html.j2")
                     placeholder.write_text(tmpl.render(domain=payload.domain), encoding="utf-8")
                 site_users.fix_site_path(str(public), linux_user)
+            _ensure_default_waf_file(payload.domain)
             nginx.write_vhost(
                 payload.domain,
                 root_path,
@@ -181,6 +189,9 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
             runtime_php_version = payload.php_version if (website.app_type or "wordpress") in {"wordpress", "php"} else None
             if website.linux_user and runtime_php_version:
                 site_users.ensure_site_runtime(website.domain, website.root_path, payload.php_version, website.linux_user)
+            result = waf.sync_website_rules(website)
+            if result.returncode != 0:
+                raise RuntimeError(_command_error(result))
             php_fpm_socket_override = site_users.php_fpm_socket(website.linux_user, payload.php_version) if runtime_php_version else None
             nginx.rewrite_vhost(
                 website.domain,
@@ -215,6 +226,9 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
                 new_root_path = site_users.site_root_for_panel_user(owner.username, website.domain)
                 runtime_php_version = website.php_version if (website.app_type or "wordpress") in {"wordpress", "php"} else None
                 site_users.move_site_runtime(website.root_path, new_root_path, new_linux_user, runtime_php_version)
+                result = waf.sync_website_rules(website)
+                if result.returncode != 0:
+                    raise RuntimeError(_command_error(result))
                 nginx.rewrite_vhost(
                     website.domain,
                     new_root_path,
@@ -241,6 +255,9 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
     if payload.waf_enabled is not None:
         ensure_role(current_user.role, Role.admin)
         try:
+            result = waf.sync_website_rules(website)
+            if result.returncode != 0:
+                raise RuntimeError(_command_error(result))
             nginx.update_waf_block(website.domain, payload.waf_enabled)
         except (RuntimeError, ValueError, FileNotFoundError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -296,6 +313,9 @@ def reset_website_nginx_config(website_id: int, request: Request, db: Session = 
     app_type = website.app_type or "wordpress"
     runtime_php_version = website.php_version if app_type in {"wordpress", "php"} else None
     try:
+        result = waf.sync_website_rules(website)
+        if result.returncode != 0:
+            raise RuntimeError(_command_error(result))
         nginx.rewrite_vhost(
             website.domain,
             website.root_path,
@@ -321,6 +341,9 @@ def set_website_waf(website_id: int, payload: WebsiteWafUpdate, request: Request
     if not website:
         raise HTTPException(status_code=404, detail="Website not found")
     try:
+        result = waf.sync_website_rules(website)
+        if result.returncode != 0:
+            raise RuntimeError(_command_error(result))
         nginx.update_waf_block(website.domain, payload.waf_enabled)
     except (RuntimeError, ValueError, FileNotFoundError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -397,6 +420,9 @@ def fix_nginx_security(website_id: int, db: Session = Depends(get_db), current_u
         raise HTTPException(status_code=404, detail="Website not found")
     if website.owner_id != current_user.id:
         ensure_role(current_user.role, Role.admin)
+    result = waf.sync_website_rules(website)
+    if result.returncode != 0:
+        raise HTTPException(status_code=400, detail=_command_error(result))
     target = nginx.harden_existing_wordpress_vhost(
         website.domain,
         website.root_path,

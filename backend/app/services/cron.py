@@ -1,5 +1,6 @@
 import re
 import shlex
+from pathlib import Path
 
 from app.models.entities import Website
 from app.services import site_users
@@ -40,6 +41,21 @@ def _validate_command(command: str) -> str:
     return " ".join(shlex.quote(arg) for arg in [*normalized, "--allow-root"])
 
 
+def cron_user_for_website(website: Website) -> str:
+    if website.linux_user:
+        return site_users.validate_linux_user(website.linux_user)
+    try:
+        parts = Path(website.root_path).resolve().relative_to(site_users.HOME_ROOT.resolve()).parts
+    except ValueError:
+        return "www-data"
+    if parts:
+        try:
+            return site_users.validate_linux_user(parts[0])
+        except ValueError:
+            return "www-data"
+    return "www-data"
+
+
 def _parse_cron_line(index: int, line: str) -> dict:
     parts = line.split(maxsplit=5)
     schedule = " ".join(parts[:5]) if len(parts) >= 5 else ""
@@ -57,10 +73,10 @@ def add_cron(website: Website, schedule: str, command: str) -> str:
     safe_domain = _validate_domain(website.domain)
     marker = f"# bpanel:{safe_domain}"
     line = f"{safe_schedule} cd {shlex.quote(str(site_users.document_root(website.root_path)))} && {safe_command} {marker}"
-    cron_user = website.linux_user or "www-data"
-    if website.linux_user:
-        runtime_php_version = website.php_version if (website.app_type or "wordpress") == "wordpress" else None
-        site_users.ensure_site_runtime(website.domain, website.root_path, runtime_php_version, website.linux_user)
+    cron_user = cron_user_for_website(website)
+    if cron_user != "www-data":
+        runtime_php_version = website.php_version if (website.app_type or "wordpress") in {"wordpress", "php"} else None
+        site_users.ensure_site_runtime(website.domain, website.root_path, runtime_php_version, cron_user)
     existing = list_cron_all(cron_user)
     new_content = existing.rstrip() + ("\n" if existing.strip() else "") + line + "\n"
     shell.privileged(

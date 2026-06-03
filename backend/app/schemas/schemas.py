@@ -308,6 +308,8 @@ class WebsiteOut(BaseModel):
     status: str
     nginx_custom: str = ""
     waf_enabled: bool = True
+    waf_default_rules: str = ""
+    waf_custom_rules: str = ""
 
     class Config:
         from_attributes = True

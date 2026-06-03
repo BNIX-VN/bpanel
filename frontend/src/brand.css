@@ -240,8 +240,16 @@ button:disabled,.upload-button.disabled{background:#dbe7f7;color:#7a8ca4;border-
 .waf-rules-grid{grid-template-columns:repeat(2,minmax(0,1fr));align-items:start}
 .waf-rule-panel{display:grid;gap:10px;min-width:0}
 .waf-rule-panel textarea,.inline-nginx-editor textarea{min-height:260px;resize:vertical}
+.waf-website-selector{grid-template-columns:minmax(240px,1fr) max-content}
+.waf-default-groups{display:grid;gap:10px;max-height:620px;overflow:auto;padding-right:4px}
+.waf-rule-group{display:grid;gap:8px;border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px;background:var(--surface-alt)}
+.waf-rule-group h3{margin:0;font-size:14px;color:var(--text)}
+.waf-rule-toggle{display:grid;grid-template-columns:20px minmax(0,1fr);gap:8px;align-items:start;padding:8px;border-radius:var(--radius-sm);background:var(--surface)}
+.waf-rule-toggle input{width:18px;height:18px;min-height:18px;margin:1px 0 0;accent-color:var(--primary)}
+.waf-rule-toggle span{display:grid;gap:3px;min-width:0}
+.waf-rule-toggle small{color:var(--text-muted);line-height:1.35}
 
 @media(max-width:950px){
-  .site-card,.site-stack,.waf-rules-grid,.firewall-blocklist-form{grid-template-columns:1fr}
+  .site-card,.site-stack,.waf-rules-grid,.firewall-blocklist-form,.waf-website-selector{grid-template-columns:1fr}
   .site-card>.actions{grid-template-columns:repeat(2,minmax(0,1fr))}
 }

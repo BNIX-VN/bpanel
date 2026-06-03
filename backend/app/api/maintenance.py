@@ -875,29 +875,36 @@ def install_php_version(php_version: str, current_user: User = Depends(get_curre
 @router.post("/cron")
 def add_cron(payload: CronCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     website = get_owned_website(db, current_user, payload.website_id)
+    cron_user = cron.cron_user_for_website(website)
+    if not website.linux_user and cron_user != "www-data":
+        website.linux_user = cron_user
+        db.add(website)
     try:
         line = cron.add_cron(website, payload.schedule, payload.command)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    db.commit()
     log_action(db, current_user.id, "add_cron", website.domain, line)
-    return {"line": line}
+    return {"line": line, "cron_user": cron_user}
 
 
 @router.get("/cron/{website_id}")
 def list_cron(website_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     website = get_owned_website(db, current_user, website_id)
-    return {"items": cron.list_cron_entries(website.domain, website.linux_user or "www-data")}
+    cron_user = cron.cron_user_for_website(website)
+    return {"items": cron.list_cron_entries(website.domain, cron_user), "cron_user": cron_user}
 
 
 @router.delete("/cron")
 def delete_cron(payload: CronDelete, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     website = get_owned_website(db, current_user, payload.website_id)
+    cron_user = cron.cron_user_for_website(website)
     try:
-        line = cron.delete_cron(website.domain, payload.index, website.linux_user or "www-data")
+        line = cron.delete_cron(website.domain, payload.index, cron_user)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     log_action(db, current_user.id, "delete_cron", website.domain, line)
-    return {"deleted": line}
+    return {"deleted": line, "cron_user": cron_user}
 
 
 @router.post("/wordpress")

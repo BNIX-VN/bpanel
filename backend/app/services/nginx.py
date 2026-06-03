@@ -15,9 +15,15 @@ ALLOWED_APP_TYPES = {"wordpress", "php", "static"}
 ALLOWED_LOG_KINDS = {"access", "error"}
 DOMAIN_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+")
 MAX_FULL_CONFIG_BYTES = 128 * 1024
-WAF_BLOCK = """    # BPANEL WAF BEGIN
+def waf_rules_file(domain: str) -> str:
+    safe_domain = _safe_domain(domain)
+    return f"/etc/nginx/modsec/sites/{safe_domain}.conf"
+
+
+def _waf_block(domain: str) -> str:
+    return f"""    # BPANEL WAF BEGIN
     modsecurity on;
-    modsecurity_rules_file /etc/nginx/modsec/bpanel-main.conf;
+    modsecurity_rules_file {waf_rules_file(domain)};
     # BPANEL WAF END"""
 FASTCGI_CACHE_SERVER_BLOCK = """    # BPANEL FASTCGI CACHE SERVER BEGIN
     set $bpanel_skip_cache 0;
@@ -301,7 +307,20 @@ def _replace_custom_block(content: str, custom: str) -> str:
     )
 
 
-def _replace_waf_block(content: str, enabled: bool) -> str:
+def _domain_from_vhost(content: str) -> str:
+    match = re.search(r"(?m)^\s*server_name\s+([^;]+);", content or "")
+    if not match:
+        return "example.com"
+    first = match.group(1).split()[0]
+    if first.startswith("www."):
+        first = first[4:]
+    try:
+        return _safe_domain(first)
+    except ValueError:
+        return "example.com"
+
+
+def _replace_waf_block(content: str, enabled: bool, domain: str | None = None) -> str:
     pattern = re.compile(
         r"\n?    # BPANEL WAF BEGIN\n.*?\n    # BPANEL WAF END",
         re.DOTALL,
@@ -309,14 +328,15 @@ def _replace_waf_block(content: str, enabled: bool) -> str:
     cleaned = pattern.sub("", content)
     if not enabled:
         return cleaned.rstrip() + "\n"
+    block = _waf_block(domain or _domain_from_vhost(cleaned))
     if "    server_tokens off;" in cleaned:
-        return cleaned.replace("    server_tokens off;", f"    server_tokens off;\n{WAF_BLOCK}", 1)
+        return cleaned.replace("    server_tokens off;", f"    server_tokens off;\n{block}", 1)
     if "    server_name " in cleaned:
-        return re.sub(r"(    server_name [^;]+;)", f"\\1\n{WAF_BLOCK}", cleaned, count=1)
+        return re.sub(r"(    server_name [^;]+;)", f"\\1\n{block}", cleaned, count=1)
     match = re.search(r"server\s*\{", cleaned)
     if match:
         insert_at = match.end()
-        return cleaned[:insert_at] + "\n" + WAF_BLOCK + cleaned[insert_at:]
+        return cleaned[:insert_at] + "\n" + block + cleaned[insert_at:]
     raise ValueError("Cannot find server block for WAF directives")
 
 
@@ -411,6 +431,7 @@ def render_vhost(
         php_fpm_socket=php_fpm_socket,
         custom_directives=safe_custom,
         waf_enabled=bool(waf_enabled),
+        waf_rules_file=waf_rules_file(domain),
     )
     return rendered
 
@@ -544,7 +565,7 @@ def harden_existing_wordpress_vhost(
                 updated = _replace_fastcgi_socket(updated, php_fpm_socket_override)
             elif php_version:
                 updated = _replace_php_fpm_socket(updated, php_version)
-            updated = _replace_waf_block(updated, waf_enabled)
+            updated = _replace_waf_block(updated, waf_enabled, domain)
             target.write_text(updated, encoding="utf-8")
             shell.privileged("nginx-reload", fallback=["bash", "-lc", "nginx -t && systemctl reload nginx"])
             return str(target)
@@ -610,11 +631,11 @@ def update_full_config(domain: str, content: str) -> str:
 def update_waf_block(domain: str, enabled: bool) -> str:
     target = _vhost_path(domain)
     if settings.command_dry_run:
-        return _replace_waf_block("server {\n    server_name example.com;\n}\n", enabled)
+        return _replace_waf_block("server {\n    server_name example.com;\n}\n", enabled, domain="example.com")
     if not target.exists():
         raise FileNotFoundError(str(target))
     existing = target.read_text(encoding="utf-8")
-    new_content = _replace_waf_block(existing, enabled)
+    new_content = _replace_waf_block(existing, enabled, domain)
     target.with_suffix(target.suffix + ".bak").write_text(existing, encoding="utf-8")
     target.write_text(new_content, encoding="utf-8")
     _test_and_reload(target, existing)

@@ -9,7 +9,7 @@ server {
 {% if waf_enabled %}
     # BPANEL WAF BEGIN
     modsecurity on;
-    modsecurity_rules_file /etc/nginx/modsec/bpanel-main.conf;
+    modsecurity_rules_file {{ waf_rules_file }};
     # BPANEL WAF END
 {% endif %}
 

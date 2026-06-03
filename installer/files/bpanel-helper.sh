@@ -295,14 +295,12 @@ run_panel_update() {
   echo "Panel update started in background. Log: /var/log/bpanel-panel-update.log"
 }
 
-write_modsec_main_conf() {
-  write_waf_default_rules
-  touch /etc/nginx/modsec/bpanel-custom.conf
+write_modsec_base_conf() {
+  install -d -o root -g root -m 0755 /etc/nginx/modsec /etc/nginx/modsec/sites
   {
     [[ -f /etc/modsecurity/modsecurity.conf ]] && echo "Include /etc/modsecurity/modsecurity.conf"
     echo "SecRuleEngine On"
     echo "SecRequestBodyAccess On"
-    echo "Include /etc/nginx/modsec/bpanel-default.conf"
     [[ -f /etc/modsecurity/crs/crs-setup.conf ]] && echo "Include /etc/modsecurity/crs/crs-setup.conf"
     [[ -f /etc/modsecurity/crs/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf ]] && echo "Include /etc/modsecurity/crs/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf"
     if compgen -G "/usr/share/modsecurity-crs/rules/*.conf" >/dev/null; then
@@ -315,6 +313,16 @@ write_modsec_main_conf() {
     if compgen -G "/etc/nginx/modsec/comodo/rules/*.conf" >/dev/null; then
       echo "Include /etc/nginx/modsec/comodo/rules/*.conf"
     fi
+  } >/etc/nginx/modsec/bpanel-base.conf
+}
+
+write_modsec_main_conf() {
+  write_waf_default_rules
+  write_modsec_base_conf
+  touch /etc/nginx/modsec/bpanel-custom.conf
+  {
+    echo "Include /etc/nginx/modsec/bpanel-base.conf"
+    echo "Include /etc/nginx/modsec/bpanel-default.conf"
     echo "Include /etc/nginx/modsec/bpanel-custom.conf"
   } >/etc/nginx/modsec/bpanel-main.conf
 }
@@ -326,9 +334,19 @@ write_waf_default_rules() {
 # high-risk paths and payloads even when third-party rules are not installed.
 SecRule REQUEST_URI "@rx (?i)(?:/\.env|/wp-config\.php|/\.git/|/composer\.(?:json|lock)|/vendor/phpunit|/etc/passwd)" "id:1001001,phase:1,deny,status:403,log,msg:'BPanel blocked sensitive file probe'"
 SecRule REQUEST_URI|ARGS|REQUEST_HEADERS "@rx (?:\.\./|\.\.\\)" "id:1001002,phase:2,deny,status:403,log,msg:'BPanel blocked path traversal'"
-SecRule ARGS|REQUEST_HEADERS|REQUEST_BODY "@rx (?i)(?:union\s+select|sleep\s*\(|benchmark\s*\(|load_file\s*\(|into\s+outfile)" "id:1001003,phase:2,deny,status:403,log,msg:'BPanel blocked SQL injection pattern'"
-SecRule ARGS|REQUEST_HEADERS|REQUEST_BODY "@rx (?i)(?:<script|javascript:|onerror\s*=|onload\s*=|document\.cookie)" "id:1001004,phase:2,deny,status:403,log,msg:'BPanel blocked XSS pattern'"
-SecRule ARGS|REQUEST_HEADERS|REQUEST_BODY "@rx (?i)(?:/bin/(?:bash|sh)|cmd\.exe|powershell|wget\s+http|curl\s+http)" "id:1001005,phase:2,deny,status:403,log,msg:'BPanel blocked command injection pattern'"
+SecRule ARGS|REQUEST_HEADERS|REQUEST_BODY "@rx (?i)(?:union\s+select|sleep\s*\(|benchmark\s*\(|load_file\s*\(|into\s+outfile|information_schema|extractvalue\s*\()" "id:1001003,phase:2,deny,status:403,log,msg:'BPanel blocked SQL injection pattern'"
+SecRule ARGS|REQUEST_HEADERS|REQUEST_BODY "@rx (?i)(?:<script|javascript:|onerror\s*=|onload\s*=|document\.cookie|<iframe|base64_decode\s*\()" "id:1001004,phase:2,deny,status:403,log,msg:'BPanel blocked XSS pattern'"
+SecRule ARGS|REQUEST_HEADERS|REQUEST_BODY "@rx (?i)(?:/bin/(?:bash|sh)|cmd\.exe|powershell|wget\s+https?://|curl\s+https?://|;\s*(?:id|whoami|uname)\b)" "id:1001005,phase:2,deny,status:403,log,msg:'BPanel blocked command injection pattern'"
+SecRule REQUEST_URI "@rx (?i)(?:/wp-config\.php|/readme\.html|/license\.txt|/wp-content/(?:uploads|cache|upgrade)/.*\.php|/wp-admin/includes/.*\.php|/wp-includes/.*\.php)" "id:1001101,phase:1,deny,status:403,log,msg:'BPanel blocked WordPress sensitive path'"
+SecRule REQUEST_URI "@streq /xmlrpc.php" "id:1001102,phase:1,deny,status:403,log,msg:'BPanel blocked WordPress XML-RPC'"
+SecRule ARGS:author "@rx ^[0-9]+$" "id:1001103,phase:2,deny,status:403,log,msg:'BPanel blocked WordPress author enumeration'"
+SecRule REQUEST_URI "@rx (?i)(?:/wp-admin/install\.php|/wp-admin/upgrade\.php|/wp-admin/setup-config\.php)" "id:1001104,phase:1,deny,status:403,log,msg:'BPanel blocked WordPress installer probe'"
+SecRule REQUEST_URI "@rx (?i)(?:^/(?:artisan|server\.php)$|/\.env(?:\.|$)|/vendor/|/storage/(?:logs|framework|app)/|/bootstrap/cache/)" "id:1001201,phase:1,deny,status:403,log,msg:'BPanel blocked Laravel sensitive path'"
+SecRule REQUEST_URI|ARGS|REQUEST_BODY "@rx (?i)(?:_ignition/execute-solution|_debugbar|php://filter|phar://|expect://|data://)" "id:1001202,phase:2,deny,status:403,log,msg:'BPanel blocked Laravel debug/RCE probe'"
+SecRule REQUEST_URI "@rx (?i)(?:/configuration\.php|/(?:attachments|downloads|templates_c|crons)/(?:.*\.php|.*)?|/vendor/|/install/)" "id:1001301,phase:1,deny,status:403,log,msg:'BPanel blocked WHMCS sensitive path'"
+SecRule REQUEST_URI "@rx (?i)(?:/(?:admin|admincp|whmcs-admin)/(?:setup|install|upgrade)|/modules/.*/(?:callback|hook)\.php\.bak)" "id:1001302,phase:1,deny,status:403,log,msg:'BPanel blocked WHMCS admin probe'"
+SecRule REQUEST_URI "@rx (?i)(?:/(?:application|system)/(?:config|logs|cache|core|helpers|libraries)/|/writable/(?:logs|cache|session|uploads)/|/app/Config/)" "id:1001401,phase:1,deny,status:403,log,msg:'BPanel blocked CodeIgniter sensitive path'"
+SecRule REQUEST_URI|ARGS "@rx (?i)(?:/\.env|/index\.php/_debugbar|/index\.php/profiler|CI_ENVIRONMENT\s*=)" "id:1001402,phase:2,deny,status:403,log,msg:'BPanel blocked CodeIgniter env/debug probe'"
 RULES
 }
 
@@ -354,6 +372,41 @@ save_waf_custom_rules() {
   echo "WAF custom rules saved"
 }
 
+save_waf_site_rules() {
+  local domain="$1" tmp target backup=""
+  require_domain "$domain"
+  install -d -o root -g root -m 0755 /etc/nginx/modsec /etc/nginx/modsec/sites
+  write_modsec_base_conf
+  tmp="$(mktemp)"
+  cat >"$tmp"
+  if grep -q $'\x00' "$tmp" 2>/dev/null; then
+    rm -f "$tmp"
+    deny "WAF rules cannot contain NUL bytes"
+  fi
+  if [[ $(wc -c <"$tmp") -gt 163840 ]]; then
+    rm -f "$tmp"
+    deny "WAF site rules must be 160 KB or smaller"
+  fi
+  target="/etc/nginx/modsec/sites/${domain}.conf"
+  if [[ -f "$target" ]]; then
+    backup="${target}.bak.$(date +%s)"
+    cp "$target" "$backup"
+  fi
+  install -m 0644 -o root -g root "$tmp" "$target"
+  rm -f "$tmp"
+  if ! nginx -t; then
+    if [[ -n "$backup" && -f "$backup" ]]; then
+      mv -f "$backup" "$target"
+    else
+      rm -f "$target"
+    fi
+    deny "Nginx rejected WAF site rules"
+  fi
+  rm -f "$backup" 2>/dev/null || true
+  systemctl reload nginx
+  echo "WAF site rules saved: ${domain}"
+}
+
 install_waf_engine() {
   export DEBIAN_FRONTEND=noninteractive
   if ! dpkg -s libnginx-mod-http-modsecurity >/dev/null 2>&1; then
@@ -361,7 +414,7 @@ install_waf_engine() {
     apt-get install -y libnginx-mod-http-modsecurity modsecurity-crs libmodsecurity3 || \
       apt-get install -y libnginx-mod-http-modsecurity libmodsecurity3
   fi
-  install -d -o root -g root -m 0755 /etc/nginx/modsec /etc/nginx/modsec/comodo
+  install -d -o root -g root -m 0755 /etc/nginx/modsec /etc/nginx/modsec/comodo /etc/nginx/modsec/sites
   write_waf_default_rules
   touch /etc/nginx/modsec/bpanel-custom.conf
   if [[ -f /etc/modsecurity/modsecurity.conf-recommended && ! -f /etc/modsecurity/modsecurity.conf ]]; then
@@ -1137,6 +1190,15 @@ case "$cmd" in
 
   waf-custom-save)
     save_waf_custom_rules
+    ;;
+  waf-site-rules)
+    [[ $# -eq 1 ]] || deny "usage: waf-site-rules <domain>"
+    require_domain "$1"
+    exec cat "/etc/nginx/modsec/sites/${1}.conf"
+    ;;
+  waf-site-save)
+    [[ $# -eq 1 ]] || deny "usage: waf-site-save <domain>"
+    save_waf_site_rules "$1"
     ;;
 
   # ---- PHP installation --------------------------------------------------

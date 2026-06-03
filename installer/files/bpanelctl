@@ -227,7 +227,7 @@ fix_permissions() {
     runuser -u bpanel -- env HOME="$APP_DIR" BPANEL_USE_HELPER=true "$APP_DIR/backend/.venv/bin/python" - <<'PY'
 from app.core.database import SessionLocal
 from app.models.entities import Website
-from app.services import nginx, site_users
+from app.services import nginx, site_users, waf
 
 db = SessionLocal()
 try:
@@ -238,6 +238,9 @@ try:
         site_users.fix_site_permissions(website.root_path, website.linux_user)
         app_type = website.app_type or "wordpress"
         runtime_php_version = website.php_version if app_type in {"wordpress", "php"} else None
+        result = waf.sync_website_rules(website)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr or result.stdout or "Unable to sync WAF rules")
         nginx.rewrite_vhost(
             website.domain,
             website.root_path,

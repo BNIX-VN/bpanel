@@ -20,7 +20,7 @@ from app.core.secrets import decrypt, encrypt
 from app.core.security import hash_password
 from app.core.permissions import normalize_role
 from app.models.entities import DatabaseAccount, User, Website
-from app.services import mariadb, nginx, site_users, wordpress
+from app.services import mariadb, nginx, site_users, waf, wordpress
 from app.services.shell import shell
 
 
@@ -96,6 +96,9 @@ def create_user_backup(user: User, db) -> str:
                 "app_type": website.app_type or "wordpress",
                 "status": website.status or "active",
                 "nginx_custom": website.nginx_custom or "",
+                "waf_enabled": bool(website.waf_enabled),
+                "waf_default_rules": website.waf_default_rules or "",
+                "waf_custom_rules": website.waf_custom_rules or "",
                 "database": None,
             }
             db_item = db.query(DatabaseAccount).filter(DatabaseAccount.website_id == website.id).first()
@@ -362,6 +365,9 @@ def restore_user_backup(backup_file: str, db) -> dict:
                     ssl_enabled=False,
                     status=site_info.get("status") or "active",
                     nginx_custom=site_info.get("nginx_custom") or "",
+                    waf_enabled=bool(site_info.get("waf_enabled", True)),
+                    waf_default_rules=site_info.get("waf_default_rules") or "",
+                    waf_custom_rules=site_info.get("waf_custom_rules") or "",
                 )
                 db.add(website)
                 db.flush()
@@ -374,6 +380,9 @@ def restore_user_backup(backup_file: str, db) -> dict:
                 website.app_type = app_type
                 website.status = site_info.get("status") or "active"
                 website.nginx_custom = site_info.get("nginx_custom") or ""
+                website.waf_enabled = bool(site_info.get("waf_enabled", True))
+                website.waf_default_rules = site_info.get("waf_default_rules") or ""
+                website.waf_custom_rules = site_info.get("waf_custom_rules") or ""
                 db.flush()
 
             db_info = site_info.get("database") or None
@@ -405,6 +414,9 @@ def restore_user_backup(backup_file: str, db) -> dict:
                     db_account.db_user = db_user
                     db_account.db_password = encrypt(db_password)
 
+            result = waf.sync_website_rules(website)
+            if result.returncode != 0:
+                raise RuntimeError((result.stderr or result.stdout or "Could not write WAF rules").strip())
             nginx.rewrite_vhost(
                 domain,
                 root_path,
@@ -412,6 +424,7 @@ def restore_user_backup(backup_file: str, db) -> dict:
                 php_version=php_version,
                 custom_directives=website.nginx_custom or "",
                 php_fpm_socket_override=site_users.php_fpm_socket(linux_user, php_version) if runtime_php_version else None,
+                waf_enabled=website.waf_enabled,
             )
             wordpress.fix_permissions(root_path, linux_user)
             restored_websites.append({"domain": domain, "created": created_site})
