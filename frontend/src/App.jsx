@@ -238,7 +238,7 @@ function App() {
   const [loading, setLoading] = useState('');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [panelSettings, setPanelSettings] = useState({ app_name: 'BPanel', panel_url: '', panel_hostname: '', panel_port: 2222, logo_url: '', favicon_url: '/favicon.png', ssl_enabled: false });
-  const [panelSettingsForm, setPanelSettingsForm] = useState({ app_name: 'BPanel', panel_hostname: '', panel_port: 2222 });
+  const [panelSettingsForm, setPanelSettingsForm] = useState({ app_name: 'BPanel', panel_hostname: '', panel_port: 2222, ssl_enabled: false });
   const [appVersion, setAppVersion] = useState('');
   const [panelLogoFile, setPanelLogoFile] = useState(null);
   const [panelFaviconFile, setPanelFaviconFile] = useState(null);
@@ -285,6 +285,7 @@ function App() {
       app_name: data.app_name || 'BPanel',
       panel_hostname: hostname,
       panel_port: Number.isFinite(port) && port > 0 ? port : 2222,
+      ssl_enabled: !!data.ssl_enabled,
     };
   }
 
@@ -459,14 +460,46 @@ function App() {
   }
 
   async function savePanelSettings() {
+    const wantsSsl = !!panelSettingsForm.ssl_enabled;
+    const hasSsl = !!panelSettings.ssl_enabled;
+    const hostname = String(panelSettingsForm.panel_hostname || '').trim();
+    const port = Number(panelSettingsForm.panel_port || 2222);
+    const currentHostname = panelSettings.panel_hostname || currentPanelHost();
+    const hostnameChanged = hostname && hostname !== currentHostname;
+
+    if (wantsSsl && (!hasSsl || hostnameChanged)) {
+      if (!panelSslEmail) {
+        setError("Enter a Let's Encrypt email in Panel SSL before enabling SSL.");
+        return;
+      }
+      const nameData = await request('/panel-settings', {
+        method: 'PATCH',
+        body: JSON.stringify({ app_name: panelSettingsForm.app_name }),
+      }, 'Saving panel settings...');
+      if (!nameData) return;
+      const sslData = await request('/panel-settings/ssl', {
+        method: 'POST',
+        body: JSON.stringify({ panel_hostname: hostname, panel_port: port, email: panelSslEmail }),
+      }, 'Installing panel SSL...');
+      if (sslData) {
+        setPanelSettings(sslData);
+        setPanelSettingsForm(formFromPanelSettings(sslData));
+        setNotice(sslData.message || 'Panel SSL installed. The panel may restart in a moment.');
+      }
+      return;
+    }
+
+    const payload = hasSsl && !wantsSsl
+      ? { app_name: panelSettingsForm.app_name, panel_url: `http://${hostname}:${port}` }
+      : { app_name: panelSettingsForm.app_name, panel_hostname: hostname };
     const data = await request('/panel-settings', {
       method: 'PATCH',
-      body: JSON.stringify({ app_name: panelSettingsForm.app_name, panel_hostname: panelSettingsForm.panel_hostname }),
+      body: JSON.stringify(payload),
     }, 'Saving panel settings...');
     if (data) {
       setPanelSettings(data);
       setPanelSettingsForm(formFromPanelSettings(data));
-      setNotice('Panel settings updated. The panel may restart if the hostname changed.');
+      setNotice(hasSsl && !wantsSsl ? 'Panel SSL disabled. The panel remains reachable by IP and port over HTTP.' : 'Panel settings updated.');
     }
   }
 
@@ -2374,7 +2407,7 @@ function App() {
         <div className="panel-settings-grid panel-settings-compact">
           <label><span>Panel name</span><input value={panelSettingsForm.app_name} onChange={e => setPanelSettingsForm(prev => ({ ...prev, app_name: e.target.value }))} placeholder="BPanel" /></label>
           <label><span>Panel hostname</span><input value={panelSettingsForm.panel_hostname} onChange={e => setPanelSettingsForm(prev => ({ ...prev, panel_hostname: e.target.value }))} placeholder="panel.domain.com" /></label>
-          <label className="check-line panel-ssl-status"><input type="checkbox" checked={!!panelSettings.ssl_enabled} readOnly disabled /> {panelSettings.ssl_enabled ? 'SSL installed' : 'SSL not installed'}</label>
+          <label className="check-line panel-ssl-status"><input type="checkbox" checked={!!panelSettingsForm.ssl_enabled} onChange={e => setPanelSettingsForm(prev => ({ ...prev, ssl_enabled: e.target.checked }))} /> Panel SSL</label>
           <button disabled={!!loading || !panelSettingsForm.app_name || !panelSettingsForm.panel_hostname} onClick={savePanelSettings}><SettingsIcon size={14}/> Save settings</button>
         </div>
       </section>
