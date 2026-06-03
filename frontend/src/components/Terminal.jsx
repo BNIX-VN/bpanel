@@ -13,7 +13,22 @@ function shortPath(path) {
   return parts.at(-1) || '~';
 }
 
-export function Terminal({ websiteId }) {
+function terminalWebSocketUrl(apiBase, websiteId) {
+  const base = String(apiBase || '/api');
+  const path = `/terminal/ws/${websiteId}`;
+  if (/^https?:\/\//i.test(base)) {
+    const url = new URL(base);
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    url.pathname = `${url.pathname.replace(/\/$/, '')}${path}`;
+    url.search = '';
+    url.hash = '';
+    return url.toString();
+  }
+  const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${scheme}//${window.location.host}${base.replace(/\/$/, '')}${path}`;
+}
+
+export function Terminal({ websiteId, apiBase = '/api' }) {
   const containerRef = useRef(null);
   const termRef = useRef(null);
   const fitRef = useRef(null);
@@ -50,8 +65,7 @@ export function Terminal({ websiteId }) {
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
-    const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${scheme}//${window.location.host}/api/terminal/ws/${websiteId}`);
+    const ws = new WebSocket(terminalWebSocketUrl(apiBase, websiteId));
     wsRef.current = ws;
 
     ws.onopen = () => {
@@ -96,7 +110,9 @@ export function Terminal({ websiteId }) {
       setConnected(false);
       wsRef.current = null;
       if (event.code !== 1000) {
-        termRef.current?.write('\r\n\x1b[31mDisconnected\x1b[0m\r\n');
+        const detail = event.reason ? `${event.code}: ${event.reason}` : `code ${event.code}`;
+        setError(`Disconnected (${detail})`);
+        termRef.current?.write(`\r\n\x1b[31mDisconnected (${detail})\x1b[0m\r\n`);
       }
     };
 
@@ -104,7 +120,7 @@ export function Terminal({ websiteId }) {
       setError('Connection failed');
       setConnected(false);
     };
-  }, [websiteId, writePrompt]);
+  }, [apiBase, websiteId, writePrompt]);
 
   useEffect(() => {
     if (!containerRef.current) return undefined;

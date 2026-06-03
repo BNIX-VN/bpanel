@@ -231,3 +231,17 @@ button:disabled,.upload-button.disabled{background:#dbe7f7;color:#7a8ca4;border-
   .backups-page .backup-item .actions{grid-template-columns:1fr}
   .backups-page .backup-item .actions .danger{width:100%}
 }
+
+.site-stack{display:grid;gap:10px;min-width:0}
+.site-stack .inline-nginx-editor{margin:0}
+.site-card{grid-template-columns:minmax(190px,1.05fr) minmax(170px,.8fr) minmax(250px,1fr)}
+.site-card>.actions{grid-template-columns:repeat(auto-fit,minmax(82px,1fr));justify-content:stretch}
+.firewall-blocklist-form{grid-template-columns:minmax(240px,1fr) max-content max-content}
+.waf-rules-grid{grid-template-columns:repeat(2,minmax(0,1fr));align-items:start}
+.waf-rule-panel{display:grid;gap:10px;min-width:0}
+.waf-rule-panel textarea,.inline-nginx-editor textarea{min-height:260px;resize:vertical}
+
+@media(max-width:950px){
+  .site-card,.site-stack,.waf-rules-grid,.firewall-blocklist-form{grid-template-columns:1fr}
+  .site-card>.actions{grid-template-columns:repeat(2,minmax(0,1fr))}
+}

@@ -15,7 +15,7 @@ USER_ZONE = "UserZone"
 
 
 def _strip_zone_comment(value: str) -> str:
-    return re.sub(r"\s*(?:#|\()?\s*bpanel:(?:PanelZone|UserZone)\)?", "", value, flags=re.I).strip()
+    return re.sub(r"\s*(?:#|\()?\s*bpanel:(?:PanelZone|UserZone)(?::[A-Za-z0-9_-]+)?\)?", "", value, flags=re.I).strip()
 
 
 def _zone_from_values(*values: str) -> str | None:
@@ -167,4 +167,38 @@ def delete_rule(number: int) -> CommandResult:
         "ufw-delete",
         helper_args=[str(number)],
         fallback=["ufw", "--force", "delete", str(number)],
+    )
+
+
+def blocklists() -> CommandResult:
+    return shell.privileged(
+        "ufw-blocklist-status",
+        check=False,
+        fallback=["bash", "-lc", "echo 'URLs:'; cat /tmp/bpanel-firewall-blocklists.urls 2>/dev/null || true"],
+    )
+
+
+def add_blocklist_url(url: str) -> CommandResult:
+    return shell.privileged(
+        "ufw-blocklist-add",
+        helper_args=[url],
+        check=False,
+        fallback=["bash", "-lc", "echo URL added"],
+    )
+
+
+def delete_blocklist_url(url: str) -> CommandResult:
+    return shell.privileged(
+        "ufw-blocklist-delete",
+        helper_args=[url],
+        check=False,
+        fallback=["bash", "-lc", "echo URL removed"],
+    )
+
+
+def update_blocklists() -> CommandResult:
+    return shell.privileged(
+        "ufw-blocklist-run",
+        check=False,
+        fallback=["bash", "-lc", "echo blocklist update skipped"],
     )

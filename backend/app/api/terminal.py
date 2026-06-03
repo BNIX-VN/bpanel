@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from jose import JWTError, jwt
@@ -22,6 +23,10 @@ router = APIRouter(prefix="/terminal", tags=["terminal"])
 def _origin_allowed(websocket: WebSocket) -> bool:
     origin = (websocket.headers.get("origin") or "").rstrip("/")
     if not origin:
+        return True
+    origin_host = (urlparse(origin).netloc or "").lower()
+    request_host = (websocket.headers.get("host") or "").lower()
+    if origin_host and request_host and origin_host == request_host:
         return True
     allowed = {item.rstrip("/") for item in settings.cors_origins}
     if settings.panel_url:

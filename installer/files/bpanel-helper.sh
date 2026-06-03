@@ -30,6 +30,9 @@ APP_DIR="/opt/bpanel"
 ENV_FILE="${APP_DIR}/backend/.env"
 DEFAULT_PANEL_PORT="2222"
 SOURCE_DIR="/opt/bpanel-source"
+BPANEL_DATA_DIR="/var/lib/bpanel"
+FIREWALL_BLOCKLIST_URLS="${BPANEL_DATA_DIR}/firewall-blocklists.urls"
+FIREWALL_BLOCKLIST_WORK="${BPANEL_DATA_DIR}/firewall-blocklists.current"
 
 deny() { echo "bpanel-helper: $*" >&2; exit 1; }
 
@@ -293,10 +296,13 @@ run_panel_update() {
 }
 
 write_modsec_main_conf() {
+  write_waf_default_rules
+  touch /etc/nginx/modsec/bpanel-custom.conf
   {
     [[ -f /etc/modsecurity/modsecurity.conf ]] && echo "Include /etc/modsecurity/modsecurity.conf"
     echo "SecRuleEngine On"
     echo "SecRequestBodyAccess On"
+    echo "Include /etc/nginx/modsec/bpanel-default.conf"
     [[ -f /etc/modsecurity/crs/crs-setup.conf ]] && echo "Include /etc/modsecurity/crs/crs-setup.conf"
     [[ -f /etc/modsecurity/crs/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf ]] && echo "Include /etc/modsecurity/crs/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf"
     if compgen -G "/usr/share/modsecurity-crs/rules/*.conf" >/dev/null; then
@@ -309,7 +315,43 @@ write_modsec_main_conf() {
     if compgen -G "/etc/nginx/modsec/comodo/rules/*.conf" >/dev/null; then
       echo "Include /etc/nginx/modsec/comodo/rules/*.conf"
     fi
+    echo "Include /etc/nginx/modsec/bpanel-custom.conf"
   } >/etc/nginx/modsec/bpanel-main.conf
+}
+
+write_waf_default_rules() {
+  install -d -o root -g root -m 0755 /etc/nginx/modsec
+  cat >/etc/nginx/modsec/bpanel-default.conf <<'RULES'
+# BPanel default WAF rules. CRS remains the main ruleset; these protect common
+# high-risk paths and payloads even when third-party rules are not installed.
+SecRule REQUEST_URI "@rx (?i)(?:/\.env|/wp-config\.php|/\.git/|/composer\.(?:json|lock)|/vendor/phpunit|/etc/passwd)" "id:1001001,phase:1,deny,status:403,log,msg:'BPanel blocked sensitive file probe'"
+SecRule REQUEST_URI|ARGS|REQUEST_HEADERS "@rx (?:\.\./|\.\.\\)" "id:1001002,phase:2,deny,status:403,log,msg:'BPanel blocked path traversal'"
+SecRule ARGS|REQUEST_HEADERS|REQUEST_BODY "@rx (?i)(?:union\s+select|sleep\s*\(|benchmark\s*\(|load_file\s*\(|into\s+outfile)" "id:1001003,phase:2,deny,status:403,log,msg:'BPanel blocked SQL injection pattern'"
+SecRule ARGS|REQUEST_HEADERS|REQUEST_BODY "@rx (?i)(?:<script|javascript:|onerror\s*=|onload\s*=|document\.cookie)" "id:1001004,phase:2,deny,status:403,log,msg:'BPanel blocked XSS pattern'"
+SecRule ARGS|REQUEST_HEADERS|REQUEST_BODY "@rx (?i)(?:/bin/(?:bash|sh)|cmd\.exe|powershell|wget\s+http|curl\s+http)" "id:1001005,phase:2,deny,status:403,log,msg:'BPanel blocked command injection pattern'"
+RULES
+}
+
+save_waf_custom_rules() {
+  install -d -o root -g root -m 0755 /etc/nginx/modsec
+  write_waf_default_rules
+  local tmp
+  tmp="$(mktemp)"
+  cat >"$tmp"
+  if grep -q $'\x00' "$tmp" 2>/dev/null; then
+    rm -f "$tmp"
+    deny "WAF rules cannot contain NUL bytes"
+  fi
+  if [[ $(wc -c <"$tmp") -gt 65536 ]]; then
+    rm -f "$tmp"
+    deny "WAF custom rules must be 64 KB or smaller"
+  fi
+  install -m 0644 -o root -g root "$tmp" /etc/nginx/modsec/bpanel-custom.conf
+  rm -f "$tmp"
+  write_modsec_main_conf
+  nginx -t
+  systemctl reload nginx
+  echo "WAF custom rules saved"
 }
 
 install_waf_engine() {
@@ -320,6 +362,8 @@ install_waf_engine() {
       apt-get install -y libnginx-mod-http-modsecurity libmodsecurity3
   fi
   install -d -o root -g root -m 0755 /etc/nginx/modsec /etc/nginx/modsec/comodo
+  write_waf_default_rules
+  touch /etc/nginx/modsec/bpanel-custom.conf
   if [[ -f /etc/modsecurity/modsecurity.conf-recommended && ! -f /etc/modsecurity/modsecurity.conf ]]; then
     cp /etc/modsecurity/modsecurity.conf-recommended /etc/modsecurity/modsecurity.conf
   fi
@@ -506,6 +550,10 @@ waf_status() {
   fi
   echo "Rules file:"
   [[ -f /etc/nginx/modsec/bpanel-main.conf ]] && echo "  /etc/nginx/modsec/bpanel-main.conf" || echo "  missing"
+  echo "Default rules:"
+  [[ -f /etc/nginx/modsec/bpanel-default.conf ]] && echo "  /etc/nginx/modsec/bpanel-default.conf" || echo "  missing"
+  echo "Custom rules:"
+  [[ -f /etc/nginx/modsec/bpanel-custom.conf ]] && echo "  /etc/nginx/modsec/bpanel-custom.conf" || echo "  missing"
   echo "Comodo rules:"
   find /etc/nginx/modsec/comodo -type f 2>/dev/null | head -20 || true
   echo "Timers:"
@@ -537,6 +585,216 @@ run_ufw_ip_rule() {
   require_port "$port"; require_proto "$protocol"
   ufw "$action" from "$network" to any port "$port" proto "$protocol" comment "bpanel:UserZone" \
     || ufw "$action" from "$network" to any port "$port" proto "$protocol"
+}
+
+require_url() {
+  local value="$1"
+  [[ "$value" =~ ^https?://[^[:space:]]+$ ]] || deny "invalid URL: $value"
+}
+
+firewall_blocklist_urls() {
+  install -d -o root -g root -m 0755 "$BPANEL_DATA_DIR"
+  touch "$FIREWALL_BLOCKLIST_URLS"
+  sed '/^[[:space:]]*$/d' "$FIREWALL_BLOCKLIST_URLS" | sort -u
+}
+
+firewall_blocklist_write_timer() {
+  cat >/etc/systemd/system/bpanel-firewall-blocklist.service <<SERVICE
+[Unit]
+Description=Refresh BPanel firewall URL blocklists
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=SUDO_USER=bpanel
+ExecStart=/usr/local/sbin/bpanel-helper ufw-blocklist-run
+SERVICE
+  cat >/etc/systemd/system/bpanel-firewall-blocklist.timer <<TIMER
+[Unit]
+Description=Refresh BPanel firewall URL blocklists daily
+
+[Timer]
+OnCalendar=*-*-* 01:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+TIMER
+  systemctl daemon-reload
+  systemctl enable --now bpanel-firewall-blocklist.timer >/dev/null 2>&1 || true
+}
+
+firewall_blocklist_status() {
+  install -d -o root -g root -m 0755 "$BPANEL_DATA_DIR"
+  touch "$FIREWALL_BLOCKLIST_URLS"
+  echo "URLs:"
+  if [[ -s "$FIREWALL_BLOCKLIST_URLS" ]]; then
+    firewall_blocklist_urls | sed 's/^/  /'
+  else
+    echo "  (none)"
+  fi
+  echo ""
+  echo "Networks:"
+  if [[ -s "$FIREWALL_BLOCKLIST_WORK" ]]; then
+    sed '/^[[:space:]]*$/d' "$FIREWALL_BLOCKLIST_WORK" | sed 's/^/  /'
+  else
+    echo "  (none)"
+  fi
+  echo ""
+  echo "Timer:"
+  systemctl is-enabled bpanel-firewall-blocklist.timer 2>/dev/null || true
+  systemctl list-timers bpanel-firewall-blocklist.timer --no-pager 2>/dev/null || true
+}
+
+firewall_blocklist_clear_rules() {
+  local numbers number
+  numbers="$(ufw status numbered 2>/dev/null | awk '/bpanel:UserZone:blocklist/ { gsub(/[][]/, "", $1); print $1 }' | sort -rn)"
+  for number in $numbers; do
+    ufw --force delete "$number" >/dev/null 2>&1 || true
+  done
+}
+
+firewall_blocklist_run() {
+  install -d -o root -g root -m 0755 "$BPANEL_DATA_DIR"
+  touch "$FIREWALL_BLOCKLIST_URLS"
+  local tmp fetched count url
+  tmp="$(mktemp)"
+  fetched="$(mktemp)"
+  while IFS= read -r url; do
+    [[ -n "$url" ]] || continue
+    require_url "$url"
+    curl -fsSL --max-time 30 "$url" >>"$fetched" || echo "WARNING: could not fetch $url" >&2
+    printf '\n' >>"$fetched"
+  done < <(firewall_blocklist_urls)
+  python3 - "$fetched" >"$tmp" <<'PY'
+import ipaddress
+import re
+import sys
+
+seen = set()
+for raw in open(sys.argv[1], encoding="utf-8", errors="ignore"):
+    line = re.split(r"[\s#;,]+", raw.strip(), 1)[0]
+    if not line:
+        continue
+    try:
+        value = str(ipaddress.ip_network(line, strict=False))
+    except ValueError:
+        continue
+    if value not in seen:
+        seen.add(value)
+        print(value)
+PY
+  mv -f "$tmp" "$FIREWALL_BLOCKLIST_WORK"
+  rm -f "$fetched"
+  firewall_blocklist_clear_rules
+  count=0
+  while IFS= read -r network; do
+    [[ -n "$network" ]] || continue
+    ufw deny from "$network" comment "bpanel:UserZone:blocklist" >/dev/null 2>&1 || ufw deny from "$network" >/dev/null 2>&1 || true
+    count=$((count + 1))
+  done <"$FIREWALL_BLOCKLIST_WORK"
+  firewall_blocklist_write_timer
+  echo "Firewall blocklist refreshed: ${count} network(s)"
+}
+
+firewall_blocklist_add_url() {
+  local url="$1"
+  require_url "$url"
+  install -d -o root -g root -m 0755 "$BPANEL_DATA_DIR"
+  touch "$FIREWALL_BLOCKLIST_URLS"
+  if ! grep -Fxq -- "$url" "$FIREWALL_BLOCKLIST_URLS"; then
+    printf '%s\n' "$url" >>"$FIREWALL_BLOCKLIST_URLS"
+  fi
+  sort -u -o "$FIREWALL_BLOCKLIST_URLS" "$FIREWALL_BLOCKLIST_URLS"
+  firewall_blocklist_write_timer
+  echo "Firewall blocklist URL added"
+}
+
+firewall_blocklist_delete_url() {
+  local url="$1"
+  require_url "$url"
+  install -d -o root -g root -m 0755 "$BPANEL_DATA_DIR"
+  touch "$FIREWALL_BLOCKLIST_URLS"
+  grep -Fxv -- "$url" "$FIREWALL_BLOCKLIST_URLS" >"${FIREWALL_BLOCKLIST_URLS}.tmp" || true
+  mv -f "${FIREWALL_BLOCKLIST_URLS}.tmp" "$FIREWALL_BLOCKLIST_URLS"
+  firewall_blocklist_write_timer
+  echo "Firewall blocklist URL removed"
+}
+
+write_ssl_auto_renew_timer() {
+  cat >/etc/systemd/system/bpanel-ssl-auto-renew.service <<SERVICE
+[Unit]
+Description=Renew BPanel SSL certificates that expire within 10 days
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=SUDO_USER=bpanel
+ExecStart=/usr/local/sbin/bpanel-helper certbot-renew-soon 10
+SERVICE
+  cat >/etc/systemd/system/bpanel-ssl-auto-renew.timer <<TIMER
+[Unit]
+Description=Check BPanel SSL certificates daily
+
+[Timer]
+OnCalendar=*-*-* 01:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+TIMER
+  systemctl daemon-reload
+  systemctl enable --now bpanel-ssl-auto-renew.timer >/dev/null 2>&1 || true
+}
+
+copy_panel_live_certificate() {
+  local domain="$1"
+  [[ -n "$domain" ]] || return 0
+  [[ -f "/etc/letsencrypt/live/${domain}/fullchain.pem" && -f "/etc/letsencrypt/live/${domain}/privkey.pem" ]] || return 0
+  install -d -o root -g bpanel -m 0750 /etc/bpanel
+  install -m 0640 -o root -g bpanel "/etc/letsencrypt/live/${domain}/fullchain.pem" /etc/bpanel/panel-fullchain.pem
+  install -m 0640 -o root -g bpanel "/etc/letsencrypt/live/${domain}/privkey.pem" /etc/bpanel/panel-privkey.pem
+  if [[ -f "$ENV_FILE" ]]; then
+    env_set PANEL_SSL_CERT "/etc/bpanel/panel-fullchain.pem"
+    env_set PANEL_SSL_KEY "/etc/bpanel/panel-privkey.pem"
+  fi
+}
+
+renew_ssl_soon() {
+  local days="${1:-10}" seconds cert cert_name checked=0 renewed=0 panel_domain
+  [[ "$days" =~ ^[0-9]+$ && "$days" -ge 1 && "$days" -le 30 ]] || deny "usage: certbot-renew-soon [1-30 days]"
+  write_ssl_auto_renew_timer
+  if ! command -v certbot >/dev/null 2>&1; then
+    echo "certbot is not installed"
+    return 0
+  fi
+  seconds=$((days * 86400))
+  shopt -s nullglob
+  for cert in /etc/letsencrypt/live/*/cert.pem; do
+    [[ -f "$cert" ]] || continue
+    cert_name="$(basename "$(dirname "$cert")")"
+    [[ "$cert_name" == "README" ]] && continue
+    checked=$((checked + 1))
+    if ! openssl x509 -checkend "$seconds" -noout -in "$cert" >/dev/null 2>&1; then
+      echo "Renewing certificate: ${cert_name}"
+      if certbot renew --cert-name "$cert_name" --quiet --force-renewal \
+        --deploy-hook "systemctl reload nginx || true; systemctl restart bpanel-api || true"; then
+        renewed=$((renewed + 1))
+      else
+        echo "WARNING: could not renew ${cert_name}" >&2
+      fi
+    fi
+  done
+  shopt -u nullglob
+  panel_domain="$(env_get PANEL_DOMAIN)"
+  copy_panel_live_certificate "$panel_domain"
+  if [[ "$renewed" -gt 0 ]]; then
+    systemctl reload nginx >/dev/null 2>&1 || true
+    systemctl restart bpanel-api >/dev/null 2>&1 || true
+  fi
+  echo "SSL auto-renew checked ${checked} certificate(s); renewed ${renewed} certificate(s) within ${days} day(s)."
 }
 
 is_in() {
@@ -867,6 +1125,20 @@ case "$cmd" in
     echo "No Comodo rule updater found. Install the Comodo/CWAF updater or place rules in /etc/nginx/modsec/comodo/."
     ;;
 
+  waf-default-rules)
+    write_waf_default_rules
+    exec cat /etc/nginx/modsec/bpanel-default.conf
+    ;;
+
+  waf-custom-rules)
+    touch /etc/nginx/modsec/bpanel-custom.conf
+    exec cat /etc/nginx/modsec/bpanel-custom.conf
+    ;;
+
+  waf-custom-save)
+    save_waf_custom_rules
+    ;;
+
   # ---- PHP installation --------------------------------------------------
   php-install)
     [[ $# -eq 1 ]] || deny "usage: php-install <version>"
@@ -951,6 +1223,14 @@ case "$cmd" in
   certbot-renew)
     exec certbot renew --quiet
     ;;
+  certbot-renew-soon)
+    [[ $# -le 1 ]] || deny "usage: certbot-renew-soon [days]"
+    renew_ssl_soon "${1:-10}"
+    ;;
+  certbot-auto-renew-install)
+    write_ssl_auto_renew_timer
+    echo "SSL auto-renew timer installed"
+    ;;
 
   # ---- ufw --------------------------------------------------------------
   ufw-status)
@@ -986,6 +1266,25 @@ case "$cmd" in
   ufw-delete)
     [[ $# -eq 1 && "$1" =~ ^[0-9]+$ ]] || deny "usage: ufw-delete <number>"
     exec ufw --force delete "$1"
+    ;;
+  ufw-blocklist-status)
+    firewall_blocklist_status
+    ;;
+  ufw-blocklist-timer-install)
+    firewall_blocklist_write_timer
+    echo "Firewall blocklist timer installed"
+    ;;
+  ufw-blocklist-add)
+    [[ $# -eq 1 ]] || deny "usage: ufw-blocklist-add <url>"
+    firewall_blocklist_add_url "$1"
+    ;;
+  ufw-blocklist-delete)
+    [[ $# -eq 1 ]] || deny "usage: ufw-blocklist-delete <url>"
+    firewall_blocklist_delete_url "$1"
+    ;;
+  ufw-blocklist-run)
+    [[ $# -eq 0 ]] || deny "usage: ufw-blocklist-run"
+    firewall_blocklist_run
     ;;
 
   # ---- filesystem -------------------------------------------------------

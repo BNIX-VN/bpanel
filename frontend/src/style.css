@@ -542,6 +542,24 @@ a:hover{color:var(--primary-hover)}
   .notice,.error,.loading{font-size:13px}
   pre{font-size:12px}
 }
+
+.site-stack{display:grid;gap:10px;min-width:0}
+.site-stack .inline-nginx-editor{margin:0}
+.site-card{grid-template-columns:minmax(190px,1.05fr) minmax(170px,.8fr) minmax(250px,1fr)}
+.site-card>.actions{grid-template-columns:repeat(auto-fit,minmax(82px,1fr));justify-content:stretch}
+.site-card>.actions select,.site-card>.actions button{min-width:0}
+.inline-nginx-editor textarea,.waf-rule-panel textarea{width:100%;min-height:260px;resize:vertical}
+.firewall-blocklist-form{grid-template-columns:minmax(240px,1fr) max-content max-content}
+.firewall-blocklist-table{margin-top:10px}
+.firewall-rule span{min-width:0;word-break:break-all}
+.waf-rules-grid{grid-template-columns:repeat(2,minmax(0,1fr));align-items:start}
+.waf-rule-panel{display:grid;gap:10px;min-width:0}
+.waf-site-list{margin-top:4px}
+
+@media(max-width:950px){
+  .site-stack,.waf-rules-grid{grid-template-columns:1fr}
+  .firewall-blocklist-form{grid-template-columns:1fr}
+}
 @media(max-width:1150px){.create-site-row{grid-template-columns:1fr 1fr}}
 @media(max-width:950px){.create-site-row{grid-template-columns:1fr}}
 

@@ -401,6 +401,21 @@ class FirewallIpRule(BaseModel):
     protocol: str = "tcp"
 
 
+class FirewallBlocklistUrl(BaseModel):
+    url: str = Field(min_length=8, max_length=2048)
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str) -> str:
+        value = value.strip()
+        parsed = urlparse(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("URL must start with http:// or https://")
+        if any(ch.isspace() for ch in value):
+            raise ValueError("URL must not contain spaces")
+        return value
+
+
 class BackupCreate(BaseModel):
     website_id: int
 

@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.api.deps import get_current_user
 from app.core.permissions import Role, ensure_role
 from app.models.entities import User
-from app.schemas.schemas import FirewallIpRule, FirewallPortRule
+from app.schemas.schemas import FirewallBlocklistUrl, FirewallIpRule, FirewallPortRule
 from app.services import firewall
 
 router = APIRouter(prefix="/firewall", tags=["firewall"])
@@ -84,4 +84,37 @@ def delete_rule(number: int, current_user: User = Depends(get_current_user)):
         result = firewall.delete_rule(number)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _result(result)
+
+
+@router.get("/blocklists")
+def get_blocklists(current_user: User = Depends(get_current_user)):
+    _require_admin(current_user)
+    return _result(firewall.blocklists())
+
+
+@router.post("/blocklists")
+def add_blocklist(payload: FirewallBlocklistUrl, current_user: User = Depends(get_current_user)):
+    _require_admin(current_user)
+    result = firewall.add_blocklist_url(payload.url)
+    if result.returncode != 0:
+        raise HTTPException(status_code=400, detail=(result.stderr or result.stdout or "Could not add URL").strip())
+    return _result(result)
+
+
+@router.post("/blocklists/delete")
+def delete_blocklist(payload: FirewallBlocklistUrl, current_user: User = Depends(get_current_user)):
+    _require_admin(current_user)
+    result = firewall.delete_blocklist_url(payload.url)
+    if result.returncode != 0:
+        raise HTTPException(status_code=400, detail=(result.stderr or result.stdout or "Could not delete URL").strip())
+    return _result(result)
+
+
+@router.post("/blocklists/update")
+def update_blocklists(current_user: User = Depends(get_current_user)):
+    _require_admin(current_user)
+    result = firewall.update_blocklists()
+    if result.returncode != 0:
+        raise HTTPException(status_code=400, detail=(result.stderr or result.stdout or "Could not update blocklists").strip())
     return _result(result)

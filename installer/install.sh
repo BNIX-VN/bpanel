@@ -306,10 +306,13 @@ NGINX
 }
 
 write_modsec_main_conf() {
+  write_waf_default_rules
+  touch /etc/nginx/modsec/bpanel-custom.conf
   {
     [[ -f /etc/modsecurity/modsecurity.conf ]] && echo "Include /etc/modsecurity/modsecurity.conf"
     echo "SecRuleEngine On"
     echo "SecRequestBodyAccess On"
+    echo "Include /etc/nginx/modsec/bpanel-default.conf"
     [[ -f /etc/modsecurity/crs/crs-setup.conf ]] && echo "Include /etc/modsecurity/crs/crs-setup.conf"
     [[ -f /etc/modsecurity/crs/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf ]] && echo "Include /etc/modsecurity/crs/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf"
     if compgen -G "/usr/share/modsecurity-crs/rules/*.conf" >/dev/null; then
@@ -322,7 +325,21 @@ write_modsec_main_conf() {
     if compgen -G "/etc/nginx/modsec/comodo/rules/*.conf" >/dev/null; then
       echo "Include /etc/nginx/modsec/comodo/rules/*.conf"
     fi
+    echo "Include /etc/nginx/modsec/bpanel-custom.conf"
   } >/etc/nginx/modsec/bpanel-main.conf
+}
+
+write_waf_default_rules() {
+  install -d -o root -g root -m 0755 /etc/nginx/modsec
+  cat >/etc/nginx/modsec/bpanel-default.conf <<'RULES'
+# BPanel default WAF rules. CRS remains the main ruleset; these protect common
+# high-risk paths and payloads even when third-party rules are not installed.
+SecRule REQUEST_URI "@rx (?i)(?:/\.env|/wp-config\.php|/\.git/|/composer\.(?:json|lock)|/vendor/phpunit|/etc/passwd)" "id:1001001,phase:1,deny,status:403,log,msg:'BPanel blocked sensitive file probe'"
+SecRule REQUEST_URI|ARGS|REQUEST_HEADERS "@rx (?:\.\./|\.\.\\)" "id:1001002,phase:2,deny,status:403,log,msg:'BPanel blocked path traversal'"
+SecRule ARGS|REQUEST_HEADERS|REQUEST_BODY "@rx (?i)(?:union\s+select|sleep\s*\(|benchmark\s*\(|load_file\s*\(|into\s+outfile)" "id:1001003,phase:2,deny,status:403,log,msg:'BPanel blocked SQL injection pattern'"
+SecRule ARGS|REQUEST_HEADERS|REQUEST_BODY "@rx (?i)(?:<script|javascript:|onerror\s*=|onload\s*=|document\.cookie)" "id:1001004,phase:2,deny,status:403,log,msg:'BPanel blocked XSS pattern'"
+SecRule ARGS|REQUEST_HEADERS|REQUEST_BODY "@rx (?i)(?:/bin/(?:bash|sh)|cmd\.exe|powershell|wget\s+http|curl\s+http)" "id:1001005,phase:2,deny,status:403,log,msg:'BPanel blocked command injection pattern'"
+RULES
 }
 
 install_waf_engine() {
@@ -333,6 +350,8 @@ install_waf_engine() {
       apt-get install -y libnginx-mod-http-modsecurity libmodsecurity3
   fi
   install -d -o root -g root -m 0755 /etc/nginx/modsec /etc/nginx/modsec/comodo
+  write_waf_default_rules
+  touch /etc/nginx/modsec/bpanel-custom.conf
   if [[ -f /etc/modsecurity/modsecurity.conf-recommended && ! -f /etc/modsecurity/modsecurity.conf ]]; then
     cp /etc/modsecurity/modsecurity.conf-recommended /etc/modsecurity/modsecurity.conf
   fi
@@ -601,6 +620,10 @@ SERVICE
   systemctl daemon-reload
   systemctl enable --now bpanel-api
   systemctl enable --now bpanel-backup-scheduler.timer
+  if id -u bpanel >/dev/null 2>&1; then
+    sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper certbot-auto-renew-install >/dev/null 2>&1 || true
+    sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper ufw-blocklist-timer-install >/dev/null 2>&1 || true
+  fi
   wait_for_backend
 }
 

@@ -418,6 +418,8 @@ log "Ensuring Nginx ModSecurity WAF engine is installed"
 if id -u bpanel >/dev/null 2>&1; then
   sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper waf-install || \
     echo "WARNING: WAF engine installation failed; continuing without ModSecurity."
+  sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper certbot-auto-renew-install >/dev/null 2>&1 || true
+  sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper ufw-blocklist-timer-install >/dev/null 2>&1 || true
 else
   echo "  (bpanel user not found; skipping WAF install - run install.sh first)"
 fi
@@ -495,6 +497,7 @@ python -m py_compile \
   app/api/updates.py \
   app/api/waf.py \
   app/api/panel_settings.py \
+  app/api/terminal.py \
   app/services/firewall.py \
   app/services/nginx.py \
   app/services/panel_urls.py \

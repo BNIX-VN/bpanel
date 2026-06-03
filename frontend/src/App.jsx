@@ -203,7 +203,7 @@ function App() {
   const [newSftpTarget, setNewSftpTarget] = useState({ name: '', host: '', port: 22, username: '', password: '', private_key: '', remote_path: '/backups/bpanel' });
   const [selectedWebsiteId, setSelectedWebsiteId] = useState(() => standaloneEditor?.websiteId || '');
   const [cronSchedule, setCronSchedule] = useState('*/15 * * * *');
-  const [cronCommand, setCronCommand] = useState('wp cron event run --due-now');
+  const [cronCommand, setCronCommand] = useState('');
   const [cronItems, setCronItems] = useState([]);
   const [filePath, setFilePath] = useState(() => standaloneEditor?.path || 'public_html/index.html');
   const [fileListPath, setFileListPath] = useState('public_html');
@@ -227,6 +227,10 @@ function App() {
   const [firewallBlockPort, setFirewallBlockPort] = useState('');
   const [firewallBlockProtocol, setFirewallBlockProtocol] = useState('tcp');
   const [firewallDeleteNumber, setFirewallDeleteNumber] = useState('');
+  const [firewallBlocklists, setFirewallBlocklists] = useState(null);
+  const [firewallBlocklistUrl, setFirewallBlocklistUrl] = useState('');
+  const [wafRules, setWafRules] = useState({ status: null, default_rules: '', custom_rules: '' });
+  const [wafCustomRules, setWafCustomRules] = useState('');
   const [websitePhpVersions, setWebsitePhpVersions] = useState({});
   const [assignUserId, setAssignUserId] = useState('');
   const [assignWebsiteId, setAssignWebsiteId] = useState('');
@@ -256,6 +260,16 @@ function App() {
     }
     return () => { if (noticeTimer.current) clearTimeout(noticeTimer.current); };
   }, [notice]);
+
+  useEffect(() => {
+    const message = formatApiError(notice, '').trim();
+    if (message) window.alert(message);
+  }, [notice]);
+
+  useEffect(() => {
+    const message = formatApiError(error, '').trim();
+    if (message) window.alert(message);
+  }, [error]);
 
   function readCookie(name) {
     const match = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/[$()*+./?[\\\]^{|}]/g, '\\$&') + '=([^;]*)'));
@@ -321,7 +335,12 @@ function App() {
     setTwoFactorSetup(null);
     setTwoFactorCode('');
     setUpdatesStatus(null);
+    setFirewallBlocklists(null);
+    setWafRules({ status: null, default_rules: '', custom_rules: '' });
+    setWafCustomRules('');
     setLogViewer(null);
+    setNginxCustomEditing(null);
+    setTerminalViewer(null);
     setSelectedWebsiteId('');
     setMobileMenuOpen(false);
     setPage('dashboard');
@@ -763,6 +782,8 @@ function App() {
   }
 
   async function openNginxCustom(site) {
+    setLogViewer(null);
+    setTerminalViewer(null);
     const data = await request(`/websites/${site.id}/nginx-config`, {}, 'Loading Nginx config...');
     if (data !== null) {
       setNginxCustomEditing({ id: site.id, domain: site.domain, content: data?.nginx_config || '' });
@@ -812,11 +833,15 @@ function App() {
   }
 
   async function openWebsiteLogs(site) {
+    setNginxCustomEditing(null);
+    setTerminalViewer(null);
     setLogViewer({ id: site.id, domain: site.domain, kind: 'access', lines: 200, path: '', content: '', exists: true });
     await loadWebsiteLog(site, 'access', 200, site.domain);
   }
 
   function openWebsiteTerminal(site) {
+    setNginxCustomEditing(null);
+    setLogViewer(null);
     setTerminalViewer({ id: site.id, domain: site.domain });
   }
 
@@ -1108,6 +1133,9 @@ function App() {
   }, [page, selectedWebsiteId]);
 
   async function openWebsiteFileManager(site) {
+    setNginxCustomEditing(null);
+    setLogViewer(null);
+    setTerminalViewer(null);
     setSelectedWebsiteId(String(site.id));
     setPage('files');
     setFileListPath('public_html');
@@ -1487,12 +1515,6 @@ function App() {
     if (data) { setNotice(`PHP ${version} installed successfully.`); await loadPhpVersions(); }
   }
 
-  async function repairPhpExtensions(version) {
-    if (!confirm(`Repair PHP ${version} extensions? This will install the BPanel extension set and reload php${version}-fpm.`)) return;
-    const data = await request(`/maintenance/php-versions/${version}/install`, { method: 'POST' }, `Repairing PHP ${version} extensions...`);
-    if (data) { setNotice(`PHP ${version} extensions repaired.`); await loadPhpVersions(); }
-  }
-
   async function loadFirewall() {
     const data = await request('/firewall/status', {}, 'Loading firewall...');
     if (data) setFirewallStatus(data);
@@ -1524,6 +1546,85 @@ function App() {
     if (!confirm(`Delete UFW rule #${ruleNumber}?`)) return;
     await runFirewallAction(`/firewall/rules/${encodeURIComponent(ruleNumber)}`, { method: 'DELETE' }, 'Deleting rule...');
     setFirewallDeleteNumber('');
+  }
+
+  function parseFirewallBlocklistUrls(text) {
+    const lines = String(text || '').split('\n');
+    const urls = [];
+    let inUrls = false;
+    for (const raw of lines) {
+      const line = raw.trim();
+      if (line === 'URLs:') { inUrls = true; continue; }
+      if (line === 'Networks:' || line === 'Timer:') break;
+      if (inUrls && /^https?:\/\//i.test(line)) urls.push(line);
+    }
+    return urls;
+  }
+
+  async function loadFirewallBlocklists() {
+    const data = await request('/firewall/blocklists', {}, 'Loading firewall blocklists...');
+    if (data) setFirewallBlocklists(data);
+  }
+
+  async function addFirewallBlocklistUrl() {
+    const url = firewallBlocklistUrl.trim();
+    if (!url) return;
+    const data = await request('/firewall/blocklists', { method: 'POST', body: JSON.stringify({ url }) }, 'Adding blocklist URL...');
+    if (data) {
+      setNotice((data.stdout || data.stderr || 'Firewall blocklist URL added.').trim());
+      setFirewallBlocklistUrl('');
+      await loadFirewallBlocklists();
+    }
+  }
+
+  async function deleteFirewallBlocklistUrl(url) {
+    if (!confirm(`Delete blocklist URL?\n${url}`)) return;
+    const data = await request('/firewall/blocklists/delete', { method: 'POST', body: JSON.stringify({ url }) }, 'Deleting blocklist URL...');
+    if (data) {
+      setNotice((data.stdout || data.stderr || 'Firewall blocklist URL removed.').trim());
+      await loadFirewallBlocklists();
+    }
+  }
+
+  async function updateFirewallBlocklistsNow() {
+    const data = await request('/firewall/blocklists/update', { method: 'POST' }, 'Refreshing firewall blocklists...');
+    if (data) {
+      setNotice((data.stdout || data.stderr || 'Firewall blocklists refreshed.').trim());
+      await loadFirewall();
+      await loadFirewallBlocklists();
+    }
+  }
+
+  async function loadWafRules() {
+    const data = await request('/waf/rules', {}, 'Loading WAF rules...');
+    if (data) {
+      setWafRules(data);
+      setWafCustomRules(data.custom_rules || '');
+    }
+  }
+
+  async function installWafEngine() {
+    const data = await request('/waf/install', { method: 'POST' }, 'Installing WAF engine...');
+    if (data) {
+      setNotice((data.stdout || data.stderr || 'WAF engine installed.').trim());
+      await loadWafRules();
+    }
+  }
+
+  async function updateWafRuleFiles() {
+    const data = await request('/waf/update-rules', { method: 'POST' }, 'Updating WAF rules...');
+    if (data) {
+      setNotice((data.stdout || data.stderr || 'WAF rules updated.').trim());
+      await loadWafRules();
+    }
+  }
+
+  async function saveWafCustomRuleFile() {
+    const data = await request('/waf/rules/custom', { method: 'PUT', body: JSON.stringify({ content: wafCustomRules }) }, 'Saving WAF custom rules...');
+    if (data) {
+      setNotice((data.stdout || data.stderr || 'WAF custom rules saved.').trim());
+      await loadWafRules();
+    }
   }
 
   async function loadUpdates() {
@@ -1610,7 +1711,8 @@ function App() {
   useEffect(() => {
     if (isAuthenticated && page === 'users') loadUsers();
     if (isAuthenticated && page === 'php') loadPhpConfig();
-    if (isAuthenticated && page === 'firewall') loadFirewall();
+    if (isAuthenticated && page === 'firewall') { loadFirewall(); loadFirewallBlocklists(); }
+    if (isAuthenticated && page === 'waf') loadWafRules();
     if (isAuthenticated && page === 'security') loadTwoFactorStatus();
     if (isAuthenticated && page === 'settings') loadPanelSettings();
     if (isAuthenticated && page === 'updates' && currentUser?.role === 'admin') loadUpdates();
@@ -1636,6 +1738,7 @@ function App() {
     ['security', 'Security', Shield],
     ...(isAdmin ? [['php', 'PHP config', Code2]] : []),
     ...(isAdmin ? [['firewall', 'Firewall', Shield]] : []),
+    ...(isAdmin ? [['waf', 'WAF', Shield]] : []),
     ...(isAdmin ? [['updates', 'Updates', RefreshCw]] : []),
     ['services', 'Services Status', Server],
     ...(isAdmin ? [['users', 'Panel users', Users]] : []),
@@ -1795,6 +1898,33 @@ function App() {
     </>;
   }
 
+  function renderNginxEditor() {
+    if (!nginxCustomEditing) return null;
+    return <section className="section nginx-modal inline-nginx-editor">
+      <div className="section-title">
+        <div className="nginx-config-title">
+          <h2>Nginx config - {nginxCustomEditing.domain}</h2>
+          <p className="hint">Edit the full vhost file. BPanel tests Nginx and rolls back if validation fails.</p>
+        </div>
+        <button className="secondary-light" onClick={() => setNginxCustomEditing(null)}><X size={14}/> Close</button>
+      </div>
+      <textarea
+        className="code-editor"
+        value={nginxCustomEditing.content}
+        onChange={e => setNginxCustomEditing(prev => ({ ...prev, content: e.target.value }))}
+        placeholder={`server {\n    listen 80;\n    server_name ${nginxCustomEditing.domain};\n}`}
+        spellCheck={false}
+        rows={14}
+      />
+      <p className="hint">Use care with <code>listen</code>, <code>root</code>, SSL paths, and upstream directives; this editor writes the production vhost.</p>
+      <div className="actions">
+        <button disabled={!!loading} onClick={saveNginxCustom}>Save and reload Nginx</button>
+        <button className="secondary-light" disabled={!!loading} onClick={resetNginxDefault}><RotateCcw size={14}/> Reset default</button>
+        <button className="secondary-light" disabled={!!loading} onClick={() => setNginxCustomEditing(null)}>Cancel</button>
+      </div>
+    </section>;
+  }
+
   function renderWebsites() {
     const wpFieldsEnabled = siteType === 'wordpress' && installWordPress;
     return <>
@@ -1833,7 +1963,8 @@ function App() {
         </div>
         {websites.length === 0 && <EmptyState icon={Globe} message="No websites yet." />}
         <div className="site-grid">
-          {websites.map(site => <article className="site-card" key={site.id}>
+          {websites.map(site => <div className="site-stack" key={site.id}>
+          <article className="site-card">
             <div className="site-head">
               <div>
                 <a className="site-link" href={websiteUrl(site)} target="_blank" rel="noopener noreferrer">{site.domain}</a>
@@ -1857,36 +1988,13 @@ function App() {
               <button disabled={!!loading} onClick={() => openWebsiteLogs(site)}><FileText size={14}/> Logs</button>
               <button disabled={!!loading} onClick={() => openWebsiteTerminal(site)}><TerminalIcon size={14}/> Terminal</button>
               {isAdmin && <button disabled={!!loading} onClick={() => openNginxCustom(site)}><Code2 size={14}/> Nginx</button>}
-              {isAdmin && <button disabled={!!loading} onClick={() => toggleWebsiteWaf(site)}><Shield size={14}/> {site.waf_enabled ? 'WAF off' : 'WAF on'}</button>}
               <button className="danger" disabled={!!loading} onClick={() => deleteWebsite(site.id)}><Trash2 size={14}/> Delete</button>
             </div>
-          </article>)}
+          </article>
+          {nginxCustomEditing?.id === site.id && renderNginxEditor()}
+          </div>)}
         </div>
       </section>
-      {nginxCustomEditing && <section className="section nginx-modal">
-        <div className="section-title">
-          <div className="nginx-config-title">
-            <h2>Nginx config - {nginxCustomEditing.domain}</h2>
-            <h2>Custom Nginx — {nginxCustomEditing.domain}</h2>
-            <p className="hint">Edit the full vhost file. BPanel tests Nginx and rolls back if validation fails.</p>
-          </div>
-          <button className="secondary-light" onClick={() => setNginxCustomEditing(null)}><X size={14}/> Close</button>
-        </div>
-        <textarea
-          className="code-editor"
-          value={nginxCustomEditing.content}
-          onChange={e => setNginxCustomEditing(prev => ({ ...prev, content: e.target.value }))}
-          placeholder={`server {\n    listen 80;\n    server_name ${nginxCustomEditing.domain};\n}`}
-          spellCheck={false}
-          rows={14}
-        />
-        <p className="hint">Use care with <code>listen</code>, <code>root</code>, SSL paths, and upstream directives; this editor writes the production vhost.</p>
-        <div className="actions">
-          <button disabled={!!loading} onClick={saveNginxCustom}>Save and reload Nginx</button>
-          <button className="secondary-light" disabled={!!loading} onClick={resetNginxDefault}><RotateCcw size={14}/> Reset default</button>
-          <button className="secondary-light" disabled={!!loading} onClick={() => setNginxCustomEditing(null)}>Cancel</button>
-        </div>
-      </section>}
       {logViewer && <section className="section nginx-modal log-viewer">
         <div className="section-title">
           <div className="nginx-config-title">
@@ -1917,7 +2025,7 @@ function App() {
           <button className="secondary-light" onClick={() => setTerminalViewer(null)}><X size={14}/> Close</button>
         </div>
         <div style={{ height: '500px', marginTop: '8px' }}>
-          <Terminal websiteId={terminalViewer.id} />
+          <Terminal websiteId={terminalViewer.id} apiBase={API} />
         </div>
       </section>}
     </>;
@@ -1975,7 +2083,7 @@ function App() {
       <div className="cron-form">
         <WebsiteSelect />
         <input value={cronSchedule} onChange={e => setCronSchedule(e.target.value)} placeholder="*/15 * * * *" />
-        <input value={cronCommand} onChange={e => setCronCommand(e.target.value)} placeholder="wp cron event run --due-now" />
+        <input value={cronCommand} onChange={e => setCronCommand(e.target.value)} placeholder="command" />
         <button disabled={!selectedWebsiteId || !!loading} onClick={addCron}><Plus size={14}/> Add cron</button>
       </div>
       <div className="cron-list">
@@ -2268,18 +2376,14 @@ function App() {
           {notInstalled.map(v => <button key={v} disabled={!!loading} onClick={() => installPhpVersion(v)}>+ PHP {v}</button>)}
         </div>
       </div>}
-      {phpVersions.installed.length > 0 && <div className="user-create-card" style={{ marginTop: 16 }}>
-        <h3>Repair PHP extensions</h3>
-        <div className="php-install-grid">
-          {phpVersions.installed.map(v => <button key={v} disabled={!!loading} onClick={() => repairPhpExtensions(v)}>PHP {v}</button>)}
-        </div>
-      </div>}
     </section>;
   }
 
   function renderFirewall() {
     if (!isAdmin) return <section className="section"><h2>Firewall</h2><p className="hint">No permission.</p></section>;
     const firewallText = firewallStatus?.stdout || firewallStatus?.stderr || 'Click Refresh to load status.';
+    const blocklistText = firewallBlocklists?.stdout || firewallBlocklists?.stderr || 'No blocklist status loaded.';
+    const blocklistUrls = parseFirewallBlocklistUrls(blocklistText);
     return <>
       <section className="section">
         <div className="section-title">
@@ -2324,6 +2428,66 @@ function App() {
           <label><span>Port (optional)</span><input value={firewallBlockPort} onChange={e => setFirewallBlockPort(e.target.value)} placeholder="All ports" inputMode="numeric" /></label>
           <label><span>Protocol</span><select value={firewallBlockProtocol} onChange={e => setFirewallBlockProtocol(e.target.value)}><option value="tcp">TCP</option><option value="udp">UDP</option></select></label>
           <button className="danger" disabled={!!loading || !firewallBlockIp} onClick={blockFirewallIp}>Block</button>
+        </div>
+      </section>
+      <section className="section">
+        <div className="section-title">
+          <div><h2>IP blocklist URLs</h2><p className="hint">TXT files are fetched daily at 01:00 and old blocklist rules are overwritten.</p></div>
+          <button disabled={!!loading} onClick={loadFirewallBlocklists}><RefreshCw size={14}/> Refresh</button>
+        </div>
+        <div className="firewall-form firewall-blocklist-form">
+          <label><span>TXT URL</span><input value={firewallBlocklistUrl} onChange={e => setFirewallBlocklistUrl(e.target.value)} placeholder="https://example.com/blocklist.txt" /></label>
+          <button disabled={!!loading || !firewallBlocklistUrl.trim()} onClick={addFirewallBlocklistUrl}><Plus size={14}/> Add URL</button>
+          <button className="secondary-light" disabled={!!loading} onClick={updateFirewallBlocklistsNow}><RefreshCw size={14}/> Update now</button>
+        </div>
+        {blocklistUrls.length > 0 && <div className="table firewall-blocklist-table">
+          {blocklistUrls.map(url => <div className="firewall-rule" key={url}>
+            <span>{url}</span>
+            <div className="firewall-rule-actions"><button className="danger" disabled={!!loading} onClick={() => deleteFirewallBlocklistUrl(url)}><Trash2 size={14}/> Delete</button></div>
+          </div>)}
+        </div>}
+        <div className="info-box firewall-status"><strong>Blocklist status</strong><pre>{blocklistText}</pre></div>
+      </section>
+    </>;
+  }
+
+  function renderWaf() {
+    if (!isAdmin) return <section className="section"><h2>WAF</h2><p className="hint">No permission.</p></section>;
+    const statusText = wafRules.status?.stdout || wafRules.status?.stderr || 'Click Refresh to load WAF status.';
+    return <>
+      <section className="section">
+        <div className="section-title">
+          <div><h2>WAF</h2><p className="hint">Default rules block common dangerous probes; custom rules are included after the default rules.</p></div>
+          <button disabled={!!loading} onClick={loadWafRules}><RefreshCw size={14}/> Refresh</button>
+        </div>
+        <div className="actions">
+          <button disabled={!!loading} onClick={installWafEngine}><Shield size={14}/> Install engine</button>
+          <button className="secondary-light" disabled={!!loading} onClick={updateWafRuleFiles}><RefreshCw size={14}/> Update rules</button>
+        </div>
+        <div className="info-box firewall-status"><strong>Status</strong><pre>{statusText}</pre></div>
+      </section>
+      <section className="section">
+        <div className="section-title"><h2>Website WAF</h2></div>
+        {websites.length === 0 && <EmptyState icon={Globe} message="No websites yet." />}
+        <div className="table waf-site-list">
+          {websites.map(site => <div className="firewall-rule" key={site.id}>
+            <span><strong>{site.domain}</strong></span>
+            <div className="firewall-rule-actions">
+              <span className={site.waf_enabled ? 'badge ok' : 'badge'}>{site.waf_enabled ? 'Enabled' : 'Disabled'}</span>
+              <button disabled={!!loading} onClick={() => toggleWebsiteWaf(site)}><Shield size={14}/> {site.waf_enabled ? 'Disable' : 'Enable'}</button>
+            </div>
+          </div>)}
+        </div>
+      </section>
+      <section className="section waf-rules-grid">
+        <div className="waf-rule-panel">
+          <div className="section-title"><h2>Default rules</h2></div>
+          <textarea className="code-editor" value={wafRules.default_rules || ''} readOnly rows={14} spellCheck={false} />
+        </div>
+        <div className="waf-rule-panel">
+          <div className="section-title"><h2>Custom rules</h2></div>
+          <textarea className="code-editor" value={wafCustomRules} onChange={e => setWafCustomRules(e.target.value)} rows={14} spellCheck={false} placeholder="SecRule ..." />
+          <div className="actions"><button disabled={!!loading} onClick={saveWafCustomRuleFile}>Save custom rules</button></div>
         </div>
       </section>
     </>;
@@ -2544,6 +2708,7 @@ function App() {
     if (page === 'security') return renderSecurity();
     if (page === 'php') return renderPhpConfig();
     if (page === 'firewall') return renderFirewall();
+    if (page === 'waf') return renderWaf();
     if (page === 'updates') return renderUpdates();
     if (page === 'services') return renderServices();
     if (page === 'settings') return renderPanelSettings();

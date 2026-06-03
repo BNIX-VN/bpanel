@@ -27,16 +27,19 @@ def test_firewall_numbered_rules_mark_defaults_protected(monkeypatch):
         "[ 3] 465/tcp                    ALLOW IN    Anywhere\n"
         "[ 4] 443/tcp                    DENY IN     Anywhere\n"
         "[ 5] 5.6.7.8                    DENY IN     Anywhere # bpanel:UserZone\n"
-        "[ 6] 80/tcp                     ALLOW IN    Anywhere # bpanel:UserZone"
+        "[ 6] 80/tcp                     ALLOW IN    Anywhere # bpanel:UserZone\n"
+        "[ 7] Anywhere                   DENY IN     10.0.0.0/8 # bpanel:UserZone:blocklist"
     )
 
-    assert [rule["id"] for rule in rules] == [1, 2, 3, 4, 5, 6]
+    assert [rule["id"] for rule in rules] == [1, 2, 3, 4, 5, 6, 7]
     assert rules[0]["protected"] is True
     assert rules[1]["protected"] is True
     assert rules[2]["protected"] is True
     assert rules[3]["protected"] is False
     assert rules[4]["protected"] is False
     assert rules[5]["protected"] is False
+    assert rules[6]["protected"] is False
     assert rules[0]["zone"] == "PanelZone"
     assert rules[4]["zone"] == "UserZone"
     assert rules[4]["from"] == "Anywhere"
+    assert rules[6]["from"] == "10.0.0.0/8"
