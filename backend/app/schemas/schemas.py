@@ -4,7 +4,7 @@ import json
 from typing import Literal, Optional
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 
 DOMAIN_RE = re.compile(r"^(?!-)([a-zA-Z0-9-]{1,63}\.)+[a-zA-Z]{2,}$")
@@ -174,6 +174,19 @@ class WebsiteCreate(BaseModel):
     admin_user: str = "admin"
     admin_email: Optional[EmailStr] = None
     admin_password: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def ignore_wordpress_fields_for_plain_sites(cls, values):
+        if not isinstance(values, dict):
+            return values
+        app_type = values.get("app_type") or "wordpress"
+        install_wordpress = bool(values.get("install_wordpress", True))
+        if app_type != "wordpress" or not install_wordpress:
+            values = dict(values)
+            values["admin_email"] = None
+            values["admin_password"] = None
+        return values
 
     @field_validator("domain")
     @classmethod

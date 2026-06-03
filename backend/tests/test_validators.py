@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ""))
 
 from app.services.nginx import render_vhost, validate_custom_nginx, validate_full_nginx_config  # noqa: E402
 from app.services.mariadb import _validate_identifier  # noqa: E402
+from app.schemas.schemas import WebsiteCreate  # noqa: E402
 
 
 class TestNginxCustomValidator:
@@ -110,6 +111,20 @@ class TestNginxCustomValidator:
         content = render_vhost("example.com", "/home/testuser/example.com", app_type="php", php_version="8.3")
         assert "fastcgi_pass" in content
         assert "wp-config.php" not in content
+
+
+class TestWebsiteCreateSchema:
+    def test_php_site_ignores_wordpress_admin_email(self):
+        payload = WebsiteCreate(
+            domain="example.com",
+            app_type="php",
+            install_wordpress=False,
+            admin_email="admin@domain.com",
+            admin_password="short",
+        )
+
+        assert payload.admin_email is None
+        assert payload.admin_password is None
 
 
 class TestMariaDBIdentifier:

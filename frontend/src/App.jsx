@@ -778,10 +778,12 @@ function App() {
       app_type: siteType,
       install_wordpress: installWp,
       title: cleanDomain,
-      admin_user: wpAdminUser,
-      admin_email: cleanAdminEmail || `admin@${cleanDomain}`,
-      admin_password: wpAdminPassword || (installWp ? 'StrongPass123!' : ''),
     };
+    if (installWp) {
+      body.admin_user = wpAdminUser;
+      body.admin_email = cleanAdminEmail || `admin@${cleanDomain}`;
+      body.admin_password = wpAdminPassword || 'StrongPass123!';
+    }
     const data = await request('/websites', { method: 'POST', body: JSON.stringify(body) },
       installWp ? 'Creating WordPress website...' : 'Creating website...');
     if (data) {
@@ -2009,9 +2011,9 @@ function App() {
           <select value={phpVersion} onChange={e => setPhpVersion(e.target.value)}>
             {phpVersions.installed.map(v => <option key={v} value={v}>PHP {v}</option>)}
           </select>
-          <input value={adminEmail} onChange={e => setAdminEmail(e.target.value)} placeholder="admin@domain.com" disabled={!wpFieldsEnabled} />
-          <input value={wpAdminUser} onChange={e => setWpAdminUser(e.target.value)} placeholder="WP admin user" disabled={!wpFieldsEnabled} />
-          <input value={wpAdminPassword} onChange={e => setWpAdminPassword(e.target.value)} placeholder="WP admin password" type="password" disabled={!wpFieldsEnabled} />
+          {wpFieldsEnabled && <input value={adminEmail} onChange={e => setAdminEmail(e.target.value)} placeholder="admin@domain.com" />}
+          {wpFieldsEnabled && <input value={wpAdminUser} onChange={e => setWpAdminUser(e.target.value)} placeholder="WP admin user" />}
+          {wpFieldsEnabled && <input value={wpAdminPassword} onChange={e => setWpAdminPassword(e.target.value)} placeholder="WP admin password" type="password" />}
           <button disabled={!!loading || !domain} onClick={createWordPress}><Plus size={15}/> Create</button>
         </div>
         {siteType === 'wordpress' && <label className="check-line">
