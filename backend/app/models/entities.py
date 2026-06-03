@@ -44,6 +44,8 @@ class Website(Base):
     waf_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     waf_default_rules: Mapped[str] = mapped_column(Text, default="")
     waf_custom_rules: Mapped[str] = mapped_column(Text, default="")
+    http_flood_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    http_flood_config: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     owner: Mapped[User] = relationship(back_populates="websites")

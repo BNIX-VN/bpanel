@@ -209,6 +209,7 @@ class WebsiteUpdate(BaseModel):
     owner_id: Optional[int] = None
     nginx_custom: Optional[str] = None
     waf_enabled: Optional[bool] = None
+    http_flood_enabled: Optional[bool] = None
 
     @field_validator("php_version")
     @classmethod
@@ -243,6 +244,14 @@ class WebsiteNginxConfig(BaseModel):
 
 class WebsiteWafUpdate(BaseModel):
     waf_enabled: bool
+
+
+class WebsiteHttpFloodUpdate(BaseModel):
+    http_flood_enabled: bool
+    access_limit_requests: int = Field(default=100, ge=1, le=100000)
+    access_limit_window: int = Field(default=10, ge=1, le=3600)
+    access_limit_burst: int = Field(default=100, ge=0, le=100000)
+    connection_limit: int = Field(default=60, ge=1, le=10000)
 
 
 class WebsiteLogOut(BaseModel):
@@ -310,6 +319,8 @@ class WebsiteOut(BaseModel):
     waf_enabled: bool = True
     waf_default_rules: str = ""
     waf_custom_rules: str = ""
+    http_flood_enabled: bool = False
+    http_flood_config: str = ""
 
     class Config:
         from_attributes = True

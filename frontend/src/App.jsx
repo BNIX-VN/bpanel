@@ -19,6 +19,24 @@ import './file-manager.css';
 
 const API = import.meta.env.VITE_API_URL || '/api';
 const SERVICE_NAMES = ['bpanel-api', 'nginx', 'php8.3-fpm', 'php8.4-fpm', 'mariadb', 'redis-server'];
+const HTTP_FLOOD_DEFAULTS = {
+  access_limit_requests: 100,
+  access_limit_window: 10,
+  access_limit_burst: 100,
+  connection_limit: 60,
+};
+
+function normalizeHttpFloodConfig(config = {}) {
+  let value = config;
+  if (typeof value === 'string') {
+    try { value = value.trim() ? JSON.parse(value) : {}; } catch { value = {}; }
+  }
+  if (!value || typeof value !== 'object') value = {};
+  return Object.fromEntries(Object.entries(HTTP_FLOOD_DEFAULTS).map(([key, fallback]) => {
+    const number = value[key] === '' ? NaN : Number(value[key]);
+    return [key, Number.isFinite(number) ? number : fallback];
+  }));
+}
 
 function editorParamsFromLocation() {
   const params = new URLSearchParams(window.location.search);
@@ -234,6 +252,7 @@ function App() {
   const [wafCustomRules, setWafCustomRules] = useState('');
   const [selectedWafWebsiteId, setSelectedWafWebsiteId] = useState('');
   const [wafSiteConfig, setWafSiteConfig] = useState(null);
+  const [httpFloodForm, setHttpFloodForm] = useState({ http_flood_enabled: false, ...HTTP_FLOOD_DEFAULTS });
   const [websitePhpVersions, setWebsitePhpVersions] = useState({});
   const [assignUserId, setAssignUserId] = useState('');
   const [assignWebsiteId, setAssignWebsiteId] = useState('');
@@ -1618,12 +1637,17 @@ function App() {
   }
 
   async function loadWebsiteWafConfig(websiteId = selectedWafWebsiteId, showLoading = true) {
-    if (!websiteId) { setWafSiteConfig(null); return; }
+    if (!websiteId) {
+      setWafSiteConfig(null);
+      setHttpFloodForm({ http_flood_enabled: false, ...HTTP_FLOOD_DEFAULTS });
+      return;
+    }
     const data = await request(`/waf/websites/${websiteId}`, {}, showLoading ? 'Loading website WAF...' : '');
     if (data) {
       setSelectedWafWebsiteId(String(websiteId));
       setWafSiteConfig(data);
       setWafCustomRules(data.custom_rules || '');
+      setHttpFloodForm({ http_flood_enabled: !!data.http_flood_enabled, ...normalizeHttpFloodConfig(data.http_flood_config) });
     }
   }
 
@@ -1651,6 +1675,20 @@ function App() {
       setWafCustomRules(data.custom_rules || '');
       setNotice(data.message || 'Website WAF rules saved.');
       await refreshAll();
+    }
+  }
+
+  async function saveWebsiteHttpFlood() {
+    if (!selectedWafWebsiteId || !wafSiteConfig) return;
+    const config = normalizeHttpFloodConfig(httpFloodForm);
+    const data = await request(`/websites/${selectedWafWebsiteId}/http-flood`, {
+      method: 'PATCH',
+      body: JSON.stringify({ http_flood_enabled: !!httpFloodForm.http_flood_enabled, ...config }),
+    }, 'Saving HTTP Flood settings...');
+    if (data) {
+      setNotice(`HTTP Flood settings saved for ${data.domain}.`);
+      await refreshAll();
+      await loadWebsiteWafConfig(selectedWafWebsiteId, false);
     }
   }
 
@@ -2010,6 +2048,7 @@ function App() {
               <span>Status <strong>{site.status}</strong></span>
               {site.nginx_custom && <span className="badge ok">Custom Nginx</span>}
               {site.waf_enabled && <span className="badge ok">WAF</span>}
+              {site.http_flood_enabled && <span className="badge ok">HTTP Flood</span>}
             </div>
             <div className="actions">
               {site.app_type !== 'static' && <select value={websitePhpVersions[site.id] || site.php_version || '8.3'} onChange={e => setWebsitePhpVersions(prev => ({ ...prev, [site.id]: e.target.value }))}>
@@ -2517,11 +2556,29 @@ function App() {
             <span><strong>{site.domain}</strong></span>
             <div className="firewall-rule-actions">
               <span className={site.waf_enabled ? 'badge ok' : 'badge'}>{site.waf_enabled ? 'Enabled' : 'Disabled'}</span>
+              <span className={site.http_flood_enabled ? 'badge ok' : 'badge'}>{site.http_flood_enabled ? 'Flood On' : 'Flood Off'}</span>
               <button disabled={!!loading} onClick={() => loadWebsiteWafConfig(site.id)}>Rules</button>
             </div>
           </div>)}
         </div>
       </section>
+      {wafSiteConfig && <section className="section http-flood-panel">
+        <div className="section-title">
+          <h2>HTTP Flood - {wafSiteConfig.domain}</h2>
+          <span className={httpFloodForm.http_flood_enabled ? 'badge ok' : 'badge'}>{httpFloodForm.http_flood_enabled ? 'Enabled' : 'Disabled'}</span>
+        </div>
+        <label className="schedule-toggle http-flood-toggle">
+          <input type="checkbox" checked={!!httpFloodForm.http_flood_enabled} onChange={e => setHttpFloodForm(prev => ({ ...prev, http_flood_enabled: e.target.checked }))} />
+          Enabled
+        </label>
+        <div className="http-flood-grid">
+          <label><span>Requests</span><input type="number" min="1" max="100000" value={httpFloodForm.access_limit_requests} onChange={e => setHttpFloodForm(prev => ({ ...prev, access_limit_requests: e.target.value }))} /></label>
+          <label><span>Window (sec)</span><input type="number" min="1" max="3600" value={httpFloodForm.access_limit_window} onChange={e => setHttpFloodForm(prev => ({ ...prev, access_limit_window: e.target.value }))} /></label>
+          <label><span>Burst</span><input type="number" min="0" max="100000" value={httpFloodForm.access_limit_burst} onChange={e => setHttpFloodForm(prev => ({ ...prev, access_limit_burst: e.target.value }))} /></label>
+          <label><span>Connections/IP</span><input type="number" min="1" max="10000" value={httpFloodForm.connection_limit} onChange={e => setHttpFloodForm(prev => ({ ...prev, connection_limit: e.target.value }))} /></label>
+          <button disabled={!!loading} onClick={saveWebsiteHttpFlood}><Shield size={14}/> Save HTTP Flood</button>
+        </div>
+      </section>}
       {wafSiteConfig && <section className="section waf-rules-grid">
         <div className="waf-rule-panel">
           <div className="section-title"><h2>Default rules - {wafSiteConfig.domain}</h2></div>

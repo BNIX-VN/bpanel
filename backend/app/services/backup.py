@@ -99,6 +99,8 @@ def create_user_backup(user: User, db) -> str:
                 "waf_enabled": bool(website.waf_enabled),
                 "waf_default_rules": website.waf_default_rules or "",
                 "waf_custom_rules": website.waf_custom_rules or "",
+                "http_flood_enabled": bool(getattr(website, "http_flood_enabled", False)),
+                "http_flood_config": getattr(website, "http_flood_config", "") or "",
                 "database": None,
             }
             db_item = db.query(DatabaseAccount).filter(DatabaseAccount.website_id == website.id).first()
@@ -368,6 +370,8 @@ def restore_user_backup(backup_file: str, db) -> dict:
                     waf_enabled=bool(site_info.get("waf_enabled", True)),
                     waf_default_rules=site_info.get("waf_default_rules") or "",
                     waf_custom_rules=site_info.get("waf_custom_rules") or "",
+                    http_flood_enabled=bool(site_info.get("http_flood_enabled", False)),
+                    http_flood_config=site_info.get("http_flood_config") or "",
                 )
                 db.add(website)
                 db.flush()
@@ -383,6 +387,8 @@ def restore_user_backup(backup_file: str, db) -> dict:
                 website.waf_enabled = bool(site_info.get("waf_enabled", True))
                 website.waf_default_rules = site_info.get("waf_default_rules") or ""
                 website.waf_custom_rules = site_info.get("waf_custom_rules") or ""
+                website.http_flood_enabled = bool(site_info.get("http_flood_enabled", False))
+                website.http_flood_config = site_info.get("http_flood_config") or ""
                 db.flush()
 
             db_info = site_info.get("database") or None
@@ -417,6 +423,10 @@ def restore_user_backup(backup_file: str, db) -> dict:
             result = waf.sync_website_rules(website)
             if result.returncode != 0:
                 raise RuntimeError((result.stderr or result.stdout or "Could not write WAF rules").strip())
+            if website.http_flood_enabled:
+                result = nginx.sync_http_flood_zones(db.query(Website).all())
+                if result.returncode != 0:
+                    raise RuntimeError((result.stderr or result.stdout or "Could not write HTTP flood zones").strip())
             nginx.rewrite_vhost(
                 domain,
                 root_path,
@@ -425,7 +435,13 @@ def restore_user_backup(backup_file: str, db) -> dict:
                 custom_directives=website.nginx_custom or "",
                 php_fpm_socket_override=site_users.php_fpm_socket(linux_user, php_version) if runtime_php_version else None,
                 waf_enabled=website.waf_enabled,
+                http_flood_enabled=website.http_flood_enabled,
+                http_flood_config=website.http_flood_config or "",
             )
+            if not website.http_flood_enabled:
+                result = nginx.sync_http_flood_zones(db.query(Website).all())
+                if result.returncode != 0:
+                    raise RuntimeError((result.stderr or result.stdout or "Could not write HTTP flood zones").strip())
             wordpress.fix_permissions(root_path, linux_user)
             restored_websites.append({"domain": domain, "created": created_site})
 

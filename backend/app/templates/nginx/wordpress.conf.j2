@@ -7,6 +7,15 @@ server {
     server_tokens off;
     include /etc/nginx/bpanel/ip-blocklist-server.conf;
 
+{% if http_flood_enabled %}
+    # BPANEL HTTP FLOOD BEGIN
+    limit_req zone={{ http_flood_zone }}{% if http_flood_burst > 0 %} burst={{ http_flood_burst }} nodelay{% endif %};
+    limit_conn bpanel_conn_flood {{ http_flood_connections }};
+    limit_req_status 429;
+    limit_conn_status 429;
+    # BPANEL HTTP FLOOD END
+{% endif %}
+
 {% if waf_enabled %}
     # BPANEL WAF BEGIN
     modsecurity on;

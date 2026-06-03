@@ -17,7 +17,7 @@ ownership, quotas, backups, SSL, services, and firewall tools built in.
 - SFTP backup targets for off-server backup copies
 - UFW firewall manager with protected panel/web/mail defaults and user rules below them
 - Update controls for apt-based OS packages and BPanel source updates
-- Nginx ModSecurity/WAF engine installed by default, with per-site toggles
+- Nginx ModSecurity/WAF engine installed by default, with per-site toggles and HTTP Flood limits
 - PHP-FPM config editor per version
 - Cron job manager with whitelisted WP-CLI commands
 - Role-based access: Admin / End user
@@ -31,7 +31,7 @@ ownership, quotas, backups, SSL, services, and firewall tools built in.
 
 ## Versioning
 
-Current release: `1.00.0009`.
+Current release: `1.00.0010`.
 
 BPanel versions use `xx.yy.zzzz`: `xx` for major/release changes, `yy` for
 feature updates in the same release line, and `zzzz` for bugfix builds.

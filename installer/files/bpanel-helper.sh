@@ -37,6 +37,10 @@ NGINX_BLOCKLIST_DIR="/etc/nginx/bpanel"
 NGINX_BLOCKLIST_CONF="/etc/nginx/conf.d/bpanel-ip-blocklist.conf"
 NGINX_BLOCKLIST_RULES="${NGINX_BLOCKLIST_DIR}/ip-blocklist-geo.conf"
 NGINX_BLOCKLIST_SERVER_CONF="${NGINX_BLOCKLIST_DIR}/ip-blocklist-server.conf"
+NGINX_HTTP_FLOOD_CONF="/etc/nginx/conf.d/00-bpanel-http-flood.conf"
+NGINX_HTTP_FLOOD_LEGACY_CONF="/etc/nginx/conf.d/bpanel-http-flood.conf"
+NGINX_HTTP_FLOOD_ZONES="${NGINX_BLOCKLIST_DIR}/http-flood-zones.conf"
+NGINX_HTTP_FLOOD_SERVER_CONF="${NGINX_BLOCKLIST_DIR}/http-flood-server.conf"
 
 deny() { echo "bpanel-helper: $*" >&2; exit 1; }
 
@@ -156,6 +160,7 @@ refresh_tools_nginx() {
   fi
   rm -f /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf 2>/dev/null || true
   firewall_blocklist_write_nginx_conf 2>/dev/null || true
+  write_http_flood_nginx_conf 2>/dev/null || true
   cat >/etc/nginx/conf.d/00-bpanel-tools.conf <<NGINX
 server {
     listen 80 default_server;${ssl_block}
@@ -445,6 +450,7 @@ install_waf_engine() {
     ln -sfn /usr/share/nginx/modules-available/mod-http-modsecurity.conf /etc/nginx/modules-enabled/50-mod-http-modsecurity.conf
   fi
   write_modsec_main_conf
+  write_http_flood_nginx_conf
   nginx -t
   systemctl reload nginx
   echo "WAF engine installed. Put Comodo/CWAF rule files under /etc/nginx/modsec/comodo/ if your Comodo account provides them."
@@ -718,6 +724,59 @@ geo \$bpanel_blocklisted_ip {
 CONF
   chown root:root "$NGINX_BLOCKLIST_CONF"
   chmod 0644 "$NGINX_BLOCKLIST_CONF"
+}
+
+write_http_flood_nginx_conf() {
+  install -d -o root -g root -m 0755 "$NGINX_BLOCKLIST_DIR" /etc/nginx/conf.d
+  if [[ ! -f "$NGINX_HTTP_FLOOD_ZONES" ]]; then
+    cat >"$NGINX_HTTP_FLOOD_ZONES" <<'CONF'
+# Managed by BPanel. Shared zones for per-website HTTP flood protection.
+limit_conn_zone $binary_remote_addr zone=bpanel_conn_flood:10m;
+CONF
+  fi
+  cat >"$NGINX_HTTP_FLOOD_CONF" <<'CONF'
+# Managed by BPanel. Shared zones for per-website HTTP flood protection.
+include /etc/nginx/bpanel/http-flood-zones.conf;
+CONF
+  rm -f "$NGINX_HTTP_FLOOD_LEGACY_CONF" "$NGINX_HTTP_FLOOD_SERVER_CONF" 2>/dev/null || true
+  chown root:root "$NGINX_HTTP_FLOOD_CONF" "$NGINX_HTTP_FLOOD_ZONES"
+  chmod 0644 "$NGINX_HTTP_FLOOD_CONF" "$NGINX_HTTP_FLOOD_ZONES"
+}
+
+save_http_flood_zones() {
+  local tmp backup=""
+  install -d -o root -g root -m 0755 "$NGINX_BLOCKLIST_DIR" /etc/nginx/conf.d
+  tmp="$(mktemp)"
+  cat >"$tmp"
+  if [[ $(wc -c <"$tmp") -gt 131072 ]]; then
+    rm -f "$tmp"
+    deny "HTTP flood zones are too large"
+  fi
+  if file_has_nul "$tmp"; then
+    rm -f "$tmp"
+    deny "HTTP flood zones cannot contain NUL bytes"
+  fi
+  if [[ -f "$NGINX_HTTP_FLOOD_ZONES" ]]; then
+    backup="${NGINX_HTTP_FLOOD_ZONES}.bak.$(date +%s)"
+    cp "$NGINX_HTTP_FLOOD_ZONES" "$backup"
+  fi
+  install -m 0644 -o root -g root "$tmp" "$NGINX_HTTP_FLOOD_ZONES"
+  rm -f "$tmp"
+  write_http_flood_nginx_conf
+  if ! nginx -t; then
+    if [[ -n "$backup" && -f "$backup" ]]; then
+      mv -f "$backup" "$NGINX_HTTP_FLOOD_ZONES"
+    else
+      cat >"$NGINX_HTTP_FLOOD_ZONES" <<'CONF'
+# Managed by BPanel. Shared zones for per-website HTTP flood protection.
+limit_conn_zone $binary_remote_addr zone=bpanel_conn_flood:10m;
+CONF
+    fi
+    deny "Nginx rejected HTTP flood zones"
+  fi
+  rm -f "$backup" 2>/dev/null || true
+  systemctl reload nginx
+  echo "HTTP flood zones saved"
 }
 
 firewall_blocklist_status() {
@@ -1284,6 +1343,10 @@ case "$cmd" in
   waf-site-save)
     [[ $# -eq 1 ]] || deny "usage: waf-site-save <domain>"
     save_waf_site_rules "$1"
+    ;;
+  http-flood-zones-save)
+    [[ $# -eq 0 ]] || deny "usage: http-flood-zones-save"
+    save_http_flood_zones
     ;;
 
   # ---- PHP installation --------------------------------------------------

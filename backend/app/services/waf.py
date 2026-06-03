@@ -226,11 +226,15 @@ def sync_website_rules(website: Website) -> CommandResult:
 
 
 def site_config(website: Website) -> dict:
+    from app.services import nginx
+
     enabled = website_enabled_rule_ids(website)
     return {
         "website_id": website.id,
         "domain": website.domain,
         "waf_enabled": bool(website.waf_enabled),
+        "http_flood_enabled": bool(getattr(website, "http_flood_enabled", False)),
+        "http_flood_config": nginx.http_flood_config_for_website(website),
         "rules_file": site_rules_file(website.domain),
         "default_rules": [
             {

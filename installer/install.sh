@@ -337,6 +337,23 @@ write_modsec_main_conf() {
   } >/etc/nginx/modsec/bpanel-main.conf
 }
 
+write_http_flood_nginx_conf() {
+  install -d -o root -g root -m 0755 /etc/nginx/bpanel /etc/nginx/conf.d
+  if [[ ! -f /etc/nginx/bpanel/http-flood-zones.conf ]]; then
+    cat >/etc/nginx/bpanel/http-flood-zones.conf <<'CONF'
+# Managed by BPanel. Shared zones for per-website HTTP flood protection.
+limit_conn_zone $binary_remote_addr zone=bpanel_conn_flood:10m;
+CONF
+  fi
+  cat >/etc/nginx/conf.d/00-bpanel-http-flood.conf <<'CONF'
+# Managed by BPanel. Shared zones for per-website HTTP flood protection.
+include /etc/nginx/bpanel/http-flood-zones.conf;
+CONF
+  rm -f /etc/nginx/conf.d/bpanel-http-flood.conf /etc/nginx/bpanel/http-flood-server.conf 2>/dev/null || true
+  chown root:root /etc/nginx/conf.d/00-bpanel-http-flood.conf /etc/nginx/bpanel/http-flood-zones.conf
+  chmod 0644 /etc/nginx/conf.d/00-bpanel-http-flood.conf /etc/nginx/bpanel/http-flood-zones.conf
+}
+
 write_waf_default_rules() {
   install -d -o root -g root -m 0755 /etc/nginx/modsec
   cat >/etc/nginx/modsec/bpanel-default.conf <<'RULES'
@@ -381,6 +398,7 @@ install_waf_engine() {
     ln -sfn /usr/share/nginx/modules-available/mod-http-modsecurity.conf /etc/nginx/modules-enabled/50-mod-http-modsecurity.conf
   fi
   write_modsec_main_conf
+  write_http_flood_nginx_conf
   nginx -t
   systemctl reload nginx || true
 }

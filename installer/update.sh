@@ -463,7 +463,14 @@ from app.models.entities import Website
 from app.services import nginx, site_users, waf
 
 with SessionLocal() as db:
-    for website in db.query(Website).all():
+    websites = db.query(Website).all()
+    try:
+        result = nginx.sync_http_flood_zones(websites)
+        if result.returncode != 0:
+            print(f"WARNING: could not refresh HTTP flood zones: {result.stderr or result.stdout}")
+    except Exception as exc:
+        print(f"WARNING: could not refresh HTTP flood zones: {exc}")
+    for website in websites:
         try:
             if website.linux_user:
                 runtime_php_version = website.php_version if (website.app_type or "wordpress") in {"wordpress", "php"} else None
@@ -482,9 +489,17 @@ with SessionLocal() as db:
                 custom_directives=website.nginx_custom or "",
                 php_fpm_socket_override=site_users.php_fpm_socket(website.linux_user, website.php_version) if runtime_php_version else None,
                 waf_enabled=website.waf_enabled,
+                http_flood_enabled=website.http_flood_enabled,
+                http_flood_config=website.http_flood_config or "",
             )
         except Exception as exc:
             print(f"WARNING: could not refresh permissions for {website.domain}: {exc}")
+    try:
+        result = nginx.sync_http_flood_zones(websites)
+        if result.returncode != 0:
+            print(f"WARNING: could not refresh HTTP flood zones: {result.stderr or result.stdout}")
+    except Exception as exc:
+        print(f"WARNING: could not refresh HTTP flood zones: {exc}")
 PY
 fi
 

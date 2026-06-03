@@ -8,7 +8,7 @@ os.environ.setdefault("COMMAND_DRY_RUN", "true")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ""))
 
 from app.models.entities import Website  # noqa: E402
-from app.services import cron, firewall, waf  # noqa: E402
+from app.services import cron, firewall, nginx, waf  # noqa: E402
 
 
 def test_cron_line_parser_strips_bpanel_wrapper():
@@ -37,6 +37,39 @@ def test_waf_site_rules_render_selected_defaults_and_custom_rules():
     assert "wordpress-sensitive-files" in content
     assert "general-path-traversal" not in content
     assert "id:1001999" in content
+
+
+def test_http_flood_zones_render_only_enabled_sites():
+    enabled = Website(
+        domain="example.com",
+        root_path="/home/client/example.com",
+        http_flood_enabled=True,
+        http_flood_config='{"access_limit_requests":30,"access_limit_window":60,"access_limit_burst":12,"connection_limit":20}',
+    )
+    disabled = Website(domain="disabled.com", root_path="/home/client/disabled.com", http_flood_enabled=False)
+
+    content = nginx.render_http_flood_zones([enabled, disabled])
+
+    assert "limit_conn_zone $binary_remote_addr zone=bpanel_conn_flood:10m;" in content
+    assert f"zone={nginx.http_flood_zone_name('example.com')}:10m rate=30r/m;" in content
+    assert nginx.http_flood_zone_name("disabled.com") not in content
+
+
+def test_render_vhost_keeps_waf_and_http_flood_blocks():
+    content = nginx.render_vhost(
+        "example.com",
+        "/home/client/example.com",
+        app_type="php",
+        php_version="8.3",
+        waf_enabled=True,
+        http_flood_enabled=True,
+        http_flood_config={"access_limit_requests":120, "access_limit_window":10, "access_limit_burst":20, "connection_limit":8},
+    )
+
+    assert "# BPANEL WAF BEGIN" in content
+    assert "# BPANEL HTTP FLOOD BEGIN" in content
+    assert f"limit_req zone={nginx.http_flood_zone_name('example.com')} burst=20 nodelay;" in content
+    assert "limit_conn bpanel_conn_flood 8;" in content
 
 
 def test_firewall_numbered_rules_mark_defaults_protected(monkeypatch):

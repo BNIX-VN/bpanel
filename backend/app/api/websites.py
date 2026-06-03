@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -11,7 +12,7 @@ from app.core.database import get_db
 from app.core.permissions import Role, ensure_role, is_admin_role
 from app.core.secrets import encrypt
 from app.models.entities import DatabaseAccount, User, Website
-from app.schemas.schemas import WebsiteCreate, WebsiteLogOut, WebsiteNginxConfig, WebsiteNginxCustom, WebsiteOut, WebsiteUpdate, WebsiteWafUpdate
+from app.schemas.schemas import WebsiteCreate, WebsiteHttpFloodUpdate, WebsiteLogOut, WebsiteNginxConfig, WebsiteNginxCustom, WebsiteOut, WebsiteUpdate, WebsiteWafUpdate
 from app.services import mariadb, nginx, site_users, ssl, storage_quota, waf, wordpress
 from app.services.audit import log_action
 
@@ -36,6 +37,26 @@ def _ensure_default_waf_file(domain: str) -> None:
     result = waf.sync_site_rules(domain, [rule["id"] for rule in waf.DEFAULT_RULES], "")
     if result.returncode != 0:
         raise HTTPException(status_code=400, detail=_command_error(result))
+
+
+def _sync_http_flood_zones(db: Session) -> None:
+    db.flush()
+    result = nginx.sync_http_flood_zones(db.query(Website).all())
+    if result.returncode != 0:
+        raise RuntimeError(_command_error(result))
+
+
+def _website_http_flood_config(website: Website) -> dict:
+    return nginx.http_flood_config_for_website(website)
+
+
+def _http_flood_payload_config(payload: WebsiteHttpFloodUpdate) -> dict:
+    return nginx.validate_http_flood_config({
+        "access_limit_requests": payload.access_limit_requests,
+        "access_limit_window": payload.access_limit_window,
+        "access_limit_burst": payload.access_limit_burst,
+        "connection_limit": payload.connection_limit,
+    })
 
 
 @router.post("", response_model=WebsiteOut)
@@ -192,6 +213,8 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
             result = waf.sync_website_rules(website)
             if result.returncode != 0:
                 raise RuntimeError(_command_error(result))
+            if website.http_flood_enabled:
+                _sync_http_flood_zones(db)
             php_fpm_socket_override = site_users.php_fpm_socket(website.linux_user, payload.php_version) if runtime_php_version else None
             nginx.rewrite_vhost(
                 website.domain,
@@ -201,6 +224,8 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
                 custom_directives=website.nginx_custom or "",
                 php_fpm_socket_override=php_fpm_socket_override,
                 waf_enabled=website.waf_enabled,
+                http_flood_enabled=website.http_flood_enabled,
+                http_flood_config=website.http_flood_config or "",
             )
         except (RuntimeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=f"Cannot write Nginx config: {exc}") from exc
@@ -229,6 +254,8 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
                 result = waf.sync_website_rules(website)
                 if result.returncode != 0:
                     raise RuntimeError(_command_error(result))
+                if website.http_flood_enabled:
+                    _sync_http_flood_zones(db)
                 nginx.rewrite_vhost(
                     website.domain,
                     new_root_path,
@@ -237,6 +264,8 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
                     custom_directives=website.nginx_custom or "",
                     php_fpm_socket_override=site_users.php_fpm_socket(new_linux_user, website.php_version) if runtime_php_version else None,
                     waf_enabled=website.waf_enabled,
+                    http_flood_enabled=website.http_flood_enabled,
+                    http_flood_config=website.http_flood_config or "",
                 )
                 website.root_path = new_root_path
                 website.linux_user = new_linux_user
@@ -262,6 +291,19 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
         except (RuntimeError, ValueError, FileNotFoundError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         website.waf_enabled = payload.waf_enabled
+    if payload.http_flood_enabled is not None:
+        ensure_role(current_user.role, Role.admin)
+        next_enabled = bool(payload.http_flood_enabled)
+        try:
+            website.http_flood_enabled = next_enabled
+            if next_enabled:
+                _sync_http_flood_zones(db)
+                nginx.update_http_flood_block(website.domain, True, _website_http_flood_config(website))
+            else:
+                nginx.update_http_flood_block(website.domain, False, _website_http_flood_config(website))
+                _sync_http_flood_zones(db)
+        except (RuntimeError, ValueError, FileNotFoundError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     db.commit()
     db.refresh(website)
     log_action(db, current_user.id, "update_website", website.domain)
@@ -316,6 +358,8 @@ def reset_website_nginx_config(website_id: int, request: Request, db: Session = 
         result = waf.sync_website_rules(website)
         if result.returncode != 0:
             raise RuntimeError(_command_error(result))
+        if website.http_flood_enabled:
+            _sync_http_flood_zones(db)
         nginx.rewrite_vhost(
             website.domain,
             website.root_path,
@@ -324,6 +368,8 @@ def reset_website_nginx_config(website_id: int, request: Request, db: Session = 
             custom_directives="",
             php_fpm_socket_override=site_users.php_fpm_socket(website.linux_user, website.php_version) if runtime_php_version else None,
             waf_enabled=website.waf_enabled,
+            http_flood_enabled=website.http_flood_enabled,
+            http_flood_config=website.http_flood_config or "",
         )
     except (RuntimeError, ValueError, FileNotFoundError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -351,6 +397,31 @@ def set_website_waf(website_id: int, payload: WebsiteWafUpdate, request: Request
     db.commit()
     db.refresh(website)
     log_action(db, current_user.id, "update_waf", website.domain, "enabled" if payload.waf_enabled else "disabled", request=request)
+    return website
+
+
+@router.patch("/{website_id}/http-flood", response_model=WebsiteOut)
+def set_website_http_flood(website_id: int, payload: WebsiteHttpFloodUpdate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.admin)
+    website = db.query(Website).filter(Website.id == website_id).first()
+    if not website:
+        raise HTTPException(status_code=404, detail="Website not found")
+    config = _http_flood_payload_config(payload)
+    next_enabled = bool(payload.http_flood_enabled)
+    try:
+        website.http_flood_enabled = next_enabled
+        website.http_flood_config = json.dumps(config, ensure_ascii=True)
+        if next_enabled:
+            _sync_http_flood_zones(db)
+            nginx.update_http_flood_block(website.domain, True, config)
+        else:
+            nginx.update_http_flood_block(website.domain, False, config)
+            _sync_http_flood_zones(db)
+    except (RuntimeError, ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    db.commit()
+    db.refresh(website)
+    log_action(db, current_user.id, "update_http_flood", website.domain, "enabled" if next_enabled else "disabled", request=request)
     return website
 
 
@@ -407,7 +478,13 @@ def delete_website(website_id: int, request: Request, delete_files: bool = True,
         wordpress.delete_wordpress(website.root_path)
     if db_item:
         db.delete(db_item)
+    had_http_flood = bool(website.http_flood_enabled)
     db.delete(website)
+    if had_http_flood:
+        try:
+            _sync_http_flood_zones(db)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     db.commit()
     log_action(db, current_user.id, "delete_website", website.domain, request=request)
     return {"ok": True}
@@ -423,12 +500,19 @@ def fix_nginx_security(website_id: int, db: Session = Depends(get_db), current_u
     result = waf.sync_website_rules(website)
     if result.returncode != 0:
         raise HTTPException(status_code=400, detail=_command_error(result))
+    if website.http_flood_enabled:
+        try:
+            _sync_http_flood_zones(db)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     target = nginx.harden_existing_wordpress_vhost(
         website.domain,
         website.root_path,
         website.php_version,
         php_fpm_socket_override=site_users.php_fpm_socket(website.linux_user, website.php_version),
         waf_enabled=website.waf_enabled,
+        http_flood_enabled=website.http_flood_enabled,
+        http_flood_config=website.http_flood_config or "",
     )
     log_action(db, current_user.id, "fix_nginx_security", website.domain)
     return {"message": f"Rewrote Nginx security template for {website.domain}", "path": target}

@@ -248,8 +248,16 @@ button:disabled,.upload-button.disabled{background:#dbe7f7;color:#7a8ca4;border-
 .waf-rule-toggle input{width:18px;height:18px;min-height:18px;margin:1px 0 0;accent-color:var(--primary)}
 .waf-rule-toggle span{display:grid;gap:3px;min-width:0}
 .waf-rule-toggle small{color:var(--text-muted);line-height:1.35}
+.http-flood-panel{gap:12px}
+.http-flood-toggle{justify-self:start}
+.http-flood-grid{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr)) max-content;gap:10px;align-items:end}
+.http-flood-grid label{display:grid;gap:6px;font-weight:600;color:var(--text-secondary);min-width:0}
+.http-flood-grid span{font-size:13px;color:var(--text-muted)}
+.http-flood-grid input{width:100%;min-width:0}
 
 @media(max-width:950px){
   .site-card,.site-stack,.waf-rules-grid,.firewall-blocklist-form,.waf-website-selector{grid-template-columns:1fr}
   .site-card>.actions{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .http-flood-grid{grid-template-columns:1fr}
+  .http-flood-grid button{width:100%}
 }
