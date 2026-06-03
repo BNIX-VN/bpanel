@@ -1417,19 +1417,24 @@ case "$cmd" in
     ;;
 
   panel-ssl-install)
-    [[ $# -eq 3 ]] || deny "usage: panel-ssl-install <domain> <port> <email>"
-    domain="$1"; port="$2"; email="$3"
+    [[ $# -ge 2 && $# -le 3 ]] || deny "usage: panel-ssl-install <domain> <port> [email]"
+    domain="$1"; port="$2"; email="${3:-}"
     require_domain "$domain"
     require_port "$port"
-    require_email "$email"
-    certbot certonly --standalone \
+    certbot_args=(certonly --standalone
       -d "$domain" \
-      --email "$email" \
       --agree-tos \
       --non-interactive \
       --pre-hook "systemctl stop nginx || true" \
       --post-hook "systemctl start nginx || true" \
-      --deploy-hook "install -d -o root -g bpanel -m 0750 /etc/bpanel && install -m 0640 -o root -g bpanel /etc/letsencrypt/live/${domain}/fullchain.pem /etc/bpanel/panel-fullchain.pem && install -m 0640 -o root -g bpanel /etc/letsencrypt/live/${domain}/privkey.pem /etc/bpanel/panel-privkey.pem"
+      --deploy-hook "install -d -o root -g bpanel -m 0750 /etc/bpanel && install -m 0640 -o root -g bpanel /etc/letsencrypt/live/${domain}/fullchain.pem /etc/bpanel/panel-fullchain.pem && install -m 0640 -o root -g bpanel /etc/letsencrypt/live/${domain}/privkey.pem /etc/bpanel/panel-privkey.pem")
+    if [[ -n "$email" ]]; then
+      require_email "$email"
+      certbot_args+=(--email "$email")
+    else
+      certbot_args+=(--register-unsafely-without-email)
+    fi
+    certbot "${certbot_args[@]}"
     install -d -o root -g bpanel -m 0750 /etc/bpanel
     install -m 0640 -o root -g bpanel "/etc/letsencrypt/live/${domain}/fullchain.pem" /etc/bpanel/panel-fullchain.pem
     install -m 0640 -o root -g bpanel "/etc/letsencrypt/live/${domain}/privkey.pem" /etc/bpanel/panel-privkey.pem
@@ -1439,7 +1444,9 @@ case "$cmd" in
     env_set PANEL_SSL_KEY "/etc/bpanel/panel-privkey.pem"
     env_set PANEL_URL "https://${domain}:${port}"
     env_set ALLOWED_ORIGINS "https://${domain}:${port}"
-    env_set SSL_EMAIL "$email"
+    if [[ -n "$email" ]]; then
+      env_set SSL_EMAIL "$email"
+    fi
     allow_panel_port "$port"
     refresh_tools_nginx
     schedule_panel_restart

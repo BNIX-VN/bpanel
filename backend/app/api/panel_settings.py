@@ -89,7 +89,7 @@ def install_panel_ssl(
     ensure_role(current_user.role, Role.admin)
     try:
         result = panel_settings.install_panel_ssl(
-            str(payload.email),
+            str(payload.email or current_user.email or ""),
             panel_hostname=payload.panel_hostname,
             panel_port=payload.panel_port,
             panel_url=payload.panel_url,

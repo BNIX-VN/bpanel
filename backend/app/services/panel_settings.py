@@ -238,7 +238,7 @@ def asset_path(filename: str) -> tuple[Path, str]:
     return path, media_type
 
 
-def install_panel_ssl(email: str, panel_hostname: str | None = None, panel_port: int | None = None, panel_url: str | None = None) -> dict:
+def install_panel_ssl(email: str | None = None, panel_hostname: str | None = None, panel_port: int | None = None, panel_url: str | None = None) -> dict:
     if panel_hostname:
         normalized = panel_url_from_parts(panel_hostname, panel_port, "http")
     elif panel_url:
@@ -248,9 +248,13 @@ def install_panel_ssl(email: str, panel_hostname: str | None = None, panel_port:
     _scheme, host, port = parse_panel_url(normalized)
     if not is_domain(host):
         raise ValueError("Panel SSL requires a domain name, not an IP address")
+    certbot_email = (email or settings.ssl_email or "").strip()
+    helper_args = [host, str(port)]
+    if certbot_email:
+        helper_args.append(certbot_email)
     result = shell.privileged(
         "panel-ssl-install",
-        helper_args=[host, str(port), email],
+        helper_args=helper_args,
         check=False,
         fallback=["bash", "-lc", "true"],
     )

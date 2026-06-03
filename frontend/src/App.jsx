@@ -5,6 +5,7 @@ import 'ace-builds/src-noconflict/ext-language_tools';
 import 'ace-builds/src-noconflict/ext-searchbox';
 import 'ace-builds/src-noconflict/mode-css';
 import 'ace-builds/src-noconflict/mode-html';
+import 'ace-builds/src-noconflict/mode-ini';
 import 'ace-builds/src-noconflict/mode-javascript';
 import 'ace-builds/src-noconflict/mode-json';
 import 'ace-builds/src-noconflict/mode-php';
@@ -97,6 +98,44 @@ function formatApiErrorItem(item) {
   return loc ? `${loc}: ${message}` : message;
 }
 
+function renderAceSelectionTextOverlay(editor, overlay) {
+  if (!editor || !overlay) return;
+  overlay.innerHTML = '';
+  const ranges = editor.selection.getAllRanges?.() || [editor.selection.getRange()];
+  const visibleFirst = editor.renderer.getFirstVisibleRow?.() ?? 0;
+  const visibleLast = editor.renderer.getLastVisibleRow?.() ?? editor.session.getLength();
+  const containerRect = editor.container.getBoundingClientRect();
+  const lineHeight = editor.renderer.lineHeight || 20;
+  const charWidth = editor.renderer.characterWidth || 8;
+
+  ranges.forEach(range => {
+    if (!range || range.isEmpty()) return;
+    const startRow = Math.max(range.start.row, visibleFirst);
+    const endRow = Math.min(range.end.row, visibleLast);
+    for (let row = startRow; row <= endRow; row += 1) {
+      const line = editor.session.getLine(row) || '';
+      const fromColumn = row === range.start.row ? range.start.column : 0;
+      const toColumn = row === range.end.row ? range.end.column : line.length;
+      if (toColumn <= fromColumn) continue;
+
+      const start = editor.renderer.textToScreenCoordinates(row, fromColumn);
+      const end = editor.renderer.textToScreenCoordinates(row, toColumn);
+      const left = start.pageX - containerRect.left;
+      const top = start.pageY - containerRect.top;
+      const width = Math.max(end.pageX - start.pageX, charWidth);
+
+      const node = document.createElement('div');
+      node.className = 'bpanel-ace-selected-text';
+      node.textContent = line.slice(fromColumn, toColumn);
+      node.style.left = `${left}px`;
+      node.style.top = `${top}px`;
+      node.style.width = `${width}px`;
+      node.style.height = `${lineHeight}px`;
+      overlay.appendChild(node);
+    }
+  });
+}
+
 function CodeEditor({ value, mode, disabled, onChange, onCursorChange }) {
   const hostRef = useRef(null);
   const editorRef = useRef(null);
@@ -120,7 +159,13 @@ function CodeEditor({ value, mode, disabled, onChange, onCursorChange }) {
       tabSize: 2,
       useSoftTabs: true,
       wrap: false,
+      selectionStyle: 'text',
     });
+
+    const selectionOverlay = document.createElement('div');
+    selectionOverlay.className = 'bpanel-ace-selection-overlay';
+    editor.container.appendChild(selectionOverlay);
+    const refreshSelectionOverlay = () => renderAceSelectionTextOverlay(editor, selectionOverlay);
 
     editor.setOptions({
       enableBasicAutocompletion: true,
@@ -148,13 +193,19 @@ function CodeEditor({ value, mode, disabled, onChange, onCursorChange }) {
 
     editor.session.on('change', handleChange);
     editor.selection.on('changeCursor', reportCursor);
+    editor.selection.on('changeSelection', refreshSelectionOverlay);
+    editor.renderer.on('afterRender', refreshSelectionOverlay);
     editorRef.current = editor;
     reportCursor();
+    refreshSelectionOverlay();
 
     return () => {
       destroyed = true;
       editor.session.off('change', handleChange);
       editor.selection.off('changeCursor', reportCursor);
+      editor.selection.off('changeSelection', refreshSelectionOverlay);
+      editor.renderer.off('afterRender', refreshSelectionOverlay);
+      selectionOverlay.remove();
       editor.destroy();
       editorRef.current = null;
       if (hostRef.current) hostRef.current.textContent = '';
@@ -335,12 +386,6 @@ function App() {
       panel_port: Number.isFinite(port) && port > 0 ? port : 2222,
       ssl_enabled: !!data.ssl_enabled,
     };
-  }
-
-  function panelHostPortLabel() {
-    const host = panelSettingsForm.panel_hostname || currentPanelHost();
-    const port = panelSettingsForm.panel_port || currentPanelPort();
-    return host ? `${host}:${port}` : `:${port}`;
   }
 
   function clearSession(message = 'Your session expired. Please log in again.') {
@@ -525,10 +570,7 @@ function App() {
     const hostnameChanged = hostname && hostname !== currentHostname;
 
     if (wantsSsl && (!hasSsl || hostnameChanged)) {
-      if (!panelSslEmail) {
-        setError("Enter a Let's Encrypt email in Panel SSL before enabling SSL.");
-        return;
-      }
+      const sslEmail = String(panelSslEmail || currentUser?.email || '').trim();
       const nameData = await request('/panel-settings', {
         method: 'PATCH',
         body: JSON.stringify({ app_name: panelSettingsForm.app_name }),
@@ -536,7 +578,7 @@ function App() {
       if (!nameData) return;
       const sslData = await request('/panel-settings/ssl', {
         method: 'POST',
-        body: JSON.stringify({ panel_hostname: hostname, panel_port: port, email: panelSslEmail }),
+        body: JSON.stringify({ panel_hostname: hostname, panel_port: port, ...(sslEmail ? { email: sslEmail } : {}) }),
       }, 'Installing panel SSL...');
       if (sslData) {
         setPanelSettings(sslData);
@@ -571,18 +613,6 @@ function App() {
       setPanelSettingsForm(formFromPanelSettings(data));
       if (kind === 'logo') setPanelLogoFile(null);
       if (kind === 'favicon') setPanelFaviconFile(null);
-    }
-  }
-
-  async function installPanelSsl() {
-    const data = await request('/panel-settings/ssl', {
-      method: 'POST',
-      body: JSON.stringify({ panel_hostname: panelSettingsForm.panel_hostname, panel_port: Number(panelSettingsForm.panel_port || 2222), email: panelSslEmail }),
-    }, 'Installing panel SSL...');
-    if (data) {
-      setPanelSettings(data);
-      setPanelSettingsForm(formFromPanelSettings(data));
-      setNotice(data.message || 'Panel SSL installed. The panel may restart in a moment.');
     }
   }
 
@@ -2748,16 +2778,6 @@ function App() {
             <label><span>Favicon</span><input type="file" accept="image/png,image/jpeg,image/webp,image/x-icon" onChange={e => setPanelFaviconFile(e.target.files?.[0] || null)} /></label>
             <button disabled={!!loading || !panelFaviconFile} onClick={() => uploadPanelAsset('favicon')}><Upload size={14}/> Upload favicon</button>
           </div>
-        </div>
-      </section>
-      <section className="section">
-        <div className="section-title">
-          <div><h2>Panel SSL</h2><p className="hint">Use a domain that already points to this VPS. Target: <strong>{panelHostPortLabel()}</strong></p></div>
-          <span className={panelSettings.ssl_enabled ? 'badge ok' : 'badge'}>{panelSettings.ssl_enabled ? 'SSL enabled' : 'SSL not active'}</span>
-        </div>
-        <div className="panel-settings-grid panel-ssl-grid">
-          <label><span>Let's Encrypt email</span><input value={panelSslEmail} onChange={e => setPanelSslEmail(e.target.value)} placeholder="admin@domain.com" type="email" /></label>
-          <button disabled={!!loading || !panelSettingsForm.panel_hostname || !panelSettingsForm.panel_port || !panelSslEmail} onClick={installPanelSsl}><Lock size={14}/> Install SSL</button>
         </div>
       </section>
     </>;

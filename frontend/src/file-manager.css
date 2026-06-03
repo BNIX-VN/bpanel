@@ -433,8 +433,25 @@
 }
 
 .code-editor-host .ace_marker-layer .ace_selection {
-  background: #2f6feb !important;
-  opacity: .38;
+  background: #2563eb !important;
+  opacity: 1;
+}
+
+.code-editor-host .bpanel-ace-selection-overlay {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 20;
+}
+
+.code-editor-host .bpanel-ace-selected-text {
+  position: absolute;
+  color: #ffffff;
+  font: 13px/1.55 Consolas, 'SFMono-Regular', 'Liberation Mono', Menlo, monospace;
+  overflow: hidden;
+  white-space: pre;
+  -webkit-text-fill-color: #ffffff;
 }
 
 .code-editor-host .ace_marker-layer .ace_selected-word {

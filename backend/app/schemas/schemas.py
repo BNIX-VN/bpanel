@@ -402,7 +402,7 @@ class PanelSslInstall(BaseModel):
     panel_hostname: Optional[str] = Field(default=None, min_length=3, max_length=255)
     panel_port: int = Field(default=2222, ge=1, le=65535)
     panel_url: Optional[str] = Field(default=None, min_length=3, max_length=255)
-    email: EmailStr
+    email: Optional[EmailStr] = None
 
     @field_validator("panel_url")
     @classmethod
