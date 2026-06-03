@@ -132,6 +132,9 @@ button:disabled,.upload-button.disabled{background:#dbe7f7;color:#7a8ca4;border-
 .update-log-box{margin-top:12px}
 .update-log-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
 .update-log-head button{height:32px;min-height:32px;padding:0 10px;font-size:12px}
+.updates-os-form{grid-template-columns:minmax(160px,1fr) minmax(150px,170px) minmax(110px,130px) max-content}
+.updates-panel-form{grid-template-columns:minmax(160px,1fr) minmax(150px,170px) max-content}
+.updates-os-form button,.updates-panel-form button{white-space:nowrap}
 .backups-page .backup-item span{font-size:13px;line-height:1.35;color:var(--text);font-weight:700}
 .backups-page .backup-item small{font-size:12px;color:var(--text-muted);font-weight:600}
 .backups-page .backup-item .actions{flex-wrap:nowrap;gap:6px;justify-content:flex-end}
@@ -280,11 +283,14 @@ button:disabled,.upload-button.disabled{background:#dbe7f7;color:#7a8ca4;border-
 @media(max-width:950px){
   .site-card,.site-stack,.waf-rules-grid,.firewall-blocklist-form,.waf-website-selector{grid-template-columns:1fr}
   .site-actions{justify-content:flex-start}
+  .updates-os-form,.updates-panel-form{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .updates-os-form button,.updates-panel-form button{grid-column:1 / -1;width:100%}
   .http-flood-grid{grid-template-columns:1fr}
   .http-flood-grid button{width:100%}
 }
 
 @media(max-width:560px){
+  .updates-os-form,.updates-panel-form{grid-template-columns:1fr}
   .site-actions{display:grid;justify-content:stretch;gap:8px}
   .site-php-actions{max-width:none;grid-template-columns:minmax(0,1fr) 40px}
   .site-php-actions select,

@@ -2658,7 +2658,7 @@ function App() {
       </section>
       <section className="section">
         <h2>Auto Update OS</h2>
-        <div className="firewall-form">
+        <div className="firewall-form updates-os-form">
           <label><span>Enabled</span><select value={osAutoUpdate.enabled ? 'on' : 'off'} onChange={e => setOsAutoUpdate(prev => ({ ...prev, enabled: e.target.value === 'on' }))}><option value="on">On</option><option value="off">Off</option></select></label>
           <label><span>Mode</span><select value={osAutoUpdate.mode} onChange={e => setOsAutoUpdate(prev => ({ ...prev, mode: e.target.value }))}><option value="security">Security</option><option value="all">All packages</option></select></label>
           <label><span>Auto reboot</span><select value={osAutoUpdate.auto_reboot ? 'on' : 'off'} onChange={e => setOsAutoUpdate(prev => ({ ...prev, auto_reboot: e.target.value === 'on' }))}><option value="off">Off</option><option value="on">On</option></select></label>
@@ -2667,7 +2667,7 @@ function App() {
       </section>
       <section className="section">
         <h2>Auto Update Panel</h2>
-        <div className="firewall-form">
+        <div className="firewall-form updates-panel-form">
           <label><span>Enabled</span><select value={panelAutoUpdate.enabled ? 'on' : 'off'} onChange={e => setPanelAutoUpdate(prev => ({ ...prev, enabled: e.target.value === 'on' }))}><option value="on">On</option><option value="off">Off</option></select></label>
           <label><span>Daily time</span><input value={panelAutoUpdate.time} onChange={e => setPanelAutoUpdate(prev => ({ ...prev, time: e.target.value }))} placeholder="03:30" /></label>
           <button disabled={!!loading} onClick={savePanelAutoUpdate}>Save panel auto update</button>
