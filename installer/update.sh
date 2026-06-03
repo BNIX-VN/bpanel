@@ -419,7 +419,8 @@ if id -u bpanel >/dev/null 2>&1; then
   sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper waf-install || \
     echo "WARNING: WAF engine installation failed; continuing without ModSecurity."
   sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper certbot-auto-renew-install >/dev/null 2>&1 || true
-  sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper ufw-blocklist-timer-install >/dev/null 2>&1 || true
+  sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper nginx-blocklist-timer-install >/dev/null 2>&1 || true
+  sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper nginx-blocklist-run >/dev/null 2>&1 || true
 else
   echo "  (bpanel user not found; skipping WAF install - run install.sh first)"
 fi

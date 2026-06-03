@@ -1572,16 +1572,16 @@ function App() {
   }
 
   async function loadFirewallBlocklists() {
-    const data = await request('/firewall/blocklists', {}, 'Loading firewall blocklists...');
+    const data = await request('/firewall/blocklists', {}, 'Loading Nginx blocklists...');
     if (data) setFirewallBlocklists(data);
   }
 
   async function addFirewallBlocklistUrl() {
     const url = firewallBlocklistUrl.trim();
     if (!url) return;
-    const data = await request('/firewall/blocklists', { method: 'POST', body: JSON.stringify({ url }) }, 'Adding blocklist URL...');
+    const data = await request('/firewall/blocklists', { method: 'POST', body: JSON.stringify({ url }) }, 'Adding Nginx blocklist URL...');
     if (data) {
-      setNotice((data.stdout || data.stderr || 'Firewall blocklist URL added.').trim());
+      setNotice((data.stdout || data.stderr || 'Nginx blocklist URL added.').trim());
       setFirewallBlocklistUrl('');
       await loadFirewallBlocklists();
     }
@@ -1589,17 +1589,17 @@ function App() {
 
   async function deleteFirewallBlocklistUrl(url) {
     if (!confirm(`Delete blocklist URL?\n${url}`)) return;
-    const data = await request('/firewall/blocklists/delete', { method: 'POST', body: JSON.stringify({ url }) }, 'Deleting blocklist URL...');
+    const data = await request('/firewall/blocklists/delete', { method: 'POST', body: JSON.stringify({ url }) }, 'Deleting Nginx blocklist URL...');
     if (data) {
-      setNotice((data.stdout || data.stderr || 'Firewall blocklist URL removed.').trim());
+      setNotice((data.stdout || data.stderr || 'Nginx blocklist URL removed.').trim());
       await loadFirewallBlocklists();
     }
   }
 
   async function updateFirewallBlocklistsNow() {
-    const data = await request('/firewall/blocklists/update', { method: 'POST' }, 'Refreshing firewall blocklists...');
+    const data = await request('/firewall/blocklists/update', { method: 'POST' }, 'Refreshing Nginx blocklists...');
     if (data) {
-      setNotice((data.stdout || data.stderr || 'Firewall blocklists refreshed.').trim());
+      setNotice((data.stdout || data.stderr || 'Nginx blocklists refreshed.').trim());
       await loadFirewall();
       await loadFirewallBlocklists();
     }
@@ -2465,7 +2465,7 @@ function App() {
       </section>
       <section className="section">
         <div className="section-title">
-          <div><h2>IP blocklist URLs</h2><p className="hint">TXT files are fetched daily at 01:00 and old blocklist rules are overwritten.</p></div>
+          <div><h2>Nginx IP blocklist URLs</h2><p className="hint">TXT files are fetched daily at 01:00 and enforced by Nginx, so large lists do not create thousands of UFW rules.</p></div>
           <button disabled={!!loading} onClick={loadFirewallBlocklists}><RefreshCw size={14}/> Refresh</button>
         </div>
         <div className="firewall-form firewall-blocklist-form">
@@ -2479,7 +2479,7 @@ function App() {
             <div className="firewall-rule-actions"><button className="danger" disabled={!!loading} onClick={() => deleteFirewallBlocklistUrl(url)}><Trash2 size={14}/> Delete</button></div>
           </div>)}
         </div>}
-        <div className="info-box firewall-status"><strong>Blocklist status</strong><pre>{blocklistText}</pre></div>
+        <div className="info-box firewall-status"><strong>Nginx blocklist status</strong><pre>{blocklistText}</pre></div>
       </section>
     </>;
   }

@@ -33,6 +33,10 @@ SOURCE_DIR="/opt/bpanel-source"
 BPANEL_DATA_DIR="/var/lib/bpanel"
 FIREWALL_BLOCKLIST_URLS="${BPANEL_DATA_DIR}/firewall-blocklists.urls"
 FIREWALL_BLOCKLIST_WORK="${BPANEL_DATA_DIR}/firewall-blocklists.current"
+NGINX_BLOCKLIST_DIR="/etc/nginx/bpanel"
+NGINX_BLOCKLIST_CONF="/etc/nginx/conf.d/bpanel-ip-blocklist.conf"
+NGINX_BLOCKLIST_RULES="${NGINX_BLOCKLIST_DIR}/ip-blocklist-geo.conf"
+NGINX_BLOCKLIST_SERVER_CONF="${NGINX_BLOCKLIST_DIR}/ip-blocklist-server.conf"
 
 deny() { echo "bpanel-helper: $*" >&2; exit 1; }
 
@@ -151,10 +155,12 @@ refresh_tools_nginx() {
     printf -v ssl_block '\n    listen 443 ssl default_server;\n    ssl_certificate %s;\n    ssl_certificate_key %s;' "$cert" "$key"
   fi
   rm -f /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf 2>/dev/null || true
+  firewall_blocklist_write_nginx_conf 2>/dev/null || true
   cat >/etc/nginx/conf.d/00-bpanel-tools.conf <<NGINX
 server {
     listen 80 default_server;${ssl_block}
     server_name _;
+    include /etc/nginx/bpanel/ip-blocklist-server.conf;
     client_max_body_size 1100M;
     location = /phpmyadmin { return 301 /phpmyadmin/; }
     location /phpmyadmin/ { alias /usr/share/phpmyadmin/; index index.php; try_files \$uri \$uri/ =404; }
@@ -665,18 +671,18 @@ firewall_blocklist_urls() {
 firewall_blocklist_write_timer() {
   cat >/etc/systemd/system/bpanel-firewall-blocklist.service <<SERVICE
 [Unit]
-Description=Refresh BPanel firewall URL blocklists
+Description=Refresh BPanel Nginx IP blocklists
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
 Environment=SUDO_USER=bpanel
-ExecStart=/usr/local/sbin/bpanel-helper ufw-blocklist-run
+ExecStart=/usr/local/sbin/bpanel-helper nginx-blocklist-run
 SERVICE
   cat >/etc/systemd/system/bpanel-firewall-blocklist.timer <<TIMER
 [Unit]
-Description=Refresh BPanel firewall URL blocklists daily
+Description=Refresh BPanel Nginx IP blocklists daily
 
 [Timer]
 OnCalendar=*-*-* 01:00:00
@@ -685,8 +691,33 @@ Persistent=true
 [Install]
 WantedBy=timers.target
 TIMER
+  firewall_blocklist_write_nginx_conf
   systemctl daemon-reload
   systemctl enable --now bpanel-firewall-blocklist.timer >/dev/null 2>&1 || true
+}
+
+firewall_blocklist_write_nginx_conf() {
+  install -d -o root -g root -m 0755 "$NGINX_BLOCKLIST_DIR" /etc/nginx/conf.d
+  touch "$NGINX_BLOCKLIST_RULES"
+  chown root:root "$NGINX_BLOCKLIST_RULES"
+  chmod 0644 "$NGINX_BLOCKLIST_RULES"
+  cat >"$NGINX_BLOCKLIST_SERVER_CONF" <<'CONF'
+# Managed by BPanel. Included inside server blocks.
+if ($bpanel_blocklisted_ip) {
+    return 444;
+}
+CONF
+  chown root:root "$NGINX_BLOCKLIST_SERVER_CONF"
+  chmod 0644 "$NGINX_BLOCKLIST_SERVER_CONF"
+  cat >"$NGINX_BLOCKLIST_CONF" <<CONF
+# Managed by BPanel. URL IP blocklists are enforced by Nginx instead of UFW.
+geo \$bpanel_blocklisted_ip {
+    default 0;
+    include ${NGINX_BLOCKLIST_RULES};
+}
+CONF
+  chown root:root "$NGINX_BLOCKLIST_CONF"
+  chmod 0644 "$NGINX_BLOCKLIST_CONF"
 }
 
 firewall_blocklist_status() {
@@ -699,9 +730,21 @@ firewall_blocklist_status() {
     echo "  (none)"
   fi
   echo ""
+  echo "Engine:"
+  echo "  nginx"
+  echo "Rules file:"
+  [[ -f "$NGINX_BLOCKLIST_RULES" ]] && echo "  ${NGINX_BLOCKLIST_RULES}" || echo "  missing"
+  echo ""
   echo "Networks:"
   if [[ -s "$FIREWALL_BLOCKLIST_WORK" ]]; then
-    sed '/^[[:space:]]*$/d' "$FIREWALL_BLOCKLIST_WORK" | sed 's/^/  /'
+    local total shown
+    total="$(sed '/^[[:space:]]*$/d' "$FIREWALL_BLOCKLIST_WORK" | wc -l | tr -d '[:space:]')"
+    shown=50
+    echo "  ${total} network(s), showing first ${shown}:"
+    sed '/^[[:space:]]*$/d' "$FIREWALL_BLOCKLIST_WORK" | head -n "$shown" | sed 's/^/  /'
+    if (( total > shown )); then
+      echo "  ... $((total - shown)) more"
+    fi
   else
     echo "  (none)"
   fi
@@ -722,21 +765,27 @@ firewall_blocklist_clear_rules() {
 firewall_blocklist_run() {
   install -d -o root -g root -m 0755 "$BPANEL_DATA_DIR"
   touch "$FIREWALL_BLOCKLIST_URLS"
-  local tmp fetched count url
+  local tmp fetched rules_tmp count url old_work old_rules
   tmp="$(mktemp)"
   fetched="$(mktemp)"
+  rules_tmp="$(mktemp)"
+  old_work="$(mktemp)"
+  old_rules="$(mktemp)"
+  [[ -f "$FIREWALL_BLOCKLIST_WORK" ]] && cp "$FIREWALL_BLOCKLIST_WORK" "$old_work" || true
+  [[ -f "$NGINX_BLOCKLIST_RULES" ]] && cp "$NGINX_BLOCKLIST_RULES" "$old_rules" || true
   while IFS= read -r url; do
     [[ -n "$url" ]] || continue
     require_url "$url"
     curl -fsSL --max-time 30 "$url" >>"$fetched" || echo "WARNING: could not fetch $url" >&2
     printf '\n' >>"$fetched"
   done < <(firewall_blocklist_urls)
-  python3 - "$fetched" >"$tmp" <<'PY'
+  python3 - "$fetched" "$tmp" "$rules_tmp" <<'PY'
 import ipaddress
 import re
 import sys
 
 seen = set()
+networks = []
 for raw in open(sys.argv[1], encoding="utf-8", errors="ignore"):
     line = re.split(r"[\s#;,]+", raw.strip(), 1)[0]
     if not line:
@@ -747,19 +796,42 @@ for raw in open(sys.argv[1], encoding="utf-8", errors="ignore"):
         continue
     if value not in seen:
         seen.add(value)
-        print(value)
+        networks.append(value)
+
+with open(sys.argv[2], "w", encoding="utf-8") as handle:
+    for value in networks:
+        handle.write(value + "\n")
+
+with open(sys.argv[3], "w", encoding="utf-8") as handle:
+    handle.write("# Managed by BPanel. Generated from URL IP blocklists.\n")
+    handle.write("# Loaded into the bpanel_blocklisted_ip geo map.\n")
+    for value in networks:
+        handle.write(f"{value} 1;\n")
 PY
-  mv -f "$tmp" "$FIREWALL_BLOCKLIST_WORK"
-  rm -f "$fetched"
+  install -d -o root -g root -m 0755 "$NGINX_BLOCKLIST_DIR"
+  install -m 0644 -o root -g root "$rules_tmp" "$NGINX_BLOCKLIST_RULES"
+  install -m 0644 -o root -g root "$tmp" "$FIREWALL_BLOCKLIST_WORK"
+  firewall_blocklist_write_nginx_conf
+  if ! nginx -t; then
+    if [[ -s "$old_rules" ]]; then
+      install -m 0644 -o root -g root "$old_rules" "$NGINX_BLOCKLIST_RULES"
+    else
+      : >"$NGINX_BLOCKLIST_RULES"
+    fi
+    if [[ -s "$old_work" ]]; then
+      install -m 0644 -o root -g root "$old_work" "$FIREWALL_BLOCKLIST_WORK"
+    else
+      : >"$FIREWALL_BLOCKLIST_WORK"
+    fi
+    rm -f "$tmp" "$fetched" "$rules_tmp" "$old_work" "$old_rules"
+    deny "Nginx rejected URL blocklist"
+  fi
+  systemctl reload nginx
   firewall_blocklist_clear_rules
-  count=0
-  while IFS= read -r network; do
-    [[ -n "$network" ]] || continue
-    ufw deny from "$network" comment "bpanel:UserZone:blocklist" >/dev/null 2>&1 || ufw deny from "$network" >/dev/null 2>&1 || true
-    count=$((count + 1))
-  done <"$FIREWALL_BLOCKLIST_WORK"
+  count="$(sed '/^[[:space:]]*$/d' "$FIREWALL_BLOCKLIST_WORK" | wc -l | tr -d '[:space:]')"
   firewall_blocklist_write_timer
-  echo "Firewall blocklist refreshed: ${count} network(s)"
+  rm -f "$tmp" "$fetched" "$rules_tmp" "$old_work" "$old_rules"
+  echo "Nginx blocklist refreshed: ${count} network(s)"
 }
 
 firewall_blocklist_add_url() {
@@ -771,8 +843,9 @@ firewall_blocklist_add_url() {
     printf '%s\n' "$url" >>"$FIREWALL_BLOCKLIST_URLS"
   fi
   sort -u -o "$FIREWALL_BLOCKLIST_URLS" "$FIREWALL_BLOCKLIST_URLS"
+  firewall_blocklist_write_nginx_conf
   firewall_blocklist_write_timer
-  echo "Firewall blocklist URL added"
+  echo "Nginx blocklist URL added"
 }
 
 firewall_blocklist_delete_url() {
@@ -782,8 +855,9 @@ firewall_blocklist_delete_url() {
   touch "$FIREWALL_BLOCKLIST_URLS"
   grep -Fxv -- "$url" "$FIREWALL_BLOCKLIST_URLS" >"${FIREWALL_BLOCKLIST_URLS}.tmp" || true
   mv -f "${FIREWALL_BLOCKLIST_URLS}.tmp" "$FIREWALL_BLOCKLIST_URLS"
+  firewall_blocklist_write_nginx_conf
   firewall_blocklist_write_timer
-  echo "Firewall blocklist URL removed"
+  echo "Nginx blocklist URL removed"
 }
 
 write_ssl_auto_renew_timer() {
@@ -1340,23 +1414,23 @@ case "$cmd" in
     [[ $# -eq 1 && "$1" =~ ^[0-9]+$ ]] || deny "usage: ufw-delete <number>"
     exec ufw --force delete "$1"
     ;;
-  ufw-blocklist-status)
+  nginx-blocklist-status|ufw-blocklist-status)
     firewall_blocklist_status
     ;;
-  ufw-blocklist-timer-install)
+  nginx-blocklist-timer-install|ufw-blocklist-timer-install)
     firewall_blocklist_write_timer
-    echo "Firewall blocklist timer installed"
+    echo "Nginx blocklist timer installed"
     ;;
-  ufw-blocklist-add)
-    [[ $# -eq 1 ]] || deny "usage: ufw-blocklist-add <url>"
+  nginx-blocklist-add|ufw-blocklist-add)
+    [[ $# -eq 1 ]] || deny "usage: nginx-blocklist-add <url>"
     firewall_blocklist_add_url "$1"
     ;;
-  ufw-blocklist-delete)
-    [[ $# -eq 1 ]] || deny "usage: ufw-blocklist-delete <url>"
+  nginx-blocklist-delete|ufw-blocklist-delete)
+    [[ $# -eq 1 ]] || deny "usage: nginx-blocklist-delete <url>"
     firewall_blocklist_delete_url "$1"
     ;;
-  ufw-blocklist-run)
-    [[ $# -eq 0 ]] || deny "usage: ufw-blocklist-run"
+  nginx-blocklist-run|ufw-blocklist-run)
+    [[ $# -eq 0 ]] || deny "usage: nginx-blocklist-run"
     firewall_blocklist_run
     ;;
 

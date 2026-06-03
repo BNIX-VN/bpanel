@@ -172,15 +172,15 @@ def delete_rule(number: int) -> CommandResult:
 
 def blocklists() -> CommandResult:
     return shell.privileged(
-        "ufw-blocklist-status",
+        "nginx-blocklist-status",
         check=False,
-        fallback=["bash", "-lc", "echo 'URLs:'; cat /tmp/bpanel-firewall-blocklists.urls 2>/dev/null || true"],
+        fallback=["bash", "-lc", "echo 'URLs:'; cat /tmp/bpanel-firewall-blocklists.urls 2>/dev/null || true; echo; echo 'Engine:'; echo '  nginx'"],
     )
 
 
 def add_blocklist_url(url: str) -> CommandResult:
     return shell.privileged(
-        "ufw-blocklist-add",
+        "nginx-blocklist-add",
         helper_args=[url],
         check=False,
         fallback=["bash", "-lc", "echo URL added"],
@@ -189,7 +189,7 @@ def add_blocklist_url(url: str) -> CommandResult:
 
 def delete_blocklist_url(url: str) -> CommandResult:
     return shell.privileged(
-        "ufw-blocklist-delete",
+        "nginx-blocklist-delete",
         helper_args=[url],
         check=False,
         fallback=["bash", "-lc", "echo URL removed"],
@@ -198,7 +198,7 @@ def delete_blocklist_url(url: str) -> CommandResult:
 
 def update_blocklists() -> CommandResult:
     return shell.privileged(
-        "ufw-blocklist-run",
+        "nginx-blocklist-run",
         check=False,
         fallback=["bash", "-lc", "echo blocklist update skipped"],
     )

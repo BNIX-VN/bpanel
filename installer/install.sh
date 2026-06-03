@@ -640,7 +640,7 @@ SERVICE
   systemctl enable --now bpanel-backup-scheduler.timer
   if id -u bpanel >/dev/null 2>&1; then
     sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper certbot-auto-renew-install >/dev/null 2>&1 || true
-    sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper ufw-blocklist-timer-install >/dev/null 2>&1 || true
+    sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper nginx-blocklist-timer-install >/dev/null 2>&1 || true
   fi
   wait_for_backend
 }

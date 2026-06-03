@@ -5,6 +5,7 @@ server {
     index index.php index.html index.htm;
 
     server_tokens off;
+    include /etc/nginx/bpanel/ip-blocklist-server.conf;
 
 {% if waf_enabled %}
     # BPANEL WAF BEGIN
