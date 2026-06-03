@@ -98,6 +98,15 @@ function formatApiErrorItem(item) {
   return loc ? `${loc}: ${message}` : message;
 }
 
+function isHostnameDomain(value = '') {
+  return /^(?!-)([a-z0-9-]{1,63}\.)+[a-z]{2,}$/i.test(String(value).trim());
+}
+
+function defaultPanelSslEmail(hostname = '') {
+  const host = String(hostname || '').trim().toLowerCase();
+  return isHostnameDomain(host) ? `admin@${host}` : '';
+}
+
 function renderAceSelectionTextOverlay(editor, overlay) {
   if (!editor || !overlay) return;
   overlay.innerHTML = '';
@@ -570,7 +579,7 @@ function App() {
     const hostnameChanged = hostname && hostname !== currentHostname;
 
     if (wantsSsl && (!hasSsl || hostnameChanged)) {
-      const sslEmail = String(panelSslEmail || currentUser?.email || '').trim();
+      const sslEmail = String(panelSslEmail || defaultPanelSslEmail(hostname) || currentUser?.email || '').trim();
       const nameData = await request('/panel-settings', {
         method: 'PATCH',
         body: JSON.stringify({ app_name: panelSettingsForm.app_name }),

@@ -211,12 +211,15 @@ fix_permissions() {
   chmod g+s /etc/nginx/conf.d 2>/dev/null || true
   install -d -o bpanel -g bpanel-sites -m 2775 "$SITES_ROOT"
   install -d -o bpanel -g bpanel -m 0750 "$BACKUP_ROOT"
+  install -d -o bpanel -g bpanel -m 0750 /var/lib/bpanel
   if [[ -d /etc/bpanel ]]; then
     chown root:bpanel /etc/bpanel /etc/bpanel/* 2>/dev/null || true
     chmod 0750 /etc/bpanel 2>/dev/null || true
     chmod 0640 /etc/bpanel/* 2>/dev/null || true
   fi
   chown -R bpanel:bpanel "$APP_DIR/backend" "$APP_DIR/frontend" 2>/dev/null || true
+  chown bpanel:bpanel /var/lib/bpanel 2>/dev/null || true
+  [[ -d /var/lib/bpanel/assets ]] && chown -R bpanel:bpanel /var/lib/bpanel/assets 2>/dev/null || true
   chmod 0640 "$ENV_FILE" 2>/dev/null || true
   if [[ -d "$APP_DIR/frontend/dist" ]]; then
     chmod o+rX "$APP_DIR" "$APP_DIR/frontend" 2>/dev/null || true

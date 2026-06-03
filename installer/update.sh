@@ -175,6 +175,7 @@ install_panel_runtime() {
   install -d -o root -g bpanel -m 2775 /etc/nginx/conf.d
   chmod g+s /etc/nginx/conf.d 2>/dev/null || true
   install -d -o bpanel -g bpanel-sites -m 2775 "${SITES_ROOT:-/home/bpanel-sites}"
+  install -d -o bpanel -g bpanel -m 0750 /var/lib/bpanel
 
   cat >/usr/local/sbin/bpanel-api-start <<STARTER
 #!/usr/bin/env bash
@@ -430,6 +431,8 @@ fi
 # --- Restore ownership so bpanel user can read/write the deploy ------------
 if id -u bpanel >/dev/null 2>&1; then
   chown -R bpanel:bpanel "$APP_DIR/backend" "$APP_DIR/frontend" 2>/dev/null || true
+  chown bpanel:bpanel /var/lib/bpanel 2>/dev/null || true
+  [[ -d /var/lib/bpanel/assets ]] && chown -R bpanel:bpanel /var/lib/bpanel/assets 2>/dev/null || true
   [[ -f "$APP_DIR/backend/.env" ]] && chmod 0640 "$APP_DIR/backend/.env"
 fi
 

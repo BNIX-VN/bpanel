@@ -64,6 +64,10 @@ def is_domain(host: str) -> bool:
     return bool(DOMAIN_RE.fullmatch((host or "").lower()))
 
 
+def default_ssl_email(host: str) -> str:
+    return f"admin@{host.lower()}" if is_domain(host) else ""
+
+
 def normalize_panel_hostname(value: str) -> str:
     host = (value or "").strip().lower().rstrip(".")
     if not host:
@@ -248,7 +252,7 @@ def install_panel_ssl(email: str | None = None, panel_hostname: str | None = Non
     _scheme, host, port = parse_panel_url(normalized)
     if not is_domain(host):
         raise ValueError("Panel SSL requires a domain name, not an IP address")
-    certbot_email = (email or settings.ssl_email or "").strip()
+    certbot_email = (email or settings.ssl_email or default_ssl_email(host)).strip()
     helper_args = [host, str(port)]
     if certbot_email:
         helper_args.append(certbot_email)

@@ -44,6 +44,10 @@ NGINX_HTTP_FLOOD_SERVER_CONF="${NGINX_BLOCKLIST_DIR}/http-flood-server.conf"
 
 deny() { echo "bpanel-helper: $*" >&2; exit 1; }
 
+ensure_bpanel_data_dir() {
+  install -d -o bpanel -g bpanel -m 0750 "$BPANEL_DATA_DIR"
+}
+
 ensure_nginx_conf_dir_writable() {
   install -d -o root -g root -m 0755 "$NGINX_BLOCKLIST_DIR"
   if getent group bpanel >/dev/null 2>&1; then
@@ -680,7 +684,7 @@ require_url() {
 }
 
 firewall_blocklist_urls() {
-  install -d -o root -g root -m 0755 "$BPANEL_DATA_DIR"
+  ensure_bpanel_data_dir
   touch "$FIREWALL_BLOCKLIST_URLS"
   sed '/^[[:space:]]*$/d' "$FIREWALL_BLOCKLIST_URLS" | sort -u
 }
@@ -799,7 +803,7 @@ CONF
 }
 
 firewall_blocklist_status() {
-  install -d -o root -g root -m 0755 "$BPANEL_DATA_DIR"
+  ensure_bpanel_data_dir
   touch "$FIREWALL_BLOCKLIST_URLS"
   echo "URLs:"
   if [[ -s "$FIREWALL_BLOCKLIST_URLS" ]]; then
@@ -841,7 +845,7 @@ firewall_blocklist_clear_rules() {
 }
 
 firewall_blocklist_run() {
-  install -d -o root -g root -m 0755 "$BPANEL_DATA_DIR"
+  ensure_bpanel_data_dir
   touch "$FIREWALL_BLOCKLIST_URLS"
   local tmp fetched rules_tmp count url old_work old_rules
   tmp="$(mktemp)"
@@ -915,7 +919,7 @@ PY
 firewall_blocklist_add_url() {
   local url="$1"
   require_url "$url"
-  install -d -o root -g root -m 0755 "$BPANEL_DATA_DIR"
+  ensure_bpanel_data_dir
   touch "$FIREWALL_BLOCKLIST_URLS"
   if ! grep -Fxq -- "$url" "$FIREWALL_BLOCKLIST_URLS"; then
     printf '%s\n' "$url" >>"$FIREWALL_BLOCKLIST_URLS"
@@ -929,7 +933,7 @@ firewall_blocklist_add_url() {
 firewall_blocklist_delete_url() {
   local url="$1"
   require_url "$url"
-  install -d -o root -g root -m 0755 "$BPANEL_DATA_DIR"
+  ensure_bpanel_data_dir
   touch "$FIREWALL_BLOCKLIST_URLS"
   grep -Fxv -- "$url" "$FIREWALL_BLOCKLIST_URLS" >"${FIREWALL_BLOCKLIST_URLS}.tmp" || true
   mv -f "${FIREWALL_BLOCKLIST_URLS}.tmp" "$FIREWALL_BLOCKLIST_URLS"
