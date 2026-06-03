@@ -44,6 +44,16 @@ NGINX_HTTP_FLOOD_SERVER_CONF="${NGINX_BLOCKLIST_DIR}/http-flood-server.conf"
 
 deny() { echo "bpanel-helper: $*" >&2; exit 1; }
 
+ensure_nginx_conf_dir_writable() {
+  install -d -o root -g root -m 0755 "$NGINX_BLOCKLIST_DIR"
+  if getent group bpanel >/dev/null 2>&1; then
+    install -d -o root -g bpanel -m 2775 "$NGINX_CONF_DIR"
+    chmod g+s "$NGINX_CONF_DIR" 2>/dev/null || true
+  else
+    install -d -o root -g root -m 0755 "$NGINX_CONF_DIR"
+  fi
+}
+
 file_has_nul() {
   local path="$1"
   python3 - "$path" <<'PY'
@@ -159,6 +169,7 @@ refresh_tools_nginx() {
     printf -v ssl_block '\n    listen 443 ssl default_server;\n    ssl_certificate %s;\n    ssl_certificate_key %s;' "$cert" "$key"
   fi
   rm -f /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf 2>/dev/null || true
+  ensure_nginx_conf_dir_writable
   firewall_blocklist_write_nginx_conf 2>/dev/null || true
   write_http_flood_nginx_conf 2>/dev/null || true
   cat >/etc/nginx/conf.d/00-bpanel-tools.conf <<NGINX
@@ -703,7 +714,7 @@ TIMER
 }
 
 firewall_blocklist_write_nginx_conf() {
-  install -d -o root -g root -m 0755 "$NGINX_BLOCKLIST_DIR" /etc/nginx/conf.d
+  ensure_nginx_conf_dir_writable
   touch "$NGINX_BLOCKLIST_RULES"
   chown root:root "$NGINX_BLOCKLIST_RULES"
   chmod 0644 "$NGINX_BLOCKLIST_RULES"
@@ -727,7 +738,7 @@ CONF
 }
 
 write_http_flood_nginx_conf() {
-  install -d -o root -g root -m 0755 "$NGINX_BLOCKLIST_DIR" /etc/nginx/conf.d
+  ensure_nginx_conf_dir_writable
   if [[ ! -f "$NGINX_HTTP_FLOOD_ZONES" ]]; then
     cat >"$NGINX_HTTP_FLOOD_ZONES" <<'CONF'
 # Managed by BPanel. Shared zones for per-website HTTP flood protection.
@@ -745,7 +756,7 @@ CONF
 
 save_http_flood_zones() {
   local tmp backup=""
-  install -d -o root -g root -m 0755 "$NGINX_BLOCKLIST_DIR" /etc/nginx/conf.d
+  ensure_nginx_conf_dir_writable
   tmp="$(mktemp)"
   cat >"$tmp"
   if [[ $(wc -c <"$tmp") -gt 131072 ]]; then

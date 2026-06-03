@@ -172,6 +172,8 @@ install_panel_runtime() {
   fi
   usermod -aG bpanel-sites bpanel 2>/dev/null || true
   usermod -aG bpanel-sites www-data 2>/dev/null || true
+  install -d -o root -g bpanel -m 2775 /etc/nginx/conf.d
+  chmod g+s /etc/nginx/conf.d 2>/dev/null || true
   install -d -o bpanel -g bpanel-sites -m 2775 "${SITES_ROOT:-/home/bpanel-sites}"
 
   cat >/usr/local/sbin/bpanel-api-start <<STARTER
