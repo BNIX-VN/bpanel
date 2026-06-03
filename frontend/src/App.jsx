@@ -2052,16 +2052,32 @@ function App() {
               {site.waf_enabled && <span className="badge ok">WAF</span>}
               {site.http_flood_enabled && <span className="badge ok">HTTP Flood</span>}
             </div>
-            <div className="actions">
-              {site.app_type !== 'static' && <select value={websitePhpVersions[site.id] || site.php_version || '8.3'} onChange={e => setWebsitePhpVersions(prev => ({ ...prev, [site.id]: e.target.value }))}>
-                {phpVersions.installed.map(v => <option key={v} value={v}>PHP {v}</option>)}
-              </select>}
-              {site.app_type !== 'static' && <button disabled={!!loading || (websitePhpVersions[site.id] || site.php_version) === site.php_version} onClick={() => changeWebsitePhpVersion(site)}>Change PHP</button>}
-              <button disabled={!!loading} onClick={() => openWebsiteFileManager(site)}><FolderOpen size={14}/> Files</button>
-              <button disabled={!!loading} onClick={() => openWebsiteLogs(site)}><FileText size={14}/> Logs</button>
-              <button disabled={!!loading} onClick={() => openWebsiteTerminal(site)}><TerminalIcon size={14}/> Terminal</button>
-              {isAdmin && <button disabled={!!loading} onClick={() => openNginxCustom(site)}><Code2 size={14}/> Nginx</button>}
-              <button className="danger" disabled={!!loading} onClick={() => deleteWebsite(site.id)}><Trash2 size={14}/> Delete</button>
+            <div className="site-actions" aria-label={`Website actions for ${site.domain}`}>
+              {site.app_type !== 'static' && <div className="site-php-actions">
+                <select
+                  value={websitePhpVersions[site.id] || site.php_version || '8.3'}
+                  onChange={e => setWebsitePhpVersions(prev => ({ ...prev, [site.id]: e.target.value }))}
+                  title="PHP version"
+                  aria-label={`PHP version for ${site.domain}`}
+                >
+                  {phpVersions.installed.map(v => <option key={v} value={v}>PHP {v}</option>)}
+                </select>
+                <button
+                  className="site-icon-button secondary-light"
+                  data-tooltip="Change PHP"
+                  title="Change PHP"
+                  aria-label={`Change PHP version for ${site.domain}`}
+                  disabled={!!loading || (websitePhpVersions[site.id] || site.php_version) === site.php_version}
+                  onClick={() => changeWebsitePhpVersion(site)}
+                ><RefreshCw size={15}/></button>
+              </div>}
+              <div className="site-feature-actions">
+                <button className="site-icon-button secondary-light" data-tooltip="Files" title="Files" aria-label={`Open file manager for ${site.domain}`} disabled={!!loading} onClick={() => openWebsiteFileManager(site)}><FolderOpen size={15}/></button>
+                <button className="site-icon-button secondary-light" data-tooltip="Logs" title="Logs" aria-label={`View logs for ${site.domain}`} disabled={!!loading} onClick={() => openWebsiteLogs(site)}><FileText size={15}/></button>
+                <button className="site-icon-button secondary-light" data-tooltip="Terminal" title="Terminal" aria-label={`Open terminal for ${site.domain}`} disabled={!!loading} onClick={() => openWebsiteTerminal(site)}><TerminalIcon size={15}/></button>
+                {isAdmin && <button className="site-icon-button secondary-light" data-tooltip="Nginx" title="Nginx" aria-label={`Edit Nginx config for ${site.domain}`} disabled={!!loading} onClick={() => openNginxCustom(site)}><Code2 size={15}/></button>}
+                <button className="site-icon-button danger" data-tooltip="Delete" title="Delete" aria-label={`Delete ${site.domain}`} disabled={!!loading} onClick={() => deleteWebsite(site.id)}><Trash2 size={15}/></button>
+              </div>
             </div>
           </article>
           {nginxCustomEditing?.id === site.id && renderNginxEditor()}
