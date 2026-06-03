@@ -36,6 +36,17 @@ FIREWALL_BLOCKLIST_WORK="${BPANEL_DATA_DIR}/firewall-blocklists.current"
 
 deny() { echo "bpanel-helper: $*" >&2; exit 1; }
 
+file_has_nul() {
+  local path="$1"
+  python3 - "$path" <<'PY'
+import sys
+
+with open(sys.argv[1], "rb") as handle:
+    data = handle.read()
+sys.exit(0 if b"\0" in data else 1)
+PY
+}
+
 env_get() {
   local key="$1"
   [[ -f "$ENV_FILE" ]] || return 0
@@ -356,7 +367,7 @@ save_waf_custom_rules() {
   local tmp
   tmp="$(mktemp)"
   cat >"$tmp"
-  if grep -q $'\x00' "$tmp" 2>/dev/null; then
+  if file_has_nul "$tmp"; then
     rm -f "$tmp"
     deny "WAF rules cannot contain NUL bytes"
   fi
@@ -379,7 +390,7 @@ save_waf_site_rules() {
   write_modsec_base_conf
   tmp="$(mktemp)"
   cat >"$tmp"
-  if grep -q $'\x00' "$tmp" 2>/dev/null; then
+  if file_has_nul "$tmp"; then
     rm -f "$tmp"
     deny "WAF rules cannot contain NUL bytes"
   fi
