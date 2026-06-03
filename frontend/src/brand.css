@@ -129,6 +129,9 @@ button:disabled,.upload-button.disabled{background:#dbe7f7;color:#7a8ca4;border-
   display:grid;grid-template-columns:minmax(0,1fr) max-content;align-items:center;gap:10px;
   min-height:52px;padding:10px 12px;background:var(--surface);border-radius:var(--radius-lg);
 }
+.update-log-box{margin-top:12px}
+.update-log-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
+.update-log-head button{height:32px;min-height:32px;padding:0 10px;font-size:12px}
 .backups-page .backup-item span{font-size:13px;line-height:1.35;color:var(--text);font-weight:700}
 .backups-page .backup-item small{font-size:12px;color:var(--text-muted);font-weight:600}
 .backups-page .backup-item .actions{flex-wrap:nowrap;gap:6px;justify-content:flex-end}

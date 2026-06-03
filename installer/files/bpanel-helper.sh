@@ -1296,12 +1296,12 @@ case "$cmd" in
     systemctl list-timers bpanel-auto-update.timer apt-daily-upgrade.timer --no-pager 2>/dev/null || true
     echo ""
     echo "OS update service:"
-    systemctl is-active bpanel-os-update.service 2>/dev/null || true
-    journalctl -u bpanel-os-update.service -n 20 --no-pager 2>/dev/null || true
+    systemctl is-active bpanel-os-update.service 2>/dev/null | sed 's/^inactive$/idle/' || true
+    journalctl -u bpanel-os-update.service -n 16 --no-pager 2>/dev/null | grep -v "Failed to open /run/systemd/transient" || true
     echo ""
     echo "Panel update service:"
-    systemctl is-active bpanel-panel-update.service 2>/dev/null || true
-    journalctl -u bpanel-panel-update.service -n 20 --no-pager 2>/dev/null || true
+    systemctl is-active bpanel-panel-update.service 2>/dev/null | sed 's/^inactive$/idle/' || true
+    journalctl -u bpanel-panel-update.service -n 16 --no-pager 2>/dev/null | grep -v "Failed to open /run/systemd/transient" || true
     ;;
 
   updates-os-run)

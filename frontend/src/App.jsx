@@ -280,6 +280,7 @@ function App() {
   const [panelFaviconFile, setPanelFaviconFile] = useState(null);
   const [panelSslEmail, setPanelSslEmail] = useState('');
   const [updatesStatus, setUpdatesStatus] = useState(null);
+  const [showUpdateLog, setShowUpdateLog] = useState(false);
   const [osAutoUpdate, setOsAutoUpdate] = useState({ enabled: true, mode: 'security', auto_reboot: false });
   const [panelAutoUpdate, setPanelAutoUpdate] = useState({ enabled: true, time: '03:30' });
   const noticeTimer = useRef(null);
@@ -1712,15 +1713,20 @@ function App() {
     if (data) setUpdatesStatus(data);
   }
 
+  async function toggleUpdateLog() {
+    if (!showUpdateLog && !updatesStatus) await loadUpdates();
+    setShowUpdateLog(prev => !prev);
+  }
+
   async function runOsUpdate() {
     if (!confirm('Run apt-get update && apt-get upgrade now?')) return;
     const data = await request('/updates/os/run', { method: 'POST' }, 'Starting OS update task...');
-    if (data) { setNotice((data.stdout || data.stderr || 'OS update task started.').trim()); await loadUpdates(); }
+    if (data) { setNotice((data.stdout || data.stderr || 'OS update task started.').trim()); if (showUpdateLog) await loadUpdates(); }
   }
 
   async function saveOsAutoUpdate() {
     const data = await request('/updates/os/auto', { method: 'POST', body: JSON.stringify(osAutoUpdate) }, 'Saving OS auto update...');
-    if (data) { setNotice((data.stdout || data.stderr || 'OS auto update saved.').trim()); await loadUpdates(); }
+    if (data) { setNotice((data.stdout || data.stderr || 'OS auto update saved.').trim()); if (showUpdateLog) await loadUpdates(); }
   }
 
   async function runPanelUpdate() {
@@ -1731,7 +1737,7 @@ function App() {
 
   async function savePanelAutoUpdate() {
     const data = await request('/updates/panel/auto', { method: 'POST', body: JSON.stringify(panelAutoUpdate) }, 'Saving panel auto update...');
-    if (data) { setNotice((data.stdout || data.stderr || 'Panel auto update saved.').trim()); await loadUpdates(); }
+    if (data) { setNotice((data.stdout || data.stderr || 'Panel auto update saved.').trim()); if (showUpdateLog) await loadUpdates(); }
   }
 
   useEffect(() => {
@@ -1795,7 +1801,6 @@ function App() {
     if (isAuthenticated && page === 'waf') loadWafRules();
     if (isAuthenticated && page === 'security') loadTwoFactorStatus();
     if (isAuthenticated && page === 'settings') loadPanelSettings();
-    if (isAuthenticated && page === 'updates' && currentUser?.role === 'admin') loadUpdates();
     if (isAuthenticated && page === 'backups' && currentUser?.role === 'admin') { loadUsers(); loadSftpTargets(); loadBackupSchedules(); loadRestoreBackups(); }
   }, [isAuthenticated, page, currentUser?.role]);
 
@@ -2635,18 +2640,21 @@ function App() {
 
   function renderUpdates() {
     if (!isAdmin) return <section className="section"><h2>Updates</h2><p className="hint">No permission.</p></section>;
-    const statusText = updatesStatus?.stdout || updatesStatus?.stderr || 'Click Refresh to load update status.';
+    const statusText = updatesStatus?.stdout || updatesStatus?.stderr || 'Click View logs to load update logs.';
     return <>
       <section className="section">
         <div className="section-title">
           <div><h2>Updates</h2><p className="hint">OS packages use apt; panel updates use <code>installer/update.sh</code>.</p></div>
-          <button disabled={!!loading} onClick={loadUpdates}><RefreshCw size={14}/> Refresh</button>
+          <button className="secondary-light" disabled={!!loading} onClick={toggleUpdateLog}>{showUpdateLog ? <X size={14}/> : <FileText size={14}/>} {showUpdateLog ? 'Hide logs' : 'View logs'}</button>
         </div>
         <div className="actions">
           <button disabled={!!loading} onClick={runOsUpdate}><RefreshCw size={14}/> Update OS now</button>
           <button disabled={!!loading} onClick={runPanelUpdate}><RotateCcw size={14}/> Update panel now</button>
         </div>
-        <div className="info-box firewall-status"><strong>Status</strong><pre>{statusText}</pre></div>
+        {showUpdateLog && <div className="info-box firewall-status update-log-box">
+          <div className="update-log-head"><strong>Update logs</strong><button className="secondary-light" disabled={!!loading} onClick={loadUpdates}><RefreshCw size={13}/> Refresh</button></div>
+          <pre>{statusText}</pre>
+        </div>}
       </section>
       <section className="section">
         <h2>Auto Update OS</h2>
