@@ -50,7 +50,8 @@ def test_http_flood_zones_render_only_enabled_sites():
 
     content = nginx.render_http_flood_zones([enabled, disabled])
 
-    assert "limit_conn_zone $binary_remote_addr zone=bpanel_conn_flood:10m;" in content
+    assert "map $cookie_bpanel_http_flood_ok $bpanel_http_flood_key" in content
+    assert "limit_conn_zone $bpanel_http_flood_key zone=bpanel_conn_flood:10m;" in content
     assert f"zone={nginx.http_flood_zone_name('example.com')}:10m rate=30r/m;" in content
     assert nginx.http_flood_zone_name("disabled.com") not in content
 
@@ -68,8 +69,10 @@ def test_render_vhost_keeps_waf_and_http_flood_blocks():
 
     assert "# BPANEL WAF BEGIN" in content
     assert "# BPANEL HTTP FLOOD BEGIN" in content
-    assert f"limit_req zone={nginx.http_flood_zone_name('example.com')} burst=20 nodelay;" in content
+    assert f"limit_req zone={nginx.http_flood_zone_name('example.com')} burst=20;" in content
     assert "limit_conn bpanel_conn_flood 8;" in content
+    assert "@bpanel_http_flood_challenge" in content
+    assert "bpanel_http_flood_ok=1" in content
 
 
 def test_firewall_numbered_rules_mark_defaults_protected(monkeypatch):

@@ -342,7 +342,11 @@ write_http_flood_nginx_conf() {
   if [[ ! -f /etc/nginx/bpanel/http-flood-zones.conf ]]; then
     cat >/etc/nginx/bpanel/http-flood-zones.conf <<'CONF'
 # Managed by BPanel. Shared zones for per-website HTTP flood protection.
-limit_conn_zone $binary_remote_addr zone=bpanel_conn_flood:10m;
+map $cookie_bpanel_http_flood_ok $bpanel_http_flood_key {
+    default $binary_remote_addr;
+    1 "";
+}
+limit_conn_zone $bpanel_http_flood_key zone=bpanel_conn_flood:10m;
 CONF
   fi
   cat >/etc/nginx/conf.d/00-bpanel-http-flood.conf <<'CONF'

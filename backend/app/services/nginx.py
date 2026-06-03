@@ -75,7 +75,27 @@ def _http_flood_rate(config: dict) -> str:
 
 
 def _http_flood_zone_line(domain: str, config: dict) -> str:
-    return f"limit_req_zone $binary_remote_addr zone={http_flood_zone_name(domain)}:10m rate={_http_flood_rate(config)};"
+    return f"limit_req_zone $bpanel_http_flood_key zone={http_flood_zone_name(domain)}:10m rate={_http_flood_rate(config)};"
+
+
+def _http_flood_challenge_block() -> str:
+    challenge_html = (
+        '<!doctype html><html><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        '<title>Checking browser</title>'
+        '<style>body{font-family:system-ui,sans-serif;background:#f8fafc;color:#0f172a;display:grid;place-items:center;min-height:100vh;margin:0}'
+        'main{max-width:420px;padding:24px;text-align:center}'
+        'strong{display:block;font-size:20px;margin-bottom:8px}</style>'
+        '<script>setTimeout(function(){document.cookie="bpanel_http_flood_ok=1; Max-Age=3600; Path=/; SameSite=Lax";'
+        'window.location.replace(window.location.href)},3000)</script>'
+        '</head><body><main><strong>Checking browser</strong><p>Please wait a moment and refresh automatically.</p></main></body></html>'
+    )
+    return f"""    error_page 429 = @bpanel_http_flood_challenge;
+    location @bpanel_http_flood_challenge {{
+        default_type text/html;
+        add_header Cache-Control "no-store" always;
+        return 200 '{challenge_html}';
+    }}"""
 
 
 def _http_flood_block(domain: str, config: dict | None = None) -> str:
@@ -85,19 +105,24 @@ def _http_flood_block(domain: str, config: dict | None = None) -> str:
     connections = safe_config["connection_limit"]
     limit_req = f"limit_req zone={zone};"
     if burst > 0:
-        limit_req = f"limit_req zone={zone} burst={burst} nodelay;"
+        limit_req = f"limit_req zone={zone} burst={burst};"
     return f"""    # BPANEL HTTP FLOOD BEGIN
     {limit_req}
     limit_conn bpanel_conn_flood {connections};
     limit_req_status 429;
     limit_conn_status 429;
+{_http_flood_challenge_block()}
     # BPANEL HTTP FLOOD END"""
 
 
 def render_http_flood_zones(websites) -> str:
     lines = [
         "# Managed by BPanel. Shared zones for per-website HTTP flood protection.",
-        "limit_conn_zone $binary_remote_addr zone=bpanel_conn_flood:10m;",
+        "map $cookie_bpanel_http_flood_ok $bpanel_http_flood_key {",
+        "    default $binary_remote_addr;",
+        "    1 \"\";",
+        "}",
+        "limit_conn_zone $bpanel_http_flood_key zone=bpanel_conn_flood:10m;",
     ]
     seen = set()
     for website in websites:
@@ -565,6 +590,7 @@ def render_vhost(
         http_flood_zone=http_flood_zone_name(domain),
         http_flood_burst=safe_http_flood_config["access_limit_burst"],
         http_flood_connections=safe_http_flood_config["connection_limit"],
+        http_flood_challenge_block=_http_flood_challenge_block(),
     )
     return rendered
 
