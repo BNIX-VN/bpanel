@@ -18,7 +18,7 @@ import './brand.css';
 import './file-manager.css';
 
 const API = import.meta.env.VITE_API_URL || '/api';
-const SERVICE_NAMES = ['bpanel-api', 'nginx', 'php8.3-fpm', 'php8.4-fpm', 'mariadb', 'redis-server'];
+const DEFAULT_SERVICE_NAMES = ['bpanel-api', 'nginx', 'php8.3-fpm', 'php8.4-fpm', 'mariadb', 'redis-server'];
 const HTTP_FLOOD_DEFAULTS = {
   access_limit_requests: 100,
   access_limit_window: 10,
@@ -218,6 +218,7 @@ function App() {
   const [users, setUsers] = useState([]);
   const [resourceUsage, setResourceUsage] = useState(null);
   const [serviceStates, setServiceStates] = useState({});
+  const [serviceNames, setServiceNames] = useState(DEFAULT_SERVICE_NAMES);
   const [backups, setBackups] = useState([]);
   const [backupJobs, setBackupJobs] = useState([]);
   const [userBackups, setUserBackups] = useState([]);
@@ -354,6 +355,7 @@ function App() {
     setUsers([]);
     setResourceUsage(null);
     setServiceStates({});
+    setServiceNames(DEFAULT_SERVICE_NAMES);
     setBackups([]);
     setBackupJobs([]);
     setCronItems([]);
@@ -1510,9 +1512,17 @@ function App() {
     return data;
   }
 
+  async function loadServiceNames() {
+    const data = await request('/services/list');
+    const names = data?.services?.length ? data.services : serviceNames;
+    setServiceNames(names);
+    return names;
+  }
+
   async function checkAllServices() {
     setLoading('Checking services...');
-    for (const name of SERVICE_NAMES) { await checkService(name); }
+    const names = await loadServiceNames();
+    for (const name of names) { await checkService(name); }
     setLoading('');
   }
 
@@ -1557,7 +1567,7 @@ function App() {
   async function installPhpVersion(version) {
     if (!confirm(`Install PHP ${version}? This will install php${version}-fpm via apt.`)) return;
     const data = await request(`/maintenance/php-versions/${version}/install`, { method: 'POST' }, `Installing PHP ${version}...`);
-    if (data) { setNotice(`PHP ${version} installed successfully.`); await loadPhpVersions(); }
+    if (data) { setNotice(`PHP ${version} installed successfully.`); await loadPhpVersions(); await loadServiceNames(); }
   }
 
   async function loadFirewall() {
@@ -2436,7 +2446,7 @@ function App() {
         <button disabled={!!loading} onClick={checkAllServices}><RefreshCw size={15}/> Refresh</button>
       </div>
       <div className="service-grid">
-        {SERVICE_NAMES.map(name => {
+        {serviceNames.map(name => {
           const state = serviceStates[name];
           const text = `${state?.stdout || ''} ${state?.stderr || ''}`;
           const active = text.includes('active (running)');

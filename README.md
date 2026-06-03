@@ -31,7 +31,7 @@ ownership, quotas, backups, SSL, services, and firewall tools built in.
 
 ## Versioning
 
-Current release: `1.00.0017`.
+Current release: `1.00.0018`.
 
 BPanel versions use `xx.yy.zzzz`: `xx` for major/release changes, `yy` for
 feature updates in the same release line, and `zzzz` for bugfix builds.

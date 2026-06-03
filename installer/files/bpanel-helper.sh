@@ -1020,6 +1020,18 @@ is_in() {
   return 1
 }
 
+is_allowed_service() {
+  local service="$1" php_version=""
+  if is_in "$service" "${ALLOWED_SERVICES[@]}"; then
+    return 0
+  fi
+  if [[ "$service" =~ ^php([0-9]+\.[0-9]+)-fpm$ ]]; then
+    php_version="${BASH_REMATCH[1]}"
+    [[ -f "/etc/php/${php_version}/fpm/php-fpm.conf" ]] && return 0
+  fi
+  return 1
+}
+
 require_safe_path() {
   local prefix="$1" path="$2"
   # Reject path traversal components, newlines, and empty input. Bash strings
@@ -1263,7 +1275,7 @@ case "$cmd" in
   systemctl)
     [[ $# -ge 2 ]] || deny "usage: systemctl <service> <action>"
     service="$1"; action="$2"
-    is_in "$service" "${ALLOWED_SERVICES[@]}" || deny "service not allowed: $service"
+    is_allowed_service "$service" || deny "service not allowed: $service"
     is_in "$action" "${ALLOWED_ACTIONS[@]}" || deny "action not allowed: $action"
     exec systemctl "$action" "$service"
     ;;
@@ -1675,7 +1687,7 @@ case "$cmd" in
   # ---- service status (read-only, no privilege change needed but useful)
   service-status)
     [[ $# -eq 1 ]] || deny "usage: service-status <service>"
-    is_in "$1" "${ALLOWED_SERVICES[@]}" || deny "service not allowed: $1"
+    is_allowed_service "$1" || deny "service not allowed: $1"
     exec systemctl status "$1" --no-pager
     ;;
 

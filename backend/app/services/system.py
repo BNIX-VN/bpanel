@@ -1,15 +1,48 @@
 import os
 import shutil
 import time
+from pathlib import Path
 
 from app.services.shell import shell
 
-SUPPORTED_SERVICES = {"nginx", "php8.3-fpm", "php8.4-fpm", "mariadb", "redis-server"}
+BASE_SERVICES = ("bpanel-api", "nginx", "mariadb", "redis-server")
+PHP_VERSION_ORDER = ("5.6", "7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5")
+PHP_ETC_DIR = Path("/etc/php")
 SUPPORTED_ACTIONS = {"start", "stop", "restart", "reload", "status"}
 
 
+def _php_sort_key(service_name: str) -> tuple[int, list[int]]:
+    version = service_name.removeprefix("php").removesuffix("-fpm")
+    try:
+        known_index = PHP_VERSION_ORDER.index(version)
+    except ValueError:
+        known_index = len(PHP_VERSION_ORDER)
+    numeric = []
+    for part in version.split("."):
+        try:
+            numeric.append(int(part))
+        except ValueError:
+            numeric.append(999)
+    return known_index, numeric
+
+
+def installed_php_services() -> list[str]:
+    if not PHP_ETC_DIR.exists():
+        return []
+    services = []
+    for version_dir in PHP_ETC_DIR.iterdir():
+        version = version_dir.name
+        if (version_dir / "fpm" / "php-fpm.conf").exists():
+            services.append(f"php{version}-fpm")
+    return sorted(set(services), key=_php_sort_key)
+
+
+def list_services() -> list[str]:
+    return [*BASE_SERVICES[:2], *installed_php_services(), *BASE_SERVICES[2:]]
+
+
 def service_action(name: str, action: str):
-    if name not in SUPPORTED_SERVICES:
+    if name not in list_services():
         raise ValueError("Unsupported service")
     if action not in SUPPORTED_ACTIONS:
         raise ValueError("Unsupported action")
