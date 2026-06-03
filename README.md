@@ -31,7 +31,7 @@ ownership, quotas, backups, SSL, services, and firewall tools built in.
 
 ## Versioning
 
-Current release: `1.00.0018`.
+Current release: `1.00.0019`.
 
 BPanel versions use `xx.yy.zzzz`: `xx` for major/release changes, `yy` for
 feature updates in the same release line, and `zzzz` for bugfix builds.
@@ -43,17 +43,21 @@ feature updates in the same release line, and `zzzz` for bugfix builds.
 - Optional: a domain pointing to the server's public IP (for SSL on the panel)
 - 1 vCPU / 1 GB RAM minimum, 2 vCPU / 2 GB RAM recommended
 
-## Install from GitHub
+## Install from GitHub tag
 
 Run as root on a fresh Ubuntu 24.04 server:
 
 ```bash
+BPANEL_VERSION=v1.00.0019;\
 apt-get update;apt-get install -y git;\
-git clone https://github.com/BNIX-VN/bpanel.git /opt/bpanel-source;\
+git clone --branch "$BPANEL_VERSION" --depth 1 https://github.com/BNIX-VN/bpanel.git /opt/bpanel-source;\
 cd /opt/bpanel-source;\
 chmod +x installer/install.sh installer/update.sh;\
 sudo bash installer/install.sh
 ```
+
+Change `BPANEL_VERSION` to the tag you want to install. Tags are used for
+installable builds; GitHub Releases are published after the build is verified.
 
 The installer will:
 
