@@ -21,7 +21,7 @@ echo "Disabling and resetting UFW..."
 ufw --force disable || true
 ufw --force reset || true
 
-ssh_port="$(sshd -T 2>/dev/null | awk '/^port / {print $2; exit}')"
+ssh_port="$(sshd -T 2>/dev/null | awk '/^port / {print $2; exit}' || true)"
 ssh_port="${ssh_port:-22}"
 panel_port=""
 if [[ -f "$env_file" ]]; then
