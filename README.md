@@ -31,7 +31,7 @@ ownership, quotas, backups, SSL, services, and firewall tools built in.
 
 ## Versioning
 
-Current release: `1.00.0019`.
+Current release: `1.00.0020`.
 
 BPanel versions use `xx.yy.zzzz`: `xx` for major/release changes, `yy` for
 feature updates in the same release line, and `zzzz` for bugfix builds.
@@ -48,7 +48,7 @@ feature updates in the same release line, and `zzzz` for bugfix builds.
 Run as root on a fresh Ubuntu 24.04 server:
 
 ```bash
-BPANEL_VERSION=v1.00.0019;\
+BPANEL_VERSION=v1.00.0020;\
 apt-get update;apt-get install -y git;\
 git clone --branch "$BPANEL_VERSION" --depth 1 https://github.com/BNIX-VN/bpanel.git /opt/bpanel-source;\
 cd /opt/bpanel-source;\
@@ -94,17 +94,33 @@ permissions, show status, and change the `admin` password.
 
 ## Update an existing install
 
-After pushing changes to GitHub:
+Stable installs update from the newest GitHub release tag by default. This keeps
+servers on tested release builds instead of tracking every commit on `main`.
 
 ```bash
 cd /opt/bpanel-source
 sudo bash installer/update.sh
 ```
 
-The script pulls latest from GitHub, syncs source to `/opt/bpanel`, rebuilds the
-frontend, refreshes the direct panel service, and reloads Nginx for customer
-vhosts. Old `dist` and Vite caches are
-purged so the new bundle hash propagates to browsers.
+The same update is available from the panel's Updates page. The script fetches
+release tags from GitHub, checks out the newest `vxx.yy.zzzz` tag, syncs source
+to `/opt/bpanel`, rebuilds the frontend, refreshes the direct panel service, and
+reloads Nginx for customer vhosts. Old `dist` and Vite caches are purged so the
+new bundle hash propagates to browsers.
+
+To pin an exact release:
+
+```bash
+cd /opt/bpanel-source
+sudo bash installer/update.sh --tag v1.00.0020
+```
+
+To test unreleased code from a branch, opt in explicitly:
+
+```bash
+cd /opt/bpanel-source
+sudo bash installer/update.sh --branch main
+```
 
 If the browser still shows the old UI, do a hard refresh (Ctrl + Shift + R) or
 open in incognito.

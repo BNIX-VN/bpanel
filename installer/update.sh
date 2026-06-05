@@ -2,13 +2,15 @@
 # Update BPanel from GitHub.
 #
 # This script is meant to live in a checkout of the BPanel repo (e.g.
-# /opt/bpanel-source). It pulls the latest commit from origin/main, syncs the
-# source into /opt/bpanel, rebuilds the frontend, refreshes the direct panel
-# service, restarts the API, and reloads nginx for customer vhosts.
+# /opt/bpanel-source). By default it pulls the latest stable release tag,
+# syncs the source into /opt/bpanel, rebuilds the frontend, refreshes the
+# direct panel service, restarts the API, and reloads nginx for customer
+# vhosts.
 #
 # Usage:
 #   sudo bash installer/update.sh
-#   sudo bash installer/update.sh --branch dev
+#   sudo bash installer/update.sh --branch main
+#   sudo bash installer/update.sh --tag v1.00.0020
 #   APP_DIR=/srv/bpanel sudo -E bash installer/update.sh
 
 set -euo pipefail
@@ -33,12 +35,18 @@ else
 fi
 
 REPO_URL="${REPO_URL:-https://github.com/BNIX-VN/bpanel.git}"
-BRANCH="${BRANCH:-main}"
+UPDATE_CHANNEL="${UPDATE_CHANNEL:-release}"       # release, branch, or tag
+BRANCH="${BRANCH:-main}"                          # used when UPDATE_CHANNEL=branch
+RELEASE_TAG="${RELEASE_TAG:-}"                    # optional exact tag
+RELEASE_PATTERN="${RELEASE_PATTERN:-v[0-9]*.[0-9][0-9].[0-9][0-9][0-9][0-9]}"
 SKIP_PULL="${SKIP_PULL:-false}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --branch) BRANCH="$2"; shift 2 ;;
+    --channel) UPDATE_CHANNEL="$2"; shift 2 ;;
+    --release) UPDATE_CHANNEL="release"; shift ;;
+    --branch) UPDATE_CHANNEL="branch"; BRANCH="$2"; shift 2 ;;
+    --tag) UPDATE_CHANNEL="tag"; RELEASE_TAG="$2"; shift 2 ;;
     --skip-pull) SKIP_PULL="true"; shift ;;
     --app-dir) APP_DIR="$2"; shift 2 ;;
     -h|--help)
@@ -331,11 +339,35 @@ if [[ "$SKIP_PULL" != "true" ]]; then
     log "Cloning $REPO_URL to $SOURCE_DIR"
     git clone "$REPO_URL" "$SOURCE_DIR"
   fi
-  log "Pulling latest from origin/$BRANCH"
   cd "$SOURCE_DIR"
-  git fetch --prune origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}" --tags
-  git checkout -f -B "$BRANCH" "origin/$BRANCH"
-  git reset --hard "origin/$BRANCH"
+  case "$UPDATE_CHANNEL" in
+    release)
+      log "Pulling latest release from origin"
+      git fetch --prune origin "+refs/tags/*:refs/tags/*"
+      RELEASE_TAG="$(git tag --list "$RELEASE_PATTERN" --sort=-v:refname | head -n 1)"
+      [[ -n "$RELEASE_TAG" ]] || fail "No release tags found matching $RELEASE_PATTERN"
+      git checkout -f --detach "$RELEASE_TAG"
+      git reset --hard "$RELEASE_TAG"
+      echo "Release: $RELEASE_TAG"
+      ;;
+    tag)
+      [[ -n "$RELEASE_TAG" ]] || fail "--tag requires a release tag"
+      log "Pulling release $RELEASE_TAG from origin"
+      git fetch --prune origin "+refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+      git checkout -f --detach "$RELEASE_TAG"
+      git reset --hard "$RELEASE_TAG"
+      echo "Release: $RELEASE_TAG"
+      ;;
+    branch)
+      log "Pulling latest from origin/$BRANCH"
+      git fetch --prune origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}" --tags
+      git checkout -f -B "$BRANCH" "origin/$BRANCH"
+      git reset --hard "origin/$BRANCH"
+      ;;
+    *)
+      fail "Unsupported UPDATE_CHANNEL: $UPDATE_CHANNEL"
+      ;;
+  esac
   echo "HEAD: $(git rev-parse --short HEAD) â€” $(git log -1 --pretty=%s)"
 fi
 
