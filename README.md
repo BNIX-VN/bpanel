@@ -75,7 +75,8 @@ The installer will:
 7. Issue Let's Encrypt SSL for the panel domain (optional).
 8. Install `/usr/local/sbin/bpanel-update` and `/usr/local/sbin/bpanel-rescue-ufw-blocklist`.
 9. Remove the extracted release source.
-10. Print the admin panel/SFTP login and save it to `/root/login.txt`.
+10. Print only the panel URL, user, and password; save the same fields to
+    `/root/login.txt`.
 
 You will be prompted for:
 
@@ -84,11 +85,9 @@ You will be prompted for:
 - Whether to enable Let's Encrypt SSL for the panel domain
 - An email for SSL registration
 
-After install, open the URL printed at the end of the installer. If no panel
-domain was entered, use the printed `http://SERVER_IP:PANEL_PORT` URL. The admin password is shown
-at the end and saved to `/root/login.txt`; store it in a password manager. The
-same password is applied to the Linux user `admin`, so SFTP can log in as
-`admin` and land in `/home/admin`.
+After install, open the `Panel URL` printed at the end of the installer. The
+admin password is shown there and saved to `/root/login.txt`; store it in a
+password manager.
 
 ## SSH maintenance menu
 

@@ -936,37 +936,17 @@ setup_ssl() {
 print_summary() {
   echo ""
   echo "=================================================="
-  echo "BPanel installation completed on Ubuntu 24.04"
-  echo "Panel: ${PANEL_URL}"
-  echo "API health: ${PANEL_URL}/api/health"
-  echo "Panel service: bpanel-api listens on port ${PANEL_PORT} without Nginx"
-  echo "SSH menu: run 'bpanel' as root"
-  echo "Admin: admin / ${ADMIN_PASSWORD}"
-  echo "SFTP: admin / ${ADMIN_PASSWORD} (home: /home/admin)"
-  echo "Login info saved to: /root/login.txt"
-  echo "Node.js: $(node -v)"
-  echo "Default PHP: ${PHP_DEFAULT}"
-  echo "Installed PHP versions: ${PHP_VERSIONS}"
-  echo "PHP-FPM service: php${PHP_DEFAULT}-fpm"
-  echo "MariaDB: $(mariadb --version 2>/dev/null || mysql --version 2>/dev/null || echo installed)"
-  echo "Backend: ${APP_DIR}/backend"
-  echo "Frontend: ${APP_DIR}/frontend"
-  echo "Firewall: UFW enabled with OpenSSH, Nginx Full, and ${PANEL_PORT}/tcp allowed."
+  echo "Panel URL: ${PANEL_URL}"
+  echo "User: admin"
+  echo "Password: ${ADMIN_PASSWORD}"
   echo "=================================================="
 }
 
 write_login_info() {
   cat >/root/login.txt <<INFO
-BPanel login
-Panel: ${PANEL_URL}
-API health: ${PANEL_URL}/api/health
-Username: admin
+Panel URL: ${PANEL_URL}
+User: admin
 Password: ${ADMIN_PASSWORD}
-SFTP username: admin
-SFTP home: /home/admin
-Panel service: bpanel-api
-Panel port: ${PANEL_PORT}
-Installed at: $(date -u +%Y-%m-%dT%H:%M:%SZ)
 INFO
   chmod 600 /root/login.txt
 }
