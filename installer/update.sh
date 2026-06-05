@@ -334,7 +334,7 @@ if [[ "$SKIP_PULL" != "true" ]]; then
   log "Pulling latest from origin/$BRANCH"
   cd "$SOURCE_DIR"
   git fetch --prune origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}" --tags
-  git checkout -B "$BRANCH" "origin/$BRANCH"
+  git checkout -f -B "$BRANCH" "origin/$BRANCH"
   git reset --hard "origin/$BRANCH"
   echo "HEAD: $(git rev-parse --short HEAD) â€” $(git log -1 --pretty=%s)"
 fi
