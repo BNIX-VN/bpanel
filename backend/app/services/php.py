@@ -132,7 +132,6 @@ def install_php(php_version: str) -> dict:
             "apt-get",
             "install",
             "-y",
-            f"php{php_version}",
             f"php{php_version}-fpm",
             f"php{php_version}-cli",
             f"php{php_version}-mysql",

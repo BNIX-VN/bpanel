@@ -271,7 +271,6 @@ install_php() {
 
   for version in $PHP_VERSIONS; do
     packages=(
-      "php${version}"
       "php${version}-fpm"
       "php${version}-cli"
       "php${version}-mysql"
@@ -588,17 +587,16 @@ PANEL_SSL_KEY=
 FRONTEND_DIST=${APP_DIR}/frontend/dist
 ENV
 
-  BPANEL_USE_HELPER=true BPANEL_ADMIN_PASSWORD="$ADMIN_PASSWORD" python -m app.seed
-  # Create / migrate the schema explicitly so subsequent service start is fast.
-  python -c "from app.core.database import run_migrations; run_migrations()"
-  deactivate || true
-
   # Lock down the env file: contains SECRET_KEY and ALLOWED_ORIGINS.
   chmod 0640 "${APP_DIR}/backend/.env"
 
-  # Make all panel files owned by bpanel so the daemon can read/write them.
+  # Make panel files writable before seed creates the SQLite DB and admin Linux user.
   chown -R bpanel:bpanel "${APP_DIR}/backend"
   chown -R bpanel:bpanel "${APP_DIR}/frontend" 2>/dev/null || true
+
+  sudo -u bpanel env HOME="$APP_DIR" BPANEL_USE_HELPER=true BPANEL_ADMIN_PASSWORD="$ADMIN_PASSWORD" \
+    "${APP_DIR}/backend/.venv/bin/python" -m app.seed
+  deactivate || true
 }
 
 wait_for_backend() {

@@ -548,7 +548,6 @@ install_php_version() {
   fi
   echo "Installing PHP $version..."
   local packages=(
-    "php${version}"
     "php${version}-fpm"
     "php${version}-cli"
     "php${version}-mysql"
