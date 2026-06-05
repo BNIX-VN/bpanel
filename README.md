@@ -31,10 +31,9 @@ ownership, quotas, backups, SSL, services, and firewall tools built in.
 
 ## Versioning
 
-Current release: `1.00.0021`.
+Current release: `1.0.0`.
 
-BPanel versions use `xx.yy.zzzz`: `xx` for major/release changes, `yy` for
-feature updates in the same release line, and `zzzz` for bugfix builds.
+BPanel versions use semantic versioning: `major.minor.patch`.
 
 ## System requirements
 
@@ -43,20 +42,22 @@ feature updates in the same release line, and `zzzz` for bugfix builds.
 - Optional: a domain pointing to the server's public IP (for SSL on the panel)
 - 1 vCPU / 1 GB RAM minimum, 2 vCPU / 2 GB RAM recommended
 
-## Install from GitHub tag
+## Install from latest GitHub tag
 
 Run as root on a fresh Ubuntu 24.04 server:
 
 ```bash
-BPANEL_VERSION=v1.00.0021;\
 apt-get update;apt-get install -y git;\
+BPANEL_VERSION="$(git ls-remote --tags --refs https://github.com/BNIX-VN/bpanel.git 'refs/tags/v*' | awk -F/ '/refs\/tags\/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/ {print $3}' | sort -V | tail -n1)";\
+test -n "$BPANEL_VERSION";\
 git clone --branch "$BPANEL_VERSION" --depth 1 https://github.com/BNIX-VN/bpanel.git /opt/bpanel-source;\
 cd /opt/bpanel-source;\
-chmod +x installer/install.sh installer/update.sh;\
+chmod +x installer/install.sh installer/update.sh installer/rescue-ufw-blocklist.sh;\
 sudo bash installer/install.sh
 ```
 
-Change `BPANEL_VERSION` to the tag you want to install. Tags are used for
+To pin an exact installable build instead, set `BPANEL_VERSION` yourself before
+the clone command, for example `BPANEL_VERSION=v1.0.0`. Tags are used for
 installable builds; GitHub Releases are published after the build is verified.
 
 The installer will:
@@ -68,7 +69,8 @@ The installer will:
 4. Configure phpMyAdmin SSO.
 5. Start the panel directly on port `2222` without relying on Nginx for login.
 6. Issue Let's Encrypt SSL for the panel domain (optional).
-7. Print the admin login and save it to `/root/login.txt`.
+7. Install `/usr/local/sbin/bpanel-rescue-ufw-blocklist` for emergency firewall recovery.
+8. Print the admin login and save it to `/root/login.txt`.
 
 You will be prompted for:
 
@@ -99,20 +101,21 @@ servers on tested release builds instead of tracking every commit on `main`.
 
 ```bash
 cd /opt/bpanel-source
-sudo bash installer/update.sh
+sudo bash installer/update.sh --release
 ```
 
 The same update is available from the panel's Updates page. The script fetches
-release tags from GitHub, checks out the newest `vxx.yy.zzzz` tag, syncs source
+release tags from GitHub, checks out the newest `vX.Y.Z` tag, syncs source
 to `/opt/bpanel`, rebuilds the frontend, refreshes the direct panel service, and
-reloads Nginx for customer vhosts. Old `dist` and Vite caches are purged so the
-new bundle hash propagates to browsers.
+reloads Nginx for customer vhosts. The helper-backed panel update button and
+daily panel auto-update timer use the same release-channel defaults. Old `dist`
+and Vite caches are purged so the new bundle hash propagates to browsers.
 
 To pin an exact release:
 
 ```bash
 cd /opt/bpanel-source
-sudo bash installer/update.sh --tag v1.00.0021
+sudo bash installer/update.sh --tag v1.0.0
 ```
 
 To test unreleased code from a branch, opt in explicitly:
@@ -120,6 +123,13 @@ To test unreleased code from a branch, opt in explicitly:
 ```bash
 cd /opt/bpanel-source
 sudo bash installer/update.sh --branch main
+```
+
+To fetch from a non-default Git remote name:
+
+```bash
+cd /opt/bpanel-source
+sudo bash installer/update.sh --remote upstream --release
 ```
 
 If the browser still shows the old UI, do a hard refresh (Ctrl + Shift + R) or
@@ -150,6 +160,7 @@ bpanel/
 |   |-- files/                   bpanel-helper.sh + sudoers rule
 |   |-- install.sh               Full first-time install
 |   |-- migrate-security.sh      One-shot migration to non-root + helper mode
+|   |-- rescue-ufw-blocklist.sh  Emergency UFW reset for oversized blocklists
 |   `-- update.sh                Pull from GitHub and redeploy
 `-- README.md
 ```

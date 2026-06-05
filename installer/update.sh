@@ -10,15 +10,72 @@
 # Usage:
 #   sudo bash installer/update.sh
 #   sudo bash installer/update.sh --branch main
-#   sudo bash installer/update.sh --tag v1.00.0021
-#   APP_DIR=/srv/bpanel sudo -E bash installer/update.sh
+#   sudo bash installer/update.sh --tag v1.0.0
+#   sudo bash installer/update.sh --help
 
 set -euo pipefail
+
+log()  { echo ""; echo "==> $1"; }
+fail() { echo "ERROR: $1" >&2; exit 1; }
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  sudo bash installer/update.sh [--release]
+  sudo bash installer/update.sh --tag v1.0.0
+  sudo bash installer/update.sh --branch main
+
+Options:
+  --release          Update to the newest matching release tag (default).
+  --tag TAG          Pin an exact release tag.
+  --branch NAME      Update from a remote branch.
+  --channel MODE     Set update mode: release, tag, or branch.
+  --remote NAME      Git remote to fetch from or create on clone (default: origin).
+  --skip-pull        Sync the current SOURCE_DIR without fetching/checking out.
+  --app-dir DIR      Production deployment dir (default: /opt/bpanel).
+  -h, --help         Show this help.
+
+Environment:
+  APP_DIR, SOURCE_DIR, REPO_URL, GIT_REMOTE, UPDATE_CHANNEL, BRANCH,
+  RELEASE_TAG, RELEASE_PATTERN, SKIP_PULL.
+
+Notes:
+  The release channel always selects the newest matching release tag. Use
+  --tag or UPDATE_CHANNEL=tag with RELEASE_TAG to pin a specific tag.
+USAGE
+}
+
+require_arg() {
+  local opt="$1" value="${2-}"
+  [[ -n "$value" && "$value" != --* ]] || fail "$opt requires a value"
+}
+
+for arg in "$@"; do
+  if [[ "$arg" == "-h" || "$arg" == "--help" ]]; then
+    usage
+    exit 0
+  fi
+done
 
 if [[ $EUID -ne 0 ]]; then
   echo "Please run as root"
   exit 1
 fi
+
+if [[ -z "${BPANEL_UPDATE_STABLE_COPY:-}" ]]; then
+  _original_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+  _stable_copy="$(mktemp /tmp/bpanel-update.XXXXXX.sh)"
+  cp "$_original_script" "$_stable_copy"
+  chmod 0700 "$_stable_copy"
+  BPANEL_UPDATE_STABLE_COPY="$_stable_copy" \
+    BPANEL_UPDATE_ORIGINAL_SCRIPT="$_original_script" \
+    exec /bin/bash "$_stable_copy" "$@"
+fi
+
+cleanup_stable_copy() {
+  rm -f "${BPANEL_UPDATE_STABLE_COPY:-}" 2>/dev/null || true
+}
+trap cleanup_stable_copy EXIT
 
 # --- Config ----------------------------------------------------------------
 APP_DIR="${APP_DIR:-/opt/bpanel}"                 # Production deployment dir
@@ -27,7 +84,8 @@ DEFAULT_SOURCE_DIR="/opt/bpanel-source"           # Where the git checkout lives
 # Resolve where THIS script lives. If it's inside a real git checkout we use
 # that. Otherwise we fall back to /opt/bpanel-source so users running the
 # script from the deploy dir still get a usable workflow.
-_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+_SCRIPT_SOURCE="${BPANEL_UPDATE_ORIGINAL_SCRIPT:-${BASH_SOURCE[0]}}"
+_SCRIPT_DIR="$(cd "$(dirname "$_SCRIPT_SOURCE")/.." && pwd)"
 if [[ -d "$_SCRIPT_DIR/.git" ]]; then
   SOURCE_DIR="${SOURCE_DIR:-$_SCRIPT_DIR}"
 else
@@ -35,29 +93,65 @@ else
 fi
 
 REPO_URL="${REPO_URL:-https://github.com/BNIX-VN/bpanel.git}"
-UPDATE_CHANNEL="${UPDATE_CHANNEL:-release}"       # release, branch, or tag
-BRANCH="${BRANCH:-main}"                          # used when UPDATE_CHANNEL=branch
-RELEASE_TAG="${RELEASE_TAG:-}"                    # optional exact tag
-RELEASE_PATTERN="${RELEASE_PATTERN:-v[0-9]*.[0-9][0-9].[0-9][0-9][0-9][0-9]}"
+GIT_REMOTE="${GIT_REMOTE-origin}"                 # remote name in the local checkout
+UPDATE_CHANNEL="${UPDATE_CHANNEL-release}"        # release, branch, or tag
+BRANCH="${BRANCH-main}"                           # used when UPDATE_CHANNEL=branch
+RELEASE_TAG="${RELEASE_TAG-}"                     # used when UPDATE_CHANNEL=tag
+RELEASE_PATTERN="${RELEASE_PATTERN:-v[0-9]*.[0-9]*.[0-9]*}"
 SKIP_PULL="${SKIP_PULL:-false}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --channel) UPDATE_CHANNEL="$2"; shift 2 ;;
+    --channel) require_arg "$1" "${2-}"; UPDATE_CHANNEL="$2"; shift 2 ;;
     --release) UPDATE_CHANNEL="release"; shift ;;
-    --branch) UPDATE_CHANNEL="branch"; BRANCH="$2"; shift 2 ;;
-    --tag) UPDATE_CHANNEL="tag"; RELEASE_TAG="$2"; shift 2 ;;
+    --branch) require_arg "$1" "${2-}"; UPDATE_CHANNEL="branch"; BRANCH="$2"; shift 2 ;;
+    --tag) require_arg "$1" "${2-}"; UPDATE_CHANNEL="tag"; RELEASE_TAG="$2"; shift 2 ;;
+    --remote) require_arg "$1" "${2-}"; GIT_REMOTE="$2"; shift 2 ;;
     --skip-pull) SKIP_PULL="true"; shift ;;
-    --app-dir) APP_DIR="$2"; shift 2 ;;
+    --app-dir) require_arg "$1" "${2-}"; APP_DIR="$2"; shift 2 ;;
     -h|--help)
-      sed -n '1,30p' "${BASH_SOURCE[0]}"
+      usage
       exit 0 ;;
-    *) echo "Unknown arg: $1"; exit 1 ;;
+    *) fail "Unknown arg: $1" ;;
   esac
 done
 
-log()  { echo ""; echo "==> $1"; }
-fail() { echo "ERROR: $1" >&2; exit 1; }
+# --- Validate config --------------------------------------------------------
+require_git_ref_name() {
+  local kind="$1" value="$2"
+  [[ -n "$value" ]] || fail "$kind cannot be empty"
+  [[ "$value" != -* ]] || fail "$kind must not start with '-'"
+  case "$kind" in
+    BRANCH)
+      git check-ref-format --branch "$value" >/dev/null 2>&1 \
+        || fail "BRANCH has invalid git ref characters: $value"
+      ;;
+    RELEASE_TAG)
+      git check-ref-format "refs/tags/$value" >/dev/null 2>&1 \
+        || fail "RELEASE_TAG has invalid git ref characters: $value"
+      ;;
+  esac
+}
+
+[[ -n "$REPO_URL" ]] || fail "REPO_URL cannot be empty"
+[[ -n "$GIT_REMOTE" ]] || fail "GIT_REMOTE cannot be empty"
+[[ "$GIT_REMOTE" != -* ]] || fail "GIT_REMOTE must not start with '-'"
+if ! [[ "$GIT_REMOTE" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  fail "GIT_REMOTE must match [A-Za-z0-9._-]+ (got: $GIT_REMOTE)"
+fi
+if [[ "$UPDATE_CHANNEL" != "release" && "$UPDATE_CHANNEL" != "branch" && "$UPDATE_CHANNEL" != "tag" ]]; then
+  fail "UPDATE_CHANNEL must be release|branch|tag (got: $UPDATE_CHANNEL)"
+fi
+[[ "$SKIP_PULL" == "true" || "$SKIP_PULL" == "false" ]] || fail "SKIP_PULL must be true|false"
+if [[ "$UPDATE_CHANNEL" == "branch" ]]; then
+  require_git_ref_name BRANCH "$BRANCH"
+fi
+if [[ "$UPDATE_CHANNEL" == "tag" ]]; then
+  require_git_ref_name RELEASE_TAG "$RELEASE_TAG"
+fi
+if [[ "$UPDATE_CHANNEL" == "release" && -n "$RELEASE_TAG" ]]; then
+  echo "INFO: ignoring RELEASE_TAG in release channel; use --tag to pin ${RELEASE_TAG}."
+fi
 
 env_get() {
   local file="$APP_DIR/backend/.env" key="$1"
@@ -70,6 +164,28 @@ env_set_default() {
   if ! grep -q "^${key}=" "$file"; then
     printf '%s=%s\n' "$key" "$value" >>"$file"
   fi
+}
+
+ensure_git_remote() {
+  if git remote get-url "$GIT_REMOTE" >/dev/null 2>&1; then
+    return 0
+  fi
+  log "Adding git remote ${GIT_REMOTE} -> ${REPO_URL}"
+  git remote add "$GIT_REMOTE" "$REPO_URL"
+}
+
+latest_release_tag() {
+  git tag --list "$RELEASE_PATTERN" --sort=-v:refname | head -n 1
+}
+
+reset_worktree_to_ref() {
+  local ref="$1" branch_name="${2-}"
+  if [[ -n "$branch_name" ]]; then
+    git checkout -f -B "$branch_name" "$ref"
+  else
+    git checkout -f --detach "$ref"
+  fi
+  git reset --hard "$ref"
 }
 
 ufw_panel_allow_port() {
@@ -336,39 +452,38 @@ if [[ "$SKIP_PULL" != "true" ]]; then
     if [[ -e "$SOURCE_DIR" && -n "$(ls -A "$SOURCE_DIR" 2>/dev/null)" ]]; then
       fail "$SOURCE_DIR exists but is not a git checkout and is not empty. Move it aside or set SOURCE_DIR=/some/empty/dir."
     fi
-    log "Cloning $REPO_URL to $SOURCE_DIR"
-    git clone "$REPO_URL" "$SOURCE_DIR"
+    log "Cloning ${REPO_URL} to ${SOURCE_DIR} with remote ${GIT_REMOTE}"
+    git clone -o "$GIT_REMOTE" "$REPO_URL" "$SOURCE_DIR"
   fi
   cd "$SOURCE_DIR"
+  ensure_git_remote
   case "$UPDATE_CHANNEL" in
     release)
-      log "Pulling latest release from origin"
-      git fetch --prune origin "+refs/tags/*:refs/tags/*"
-      RELEASE_TAG="$(git tag --list "$RELEASE_PATTERN" --sort=-v:refname | head -n 1)"
+      log "Pulling latest release from ${GIT_REMOTE}"
+      git fetch --prune --prune-tags "$GIT_REMOTE" "+refs/tags/*:refs/tags/*"
+      RELEASE_TAG="$(latest_release_tag)"
       [[ -n "$RELEASE_TAG" ]] || fail "No release tags found matching $RELEASE_PATTERN"
-      git checkout -f --detach "$RELEASE_TAG"
-      git reset --hard "$RELEASE_TAG"
-      echo "Release: $RELEASE_TAG"
+      reset_worktree_to_ref "$RELEASE_TAG"
+      echo "Release: ${RELEASE_TAG}"
       ;;
     tag)
       [[ -n "$RELEASE_TAG" ]] || fail "--tag requires a release tag"
-      log "Pulling release $RELEASE_TAG from origin"
-      git fetch --prune origin "+refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
-      git checkout -f --detach "$RELEASE_TAG"
-      git reset --hard "$RELEASE_TAG"
-      echo "Release: $RELEASE_TAG"
+      log "Pulling release ${RELEASE_TAG} from ${GIT_REMOTE}"
+      git fetch --prune "$GIT_REMOTE" "+refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+      reset_worktree_to_ref "$RELEASE_TAG"
+      echo "Release: ${RELEASE_TAG}"
       ;;
     branch)
-      log "Pulling latest from origin/$BRANCH"
-      git fetch --prune origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}" --tags
-      git checkout -f -B "$BRANCH" "origin/$BRANCH"
-      git reset --hard "origin/$BRANCH"
+      remote_branch="${GIT_REMOTE}/${BRANCH}"
+      log "Pulling latest from ${remote_branch}"
+      git fetch --prune "$GIT_REMOTE" "+refs/heads/${BRANCH}:refs/remotes/${GIT_REMOTE}/${BRANCH}" --tags
+      reset_worktree_to_ref "$remote_branch" "$BRANCH"
       ;;
     *)
       fail "Unsupported UPDATE_CHANNEL: $UPDATE_CHANNEL"
       ;;
   esac
-  echo "HEAD: $(git rev-parse --short HEAD) â€” $(git log -1 --pretty=%s)"
+  echo "HEAD: $(git rev-parse --short HEAD) - $(git log -1 --pretty=%s)"
 fi
 
 # --- Validate ---------------------------------------------------------------
@@ -438,8 +553,13 @@ if [[ -f "$SOURCE_DIR/installer/files/bpanel-helper.sh" ]]; then
     visudo -c -f /etc/sudoers.d/bpanel >/dev/null
     sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper wp --info >/dev/null
   else
-    echo "  (bpanel user not found; skipping helper refresh â€” run install.sh first)"
+    echo "  (bpanel user not found; skipping helper refresh - run install.sh first)"
   fi
+fi
+
+if [[ -f "$SOURCE_DIR/installer/rescue-ufw-blocklist.sh" ]]; then
+  log "Refreshing UFW blocklist rescue command"
+  install -m 0755 -o root -g root "$SOURCE_DIR/installer/rescue-ufw-blocklist.sh" /usr/local/sbin/bpanel-rescue-ufw-blocklist
 fi
 
 if [[ -f "$SOURCE_DIR/installer/files/bpanelctl" ]]; then

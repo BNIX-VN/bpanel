@@ -45,4 +45,4 @@ ufw status numbered || true
 
 echo ""
 echo "UFW rescue complete. Next, update BPanel so URL blocklists move to Nginx:"
-echo "  cd /opt/bpanel-source && git fetch --tags origin && git pull --ff-only origin main && bash installer/update.sh"
+echo "  cd /opt/bpanel-source && sudo bash installer/update.sh --release"

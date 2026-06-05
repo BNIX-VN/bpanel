@@ -289,6 +289,13 @@ Wants=network-online.target
 Type=oneshot
 Environment=SOURCE_DIR=${SOURCE_DIR}
 Environment=APP_DIR=${APP_DIR}
+Environment=REPO_URL=${REPO_URL:-https://github.com/BNIX-VN/bpanel.git}
+Environment=GIT_REMOTE=${GIT_REMOTE:-origin}
+Environment=UPDATE_CHANNEL=${UPDATE_CHANNEL:-release}
+Environment=BRANCH=${BRANCH:-main}
+Environment=RELEASE_TAG=${RELEASE_TAG:-}
+Environment=RELEASE_PATTERN=${RELEASE_PATTERN:-v[0-9]*.[0-9]*.[0-9]*}
+Environment=SKIP_PULL=${SKIP_PULL:-false}
 ExecStart=/bin/bash ${SOURCE_DIR}/installer/update.sh
 SERVICE
   cat >/etc/systemd/system/bpanel-auto-update.timer <<TIMER
@@ -322,12 +329,29 @@ run_panel_update() {
       --description="Update BPanel from GitHub" \
       --property="Environment=SOURCE_DIR=${SOURCE_DIR}" \
       --property="Environment=APP_DIR=${APP_DIR}" \
+      --property="Environment=REPO_URL=${REPO_URL:-https://github.com/BNIX-VN/bpanel.git}" \
+      --property="Environment=GIT_REMOTE=${GIT_REMOTE:-origin}" \
+      --property="Environment=UPDATE_CHANNEL=${UPDATE_CHANNEL:-release}" \
+      --property="Environment=BRANCH=${BRANCH:-main}" \
+      --property="Environment=RELEASE_TAG=${RELEASE_TAG:-}" \
+      --property="Environment=RELEASE_PATTERN=${RELEASE_PATTERN:-v[0-9]*.[0-9]*.[0-9]*}" \
+      --property="Environment=SKIP_PULL=${SKIP_PULL:-false}" \
       /bin/bash "${SOURCE_DIR}/installer/update.sh"
     echo "Panel update started: ${unit}.service"
     echo "Check progress: journalctl -u ${unit}.service -f"
     return 0
   fi
-  nohup env SOURCE_DIR="$SOURCE_DIR" APP_DIR="$APP_DIR" /bin/bash "${SOURCE_DIR}/installer/update.sh" \
+  nohup env \
+    SOURCE_DIR="$SOURCE_DIR" \
+    APP_DIR="$APP_DIR" \
+    REPO_URL="${REPO_URL:-https://github.com/BNIX-VN/bpanel.git}" \
+    GIT_REMOTE="${GIT_REMOTE:-origin}" \
+    UPDATE_CHANNEL="${UPDATE_CHANNEL:-release}" \
+    BRANCH="${BRANCH:-main}" \
+    RELEASE_TAG="${RELEASE_TAG:-}" \
+    RELEASE_PATTERN="${RELEASE_PATTERN:-v[0-9]*.[0-9]*.[0-9]*}" \
+    SKIP_PULL="${SKIP_PULL:-false}" \
+    /bin/bash "${SOURCE_DIR}/installer/update.sh" \
     >/var/log/bpanel-panel-update.log 2>&1 &
   echo "Panel update started in background. Log: /var/log/bpanel-panel-update.log"
 }
