@@ -51,7 +51,7 @@ BPANEL_VERSION=v1.0.0
 apt-get update
 apt-get install -y curl unzip
 rm -rf /opt/bpanel-source /tmp/bpanel-release /tmp/bpanel-release.zip
-curl -fL "https://github.com/BNIX-VN/bpanel/archive/refs/tags/${BPANEL_VERSION}.zip" -o /tmp/bpanel-release.zip
+curl -fL --connect-timeout 10 --max-time 300 "https://github.com/BNIX-VN/bpanel/archive/refs/tags/${BPANEL_VERSION}.zip" -o /tmp/bpanel-release.zip
 unzip -q /tmp/bpanel-release.zip -d /tmp/bpanel-release
 mv /tmp/bpanel-release/bpanel-* /opt/bpanel-source
 cd /opt/bpanel-source
@@ -113,11 +113,11 @@ bpanel-update --release
 ```
 
 The same action is available in the panel's **Updates** page. The update script
-fetches release tags, checks out the newest `vX.Y.Z` tag, syncs source to
-`/opt/bpanel`, rebuilds the frontend, refreshes helper scripts, restarts the API,
-and reloads Nginx. On zip-based installs, the first update automatically
-creates `/opt/bpanel-source` as a git checkout when it needs fresh release
-source.
+checks release tags, downloads the selected release zip to a temporary
+directory, syncs source to `/opt/bpanel`, rebuilds the frontend, refreshes
+helper scripts, restarts the API, reloads Nginx, and removes the temporary
+source. `/opt/bpanel-source` is not kept for normal release updates; it is only a
+developer `--branch` or `--skip-pull` source directory.
 
 The panel stores release check and update progress in
 `/var/lib/bpanel/update-status.json`. The Updates page compares the installed

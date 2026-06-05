@@ -41,11 +41,42 @@ detect_ip() {
   hostname -I 2>/dev/null | awk '{print $1}' || true
 }
 
-detect_ssh_ports() {
+find_sshd() {
   if command -v sshd >/dev/null 2>&1; then
-    sshd -T 2>/dev/null | awk '$1 == "port" {print $2}' | sort -nu
+    command -v sshd
+    return 0
   fi
-  awk '$1 == "Port" && $2 ~ /^[0-9]+$/ {print $2}' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null | sort -nu
+  for candidate in /usr/sbin/sshd /usr/local/sbin/sshd; do
+    [[ -x "$candidate" ]] && { echo "$candidate"; return 0; }
+  done
+  return 1
+}
+
+detect_ssh_ports() {
+  local sshd_bin
+  sshd_bin="$(find_sshd || true)"
+  {
+    if [[ -n "$sshd_bin" ]]; then
+      "$sshd_bin" -T 2>/dev/null | awk '$1 == "port" {print $2}'
+    fi
+    if [[ -n "${SSH_CONNECTION:-}" ]]; then
+      awk '{print $4}' <<<"$SSH_CONNECTION"
+    fi
+    awk '
+      tolower($1) == "port" && $2 ~ /^[0-9]+$/ { print $2 }
+      tolower($1) == "listenaddress" {
+        for (i = 2; i <= NF; i++) {
+          value = $i
+          gsub(/^\[/, "", value)
+          gsub(/\]$/, "", value)
+          if (value ~ /:[0-9]+$/) {
+            sub(/^.*:/, "", value)
+            print value
+          }
+        }
+      }
+    ' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null
+  } | awk '$1 ~ /^[0-9]+$/ && $1 >= 1 && $1 <= 65535 {print $1}' | sort -nu
 }
 
 normalize_domain() {
@@ -79,24 +110,60 @@ login_password_from_file() {
 
 write_login_info() {
   ensure_env_file
-  local password="${1:-}" url
+  local password="${1:-}" url tmp
   url="$(env_get PANEL_URL)"
   if [[ -z "$password" ]]; then
     password="$(login_password_from_file)"
   fi
-  [[ -n "$password" ]] || return 0
-  cat >/root/login.txt <<INFO
+  password="${password:-<not available; run bpanel change-admin-password>}"
+  (
+    if command -v flock >/dev/null 2>&1; then
+      flock -x 9
+    fi
+    tmp="$(mktemp /root/login.txt.XXXXXX)"
+    chmod 600 "$tmp"
+    cat >"$tmp" <<INFO
 Panel URL: ${url}
 User: admin
 Password: ${password}
 INFO
+    mv -f "$tmp" /root/login.txt
+  ) 9>/root/.bpanel-login.lock
   chmod 600 /root/login.txt
+}
+
+delete_bpanel_ufw_rules() {
+  local pattern="$1" number
+  command -v ufw >/dev/null 2>&1 || return 0
+  while read -r number; do
+    [[ -n "$number" ]] || continue
+    ufw --force delete "$number" >/dev/null 2>&1 || true
+  done < <(
+    ufw status numbered 2>/dev/null \
+      | awk -v pattern="$pattern" '
+          index($0, "bpanel:PanelZone") {
+            line = $0
+            if (!match(line, /^\[[[:space:]]*[0-9]+\]/)) {
+              next
+            }
+            number = substr(line, RSTART, RLENGTH)
+            gsub(/[^0-9]/, "", number)
+            sub(/^\[[[:space:]]*[0-9]+\][[:space:]]*/, "", line)
+            split(line, parts, /[[:space:]]+ALLOW[[:space:]]+/)
+            target = parts[1]
+            if (target == pattern || target == pattern " (v6)") {
+              print number
+            }
+          }
+        ' \
+      | sort -rn
+  )
 }
 
 allow_panel_port() {
   local port="$1"
   if command -v ufw >/dev/null 2>&1; then
-    ufw --force delete allow "${port}/tcp" >/dev/null 2>&1 || true
+    delete_bpanel_ufw_rules "${port}/tcp"
     ufw insert 1 allow "${port}/tcp" comment "bpanel:PanelZone" >/dev/null 2>&1 \
       || ufw insert 1 allow "${port}/tcp" >/dev/null 2>&1 \
       || ufw allow "${port}/tcp" >/dev/null 2>&1 \
@@ -107,7 +174,7 @@ allow_panel_port() {
 allow_panel_app() {
   local app="$1"
   if command -v ufw >/dev/null 2>&1; then
-    ufw --force delete allow "$app" >/dev/null 2>&1 || true
+    delete_bpanel_ufw_rules "$app"
     ufw insert 1 allow "$app" comment "bpanel:PanelZone" >/dev/null 2>&1 \
       || ufw insert 1 allow "$app" >/dev/null 2>&1 \
       || ufw allow "$app" >/dev/null 2>&1 \
@@ -122,7 +189,7 @@ close_old_panel_port() {
     22|80|443|465|587) return 0 ;;
   esac
   if command -v ufw >/dev/null 2>&1; then
-    ufw --force delete allow "${old_port}/tcp" >/dev/null 2>&1 || true
+    delete_bpanel_ufw_rules "${old_port}/tcp"
   fi
 }
 
@@ -390,7 +457,7 @@ PY
 
 show_status() {
   ensure_env_file
-  local port cert key scheme health_url health
+  local port cert key scheme health_url health http_code curl_rc curl_error curl_stderr
   port="$(env_get PANEL_PORT)"; port="${port:-$DEFAULT_PANEL_PORT}"
   cert="$(env_get PANEL_SSL_CERT)"; key="$(env_get PANEL_SSL_KEY)"
   scheme="http"
@@ -398,10 +465,19 @@ show_status() {
     scheme="https"
   fi
   health_url="${scheme}://127.0.0.1:${port}/api/health"
-  if curl -kfsS "$health_url" >/dev/null 2>&1; then
-    health="ok"
+  if ! command -v curl >/dev/null 2>&1; then
+    health="unknown (curl not found)"
   else
-    health="failed"
+    curl_stderr="$(mktemp)"
+    curl_rc=0
+    http_code="$(curl -ksS --connect-timeout 2 --max-time 5 -o /dev/null -w '%{http_code}' "$health_url" 2>"$curl_stderr")" || curl_rc=$?
+    curl_error="$(tr '\n' ' ' <"$curl_stderr" | sed -e 's/[[:space:]]*$//')"
+    rm -f "$curl_stderr"
+    if [[ "$curl_rc" -eq 0 && "$http_code" == "200" ]]; then
+      health="ok (HTTP 200)"
+    else
+      health="failed (curl=${curl_rc}, http=${http_code:-000}${curl_error:+, ${curl_error}})"
+    fi
   fi
   echo "Panel URL: $(env_get PANEL_URL)"
   echo "Local health: ${health} (${health_url})"
@@ -415,8 +491,15 @@ show_status() {
 }
 
 show_login_info() {
-  [[ -f /root/login.txt ]] || fail "/root/login.txt not found"
-  cat /root/login.txt
+  ensure_env_file
+  if [[ -f /root/login.txt ]]; then
+    cat /root/login.txt
+    return 0
+  fi
+  echo "Panel URL: $(env_get PANEL_URL)"
+  echo "User: admin"
+  echo "Password: <not available; run bpanel change-admin-password>"
+  echo "Note: /root/login.txt is missing and database password hashes cannot be reversed."
 }
 
 restart_panel_command() {
@@ -445,21 +528,24 @@ show_logs() {
 
 repair_firewall() {
   ensure_env_file
-  local panel_port ssh_port port
+  local panel_port ssh_port port seen_ssh_ports
   panel_port="$(env_get PANEL_PORT)"; panel_port="${panel_port:-$DEFAULT_PANEL_PORT}"
   validate_port "$panel_port"
   allow_panel_app OpenSSH
-  allow_panel_port 22
+  seen_ssh_ports="$(detect_ssh_ports)"
   while read -r ssh_port; do
     [[ -n "$ssh_port" ]] || continue
+    [[ "$ssh_port" == "22" ]] && continue
     allow_panel_port "$ssh_port"
-  done < <(detect_ssh_ports)
+  done <<<"$seen_ssh_ports"
   allow_panel_app 'Nginx Full'
-  for port in 80 443 465 587 "$panel_port"; do
+  for port in 465 587 "$panel_port"; do
+    case "$port" in
+      80|443) continue ;;
+    esac
     allow_panel_port "$port"
   done
   if command -v ufw >/dev/null 2>&1; then
-    ufw reload >/dev/null 2>&1 || true
     ufw status numbered || true
   fi
   echo "Firewall rescue rules refreshed."

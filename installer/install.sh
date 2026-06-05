@@ -51,17 +51,47 @@ detect_server_ip() {
   hostname -I 2>/dev/null | awk '{print $1}' || true
 }
 
+find_sshd() {
+  if command -v sshd >/dev/null 2>&1; then
+    command -v sshd
+    return 0
+  fi
+  for candidate in /usr/sbin/sshd /usr/local/sbin/sshd; do
+    [[ -x "$candidate" ]] && { echo "$candidate"; return 0; }
+  done
+  return 1
+}
+
 validate_port() {
   [[ "$1" =~ ^[0-9]{1,5}$ ]] || fail "Invalid PANEL_PORT: $1"
   (( $1 >= 1 && $1 <= 65535 )) || fail "PANEL_PORT out of range: $1"
 }
 
 detect_ssh_ports() {
-  if command -v sshd >/dev/null 2>&1; then
-    sshd -T 2>/dev/null | awk '$1 == "port" {print $2}' | sort -nu
-    return 0
-  fi
-  awk '$1 == "Port" && $2 ~ /^[0-9]+$/ {print $2}' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null | sort -nu
+  local sshd_bin
+  sshd_bin="$(find_sshd || true)"
+  {
+    if [[ -n "$sshd_bin" ]]; then
+      "$sshd_bin" -T 2>/dev/null | awk '$1 == "port" {print $2}'
+    fi
+    if [[ -n "${SSH_CONNECTION:-}" ]]; then
+      awk '{print $4}' <<<"$SSH_CONNECTION"
+    fi
+    awk '
+      tolower($1) == "port" && $2 ~ /^[0-9]+$/ { print $2 }
+      tolower($1) == "listenaddress" {
+        for (i = 2; i <= NF; i++) {
+          value = $i
+          gsub(/^\[/, "", value)
+          gsub(/\]$/, "", value)
+          if (value ~ /:[0-9]+$/) {
+            sub(/^.*:/, "", value)
+            print value
+          }
+        }
+      }
+    ' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null
+  } | awk '$1 ~ /^[0-9]+$/ && $1 >= 1 && $1 <= 65535 {print $1}' | sort -nu
 }
 
 is_domain_name() {
@@ -166,7 +196,7 @@ install_base_packages() {
 }
 
 install_nodejs() {
-  curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash -
+  curl -fsSL --connect-timeout 10 --max-time 180 "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash -
   apt-get install -y nodejs
   node - <<'NODE'
 const major = Number(process.versions.node.split('.')[0]);
@@ -194,7 +224,7 @@ install_ioncube_loader() {
   apt-get install -y ca-certificates curl tar >/dev/null
   tmp="$(mktemp -d)" || fail "Cannot create ionCube temporary directory"
   archive="${tmp}/ioncube_loaders.tar.gz"
-  if ! curl -fsSL "$url" -o "$archive"; then
+  if ! curl -fsSL --connect-timeout 10 --max-time 300 "$url" -o "$archive"; then
     rm -rf -- "$tmp"
     fail "Failed to download ionCube Loader"
   fi
@@ -409,7 +439,7 @@ install_waf_engine() {
 
 install_wp_cli() {
   if ! command -v wp >/dev/null 2>&1; then
-    curl -fsSL -o /usr/local/bin/wp https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+    curl -fsSL --connect-timeout 10 --max-time 180 -o /usr/local/bin/wp https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
     chmod +x /usr/local/bin/wp
   fi
 }
@@ -573,7 +603,7 @@ ENV
 
 wait_for_backend() {
   for _ in {1..30}; do
-    if curl -fsS "http://127.0.0.1:${PANEL_PORT}/api/health" >/dev/null 2>&1; then
+    if curl -fsS --connect-timeout 2 --max-time 5 "http://127.0.0.1:${PANEL_PORT}/api/health" >/dev/null 2>&1; then
       return 0
     fi
     sleep 1
@@ -863,10 +893,37 @@ setup_nginx() {
 }
 
 setup_firewall() {
+  local default_port seen_ssh_ports ssh_port
+  ufw_delete_bpanel_rules() {
+    local pattern="$1" number
+    while read -r number; do
+      [[ -n "$number" ]] || continue
+      ufw --force delete "$number" >/dev/null 2>&1 || true
+    done < <(
+      ufw status numbered 2>/dev/null \
+        | awk -v pattern="$pattern" '
+            index($0, "bpanel:PanelZone") {
+              line = $0
+              if (!match(line, /^\[[[:space:]]*[0-9]+\]/)) {
+                next
+              }
+              number = substr(line, RSTART, RLENGTH)
+              gsub(/[^0-9]/, "", number)
+              sub(/^\[[[:space:]]*[0-9]+\][[:space:]]*/, "", line)
+              split(line, parts, /[[:space:]]+ALLOW[[:space:]]+/)
+              target = parts[1]
+              if (target == pattern || target == pattern " (v6)") {
+                print number
+              }
+            }
+          ' \
+        | sort -rn
+    )
+  }
   ufw_panel_allow_port() {
     local port="$1"
     [[ "$port" =~ ^[0-9]+$ ]] || return 0
-    ufw --force delete allow "${port}/tcp" >/dev/null 2>&1 || true
+    ufw_delete_bpanel_rules "${port}/tcp"
     ufw insert 1 allow "${port}/tcp" comment "bpanel:PanelZone" >/dev/null 2>&1 \
       || ufw insert 1 allow "${port}/tcp" >/dev/null 2>&1 \
       || ufw allow "${port}/tcp" >/dev/null 2>&1 \
@@ -874,6 +931,7 @@ setup_firewall() {
   }
   ufw_panel_allow_app() {
     local app="$1"
+    ufw_delete_bpanel_rules "$app"
     ufw insert 1 allow "$app" comment "bpanel:PanelZone" >/dev/null 2>&1 \
       || ufw insert 1 allow "$app" >/dev/null 2>&1 \
       || ufw allow "$app" >/dev/null 2>&1 \
@@ -883,13 +941,14 @@ setup_firewall() {
   ufw default deny incoming || true
   ufw default allow outgoing || true
   ufw_panel_allow_app OpenSSH
-  ufw_panel_allow_port 22
+  seen_ssh_ports="$(detect_ssh_ports)"
   while read -r ssh_port; do
     [[ -n "$ssh_port" ]] || continue
+    [[ "$ssh_port" == "22" ]] && continue
     ufw_panel_allow_port "$ssh_port"
-  done < <(detect_ssh_ports)
+  done <<<"$seen_ssh_ports"
   ufw_panel_allow_app 'Nginx Full'
-  for default_port in 80 443 465 587 "${PANEL_PORT}"; do
+  for default_port in 465 587 "${PANEL_PORT}"; do
     ufw_panel_allow_port "$default_port"
   done
   ufw --force enable || true
@@ -924,7 +983,7 @@ setup_ssl() {
   systemctl reload nginx
   systemctl restart bpanel-api
   for _ in {1..20}; do
-    if curl -kfsS "https://127.0.0.1:${PANEL_PORT}/api/health" >/dev/null 2>&1; then
+    if curl -kfsS --connect-timeout 2 --max-time 5 "https://127.0.0.1:${PANEL_PORT}/api/health" >/dev/null 2>&1; then
       return 0
     fi
     sleep 1
@@ -943,11 +1002,20 @@ print_summary() {
 }
 
 write_login_info() {
-  cat >/root/login.txt <<INFO
+  local tmp
+  (
+    if command -v flock >/dev/null 2>&1; then
+      flock -x 9
+    fi
+    tmp="$(mktemp /root/login.txt.XXXXXX)"
+    chmod 600 "$tmp"
+    cat >"$tmp" <<INFO
 Panel URL: ${PANEL_URL}
 User: admin
 Password: ${ADMIN_PASSWORD}
 INFO
+    mv -f "$tmp" /root/login.txt
+  ) 9>/root/.bpanel-login.lock
   chmod 600 /root/login.txt
 }
 

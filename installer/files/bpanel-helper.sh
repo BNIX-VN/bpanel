@@ -124,10 +124,43 @@ allow_panel_port() {
   fi
 }
 
+ufw_commented_rule_numbers() {
+  local comment="$1" target="${2:-}"
+  ufw status numbered 2>/dev/null \
+    | awk -v comment="$comment" -v target="$target" '
+        index($0, comment) {
+          line = $0
+          if (!match(line, /^\[[[:space:]]*[0-9]+\]/)) {
+            next
+          }
+          number = substr(line, RSTART, RLENGTH)
+          gsub(/[^0-9]/, "", number)
+          if (target == "") {
+            print number
+            next
+          }
+          sub(/^\[[[:space:]]*[0-9]+\][[:space:]]*/, "", line)
+          split(line, parts, /[[:space:]]+ALLOW[[:space:]]+/)
+          rule_target = parts[1]
+          if (rule_target == target || rule_target == target " (v6)") {
+            print number
+          }
+        }
+      '
+}
+
+ufw_delete_commented_rules() {
+  local comment="$1" target="${2:-}" number
+  while read -r number; do
+    [[ -n "$number" ]] || continue
+    ufw --force delete "$number" >/dev/null 2>&1 || true
+  done < <(ufw_commented_rule_numbers "$comment" "$target" | sort -rn)
+}
+
 ufw_panel_allow_port() {
   local port="$1"
   require_port "$port"
-  ufw --force delete allow "${port}/tcp" >/dev/null 2>&1 || true
+  ufw_delete_commented_rules "bpanel:PanelZone" "${port}/tcp"
   ufw insert 1 allow "${port}/tcp" comment "bpanel:PanelZone" >/dev/null 2>&1 \
     || ufw insert 1 allow "${port}/tcp" >/dev/null 2>&1 \
     || ufw allow "${port}/tcp" >/dev/null 2>&1 \
@@ -137,6 +170,7 @@ ufw_panel_allow_port() {
 ufw_panel_allow_app() {
   local app="$1"
   [[ "$app" == "OpenSSH" || "$app" == "Nginx Full" ]] || deny "invalid panel firewall app: $app"
+  ufw_delete_commented_rules "bpanel:PanelZone" "$app"
   ufw insert 1 allow "$app" comment "bpanel:PanelZone" >/dev/null 2>&1 \
     || ufw insert 1 allow "$app" >/dev/null 2>&1 \
     || ufw allow "$app" >/dev/null 2>&1 \
@@ -566,7 +600,7 @@ install_ioncube_loader() {
   apt-get install -y ca-certificates curl tar >/dev/null
   tmp="$(mktemp -d)" || deny "cannot create ionCube temporary directory"
   archive="${tmp}/ioncube_loaders.tar.gz"
-  if ! curl -fsSL "$url" -o "$archive"; then
+  if ! curl -fsSL --connect-timeout 10 --max-time 300 "$url" -o "$archive"; then
     rm -rf -- "$tmp"
     deny "failed to download ionCube Loader"
   fi
@@ -863,7 +897,7 @@ firewall_blocklist_status() {
 
 firewall_blocklist_clear_rules() {
   local numbers number
-  numbers="$(ufw status numbered 2>/dev/null | awk '/bpanel:UserZone:blocklist/ { gsub(/[][]/, "", $1); print $1 }' | sort -rn)"
+  numbers="$(ufw_commented_rule_numbers "bpanel:UserZone:blocklist" | sort -rn)"
   for number in $numbers; do
     ufw --force delete "$number" >/dev/null 2>&1 || true
   done
@@ -883,7 +917,7 @@ firewall_blocklist_run() {
   while IFS= read -r url; do
     [[ -n "$url" ]] || continue
     require_url "$url"
-    curl -fsSL --max-time 30 "$url" >>"$fetched" || echo "WARNING: could not fetch $url" >&2
+    curl -fsSL --connect-timeout 10 --max-time 30 "$url" >>"$fetched" || echo "WARNING: could not fetch $url" >&2
     printf '\n' >>"$fetched"
   done < <(firewall_blocklist_urls)
   python3 - "$fetched" "$tmp" "$rules_tmp" <<'PY'

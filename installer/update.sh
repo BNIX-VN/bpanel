@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # Update BPanel from GitHub.
 #
-# This script is meant to live in a checkout of the BPanel repo (e.g.
-# /opt/bpanel-source). By default it pulls the latest stable release tag,
-# syncs the source into /opt/bpanel, rebuilds the frontend, refreshes the
-# direct panel service, restarts the API, and reloads nginx for customer
-# vhosts.
+# By default this script downloads the newest stable release zip to a temporary
+# directory, syncs the source into /opt/bpanel, rebuilds the frontend, refreshes
+# helper scripts, restarts the API, and reloads nginx for customer vhosts. A git
+# checkout is only used for --branch or --skip-pull development workflows.
 #
 # Usage:
 #   sudo bash installer/update.sh
@@ -37,11 +36,12 @@ Options:
 
 Environment:
   APP_DIR, SOURCE_DIR, REPO_URL, GIT_REMOTE, UPDATE_CHANNEL, BRANCH,
-  RELEASE_TAG, RELEASE_PATTERN, SKIP_PULL.
+  RELEASE_TAG, RELEASE_PATTERN, RELEASE_ZIP_URL, SKIP_PULL.
 
 Notes:
-  The release channel always selects the newest matching release tag. Use
-  --tag or UPDATE_CHANNEL=tag with RELEASE_TAG to pin a specific tag.
+  The release channel selects the newest matching release tag and downloads a
+  zip archive. Use --tag or UPDATE_CHANNEL=tag with RELEASE_TAG to pin a tag.
+  Use RELEASE_ZIP_URL with {tag} only for non-GitHub archive URLs.
 USAGE
 }
 
@@ -79,7 +79,7 @@ trap cleanup_stable_copy EXIT
 
 # --- Config ----------------------------------------------------------------
 APP_DIR="${APP_DIR:-/opt/bpanel}"                 # Production deployment dir
-DEFAULT_SOURCE_DIR="/opt/bpanel-source"           # Where the git checkout lives
+DEFAULT_SOURCE_DIR="/opt/bpanel-source"           # Dev/branch checkout dir only
 
 # Resolve where THIS script lives. If it's inside a real git checkout we use
 # that. Otherwise we fall back to /opt/bpanel-source so users running the
@@ -98,8 +98,10 @@ UPDATE_CHANNEL="${UPDATE_CHANNEL-release}"        # release, branch, or tag
 BRANCH="${BRANCH-main}"                           # used when UPDATE_CHANNEL=branch
 RELEASE_TAG="${RELEASE_TAG-}"                     # used when UPDATE_CHANNEL=tag
 RELEASE_PATTERN="${RELEASE_PATTERN:-v[0-9]*.[0-9]*.[0-9]*}"
+RELEASE_ZIP_URL="${RELEASE_ZIP_URL:-}"             # optional archive URL template with {tag}
 SKIP_PULL="${SKIP_PULL:-false}"
 UPDATE_STATE_FILE="${UPDATE_STATE_FILE:-/var/lib/bpanel/update-status.json}"
+RELEASE_WORK_DIR=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -176,7 +178,46 @@ ensure_git_remote() {
 }
 
 latest_release_tag() {
-  git tag --list "$RELEASE_PATTERN" --sort=-v:refname | head -n 1
+  git ls-remote --tags --refs "$REPO_URL" "refs/tags/${RELEASE_PATTERN}" \
+    | awk '{ sub("refs/tags/", "", $2); print $2 }' \
+    | sort -V \
+    | tail -n 1
+}
+
+release_archive_url() {
+  local tag="$1" repo="$REPO_URL" base
+  if [[ -n "$RELEASE_ZIP_URL" ]]; then
+    printf '%s\n' "${RELEASE_ZIP_URL//\{tag\}/$tag}"
+    return 0
+  fi
+  case "$repo" in
+    https://github.com/*)
+      base="${repo%.git}"
+      ;;
+    git@github.com:*)
+      base="https://github.com/${repo#git@github.com:}"
+      base="${base%.git}"
+      ;;
+    *)
+      fail "Cannot derive release zip URL from REPO_URL. Set RELEASE_ZIP_URL or use --branch."
+      ;;
+  esac
+  printf '%s/archive/refs/tags/%s.zip\n' "$base" "$tag"
+}
+
+download_release_source() {
+  local tag="$1" archive extract_dir archive_url
+  RELEASE_WORK_DIR="$(mktemp -d /tmp/bpanel-release-update.XXXXXX)"
+  archive="${RELEASE_WORK_DIR}/bpanel-release.zip"
+  extract_dir="${RELEASE_WORK_DIR}/extract"
+  archive_url="$(release_archive_url "$tag")"
+  log "Downloading release ${tag}"
+  curl -fL --connect-timeout 10 --max-time 300 "$archive_url" -o "$archive"
+  mkdir -p "$extract_dir"
+  unzip -q "$archive" -d "$extract_dir"
+  SOURCE_DIR="$(find "$extract_dir" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+  [[ -n "$SOURCE_DIR" && -d "$SOURCE_DIR/backend" && -d "$SOURCE_DIR/frontend" ]] \
+    || fail "Release archive does not contain backend/frontend source"
 }
 
 reset_worktree_to_ref() {
@@ -235,19 +276,54 @@ PY
 }
 
 UPDATE_REF=""
+cleanup_release_work_dir() {
+  if [[ -n "${RELEASE_WORK_DIR:-}" && -d "$RELEASE_WORK_DIR" ]]; then
+    rm -rf -- "$RELEASE_WORK_DIR"
+  fi
+}
+
 finish_update_script() {
   local rc=$?
   if [[ $rc -ne 0 ]]; then
     write_update_state "failed" "${UPDATE_REF:-}" "Update failed with exit code ${rc}" || true
   fi
+  cleanup_release_work_dir
   cleanup_stable_copy
 }
 trap finish_update_script EXIT
 
+ufw_delete_bpanel_rules() {
+  local pattern="$1" number
+  command -v ufw >/dev/null 2>&1 || return 0
+  while read -r number; do
+    [[ -n "$number" ]] || continue
+    ufw --force delete "$number" >/dev/null 2>&1 || true
+  done < <(
+    ufw status numbered 2>/dev/null \
+      | awk -v pattern="$pattern" '
+          index($0, "bpanel:PanelZone") {
+            line = $0
+            if (!match(line, /^\[[[:space:]]*[0-9]+\]/)) {
+              next
+            }
+            number = substr(line, RSTART, RLENGTH)
+            gsub(/[^0-9]/, "", number)
+            sub(/^\[[[:space:]]*[0-9]+\][[:space:]]*/, "", line)
+            split(line, parts, /[[:space:]]+ALLOW[[:space:]]+/)
+            target = parts[1]
+            if (target == pattern || target == pattern " (v6)") {
+              print number
+            }
+          }
+        ' \
+      | sort -rn
+  )
+}
+
 ufw_panel_allow_port() {
   local port="$1"
   [[ "$port" =~ ^[0-9]+$ ]] || return 0
-  ufw --force delete allow "${port}/tcp" >/dev/null 2>&1 || true
+  ufw_delete_bpanel_rules "${port}/tcp"
   ufw insert 1 allow "${port}/tcp" comment "bpanel:PanelZone" >/dev/null 2>&1 \
     || ufw insert 1 allow "${port}/tcp" >/dev/null 2>&1 \
     || ufw allow "${port}/tcp" >/dev/null 2>&1 \
@@ -468,8 +544,8 @@ panel_healthcheck() {
   local port
   port="$(env_get PANEL_PORT)"
   port="${port:-2222}"
-  curl -kfsS "https://127.0.0.1:${port}/api/health" >/dev/null 2>&1 \
-    || curl -fsS "http://127.0.0.1:${port}/api/health" >/dev/null 2>&1
+  curl -kfsS --connect-timeout 2 --max-time 5 "https://127.0.0.1:${port}/api/health" >/dev/null 2>&1 \
+    || curl -fsS --connect-timeout 2 --max-time 5 "http://127.0.0.1:${port}/api/health" >/dev/null 2>&1
 }
 
 refresh_bpanel_mariadb_grants() {
@@ -523,57 +599,59 @@ log "Backing up SQLite DB before update"
 backup_db
 write_update_state "checking" "" "Checking for BPanel releases"
 
-# --- Pull latest source ----------------------------------------------------
-if [[ "$(readlink -f "$SOURCE_DIR")" == "$(readlink -f "$APP_DIR")" ]]; then
-  fail "SOURCE_DIR ($SOURCE_DIR) and APP_DIR ($APP_DIR) must be different. Clone the repo to /opt/bpanel-source first."
-fi
-
-if [[ "$SKIP_PULL" != "true" ]]; then
-  if [[ ! -d "$SOURCE_DIR/.git" ]]; then
-    if [[ -e "$SOURCE_DIR" && -n "$(ls -A "$SOURCE_DIR" 2>/dev/null)" ]]; then
-      source_backup="${SOURCE_DIR}.release-archive-$(date -u +%Y%m%d-%H%M%S)"
-      log "Archiving non-git release source to ${source_backup}"
-      cd /
-      mv "$SOURCE_DIR" "$source_backup"
-    fi
-    log "Cloning ${REPO_URL} to ${SOURCE_DIR} with remote ${GIT_REMOTE}"
-    git clone -o "$GIT_REMOTE" "$REPO_URL" "$SOURCE_DIR"
+# --- Fetch source -----------------------------------------------------------
+if [[ "$SKIP_PULL" == "true" ]]; then
+  if [[ "$(readlink -f "$SOURCE_DIR")" == "$(readlink -f "$APP_DIR")" ]]; then
+    fail "SOURCE_DIR ($SOURCE_DIR) and APP_DIR ($APP_DIR) must be different."
   fi
-  cd "$SOURCE_DIR"
-  ensure_git_remote
+  UPDATE_REF="local:${SOURCE_DIR}"
+  write_update_state "updating" "$UPDATE_REF" "Syncing BPanel from ${SOURCE_DIR}"
+else
   case "$UPDATE_CHANNEL" in
     release)
-      log "Pulling latest release from ${GIT_REMOTE}"
-      git fetch --prune --prune-tags "$GIT_REMOTE" "+refs/tags/*:refs/tags/*"
+      log "Checking latest release from ${REPO_URL}"
       RELEASE_TAG="$(latest_release_tag)"
       [[ -n "$RELEASE_TAG" ]] || fail "No release tags found matching $RELEASE_PATTERN"
       UPDATE_REF="$RELEASE_TAG"
       write_update_state "updating" "$UPDATE_REF" "Updating BPanel from ${UPDATE_REF}"
-      reset_worktree_to_ref "$RELEASE_TAG"
+      download_release_source "$RELEASE_TAG"
       echo "Release: ${RELEASE_TAG}"
       ;;
     tag)
       [[ -n "$RELEASE_TAG" ]] || fail "--tag requires a release tag"
-      log "Pulling release ${RELEASE_TAG} from ${GIT_REMOTE}"
-      git fetch --prune "$GIT_REMOTE" "+refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
       UPDATE_REF="$RELEASE_TAG"
       write_update_state "updating" "$UPDATE_REF" "Updating BPanel from ${UPDATE_REF}"
-      reset_worktree_to_ref "$RELEASE_TAG"
+      download_release_source "$RELEASE_TAG"
       echo "Release: ${RELEASE_TAG}"
       ;;
     branch)
+      if [[ "$(readlink -f "$SOURCE_DIR")" == "$(readlink -f "$APP_DIR")" ]]; then
+        fail "SOURCE_DIR ($SOURCE_DIR) and APP_DIR ($APP_DIR) must be different."
+      fi
+      if [[ ! -d "$SOURCE_DIR/.git" ]]; then
+        if [[ -e "$SOURCE_DIR" && -n "$(ls -A "$SOURCE_DIR" 2>/dev/null)" ]]; then
+          source_backup="${SOURCE_DIR}.release-archive-$(date -u +%Y%m%d-%H%M%S)"
+          log "Archiving non-git release source to ${source_backup}"
+          cd /
+          mv "$SOURCE_DIR" "$source_backup"
+        fi
+        log "Cloning ${REPO_URL} to ${SOURCE_DIR} with remote ${GIT_REMOTE}"
+        git clone -o "$GIT_REMOTE" "$REPO_URL" "$SOURCE_DIR"
+      fi
+      cd "$SOURCE_DIR"
+      ensure_git_remote
       remote_branch="${GIT_REMOTE}/${BRANCH}"
       log "Pulling latest from ${remote_branch}"
       git fetch --prune "$GIT_REMOTE" "+refs/heads/${BRANCH}:refs/remotes/${GIT_REMOTE}/${BRANCH}" --tags
       UPDATE_REF="$remote_branch"
       write_update_state "updating" "$UPDATE_REF" "Updating BPanel from ${UPDATE_REF}"
       reset_worktree_to_ref "$remote_branch" "$BRANCH"
+      echo "HEAD: $(git rev-parse --short HEAD) - $(git log -1 --pretty=%s)"
       ;;
     *)
       fail "Unsupported UPDATE_CHANNEL: $UPDATE_CHANNEL"
       ;;
   esac
-  echo "HEAD: $(git rev-parse --short HEAD) - $(git log -1 --pretty=%s)"
 fi
 
 # --- Validate ---------------------------------------------------------------
