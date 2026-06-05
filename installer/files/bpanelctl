@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# BPanel SSH maintenance menu.
+# BPanel SSH rescue menu.
 
 set -euo pipefail
 
@@ -41,6 +41,13 @@ detect_ip() {
   hostname -I 2>/dev/null | awk '{print $1}' || true
 }
 
+detect_ssh_ports() {
+  if command -v sshd >/dev/null 2>&1; then
+    sshd -T 2>/dev/null | awk '$1 == "port" {print $2}' | sort -nu
+  fi
+  awk '$1 == "Port" && $2 ~ /^[0-9]+$/ {print $2}' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null | sort -nu
+}
+
 normalize_domain() {
   local value="$1"
   value="${value#http://}"
@@ -65,10 +72,57 @@ restart_panel() {
   systemctl restart bpanel-api
 }
 
+login_password_from_file() {
+  [[ -f /root/login.txt ]] || return 0
+  sed -n 's/^Password: //p' /root/login.txt | head -n 1
+}
+
+write_login_info() {
+  ensure_env_file
+  local password="${1:-}" url
+  url="$(env_get PANEL_URL)"
+  if [[ -z "$password" ]]; then
+    password="$(login_password_from_file)"
+  fi
+  [[ -n "$password" ]] || return 0
+  cat >/root/login.txt <<INFO
+Panel URL: ${url}
+User: admin
+Password: ${password}
+INFO
+  chmod 600 /root/login.txt
+}
+
 allow_panel_port() {
   local port="$1"
   if command -v ufw >/dev/null 2>&1; then
-    ufw allow "${port}/tcp" >/dev/null || true
+    ufw --force delete allow "${port}/tcp" >/dev/null 2>&1 || true
+    ufw insert 1 allow "${port}/tcp" comment "bpanel:PanelZone" >/dev/null 2>&1 \
+      || ufw insert 1 allow "${port}/tcp" >/dev/null 2>&1 \
+      || ufw allow "${port}/tcp" >/dev/null 2>&1 \
+      || true
+  fi
+}
+
+allow_panel_app() {
+  local app="$1"
+  if command -v ufw >/dev/null 2>&1; then
+    ufw --force delete allow "$app" >/dev/null 2>&1 || true
+    ufw insert 1 allow "$app" comment "bpanel:PanelZone" >/dev/null 2>&1 \
+      || ufw insert 1 allow "$app" >/dev/null 2>&1 \
+      || ufw allow "$app" >/dev/null 2>&1 \
+      || true
+  fi
+}
+
+close_old_panel_port() {
+  local old_port="$1" new_port="$2"
+  [[ -n "$old_port" && "$old_port" != "$new_port" ]] || return 0
+  case "$old_port" in
+    22|80|443|465|587) return 0 ;;
+  esac
+  if command -v ufw >/dev/null 2>&1; then
+    ufw --force delete allow "${old_port}/tcp" >/dev/null 2>&1 || true
   fi
 }
 
@@ -145,6 +199,8 @@ set_panel_url() {
     env_set PANEL_SSL_KEY ""
   fi
   allow_panel_port "$port"
+  close_old_panel_port "$current_port" "$port"
+  write_login_info
   refresh_phpmyadmin_api_base "$scheme" "$port"
   refresh_tools_nginx
   restart_panel
@@ -190,6 +246,7 @@ install_panel_ssl() {
   env_set ALLOWED_ORIGINS "$url"
   env_set SSL_EMAIL "$email"
   allow_panel_port "$port"
+  write_login_info
   refresh_phpmyadmin_api_base "https" "$port"
   refresh_tools_nginx
   restart_panel
@@ -327,33 +384,124 @@ try:
 finally:
     db.close()
 PY
+  write_login_info "$password"
   echo "Admin password changed. Existing sessions were invalidated."
 }
 
 show_status() {
   ensure_env_file
+  local port cert key scheme health_url health
+  port="$(env_get PANEL_PORT)"; port="${port:-$DEFAULT_PANEL_PORT}"
+  cert="$(env_get PANEL_SSL_CERT)"; key="$(env_get PANEL_SSL_KEY)"
+  scheme="http"
+  if [[ -n "$cert" && -n "$key" && -f "$cert" && -f "$key" ]]; then
+    scheme="https"
+  fi
+  health_url="${scheme}://127.0.0.1:${port}/api/health"
+  if curl -kfsS "$health_url" >/dev/null 2>&1; then
+    health="ok"
+  else
+    health="failed"
+  fi
   echo "Panel URL: $(env_get PANEL_URL)"
-  echo "Panel port: $(env_get PANEL_PORT)"
-  systemctl --no-pager --lines=0 status bpanel-api || true
+  echo "Local health: ${health} (${health_url})"
+  echo "API: $(systemctl is-active bpanel-api 2>/dev/null || echo unknown)"
+  echo "Nginx: $(systemctl is-active nginx 2>/dev/null || echo unknown)"
+  echo "MariaDB: $(systemctl is-active mariadb 2>/dev/null || echo unknown)"
+  echo "Redis: $(systemctl is-active redis-server 2>/dev/null || echo unknown)"
+  if command -v ufw >/dev/null 2>&1; then
+    echo "UFW: $(ufw status 2>/dev/null | head -n 1)"
+  fi
+}
+
+show_login_info() {
+  [[ -f /root/login.txt ]] || fail "/root/login.txt not found"
+  cat /root/login.txt
+}
+
+restart_panel_command() {
+  systemctl daemon-reload || true
+  for service in mariadb redis-server nginx bpanel-api; do
+    if systemctl restart "$service" 2>/dev/null; then
+      echo "${service}: restarted"
+    else
+      echo "${service}: failed"
+    fi
+  done
+}
+
+show_logs() {
+  echo "== bpanel-api =="
+  journalctl -u bpanel-api -n 120 --no-pager 2>/dev/null || true
+  echo ""
+  echo "== nginx error.log =="
+  tail -n 80 /var/log/nginx/error.log 2>/dev/null || echo "No nginx error log found."
+  if [[ -f /var/log/bpanel-panel-update.log ]]; then
+    echo ""
+    echo "== bpanel update =="
+    tail -n 80 /var/log/bpanel-panel-update.log
+  fi
+}
+
+repair_firewall() {
+  ensure_env_file
+  local panel_port ssh_port port
+  panel_port="$(env_get PANEL_PORT)"; panel_port="${panel_port:-$DEFAULT_PANEL_PORT}"
+  validate_port "$panel_port"
+  allow_panel_app OpenSSH
+  allow_panel_port 22
+  while read -r ssh_port; do
+    [[ -n "$ssh_port" ]] || continue
+    allow_panel_port "$ssh_port"
+  done < <(detect_ssh_ports)
+  allow_panel_app 'Nginx Full'
+  for port in 80 443 465 587 "$panel_port"; do
+    allow_panel_port "$port"
+  done
+  if command -v ufw >/dev/null 2>&1; then
+    ufw reload >/dev/null 2>&1 || true
+    ufw status numbered || true
+  fi
+  echo "Firewall rescue rules refreshed."
+}
+
+run_panel_update() {
+  [[ -x /usr/local/sbin/bpanel-update ]] || fail "/usr/local/sbin/bpanel-update not found"
+  read -rp "Update BPanel to the latest vX.Y.Z release now? [y/N]: " confirm
+  case "$confirm" in
+    y|Y|yes|YES) ;;
+    *) echo "Canceled."; return 0 ;;
+  esac
+  /usr/local/sbin/bpanel-update --release
 }
 
 menu() {
   while true; do
     echo ""
-    echo "BPanel SSH Menu"
-    echo "1) Set panel URL / port"
-    echo "2) Install SSL for panel URL"
-    echo "3) Fix permissions"
-    echo "4) Change admin password"
-    echo "5) Show panel status"
+    echo "BPanel SSH Rescue Menu"
+    echo "1) Show login info"
+    echo "2) Show rescue status"
+    echo "3) View recent logs"
+    echo "4) Restart panel services"
+    echo "5) Repair firewall ports"
+    echo "6) Set/reset panel URL / port"
+    echo "7) Install/repair panel SSL"
+    echo "8) Fix permissions/runtime"
+    echo "9) Change admin password"
+    echo "10) Update panel from release"
     echo "0) Exit"
     read -rp "Choose: " choice
     case "$choice" in
-      1) set_panel_url ;;
-      2) install_panel_ssl ;;
-      3) fix_permissions ;;
-      4) change_admin_password ;;
-      5) show_status ;;
+      1) show_login_info ;;
+      2) show_status ;;
+      3) show_logs ;;
+      4) restart_panel_command ;;
+      5) repair_firewall ;;
+      6) set_panel_url ;;
+      7) install_panel_ssl ;;
+      8) fix_permissions ;;
+      9) change_admin_password ;;
+      10) run_panel_update ;;
       0) exit 0 ;;
       *) echo "Invalid choice" ;;
     esac
@@ -362,13 +510,18 @@ menu() {
 
 case "${1:-menu}" in
   menu|--menu) menu ;;
+  login|--login|show-login|--show-login) show_login_info ;;
+  logs|--logs) show_logs ;;
+  restart|--restart) restart_panel_command ;;
+  repair-firewall|--repair-firewall) repair_firewall ;;
+  update|--update) run_panel_update ;;
   set-panel-url|--set-panel-url) set_panel_url ;;
   install-panel-ssl|--install-panel-ssl) install_panel_ssl ;;
   fix-permissions|--fix-permissions) fix_permissions ;;
   change-admin-password|--change-admin-password) change_admin_password ;;
   status|--status) show_status ;;
   *)
-    echo "Usage: bpanel [menu|set-panel-url|install-panel-ssl|fix-permissions|change-admin-password|status]"
+    echo "Usage: bpanel [menu|login|status|logs|restart|repair-firewall|set-panel-url|install-panel-ssl|fix-permissions|change-admin-password|update]"
     exit 2
     ;;
 esac

@@ -89,7 +89,7 @@ After install, open the `Panel URL` printed at the end of the installer. The
 admin password is shown there and saved to `/root/login.txt`; store it in a
 password manager.
 
-## SSH maintenance menu
+## SSH rescue menu
 
 Run as root:
 
@@ -97,8 +97,11 @@ Run as root:
 bpanel
 ```
 
-The menu can set the panel URL/port, install SSL for the panel URL, fix runtime
-permissions, show status, and change the `admin` password.
+Use this menu when the web panel is unavailable. It can show the saved login,
+show rescue status, print recent logs, restart panel services, reopen required
+firewall ports, reset the panel URL/port, repair panel SSL, fix runtime
+permissions, change the `admin` password, and update BPanel from the latest
+release tag. Website and user management stays in the web panel.
 
 ## Updates
 
