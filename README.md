@@ -31,7 +31,7 @@ ownership, quotas, backups, SSL, services, and firewall tools built in.
 
 ## Versioning
 
-Current release: `1.00.0020`.
+Current release: `1.00.0021`.
 
 BPanel versions use `xx.yy.zzzz`: `xx` for major/release changes, `yy` for
 feature updates in the same release line, and `zzzz` for bugfix builds.
@@ -48,7 +48,7 @@ feature updates in the same release line, and `zzzz` for bugfix builds.
 Run as root on a fresh Ubuntu 24.04 server:
 
 ```bash
-BPANEL_VERSION=v1.00.0020;\
+BPANEL_VERSION=v1.00.0021;\
 apt-get update;apt-get install -y git;\
 git clone --branch "$BPANEL_VERSION" --depth 1 https://github.com/BNIX-VN/bpanel.git /opt/bpanel-source;\
 cd /opt/bpanel-source;\
@@ -112,7 +112,7 @@ To pin an exact release:
 
 ```bash
 cd /opt/bpanel-source
-sudo bash installer/update.sh --tag v1.00.0020
+sudo bash installer/update.sh --tag v1.00.0021
 ```
 
 To test unreleased code from a branch, opt in explicitly:

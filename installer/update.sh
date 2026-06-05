@@ -10,7 +10,7 @@
 # Usage:
 #   sudo bash installer/update.sh
 #   sudo bash installer/update.sh --branch main
-#   sudo bash installer/update.sh --tag v1.00.0020
+#   sudo bash installer/update.sh --tag v1.00.0021
 #   APP_DIR=/srv/bpanel sudo -E bash installer/update.sh
 
 set -euo pipefail
