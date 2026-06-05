@@ -1773,8 +1773,8 @@ function App() {
     }
   }
 
-  async function loadUpdates() {
-    const data = await request('/updates/status', {}, 'Loading update status...');
+  async function loadUpdates(force = false) {
+    const data = await request(`/updates/status${force ? '?refresh=true' : ''}`, {}, 'Loading update status...');
     if (data) setUpdatesStatus(data);
   }
 
@@ -1797,7 +1797,7 @@ function App() {
   async function runPanelUpdate() {
     if (!confirm('Update BPanel from GitHub now? The API may restart.')) return;
     const data = await request('/updates/panel/run', { method: 'POST' }, 'Starting BPanel update task...');
-    if (data) setNotice((data.stdout || data.stderr || 'Panel update task started.').trim());
+    if (data) { setNotice((data.stdout || data.stderr || 'Panel update task started.').trim()); await loadUpdates(); }
   }
 
   async function savePanelAutoUpdate() {
@@ -1864,6 +1864,7 @@ function App() {
     if (isAuthenticated && page === 'php') loadPhpConfig();
     if (isAuthenticated && page === 'firewall') { loadFirewall(); loadFirewallBlocklists(); }
     if (isAuthenticated && page === 'waf') loadWafRules();
+    if (isAuthenticated && page === 'updates' && currentUser?.role === 'admin') loadUpdates();
     if (isAuthenticated && page === 'security') loadTwoFactorStatus();
     if (isAuthenticated && page === 'settings') loadPanelSettings();
     if (isAuthenticated && page === 'backups' && currentUser?.role === 'admin') { loadUsers(); loadSftpTargets(); loadBackupSchedules(); loadRestoreBackups(); }
@@ -2736,18 +2737,37 @@ function App() {
   function renderUpdates() {
     if (!isAdmin) return <section className="section"><h2>Updates</h2><p className="hint">No permission.</p></section>;
     const statusText = updatesStatus?.stdout || updatesStatus?.stderr || 'Click View logs to load update logs.';
+    const panelUpdate = updatesStatus?.panel || {};
+    const updateKnown = typeof panelUpdate.update_available === 'boolean';
+    const updateAvailable = panelUpdate.update_available === true;
+    const panelBadge = updateAvailable ? 'Update available' : updateKnown ? 'Up to date' : 'Unknown';
+    const panelBadgeClass = updateAvailable ? 'badge bad' : updateKnown ? 'badge ok' : 'badge';
+    const currentPanelVersion = panelUpdate.current_version || appVersion || 'unknown';
+    const latestPanelVersion = panelUpdate.latest_version || 'unknown';
     return <>
       <section className="section">
         <div className="section-title">
-          <div><h2>Updates</h2><p className="hint">OS packages use apt; panel updates use <code>installer/update.sh</code>.</p></div>
+          <div><h2>Updates</h2><p className="hint">OS packages use apt; panel updates use <code>bpanel-update</code>.</p></div>
           <button className="secondary-light" disabled={!!loading} onClick={toggleUpdateLog}>{showUpdateLog ? <X size={14}/> : <FileText size={14}/>} {showUpdateLog ? 'Hide logs' : 'View logs'}</button>
         </div>
+        <div className="info-box update-version-box">
+          <div className="update-version-head"><strong>Panel release</strong><span className={panelBadgeClass}>{panelBadge}</span></div>
+          <div className="update-version-grid">
+            <span>Current <strong>v{currentPanelVersion}</strong></span>
+            <span>Latest <strong>{latestPanelVersion === 'unknown' ? 'unknown' : `v${latestPanelVersion}`}</strong></span>
+            <span>Checked <strong>{panelUpdate.last_checked_at || 'never'}</strong></span>
+            <span>State file <strong>{panelUpdate.state_file || '/var/lib/bpanel/update-status.json'}</strong></span>
+          </div>
+          {panelUpdate.check_error && <p className="hint">Release check failed: {panelUpdate.check_error}</p>}
+          {panelUpdate.last_update_status && <p className="hint">Last update: {panelUpdate.last_update_status}{panelUpdate.last_update_ref ? ` (${panelUpdate.last_update_ref})` : ''}{panelUpdate.last_update_finished_at ? ` at ${panelUpdate.last_update_finished_at}` : ''}</p>}
+        </div>
         <div className="actions">
+          <button className="secondary-light" disabled={!!loading} onClick={() => loadUpdates(true)}><RefreshCw size={14}/> Check releases</button>
           <button disabled={!!loading} onClick={runOsUpdate}><RefreshCw size={14}/> Update OS now</button>
-          <button disabled={!!loading} onClick={runPanelUpdate}><RotateCcw size={14}/> Update panel now</button>
+          <button disabled={!!loading || !updateAvailable} onClick={runPanelUpdate}><RotateCcw size={14}/> Update panel now</button>
         </div>
         {showUpdateLog && <div className="info-box firewall-status update-log-box">
-          <div className="update-log-head"><strong>Update logs</strong><button className="secondary-light" disabled={!!loading} onClick={loadUpdates}><RefreshCw size={13}/> Refresh</button></div>
+          <div className="update-log-head"><strong>Update logs</strong><button className="secondary-light" disabled={!!loading} onClick={() => loadUpdates(true)}><RefreshCw size={13}/> Refresh</button></div>
           <pre>{statusText}</pre>
         </div>}
       </section>

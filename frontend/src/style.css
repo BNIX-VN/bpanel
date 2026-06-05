@@ -720,6 +720,10 @@ button:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
 .backup-item:hover{border-color:var(--border-hover);background:var(--surface-alt)}
 .firewall-form span{font-weight:600;color:var(--text-muted);font-size:13px}
 .firewall-status pre{max-height:320px;overflow:auto;margin:0;white-space:pre}
+.update-version-box{margin-top:4px}
+.update-version-head{display:flex;justify-content:space-between;gap:10px;align-items:center}
+.update-version-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;color:var(--text-muted);font-size:13px}
+.update-version-grid strong{color:var(--text)}
 .firewall-delete-inline{display:grid;grid-template-columns:minmax(140px,1fr) max-content;gap:10px;align-items:end;margin-top:8px;max-width:420px}
 .firewall-delete-inline label{display:grid;gap:6px;font-weight:600;color:var(--text-secondary)}
 .firewall-delete-inline span{font-weight:600;color:var(--text-muted);font-size:13px}

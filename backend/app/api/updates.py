@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from app.api.deps import get_current_user
 from app.core.permissions import Role, ensure_role
@@ -10,9 +10,9 @@ router = APIRouter(prefix="/updates", tags=["updates"])
 
 
 @router.get("/status")
-def get_update_status(current_user: User = Depends(get_current_user)):
+def get_update_status(refresh: bool = Query(default=False), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.admin)
-    return updates.status().__dict__
+    return updates.status(force_refresh=refresh)
 
 
 @router.post("/os/run")

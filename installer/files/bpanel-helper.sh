@@ -1325,6 +1325,13 @@ case "$cmd" in
 
   # ---- updates ----------------------------------------------------------
   updates-status)
+    echo "BPanel release status:"
+    if [[ -f "${BPANEL_DATA_DIR}/update-status.json" ]]; then
+      cat "${BPANEL_DATA_DIR}/update-status.json"
+    else
+      echo "No update status file found."
+    fi
+    echo ""
     echo "APT upgradable packages:"
     apt list --upgradable 2>/dev/null | sed -n '1,60p' || true
     echo ""

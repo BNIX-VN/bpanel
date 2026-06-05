@@ -114,6 +114,11 @@ and reloads Nginx. On zip-based installs, the first update automatically
 creates `/opt/bpanel-source` as a git checkout when it needs fresh release
 source.
 
+The panel stores release check and update progress in
+`/var/lib/bpanel/update-status.json`. The Updates page compares the installed
+version with the newest release tag and enables the panel update button only
+when a newer release is available.
+
 To stay on a specific release:
 
 ```bash

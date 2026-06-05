@@ -943,6 +943,35 @@ INFO
   chmod 600 /root/login.txt
 }
 
+source_version() {
+  if [[ -f "${PROJECT_ROOT}/VERSION" ]]; then
+    tr -d '[:space:]' <"${PROJECT_ROOT}/VERSION"
+    return 0
+  fi
+  sed -nE 's/^APP_VERSION = "([^"]+)"/\1/p' "${PROJECT_ROOT}/backend/app/core/version.py" 2>/dev/null | head -n 1
+}
+
+write_update_state() {
+  local version now
+  version="$(source_version)"
+  version="${version:-1.0.0}"
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  install -d -o bpanel -g bpanel -m 0750 /var/lib/bpanel
+  cat >/var/lib/bpanel/update-status.json <<STATE
+{
+  "current_version": "${version}",
+  "latest_tag": "v${version}",
+  "latest_version": "${version}",
+  "last_checked_at": "${now}",
+  "last_update_finished_at": "${now}",
+  "last_update_ref": "v${version}",
+  "last_update_status": "installed"
+}
+STATE
+  chown bpanel:bpanel /var/lib/bpanel/update-status.json 2>/dev/null || true
+  chmod 0640 /var/lib/bpanel/update-status.json
+}
+
 cleanup_release_source() {
   [[ "${CLEAN_RELEASE_SOURCE:-true}" == "true" ]] || return 0
   [[ "$PROJECT_ROOT" == "/opt/bpanel-source" ]] || return 0
@@ -1013,6 +1042,7 @@ main() {
   setup_ssl
 
   write_login_info
+  write_update_state
 
   print_summary
   cleanup_release_source

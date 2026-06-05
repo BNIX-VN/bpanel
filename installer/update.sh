@@ -99,6 +99,7 @@ BRANCH="${BRANCH-main}"                           # used when UPDATE_CHANNEL=bra
 RELEASE_TAG="${RELEASE_TAG-}"                     # used when UPDATE_CHANNEL=tag
 RELEASE_PATTERN="${RELEASE_PATTERN:-v[0-9]*.[0-9]*.[0-9]*}"
 SKIP_PULL="${SKIP_PULL:-false}"
+UPDATE_STATE_FILE="${UPDATE_STATE_FILE:-/var/lib/bpanel/update-status.json}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -187,6 +188,61 @@ reset_worktree_to_ref() {
   fi
   git reset --hard "$ref"
 }
+
+current_panel_version() {
+  sed -nE 's/^APP_VERSION = "([^"]+)"/\1/p' "$APP_DIR/backend/app/core/version.py" 2>/dev/null | head -n 1
+}
+
+write_update_state() {
+  local status="$1" ref="${2:-}" message="${3:-}" now current latest
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  current="$(current_panel_version)"
+  latest="${ref#v}"
+  [[ "$latest" == "$ref" ]] && latest=""
+  install -d -m 0750 "$(dirname "$UPDATE_STATE_FILE")"
+  python3 - "$UPDATE_STATE_FILE" "$status" "$ref" "$latest" "$current" "$message" "$now" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+status, ref, latest, current, message, now = sys.argv[2:8]
+try:
+    state = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+except Exception:
+    state = {}
+
+if current:
+    state["current_version"] = current
+if latest:
+    state["latest_tag"] = ref
+    state["latest_version"] = latest
+state["last_update_status"] = status
+if ref:
+    state["last_update_ref"] = ref
+if message:
+    state["last_update_message"] = message
+if status in {"checking", "updating"}:
+    state["last_update_started_at"] = now
+elif status in {"completed", "failed"}:
+    state["last_update_finished_at"] = now
+path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+  if id -u bpanel >/dev/null 2>&1; then
+    chown bpanel:bpanel "$UPDATE_STATE_FILE" 2>/dev/null || true
+  fi
+  chmod 0640 "$UPDATE_STATE_FILE" 2>/dev/null || true
+}
+
+UPDATE_REF=""
+finish_update_script() {
+  local rc=$?
+  if [[ $rc -ne 0 ]]; then
+    write_update_state "failed" "${UPDATE_REF:-}" "Update failed with exit code ${rc}" || true
+  fi
+  cleanup_stable_copy
+}
+trap finish_update_script EXIT
 
 ufw_panel_allow_port() {
   local port="$1"
@@ -441,6 +497,7 @@ backup_db() {
 
 log "Backing up SQLite DB before update"
 backup_db
+write_update_state "checking" "" "Checking for BPanel releases"
 
 # --- Pull latest source ----------------------------------------------------
 if [[ "$(readlink -f "$SOURCE_DIR")" == "$(readlink -f "$APP_DIR")" ]]; then
@@ -466,6 +523,8 @@ if [[ "$SKIP_PULL" != "true" ]]; then
       git fetch --prune --prune-tags "$GIT_REMOTE" "+refs/tags/*:refs/tags/*"
       RELEASE_TAG="$(latest_release_tag)"
       [[ -n "$RELEASE_TAG" ]] || fail "No release tags found matching $RELEASE_PATTERN"
+      UPDATE_REF="$RELEASE_TAG"
+      write_update_state "updating" "$UPDATE_REF" "Updating BPanel from ${UPDATE_REF}"
       reset_worktree_to_ref "$RELEASE_TAG"
       echo "Release: ${RELEASE_TAG}"
       ;;
@@ -473,6 +532,8 @@ if [[ "$SKIP_PULL" != "true" ]]; then
       [[ -n "$RELEASE_TAG" ]] || fail "--tag requires a release tag"
       log "Pulling release ${RELEASE_TAG} from ${GIT_REMOTE}"
       git fetch --prune "$GIT_REMOTE" "+refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+      UPDATE_REF="$RELEASE_TAG"
+      write_update_state "updating" "$UPDATE_REF" "Updating BPanel from ${UPDATE_REF}"
       reset_worktree_to_ref "$RELEASE_TAG"
       echo "Release: ${RELEASE_TAG}"
       ;;
@@ -480,6 +541,8 @@ if [[ "$SKIP_PULL" != "true" ]]; then
       remote_branch="${GIT_REMOTE}/${BRANCH}"
       log "Pulling latest from ${remote_branch}"
       git fetch --prune "$GIT_REMOTE" "+refs/heads/${BRANCH}:refs/remotes/${GIT_REMOTE}/${BRANCH}" --tags
+      UPDATE_REF="$remote_branch"
+      write_update_state "updating" "$UPDATE_REF" "Updating BPanel from ${UPDATE_REF}"
       reset_worktree_to_ref "$remote_branch" "$BRANCH"
       ;;
     *)
@@ -765,6 +828,7 @@ for _ in {1..20}; do
     echo ""
     echo "Update completed."
     echo "If the browser still shows the old UI, hard refresh (Ctrl + Shift + R)."
+    write_update_state "completed" "${UPDATE_REF:-}" "Update completed"
     exit 0
   fi
   sleep 1
@@ -772,4 +836,5 @@ done
 
 echo "API did not respond. Check logs:"
 echo "  journalctl -u bpanel-api -n 100 --no-pager"
+write_update_state "failed" "${UPDATE_REF:-}" "API health check failed after update"
 exit 1
