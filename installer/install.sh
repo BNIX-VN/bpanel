@@ -561,7 +561,7 @@ setup_systemd() {
 #!/usr/bin/env bash
 # Trusted forwarders: only the local Nginx (127.0.0.1) is allowed to set
 # X-Forwarded-For / X-Forwarded-Proto. Anything else (direct hits on
-# 0.0.0.0:2222) cannot spoof the audit log IP or the login rate-limit key.
+# the configured panel port) cannot spoof the audit log IP or the login rate-limit key.
 set -euo pipefail
 cd ${APP_DIR}/backend
 args=(app.main:app --host 0.0.0.0 --port "\${PANEL_PORT:-2222}" --proxy-headers --forwarded-allow-ips "127.0.0.1")
@@ -863,7 +863,7 @@ setup_firewall() {
     ufw_panel_allow_port "$ssh_port"
   done < <(detect_ssh_ports)
   ufw_panel_allow_app 'Nginx Full'
-  for default_port in 80 443 465 587 2222 "${PANEL_PORT}"; do
+  for default_port in 80 443 465 587 "${PANEL_PORT}"; do
     ufw_panel_allow_port "$default_port"
   done
   ufw --force enable || true

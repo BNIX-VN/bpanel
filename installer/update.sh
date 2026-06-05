@@ -305,7 +305,7 @@ install_panel_runtime() {
 #!/usr/bin/env bash
 # Trusted forwarders: only the local Nginx (127.0.0.1) is allowed to set
 # X-Forwarded-For / X-Forwarded-Proto. Anything else (direct hits on
-# 0.0.0.0:2222) cannot spoof the audit log IP or the login rate-limit key.
+# the configured panel port) cannot spoof the audit log IP or the login rate-limit key.
 set -euo pipefail
 cd ${APP_DIR}/backend
 args=(app.main:app --host 0.0.0.0 --port "\${PANEL_PORT:-2222}" --proxy-headers --forwarded-allow-ips "127.0.0.1")
@@ -368,7 +368,7 @@ WantedBy=timers.target
 SERVICE
   systemctl daemon-reload
   if command -v ufw >/dev/null 2>&1; then
-    for default_port in 80 443 465 587 2222 "${panel_port}"; do
+    for default_port in 80 443 465 587 "${panel_port}"; do
       ufw_panel_allow_port "$default_port"
     done
   fi
@@ -526,7 +526,7 @@ fi
 if [[ ! -f "$APP_DIR/backend/.env" ]]; then
   fail "$APP_DIR/backend/.env is missing. Run installer/install.sh first or restore .env from backup."
 fi
-log "Installing direct panel runtime on port 2222"
+log "Installing direct panel runtime"
 install_panel_runtime
 log "Configuring Nginx FastCGI cache"
 configure_fastcgi_cache

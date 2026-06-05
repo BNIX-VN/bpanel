@@ -57,6 +57,18 @@ bash installer/install.sh
 
 `v1.0.0` is the current installable release tag.
 
+To install a specific release version, change only the tag:
+
+```bash
+BPANEL_VERSION=v1.0.0
+apt-get update
+apt-get install -y git
+git clone --branch "$BPANEL_VERSION" --depth 1 https://github.com/BNIX-VN/bpanel.git /opt/bpanel-source
+cd /opt/bpanel-source
+chmod +x installer/install.sh installer/update.sh installer/rescue-ufw-blocklist.sh
+bash installer/install.sh
+```
+
 The installer will:
 
 1. Install Nginx, MariaDB, Redis, PHP 8.3/8.4, Node.js 22, certbot, phpMyAdmin,
@@ -64,7 +76,7 @@ The installer will:
 2. Copy source to `/opt/bpanel`, build the frontend, set up the Python venv.
 3. Create the systemd service `bpanel-api`.
 4. Configure phpMyAdmin SSO.
-5. Start the panel directly on port `2222` without relying on Nginx for login.
+5. Start the panel directly on the configured panel port without relying on Nginx for login.
 6. Issue Let's Encrypt SSL for the panel domain (optional).
 7. Install `/usr/local/sbin/bpanel-rescue-ufw-blocklist` for emergency firewall recovery.
 8. Print the admin login and save it to `/root/login.txt`.
@@ -72,12 +84,12 @@ The installer will:
 You will be prompted for:
 
 - Panel hostname (optional; blank uses the server IP)
-- Panel port (default `2222`)
+- Panel port (default `2222`; UFW opens only the selected panel port)
 - Whether to enable Let's Encrypt SSL for the panel domain
 - An email for SSL registration
 
 After install, open the URL printed at the end of the installer. If no panel
-domain was entered, use `http://SERVER_IP:2222`. The admin password is shown
+domain was entered, use the printed `http://SERVER_IP:PANEL_PORT` URL. The admin password is shown
 at the end and saved to `/root/login.txt`; store it in a password manager.
 
 ## SSH maintenance menu
@@ -188,9 +200,9 @@ ALLOWED_ORIGINS=https://panel.example.com
 SITES_ROOT=/home/bpanel-sites  # legacy/imported sites; new sites use /home/<panel-user>/<domain>
 BACKUP_ROOT=/var/backups/bpanel
 SSL_EMAIL=admin@example.com
-PANEL_URL=http://SERVER_IP:2222
+PANEL_URL=http://SERVER_IP:2222  # uses the selected panel port
 PANEL_DOMAIN=
-PANEL_PORT=2222
+PANEL_PORT=2222                  # default; installer can set another port
 PANEL_SSL_CERT=
 PANEL_SSL_KEY=
 FRONTEND_DIST=/opt/bpanel/frontend/dist
