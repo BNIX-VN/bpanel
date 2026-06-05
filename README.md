@@ -44,7 +44,24 @@ BPanel versions use semantic versioning: `major.minor.patch`.
 
 ## Fresh install
 
-Run as root on a fresh Ubuntu 24.04 server:
+Run as root on a fresh Ubuntu 24.04 server.
+
+Recommended when the release tag has just been updated:
+
+```bash
+set -e
+BPANEL_VERSION=v1.0.0
+apt-get update
+apt-get install -y git
+rm -rf /tmp/bpanel-source
+git clone --depth 1 --branch "${BPANEL_VERSION}" https://github.com/BNIX-VN/bpanel.git /tmp/bpanel-source
+cd /tmp/bpanel-source
+trap 'cd /; rm -rf /tmp/bpanel-source' EXIT
+chmod +x installer/install.sh installer/update.sh installer/rescue-ufw-blocklist.sh
+bash installer/install.sh
+```
+
+Release zip install:
 
 ```bash
 BPANEL_VERSION=v1.0.0
@@ -60,8 +77,10 @@ bash installer/install.sh
 ```
 
 `v1.0.0` is the current installable release tag. To install another release,
-change only `BPANEL_VERSION`. The installer removes `/opt/bpanel-source` after a
-successful zip-based install and keeps only the deployed app in `/opt/bpanel`.
+change only `BPANEL_VERSION`. GitHub auto-generates the tag zip, but the
+`git clone` method avoids archive cache after a forced tag refresh. Both normal
+paths remove the temporary source and keep only the deployed app in
+`/opt/bpanel`.
 
 The installer will:
 
