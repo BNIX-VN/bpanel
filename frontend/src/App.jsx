@@ -279,6 +279,7 @@ function App() {
   const [resourceUsage, setResourceUsage] = useState(null);
   const [serviceStates, setServiceStates] = useState({});
   const [serviceNames, setServiceNames] = useState(DEFAULT_SERVICE_NAMES);
+  const [backupTab, setBackupTab] = useState('website');
   const [backups, setBackups] = useState([]);
   const [backupJobs, setBackupJobs] = useState([]);
   const [userBackups, setUserBackups] = useState([]);
@@ -410,6 +411,7 @@ function App() {
     setResourceUsage(null);
     setServiceStates({});
     setServiceNames(DEFAULT_SERVICE_NAMES);
+    setBackupTab('website');
     setBackups([]);
     setBackupJobs([]);
     setCronItems([]);
@@ -1286,6 +1288,20 @@ function App() {
     await listBackups();
     await loadBackupJobs();
     if (selectedBackupUserId) await listUserBackups(selectedBackupUserId);
+  }
+
+  async function refreshUserBackupArea() {
+    await loadUsers();
+    await loadRestoreBackups();
+    await loadBackupJobs();
+    if (selectedBackupUserId) await listUserBackups(selectedBackupUserId);
+  }
+
+  async function refreshScheduledBackupArea() {
+    await loadUsers();
+    await loadSftpTargets();
+    await loadBackupSchedules();
+    await loadBackupJobs();
   }
 
   async function listUserBackups(userId = selectedBackupUserId) {
@@ -2340,17 +2356,27 @@ function App() {
     };
     const jobTitle = job => ({ site_backup: 'Website backup', user_backup: 'Full user backup', sftp_backup: 'SFTP backup' }[job.kind] || 'Backup task');
     const jobDetail = job => job.error || job.remote_file || job.backup_file || job.message || job.status;
+    const backupTabs = isAdmin
+      ? [
+        ['website', 'Backup website', Globe],
+        ['user', 'Backup user', Users],
+        ['schedule', 'Scheduled backups', Clock],
+        ['destination', 'Backup Destination', Network],
+      ]
+      : [['website', 'Backup website', Globe]];
+    const activeBackupTab = backupTabs.some(([id]) => id === backupTab) ? backupTab : 'website';
+
     return <section className="section backups-page">
       <h2>Backups</h2>
-      <WebsiteSelect />
-      <p className="hint">Backups include website source files and a database SQL export.</p>
-      <div className="actions backup-toolbar">
-        <button disabled={!selectedWebsiteId || !!loading} onClick={createBackup}><Plus size={14}/> Create backup</button>
-        <button disabled={!selectedWebsiteId || !!loading} onClick={refreshBackupArea}><RefreshCw size={14}/> Refresh</button>
-        <label className="upload-button">
-          <Upload size={14}/> Upload backup
-          <input type="file" accept=".tar.gz,application/gzip" onChange={e => { uploadBackup(e.target.files?.[0]); e.target.value = ''; }} />
-        </label>
+      <div className="segmented-control backup-tabs" role="tablist" aria-label="Backup sections">
+        {backupTabs.map(([id, label, Icon]) => <button
+          key={id}
+          type="button"
+          role="tab"
+          aria-selected={activeBackupTab === id}
+          className={activeBackupTab === id ? 'active' : ''}
+          onClick={() => setBackupTab(id)}
+        ><Icon size={14}/>{label}</button>)}
       </div>
       {backupJobs.length > 0 && <div className="backup-job-list">
         {backupJobs.map(job => <div className={`backup-job ${job.status}`} key={job.job_id}>
@@ -2359,21 +2385,37 @@ function App() {
           <span className={job.status === 'done' ? 'badge ok' : job.status === 'error' ? 'badge bad' : 'badge'}>{job.status}</span>
         </div>)}
       </div>}
-      {backups.length === 0 && selectedWebsiteId && <EmptyState icon={Archive} message="No backups found for this website." />}
-      <div className="backup-list">
-        {backups.map(file => <div className="backup-item" key={file}>
-          <span>{file.split('/').pop()}</span>
-          <div className="actions">
-            <button disabled={!!loading} onClick={() => downloadBackup(file)}><Download size={14}/> Download</button>
-            <button disabled={!!loading} onClick={() => restoreBackup(file)}><RotateCcw size={14}/> Restore</button>
-            <button className="danger" disabled={!!loading} onClick={() => deleteBackup(file)}><Trash2 size={14}/></button>
-          </div>
-        </div>)}
-      </div>
-      {isAdmin && <div className="sftp-panel backup-admin-panel">
-        <div className="section-title backup-panel-heading">
-          <div><h2>Full user backup</h2><p className="hint">Includes the panel user, all owned websites, source files, database dumps, and restore metadata.</p></div>
-          <button disabled={!!loading} onClick={() => { loadUsers(); loadBackupSchedules(); loadRestoreBackups(); }}><RefreshCw size={14}/> Refresh</button>
+
+      {activeBackupTab === 'website' && <div className="backup-tab-panel">
+        <div className="backup-panel-title">
+          <div><h3>Backup website</h3><p className="hint">Backups include website source files and a database SQL export.</p></div>
+        </div>
+        <WebsiteSelect />
+        <div className="actions backup-toolbar">
+          <button disabled={!selectedWebsiteId || !!loading} onClick={createBackup}><Plus size={14}/> Create backup</button>
+          <button disabled={!selectedWebsiteId || !!loading} onClick={refreshBackupArea}><RefreshCw size={14}/> Refresh</button>
+          <label className="upload-button">
+            <Upload size={14}/> Upload backup
+            <input type="file" accept=".tar.gz,application/gzip" onChange={e => { uploadBackup(e.target.files?.[0]); e.target.value = ''; }} />
+          </label>
+        </div>
+        {backups.length === 0 && selectedWebsiteId && <EmptyState icon={Archive} message="No backups found for this website." />}
+        <div className="backup-list">
+          {backups.map(file => <div className="backup-item" key={file}>
+            <span>{file.split('/').pop()}</span>
+            <div className="actions">
+              <button disabled={!!loading} onClick={() => downloadBackup(file)}><Download size={14}/> Download</button>
+              <button disabled={!!loading} onClick={() => restoreBackup(file)}><RotateCcw size={14}/> Restore</button>
+              <button className="danger" disabled={!!loading} onClick={() => deleteBackup(file)}><Trash2 size={14}/></button>
+            </div>
+          </div>)}
+        </div>
+      </div>}
+
+      {isAdmin && activeBackupTab === 'user' && <div className="backup-tab-panel">
+        <div className="backup-panel-title">
+          <div><h3>Backup user</h3><p className="hint">Includes the panel user, all owned websites, source files, database dumps, and restore metadata.</p></div>
+          <button disabled={!!loading} onClick={refreshUserBackupArea}><RefreshCw size={14}/> Reload</button>
         </div>
         <div className="sftp-run-row user-backup-row backup-run-row">
           <select value={selectedBackupUserId} onChange={e => setSelectedBackupUserId(e.target.value)}>
@@ -2384,12 +2426,13 @@ function App() {
             <option value="">Local only</option>
             {sftpTargets.map(target => <option key={target.id} value={target.id}>{target.name}</option>)}
           </select>
-          <button disabled={!selectedBackupUserId || !!loading} onClick={createUserBackup}><Archive size={14}/> Full backup</button>
+          <button disabled={!selectedBackupUserId || !!loading} onClick={createUserBackup}><Archive size={14}/> Create backup</button>
         </div>
         {selectedBackupUser && <p className="hint">Current user: <strong>{selectedBackupUser.username}</strong></p>}
         <div className="actions backup-subactions">
-          <button disabled={!selectedBackupUserId || !!loading} onClick={() => listUserBackups()}><RefreshCw size={14}/> Backups</button>
+          <button disabled={!selectedBackupUserId || !!loading} onClick={() => listUserBackups()}><RefreshCw size={14}/> Refresh list</button>
         </div>
+        {selectedBackupUserId && userBackups.length === 0 && <EmptyState icon={Archive} message="No user backups found." />}
         <div className="backup-list">
           {userBackups.map(file => <div className="backup-item" key={file}>
             <span>{file.split('/').pop()}</span>
@@ -2400,8 +2443,9 @@ function App() {
             </div>
           </div>)}
         </div>
-        <div className="section-title restore-title backup-panel-heading">
-          <div><h2>Restore folder</h2><p className="hint">{restoreBackupDir || '/var/backups/bpanel/users/restore'}</p></div>
+
+        <div className="section-title restore-title backup-panel-heading backup-subtitle">
+          <div><h3>Restore folder</h3><p className="hint">{restoreBackupDir || '/var/backups/bpanel/users/restore'}</p></div>
           <div className="actions">
             <button disabled={!!loading} onClick={loadRestoreBackups}><RefreshCw size={14}/> Refresh</button>
             <label className="upload-button">
@@ -2420,6 +2464,14 @@ function App() {
             </div>
           </div>)}
         </div>
+
+      </div>}
+
+      {isAdmin && activeBackupTab === 'schedule' && <div className="backup-tab-panel">
+        <div className="backup-panel-title">
+          <div><h3>Scheduled backups</h3><p className="hint">Run full user backups automatically with optional off-server destination.</p></div>
+          <button disabled={!!loading} onClick={refreshScheduledBackupArea}><RefreshCw size={14}/> Refresh</button>
+        </div>
         <div className="sftp-form schedule-form backup-schedule-form">
           <label className="schedule-toggle">
             <input type="checkbox" checked={!!newBackupSchedule.all_users} onChange={e => setNewBackupSchedule(prev => ({ ...prev, all_users: e.target.checked }))} />
@@ -2433,30 +2485,23 @@ function App() {
             <option value="">Local only</option>
             {sftpTargets.map(target => <option key={target.id} value={target.id}>{target.name}</option>)}
           </select>
-          <input value={newBackupSchedule.retention} onChange={e => setNewBackupSchedule(prev => ({ ...prev, retention: e.target.value }))} placeholder="7" inputMode="numeric" />
           <button disabled={(!newBackupSchedule.all_users && (!newBackupSchedule.user_ids || newBackupSchedule.user_ids.length === 0)) || !!loading} onClick={createBackupSchedule}><Clock size={14}/> Schedule</button>
         </div>
         <div className="backup-list">
           {backupSchedules.map(item => {
             const scheduleTarget = sftpTargets.find(target => target.id === item.target_id);
             return <div className="backup-item" key={item.id}>
-              <span>{scheduleUserLabel(item)} - {item.schedule} - keep {item.retention}{scheduleTarget ? ` - ${scheduleTarget.name}` : ''}<small>{item.last_status}: {item.last_message || 'not run yet'}</small></span>
+              <span>{scheduleUserLabel(item)} - {item.schedule}{scheduleTarget ? ` - ${scheduleTarget.name}` : ''}<small>{item.last_status}: {item.last_message || 'not run yet'}</small></span>
               <button className="danger" disabled={!!loading} onClick={() => deleteBackupSchedule(item.id)}><Trash2 size={14}/></button>
             </div>;
           })}
         </div>
       </div>}
-      {isAdmin && <div className="sftp-panel backup-admin-panel">
-        <div className="section-title backup-panel-heading">
-          <div><h2>SFTP backup</h2><p className="hint">Create a local archive and upload it to an SFTP target.</p></div>
-          <button disabled={!!loading} onClick={loadSftpTargets}><RefreshCw size={14}/> Targets</button>
-        </div>
-        <div className="sftp-run-row backup-run-row">
-          <select value={selectedSftpTargetId} onChange={e => setSelectedSftpTargetId(e.target.value)}>
-            <option value="">Select SFTP target</option>
-            {sftpTargets.map(target => <option key={target.id} value={target.id}>{target.name} - {target.host}</option>)}
-          </select>
-          <button disabled={!selectedWebsiteId || !selectedSftpTargetId || !!loading} onClick={createSftpBackup}><Upload size={14}/> Backup to SFTP</button>
+
+      {isAdmin && activeBackupTab === 'destination' && <div className="backup-tab-panel">
+        <div className="backup-panel-title">
+          <div><h3>Backup Destination</h3><p className="hint">Manage SFTP destinations used for off-server backup copies.</p></div>
+          <button disabled={!!loading} onClick={loadSftpTargets}><RefreshCw size={14}/> Refresh</button>
         </div>
         <div className="sftp-form sftp-target-form">
           <input value={newSftpTarget.name} onChange={e => setNewSftpTarget(prev => ({ ...prev, name: e.target.value }))} placeholder="Target name" />
@@ -2468,6 +2513,7 @@ function App() {
           <textarea value={newSftpTarget.private_key} onChange={e => setNewSftpTarget(prev => ({ ...prev, private_key: e.target.value }))} placeholder="Private key (optional)" rows={4} />
           <button disabled={!!loading || !newSftpTarget.name || !newSftpTarget.host || !newSftpTarget.username || (!newSftpTarget.password && !newSftpTarget.private_key)} onClick={createSftpTarget}><Plus size={14}/> Save target</button>
         </div>
+        {sftpTargets.length === 0 && <EmptyState icon={Network} message="No backup destinations found." />}
         <div className="backup-list">
           {sftpTargets.map(target => <div className="backup-item" key={target.id}>
             <span>{target.name} - {target.username}@{target.host}:{target.remote_path}</span>

@@ -108,6 +108,14 @@ button:disabled,.upload-button.disabled{background:#dbe7f7;color:#7a8ca4;border-
 /* Backup page balance */
 .backups-page{gap:12px}
 .backups-page>h2{margin-bottom:0}
+.backup-tabs{width:100%;grid-auto-flow:row;grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}
+.backup-tabs button{gap:7px;white-space:nowrap}
+.backup-tabs button:hover:not(:disabled){background:var(--surface);color:var(--text-secondary)}
+.backup-tabs button.active:hover:not(:disabled){background:var(--primary-hover);color:#fff}
+.backup-tab-panel{display:grid;gap:12px;min-width:0}
+.backup-panel-title{display:flex;align-items:center;justify-content:space-between;gap:10px;padding-bottom:10px;border-bottom:1px solid var(--border)}
+.backup-panel-title h3,.backup-subtitle h3{margin:0 0 3px;color:var(--brand-navy);font-size:16px;line-height:1.2}
+.backup-panel-title>button{min-width:108px;height:38px;min-height:38px}
 .backup-toolbar{margin-top:2px}
 .backup-toolbar button,.backup-toolbar .upload-button{min-width:132px}
 .backup-admin-panel{
@@ -117,7 +125,7 @@ button:disabled,.upload-button.disabled{background:#dbe7f7;color:#7a8ca4;border-
   border-radius:var(--radius-lg);
 }
 .backup-panel-heading{align-items:center;padding-bottom:12px;border-bottom:1px solid var(--border)}
-.backup-panel-heading h2{margin-bottom:3px;color:var(--brand-navy)}
+.backup-panel-heading h2,.backup-panel-heading h3{margin-bottom:3px;color:var(--brand-navy)}
 .backup-panel-heading>button,.backup-panel-heading>.actions button,.backup-panel-heading>.actions .upload-button{min-width:108px;height:38px;min-height:38px}
 .backup-run-row{grid-template-columns:minmax(240px,1fr) max-content;gap:10px;align-items:center}
 .user-backup-row{grid-template-columns:minmax(220px,1fr) minmax(220px,1fr) max-content}
@@ -141,12 +149,13 @@ button:disabled,.upload-button.disabled{background:#dbe7f7;color:#7a8ca4;border-
 .backups-page .backup-item .actions button,.backups-page .backup-item>button{height:34px;min-height:34px;padding:0 10px;font-size:12px}
 .backups-page .backup-item .actions .danger,.backups-page .backup-item>button.danger{width:34px;min-width:34px;padding:0}
 .restore-title{margin-top:8px}
+.backup-subtitle{margin-top:10px}
 
 .backup-schedule-form,.sftp-target-form{
   padding:12px;background:var(--surface-alt);border:1px solid var(--border);border-radius:var(--radius-lg);
   align-items:center;
 }
-.backup-schedule-form{grid-template-columns:130px minmax(240px,1.2fr) 140px minmax(190px,1fr) 90px max-content}
+.backup-schedule-form{grid-template-columns:130px minmax(240px,1.2fr) 140px minmax(190px,1fr) max-content}
 .backup-schedule-form select[multiple]{min-height:88px;padding-block:8px}
 .schedule-toggle{height:40px;padding:0 12px;background:var(--surface);border-color:var(--border);color:var(--brand-navy)}
 .schedule-toggle input{accent-color:var(--primary)}
@@ -208,6 +217,8 @@ button:disabled,.upload-button.disabled{background:#dbe7f7;color:#7a8ca4;border-
   .site-card>.actions button,
   .site-card>.actions .button-link,
   .site-card>.actions .upload-button{width:100%;max-width:none;min-width:0;height:40px;min-height:40px;padding-inline:8px;flex:auto}
+  .backup-panel-title{display:grid;align-items:start;gap:10px}
+  .backup-panel-title>button{width:100%;min-width:0}
   .backup-admin-panel{padding:12px;border-left-width:3px}
   .backup-panel-heading{display:grid;align-items:start;gap:10px}
   .backup-toolbar button,.backup-toolbar .upload-button,.backup-run-row button,.backup-subactions button{min-width:0;width:100%}
