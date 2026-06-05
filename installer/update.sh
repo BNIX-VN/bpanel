@@ -450,7 +450,10 @@ fi
 if [[ "$SKIP_PULL" != "true" ]]; then
   if [[ ! -d "$SOURCE_DIR/.git" ]]; then
     if [[ -e "$SOURCE_DIR" && -n "$(ls -A "$SOURCE_DIR" 2>/dev/null)" ]]; then
-      fail "$SOURCE_DIR exists but is not a git checkout and is not empty. Move it aside or set SOURCE_DIR=/some/empty/dir."
+      source_backup="${SOURCE_DIR}.release-archive-$(date -u +%Y%m%d-%H%M%S)"
+      log "Archiving non-git release source to ${source_backup}"
+      cd /
+      mv "$SOURCE_DIR" "$source_backup"
     fi
     log "Cloning ${REPO_URL} to ${SOURCE_DIR} with remote ${GIT_REMOTE}"
     git clone -o "$GIT_REMOTE" "$REPO_URL" "$SOURCE_DIR"

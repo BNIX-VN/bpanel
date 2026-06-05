@@ -47,23 +47,31 @@ BPanel versions use semantic versioning: `major.minor.patch`.
 Run as root on a fresh Ubuntu 24.04 server:
 
 ```bash
+BPANEL_VERSION=v1.0.0
 apt-get update
-apt-get install -y git
-git clone --branch v1.0.0 --depth 1 https://github.com/BNIX-VN/bpanel.git /opt/bpanel-source
+apt-get install -y curl unzip
+rm -rf /opt/bpanel-source /tmp/bpanel-release /tmp/bpanel-release.zip
+curl -fL "https://github.com/BNIX-VN/bpanel/archive/refs/tags/${BPANEL_VERSION}.zip" -o /tmp/bpanel-release.zip
+unzip -q /tmp/bpanel-release.zip -d /tmp/bpanel-release
+mv /tmp/bpanel-release/bpanel-* /opt/bpanel-source
 cd /opt/bpanel-source
 chmod +x installer/install.sh installer/update.sh installer/rescue-ufw-blocklist.sh
 bash installer/install.sh
 ```
 
-`v1.0.0` is the current installable release tag.
+`v1.0.0` is the current installable release tag. The installer installs git for
+future panel updates; the initial install itself uses the release zip.
 
 To install a specific release version, change only the tag:
 
 ```bash
 BPANEL_VERSION=v1.0.0
 apt-get update
-apt-get install -y git
-git clone --branch "$BPANEL_VERSION" --depth 1 https://github.com/BNIX-VN/bpanel.git /opt/bpanel-source
+apt-get install -y curl unzip
+rm -rf /opt/bpanel-source /tmp/bpanel-release /tmp/bpanel-release.zip
+curl -fL "https://github.com/BNIX-VN/bpanel/archive/refs/tags/${BPANEL_VERSION}.zip" -o /tmp/bpanel-release.zip
+unzip -q /tmp/bpanel-release.zip -d /tmp/bpanel-release
+mv /tmp/bpanel-release/bpanel-* /opt/bpanel-source
 cd /opt/bpanel-source
 chmod +x installer/install.sh installer/update.sh installer/rescue-ufw-blocklist.sh
 bash installer/install.sh
@@ -116,7 +124,9 @@ bash installer/update.sh --release
 The same action is available in the panel's **Updates** page. The update script
 fetches release tags, checks out the newest `vX.Y.Z` tag, syncs source to
 `/opt/bpanel`, rebuilds the frontend, refreshes helper scripts, restarts the API,
-and reloads Nginx.
+and reloads Nginx. On zip-based installs, the first update automatically
+replaces `/opt/bpanel-source` with a git checkout after archiving the extracted
+release source.
 
 To stay on a specific release:
 
