@@ -59,35 +59,22 @@ chmod +x installer/install.sh installer/update.sh installer/rescue-ufw-blocklist
 bash installer/install.sh
 ```
 
-`v1.0.0` is the current installable release tag. The installer installs git for
-future panel updates; the initial install itself uses the release zip.
-
-To install a specific release version, change only the tag:
-
-```bash
-BPANEL_VERSION=v1.0.0
-apt-get update
-apt-get install -y curl unzip
-rm -rf /opt/bpanel-source /tmp/bpanel-release /tmp/bpanel-release.zip
-curl -fL "https://github.com/BNIX-VN/bpanel/archive/refs/tags/${BPANEL_VERSION}.zip" -o /tmp/bpanel-release.zip
-unzip -q /tmp/bpanel-release.zip -d /tmp/bpanel-release
-mv /tmp/bpanel-release/bpanel-* /opt/bpanel-source
-cd /opt/bpanel-source
-chmod +x installer/install.sh installer/update.sh installer/rescue-ufw-blocklist.sh
-bash installer/install.sh
-```
+`v1.0.0` is the current installable release tag. To install another release,
+change only `BPANEL_VERSION`. The installer removes `/opt/bpanel-source` after a
+successful zip-based install and keeps only the deployed app in `/opt/bpanel`.
 
 The installer will:
 
-1. Install Nginx, MariaDB, Redis, PHP 8.3/8.4, Node.js 22, certbot, phpMyAdmin,
-   WP-CLI, UFW.
+1. Install git, Nginx, MariaDB, Redis, PHP 8.3/8.4, Node.js 22, certbot,
+   phpMyAdmin, WP-CLI, UFW.
 2. Copy source to `/opt/bpanel`, build the frontend, set up the Python venv.
 3. Create the systemd service `bpanel-api`.
 4. Configure phpMyAdmin SSO.
 5. Start the panel directly on the configured panel port without relying on Nginx for login.
 6. Issue Let's Encrypt SSL for the panel domain (optional).
-7. Install `/usr/local/sbin/bpanel-rescue-ufw-blocklist` for emergency firewall recovery.
-8. Print the admin login and save it to `/root/login.txt`.
+7. Install `/usr/local/sbin/bpanel-update` and `/usr/local/sbin/bpanel-rescue-ufw-blocklist`.
+8. Remove the extracted release source.
+9. Print the admin login and save it to `/root/login.txt`.
 
 You will be prompted for:
 
@@ -117,22 +104,20 @@ BPanel can update itself from the latest stable GitHub release tag. Run it from
 SSH:
 
 ```bash
-cd /opt/bpanel-source
-bash installer/update.sh --release
+bpanel-update --release
 ```
 
 The same action is available in the panel's **Updates** page. The update script
 fetches release tags, checks out the newest `vX.Y.Z` tag, syncs source to
 `/opt/bpanel`, rebuilds the frontend, refreshes helper scripts, restarts the API,
 and reloads Nginx. On zip-based installs, the first update automatically
-replaces `/opt/bpanel-source` with a git checkout after archiving the extracted
-release source.
+creates `/opt/bpanel-source` as a git checkout when it needs fresh release
+source.
 
 To stay on a specific release:
 
 ```bash
-cd /opt/bpanel-source
-bash installer/update.sh --tag v1.0.0
+bpanel-update --tag v1.0.0
 ```
 
 If the browser still shows the old UI, do a hard refresh (Ctrl + Shift + R) or

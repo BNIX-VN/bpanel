@@ -30,6 +30,7 @@ APP_DIR="/opt/bpanel"
 ENV_FILE="${APP_DIR}/backend/.env"
 DEFAULT_PANEL_PORT="2222"
 SOURCE_DIR="/opt/bpanel-source"
+UPDATE_SCRIPT="/usr/local/sbin/bpanel-update"
 BPANEL_DATA_DIR="/var/lib/bpanel"
 FIREWALL_BLOCKLIST_URLS="${BPANEL_DATA_DIR}/firewall-blocklists.urls"
 FIREWALL_BLOCKLIST_WORK="${BPANEL_DATA_DIR}/firewall-blocklists.current"
@@ -278,7 +279,7 @@ write_panel_auto_update_timer() {
     echo "Panel auto update disabled"
     return 0
   fi
-  [[ -f "${SOURCE_DIR}/installer/update.sh" ]] || deny "missing ${SOURCE_DIR}/installer/update.sh"
+  [[ -f "$UPDATE_SCRIPT" ]] || deny "missing $UPDATE_SCRIPT"
   cat >/etc/systemd/system/bpanel-auto-update.service <<SERVICE
 [Unit]
 Description=Update BPanel from GitHub
@@ -296,7 +297,7 @@ Environment=BRANCH=${BRANCH:-main}
 Environment=RELEASE_TAG=${RELEASE_TAG:-}
 Environment=RELEASE_PATTERN=${RELEASE_PATTERN:-v[0-9]*.[0-9]*.[0-9]*}
 Environment=SKIP_PULL=${SKIP_PULL:-false}
-ExecStart=/bin/bash ${SOURCE_DIR}/installer/update.sh
+ExecStart=/bin/bash ${UPDATE_SCRIPT}
 SERVICE
   cat >/etc/systemd/system/bpanel-auto-update.timer <<TIMER
 [Unit]
@@ -316,7 +317,7 @@ TIMER
 }
 
 run_panel_update() {
-  [[ -f "${SOURCE_DIR}/installer/update.sh" ]] || deny "missing ${SOURCE_DIR}/installer/update.sh"
+  [[ -f "$UPDATE_SCRIPT" ]] || deny "missing $UPDATE_SCRIPT"
   local unit="bpanel-panel-update"
   if systemctl is-active --quiet "${unit}.service"; then
     echo "Panel update is already running: ${unit}.service"
@@ -336,7 +337,7 @@ run_panel_update() {
       --property="Environment=RELEASE_TAG=${RELEASE_TAG:-}" \
       --property="Environment=RELEASE_PATTERN=${RELEASE_PATTERN:-v[0-9]*.[0-9]*.[0-9]*}" \
       --property="Environment=SKIP_PULL=${SKIP_PULL:-false}" \
-      /bin/bash "${SOURCE_DIR}/installer/update.sh"
+      /bin/bash "$UPDATE_SCRIPT"
     echo "Panel update started: ${unit}.service"
     echo "Check progress: journalctl -u ${unit}.service -f"
     return 0
@@ -351,7 +352,7 @@ run_panel_update() {
     RELEASE_TAG="${RELEASE_TAG:-}" \
     RELEASE_PATTERN="${RELEASE_PATTERN:-v[0-9]*.[0-9]*.[0-9]*}" \
     SKIP_PULL="${SKIP_PULL:-false}" \
-    /bin/bash "${SOURCE_DIR}/installer/update.sh" \
+    /bin/bash "$UPDATE_SCRIPT" \
     >/var/log/bpanel-panel-update.log 2>&1 &
   echo "Panel update started in background. Log: /var/log/bpanel-panel-update.log"
 }

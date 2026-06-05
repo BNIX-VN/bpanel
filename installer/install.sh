@@ -489,6 +489,7 @@ MYCNF
 install_privileged_helper() {
   install -m 0750 -o root -g bpanel "${SCRIPT_DIR}/files/bpanel-helper.sh" /usr/local/sbin/bpanel-helper
   sed -i "s#^APP_DIR=\"/opt/bpanel\"#APP_DIR=\"${APP_DIR}\"#" /usr/local/sbin/bpanel-helper
+  install -m 0755 -o root -g root "${SCRIPT_DIR}/update.sh" /usr/local/sbin/bpanel-update
   install -m 0440 -o root -g root "${SCRIPT_DIR}/files/bpanel-sudoers" /etc/sudoers.d/bpanel
   visudo -c -f /etc/sudoers.d/bpanel >/dev/null
   install -m 0755 -o root -g root "${SCRIPT_DIR}/rescue-ufw-blocklist.sh" /usr/local/sbin/bpanel-rescue-ufw-blocklist
@@ -942,6 +943,15 @@ INFO
   chmod 600 /root/login.txt
 }
 
+cleanup_release_source() {
+  [[ "${CLEAN_RELEASE_SOURCE:-true}" == "true" ]] || return 0
+  [[ "$PROJECT_ROOT" == "/opt/bpanel-source" ]] || return 0
+  [[ ! -d "${PROJECT_ROOT}/.git" ]] || return 0
+  log "Removing release source from ${PROJECT_ROOT}"
+  cd /
+  rm -rf "$PROJECT_ROOT" /tmp/bpanel-release /tmp/bpanel-release.zip
+}
+
 main() {
   validate_sources
   ask_panel_url
@@ -1005,6 +1015,7 @@ main() {
   write_login_info
 
   print_summary
+  cleanup_release_source
 }
 
 main "$@"
