@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ""))
 
 from app.services.nginx import render_vhost, validate_custom_nginx, validate_full_nginx_config  # noqa: E402
 from app.services.mariadb import _validate_identifier  # noqa: E402
-from app.schemas.schemas import WebsiteCreate  # noqa: E402
+from app.schemas.schemas import UserCreate, UserPasswordUpdate, WebsiteCreate  # noqa: E402
 
 
 class TestNginxCustomValidator:
@@ -125,6 +125,20 @@ class TestWebsiteCreateSchema:
 
         assert payload.admin_email is None
         assert payload.admin_password is None
+
+
+class TestPanelUserPasswordSchema:
+    def test_rejects_password_with_chpasswd_separator(self):
+        with pytest.raises(ValueError):
+            UserCreate(
+                username="client",
+                email="client@example.com",
+                password="Strong:Password123",
+            )
+
+    def test_rejects_password_update_with_newline(self):
+        with pytest.raises(ValueError):
+            UserPasswordUpdate(password="StrongPassword123\n")
 
 
 class TestMariaDBIdentifier:

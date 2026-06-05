@@ -72,7 +72,7 @@ def create_user(payload: UserCreate, request: Request, db: Session = Depends(get
     if db.query(User).filter((User.username == payload.username) | (User.email == payload.email)).first():
         raise HTTPException(status_code=409, detail="User already exists")
     try:
-        site_users.ensure_panel_user(payload.username)
+        site_users.ensure_panel_user(payload.username, payload.password)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -150,17 +150,15 @@ def delete_user(user_id: int, request: Request, db: Session = Depends(get_db), c
         raise HTTPException(status_code=400, detail="Cannot delete yourself")
     websites = db.query(Website).filter(Website.owner_id == user.id).order_by(Website.id.asc()).all()
     deleted_domains = []
-    legacy_site_users = []
     panel_linux_user = site_users.linux_user_for_panel_username(user.username)
     try:
         for website in websites:
             if website.linux_user and website.linux_user != panel_linux_user:
-                legacy_site_users.append((website.linux_user, website.root_path))
+                raise ValueError(f"Website {website.domain} is not owned by Linux user {panel_linux_user}")
+        for website in websites:
             _delete_owned_website(db, website)
             deleted_domains.append(website.domain)
         _remove_user_from_backup_schedules(db, user.id)
-        for linux_user, root_path in legacy_site_users:
-            site_users.delete_site_runtime(root_path, linux_user)
         site_users.delete_panel_user(user.username)
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -178,6 +176,12 @@ def update_user_password(user_id: int, payload: UserPasswordUpdate, request: Req
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    try:
+        site_users.set_panel_user_password(user.username, payload.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     user.hashed_password = hash_password(payload.password)
     # Force re-login on all other sessions of this user.
     user.token_version = (user.token_version or 0) + 1

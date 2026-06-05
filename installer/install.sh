@@ -34,7 +34,6 @@ NODE_MAJOR="${NODE_MAJOR:-22}"
 PHP_DEFAULT="${PHP_DEFAULT:-8.3}"
 PHP_VERSIONS="${PHP_VERSIONS:-8.3 8.4}"
 APP_DIR="${APP_DIR:-/opt/bpanel}"
-SITES_ROOT="${SITES_ROOT:-/home/bpanel-sites}"
 BACKUP_ROOT="${BACKUP_ROOT:-/var/backups/bpanel}"
 ADMIN_PASSWORD=""
 
@@ -161,8 +160,9 @@ ask_panel_url() {
 install_base_packages() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
-  apt-get install -y software-properties-common ca-certificates curl gnupg git composer nginx mariadb-server redis-server python3 python3-pip python3-venv certbot python3-certbot-nginx tar openssl unzip ufw phpmyadmin acl
+  apt-get install -y software-properties-common ca-certificates curl gnupg git composer nginx mariadb-server redis-server openssh-server python3 python3-pip python3-venv certbot python3-certbot-nginx tar openssl unzip ufw phpmyadmin acl
   systemctl enable --now nginx mariadb redis-server
+  systemctl enable --now ssh 2>/dev/null || systemctl enable --now sshd 2>/dev/null || true
 }
 
 install_nodejs() {
@@ -415,7 +415,7 @@ install_wp_cli() {
 }
 
 copy_sources() {
-  mkdir -p "$APP_DIR" "$SITES_ROOT" "$BACKUP_ROOT"
+  mkdir -p "$APP_DIR" "$BACKUP_ROOT"
   rm -rf "${APP_DIR}/backend" "${APP_DIR}/frontend"
   cp -r "$BACKEND_SRC" "${APP_DIR}/backend"
   cp -r "$FRONTEND_SRC" "${APP_DIR}/frontend"
@@ -439,6 +439,9 @@ setup_panel_user() {
   if ! getent group bpanel-sites >/dev/null; then
     groupadd --system bpanel-sites
   fi
+  if ! getent group bpanel-sftp >/dev/null; then
+    groupadd --system bpanel-sftp
+  fi
   if ! id -u bpanel >/dev/null 2>&1; then
     useradd --system --home-dir "$APP_DIR" --shell /usr/sbin/nologin --user-group bpanel
   fi
@@ -453,7 +456,6 @@ setup_panel_user() {
 
   # Make the panel data dirs writable by bpanel.
   install -d -o bpanel -g bpanel -m 0750 "$APP_DIR"
-  install -d -o bpanel -g bpanel-sites -m 2775 "$SITES_ROOT"
   install -d -o bpanel -g bpanel -m 0750 "$BACKUP_ROOT"
 
   # MariaDB: create an admin user that bpanel can use without password
@@ -470,7 +472,6 @@ setup_panel_user() {
     FLUSH PRIVILEGES;
   "
 
-  install -d -o bpanel -g bpanel -m 0700 /home/bpanel || true
   cat >"${APP_DIR}/.my.cnf" <<MYCNF
 [client]
 user=bpanel
@@ -484,6 +485,31 @@ host=localhost
 MYCNF
   chown bpanel:bpanel "${APP_DIR}/.my.cnf"
   chmod 0600 "${APP_DIR}/.my.cnf"
+}
+
+setup_sftp_access() {
+  local sshd_config="/etc/ssh/sshd_config" backup
+  getent group bpanel-sftp >/dev/null || groupadd --system bpanel-sftp
+  install -d -o root -g root -m 0755 /run/sshd
+  rm -f /etc/ssh/sshd_config.d/99-bpanel-sftp.conf 2>/dev/null || true
+  touch "$sshd_config"
+  backup="${sshd_config}.bpanel.bak"
+  cp "$sshd_config" "$backup"
+  sed -i '/^# BEGIN BPANEL SFTP USERS$/,/^# END BPANEL SFTP USERS$/d' "$sshd_config"
+  cat >>"$sshd_config" <<'SSHD'
+# BEGIN BPANEL SFTP USERS
+# Allow BPanel Linux users to log in with SFTP using their panel password.
+Match Group bpanel-sftp
+    PasswordAuthentication yes
+    X11Forwarding no
+    AllowTcpForwarding no
+# END BPANEL SFTP USERS
+SSHD
+  if ! sshd -t; then
+    cp "$backup" "$sshd_config"
+    fail "Invalid SSHD configuration for BPanel SFTP users"
+  fi
+  systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
 }
 
 install_privileged_helper() {
@@ -522,7 +548,6 @@ DATABASE_URL=sqlite:///${APP_DIR}/backend/bpanel.db
 REDIS_URL=redis://localhost:6379/0
 RATE_LIMIT_BACKEND=redis
 ALLOWED_ORIGINS=${PANEL_URL}
-SITES_ROOT=${SITES_ROOT}
 BACKUP_ROOT=${BACKUP_ROOT}
 SSL_EMAIL=${SSL_EMAIL}
 PANEL_URL=${PANEL_URL}
@@ -533,7 +558,7 @@ PANEL_SSL_KEY=
 FRONTEND_DIST=${APP_DIR}/frontend/dist
 ENV
 
-  BPANEL_ADMIN_PASSWORD="$ADMIN_PASSWORD" python -m app.seed
+  BPANEL_USE_HELPER=true BPANEL_ADMIN_PASSWORD="$ADMIN_PASSWORD" python -m app.seed
   # Create / migrate the schema explicitly so subsequent service start is fast.
   python -c "from app.core.database import run_migrations; run_migrations()"
   deactivate || true
@@ -596,7 +621,7 @@ RestartSec=3
 NoNewPrivileges=false
 ProtectSystem=false
 ProtectHome=false
-ReadWritePaths=${APP_DIR} /home ${SITES_ROOT} ${BACKUP_ROOT} /etc/nginx/conf.d /tmp /var/lib/bpanel
+ReadWritePaths=${APP_DIR} /home ${BACKUP_ROOT} /etc/nginx/conf.d /tmp /var/lib/bpanel
 PrivateTmp=true
 PrivateDevices=true
 ProtectKernelTunables=true
@@ -638,7 +663,7 @@ ExecStart=${APP_DIR}/backend/.venv/bin/python -m app.services.backup_scheduler
 NoNewPrivileges=false
 ProtectSystem=false
 ProtectHome=false
-ReadWritePaths=${APP_DIR} /home ${SITES_ROOT} ${BACKUP_ROOT} /etc/nginx/conf.d /tmp /var/lib/bpanel
+ReadWritePaths=${APP_DIR} /home ${BACKUP_ROOT} /etc/nginx/conf.d /tmp /var/lib/bpanel
 PrivateTmp=true
 
 [Install]
@@ -917,6 +942,7 @@ print_summary() {
   echo "Panel service: bpanel-api listens on port ${PANEL_PORT} without Nginx"
   echo "SSH menu: run 'bpanel' as root"
   echo "Admin: admin / ${ADMIN_PASSWORD}"
+  echo "SFTP: admin / ${ADMIN_PASSWORD} (home: /home/admin)"
   echo "Login info saved to: /root/login.txt"
   echo "Node.js: $(node -v)"
   echo "Default PHP: ${PHP_DEFAULT}"
@@ -936,6 +962,8 @@ Panel: ${PANEL_URL}
 API health: ${PANEL_URL}/api/health
 Username: admin
 Password: ${ADMIN_PASSWORD}
+SFTP username: admin
+SFTP home: /home/admin
 Panel service: bpanel-api
 Panel port: ${PANEL_PORT}
 Installed at: $(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -1013,6 +1041,9 @@ main() {
 
   log "Creating bpanel system user, MariaDB credentials and filesystem ACLs"
   setup_panel_user
+
+  log "Configuring SFTP access for panel users"
+  setup_sftp_access
 
   log "Installing privileged helper and sudoers rule"
   install_privileged_helper

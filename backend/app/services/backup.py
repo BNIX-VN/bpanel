@@ -692,8 +692,8 @@ def upload_to_sftp(
 
     client = paramiko.SSHClient()
     # Note: we deliberately do NOT call load_system_host_keys() because the
-    # daemon runs as the bpanel system user with no shell history; trusting
-    # /home/bpanel/.ssh/known_hosts blindly would defeat the pinning model.
+        # daemon runs as the bpanel service user with no interactive shell
+        # history; trusting its known_hosts blindly would defeat the pinning model.
     if expected_host_key_fingerprint:
         # Strict: the only acceptable key is the one pinned in the DB.
         client.set_missing_host_key_policy(paramiko.RejectPolicy())

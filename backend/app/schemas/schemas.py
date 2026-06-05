@@ -16,8 +16,14 @@ PANEL_HOST_RE = re.compile(r"^(?:localhost|(?:\d{1,3}\.){3}\d{1,3}|(?:(?!-)[a-zA
 RESERVED_LINUX_USERNAMES = {
     "root", "daemon", "bin", "sys", "sync", "games", "man", "lp", "mail",
     "news", "uucp", "proxy", "www-data", "backup", "list", "irc", "_apt",
-    "nobody", "bpanel", "bpanel-sites", "mysql", "redis", "nginx",
+    "nobody", "bpanel", "bpanel-sites", "bpanel-sftp", "mysql", "redis", "nginx",
 }
+
+
+def _validate_linux_login_password(value: str) -> str:
+    if any(char in value for char in (":", "\r", "\n", "\x00")):
+        raise ValueError("password cannot contain ':', newlines, or NUL characters because it is synced to the Linux/SFTP account")
+    return value
 
 
 def _validate_php_version(value: Optional[str]) -> Optional[str]:
@@ -111,6 +117,11 @@ class UserCreate(BaseModel):
             raise ValueError("username is reserved by the system")
         return value
 
+    @field_validator("password")
+    @classmethod
+    def validate_sftp_password(cls, value: str) -> str:
+        return _validate_linux_login_password(value)
+
 
 class UserUpdate(BaseModel):
     email: Optional[EmailStr] = None
@@ -122,6 +133,11 @@ class UserUpdate(BaseModel):
 
 class UserPasswordUpdate(BaseModel):
     password: str = Field(min_length=12, max_length=72)
+
+    @field_validator("password")
+    @classmethod
+    def validate_sftp_password(cls, value: str) -> str:
+        return _validate_linux_login_password(value)
 
 
 class UserOut(BaseModel):

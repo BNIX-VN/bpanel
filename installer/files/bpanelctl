@@ -5,7 +5,6 @@ set -euo pipefail
 
 APP_DIR="${APP_DIR:-/opt/bpanel}"
 ENV_FILE="${APP_DIR}/backend/.env"
-SITES_ROOT="${SITES_ROOT:-/home/bpanel-sites}"
 BACKUP_ROOT="${BACKUP_ROOT:-/var/backups/bpanel}"
 DEFAULT_PANEL_PORT="2222"
 
@@ -200,16 +199,39 @@ install_panel_ssl() {
 fix_permissions() {
   ensure_env_file
   getent group bpanel-sites >/dev/null || groupadd --system bpanel-sites
+  getent group bpanel-sftp >/dev/null || groupadd --system bpanel-sftp
   if ! command -v setfacl >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1; then
     DEBIAN_FRONTEND=noninteractive apt-get update
     DEBIAN_FRONTEND=noninteractive apt-get install -y acl
   fi
   usermod -aG bpanel-sites bpanel 2>/dev/null || true
   usermod -aG bpanel-sites www-data 2>/dev/null || true
+  if command -v sshd >/dev/null 2>&1; then
+    local sshd_config="/etc/ssh/sshd_config" sshd_backup="${sshd_config}.bpanel.bak"
+    install -d -o root -g root -m 0755 /run/sshd
+    rm -f /etc/ssh/sshd_config.d/99-bpanel-sftp.conf 2>/dev/null || true
+    touch "$sshd_config"
+    cp "$sshd_config" "$sshd_backup"
+    sed -i '/^# BEGIN BPANEL SFTP USERS$/,/^# END BPANEL SFTP USERS$/d' "$sshd_config"
+    cat >>"$sshd_config" <<'SSHD'
+# BEGIN BPANEL SFTP USERS
+# Allow BPanel Linux users to log in with SFTP using their panel password.
+Match Group bpanel-sftp
+    PasswordAuthentication yes
+    X11Forwarding no
+    AllowTcpForwarding no
+# END BPANEL SFTP USERS
+SSHD
+    if sshd -t; then
+      systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+    else
+      cp "$sshd_backup" "$sshd_config"
+      echo "WARNING: invalid SSHD configuration; skipped BPanel SFTP password block"
+    fi
+  fi
   install -d -o bpanel -g bpanel -m 0750 "$APP_DIR" "$APP_DIR/backend" "$APP_DIR/frontend"
   install -d -o root -g bpanel -m 2775 /etc/nginx/conf.d
   chmod g+s /etc/nginx/conf.d 2>/dev/null || true
-  install -d -o bpanel -g bpanel-sites -m 2775 "$SITES_ROOT"
   install -d -o bpanel -g bpanel -m 0750 "$BACKUP_ROOT"
   install -d -o bpanel -g bpanel -m 0750 /var/lib/bpanel
   if [[ -d /etc/bpanel ]]; then
@@ -225,9 +247,7 @@ fix_permissions() {
     chmod o+rX "$APP_DIR" "$APP_DIR/frontend" 2>/dev/null || true
     chmod -R o+rX "$APP_DIR/frontend/dist"
   fi
-  if [[ -d "$SITES_ROOT" ]]; then
-    chown bpanel:bpanel-sites "$SITES_ROOT" 2>/dev/null || true
-    chmod 2775 "$SITES_ROOT" 2>/dev/null || true
+  if [[ -x "$APP_DIR/backend/.venv/bin/python" ]]; then
     cd "$APP_DIR/backend"
     runuser -u bpanel -- env HOME="$APP_DIR" BPANEL_USE_HELPER=true "$APP_DIR/backend/.venv/bin/python" - <<'PY'
 from app.core.database import SessionLocal
@@ -283,15 +303,16 @@ change_admin_password() {
 
   cd "$APP_DIR/backend"
   if id -u bpanel >/dev/null 2>&1; then
-    runner=(runuser -u bpanel -- env "BPANEL_NEW_ADMIN_PASSWORD=$password" "$APP_DIR/backend/.venv/bin/python")
+    runner=(runuser -u bpanel -- env HOME="$APP_DIR" BPANEL_USE_HELPER=true "BPANEL_NEW_ADMIN_PASSWORD=$password" "$APP_DIR/backend/.venv/bin/python")
   else
-    runner=(env "BPANEL_NEW_ADMIN_PASSWORD=$password" "$APP_DIR/backend/.venv/bin/python")
+    runner=(env HOME="$APP_DIR" BPANEL_USE_HELPER=true "BPANEL_NEW_ADMIN_PASSWORD=$password" "$APP_DIR/backend/.venv/bin/python")
   fi
   "${runner[@]}" - <<'PY'
 import os
 from app.core.database import SessionLocal
 from app.core.security import hash_password
 from app.models.entities import User
+from app.services import site_users
 
 password = os.environ["BPANEL_NEW_ADMIN_PASSWORD"]
 db = SessionLocal()
@@ -299,6 +320,7 @@ try:
     user = db.query(User).filter(User.username == "admin").first()
     if not user:
         raise SystemExit("admin user not found")
+    site_users.set_panel_user_password(user.username, password)
     user.hashed_password = hash_password(password)
     user.token_version = (user.token_version or 0) + 1
     db.commit()

@@ -13,7 +13,6 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./bpanel.db"
     command_dry_run: bool = True
     allowed_origins: str = Field(default="")
-    sites_root: str = "/home/bpanel-sites"
     backup_root: str = "/var/backups/bpanel"
     nginx_sites_available: str = "/etc/nginx/conf.d"
     default_php_version: str = "8.3"

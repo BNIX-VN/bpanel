@@ -3,7 +3,6 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from app.core.config import settings
 from app.services.shell import shell
 
 
@@ -11,11 +10,10 @@ LINUX_USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{2,31}$")
 DOMAIN_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$")
 HOME_ROOT = Path("/home")
 PUBLIC_DIR = "public_html"
-LEGACY_PUBLIC_DIR = "public"
 RESERVED_LINUX_USERS = {
     "root", "daemon", "bin", "sys", "sync", "games", "man", "lp", "mail",
     "news", "uucp", "proxy", "www-data", "backup", "list", "irc", "_apt",
-    "nobody", "bpanel", "bpanel-sites", "mysql", "redis", "nginx",
+    "nobody", "bpanel", "bpanel-sites", "bpanel-sftp", "mysql", "redis", "nginx",
 }
 
 
@@ -30,7 +28,7 @@ def linux_user_for_domain(domain: str) -> str:
 
 def validate_linux_user(username: str) -> str:
     if not LINUX_USER_RE.fullmatch(username or "") or username in RESERVED_LINUX_USERS:
-        raise ValueError("Invalid site Linux user")
+        raise ValueError("Invalid panel Linux user")
     return username
 
 
@@ -64,9 +62,6 @@ def document_root(root_path: str | Path) -> Path:
 def is_managed_site_path(path: str | Path) -> bool:
     resolved = Path(path).resolve()
     home_root = HOME_ROOT.resolve()
-    legacy_root = Path(settings.sites_root).resolve()
-    if legacy_root == resolved or legacy_root in resolved.parents:
-        return True
     try:
         relative = resolved.relative_to(home_root)
     except ValueError:
@@ -78,9 +73,6 @@ def is_managed_site_path(path: str | Path) -> bool:
 def is_site_root_for_domain(path: str | Path, domain: str) -> bool:
     resolved = Path(path).resolve()
     home_root = HOME_ROOT.resolve()
-    legacy_root = Path(settings.sites_root).resolve()
-    if resolved == legacy_root / domain:
-        return True
     try:
         relative = resolved.relative_to(home_root)
     except ValueError:
@@ -94,14 +86,27 @@ def is_site_root_for_domain(path: str | Path, domain: str) -> bool:
     )
 
 
-def ensure_panel_user(username: str) -> str:
+def ensure_panel_user(username: str, password: Optional[str] = None) -> str:
     linux_user = linux_user_for_panel_username(username)
     shell.privileged(
         "panel-user-ensure",
         helper_args=[linux_user],
         fallback=["mkdir", "-p", str(HOME_ROOT / linux_user)],
     )
+    if password is not None:
+        set_panel_user_password(linux_user, password)
     return linux_user
+
+
+def set_panel_user_password(username: str, password: str) -> None:
+    linux_user = linux_user_for_panel_username(username)
+    shell.privileged(
+        "panel-user-password",
+        helper_args=[linux_user],
+        input=f"{password}\n",
+        sensitive=True,
+        fallback=["true"],
+    )
 
 
 def delete_panel_user(username: str) -> None:

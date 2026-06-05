@@ -324,7 +324,7 @@ ensure_terminal_tools() {
 install_panel_runtime() {
   local env_file="$APP_DIR/backend/.env"
   [[ -f "$env_file" ]] || return 0
-  local panel_port panel_url server_ip
+  local panel_port panel_url server_ip sshd_config sshd_backup
   panel_port="$(env_get PANEL_PORT)"
   panel_port="${panel_port:-2222}"
   server_ip="$(detect_server_ip)"
@@ -346,6 +346,7 @@ install_panel_runtime() {
   remove_filebrowser_runtime
 
   getent group bpanel-sites >/dev/null || groupadd --system bpanel-sites
+  getent group bpanel-sftp >/dev/null || groupadd --system bpanel-sftp
   if ! command -v setfacl >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1; then
     DEBIAN_FRONTEND=noninteractive apt-get update
     DEBIAN_FRONTEND=noninteractive apt-get install -y acl
@@ -354,8 +355,31 @@ install_panel_runtime() {
   usermod -aG bpanel-sites www-data 2>/dev/null || true
   install -d -o root -g bpanel -m 2775 /etc/nginx/conf.d
   chmod g+s /etc/nginx/conf.d 2>/dev/null || true
-  install -d -o bpanel -g bpanel-sites -m 2775 "${SITES_ROOT:-/home/bpanel-sites}"
   install -d -o bpanel -g bpanel -m 0750 /var/lib/bpanel
+  if command -v sshd >/dev/null 2>&1; then
+    sshd_config="/etc/ssh/sshd_config"
+    sshd_backup="${sshd_config}.bpanel.bak"
+    install -d -o root -g root -m 0755 /run/sshd
+    rm -f /etc/ssh/sshd_config.d/99-bpanel-sftp.conf 2>/dev/null || true
+    touch "$sshd_config"
+    cp "$sshd_config" "$sshd_backup"
+    sed -i '/^# BEGIN BPANEL SFTP USERS$/,/^# END BPANEL SFTP USERS$/d' "$sshd_config"
+    cat >>"$sshd_config" <<'SSHD'
+# BEGIN BPANEL SFTP USERS
+# Allow BPanel Linux users to log in with SFTP using their panel password.
+Match Group bpanel-sftp
+    PasswordAuthentication yes
+    X11Forwarding no
+    AllowTcpForwarding no
+# END BPANEL SFTP USERS
+SSHD
+    if sshd -t; then
+      systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+    else
+      cp "$sshd_backup" "$sshd_config"
+      echo "WARNING: invalid SSHD configuration; skipped BPanel SFTP password block"
+    fi
+  fi
 
   cat >/usr/local/sbin/bpanel-api-start <<STARTER
 #!/usr/bin/env bash
@@ -383,7 +407,7 @@ ExecStart=/usr/local/sbin/bpanel-api-start
 SupplementaryGroups=www-data bpanel-sites
 ProtectHome=false
 ReadWritePaths=
-ReadWritePaths=${APP_DIR} /home /home/bpanel-sites /var/backups/bpanel /etc/nginx/conf.d /tmp /var/lib/bpanel
+ReadWritePaths=${APP_DIR} /home /var/backups/bpanel /etc/nginx/conf.d /tmp /var/lib/bpanel
 SERVICE
   cat >/etc/systemd/system/bpanel-backup-scheduler.service <<SERVICE
 [Unit]
@@ -403,7 +427,7 @@ ExecStart=${APP_DIR}/backend/.venv/bin/python -m app.services.backup_scheduler
 NoNewPrivileges=false
 ProtectSystem=false
 ProtectHome=false
-ReadWritePaths=/home /home/bpanel-sites /var/backups/bpanel /etc/nginx/conf.d /tmp /var/lib/bpanel ${APP_DIR}
+ReadWritePaths=/home /var/backups/bpanel /etc/nginx/conf.d /tmp /var/lib/bpanel ${APP_DIR}
 PrivateTmp=true
 
 [Install]

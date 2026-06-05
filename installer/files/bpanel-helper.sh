@@ -21,11 +21,11 @@ export PATH
 
 ALLOWED_SERVICES=(nginx mariadb redis-server php8.3-fpm php8.4-fpm bpanel-api)
 ALLOWED_ACTIONS=(start stop restart reload status is-active is-enabled)
-SITES_ROOT="/home/bpanel-sites"
 HOME_ROOT="/home"
 NGINX_CONF_DIR="/etc/nginx/conf.d"
 PHP_CONF_DIRS=(/etc/php/{5.6,7.4,8.0,8.1,8.2,8.3,8.4,8.5}/fpm/conf.d)
 BPANEL_SITES_GROUP="bpanel-sites"
+BPANEL_SFTP_GROUP="bpanel-sftp"
 APP_DIR="/opt/bpanel"
 ENV_FILE="${APP_DIR}/backend/.env"
 DEFAULT_PANEL_PORT="2222"
@@ -1115,10 +1115,10 @@ require_php_version() {
 }
 
 require_linux_user() {
-  [[ "$1" =~ ^[a-z_][a-z0-9_-]{2,31}$ ]] || deny "invalid site user: $1"
+  [[ "$1" =~ ^[a-z_][a-z0-9_-]{2,31}$ ]] || deny "invalid panel Linux user: $1"
   case "$1" in
-    root|daemon|bin|sys|sync|games|man|lp|mail|news|uucp|proxy|www-data|backup|list|irc|_apt|nobody|bpanel|bpanel-sites|mysql|redis|nginx)
-      deny "reserved site user: $1" ;;
+    root|daemon|bin|sys|sync|games|man|lp|mail|news|uucp|proxy|www-data|backup|list|irc|_apt|nobody|bpanel|bpanel-sites|bpanel-sftp|mysql|redis|nginx)
+      deny "reserved panel Linux user: $1" ;;
   esac
 }
 
@@ -1158,12 +1158,10 @@ require_managed_path() {
         domain_part="${relative%%/*}"
         require_site_domain_segment "$domain_part"
         ;;
-      "$SITES_ROOT"/*) ;;
-      *) deny "path is not owned by site user $user: $resolved" ;;
+      *) deny "path is not owned by panel Linux user $user: $resolved" ;;
     esac
   else
     case "$resolved/" in
-      "$SITES_ROOT"/*) ;;
       "$HOME_ROOT"/*/*)
         first_part="${resolved#${HOME_ROOT}/}"
         first_part="${first_part%%/*}"
@@ -1183,8 +1181,8 @@ require_terminal_cwd() {
   require_linux_user "$user"
   resolved=$(require_safe_path "$HOME_ROOT" "$path")
   case "$resolved" in
-    "$HOME_ROOT/$user"|"$HOME_ROOT/$user"/*|"$SITES_ROOT"/*) ;;
-    *) deny "terminal cwd is not owned by site user $user: $resolved" ;;
+    "$HOME_ROOT/$user"|"$HOME_ROOT/$user"/*) ;;
+    *) deny "terminal cwd is not owned by panel Linux user $user: $resolved" ;;
   esac
   [[ -d "$resolved" ]] || deny "terminal cwd is not a directory: $resolved"
   echo "$resolved"
@@ -1196,19 +1194,42 @@ ensure_sites_group() {
   usermod -aG "$BPANEL_SITES_GROUP" www-data 2>/dev/null || true
 }
 
+ensure_sftp_group() {
+  getent group "$BPANEL_SFTP_GROUP" >/dev/null || groupadd --system "$BPANEL_SFTP_GROUP"
+}
+
 ensure_panel_user_home() {
   local user="$1" home_dir="$HOME_ROOT/$1"
   ensure_sites_group
+  ensure_sftp_group
   require_linux_user "$user"
-  getent group "$user" >/dev/null || groupadd --system "$user"
+  getent group "$user" >/dev/null || groupadd "$user"
   if ! id -u "$user" >/dev/null 2>&1; then
-    useradd --system --home-dir "$home_dir" --shell /usr/sbin/nologin --gid "$user" "$user"
+    useradd --create-home --home-dir "$home_dir" --shell /bin/bash --gid "$user" "$user"
   fi
-  usermod --home "$home_dir" --shell /usr/sbin/nologin --gid "$user" "$user" 2>/dev/null || true
-  usermod -L "$user" 2>/dev/null || true
+  usermod --home "$home_dir" --shell /bin/bash --gid "$user" "$user" 2>/dev/null || true
+  usermod -aG "$BPANEL_SFTP_GROUP" "$user" 2>/dev/null || true
   mkdir -p "$home_dir"
-  chown "$user:$BPANEL_SITES_GROUP" "$home_dir"
+  chown "$user:$user" "$home_dir"
   chmod 0750 "$home_dir"
+  if command -v setfacl >/dev/null 2>&1; then
+    setfacl -m "g:${BPANEL_SITES_GROUP}:rx" "$home_dir"
+    setfacl -m "d:g:${BPANEL_SITES_GROUP}:rx" "$home_dir"
+  fi
+}
+
+set_panel_user_password() {
+  local user="$1" password
+  require_linux_user "$user"
+  id -u "$user" >/dev/null 2>&1 || deny "panel Linux user does not exist: $user"
+  password="$(cat)"
+  password="${password%$'\n'}"
+  [[ ${#password} -ge 12 && ${#password} -le 72 ]] || deny "password must be 12-72 characters"
+  case "$password" in
+    *:*|*$'\r'*|*$'\n'*) deny "password cannot contain ':', carriage returns or newlines" ;;
+  esac
+  printf '%s:%s\n' "$user" "$password" | chpasswd
+  passwd -u "$user" >/dev/null 2>&1 || true
 }
 
 delete_panel_user_runtime() {
@@ -1625,12 +1646,17 @@ case "$cmd" in
     ;;
 
   panel-user-ensure)
-    [[ $# -eq 1 ]] || deny "usage: panel-user-ensure <site-user>"
+    [[ $# -eq 1 ]] || deny "usage: panel-user-ensure <panel-user>"
     ensure_panel_user_home "$1"
     ;;
 
+  panel-user-password)
+    [[ $# -eq 1 ]] || deny "usage: panel-user-password <panel-user>"
+    set_panel_user_password "$1"
+    ;;
+
   panel-user-delete)
-    [[ $# -eq 1 ]] || deny "usage: panel-user-delete <site-user>"
+    [[ $# -eq 1 ]] || deny "usage: panel-user-delete <panel-user>"
     delete_panel_user_runtime "$1"
     ;;
 
@@ -1677,15 +1703,15 @@ case "$cmd" in
     [[ $# -eq 2 ]] || deny "usage: site-runtime-delete <site-user> <path>"
     user="$1"; path="$2"
     require_linux_user "$user"
-    require_managed_path "$path" "$user" >/dev/null
-    delete_panel_user_runtime "$user"
+    target=$(require_managed_path "$path" "$user")
+    exec rm -rf "$target"
     ;;
 
   rm-site)
     [[ $# -eq 1 ]] || deny "usage: rm-site <path>"
     target=$(require_managed_path "$1")
     relative="${target#${HOME_ROOT}/}"
-    [[ "$target" == "$SITES_ROOT" || "$relative" != */* ]] && deny "refusing to delete a site root container"
+    [[ "$relative" != */* ]] && deny "refusing to delete a panel user home"
     exec rm -rf "$target"
     ;;
 
@@ -1734,15 +1760,15 @@ case "$cmd" in
     exec systemctl status "$1" --no-pager
     ;;
 
-  # ---- terminal command execution as site user -------------------------
+  # ---- terminal command execution as panel Linux user ------------------
   terminal-exec)
-    # Execute a whitelisted command as the site user
+    # Execute a whitelisted command as the panel Linux user
     # Args: <site-user> <cwd> <command> [args...]
     [[ $# -ge 3 ]] || deny "usage: terminal-exec <site-user> <cwd> <command> [args...]"
     user="$1"; cwd_arg="$2"; shift 2
     cmd="$1"; shift
     require_linux_user "$user"
-    id -u "$user" >/dev/null 2>&1 || deny "site user does not exist: $user"
+    id -u "$user" >/dev/null 2>&1 || deny "panel Linux user does not exist: $user"
     target=$(require_terminal_cwd "$cwd_arg" "$user")
 
     install -d -o "$user" -g "$user" -m 0700 "$HOME_ROOT/$user/.composer" "$HOME_ROOT/$user/.npm"

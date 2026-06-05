@@ -7,7 +7,7 @@ ownership, quotas, backups, SSL, services, and firewall tools built in.
 - Dashboard resource monitoring for CPU, RAM, disk, and network throughput
 - WordPress one-click installer (PHP 8.3 / 8.4) with WP-CLI
 - WordPress and PHP sites with editable full Nginx vhosts
-- Panel users map to locked Linux users; website source lives in `/home/<panel-user>/<domain>/public_html`
+- Panel users map to Linux/SFTP users; website source lives in `/home/<panel-user>/<domain>/public_html`
 - Admin quick-login for creating sites as a selected user, plus one-owner assignment per website
 - Website count limits and BPanel soft storage quotas per end user
 - MariaDB database creation and management with phpMyAdmin SSO (60s tokens)
@@ -27,7 +27,7 @@ ownership, quotas, backups, SSL, services, and firewall tools built in.
 
 - Backend: FastAPI, SQLAlchemy, SQLite (default), Pydantic v2
 - Frontend: React 18, Vite, lucide-react
-- Server: Nginx, ModSecurity/WAF, systemd, MariaDB, Redis, PHP-FPM, certbot
+- Server: Nginx, OpenSSH/SFTP, ModSecurity/WAF, systemd, MariaDB, Redis, PHP-FPM, certbot
 
 ## Versioning
 
@@ -65,16 +65,17 @@ successful zip-based install and keeps only the deployed app in `/opt/bpanel`.
 
 The installer will:
 
-1. Install git, Nginx, MariaDB, Redis, PHP 8.3/8.4, Node.js 22, certbot,
-   phpMyAdmin, WP-CLI, UFW.
+1. Install git, Nginx, MariaDB, Redis, OpenSSH/SFTP, PHP 8.3/8.4, Node.js 22,
+   certbot, phpMyAdmin, WP-CLI, UFW.
 2. Copy source to `/opt/bpanel`, build the frontend, set up the Python venv.
-3. Create the systemd service `bpanel-api`.
-4. Configure phpMyAdmin SSO.
-5. Start the panel directly on the configured panel port without relying on Nginx for login.
-6. Issue Let's Encrypt SSL for the panel domain (optional).
-7. Install `/usr/local/sbin/bpanel-update` and `/usr/local/sbin/bpanel-rescue-ufw-blocklist`.
-8. Remove the extracted release source.
-9. Print the admin login and save it to `/root/login.txt`.
+3. Create the `bpanel` service account and the `admin` Linux/SFTP account.
+4. Create the systemd service `bpanel-api`.
+5. Configure phpMyAdmin SSO.
+6. Start the panel directly on the configured panel port without relying on Nginx for login.
+7. Issue Let's Encrypt SSL for the panel domain (optional).
+8. Install `/usr/local/sbin/bpanel-update` and `/usr/local/sbin/bpanel-rescue-ufw-blocklist`.
+9. Remove the extracted release source.
+10. Print the admin panel/SFTP login and save it to `/root/login.txt`.
 
 You will be prompted for:
 
@@ -85,7 +86,9 @@ You will be prompted for:
 
 After install, open the URL printed at the end of the installer. If no panel
 domain was entered, use the printed `http://SERVER_IP:PANEL_PORT` URL. The admin password is shown
-at the end and saved to `/root/login.txt`; store it in a password manager.
+at the end and saved to `/root/login.txt`; store it in a password manager. The
+same password is applied to the Linux user `admin`, so SFTP can log in as
+`admin` and land in `/home/admin`.
 
 ## SSH maintenance menu
 
@@ -163,7 +166,11 @@ bpanel/
 
 ## User and website ownership
 
-- Each panel user also has a locked Linux user with the same normalized username.
+- Each panel user also has a Linux user with the same normalized username.
+- The panel password is synced to the Linux password so the same account can
+  log in with SFTP, for example `admin` -> `/home/admin`.
+- Panel Linux users are members of `bpanel-sftp`; the installer adds an SSHD
+  `Match Group bpanel-sftp` block for password-based SFTP access.
 - New websites are created under `/home/<panel-user>/<domain>/public_html`.
 - If an admin creates a website without impersonating another user, the website
   belongs to the admin account.
@@ -197,7 +204,6 @@ DATABASE_URL=sqlite:////opt/bpanel/backend/bpanel.db
 REDIS_URL=redis://localhost:6379/0
 RATE_LIMIT_BACKEND=redis
 ALLOWED_ORIGINS=https://panel.example.com
-SITES_ROOT=/home/bpanel-sites  # legacy/imported sites; new sites use /home/<panel-user>/<domain>
 BACKUP_ROOT=/var/backups/bpanel
 SSL_EMAIL=admin@example.com
 PANEL_URL=http://SERVER_IP:2222  # uses the selected panel port
@@ -245,9 +251,9 @@ What the helper allows:
 - `systemctl start/stop/restart/reload <whitelisted service>`
 - `nginx -t`, `nginx reload`
 - `certbot --nginx ...` for a single validated domain
-- create/delete locked panel Linux users and per-user PHP-FPM pools
+- create/delete panel Linux users, sync their SFTP password, and manage per-user PHP-FPM pools
 - `ufw status/enable/disable/allow/deny/delete`
-- fix ownership/ACLs for managed site paths under `/home/<panel-user>/<domain>` or legacy `/home/bpanel-sites`
+- fix ownership/ACLs for managed site paths under `/home/<panel-user>/<domain>`
 - `rm -rf <managed site path>`
 - WP-CLI and crontab management as the website's Linux user
 
@@ -260,6 +266,10 @@ create per-site databases and users for WordPress installs.
 Additional hardening on the systemd unit:
 
 - Runs as `bpanel` with only the `www-data` and `bpanel-sites` supplementary groups.
+  `bpanel` is the service account for the API, not a panel login user; fresh
+  installs do not create `/home/bpanel` or `/home/bpanel-sites`.
+- Panel login users are normal Linux users in the `bpanel-sftp` group. Their
+  home directories live directly under `/home/<username>`.
 - Uses `PrivateTmp`, `PrivateDevices`, `ProtectKernelTunables`,
   `ProtectKernelModules`, `ProtectKernelLogs`, `ProtectControlGroups`,
   `ProtectClock`, `ProtectHostname`, and `ProtectProc=invisible`.
