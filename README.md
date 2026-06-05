@@ -42,23 +42,20 @@ BPanel versions use semantic versioning: `major.minor.patch`.
 - Optional: a domain pointing to the server's public IP (for SSL on the panel)
 - 1 vCPU / 1 GB RAM minimum, 2 vCPU / 2 GB RAM recommended
 
-## Install from latest GitHub tag
+## Fresh install
 
 Run as root on a fresh Ubuntu 24.04 server:
 
 ```bash
-apt-get update;apt-get install -y git;\
-BPANEL_VERSION="$(git ls-remote --tags --refs https://github.com/BNIX-VN/bpanel.git 'refs/tags/v*' | awk -F/ '/refs\/tags\/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/ {print $3}' | sort -V | tail -n1)";\
-test -n "$BPANEL_VERSION";\
-git clone --branch "$BPANEL_VERSION" --depth 1 https://github.com/BNIX-VN/bpanel.git /opt/bpanel-source;\
-cd /opt/bpanel-source;\
-chmod +x installer/install.sh installer/update.sh installer/rescue-ufw-blocklist.sh;\
-sudo bash installer/install.sh
+apt-get update
+apt-get install -y git
+git clone --branch v1.0.0 --depth 1 https://github.com/BNIX-VN/bpanel.git /opt/bpanel-source
+cd /opt/bpanel-source
+chmod +x installer/install.sh installer/update.sh installer/rescue-ufw-blocklist.sh
+bash installer/install.sh
 ```
 
-To pin an exact installable build instead, set `BPANEL_VERSION` yourself before
-the clone command, for example `BPANEL_VERSION=v1.0.0`. Tags are used for
-installable builds; GitHub Releases are published after the build is verified.
+`v1.0.0` is the current installable release tag.
 
 The installer will:
 
@@ -94,42 +91,26 @@ bpanel
 The menu can set the panel URL/port, install SSL for the panel URL, fix runtime
 permissions, show status, and change the `admin` password.
 
-## Update an existing install
+## Updates
 
-Stable installs update from the newest GitHub release tag by default. This keeps
-servers on tested release builds instead of tracking every commit on `main`.
+BPanel can update itself from the latest stable GitHub release tag. Run it from
+SSH:
 
 ```bash
 cd /opt/bpanel-source
-sudo bash installer/update.sh --release
+bash installer/update.sh --release
 ```
 
-The same update is available from the panel's Updates page. The script fetches
-release tags from GitHub, checks out the newest `vX.Y.Z` tag, syncs source
-to `/opt/bpanel`, rebuilds the frontend, refreshes the direct panel service, and
-reloads Nginx for customer vhosts. The helper-backed panel update button and
-daily panel auto-update timer use the same release-channel defaults. Old `dist`
-and Vite caches are purged so the new bundle hash propagates to browsers.
+The same action is available in the panel's **Updates** page. The update script
+fetches release tags, checks out the newest `vX.Y.Z` tag, syncs source to
+`/opt/bpanel`, rebuilds the frontend, refreshes helper scripts, restarts the API,
+and reloads Nginx.
 
-To pin an exact release:
+To stay on a specific release:
 
 ```bash
 cd /opt/bpanel-source
-sudo bash installer/update.sh --tag v1.0.0
-```
-
-To test unreleased code from a branch, opt in explicitly:
-
-```bash
-cd /opt/bpanel-source
-sudo bash installer/update.sh --branch main
-```
-
-To fetch from a non-default Git remote name:
-
-```bash
-cd /opt/bpanel-source
-sudo bash installer/update.sh --remote upstream --release
+bash installer/update.sh --tag v1.0.0
 ```
 
 If the browser still shows the old UI, do a hard refresh (Ctrl + Shift + R) or
@@ -140,9 +121,6 @@ open in incognito.
 ```
 bpanel/
 |-- backend/                    FastAPI application
-|   |-- alembic/                 SQL schema migrations (Alembic)
-|   |   `-- versions/             Migration scripts
-|   |-- alembic.ini              Alembic config
 |   |-- app/
 |   |   |-- api/                  HTTP routes
 |   |   |-- core/                 config, db, security, permissions, secrets
@@ -159,30 +137,10 @@ bpanel/
 |-- installer/
 |   |-- files/                   bpanel-helper.sh + sudoers rule
 |   |-- install.sh               Full first-time install
-|   |-- migrate-security.sh      One-shot migration to non-root + helper mode
 |   |-- rescue-ufw-blocklist.sh  Emergency UFW reset for oversized blocklists
 |   `-- update.sh                Pull from GitHub and redeploy
 `-- README.md
 ```
-
-## Database migrations
-
-Schema changes are managed by [Alembic](https://alembic.sqlalchemy.org/).
-Migrations live in `backend/alembic/versions/`. The backend automatically
-runs `alembic upgrade head` on startup and `installer/update.sh` runs it
-explicitly before restarting the API.
-
-To author a new migration locally:
-
-```bash
-cd backend
-.venv/bin/alembic revision --autogenerate -m "describe change"
-# Inspect the generated file in alembic/versions/, then commit it.
-```
-
-Existing servers that pre-date Alembic adoption are detected at startup
-(tables exist but `alembic_version` does not) and are stamped to revision
-`0001_initial` so no DDL is replayed on already-correct schemas.
 
 ## Roles
 
