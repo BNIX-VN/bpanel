@@ -9,7 +9,7 @@
 # Usage:
 #   sudo bash installer/update.sh
 #   sudo bash installer/update.sh --branch main
-#   sudo bash installer/update.sh --tag v1.0.1
+#   sudo bash installer/update.sh --tag v1.0.2
 #   sudo bash installer/update.sh --help
 
 set -euo pipefail
@@ -21,7 +21,7 @@ usage() {
   cat <<'USAGE'
 Usage:
   sudo bash installer/update.sh [--release]
-  sudo bash installer/update.sh --tag v1.0.1
+  sudo bash installer/update.sh --tag v1.0.2
   sudo bash installer/update.sh --branch main
 
 Options:
