@@ -455,6 +455,77 @@ PY
   echo "Admin password changed. Existing sessions were invalidated."
 }
 
+root_password_hash() {
+  local hash
+  hash="$(getent shadow root 2>/dev/null | awk -F: '{print $2; exit}')"
+  if [[ -z "$hash" && -r /etc/shadow ]]; then
+    hash="$(awk -F: '$1 == "root" {print $2; exit}' /etc/shadow)"
+  fi
+  printf '%s' "$hash"
+}
+
+validate_root_password_hash() {
+  local hash="$1"
+  [[ -n "$hash" ]] || fail "Cannot read root password hash from /etc/shadow"
+  case "$hash" in
+    \!*|\**|x) fail "Root account does not have an unlocked password hash" ;;
+  esac
+  case "$hash" in
+    \$y\$*|\$gy\$*|\$7\$*|\$6\$*|\$5\$*|\$2a\$*|\$2b\$*|\$2y\$*) ;;
+    *) fail "Unsupported root password hash format: ${hash%%\$*}" ;;
+  esac
+}
+
+sync_admin_root_password() {
+  ensure_env_file
+  local root_hash runner login_password
+  root_hash="$(root_password_hash)"
+  validate_root_password_hash "$root_hash"
+
+  if [[ -x /usr/local/sbin/bpanel-helper ]]; then
+    if [[ "$(id -un)" == "bpanel" ]]; then
+      sudo -n /usr/local/sbin/bpanel-helper panel-user-ensure admin
+    elif id -u bpanel >/dev/null 2>&1; then
+      runuser -u bpanel -- sudo -n /usr/local/sbin/bpanel-helper panel-user-ensure admin
+    else
+      /usr/local/sbin/bpanel-helper panel-user-ensure admin
+    fi
+  fi
+  id -u admin >/dev/null 2>&1 || fail "Linux user admin not found"
+  usermod -p "$root_hash" admin
+  passwd -u admin >/dev/null 2>&1 || true
+
+  cd "$APP_DIR/backend"
+  if id -u bpanel >/dev/null 2>&1; then
+    runner=(runuser -u bpanel -- env HOME="$APP_DIR" BPANEL_USE_HELPER=true "BPANEL_ROOT_PASSWORD_HASH=$root_hash" "$APP_DIR/backend/.venv/bin/python")
+  else
+    runner=(env HOME="$APP_DIR" BPANEL_USE_HELPER=true "BPANEL_ROOT_PASSWORD_HASH=$root_hash" "$APP_DIR/backend/.venv/bin/python")
+  fi
+  "${runner[@]}" - <<'PY'
+import os
+from app.core.database import SessionLocal
+from app.models.entities import User
+
+root_hash = os.environ["BPANEL_ROOT_PASSWORD_HASH"]
+db = SessionLocal()
+try:
+    user = db.query(User).filter(User.username == "admin").first()
+    if not user:
+        raise SystemExit("admin user not found")
+    user.hashed_password = root_hash
+    user.token_version = (user.token_version or 0) + 1
+    db.commit()
+finally:
+    db.close()
+PY
+  read -rsp "Root password to write to /root/login.txt (blank to skip): " login_password; echo
+  if [[ -n "$login_password" ]]; then
+    write_login_info "$login_password"
+  fi
+  restart_panel
+  echo "Admin password now matches the root password. Existing sessions were invalidated."
+}
+
 show_status() {
   ensure_env_file
   local port cert key scheme health_url health http_code curl_rc curl_error curl_stderr
@@ -591,6 +662,7 @@ menu() {
     echo "9) Change admin password"
     echo "10) Update panel from release"
     echo "11) Change server IP"
+    echo "12) Sync admin password from root"
     echo "0) Exit"
     read -rp "Choose: " choice
     case "$choice" in
@@ -605,6 +677,7 @@ menu() {
       9) change_admin_password ;;
       10) run_panel_update ;;
       11) change_panel_ip ;;
+      12) sync_admin_root_password ;;
       0) exit 0 ;;
       *) echo "Invalid choice" ;;
     esac
@@ -623,9 +696,10 @@ case "${1:-menu}" in
   install-panel-ssl|--install-panel-ssl) install_panel_ssl ;;
   fix-permissions|--fix-permissions) fix_permissions ;;
   change-admin-password|--change-admin-password) change_admin_password ;;
+  sync-admin-root-password|--sync-admin-root-password|admin-use-root-password|--admin-use-root-password) sync_admin_root_password ;;
   status|--status) show_status ;;
   *)
-    echo "Usage: bpanel [menu|login|status|logs|restart|repair-firewall|change-ip|set-panel-url|install-panel-ssl|fix-permissions|change-admin-password|update]"
+    echo "Usage: bpanel [menu|login|status|logs|restart|repair-firewall|change-ip|set-panel-url|install-panel-ssl|fix-permissions|change-admin-password|sync-admin-root-password|update]"
     exit 2
     ;;
 esac

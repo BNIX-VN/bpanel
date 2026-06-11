@@ -1031,7 +1031,7 @@ source_version() {
 write_update_state() {
   local version now
   version="$(source_version)"
-  version="${version:-1.0.2}"
+  version="${version:-1.0.3}"
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   install -d -o bpanel -g bpanel -m 0750 /var/lib/bpanel
   cat >/var/lib/bpanel/update-status.json <<STATE

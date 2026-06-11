@@ -31,7 +31,7 @@ ownership, quotas, backups, SSL, services, and firewall tools built in.
 
 ## Versioning
 
-Current release: `1.0.2`.
+Current release: `1.0.3`.
 
 BPanel versions use semantic versioning: `major.minor.patch`.
 
@@ -50,7 +50,7 @@ Recommended when the release tag has just been updated:
 
 ```bash
 set -e
-BPANEL_VERSION=v1.0.2
+BPANEL_VERSION=v1.0.3
 apt-get update
 apt-get install -y git
 rm -rf /tmp/bpanel-source
@@ -64,7 +64,7 @@ bash installer/install.sh
 Release zip install:
 
 ```bash
-BPANEL_VERSION=v1.0.2
+BPANEL_VERSION=v1.0.3
 apt-get update
 apt-get install -y curl unzip
 rm -rf /opt/bpanel-source /tmp/bpanel-release /tmp/bpanel-release.zip
@@ -76,7 +76,7 @@ chmod +x installer/install.sh installer/update.sh installer/rescue-ufw-blocklist
 bash installer/install.sh
 ```
 
-`v1.0.2` is the current installable release tag. To install another release,
+`v1.0.3` is the current installable release tag. To install another release,
 change only `BPANEL_VERSION`. GitHub auto-generates the tag zip, but the
 `git clone` method avoids archive cache after a forced tag refresh. The clone
 path cleans up `/tmp/bpanel-source`; the zip path cleans up
@@ -146,7 +146,7 @@ when a newer release is available.
 To stay on a specific release:
 
 ```bash
-bpanel-update --tag v1.0.2
+bpanel-update --tag v1.0.3
 ```
 
 If the browser still shows the old UI, do a hard refresh (Ctrl + Shift + R) or
@@ -261,6 +261,9 @@ bpanel change-ip
 
 # Change the BPanel admin login password
 bpanel change-admin-password
+
+# Make BPanel admin use the current root password after cloning a VPS/template
+bpanel sync-admin-root-password
 ```
 
 ## Security model

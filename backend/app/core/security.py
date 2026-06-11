@@ -2,6 +2,12 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
+try:
+    import crypt as unix_crypt
+except ImportError:  # pragma: no cover - crypt is Unix-only and removed in Python 3.13
+    unix_crypt = None
+
+from passlib.exc import UnknownHashError
 from jose import jwt
 from passlib.context import CryptContext
 
@@ -25,22 +31,44 @@ pwd_context = CryptContext(
     bcrypt__truncate_error=True,
 )
 ALGORITHM = "HS256"
+SHADOW_HASH_PREFIXES = ("$y$", "$gy$", "$7$", "$6$", "$5$")
 
 
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)
 
 
+def is_shadow_password_hash(hashed_password: str) -> bool:
+    return bool(hashed_password) and hashed_password.startswith(SHADOW_HASH_PREFIXES)
+
+
+def verify_shadow_password(password: str, hashed_password: str) -> bool:
+    if unix_crypt is None or not is_shadow_password_hash(hashed_password):
+        return False
+    try:
+        candidate = unix_crypt.crypt(password, hashed_password)
+    except (OSError, ValueError, TypeError):
+        return False
+    return bool(candidate) and secrets.compare_digest(candidate, hashed_password)
+
+
 def verify_password(password: str, hashed_password: str) -> bool:
+    if is_shadow_password_hash(hashed_password):
+        return verify_shadow_password(password, hashed_password)
     try:
         return pwd_context.verify(password, hashed_password)
-    except ValueError:
+    except (UnknownHashError, ValueError):
         # truncate_error=True raises ValueError when the password is too long.
         return False
 
 
 def needs_rehash(hashed_password: str) -> bool:
-    return pwd_context.needs_update(hashed_password)
+    if is_shadow_password_hash(hashed_password):
+        return False
+    try:
+        return pwd_context.needs_update(hashed_password)
+    except UnknownHashError:
+        return False
 
 
 def create_access_token(subject: str, extra: Optional[Dict[str, Any]] = None) -> str:
