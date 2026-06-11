@@ -6,6 +6,7 @@ set -euo pipefail
 
 APP_DIR="${APP_DIR:-/opt/bpanel}"
 BPANEL_DATA_DIR="${BPANEL_DATA_DIR:-/var/lib/bpanel}"
+LOGIN_FILE="${LOGIN_FILE:-/root/login.txt}"
 
 usage() {
   cat <<'EOF'
@@ -120,7 +121,7 @@ collect_glob \
   "$APP_DIR/backend/.env" \
   "$APP_DIR"/backend/.env.* \
   "$BPANEL_DATA_DIR/panel-settings.json" \
-  /root/login.txt \
+  "$LOGIN_FILE" \
   /etc/hosts \
   /usr/share/phpmyadmin/bpanel-signon.php \
   /etc/phpmyadmin/conf.d/*.php \
@@ -135,11 +136,17 @@ collect_tree /etc/nginx
 collect_tree /etc/phpmyadmin
 collect_tree /etc/systemd/system
 
+env_value() {
+  local key="$1"
+  awk -F= -v key="$key" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "$APP_DIR/backend/.env" 2>/dev/null || true
+}
+
 changed=0
 declare -a changed_files=()
 
 backup_file() {
-  local src="$1" dest="$backup_root$src"
+  local src="$1" dest
+  dest="$backup_root$src"
   mkdir -p "$(dirname "$dest")"
   cp -a -- "$src" "$dest"
 }
@@ -152,6 +159,94 @@ for file in "${files[@]}"; do
     ((++changed))
   fi
 done
+
+sync_panel_settings_json() {
+  local settings_file="$BPANEL_DATA_DIR/panel-settings.json" panel_url current_panel_url
+  [[ -f "$settings_file" ]] || return 0
+  panel_url="$(env_value PANEL_URL)"
+  [[ -n "$panel_url" ]] || return 0
+
+  current_panel_url="$(
+    python3 - "$settings_file" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+try:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(data, dict):
+        print(data.get("panel_url", ""))
+except Exception:
+    pass
+PY
+  )"
+  if [[ "$current_panel_url" == "$panel_url" ]]; then
+    return 0
+  fi
+
+  backup_file "$settings_file"
+  python3 - "$settings_file" "$panel_url" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+panel_url = sys.argv[2]
+try:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        data = {}
+except Exception:
+    data = {}
+data["panel_url"] = panel_url
+path.write_text(json.dumps(data, ensure_ascii=True, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+  changed_files+=("$settings_file")
+  ((++changed))
+}
+
+sync_login_info_url() {
+  local login_file="$LOGIN_FILE" panel_url current_login_url
+  [[ -f "$login_file" ]] || return 0
+  panel_url="$(env_value PANEL_URL)"
+  [[ -n "$panel_url" ]] || return 0
+
+  current_login_url="$(awk -F': ' '/^Panel URL: / {print $2; exit}' "$login_file" 2>/dev/null || true)"
+  if [[ "$current_login_url" == "$panel_url" ]]; then
+    return 0
+  fi
+
+  backup_file "$login_file"
+  python3 - "$login_file" "$panel_url" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+panel_url = sys.argv[2]
+try:
+    lines = path.read_text(encoding="utf-8").splitlines()
+except Exception:
+    lines = []
+
+updated = False
+for idx, line in enumerate(lines):
+    if line.startswith("Panel URL: "):
+        lines[idx] = f"Panel URL: {panel_url}"
+        updated = True
+        break
+
+if not updated:
+    lines.insert(0, f"Panel URL: {panel_url}")
+
+path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+PY
+  changed_files+=("$login_file")
+  ((++changed))
+}
+
+sync_panel_settings_json
+sync_login_info_url
 
 restart_if_loaded() {
   local unit="$1"
