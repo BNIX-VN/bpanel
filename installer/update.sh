@@ -730,6 +730,11 @@ if [[ -f "$SOURCE_DIR/installer/rescue-ufw-blocklist.sh" ]]; then
   install -m 0755 -o root -g root "$SOURCE_DIR/installer/rescue-ufw-blocklist.sh" /usr/local/sbin/bpanel-rescue-ufw-blocklist
 fi
 
+if [[ -f "$SOURCE_DIR/change_IP.sh" ]]; then
+  log "Refreshing panel IP change command"
+  install -m 0755 -o root -g root "$SOURCE_DIR/change_IP.sh" /usr/local/sbin/bpanel-change-ip
+fi
+
 if [[ -f "$SOURCE_DIR/installer/update.sh" ]]; then
   log "Refreshing panel update command"
   install -m 0755 -o root -g root "$SOURCE_DIR/installer/update.sh" /usr/local/sbin/bpanel-update

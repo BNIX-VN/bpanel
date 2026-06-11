@@ -548,6 +548,9 @@ install_privileged_helper() {
   install -m 0440 -o root -g root "${SCRIPT_DIR}/files/bpanel-sudoers" /etc/sudoers.d/bpanel
   visudo -c -f /etc/sudoers.d/bpanel >/dev/null
   install -m 0755 -o root -g root "${SCRIPT_DIR}/rescue-ufw-blocklist.sh" /usr/local/sbin/bpanel-rescue-ufw-blocklist
+  if [[ -f "${PROJECT_ROOT}/change_IP.sh" ]]; then
+    install -m 0755 -o root -g root "${PROJECT_ROOT}/change_IP.sh" /usr/local/sbin/bpanel-change-ip
+  fi
 }
 
 install_panel_cli() {

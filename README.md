@@ -252,6 +252,15 @@ nginx -t && systemctl reload nginx
 
 # Service status
 systemctl status bpanel-api nginx mariadb redis-server php8.3-fpm php8.4-fpm
+
+# SSH rescue menu
+bpanel
+
+# Change a cloned/template VM from old IP to the current/new IP
+bpanel change-ip
+
+# Change the BPanel admin login password
+bpanel change-admin-password
 ```
 
 ## Security model

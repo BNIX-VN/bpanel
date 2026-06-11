@@ -561,6 +561,21 @@ run_panel_update() {
   /usr/local/sbin/bpanel-update --release
 }
 
+change_panel_ip() {
+  local script="/usr/local/sbin/bpanel-change-ip" old_ip new_ip current_ip
+  [[ -x "$script" ]] || fail "$script not found. Reinstall/update BPanel or copy change_IP.sh to that path."
+
+  current_ip="$(detect_ip)"
+  read -rp "Old IP: " old_ip
+  if [[ -n "$current_ip" ]]; then
+    read -rp "New IP [${current_ip}]: " new_ip
+    new_ip="${new_ip:-$current_ip}"
+  else
+    read -rp "New IP: " new_ip
+  fi
+  "$script" "$old_ip" "$new_ip"
+}
+
 menu() {
   while true; do
     echo ""
@@ -575,6 +590,7 @@ menu() {
     echo "8) Fix permissions/runtime"
     echo "9) Change admin password"
     echo "10) Update panel from release"
+    echo "11) Change server IP"
     echo "0) Exit"
     read -rp "Choose: " choice
     case "$choice" in
@@ -588,6 +604,7 @@ menu() {
       8) fix_permissions ;;
       9) change_admin_password ;;
       10) run_panel_update ;;
+      11) change_panel_ip ;;
       0) exit 0 ;;
       *) echo "Invalid choice" ;;
     esac
@@ -601,13 +618,14 @@ case "${1:-menu}" in
   restart|--restart) restart_panel_command ;;
   repair-firewall|--repair-firewall) repair_firewall ;;
   update|--update) run_panel_update ;;
+  change-ip|--change-ip) change_panel_ip ;;
   set-panel-url|--set-panel-url) set_panel_url ;;
   install-panel-ssl|--install-panel-ssl) install_panel_ssl ;;
   fix-permissions|--fix-permissions) fix_permissions ;;
   change-admin-password|--change-admin-password) change_admin_password ;;
   status|--status) show_status ;;
   *)
-    echo "Usage: bpanel [menu|login|status|logs|restart|repair-firewall|set-panel-url|install-panel-ssl|fix-permissions|change-admin-password|update]"
+    echo "Usage: bpanel [menu|login|status|logs|restart|repair-firewall|change-ip|set-panel-url|install-panel-ssl|fix-permissions|change-admin-password|update]"
     exit 2
     ;;
 esac
