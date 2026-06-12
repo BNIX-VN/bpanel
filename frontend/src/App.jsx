@@ -343,6 +343,8 @@ function App() {
   const [panelSslEmail, setPanelSslEmail] = useState('');
   const [updatesStatus, setUpdatesStatus] = useState(null);
   const [showUpdateLog, setShowUpdateLog] = useState(false);
+  const [osUpdating, setOsUpdating] = useState(false);
+  const [panelUpdating, setPanelUpdating] = useState(false);
   const [osAutoUpdate, setOsAutoUpdate] = useState({ enabled: true, mode: 'security', auto_reboot: false });
   const [panelAutoUpdate, setPanelAutoUpdate] = useState({ enabled: true, time: '03:30' });
   const noticeTimer = useRef(null);
@@ -1794,8 +1796,10 @@ function App() {
 
   async function runOsUpdate() {
     if (!confirm('Run apt-get update && apt-get upgrade now?')) return;
-    const data = await request('/updates/os/run', { method: 'POST' }, 'Starting OS update task...');
-    if (data) { setNotice((data.stdout || data.stderr || 'OS update task started.').trim()); if (showUpdateLog) await loadUpdates(); }
+    setOsUpdating(true);
+    const data = await request('/updates/os/run', { method: 'POST' }, 'Updating OS packages...');
+    setOsUpdating(false);
+    if (data) { setNotice((data.stdout || data.stderr || 'OS update completed.').trim()); if (showUpdateLog) await loadUpdates(); }
   }
 
   async function saveOsAutoUpdate() {
@@ -1805,8 +1809,10 @@ function App() {
 
   async function runPanelUpdate() {
     if (!confirm('Update BPanel from GitHub now? The API may restart.')) return;
-    const data = await request('/updates/panel/run', { method: 'POST' }, 'Starting BPanel update task...');
-    if (data) { setNotice((data.stdout || data.stderr || 'Panel update task started.').trim()); await loadUpdates(); }
+    setPanelUpdating(true);
+    const data = await request('/updates/panel/run', { method: 'POST' }, 'Updating BPanel...');
+    setPanelUpdating(false);
+    if (data) { setNotice((data.stdout || data.stderr || 'Panel update completed.').trim()); await loadUpdates(); }
   }
 
   async function savePanelAutoUpdate() {
@@ -2770,8 +2776,8 @@ function App() {
         </div>
         <div className="actions">
           <button className="secondary-light" disabled={!!loading} onClick={() => loadUpdates(true)}><RefreshCw size={14}/> Check releases</button>
-          <button disabled={!!loading} onClick={runOsUpdate}><RefreshCw size={14}/> Update OS now</button>
-          <button disabled={!!loading || !updateAvailable} onClick={runPanelUpdate}><RotateCcw size={14}/> Update panel now</button>
+          <button disabled={!!loading || osUpdating} onClick={runOsUpdate}><RefreshCw size={14} className={osUpdating ? 'spin' : ''}/> {osUpdating ? 'Updating OS...' : 'Update OS now'}</button>
+          <button disabled={!!loading || panelUpdating || !updateAvailable} onClick={runPanelUpdate}><RotateCcw size={14} className={panelUpdating ? 'spin' : ''}/> {panelUpdating ? 'Updating panel...' : 'Update panel now'}</button>
         </div>
         {showUpdateLog && <div className="info-box firewall-status update-log-box">
           <div className="update-log-head"><strong>Update logs</strong><button className="secondary-light" disabled={!!loading} onClick={() => loadUpdates(true)}><RefreshCw size={13}/> Refresh</button></div>

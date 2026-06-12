@@ -320,6 +320,7 @@ button:disabled{opacity:.55;cursor:not-allowed;box-shadow:none}
   animation:spin .8s linear infinite;flex:none;
 }
 @keyframes spin{to{transform:rotate(360deg)}}
+.spin{animation:spin .8s linear infinite;}
 
 /* Error & notice */
 .error{
