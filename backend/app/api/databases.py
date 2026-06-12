@@ -66,7 +66,11 @@ def create_database(payload: DatabaseCreate, db: Session = Depends(get_db), curr
     if db.query(DatabaseAccount).filter(DatabaseAccount.db_user == db_user).first():
         raise HTTPException(status_code=409, detail="Database user already exists")
 
-    mariadb.create_database_credentials(db_name, db_user, db_password)
+    try:
+        mariadb.create_database_credentials(db_name, db_user, db_password)
+    except Exception as exc:
+        logger.exception("Failed to create MariaDB database/user")
+        raise HTTPException(status_code=500, detail=f"MariaDB error: {exc}") from exc
 
     item = DatabaseAccount(
         owner_id=current_user.id,

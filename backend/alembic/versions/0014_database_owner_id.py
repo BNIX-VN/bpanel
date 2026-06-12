@@ -19,30 +19,63 @@ depends_on: Union[str, Sequence[str], None] = None
 def _column_exists(table: str, column: str) -> bool:
     """Check if a column already exists (works for SQLite and other backends)."""
     bind = op.get_bind()
-    result = bind.execute(sa.text(f"PRAGMA table_info('{table}')"))
-    columns = [row[1] for row in result]
-    if columns:
+    if bind.dialect.name == "sqlite":
+        result = bind.execute(sa.text(f"PRAGMA table_info('{table}')"))
+        columns = [row[1] for row in result]
         return column in columns
-    # Fallback for non-SQLite
     from sqlalchemy import inspect
     insp = inspect(bind)
     col_names = [c["name"] for c in insp.get_columns(table)]
     return column in col_names
 
 
-def upgrade() -> None:
-    if not _column_exists("database_accounts", "owner_id"):
-        op.add_column("database_accounts", sa.Column("owner_id", sa.Integer(), nullable=True))
-    # Backfill owner_id from website.owner_id for existing rows
-    op.execute(
-        "UPDATE database_accounts SET owner_id = ("
-        "  SELECT websites.owner_id FROM websites WHERE websites.id = database_accounts.website_id"
-        ") WHERE owner_id IS NULL"
-    )
-    # SQLite doesn't support ALTER COLUMN, but the column is already added as nullable
-    # For non-SQLite backends:
+def _get_column_notnull(table: str, column: str) -> bool:
+    """Check if a column is NOT NULL in SQLite."""
     bind = op.get_bind()
     if bind.dialect.name != "sqlite":
+        return False
+    result = bind.execute(sa.text(f"PRAGMA table_info('{table}')"))
+    for row in result:
+        if row[1] == column:
+            return bool(row[3])  # notnull flag
+    return False
+
+
+def upgrade() -> None:
+    bind = op.get_bind()
+
+    if bind.dialect.name == "sqlite":
+        # SQLite cannot ALTER COLUMN nullable. Use batch mode to recreate table.
+        needs_rebuild = False
+
+        # First ensure owner_id column exists
+        if not _column_exists("database_accounts", "owner_id"):
+            needs_rebuild = True
+        elif _get_column_notnull("database_accounts", "website_id"):
+            # website_id is still NOT NULL, need to rebuild
+            needs_rebuild = True
+
+        if needs_rebuild:
+            with op.batch_alter_table("database_accounts") as batch_op:
+                if not _column_exists("database_accounts", "owner_id"):
+                    batch_op.add_column(sa.Column("owner_id", sa.Integer(), nullable=True))
+                batch_op.alter_column("website_id", existing_type=sa.Integer(), nullable=True)
+
+        # Backfill owner_id from website.owner_id for existing rows
+        op.execute(
+            "UPDATE database_accounts SET owner_id = ("
+            "  SELECT websites.owner_id FROM websites WHERE websites.id = database_accounts.website_id"
+            ") WHERE owner_id IS NULL AND website_id IS NOT NULL"
+        )
+    else:
+        if not _column_exists("database_accounts", "owner_id"):
+            op.add_column("database_accounts", sa.Column("owner_id", sa.Integer(), nullable=True))
+        # Backfill
+        op.execute(
+            "UPDATE database_accounts SET owner_id = ("
+            "  SELECT websites.owner_id FROM websites WHERE websites.id = database_accounts.website_id"
+            ") WHERE owner_id IS NULL"
+        )
         op.alter_column("database_accounts", "owner_id", nullable=False)
         op.alter_column("database_accounts", "website_id", existing_type=sa.Integer(), nullable=True)
         op.create_foreign_key("fk_database_accounts_owner_id", "database_accounts", "users", ["owner_id"], ["id"])
@@ -50,8 +83,11 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     bind = op.get_bind()
-    if bind.dialect.name != "sqlite":
+    if bind.dialect.name == "sqlite":
+        with op.batch_alter_table("database_accounts") as batch_op:
+            batch_op.drop_column("owner_id")
+            batch_op.alter_column("website_id", existing_type=sa.Integer(), nullable=False)
+    else:
         op.drop_constraint("fk_database_accounts_owner_id", "database_accounts", type_="foreignkey")
         op.alter_column("database_accounts", "website_id", existing_type=sa.Integer(), nullable=False)
-    if _column_exists("database_accounts", "owner_id"):
         op.drop_column("database_accounts", "owner_id")
