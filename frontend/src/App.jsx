@@ -2251,10 +2251,10 @@ function App() {
 
   function renderDatabases() {
     function copyToClipboard(text, field) {
-      navigator.clipboard.writeText(text).then(() => {
-        setCopiedField(field);
-        setTimeout(() => setCopiedField(null), 2000);
+      const doCopy = navigator.clipboard ? navigator.clipboard.writeText(text) : new Promise((resolve, reject) => {
+        try { const ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); resolve(); } catch(e) { reject(e); }
       });
+      doCopy.then(() => { setCopiedField(field); setTimeout(() => setCopiedField(null), 2000); }).catch(() => setError('Copy failed.'));
     }
     return <section className="section">
       <div className="section-title">
