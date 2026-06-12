@@ -962,6 +962,15 @@ function App() {
     await request(`/databases/${id}/password`, { method: 'POST', body: JSON.stringify({ password: newPass }) }, 'Changing database password...');
   }
 
+  async function deleteDatabase(id, dbName) {
+    if (!confirm(`Delete database "${dbName}"? This action cannot be undone.`)) return;
+    const data = await request(`/databases/${id}`, { method: 'DELETE' }, 'Deleting database...');
+    if (data) {
+      setNotice(`Database "${dbName}" deleted successfully.`);
+      await refreshAll();
+    }
+  }
+
   async function createDatabase() {
     if (!newDatabase.website_id) { setError('Please select a website.'); return; }
     const body = {
@@ -2241,6 +2250,7 @@ function App() {
           <button disabled={!!loading} onClick={() => openPhpMyAdmin(db.id)}>phpMyAdmin</button>
           <button disabled={!!loading} onClick={() => downloadDatabase(db.id, db.db_name)}><Download size={14}/> SQL</button>
           <button disabled={!!loading} onClick={() => changeDbPassword(db.id)}><KeyRound size={14}/> Password</button>
+          <button className="danger" disabled={!!loading} onClick={() => deleteDatabase(db.id, db.db_name)}><Trash2 size={14}/> Delete</button>
         </div>})}
       </div>
       <p className="hint">Click phpMyAdmin to sign in directly. Token expires after 60s.</p>
