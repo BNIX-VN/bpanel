@@ -12,7 +12,7 @@ import 'ace-builds/src-noconflict/mode-php';
 import 'ace-builds/src-noconflict/mode-text';
 import 'ace-builds/src-noconflict/mode-yaml';
 import 'ace-builds/src-noconflict/theme-textmate';
-import { Archive, Clock, Code2, Copy, Cpu, Database, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, MoveRight, Network, Server, Settings as SettingsIcon, Shield, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
+import { Archive, Clock, Code2, Copy, Cpu, Database, Dices, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, MoveRight, Network, Server, Settings as SettingsIcon, Shield, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
 import { Terminal } from './components/Terminal';
 import './style.css';
 import './brand.css';
@@ -970,6 +970,13 @@ function App() {
       setNotice(`Database "${dbName}" deleted successfully.`);
       await refreshAll();
     }
+  }
+
+  function generateRandomPassword(length = 20) {
+    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#%^*_+-';
+    const arr = new Uint8Array(length);
+    crypto.getRandomValues(arr);
+    return Array.from(arr, b => chars[b % chars.length]).join('');
   }
 
   async function createDatabase() {
@@ -2241,7 +2248,8 @@ function App() {
       <div className="form-row">
         <input value={newDatabase.db_name} onChange={e => setNewDatabase(prev => ({ ...prev, db_name: e.target.value }))} placeholder="database_name" />
         <input value={newDatabase.db_user} onChange={e => setNewDatabase(prev => ({ ...prev, db_user: e.target.value }))} placeholder="db_user (default = db_name)" />
-        <input value={newDatabase.db_password} onChange={e => setNewDatabase(prev => ({ ...prev, db_password: e.target.value }))} placeholder="password (auto if empty, min 12 chars)" />
+        <input value={newDatabase.db_password} onChange={e => setNewDatabase(prev => ({ ...prev, db_password: e.target.value }))} placeholder="password (min 12 chars)" />
+        <button className="secondary-light" title="Generate random password" onClick={() => setNewDatabase(prev => ({ ...prev, db_password: generateRandomPassword() }))}><Dices size={15}/></button>
         <button disabled={!!loading || !newDatabase.db_name.trim()} onClick={createDatabase}><Plus size={15}/> Create database</button>
       </div>
       {databases.length === 0 && <EmptyState icon={Database} message="No databases found." />}
@@ -2253,7 +2261,7 @@ function App() {
           <button disabled={!!loading} onClick={() => openPhpMyAdmin(db.id)}>phpMyAdmin</button>
           <button disabled={!!loading} onClick={() => downloadDatabase(db.id, db.db_name)}><Download size={14}/> SQL</button>
           <button disabled={!!loading} onClick={() => changeDbPassword(db.id)}><KeyRound size={14}/> Password</button>
-          <button className="danger" disabled={!!loading} onClick={() => deleteDatabase(db.id, db.db_name)}><Trash2 size={14}/> Delete</button>
+          <button className="danger" disabled={!!loading} onClick={() => deleteDatabase(db.id, db.db_name)}><Trash2 size={14}/></button>
         </div>})}
       </div>
       <p className="hint">Click phpMyAdmin to sign in directly. Token expires after 60s.</p>
