@@ -12,7 +12,7 @@ import 'ace-builds/src-noconflict/mode-php';
 import 'ace-builds/src-noconflict/mode-text';
 import 'ace-builds/src-noconflict/mode-yaml';
 import 'ace-builds/src-noconflict/theme-textmate';
-import { Archive, Clock, Code2, Copy, Cpu, Database, Dices, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, MoveRight, Network, Server, Settings as SettingsIcon, Shield, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
+import { Archive, Check, Clock, Code2, Copy, Cpu, Database, Dices, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, MoveRight, Network, Server, Settings as SettingsIcon, Shield, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
 import { Terminal } from './components/Terminal';
 import './style.css';
 import './brand.css';
@@ -276,6 +276,7 @@ function App() {
   const [databases, setDatabases] = useState([]);
   const [newDatabase, setNewDatabase] = useState({ db_name: '', db_user: '', db_password: '' });
   const [createdDbInfo, setCreatedDbInfo] = useState(null);
+  const [copiedField, setCopiedField] = useState(null);
   const [users, setUsers] = useState([]);
   const [resourceUsage, setResourceUsage] = useState(null);
   const [serviceStates, setServiceStates] = useState({});
@@ -2241,8 +2242,17 @@ function App() {
   }
 
   function renderDatabases() {
-    function copyToClipboard(text) {
-      navigator.clipboard.writeText(text).then(() => setNotice('Copied to clipboard.'));
+    function copyToClipboard(text, field) {
+      navigator.clipboard.writeText(text).then(() => {
+        setCopiedField(field);
+        setTimeout(() => setCopiedField(null), 2000);
+      });
+    }
+    function CopyBtn({ text, field }) {
+      const copied = copiedField === field;
+      return <button className="mini secondary-light" title={copied ? 'Copied!' : 'Copy'} onClick={() => copyToClipboard(text, field)}>
+        {copied ? <Check size={12} style={{color:'var(--green)'}}/> : <Copy size={12}/>}
+      </button>;
     }
     return <section className="section">
       <div className="section-title">
@@ -2259,9 +2269,9 @@ function App() {
       {createdDbInfo && <div className="info-box db-created-box">
         <div className="db-created-head"><strong>Database created successfully</strong><button className="mini secondary-light" onClick={() => setCreatedDbInfo(null)}><X size={13}/></button></div>
         <div className="db-created-grid">
-          <label>Database</label><span>{createdDbInfo.db_name} <button className="mini secondary-light" onClick={() => copyToClipboard(createdDbInfo.db_name)}><Copy size={12}/></button></span>
-          <label>User</label><span>{createdDbInfo.db_user} <button className="mini secondary-light" onClick={() => copyToClipboard(createdDbInfo.db_user)}><Copy size={12}/></button></span>
-          <label>Password</label><span><code>{createdDbInfo.db_password}</code> <button className="mini secondary-light" onClick={() => copyToClipboard(createdDbInfo.db_password)}><Copy size={12}/></button></span>
+          <label>Database</label><span>{createdDbInfo.db_name} <CopyBtn text={createdDbInfo.db_name} field="db_name"/></span>
+          <label>User</label><span>{createdDbInfo.db_user} <CopyBtn text={createdDbInfo.db_user} field="db_user"/></span>
+          <label>Password</label><span><code>{createdDbInfo.db_password}</code> <CopyBtn text={createdDbInfo.db_password} field="db_password"/></span>
         </div>
       </div>}
       {databases.length === 0 && !createdDbInfo && <EmptyState icon={Database} message="No databases found." />}
