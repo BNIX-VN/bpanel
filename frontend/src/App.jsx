@@ -982,11 +982,19 @@ function App() {
   }
 
   async function createDatabase() {
-    if (!newDatabase.db_name.trim()) { setError('Please enter a database name.'); return; }
+    const validDbName = /^[a-zA-Z0-9_]+$/;
+    const dbName = newDatabase.db_name.trim();
+    const dbUser = newDatabase.db_user.trim();
+    const dbPass = newDatabase.db_password.trim();
+    if (!dbName) { setError('Please enter a database name.'); return; }
+    if (!validDbName.test(dbName)) { setError('Database name can only contain letters, numbers and underscores (no spaces or special characters).'); return; }
+    if (dbUser && !validDbName.test(dbUser)) { setError('Database user can only contain letters, numbers and underscores (no spaces or special characters).'); return; }
+    if (dbPass && dbPass.length < 12) { setError('Password must be at least 12 characters.'); return; }
+    if (dbPass && /[^\x20-\x7E]/.test(dbPass)) { setError('Password contains invalid characters. Use only ASCII characters.'); return; }
     const body = {
-      db_name: newDatabase.db_name.trim(),
-      db_user: newDatabase.db_user.trim() || null,
-      db_password: newDatabase.db_password.trim() || null,
+      db_name: dbName,
+      db_user: dbUser || null,
+      db_password: dbPass || null,
     };
     const data = await request('/databases', { method: 'POST', body: JSON.stringify(body) }, 'Creating database...');
     if (data) {
@@ -2248,12 +2256,6 @@ function App() {
         setTimeout(() => setCopiedField(null), 2000);
       });
     }
-    function CopyBtn({ text, field }) {
-      const copied = copiedField === field;
-      return <button className="mini secondary-light" title={copied ? 'Copied!' : 'Copy'} onClick={() => copyToClipboard(text, field)}>
-        {copied ? <Check size={12} style={{color:'var(--green)'}}/> : <Copy size={12}/>}
-      </button>;
-    }
     return <section className="section">
       <div className="section-title">
         <h2>Databases</h2>
@@ -2269,9 +2271,9 @@ function App() {
       {createdDbInfo && <div className="info-box db-created-box">
         <div className="db-created-head"><strong>Database created successfully</strong><button className="mini secondary-light" onClick={() => setCreatedDbInfo(null)}><X size={13}/></button></div>
         <div className="db-created-grid">
-          <label>Database</label><span>{createdDbInfo.db_name} <CopyBtn text={createdDbInfo.db_name} field="db_name"/></span>
-          <label>User</label><span>{createdDbInfo.db_user} <CopyBtn text={createdDbInfo.db_user} field="db_user"/></span>
-          <label>Password</label><span><code>{createdDbInfo.db_password}</code> <CopyBtn text={createdDbInfo.db_password} field="db_password"/></span>
+          <label>Database</label><span>{createdDbInfo.db_name} <button className="mini secondary-light" title={copiedField === 'db_name' ? 'Copied!' : 'Copy'} onClick={() => copyToClipboard(createdDbInfo.db_name, 'db_name')}>{copiedField === 'db_name' ? <Check size={12} style={{color:'var(--green)'}}/> : <Copy size={12}/>}</button></span>
+          <label>User</label><span>{createdDbInfo.db_user} <button className="mini secondary-light" title={copiedField === 'db_user' ? 'Copied!' : 'Copy'} onClick={() => copyToClipboard(createdDbInfo.db_user, 'db_user')}>{copiedField === 'db_user' ? <Check size={12} style={{color:'var(--green)'}}/> : <Copy size={12}/>}</button></span>
+          <label>Password</label><span><code>{createdDbInfo.db_password}</code> <button className="mini secondary-light" title={copiedField === 'db_password' ? 'Copied!' : 'Copy'} onClick={() => copyToClipboard(createdDbInfo.db_password, 'db_password')}>{copiedField === 'db_password' ? <Check size={12} style={{color:'var(--green)'}}/> : <Copy size={12}/>}</button></span>
         </div>
       </div>}
       {databases.length === 0 && !createdDbInfo && <EmptyState icon={Database} message="No databases found." />}
