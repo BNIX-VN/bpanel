@@ -275,6 +275,7 @@ function App() {
   const [websites, setWebsites] = useState([]);
   const [databases, setDatabases] = useState([]);
   const [newDatabase, setNewDatabase] = useState({ db_name: '', db_user: '', db_password: '' });
+  const [createdDbInfo, setCreatedDbInfo] = useState(null);
   const [users, setUsers] = useState([]);
   const [resourceUsage, setResourceUsage] = useState(null);
   const [serviceStates, setServiceStates] = useState({});
@@ -988,7 +989,7 @@ function App() {
     };
     const data = await request('/databases', { method: 'POST', body: JSON.stringify(body) }, 'Creating database...');
     if (data) {
-      setNotice(`Created database ${data.db_name}\nUser: ${data.db_user}${data.db_password ? ` | Password: ${data.db_password}` : ''}`);
+      setCreatedDbInfo({ db_name: data.db_name, db_user: data.db_user, db_password: data.db_password });
       setNewDatabase({ db_name: '', db_user: '', db_password: '' });
       await refreshAll();
     }
@@ -2240,6 +2241,9 @@ function App() {
   }
 
   function renderDatabases() {
+    function copyToClipboard(text) {
+      navigator.clipboard.writeText(text).then(() => setNotice('Copied to clipboard.'));
+    }
     return <section className="section">
       <div className="section-title">
         <h2>Databases</h2>
@@ -2252,7 +2256,15 @@ function App() {
         <button className="mini secondary-light" title="Generate random password" onClick={() => setNewDatabase(prev => ({ ...prev, db_password: generateRandomPassword() }))}><Dices size={13}/></button>
         <button disabled={!!loading || !newDatabase.db_name.trim()} onClick={createDatabase}><Plus size={15}/> Create database</button>
       </div>
-      {databases.length === 0 && <EmptyState icon={Database} message="No databases found." />}
+      {createdDbInfo && <div className="info-box db-created-box">
+        <div className="db-created-head"><strong>Database created successfully</strong><button className="mini secondary-light" onClick={() => setCreatedDbInfo(null)}><X size={13}/></button></div>
+        <div className="db-created-grid">
+          <label>Database</label><span>{createdDbInfo.db_name} <button className="mini secondary-light" onClick={() => copyToClipboard(createdDbInfo.db_name)}><Copy size={12}/></button></span>
+          <label>User</label><span>{createdDbInfo.db_user} <button className="mini secondary-light" onClick={() => copyToClipboard(createdDbInfo.db_user)}><Copy size={12}/></button></span>
+          <label>Password</label><span><code>{createdDbInfo.db_password}</code> <button className="mini secondary-light" onClick={() => copyToClipboard(createdDbInfo.db_password)}><Copy size={12}/></button></span>
+        </div>
+      </div>}
+      {databases.length === 0 && !createdDbInfo && <EmptyState icon={Database} message="No databases found." />}
       <div className="table">
         {databases.map(db => {
           return <div className="row db-row" key={db.id}>

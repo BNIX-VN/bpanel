@@ -298,7 +298,13 @@ button:disabled{opacity:.55;cursor:not-allowed;box-shadow:none}
 /* Info box */
 .info-box{display:grid;gap:5px;background:var(--surface-alt);border:1px solid var(--border);border-radius:var(--radius-md);padding:14px;min-width:0}
 
-/* Firewall */
+/* Database created info box */
+.db-created-box{gap:10px;margin-top:8px;background:var(--surface);border-color:var(--accent)}
+.db-created-head{display:flex;justify-content:space-between;align-items:center}
+.db-created-grid{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;align-items:center;font-size:14px}
+.db-created-grid label{font-weight:600;color:var(--text-muted)}
+.db-created-grid code{background:var(--surface-alt);padding:2px 8px;border-radius:var(--radius-sm);font-size:13px;word-break:break-all}
+.db-created-grid span{display:flex;align-items:center;gap:6px}
 .firewall-status{margin-top:10px}
 .firewall-form{display:grid;grid-template-columns:1fr 170px auto;gap:10px;align-items:end}
 .firewall-form span{font-weight:700;color:var(--text-secondary);font-size:13px}
