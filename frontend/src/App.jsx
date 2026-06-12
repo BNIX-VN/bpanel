@@ -274,7 +274,7 @@ function App() {
   const [terminalViewer, setTerminalViewer] = useState(null); // {id, domain}
   const [websites, setWebsites] = useState([]);
   const [databases, setDatabases] = useState([]);
-  const [newDatabase, setNewDatabase] = useState({ website_id: '', db_name: '' });
+  const [newDatabase, setNewDatabase] = useState({ db_name: '', db_user: '', db_password: '' });
   const [users, setUsers] = useState([]);
   const [resourceUsage, setResourceUsage] = useState(null);
   const [serviceStates, setServiceStates] = useState({});
@@ -678,7 +678,6 @@ function App() {
     if (siteData) {
       setWebsites(siteData);
       if (!selectedWebsiteId && siteData[0]) setSelectedWebsiteId(String(siteData[0].id));
-      if (!newDatabase.website_id && siteData[0]) setNewDatabase(prev => ({ ...prev, website_id: String(siteData[0].id) }));
     }
     const dbData = await request('/databases');
     if (dbData) setDatabases(dbData);
@@ -972,15 +971,16 @@ function App() {
   }
 
   async function createDatabase() {
-    if (!newDatabase.website_id) { setError('Please select a website.'); return; }
+    if (!newDatabase.db_name.trim()) { setError('Please enter a database name.'); return; }
     const body = {
-      website_id: Number(newDatabase.website_id),
-      db_name: newDatabase.db_name.trim() || null,
+      db_name: newDatabase.db_name.trim(),
+      db_user: newDatabase.db_user.trim() || null,
+      db_password: newDatabase.db_password.trim() || null,
     };
     const data = await request('/databases', { method: 'POST', body: JSON.stringify(body) }, 'Creating database...');
     if (data) {
       setNotice(`Created database ${data.db_name}\nUser: ${data.db_user}${data.db_password ? ` | Password: ${data.db_password}` : ''}`);
-      setNewDatabase(prev => ({ ...prev, db_name: '' }));
+      setNewDatabase({ db_name: '', db_user: '', db_password: '' });
       await refreshAll();
     }
   }
@@ -2233,19 +2233,16 @@ function App() {
         <button disabled={!!loading} onClick={refreshAll}><RefreshCw size={15}/> Refresh</button>
       </div>
       <div className="form-row">
-        <select value={newDatabase.website_id} onChange={e => setNewDatabase(prev => ({ ...prev, website_id: e.target.value }))}>
-          <option value="">Select website</option>
-          {websites.map(site => <option key={site.id} value={site.id}>{site.domain}</option>)}
-        </select>
-        <input value={newDatabase.db_name} onChange={e => setNewDatabase(prev => ({ ...prev, db_name: e.target.value }))} placeholder="database_name (optional)" />
-        <button disabled={!!loading || !newDatabase.website_id} onClick={createDatabase}><Plus size={15}/> Create database</button>
+        <input value={newDatabase.db_name} onChange={e => setNewDatabase(prev => ({ ...prev, db_name: e.target.value }))} placeholder="database_name" />
+        <input value={newDatabase.db_user} onChange={e => setNewDatabase(prev => ({ ...prev, db_user: e.target.value }))} placeholder="db_user (default = db_name)" />
+        <input value={newDatabase.db_password} onChange={e => setNewDatabase(prev => ({ ...prev, db_password: e.target.value }))} placeholder="password (auto if empty, min 12 chars)" />
+        <button disabled={!!loading || !newDatabase.db_name.trim()} onClick={createDatabase}><Plus size={15}/> Create database</button>
       </div>
       {databases.length === 0 && <EmptyState icon={Database} message="No databases found." />}
       <div className="table">
         {databases.map(db => {
-          const site = websites.find(item => item.id === db.website_id);
           return <div className="row db-row" key={db.id}>
-          <span><strong>{db.db_name}</strong>{site && <small>{site.domain}</small>}</span>
+          <span><strong>{db.db_name}</strong></span>
           <span style={{color:'var(--text-muted)'}}>{db.db_user}</span>
           <button disabled={!!loading} onClick={() => openPhpMyAdmin(db.id)}>phpMyAdmin</button>
           <button disabled={!!loading} onClick={() => downloadDatabase(db.id, db.db_name)}><Download size={14}/> SQL</button>

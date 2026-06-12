@@ -316,15 +316,30 @@ class DatabasePasswordUpdate(BaseModel):
 
 
 class DatabaseCreate(BaseModel):
-    website_id: int
-    db_name: Optional[str] = Field(default=None, min_length=1, max_length=64, pattern=r"^[a-z0-9_]+$")
+    db_name: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9_]+$")
+    db_user: Optional[str] = Field(default=None, min_length=1, max_length=64, pattern=r"^[a-z0-9_]+$")
+    db_password: Optional[str] = Field(default=None, min_length=12, max_length=128)
 
     @field_validator("db_name", mode="before")
     @classmethod
-    def validate_db_name(cls, value) -> Optional[str]:
+    def validate_db_name(cls, value) -> str:
+        if value is None or value == "":
+            raise ValueError("db_name is required")
+        return str(value).strip().lower()
+
+    @field_validator("db_user", mode="before")
+    @classmethod
+    def validate_db_user(cls, value) -> Optional[str]:
         if value is None or value == "":
             return None
         return str(value).strip().lower()
+
+    @field_validator("db_password", mode="before")
+    @classmethod
+    def validate_db_password(cls, value) -> Optional[str]:
+        if value is None or value == "":
+            return None
+        return value
 
 
 class CronDelete(BaseModel):
@@ -357,7 +372,8 @@ class WebsiteOut(BaseModel):
 
 class DatabaseOut(BaseModel):
     id: int
-    website_id: int
+    owner_id: int
+    website_id: Optional[int] = None
     db_name: str
     db_user: str
 

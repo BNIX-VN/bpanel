@@ -49,20 +49,22 @@ class Website(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     owner: Mapped[User] = relationship(back_populates="websites")
-    database: Mapped["DatabaseAccount"] = relationship(back_populates="website", uselist=False)
+    database: Mapped[Optional["DatabaseAccount"]] = relationship(back_populates="website", uselist=False)
 
 
 class DatabaseAccount(Base):
     __tablename__ = "database_accounts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    website_id: Mapped[int] = mapped_column(ForeignKey("websites.id"))
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    website_id: Mapped[Optional[int]] = mapped_column(ForeignKey("websites.id"), nullable=True)
     db_name: Mapped[str] = mapped_column(String(64), unique=True)
     db_user: Mapped[str] = mapped_column(String(64), unique=True)
     db_password: Mapped[str] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
-    website: Mapped[Website] = relationship(back_populates="database")
+    owner: Mapped["User"] = relationship()
+    website: Mapped[Optional[Website]] = relationship(back_populates="database")
 
 
 class AuditLog(Base):
