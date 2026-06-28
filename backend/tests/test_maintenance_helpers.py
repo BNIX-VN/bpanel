@@ -73,6 +73,8 @@ def test_render_vhost_keeps_waf_and_http_flood_blocks():
     assert "limit_conn bpanel_conn_flood 8;" in content
     assert "@bpanel_http_flood_challenge" in content
     assert "bpanel_http_flood_ok=1" in content
+    assert "# BPANEL ACME CHALLENGE" in content
+    assert "root /var/www/bpanel-acme;" in content
 
 
 def test_firewall_numbered_rules_mark_defaults_protected(monkeypatch):

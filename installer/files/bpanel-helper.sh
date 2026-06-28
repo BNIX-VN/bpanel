@@ -1551,14 +1551,52 @@ case "$cmd" in
     [[ $# -ge 1 ]] || deny "usage: certbot-issue <domain> [email]"
     domain="$1"; email="${2:-}"
     require_domain "$domain"
-    args=(--nginx -d "$domain" --non-interactive --agree-tos --redirect)
+    install -d -o root -g bpanel -m 0755 /var/www/bpanel-acme/.well-known/acme-challenge
+    if [[ -f "/etc/nginx/conf.d/${domain}.conf" ]]; then
+      if grep -q "/var/lib/bpanel/acme-challenges" "/etc/nginx/conf.d/${domain}.conf"; then
+        cp -a "/etc/nginx/conf.d/${domain}.conf" "/etc/nginx/conf.d/${domain}.conf.bak"
+        sed -i 's#/var/lib/bpanel/acme-challenges#/var/www/bpanel-acme#g' "/etc/nginx/conf.d/${domain}.conf"
+        nginx -t && systemctl reload nginx
+      elif ! grep -q "well-known/acme-challenge" "/etc/nginx/conf.d/${domain}.conf"; then
+        cp -a "/etc/nginx/conf.d/${domain}.conf" "/etc/nginx/conf.d/${domain}.conf.bak"
+        python3 - "$domain" <<'PY'
+from pathlib import Path
+import sys
+
+domain = sys.argv[1]
+path = Path(f"/etc/nginx/conf.d/{domain}.conf")
+content = path.read_text(encoding="utf-8")
+block = """\
+
+    # BPANEL ACME CHALLENGE
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/bpanel-acme;
+        default_type text/plain;
+        try_files $uri =404;
+        access_log off;
+        auth_basic off;
+    }
+"""
+marker = "    client_max_body_size"
+if marker in content:
+    line_end = content.find("\n", content.find(marker))
+    content = content[: line_end + 1] + block + content[line_end + 1 :]
+else:
+    content = content.replace("\n    location / {", block + "\n    location / {", 1)
+path.write_text(content, encoding="utf-8")
+PY
+        nginx -t && systemctl reload nginx
+      fi
+    fi
+    args=(certonly --webroot -w /var/www/bpanel-acme -d "$domain" --non-interactive --agree-tos)
     if [[ -n "$email" ]]; then
       require_email "$email"
       args+=(--email "$email")
     else
       args+=(--register-unsafely-without-email)
     fi
-    exec certbot "${args[@]}"
+    certbot "${args[@]}"
+    exec certbot install --nginx --cert-name "$domain" -d "$domain" --non-interactive --redirect
     ;;
 
   certbot-renew)

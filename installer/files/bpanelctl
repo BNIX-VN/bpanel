@@ -331,7 +331,8 @@ fix_permissions() {
   usermod -aG bpanel-sites bpanel 2>/dev/null || true
   usermod -aG bpanel-sites www-data 2>/dev/null || true
   if command -v sshd >/dev/null 2>&1; then
-    local sshd_config="/etc/ssh/sshd_config" sshd_backup="${sshd_config}.bpanel.bak"
+    local sshd_config="/etc/ssh/sshd_config"
+    local sshd_backup="${sshd_config}.bpanel.bak"
     install -d -o root -g root -m 0755 /run/sshd
     rm -f /etc/ssh/sshd_config.d/99-bpanel-sftp.conf 2>/dev/null || true
     touch "$sshd_config"

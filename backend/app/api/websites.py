@@ -50,6 +50,37 @@ def _website_http_flood_config(website: Website) -> dict:
     return nginx.http_flood_config_for_website(website)
 
 
+def _has_live_certificate(domain: str) -> bool:
+    live_dir = Path("/etc/letsencrypt/live") / domain
+    try:
+        if (live_dir / "fullchain.pem").is_file() and (live_dir / "privkey.pem").is_file():
+            return True
+    except OSError:
+        pass
+    vhost = Path("/etc/nginx/conf.d") / f"{domain}.conf"
+    try:
+        content = vhost.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return (
+        f"/etc/letsencrypt/live/{domain}/fullchain.pem" in content
+        and f"/etc/letsencrypt/live/{domain}/privkey.pem" in content
+    )
+
+
+def _sync_live_ssl_flags(db: Session, websites: list[Website]) -> list[Website]:
+    changed = False
+    for website in websites:
+        if not website.ssl_enabled and _has_live_certificate(website.domain):
+            website.ssl_enabled = True
+            changed = True
+    if changed:
+        db.commit()
+        for website in websites:
+            db.refresh(website)
+    return websites
+
+
 def _http_flood_payload_config(payload: WebsiteHttpFloodUpdate) -> dict:
     return nginx.validate_http_flood_config({
         "access_limit_requests": payload.access_limit_requests,
@@ -194,8 +225,10 @@ def create_wordpress(payload: WebsiteCreate, request: Request, db: Session = Dep
 @router.get("", response_model=List[WebsiteOut])
 def list_websites(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     if is_admin_role(current_user.role):
-        return db.query(Website).order_by(Website.id.desc()).all()
-    return db.query(Website).filter(Website.owner_id == current_user.id).order_by(Website.id.desc()).all()
+        websites = db.query(Website).order_by(Website.id.desc()).all()
+    else:
+        websites = db.query(Website).filter(Website.owner_id == current_user.id).order_by(Website.id.desc()).all()
+    return _sync_live_ssl_flags(db, websites)
 
 
 @router.patch("/{website_id}", response_model=WebsiteOut)

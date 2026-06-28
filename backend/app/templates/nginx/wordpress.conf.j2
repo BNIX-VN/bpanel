@@ -29,6 +29,15 @@ server {
 
     client_max_body_size 1100M;
 
+    # BPANEL ACME CHALLENGE
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/bpanel-acme;
+        default_type text/plain;
+        try_files $uri =404;
+        access_log off;
+        auth_basic off;
+    }
+
     # BPANEL FASTCGI CACHE SERVER BEGIN
     set $bpanel_skip_cache 0;
     if ($request_method = POST) { set $bpanel_skip_cache 1; }

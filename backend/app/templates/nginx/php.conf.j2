@@ -29,6 +29,15 @@ server {
 
     client_max_body_size 1100M;
 
+    # BPANEL ACME CHALLENGE
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/bpanel-acme;
+        default_type text/plain;
+        try_files $uri =404;
+        access_log off;
+        auth_basic off;
+    }
+
     add_header X-Frame-Options "SAMEORIGIN" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
