@@ -544,13 +544,15 @@ function App() {
       const res = await fetch(`${API}/users/me`, { credentials: 'include' });
       if (!res.ok) {
         if (res.status === 401) clearSession('Session expired.');
-        return;
+        return null;
       }
       const data = await res.json();
       setCurrentUser(data);
       setIsAuthenticated(true);
+      return data;
     } catch {
       setCurrentUser(null);
+      return null;
     }
   }
 
@@ -677,7 +679,7 @@ function App() {
   }, [currentUser?.email, panelSslEmail]);
 
   async function refreshAll() {
-    await loadCurrentUser();
+    const refreshedUser = await loadCurrentUser();
     const siteData = await request('/websites');
     if (siteData) {
       setWebsites(siteData);
@@ -685,7 +687,7 @@ function App() {
     }
     const dbData = await request('/databases');
     if (dbData) setDatabases(dbData);
-    if (isAdmin) await loadPhpVersions();
+    if (refreshedUser?.role === 'admin') await loadPhpVersions();
   }
 
   async function loadUsers() {
