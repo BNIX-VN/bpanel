@@ -77,6 +77,23 @@ def test_render_vhost_keeps_waf_and_http_flood_blocks():
     assert "root /var/www/bpanel-acme;" in content
 
 
+def test_wordpress_cache_revalidates_quickly():
+    content = nginx.render_vhost(
+        "example.com",
+        "/home/client/example.com",
+        app_type="wordpress",
+        php_version="8.3",
+    )
+
+    assert 'if ($http_cache_control ~* "no-cache|no-store|max-age=0")' in content
+    assert 'if ($http_pragma = "no-cache")' in content
+    assert "fastcgi_cache_valid 200 15s;" in content
+    assert "fastcgi_cache_valid 200 301 302 10m;" not in content
+    assert "fastcgi_cache_use_stale" not in content
+    assert "expires -1;" in content
+    assert 'Cache-Control "public, immutable"' not in content
+
+
 def test_firewall_numbered_rules_mark_defaults_protected(monkeypatch):
     monkeypatch.setattr(firewall.settings, "panel_port", 2222)
 

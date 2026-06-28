@@ -158,18 +158,21 @@ FASTCGI_CACHE_SERVER_BLOCK = """    # BPANEL FASTCGI CACHE SERVER BEGIN
     set $bpanel_skip_cache 0;
     if ($request_method = POST) { set $bpanel_skip_cache 1; }
     if ($query_string != "") { set $bpanel_skip_cache 1; }
+    if ($http_cache_control ~* "no-cache|no-store|max-age=0") { set $bpanel_skip_cache 1; }
+    if ($http_pragma = "no-cache") { set $bpanel_skip_cache 1; }
     if ($request_uri ~* "/wp-admin/|/wp-login.php|/xmlrpc.php|wp-.*.php|/feed/|sitemap(_index)?\\.xml") { set $bpanel_skip_cache 1; }
     if ($http_cookie ~* "comment_author|wordpress_[a-f0-9]+|wordpress_logged_in|wp-postpass|woocommerce_items_in_cart|woocommerce_cart_hash|wp_woocommerce_session|edd_items_in_cart") { set $bpanel_skip_cache 1; }
     add_header X-FastCGI-Cache $upstream_cache_status always;
     # BPANEL FASTCGI CACHE SERVER END"""
 FASTCGI_CACHE_LOCATION_BLOCK = """        # BPANEL FASTCGI CACHE LOCATION BEGIN
         fastcgi_cache BPANEL_FASTCGI;
-        fastcgi_cache_valid 200 301 302 10m;
-        fastcgi_cache_valid 404 1m;
+        fastcgi_cache_methods GET HEAD;
+        fastcgi_cache_valid 200 15s;
+        fastcgi_cache_min_uses 2;
         fastcgi_cache_bypass $bpanel_skip_cache;
         fastcgi_no_cache $bpanel_skip_cache;
+        fastcgi_no_cache $upstream_http_set_cookie;
         fastcgi_cache_lock on;
-        fastcgi_cache_use_stale error timeout invalid_header updating http_500 http_503;
         # BPANEL FASTCGI CACHE LOCATION END"""
 
 # Block-opening directives that nest scopes; matched against the original

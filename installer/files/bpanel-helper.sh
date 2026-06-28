@@ -1381,6 +1381,12 @@ case "$cmd" in
     exec systemctl reload nginx
     ;;
 
+  fastcgi-cache-clear)
+    [[ $# -eq 0 ]] || deny "usage: fastcgi-cache-clear"
+    install -d -o www-data -g www-data -m 0755 /var/cache/nginx/bpanel-fastcgi
+    find /var/cache/nginx/bpanel-fastcgi -mindepth 1 -delete
+    ;;
+
   # ---- updates ----------------------------------------------------------
   updates-status)
     echo "BPanel release status:"

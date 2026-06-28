@@ -111,6 +111,26 @@ def test_chmod_entry_rejects_executable_file_mode(tmp_path):
         file_manager.chmod_entry(_website(root), "public_html/index.php", "755")
 
 
+def test_write_text_file_clears_fastcgi_cache(tmp_path, monkeypatch):
+    root = tmp_path / "site"
+    public = root / "public_html"
+    public.mkdir(parents=True)
+    target = public / "index.php"
+    target.write_text("old", encoding="utf-8")
+    cleared = []
+    monkeypatch.setattr(file_manager, "_clear_fastcgi_cache", lambda: cleared.append(True))
+
+    file_manager.write_text_file(
+        _website(root),
+        "public_html/index.php",
+        "new",
+        allow_executable=True,
+    )
+
+    assert target.read_text(encoding="utf-8") == "new"
+    assert cleared == [True]
+
+
 def test_copy_entries_copies_files_and_folders(tmp_path):
     root = tmp_path / "site"
     public = root / "public_html"

@@ -40,6 +40,14 @@ BLOCKED_WRITE_NAMES: set[str] = set()
 SENSITIVE_READ_NAMES: set[str] = set()
 
 
+def _clear_fastcgi_cache() -> None:
+    try:
+        shell.privileged("fastcgi-cache-clear", check=False)
+    except RuntimeError:
+        # Local development and tests do not install the privileged helper.
+        pass
+
+
 def _safe_upload_name(filename: str) -> str:
     name = (filename or "").replace("\\", "/").split("/")[-1].strip()
     if not name or name in {".", ".."} or "\x00" in name:
@@ -192,6 +200,7 @@ def make_directory(website: Website, parent_path: str, name: str) -> str:
         raise ValueError("File or folder already exists")
     target.mkdir()
     site_users.fix_site_path(str(target), website.linux_user)
+    _clear_fastcgi_cache()
     return str(target)
 
 
@@ -208,6 +217,7 @@ def rename_entry(website: Website, relative_path: str, new_name: str, allow_exec
     _assert_write_allowed(target, "Renaming", allow_executable)
     source.rename(target)
     site_users.fix_site_path(str(target), website.linux_user)
+    _clear_fastcgi_cache()
     return str(target)
 
 
@@ -331,6 +341,7 @@ def create_text_file(
     else:
         parent.mkdir(parents=True, exist_ok=True)
         target.touch()
+    _clear_fastcgi_cache()
     return str(target)
 
 
@@ -353,6 +364,7 @@ def write_text_file(
     _write_text_as_site_user(website, target, content)
     if not website.linux_user:
         site_users.fix_site_path(str(target.parent), website.linux_user)
+    _clear_fastcgi_cache()
     return str(target)
 
 
@@ -389,6 +401,7 @@ def upload_file(
         temp_path.unlink(missing_ok=True)
         raise
     site_users.fix_site_path(str(target), website.linux_user)
+    _clear_fastcgi_cache()
     return str(target)
 
 
@@ -398,6 +411,7 @@ def delete_file(website: Website, relative_path: str, allow_executable: bool = F
         raise ValueError("Cannot delete directory")
     _assert_write_allowed(target, "Deleting", allow_executable)
     target.unlink(missing_ok=True)
+    _clear_fastcgi_cache()
     return str(target)
 
 
@@ -426,6 +440,7 @@ def delete_entries(website: Website, paths: Iterable[str], allow_executable: boo
         else:
             target.unlink(missing_ok=True)
         deleted.append(str(target))
+    _clear_fastcgi_cache()
     return deleted
 
 
@@ -498,6 +513,7 @@ def copy_entries(
             shutil.copy2(source, target)
         site_users.fix_site_path(str(target), website.linux_user)
         copied.append(str(target))
+    _clear_fastcgi_cache()
     return copied
 
 
@@ -520,6 +536,7 @@ def move_entries(
         shutil.move(str(source), str(target))
         site_users.fix_site_path(str(target), website.linux_user)
         moved.append(str(target))
+    _clear_fastcgi_cache()
     return moved
 
 
@@ -608,6 +625,7 @@ def archive_entries(
                     filter=lambda member: None if (member.issym() or member.islnk() or member.isdev()) else member,
                 )
     site_users.fix_site_path(str(output_path), website.linux_user)
+    _clear_fastcgi_cache()
     return str(output_path)
 
 
@@ -752,6 +770,7 @@ def extract_archive(
     else:
         raise ValueError("Only .zip, .tar.gz, and .tgz archives can be extracted")
     site_users.fix_site_path(str(destination), website.linux_user)
+    _clear_fastcgi_cache()
     return str(destination)
 
 

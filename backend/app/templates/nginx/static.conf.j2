@@ -67,9 +67,8 @@ server {
     }
 
     location ~* \.(jpg|jpeg|gif|png|css|js|ico|webp|svg|woff|woff2|ttf|eot)$ {
-        expires 30d;
+        expires -1;
         access_log off;
-        add_header Cache-Control "public, immutable";
     }
 
     location ~ /\.ht {
