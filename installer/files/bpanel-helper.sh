@@ -551,6 +551,7 @@ install_php_version() {
     "php${version}-fpm"
     "php${version}-cli"
     "php${version}-mysql"
+    "php${version}-sqlite3"
     "php${version}-curl"
     "php${version}-gd"
     "php${version}-mbstring"

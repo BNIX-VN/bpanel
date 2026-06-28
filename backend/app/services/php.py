@@ -135,6 +135,7 @@ def install_php(php_version: str) -> dict:
             f"php{php_version}-fpm",
             f"php{php_version}-cli",
             f"php{php_version}-mysql",
+            f"php{php_version}-sqlite3",
             f"php{php_version}-curl",
             f"php{php_version}-gd",
             f"php{php_version}-mbstring",

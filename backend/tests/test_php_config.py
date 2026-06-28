@@ -71,5 +71,6 @@ def test_install_php_repairs_existing_version(monkeypatch):
     assert captured["helper_args"] == ["8.3"]
     assert "php8.3" not in captured["fallback"]
     assert "php8.3-fpm" in captured["fallback"]
+    assert "php8.3-sqlite3" in captured["fallback"]
     assert "php8.3-intl" in captured["fallback"]
     assert "php8.3-imagick" in captured["fallback"]

@@ -274,6 +274,7 @@ install_php() {
       "php${version}-fpm"
       "php${version}-cli"
       "php${version}-mysql"
+      "php${version}-sqlite3"
       "php${version}-gd"
       "php${version}-xml"
       "php${version}-mbstring"
