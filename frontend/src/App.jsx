@@ -2587,7 +2587,7 @@ function App() {
             <small>Auto-refreshes every 10s</small>
             {isAdmin && <div className="service-actions">
               <button onClick={() => runServiceAction(name, 'start')}><Play size={13}/> Start</button>
-              {name !== 'bpanel-api' && <button onClick={() => runServiceAction(name, 'stop')}><Square size={13}/> Stop</button>}
+              {!['bpanel-api', 'redis-server'].includes(name) && <button onClick={() => runServiceAction(name, 'stop')}><Square size={13}/> Stop</button>}
               <button onClick={() => runServiceAction(name, 'restart')}><RotateCcw size={13}/> Restart</button>
             </div>}
           </div>;

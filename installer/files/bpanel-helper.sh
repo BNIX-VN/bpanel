@@ -1360,6 +1360,9 @@ case "$cmd" in
     service="$1"; action="$2"
     is_allowed_service "$service" || deny "service not allowed: $service"
     is_in "$action" "${ALLOWED_ACTIONS[@]}" || deny "action not allowed: $action"
+    if [[ "$action" == "stop" && ( "$service" == "bpanel-api" || "$service" == "redis-server" ) ]]; then
+      deny "refusing to stop panel-critical service: $service"
+    fi
     exec systemctl "$action" "$service"
     ;;
 

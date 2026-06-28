@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     panel_ssl_key: str = ""
     frontend_dist: str = "/opt/bpanel/frontend/dist"
     totp_issuer: str = "BPanel"
+    github_token: str = ""
     # When true, ``app.core.secrets.decrypt`` refuses to read legacy plaintext
     # values (the deprecated migration grace path). Production should leave
     # this True so any unmigrated row surfaces as a hard error instead of
