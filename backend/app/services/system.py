@@ -9,6 +9,10 @@ BASE_SERVICES = ("bpanel-api", "nginx", "mariadb", "redis-server")
 PHP_VERSION_ORDER = ("5.6", "7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5")
 PHP_ETC_DIR = Path("/etc/php")
 SUPPORTED_ACTIONS = {"start", "stop", "restart", "reload", "status"}
+PROTECTED_SERVICE_ACTIONS = {
+    ("bpanel-api", "stop"): "Stopping bpanel-api from the panel would make the panel unavailable",
+    ("redis-server", "stop"): "Stopping redis-server would disable production login rate limiting",
+}
 
 
 def _php_sort_key(service_name: str) -> tuple[int, list[int]]:
@@ -46,6 +50,8 @@ def service_action(name: str, action: str):
         raise ValueError("Unsupported service")
     if action not in SUPPORTED_ACTIONS:
         raise ValueError("Unsupported action")
+    if reason := PROTECTED_SERVICE_ACTIONS.get((name, action)):
+        raise ValueError(reason)
     if action == "status":
         # Status is read-only; non-privileged user can call systemctl status fine.
         return shell.run(["systemctl", action, name], check=False)

@@ -58,3 +58,39 @@ def test_service_action_rejects_uninstalled_php_service(tmp_path, monkeypatch):
 
     with pytest.raises(ValueError, match="Unsupported service"):
         system.service_action("php8.2-fpm", "status")
+
+
+@pytest.mark.parametrize(
+    ("service_name", "message"),
+    [
+        ("bpanel-api", "make the panel unavailable"),
+        ("redis-server", "disable production login rate limiting"),
+    ],
+)
+def test_service_action_rejects_stopping_required_panel_services(service_name, message):
+    with pytest.raises(ValueError, match=message):
+        system.service_action(service_name, "stop")
+
+
+def test_service_action_allows_restarting_redis(monkeypatch):
+    captured = {}
+
+    def fake_privileged(command, helper_args, check=False, fallback=None):
+        captured.update(
+            command=command,
+            helper_args=helper_args,
+            check=check,
+            fallback=fallback,
+        )
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    monkeypatch.setattr(system.shell, "privileged", fake_privileged)
+
+    system.service_action("redis-server", "restart")
+
+    assert captured == {
+        "command": "systemctl",
+        "helper_args": ["redis-server", "restart"],
+        "check": False,
+        "fallback": ["systemctl", "restart", "redis-server"],
+    }
