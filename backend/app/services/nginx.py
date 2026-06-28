@@ -2,6 +2,7 @@ import hashlib
 import json
 import math
 import re
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -340,6 +341,27 @@ def _has_ssl_config(content: str) -> bool:
     return "ssl_certificate" in content or "listen 443" in content
 
 
+def _write_backup(target: Path, content: str) -> Path:
+    backup = target.with_suffix(target.suffix + ".bak")
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=target.parent,
+            prefix=f".{target.name}.bak-",
+            delete=False,
+        ) as handle:
+            handle.write(content)
+            temp_path = Path(handle.name)
+        temp_path.chmod(0o640)
+        temp_path.replace(backup)
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+    return backup
+
+
 def _merge_certbot_ssl_config(new_content: str, existing_content: str) -> str:
     server_name = "_"
     if "server_name " in new_content:
@@ -631,7 +653,7 @@ def write_vhost(
     if target.exists():
         existing = target.read_text(encoding="utf-8")
         if _has_ssl_config(existing):
-            target.with_suffix(target.suffix + ".bak").write_text(existing, encoding="utf-8")
+            _write_backup(target, existing)
             return str(target)
     target.write_text(content, encoding="utf-8")
     shell.privileged("nginx-reload", fallback=["bash", "-lc", "nginx -t && systemctl reload nginx"])
@@ -669,7 +691,7 @@ def rewrite_vhost(
         return content
     if target.exists():
         existing = target.read_text(encoding="utf-8")
-        target.with_suffix(target.suffix + ".bak").write_text(existing, encoding="utf-8")
+        _write_backup(target, existing)
         if _has_ssl_config(existing):
             content = _merge_certbot_ssl_config(content, existing)
     old_content = target.read_text(encoding="utf-8") if target.exists() else None
@@ -691,22 +713,38 @@ def update_custom_block(domain: str, custom_directives: str) -> str:
         raise FileNotFoundError(str(target))
     existing = target.read_text(encoding="utf-8")
     new_content = _replace_custom_block(existing, safe_custom)
-    target.with_suffix(target.suffix + ".bak").write_text(existing, encoding="utf-8")
+    _write_backup(target, existing)
+    target.write_text(new_content, encoding="utf-8")
+    _test_and_reload(target, existing)
+    return str(target)
+
+
+def set_php_version(
+    domain: str,
+    php_version: str,
+    php_fpm_socket_override: Optional[str] = None,
+) -> str:
+    target = _vhost_path(domain)
+    socket_path = php_fpm_socket_override or _php_fpm_socket(php_version)
+    _check_php_version(php_version)
+    if settings.command_dry_run:
+        return socket_path
+    if not target.exists():
+        raise FileNotFoundError(str(target))
+    existing = target.read_text(encoding="utf-8")
+    new_content = _replace_fastcgi_socket(existing, socket_path)
+    if new_content == existing:
+        if f"fastcgi_pass unix:{socket_path};" in existing:
+            return str(target)
+        raise ValueError("Cannot find a PHP FastCGI socket in the Nginx config")
+    _write_backup(target, existing)
     target.write_text(new_content, encoding="utf-8")
     _test_and_reload(target, existing)
     return str(target)
 
 
 def set_wordpress_php_version(domain: str, php_version: str) -> str:
-    target = _vhost_path(domain)
-    if settings.command_dry_run:
-        return _php_fpm_socket(php_version)
-    if not target.exists():
-        raise FileNotFoundError(str(target))
-    existing = target.read_text(encoding="utf-8")
-    target.write_text(_replace_php_fpm_socket(existing, php_version), encoding="utf-8")
-    shell.privileged("nginx-reload", fallback=["bash", "-lc", "nginx -t && systemctl reload nginx"])
-    return str(target)
+    return set_php_version(domain, php_version)
 
 
 def harden_existing_wordpress_vhost(
@@ -797,7 +835,7 @@ def update_full_config(domain: str, content: str) -> str:
     if not target.exists():
         raise FileNotFoundError(str(target))
     existing = target.read_text(encoding="utf-8")
-    target.with_suffix(target.suffix + ".bak").write_text(existing, encoding="utf-8")
+    _write_backup(target, existing)
     target.write_text(safe_content, encoding="utf-8")
     _test_and_reload(target, existing)
     return str(target)
@@ -811,7 +849,7 @@ def update_waf_block(domain: str, enabled: bool) -> str:
         raise FileNotFoundError(str(target))
     existing = target.read_text(encoding="utf-8")
     new_content = _replace_waf_block(existing, enabled, domain)
-    target.with_suffix(target.suffix + ".bak").write_text(existing, encoding="utf-8")
+    _write_backup(target, existing)
     target.write_text(new_content, encoding="utf-8")
     _test_and_reload(target, existing)
     return str(target)
@@ -826,7 +864,7 @@ def update_http_flood_block(domain: str, enabled: bool, config: dict | str | Non
         raise FileNotFoundError(str(target))
     existing = target.read_text(encoding="utf-8")
     new_content = _replace_http_flood_block(existing, enabled, domain, safe_config)
-    target.with_suffix(target.suffix + ".bak").write_text(existing, encoding="utf-8")
+    _write_backup(target, existing)
     target.write_text(new_content, encoding="utf-8")
     _test_and_reload(target, existing)
     return str(target)
@@ -845,7 +883,7 @@ def ensure_wordpress_fastcgi_cache(domain: str) -> str:
     new_content = _replace_fastcgi_cache_blocks(existing, True)
     if new_content == existing:
         return str(target)
-    target.with_suffix(target.suffix + ".bak").write_text(existing, encoding="utf-8")
+    _write_backup(target, existing)
     target.write_text(new_content, encoding="utf-8")
     _test_and_reload(target, existing)
     return str(target)

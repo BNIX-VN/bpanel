@@ -94,6 +94,42 @@ def test_wordpress_cache_revalidates_quickly():
     assert 'Cache-Control "public, immutable"' not in content
 
 
+def test_set_php_version_preserves_existing_vhost(tmp_path, monkeypatch):
+    target = tmp_path / "example.com.conf"
+    existing = """server {
+    server_name example.com;
+    # BPANEL REVERSE PROXY BEGIN
+    real_ip_header X-Forwarded-For;
+    # BPANEL REVERSE PROXY END
+    location ~ \\.php$ {
+        fastcgi_pass unix:/run/php/bpanel-client-8_3.sock;
+    }
+}
+"""
+    target.write_text(existing, encoding="utf-8")
+    monkeypatch.setattr(nginx.settings, "command_dry_run", False)
+    monkeypatch.setattr(nginx, "_vhost_path", lambda _domain: target)
+    monkeypatch.setattr(nginx, "_test_and_reload", lambda _target, _old: None)
+
+    nginx.set_php_version("example.com", "8.1", "/run/php/bpanel-client-8_1.sock")
+
+    updated = target.read_text(encoding="utf-8")
+    assert "# BPANEL REVERSE PROXY BEGIN" in updated
+    assert "fastcgi_pass unix:/run/php/bpanel-client-8_1.sock;" in updated
+    assert target.with_suffix(".conf.bak").read_text(encoding="utf-8") == existing
+
+
+def test_write_backup_replaces_existing_backup(tmp_path):
+    target = tmp_path / "example.com.conf"
+    target.write_text("current", encoding="utf-8")
+    backup = target.with_suffix(".conf.bak")
+    backup.write_text("old backup", encoding="utf-8")
+
+    nginx._write_backup(target, "new backup")
+
+    assert backup.read_text(encoding="utf-8") == "new backup"
+
+
 def test_firewall_numbered_rules_mark_defaults_protected(monkeypatch):
     monkeypatch.setattr(firewall.settings, "panel_port", 2222)
 

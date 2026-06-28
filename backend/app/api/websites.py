@@ -249,17 +249,12 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
             if website.http_flood_enabled:
                 _sync_http_flood_zones(db)
             php_fpm_socket_override = site_users.php_fpm_socket(website.linux_user, payload.php_version) if runtime_php_version else None
-            nginx.rewrite_vhost(
-                website.domain,
-                website.root_path,
-                app_type=website.app_type or "wordpress",
-                php_version=payload.php_version,
-                custom_directives=website.nginx_custom or "",
-                php_fpm_socket_override=php_fpm_socket_override,
-                waf_enabled=website.waf_enabled,
-                http_flood_enabled=website.http_flood_enabled,
-                http_flood_config=website.http_flood_config or "",
-            )
+            if runtime_php_version:
+                nginx.set_php_version(
+                    website.domain,
+                    payload.php_version,
+                    php_fpm_socket_override,
+                )
         except (RuntimeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=f"Cannot write Nginx config: {exc}") from exc
         website.php_version = payload.php_version
