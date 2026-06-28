@@ -330,7 +330,7 @@ install_php() {
 configure_fastcgi_cache() {
   install -d -o www-data -g www-data -m 0755 /var/cache/nginx/bpanel-fastcgi
   cat >/etc/nginx/conf.d/00-bpanel-fastcgi-cache.conf <<'NGINX'
-fastcgi_cache_path /var/cache/nginx/bpanel-fastcgi levels=1:2 keys_zone=BPANEL_FASTCGI:100m inactive=60m max_size=512m use_temp_path=off;
+fastcgi_cache_path /var/cache/nginx/bpanel-fastcgi levels=1:2 keys_zone=BPANEL_FASTCGI:32m inactive=30m max_size=256m use_temp_path=off;
 fastcgi_cache_key "$scheme$request_method$host$request_uri";
 NGINX
 }
