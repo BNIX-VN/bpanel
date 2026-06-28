@@ -1,4 +1,5 @@
 import base64
+import logging
 import secrets
 import time
 from collections import defaultdict, deque
@@ -130,7 +131,17 @@ def _rate_limit_key(kind: str, key: str) -> str:
 
 
 def _rate_limit_unavailable(exc: Exception) -> HTTPException:
+    # Kept for backward compatibility but no longer raised during login.
+    # If Redis is down the rate limiter falls back to the in-memory backend
+    # so that a Redis outage never blocks authentication.
     return HTTPException(status_code=503, detail="Login rate limiter is unavailable")
+
+
+def _log_redis_fallback(exc: Exception) -> None:
+    """Log a warning when Redis is unavailable and we fall back to memory."""
+    logging.getLogger("bpanel.auth").warning(
+        "Redis unavailable (%s), falling back to in-memory rate limiter", exc,
+    )
 
 
 def _raise_locked(retry_after: int) -> None:
@@ -191,8 +202,14 @@ def _memory_enforce_rate_limit(key: str) -> None:
 
 def _enforce_rate_limit(key: str) -> None:
     if _rate_limit_backend() == "redis":
-        _redis_enforce_rate_limit(key)
-        return
+        try:
+            _redis_enforce_rate_limit(key)
+            return
+        except HTTPException as exc:
+            if exc.status_code == 503:
+                _log_redis_fallback(exc.detail)
+            else:
+                raise
     _memory_enforce_rate_limit(key)
 
 
@@ -253,8 +270,14 @@ def _memory_record_failure(key: str, *, apply_lockout: bool) -> None:
 
 def _record_failure(key: str, *, apply_lockout: bool = True) -> None:
     if _rate_limit_backend() == "redis":
-        _redis_record_failure(key, apply_lockout=apply_lockout)
-        return
+        try:
+            _redis_record_failure(key, apply_lockout=apply_lockout)
+            return
+        except HTTPException as exc:
+            if exc.status_code == 503:
+                _log_redis_fallback(exc.detail)
+            else:
+                raise
     _memory_record_failure(key, apply_lockout=apply_lockout)
 
 
@@ -271,8 +294,14 @@ def _redis_record_success(key: str) -> None:
 
 def _record_success(key: str) -> None:
     if _rate_limit_backend() == "redis":
-        _redis_record_success(key)
-        return
+        try:
+            _redis_record_success(key)
+            return
+        except HTTPException as exc:
+            if exc.status_code == 503:
+                _log_redis_fallback(exc.detail)
+            else:
+                raise
     with _login_lock:
         _login_attempts.pop(key, None)
         _login_failures.pop(key, None)
