@@ -252,21 +252,23 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
             if website.http_flood_enabled:
                 _sync_http_flood_zones(db)
             php_fpm_socket_override = site_users.php_fpm_socket(website.linux_user, payload.php_version) if runtime_php_version else None
-            if runtime_php_version:
-                nginx.set_php_version(
-                    website.domain,
-                    payload.php_version,
-                    php_fpm_socket_override,
-                )
+            app_type = website.app_type or "wordpress"
+            nginx.rewrite_vhost(
+                website.domain,
+                website.root_path,
+                app_type=app_type,
+                php_version=payload.php_version,
+                custom_directives=website.nginx_custom or "",
+                php_fpm_socket_override=php_fpm_socket_override if runtime_php_version else None,
+                waf_enabled=website.waf_enabled,
+                http_flood_enabled=website.http_flood_enabled,
+                http_flood_config=website.http_flood_config or "",
+                document_root=website.document_root or "public_html",
+            )
         except (RuntimeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=f"Cannot write Nginx config: {exc}") from exc
         website.php_version = payload.php_version
     if payload.app_type is not None and payload.app_type != (website.app_type or "wordpress"):
-        if website.nginx_config_mode == "custom":
-            raise HTTPException(
-                status_code=409,
-                detail="Reset the full custom Nginx config before changing website mode",
-            )
         try:
             next_app_type = payload.app_type
             runtime_php_version = website.php_version if next_app_type in {"wordpress", "php"} else None
@@ -300,11 +302,6 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
     if payload.status is not None:
         website.status = payload.status
     if payload.document_root is not None and payload.document_root != (website.document_root or "public_html"):
-        if website.nginx_config_mode == "custom":
-            raise HTTPException(
-                status_code=409,
-                detail="Reset the full custom Nginx config before changing document root",
-            )
         try:
             next_document_root = site_users.validate_document_root(payload.document_root)
             site_users.ensure_document_root(website.root_path, next_document_root, website.linux_user)
@@ -339,11 +336,6 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
         if not is_admin_role(owner.role) and assigned_count >= owner.website_limit:
             raise HTTPException(status_code=403, detail="Website limit reached")
         if payload.owner_id != website.owner_id:
-            if website.nginx_config_mode == "custom":
-                raise HTTPException(
-                    status_code=409,
-                    detail="Reset the full custom Nginx config before assigning this website to another user",
-                )
             try:
                 storage_quota.enforce_user_storage_quota(
                     db,
@@ -379,24 +371,14 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
         website.owner_id = payload.owner_id
     if payload.nginx_custom is not None:
-        ensure_role(current_user.role, Role.admin)
-        if website.nginx_config_mode == "custom":
-            raise HTTPException(
-                status_code=409,
-                detail="Use the full Nginx editor or reset this website to managed mode",
-            )
         try:
             nginx.update_custom_block(website.domain, payload.nginx_custom)
         except (RuntimeError, ValueError, FileNotFoundError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         website.nginx_custom = payload.nginx_custom
+        website.nginx_config_mode = "managed"
     if payload.waf_enabled is not None:
         ensure_role(current_user.role, Role.admin)
-        if website.nginx_config_mode == "custom":
-            raise HTTPException(
-                status_code=409,
-                detail="Reset the full custom Nginx config before changing WAF",
-            )
         try:
             result = waf.sync_website_rules(website)
             if result.returncode != 0:
@@ -407,11 +389,6 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
         website.waf_enabled = payload.waf_enabled
     if payload.http_flood_enabled is not None:
         ensure_role(current_user.role, Role.admin)
-        if website.nginx_config_mode == "custom":
-            raise HTTPException(
-                status_code=409,
-                detail="Reset the full custom Nginx config before changing HTTP Flood protection",
-            )
         next_enabled = bool(payload.http_flood_enabled)
         try:
             website.http_flood_enabled = next_enabled
@@ -453,19 +430,10 @@ def get_website_nginx_config(website_id: int, db: Session = Depends(get_db), cur
 
 @router.put("/{website_id}/nginx-config", response_model=WebsiteOut)
 def set_website_nginx_config(website_id: int, payload: WebsiteNginxConfig, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    ensure_role(current_user.role, Role.admin)
-    website = db.query(Website).filter(Website.id == website_id).first()
-    if not website:
-        raise HTTPException(status_code=404, detail="Website not found")
-    try:
-        nginx.update_full_config(website.domain, payload.nginx_config)
-    except (RuntimeError, ValueError, FileNotFoundError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    website.nginx_config_mode = "custom"
-    db.commit()
-    db.refresh(website)
-    log_action(db, current_user.id, "update_nginx_config", website.domain, request=request)
-    return website
+    raise HTTPException(
+        status_code=405,
+        detail="The main Nginx vhost is managed by BPanel. Use Custom Nginx instead.",
+    )
 
 
 @router.post("/{website_id}/nginx-config/reset", response_model=WebsiteOut)
@@ -510,11 +478,6 @@ def set_website_waf(website_id: int, payload: WebsiteWafUpdate, request: Request
     website = db.query(Website).filter(Website.id == website_id).first()
     if not website:
         raise HTTPException(status_code=404, detail="Website not found")
-    if website.nginx_config_mode == "custom":
-        raise HTTPException(
-            status_code=409,
-            detail="Reset the full custom Nginx config before changing WAF",
-        )
     try:
         result = waf.sync_website_rules(website)
         if result.returncode != 0:
@@ -535,11 +498,6 @@ def set_website_http_flood(website_id: int, payload: WebsiteHttpFloodUpdate, req
     website = db.query(Website).filter(Website.id == website_id).first()
     if not website:
         raise HTTPException(status_code=404, detail="Website not found")
-    if website.nginx_config_mode == "custom":
-        raise HTTPException(
-            status_code=409,
-            detail="Reset the full custom Nginx config before changing HTTP Flood protection",
-        )
     config = _http_flood_payload_config(payload)
     next_enabled = bool(payload.http_flood_enabled)
     try:
@@ -580,22 +538,17 @@ def get_website_log(
 
 @router.put("/{website_id}/nginx-custom", response_model=WebsiteOut)
 def set_website_nginx_custom(website_id: int, payload: WebsiteNginxCustom, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    # Only admins can modify nginx config; the directives we accept are
-    # filesystem-write-adjacent and easy to misuse.
-    ensure_role(current_user.role, Role.admin)
     website = db.query(Website).filter(Website.id == website_id).first()
     if not website:
         raise HTTPException(status_code=404, detail="Website not found")
-    if website.nginx_config_mode == "custom":
-        raise HTTPException(
-            status_code=409,
-            detail="Use the full Nginx editor or reset this website to managed mode",
-        )
+    if website.owner_id != current_user.id:
+        ensure_role(current_user.role, Role.admin)
     try:
         nginx.update_custom_block(website.domain, payload.nginx_custom)
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     website.nginx_custom = payload.nginx_custom
+    website.nginx_config_mode = "managed"
     db.commit()
     db.refresh(website)
     log_action(db, current_user.id, "update_nginx_custom", website.domain, request=request)
@@ -636,11 +589,6 @@ def fix_nginx_security(website_id: int, db: Session = Depends(get_db), current_u
         raise HTTPException(status_code=404, detail="Website not found")
     if website.owner_id != current_user.id:
         ensure_role(current_user.role, Role.admin)
-    if website.nginx_config_mode == "custom":
-        raise HTTPException(
-            status_code=409,
-            detail="Reset the full custom Nginx config before regenerating the Nginx security template",
-        )
     result = waf.sync_website_rules(website)
     if result.returncode != 0:
         raise HTTPException(status_code=400, detail=_command_error(result))
@@ -653,6 +601,7 @@ def fix_nginx_security(website_id: int, db: Session = Depends(get_db), current_u
         website.domain,
         website.root_path,
         website.php_version,
+        custom_directives=website.nginx_custom or "",
         php_fpm_socket_override=site_users.php_fpm_socket(website.linux_user, website.php_version),
         waf_enabled=website.waf_enabled,
         http_flood_enabled=website.http_flood_enabled,

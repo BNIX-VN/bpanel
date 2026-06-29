@@ -482,8 +482,10 @@ setup_panel_user() {
 
   # Allow bpanel to write into /etc/nginx/conf.d (vhost files).
   install -d -o root -g bpanel -m 2775 /etc/nginx/conf.d
+  install -d -o root -g bpanel -m 2775 /etc/nginx/bpanel/custom
   # setgid so new files inherit the bpanel group; allows future writes.
   chmod g+s /etc/nginx/conf.d || true
+  chmod g+s /etc/nginx/bpanel/custom 2>/dev/null || true
 
   # Make the panel data dirs writable by bpanel.
   install -d -o bpanel -g bpanel -m 0750 "$APP_DIR"
@@ -654,7 +656,7 @@ RestartSec=3
 NoNewPrivileges=false
 ProtectSystem=false
 ProtectHome=false
-ReadWritePaths=${APP_DIR} /home ${BACKUP_ROOT} /etc/nginx/conf.d /tmp /var/lib/bpanel
+ReadWritePaths=${APP_DIR} /home ${BACKUP_ROOT} /etc/nginx/conf.d /etc/nginx/bpanel/custom /tmp /var/lib/bpanel
 PrivateTmp=true
 PrivateDevices=true
 ProtectKernelTunables=true
@@ -696,7 +698,7 @@ ExecStart=${APP_DIR}/backend/.venv/bin/python -m app.services.backup_scheduler
 NoNewPrivileges=false
 ProtectSystem=false
 ProtectHome=false
-ReadWritePaths=${APP_DIR} /home ${BACKUP_ROOT} /etc/nginx/conf.d /tmp /var/lib/bpanel
+ReadWritePaths=${APP_DIR} /home ${BACKUP_ROOT} /etc/nginx/conf.d /etc/nginx/bpanel/custom /tmp /var/lib/bpanel
 PrivateTmp=true
 
 [Install]

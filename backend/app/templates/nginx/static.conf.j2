@@ -75,7 +75,6 @@ server {
         deny all;
     }
 
-    # BPANEL CUSTOM BEGIN
-    {{ custom_directives }}
-    # BPANEL CUSTOM END
+    # BPANEL CUSTOM INCLUDE
+    include {{ custom_include_path }};
 }

@@ -38,6 +38,7 @@ NGINX_BLOCKLIST_DIR="/etc/nginx/bpanel"
 NGINX_BLOCKLIST_CONF="/etc/nginx/conf.d/bpanel-ip-blocklist.conf"
 NGINX_BLOCKLIST_RULES="${NGINX_BLOCKLIST_DIR}/ip-blocklist-geo.conf"
 NGINX_BLOCKLIST_SERVER_CONF="${NGINX_BLOCKLIST_DIR}/ip-blocklist-server.conf"
+NGINX_CUSTOM_DIR="${NGINX_BLOCKLIST_DIR}/custom"
 NGINX_HTTP_FLOOD_CONF="/etc/nginx/conf.d/00-bpanel-http-flood.conf"
 NGINX_HTTP_FLOOD_LEGACY_CONF="/etc/nginx/conf.d/bpanel-http-flood.conf"
 NGINX_HTTP_FLOOD_ZONES="${NGINX_BLOCKLIST_DIR}/http-flood-zones.conf"
@@ -53,9 +54,12 @@ ensure_nginx_conf_dir_writable() {
   install -d -o root -g root -m 0755 "$NGINX_BLOCKLIST_DIR"
   if getent group bpanel >/dev/null 2>&1; then
     install -d -o root -g bpanel -m 2775 "$NGINX_CONF_DIR"
+    install -d -o root -g bpanel -m 2775 "$NGINX_CUSTOM_DIR"
     chmod g+s "$NGINX_CONF_DIR" 2>/dev/null || true
+    chmod g+s "$NGINX_CUSTOM_DIR" 2>/dev/null || true
   else
     install -d -o root -g root -m 0755 "$NGINX_CONF_DIR"
+    install -d -o root -g root -m 0755 "$NGINX_CUSTOM_DIR"
   fi
 }
 
@@ -1379,6 +1383,27 @@ case "$cmd" in
   nginx-reload)
     nginx -t
     exec systemctl reload nginx
+    ;;
+  nginx-custom-write)
+    [[ $# -eq 1 ]] || deny "usage: nginx-custom-write <domain>"
+    domain="$1"
+    require_domain "$domain"
+    ensure_nginx_conf_dir_writable
+    target="${NGINX_CUSTOM_DIR}/${domain}.conf"
+    tmp="${target}.tmp.$$"
+    cat >"$tmp"
+    if file_has_nul "$tmp"; then
+      rm -f "$tmp"
+      deny "custom nginx include contains NUL byte"
+    fi
+    install -m 0664 -o root -g bpanel "$tmp" "$target"
+    rm -f "$tmp"
+    ;;
+  nginx-custom-delete)
+    [[ $# -eq 1 ]] || deny "usage: nginx-custom-delete <domain>"
+    domain="$1"
+    require_domain "$domain"
+    rm -f "${NGINX_CUSTOM_DIR}/${domain}.conf"
     ;;
 
   fastcgi-cache-clear)

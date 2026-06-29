@@ -432,6 +432,8 @@ install_panel_runtime() {
   usermod -aG bpanel-sites www-data 2>/dev/null || true
   install -d -o root -g bpanel -m 2775 /etc/nginx/conf.d
   chmod g+s /etc/nginx/conf.d 2>/dev/null || true
+  install -d -o root -g bpanel -m 2775 /etc/nginx/bpanel/custom
+  chmod g+s /etc/nginx/bpanel/custom 2>/dev/null || true
   install -d -o bpanel -g bpanel -m 0750 /var/lib/bpanel
   if command -v sshd >/dev/null 2>&1; then
     sshd_config="/etc/ssh/sshd_config"
@@ -484,7 +486,7 @@ ExecStart=/usr/local/sbin/bpanel-api-start
 SupplementaryGroups=www-data bpanel-sites
 ProtectHome=false
 ReadWritePaths=
-ReadWritePaths=${APP_DIR} /home /var/backups/bpanel /etc/nginx/conf.d /tmp /var/lib/bpanel
+ReadWritePaths=${APP_DIR} /home /var/backups/bpanel /etc/nginx/conf.d /etc/nginx/bpanel/custom /tmp /var/lib/bpanel
 SERVICE
   cat >/etc/systemd/system/bpanel-backup-scheduler.service <<SERVICE
 [Unit]
@@ -504,7 +506,7 @@ ExecStart=${APP_DIR}/backend/.venv/bin/python -m app.services.backup_scheduler
 NoNewPrivileges=false
 ProtectSystem=false
 ProtectHome=false
-ReadWritePaths=/home /var/backups/bpanel /etc/nginx/conf.d /tmp /var/lib/bpanel ${APP_DIR}
+ReadWritePaths=/home /var/backups/bpanel /etc/nginx/conf.d /etc/nginx/bpanel/custom /tmp /var/lib/bpanel ${APP_DIR}
 PrivateTmp=true
 
 [Install]
@@ -820,17 +822,9 @@ with SessionLocal() as db:
             result = waf.sync_website_rules(website)
             if result.returncode != 0:
                 print(f"WARNING: could not refresh WAF rules for {website.domain}: {result.stderr or result.stdout}")
-            if (
-                getattr(website, "nginx_config_mode", "managed") != "custom"
-                and nginx.has_legacy_custom_vhost(website.domain, website.nginx_custom or "")
-            ):
-                website.nginx_config_mode = "custom"
+            if getattr(website, "nginx_config_mode", "managed") != "managed":
+                website.nginx_config_mode = "managed"
                 db.commit()
-                print(f"Preserving detected custom Nginx config for {website.domain}")
-                continue
-            if getattr(website, "nginx_config_mode", "managed") == "custom":
-                print(f"Preserving full custom Nginx config for {website.domain}")
-                continue
             app_type = website.app_type or "wordpress"
             runtime_php_version = website.php_version if app_type in {"wordpress", "php"} else None
             nginx.rewrite_vhost(

@@ -6,6 +6,7 @@ These run on Linux CI; do not rely on running them on Windows.
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 import pytest
 
 # Force a deterministic config when imported in CI without an .env present.
@@ -155,28 +156,44 @@ class TestNginxCustomValidator:
                 document_root=document_root,
             )
 
-    def test_detects_legacy_reverse_proxy_vhost(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(nginx_service.settings, "nginx_sites_available", str(tmp_path))
-        (tmp_path / "example.com.conf").write_text(
-            "server {\n"
-            "    server_name example.com www.example.com;\n"
-            "    # BPANEL REVERSE PROXY BEGIN\n"
-            "    set_real_ip_from 103.139.154.160;\n"
-            "    # BPANEL REVERSE PROXY END\n"
-            "}\n",
-            encoding="utf-8",
-        )
+    def test_wordpress_template_keeps_front_controller(self):
+        content = render_vhost("example.com", "/home/testuser/example.com", app_type="wordpress", php_version="8.3")
 
-        assert nginx_service.has_legacy_custom_vhost("example.com")
+        assert "location / {" in content
+        assert "try_files $uri $uri/ /index.php?$args;" in content
 
-    def test_managed_empty_custom_vhost_is_not_legacy_custom(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(nginx_service.settings, "nginx_sites_available", str(tmp_path))
-        (tmp_path / "example.com.conf").write_text(
-            render_vhost("example.com", "/home/testuser/example.com", app_type="php", php_version="8.3"),
-            encoding="utf-8",
-        )
+    def test_vhost_includes_separate_custom_file(self):
+        content = render_vhost("example.com", "/home/testuser/example.com", app_type="php", php_version="8.3")
 
-        assert not nginx_service.has_legacy_custom_vhost("example.com")
+        assert "include /etc/nginx/bpanel/custom/example.com.conf;" in content
+
+    def test_update_custom_writes_only_include_file(self, tmp_path, monkeypatch):
+        vhost_dir = tmp_path / "conf.d"
+        custom_dir = tmp_path / "custom"
+        vhost_dir.mkdir()
+        custom_dir.mkdir()
+        vhost = vhost_dir / "example.com.conf"
+        original_vhost = "server { server_name example.com; }\n"
+        vhost.write_text(original_vhost, encoding="utf-8")
+        calls = []
+
+        def fake_privileged(command, helper_args=None, check=True, input=None, **_kwargs):
+            calls.append((command, helper_args, input))
+            if command == "nginx-custom-write":
+                (custom_dir / f"{helper_args[0]}.conf").write_text(input or "", encoding="utf-8")
+            return SimpleNamespace(command=command, returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(nginx_service.settings, "command_dry_run", False)
+        monkeypatch.setattr(nginx_service.settings, "nginx_sites_available", str(vhost_dir))
+        monkeypatch.setattr(nginx_service, "CUSTOM_INCLUDE_DIR", custom_dir)
+        monkeypatch.setattr(nginx_service.shell, "privileged", fake_privileged)
+
+        result = nginx_service.update_custom_block("example.com", "client_max_body_size 32m;")
+
+        assert result == "/etc/nginx/bpanel/custom/example.com.conf"
+        assert vhost.read_text(encoding="utf-8") == original_vhost
+        assert (custom_dir / "example.com.conf").read_text(encoding="utf-8") == "client_max_body_size 32m;"
+        assert [call[0] for call in calls] == ["nginx-custom-write", "nginx-test", "nginx-reload"]
 
 
 class TestWebsiteCreateSchema:

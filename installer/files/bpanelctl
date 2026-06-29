@@ -400,17 +400,9 @@ try:
         result = waf.sync_website_rules(website)
         if result.returncode != 0:
             raise RuntimeError(result.stderr or result.stdout or "Unable to sync WAF rules")
-        if (
-            getattr(website, "nginx_config_mode", "managed") != "custom"
-            and nginx.has_legacy_custom_vhost(website.domain, website.nginx_custom or "")
-        ):
-            website.nginx_config_mode = "custom"
+        if getattr(website, "nginx_config_mode", "managed") != "managed":
+            website.nginx_config_mode = "managed"
             db.commit()
-            print(f"Preserving detected custom Nginx config for {website.domain}")
-            continue
-        if getattr(website, "nginx_config_mode", "managed") == "custom":
-            print(f"Preserving full custom Nginx config for {website.domain}")
-            continue
         nginx.rewrite_vhost(
             website.domain,
             website.root_path,

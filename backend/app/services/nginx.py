@@ -13,6 +13,7 @@ from app.services import site_users
 from app.services.shell import shell
 
 TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates" / "nginx"
+CUSTOM_INCLUDE_DIR = Path("/etc/nginx/bpanel/custom")
 
 ALLOWED_PHP_VERSIONS = {"5.6", "7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5"}
 ALLOWED_APP_TYPES = {"wordpress", "php", "static"}
@@ -263,34 +264,69 @@ def _safe_domain(domain: str) -> str:
     return safe_domain
 
 
-def _extract_custom_block(content: str) -> str:
-    match = re.search(
-        r"(?s)    # BPANEL CUSTOM BEGIN\n(.*?)\n?    # BPANEL CUSTOM END",
-        content or "",
-    )
-    if not match:
-        return ""
-    lines = match.group(1).splitlines()
-    if not lines:
-        return ""
-    return "\n".join(line[4:] if line.startswith("    ") else line for line in lines).strip()
+def _custom_include_path(domain: str) -> Path:
+    return CUSTOM_INCLUDE_DIR / f"{_safe_domain(domain)}.conf"
 
 
-def has_legacy_custom_vhost(domain: str, expected_custom: str = "") -> bool:
-    """Detect old hand/custom vhosts before first managed rewrite."""
+def custom_include_path(domain: str) -> str:
+    return f"/etc/nginx/bpanel/custom/{_safe_domain(domain)}.conf"
+
+
+def read_custom_include(domain: str) -> str:
     try:
-        content = _vhost_path(domain).read_text(encoding="utf-8")
-    except (OSError, ValueError):
-        return False
-    if "BPANEL REVERSE PROXY BEGIN" in content or "proxy-fastcgi-params.conf" in content:
-        return True
-    if re.search(r"(?mi)^\s*set_real_ip_from\s+", content):
-        return True
-    if re.search(r"(?mi)^\s*location\s+@[A-Za-z0-9._-]+\s*\{", content):
-        return True
-    if re.search(r"(?mi)^\s*rewrite\s+\S+\s+/\S+", content):
-        return True
-    return _extract_custom_block(content) != (expected_custom or "").strip()
+        return _custom_include_path(domain).read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def _custom_include_snapshot(domain: str) -> tuple[bool, str]:
+    target = _custom_include_path(domain)
+    try:
+        return True, target.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return False, ""
+
+
+def _write_custom_include(domain: str, custom_directives: str) -> str:
+    safe_domain = _safe_domain(domain)
+    safe_custom = validate_custom_nginx(custom_directives)
+    target = _custom_include_path(safe_domain)
+    if settings.command_dry_run:
+        return str(target)
+    shell.privileged(
+        "nginx-custom-write",
+        helper_args=[safe_domain],
+        input=safe_custom,
+        fallback=[
+            "bash",
+            "-lc",
+            (
+                "install -d -m 0775 /etc/nginx/bpanel/custom && "
+                f"cat > /etc/nginx/bpanel/custom/{safe_domain}.conf && "
+                f"chmod 0664 /etc/nginx/bpanel/custom/{safe_domain}.conf"
+            ),
+        ],
+    )
+    return str(target)
+
+
+def _delete_custom_include(domain: str) -> None:
+    safe_domain = _safe_domain(domain)
+    if settings.command_dry_run:
+        return
+    shell.privileged(
+        "nginx-custom-delete",
+        helper_args=[safe_domain],
+        fallback=["rm", "-f", str(_custom_include_path(safe_domain))],
+    )
+
+
+def _restore_custom_include(domain: str, snapshot: tuple[bool, str]) -> None:
+    existed, content = snapshot
+    if existed:
+        _write_custom_include(domain, content)
+    else:
+        _delete_custom_include(domain)
 
 
 def _check_log_kind(kind: str) -> str:
@@ -493,28 +529,6 @@ def _replace_fastcgi_socket(content: str, socket_path: str) -> str:
     )
 
 
-def _replace_custom_block(content: str, custom: str) -> str:
-    """Swap content between BPANEL CUSTOM markers."""
-    pattern = re.compile(
-        r"(    # BPANEL CUSTOM BEGIN\n)(.*?)(\n?    # BPANEL CUSTOM END)",
-        re.DOTALL,
-    )
-    new_inner = ""
-    if custom.strip():
-        new_inner = "    " + custom.replace("\n", "\n    ")
-    if pattern.search(content):
-        return pattern.sub(
-            lambda _m: f"    # BPANEL CUSTOM BEGIN\n{new_inner}\n    # BPANEL CUSTOM END",
-            content,
-        )
-    # Fallback: insert before the closing brace.
-    return content.rstrip()[:-1] + (
-        "\n    # BPANEL CUSTOM BEGIN\n"
-        + (new_inner + "\n" if new_inner else "")
-        + "    # BPANEL CUSTOM END\n}\n"
-    )
-
-
 def _domain_from_vhost(content: str) -> str:
     match = re.search(r"(?m)^\s*server_name\s+([^;]+);", content or "")
     if not match:
@@ -619,11 +633,20 @@ def _replace_fastcgi_cache_blocks(content: str, enabled: bool = True) -> str:
     )
 
 
-def _test_and_reload(target: Path, old_content: Optional[str]) -> None:
+def _test_and_reload(
+    target: Path,
+    old_content: Optional[str],
+    custom_domain: Optional[str] = None,
+    custom_snapshot: Optional[tuple[bool, str]] = None,
+) -> None:
     test = shell.privileged("nginx-test", check=False, fallback=["nginx", "-t"])
     if test.returncode != 0:
         if old_content is not None:
             target.write_text(old_content, encoding="utf-8")
+        else:
+            target.unlink(missing_ok=True)
+        if custom_domain is not None and custom_snapshot is not None:
+            _restore_custom_include(custom_domain, custom_snapshot)
         raise RuntimeError((test.stderr or test.stdout or "nginx -t failed").strip())
     shell.privileged("nginx-reload", fallback=["bash", "-lc", "nginx -t && systemctl reload nginx"])
 
@@ -647,8 +670,9 @@ def render_vhost(
     resolved_root = Path(root_path).resolve()
     if not site_users.is_site_root_for_domain(resolved_root, domain):
         raise ValueError("root_path must be the managed root for this domain")
-    safe_custom = validate_custom_nginx(custom_directives)
+    validate_custom_nginx(custom_directives)
     resolved_document_root = site_users.document_root(resolved_root, document_root)
+    include_path = custom_include_path(domain)
 
     env = Environment(loader=FileSystemLoader(TEMPLATE_DIR), autoescape=False)
     template_name = {
@@ -665,7 +689,7 @@ def render_vhost(
         root_path=str(resolved_root),
         document_root_path=str(resolved_document_root),
         php_fpm_socket=php_fpm_socket,
-        custom_directives=safe_custom,
+        custom_include_path=include_path,
         waf_enabled=bool(waf_enabled),
         waf_rules_file=waf_rules_file(domain),
         http_flood_enabled=bool(http_flood_enabled),
@@ -694,10 +718,9 @@ def write_vhost(
     http_flood_config: dict | str | None = None,
     document_root: str = "public_html",
 ) -> str:
-    content = render_vhost(
+    return rewrite_vhost(
         domain,
         root_path,
-        document_root=document_root,
         app_type=app_type,
         php_version=php_version,
         custom_directives=custom_directives,
@@ -705,18 +728,8 @@ def write_vhost(
         waf_enabled=waf_enabled,
         http_flood_enabled=http_flood_enabled,
         http_flood_config=http_flood_config,
+        document_root=document_root,
     )
-    target = _vhost_path(domain)
-    if settings.command_dry_run:
-        return content
-    if target.exists():
-        existing = target.read_text(encoding="utf-8")
-        if _has_ssl_config(existing):
-            _write_backup(target, existing)
-            return str(target)
-    target.write_text(content, encoding="utf-8")
-    shell.privileged("nginx-reload", fallback=["bash", "-lc", "nginx -t && systemctl reload nginx"])
-    return str(target)
 
 
 def write_wordpress_vhost(domain: str, root_path: str, php_version: Optional[str] = None) -> str:
@@ -727,7 +740,7 @@ def rewrite_vhost(
     domain: str,
     root_path: str,
     app_type: str,
-    php_version: str,
+    php_version: Optional[str],
     custom_directives: str = "",
     php_fpm_socket_override: Optional[str] = None,
     waf_enabled: bool = True,
@@ -750,6 +763,8 @@ def rewrite_vhost(
     )
     if settings.command_dry_run:
         return content
+    custom_snapshot = _custom_include_snapshot(domain)
+    _write_custom_include(domain, custom_directives)
     if target.exists():
         existing = target.read_text(encoding="utf-8")
         _write_backup(target, existing)
@@ -757,7 +772,7 @@ def rewrite_vhost(
             content = _merge_certbot_ssl_config(content, existing)
     old_content = target.read_text(encoding="utf-8") if target.exists() else None
     target.write_text(content, encoding="utf-8")
-    _test_and_reload(target, old_content)
+    _test_and_reload(target, old_content, domain, custom_snapshot)
     return str(target)
 
 
@@ -773,11 +788,10 @@ def update_custom_block(domain: str, custom_directives: str) -> str:
     if not target.exists():
         raise FileNotFoundError(str(target))
     existing = target.read_text(encoding="utf-8")
-    new_content = _replace_custom_block(existing, safe_custom)
-    _write_backup(target, existing)
-    target.write_text(new_content, encoding="utf-8")
-    _test_and_reload(target, existing)
-    return str(target)
+    custom_snapshot = _custom_include_snapshot(domain)
+    _write_custom_include(domain, safe_custom)
+    _test_and_reload(target, existing, domain, custom_snapshot)
+    return custom_include_path(domain)
 
 
 def set_php_version(
@@ -812,42 +826,25 @@ def harden_existing_wordpress_vhost(
     domain: str,
     root_path: str,
     php_version: str | None = None,
+    custom_directives: str = "",
     php_fpm_socket_override: Optional[str] = None,
     waf_enabled: bool = True,
     http_flood_enabled: bool = False,
     http_flood_config: dict | str | None = None,
     document_root: str = "public_html",
 ) -> str:
-    target = _vhost_path(domain)
-    content = render_vhost(
+    return rewrite_vhost(
         domain,
         root_path,
-        document_root=document_root,
         app_type="wordpress",
         php_version=php_version,
+        custom_directives=custom_directives,
         php_fpm_socket_override=php_fpm_socket_override,
         waf_enabled=waf_enabled,
         http_flood_enabled=http_flood_enabled,
         http_flood_config=http_flood_config,
+        document_root=document_root,
     )
-    if settings.command_dry_run:
-        return content
-    if target.exists():
-        existing = target.read_text(encoding="utf-8")
-        if _has_ssl_config(existing):
-            updated = _ensure_hsts_header(existing)
-            if php_fpm_socket_override:
-                updated = _replace_fastcgi_socket(updated, php_fpm_socket_override)
-            elif php_version:
-                updated = _replace_php_fpm_socket(updated, php_version)
-            updated = _replace_waf_block(updated, waf_enabled, domain)
-            updated = _replace_http_flood_block(updated, http_flood_enabled, domain, http_flood_config)
-            target.write_text(updated, encoding="utf-8")
-            shell.privileged("nginx-reload", fallback=["bash", "-lc", "nginx -t && systemctl reload nginx"])
-            return str(target)
-    target.write_text(content, encoding="utf-8")
-    shell.privileged("nginx-reload", fallback=["bash", "-lc", "nginx -t && systemctl reload nginx"])
-    return str(target)
 
 
 def delete_wordpress_vhost(domain: str):
@@ -855,6 +852,7 @@ def delete_wordpress_vhost(domain: str):
     if settings.command_dry_run:
         return str(target)
     target.unlink(missing_ok=True)
+    _delete_custom_include(domain)
     shell.privileged("nginx-reload", fallback=["bash", "-lc", "nginx -t && systemctl reload nginx"])
     return str(target)
 
