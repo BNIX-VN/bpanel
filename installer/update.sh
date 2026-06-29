@@ -811,10 +811,18 @@ with SessionLocal() as db:
             if website.linux_user:
                 runtime_php_version = website.php_version if (website.app_type or "wordpress") in {"wordpress", "php"} else None
                 site_users.ensure_site_runtime(website.domain, website.root_path, runtime_php_version, website.linux_user)
+                site_users.ensure_document_root(
+                    website.root_path,
+                    getattr(website, "document_root", "public_html") or "public_html",
+                    website.linux_user,
+                )
             site_users.fix_site_permissions(website.root_path, website.linux_user)
             result = waf.sync_website_rules(website)
             if result.returncode != 0:
                 print(f"WARNING: could not refresh WAF rules for {website.domain}: {result.stderr or result.stdout}")
+            if getattr(website, "nginx_config_mode", "managed") == "custom":
+                print(f"Preserving full custom Nginx config for {website.domain}")
+                continue
             app_type = website.app_type or "wordpress"
             runtime_php_version = website.php_version if app_type in {"wordpress", "php"} else None
             nginx.rewrite_vhost(
@@ -827,6 +835,7 @@ with SessionLocal() as db:
                 waf_enabled=website.waf_enabled,
                 http_flood_enabled=website.http_flood_enabled,
                 http_flood_config=website.http_flood_config or "",
+                document_root=getattr(website, "document_root", "public_html") or "public_html",
             )
         except Exception as exc:
             print(f"WARNING: could not refresh permissions for {website.domain}: {exc}")

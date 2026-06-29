@@ -42,6 +42,21 @@ def _validate_app_type(value: Optional[str]) -> Optional[str]:
     return value
 
 
+def _validate_document_root(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return value
+    cleaned = value.strip().replace("\\", "/")
+    if cleaned.startswith("/") or re.match(r"^[A-Za-z]:/", cleaned):
+        raise ValueError("document_root must be relative to the website root")
+    cleaned = cleaned.strip("/")
+    if not cleaned or len(cleaned) > 255:
+        raise ValueError("document_root must be a relative path up to 255 characters")
+    parts = cleaned.split("/")
+    if any(part in {"", ".", ".."} or not re.fullmatch(r"[A-Za-z0-9._-]+", part) for part in parts):
+        raise ValueError("document_root must be a safe relative path such as public_html/public")
+    return "/".join(parts)
+
+
 def _validate_panel_url(value: Optional[str]) -> Optional[str]:
     if value is None:
         return value
@@ -234,6 +249,8 @@ class WebsiteCreate(BaseModel):
 
 class WebsiteUpdate(BaseModel):
     php_version: Optional[str] = None
+    app_type: Optional[str] = None
+    document_root: Optional[str] = None
     status: Optional[str] = None
     owner_id: Optional[int] = None
     nginx_custom: Optional[str] = None
@@ -244,6 +261,16 @@ class WebsiteUpdate(BaseModel):
     @classmethod
     def validate_php(cls, value: Optional[str]) -> Optional[str]:
         return _validate_php_version(value)
+
+    @field_validator("app_type")
+    @classmethod
+    def validate_app(cls, value: Optional[str]) -> Optional[str]:
+        return _validate_app_type(value)
+
+    @field_validator("document_root")
+    @classmethod
+    def validate_document_root(cls, value: Optional[str]) -> Optional[str]:
+        return _validate_document_root(value)
 
     @field_validator("status")
     @classmethod
@@ -352,6 +379,7 @@ class WebsiteOut(BaseModel):
     domain: str
     owner_id: int
     root_path: str
+    document_root: str = "public_html"
     linux_user: Optional[str] = None
     panel_username: Optional[str] = None
     panel_password: Optional[str] = None
@@ -360,6 +388,7 @@ class WebsiteOut(BaseModel):
     ssl_enabled: bool
     status: str
     nginx_custom: str = ""
+    nginx_config_mode: str = "managed"
     waf_enabled: bool = True
     waf_default_rules: str = ""
     waf_custom_rules: str = ""

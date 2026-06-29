@@ -252,7 +252,10 @@ button:disabled,.upload-button.disabled{background:#dbe7f7;color:#7a8ca4;border-
 .site-stack{display:grid;gap:10px;min-width:0}
 .site-stack .inline-nginx-editor{margin:0}
 .site-card{grid-template-columns:minmax(190px,1.05fr) minmax(170px,.8fr) minmax(250px,.72fr)}
-.site-actions{display:grid;gap:7px;justify-self:end;width:min(100%,238px);min-width:0}
+.site-actions{display:grid;gap:7px;justify-self:end;width:min(100%,260px);min-width:0}
+.site-mode-actions,.site-root-actions{display:grid;grid-template-columns:minmax(0,1fr) 36px;gap:6px;min-width:0}
+.site-mode-actions select,
+.site-root-actions input{width:100%;min-width:0;height:34px;min-height:34px;padding:0 9px;font-size:12px}
 .site-php-actions{display:grid;grid-template-columns:minmax(112px,1fr) 36px;gap:6px;min-width:0}
 .site-php-actions select{width:100%;max-width:none;min-width:0;height:34px;min-height:34px;padding-block:0;font-size:12px}
 .site-feature-actions{display:flex;align-items:center;justify-content:flex-end;gap:6px;min-width:0;flex-wrap:wrap}
@@ -287,7 +290,7 @@ button:disabled,.upload-button.disabled{background:#dbe7f7;color:#7a8ca4;border-
 
 @media(max-width:1450px){
   .site-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;width:100%;max-width:none;justify-self:stretch;flex-wrap:wrap}
-  .site-php-actions{flex:1 1 180px;max-width:240px}
+  .site-mode-actions,.site-root-actions,.site-php-actions{flex:1 1 180px;max-width:260px}
   .site-feature-actions{flex:0 0 auto}
 }
 
@@ -303,8 +306,12 @@ button:disabled,.upload-button.disabled{background:#dbe7f7;color:#7a8ca4;border-
 @media(max-width:560px){
   .updates-os-form,.updates-panel-form{grid-template-columns:1fr}
   .site-actions{display:grid;justify-content:stretch;gap:8px}
-  .site-php-actions{max-width:none;grid-template-columns:minmax(0,1fr) 40px}
+  .site-mode-actions,.site-root-actions,.site-php-actions{max-width:none;grid-template-columns:minmax(0,1fr) 40px}
+  .site-mode-actions select,
+  .site-root-actions input,
   .site-php-actions select,
+  .site-mode-actions .site-icon-button,
+  .site-root-actions .site-icon-button,
   .site-php-actions .site-icon-button{height:40px;min-height:40px}
   .site-feature-actions{display:flex;justify-content:flex-start;gap:8px;width:100%}
   .site-feature-actions .site-icon-button{width:40px;min-width:40px;height:40px;min-height:40px;flex:0 0 40px}

@@ -12,7 +12,7 @@ import 'ace-builds/src-noconflict/mode-php';
 import 'ace-builds/src-noconflict/mode-text';
 import 'ace-builds/src-noconflict/mode-yaml';
 import 'ace-builds/src-noconflict/theme-textmate';
-import { Archive, Check, Clock, Code2, Copy, Cpu, Database, Dices, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, MoveRight, Network, Server, Settings as SettingsIcon, Shield, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
+import { Archive, Check, Clock, Code2, Copy, Cpu, Database, Dices, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, MoveRight, Network, Save, Server, Settings as SettingsIcon, Shield, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
 import { Terminal } from './components/Terminal';
 import './style.css';
 import './brand.css';
@@ -269,7 +269,7 @@ function App() {
   const [siteType, setSiteType] = useState('wordpress');
   const [installSslAfterCreate, setInstallSslAfterCreate] = useState(false);
   const [installWordPress, setInstallWordPress] = useState(true);
-  const [nginxCustomEditing, setNginxCustomEditing] = useState(null); // {id, domain, content}
+  const [nginxCustomEditing, setNginxCustomEditing] = useState(null); // {id, domain, mode, content, configMode}
   const [logViewer, setLogViewer] = useState(null); // {id, domain, kind, lines, path, content, exists}
   const [terminalViewer, setTerminalViewer] = useState(null); // {id, domain}
   const [websites, setWebsites] = useState([]);
@@ -328,6 +328,8 @@ function App() {
   const [wafSiteConfig, setWafSiteConfig] = useState(null);
   const [httpFloodForm, setHttpFloodForm] = useState({ http_flood_enabled: false, ...HTTP_FLOOD_DEFAULTS });
   const [websitePhpVersions, setWebsitePhpVersions] = useState({});
+  const [websiteAppTypes, setWebsiteAppTypes] = useState({});
+  const [websiteDocumentRoots, setWebsiteDocumentRoots] = useState({});
   const [assignUserId, setAssignUserId] = useState('');
   const [assignWebsiteId, setAssignWebsiteId] = useState('');
   const [twoFactorStatus, setTwoFactorStatus] = useState(null);
@@ -870,20 +872,42 @@ function App() {
   async function openNginxCustom(site) {
     setLogViewer(null);
     setTerminalViewer(null);
-    const data = await request(`/websites/${site.id}/nginx-config`, {}, 'Loading Nginx config...');
+    const fullConfig = site.nginx_config_mode === 'custom';
+    const data = await request(
+      `/websites/${site.id}/${fullConfig ? 'nginx-config' : 'nginx-custom'}`,
+      {},
+      `Loading ${fullConfig ? 'full' : 'custom'} Nginx config...`,
+    );
     if (data !== null) {
-      setNginxCustomEditing({ id: site.id, domain: site.domain, content: data?.nginx_config || '' });
+      setNginxCustomEditing({
+        id: site.id,
+        domain: site.domain,
+        mode: fullConfig ? 'full' : 'custom',
+        content: fullConfig ? (data?.nginx_config || '') : (data?.nginx_custom || ''),
+        configMode: site.nginx_config_mode || 'managed',
+      });
+    }
+  }
+
+  async function viewFullNginxConfig() {
+    if (!nginxCustomEditing) return;
+    const data = await request(`/websites/${nginxCustomEditing.id}/nginx-config`, {}, 'Loading full Nginx config...');
+    if (data !== null) {
+      setNginxCustomEditing(prev => ({ ...prev, mode: 'full', content: data?.nginx_config || '' }));
     }
   }
 
   async function saveNginxCustom() {
     if (!nginxCustomEditing) return;
-    const data = await request(`/websites/${nginxCustomEditing.id}/nginx-config`, {
+    const fullConfig = nginxCustomEditing.mode === 'full';
+    const data = await request(`/websites/${nginxCustomEditing.id}/${fullConfig ? 'nginx-config' : 'nginx-custom'}`, {
       method: 'PUT',
-      body: JSON.stringify({ nginx_config: nginxCustomEditing.content }),
-    }, 'Applying Nginx config and reloading...');
+      body: JSON.stringify(fullConfig
+        ? { nginx_config: nginxCustomEditing.content }
+        : { nginx_custom: nginxCustomEditing.content }),
+    }, `Applying ${fullConfig ? 'full' : 'custom'} Nginx config and reloading...`);
     if (data) {
-      setNotice(`Updated Nginx config for ${nginxCustomEditing.domain}`);
+      setNotice(`Updated ${fullConfig ? 'full' : 'custom'} Nginx config for ${nginxCustomEditing.domain}`);
       setNginxCustomEditing(null);
       refreshAll();
     }
@@ -959,6 +983,34 @@ function App() {
     if (next === site.php_version) return;
     const data = await request(`/websites/${site.id}`, { method: 'PATCH', body: JSON.stringify({ php_version: next }) }, `Changing ${site.domain} to PHP ${next}...`);
     if (data) { setNotice(`Changed ${site.domain} to PHP ${next} and reloaded Nginx.`); await refreshAll(); }
+  }
+
+  async function changeWebsiteAppType(site) {
+    const next = websiteAppTypes[site.id] || site.app_type || 'wordpress';
+    if (next === (site.app_type || 'wordpress')) return;
+    const data = await request(`/websites/${site.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ app_type: next }),
+    }, `Changing ${site.domain} to ${next} mode...`);
+    if (data) {
+      setNotice(`Changed ${site.domain} to ${data.app_type} mode.`);
+      setWebsiteAppTypes(prev => ({ ...prev, [site.id]: data.app_type }));
+      await refreshAll();
+    }
+  }
+
+  async function changeWebsiteDocumentRoot(site) {
+    const next = (websiteDocumentRoots[site.id] ?? site.document_root ?? 'public_html').trim();
+    if (!next || next === (site.document_root || 'public_html')) return;
+    const data = await request(`/websites/${site.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ document_root: next }),
+    }, `Changing document root for ${site.domain}...`);
+    if (data) {
+      setNotice(`Changed ${site.domain} document root to ${data.document_root}.`);
+      setWebsiteDocumentRoots(prev => ({ ...prev, [site.id]: data.document_root }));
+      await refreshAll();
+    }
   }
 
   async function changeDbPassword(id) {
@@ -2076,6 +2128,7 @@ function App() {
             <div className="site-meta">
               <span className={`badge site-ssl-badge ${site.ssl_enabled ? 'ok' : ''}`}>{site.ssl_enabled ? 'SSL' : 'No SSL'}</span>
               <span>PHP <strong>{site.php_version}</strong></span>
+              <span>Root <strong>{site.document_root || 'public_html'}</strong></span>
               <span>Status <strong>{site.status}</strong></span>
             </div>
           </article>)}
@@ -2090,26 +2143,33 @@ function App() {
 
   function renderNginxEditor() {
     if (!nginxCustomEditing) return null;
+    const fullConfig = nginxCustomEditing.mode === 'full';
     return <section className="section nginx-modal inline-nginx-editor">
       <div className="section-title">
         <div className="nginx-config-title">
-          <h2>Nginx config - {nginxCustomEditing.domain}</h2>
-          <p className="hint">Edit the full vhost file. BPanel tests Nginx and rolls back if validation fails.</p>
+          <h2>{fullConfig ? 'Full Nginx config' : 'Custom Nginx'} - {nginxCustomEditing.domain}</h2>
+          <p className="hint">{fullConfig
+            ? 'Saving the full vhost switches this website to full-custom mode, so BPanel updates preserve it.'
+            : 'These directives are stored in BPanel and inserted into the managed vhost after every update.'}</p>
         </div>
-        <button className="secondary-light" onClick={() => setNginxCustomEditing(null)}><X size={14}/> Close</button>
+        <div className="actions">
+          {!fullConfig && <button className="secondary-light" disabled={!!loading} onClick={viewFullNginxConfig}><FileText size={14}/> View all</button>}
+          <button className="secondary-light" onClick={() => setNginxCustomEditing(null)}><X size={14}/> Close</button>
+        </div>
       </div>
       <textarea
         className="code-editor"
         value={nginxCustomEditing.content}
         onChange={e => setNginxCustomEditing(prev => ({ ...prev, content: e.target.value }))}
-        placeholder={`server {\n    listen 80;\n    server_name ${nginxCustomEditing.domain};\n}`}
+        placeholder={fullConfig
+          ? `server {\n    listen 80;\n    server_name ${nginxCustomEditing.domain};\n}`
+          : `try_files $uri $uri/ @seohburl;\nlocation @seohburl {\n    rewrite ^/(.+)$ /index.php?/$1 last;\n}`}
         spellCheck={false}
         rows={14}
       />
-      <p className="hint">Use care with <code>listen</code>, <code>root</code>, SSL paths, and upstream directives; this editor writes the production vhost.</p>
       <div className="actions">
         <button disabled={!!loading} onClick={saveNginxCustom}>Save and reload Nginx</button>
-        <button className="secondary-light" disabled={!!loading} onClick={resetNginxDefault}><RotateCcw size={14}/> Reset default</button>
+        {fullConfig && <button className="secondary-light" disabled={!!loading} onClick={resetNginxDefault}><RotateCcw size={14}/> Reset default</button>}
         <button className="secondary-light" disabled={!!loading} onClick={() => setNginxCustomEditing(null)}>Cancel</button>
       </div>
     </section>;
@@ -2166,11 +2226,61 @@ function App() {
               <span>Type <strong>{site.app_type || 'wordpress'}</strong></span>
               <span>PHP <strong>{site.php_version}</strong></span>
               <span>Status <strong>{site.status}</strong></span>
-              {site.nginx_custom && <span className="badge ok">Custom Nginx</span>}
+              {site.nginx_config_mode === 'custom'
+                ? <span className="badge ok">Full custom Nginx</span>
+                : site.nginx_custom && <span className="badge ok">Custom Nginx</span>}
               {site.waf_enabled && <span className="badge ok">WAF</span>}
               {site.http_flood_enabled && <span className="badge ok">HTTP Flood</span>}
             </div>
             <div className="site-actions" aria-label={`Website actions for ${site.domain}`}>
+              <div className="site-mode-actions">
+                <select
+                  value={websiteAppTypes[site.id] || site.app_type || 'wordpress'}
+                  onChange={e => setWebsiteAppTypes(prev => ({ ...prev, [site.id]: e.target.value }))}
+                  title={site.nginx_config_mode === 'custom' ? 'Reset full custom Nginx before changing website mode' : 'Website mode'}
+                  aria-label={`Website mode for ${site.domain}`}
+                  disabled={!!loading || site.nginx_config_mode === 'custom'}
+                >
+                  <option value="wordpress">WordPress</option>
+                  <option value="php">PHP</option>
+                  <option value="static">Static</option>
+                </select>
+                <button
+                  className="site-icon-button secondary-light"
+                  data-tooltip="Save mode"
+                  title="Save website mode"
+                  aria-label={`Save website mode for ${site.domain}`}
+                  disabled={
+                    !!loading
+                    || site.nginx_config_mode === 'custom'
+                    || (websiteAppTypes[site.id] || site.app_type || 'wordpress') === (site.app_type || 'wordpress')
+                  }
+                  onClick={() => changeWebsiteAppType(site)}
+                ><Save size={15}/></button>
+              </div>
+              <div className="site-root-actions">
+                <input
+                  value={websiteDocumentRoots[site.id] ?? site.document_root ?? 'public_html'}
+                  onChange={e => setWebsiteDocumentRoots(prev => ({ ...prev, [site.id]: e.target.value }))}
+                  placeholder="public_html/public"
+                  title={site.nginx_config_mode === 'custom' ? 'Reset full custom Nginx before changing document root' : 'Document root relative to website root'}
+                  aria-label={`Document root for ${site.domain}`}
+                  disabled={!!loading || site.nginx_config_mode === 'custom'}
+                />
+                <button
+                  className="site-icon-button secondary-light"
+                  data-tooltip="Save root"
+                  title="Save document root"
+                  aria-label={`Save document root for ${site.domain}`}
+                  disabled={
+                    !!loading
+                    || site.nginx_config_mode === 'custom'
+                    || !(websiteDocumentRoots[site.id] ?? site.document_root ?? 'public_html').trim()
+                    || (websiteDocumentRoots[site.id] ?? site.document_root ?? 'public_html').trim() === (site.document_root || 'public_html')
+                  }
+                  onClick={() => changeWebsiteDocumentRoot(site)}
+                ><Save size={15}/></button>
+              </div>
               {site.app_type !== 'static' && <div className="site-php-actions">
                 <select
                   value={websitePhpVersions[site.id] || site.php_version || '8.3'}

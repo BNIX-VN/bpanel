@@ -1,5 +1,6 @@
 import os
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -103,6 +104,7 @@ def test_render_vhost_keeps_waf_and_http_flood_blocks():
         "/home/client/example.com",
         app_type="php",
         php_version="8.3",
+        document_root="public_html/public",
         waf_enabled=True,
         http_flood_enabled=True,
         http_flood_config={"access_limit_requests":120, "access_limit_window":10, "access_limit_burst":20, "connection_limit":8},
@@ -116,6 +118,8 @@ def test_render_vhost_keeps_waf_and_http_flood_blocks():
     assert "bpanel_http_flood_ok=1" in content
     assert "# BPANEL ACME CHALLENGE" in content
     assert "root /var/www/bpanel-acme;" in content
+    expected_root = Path("/home/client/example.com").resolve() / "public_html" / "public"
+    assert f"root {expected_root};" in content
 
 
 def test_wordpress_cache_revalidates_quickly():

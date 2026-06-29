@@ -1699,6 +1699,29 @@ PY
     fix_site_tree "$target" "$2"
     ;;
 
+  site-document-root-ensure)
+    [[ $# -eq 3 ]] || deny "usage: site-document-root-ensure <site-user> <site-root> <relative-path>"
+    user="$1"; root_arg="$2"; rel_arg="$3"
+    ensure_sites_group
+    require_linux_user "$user"
+    root_target=$(require_managed_path "$root_arg" "$user")
+    [[ "$rel_arg" =~ ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ ]] || deny "unsafe relative path: $rel_arg"
+    case "$rel_arg" in
+      ""|"/"|/*|*$'\n'*|"."|".."|"./"*|"../"*|*"/."|*"/.."|*"/./"*|*"/../"*) deny "unsafe relative path: $rel_arg" ;;
+    esac
+    target=$(require_safe_path "$root_target" "$root_target/$rel_arg")
+    mkdir -p -- "$target"
+    current="$root_target"
+    IFS='/' read -r -a root_parts <<< "$rel_arg"
+    for part in "${root_parts[@]}"; do
+      current="$current/$part"
+      chown "$user:$user" "$current"
+      chmod 2750 "$current"
+      setfacl -m "g::rwX,g:${BPANEL_SITES_GROUP}:rwX,m::rwX" "$current"
+      setfacl -m "d:g::rwX,d:g:${BPANEL_SITES_GROUP}:rwX,d:m::rwX" "$current"
+    done
+    ;;
+
   site-file-write)
     [[ $# -eq 3 ]] || deny "usage: site-file-write <site-user> <site-root> <relative-path>"
     user="$1"; root_arg="$2"; rel_arg="$3"

@@ -5,6 +5,7 @@ These run on Linux CI; do not rely on running them on Windows.
 
 import os
 import sys
+from pathlib import Path
 import pytest
 
 # Force a deterministic config when imported in CI without an .env present.
@@ -16,7 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ""))
 
 from app.services.nginx import render_vhost, validate_custom_nginx, validate_full_nginx_config  # noqa: E402
 from app.services.mariadb import _validate_identifier  # noqa: E402
-from app.schemas.schemas import UserCreate, UserPasswordUpdate, WebsiteCreate  # noqa: E402
+from app.schemas.schemas import UserCreate, UserPasswordUpdate, WebsiteCreate, WebsiteUpdate  # noqa: E402
 
 
 class TestNginxCustomValidator:
@@ -65,9 +66,9 @@ class TestNginxCustomValidator:
         with pytest.raises(ValueError):
             validate_custom_nginx("error_page 404 https://attacker.example/;")
 
-    def test_rejects_rewrite(self):
+    def test_rejects_external_rewrite(self):
         with pytest.raises(ValueError):
-            validate_custom_nginx("rewrite ^/(.*)$ /$1 last;")
+            validate_custom_nginx("rewrite ^/(.*)$ https://attacker.example/$1 redirect;")
 
     def test_rejects_add_header(self):
         # add_header lets a tenant override security headers (HSTS, CSP)
@@ -83,9 +84,27 @@ class TestNginxCustomValidator:
         with pytest.raises(ValueError):
             validate_custom_nginx('sub_filter "</body>" "<script>x</script></body>";')
 
-    def test_rejects_try_files(self):
+    def test_accepts_hostbill_routing(self):
+        result = validate_custom_nginx(
+            "try_files $uri $uri/ @seohburl;\n"
+            "location @seohburl {\n"
+            "    rewrite ^/(.+)$ /index.php?/$1 last;\n"
+            "}"
+        )
+        assert "try_files $uri $uri/ @seohburl;" in result
+        assert "rewrite ^/(.+)$ /index.php?/$1 last;" in result
+
+    def test_accepts_laravel_try_files(self):
+        result = validate_custom_nginx(
+            "location / {\n"
+            "    try_files $uri $uri/ /index.php?$query_string;\n"
+            "}"
+        )
+        assert "try_files $uri $uri/ /index.php?$query_string;" in result
+
+    def test_rejects_try_files_traversal(self):
         with pytest.raises(ValueError):
-            validate_custom_nginx("try_files /etc/passwd =404;")
+            validate_custom_nginx("try_files ../private.php =404;")
 
     def test_rejects_unbalanced_braces(self):
         with pytest.raises(ValueError):
@@ -111,6 +130,29 @@ class TestNginxCustomValidator:
         content = render_vhost("example.com", "/home/testuser/example.com", app_type="php", php_version="8.3")
         assert "fastcgi_pass" in content
         assert "wp-config.php" not in content
+        assert "location / {" not in content
+
+    def test_custom_document_root_is_rendered(self):
+        content = render_vhost(
+            "example.com",
+            "/home/testuser/example.com",
+            app_type="php",
+            php_version="8.3",
+            document_root="public_html/public",
+        )
+        expected_root = Path("/home/testuser/example.com").resolve() / "public_html" / "public"
+        assert f"root {expected_root};" in content
+
+    @pytest.mark.parametrize("document_root", ["/var/www", "../public", "public_html/../secret"])
+    def test_rejects_unsafe_document_root(self, document_root):
+        with pytest.raises(ValueError):
+            render_vhost(
+                "example.com",
+                "/home/testuser/example.com",
+                app_type="php",
+                php_version="8.3",
+                document_root=document_root,
+            )
 
 
 class TestWebsiteCreateSchema:
@@ -125,6 +167,12 @@ class TestWebsiteCreateSchema:
 
         assert payload.admin_email is None
         assert payload.admin_password is None
+
+    def test_update_accepts_php_mode_and_nested_document_root(self):
+        payload = WebsiteUpdate(app_type="php", document_root="public_html/public")
+
+        assert payload.app_type == "php"
+        assert payload.document_root == "public_html/public"
 
 
 class TestPanelUserPasswordSchema:

@@ -213,14 +213,12 @@ DANGEROUS_DIRECTIVES = re.compile(
     r"alias\s+|"
     r"root\s+|"
     r"auth_basic_user_file\b|"
-    r"try_files\s+|"          # remap request to arbitrary file
     # ---- arbitrary file write via logging ----
     r"access_log\s+|"
     r"error_log\s+|"
     # ---- HTTP response control / phishing primitives ----
     r"return\s+|"             # forced redirects, body injection
     r"error_page\s+|"         # remap error responses to attacker URI
-    r"rewrite\s+|"
     r"add_header\s+|"         # override security headers
     r"more_set_headers\b|"
     r"more_clear_headers\b|"
@@ -319,6 +317,32 @@ def validate_custom_nginx(content: Optional[str]) -> str:
             "Custom block must not contain disallowed directives (proxy_pass, alias, "
             "return, add_header, ssl_certificate, ...)"
         )
+    for match in re.finditer(r"(?mi)^\s*try_files\s+(.+);", text):
+        arguments = match.group(1).split()
+        if not arguments or any(
+            token.startswith("file:")
+            or token.startswith("http:")
+            or token.startswith("https:")
+            or ".." in token.split("/")
+            for token in arguments
+        ):
+            raise ValueError("Custom try_files directives must not use traversal or external URLs")
+    try_files_count = len(re.findall(r"(?mi)(?:^|[;{}])\s*try_files\b", text))
+    if try_files_count != len(re.findall(r"(?mi)^\s*try_files\s+.+;", text)):
+        raise ValueError("Malformed or unsupported try_files directive")
+    for match in re.finditer(r"(?mi)^\s*rewrite\s+\S+\s+(\S+)(?:\s+(\S+))?\s*;", text):
+        replacement, flag = match.groups()
+        if (
+            not replacement.startswith("/")
+            or replacement.startswith("//")
+            or "://" in replacement
+            or ".." in replacement.split("/")
+            or (flag and flag not in {"last", "break"})
+        ):
+            raise ValueError("Custom rewrite directives must target a local URI and use last or break")
+    rewrite_count = len(re.findall(r"(?mi)(?:^|[;{}])\s*rewrite\b", text))
+    if rewrite_count != len(re.findall(r"(?mi)^\s*rewrite\s+\S+\s+\S+(?:\s+\S+)?\s*;", text)):
+        raise ValueError("Malformed or unsupported rewrite directive")
     if "\x00" in text:
         raise ValueError("Custom nginx block contains a NUL byte")
     return text
@@ -584,6 +608,7 @@ def render_vhost(
     waf_enabled: bool = True,
     http_flood_enabled: bool = False,
     http_flood_config: dict | str | None = None,
+    document_root: str = "public_html",
 ) -> str:
     if not DOMAIN_RE.fullmatch((domain or "").lower()):
         raise ValueError("Invalid domain")
@@ -593,6 +618,7 @@ def render_vhost(
     if not site_users.is_site_root_for_domain(resolved_root, domain):
         raise ValueError("root_path must be the managed root for this domain")
     safe_custom = validate_custom_nginx(custom_directives)
+    resolved_document_root = site_users.document_root(resolved_root, document_root)
 
     env = Environment(loader=FileSystemLoader(TEMPLATE_DIR), autoescape=False)
     template_name = {
@@ -607,6 +633,7 @@ def render_vhost(
     rendered = template.render(
         domain=domain,
         root_path=str(resolved_root),
+        document_root_path=str(resolved_document_root),
         php_fpm_socket=php_fpm_socket,
         custom_directives=safe_custom,
         waf_enabled=bool(waf_enabled),
@@ -635,10 +662,12 @@ def write_vhost(
     waf_enabled: bool = True,
     http_flood_enabled: bool = False,
     http_flood_config: dict | str | None = None,
+    document_root: str = "public_html",
 ) -> str:
     content = render_vhost(
         domain,
         root_path,
+        document_root=document_root,
         app_type=app_type,
         php_version=php_version,
         custom_directives=custom_directives,
@@ -674,11 +703,13 @@ def rewrite_vhost(
     waf_enabled: bool = True,
     http_flood_enabled: bool = False,
     http_flood_config: dict | str | None = None,
+    document_root: str = "public_html",
 ) -> str:
     target = _vhost_path(domain)
     content = render_vhost(
         domain,
         root_path,
+        document_root=document_root,
         app_type=app_type,
         php_version=php_version,
         custom_directives=custom_directives,
@@ -755,11 +786,13 @@ def harden_existing_wordpress_vhost(
     waf_enabled: bool = True,
     http_flood_enabled: bool = False,
     http_flood_config: dict | str | None = None,
+    document_root: str = "public_html",
 ) -> str:
     target = _vhost_path(domain)
     content = render_vhost(
         domain,
         root_path,
+        document_root=document_root,
         app_type="wordpress",
         php_version=php_version,
         php_fpm_socket_override=php_fpm_socket_override,

@@ -910,7 +910,11 @@ def delete_cron(payload: CronDelete, db: Session = Depends(get_db), current_user
 @router.post("/wordpress")
 def wordpress_action(payload: WpAction, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     website = get_owned_website(db, current_user, payload.website_id)
-    result = wordpress.wp_update(str(site_users.document_root(website.root_path)), payload.action, website.linux_user)
+    result = wordpress.wp_update(
+        str(site_users.document_root(website.root_path, website.document_root or "public_html")),
+        payload.action,
+        website.linux_user,
+    )
     return result.__dict__
 
 

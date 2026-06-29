@@ -1,6 +1,6 @@
 import hashlib
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Optional
 
 from app.services.shell import shell
@@ -55,8 +55,30 @@ def site_root_for_panel_user(username: str, domain: str) -> str:
     return str(HOME_ROOT / linux_user_for_panel_username(username) / domain.strip().lower())
 
 
-def document_root(root_path: str | Path) -> Path:
-    return Path(root_path) / PUBLIC_DIR
+def validate_document_root(value: str | None) -> str:
+    cleaned = (value or PUBLIC_DIR).strip().replace("\\", "/")
+    if cleaned.startswith("/") or re.match(r"^[A-Za-z]:/", cleaned):
+        raise ValueError("document_root must be relative to the website root")
+    cleaned = cleaned.strip("/")
+    if not cleaned or len(cleaned) > 255:
+        raise ValueError("document_root must be a relative path up to 255 characters")
+    relative = PurePosixPath(cleaned)
+    if relative.is_absolute():
+        raise ValueError("document_root must be relative to the website root")
+    parts = relative.parts
+    if any(part in {"", ".", ".."} or not re.fullmatch(r"[A-Za-z0-9._-]+", part) for part in parts):
+        raise ValueError("document_root must be a safe relative path such as public_html/public")
+    return "/".join(parts)
+
+
+def document_root(root_path: str | Path, relative_path: str = PUBLIC_DIR) -> Path:
+    root = Path(root_path).resolve()
+    target = (root / validate_document_root(relative_path)).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("document_root must stay inside the website root") from exc
+    return target
 
 
 def is_managed_site_path(path: str | Path) -> bool:
@@ -128,6 +150,20 @@ def ensure_site_runtime(domain: str, root_path: str, php_version: Optional[str] 
         fallback=["mkdir", "-p", str(document_root(root_path))],
     )
     return username
+
+
+def ensure_document_root(root_path: str, relative_path: str, linux_user: Optional[str]) -> Path:
+    target = document_root(root_path, relative_path)
+    if not linux_user:
+        target.mkdir(parents=True, exist_ok=True)
+        return target
+    username = validate_linux_user(linux_user)
+    shell.privileged(
+        "site-document-root-ensure",
+        helper_args=[username, root_path, validate_document_root(relative_path)],
+        fallback=["mkdir", "-p", str(target)],
+    )
+    return target
 
 
 def move_site_runtime(old_root_path: str, new_root_path: str, linux_user: str, php_version: Optional[str] = None) -> str:
