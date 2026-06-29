@@ -1,6 +1,8 @@
 import os
 import sys
 
+import pytest
+
 os.environ.setdefault("APP_ENV", "development")
 os.environ.setdefault("SECRET_KEY", "test-secret-key-for-unit-tests-only")
 os.environ.setdefault("COMMAND_DRY_RUN", "true")
@@ -23,6 +25,45 @@ def test_cron_user_for_website_uses_site_owner_from_home_path():
     website = Website(domain="example.com", root_path="/home/client/example.com", linux_user="")
 
     assert cron.cron_user_for_website(website) == "client"
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        (
+            "php -q /home/minhhien/minhhien.vn/public_html/sieunhim/cron.php profile=default",
+            "php -q /home/minhhien/minhhien.vn/public_html/sieunhim/cron.php profile=default",
+        ),
+        (
+            "php -q /home/minhhien/minhhien.vn/public_html/queue.php",
+            "php -q /home/minhhien/minhhien.vn/public_html/queue.php",
+        ),
+    ],
+)
+def test_cron_command_allows_php_scripts_inside_document_root(command, expected):
+    result = cron._validate_command(command, "/home/minhhien/minhhien.vn/public_html")  # noqa: SLF001
+
+    assert result == expected
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "php -r 'echo 1;'",
+        "php /home/minhhien/minhhien.vn/private.php",
+        "php /home/minhhien/minhhien.vn/public_html/../private.php",
+        "php /home/minhhien/minhhien.vn/public_html/readme.txt",
+    ],
+)
+def test_cron_command_rejects_unsafe_php_commands(command):
+    with pytest.raises(ValueError):
+        cron._validate_command(command, "/home/minhhien/minhhien.vn/public_html")  # noqa: SLF001
+
+
+def test_cron_command_keeps_wp_cli_allow_root_behavior():
+    result = cron._validate_command("wp cron event run --due-now", "/home/client/example.com/public_html")  # noqa: SLF001
+
+    assert result == "wp cron event run --due-now --allow-root"
 
 
 def test_waf_site_rules_render_selected_defaults_and_custom_rules():

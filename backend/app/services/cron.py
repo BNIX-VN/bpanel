@@ -6,7 +6,6 @@ from app.models.entities import Website
 from app.services import site_users
 from app.services.shell import shell
 
-
 CRON_FIELD_RE = r"(?:\*|\d{1,2})(?:[-/,](?:\*|\d{1,2}))*"
 DOMAIN_GREP_RE = re.compile(r"^[a-z0-9.\-]{3,253}$")
 ALLOWED_COMMAND_PREFIXES = (
@@ -15,6 +14,7 @@ ALLOWED_COMMAND_PREFIXES = (
     ("wp", "plugin", "update", "--all"),
     ("wp", "theme", "update", "--all"),
 )
+ALLOWED_PHP_OPTIONS = {"-q"}
 
 
 def _validate_schedule(schedule: str) -> str:
@@ -31,13 +31,36 @@ def _validate_domain(domain: str) -> str:
     return value
 
 
-def _validate_command(command: str) -> str:
+def _validate_php_command(args: list[str], document_root: str | Path) -> str:
+    option_count = 1 if len(args) > 1 and args[1] in ALLOWED_PHP_OPTIONS else 0
+    script_index = 1 + option_count
+    if len(args) <= script_index or args[script_index].startswith("-"):
+        raise ValueError("PHP cron commands must run a .php file; only the -q option is allowed")
+
+    script = Path(args[script_index])
+    if script.suffix.lower() != ".php":
+        raise ValueError("PHP cron commands must run a .php file")
+
+    safe_root = Path(document_root).resolve(strict=False)
+    candidate = (script if script.is_absolute() else safe_root / script).resolve(strict=False)
+    try:
+        candidate.relative_to(safe_root)
+    except ValueError as exc:
+        raise ValueError("PHP cron scripts must be inside this website's public_html directory") from exc
+
+    return " ".join(shlex.quote(arg) for arg in args)
+
+
+def _validate_command(command: str, document_root: str | Path) -> str:
     args = shlex.split(command)
     if not args:
         raise ValueError("Cron command is required")
+    if args[0] == "php":
+        return _validate_php_command(args, document_root)
+
     normalized = [arg for arg in args if arg != "--allow-root"]
     if not any(tuple(normalized[:len(prefix)]) == prefix for prefix in ALLOWED_COMMAND_PREFIXES):
-        raise ValueError("Only safe WP-CLI maintenance commands are allowed")
+        raise ValueError("Only safe WP-CLI maintenance commands or PHP scripts inside this website are allowed")
     return " ".join(shlex.quote(arg) for arg in [*normalized, "--allow-root"])
 
 
@@ -69,10 +92,11 @@ def _parse_cron_line(index: int, line: str) -> dict:
 
 def add_cron(website: Website, schedule: str, command: str) -> str:
     safe_schedule = _validate_schedule(schedule)
-    safe_command = _validate_command(command)
+    document_root = site_users.document_root(website.root_path)
+    safe_command = _validate_command(command, document_root)
     safe_domain = _validate_domain(website.domain)
     marker = f"# bpanel:{safe_domain}"
-    line = f"{safe_schedule} cd {shlex.quote(str(site_users.document_root(website.root_path)))} && {safe_command} {marker}"
+    line = f"{safe_schedule} cd {shlex.quote(str(document_root))} && {safe_command} {marker}"
     cron_user = cron_user_for_website(website)
     if cron_user != "www-data":
         runtime_php_version = website.php_version if (website.app_type or "wordpress") in {"wordpress", "php"} else None
