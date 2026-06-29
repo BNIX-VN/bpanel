@@ -263,6 +263,36 @@ def _safe_domain(domain: str) -> str:
     return safe_domain
 
 
+def _extract_custom_block(content: str) -> str:
+    match = re.search(
+        r"(?s)    # BPANEL CUSTOM BEGIN\n(.*?)\n?    # BPANEL CUSTOM END",
+        content or "",
+    )
+    if not match:
+        return ""
+    lines = match.group(1).splitlines()
+    if not lines:
+        return ""
+    return "\n".join(line[4:] if line.startswith("    ") else line for line in lines).strip()
+
+
+def has_legacy_custom_vhost(domain: str, expected_custom: str = "") -> bool:
+    """Detect old hand/custom vhosts before first managed rewrite."""
+    try:
+        content = _vhost_path(domain).read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return False
+    if "BPANEL REVERSE PROXY BEGIN" in content or "proxy-fastcgi-params.conf" in content:
+        return True
+    if re.search(r"(?mi)^\s*set_real_ip_from\s+", content):
+        return True
+    if re.search(r"(?mi)^\s*location\s+@[A-Za-z0-9._-]+\s*\{", content):
+        return True
+    if re.search(r"(?mi)^\s*rewrite\s+\S+\s+/\S+", content):
+        return True
+    return _extract_custom_block(content) != (expected_custom or "").strip()
+
+
 def _check_log_kind(kind: str) -> str:
     if kind not in ALLOWED_LOG_KINDS:
         raise ValueError("Log kind must be access or error")

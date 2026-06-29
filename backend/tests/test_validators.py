@@ -15,6 +15,7 @@ os.environ.setdefault("COMMAND_DRY_RUN", "true")
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ""))
 
+from app.services import nginx as nginx_service  # noqa: E402
 from app.services.nginx import render_vhost, validate_custom_nginx, validate_full_nginx_config  # noqa: E402
 from app.services.mariadb import _validate_identifier  # noqa: E402
 from app.schemas.schemas import UserCreate, UserPasswordUpdate, WebsiteCreate, WebsiteUpdate  # noqa: E402
@@ -153,6 +154,29 @@ class TestNginxCustomValidator:
                 php_version="8.3",
                 document_root=document_root,
             )
+
+    def test_detects_legacy_reverse_proxy_vhost(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(nginx_service.settings, "nginx_sites_available", str(tmp_path))
+        (tmp_path / "example.com.conf").write_text(
+            "server {\n"
+            "    server_name example.com www.example.com;\n"
+            "    # BPANEL REVERSE PROXY BEGIN\n"
+            "    set_real_ip_from 103.139.154.160;\n"
+            "    # BPANEL REVERSE PROXY END\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        assert nginx_service.has_legacy_custom_vhost("example.com")
+
+    def test_managed_empty_custom_vhost_is_not_legacy_custom(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(nginx_service.settings, "nginx_sites_available", str(tmp_path))
+        (tmp_path / "example.com.conf").write_text(
+            render_vhost("example.com", "/home/testuser/example.com", app_type="php", php_version="8.3"),
+            encoding="utf-8",
+        )
+
+        assert not nginx_service.has_legacy_custom_vhost("example.com")
 
 
 class TestWebsiteCreateSchema:

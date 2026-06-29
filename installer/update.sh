@@ -820,6 +820,14 @@ with SessionLocal() as db:
             result = waf.sync_website_rules(website)
             if result.returncode != 0:
                 print(f"WARNING: could not refresh WAF rules for {website.domain}: {result.stderr or result.stdout}")
+            if (
+                getattr(website, "nginx_config_mode", "managed") != "custom"
+                and nginx.has_legacy_custom_vhost(website.domain, website.nginx_custom or "")
+            ):
+                website.nginx_config_mode = "custom"
+                db.commit()
+                print(f"Preserving detected custom Nginx config for {website.domain}")
+                continue
             if getattr(website, "nginx_config_mode", "managed") == "custom":
                 print(f"Preserving full custom Nginx config for {website.domain}")
                 continue
