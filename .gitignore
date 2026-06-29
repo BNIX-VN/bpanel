@@ -42,3 +42,31 @@ backup/
 
 # BPanel runtime
 backend/bpanel.db
+
+# Landing page
+landing.html
+style.css
+
+# Dev / CI / tooling (not part of release)
+.codex/
+.github/
+.ruff_cache/
+.vendor/
+skills/
+prompts/
+
+# Scripts not part of setup
+check.py
+patch*.py
+do_patch.py
+fix_include.py
+remote_fix.py
+test_ssh.py
+setup.sh
+change_IP.sh
+
+# Test files
+backend/tests/
+
+# Misc
+images.zip
