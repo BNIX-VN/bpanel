@@ -2171,6 +2171,34 @@ function App() {
     </section>;
   }
 
+  function renderWebsiteLogViewer() {
+    if (!logViewer) return null;
+    return <section className="section nginx-modal log-viewer">
+      <div className="section-title">
+        <div className="nginx-config-title">
+          <h2>Nginx logs - {logViewer.domain}</h2>
+          <p className="hint">{logViewer.path || `/var/log/nginx/${logViewer.domain}.${logViewer.kind}.log`}</p>
+        </div>
+        <button className="secondary-light" onClick={() => setLogViewer(null)}><X size={14}/> Close</button>
+      </div>
+      <div className="log-toolbar">
+        <div className="segmented-control">
+          <button className={logViewer.kind === 'access' ? 'active' : ''} disabled={!!loading} onClick={() => loadWebsiteLog(logViewer.id, 'access', logViewer.lines, logViewer.domain)}>Access</button>
+          <button className={logViewer.kind === 'error' ? 'active' : ''} disabled={!!loading} onClick={() => loadWebsiteLog(logViewer.id, 'error', logViewer.lines, logViewer.domain)}>Error</button>
+        </div>
+        <select value={logViewer.lines} onChange={e => loadWebsiteLog(logViewer.id, logViewer.kind, Number(e.target.value), logViewer.domain)} disabled={!!loading}>
+          <option value={100}>100 lines</option>
+          <option value={200}>200 lines</option>
+          <option value={500}>500 lines</option>
+          <option value={1000}>1000 lines</option>
+          <option value={2000}>2000 lines</option>
+        </select>
+        <button disabled={!!loading} onClick={() => loadWebsiteLog(logViewer.id, logViewer.kind, logViewer.lines, logViewer.domain)}><RefreshCw size={14}/> Refresh</button>
+      </div>
+      <pre className="log-output">{logViewer.exists ? (logViewer.content || 'Log is empty.') : 'Log file has not been created yet.'}</pre>
+    </section>;
+  }
+
   function renderWebsites() {
     const wpFieldsEnabled = siteType === 'wordpress' && installWordPress;
     return <>
@@ -2301,33 +2329,10 @@ function App() {
             </div>
           </article>
           {nginxCustomEditing?.id === site.id && renderNginxEditor()}
+          {logViewer?.id === site.id && renderWebsiteLogViewer()}
           </div>)}
         </div>
       </section>
-      {logViewer && <section className="section nginx-modal log-viewer">
-        <div className="section-title">
-          <div className="nginx-config-title">
-            <h2>Nginx logs - {logViewer.domain}</h2>
-            <p className="hint">{logViewer.path || `/var/log/nginx/${logViewer.domain}.${logViewer.kind}.log`}</p>
-          </div>
-          <button className="secondary-light" onClick={() => setLogViewer(null)}><X size={14}/> Close</button>
-        </div>
-        <div className="log-toolbar">
-          <div className="segmented-control">
-            <button className={logViewer.kind === 'access' ? 'active' : ''} disabled={!!loading} onClick={() => loadWebsiteLog(logViewer.id, 'access', logViewer.lines, logViewer.domain)}>Access</button>
-            <button className={logViewer.kind === 'error' ? 'active' : ''} disabled={!!loading} onClick={() => loadWebsiteLog(logViewer.id, 'error', logViewer.lines, logViewer.domain)}>Error</button>
-          </div>
-          <select value={logViewer.lines} onChange={e => loadWebsiteLog(logViewer.id, logViewer.kind, Number(e.target.value), logViewer.domain)} disabled={!!loading}>
-            <option value={100}>100 lines</option>
-            <option value={200}>200 lines</option>
-            <option value={500}>500 lines</option>
-            <option value={1000}>1000 lines</option>
-            <option value={2000}>2000 lines</option>
-          </select>
-          <button disabled={!!loading} onClick={() => loadWebsiteLog(logViewer.id, logViewer.kind, logViewer.lines, logViewer.domain)}><RefreshCw size={14}/> Refresh</button>
-        </div>
-        <pre className="log-output">{logViewer.exists ? (logViewer.content || 'Log is empty.') : 'Log file has not been created yet.'}</pre>
-      </section>}
       {terminalViewer && <section className="section terminal-modal">
         <div className="section-title">
           <h2>Terminal - {terminalViewer.domain}</h2>
