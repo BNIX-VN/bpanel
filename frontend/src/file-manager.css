@@ -415,10 +415,11 @@
 }
 
 /* Ace editor replacement for CodeMirror. */
+.code-editor-host.ace_editor,
 .code-editor-host .ace_editor {
   background: #ffffff;
   color: #0f172a;
-  font: 13px/1.55 Consolas, 'SFMono-Regular', 'Liberation Mono', Menlo, monospace;
+  font: 13px/22px Consolas, 'SFMono-Regular', 'Liberation Mono', Menlo, monospace;
 }
 
 .code-editor-host .ace_gutter {
@@ -448,7 +449,7 @@
 .code-editor-host .bpanel-ace-selected-text {
   position: absolute;
   color: #ffffff;
-  font: 13px/1.55 Consolas, 'SFMono-Regular', 'Liberation Mono', Menlo, monospace;
+  font: 13px/22px Consolas, 'SFMono-Regular', 'Liberation Mono', Menlo, monospace;
   overflow: hidden;
   white-space: pre;
   -webkit-text-fill-color: #ffffff;

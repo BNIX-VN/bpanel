@@ -28,6 +28,43 @@ const HTTP_FLOOD_DEFAULTS = {
 };
 const PHP_VERSION_ORDER = ['5.6', '7.4', '8.0', '8.1', '8.2', '8.3', '8.4', '8.5'];
 const SETTINGS_PAGE_KEYS = ['settings', 'security', 'php', 'firewall', 'waf', 'updates', 'services'];
+const PAGE_ROUTES = {
+  dashboard: '/',
+  websites: '/website',
+  ssl: '/ssl',
+  databases: '/database',
+  cron: '/cron',
+  files: '/filemanager',
+  backups: '/backups',
+  users: '/users',
+  settings: '/settings',
+  security: '/security',
+  php: '/php',
+  firewall: '/firewall',
+  waf: '/waf',
+  updates: '/updates',
+  services: '/services',
+};
+const EDITOR_LINE_HEIGHT = 22;
+const EDITOR_FONT_FAMILY = "Consolas, 'SFMono-Regular', 'Liberation Mono', Menlo, monospace";
+const ROUTE_PAGES = new Map([
+  ...Object.entries(PAGE_ROUTES).map(([pageName, path]) => [path, pageName]),
+  ['/dashboard', 'dashboard'],
+  ['/websites', 'websites'],
+  ['/databases', 'databases'],
+  ['/files', 'files'],
+  ['/file-manager', 'files'],
+  ['/website', 'websites'],
+]);
+
+function pageFromPathname(pathname) {
+  const normalized = `/${String(pathname || '').replace(/^\/+|\/+$/g, '')}`.toLowerCase();
+  return ROUTE_PAGES.get(normalized) || 'dashboard';
+}
+
+function routeForPage(pageName) {
+  return PAGE_ROUTES[pageName] || PAGE_ROUTES.dashboard;
+}
 
 function sortPhpVersions(versions = []) {
   return [...versions].sort((a, b) => {
@@ -160,6 +197,24 @@ function renderAceSelectionTextOverlay(editor, overlay) {
   });
 }
 
+function applyAceLineHeight(editor) {
+  if (!editor?.renderer) return;
+  const { renderer } = editor;
+  const characterWidth = renderer.characterWidth || renderer.$textLayer?.getCharacterWidth?.() || 8;
+  editor.container?.style.setProperty('font-family', EDITOR_FONT_FAMILY);
+  editor.container?.style.setProperty('font-size', '13px');
+  editor.container?.style.setProperty('line-height', `${EDITOR_LINE_HEIGHT}px`);
+  renderer.$textLayer?.$fontMetrics?.checkForSizeChanges?.({ width: characterWidth, height: EDITOR_LINE_HEIGHT });
+  renderer.updateFontSize?.();
+  renderer.updateCharacterSize?.();
+  renderer.lineHeight = EDITOR_LINE_HEIGHT;
+  if (renderer.layerConfig) renderer.layerConfig.lineHeight = EDITOR_LINE_HEIGHT;
+  if (renderer.scroller) renderer.scroller.style.lineHeight = `${EDITOR_LINE_HEIGHT}px`;
+  renderer.updateFull?.(true);
+  renderer.updateText?.();
+  renderer.updateCursor?.();
+}
+
 function CodeEditor({ value, mode, disabled, onChange, onCursorChange }) {
   const hostRef = useRef(null);
   const editorRef = useRef(null);
@@ -196,8 +251,9 @@ function CodeEditor({ value, mode, disabled, onChange, onCursorChange }) {
       enableLiveAutocompletion: true,
       enableMatchBrackets: true,
       enableSnippets: false,
-      fontFamily: "Consolas, 'SFMono-Regular', 'Liberation Mono', Menlo, monospace",
+      fontFamily: EDITOR_FONT_FAMILY,
     });
+    applyAceLineHeight(editor);
     editor.session.setUseWorker(false);
     editor.session.setNewLineMode('unix');
 
@@ -218,8 +274,19 @@ function CodeEditor({ value, mode, disabled, onChange, onCursorChange }) {
     editor.session.on('change', handleChange);
     editor.selection.on('changeCursor', reportCursor);
     editor.selection.on('changeSelection', refreshSelectionOverlay);
-    editor.renderer.on('afterRender', refreshSelectionOverlay);
+    const afterRender = () => {
+      if (Math.round(editor.renderer.lineHeight || 0) !== EDITOR_LINE_HEIGHT) {
+        applyAceLineHeight(editor);
+      }
+      refreshSelectionOverlay();
+    };
+    editor.renderer.on('afterRender', afterRender);
     editorRef.current = editor;
+    requestAnimationFrame(() => {
+      if (destroyed) return;
+      applyAceLineHeight(editor);
+      refreshSelectionOverlay();
+    });
     reportCursor();
     refreshSelectionOverlay();
 
@@ -228,7 +295,7 @@ function CodeEditor({ value, mode, disabled, onChange, onCursorChange }) {
       editor.session.off('change', handleChange);
       editor.selection.off('changeCursor', reportCursor);
       editor.selection.off('changeSelection', refreshSelectionOverlay);
-      editor.renderer.off('afterRender', refreshSelectionOverlay);
+      editor.renderer.off('afterRender', afterRender);
       selectionOverlay.remove();
       editor.destroy();
       editorRef.current = null;
@@ -275,7 +342,7 @@ function App() {
   const [password, setPassword] = useState('');
   const [otpCode, setOtpCode] = useState('');
   const [needsTwoFactor, setNeedsTwoFactor] = useState(false);
-  const [page, setPage] = useState('dashboard');
+  const [page, setPage] = useState(() => pageFromPathname(window.location.pathname));
   const [domain, setDomain] = useState('');
   const [adminEmail, setAdminEmail] = useState('');
   const [wpAdminUser, setWpAdminUser] = useState('admin');
@@ -371,6 +438,18 @@ function App() {
   const [panelAutoUpdate, setPanelAutoUpdate] = useState({ enabled: true, time: '03:30' });
   const noticeTimer = useRef(null);
 
+  const navigateToPage = useCallback((nextPage, options = {}) => {
+    const route = routeForPage(nextPage);
+    if (!route) return;
+    const nextUrl = route;
+    if (!options.replace && window.location.pathname !== route) {
+      window.history.pushState({}, '', nextUrl);
+    } else if (options.replace && window.location.pathname !== route) {
+      window.history.replaceState({}, '', nextUrl);
+    }
+    setPage(nextPage);
+  }, []);
+
   // Auto-dismiss notices after 6 seconds
   useEffect(() => {
     if (notice) {
@@ -451,7 +530,7 @@ function App() {
     setTerminalViewer(null);
     setSelectedWebsiteId('');
     setMobileMenuOpen(false);
-    setPage('dashboard');
+    navigateToPage('dashboard', { replace: true });
     setError('');
     setNotice(message);
   }
@@ -821,7 +900,7 @@ function App() {
       if (retryData?.access_token) {
         setNotice(`Logged in as ${user.username}.`);
         await loadCurrentUser();
-        setPage('websites');
+        navigateToPage('websites');
         await refreshAll();
       }
       return;
@@ -829,7 +908,7 @@ function App() {
     if (data?.access_token) {
       setNotice(`Logged in as ${user.username}.`);
       await loadCurrentUser();
-      setPage('websites');
+      navigateToPage('websites');
       await refreshAll();
     }
   }
@@ -1181,6 +1260,7 @@ function App() {
 
   function fileEditorUrl(websiteId, path) {
     const url = new URL(window.location.href);
+    url.pathname = routeForPage('files');
     url.search = '';
     url.hash = '';
     url.searchParams.set('view', 'editor');
@@ -1353,7 +1433,7 @@ function App() {
     setLogViewer(null);
     setTerminalViewer(null);
     setSelectedWebsiteId(String(site.id));
-    setPage('files');
+    navigateToPage('files');
     setFileListPath('public_html');
     setFileUploadDir('public_html');
     await listFiles('public_html', site.id);
@@ -1945,6 +2025,14 @@ function App() {
       refreshAll();
     }
   }, [isAuthenticated]);
+
+  useEffect(() => {
+    if (standaloneEditor) return undefined;
+    const syncPageFromLocation = () => setPage(pageFromPathname(window.location.pathname));
+    syncPageFromLocation();
+    window.addEventListener('popstate', syncPageFromLocation);
+    return () => window.removeEventListener('popstate', syncPageFromLocation);
+  }, [standaloneEditor]);
 
   useEffect(() => {
     if (!isAuthenticated || !standaloneEditor) return;
@@ -3267,7 +3355,7 @@ function App() {
           <button className="sidebar-close" onClick={() => setMobileMenuOpen(false)} aria-label="Close menu"><X size={18}/></button>
         </div>
         <nav className="sidebar-nav">
-          {mainNavItems.map(([key, label, Icon]) => <button key={key} className={page === key ? 'active' : ''} onClick={() => { setPage(key); setMobileMenuOpen(false); }} aria-current={page === key ? 'page' : undefined}>
+          {mainNavItems.map(([key, label, Icon]) => <button key={key} type="button" className={page === key ? 'active' : ''} onClick={() => navigateToPage(key)} aria-current={page === key ? 'page' : undefined}>
             <Icon size={17}/>{label}
           </button>)}
           <div className={`sidebar-nav-group ${settingsMenuOpen ? 'open' : ''}`}>
@@ -3275,7 +3363,7 @@ function App() {
               <SettingsIcon size={17}/><span>Settings</span><ChevronDown className="sidebar-group-chevron" size={16}/>
             </button>
             {settingsMenuOpen && <div className="sidebar-subnav" id="settings-submenu">
-              {settingsNavItems.map(([key, label, Icon]) => <button key={key} className={page === key ? 'active' : ''} onClick={() => { setPage(key); setMobileMenuOpen(false); }} aria-current={page === key ? 'page' : undefined}>
+              {settingsNavItems.map(([key, label, Icon]) => <button key={key} type="button" className={page === key ? 'active' : ''} onClick={() => navigateToPage(key)} aria-current={page === key ? 'page' : undefined}>
                 <Icon size={16}/>{label}
               </button>)}
             </div>}
