@@ -64,15 +64,15 @@ server {
         fastcgi_read_timeout 300;
     }
 
-    location ~* \.(jpg|jpeg|gif|png|css|js|ico|webp|svg|woff|woff2|ttf|eot)$ {
-        expires -1;
-        access_log off;
-    }
-
     location ~ /\.ht {
         deny all;
     }
 
     # BPANEL CUSTOM INCLUDE
     include {{ custom_include_path }};
+
+    location ~* \.(jpg|jpeg|gif|png|css|js|ico|webp|svg|woff|woff2|ttf|eot)$ {
+        expires -1;
+        access_log off;
+    }
 }

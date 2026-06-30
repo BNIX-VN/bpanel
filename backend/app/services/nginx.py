@@ -220,7 +220,6 @@ DANGEROUS_DIRECTIVES = re.compile(
     # ---- HTTP response control / phishing primitives ----
     r"return\s+|"             # forced redirects, body injection
     r"error_page\s+|"         # remap error responses to attacker URI
-    r"add_header\s+|"         # override security headers
     r"more_set_headers\b|"
     r"more_clear_headers\b|"
     r"auth_request\b|"        # delegate auth to attacker endpoint
@@ -234,6 +233,25 @@ DANGEROUS_DIRECTIVES = re.compile(
     r"ssl_trusted_certificate\b"
     r")"
 )
+
+CACHE_HEADER_NAMES = frozenset(
+    {
+        "cache-control",
+        "cdn-cache-control",
+        "expires",
+        "pragma",
+        "surrogate-control",
+        "vary",
+        "x-cache",
+        "x-cache-status",
+        "x-fastcgi-cache",
+    }
+)
+ADD_HEADER_NAME_RE = re.compile(
+    r"(?mi)(?:^|[;{}])\s*add_header\s+"
+    r"([!#$%&'*+\-.^_`|~0-9A-Za-z]+)(?=\s)"
+)
+TRY_FILES_RE = re.compile(r"(?mi)^\s*try_files\s+([^;{}]+);")
 
 
 def _check_php_version(php_version: str | None) -> str | None:
@@ -270,6 +288,45 @@ def _custom_include_path(domain: str) -> Path:
 
 def custom_include_path(domain: str) -> str:
     return f"/etc/nginx/bpanel/custom/{_safe_domain(domain)}.conf"
+
+
+def _custom_include_block(domain: str) -> str:
+    return f"    # BPANEL CUSTOM INCLUDE\n    include {custom_include_path(domain)};"
+
+
+def _ensure_custom_include_position(content: str, domain: str) -> str:
+    block = _custom_include_block(domain)
+    include_path = re.escape(custom_include_path(domain))
+    existing_block = re.compile(
+        rf"\n?[ \t]*# BPANEL CUSTOM INCLUDE[ \t]*\n"
+        rf"[ \t]*include[ \t]+{include_path};[ \t]*\n?",
+        re.MULTILINE,
+    )
+    cleaned = existing_block.sub("\n", content)
+    main_location_pattern = re.compile(
+        r"\n    location / \{\n"
+        r"(?:        [^\n]*\n)*"
+        r"    \}\n"
+    )
+    main_location_match = main_location_pattern.search(cleaned)
+    main_location = ""
+    if main_location_match:
+        main_location = main_location_match.group(0).strip("\n")
+        cleaned = (
+            cleaned[:main_location_match.start()].rstrip()
+            + "\n"
+            + cleaned[main_location_match.end():].lstrip("\n")
+        )
+    static_location = "\n    location ~* \\.(jpg|jpeg|gif|png|css|js|ico|webp|svg|woff|woff2|ttf|eot)$ {"
+    insert_at = cleaned.find(static_location)
+    if insert_at == -1:
+        insert_at = cleaned.rfind("\n}")
+    if insert_at != -1:
+        before = cleaned[:insert_at].rstrip()
+        after = cleaned[insert_at + 1:].lstrip("\n")
+        main_block = f"\n\n{main_location}" if main_location else ""
+        return f"{before}\n\n{block}{main_block}\n\n{after}"
+    return cleaned.rstrip() + f"\n\n{block}\n"
 
 
 def read_custom_include(domain: str) -> str:
@@ -381,9 +438,27 @@ def validate_custom_nginx(content: Optional[str]) -> str:
     if DANGEROUS_DIRECTIVES.search(normalized):
         raise ValueError(
             "Custom block must not contain disallowed directives (proxy_pass, alias, "
-            "return, add_header, ssl_certificate, ...)"
+            "return, ssl_certificate, ...)"
         )
-    for match in re.finditer(r"(?mi)^\s*try_files\s+(.+);", text):
+    add_header_count = len(re.findall(r"(?mi)(?:^|[;{}])\s*add_header\b", text))
+    add_header_names = ADD_HEADER_NAME_RE.findall(text)
+    if add_header_count != len(add_header_names):
+        raise ValueError("Malformed or unsupported add_header directive")
+    unsupported_headers = sorted(
+        {
+            header
+            for header in add_header_names
+            if header.lower() not in CACHE_HEADER_NAMES
+        },
+        key=str.lower,
+    )
+    if unsupported_headers:
+        raise ValueError(
+            "Custom add_header may only set cache-related headers; disallowed: "
+            + ", ".join(unsupported_headers)
+        )
+    try_files_matches = list(TRY_FILES_RE.finditer(text))
+    for match in try_files_matches:
         arguments = match.group(1).split()
         if not arguments or any(
             token.startswith("file:")
@@ -394,7 +469,7 @@ def validate_custom_nginx(content: Optional[str]) -> str:
         ):
             raise ValueError("Custom try_files directives must not use traversal or external URLs")
     try_files_count = len(re.findall(r"(?mi)(?:^|[;{}])\s*try_files\b", text))
-    if try_files_count != len(re.findall(r"(?mi)^\s*try_files\s+.+;", text)):
+    if try_files_count != len(try_files_matches):
         raise ValueError("Malformed or unsupported try_files directive")
     for match in re.finditer(r"(?mi)^\s*rewrite\s+\S+\s+(\S+)(?:\s+(\S+))?\s*;", text):
         replacement, flag = match.groups()
@@ -788,8 +863,11 @@ def update_custom_block(domain: str, custom_directives: str) -> str:
     if not target.exists():
         raise FileNotFoundError(str(target))
     existing = target.read_text(encoding="utf-8")
+    positioned = _ensure_custom_include_position(existing, domain)
     custom_snapshot = _custom_include_snapshot(domain)
     _write_custom_include(domain, safe_custom)
+    if positioned != existing:
+        target.write_text(positioned, encoding="utf-8")
     _test_and_reload(target, existing, domain, custom_snapshot)
     return custom_include_path(domain)
 

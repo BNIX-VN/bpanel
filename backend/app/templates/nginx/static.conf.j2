@@ -55,12 +55,19 @@ server {
         deny all;
     }
 
+    location ~ /\.ht {
+        deny all;
+    }
+
     # Static-only site: refuse to execute any PHP / CGI even if a script
     # somehow lands in the document root.
     location ~* \.(?:php|phtml|phar|php3|php4|php5|php7|php8|cgi|pl|py)$ {
         deny all;
         return 403;
     }
+
+    # BPANEL CUSTOM INCLUDE
+    include {{ custom_include_path }};
 
     location / {
         try_files $uri $uri/ =404;
@@ -70,11 +77,4 @@ server {
         expires -1;
         access_log off;
     }
-
-    location ~ /\.ht {
-        deny all;
-    }
-
-    # BPANEL CUSTOM INCLUDE
-    include {{ custom_include_path }};
 }

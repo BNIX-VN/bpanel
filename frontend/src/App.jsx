@@ -12,7 +12,7 @@ import 'ace-builds/src-noconflict/mode-php';
 import 'ace-builds/src-noconflict/mode-text';
 import 'ace-builds/src-noconflict/mode-yaml';
 import 'ace-builds/src-noconflict/theme-textmate';
-import { Archive, Check, Clock, Code2, Copy, Cpu, Database, Dices, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, MoveRight, Network, Save, Server, Settings as SettingsIcon, Shield, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
+import { Archive, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, MoveRight, Network, Pencil, Save, Server, Settings as SettingsIcon, Shield, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
 import { Terminal } from './components/Terminal';
 import './style.css';
 import './brand.css';
@@ -27,6 +27,7 @@ const HTTP_FLOOD_DEFAULTS = {
   connection_limit: 60,
 };
 const PHP_VERSION_ORDER = ['5.6', '7.4', '8.0', '8.1', '8.2', '8.3', '8.4', '8.5'];
+const SETTINGS_PAGE_KEYS = ['settings', 'security', 'php', 'firewall', 'waf', 'updates', 'services'];
 
 function sortPhpVersions(versions = []) {
   return [...versions].sort((a, b) => {
@@ -96,6 +97,20 @@ function formatApiErrorItem(item) {
     ? item.loc.filter(part => part !== 'body' && part !== 'query' && part !== 'path').join('.')
     : '';
   return loc ? `${loc}: ${message}` : message;
+}
+
+function NotificationToast({ type, message, onClose }) {
+  if (!message) return null;
+  const isError = type === 'error';
+  const Icon = isError ? AlertCircle : Check;
+  return <div className={`app-toast ${isError ? 'app-toast-error' : 'app-toast-success'}`} role={isError ? 'alert' : 'status'} aria-live={isError ? 'assertive' : 'polite'}>
+    <Icon className="app-toast-icon" size={18}/>
+    <div className="app-toast-content">
+      <strong>{isError ? 'Action failed' : 'Completed'}</strong>
+      <span>{message}</span>
+    </div>
+    <button className="app-toast-close" onClick={onClose} aria-label="Dismiss notification" title="Dismiss notification"><X size={16}/></button>
+  </div>;
 }
 
 function isHostnameDomain(value = '') {
@@ -308,6 +323,8 @@ function App() {
   const [archiveFormat, setArchiveFormat] = useState('zip');
   const [editorCursor, setEditorCursor] = useState({ line: 1, column: 1 });
   const [newUser, setNewUser] = useState({ username: '', email: '', password: '', role: 'end_user', website_limit: 5, storage_limit_mb: 1024 });
+  const [editingUser, setEditingUser] = useState(null);
+  const [editingUserForm, setEditingUserForm] = useState({ email: '', role: 'end_user', website_limit: 5, storage_limit_mb: 1024 });
   const [phpConfig, setPhpConfig] = useState({ php_version: '8.3', display_errors: 'Off', max_execution_time: 300, max_input_time: 600, max_input_vars: 10000, memory_limit: '512M', post_max_size: '1024M', upload_max_filesize: '1024M' });
   const [phpVersions, setPhpVersions] = useState({ installed: ['8.3', '8.4'], supported: ['5.6', '7.4', '8.0', '8.1', '8.2', '8.3', '8.4', '8.5'] });
   const [firewallStatus, setFirewallStatus] = useState(null);
@@ -339,6 +356,7 @@ function App() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState('');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [panelSettings, setPanelSettings] = useState({ app_name: 'BPanel', panel_url: '', panel_hostname: '', panel_port: 2222, logo_url: '', favicon_url: '/favicon.png', ssl_enabled: false });
   const [panelSettingsForm, setPanelSettingsForm] = useState({ app_name: 'BPanel', panel_hostname: '', panel_port: 2222, ssl_enabled: false });
   const [appVersion, setAppVersion] = useState('');
@@ -361,16 +379,6 @@ function App() {
     }
     return () => { if (noticeTimer.current) clearTimeout(noticeTimer.current); };
   }, [notice]);
-
-  useEffect(() => {
-    const message = formatApiError(notice, '').trim();
-    if (message) window.alert(message);
-  }, [notice]);
-
-  useEffect(() => {
-    const message = formatApiError(error, '').trim();
-    if (message) window.alert(message);
-  }, [error]);
 
   function readCookie(name) {
     const match = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/[$()*+./?[\\\]^{|}]/g, '\\$&') + '=([^;]*)'));
@@ -711,6 +719,52 @@ function App() {
     if (data) {
       setNotice(`Created user ${data.username}`);
       setNewUser({ username: '', email: '', password: '', role: 'end_user', website_limit: 5, storage_limit_mb: 1024 });
+      await loadUsers();
+    }
+  }
+
+  function startEditingUser(user) {
+    setEditingUser(user);
+    setEditingUserForm({
+      email: user.email || '',
+      role: user.role || 'end_user',
+      website_limit: user.website_limit ?? 5,
+      storage_limit_mb: user.storage_limit_mb ?? 1024,
+    });
+  }
+
+  function cancelEditingUser() {
+    setEditingUser(null);
+    setEditingUserForm({ email: '', role: 'end_user', website_limit: 5, storage_limit_mb: 1024 });
+  }
+
+  async function updatePanelUser() {
+    if (!editingUser) return;
+    const websiteLimit = Number(editingUserForm.website_limit);
+    const storageLimitMb = Number(editingUserForm.storage_limit_mb);
+    if (!editingUserForm.email.trim()) { setError('Email is required.'); return; }
+    if (!Number.isInteger(websiteLimit) || websiteLimit < 0 || websiteLimit > 1000) {
+      setError('Website limit must be between 0 and 1000.');
+      return;
+    }
+    if (!Number.isInteger(storageLimitMb) || storageLimitMb < 0 || storageLimitMb > 1024 * 1024) {
+      setError('Storage limit must be between 0 and 1048576 MB.');
+      return;
+    }
+    const payload = {
+      email: editingUserForm.email.trim(),
+      website_limit: websiteLimit,
+      storage_limit_mb: storageLimitMb,
+    };
+    if (editingUser.id !== currentUser?.id) payload.role = editingUserForm.role;
+    const data = await request(`/users/${editingUser.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }, `Updating ${editingUser.username}...`);
+    if (data) {
+      setNotice(`Updated user ${data.username}.`);
+      if (data.id === currentUser?.id) setCurrentUser(prev => ({ ...prev, ...data }));
+      cancelEditingUser();
       await loadUsers();
     }
   }
@@ -1958,13 +2012,17 @@ function App() {
 
   useEffect(() => { setMobileMenuOpen(false); }, [page]);
 
+  useEffect(() => {
+    if (SETTINGS_PAGE_KEYS.includes(page)) setSettingsMenuOpen(true);
+  }, [page]);
+
   const isAdmin = currentUser?.role === 'admin';
 
   function roleLabel(role) {
     return role === 'admin' ? 'Admin' : 'End user';
   }
 
-  const navItems = [
+  const mainNavItems = [
     ['dashboard', 'Dashboard', Home],
     ['websites', 'Websites', Globe],
     ['ssl', 'SSL', Lock],
@@ -1972,18 +2030,33 @@ function App() {
     ['cron', 'Cron', Clock],
     ['files', 'File manager', FolderOpen],
     ['backups', 'Backups', Archive],
+    ...(isAdmin ? [['users', 'Panel users', Users]] : []),
+  ];
+
+  const settingsNavItems = [
+    ...(isAdmin ? [['settings', 'Panel settings', SettingsIcon]] : []),
     ['security', 'Security', Shield],
     ...(isAdmin ? [['php', 'PHP config', Code2]] : []),
     ...(isAdmin ? [['firewall', 'Firewall', Shield]] : []),
     ...(isAdmin ? [['waf', 'WAF', Shield]] : []),
     ...(isAdmin ? [['updates', 'Updates', RefreshCw]] : []),
     ['services', 'Services Status', Server],
-    ...(isAdmin ? [['users', 'Panel users', Users]] : []),
-    ...(isAdmin ? [['settings', 'Settings', SettingsIcon]] : []),
   ];
 
+  const navItems = [...mainNavItems, ...settingsNavItems];
   const currentSite = websites.find(site => String(site.id) === String(selectedWebsiteId));
   const activeNavItem = navItems.find(([key]) => key === page) || navItems[0];
+  const settingsIsActive = SETTINGS_PAGE_KEYS.includes(page);
+
+  function renderNotifications() {
+    const errorMessage = formatApiError(error, '').trim();
+    const noticeMessage = formatApiError(notice, '').trim();
+    if (!errorMessage && !noticeMessage) return null;
+    return <div className="app-toast-stack" aria-label="Notifications">
+      <NotificationToast type="error" message={errorMessage} onClose={() => setError('')} />
+      <NotificationToast type="success" message={noticeMessage} onClose={() => setNotice('')} />
+    </div>;
+  }
 
   function websiteUrl(site) {
     const value = (site?.domain || '').trim();
@@ -3059,11 +3132,33 @@ function App() {
             <span className="user-metric"><Globe size={13}/>{user.website_limit} sites</span>
             <span className="user-metric"><HardDrive size={13}/>{storageUsageText(user)}</span>
             <div className="row-actions">
+              <button className="mini secondary-light" disabled={!!loading} onClick={() => startEditingUser(user)}><Pencil size={14}/> Edit</button>
               <button className="mini secondary-light" disabled={!!loading} onClick={() => quickLoginUser(user)}><LogIn size={14}/> Login as</button>
               <button className="mini secondary-light" disabled={!!loading} onClick={() => changeUserPassword(user)}><KeyRound size={14}/> Password</button>
               {user.totp_enabled && user.id !== currentUser?.id && <button className="mini secondary-light" disabled={!!loading} onClick={() => resetUserTwoFactor(user)}>Reset 2FA</button>}
               {user.id !== currentUser?.id && <button className="mini danger" disabled={!!loading} onClick={() => deletePanelUser(user)}><Trash2 size={14}/></button>}
             </div>
+            {editingUser?.id === user.id && <div className="user-edit-panel">
+              <div className="user-edit-heading">
+                <div><strong>Edit {user.username}</strong><small>
+                  {user.id === currentUser?.id ? 'Role is locked for the active admin session.' : 'Role changes sign the user out of existing sessions.'}
+                  {editingUserForm.role === 'admin' ? ' Admin accounts bypass website and storage limits.' : ''}
+                </small></div>
+                <button className="user-edit-close secondary-light" onClick={cancelEditingUser} aria-label="Close user editor" title="Close user editor"><X size={16}/></button>
+              </div>
+              <div className="user-edit-grid">
+                <label><span>Email</span><input type="email" value={editingUserForm.email} onChange={e => setEditingUserForm(prev => ({ ...prev, email: e.target.value }))} /></label>
+                <label><span>Role</span><select value={editingUserForm.role} disabled={user.id === currentUser?.id} onChange={e => setEditingUserForm(prev => ({ ...prev, role: e.target.value }))}>
+                  <option value="end_user">End user</option><option value="admin">Admin</option>
+                </select></label>
+                <label><span>Website limit</span><input type="number" min="0" max="1000" value={editingUserForm.website_limit} onChange={e => setEditingUserForm(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
+                <label><span>Storage limit (MB)</span><input type="number" min="0" max="1048576" value={editingUserForm.storage_limit_mb} onChange={e => setEditingUserForm(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
+              </div>
+              <div className="user-edit-actions">
+                <button className="secondary-light" onClick={cancelEditingUser}>Cancel</button>
+                <button disabled={!!loading || !editingUserForm.email.trim()} onClick={updatePanelUser}><Save size={14}/> Save changes</button>
+              </div>
+            </div>}
           </div>)}
         </div>
       </section>
@@ -3091,8 +3186,7 @@ function App() {
         </div>
       </header>
       {loading && <div className="loading">{loading}</div>}
-      {error && <div className="error"><AlertCircle size={16} style={{display:'inline',verticalAlign:'middle',marginRight:6}}/>{formatApiError(error, '')}</div>}
-      {notice && <div className="notice">{formatApiError(notice, '')}</div>}
+      {renderNotifications()}
       <section className="standalone-editor-body">
         <CodeEditor
           value={fileContent}
@@ -3149,9 +3243,8 @@ function App() {
           {needsTwoFactor && <input value={otpCode} onChange={e => setOtpCode(e.target.value)} placeholder="Authentication code" inputMode="numeric" autoComplete="one-time-code" onKeyDown={e => { if (e.key === 'Enter') login(); }} />}
           <button disabled={!!loading || !username || !password} onClick={login}>{loading ? 'Logging in...' : 'Login'}</button>
         </div>
-        {error && <div className="error"><AlertCircle size={16} style={{display:'inline',verticalAlign:'middle',marginRight:6}}/>{formatApiError(error, '')}</div>}
-        {notice && <div className="notice">{formatApiError(notice, '')}</div>}
       </section>
+      {renderNotifications()}
     </main>;
   }
 
@@ -3174,9 +3267,19 @@ function App() {
           <button className="sidebar-close" onClick={() => setMobileMenuOpen(false)} aria-label="Close menu"><X size={18}/></button>
         </div>
         <nav className="sidebar-nav">
-          {navItems.map(([key, label, Icon]) => <button key={key} className={page === key ? 'active' : ''} onClick={() => { setPage(key); setMobileMenuOpen(false); }} aria-current={page === key ? 'page' : undefined}>
+          {mainNavItems.map(([key, label, Icon]) => <button key={key} className={page === key ? 'active' : ''} onClick={() => { setPage(key); setMobileMenuOpen(false); }} aria-current={page === key ? 'page' : undefined}>
             <Icon size={17}/>{label}
           </button>)}
+          <div className={`sidebar-nav-group ${settingsMenuOpen ? 'open' : ''}`}>
+            <button className={`sidebar-group-toggle ${settingsIsActive ? 'active' : ''}`} onClick={() => setSettingsMenuOpen(open => !open)} aria-expanded={settingsMenuOpen} aria-controls="settings-submenu">
+              <SettingsIcon size={17}/><span>Settings</span><ChevronDown className="sidebar-group-chevron" size={16}/>
+            </button>
+            {settingsMenuOpen && <div className="sidebar-subnav" id="settings-submenu">
+              {settingsNavItems.map(([key, label, Icon]) => <button key={key} className={page === key ? 'active' : ''} onClick={() => { setPage(key); setMobileMenuOpen(false); }} aria-current={page === key ? 'page' : undefined}>
+                <Icon size={16}/>{label}
+              </button>)}
+            </div>}
+          </div>
         </nav>
         {appVersion && <div className="sidebar-version">v{appVersion}</div>}
       </aside>
@@ -3200,11 +3303,10 @@ function App() {
         <div className="content-body">
           {renderPage()}
           {loading && <div className="loading"><span></span>{loading}</div>}
-          {error && <div className="error">{formatApiError(error, '')}</div>}
-          {notice && <div className="notice">{formatApiError(notice, '')}</div>}
         </div>
       </div>
     </section>
+    {renderNotifications()}
   </main>;
 }
 

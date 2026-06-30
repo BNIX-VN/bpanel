@@ -93,10 +93,6 @@ server {
         deny all;
     }
 
-    location / {
-        try_files $uri $uri/ /index.php?$args;
-    }
-
     location ~ \.php$ {
         try_files $uri =404;
         include fastcgi_params;
@@ -116,15 +112,19 @@ server {
         # BPANEL FASTCGI CACHE LOCATION END
     }
 
-    location ~* \.(jpg|jpeg|gif|png|css|js|ico|webp|svg|woff|woff2|ttf|eot)$ {
-        expires -1;
-        access_log off;
-    }
-
     location ~ /\.ht {
         deny all;
     }
 
     # BPANEL CUSTOM INCLUDE
     include {{ custom_include_path }};
+
+    location / {
+        try_files $uri $uri/ /index.php?$args;
+    }
+
+    location ~* \.(jpg|jpeg|gif|png|css|js|ico|webp|svg|woff|woff2|ttf|eot)$ {
+        expires -1;
+        access_log off;
+    }
 }
