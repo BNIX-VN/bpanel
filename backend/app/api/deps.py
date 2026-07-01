@@ -16,6 +16,14 @@ from app.models.entities import RevokedToken, User
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
 
 
+def _credentials_exception() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
 def _resolve_token(
     bearer: Optional[str],
     cookie_token: Optional[str],
@@ -27,21 +35,8 @@ def _resolve_token(
     return None
 
 
-def get_current_user(
-    request: Request,
-    bearer_token: Optional[str] = Depends(oauth2_scheme),
-    session_cookie: Optional[str] = Cookie(default=None, alias="bpanel_session"),
-    db: Session = Depends(get_db),
-) -> User:
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    token = _resolve_token(bearer_token, session_cookie)
-    if not token:
-        raise credentials_exception
-
+def _user_from_token(token: str, db: Session) -> tuple[User, dict]:
+    credentials_exception = _credentials_exception()
     try:
         payload = jwt.decode(token, settings.secret_key, algorithms=[ALGORITHM])
         username: Optional[str] = payload.get("sub")
@@ -59,10 +54,15 @@ def get_current_user(
         raise credentials_exception
     if jti and db.query(RevokedToken.id).filter(RevokedToken.jti == jti).first():
         raise credentials_exception
+    return user, payload
 
+
+def _attach_auth_state(request: Request, token: str, payload: dict) -> None:
     request.state.jwt_payload = payload
     request.state.jwt_token = token
 
+
+def _enforce_cookie_csrf(request: Request, bearer_token: Optional[str], session_cookie: Optional[str]) -> None:
     # When the request was authenticated via cookie (browser flow) we ALSO
     # require a CSRF token on mutating methods. Bearer auth (CLI/SDK) is
     # exempt because it cannot be triggered cross-origin without an explicit
@@ -83,4 +83,37 @@ def get_current_user(
                     detail="CSRF token missing or invalid",
                 )
 
+
+def get_current_user_optional(
+    request: Request,
+    bearer_token: Optional[str] = Depends(oauth2_scheme),
+    session_cookie: Optional[str] = Cookie(default=None, alias="bpanel_session"),
+    db: Session = Depends(get_db),
+) -> Optional[User]:
+    token = _resolve_token(bearer_token, session_cookie)
+    if not token:
+        return None
+    try:
+        user, payload = _user_from_token(token, db)
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_401_UNAUTHORIZED:
+            return None
+        raise
+    _attach_auth_state(request, token, payload)
+    _enforce_cookie_csrf(request, bearer_token, session_cookie)
+    return user
+
+
+def get_current_user(
+    request: Request,
+    bearer_token: Optional[str] = Depends(oauth2_scheme),
+    session_cookie: Optional[str] = Cookie(default=None, alias="bpanel_session"),
+    db: Session = Depends(get_db),
+) -> User:
+    token = _resolve_token(bearer_token, session_cookie)
+    if not token:
+        raise _credentials_exception()
+    user, payload = _user_from_token(token, db)
+    _attach_auth_state(request, token, payload)
+    _enforce_cookie_csrf(request, bearer_token, session_cookie)
     return user

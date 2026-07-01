@@ -6,7 +6,7 @@ from collections import defaultdict, deque
 from datetime import datetime
 from io import BytesIO
 from threading import Lock
-from typing import Deque, Dict
+from typing import Deque, Dict, Optional
 
 import pyotp
 import qrcode
@@ -16,7 +16,7 @@ from redis import Redis
 from redis.exceptions import RedisError
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, get_current_user_optional
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.permissions import Role, ensure_role
@@ -24,6 +24,7 @@ from app.core.security import create_access_token, hash_password, needs_rehash, 
 from app.core.secrets import decrypt, encrypt
 from app.models.entities import RevokedToken, User
 from app.schemas.schemas import LoginResponse, TwoFactorCode, TwoFactorSetup, TwoFactorStatus
+from app.services import storage_quota
 from app.services.audit import log_action
 
 # Hard caps for credentials submitted to /auth/login. bcrypt accepts at most
@@ -438,6 +439,29 @@ def logout(
     db.commit()
     _clear_session_cookies(response)
     return {"ok": True}
+
+
+@router.get("/session")
+def session_status(
+    response: Response,
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
+    if current_user is None:
+        _clear_session_cookies(response)
+        return {"authenticated": False, "user": None}
+    user_data = {
+        "id": current_user.id,
+        "username": current_user.username,
+        "email": current_user.email,
+        "role": current_user.role,
+        "is_active": current_user.is_active,
+        "website_limit": current_user.website_limit,
+        "storage_limit_mb": current_user.storage_limit_mb,
+        "totp_enabled": current_user.totp_enabled,
+    }
+    user_data.update(storage_quota.storage_usage_summary(db, current_user))
+    return {"authenticated": True, "user": user_data}
 
 
 @router.post("/impersonate/{user_id}", response_model=LoginResponse)

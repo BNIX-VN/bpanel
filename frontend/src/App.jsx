@@ -464,6 +464,15 @@ function App() {
     return match ? decodeURIComponent(match[1]) : '';
   }
 
+  function clearReadableSessionCookies() {
+    try {
+      document.cookie = 'bpanel_csrf=; Max-Age=0; path=/; SameSite=Lax';
+      if (window.location.protocol === 'https:') {
+        document.cookie = 'bpanel_csrf=; Max-Age=0; path=/; SameSite=Lax; Secure';
+      }
+    } catch {}
+  }
+
   function currentPanelHost() {
     return window.location.hostname || '';
   }
@@ -494,6 +503,7 @@ function App() {
   function clearSession(message = 'Your session expired. Please log in again.') {
     // Old localStorage token from a previous deploy: nuke it for safety.
     try { localStorage.removeItem('token'); } catch {}
+    clearReadableSessionCookies();
     setIsAuthenticated(false);
     setCurrentUser(null);
     setNeedsTwoFactor(false);
@@ -628,17 +638,33 @@ function App() {
     clearSession('Logged out.');
   }
 
-  async function loadCurrentUser() {
+  async function loadCurrentUser({ clearOnUnauthorized = true } = {}) {
     try {
-      const res = await fetch(`${API}/users/me`, { credentials: 'include' });
+      const res = await fetch(`${API}/auth/session`, { credentials: 'include' });
       if (!res.ok) {
-        if (res.status === 401) clearSession('Session expired.');
+        if (res.status === 401) {
+          if (clearOnUnauthorized) clearSession('Session expired.');
+          else {
+            clearReadableSessionCookies();
+            setCurrentUser(null);
+            setIsAuthenticated(false);
+          }
+        }
         return null;
       }
       const data = await res.json();
-      setCurrentUser(data);
+      if (!data.authenticated || !data.user) {
+        if (clearOnUnauthorized) clearSession('Session expired.');
+        else {
+          clearReadableSessionCookies();
+          setCurrentUser(null);
+          setIsAuthenticated(false);
+        }
+        return null;
+      }
+      setCurrentUser(data.user);
       setIsAuthenticated(true);
-      return data;
+      return data.user;
     } catch {
       setCurrentUser(null);
       return null;
@@ -733,17 +759,12 @@ function App() {
     return <span className={classes}>{panelSettings.logo_url ? <img src={panelSettings.logo_url} alt="" /> : brandInitials()}</span>;
   }
 
-  // Bootstrap: try to restore session from the HttpOnly cookie (set previously
-  // and still valid). If /users/me returns 200 we are authenticated.
+  // Bootstrap: ask for session state without turning an anonymous visit into
+  // a console-level 401.
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch(`${API}/users/me`, { credentials: 'include' });
-        if (res.ok) {
-          const data = await res.json();
-          setCurrentUser(data);
-          setIsAuthenticated(true);
-        }
+        await loadCurrentUser({ clearOnUnauthorized: false });
       } catch {}
       finally { setBootstrapping(false); }
     })();
