@@ -68,48 +68,6 @@ SecRule ARGS:author "@rx ^[0-9]+$" "id:1001103,phase:2,deny,status:403,log,msg:'
         "description": "Blocks direct access to installation and upgrade scripts after deployment.",
         "rules": """SecRule REQUEST_URI "@rx (?i)(?:/wp-admin/install\\.php|/wp-admin/upgrade\\.php|/wp-admin/setup-config\\.php)" "id:1001104,phase:1,deny,status:403,log,msg:'BPanel blocked WordPress installer probe'""",
     },
-    {
-        "id": "laravel-sensitive-files",
-        "category": "Laravel",
-        "title": "Laravel sensitive paths",
-        "description": "Blocks .env, artisan, vendor, storage, and bootstrap cache probes.",
-        "rules": """SecRule REQUEST_URI "@rx (?i)(?:^/(?:artisan|server\\.php)$|/\\.env(?:\\.|$)|/vendor/|/storage/(?:logs|framework|app)/|/bootstrap/cache/)" "id:1001201,phase:1,deny,status:403,log,msg:'BPanel blocked Laravel sensitive path'""",
-    },
-    {
-        "id": "laravel-debug-rce",
-        "category": "Laravel",
-        "title": "Laravel debug/RCE probes",
-        "description": "Blocks common Ignition/debug and PHP stream wrapper exploit payloads.",
-        "rules": """SecRule REQUEST_URI|ARGS|REQUEST_BODY "@rx (?i)(?:_ignition/execute-solution|_debugbar|php://filter|phar://|expect://|data://)" "id:1001202,phase:2,deny,status:403,log,msg:'BPanel blocked Laravel debug/RCE probe'""",
-    },
-    {
-        "id": "whmcs-sensitive-files",
-        "category": "WHMCS",
-        "title": "WHMCS sensitive files",
-        "description": "Blocks configuration, attachments, downloads, and template cache probes.",
-        "rules": """SecRule REQUEST_URI "@rx (?i)(?:/configuration\\.php|/(?:attachments|downloads|templates_c|crons)/(?:.*\\.php|.*)?|/vendor/|/install/)" "id:1001301,phase:1,deny,status:403,log,msg:'BPanel blocked WHMCS sensitive path'""",
-    },
-    {
-        "id": "whmcs-admin-probes",
-        "category": "WHMCS",
-        "title": "WHMCS admin/install probes",
-        "description": "Blocks common WHMCS installer and admin utility probes.",
-        "rules": """SecRule REQUEST_URI "@rx (?i)(?:/(?:admin|admincp|whmcs-admin)/(?:setup|install|upgrade)|/modules/.*/(?:callback|hook)\\.php\\.bak)" "id:1001302,phase:1,deny,status:403,log,msg:'BPanel blocked WHMCS admin probe'""",
-    },
-    {
-        "id": "codeigniter-sensitive-paths",
-        "category": "CodeIgniter",
-        "title": "CodeIgniter sensitive paths",
-        "description": "Blocks application, system, writable, cache, and log paths.",
-        "rules": """SecRule REQUEST_URI "@rx (?i)(?:/(?:application|system)/(?:config|logs|cache|core|helpers|libraries)/|/writable/(?:logs|cache|session|uploads)/|/app/Config/)" "id:1001401,phase:1,deny,status:403,log,msg:'BPanel blocked CodeIgniter sensitive path'""",
-    },
-    {
-        "id": "codeigniter-env-debug",
-        "category": "CodeIgniter",
-        "title": "CodeIgniter env/debug probes",
-        "description": "Blocks env files, debug toolbar, and profiler probes.",
-        "rules": """SecRule REQUEST_URI|ARGS "@rx (?i)(?:/\\.env|/index\\.php/_debugbar|/index\\.php/profiler|CI_ENVIRONMENT\\s*=)" "id:1001402,phase:2,deny,status:403,log,msg:'BPanel blocked CodeIgniter env/debug probe'""",
-    },
 ]
 
 
