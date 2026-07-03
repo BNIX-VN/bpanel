@@ -83,10 +83,26 @@ def _assert_tree_write_allowed(path: Path, action: str, allow_executable: bool =
     if path.is_symlink():
         raise ValueError("Symlinks are not allowed")
     if path.is_dir():
-        for item in path.rglob("*"):
-            if item.is_symlink():
+        try:
+            items = list(path.rglob("*"))
+        except PermissionError:
+            # bpanel process may not have read access into site-user directories.
+            # The actual delete is executed via the privileged helper which runs
+            # as the site user, so a PermissionError here only means we cannot
+            # pre-validate — not that the operation is unsafe.
+            return
+        for item in items:
+            try:
+                is_sym = item.is_symlink()
+            except OSError:
+                continue
+            if is_sym:
                 raise ValueError("Symlinks are not allowed")
-            if item.is_file():
+            try:
+                is_file = item.is_file()
+            except OSError:
+                continue
+            if is_file:
                 _assert_write_allowed(item, action, allow_executable)
         return
     _assert_write_allowed(path, action, allow_executable)
@@ -96,10 +112,22 @@ def _assert_tree_read_allowed(path: Path, action: str, allow_sensitive: bool = F
     if path.is_symlink():
         raise ValueError("Symlinks are not allowed")
     if path.is_dir():
-        for item in path.rglob("*"):
-            if item.is_symlink():
+        try:
+            items = list(path.rglob("*"))
+        except PermissionError:
+            return
+        for item in items:
+            try:
+                is_sym = item.is_symlink()
+            except OSError:
+                continue
+            if is_sym:
                 raise ValueError("Symlinks are not allowed")
-            if item.is_file():
+            try:
+                is_file = item.is_file()
+            except OSError:
+                continue
+            if is_file:
                 _assert_sensitive_read_allowed(item, action, allow_sensitive)
         return
     _assert_sensitive_read_allowed(path, action, allow_sensitive)
@@ -410,7 +438,14 @@ def delete_file(website: Website, relative_path: str, allow_executable: bool = F
     if target.is_dir():
         raise ValueError("Cannot delete directory")
     _assert_write_allowed(target, "Deleting", allow_executable)
-    target.unlink(missing_ok=True)
+    if website.linux_user:
+        shell.privileged(
+            "rm-site",
+            helper_args=[str(target)],
+            fallback=["rm", "-f", "--", str(target)],
+        )
+    else:
+        target.unlink(missing_ok=True)
     _clear_fastcgi_cache()
     return str(target)
 
@@ -435,10 +470,24 @@ def delete_entries(website: Website, paths: Iterable[str], allow_executable: boo
         if any(parent in target.parents for parent in deleted_dirs):
             continue
         if target.is_dir():
-            shutil.rmtree(target)
+            if website.linux_user:
+                shell.privileged(
+                    "rm-site",
+                    helper_args=[str(target)],
+                    fallback=["rm", "-rf", "--", str(target)],
+                )
+            else:
+                shutil.rmtree(target)
             deleted_dirs.append(target)
         else:
-            target.unlink(missing_ok=True)
+            if website.linux_user:
+                shell.privileged(
+                    "rm-site",
+                    helper_args=[str(target)],
+                    fallback=["rm", "-f", "--", str(target)],
+                )
+            else:
+                target.unlink(missing_ok=True)
         deleted.append(str(target))
     _clear_fastcgi_cache()
     return deleted
@@ -643,10 +692,39 @@ def _is_source_archive_target(target: Path, archive_file: Path) -> bool:
     return target.resolve() == archive_file.resolve()
 
 
+def _get_implied_dirs(archive: zipfile.ZipFile) -> set[str]:
+    implied = set()
+    for info in archive.infolist():
+        normalized = info.filename.replace('\\', '/')
+        parts = normalized.split('/')
+        for i in range(1, len(parts)):
+            implied.add('/'.join(parts[:i]))
+    return implied
+
+
+def _zip_info_is_dir(info: zipfile.ZipInfo, implied_dirs: Optional[set[str]] = None) -> bool:
+    """Return True if the ZIP entry is a directory.
+
+    Some archivers (e.g. zip on Linux) write directory entries *without* a
+    trailing slash, so `ZipInfo.is_dir()` returns False even though the
+    external_attr mode bits say S_ISDIR.  We check both to catch those.
+    """
+    normalized = info.filename.replace('\\', '/')
+    if info.is_dir() or normalized.endswith('/'):
+        return True
+    mode = (info.external_attr >> 16) & 0o170000
+    if bool(stat.S_ISDIR(mode)) and info.file_size == 0:
+        return True
+    if implied_dirs and info.file_size == 0 and normalized.rstrip('/') in implied_dirs:
+        return True
+    return False
+
+
 def _zip_uncompressed_size(
     archive: zipfile.ZipFile,
     destination: Path,
     archive_file: Path,
+    implied_dirs: Optional[set[str]] = None,
     allow_executable: bool = False,
 ) -> int:
     total = 0
@@ -661,9 +739,15 @@ def _zip_uncompressed_size(
             continue
         if target.exists() and target.is_symlink():
             raise ValueError("Refusing to overwrite a symlink")
-        if info.is_dir():
+        if _zip_info_is_dir(info, implied_dirs):
             if target.exists() and not target.is_dir():
-                raise ValueError("Archive directory conflicts with an existing file")
+                try:
+                    if target.stat().st_size == 0:
+                        pass # allow overwriting empty file
+                    else:
+                        raise ValueError("Archive directory conflicts with an existing file")
+                except OSError:
+                    raise ValueError("Archive directory conflicts with an existing file")
             continue
         if target.exists() and target.is_dir():
             raise ValueError("Archive file conflicts with an existing directory")
@@ -706,15 +790,34 @@ def _tar_uncompressed_size(
     return total
 
 
-def _extract_zip_archive(archive: zipfile.ZipFile, destination: Path, archive_file: Path) -> None:
+def _extract_zip_archive(archive: zipfile.ZipFile, destination: Path, archive_file: Path, implied_dirs: Optional[set[str]] = None) -> None:
     for info in archive.infolist():
         target = _validate_archive_destination(destination, info.filename)
         if _is_source_archive_target(target, archive_file):
             continue
-        if info.is_dir():
+        if _zip_info_is_dir(info, implied_dirs):
+            if target.exists() and not target.is_dir():
+                try:
+                    target.unlink()
+                except OSError:
+                    pass
             target.mkdir(parents=True, exist_ok=True)
             continue
-        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+        except (FileExistsError, NotADirectoryError):
+            # If the parent exists as an empty file, we unlink and retry (useful for broken previous extractions or messy zips)
+            for p in reversed(target.parents):
+                if p == destination or p in destination.parents:
+                    break
+                if p.exists() and not p.is_dir():
+                    try:
+                        if p.stat().st_size == 0:
+                            p.unlink()
+                            p.mkdir(parents=True, exist_ok=True)
+                    except OSError:
+                        pass
+            target.parent.mkdir(parents=True, exist_ok=True)
         try:
             with archive.open(info) as source, target.open("wb") as output:
                 shutil.copyfileobj(source, output, length=1024 * 1024)
@@ -757,10 +860,11 @@ def extract_archive(
     suffix = archive_file.name.lower()
     if suffix.endswith(".zip"):
         with zipfile.ZipFile(archive_file) as archive:
-            incoming = _zip_uncompressed_size(archive, destination, archive_file, allow_executable)
+            implied_dirs = _get_implied_dirs(archive)
+            incoming = _zip_uncompressed_size(archive, destination, archive_file, implied_dirs, allow_executable)
             if quota_check:
                 quota_check(incoming, 0)
-            _extract_zip_archive(archive, destination, archive_file)
+            _extract_zip_archive(archive, destination, archive_file, implied_dirs)
     elif suffix.endswith(".tar.gz") or suffix.endswith(".tgz"):
         with tarfile.open(archive_file, "r:gz") as archive:
             incoming = _tar_uncompressed_size(archive, destination, archive_file, allow_executable)

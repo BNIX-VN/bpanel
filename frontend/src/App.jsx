@@ -2353,6 +2353,20 @@ function App() {
     </section>;
   }
 
+
+  function renderWebsiteTerminal() {
+    if (!terminalViewer) return null;
+    return <section className="section nginx-modal terminal-modal">
+      <div className="section-title">
+        <h2>Terminal - {terminalViewer.domain}</h2>
+        <button className="secondary-light" onClick={() => setTerminalViewer(null)}><X size={14}/> Close</button>
+      </div>
+      <div style={{ height: '500px', marginTop: '8px' }}>
+        <Terminal websiteId={terminalViewer.id} apiBase={API} />
+      </div>
+    </section>;
+  }
+
   function renderWebsiteLogViewer() {
     if (!logViewer) return null;
     return <section className="section nginx-modal log-viewer">
@@ -2512,18 +2526,10 @@ function App() {
           </article>
           {nginxCustomEditing?.id === site.id && renderNginxEditor()}
           {logViewer?.id === site.id && renderWebsiteLogViewer()}
+          {terminalViewer?.id === site.id && renderWebsiteTerminal()}
           </div>)}
         </div>
       </section>
-      {terminalViewer && <section className="section terminal-modal">
-        <div className="section-title">
-          <h2>Terminal - {terminalViewer.domain}</h2>
-          <button className="secondary-light" onClick={() => setTerminalViewer(null)}><X size={14}/> Close</button>
-        </div>
-        <div style={{ height: '500px', marginTop: '8px' }}>
-          <Terminal websiteId={terminalViewer.id} apiBase={API} />
-        </div>
-      </section>}
     </>;
   }
 

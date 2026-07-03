@@ -106,6 +106,7 @@ async def exec_command(
         website.linux_user,
         request.command,
         cwd=terminal.default_cwd(website.root_path),
+        php_version=getattr(website, "php_version", None),
     )
 
     return TerminalExecResponse(
@@ -269,6 +270,7 @@ async def terminal_websocket(
                     website.linux_user,
                     command,
                     cwd=cwd,
+                    php_version=getattr(website, "php_version", None),
                 )
                 await websocket.send_json({
                     "type": "output",

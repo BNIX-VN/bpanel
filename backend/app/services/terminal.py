@@ -7,6 +7,7 @@ ordinary arguments instead of shell syntax.
 """
 
 import os
+import re
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
@@ -69,6 +70,8 @@ DEFAULT_TIMEOUT = 30
 
 # Maximum timeout for long-running commands
 MAX_TIMEOUT = 120
+
+_PHP_VERSION_RE = re.compile(r"^\d+\.\d+$")
 
 
 @dataclass
@@ -164,6 +167,7 @@ def exec_command(
     command: str,
     cwd: Optional[str] = None,
     timeout: int = DEFAULT_TIMEOUT,
+    php_version: Optional[str] = None,
 ) -> CommandResult:
     """Execute a command as the website user.
 
@@ -172,6 +176,9 @@ def exec_command(
         command: The command to execute (e.g., "php artisan migrate").
         cwd: Working directory (defaults to user's home).
         timeout: Maximum execution time in seconds.
+        php_version: PHP version to use (e.g. "8.4").  When provided the helper
+            will call ``php8.4`` instead of the system default ``php`` binary so
+            Composer platform checks pass for the correct version.
 
     Returns:
         CommandResult with exit_code, stdout, and stderr.
@@ -203,9 +210,15 @@ def exec_command(
 
     working_dir = cwd or f"/home/{linux_user}"
 
+    # When a php_version is known, pass it so bpanel-helper can invoke the
+    # correct versioned binary (php8.4) instead of the system default (php).
+    extra_env: list[str] = []
+    if php_version and _PHP_VERSION_RE.match(php_version):
+        extra_env = [f"--php-version={php_version}"]
+
     result = shell.privileged(
         "terminal-exec",
-        helper_args=[linux_user, working_dir, *argv],
+        helper_args=[linux_user, working_dir, *extra_env, *argv],
         check=False,
     )
 
@@ -224,6 +237,7 @@ def exec_batch(
     commands: list[str],
     cwd: Optional[str] = None,
     timeout: int = DEFAULT_TIMEOUT,
+    php_version: Optional[str] = None,
 ) -> list[CommandResult]:
     """Execute multiple commands sequentially.
 
@@ -232,13 +246,14 @@ def exec_batch(
         commands: List of commands to execute.
         cwd: Working directory (defaults to user's home).
         timeout: Maximum execution time per command.
+        php_version: PHP version to use (e.g. "8.4").
 
     Returns:
         List of CommandResult for each command.
     """
     results = []
     for cmd in commands:
-        result = exec_command(linux_user, cmd, cwd=cwd, timeout=timeout)
+        result = exec_command(linux_user, cmd, cwd=cwd, timeout=timeout, php_version=php_version)
         results.append(result)
         # Stop on first failure if non-interactive
         if result.exit_code != 0:
