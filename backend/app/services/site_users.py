@@ -8,6 +8,7 @@ from app.services.shell import shell
 
 LINUX_USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{2,31}$")
 DOMAIN_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$")
+PHP_VERSION_RE = re.compile(r"^(?:5\.6|7\.4|8\.[0-5])$")
 HOME_ROOT = Path("/home")
 PUBLIC_DIR = "public_html"
 RESERVED_LINUX_USERS = {
@@ -36,14 +37,37 @@ def linux_user_for_panel_username(username: str) -> str:
     return validate_linux_user((username or "").strip().lower())
 
 
-def php_fpm_socket(username: Optional[str], php_version: Optional[str] = None) -> Optional[str]:
+def validate_php_version(php_version: str) -> str:
+    if not PHP_VERSION_RE.fullmatch(php_version or ""):
+        raise ValueError("Invalid PHP version")
+    return php_version
+
+
+def php_fpm_pool_name(username: str, php_version: str, root_path: str | Path | None = None) -> str:
+    safe_user = validate_linux_user(username)
+    safe_version = validate_php_version(php_version).replace(".", "_")
+    if root_path is not None:
+        resolved_root = str(Path(root_path).resolve())
+        site_hash = hashlib.sha256(resolved_root.encode("utf-8")).hexdigest()[:12]
+        return f"bpanel-{safe_user}-{site_hash}-{safe_version}"
+    return f"bpanel-{safe_user}-{safe_version}"
+
+
+def php_fpm_socket(
+    username: Optional[str],
+    php_version: Optional[str] = None,
+    root_path: str | Path | None = None,
+) -> Optional[str]:
     if not username:
         return None
-    safe_user = validate_linux_user(username)
     if php_version:
-        safe_version = php_version.replace(".", "_")
-        return f"/run/php/bpanel-{safe_user}-{safe_version}.sock"
+        return f"/run/php/{php_fpm_pool_name(username, php_version, root_path)}.sock"
+    safe_user = validate_linux_user(username)
     return f"/run/php/bpanel-{safe_user}.sock"
+
+
+def site_php_fpm_socket(username: Optional[str], root_path: str | Path, php_version: Optional[str]) -> Optional[str]:
+    return php_fpm_socket(username, php_version, root_path) if php_version else None
 
 
 def site_root_for_domain(domain: str) -> str:

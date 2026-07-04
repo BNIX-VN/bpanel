@@ -1324,13 +1324,40 @@ delete_panel_user_runtime() {
   rm -rf "/var/lib/php/uploads/$user" 2>/dev/null || true
 }
 
+site_php_pool_glob() {
+  local user="$1" target="$2"
+  require_linux_user "$user"
+  target=$(readlink -m "$target") || deny "cannot resolve $target"
+  local site_hash
+  site_hash="$(printf '%s' "$target" | sha256sum | awk '{print substr($1, 1, 12)}')"
+  printf 'bpanel-%s-%s-*' "$user" "$site_hash"
+}
+
+delete_site_php_pools() {
+  local user="$1" target="$2" glob
+  glob="$(site_php_pool_glob "$user" "$target")"
+  for dir in /etc/php/*/fpm/pool.d; do
+    [[ -d "$dir" ]] || continue
+    for pool_file in "$dir"/$glob.conf; do
+      [[ -f "$pool_file" ]] || continue
+      rm -f "$pool_file"
+      local php_version
+      php_version="$(echo "$dir" | awk -F/ '{print $4}')"
+      systemctl reload "php${php_version}-fpm" 2>/dev/null || true
+    done
+  done
+}
+
 ensure_php_pool() {
   local user="$1" target="$2" php_version="$3"
   [[ "$php_version" != "none" ]] || return 0
   require_linux_user "$user"
   require_php_version "$php_version"
+  target=$(readlink -m "$target") || deny "cannot resolve $target"
   local pool_suffix="${php_version//./_}"
-  local pool_name="bpanel-${user}-${pool_suffix}"
+  local site_hash
+  site_hash="$(printf '%s' "$target" | sha256sum | awk '{print substr($1, 1, 12)}')"
+  local pool_name="bpanel-${user}-${site_hash}-${pool_suffix}"
   local pool_file="/etc/php/${php_version}/fpm/pool.d/${pool_name}.conf"
   # Per-user dirs for sessions/uploads. Sharing /tmp across pools lets one
   # site read another's session files (mode 0600 helps but only inside the
@@ -1974,9 +2001,12 @@ PY
     require_linux_user "$user"
     old_target=$(require_managed_path "$old_path")
     new_target=$(require_managed_path "$new_path" "$user")
+    old_user="${old_target#${HOME_ROOT}/}"
+    old_user="${old_user%%/*}"
     ensure_panel_user_home "$user"
     if [[ "$old_target" != "$new_target" ]]; then
       [[ ! -e "$new_target" ]] || deny "target path already exists: $new_target"
+      delete_site_php_pools "$old_user" "$old_target"
       mkdir -p "$(dirname "$new_target")"
       mv "$old_target" "$new_target"
     fi
@@ -1993,6 +2023,7 @@ PY
     user="$1"; path="$2"
     require_linux_user "$user"
     target=$(require_managed_path "$path" "$user")
+    delete_site_php_pools "$user" "$target"
     exec rm -rf "$target"
     ;;
 

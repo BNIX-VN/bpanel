@@ -71,6 +71,10 @@ server {
     # BPANEL CUSTOM INCLUDE
     include {{ custom_include_path }};
 
+    location / {
+        try_files $uri $uri/ /index.php?$query_string;
+    }
+
     location ~* \.(jpg|jpeg|gif|png|css|js|ico|webp|svg|woff|woff2|ttf|eot)$ {
         expires -1;
         access_log off;

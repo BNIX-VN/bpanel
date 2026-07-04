@@ -28,7 +28,10 @@ def _command_error(result):
 def _cleanup_failed_site(root_path: str, linux_user: str | None, delete_files: bool = True) -> None:
     if delete_files:
         try:
-            wordpress.delete_wordpress(root_path)
+            if linux_user:
+                site_users.delete_site_runtime(root_path, linux_user)
+            else:
+                wordpress.delete_wordpress(root_path)
         except Exception:
             pass
 
@@ -150,7 +153,7 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
                 root_path,
                 app_type="wordpress",
                 php_version=payload.php_version,
-                php_fpm_socket_override=site_users.php_fpm_socket(linux_user, payload.php_version),
+                php_fpm_socket_override=site_users.site_php_fpm_socket(linux_user, root_path, payload.php_version),
                 document_root="public_html",
             )
         except (RuntimeError, ValueError) as exc:
@@ -178,7 +181,7 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
                 root_path,
                 app_type=app_type_value,
                 php_version=payload.php_version,
-                php_fpm_socket_override=site_users.php_fpm_socket(linux_user, payload.php_version) if runtime_php_version else None,
+                php_fpm_socket_override=site_users.site_php_fpm_socket(linux_user, root_path, runtime_php_version),
                 document_root="public_html",
             )
         except (RuntimeError, ValueError, OSError) as exc:
@@ -251,7 +254,11 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
                 raise RuntimeError(_command_error(result))
             if website.http_flood_enabled:
                 _sync_http_flood_zones(db)
-            php_fpm_socket_override = site_users.php_fpm_socket(website.linux_user, payload.php_version) if runtime_php_version else None
+            php_fpm_socket_override = site_users.site_php_fpm_socket(
+                website.linux_user,
+                website.root_path,
+                runtime_php_version,
+            )
             app_type = website.app_type or "wordpress"
             nginx.rewrite_vhost(
                 website.domain,
@@ -290,7 +297,7 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
                 app_type=next_app_type,
                 php_version=website.php_version,
                 custom_directives=website.nginx_custom or "",
-                php_fpm_socket_override=site_users.php_fpm_socket(website.linux_user, website.php_version) if runtime_php_version else None,
+                php_fpm_socket_override=site_users.site_php_fpm_socket(website.linux_user, website.root_path, runtime_php_version),
                 waf_enabled=website.waf_enabled,
                 http_flood_enabled=website.http_flood_enabled,
                 http_flood_config=website.http_flood_config or "",
@@ -318,7 +325,7 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
                 app_type=app_type,
                 php_version=website.php_version,
                 custom_directives=website.nginx_custom or "",
-                php_fpm_socket_override=site_users.php_fpm_socket(website.linux_user, website.php_version) if runtime_php_version else None,
+                php_fpm_socket_override=site_users.site_php_fpm_socket(website.linux_user, website.root_path, runtime_php_version),
                 waf_enabled=website.waf_enabled,
                 http_flood_enabled=website.http_flood_enabled,
                 http_flood_config=website.http_flood_config or "",
@@ -357,7 +364,7 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
                     app_type=website.app_type or "wordpress",
                     php_version=website.php_version,
                     custom_directives=website.nginx_custom or "",
-                    php_fpm_socket_override=site_users.php_fpm_socket(new_linux_user, website.php_version) if runtime_php_version else None,
+                    php_fpm_socket_override=site_users.site_php_fpm_socket(new_linux_user, new_root_path, runtime_php_version),
                     waf_enabled=website.waf_enabled,
                     http_flood_enabled=website.http_flood_enabled,
                     http_flood_config=website.http_flood_config or "",
@@ -456,7 +463,7 @@ def reset_website_nginx_config(website_id: int, request: Request, db: Session = 
             app_type=app_type,
             php_version=website.php_version,
             custom_directives="",
-            php_fpm_socket_override=site_users.php_fpm_socket(website.linux_user, website.php_version) if runtime_php_version else None,
+            php_fpm_socket_override=site_users.site_php_fpm_socket(website.linux_user, website.root_path, runtime_php_version),
             waf_enabled=website.waf_enabled,
             http_flood_enabled=website.http_flood_enabled,
             http_flood_config=website.http_flood_config or "",
@@ -567,7 +574,10 @@ def delete_website(website_id: int, request: Request, delete_files: bool = True,
         mariadb.drop_database(db_item.db_name, db_item.db_user)
     nginx.delete_wordpress_vhost(website.domain)
     if delete_files:
-        wordpress.delete_wordpress(website.root_path)
+        if website.linux_user:
+            site_users.delete_site_runtime(website.root_path, website.linux_user)
+        else:
+            wordpress.delete_wordpress(website.root_path)
     if db_item:
         db.delete(db_item)
     had_http_flood = bool(website.http_flood_enabled)
@@ -602,7 +612,7 @@ def fix_nginx_security(website_id: int, db: Session = Depends(get_db), current_u
         website.root_path,
         website.php_version,
         custom_directives=website.nginx_custom or "",
-        php_fpm_socket_override=site_users.php_fpm_socket(website.linux_user, website.php_version),
+        php_fpm_socket_override=site_users.site_php_fpm_socket(website.linux_user, website.root_path, website.php_version),
         waf_enabled=website.waf_enabled,
         http_flood_enabled=website.http_flood_enabled,
         http_flood_config=website.http_flood_config or "",

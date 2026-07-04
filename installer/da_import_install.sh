@@ -904,7 +904,7 @@ def create_or_update_website(db, user, domain: str, source: Path | None, app_typ
         waf_enabled = False
         log(f"  warning: WAF rules failed for {domain}; vhost will be created with WAF disabled")
 
-    socket = site_users.php_fpm_socket(linux_user, DEFAULT_PHP_VERSION) if app_type in {"wordpress", "php"} else None
+    socket = site_users.site_php_fpm_socket(linux_user, root_path, DEFAULT_PHP_VERSION if app_type in {"wordpress", "php"} else None)
     try:
         nginx.write_vhost(
             domain,

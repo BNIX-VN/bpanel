@@ -441,7 +441,7 @@ def restore_user_backup(backup_file: str, db) -> dict:
                 app_type=app_type,
                 php_version=php_version,
                 custom_directives=website.nginx_custom or "",
-                php_fpm_socket_override=site_users.php_fpm_socket(linux_user, php_version) if runtime_php_version else None,
+                php_fpm_socket_override=site_users.site_php_fpm_socket(linux_user, root_path, runtime_php_version),
                 waf_enabled=website.waf_enabled,
                 http_flood_enabled=website.http_flood_enabled,
                 http_flood_config=website.http_flood_config or "",
