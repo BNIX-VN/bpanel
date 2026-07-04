@@ -2083,11 +2083,11 @@ function App() {
   }, [standaloneEditor, isAuthenticated, selectedWebsiteId, filePath, fileContent]);
 
   useEffect(() => {
-    if (!isAuthenticated || page !== 'dashboard') return undefined;
+    if (!isAuthenticated || page !== 'dashboard' || !isAdmin) return undefined;
     loadResourceUsage();
     const timer = setInterval(loadResourceUsage, 5000);
     return () => clearInterval(timer);
-  }, [isAuthenticated, page]);
+  }, [isAuthenticated, page, isAdmin]);
 
   useEffect(() => {
     if (!isAuthenticated || page !== 'services') return undefined;
@@ -2291,12 +2291,12 @@ function App() {
     const network = resourceUsage?.network || {};
     const networkTotal = (Number(network.rx_per_sec) || 0) + (Number(network.tx_per_sec) || 0);
     return <>
-      <section className="resource-grid">
+      {isAdmin && <section className="resource-grid">
         <ResourceCard icon={Cpu} label="CPU" value={formatPercent(cpu.percent)} percent={cpu.percent} detail={cpu.load?.length ? `Load ${cpu.load.join(' / ')}` : `${cpu.cores || '--'} cores`} />
         <ResourceCard icon={MemoryStick} label="RAM" value={formatPercent(memory.percent)} percent={memory.percent} detail={`${formatBytes(memory.used)} / ${formatBytes(memory.total)}`} />
         <ResourceCard icon={HardDrive} label="Disk" value={formatPercent(disk.percent)} percent={disk.percent} detail={`${formatBytes(disk.used)} / ${formatBytes(disk.total)}`} />
         <ResourceCard icon={Network} label="Network" value={`${formatBytes(networkTotal)}/s`} detail={`Down ${formatBytes(network.rx_per_sec)}/s / Up ${formatBytes(network.tx_per_sec)}/s`} />
-      </section>
+      </section>}
       <section className="stats-grid">
         <div className="stat-card"><strong>{websites.length}</strong><span>Websites</span></div>
         <div className="stat-card"><strong>{databases.length}</strong><span>Databases</span></div>
