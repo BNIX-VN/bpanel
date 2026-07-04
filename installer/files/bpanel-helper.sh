@@ -1281,6 +1281,8 @@ ensure_panel_user_home() {
   mkdir -p "$home_dir"
   chown "$user:$user" "$home_dir"
   chmod 0755 "$home_dir"
+  chmod a-s "$home_dir" 2>/dev/null || true
+  chmod -t "$home_dir" 2>/dev/null || true
   if command -v setfacl >/dev/null 2>&1; then
     setfacl -b -k "$home_dir" 2>/dev/null || true
   fi
@@ -1370,6 +1372,8 @@ fix_site_tree() {
       find "$target" -type d -exec setfacl -k {} + 2>/dev/null || true
     fi
     find "$target" -type d -exec chmod 755 {} +
+    find "$target" -type d -exec chmod a-s {} + 2>/dev/null || true
+    find "$target" -type d -exec chmod -t {} + 2>/dev/null || true
     find "$target" -type f -exec chmod 644 {} +
   else
     if command -v setfacl >/dev/null 2>&1; then
@@ -1754,6 +1758,8 @@ PY
       find "$target" -type d -exec setfacl -k {} + 2>/dev/null || true
     fi
     find "$target" -type d -exec chmod 755 {} +
+    find "$target" -type d -exec chmod a-s {} + 2>/dev/null || true
+    find "$target" -type d -exec chmod -t {} + 2>/dev/null || true
     find "$target" -type f -exec chmod 644 {} +
     ;;
 
@@ -1780,6 +1786,8 @@ PY
     fi
     chown "$user:$user" "$root_target"
     chmod 755 "$root_target"
+    chmod a-s "$root_target" 2>/dev/null || true
+    chmod -t "$root_target" 2>/dev/null || true
     current="$root_target"
     IFS='/' read -r -a root_parts <<< "$rel_arg"
     for part in "${root_parts[@]}"; do
@@ -1789,6 +1797,8 @@ PY
         setfacl -b -k "$current" 2>/dev/null || true
       fi
       chmod 755 "$current"
+      chmod a-s "$current" 2>/dev/null || true
+      chmod -t "$current" 2>/dev/null || true
     done
     ;;
 
