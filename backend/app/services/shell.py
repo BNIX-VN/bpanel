@@ -28,7 +28,8 @@ def _use_helper() -> bool:
     if flag is not None:
         return flag.lower() in {"1", "true", "yes", "on"}
     # Default: use helper when running as a non-root system user in production.
-    return os.geteuid() != 0 and os.path.exists(HELPER_PATH)
+    geteuid = getattr(os, "geteuid", None)
+    return bool(geteuid and geteuid() != 0 and os.path.exists(HELPER_PATH))
 
 
 @dataclass

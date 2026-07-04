@@ -1,6 +1,8 @@
 import io
+import os
 import stat
 import tarfile
+from pathlib import Path
 
 import pytest
 
@@ -10,6 +12,116 @@ from app.services import file_manager
 
 def _website(root):
     return Website(domain="example.test", owner_id=1, root_path=str(root), linux_user=None)
+
+
+def _linux_website(root):
+    return Website(domain="example.test", owner_id=1, root_path=str(root), linux_user="siteuser")
+
+
+def test_upload_file_with_linux_user_uses_install_helper_and_normalizes(tmp_path, monkeypatch):
+    root = tmp_path / "site"
+    public = root / "public_html"
+    public.mkdir(parents=True)
+    calls = []
+
+    def fake_privileged(helper_command, helper_args=None, **kwargs):
+        calls.append((helper_command, helper_args, kwargs))
+        return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(file_manager.shell, "privileged", fake_privileged)
+    monkeypatch.setattr(file_manager, "_clear_fastcgi_cache", lambda: None)
+
+    target = file_manager.upload_file(
+        _linux_website(root),
+        "public_html",
+        "index.php",
+        io.BytesIO(b"<?php echo 'ok';\n"),
+        allow_executable=True,
+    )
+
+    assert target == str(public / "index.php")
+    assert calls[0][0] == "site-file-install"
+    assert calls[0][1][:3] == ["siteuser", str(root.resolve()), "public_html/index.php"]
+    assert calls[1] == (
+        "site-path-fix",
+        [str(public / "index.php"), "siteuser"],
+        {"check": True, "fallback": ["chown", "-R", "siteuser:siteuser", str(public / "index.php")]},
+    )
+    assert not Path(calls[0][1][3]).exists()
+
+
+def test_copy_entries_with_linux_user_runs_as_site_user_then_normalizes(tmp_path, monkeypatch):
+    root = tmp_path / "site"
+    public = root / "public_html"
+    public.mkdir(parents=True)
+    source = public / "index.php"
+    source.write_text("hello", encoding="utf-8")
+    destination = root / "copies"
+    destination.mkdir()
+    calls = []
+
+    def fake_privileged(helper_command, helper_args=None, **kwargs):
+        calls.append((helper_command, helper_args, kwargs))
+        return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(file_manager.shell, "privileged", fake_privileged)
+    monkeypatch.setattr(file_manager, "_clear_fastcgi_cache", lambda: None)
+
+    copied = file_manager.copy_entries(
+        _linux_website(root),
+        ["public_html/index.php"],
+        "copies",
+        allow_executable=True,
+    )
+
+    assert copied == [str(destination / "index.php")]
+    assert calls[0] == (
+        "terminal-exec",
+        ["siteuser", str(root.resolve()), "cp", "-R", "--", "public_html/index.php", "copies/index.php"],
+        {"fallback": ["cp", "-R", "--", str(source), str(destination / "index.php")]},
+    )
+    assert calls[1] == (
+        "site-path-fix",
+        [str(destination / "index.php"), "siteuser"],
+        {"check": True, "fallback": ["chown", "-R", "siteuser:siteuser", str(destination / "index.php")]},
+    )
+
+
+def test_write_text_file_with_linux_user_normalizes_written_file(tmp_path, monkeypatch):
+    root = tmp_path / "site"
+    public = root / "public_html"
+    public.mkdir(parents=True)
+    target = public / "index.php"
+    target.write_text("old", encoding="utf-8")
+    calls = []
+
+    def fake_privileged(helper_command, helper_args=None, **kwargs):
+        calls.append((helper_command, helper_args, kwargs))
+        return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(file_manager.shell, "privileged", fake_privileged)
+    monkeypatch.setattr(file_manager, "_clear_fastcgi_cache", lambda: None)
+
+    written = file_manager.write_text_file(
+        _linux_website(root),
+        "public_html/index.php",
+        "new",
+        allow_executable=True,
+    )
+
+    assert written == str(target)
+    assert calls == [
+        (
+            "site-file-write",
+            ["siteuser", str(root.resolve()), "public_html/index.php"],
+            {"input": "new", "fallback": ["tee", str(target)]},
+        ),
+        (
+            "site-path-fix",
+            [str(target), "siteuser"],
+            {"check": True, "fallback": ["chown", "-R", "siteuser:siteuser", str(target)]},
+        ),
+    ]
 
 
 def test_tar_validation_allows_more_than_legacy_file_limit(tmp_path):
@@ -76,6 +188,8 @@ def test_extract_tar_does_not_overwrite_source_archive(tmp_path):
 
 
 def test_chmod_entry_updates_mode(tmp_path):
+    if os.name == "nt":
+        pytest.skip("Windows does not expose POSIX chmod semantics")
     root = tmp_path / "site"
     public = root / "public_html"
     public.mkdir(parents=True)

@@ -1280,10 +1280,9 @@ ensure_panel_user_home() {
   usermod -aG "$BPANEL_SFTP_GROUP" "$user" 2>/dev/null || true
   mkdir -p "$home_dir"
   chown "$user:$user" "$home_dir"
-  chmod 0750 "$home_dir"
+  chmod 0755 "$home_dir"
   if command -v setfacl >/dev/null 2>&1; then
-    setfacl -m "g:${BPANEL_SITES_GROUP}:rx" "$home_dir"
-    setfacl -m "d:g:${BPANEL_SITES_GROUP}:rx" "$home_dir"
+    setfacl -b -k "$home_dir" 2>/dev/null || true
   fi
 }
 
@@ -1364,18 +1363,19 @@ fix_site_tree() {
   local target="$1" user="$2"
   ensure_sites_group
   require_linux_user "$user"
-  command -v setfacl >/dev/null 2>&1 || deny "setfacl not found; install the acl package"
   chown -R "$user:$user" "$target"
   if [[ -d "$target" ]]; then
-    find "$target" -type d -exec chmod 2750 {} +
-    find "$target" -type f -exec chmod 640 {} +
-    find "$target" -name wp-config.php -type f -exec chmod 640 {} + 2>/dev/null || true
-    setfacl -R -m "g::rwX,g:${BPANEL_SITES_GROUP}:rwX,m::rwX" "$target"
-    find "$target" -type d -exec setfacl -m "d:g::rwX,d:g:${BPANEL_SITES_GROUP}:rwX,d:m::rwX" {} +
+    if command -v setfacl >/dev/null 2>&1; then
+      setfacl -Rb "$target" 2>/dev/null || true
+      find "$target" -type d -exec setfacl -k {} + 2>/dev/null || true
+    fi
+    find "$target" -type d -exec chmod 755 {} +
+    find "$target" -type f -exec chmod 644 {} +
   else
-    chmod 640 "$target"
-    [[ "$(basename "$target")" == "wp-config.php" ]] && chmod 640 "$target"
-    setfacl -m "g:${BPANEL_SITES_GROUP}:rw" "$target"
+    if command -v setfacl >/dev/null 2>&1; then
+      setfacl -b "$target" 2>/dev/null || true
+    fi
+    chmod 644 "$target"
   fi
 }
 
@@ -1749,9 +1749,12 @@ PY
       exit 0
     fi
     chown -R www-data:www-data "$target"
+    if command -v setfacl >/dev/null 2>&1; then
+      setfacl -Rb "$target" 2>/dev/null || true
+      find "$target" -type d -exec setfacl -k {} + 2>/dev/null || true
+    fi
     find "$target" -type d -exec chmod 755 {} +
     find "$target" -type f -exec chmod 644 {} +
-    find "$target" -type d -name uploads -exec chmod 775 {} + 2>/dev/null || true
     ;;
 
   site-path-fix)
@@ -1772,14 +1775,20 @@ PY
     esac
     target=$(require_safe_path "$root_target" "$root_target/$rel_arg")
     mkdir -p -- "$target"
+    if command -v setfacl >/dev/null 2>&1; then
+      setfacl -b -k "$root_target" 2>/dev/null || true
+    fi
+    chown "$user:$user" "$root_target"
+    chmod 755 "$root_target"
     current="$root_target"
     IFS='/' read -r -a root_parts <<< "$rel_arg"
     for part in "${root_parts[@]}"; do
       current="$current/$part"
       chown "$user:$user" "$current"
-      chmod 2750 "$current"
-      setfacl -m "g::rwX,g:${BPANEL_SITES_GROUP}:rwX,m::rwX" "$current"
-      setfacl -m "d:g::rwX,d:g:${BPANEL_SITES_GROUP}:rwX,d:m::rwX" "$current"
+      if command -v setfacl >/dev/null 2>&1; then
+        setfacl -b -k "$current" 2>/dev/null || true
+      fi
+      chmod 755 "$current"
     done
     ;;
 
@@ -1795,8 +1804,8 @@ PY
     [[ -d "$target" ]] && deny "cannot write a directory: $target"
     [[ -L "$target" ]] && deny "refusing to write through a symlink: $target"
     parent=$(dirname -- "$target")
-    mkdir -p -- "$parent"
-    chown "$user:$user" "$parent"
+    runuser -u "$user" -- mkdir -p -- "$parent"
+    chmod 755 "$parent"
     existing_mode=""
     if [[ -e "$target" ]]; then
       existing_mode=$(stat -c '%a' -- "$target")
@@ -1806,8 +1815,113 @@ PY
     rm -f -- "$tmp"
     cat >"$tmp"
     chown "$user:$user" "$tmp"
-    chmod "${existing_mode:-0644}" "$tmp"
+    chmod 0644 "$tmp"
     mv -f -- "$tmp" "$target"
+    ;;
+
+  site-file-install)
+    [[ $# -eq 4 ]] || deny "usage: site-file-install <site-user> <site-root> <relative-path> <staged-path>"
+    user="$1"; root_arg="$2"; rel_arg="$3"; staged_arg="$4"
+    require_linux_user "$user"
+    root_target=$(require_managed_path "$root_arg" "$user")
+    case "$rel_arg" in
+      ""|"/"|/*|*$'\n'*|".."|"../"*|*"/.."|*"/../"*) deny "unsafe relative path: $rel_arg" ;;
+    esac
+    target=$(require_safe_path "$root_target" "$root_target/$rel_arg")
+    [[ ! -L "$target" ]] || deny "refusing to write through a symlink: $target"
+    [[ "$staged_arg" == /tmp/bpanel-upload-* ]] || deny "invalid staged upload path"
+    [[ ! -L "$staged_arg" ]] || deny "staged upload cannot be a symlink"
+    staged=$(readlink -e -- "$staged_arg") || deny "staged upload not found"
+    [[ "$staged" == /tmp/bpanel-upload-* && -f "$staged" ]] || deny "invalid staged upload"
+    [[ "$(stat -c '%U' -- "$staged")" == "bpanel" ]] || deny "staged upload must be owned by bpanel"
+    parent=$(dirname -- "$target")
+    runuser -u "$user" -- mkdir -p -- "$parent"
+    chmod 755 "$parent"
+    base=$(basename -- "$target")
+    tmp="$parent/.${base}.bpanel-install-$$"
+    rm -f -- "$tmp"
+    install -o "$user" -g "$user" -m 0644 -- "$staged" "$tmp"
+    mv -f -- "$tmp" "$target"
+    rm -f -- "$staged"
+    ;;
+
+  site-archive-extract)
+    [[ $# -eq 7 ]] || deny "usage: site-archive-extract <site-user> <site-root> <archive-path> <destination-path> <zip|tar.gz> <max-items> <max-bytes>"
+    user="$1"; root_arg="$2"; archive_rel="$3"; destination_rel="$4"; archive_kind="$5"
+    max_items="$6"; max_bytes="$7"
+    require_linux_user "$user"
+    [[ "$archive_kind" == "zip" || "$archive_kind" == "tar.gz" ]] || deny "unsupported archive type"
+    [[ "$max_items" =~ ^[0-9]+$ && "$max_bytes" =~ ^[0-9]+$ ]] || deny "invalid archive limits"
+    root_target=$(require_managed_path "$root_arg" "$user")
+    archive_target=$(require_safe_path "$root_target" "$root_target/$archive_rel")
+    destination_target=$(require_safe_path "$root_target" "$root_target/$destination_rel")
+    [[ -f "$archive_target" && ! -L "$archive_target" ]] || deny "archive not found"
+    [[ -d "$destination_target" && ! -L "$destination_target" ]] || deny "archive destination not found"
+    tmp_archive=$(mktemp "/tmp/bpanel-extract-XXXXXX")
+    trap 'rm -f -- "$tmp_archive"' EXIT
+    install -o "$user" -g "$user" -m 0600 -- "$archive_target" "$tmp_archive"
+    python3 - "$tmp_archive" "$archive_kind" "$destination_target" "$max_items" "$max_bytes" <<'PY'
+import os
+import stat
+import sys
+import tarfile
+import zipfile
+
+archive_path, archive_kind, destination = sys.argv[1:4]
+max_items, max_bytes = int(sys.argv[4]), int(sys.argv[5])
+destination = os.path.realpath(destination)
+
+
+def validate_name(name):
+    normalized = name.replace("\\", "/")
+    if normalized.startswith("/"):
+        raise ValueError("archive contains an absolute path")
+    parts = [part for part in normalized.split("/") if part not in ("", ".")]
+    if not parts or any(part == ".." for part in parts):
+        raise ValueError("archive contains an unsafe path")
+    target = os.path.realpath(os.path.join(destination, *parts))
+    if os.path.commonpath((destination, target)) != destination:
+        raise ValueError("archive path escapes destination")
+
+
+count = 0
+total = 0
+if archive_kind == "zip":
+    with zipfile.ZipFile(archive_path) as archive:
+        for info in archive.infolist():
+            count += 1
+            validate_name(info.filename)
+            mode = (info.external_attr >> 16) & 0o170000
+            if stat.S_ISLNK(mode):
+                raise ValueError("archive symlinks are not allowed")
+            total += info.file_size
+else:
+    with tarfile.open(archive_path, "r:gz") as archive:
+        for member in archive:
+            count += 1
+            validate_name(member.name)
+            if member.issym() or member.islnk() or member.isdev():
+                raise ValueError("archive links and devices are not allowed")
+            if not member.isdir() and not member.isfile():
+                raise ValueError("archive contains unsupported entries")
+            total += member.size
+if max_items and count > max_items:
+    raise ValueError("archive has too many files")
+if max_bytes and total > max_bytes:
+    raise ValueError("archive is too large")
+PY
+    if [[ "$archive_kind" == "zip" ]]; then
+      runuser -u "$user" -- unzip -oq "$tmp_archive" -d "$destination_target"
+    else
+      runuser -u "$user" -- tar --extract --gzip --file="$tmp_archive" \
+        --directory="$destination_target" --no-same-owner --no-same-permissions
+    fi
+    # The archive may contain an entry with its own filename. Restore the
+    # original source archive after extraction so it cannot overwrite itself.
+    install -o "$user" -g "$user" -m 0644 -- "$tmp_archive" "$archive_target"
+    fix_site_tree "$destination_target" "$user"
+    rm -f -- "$tmp_archive"
+    trap - EXIT
     ;;
 
   panel-user-ensure)
@@ -1883,8 +1997,8 @@ PY
   mkdir-site)
     [[ $# -eq 1 ]] || deny "usage: mkdir-site <path>"
     target=$(require_managed_path "$1")
-    install -d -o www-data -g www-data -m 0775 "$target"
-    install -d -o www-data -g www-data -m 0775 "$target/public_html"
+    install -d -o www-data -g www-data -m 0755 "$target"
+    install -d -o www-data -g www-data -m 0755 "$target/public_html"
     ;;
 
   site-log-read)

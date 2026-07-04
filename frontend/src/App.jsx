@@ -775,14 +775,22 @@ function App() {
   useEffect(() => {
     const appName = panelSettings.app_name || 'BPanel';
     document.title = appName;
-    let link = document.querySelector('link[rel="icon"]');
-    if (!link) {
-      link = document.createElement('link');
-      link.rel = 'icon';
-      document.head.appendChild(link);
-    }
-    link.href = panelSettings.favicon_url || '/favicon.png';
-  }, [panelSettings]);
+    const configuredFaviconUrl = panelSettings.favicon_url || '/favicon.png';
+    const faviconUrl = configuredFaviconUrl.includes('?')
+      ? configuredFaviconUrl
+      : `${configuredFaviconUrl}?v=${encodeURIComponent(appVersion || 'current')}`;
+    const pathname = faviconUrl.split('?', 1)[0].toLowerCase();
+    const faviconType = pathname.endsWith('.ico') ? 'image/x-icon'
+      : pathname.endsWith('.jpg') || pathname.endsWith('.jpeg') ? 'image/jpeg'
+        : pathname.endsWith('.webp') ? 'image/webp'
+          : 'image/png';
+    document.querySelectorAll('link[rel~="icon"]').forEach(link => link.remove());
+    const link = document.createElement('link');
+    link.rel = 'icon';
+    link.type = faviconType;
+    link.href = faviconUrl;
+    document.head.appendChild(link);
+  }, [panelSettings, appVersion]);
 
   useEffect(() => {
     if (!panelSslEmail && currentUser?.email) setPanelSslEmail(currentUser.email);

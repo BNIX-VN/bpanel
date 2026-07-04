@@ -50,7 +50,8 @@ def _asset_url(filename: str | None) -> str:
     path = ASSETS_DIR / filename
     if not path.exists():
         return ""
-    version = int(path.stat().st_mtime)
+    stat = path.stat()
+    version = f"{stat.st_mtime_ns}-{stat.st_size}"
     return f"/brand-assets/{filename}?v={version}"
 
 

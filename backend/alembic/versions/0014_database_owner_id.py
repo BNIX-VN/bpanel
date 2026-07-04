@@ -41,6 +41,21 @@ def _get_column_notnull(table: str, column: str) -> bool:
     return False
 
 
+def _backfill_database_owner_id() -> None:
+    op.execute(
+        "UPDATE database_accounts SET owner_id = ("
+        "  SELECT websites.owner_id FROM websites WHERE websites.id = database_accounts.website_id"
+        ") WHERE owner_id IS NULL AND website_id IS NOT NULL"
+    )
+    op.execute(
+        "UPDATE database_accounts SET owner_id = ("
+        "  SELECT users.id FROM users"
+        "  ORDER BY CASE WHEN users.role = 'admin' THEN 0 ELSE 1 END, users.id"
+        "  LIMIT 1"
+        ") WHERE owner_id IS NULL AND EXISTS (SELECT 1 FROM users)"
+    )
+
+
 def upgrade() -> None:
     bind = op.get_bind()
 
@@ -61,21 +76,11 @@ def upgrade() -> None:
                     batch_op.add_column(sa.Column("owner_id", sa.Integer(), nullable=True))
                 batch_op.alter_column("website_id", existing_type=sa.Integer(), nullable=True)
 
-        # Backfill owner_id from website.owner_id for existing rows
-        op.execute(
-            "UPDATE database_accounts SET owner_id = ("
-            "  SELECT websites.owner_id FROM websites WHERE websites.id = database_accounts.website_id"
-            ") WHERE owner_id IS NULL AND website_id IS NOT NULL"
-        )
+        _backfill_database_owner_id()
     else:
         if not _column_exists("database_accounts", "owner_id"):
             op.add_column("database_accounts", sa.Column("owner_id", sa.Integer(), nullable=True))
-        # Backfill
-        op.execute(
-            "UPDATE database_accounts SET owner_id = ("
-            "  SELECT websites.owner_id FROM websites WHERE websites.id = database_accounts.website_id"
-            ") WHERE owner_id IS NULL"
-        )
+        _backfill_database_owner_id()
         op.alter_column("database_accounts", "owner_id", nullable=False)
         op.alter_column("database_accounts", "website_id", existing_type=sa.Integer(), nullable=True)
         op.create_foreign_key("fk_database_accounts_owner_id", "database_accounts", "users", ["owner_id"], ["id"])

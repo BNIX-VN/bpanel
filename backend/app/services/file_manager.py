@@ -3,6 +3,7 @@ import secrets
 import shutil
 import stat
 import tarfile
+import tempfile
 import time
 import zipfile
 from pathlib import Path
@@ -226,8 +227,18 @@ def make_directory(website: Website, parent_path: str, name: str) -> str:
     target = parent / _safe_entry_name(name)
     if target.exists():
         raise ValueError("File or folder already exists")
-    target.mkdir()
-    site_users.fix_site_path(str(target), website.linux_user)
+    if website.linux_user:
+        root = Path(website.root_path).resolve()
+        _run_as_site_user(
+            website,
+            root,
+            "mkdir",
+            ["--", _helper_relative_path(website, target)],
+            ["mkdir", "--", str(target)],
+        )
+    else:
+        target.mkdir()
+    site_users.fix_site_path(str(target), website.linux_user, check=True)
     _clear_fastcgi_cache()
     return str(target)
 
@@ -243,8 +254,22 @@ def rename_entry(website: Website, relative_path: str, new_name: str, allow_exec
         raise ValueError("Target already exists")
     _assert_tree_write_allowed(source, "Renaming", allow_executable)
     _assert_write_allowed(target, "Renaming", allow_executable)
-    source.rename(target)
-    site_users.fix_site_path(str(target), website.linux_user)
+    if website.linux_user:
+        root = Path(website.root_path).resolve()
+        _run_as_site_user(
+            website,
+            root,
+            "mv",
+            [
+                "--",
+                _helper_relative_path(website, source),
+                _helper_relative_path(website, target),
+            ],
+            ["mv", "--", str(source), str(target)],
+        )
+    else:
+        source.rename(target)
+    site_users.fix_site_path(str(target), website.linux_user, check=True)
     _clear_fastcgi_cache()
     return str(target)
 
@@ -330,20 +355,39 @@ def _helper_relative_path(website: Website, target: Path) -> str:
     return str(target.relative_to(root)).replace("\\", "/") if target != root else "."
 
 
+def _run_as_site_user(
+    website: Website,
+    cwd: Path,
+    command: str,
+    args: List[str],
+    fallback: Optional[List[str]] = None,
+) -> None:
+    if not website.linux_user:
+        raise ValueError("Website has no runtime user configured")
+    shell.privileged(
+        "terminal-exec",
+        helper_args=[website.linux_user, str(cwd), command, *args],
+        fallback=fallback,
+    )
+
+
+def _staging_directory() -> Path:
+    if os.name != "nt":
+        return Path("/tmp")
+    return Path(tempfile.gettempdir())
+
+
 def _write_text_as_site_user(website: Website, target: Path, content: str) -> None:
     if not website.linux_user:
         target.write_text(content, encoding="utf-8")
         return
     root = Path(website.root_path).resolve()
-    try:
-        shell.privileged(
-            "site-file-write",
-            helper_args=[website.linux_user, str(root), _helper_relative_path(website, target)],
-            input=content,
-        )
-    except RuntimeError:
-        # Fallback for dev/test environments without bpanel-helper installed
-        target.write_text(content, encoding="utf-8")
+    shell.privileged(
+        "site-file-write",
+        helper_args=[website.linux_user, str(root), _helper_relative_path(website, target)],
+        input=content,
+        fallback=["tee", str(target)],
+    )
 
 
 def create_text_file(
@@ -369,6 +413,7 @@ def create_text_file(
     else:
         parent.mkdir(parents=True, exist_ok=True)
         target.touch()
+    site_users.fix_site_path(str(target), website.linux_user, check=True)
     _clear_fastcgi_cache()
     return str(target)
 
@@ -390,8 +435,7 @@ def write_text_file(
     if quota_check:
         quota_check(content_size, _existing_file_size(target))
     _write_text_as_site_user(website, target, content)
-    if not website.linux_user:
-        site_users.fix_site_path(str(target.parent), website.linux_user)
+    site_users.fix_site_path(str(target), website.linux_user, check=True)
     _clear_fastcgi_cache()
     return str(target)
 
@@ -417,18 +461,46 @@ def upload_file(
     if quota_check:
         upload_size = storage_quota.source_file_size(source_file)
         quota_check(upload_size or 0, _existing_file_size(target))
-    target_dir.mkdir(parents=True, exist_ok=True)
-    temp_path = target_dir / f".{safe_name}.upload-{secrets.token_hex(8)}.tmp"
-    try:
-        with temp_path.open("wb") as output:
-            shutil.copyfileobj(source_file, output, length=1024 * 1024)
-            output.flush()
-            os.fsync(output.fileno())
-        temp_path.replace(target)
-    except Exception:
-        temp_path.unlink(missing_ok=True)
-        raise
-    site_users.fix_site_path(str(target), website.linux_user)
+    if website.linux_user:
+        root = Path(website.root_path).resolve()
+        staged_path: Optional[Path] = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w+b",
+                prefix="bpanel-upload-",
+                dir=str(_staging_directory()),
+                delete=False,
+            ) as output:
+                staged_path = Path(output.name)
+                shutil.copyfileobj(source_file, output, length=1024 * 1024)
+                output.flush()
+                os.fsync(output.fileno())
+            shell.privileged(
+                "site-file-install",
+                helper_args=[
+                    website.linux_user,
+                    str(root),
+                    _helper_relative_path(website, target),
+                    str(staged_path),
+                ],
+                fallback=["cp", "--", str(staged_path), str(target)],
+            )
+        finally:
+            if staged_path is not None:
+                staged_path.unlink(missing_ok=True)
+    else:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        temp_path = target_dir / f".{safe_name}.upload-{secrets.token_hex(8)}.tmp"
+        try:
+            with temp_path.open("wb") as output:
+                shutil.copyfileobj(source_file, output, length=1024 * 1024)
+                output.flush()
+                os.fsync(output.fileno())
+            temp_path.replace(target)
+        except Exception:
+            temp_path.unlink(missing_ok=True)
+            raise
+    site_users.fix_site_path(str(target), website.linux_user, check=True)
     _clear_fastcgi_cache()
     return str(target)
 
@@ -556,11 +628,25 @@ def copy_entries(
 
     copied = []
     for source, target in zip(sources, targets):
-        if source.is_dir():
+        if website.linux_user:
+            root = Path(website.root_path).resolve()
+            _run_as_site_user(
+                website,
+                root,
+                "cp",
+                [
+                    "-R",
+                    "--",
+                    _helper_relative_path(website, source),
+                    _helper_relative_path(website, target),
+                ],
+                ["cp", "-R", "--", str(source), str(target)],
+            )
+        elif source.is_dir():
             shutil.copytree(source, target, copy_function=shutil.copy2)
         else:
             shutil.copy2(source, target)
-        site_users.fix_site_path(str(target), website.linux_user)
+        site_users.fix_site_path(str(target), website.linux_user, check=True)
         copied.append(str(target))
     _clear_fastcgi_cache()
     return copied
@@ -582,8 +668,22 @@ def move_entries(
 
     moved = []
     for source, target in zip(sources, targets):
-        shutil.move(str(source), str(target))
-        site_users.fix_site_path(str(target), website.linux_user)
+        if website.linux_user:
+            root = Path(website.root_path).resolve()
+            _run_as_site_user(
+                website,
+                root,
+                "mv",
+                [
+                    "--",
+                    _helper_relative_path(website, source),
+                    _helper_relative_path(website, target),
+                ],
+                ["mv", "--", str(source), str(target)],
+            )
+        else:
+            shutil.move(str(source), str(target))
+        site_users.fix_site_path(str(target), website.linux_user, check=True)
         moved.append(str(target))
     _clear_fastcgi_cache()
     return moved
@@ -649,7 +749,23 @@ def archive_entries(
             raise ValueError("Archive output cannot be inside a selected folder")
     if quota_check:
         quota_check(_total_size(selected), 0)
-    if archive_format == "zip":
+    if website.linux_user:
+        archive_items = [_archive_arcname(base, path) for path in selected]
+        if archive_format == "zip":
+            _run_as_site_user(
+                website,
+                base,
+                "zip",
+                ["-r", output_path.name, "--", *archive_items],
+            )
+        else:
+            _run_as_site_user(
+                website,
+                base,
+                "tar",
+                ["-czf", output_path.name, "--", *archive_items],
+            )
+    elif archive_format == "zip":
         with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for path in selected:
                 if path.is_dir():
@@ -673,7 +789,7 @@ def archive_entries(
                     recursive=True,
                     filter=lambda member: None if (member.issym() or member.islnk() or member.isdev()) else member,
                 )
-    site_users.fix_site_path(str(output_path), website.linux_user)
+    site_users.fix_site_path(str(output_path), website.linux_user, check=True)
     _clear_fastcgi_cache()
     return str(output_path)
 
@@ -858,22 +974,45 @@ def extract_archive(
         raise ValueError("Extract destination not found")
 
     suffix = archive_file.name.lower()
+    archive_kind = ""
+    incoming = 0
     if suffix.endswith(".zip"):
+        archive_kind = "zip"
         with zipfile.ZipFile(archive_file) as archive:
             implied_dirs = _get_implied_dirs(archive)
             incoming = _zip_uncompressed_size(archive, destination, archive_file, implied_dirs, allow_executable)
             if quota_check:
                 quota_check(incoming, 0)
-            _extract_zip_archive(archive, destination, archive_file, implied_dirs)
     elif suffix.endswith(".tar.gz") or suffix.endswith(".tgz"):
+        archive_kind = "tar.gz"
         with tarfile.open(archive_file, "r:gz") as archive:
             incoming = _tar_uncompressed_size(archive, destination, archive_file, allow_executable)
             if quota_check:
                 quota_check(incoming, 0)
-            _extract_tar_archive(archive, destination, archive_file)
     else:
         raise ValueError("Only .zip, .tar.gz, and .tgz archives can be extracted")
-    site_users.fix_site_path(str(destination), website.linux_user)
+    if website.linux_user:
+        max_items = 0 if MAX_ARCHIVE_ITEMS is None else MAX_ARCHIVE_ITEMS
+        max_bytes = 0 if MAX_ARCHIVE_UNCOMPRESSED_BYTES is None else MAX_ARCHIVE_UNCOMPRESSED_BYTES
+        shell.privileged(
+            "site-archive-extract",
+            helper_args=[
+                website.linux_user,
+                str(Path(website.root_path).resolve()),
+                _helper_relative_path(website, archive_file),
+                _helper_relative_path(website, destination),
+                archive_kind,
+                str(max_items),
+                str(max_bytes),
+            ],
+        )
+    elif archive_kind == "zip":
+        with zipfile.ZipFile(archive_file) as archive:
+            _extract_zip_archive(archive, destination, archive_file, _get_implied_dirs(archive))
+    else:
+        with tarfile.open(archive_file, "r:gz") as archive:
+            _extract_tar_archive(archive, destination, archive_file)
+    site_users.fix_site_path(str(destination), website.linux_user, check=True)
     _clear_fastcgi_cache()
     return str(destination)
 

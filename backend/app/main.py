@@ -119,17 +119,29 @@ def favicon():
     if custom.startswith("/brand-assets/"):
         filename = custom.split("/brand-assets/", 1)[1].split("?", 1)[0]
         path, media_type = panel_brand_settings.asset_path(filename)
-        return FileResponse(path, media_type=media_type)
+        return FileResponse(
+            path,
+            media_type=media_type,
+            headers={"Cache-Control": "no-cache, must-revalidate"},
+        )
     path = frontend_dist / "favicon.png"
     if path.exists():
-        return FileResponse(path, media_type="image/png")
+        return FileResponse(
+            path,
+            media_type="image/png",
+            headers={"Cache-Control": "no-cache, must-revalidate"},
+        )
     raise HTTPException(status_code=404, detail="Not found")
 
 
 @app.get("/brand-assets/{filename}", include_in_schema=False)
 def brand_asset(filename: str):
     path, media_type = panel_brand_settings.asset_path(filename)
-    return FileResponse(path, media_type=media_type)
+    return FileResponse(
+        path,
+        media_type=media_type,
+        headers={"Cache-Control": "no-cache, must-revalidate"},
+    )
 
 
 @app.get("/{full_path:path}", include_in_schema=False)

@@ -391,10 +391,14 @@ NGINX
 }
 
 ensure_terminal_tools() {
-  if ! command -v composer >/dev/null 2>&1; then
-    log "Installing Composer for per-site terminal workflows"
+  local missing=()
+  command -v composer >/dev/null 2>&1 || missing+=(composer)
+  command -v zip >/dev/null 2>&1 || missing+=(zip)
+  command -v unzip >/dev/null 2>&1 || missing+=(unzip)
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    log "Installing terminal/file-manager tools: ${missing[*]}"
     DEBIAN_FRONTEND=noninteractive apt-get update
-    DEBIAN_FRONTEND=noninteractive apt-get install -y composer
+    DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing[@]}"
   fi
 }
 

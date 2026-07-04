@@ -193,13 +193,13 @@ def fix_site_permissions(root_path: str, linux_user: Optional[str]) -> None:
     )
 
 
-def fix_site_path(path: str, linux_user: Optional[str]) -> None:
+def fix_site_path(path: str, linux_user: Optional[str], check: bool = False) -> None:
     if not linux_user:
         return
     shell.privileged(
         "site-path-fix",
         helper_args=[path, validate_linux_user(linux_user)],
-        check=False,
+        check=check,
         fallback=["chown", "-R", f"{linux_user}:{linux_user}", path],
     )
 
