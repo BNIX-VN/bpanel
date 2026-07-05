@@ -205,6 +205,7 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
     if db_info:
         # Store password encrypted; phpMyAdmin SSO decrypts on demand.
         db.add(DatabaseAccount(
+            owner_id=owner_id,
             website_id=website.id,
             db_name=db_info["db_name"],
             db_user=db_info["db_user"],

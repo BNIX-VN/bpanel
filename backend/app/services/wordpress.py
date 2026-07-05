@@ -103,11 +103,20 @@ def install_wordpress(
     config_path = public / "wp-config.php"
     config_content = _render_wp_config(db["db_name"], db["db_user"], db["db_password"])
     if not settings.command_dry_run:
-        config_path.write_text(config_content, encoding="utf-8")
-        try:
-            config_path.chmod(0o640)
-        except PermissionError:
-            pass
+        shell.privileged(
+            "site-file-write",
+            helper_args=[linux_user, str(root), "public_html/wp-config.php", "0640"],
+            fallback=[
+                "sh",
+                "-c",
+                'cat >"$1" && chmod "$2" "$1"',
+                "sh",
+                str(config_path),
+                "0640",
+            ],
+            input=config_content,
+            sensitive=True,
+        )
     shell.privileged(
         "site-path-fix",
         helper_args=[str(public), linux_user],
@@ -134,6 +143,21 @@ def install_wordpress(
     )
 
     fix_permissions(str(root), linux_user)
+    if not settings.command_dry_run:
+        shell.privileged(
+            "site-file-write",
+            helper_args=[linux_user, str(root), "public_html/wp-config.php", "0640"],
+            fallback=[
+                "sh",
+                "-c",
+                'chmod "$2" "$1"',
+                "sh",
+                str(config_path),
+                "0640",
+            ],
+            input=config_content,
+            sensitive=True,
+        )
     return str(root)
 
 

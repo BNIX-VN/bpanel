@@ -418,12 +418,14 @@ def restore_user_backup(backup_file: str, db) -> dict:
                 db_account = db.query(DatabaseAccount).filter(DatabaseAccount.website_id == website.id).first()
                 if db_account is None:
                     db.add(DatabaseAccount(
+                        owner_id=website.owner_id,
                         website_id=website.id,
                         db_name=db_name,
                         db_user=db_user,
                         db_password=encrypt(db_password),
                     ))
                 else:
+                    db_account.owner_id = website.owner_id
                     db_account.db_name = db_name
                     db_account.db_user = db_user
                     db_account.db_password = encrypt(db_password)

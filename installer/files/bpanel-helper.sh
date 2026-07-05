@@ -1830,9 +1830,10 @@ PY
     ;;
 
   site-file-write)
-    [[ $# -eq 3 ]] || deny "usage: site-file-write <site-user> <site-root> <relative-path>"
-    user="$1"; root_arg="$2"; rel_arg="$3"
+    [[ $# -eq 3 || $# -eq 4 ]] || deny "usage: site-file-write <site-user> <site-root> <relative-path> [0644|0640]"
+    user="$1"; root_arg="$2"; rel_arg="$3"; mode_arg="${4:-0644}"
     require_linux_user "$user"
+    [[ "$mode_arg" == "0644" || "$mode_arg" == "0640" ]] || deny "invalid file mode: $mode_arg"
     root_target=$(require_managed_path "$root_arg" "$user")
     case "$rel_arg" in
       ""|"/"|/*|*$'\n'*|".."|"../"*|*"/.."|*"/../"*) deny "unsafe relative path: $rel_arg" ;;
@@ -1852,7 +1853,7 @@ PY
     rm -f -- "$tmp"
     cat >"$tmp"
     chown "$user:$user" "$tmp"
-    chmod 0644 "$tmp"
+    chmod "$mode_arg" "$tmp"
     mv -f -- "$tmp" "$target"
     ;;
 
