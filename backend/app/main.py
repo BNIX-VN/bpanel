@@ -43,6 +43,11 @@ app.add_middleware(
 )
 
 
+def _is_potentially_trustworthy_origin(request) -> bool:
+    host = (request.url.hostname or "").lower()
+    return request.url.scheme == "https" or host in {"localhost", "127.0.0.1", "::1"}
+
+
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request, exc):
     logger.exception("Unhandled request error: %s %s", request.method, request.url.path)
@@ -56,8 +61,9 @@ async def security_headers(request, call_next):
     response = await call_next(request)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
-    response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
-    response.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
+    if _is_potentially_trustworthy_origin(request):
+        response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+        response.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
     response.headers.setdefault("X-Permitted-Cross-Domain-Policies", "none")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
     response.headers.setdefault(
@@ -78,7 +84,7 @@ async def security_headers(request, call_next):
         "base-uri 'self'; "
         "form-action 'self'",
     )
-    if settings.app_env.lower() == "production":
+    if settings.app_env.lower() == "production" and request.url.scheme == "https":
         response.headers.setdefault(
             "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
         )
