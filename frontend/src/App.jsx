@@ -437,6 +437,7 @@ function App() {
   const [osAutoUpdate, setOsAutoUpdate] = useState({ enabled: true, mode: 'security', auto_reboot: false });
   const [panelAutoUpdate, setPanelAutoUpdate] = useState({ enabled: true, time: '03:30' });
   const noticeTimer = useRef(null);
+  const isAdmin = currentUser?.role === 'admin';
 
   const navigateToPage = useCallback((nextPage, options = {}) => {
     const route = routeForPage(nextPage);
@@ -2132,8 +2133,6 @@ function App() {
   useEffect(() => {
     if (SETTINGS_PAGE_KEYS.includes(page)) setSettingsMenuOpen(true);
   }, [page]);
-
-  const isAdmin = currentUser?.role === 'admin';
 
   function roleLabel(role) {
     return role === 'admin' ? 'Admin' : 'End user';
