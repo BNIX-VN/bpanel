@@ -166,6 +166,37 @@ class TestExecCommand:
             "check": False,
         }
 
+    def test_exec_passes_php_version_before_command(self, monkeypatch):
+        captured = {}
+
+        def fake_privileged(helper_command, helper_args=None, check=True, **kwargs):
+            captured["helper_command"] = helper_command
+            captured["helper_args"] = helper_args
+            captured["check"] = check
+            return type("Result", (), {"returncode": 0, "stdout": "ok", "stderr": ""})()
+
+        monkeypatch.setattr(terminal_service.shell, "privileged", fake_privileged)
+        result = exec_command(
+            "siteuser",
+            "composer install --no-dev",
+            cwd="/home/siteuser/example.com/public_html",
+            php_version="8.3",
+        )
+
+        assert result.exit_code == 0
+        assert captured == {
+            "helper_command": "terminal-exec",
+            "helper_args": [
+                "siteuser",
+                "/home/siteuser/example.com/public_html",
+                "--php-version=8.3",
+                "composer",
+                "install",
+                "--no-dev",
+            ],
+            "check": False,
+        }
+
     def test_exec_rejects_cd_outside_session(self):
         result = exec_command("siteuser", "cd public_html", cwd="/home/siteuser/example.com")
         assert result.exit_code == 2

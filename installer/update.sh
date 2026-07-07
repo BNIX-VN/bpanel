@@ -578,6 +578,15 @@ FLUSH PRIVILEGES;
 SQL
 }
 
+ensure_panel_runtime_ownership() {
+  id -u bpanel >/dev/null 2>&1 || return 0
+  [[ -d "$APP_DIR/backend" ]] && chown -R bpanel:bpanel "$APP_DIR/backend" 2>/dev/null || true
+  [[ -d "$APP_DIR/frontend" ]] && chown -R bpanel:bpanel "$APP_DIR/frontend" 2>/dev/null || true
+  [[ -d /var/lib/bpanel ]] && chown bpanel:bpanel /var/lib/bpanel 2>/dev/null || true
+  [[ -d /var/lib/bpanel/assets ]] && chown -R bpanel:bpanel /var/lib/bpanel/assets 2>/dev/null || true
+  [[ -f "$APP_DIR/backend/.env" ]] && chmod 0640 "$APP_DIR/backend/.env"
+}
+
 # --- Snapshot the SQLite DB before doing anything ---------------------------
 backup_db() {
   local db_path="$APP_DIR/backend/bpanel.db"
@@ -695,6 +704,7 @@ else
   cp -r "$SOURCE_DIR/backend/."  "$APP_DIR/backend/"
   cp -r "$SOURCE_DIR/frontend/." "$APP_DIR/frontend/"
 fi
+ensure_panel_runtime_ownership
 
 # Defensive: if .env still doesn't exist (e.g. fresh deploy syncing on top of
 # nothing), leave a clear error message.
@@ -767,10 +777,7 @@ fi
 
 # --- Restore ownership so bpanel user can read/write the deploy ------------
 if id -u bpanel >/dev/null 2>&1; then
-  chown -R bpanel:bpanel "$APP_DIR/backend" "$APP_DIR/frontend" 2>/dev/null || true
-  chown bpanel:bpanel /var/lib/bpanel 2>/dev/null || true
-  [[ -d /var/lib/bpanel/assets ]] && chown -R bpanel:bpanel /var/lib/bpanel/assets 2>/dev/null || true
-  [[ -f "$APP_DIR/backend/.env" ]] && chmod 0640 "$APP_DIR/backend/.env"
+  ensure_panel_runtime_ownership
 fi
 
 # --- Backend ---------------------------------------------------------------

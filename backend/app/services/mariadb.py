@@ -87,7 +87,7 @@ def drop_database(db_name: str, db_user: str):
         f"DROP USER IF EXISTS {_quote_sql_string(_validate_identifier(db_user))}@'localhost';\n"
         "FLUSH PRIVILEGES;\n"
     )
-    return _run_sql(sql, check=False)
+    return _run_sql(sql)
 
 
 def change_database_password(db_user: str, db_password: str):

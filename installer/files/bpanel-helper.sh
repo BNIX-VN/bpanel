@@ -2084,9 +2084,16 @@ PY
   # ---- terminal command execution as panel Linux user ------------------
   terminal-exec)
     # Execute a whitelisted command as the panel Linux user
-    # Args: <site-user> <cwd> <command> [args...]
-    [[ $# -ge 3 ]] || deny "usage: terminal-exec <site-user> <cwd> <command> [args...]"
+    # Args: <site-user> <cwd> [--php-version=<version>] <command> [args...]
+    [[ $# -ge 3 ]] || deny "usage: terminal-exec <site-user> <cwd> [--php-version=<version>] <command> [args...]"
     user="$1"; cwd_arg="$2"; shift 2
+    php_version=""
+    if [[ "${1:-}" == --php-version=* ]]; then
+      php_version="${1#--php-version=}"
+      require_php_version "$php_version"
+      shift
+    fi
+    [[ $# -ge 1 ]] || deny "usage: terminal-exec <site-user> <cwd> [--php-version=<version>] <command> [args...]"
     cmd="$1"; shift
     require_linux_user "$user"
     id -u "$user" >/dev/null 2>&1 || deny "panel Linux user does not exist: $user"
@@ -2102,10 +2109,28 @@ PY
       "npm_config_cache=$HOME_ROOT/$user/.npm"
       "PATH=/usr/local/bin:/usr/bin:/bin"
     )
+    php_bin="php"
+    if [[ -n "$php_version" ]]; then
+      php_bin="php${php_version}"
+      command -v "$php_bin" >/dev/null 2>&1 || deny "PHP CLI is not installed: $php_bin"
+    fi
 
     # Whitelist of allowed commands for terminal access
     case "$cmd" in
-      php|composer|node|npm|npx|yarn|git|phpunit)
+      php)
+        exec runuser -u "$user" -- env "${terminal_env[@]}" "$php_bin" "$@"
+        ;;
+      composer)
+        composer_bin="$(command -v composer || true)"
+        [[ -n "$composer_bin" ]] || deny "composer not found"
+        exec runuser -u "$user" -- env "${terminal_env[@]}" "$php_bin" "$composer_bin" "$@"
+        ;;
+      phpunit)
+        phpunit_bin="$(command -v phpunit || true)"
+        [[ -n "$phpunit_bin" ]] || deny "phpunit not found"
+        exec runuser -u "$user" -- env "${terminal_env[@]}" "$php_bin" "$phpunit_bin" "$@"
+        ;;
+      node|npm|npx|yarn|git)
         exec runuser -u "$user" -- env "${terminal_env[@]}" "$cmd" "$@"
         ;;
       ls|cat|mkdir|rm|cp|mv|chmod|chown|pwd|echo|touch|grep|find|tar|zip|unzip|curl|wget|diff|head|tail|less|du|df|date|whoami|which|clear)
@@ -2114,7 +2139,7 @@ PY
       artisan)
         # artisan is a PHP script, executed via php
         [[ -f artisan ]] || deny "artisan not found in $target"
-        exec runuser -u "$user" -- env "${terminal_env[@]}" php artisan "$@"
+        exec runuser -u "$user" -- env "${terminal_env[@]}" "$php_bin" artisan "$@"
         ;;
       *)
         echo "Command not allowed: $cmd" >&2

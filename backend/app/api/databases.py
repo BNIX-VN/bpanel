@@ -3,6 +3,7 @@ from tempfile import NamedTemporaryFile
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.background import BackgroundTask
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from typing import List
 import ipaddress
@@ -94,9 +95,18 @@ def create_database(payload: DatabaseCreate, db: Session = Depends(get_db), curr
 @router.delete("/{database_id}")
 def delete_database_record(database_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     item = get_accessible_database(database_id, db, current_user)
-    mariadb.drop_database(item.db_name, item.db_user)
-    db.delete(item)
-    db.commit()
+    try:
+        mariadb.drop_database(item.db_name, item.db_user)
+    except Exception as exc:
+        logger.exception("Failed to delete MariaDB database/user")
+        raise HTTPException(status_code=500, detail=f"MariaDB error: {exc}") from exc
+    try:
+        db.delete(item)
+        db.commit()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.exception("Failed to delete database record")
+        raise HTTPException(status_code=500, detail="Panel database error") from exc
     return {"ok": True}
 
 
