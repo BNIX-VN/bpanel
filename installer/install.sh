@@ -189,7 +189,7 @@ ask_panel_url() {
 
 install_base_packages() {
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update
+  apt-get update --allow-releaseinfo-change
   apt-get install -y software-properties-common ca-certificates curl gnupg git composer nginx mariadb-server redis-server openssh-server python3 python3-pip python3-venv certbot python3-certbot-nginx tar zip unzip openssl ufw phpmyadmin acl
   systemctl enable --now nginx mariadb redis-server
   systemctl enable --now ssh 2>/dev/null || systemctl enable --now sshd 2>/dev/null || true
@@ -263,7 +263,7 @@ install_ioncube_loader() {
 
 install_php() {
   add-apt-repository -y ppa:ondrej/php
-  apt-get update
+  apt-get update --allow-releaseinfo-change
 
   if [[ ! " ${PHP_VERSIONS} " =~ " ${PHP_DEFAULT} " ]]; then
     fail "PHP_DEFAULT=${PHP_DEFAULT} must be included in PHP_VERSIONS='${PHP_VERSIONS}'"
@@ -442,7 +442,7 @@ RULES
 install_waf_engine() {
   export DEBIAN_FRONTEND=noninteractive
   if ! dpkg -s libnginx-mod-http-modsecurity >/dev/null 2>&1; then
-    apt-get update
+    apt-get update --allow-releaseinfo-change
     apt-get install -y libnginx-mod-http-modsecurity modsecurity-crs libmodsecurity3 || \
       apt-get install -y libnginx-mod-http-modsecurity libmodsecurity3
   fi

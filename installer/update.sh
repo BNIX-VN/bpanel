@@ -397,7 +397,7 @@ ensure_terminal_tools() {
   command -v unzip >/dev/null 2>&1 || missing+=(unzip)
   if [[ ${#missing[@]} -gt 0 ]]; then
     log "Installing terminal/file-manager tools: ${missing[*]}"
-    DEBIAN_FRONTEND=noninteractive apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get update --allow-releaseinfo-change
     DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing[@]}"
   fi
 }
@@ -429,7 +429,7 @@ install_panel_runtime() {
   getent group bpanel-sites >/dev/null || groupadd --system bpanel-sites
   getent group bpanel-sftp >/dev/null || groupadd --system bpanel-sftp
   if ! command -v setfacl >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1; then
-    DEBIAN_FRONTEND=noninteractive apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get update --allow-releaseinfo-change
     DEBIAN_FRONTEND=noninteractive apt-get install -y acl
   fi
   usermod -aG bpanel-sites bpanel 2>/dev/null || true
@@ -915,7 +915,7 @@ cd "$APP_DIR/frontend"
 # Check Node.js availability
 if ! command -v node >/dev/null 2>&1; then
   log "WARNING: Node.js not found, installing..."
-  DEBIAN_FRONTEND=noninteractive apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get update --allow-releaseinfo-change
   DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs npm
 fi
 echo "Node version: $(node --version)"

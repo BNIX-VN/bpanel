@@ -239,7 +239,7 @@ configure_unattended_upgrades() {
   [[ "$mode" == "security" || "$mode" == "all" ]] || deny "mode must be security/all"
   [[ "$reboot" == "on" || "$reboot" == "off" ]] || deny "auto reboot must be on/off"
 
-  DEBIAN_FRONTEND=noninteractive apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get update --allow-releaseinfo-change
   DEBIAN_FRONTEND=noninteractive apt-get install -y unattended-upgrades apt-listchanges
 
   if [[ "$enabled" == "off" ]]; then
@@ -278,7 +278,7 @@ APT
 
 run_os_update_now() {
   export DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none
-  apt-get update
+  apt-get update --allow-releaseinfo-change
   apt-get \
     -o Dpkg::Options::=--force-confdef \
     -o Dpkg::Options::=--force-confold \
@@ -296,12 +296,12 @@ run_os_update() {
       --unit="$unit" \
       --collect \
       --description="Update OS packages for BPanel" \
-      /bin/bash -lc 'export DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none; apt-get update; apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade -y'
+      /bin/bash -lc 'export DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none; apt-get update --allow-releaseinfo-change; apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade -y'
     echo "OS update started: ${unit}.service"
     echo "Check progress: journalctl -u ${unit}.service -f"
     return 0
   fi
-  nohup /bin/bash -lc 'export DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none; apt-get update; apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade -y' \
+  nohup /bin/bash -lc 'export DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none; apt-get update --allow-releaseinfo-change; apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade -y' \
     >/var/log/bpanel-os-update.log 2>&1 &
   echo "OS update started in background. Log: /var/log/bpanel-os-update.log"
 }
@@ -537,7 +537,7 @@ save_waf_site_rules() {
 install_waf_engine() {
   export DEBIAN_FRONTEND=noninteractive
   if ! dpkg -s libnginx-mod-http-modsecurity >/dev/null 2>&1; then
-    apt-get update
+    apt-get update --allow-releaseinfo-change
     apt-get install -y libnginx-mod-http-modsecurity modsecurity-crs libmodsecurity3 || \
       apt-get install -y libnginx-mod-http-modsecurity libmodsecurity3
   fi
@@ -571,11 +571,11 @@ install_php_version() {
   if ! apt-cache show "php${version}-fpm" >/dev/null 2>&1; then
     if ! grep -q "ondrej/php" /etc/apt/sources.list.d/*.list 2>/dev/null; then
       echo "Adding ondrej/php PPA for PHP $version..."
-      apt-get update
+      apt-get update --allow-releaseinfo-change
       apt-get install -y software-properties-common || true
       add-apt-repository -y ppa:ondrej/php 2>/dev/null || true
     fi
-    apt-get update
+    apt-get update --allow-releaseinfo-change
   fi
   echo "Installing PHP $version..."
   local packages=(
