@@ -31,6 +31,8 @@ DEFAULT_RULES = [
         "title": "SQL injection probes",
         "description": "Blocks high-confidence SQL injection primitives.",
         "rules": """SecRule ARGS|REQUEST_HEADERS|REQUEST_BODY "@rx (?i)(?:union\\s+select|sleep\\s*\\(|benchmark\\s*\\(|load_file\\s*\\(|into\\s+outfile|information_schema|extractvalue\\s*\\()" "id:1001003,phase:2,deny,status:403,log,msg:'BPanel blocked SQL injection pattern'""",
+        "exceptions": '''# Exception: WordPress admin-ajax file upload (e.g. All-in-One Migration) contains SQL dump - false positive
+SecRule REQUEST_URI "@rx ^/wp-admin/admin-ajax\\.php" "id:1007003,phase:1,pass,nolog,ctl:ruleRemoveById=1001003"''',
     },
     {
         "id": "general-xss",
@@ -69,6 +71,8 @@ SecRule ARGS:author "@rx ^[0-9]+$" "id:1001103,phase:2,deny,status:403,log,msg:'
         "title": "WordPress installer probes",
         "description": "Blocks direct access to installation and upgrade scripts after deployment.",
         "rules": """SecRule REQUEST_URI "@rx (?i)(?:/wp-admin/install\\.php|/wp-admin/upgrade\\.php|/wp-admin/setup-config\\.php)" "id:1001104,phase:1,deny,status:403,log,msg:'BPanel blocked WordPress installer probe'""",
+        "exceptions": '''# Exception: /wp-admin/upgrade.php is triggered automatically by WordPress after plugin/core updates
+SecRule REQUEST_URI "@rx ^/wp-admin/upgrade\\.php" "id:1007104,phase:1,pass,nolog,ctl:ruleRemoveById=1001104"''',
     },
 ]
 

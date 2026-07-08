@@ -120,6 +120,29 @@ def test_http_flood_zones_render_only_enabled_sites():
     assert nginx.http_flood_zone_name("disabled.com") not in content
 
 
+def test_waf_sqli_rule_includes_admin_ajax_exception():
+    content = waf.render_site_rules(
+        "example.com",
+        ["general-sqli"],
+    )
+
+    assert "id:1001003" in content
+    assert "id:1007003" in content
+    assert "admin-ajax" in content
+    assert "ctl:ruleRemoveById=1001003" in content
+
+
+def test_waf_install_upgrade_rule_includes_upgrade_exception():
+    content = waf.render_site_rules(
+        "example.com",
+        ["wordpress-install-upgrade"],
+    )
+
+    assert "id:1001104" in content
+    assert "id:1007104" in content
+    assert "upgrade\\.php" in content
+    assert "ctl:ruleRemoveById=1001104" in content
+
 def test_render_vhost_keeps_waf_and_http_flood_blocks():
     content = nginx.render_vhost(
         "example.com",
