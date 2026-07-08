@@ -13,7 +13,7 @@ from app.core.permissions import Role, ensure_role, is_admin_role
 from app.core.secrets import encrypt
 from app.models.entities import DatabaseAccount, User, Website
 from app.schemas.schemas import WebsiteCreate, WebsiteHttpFloodUpdate, WebsiteLogOut, WebsiteNginxConfig, WebsiteNginxCustom, WebsiteOut, WebsiteUpdate, WebsiteWafUpdate
-from app.services import mariadb, nginx, site_users, ssl, storage_quota, waf, wordpress
+from app.services import file_manager, mariadb, nginx, site_users, ssl, storage_quota, waf, wordpress
 from app.services.audit import log_action
 
 _PLACEHOLDER_TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates" / "nginx"
@@ -47,6 +47,29 @@ def _sync_http_flood_zones(db: Session) -> None:
     result = nginx.sync_http_flood_zones(db.query(Website).all())
     if result.returncode != 0:
         raise RuntimeError(_command_error(result))
+
+
+def _write_placeholder_page(domain: str, root_path: str, linux_user: str | None, php_version: str) -> None:
+    placeholder = site_users.document_root(root_path) / "index.html"
+    if placeholder.exists():
+        return
+    env = Environment(loader=FileSystemLoader(_PLACEHOLDER_TEMPLATE_DIR), autoescape=False)
+    tmpl = env.get_template("placeholder.html.j2")
+    placeholder_site = Website(
+        domain=domain,
+        owner_id=0,
+        root_path=root_path,
+        document_root="public_html",
+        linux_user=linux_user,
+        php_version=php_version,
+        app_type="php",
+    )
+    file_manager.write_text_file(
+        placeholder_site,
+        "public_html/index.html",
+        tmpl.render(domain=domain),
+        allow_executable=True,
+    )
 
 
 def _website_http_flood_config(website: Website) -> dict:
@@ -169,11 +192,7 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
             # Just create the public_html/ folder skeleton and write a vhost.
             public = site_users.document_root(root_path)
             if not settings.command_dry_run:
-                placeholder = public / "index.html"
-                if not placeholder.exists():
-                    env = Environment(loader=FileSystemLoader(_PLACEHOLDER_TEMPLATE_DIR), autoescape=False)
-                    tmpl = env.get_template("placeholder.html.j2")
-                    placeholder.write_text(tmpl.render(domain=payload.domain), encoding="utf-8")
+                _write_placeholder_page(payload.domain, root_path, linux_user, payload.php_version)
                 site_users.fix_site_path(str(public), linux_user)
             _ensure_default_waf_file(payload.domain)
             nginx.write_vhost(
