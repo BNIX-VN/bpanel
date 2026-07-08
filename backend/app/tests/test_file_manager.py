@@ -2,6 +2,7 @@ import io
 import os
 import stat
 import tarfile
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -185,6 +186,34 @@ def test_extract_tar_does_not_overwrite_source_archive(tmp_path):
     assert archive_path.read_bytes() == original
     with tarfile.open(archive_path, "r:gz") as archive:
         assert archive.getnames() == ["site.tar.gz"]
+
+
+def test_extract_zip_normalizes_backslashes_and_overwrites_existing_files(tmp_path):
+    root = tmp_path / "site"
+    public = root / "public_html"
+    public.mkdir(parents=True)
+    archive_path = public / "crm_update.zip"
+    existing = public / "app" / "config.php"
+    existing.parent.mkdir()
+    existing.write_text("old", encoding="utf-8")
+
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("app\\config.php", b"new")
+        archive.writestr("app\\cache\\", b"")
+        archive.writestr("crm_update.zip", b"do not replace the source archive")
+
+    original = archive_path.read_bytes()
+
+    file_manager.extract_archive(
+        _website(root),
+        "public_html/crm_update.zip",
+        "public_html",
+        allow_executable=True,
+    )
+
+    assert existing.read_text(encoding="utf-8") == "new"
+    assert (public / "app" / "cache").is_dir()
+    assert archive_path.read_bytes() == original
 
 
 def test_chmod_entry_updates_mode(tmp_path):

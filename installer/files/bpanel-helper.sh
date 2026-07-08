@@ -1898,8 +1898,9 @@ PY
     tmp_archive=$(mktemp "/tmp/bpanel-extract-XXXXXX")
     trap 'rm -f -- "$tmp_archive"' EXIT
     install -o "$user" -g "$user" -m 0600 -- "$archive_target" "$tmp_archive"
-    python3 - "$tmp_archive" "$archive_kind" "$destination_target" "$max_items" "$max_bytes" <<'PY'
+    runuser -u "$user" -- python3 - "$tmp_archive" "$archive_kind" "$destination_target" "$max_items" "$max_bytes" "$archive_target" <<'PY'
 import os
+import shutil
 import stat
 import sys
 import tarfile
@@ -1907,53 +1908,166 @@ import zipfile
 
 archive_path, archive_kind, destination = sys.argv[1:4]
 max_items, max_bytes = int(sys.argv[4]), int(sys.argv[5])
+source_archive = os.path.realpath(sys.argv[6])
 destination = os.path.realpath(destination)
 
 
-def validate_name(name):
+def safe_target(name):
+    """Normalize backslash paths and resolve to a safe absolute path."""
+    if "\x00" in name:
+        raise ValueError("archive contains an unsafe path")
     normalized = name.replace("\\", "/")
-    if normalized.startswith("/"):
+    if normalized.startswith("/") or ":" in normalized.split("/", 1)[0]:
         raise ValueError("archive contains an absolute path")
     parts = [part for part in normalized.split("/") if part not in ("", ".")]
     if not parts or any(part == ".." for part in parts):
         raise ValueError("archive contains an unsafe path")
-    target = os.path.realpath(os.path.join(destination, *parts))
-    if os.path.commonpath((destination, target)) != destination:
+    target = os.path.abspath(os.path.join(destination, *parts))
+    resolved = os.path.realpath(target)
+    if os.path.commonpath((destination, resolved)) != destination:
         raise ValueError("archive path escapes destination")
+    return target, resolved
 
 
-count = 0
-total = 0
-if archive_kind == "zip":
+def zip_implied_dirs(infos):
+    implied = set()
+    for info in infos:
+        parts = [part for part in info.filename.replace("\\", "/").split("/") if part not in ("", ".")]
+        for index in range(1, len(parts)):
+            implied.add("/".join(parts[:index]))
+    return implied
+
+
+def _is_dir_entry(info, implied_dirs):
+    """Return True if a ZipInfo represents a directory."""
+    normalized = info.filename.replace("\\", "/")
+    if info.is_dir() or normalized.endswith("/"):
+        return True
+    mode = (info.external_attr >> 16) & 0o170000
+    if stat.S_ISDIR(mode) and info.file_size == 0:
+        return True
+    if info.file_size == 0 and normalized.rstrip("/") in implied_dirs:
+        return True
+    return False
+
+
+def is_source_archive(resolved):
+    return resolved == source_archive
+
+
+def ensure_regular_target(target):
+    if os.path.islink(target):
+        raise ValueError("refusing to overwrite a symlink")
+    if os.path.isdir(target):
+        raise ValueError("archive file conflicts with an existing directory")
+
+
+def ensure_directory_target(target):
+    if os.path.islink(target):
+        raise ValueError("refusing to overwrite a symlink")
+    if os.path.exists(target) and not os.path.isdir(target):
+        try:
+            if os.path.getsize(target) == 0:
+                return
+        except OSError:
+            pass
+        raise ValueError("archive directory conflicts with an existing file")
+
+
+def validate_zip():
+    count = 0
+    total = 0
     with zipfile.ZipFile(archive_path) as archive:
-        for info in archive.infolist():
+        infos = archive.infolist()
+        implied_dirs = zip_implied_dirs(infos)
+        for info in infos:
             count += 1
-            validate_name(info.filename)
+            if max_items and count > max_items:
+                raise ValueError("archive has too many files")
+            target, resolved = safe_target(info.filename)
             mode = (info.external_attr >> 16) & 0o170000
             if stat.S_ISLNK(mode):
                 raise ValueError("archive symlinks are not allowed")
+            if is_source_archive(resolved):
+                continue
+            if _is_dir_entry(info, implied_dirs):
+                ensure_directory_target(target)
+                continue
+            ensure_regular_target(target)
             total += info.file_size
-else:
+            if max_bytes and total > max_bytes:
+                raise ValueError("archive is too large")
+
+
+def extract_zip():
+    with zipfile.ZipFile(archive_path) as archive:
+        infos = archive.infolist()
+        implied_dirs = zip_implied_dirs(infos)
+        for info in infos:
+            target, resolved = safe_target(info.filename)
+            if is_source_archive(resolved):
+                continue
+            if _is_dir_entry(info, implied_dirs):
+                if os.path.exists(target) and not os.path.isdir(target):
+                    os.unlink(target)
+                os.makedirs(target, exist_ok=True)
+                continue
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            try:
+                with archive.open(info) as src, open(target, "wb") as dst:
+                    shutil.copyfileobj(src, dst, length=1024 * 1024)
+            except RuntimeError as exc:
+                raise ValueError("archive entry cannot be extracted") from exc
+
+
+def validate_tar():
+    count = 0
+    total = 0
     with tarfile.open(archive_path, "r:gz") as archive:
         for member in archive:
             count += 1
-            validate_name(member.name)
+            if max_items and count > max_items:
+                raise ValueError("archive has too many files")
+            target, resolved = safe_target(member.name)
             if member.issym() or member.islnk() or member.isdev():
                 raise ValueError("archive links and devices are not allowed")
+            if is_source_archive(resolved):
+                continue
             if not member.isdir() and not member.isfile():
                 raise ValueError("archive contains unsupported entries")
+            if member.isdir():
+                ensure_directory_target(target)
+                continue
+            ensure_regular_target(target)
             total += member.size
-if max_items and count > max_items:
-    raise ValueError("archive has too many files")
-if max_bytes and total > max_bytes:
-    raise ValueError("archive is too large")
+            if max_bytes and total > max_bytes:
+                raise ValueError("archive is too large")
+
+
+def extract_tar():
+    with tarfile.open(archive_path, "r:gz") as archive:
+        for member in archive:
+            target, resolved = safe_target(member.name)
+            if is_source_archive(resolved):
+                continue
+            if member.isdir():
+                os.makedirs(target, exist_ok=True)
+                continue
+            source = archive.extractfile(member)
+            if source is None:
+                raise ValueError("archive entry cannot be extracted")
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with source, open(target, "wb") as dst:
+                shutil.copyfileobj(source, dst, length=1024 * 1024)
+
+
+if archive_kind == "zip":
+    validate_zip()
+    extract_zip()
+else:
+    validate_tar()
+    extract_tar()
 PY
-    if [[ "$archive_kind" == "zip" ]]; then
-      runuser -u "$user" -- unzip -oq "$tmp_archive" -d "$destination_target"
-    else
-      runuser -u "$user" -- tar --extract --gzip --file="$tmp_archive" \
-        --directory="$destination_target" --no-same-owner --no-same-permissions
-    fi
     # The archive may contain an entry with its own filename. Restore the
     # original source archive after extraction so it cannot overwrite itself.
     install -o "$user" -g "$user" -m 0644 -- "$tmp_archive" "$archive_target"
