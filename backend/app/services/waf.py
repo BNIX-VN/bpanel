@@ -45,6 +45,8 @@ DEFAULT_RULES = [
         "title": "Command injection probes",
         "description": "Blocks shell and downloader payloads commonly used for webshell drops.",
         "rules": """SecRule ARGS|REQUEST_HEADERS|REQUEST_BODY "@rx (?i)(?:/bin/(?:bash|sh)|cmd\\.exe|powershell|wget\\s+https?://|curl\\s+https?://|;\\s*(?:id|whoami|uname)\\b)" "id:1001005,phase:2,deny,status:403,log,msg:'BPanel blocked command injection pattern'""",
+        "exceptions": '''# Exception: WordPress plugin/theme upload - zip body triggers command-injection false positive
+SecRule REQUEST_URI "@rx ^/wp-admin/update\\.php" "id:1001006,phase:1,pass,nolog,ctl:ruleRemoveById=1001005"''',
     },
     {
         "id": "wordpress-sensitive-files",
@@ -150,6 +152,8 @@ def render_site_rules(domain: str, enabled_rule_ids: Iterable[str], custom_rules
             continue
         chunks.append(f"# {rule['category']} - {rule['title']} ({rule['id']})")
         chunks.append(rule["rules"].strip())
+        if rule.get("exceptions"):
+            chunks.append(rule["exceptions"].strip())
     chunks.extend(["", "# BPanel custom rules"])
     if custom:
         chunks.append(custom)
