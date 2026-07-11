@@ -31,7 +31,7 @@ ownership, quotas, backups, SSL, services, and firewall tools built in.
 
 ## Versioning
 
-Current release: `1.0.4`.
+Current release: `1.0.33`.
 
 BPanel versions use semantic versioning: `major.minor.patch`.
 
@@ -46,15 +46,26 @@ BPanel versions use semantic versioning: `major.minor.patch`.
 
 Run as root on a fresh Ubuntu 24.04 server.
 
-Recommended when the release tag has just been updated:
+Recommended auto latest-tag install:
 
 ```bash
 set -e
-BPANEL_VERSION=v1.0.4
 apt-get update
 apt-get install -y git
+BPANEL_REPO=https://github.com/BNIX-VN/bpanel.git
+if [ -z "${BPANEL_VERSION:-}" ]; then
+  BPANEL_VERSION="$(
+    git ls-remote --tags --refs "${BPANEL_REPO}" 'refs/tags/v*' |
+    awk -F/ '{print $NF}' |
+    grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' |
+    sort -V |
+    tail -n 1
+  )"
+fi
+test -n "${BPANEL_VERSION}" || { echo "Could not detect latest BPanel release tag" >&2; exit 1; }
+echo "Installing BPanel ${BPANEL_VERSION}"
 rm -rf /tmp/bpanel-source
-git clone --depth 1 --branch "${BPANEL_VERSION}" https://github.com/BNIX-VN/bpanel.git /tmp/bpanel-source
+git clone --depth 1 --branch "${BPANEL_VERSION}" "${BPANEL_REPO}" /tmp/bpanel-source
 cd /tmp/bpanel-source
 trap 'cd /; rm -rf /tmp/bpanel-source' EXIT
 chmod +x installer/install.sh installer/update.sh installer/rescue-ufw-blocklist.sh
@@ -64,9 +75,20 @@ bash installer/install.sh
 Release zip install:
 
 ```bash
-BPANEL_VERSION=v1.0.4
 apt-get update
-apt-get install -y curl unzip
+apt-get install -y git curl unzip
+BPANEL_REPO=https://github.com/BNIX-VN/bpanel.git
+if [ -z "${BPANEL_VERSION:-}" ]; then
+  BPANEL_VERSION="$(
+    git ls-remote --tags --refs "${BPANEL_REPO}" 'refs/tags/v*' |
+    awk -F/ '{print $NF}' |
+    grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' |
+    sort -V |
+    tail -n 1
+  )"
+fi
+test -n "${BPANEL_VERSION}" || { echo "Could not detect latest BPanel release tag" >&2; exit 1; }
+echo "Installing BPanel ${BPANEL_VERSION}"
 rm -rf /opt/bpanel-source /tmp/bpanel-release /tmp/bpanel-release.zip
 curl -fL --connect-timeout 10 --max-time 300 "https://github.com/BNIX-VN/bpanel/archive/refs/tags/${BPANEL_VERSION}.zip" -o /tmp/bpanel-release.zip
 unzip -q /tmp/bpanel-release.zip -d /tmp/bpanel-release
@@ -76,11 +98,13 @@ chmod +x installer/install.sh installer/update.sh installer/rescue-ufw-blocklist
 bash installer/install.sh
 ```
 
-`v1.0.4` is the current installable release tag. To install another release,
-change only `BPANEL_VERSION`. GitHub auto-generates the tag zip, but the
-`git clone` method avoids archive cache after a forced tag refresh. The clone
-path cleans up `/tmp/bpanel-source`; the zip path cleans up
-`/opt/bpanel-source` and its temporary archive files.
+The commands auto-detect the newest semantic release tag from GitHub; at the
+time of this README, that tag is `v1.0.33`. To pin another release, run the
+same command with `BPANEL_VERSION=v1.0.33` exported or set before the detection
+block. GitHub auto-generates the tag zip, but the `git clone` method avoids
+archive cache after a forced tag refresh. The clone path cleans up
+`/tmp/bpanel-source`; the zip path cleans up `/opt/bpanel-source` and its
+temporary archive files.
 
 The installer will:
 
@@ -146,7 +170,7 @@ when a newer release is available.
 To stay on a specific release:
 
 ```bash
-bpanel-update --tag v1.0.4
+bpanel-update --tag v1.0.33
 ```
 
 If the browser still shows the old UI, do a hard refresh (Ctrl + Shift + R) or
@@ -172,7 +196,9 @@ bpanel/
 |   `-- src/
 |-- installer/
 |   |-- files/                   bpanel-helper.sh + sudoers rule
+|   |-- da_import_install.sh     DirectAdmin backup import helper
 |   |-- install.sh               Full first-time install
+|   |-- proxy_install.sh         Proxy/edge install helper
 |   |-- rescue-ufw-blocklist.sh  Emergency UFW reset for oversized blocklists
 |   `-- update.sh                Pull from GitHub and redeploy
 `-- README.md
