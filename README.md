@@ -196,9 +196,7 @@ bpanel/
 |   `-- src/
 |-- installer/
 |   |-- files/                   bpanel-helper.sh + sudoers rule
-|   |-- da_import_install.sh     DirectAdmin backup import helper
 |   |-- install.sh               Full first-time install
-|   |-- proxy_install.sh         Proxy/edge install helper
 |   |-- rescue-ufw-blocklist.sh  Emergency UFW reset for oversized blocklists
 |   `-- update.sh                Pull from GitHub and redeploy
 `-- README.md
