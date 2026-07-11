@@ -31,8 +31,9 @@ DEFAULT_RULES = [
         "title": "SQL injection probes",
         "description": "Blocks high-confidence SQL injection primitives.",
         "rules": """SecRule ARGS|REQUEST_HEADERS|REQUEST_BODY "@rx (?i)(?:union\\s+select|sleep\\s*\\(|benchmark\\s*\\(|load_file\\s*\\(|into\\s+outfile|information_schema|extractvalue\\s*\\()" "id:1001003,phase:2,deny,status:403,log,msg:'BPanel blocked SQL injection pattern'""",
-        "exceptions": '''# Exception: WordPress admin-ajax file upload (e.g. All-in-One Migration) contains SQL dump - false positive
-SecRule REQUEST_URI "@rx ^/wp-admin/admin-ajax\\.php" "id:1007003,phase:1,pass,nolog,ctl:ruleRemoveById=1001003"''',
+        "exceptions": '''# Exception: All-in-One WP Migration imports contain raw site archives and SQL dumps - false positive
+SecRule REQUEST_URI "@rx ^/wp-admin/admin-ajax\\.php$" "id:1007001,phase:1,pass,nolog,chain,ctl:ruleRemoveById=1001002,ctl:ruleRemoveById=1001003,ctl:ruleRemoveById=1001004,ctl:ruleRemoveById=1001005"
+SecRule ARGS:action "@streq ai1wm_import" "t:none"''',
     },
     {
         "id": "general-xss",
