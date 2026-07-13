@@ -783,6 +783,10 @@ if [[ -f "$SOURCE_DIR/installer/files/bpanel-helper.sh" ]]; then
     install -m 0440 -o root -g root  "$SOURCE_DIR/installer/files/bpanel-sudoers"   /etc/sudoers.d/bpanel
     visudo -c -f /etc/sudoers.d/bpanel >/dev/null
     sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper wp --info >/dev/null
+    sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper php-fpm-retune >/dev/null || \
+      echo "  (warning: could not retune existing PHP-FPM pools; site refresh will retry later)"
+    sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper mariadb-retune >/dev/null || \
+      echo "  (warning: could not retune MariaDB; update will continue with existing settings)"
   else
     echo "  (bpanel user not found; skipping helper refresh - run install.sh first)"
   fi

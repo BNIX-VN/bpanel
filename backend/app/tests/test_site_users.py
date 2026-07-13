@@ -83,6 +83,35 @@ def test_site_permissions_do_not_allow_cross_user_reading():
     assert 'find "$target" -type d -exec chmod 755 {} +' not in helper
 
 
+def test_php_fpm_pools_are_auto_tuned_for_vps_size():
+    helper = HELPER_SCRIPT.read_text(encoding="utf-8")
+    assert "calculate_php_fpm_pool_tuning()" in helper
+    assert "php_fpm_total_memory_mb()" in helper
+    assert "php_fpm_cpu_count()" in helper
+    assert "php_fpm_pool_count()" in helper
+    assert "active_pool_divisor * active_pool_divisor < pool_count" in helper
+    assert "pm.max_children = ${PHP_FPM_MAX_CHILDREN}" in helper
+    assert "pm.process_idle_timeout = ${PHP_FPM_PROCESS_IDLE_TIMEOUT}s" in helper
+    assert "pm.max_requests = ${PHP_FPM_MAX_REQUESTS}" in helper
+    assert "request_terminate_timeout = ${PHP_FPM_REQUEST_TERMINATE_TIMEOUT}s" in helper
+    assert "BPANEL_PHP_FPM_WORKER_MB" in helper
+    assert "BPANEL_PHP_FPM_MAX_CHILDREN" in helper
+    assert "php-fpm-retune)" in helper
+    assert "pm.max_children = 8" not in helper
+
+
+def test_mariadb_is_auto_tuned_for_vps_size():
+    helper = HELPER_SCRIPT.read_text(encoding="utf-8")
+    assert "calculate_mariadb_tuning()" in helper
+    assert "write_mariadb_tuning()" in helper
+    assert "mariadb-retune)" in helper
+    assert "innodb_buffer_pool_size = ${MARIADB_INNODB_BUFFER_POOL_SIZE}" in helper
+    assert "max_connections = ${MARIADB_MAX_CONNECTIONS}" in helper
+    assert "table_open_cache = ${MARIADB_TABLE_OPEN_CACHE}" in helper
+    assert "ensure_mariadb_slow_log" in helper
+    assert "BPANEL_MARIADB_BUFFER_POOL_SIZE" in helper
+
+
 def test_terminal_helper_rejects_paths_outside_user_home():
     helper = HELPER_SCRIPT.read_text(encoding="utf-8")
     assert "require_terminal_path_args()" in helper

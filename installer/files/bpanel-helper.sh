@@ -43,6 +43,9 @@ NGINX_HTTP_FLOOD_CONF="/etc/nginx/conf.d/00-bpanel-http-flood.conf"
 NGINX_HTTP_FLOOD_LEGACY_CONF="/etc/nginx/conf.d/bpanel-http-flood.conf"
 NGINX_HTTP_FLOOD_ZONES="${NGINX_BLOCKLIST_DIR}/http-flood-zones.conf"
 NGINX_HTTP_FLOOD_SERVER_CONF="${NGINX_BLOCKLIST_DIR}/http-flood-server.conf"
+PHP_FPM_DEFAULT_WORKER_MB=128
+PHP_FPM_DEFAULT_REQUEST_TERMINATE_TIMEOUT=300
+MARIADB_TUNING_CONF="/etc/mysql/mariadb.conf.d/90-bpanel-tuning.cnf"
 
 deny() { echo "bpanel-helper: $*" >&2; exit 1; }
 
@@ -1376,6 +1379,351 @@ site_php_pool_glob() {
   printf 'bpanel-%s-%s-*' "$user" "$site_hash"
 }
 
+positive_int_or_default() {
+  local value="${1:-}" default="$2" min="${3:-1}" max="${4:-}"
+  if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+    value="$default"
+  fi
+  if (( value < min )); then
+    value="$min"
+  fi
+  if [[ -n "$max" ]] && (( value > max )); then
+    value="$max"
+  fi
+  printf '%s\n' "$value"
+}
+
+php_fpm_tuning_value() {
+  local key="$1" default="$2" value=""
+  if [[ -v "$key" ]]; then
+    value="${!key}"
+  fi
+  if [[ -z "$value" ]]; then
+    value="$(env_get "$key" 2>/dev/null || true)"
+  fi
+  printf '%s\n' "${value:-$default}"
+}
+
+php_fpm_total_memory_mb() {
+  local total
+  total="$(awk '/^MemTotal:/ { print int($2 / 1024); exit }' /proc/meminfo 2>/dev/null || true)"
+  positive_int_or_default "$total" 1024 256 1048576
+}
+
+php_fpm_cpu_count() {
+  local count
+  count="$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)"
+  positive_int_or_default "$count" 1 1 256
+}
+
+php_fpm_pool_count() {
+  local current_pool="${1:-}" count=0 pool_file
+  shopt -s nullglob
+  for pool_file in /etc/php/*/fpm/pool.d/bpanel-*.conf; do
+    [[ -f "$pool_file" ]] || continue
+    count=$((count + 1))
+  done
+  shopt -u nullglob
+  if [[ -n "$current_pool" && ! -f "$current_pool" ]]; then
+    count=$((count + 1))
+  fi
+  if (( count < 1 )); then
+    count=1
+  fi
+  printf '%s\n' "$count"
+}
+
+php_fpm_reserved_memory_mb() {
+  local total="$1" reserve
+  if (( total <= 1024 )); then
+    reserve=$((total * 45 / 100))
+    (( reserve >= 448 )) || reserve=448
+  elif (( total <= 2048 )); then
+    reserve=$((total * 35 / 100))
+    (( reserve >= 640 )) || reserve=640
+  elif (( total <= 4096 )); then
+    reserve=$((total * 30 / 100))
+    (( reserve >= 896 )) || reserve=896
+  elif (( total <= 8192 )); then
+    reserve=$((total * 25 / 100))
+    (( reserve >= 1280 )) || reserve=1280
+  else
+    reserve=$((total * 20 / 100))
+    (( reserve >= 2048 )) || reserve=2048
+  fi
+  if (( reserve > total - 128 )); then
+    reserve=$((total - 128))
+  fi
+  if (( reserve < 128 )); then
+    reserve=128
+  fi
+  printf '%s\n' "$reserve"
+}
+
+calculate_php_fpm_pool_tuning() {
+  local current_pool="${1:-}" total_mb reserve_mb php_budget_mb cpu_count pool_count worker_mb
+  local global_children pool_children cpu_cap profile_cap forced_children idle_default requests_default
+  local active_pool_divisor pool_floor
+  total_mb="$(php_fpm_total_memory_mb)"
+  cpu_count="$(php_fpm_cpu_count)"
+  pool_count="$(php_fpm_pool_count "$current_pool")"
+  worker_mb="$(positive_int_or_default "$(php_fpm_tuning_value BPANEL_PHP_FPM_WORKER_MB "$PHP_FPM_DEFAULT_WORKER_MB")" "$PHP_FPM_DEFAULT_WORKER_MB" 32 1024)"
+  reserve_mb="$(php_fpm_reserved_memory_mb "$total_mb")"
+  php_budget_mb=$((total_mb - reserve_mb))
+  if (( php_budget_mb < worker_mb )); then
+    php_budget_mb="$worker_mb"
+  fi
+
+  global_children=$((php_budget_mb / worker_mb))
+  (( global_children >= 1 )) || global_children=1
+
+  active_pool_divisor=1
+  while (( active_pool_divisor * active_pool_divisor < pool_count )); do
+    active_pool_divisor=$((active_pool_divisor + 1))
+  done
+  pool_children=$((global_children / active_pool_divisor))
+  (( pool_children >= 1 )) || pool_children=1
+
+  cpu_cap=$((cpu_count * 4))
+  if (( total_mb >= 3072 )); then
+    cpu_cap=$((cpu_count * 6))
+  fi
+  if (( total_mb >= 8192 )); then
+    cpu_cap=$((cpu_count * 8))
+  fi
+  (( cpu_cap >= 2 )) || cpu_cap=2
+  (( cpu_cap <= 96 )) || cpu_cap=96
+
+  if (( total_mb <= 1024 )); then
+    pool_floor=1
+    profile_cap=4
+    idle_default=10
+    requests_default=300
+  elif (( total_mb <= 2048 )); then
+    pool_floor=2
+    profile_cap=8
+    idle_default=15
+    requests_default=400
+  elif (( total_mb <= 4096 )); then
+    pool_floor=3
+    profile_cap=14
+    idle_default=20
+    requests_default=500
+  elif (( total_mb <= 8192 )); then
+    pool_floor=4
+    profile_cap=24
+    idle_default=30
+    requests_default=750
+  else
+    pool_floor=6
+    profile_cap=48
+    idle_default=45
+    requests_default=1000
+  fi
+
+  (( pool_children >= pool_floor )) || pool_children="$pool_floor"
+  (( pool_children <= cpu_cap )) || pool_children="$cpu_cap"
+  (( pool_children <= profile_cap )) || pool_children="$profile_cap"
+  forced_children="$(php_fpm_tuning_value BPANEL_PHP_FPM_MAX_CHILDREN "")"
+  if [[ -n "$forced_children" ]]; then
+    pool_children="$(positive_int_or_default "$forced_children" "$pool_children" 1 512)"
+  fi
+
+  PHP_FPM_PM_MODE="ondemand"
+  PHP_FPM_MAX_CHILDREN="$pool_children"
+  PHP_FPM_PROCESS_IDLE_TIMEOUT="$(positive_int_or_default "$(php_fpm_tuning_value BPANEL_PHP_FPM_IDLE_TIMEOUT "$idle_default")" "$idle_default" 5 300)"
+  PHP_FPM_MAX_REQUESTS="$(positive_int_or_default "$(php_fpm_tuning_value BPANEL_PHP_FPM_MAX_REQUESTS "$requests_default")" "$requests_default" 50 10000)"
+  PHP_FPM_REQUEST_TERMINATE_TIMEOUT="$(positive_int_or_default "$(php_fpm_tuning_value BPANEL_PHP_FPM_REQUEST_TERMINATE_TIMEOUT "$PHP_FPM_DEFAULT_REQUEST_TERMINATE_TIMEOUT")" "$PHP_FPM_DEFAULT_REQUEST_TERMINATE_TIMEOUT" 30 3600)"
+}
+
+php_fpm_set_directive() {
+  local file="$1" key="$2" value="$3" key_re
+  key_re="${key//./\\.}"
+  if grep -Eq "^[;[:space:]]*${key_re}[[:space:]]*=" "$file"; then
+    sed -i -E "s|^[;[:space:]]*${key_re}[[:space:]]*=.*|${key} = ${value}|" "$file"
+  else
+    printf '%s = %s\n' "$key" "$value" >>"$file"
+  fi
+}
+
+apply_php_fpm_tuning_to_pool_file() {
+  local pool_file="$1"
+  php_fpm_set_directive "$pool_file" "pm" "$PHP_FPM_PM_MODE"
+  php_fpm_set_directive "$pool_file" "pm.max_children" "$PHP_FPM_MAX_CHILDREN"
+  php_fpm_set_directive "$pool_file" "pm.process_idle_timeout" "${PHP_FPM_PROCESS_IDLE_TIMEOUT}s"
+  php_fpm_set_directive "$pool_file" "pm.max_requests" "$PHP_FPM_MAX_REQUESTS"
+  php_fpm_set_directive "$pool_file" "request_terminate_timeout" "${PHP_FPM_REQUEST_TERMINATE_TIMEOUT}s"
+}
+
+retune_php_fpm_pools() {
+  local pool_file php_version count=0 versions=""
+  shopt -s nullglob
+  for pool_file in /etc/php/*/fpm/pool.d/bpanel-*.conf; do
+    [[ -f "$pool_file" ]] || continue
+    calculate_php_fpm_pool_tuning "$pool_file"
+    apply_php_fpm_tuning_to_pool_file "$pool_file"
+    count=$((count + 1))
+    php_version="$(echo "$pool_file" | awk -F/ '{print $4}')"
+    case " $versions " in
+      *" $php_version "*) ;;
+      *) versions="${versions} ${php_version}" ;;
+    esac
+  done
+  shopt -u nullglob
+  for php_version in $versions; do
+    systemctl reload "php${php_version}-fpm" 2>/dev/null || true
+  done
+  echo "Retuned ${count} BPanel PHP-FPM pool(s)."
+}
+
+mariadb_tuning_value() {
+  local key="$1" default="$2" value=""
+  if [[ -v "$key" ]]; then
+    value="${!key}"
+  fi
+  if [[ -z "$value" ]]; then
+    value="$(env_get "$key" 2>/dev/null || true)"
+  fi
+  printf '%s\n' "${value:-$default}"
+}
+
+mariadb_megabytes() {
+  local value="${1:-}" default="$2" number unit
+  if [[ "$value" =~ ^([0-9]+)([KkMmGg]?)$ ]]; then
+    number="${BASH_REMATCH[1]}"
+    unit="${BASH_REMATCH[2]}"
+    case "$unit" in
+      [Kk]) printf '%s\n' $(((number + 1023) / 1024)) ;;
+      [Gg]) printf '%s\n' $((number * 1024)) ;;
+      *) printf '%s\n' "$number" ;;
+    esac
+    return 0
+  fi
+  printf '%s\n' "$default"
+}
+
+calculate_mariadb_tuning() {
+  local total_mb cpu_count buffer_default buffer_mb log_file_mb tmp_mb max_connections thread_cache
+  local table_open_cache open_files_limit packet_mb io_capacity
+  total_mb="$(php_fpm_total_memory_mb)"
+  cpu_count="$(php_fpm_cpu_count)"
+
+  if (( total_mb <= 1024 )); then
+    buffer_default=$((total_mb * 22 / 100))
+    max_connections=35
+    thread_cache=16
+    table_open_cache=512
+    tmp_mb=32
+    packet_mb=64
+  elif (( total_mb <= 2048 )); then
+    buffer_default=$((total_mb * 25 / 100))
+    max_connections=50
+    thread_cache=24
+    table_open_cache=512
+    tmp_mb=48
+    packet_mb=64
+  elif (( total_mb <= 4096 )); then
+    buffer_default=$((total_mb * 28 / 100))
+    max_connections=80
+    thread_cache=32
+    table_open_cache=1024
+    tmp_mb=64
+    packet_mb=96
+  elif (( total_mb <= 8192 )); then
+    buffer_default=$((total_mb * 32 / 100))
+    max_connections=120
+    thread_cache=48
+    table_open_cache=1024
+    tmp_mb=96
+    packet_mb=128
+  else
+    buffer_default=$((total_mb * 36 / 100))
+    max_connections=180
+    thread_cache=64
+    table_open_cache=2048
+    tmp_mb=128
+    packet_mb=128
+  fi
+
+  (( buffer_default >= 128 )) || buffer_default=128
+  (( buffer_default <= total_mb * 45 / 100 )) || buffer_default=$((total_mb * 45 / 100))
+  buffer_mb="$(mariadb_megabytes "$(mariadb_tuning_value BPANEL_MARIADB_BUFFER_POOL_SIZE "${buffer_default}M")" "$buffer_default")"
+  buffer_mb="$(positive_int_or_default "$buffer_mb" "$buffer_default" 128 "$((total_mb * 60 / 100))")"
+
+  max_connections="$(positive_int_or_default "$(mariadb_tuning_value BPANEL_MARIADB_MAX_CONNECTIONS "$max_connections")" "$max_connections" 20 1000)"
+  thread_cache="$(positive_int_or_default "$(mariadb_tuning_value BPANEL_MARIADB_THREAD_CACHE_SIZE "$thread_cache")" "$thread_cache" 8 256)"
+  table_open_cache="$(positive_int_or_default "$(mariadb_tuning_value BPANEL_MARIADB_TABLE_OPEN_CACHE "$table_open_cache")" "$table_open_cache" 256 65535)"
+  tmp_mb="$(mariadb_megabytes "$(mariadb_tuning_value BPANEL_MARIADB_TMP_TABLE_SIZE "${tmp_mb}M")" "$tmp_mb")"
+  tmp_mb="$(positive_int_or_default "$tmp_mb" 64 16 512)"
+  packet_mb="$(mariadb_megabytes "$(mariadb_tuning_value BPANEL_MARIADB_MAX_ALLOWED_PACKET "${packet_mb}M")" "$packet_mb")"
+  packet_mb="$(positive_int_or_default "$packet_mb" 64 16 512)"
+  log_file_mb=$((buffer_mb / 4))
+  log_file_mb="$(positive_int_or_default "$(mariadb_megabytes "$(mariadb_tuning_value BPANEL_MARIADB_LOG_FILE_SIZE "${log_file_mb}M")" "$log_file_mb")" "$log_file_mb" 64 1024)"
+  io_capacity=$((cpu_count * 200))
+  io_capacity="$(positive_int_or_default "$(mariadb_tuning_value BPANEL_MARIADB_IO_CAPACITY "$io_capacity")" "$io_capacity" 200 4000)"
+  open_files_limit=$((table_open_cache * 2 + max_connections + 512))
+  open_files_limit="$(positive_int_or_default "$(mariadb_tuning_value BPANEL_MARIADB_OPEN_FILES_LIMIT "$open_files_limit")" "$open_files_limit" 2048 200000)"
+
+  MARIADB_INNODB_BUFFER_POOL_SIZE="${buffer_mb}M"
+  MARIADB_INNODB_LOG_FILE_SIZE="${log_file_mb}M"
+  MARIADB_MAX_CONNECTIONS="$max_connections"
+  MARIADB_THREAD_CACHE_SIZE="$thread_cache"
+  MARIADB_TABLE_OPEN_CACHE="$table_open_cache"
+  MARIADB_TMP_TABLE_SIZE="${tmp_mb}M"
+  MARIADB_MAX_ALLOWED_PACKET="${packet_mb}M"
+  MARIADB_INNODB_IO_CAPACITY="$io_capacity"
+  MARIADB_OPEN_FILES_LIMIT="$open_files_limit"
+}
+
+write_mariadb_tuning() {
+  calculate_mariadb_tuning
+  install -d -o root -g root -m 0755 "$(dirname "$MARIADB_TUNING_CONF")"
+  cat >"$MARIADB_TUNING_CONF" <<MYSQL
+# BPanel auto-tunes MariaDB for small and medium VPS plans.
+# Optional overrides in ${ENV_FILE}: BPANEL_MARIADB_BUFFER_POOL_SIZE,
+# BPANEL_MARIADB_MAX_CONNECTIONS, BPANEL_MARIADB_THREAD_CACHE_SIZE,
+# BPANEL_MARIADB_TABLE_OPEN_CACHE, BPANEL_MARIADB_TMP_TABLE_SIZE,
+# BPANEL_MARIADB_MAX_ALLOWED_PACKET, BPANEL_MARIADB_LOG_FILE_SIZE,
+# BPANEL_MARIADB_IO_CAPACITY, BPANEL_MARIADB_OPEN_FILES_LIMIT.
+[mysqld]
+innodb_buffer_pool_size = ${MARIADB_INNODB_BUFFER_POOL_SIZE}
+innodb_log_file_size = ${MARIADB_INNODB_LOG_FILE_SIZE}
+innodb_flush_log_at_trx_commit = 2
+innodb_flush_method = O_DIRECT
+innodb_io_capacity = ${MARIADB_INNODB_IO_CAPACITY}
+max_connections = ${MARIADB_MAX_CONNECTIONS}
+thread_cache_size = ${MARIADB_THREAD_CACHE_SIZE}
+table_open_cache = ${MARIADB_TABLE_OPEN_CACHE}
+tmp_table_size = ${MARIADB_TMP_TABLE_SIZE}
+max_heap_table_size = ${MARIADB_TMP_TABLE_SIZE}
+max_allowed_packet = ${MARIADB_MAX_ALLOWED_PACKET}
+skip_name_resolve = 1
+slow_query_log = 1
+slow_query_log_file = /var/log/mysql/bpanel-slow.log
+long_query_time = 2
+
+[server]
+open_files_limit = ${MARIADB_OPEN_FILES_LIMIT}
+MYSQL
+}
+
+ensure_mariadb_slow_log() {
+  local log_dir="/var/log/mysql" log_file="/var/log/mysql/bpanel-slow.log" log_group="mysql"
+  getent group adm >/dev/null 2>&1 && log_group="adm"
+  install -d -o mysql -g "$log_group" -m 0750 "$log_dir"
+  touch "$log_file"
+  chown mysql:"$log_group" "$log_file"
+  chmod 0640 "$log_file"
+}
+
+retune_mariadb() {
+  write_mariadb_tuning
+  ensure_mariadb_slow_log
+  mariadbd --help --verbose >/dev/null
+  systemctl restart mariadb
+  echo "Retuned MariaDB: innodb_buffer_pool_size=${MARIADB_INNODB_BUFFER_POOL_SIZE}, max_connections=${MARIADB_MAX_CONNECTIONS}, table_open_cache=${MARIADB_TABLE_OPEN_CACHE}."
+}
+
 delete_site_php_pools() {
   local user="$1" target="$2" glob
   glob="$(site_php_pool_glob "$user" "$target")"
@@ -1411,6 +1759,7 @@ ensure_php_pool() {
   local upload_dir="/var/lib/php/uploads/${user}"
   install -d -o "$user" -g "$user" -m 0700 "$sess_dir"
   install -d -o "$user" -g "$user" -m 0700 "$upload_dir"
+  calculate_php_fpm_pool_tuning "$pool_file"
   cat >"$pool_file" <<POOL
 [${pool_name}]
 user = ${user}
@@ -1419,10 +1768,15 @@ listen = /run/php/${pool_name}.sock
 listen.owner = www-data
 listen.group = www-data
 listen.mode = 0660
-pm = ondemand
-pm.max_children = 8
-pm.process_idle_timeout = 20s
-pm.max_requests = 500
+; BPanel auto-tunes these values from RAM, CPU and managed pool count.
+; Optional overrides: BPANEL_PHP_FPM_WORKER_MB, BPANEL_PHP_FPM_MAX_CHILDREN,
+; BPANEL_PHP_FPM_IDLE_TIMEOUT, BPANEL_PHP_FPM_MAX_REQUESTS,
+; BPANEL_PHP_FPM_REQUEST_TERMINATE_TIMEOUT.
+pm = ${PHP_FPM_PM_MODE}
+pm.max_children = ${PHP_FPM_MAX_CHILDREN}
+pm.process_idle_timeout = ${PHP_FPM_PROCESS_IDLE_TIMEOUT}s
+pm.max_requests = ${PHP_FPM_MAX_REQUESTS}
+request_terminate_timeout = ${PHP_FPM_REQUEST_TERMINATE_TIMEOUT}s
 chdir = /
 php_admin_value[open_basedir] = ${target}:${sess_dir}:${upload_dir}:/usr/share/php
 php_admin_value[upload_tmp_dir] = ${upload_dir}
@@ -1614,6 +1968,16 @@ case "$cmd" in
   php-config-write)
     [[ $# -eq 1 ]] || deny "usage: php-config-write <version>"
     write_php_config "$1"
+    ;;
+
+  php-fpm-retune)
+    [[ $# -eq 0 ]] || deny "usage: php-fpm-retune"
+    retune_php_fpm_pools
+    ;;
+
+  mariadb-retune)
+    [[ $# -eq 0 ]] || deny "usage: mariadb-retune"
+    retune_mariadb
     ;;
 
   # ---- panel runtime ----------------------------------------------------

@@ -31,7 +31,7 @@ ownership, quotas, backups, SSL, services, and firewall tools built in.
 
 ## Versioning
 
-Current release: `1.0.35`.
+Current release: `1.0.36`.
 
 BPanel versions use semantic versioning: `major.minor.patch`.
 
@@ -99,8 +99,8 @@ bash installer/install.sh
 ```
 
 The commands auto-detect the newest semantic release tag from GitHub; at the
-time of this README, that tag is `v1.0.35`. To pin another release, run the
-same command with `BPANEL_VERSION=v1.0.35` exported or set before the detection
+time of this README, that tag is `v1.0.36`. To pin another release, run the
+same command with `BPANEL_VERSION=v1.0.36` exported or set before the detection
 block. GitHub auto-generates the tag zip, but the `git clone` method avoids
 archive cache after a forced tag refresh. The clone path cleans up
 `/tmp/bpanel-source`; the zip path cleans up `/opt/bpanel-source` and its
@@ -170,7 +170,7 @@ when a newer release is available.
 To stay on a specific release:
 
 ```bash
-bpanel-update --tag v1.0.35
+bpanel-update --tag v1.0.36
 ```
 
 If the browser still shows the old UI, do a hard refresh (Ctrl + Shift + R) or
@@ -258,6 +258,60 @@ PANEL_PORT=2222                  # default; installer can set another port
 PANEL_SSL_CERT=
 PANEL_SSL_KEY=
 FRONTEND_DIST=/opt/bpanel/frontend/dist
+```
+
+### PHP-FPM auto tuning
+
+BPanel creates one PHP-FPM pool per managed PHP site. Pool sizing is tuned when
+a site runtime is created or refreshed: the helper reads total RAM, CPU count,
+and the number of managed PHP-FPM pools, then sets conservative `ondemand`
+values for `pm.max_children`, idle timeout, request recycling, and hard request
+timeout. Small VPS plans keep fewer children alive and recycle sooner; larger
+plans receive a higher per-pool cap without using the same static values as a
+1 GB server.
+
+Optional overrides can be added to `/opt/bpanel/backend/.env`:
+
+```ini
+BPANEL_PHP_FPM_WORKER_MB=128
+BPANEL_PHP_FPM_MAX_CHILDREN=
+BPANEL_PHP_FPM_IDLE_TIMEOUT=
+BPANEL_PHP_FPM_MAX_REQUESTS=
+BPANEL_PHP_FPM_REQUEST_TERMINATE_TIMEOUT=300
+```
+
+After changing overrides, retune existing pools:
+
+```bash
+sudo -u bpanel env HOME=/opt/bpanel sudo -n /usr/local/sbin/bpanel-helper php-fpm-retune
+```
+
+### MariaDB auto tuning
+
+BPanel also writes `/etc/mysql/mariadb.conf.d/90-bpanel-tuning.cnf` with VPS
+sized MariaDB defaults. The helper tunes InnoDB buffer pool, connection count,
+thread/table caches, temporary table limits, packet size, and slow-query logging
+from total RAM and CPU count. The defaults leave memory for Nginx, PHP-FPM,
+Redis, and the panel process instead of giving MariaDB a fixed oversized cache.
+
+Optional overrides can be added to `/opt/bpanel/backend/.env`:
+
+```ini
+BPANEL_MARIADB_BUFFER_POOL_SIZE=
+BPANEL_MARIADB_MAX_CONNECTIONS=
+BPANEL_MARIADB_THREAD_CACHE_SIZE=
+BPANEL_MARIADB_TABLE_OPEN_CACHE=
+BPANEL_MARIADB_TMP_TABLE_SIZE=
+BPANEL_MARIADB_MAX_ALLOWED_PACKET=
+BPANEL_MARIADB_LOG_FILE_SIZE=
+BPANEL_MARIADB_IO_CAPACITY=
+BPANEL_MARIADB_OPEN_FILES_LIMIT=
+```
+
+After changing overrides, retune MariaDB:
+
+```bash
+sudo -u bpanel env HOME=/opt/bpanel sudo -n /usr/local/sbin/bpanel-helper mariadb-retune
 ```
 
 The backend refuses to start in production with `COMMAND_DRY_RUN=true` or
