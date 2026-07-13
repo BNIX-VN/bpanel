@@ -336,58 +336,12 @@ fastcgi_cache_key "$scheme$request_method$host$request_uri";
 NGINX
 }
 
-write_comodo_wordpress_profile() {
-  local rules_dir="" candidate file
-  local profile="/etc/nginx/modsec/bpanel-comodo-wordpress.conf"
-  install -d -o root -g root -m 0755 /etc/nginx/modsec
-  for candidate in \
-    /etc/nginx/modsec/comodo/rules \
-    /etc/nginx/modsec/comodo \
-    /usr/local/cwaf/rules \
-    /usr/local/cwaf; do
-    if [[ -f "${candidate}/00_Init_Initialization.conf" \
-      && -f "${candidate}/01_Init_AppsInitialization.conf" \
-      && -f "${candidate}/26_Apps_WordPress.conf" ]]; then
-      rules_dir="$candidate"
-      break
-    fi
-  done
-  {
-    echo "# Managed by BPanel. Optimized Comodo/CWAF profile for WordPress."
-    if [[ -z "$rules_dir" ]]; then
-      echo "# Compatible Comodo WordPress rules were not found; BPanel built-in rules remain active."
-    else
-      for file in \
-        00_Init_Initialization.conf \
-        01_Init_AppsInitialization.conf \
-        26_Apps_WordPress.conf \
-        27_Apps_WPPlugin.conf; do
-        if [[ -f "${rules_dir}/${file}" ]]; then
-          echo "Include ${rules_dir}/${file}"
-        fi
-      done
-    fi
-  } >"$profile"
-}
-
-comodo_wordpress_profile_ready() {
-  local profile="/etc/nginx/modsec/bpanel-comodo-wordpress.conf"
-  [[ -f "$profile" ]] \
-    && grep -Eq '^Include .*/00_Init_Initialization\.conf$' "$profile" \
-    && grep -Eq '^Include .*/01_Init_AppsInitialization\.conf$' "$profile" \
-    && grep -Eq '^Include .*/26_Apps_WordPress\.conf$' "$profile"
-}
-
 write_modsec_base_conf() {
   install -d -o root -g root -m 0755 /etc/nginx/modsec /etc/nginx/modsec/sites
-  write_comodo_wordpress_profile
   {
     [[ -f /etc/modsecurity/modsecurity.conf ]] && echo "Include /etc/modsecurity/modsecurity.conf"
     echo "SecRuleEngine On"
-    echo "SecRequestBodyAccess On"
-    if comodo_wordpress_profile_ready; then
-      echo "Include /etc/nginx/modsec/bpanel-comodo-wordpress.conf"
-    fi
+    echo "SecRequestBodyAccess Off"
   } >/etc/nginx/modsec/bpanel-base.conf
 }
 
@@ -426,16 +380,15 @@ CONF
 write_waf_default_rules() {
   install -d -o root -g root -m 0755 /etc/nginx/modsec
   cat >/etc/nginx/modsec/bpanel-default.conf <<'RULES'
-# BPanel default WAF rules: common high-confidence attacks plus WordPress.
-SecRule REQUEST_URI "@rx (?i)(?:/\.env(?:\.|$)|/\.git/|/composer\.(?:json|lock)|/vendor/phpunit|/etc/passwd|/web\.config|/config\.php(?:\.|$))" "id:1001001,phase:1,deny,status:403,log,msg:'BPanel blocked sensitive file probe'"
-SecRule REQUEST_URI|ARGS|REQUEST_HEADERS "@rx (?i)(?:\.\./|\.\.\\|%2e%2e%2f|%252e%252e%252f)" "id:1001002,phase:2,deny,status:403,log,msg:'BPanel blocked path traversal'"
-SecRule ARGS|REQUEST_HEADERS|REQUEST_BODY "@rx (?i)(?:union\s+select|sleep\s*\(|benchmark\s*\(|load_file\s*\(|into\s+outfile|information_schema|extractvalue\s*\()" "id:1001003,phase:2,deny,status:403,log,msg:'BPanel blocked SQL injection pattern'"
-SecRule ARGS|REQUEST_HEADERS|REQUEST_BODY "@rx (?i)(?:<script|javascript:|onerror\s*=|onload\s*=|document\.cookie|<iframe|base64_decode\s*\()" "id:1001004,phase:2,deny,status:403,log,msg:'BPanel blocked XSS pattern'"
-SecRule ARGS|REQUEST_HEADERS|REQUEST_BODY "@rx (?i)(?:/bin/(?:bash|sh)|cmd\.exe|powershell|wget\s+https?://|curl\s+https?://|;\s*(?:id|whoami|uname)\b)" "id:1001005,phase:2,deny,status:403,log,msg:'BPanel blocked command injection pattern'"
-SecRule REQUEST_URI "@rx (?i)(?:/wp-config\.php|/readme\.html|/license\.txt|/wp-content/(?:uploads|cache|upgrade)/.*\.php|/wp-admin/includes/.*\.php|/wp-includes/.*\.php)" "id:1001101,phase:1,deny,status:403,log,msg:'BPanel blocked WordPress sensitive path'"
-SecRule REQUEST_URI "@streq /xmlrpc.php" "id:1001102,phase:1,deny,status:403,log,msg:'BPanel blocked WordPress XML-RPC'"
+# BPanel default WAF rules: lightweight WordPress, Laravel, and PHP probes only.
+SecRule REQUEST_URI "@rx (?i)(?:/\.env(?:\.|$)|/\.user\.ini(?:\.|$)|/\.git/|/composer\.(?:json|lock)(?:$|[?])|/(?:phpinfo|info)\.php(?:$|[?])|/(?:config|database|db)\.php\.(?:bak|old|save|txt)(?:$|[?]))" "id:1001301,phase:1,deny,status:403,log,msg:'BPanel blocked PHP sensitive file probe'"
+SecRule REQUEST_URI|ARGS "@rx (?i)(?:\.\./|\.\.\\|%2e%2e%2f|%252e%252e%252f)" "id:1001302,phase:2,deny,status:403,log,msg:'BPanel blocked PHP path traversal'"
+SecRule REQUEST_URI "@rx (?i)(?:/(?:c99|r57|shell|cmd|wso)\.php(?:$|[?])|/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin\.php(?:$|[?]))" "id:1001303,phase:1,deny,status:403,log,msg:'BPanel blocked PHP runtime probe'"
+SecRule REQUEST_URI "@rx (?i)(?:/\.env(?:\.|$)|/artisan(?:$|[?])|/server\.php(?:$|[?])|/storage/logs/[^?]*\.log(?:$|[?])|/bootstrap/cache/[^?]*\.php(?:$|[?]))" "id:1001201,phase:1,deny,status:403,log,msg:'BPanel blocked Laravel sensitive path'"
+SecRule REQUEST_URI "@rx (?i)(?:/_ignition/execute-solution(?:$|[?]))" "id:1001202,phase:1,deny,status:403,log,msg:'BPanel blocked Laravel Ignition RCE probe'"
+SecRule REQUEST_URI "@rx (?i)(?:/wp-config\.php(?:\.|$|[?])|/wp-content/(?:uploads|cache|upgrade)/[^?]*\.php(?:$|[?])|/wp-admin/includes/[^?]*\.php(?:$|[?])|/wp-includes/[^?]*\.php(?:$|[?]))" "id:1001101,phase:1,deny,status:403,log,msg:'BPanel blocked WordPress sensitive path'"
 SecRule ARGS:author "@rx ^[0-9]+$" "id:1001103,phase:2,deny,status:403,log,msg:'BPanel blocked WordPress author enumeration'"
-SecRule REQUEST_URI "@rx (?i)(?:/wp-admin/install\.php|/wp-admin/upgrade\.php|/wp-admin/setup-config\.php)" "id:1001104,phase:1,deny,status:403,log,msg:'BPanel blocked WordPress installer probe'"
+SecRule REQUEST_URI "@rx (?i)(?:/wp-admin/install\.php(?:$|[?])|/wp-admin/setup-config\.php(?:$|[?]))" "id:1001104,phase:1,deny,status:403,log,msg:'BPanel blocked WordPress installer probe'"
 RULES
 }
 
@@ -446,7 +399,7 @@ install_waf_engine() {
     apt-get install -y libnginx-mod-http-modsecurity modsecurity-crs libmodsecurity3 || \
       apt-get install -y libnginx-mod-http-modsecurity libmodsecurity3
   fi
-  install -d -o root -g root -m 0755 /etc/nginx/modsec /etc/nginx/modsec/comodo /etc/nginx/modsec/sites
+  install -d -o root -g root -m 0755 /etc/nginx/modsec /etc/nginx/modsec/sites
   write_waf_default_rules
   touch /etc/nginx/modsec/bpanel-custom.conf
   if [[ -f /etc/modsecurity/modsecurity.conf-recommended && ! -f /etc/modsecurity/modsecurity.conf ]]; then
@@ -559,10 +512,15 @@ setup_sftp_access() {
   cat >>"$sshd_config" <<'SSHD'
 # BEGIN BPANEL SFTP USERS
 # Allow BPanel Linux users to log in with SFTP using their panel password.
+# SSH shells are intentionally disabled; /home/%u is a root-owned chroot.
 Match Group bpanel-sftp
     PasswordAuthentication yes
+    ChrootDirectory /home/%u
+    ForceCommand internal-sftp -d /
+    PermitTTY no
     X11Forwarding no
     AllowTcpForwarding no
+    PermitTunnel no
 # END BPANEL SFTP USERS
 SSHD
   if ! sshd -t; then

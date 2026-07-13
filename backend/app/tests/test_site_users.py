@@ -6,6 +6,11 @@ import pytest
 from app.api import websites
 from app.services import site_users
 
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+HELPER_SCRIPT = PROJECT_ROOT / "installer" / "files" / "bpanel-helper.sh"
+INSTALL_SCRIPT = PROJECT_ROOT / "installer" / "install.sh"
+UPDATE_SCRIPT = PROJECT_ROOT / "installer" / "update.sh"
+
 
 def test_site_php_fpm_socket_is_scoped_to_site_root(tmp_path):
     first_root = tmp_path / "first.test"
@@ -50,3 +55,40 @@ def test_placeholder_page_for_linux_user_uses_site_file_write(tmp_path, monkeypa
     assert calls[0][0] == "site-file-write"
     assert calls[0][1] == ["siteuser", str(root.resolve()), "public_html/index.html"]
     assert "example.test" in calls[0][2]["input"]
+
+
+def test_panel_linux_users_are_sftp_chroot_only():
+    helper = HELPER_SCRIPT.read_text(encoding="utf-8")
+    for script_path in (INSTALL_SCRIPT, UPDATE_SCRIPT):
+        script = script_path.read_text(encoding="utf-8")
+        assert "Match Group bpanel-sftp" in script
+        assert "ChrootDirectory /home/%u" in script
+        assert "ForceCommand internal-sftp -d /" in script
+        assert "PermitTTY no" in script
+        assert "AllowTcpForwarding no" in script
+    assert "--shell /usr/sbin/nologin" in helper
+    assert "--shell /bin/bash" not in helper
+    assert 'chmod 0711 "$HOME_ROOT"' in helper
+    assert 'chown "root:$user" "$home_dir"' in helper
+    assert 'chmod 0751 "$home_dir"' in helper
+
+
+def test_site_permissions_do_not_allow_cross_user_reading():
+    helper = HELPER_SCRIPT.read_text(encoding="utf-8")
+    assert 'find "$target" -type d -exec chmod 2750 {} +' in helper
+    assert 'find "$target" -type f -exec chmod 640 {} +' in helper
+    assert 'chown -R "$user:$BPANEL_SITES_GROUP" "$target"' in helper
+    assert 'install -o "$user" -g "$BPANEL_SITES_GROUP" -m 0640' in helper
+    assert 'chmod 0755 "$target" "$target/public_html"' not in helper
+    assert 'find "$target" -type d -exec chmod 755 {} +' not in helper
+
+
+def test_terminal_helper_rejects_paths_outside_user_home():
+    helper = HELPER_SCRIPT.read_text(encoding="utf-8")
+    assert "require_terminal_path_args()" in helper
+    assert "require_terminal_download_args()" in helper
+    assert 'deny "terminal path argument is outside panel user home: $arg"' in helper
+    assert 'deny "terminal path argument escapes user home: $arg"' in helper
+    assert 'deny "terminal URL argument uses local file scheme: $arg"' in helper
+    assert 'require_terminal_path_args "$user" "$target" "$@"' in helper
+    assert 'require_terminal_download_args "$user" "$target" "$@"' in helper

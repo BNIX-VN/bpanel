@@ -402,6 +402,46 @@ ensure_terminal_tools() {
   fi
 }
 
+harden_existing_panel_users() {
+  local user home_dir site_dir
+  getent group bpanel-sftp >/dev/null || return 0
+  chown root:root /home
+  chmod 0711 /home
+  chmod a-s /home 2>/dev/null || true
+  chmod -t /home 2>/dev/null || true
+  while IFS= read -r user; do
+    [[ -n "$user" ]] || continue
+    case "$user" in
+      root|daemon|bin|sys|sync|games|man|lp|mail|news|uucp|proxy|www-data|backup|list|irc|_apt|nobody|bpanel|bpanel-sites|bpanel-sftp|mysql|redis|nginx)
+        continue ;;
+    esac
+    id -u "$user" >/dev/null 2>&1 || continue
+    getent group "$user" >/dev/null || groupadd "$user" 2>/dev/null || true
+    home_dir="/home/$user"
+    usermod --home "$home_dir" --shell /usr/sbin/nologin --gid "$user" "$user" 2>/dev/null || true
+    mkdir -p "$home_dir"
+    chown "root:$user" "$home_dir"
+    chmod 0751 "$home_dir"
+    chmod a-s "$home_dir" 2>/dev/null || true
+    chmod -t "$home_dir" 2>/dev/null || true
+    if command -v setfacl >/dev/null 2>&1; then
+      setfacl -b -k "$home_dir" 2>/dev/null || true
+    fi
+    find "$home_dir" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null | while IFS= read -r -d '' site_dir; do
+      [[ "$(basename "$site_dir")" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]] || continue
+      chown -R "$user:bpanel-sites" "$site_dir" 2>/dev/null || true
+      if command -v setfacl >/dev/null 2>&1; then
+        setfacl -Rb "$site_dir" 2>/dev/null || true
+        find "$site_dir" -type d -exec setfacl -k {} + 2>/dev/null || true
+      fi
+      find "$site_dir" -type d -exec chmod 2750 {} + 2>/dev/null || true
+      find "$site_dir" -type d -exec chmod u-s {} + 2>/dev/null || true
+      find "$site_dir" -type d -exec chmod -t {} + 2>/dev/null || true
+      find "$site_dir" -type f -exec chmod 640 {} + 2>/dev/null || true
+    done
+  done < <(getent group bpanel-sftp | awk -F: '{gsub(",", "\n", $4); print $4}')
+}
+
 install_panel_runtime() {
   local env_file="$APP_DIR/backend/.env"
   [[ -f "$env_file" ]] || return 0
@@ -434,6 +474,7 @@ install_panel_runtime() {
   fi
   usermod -aG bpanel-sites bpanel 2>/dev/null || true
   usermod -aG bpanel-sites www-data 2>/dev/null || true
+  harden_existing_panel_users
   install -d -o root -g bpanel -m 2775 /etc/nginx/conf.d
   chmod g+s /etc/nginx/conf.d 2>/dev/null || true
   install -d -o root -g bpanel -m 2775 /etc/nginx/bpanel/custom
@@ -450,10 +491,15 @@ install_panel_runtime() {
     cat >>"$sshd_config" <<'SSHD'
 # BEGIN BPANEL SFTP USERS
 # Allow BPanel Linux users to log in with SFTP using their panel password.
+# SSH shells are intentionally disabled; /home/%u is a root-owned chroot.
 Match Group bpanel-sftp
     PasswordAuthentication yes
+    ChrootDirectory /home/%u
+    ForceCommand internal-sftp -d /
+    PermitTTY no
     X11Forwarding no
     AllowTcpForwarding no
+    PermitTunnel no
 # END BPANEL SFTP USERS
 SSHD
     if sshd -t; then

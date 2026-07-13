@@ -17,7 +17,7 @@ ownership, quotas, backups, SSL, services, and firewall tools built in.
 - SFTP backup targets for off-server backup copies
 - UFW firewall manager with protected panel/web/mail defaults and user rules below them
 - Update controls for apt-based OS packages and BPanel source updates
-- Nginx ModSecurity/WAF engine installed by default, with per-site toggles and HTTP Flood limits
+- Nginx ModSecurity/WAF engine installed by default, using lightweight WordPress/Laravel/PHP rules, per-site toggles, and HTTP Flood limits
 - PHP-FPM config editor per version
 - Cron job manager with whitelisted WP-CLI commands
 - Role-based access: Admin / End user
@@ -31,7 +31,7 @@ ownership, quotas, backups, SSL, services, and firewall tools built in.
 
 ## Versioning
 
-Current release: `1.0.34`.
+Current release: `1.0.35`.
 
 BPanel versions use semantic versioning: `major.minor.patch`.
 
@@ -99,8 +99,8 @@ bash installer/install.sh
 ```
 
 The commands auto-detect the newest semantic release tag from GitHub; at the
-time of this README, that tag is `v1.0.34`. To pin another release, run the
-same command with `BPANEL_VERSION=v1.0.34` exported or set before the detection
+time of this README, that tag is `v1.0.35`. To pin another release, run the
+same command with `BPANEL_VERSION=v1.0.35` exported or set before the detection
 block. GitHub auto-generates the tag zip, but the `git clone` method avoids
 archive cache after a forced tag refresh. The clone path cleans up
 `/tmp/bpanel-source`; the zip path cleans up `/opt/bpanel-source` and its
@@ -170,7 +170,7 @@ when a newer release is available.
 To stay on a specific release:
 
 ```bash
-bpanel-update --tag v1.0.34
+bpanel-update --tag v1.0.35
 ```
 
 If the browser still shows the old UI, do a hard refresh (Ctrl + Shift + R) or
@@ -213,9 +213,10 @@ bpanel/
 
 - Each panel user also has a Linux user with the same normalized username.
 - The panel password is synced to the Linux password so the same account can
-  log in with SFTP, for example `admin` -> `/home/admin`.
+  log in with chrooted SFTP, for example `admin` -> `/home/admin`.
 - Panel Linux users are members of `bpanel-sftp`; the installer adds an SSHD
-  `Match Group bpanel-sftp` block for password-based SFTP access.
+  `Match Group bpanel-sftp` block for password-based SFTP access. SSH shells,
+  TTYs and forwarding are disabled for these users.
 - New websites are created under `/home/<panel-user>/<domain>/public_html`.
 - If an admin creates a website without impersonating another user, the website
   belongs to the admin account.
@@ -325,8 +326,11 @@ Additional hardening on the systemd unit:
 - Runs as `bpanel` with only the `www-data` and `bpanel-sites` supplementary groups.
   `bpanel` is the service account for the API, not a panel login user; fresh
   installs do not create `/home/bpanel` or `/home/bpanel-sites`.
-- Panel login users are normal Linux users in the `bpanel-sftp` group. Their
-  home directories live directly under `/home/<username>`.
+- Panel login users are Linux users in the `bpanel-sftp` group. Their
+  home directories live directly under `/home/<username>`, are root-owned
+  SFTP chroots, and contain user-owned site directories with no `other`
+  read/traverse permission. `/home` is executable-only for non-root users, so
+  panel users cannot list other usernames.
 - Uses `PrivateTmp`, `PrivateDevices`, `ProtectKernelTunables`,
   `ProtectKernelModules`, `ProtectKernelLogs`, `ProtectControlGroups`,
   `ProtectClock`, `ProtectHostname`, and `ProtectProc=invisible`.

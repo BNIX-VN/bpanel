@@ -395,58 +395,12 @@ run_panel_update() {
   echo "Panel update started in background. Log: /var/log/bpanel-panel-update.log"
 }
 
-write_comodo_wordpress_profile() {
-  local rules_dir="" candidate file
-  local profile="/etc/nginx/modsec/bpanel-comodo-wordpress.conf"
-  install -d -o root -g root -m 0755 /etc/nginx/modsec
-  for candidate in \
-    /etc/nginx/modsec/comodo/rules \
-    /etc/nginx/modsec/comodo \
-    /usr/local/cwaf/rules \
-    /usr/local/cwaf; do
-    if [[ -f "${candidate}/00_Init_Initialization.conf" \
-      && -f "${candidate}/01_Init_AppsInitialization.conf" \
-      && -f "${candidate}/26_Apps_WordPress.conf" ]]; then
-      rules_dir="$candidate"
-      break
-    fi
-  done
-  {
-    echo "# Managed by BPanel. Optimized Comodo/CWAF profile for WordPress."
-    if [[ -z "$rules_dir" ]]; then
-      echo "# Compatible Comodo WordPress rules were not found; BPanel built-in rules remain active."
-    else
-      for file in \
-        00_Init_Initialization.conf \
-        01_Init_AppsInitialization.conf \
-        26_Apps_WordPress.conf \
-        27_Apps_WPPlugin.conf; do
-        if [[ -f "${rules_dir}/${file}" ]]; then
-          echo "Include ${rules_dir}/${file}"
-        fi
-      done
-    fi
-  } >"$profile"
-}
-
-comodo_wordpress_profile_ready() {
-  local profile="/etc/nginx/modsec/bpanel-comodo-wordpress.conf"
-  [[ -f "$profile" ]] \
-    && grep -Eq '^Include .*/00_Init_Initialization\.conf$' "$profile" \
-    && grep -Eq '^Include .*/01_Init_AppsInitialization\.conf$' "$profile" \
-    && grep -Eq '^Include .*/26_Apps_WordPress\.conf$' "$profile"
-}
-
 write_modsec_base_conf() {
   install -d -o root -g root -m 0755 /etc/nginx/modsec /etc/nginx/modsec/sites
-  write_comodo_wordpress_profile
   {
     [[ -f /etc/modsecurity/modsecurity.conf ]] && echo "Include /etc/modsecurity/modsecurity.conf"
     echo "SecRuleEngine On"
-    echo "SecRequestBodyAccess On"
-    if comodo_wordpress_profile_ready; then
-      echo "Include /etc/nginx/modsec/bpanel-comodo-wordpress.conf"
-    fi
+    echo "SecRequestBodyAccess Off"
   } >/etc/nginx/modsec/bpanel-base.conf
 }
 
@@ -464,16 +418,15 @@ write_modsec_main_conf() {
 write_waf_default_rules() {
   install -d -o root -g root -m 0755 /etc/nginx/modsec
   cat >/etc/nginx/modsec/bpanel-default.conf <<'RULES'
-# BPanel default WAF rules: common high-confidence attacks plus WordPress.
-SecRule REQUEST_URI "@rx (?i)(?:/\.env(?:\.|$)|/\.git/|/composer\.(?:json|lock)|/vendor/phpunit|/etc/passwd|/web\.config|/config\.php(?:\.|$))" "id:1001001,phase:1,deny,status:403,log,msg:'BPanel blocked sensitive file probe'"
-SecRule REQUEST_URI|ARGS|REQUEST_HEADERS "@rx (?i)(?:\.\./|\.\.\\|%2e%2e%2f|%252e%252e%252f)" "id:1001002,phase:2,deny,status:403,log,msg:'BPanel blocked path traversal'"
-SecRule ARGS|REQUEST_HEADERS|REQUEST_BODY "@rx (?i)(?:union\s+select|sleep\s*\(|benchmark\s*\(|load_file\s*\(|into\s+outfile|information_schema|extractvalue\s*\()" "id:1001003,phase:2,deny,status:403,log,msg:'BPanel blocked SQL injection pattern'"
-SecRule ARGS|REQUEST_HEADERS|REQUEST_BODY "@rx (?i)(?:<script|javascript:|onerror\s*=|onload\s*=|document\.cookie|<iframe|base64_decode\s*\()" "id:1001004,phase:2,deny,status:403,log,msg:'BPanel blocked XSS pattern'"
-SecRule ARGS|REQUEST_HEADERS|REQUEST_BODY "@rx (?i)(?:/bin/(?:bash|sh)|cmd\.exe|powershell|wget\s+https?://|curl\s+https?://|;\s*(?:id|whoami|uname)\b)" "id:1001005,phase:2,deny,status:403,log,msg:'BPanel blocked command injection pattern'"
-SecRule REQUEST_URI "@rx (?i)(?:/wp-config\.php|/readme\.html|/license\.txt|/wp-content/(?:uploads|cache|upgrade)/.*\.php|/wp-admin/includes/.*\.php|/wp-includes/.*\.php)" "id:1001101,phase:1,deny,status:403,log,msg:'BPanel blocked WordPress sensitive path'"
-SecRule REQUEST_URI "@streq /xmlrpc.php" "id:1001102,phase:1,deny,status:403,log,msg:'BPanel blocked WordPress XML-RPC'"
+# BPanel default WAF rules: lightweight WordPress, Laravel, and PHP probes only.
+SecRule REQUEST_URI "@rx (?i)(?:/\.env(?:\.|$)|/\.user\.ini(?:\.|$)|/\.git/|/composer\.(?:json|lock)(?:$|[?])|/(?:phpinfo|info)\.php(?:$|[?])|/(?:config|database|db)\.php\.(?:bak|old|save|txt)(?:$|[?]))" "id:1001301,phase:1,deny,status:403,log,msg:'BPanel blocked PHP sensitive file probe'"
+SecRule REQUEST_URI|ARGS "@rx (?i)(?:\.\./|\.\.\\|%2e%2e%2f|%252e%252e%252f)" "id:1001302,phase:2,deny,status:403,log,msg:'BPanel blocked PHP path traversal'"
+SecRule REQUEST_URI "@rx (?i)(?:/(?:c99|r57|shell|cmd|wso)\.php(?:$|[?])|/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin\.php(?:$|[?]))" "id:1001303,phase:1,deny,status:403,log,msg:'BPanel blocked PHP runtime probe'"
+SecRule REQUEST_URI "@rx (?i)(?:/\.env(?:\.|$)|/artisan(?:$|[?])|/server\.php(?:$|[?])|/storage/logs/[^?]*\.log(?:$|[?])|/bootstrap/cache/[^?]*\.php(?:$|[?]))" "id:1001201,phase:1,deny,status:403,log,msg:'BPanel blocked Laravel sensitive path'"
+SecRule REQUEST_URI "@rx (?i)(?:/_ignition/execute-solution(?:$|[?]))" "id:1001202,phase:1,deny,status:403,log,msg:'BPanel blocked Laravel Ignition RCE probe'"
+SecRule REQUEST_URI "@rx (?i)(?:/wp-config\.php(?:\.|$|[?])|/wp-content/(?:uploads|cache|upgrade)/[^?]*\.php(?:$|[?])|/wp-admin/includes/[^?]*\.php(?:$|[?])|/wp-includes/[^?]*\.php(?:$|[?]))" "id:1001101,phase:1,deny,status:403,log,msg:'BPanel blocked WordPress sensitive path'"
 SecRule ARGS:author "@rx ^[0-9]+$" "id:1001103,phase:2,deny,status:403,log,msg:'BPanel blocked WordPress author enumeration'"
-SecRule REQUEST_URI "@rx (?i)(?:/wp-admin/install\.php|/wp-admin/upgrade\.php|/wp-admin/setup-config\.php)" "id:1001104,phase:1,deny,status:403,log,msg:'BPanel blocked WordPress installer probe'"
+SecRule REQUEST_URI "@rx (?i)(?:/wp-admin/install\.php(?:$|[?])|/wp-admin/setup-config\.php(?:$|[?]))" "id:1001104,phase:1,deny,status:403,log,msg:'BPanel blocked WordPress installer probe'"
 RULES
 }
 
@@ -541,7 +494,7 @@ install_waf_engine() {
     apt-get install -y libnginx-mod-http-modsecurity modsecurity-crs libmodsecurity3 || \
       apt-get install -y libnginx-mod-http-modsecurity libmodsecurity3
   fi
-  install -d -o root -g root -m 0755 /etc/nginx/modsec /etc/nginx/modsec/comodo /etc/nginx/modsec/sites
+  install -d -o root -g root -m 0755 /etc/nginx/modsec /etc/nginx/modsec/sites
   write_waf_default_rules
   touch /etc/nginx/modsec/bpanel-custom.conf
   if [[ -f /etc/modsecurity/modsecurity.conf-recommended && ! -f /etc/modsecurity/modsecurity.conf ]]; then
@@ -558,7 +511,7 @@ install_waf_engine() {
   write_http_flood_nginx_conf
   nginx -t
   systemctl reload nginx
-  echo "WAF engine installed. Put Comodo/CWAF rule files under /etc/nginx/modsec/comodo/ if your Comodo account provides them."
+  echo "WAF engine installed with BPanel lightweight WordPress/Laravel/PHP rules."
 }
 
 install_php_version() {
@@ -735,12 +688,8 @@ waf_status() {
   [[ -f /etc/nginx/modsec/bpanel-default.conf ]] && echo "  /etc/nginx/modsec/bpanel-default.conf" || echo "  missing"
   echo "Custom rules:"
   [[ -f /etc/nginx/modsec/bpanel-custom.conf ]] && echo "  /etc/nginx/modsec/bpanel-custom.conf" || echo "  missing"
-  echo "Comodo WordPress profile:"
-  if comodo_wordpress_profile_ready; then
-    grep '^Include ' /etc/nginx/modsec/bpanel-comodo-wordpress.conf | sed 's/^/  /'
-  else
-    echo "  unavailable; using BPanel built-in rules only"
-  fi
+  echo "Managed profile:"
+  echo "  BPanel built-in lightweight WordPress/Laravel/PHP rules"
   echo "Timers:"
   systemctl list-timers bpanel-auto-update.timer apt-daily-upgrade.timer --no-pager 2>/dev/null || true
 }
@@ -1257,6 +1206,59 @@ require_terminal_cwd() {
   echo "$resolved"
 }
 
+require_terminal_path_args() {
+  local user="$1" cwd="$2" arg resolved
+  shift 2
+  require_linux_user "$user"
+  for arg in "$@"; do
+    case "$arg" in
+      ""|"-"*|"--") continue ;;
+      *$'\n'*|".."|"../"*|*"/.."|*"/../"*) deny "terminal path argument escapes user home: $arg" ;;
+    esac
+    if [[ "$arg" = /* ]]; then
+      resolved=$(readlink -m -- "$arg") || deny "cannot resolve terminal path: $arg"
+    else
+      resolved=$(readlink -m -- "$cwd/$arg") || deny "cannot resolve terminal path: $arg"
+    fi
+    case "$resolved/" in
+      "$HOME_ROOT/$user/"*) ;;
+      *) deny "terminal path argument is outside panel user home: $arg" ;;
+    esac
+  done
+}
+
+require_terminal_download_args() {
+  local user="$1" cwd="$2" arg value expect_output=0
+  shift 2
+  for arg in "$@"; do
+    case "${arg,,}" in
+      file://*) deny "terminal URL argument uses local file scheme: $arg" ;;
+    esac
+    if (( expect_output )); then
+      require_terminal_path_args "$user" "$cwd" "$arg"
+      expect_output=0
+      continue
+    fi
+    case "$arg" in
+      --output=*|--output-document=*|-O=*)
+        value="${arg#*=}"
+        require_terminal_path_args "$user" "$cwd" "$value"
+        ;;
+      -o|-O|--output|--output-document)
+        expect_output=1
+        ;;
+      http://*|https://*|ftp://*|ftps://*|sftp://*)
+        ;;
+      -*|"")
+        ;;
+      *)
+        require_terminal_path_args "$user" "$cwd" "$arg"
+        ;;
+    esac
+  done
+  (( expect_output == 0 )) || deny "terminal download output path is missing"
+}
+
 ensure_sites_group() {
   getent group "$BPANEL_SITES_GROUP" >/dev/null || groupadd --system "$BPANEL_SITES_GROUP"
   usermod -aG "$BPANEL_SITES_GROUP" bpanel 2>/dev/null || true
@@ -1267,25 +1269,66 @@ ensure_sftp_group() {
   getent group "$BPANEL_SFTP_GROUP" >/dev/null || groupadd --system "$BPANEL_SFTP_GROUP"
 }
 
+clear_path_acl() {
+  local target="$1"
+  if command -v setfacl >/dev/null 2>&1; then
+    setfacl -b -k "$target" 2>/dev/null || true
+  fi
+}
+
+harden_site_dir() {
+  local target="$1" user="$2"
+  chown "$user:$BPANEL_SITES_GROUP" "$target"
+  clear_path_acl "$target"
+  chmod 2750 "$target"
+  chmod u-s "$target" 2>/dev/null || true
+  chmod -t "$target" 2>/dev/null || true
+}
+
+harden_site_dir_path() {
+  local root="$1" target="$2" user="$3" relative current part
+  ensure_sites_group
+  require_linux_user "$user"
+  root=$(readlink -m "$root") || deny "cannot resolve $root"
+  target=$(readlink -m "$target") || deny "cannot resolve $target"
+  case "$target" in
+    "$root"|"$root"/*) ;;
+    *) deny "directory path outside site root: $target" ;;
+  esac
+  [[ -d "$target" ]] || deny "site directory does not exist: $target"
+  harden_site_dir "$root" "$user"
+  [[ "$target" == "$root" ]] && return 0
+  relative="${target#${root}/}"
+  current="$root"
+  IFS='/' read -r -a root_parts <<< "$relative"
+  for part in "${root_parts[@]}"; do
+    current="$current/$part"
+    [[ -d "$current" ]] || deny "site directory does not exist: $current"
+    harden_site_dir "$current" "$user"
+  done
+}
+
 ensure_panel_user_home() {
   local user="$1" home_dir="$HOME_ROOT/$1"
   ensure_sites_group
   ensure_sftp_group
   require_linux_user "$user"
   getent group "$user" >/dev/null || groupadd "$user"
+  chown root:root "$HOME_ROOT"
+  chmod 0711 "$HOME_ROOT"
+  chmod a-s "$HOME_ROOT" 2>/dev/null || true
+  chmod -t "$HOME_ROOT" 2>/dev/null || true
   if ! id -u "$user" >/dev/null 2>&1; then
-    useradd --create-home --home-dir "$home_dir" --shell /bin/bash --gid "$user" "$user"
+    useradd --create-home --home-dir "$home_dir" --shell /usr/sbin/nologin --gid "$user" "$user"
   fi
-  usermod --home "$home_dir" --shell /bin/bash --gid "$user" "$user" 2>/dev/null || true
+  usermod --home "$home_dir" --shell /usr/sbin/nologin --gid "$user" "$user" 2>/dev/null || true
   usermod -aG "$BPANEL_SFTP_GROUP" "$user" 2>/dev/null || true
   mkdir -p "$home_dir"
-  chown "$user:$user" "$home_dir"
-  chmod 0755 "$home_dir"
+  chown "root:$user" "$home_dir"
+  chmod 0751 "$home_dir"
   chmod a-s "$home_dir" 2>/dev/null || true
   chmod -t "$home_dir" 2>/dev/null || true
-  if command -v setfacl >/dev/null 2>&1; then
-    setfacl -b -k "$home_dir" 2>/dev/null || true
-  fi
+  clear_path_acl "$home_dir"
 }
 
 set_panel_user_password() {
@@ -1392,21 +1435,19 @@ fix_site_tree() {
   local target="$1" user="$2"
   ensure_sites_group
   require_linux_user "$user"
-  chown -R "$user:$user" "$target"
+  chown -R "$user:$BPANEL_SITES_GROUP" "$target"
   if [[ -d "$target" ]]; then
     if command -v setfacl >/dev/null 2>&1; then
       setfacl -Rb "$target" 2>/dev/null || true
       find "$target" -type d -exec setfacl -k {} + 2>/dev/null || true
     fi
-    find "$target" -type d -exec chmod 755 {} +
-    find "$target" -type d -exec chmod a-s {} + 2>/dev/null || true
+    find "$target" -type d -exec chmod 2750 {} +
+    find "$target" -type d -exec chmod u-s {} + 2>/dev/null || true
     find "$target" -type d -exec chmod -t {} + 2>/dev/null || true
-    find "$target" -type f -exec chmod 644 {} +
+    find "$target" -type f -exec chmod 640 {} +
   else
-    if command -v setfacl >/dev/null 2>&1; then
-      setfacl -b "$target" 2>/dev/null || true
-    fi
-    chmod 644 "$target"
+    clear_path_acl "$target"
+    chmod 640 "$target"
   fi
 }
 
@@ -1531,18 +1572,10 @@ case "$cmd" in
     ;;
 
   waf-update)
-    if [[ -x /usr/local/cwaf/scripts/updater.pl ]]; then
-      /usr/local/cwaf/scripts/updater.pl
-    elif [[ -x /etc/nginx/modsec/comodo/update.sh ]]; then
-      /etc/nginx/modsec/comodo/update.sh
-    else
-      echo "No Comodo rule updater found. Install the Comodo/CWAF updater or place rules in /etc/nginx/modsec/comodo/."
-      exit 0
-    fi
     write_modsec_main_conf
     nginx -t
     systemctl reload nginx
-    echo "Comodo WordPress rule profile updated"
+    echo "BPanel lightweight WAF rules refreshed"
     ;;
 
   waf-default-rules)
@@ -1769,7 +1802,11 @@ PY
   chown-www)
     [[ $# -eq 1 ]] || deny "usage: chown-www <path>"
     target=$(require_managed_path "$1")
-    exec chown -R www-data:www-data "$target"
+    chown -R www-data:www-data "$target"
+    find "$target" -type d -exec chmod 750 {} +
+    find "$target" -type d -exec chmod a-s {} + 2>/dev/null || true
+    find "$target" -type d -exec chmod -t {} + 2>/dev/null || true
+    find "$target" -type f -exec chmod 640 {} +
     ;;
 
   fix-permissions)
@@ -1784,10 +1821,10 @@ PY
       setfacl -Rb "$target" 2>/dev/null || true
       find "$target" -type d -exec setfacl -k {} + 2>/dev/null || true
     fi
-    find "$target" -type d -exec chmod 755 {} +
+    find "$target" -type d -exec chmod 750 {} +
     find "$target" -type d -exec chmod a-s {} + 2>/dev/null || true
     find "$target" -type d -exec chmod -t {} + 2>/dev/null || true
-    find "$target" -type f -exec chmod 644 {} +
+    find "$target" -type f -exec chmod 640 {} +
     ;;
 
   site-path-fix)
@@ -1808,25 +1845,7 @@ PY
     esac
     target=$(require_safe_path "$root_target" "$root_target/$rel_arg")
     mkdir -p -- "$target"
-    if command -v setfacl >/dev/null 2>&1; then
-      setfacl -b -k "$root_target" 2>/dev/null || true
-    fi
-    chown "$user:$user" "$root_target"
-    chmod 755 "$root_target"
-    chmod a-s "$root_target" 2>/dev/null || true
-    chmod -t "$root_target" 2>/dev/null || true
-    current="$root_target"
-    IFS='/' read -r -a root_parts <<< "$rel_arg"
-    for part in "${root_parts[@]}"; do
-      current="$current/$part"
-      chown "$user:$user" "$current"
-      if command -v setfacl >/dev/null 2>&1; then
-        setfacl -b -k "$current" 2>/dev/null || true
-      fi
-      chmod 755 "$current"
-      chmod a-s "$current" 2>/dev/null || true
-      chmod -t "$current" 2>/dev/null || true
-    done
+    harden_site_dir_path "$root_target" "$target" "$user"
     ;;
 
   site-file-write)
@@ -1834,6 +1853,7 @@ PY
     user="$1"; root_arg="$2"; rel_arg="$3"; mode_arg="${4:-0644}"
     require_linux_user "$user"
     [[ "$mode_arg" == "0644" || "$mode_arg" == "0640" ]] || deny "invalid file mode: $mode_arg"
+    [[ "$mode_arg" == "0644" ]] && mode_arg="0640"
     root_target=$(require_managed_path "$root_arg" "$user")
     case "$rel_arg" in
       ""|"/"|/*|*$'\n'*|".."|"../"*|*"/.."|*"/../"*) deny "unsafe relative path: $rel_arg" ;;
@@ -1843,7 +1863,7 @@ PY
     [[ -L "$target" ]] && deny "refusing to write through a symlink: $target"
     parent=$(dirname -- "$target")
     runuser -u "$user" -- mkdir -p -- "$parent"
-    chmod 755 "$parent"
+    harden_site_dir_path "$root_target" "$parent" "$user"
     existing_mode=""
     if [[ -e "$target" ]]; then
       existing_mode=$(stat -c '%a' -- "$target")
@@ -1852,7 +1872,7 @@ PY
     tmp="$parent/.${base}.bpanel-write-$$"
     rm -f -- "$tmp"
     cat >"$tmp"
-    chown "$user:$user" "$tmp"
+    chown "$user:$BPANEL_SITES_GROUP" "$tmp"
     chmod "$mode_arg" "$tmp"
     mv -f -- "$tmp" "$target"
     ;;
@@ -1874,11 +1894,11 @@ PY
     [[ "$(stat -c '%U' -- "$staged")" == "bpanel" ]] || deny "staged upload must be owned by bpanel"
     parent=$(dirname -- "$target")
     runuser -u "$user" -- mkdir -p -- "$parent"
-    chmod 755 "$parent"
+    harden_site_dir_path "$root_target" "$parent" "$user"
     base=$(basename -- "$target")
     tmp="$parent/.${base}.bpanel-install-$$"
     rm -f -- "$tmp"
-    install -o "$user" -g "$user" -m 0644 -- "$staged" "$tmp"
+    install -o "$user" -g "$BPANEL_SITES_GROUP" -m 0640 -- "$staged" "$tmp"
     mv -f -- "$tmp" "$target"
     rm -f -- "$staged"
     ;;
@@ -2070,7 +2090,7 @@ else:
 PY
     # The archive may contain an entry with its own filename. Restore the
     # original source archive after extraction so it cannot overwrite itself.
-    install -o "$user" -g "$user" -m 0644 -- "$tmp_archive" "$archive_target"
+    install -o "$user" -g "$BPANEL_SITES_GROUP" -m 0640 -- "$tmp_archive" "$archive_target"
     fix_site_tree "$destination_target" "$user"
     rm -f -- "$tmp_archive"
     trap - EXIT
@@ -2104,8 +2124,7 @@ PY
       mv "$target/public" "$target/public_html"
     fi
     mkdir -p "$target/public_html"
-    chown "$user:$user" "$target" "$target/public_html"
-    chmod 0755 "$target" "$target/public_html"
+    harden_site_dir_path "$target" "$target/public_html" "$user"
     fix_site_tree "$target" "$user"
     ensure_php_pool "$user" "$target" "$php_version"
     ;;
@@ -2129,6 +2148,7 @@ PY
       mv "$new_target/public" "$new_target/public_html"
     fi
     mkdir -p "$new_target/public_html"
+    harden_site_dir_path "$new_target" "$new_target/public_html" "$user"
     fix_site_tree "$new_target" "$user"
     ensure_php_pool "$user" "$new_target" "$php_version"
     ;;
@@ -2153,8 +2173,8 @@ PY
   mkdir-site)
     [[ $# -eq 1 ]] || deny "usage: mkdir-site <path>"
     target=$(require_managed_path "$1")
-    install -d -o www-data -g www-data -m 0755 "$target"
-    install -d -o www-data -g www-data -m 0755 "$target/public_html"
+    install -d -o www-data -g www-data -m 0750 "$target"
+    install -d -o www-data -g www-data -m 0750 "$target/public_html"
     ;;
 
   site-log-read)
@@ -2217,6 +2237,7 @@ PY
     # Validate cwd exists immediately before cd to avoid TOCTOU
     [[ -d "$target" ]] || deny "working directory does not exist: $target"
     cd "$target" || deny "failed to change to working directory: $target"
+    umask 027
     terminal_env=(
       "HOME=$HOME_ROOT/$user"
       "COMPOSER_HOME=$HOME_ROOT/$user/.composer"
@@ -2247,7 +2268,18 @@ PY
       node|npm|npx|yarn|git)
         exec runuser -u "$user" -- env "${terminal_env[@]}" "$cmd" "$@"
         ;;
-      ls|cat|mkdir|rm|cp|mv|chmod|chown|pwd|echo|touch|grep|find|tar|zip|unzip|curl|wget|diff|head|tail|less|du|df|date|whoami|which|clear)
+      ls|cat|mkdir|rm|cp|mv|chmod|chown|grep|find|tar|zip|unzip|diff|head|tail|less|du|df)
+        require_terminal_path_args "$user" "$target" "$@"
+        exec runuser -u "$user" -- env "${terminal_env[@]}" "$cmd" "$@"
+        ;;
+      pwd|echo|touch|date|whoami|which|clear)
+        if [[ "$cmd" == "touch" ]]; then
+          require_terminal_path_args "$user" "$target" "$@"
+        fi
+        exec runuser -u "$user" -- env "${terminal_env[@]}" "$cmd" "$@"
+        ;;
+      curl|wget)
+        require_terminal_download_args "$user" "$target" "$@"
         exec runuser -u "$user" -- env "${terminal_env[@]}" "$cmd" "$@"
         ;;
       artisan)
