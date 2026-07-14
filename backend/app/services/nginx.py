@@ -27,6 +27,21 @@ HTTP_FLOOD_DEFAULTS = {
     "connection_limit": 60,
 }
 HTTP_FLOOD_ZONES_FALLBACK = ["bash", "-lc", "cat >/tmp/bpanel-http-flood-zones.conf && echo HTTP flood zones saved"]
+WORDPRESS_CSP = (
+    "default-src 'self' https: data: blob:; "
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; "
+    "style-src 'self' 'unsafe-inline' https:; "
+    "img-src 'self' data: https: blob:; "
+    "font-src 'self' data: https:; "
+    "connect-src 'self' https:; "
+    "frame-src 'self' https: blob:; "
+    "object-src 'none'; "
+    "base-uri 'self'; "
+    "form-action 'self' https:; "
+    "frame-ancestors 'self'; "
+    "upgrade-insecure-requests"
+)
+WORDPRESS_CSP_HEADER = f'    add_header Content-Security-Policy "{WORDPRESS_CSP}" always;'
 
 
 def waf_rules_file(domain: str) -> str:
@@ -564,7 +579,7 @@ def _ensure_hsts_header(content: str) -> str:
     security_headers = [
         ('Strict-Transport-Security', '    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;'),
         ('Permissions-Policy', '    add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), bluetooth=(), magnetometer=(), gyroscope=(), accelerometer=()" always;'),
-        ('Content-Security-Policy', '    add_header Content-Security-Policy "default-src \'self\' https: data: blob:; script-src \'self\' \'unsafe-inline\' \'unsafe-eval\' https:; style-src \'self\' \'unsafe-inline\' https:; img-src \'self\' data: https: blob:; font-src \'self\' data: https:; connect-src \'self\' https:; frame-src \'self\' https:; object-src \'none\'; base-uri \'self\'; form-action \'self\' https:; frame-ancestors \'self\'; upgrade-insecure-requests" always;'),
+        ('Content-Security-Policy', WORDPRESS_CSP_HEADER),
     ]
     headers_to_add = [header for name, header in security_headers if name not in content]
     if not headers_to_add:
