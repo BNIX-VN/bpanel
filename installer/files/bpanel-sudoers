@@ -19,4 +19,4 @@ Defaults:bpanel !requiretty
 Defaults:bpanel env_reset
 Defaults:bpanel secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-bpanel ALL=(root) NOPASSWD: /usr/local/sbin/bpanel-helper, /usr/local/sbin/bpanel-helper *
+bpanel ALL=(root) NOPASSWD: /usr/local/sbin/bpanel-helper *

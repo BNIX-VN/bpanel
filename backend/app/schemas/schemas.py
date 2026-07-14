@@ -10,6 +10,7 @@ from pydantic import BaseModel, EmailStr, Field, field_validator, model_validato
 DOMAIN_RE = re.compile(r"^(?!-)([a-zA-Z0-9-]{1,63}\.)+[a-zA-Z]{2,}$")
 SUPPORTED_PHP_VERSIONS = {"5.6", "7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5"}
 SUPPORTED_APP_TYPES = {"wordpress", "php", "static"}
+SUPPORTED_NGINX_REWRITE_MODES = {"none", "front_controller", "laravel", "codeigniter", "seohburl"}
 SUPPORTED_ROLES = {"admin", "end_user"}
 SIZE_RE = re.compile(r"^\d{1,6}[KMG]?$")  # e.g. "512M", "1024M"
 PANEL_HOST_RE = re.compile(r"^(?:localhost|(?:\d{1,3}\.){3}\d{1,3}|(?:(?!-)[a-zA-Z0-9-]{1,63}\.)+[a-zA-Z]{2,})$")
@@ -40,6 +41,15 @@ def _validate_app_type(value: Optional[str]) -> Optional[str]:
     if value not in SUPPORTED_APP_TYPES:
         raise ValueError(f"Unsupported app type. Allowed: {sorted(SUPPORTED_APP_TYPES)}")
     return value
+
+
+def _validate_nginx_rewrite_mode(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return value
+    normalized = value.strip().lower()
+    if normalized not in SUPPORTED_NGINX_REWRITE_MODES:
+        raise ValueError(f"Unsupported nginx rewrite mode. Allowed: {sorted(SUPPORTED_NGINX_REWRITE_MODES)}")
+    return normalized
 
 
 def _validate_document_root(value: Optional[str]) -> Optional[str]:
@@ -254,6 +264,7 @@ class WebsiteUpdate(BaseModel):
     status: Optional[str] = None
     owner_id: Optional[int] = None
     nginx_custom: Optional[str] = None
+    nginx_rewrite_mode: Optional[str] = None
     waf_enabled: Optional[bool] = None
     http_flood_enabled: Optional[bool] = None
 
@@ -266,6 +277,11 @@ class WebsiteUpdate(BaseModel):
     @classmethod
     def validate_app(cls, value: Optional[str]) -> Optional[str]:
         return _validate_app_type(value)
+
+    @field_validator("nginx_rewrite_mode")
+    @classmethod
+    def validate_nginx_rewrite_mode(cls, value: Optional[str]) -> Optional[str]:
+        return _validate_nginx_rewrite_mode(value)
 
     @field_validator("document_root")
     @classmethod
@@ -389,6 +405,7 @@ class WebsiteOut(BaseModel):
     status: str
     nginx_custom: str = ""
     nginx_config_mode: str = "managed"
+    nginx_rewrite_mode: str = "none"
     waf_enabled: bool = True
     waf_default_rules: str = ""
     waf_custom_rules: str = ""

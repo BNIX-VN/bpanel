@@ -899,6 +899,7 @@ with SessionLocal() as db:
                 http_flood_enabled=website.http_flood_enabled,
                 http_flood_config=website.http_flood_config or "",
                 document_root=getattr(website, "document_root", "public_html") or "public_html",
+                rewrite_mode=getattr(website, "nginx_rewrite_mode", "none") or "none",
             )
         except Exception as exc:
             print(f"WARNING: could not refresh permissions for {website.domain}: {exc}")

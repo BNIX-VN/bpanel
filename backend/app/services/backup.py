@@ -98,6 +98,7 @@ def create_user_backup(user: User, db) -> str:
                 "document_root": getattr(website, "document_root", "public_html") or "public_html",
                 "nginx_custom": website.nginx_custom or "",
                 "nginx_config_mode": "managed",
+                "nginx_rewrite_mode": getattr(website, "nginx_rewrite_mode", "none") or "none",
                 "waf_enabled": bool(website.waf_enabled),
                 "waf_default_rules": website.waf_default_rules or "",
                 "waf_custom_rules": website.waf_custom_rules or "",
@@ -347,6 +348,9 @@ def restore_user_backup(backup_file: str, db) -> dict:
             app_type = site_info.get("app_type") or "wordpress"
             if app_type not in {"wordpress", "php", "static"}:
                 app_type = "wordpress"
+            nginx_rewrite_mode = site_info.get("nginx_rewrite_mode")
+            if nginx_rewrite_mode not in {"none", "front_controller", "laravel", "codeigniter", "seohburl"}:
+                nginx_rewrite_mode = "front_controller" if app_type in {"wordpress", "php"} else "none"
             document_root = site_users.validate_document_root(site_info.get("document_root") or "public_html")
             linux_user = site_users.linux_user_for_panel_username(user.username)
             root_path = site_users.site_root_for_panel_user(user.username, domain)
@@ -373,6 +377,7 @@ def restore_user_backup(backup_file: str, db) -> dict:
                     status=site_info.get("status") or "active",
                     nginx_custom=site_info.get("nginx_custom") or "",
                     nginx_config_mode="managed",
+                    nginx_rewrite_mode=nginx_rewrite_mode,
                     waf_enabled=bool(site_info.get("waf_enabled", True)),
                     waf_default_rules=site_info.get("waf_default_rules") or "",
                     waf_custom_rules=site_info.get("waf_custom_rules") or "",
@@ -392,6 +397,7 @@ def restore_user_backup(backup_file: str, db) -> dict:
                 website.status = site_info.get("status") or "active"
                 website.nginx_custom = site_info.get("nginx_custom") or ""
                 website.nginx_config_mode = "managed"
+                website.nginx_rewrite_mode = nginx_rewrite_mode
                 website.waf_enabled = bool(site_info.get("waf_enabled", True))
                 website.waf_default_rules = site_info.get("waf_default_rules") or ""
                 website.waf_custom_rules = site_info.get("waf_custom_rules") or ""
@@ -448,6 +454,7 @@ def restore_user_backup(backup_file: str, db) -> dict:
                 http_flood_enabled=website.http_flood_enabled,
                 http_flood_config=website.http_flood_config or "",
                 document_root=document_root,
+                rewrite_mode=nginx_rewrite_mode,
             )
             if not website.http_flood_enabled:
                 result = nginx.sync_http_flood_zones(db.query(Website).all())

@@ -71,9 +71,23 @@ server {
     # BPANEL CUSTOM INCLUDE
     include {{ custom_include_path }};
 
+{% if rewrite_mode in ["front_controller", "laravel", "codeigniter"] %}
     location / {
         try_files $uri $uri/ /index.php?$query_string;
     }
+{% elif rewrite_mode == "seohburl" %}
+    location / {
+        try_files $uri $uri/ @seohburl;
+    }
+
+    location @seohburl {
+        rewrite ^/(.+)$ /index.php?/$1 last;
+    }
+{% else %}
+    location / {
+        try_files $uri $uri/ =404;
+    }
+{% endif %}
 
     location ~* \.(jpg|jpeg|gif|png|css|js|ico|webp|svg|woff|woff2|ttf|eot)$ {
         expires -1;

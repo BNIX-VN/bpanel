@@ -43,6 +43,7 @@ class Website(Base):
     status: Mapped[str] = mapped_column(String(32), default="pending")
     nginx_custom: Mapped[str] = mapped_column(Text, default="")
     nginx_config_mode: Mapped[str] = mapped_column(String(16), default="managed")
+    nginx_rewrite_mode: Mapped[str] = mapped_column(String(32), default="none")
     waf_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     waf_default_rules: Mapped[str] = mapped_column(Text, default="")
     waf_custom_rules: Mapped[str] = mapped_column(Text, default="")

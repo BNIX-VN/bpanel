@@ -76,6 +76,10 @@ def _website_http_flood_config(website: Website) -> dict:
     return nginx.http_flood_config_for_website(website)
 
 
+def _website_rewrite_mode(website: Website) -> str:
+    return getattr(website, "nginx_rewrite_mode", "none") or "none"
+
+
 def _has_live_certificate(domain: str) -> bool:
     live_dir = Path("/etc/letsencrypt/live") / domain
     try:
@@ -178,6 +182,7 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
                 php_version=payload.php_version,
                 php_fpm_socket_override=site_users.site_php_fpm_socket(linux_user, root_path, payload.php_version),
                 document_root="public_html",
+                rewrite_mode="front_controller",
             )
         except (RuntimeError, ValueError) as exc:
             mariadb.drop_database(db_info["db_name"], db_info["db_user"])
@@ -202,6 +207,7 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
                 php_version=payload.php_version,
                 php_fpm_socket_override=site_users.site_php_fpm_socket(linux_user, root_path, runtime_php_version),
                 document_root="public_html",
+                rewrite_mode="none",
             )
         except (RuntimeError, ValueError, OSError) as exc:
             _cleanup_failed_site(root_path, linux_user)
@@ -216,6 +222,7 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
         linux_user=linux_user,
         php_version=payload.php_version,
         app_type=app_type_value,
+        nginx_rewrite_mode="front_controller" if app_type_value == "wordpress" else "none",
         status="active",
     )
     db.add(website)
@@ -291,6 +298,7 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
                 http_flood_enabled=website.http_flood_enabled,
                 http_flood_config=website.http_flood_config or "",
                 document_root=website.document_root or "public_html",
+                rewrite_mode=_website_rewrite_mode(website),
             )
         except (RuntimeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=f"Cannot write Nginx config: {exc}") from exc
@@ -311,6 +319,11 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
                 raise RuntimeError(_command_error(result))
             if website.http_flood_enabled:
                 _sync_http_flood_zones(db)
+            next_rewrite_mode = (
+                "front_controller" if next_app_type == "wordpress"
+                else "none" if next_app_type == "static"
+                else payload.nginx_rewrite_mode or _website_rewrite_mode(website)
+            )
             nginx.rewrite_vhost(
                 website.domain,
                 website.root_path,
@@ -322,10 +335,12 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
                 http_flood_enabled=website.http_flood_enabled,
                 http_flood_config=website.http_flood_config or "",
                 document_root=website.document_root or "public_html",
+                rewrite_mode=next_rewrite_mode,
             )
         except (RuntimeError, ValueError, OSError) as exc:
             raise HTTPException(status_code=400, detail=f"Cannot change website mode: {exc}") from exc
         website.app_type = next_app_type
+        website.nginx_rewrite_mode = next_rewrite_mode
     if payload.status is not None:
         website.status = payload.status
     if payload.document_root is not None and payload.document_root != (website.document_root or "public_html"):
@@ -350,6 +365,7 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
                 http_flood_enabled=website.http_flood_enabled,
                 http_flood_config=website.http_flood_config or "",
                 document_root=next_document_root,
+                rewrite_mode=_website_rewrite_mode(website),
             )
         except (RuntimeError, ValueError, OSError) as exc:
             raise HTTPException(status_code=400, detail=f"Cannot change document root: {exc}") from exc
@@ -389,6 +405,7 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
                     http_flood_enabled=website.http_flood_enabled,
                     http_flood_config=website.http_flood_config or "",
                     document_root=website.document_root or "public_html",
+                    rewrite_mode=_website_rewrite_mode(website),
                 )
                 website.root_path = new_root_path
                 website.linux_user = new_linux_user
@@ -403,6 +420,33 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
         except (RuntimeError, ValueError, FileNotFoundError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         website.nginx_custom = payload.nginx_custom
+        website.nginx_config_mode = "managed"
+    if payload.nginx_rewrite_mode is not None and payload.nginx_rewrite_mode != _website_rewrite_mode(website):
+        app_type = website.app_type or "wordpress"
+        next_rewrite_mode = "front_controller" if app_type == "wordpress" else "none" if app_type == "static" else payload.nginx_rewrite_mode
+        runtime_php_version = website.php_version if app_type in {"wordpress", "php"} else None
+        try:
+            result = waf.sync_website_rules(website)
+            if result.returncode != 0:
+                raise RuntimeError(_command_error(result))
+            if website.http_flood_enabled:
+                _sync_http_flood_zones(db)
+            nginx.rewrite_vhost(
+                website.domain,
+                website.root_path,
+                app_type=app_type,
+                php_version=website.php_version,
+                custom_directives=website.nginx_custom or "",
+                php_fpm_socket_override=site_users.site_php_fpm_socket(website.linux_user, website.root_path, runtime_php_version),
+                waf_enabled=website.waf_enabled,
+                http_flood_enabled=website.http_flood_enabled,
+                http_flood_config=website.http_flood_config or "",
+                document_root=website.document_root or "public_html",
+                rewrite_mode=next_rewrite_mode,
+            )
+        except (RuntimeError, ValueError, OSError, FileNotFoundError) as exc:
+            raise HTTPException(status_code=400, detail=f"Cannot change Nginx rewrite: {exc}") from exc
+        website.nginx_rewrite_mode = next_rewrite_mode
         website.nginx_config_mode = "managed"
     if payload.waf_enabled is not None:
         ensure_role(current_user.role, Role.admin)
@@ -488,6 +532,7 @@ def reset_website_nginx_config(website_id: int, request: Request, db: Session = 
             http_flood_enabled=website.http_flood_enabled,
             http_flood_config=website.http_flood_config or "",
             document_root=website.document_root or "public_html",
+            rewrite_mode=_website_rewrite_mode(website),
         )
     except (RuntimeError, ValueError, FileNotFoundError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -637,6 +682,7 @@ def fix_nginx_security(website_id: int, db: Session = Depends(get_db), current_u
         http_flood_enabled=website.http_flood_enabled,
         http_flood_config=website.http_flood_config or "",
         document_root=website.document_root or "public_html",
+        rewrite_mode=_website_rewrite_mode(website),
     )
     log_action(db, current_user.id, "fix_nginx_security", website.domain)
     return {"message": f"Rewrote Nginx security template for {website.domain}", "path": target}

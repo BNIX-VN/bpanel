@@ -31,7 +31,7 @@ ownership, quotas, backups, SSL, services, and firewall tools built in.
 
 ## Versioning
 
-Current release: `1.0.37`.
+Current release: `1.0.38`.
 
 BPanel versions use semantic versioning: `major.minor.patch`.
 
@@ -99,8 +99,8 @@ bash installer/install.sh
 ```
 
 The commands auto-detect the newest semantic release tag from GitHub; at the
-time of this README, that tag is `v1.0.37`. To pin another release, run the
-same command with `BPANEL_VERSION=v1.0.37` exported or set before the detection
+time of this README, that tag is `v1.0.38`. To pin another release, run the
+same command with `BPANEL_VERSION=v1.0.38` exported or set before the detection
 block. GitHub auto-generates the tag zip, but the `git clone` method avoids
 archive cache after a forced tag refresh. The clone path cleans up
 `/tmp/bpanel-source`; the zip path cleans up `/opt/bpanel-source` and its
@@ -170,7 +170,7 @@ when a newer release is available.
 To stay on a specific release:
 
 ```bash
-bpanel-update --tag v1.0.37
+bpanel-update --tag v1.0.38
 ```
 
 If the browser still shows the old UI, do a hard refresh (Ctrl + Shift + R) or

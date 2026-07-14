@@ -27,6 +27,13 @@ const HTTP_FLOOD_DEFAULTS = {
   connection_limit: 60,
 };
 const PHP_VERSION_ORDER = ['5.6', '7.4', '8.0', '8.1', '8.2', '8.3', '8.4', '8.5'];
+const NGINX_REWRITE_MODES = [
+  { value: 'none', label: 'None / static PHP' },
+  { value: 'front_controller', label: 'PHP front controller' },
+  { value: 'laravel', label: 'Laravel' },
+  { value: 'codeigniter', label: 'CodeIgniter' },
+  { value: 'seohburl', label: 'SEO HB URL' },
+];
 const SETTINGS_PAGE_KEYS = ['settings', 'security', 'php', 'firewall', 'waf', 'updates', 'services'];
 const PAGE_ROUTES = {
   dashboard: '/',
@@ -85,6 +92,19 @@ function normalizeHttpFloodConfig(config = {}) {
     const number = value[key] === '' ? NaN : Number(value[key]);
     return [key, Number.isFinite(number) ? number : fallback];
   }));
+}
+
+function websiteConfigForm(site = {}) {
+  const appType = site.app_type || 'wordpress';
+  return {
+    app_type: appType,
+    php_version: site.php_version || '8.3',
+    nginx_rewrite_mode: appType === 'wordpress'
+      ? 'front_controller'
+      : appType === 'static'
+        ? 'none'
+        : site.nginx_rewrite_mode || 'none',
+  };
 }
 
 function editorParamsFromLocation() {
@@ -351,7 +371,8 @@ function App() {
   const [siteType, setSiteType] = useState('wordpress');
   const [installSslAfterCreate, setInstallSslAfterCreate] = useState(false);
   const [installWordPress, setInstallWordPress] = useState(true);
-  const [nginxCustomEditing, setNginxCustomEditing] = useState(null); // {id, domain, mode, content}
+  const [nginxCustomEditing, setNginxCustomEditing] = useState(null); // Website settings editor state
+  const [websiteSettingsForm, setWebsiteSettingsForm] = useState(websiteConfigForm());
   const [logViewer, setLogViewer] = useState(null); // {id, domain, kind, lines, path, content, exists}
   const [terminalViewer, setTerminalViewer] = useState(null); // {id, domain}
   const [websites, setWebsites] = useState([]);
@@ -411,9 +432,6 @@ function App() {
   const [selectedWafWebsiteId, setSelectedWafWebsiteId] = useState('');
   const [wafSiteConfig, setWafSiteConfig] = useState(null);
   const [httpFloodForm, setHttpFloodForm] = useState({ http_flood_enabled: false, ...HTTP_FLOOD_DEFAULTS });
-  const [websitePhpVersions, setWebsitePhpVersions] = useState({});
-  const [websiteAppTypes, setWebsiteAppTypes] = useState({});
-  const [websiteDocumentRoots, setWebsiteDocumentRoots] = useState({});
   const [assignUserId, setAssignUserId] = useState('');
   const [assignWebsiteId, setAssignWebsiteId] = useState('');
   const [twoFactorStatus, setTwoFactorStatus] = useState(null);
@@ -1035,11 +1053,13 @@ function App() {
   async function openNginxCustom(site) {
     setLogViewer(null);
     setTerminalViewer(null);
+    setWebsiteSettingsForm(websiteConfigForm(site));
     const data = await request(`/websites/${site.id}/nginx-custom`, {}, 'Loading Custom Nginx...');
     if (data !== null) {
       setNginxCustomEditing({
         id: site.id,
         domain: site.domain,
+        site,
         mode: 'custom',
         content: data?.nginx_custom || '',
       });
@@ -1050,7 +1070,7 @@ function App() {
     if (!nginxCustomEditing) return;
     const data = await request(`/websites/${nginxCustomEditing.id}/nginx-config`, {}, 'Loading full Nginx config...');
     if (data !== null) {
-      setNginxCustomEditing(prev => ({ ...prev, mode: 'full', content: data?.nginx_config || '' }));
+      setNginxCustomEditing(prev => ({ ...prev, mode: 'full', customContent: prev?.content || '', content: data?.nginx_config || '' }));
     }
   }
 
@@ -1065,6 +1085,37 @@ function App() {
       setNotice(`Updated Custom Nginx for ${nginxCustomEditing.domain}`);
       setNginxCustomEditing(null);
       refreshAll();
+    }
+  }
+
+  async function saveWebsiteSettings() {
+    if (!nginxCustomEditing) return;
+    const original = nginxCustomEditing.site || {};
+    const body = {};
+    const nextAppType = websiteSettingsForm.app_type || original.app_type || 'wordpress';
+    const nextPhp = websiteSettingsForm.php_version || original.php_version || '8.3';
+    const nextRewrite = nextAppType === 'wordpress'
+      ? 'front_controller'
+      : nextAppType === 'static'
+        ? 'none'
+        : websiteSettingsForm.nginx_rewrite_mode || 'none';
+
+    if (nextAppType !== (original.app_type || 'wordpress')) body.app_type = nextAppType;
+    if (nextAppType !== 'static' && nextPhp !== original.php_version) body.php_version = nextPhp;
+    if (nextRewrite !== (original.nginx_rewrite_mode || (original.app_type === 'wordpress' ? 'front_controller' : 'none'))) {
+      body.nginx_rewrite_mode = nextRewrite;
+    }
+    if (Object.keys(body).length === 0) return;
+
+    const data = await request(`/websites/${nginxCustomEditing.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }, `Saving ${nginxCustomEditing.domain} settings...`);
+    if (data) {
+      setNotice(`Updated settings for ${nginxCustomEditing.domain}.`);
+      setWebsiteSettingsForm(websiteConfigForm(data));
+      setNginxCustomEditing(prev => prev ? ({ ...prev, site: data }) : prev);
+      await refreshAll();
     }
   }
 
@@ -1134,41 +1185,6 @@ function App() {
   async function fixNginxSecurity(id) {
     const data = await request(`/websites/${id}/fix-nginx-security`, { method: 'POST' }, 'Rewriting Nginx security template...');
     if (data?.message) setNotice(data.message);
-  }
-
-  async function changeWebsitePhpVersion(site) {
-    const next = websitePhpVersions[site.id] || site.php_version || '8.3';
-    if (next === site.php_version) return;
-    const data = await request(`/websites/${site.id}`, { method: 'PATCH', body: JSON.stringify({ php_version: next }) }, `Changing ${site.domain} to PHP ${next}...`);
-    if (data) { setNotice(`Changed ${site.domain} to PHP ${next} and reloaded Nginx.`); await refreshAll(); }
-  }
-
-  async function changeWebsiteAppType(site) {
-    const next = websiteAppTypes[site.id] || site.app_type || 'wordpress';
-    if (next === (site.app_type || 'wordpress')) return;
-    const data = await request(`/websites/${site.id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ app_type: next }),
-    }, `Changing ${site.domain} to ${next} mode...`);
-    if (data) {
-      setNotice(`Changed ${site.domain} to ${data.app_type} mode.`);
-      setWebsiteAppTypes(prev => ({ ...prev, [site.id]: data.app_type }));
-      await refreshAll();
-    }
-  }
-
-  async function changeWebsiteDocumentRoot(site) {
-    const next = (websiteDocumentRoots[site.id] ?? site.document_root ?? 'public_html').trim();
-    if (!next || next === (site.document_root || 'public_html')) return;
-    const data = await request(`/websites/${site.id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ document_root: next }),
-    }, `Changing document root for ${site.domain}...`);
-    if (data) {
-      setNotice(`Changed ${site.domain} document root to ${data.document_root}.`);
-      setWebsiteDocumentRoots(prev => ({ ...prev, [site.id]: data.document_root }));
-      await refreshAll();
-    }
   }
 
   async function changeDbPassword(id) {
@@ -2328,30 +2344,68 @@ function App() {
   function renderNginxEditor() {
     if (!nginxCustomEditing) return null;
     const fullConfig = nginxCustomEditing.mode === 'full';
+    const selectedAppType = websiteSettingsForm.app_type || nginxCustomEditing.site?.app_type || 'wordpress';
+    const rewriteDisabled = selectedAppType !== 'php';
     return <section className="section nginx-modal inline-nginx-editor">
       <div className="section-title">
         <div className="nginx-config-title">
-          <h2>{fullConfig ? 'Full Nginx config' : 'Custom Nginx'} - {nginxCustomEditing.domain}</h2>
+          <h2>{fullConfig ? 'Full Nginx config' : 'Website settings'} - {nginxCustomEditing.domain}</h2>
           <p className="hint">{fullConfig
             ? 'This is read-only. BPanel manages the main vhost template.'
-            : 'These directives are written to a separate include file and survive BPanel template updates.'}</p>
+            : 'Managed settings rewrite the main vhost safely. Custom Nginx is still stored as a separate include.'}</p>
         </div>
         <div className="actions">
           {!fullConfig && isAdmin && <button className="secondary-light" disabled={!!loading} onClick={viewFullNginxConfig}><FileText size={14}/> View all</button>}
+          {fullConfig && <button className="secondary-light" disabled={!!loading} onClick={() => setNginxCustomEditing(prev => ({ ...prev, mode: 'custom', content: prev?.customContent ?? prev?.content ?? '' }))}><SettingsIcon size={14}/> Settings</button>}
           <button className="secondary-light" onClick={() => setNginxCustomEditing(null)}><X size={14}/> Close</button>
         </div>
       </div>
-      <textarea
-        className="code-editor"
-        value={nginxCustomEditing.content}
-        onChange={e => setNginxCustomEditing(prev => ({ ...prev, content: e.target.value }))}
-        placeholder={fullConfig
-          ? `server {\n    listen 80;\n    server_name ${nginxCustomEditing.domain};\n}`
-          : `try_files $uri $uri/ @seohburl;\nlocation @seohburl {\n    rewrite ^/(.+)$ /index.php?/$1 last;\n}`}
-        spellCheck={false}
-        rows={14}
-        readOnly={fullConfig}
-      />
+      {!fullConfig && <div className="website-settings-grid">
+        <label><span>Website mode</span><select
+          value={websiteSettingsForm.app_type}
+          onChange={e => setWebsiteSettingsForm(prev => ({
+            ...prev,
+            app_type: e.target.value,
+            nginx_rewrite_mode: e.target.value === 'php' ? prev.nginx_rewrite_mode || 'none' : e.target.value === 'wordpress' ? 'front_controller' : 'none',
+          }))}
+          disabled={!!loading}
+        >
+          <option value="wordpress">WordPress</option>
+          <option value="php">PHP</option>
+          <option value="static">Static</option>
+        </select></label>
+        {selectedAppType !== 'static' && <label><span>PHP version</span><select
+          value={websiteSettingsForm.php_version}
+          onChange={e => setWebsiteSettingsForm(prev => ({ ...prev, php_version: e.target.value }))}
+          disabled={!!loading}
+        >
+          {phpVersions.installed.map(v => <option key={v} value={v}>PHP {v}</option>)}
+        </select></label>}
+        <label><span>Nginx rewrite</span><select
+          value={rewriteDisabled ? (selectedAppType === 'wordpress' ? 'front_controller' : 'none') : websiteSettingsForm.nginx_rewrite_mode}
+          onChange={e => setWebsiteSettingsForm(prev => ({ ...prev, nginx_rewrite_mode: e.target.value }))}
+          disabled={!!loading || rewriteDisabled}
+        >
+          {NGINX_REWRITE_MODES.map(mode => <option key={mode.value} value={mode.value}>{mode.label}</option>)}
+        </select></label>
+        <div className="website-settings-actions">
+          <button disabled={!!loading} onClick={saveWebsiteSettings}><Save size={14}/> Save settings</button>
+        </div>
+      </div>}
+      <div className="custom-nginx-block">
+        {!fullConfig && <h3>Custom Nginx</h3>}
+        <textarea
+          className="code-editor"
+          value={nginxCustomEditing.content}
+          onChange={e => setNginxCustomEditing(prev => ({ ...prev, content: e.target.value, customContent: e.target.value }))}
+          placeholder={fullConfig
+            ? `server {\n    listen 80;\n    server_name ${nginxCustomEditing.domain};\n}`
+            : `# Optional extra directives only. Use Nginx rewrite above for location / routing.`}
+          spellCheck={false}
+          rows={fullConfig ? 18 : 10}
+          readOnly={fullConfig}
+        />
+      </div>
       <div className="actions">
         {!fullConfig && <button disabled={!!loading} onClick={saveNginxCustom}>Save and reload Nginx</button>}
         {!fullConfig && <button className="secondary-light" disabled={!!loading} onClick={resetNginxDefault}><RotateCcw size={14}/> Reset custom</button>}
@@ -2453,80 +2507,17 @@ function App() {
               <span>Type <strong>{site.app_type || 'wordpress'}</strong></span>
               <span>PHP <strong>{site.php_version}</strong></span>
               <span>Status <strong>{site.status}</strong></span>
+              {site.app_type === 'php' && site.nginx_rewrite_mode && site.nginx_rewrite_mode !== 'none' && <span>Rewrite <strong>{site.nginx_rewrite_mode}</strong></span>}
               {site.nginx_custom && <span className="badge ok">Custom Nginx</span>}
               {site.waf_enabled && <span className="badge ok">WAF</span>}
               {site.http_flood_enabled && <span className="badge ok">HTTP Flood</span>}
             </div>
             <div className="site-actions" aria-label={`Website actions for ${site.domain}`}>
-              <div className="site-mode-actions">
-                <select
-                  value={websiteAppTypes[site.id] || site.app_type || 'wordpress'}
-                  onChange={e => setWebsiteAppTypes(prev => ({ ...prev, [site.id]: e.target.value }))}
-                  title="Website mode"
-                  aria-label={`Website mode for ${site.domain}`}
-                  disabled={!!loading}
-                >
-                  <option value="wordpress">WordPress</option>
-                  <option value="php">PHP</option>
-                  <option value="static">Static</option>
-                </select>
-                <button
-                  className="site-icon-button secondary-light"
-                  data-tooltip="Save mode"
-                  title="Save website mode"
-                  aria-label={`Save website mode for ${site.domain}`}
-                  disabled={
-                    !!loading
-                    || (websiteAppTypes[site.id] || site.app_type || 'wordpress') === (site.app_type || 'wordpress')
-                  }
-                  onClick={() => changeWebsiteAppType(site)}
-                ><Save size={15}/></button>
-              </div>
-              <div className="site-root-actions">
-                <input
-                  value={websiteDocumentRoots[site.id] ?? site.document_root ?? 'public_html'}
-                  onChange={e => setWebsiteDocumentRoots(prev => ({ ...prev, [site.id]: e.target.value }))}
-                  placeholder="public_html/public"
-                  title="Document root relative to website root"
-                  aria-label={`Document root for ${site.domain}`}
-                  disabled={!!loading}
-                />
-                <button
-                  className="site-icon-button secondary-light"
-                  data-tooltip="Save root"
-                  title="Save document root"
-                  aria-label={`Save document root for ${site.domain}`}
-                  disabled={
-                    !!loading
-                    || !(websiteDocumentRoots[site.id] ?? site.document_root ?? 'public_html').trim()
-                    || (websiteDocumentRoots[site.id] ?? site.document_root ?? 'public_html').trim() === (site.document_root || 'public_html')
-                  }
-                  onClick={() => changeWebsiteDocumentRoot(site)}
-                ><Save size={15}/></button>
-              </div>
-              {site.app_type !== 'static' && <div className="site-php-actions">
-                <select
-                  value={websitePhpVersions[site.id] || site.php_version || '8.3'}
-                  onChange={e => setWebsitePhpVersions(prev => ({ ...prev, [site.id]: e.target.value }))}
-                  title="PHP version"
-                  aria-label={`PHP version for ${site.domain}`}
-                >
-                  {phpVersions.installed.map(v => <option key={v} value={v}>PHP {v}</option>)}
-                </select>
-                <button
-                  className="site-icon-button secondary-light"
-                  data-tooltip="Change PHP"
-                  title="Change PHP"
-                  aria-label={`Change PHP version for ${site.domain}`}
-                  disabled={!!loading || (websitePhpVersions[site.id] || site.php_version) === site.php_version}
-                  onClick={() => changeWebsitePhpVersion(site)}
-                ><RefreshCw size={15}/></button>
-              </div>}
               <div className="site-feature-actions">
                 <button className="site-icon-button secondary-light" data-tooltip="Files" title="Files" aria-label={`Open file manager for ${site.domain}`} disabled={!!loading} onClick={() => openWebsiteFileManager(site)}><FolderOpen size={15}/></button>
                 <button className="site-icon-button secondary-light" data-tooltip="Logs" title="Logs" aria-label={`View logs for ${site.domain}`} disabled={!!loading} onClick={() => openWebsiteLogs(site)}><FileText size={15}/></button>
                 <button className="site-icon-button secondary-light" data-tooltip="Terminal" title="Terminal" aria-label={`Open terminal for ${site.domain}`} disabled={!!loading} onClick={() => openWebsiteTerminal(site)}><TerminalIcon size={15}/></button>
-                <button className="site-icon-button secondary-light" data-tooltip="Custom Nginx" title="Custom Nginx" aria-label={`Edit Custom Nginx for ${site.domain}`} disabled={!!loading} onClick={() => openNginxCustom(site)}><Code2 size={15}/></button>
+                <button className="site-icon-button secondary-light" data-tooltip="Settings" title="Settings" aria-label={`Edit settings for ${site.domain}`} disabled={!!loading} onClick={() => openNginxCustom(site)}><SettingsIcon size={15}/></button>
                 <button className="site-icon-button danger" data-tooltip="Delete" title="Delete" aria-label={`Delete ${site.domain}`} disabled={!!loading} onClick={() => deleteWebsite(site.id)}><Trash2 size={15}/></button>
               </div>
             </div>

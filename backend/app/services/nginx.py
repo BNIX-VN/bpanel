@@ -17,6 +17,7 @@ CUSTOM_INCLUDE_DIR = Path("/etc/nginx/bpanel/custom")
 
 ALLOWED_PHP_VERSIONS = {"5.6", "7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5"}
 ALLOWED_APP_TYPES = {"wordpress", "php", "static"}
+ALLOWED_REWRITE_MODES = {"none", "front_controller", "laravel", "codeigniter", "seohburl"}
 ALLOWED_LOG_KINDS = {"access", "error"}
 DOMAIN_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+")
 MAX_FULL_CONFIG_BYTES = 128 * 1024
@@ -281,6 +282,20 @@ def _check_app_type(app_type: str) -> str:
     if app_type not in ALLOWED_APP_TYPES:
         raise ValueError(f"Unsupported app type: {app_type}")
     return app_type
+
+
+def _check_rewrite_mode(mode: str | None) -> str:
+    value = (mode or "none").strip().lower()
+    if value not in ALLOWED_REWRITE_MODES:
+        raise ValueError(f"Unsupported nginx rewrite mode: {mode}")
+    return value
+
+
+def _effective_document_root(document_root: str, rewrite_mode: str) -> str:
+    safe_root = site_users.validate_document_root(document_root)
+    if rewrite_mode in {"laravel", "codeigniter"} and safe_root.rstrip("/") == "public_html":
+        return "public_html/public"
+    return safe_root
 
 
 def _vhost_path(domain: str) -> Path:
@@ -752,16 +767,19 @@ def render_vhost(
     http_flood_enabled: bool = False,
     http_flood_config: dict | str | None = None,
     document_root: str = "public_html",
+    rewrite_mode: str | None = None,
 ) -> str:
     if not DOMAIN_RE.fullmatch((domain or "").lower()):
         raise ValueError("Invalid domain")
     _check_app_type(app_type)
+    safe_rewrite_mode = _check_rewrite_mode(rewrite_mode)
     _check_php_version(php_version)
     resolved_root = Path(root_path).resolve()
     if not site_users.is_site_root_for_domain(resolved_root, domain):
         raise ValueError("root_path must be the managed root for this domain")
     validate_custom_nginx(custom_directives)
-    resolved_document_root = site_users.document_root(resolved_root, document_root)
+    effective_document_root = _effective_document_root(document_root, safe_rewrite_mode)
+    resolved_document_root = site_users.document_root(resolved_root, effective_document_root)
     include_path = custom_include_path(domain)
 
     env = Environment(loader=FileSystemLoader(TEMPLATE_DIR), autoescape=False)
@@ -787,6 +805,7 @@ def render_vhost(
         http_flood_burst=safe_http_flood_config["access_limit_burst"],
         http_flood_connections=safe_http_flood_config["connection_limit"],
         http_flood_challenge_block=_http_flood_challenge_block(),
+        rewrite_mode=safe_rewrite_mode,
     )
     return rendered
 
@@ -807,6 +826,7 @@ def write_vhost(
     http_flood_enabled: bool = False,
     http_flood_config: dict | str | None = None,
     document_root: str = "public_html",
+    rewrite_mode: str | None = None,
 ) -> str:
     return rewrite_vhost(
         domain,
@@ -819,6 +839,7 @@ def write_vhost(
         http_flood_enabled=http_flood_enabled,
         http_flood_config=http_flood_config,
         document_root=document_root,
+        rewrite_mode=rewrite_mode,
     )
 
 
@@ -837,6 +858,7 @@ def rewrite_vhost(
     http_flood_enabled: bool = False,
     http_flood_config: dict | str | None = None,
     document_root: str = "public_html",
+    rewrite_mode: str | None = None,
 ) -> str:
     target = _vhost_path(domain)
     content = render_vhost(
@@ -850,6 +872,7 @@ def rewrite_vhost(
         waf_enabled=waf_enabled,
         http_flood_enabled=http_flood_enabled,
         http_flood_config=http_flood_config,
+        rewrite_mode=rewrite_mode,
     )
     if settings.command_dry_run:
         return content
@@ -925,6 +948,7 @@ def harden_existing_wordpress_vhost(
     http_flood_enabled: bool = False,
     http_flood_config: dict | str | None = None,
     document_root: str = "public_html",
+    rewrite_mode: str | None = None,
 ) -> str:
     return rewrite_vhost(
         domain,
@@ -937,6 +961,7 @@ def harden_existing_wordpress_vhost(
         http_flood_enabled=http_flood_enabled,
         http_flood_config=http_flood_config,
         document_root=document_root,
+        rewrite_mode=rewrite_mode,
     )
 
 
