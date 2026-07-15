@@ -350,7 +350,7 @@ write_tools_nginx_config() {
   panel_domain="$(env_get PANEL_DOMAIN)"
   panel_cert="$(env_get PANEL_SSL_CERT)"
   panel_key="$(env_get PANEL_SSL_KEY)"
-  php_version="${PHP_DEFAULT:-8.3}"
+  php_version="${PHP_DEFAULT:-8.4}"
   server_ip="$(detect_server_ip)"
   host="${panel_domain:-$server_ip}"
   api_scheme="http"; tools_scheme="http"; pma_secure="false"; ssl_block=""
