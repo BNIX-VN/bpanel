@@ -6,7 +6,7 @@ from app.core.database import get_db
 from app.core.permissions import Role, ensure_role
 from app.models.entities import User
 from app.schemas.schemas import (
-    MalwareScanResult,
+    MalwareScanJob,
     MalwareScanRun,
     MalwareScanStatus,
     MalwareScanToggle,
@@ -133,7 +133,7 @@ def toggle_malware_scan(
     return result
 
 
-@router.post("/malware-scan/run", response_model=MalwareScanResult)
+@router.post("/malware-scan/run", response_model=MalwareScanJob)
 def run_malware_scan(
     payload: MalwareScanRun,
     request: Request,
@@ -142,13 +142,24 @@ def run_malware_scan(
 ):
     ensure_role(current_user.role, Role.admin)
     try:
-        result = panel_settings.run_scan(payload.website_id, db)
+        if not payload.all and payload.website_id is None:
+            raise ValueError("Website is required")
+        result = panel_settings.start_scan_job(None if payload.all else payload.website_id, db)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    log_action(db, current_user.id, "malware_scan_run", str(payload.website_id), request=request)
+    log_action(db, current_user.id, "malware_scan_run", "all" if payload.all else str(payload.website_id), request=request)
     return result
+
+
+@router.get("/malware-scan/jobs/{job_id}", response_model=MalwareScanJob)
+def get_malware_scan_job(job_id: str, current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.admin)
+    try:
+        return panel_settings.get_malware_scan_job(job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/malware-scan/start")

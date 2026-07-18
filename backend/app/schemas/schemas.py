@@ -470,12 +470,14 @@ class MalwareScanToggle(BaseModel):
 
 
 class MalwareScanRun(BaseModel):
-    website_id: int
+    website_id: Optional[int] = None
+    all: bool = False
 
 
 class MalwareScanThreat(BaseModel):
     path: str
     signature: str
+    domain: Optional[str] = None
 
 
 class MalwareScanResult(BaseModel):
@@ -483,6 +485,30 @@ class MalwareScanResult(BaseModel):
     infected: int = 0
     threats: list[MalwareScanThreat] = []
     exit_code: int = 0
+    errors: int = 0
+    skipped: int = 0
+    log: list[str] = []
+
+
+class MalwareScanJob(BaseModel):
+    job_id: str
+    status: str = "queued"
+    scope: str = "website"
+    website_id: Optional[int] = None
+    domains: list[str] = []
+    message: str = ""
+    progress_percent: int = 0
+    total_files: int = 0
+    scanned: int = 0
+    infected: int = 0
+    errors: int = 0
+    skipped: int = 0
+    threats: list[MalwareScanThreat] = []
+    log: list[str] = []
+    error: str = ""
+    created_at: str = ""
+    started_at: str = ""
+    finished_at: str = ""
 
 
 class MalwareScanStatus(BaseModel):

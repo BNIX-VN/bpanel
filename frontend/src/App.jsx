@@ -12,7 +12,7 @@ import 'ace-builds/src-noconflict/mode-php';
 import 'ace-builds/src-noconflict/mode-text';
 import 'ace-builds/src-noconflict/mode-yaml';
 import 'ace-builds/src-noconflict/theme-textmate';
-import { Archive, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, MoveRight, Network, Pencil, Save, Server, Settings as SettingsIcon, Shield, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
+import { Archive, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, MoveRight, Network, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
 import { Terminal } from './components/Terminal';
 import './style.css';
 import './brand.css';
@@ -443,6 +443,7 @@ function App() {
   const [malwareScanStatus, setMalwareScanStatus] = useState(null);
   const [scanTargetWebsiteId, setScanTargetWebsiteId] = useState('');
   const [scanResults, setScanResults] = useState(null);
+  const [scanJob, setScanJob] = useState(null);
   const [scanLoading, setScanLoading] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
@@ -561,6 +562,7 @@ function App() {
     setMalwareScanStatus(null);
     setScanTargetWebsiteId('');
     setScanResults(null);
+    setScanJob(null);
     setScanLoading(false);
     setUpdatesStatus(null);
     setFirewallBlocklists(null);
@@ -1040,23 +1042,41 @@ function App() {
   async function runMalwareScan() {
     if (!scanTargetWebsiteId) return;
     setScanResults(null);
+    setScanJob(null);
     setScanLoading(true);
     try {
+      const body = scanTargetWebsiteId === 'all'
+        ? { all: true }
+        : { website_id: Number(scanTargetWebsiteId) };
       const data = await request('/panel-settings/malware-scan/run', {
         method: 'POST',
-        body: JSON.stringify({ website_id: Number(scanTargetWebsiteId) }),
-      }, 'Scanning website for malware...');
+        body: JSON.stringify(body),
+      }, 'Starting malware scan...');
       if (data) {
-        setScanResults(data);
-        if (data.infected > 0) {
-          setNotice(`⚠️ ${data.infected} threat(s) found!`);
-        } else {
-          setNotice(`✅ Scan complete — ${data.scanned} files scanned, no threats found.`);
-        }
+        setScanJob(data);
+        setNotice('Malware scan started.');
       }
     } finally {
       setScanLoading(false);
     }
+  }
+
+  async function loadMalwareScanJob(jobId) {
+    const data = await request(`/panel-settings/malware-scan/jobs/${jobId}`, {}, '');
+    if (!data) return null;
+    setScanJob(data);
+    if (['done', 'infected', 'error'].includes(data.status)) {
+      setScanLoading(false);
+      setScanResults(data);
+      if (data.status === 'infected' || data.infected > 0) {
+        setNotice(`${data.infected} threat(s) found.`);
+      } else if (data.status === 'error') {
+        setError(data.error || data.message || 'Malware scan failed.');
+      } else {
+        setNotice(`Scan complete: ${data.scanned || 0} files scanned, no threats found.`);
+      }
+    }
+    return data;
   }
 
   async function startClamavDaemon() {
@@ -2267,6 +2287,15 @@ function App() {
   }, [isAuthenticated, page, currentUser?.role]);
 
   useEffect(() => {
+    if (!scanJob?.job_id || !['queued', 'running'].includes(scanJob.status)) return undefined;
+    setScanLoading(true);
+    const poll = () => loadMalwareScanJob(scanJob.job_id);
+    const timer = window.setInterval(poll, 2000);
+    poll();
+    return () => window.clearInterval(timer);
+  }, [scanJob?.job_id, scanJob?.status]);
+
+  useEffect(() => {
     if (!isAuthenticated || page !== 'waf' || selectedWafWebsiteId || websites.length === 0) return;
     loadWebsiteWafConfig(websites[0].id, false);
   }, [isAuthenticated, page, selectedWafWebsiteId, websites.length]);
@@ -3310,6 +3339,8 @@ function App() {
     const mwActive = Boolean(mw.active);
     const mwInstalled = Boolean(mw.installed);
     const mwEnabled = Boolean(mw.enabled);
+    const activeScanJob = scanJob || scanResults || {};
+    const scanRunning = ['queued', 'running'].includes(scanJob?.status);
     return <>
       <section className="section">
         <div className="section-title">
@@ -3375,28 +3406,36 @@ function App() {
           <strong>Scan a website now</strong>
           <p className="hint" style={{marginBottom:8}}>Select a website and run an on-demand malware scan.</p>
           <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
-            <select value={scanTargetWebsiteId} onChange={e => { setScanTargetWebsiteId(e.target.value); setScanResults(null); }}>
+            <select value={scanTargetWebsiteId} onChange={e => { setScanTargetWebsiteId(e.target.value); setScanResults(null); setScanJob(null); }}>
               <option value="">-- Select website --</option>
+              <option value="all">All websites</option>
               {websites.map(w => <option key={w.id} value={w.id}>{w.domain}</option>)}
             </select>
-            <button disabled={!!loading || scanLoading || !scanTargetWebsiteId} onClick={runMalwareScan}>
-              {scanLoading ? <><RefreshCw size={14} className="spin"/> Scanning...</> : '🔍 Scan Now'}
+            <button disabled={!!loading || scanRunning || !scanTargetWebsiteId} onClick={runMalwareScan}>
+              {scanRunning || scanLoading ? <><RefreshCw size={14} className="spin"/> Scanning...</> : <><Search size={14}/> Scan Now</>}
             </button>
           </div>
-          {scanResults && <div style={{marginTop:12}}>
+          {(scanJob || scanResults) && <div style={{marginTop:12}}>
+            <div className="progress-bar" style={{marginBottom:8}}>
+              <div className="progress-bar-fill" style={{width: `${Number(activeScanJob.progress_percent) || 0}%`}} />
+            </div>
             <div style={{display:'flex',gap:16,marginBottom:8}}>
-              <span><strong>Files scanned:</strong> {scanResults.scanned || 0}</span>
-              <span><strong>Threats found:</strong> {scanResults.infected > 0
-                ? <span className="badge danger">{scanResults.infected}</span>
+              <span><strong>Progress:</strong> {Number(activeScanJob.progress_percent) || 0}%</span>
+              <span><strong>Files scanned:</strong> {activeScanJob.scanned || 0}/{activeScanJob.total_files || activeScanJob.scanned || 0}</span>
+              <span><strong>Threats found:</strong> {activeScanJob.infected > 0
+                ? <span className="badge danger">{activeScanJob.infected}</span>
                 : <span className="badge ok">0</span>}
               </span>
+              <span><strong>Errors:</strong> {activeScanJob.errors || 0}</span>
             </div>
-            {scanResults.threats && scanResults.threats.length > 0 && <div style={{maxHeight:200,overflow:'auto',background:'var(--surface-2, #1a1a2e)',borderRadius:6,padding:'8px 12px'}}>
-              {scanResults.threats.map((t, i) => <div key={i} style={{padding:'4px 0',borderBottom:'1px solid var(--border, #333)',fontSize:13}}>
+            {activeScanJob.message && <p className="hint" style={{marginBottom:8}}>{activeScanJob.message}</p>}
+            {activeScanJob.threats && activeScanJob.threats.length > 0 && <div style={{maxHeight:200,overflow:'auto',background:'var(--surface-2, #1a1a2e)',borderRadius:6,padding:'8px 12px'}}>
+              {activeScanJob.threats.map((t, i) => <div key={i} style={{padding:'4px 0',borderBottom:'1px solid var(--border, #333)',fontSize:13}}>
                 <span style={{color:'var(--danger, #ff4444)',fontWeight:600}}>{t.signature}</span>
-                <span className="hint" style={{marginLeft:8}}>{t.path}</span>
+                <span className="hint" style={{marginLeft:8}}>{t.domain ? `${t.domain}: ` : ''}{t.path}</span>
               </div>)}
             </div>}
+            {activeScanJob.log && activeScanJob.log.length > 0 && <pre className="malware-scan-log">{activeScanJob.log.join('\n')}</pre>}
           </div>}
           </>}
         </div>}

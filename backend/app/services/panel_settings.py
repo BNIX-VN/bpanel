@@ -1,6 +1,8 @@
 import json
 import os
 import re
+import time
+import uuid
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from urllib.parse import urlparse
@@ -287,6 +289,11 @@ import threading
 
 from app.services import malware_scan as _malware_scan
 
+MALWARE_JOBS: dict[str, dict] = {}
+MALWARE_JOBS_LOCK = threading.Lock()
+MALWARE_JOBS_DIR = SETTINGS_DIR / "malware-scan-jobs"
+MAX_MALWARE_LOG_LINES = 1000
+
 
 def _persist_malware_enabled(enabled: bool) -> None:
     """Write the malware_scan_enabled flag to the panel settings file so it
@@ -344,6 +351,188 @@ def _install_and_enable_flow() -> None:
                 "detail": f"ClamAV install failed: {exc}",
             }
         )
+
+
+def _now_iso() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _public_malware_job(job: dict) -> dict:
+    return dict(job)
+
+
+def _write_malware_job(job: dict) -> None:
+    try:
+        MALWARE_JOBS_DIR.mkdir(parents=True, exist_ok=True)
+        path = MALWARE_JOBS_DIR / f"{job['job_id']}.json"
+        path.write_text(json.dumps(_public_malware_job(job), indent=2) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _remember_malware_job(job: dict) -> dict:
+    with MALWARE_JOBS_LOCK:
+        MALWARE_JOBS[job["job_id"]] = job
+    _write_malware_job(job)
+    return _public_malware_job(job)
+
+
+def _update_malware_job(job_id: str, **updates) -> None:
+    with MALWARE_JOBS_LOCK:
+        job = MALWARE_JOBS.get(job_id)
+        if not job:
+            return
+        job.update(updates)
+        if len(job.get("log", [])) > MAX_MALWARE_LOG_LINES:
+            job["log"] = job["log"][-MAX_MALWARE_LOG_LINES:]
+        snapshot = dict(job)
+    _write_malware_job(snapshot)
+
+
+def _append_malware_log(job_id: str, line: str) -> None:
+    with MALWARE_JOBS_LOCK:
+        job = MALWARE_JOBS.get(job_id)
+        if not job:
+            return
+        job.setdefault("log", []).append(f"{_now_iso()} {line}")
+        if len(job["log"]) > MAX_MALWARE_LOG_LINES:
+            job["log"] = job["log"][-MAX_MALWARE_LOG_LINES:]
+        snapshot = dict(job)
+    _write_malware_job(snapshot)
+
+
+def get_malware_scan_job(job_id: str) -> dict:
+    with MALWARE_JOBS_LOCK:
+        job = MALWARE_JOBS.get(job_id)
+        if job:
+            return _public_malware_job(job)
+    path = MALWARE_JOBS_DIR / f"{job_id}.json"
+    try:
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        pass
+    raise ValueError("Scan job not found")
+
+
+def _select_scan_websites(website_id: int | None, db) -> list:
+    from app.models.entities import Website
+
+    if website_id is None:
+        return db.query(Website).order_by(Website.domain.asc()).all()
+    website = db.query(Website).filter(Website.id == website_id).first()
+    if not website:
+        raise ValueError("Website not found")
+    return [website]
+
+
+def start_scan_job(website_id: int | None, db) -> dict:
+    """Start a background malware scan for one website or all websites."""
+    websites = _select_scan_websites(website_id, db)
+    if not websites:
+        raise ValueError("No websites found")
+    targets = []
+    for website in websites:
+        root_path = website.root_path
+        if not root_path or not Path(root_path).is_dir():
+            raise ValueError(f"Website root not found: {root_path}")
+        targets.append({"id": website.id, "domain": website.domain, "root_path": root_path})
+
+    job_id = uuid.uuid4().hex
+    job = {
+        "job_id": job_id,
+        "status": "queued",
+        "scope": "all" if website_id is None else "website",
+        "website_id": website_id,
+        "domains": [target["domain"] for target in targets],
+        "message": "Queued",
+        "progress_percent": 0,
+        "total_files": 0,
+        "scanned": 0,
+        "infected": 0,
+        "errors": 0,
+        "skipped": 0,
+        "threats": [],
+        "log": [],
+        "created_at": _now_iso(),
+        "started_at": "",
+        "finished_at": "",
+    }
+    _remember_malware_job(job)
+    threading.Thread(target=_run_scan_job, args=(job_id, targets), daemon=True).start()
+    return _public_malware_job(job)
+
+
+def _run_scan_job(job_id: str, targets: list[dict]) -> None:
+    _update_malware_job(job_id, status="running", started_at=_now_iso(), message="Preparing scan")
+    try:
+        if not _malware_scan.clamd_running():
+            raise RuntimeError("ClamAV daemon is not running. Enable malware scanning first.")
+        target_files: list[tuple[dict, str]] = []
+        skipped = 0
+        for target in targets:
+            files, skipped_lines = _malware_scan.collect_regular_files(target["root_path"])
+            skipped += len(skipped_lines)
+            _append_malware_log(job_id, f"Prepared {target['domain']}: {len(files)} files")
+            for line in skipped_lines:
+                _append_malware_log(job_id, line)
+            target_files.extend((target, file_path) for file_path in files)
+        total = len(target_files)
+        _update_malware_job(job_id, total_files=total, skipped=skipped, message=f"Scanning 0/{total} files")
+
+        threats = []
+        errors = 0
+        scanned = 0
+        for target, file_path in target_files:
+            result = _malware_scan.scan_file_with_clamdscan(file_path)
+            scanned += 1
+            status = result["status"]
+            if status == "infected":
+                threat = {"path": file_path, "signature": result["signature"], "domain": target["domain"]}
+                threats.append(threat)
+                _append_malware_log(job_id, f"INFECTED {target['domain']} {file_path}: {result['signature']}")
+            elif status == "error":
+                errors += 1
+                _append_malware_log(job_id, f"ERROR {target['domain']} {file_path}: {result['detail']}")
+            elif status == "skipped":
+                skipped += 1
+                _append_malware_log(job_id, f"SKIP {target['domain']} {file_path}: {result['detail']}")
+
+            percent = int((scanned / total) * 100) if total else 100
+            _update_malware_job(
+                job_id,
+                scanned=scanned,
+                infected=len(threats),
+                errors=errors,
+                skipped=skipped,
+                threats=threats,
+                progress_percent=percent,
+                message=f"Scanning {scanned}/{total} files",
+            )
+
+        status = "infected" if threats else "done"
+        _update_malware_job(
+            job_id,
+            status=status,
+            progress_percent=100,
+            scanned=scanned,
+            infected=len(threats),
+            errors=errors,
+            skipped=skipped,
+            threats=threats,
+            message=f"Scan complete: {scanned} files, {len(threats)} threats, {errors} errors",
+            finished_at=_now_iso(),
+        )
+        _append_malware_log(job_id, "Scan finished")
+    except Exception as exc:  # noqa: BLE001 - scan jobs should report errors, not crash the API
+        _update_malware_job(
+            job_id,
+            status="error",
+            message="Scan failed",
+            error=str(exc),
+            finished_at=_now_iso(),
+        )
+        _append_malware_log(job_id, f"ERROR scan failed: {exc}")
 
 
 def run_scan(website_id: int, db) -> dict:

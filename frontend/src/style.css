@@ -243,6 +243,7 @@ button:disabled{opacity:.55;cursor:not-allowed;box-shadow:none}
 .segmented-control button:hover:not(:disabled){background:var(--surface);box-shadow:none}
 .segmented-control button.active{background:var(--primary);color:#fff}
 .log-output{min-height:360px;max-height:62vh;overflow:auto;background:#0b1220;color:#dbeafe;border:1px solid #1e293b;border-radius:var(--radius-md);padding:14px;font-family:Consolas,'SFMono-Regular','Liberation Mono',Menlo,monospace;font-size:12px;line-height:1.5;white-space:pre-wrap;word-break:break-word}
+.malware-scan-log{max-height:260px;overflow:auto;margin-top:10px;background:#0b1220;color:#e5edf8;border:1px solid #334155;border-radius:6px;padding:10px 12px;font-family:Consolas,'SFMono-Regular','Liberation Mono',Menlo,monospace;font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-word}
 @media(max-width:700px){.log-toolbar{grid-template-columns:1fr}.segmented-control{width:100%;grid-template-columns:1fr 1fr}.log-toolbar select,.log-toolbar button{width:100%}.log-output{min-height:280px}}
 
 /* System & services */
