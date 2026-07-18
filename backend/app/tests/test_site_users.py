@@ -112,6 +112,16 @@ def test_mariadb_is_auto_tuned_for_vps_size():
     assert "BPANEL_MARIADB_BUFFER_POOL_SIZE" in helper
 
 
+def test_manual_ssl_helper_installs_private_key_outside_web_root():
+    helper = HELPER_SCRIPT.read_text(encoding="utf-8")
+    assert "install_manual_ssl()" in helper
+    assert "remove_manual_ssl()" in helper
+    assert 'base="/etc/nginx/bpanel/ssl/sites/${domain}"' in helper
+    assert 'install -m 0640 -o root -g bpanel "$tmpdir/privkey.key" "$base/privkey.key"' in helper
+    assert "manual-ssl-install)" in helper
+    assert "manual-ssl-remove)" in helper
+
+
 def test_terminal_helper_rejects_paths_outside_user_home():
     helper = HELPER_SCRIPT.read_text(encoding="utf-8")
     assert "require_terminal_path_args()" in helper

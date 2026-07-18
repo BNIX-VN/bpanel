@@ -536,6 +536,22 @@ def _has_ssl_config(content: str) -> bool:
     return "ssl_certificate" in content or "listen 443" in content
 
 
+def _manual_ssl_paths(cert_path: str | None, key_path: str | None, ca_path: str | None = None) -> tuple[str, str, str | None]:
+    if not cert_path or not key_path:
+        raise ValueError("Manual SSL certificate and key paths are required")
+    cert = str(cert_path).replace("\\", "/")
+    key = str(key_path).replace("\\", "/")
+    ca = str(ca_path).replace("\\", "/") if ca_path else None
+    for value in (cert, key, ca):
+        if not value:
+            continue
+        if "\x00" in value or "\n" in value or "\r" in value:
+            raise ValueError("Manual SSL path contains unsafe characters")
+        if not value.startswith("/etc/nginx/bpanel/ssl/sites/"):
+            raise ValueError("Manual SSL paths must be under /etc/nginx/bpanel/ssl/sites")
+    return cert, key, ca
+
+
 def _write_backup(target: Path, content: str) -> Path:
     backup = target.with_suffix(target.suffix + ".bak")
     temp_path: Path | None = None
@@ -579,6 +595,41 @@ def _merge_certbot_ssl_config(new_content: str, existing_content: str) -> str:
             https_lines.append(line)
         if "server_name" in line and ssl_lines:
             https_lines.extend(ssl_lines)
+    redirect_block = "\n".join([
+        "server {",
+        "    listen 80;",
+        f"    server_name {server_name};",
+        "    return 301 https://$host$request_uri;",
+        "}",
+        "",
+    ])
+    return redirect_block + "\n".join(https_lines) + "\n"
+
+
+def apply_manual_ssl_config(new_content: str, cert_path: str, key_path: str, ca_path: str | None = None) -> str:
+    cert, key, ca = _manual_ssl_paths(cert_path, key_path, ca_path)
+    fullchain = cert.rsplit("/", 1)[0] + "/fullchain.crt"
+    server_name = "_"
+    if "server_name " in new_content:
+        server_name = new_content.split("server_name ", 1)[1].split(";", 1)[0].strip()
+    ssl_lines = [
+        f"    ssl_certificate {fullchain if ca else cert};",
+        f"    ssl_certificate_key {key};",
+        "    ssl_protocols TLSv1.2 TLSv1.3;",
+        "    ssl_prefer_server_ciphers off;",
+    ]
+    if ca:
+        ssl_lines.append(f"    ssl_trusted_certificate {ca};")
+    https_lines = []
+    inserted = False
+    for line in new_content.splitlines():
+        if "listen 80;" in line:
+            https_lines.append(line.replace("listen 80;", "listen 443 ssl http2;"))
+        else:
+            https_lines.append(line)
+        if not inserted and "server_name" in line:
+            https_lines.extend(ssl_lines)
+            inserted = True
     redirect_block = "\n".join([
         "server {",
         "    listen 80;",
@@ -768,6 +819,9 @@ def render_vhost(
     http_flood_config: dict | str | None = None,
     document_root: str = "public_html",
     rewrite_mode: str | None = None,
+    ssl_cert_path: str | None = None,
+    ssl_key_path: str | None = None,
+    ssl_ca_path: str | None = None,
 ) -> str:
     if not DOMAIN_RE.fullmatch((domain or "").lower()):
         raise ValueError("Invalid domain")
@@ -807,6 +861,8 @@ def render_vhost(
         http_flood_challenge_block=_http_flood_challenge_block(),
         rewrite_mode=safe_rewrite_mode,
     )
+    if ssl_cert_path or ssl_key_path:
+        rendered = apply_manual_ssl_config(rendered, ssl_cert_path or "", ssl_key_path or "", ssl_ca_path)
     return rendered
 
 
@@ -827,6 +883,10 @@ def write_vhost(
     http_flood_config: dict | str | None = None,
     document_root: str = "public_html",
     rewrite_mode: str | None = None,
+    ssl_cert_path: str | None = None,
+    ssl_key_path: str | None = None,
+    ssl_ca_path: str | None = None,
+    preserve_existing_ssl: bool = True,
 ) -> str:
     return rewrite_vhost(
         domain,
@@ -840,6 +900,10 @@ def write_vhost(
         http_flood_config=http_flood_config,
         document_root=document_root,
         rewrite_mode=rewrite_mode,
+        ssl_cert_path=ssl_cert_path,
+        ssl_key_path=ssl_key_path,
+        ssl_ca_path=ssl_ca_path,
+        preserve_existing_ssl=preserve_existing_ssl,
     )
 
 
@@ -859,6 +923,10 @@ def rewrite_vhost(
     http_flood_config: dict | str | None = None,
     document_root: str = "public_html",
     rewrite_mode: str | None = None,
+    ssl_cert_path: str | None = None,
+    ssl_key_path: str | None = None,
+    ssl_ca_path: str | None = None,
+    preserve_existing_ssl: bool = True,
 ) -> str:
     target = _vhost_path(domain)
     content = render_vhost(
@@ -873,6 +941,9 @@ def rewrite_vhost(
         http_flood_enabled=http_flood_enabled,
         http_flood_config=http_flood_config,
         rewrite_mode=rewrite_mode,
+        ssl_cert_path=ssl_cert_path,
+        ssl_key_path=ssl_key_path,
+        ssl_ca_path=ssl_ca_path,
     )
     if settings.command_dry_run:
         return content
@@ -881,7 +952,7 @@ def rewrite_vhost(
     if target.exists():
         existing = target.read_text(encoding="utf-8")
         _write_backup(target, existing)
-        if _has_ssl_config(existing):
+        if preserve_existing_ssl and _has_ssl_config(existing) and not (ssl_cert_path and ssl_key_path):
             content = _merge_certbot_ssl_config(content, existing)
     old_content = target.read_text(encoding="utf-8") if target.exists() else None
     target.write_text(content, encoding="utf-8")
@@ -949,6 +1020,9 @@ def harden_existing_wordpress_vhost(
     http_flood_config: dict | str | None = None,
     document_root: str = "public_html",
     rewrite_mode: str | None = None,
+    ssl_cert_path: str | None = None,
+    ssl_key_path: str | None = None,
+    ssl_ca_path: str | None = None,
 ) -> str:
     return rewrite_vhost(
         domain,
@@ -962,6 +1036,9 @@ def harden_existing_wordpress_vhost(
         http_flood_config=http_flood_config,
         document_root=document_root,
         rewrite_mode=rewrite_mode,
+        ssl_cert_path=ssl_cert_path,
+        ssl_key_path=ssl_key_path,
+        ssl_ca_path=ssl_ca_path,
     )
 
 

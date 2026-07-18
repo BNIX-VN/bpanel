@@ -402,6 +402,12 @@ class WebsiteOut(BaseModel):
     php_version: str
     app_type: str
     ssl_enabled: bool
+    ssl_mode: str = "none"
+    ssl_updated_at: Optional[datetime] = None
+    ssl_has_ca: bool = False
+    ssl_cert_path: Optional[str] = Field(default=None, exclude=True)
+    ssl_key_path: Optional[str] = Field(default=None, exclude=True)
+    ssl_ca_path: Optional[str] = Field(default=None, exclude=True)
     status: str
     nginx_custom: str = ""
     nginx_config_mode: str = "managed"
@@ -414,6 +420,13 @@ class WebsiteOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+    @model_validator(mode="after")
+    def derive_ssl_fields(self):
+        if not self.ssl_mode:
+            self.ssl_mode = "letsencrypt" if self.ssl_enabled else "none"
+        self.ssl_has_ca = bool(self.ssl_ca_path)
+        return self
 
 
 class DatabaseOut(BaseModel):

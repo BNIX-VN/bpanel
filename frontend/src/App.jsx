@@ -397,6 +397,9 @@ function App() {
   const [selectedSftpTargetId, setSelectedSftpTargetId] = useState('');
   const [newSftpTarget, setNewSftpTarget] = useState({ name: '', host: '', port: 22, username: '', password: '', private_key: '', remote_path: '/backups/bpanel' });
   const [selectedWebsiteId, setSelectedWebsiteId] = useState(() => standaloneEditor?.websiteId || '');
+  const [sslMode, setSslMode] = useState('letsencrypt');
+  const [manualSslForm, setManualSslForm] = useState({ certificate: '', private_key: '', ca_bundle: '' });
+  const [manualSslFiles, setManualSslFiles] = useState({ certificate: null, private_key: null, ca_bundle: null });
   const [cronSchedule, setCronSchedule] = useState('*/15 * * * *');
   const [cronCommand, setCronCommand] = useState('');
   const [cronItems, setCronItems] = useState([]);
@@ -1048,6 +1051,29 @@ function App() {
   async function enableSsl(id) {
     const data = await request(`/websites/${id}/ssl`, { method: 'POST' }, "Installing Let's Encrypt SSL...");
     if (data) refreshAll();
+  }
+
+  async function installManualSsl() {
+    if (!selectedWebsiteId) return;
+    const hasCert = manualSslFiles.certificate || manualSslForm.certificate.trim();
+    const hasKey = manualSslFiles.private_key || manualSslForm.private_key.trim();
+    if (!hasCert || !hasKey) {
+      setError('Certificate and private key are required.');
+      return;
+    }
+    const form = new FormData();
+    if (manualSslFiles.certificate) form.append('certificate', manualSslFiles.certificate);
+    else form.append('certificate_text', manualSslForm.certificate);
+    if (manualSslFiles.private_key) form.append('private_key', manualSslFiles.private_key);
+    else form.append('private_key_text', manualSslForm.private_key);
+    if (manualSslFiles.ca_bundle) form.append('ca_bundle', manualSslFiles.ca_bundle);
+    else if (manualSslForm.ca_bundle.trim()) form.append('ca_bundle_text', manualSslForm.ca_bundle);
+    const data = await request(`/websites/${selectedWebsiteId}/ssl/manual`, { method: 'POST', body: form }, 'Installing manual SSL...');
+    if (data) {
+      setManualSslForm({ certificate: '', private_key: '', ca_bundle: '' });
+      setManualSslFiles({ certificate: null, private_key: null, ca_bundle: null });
+      refreshAll();
+    }
   }
 
   async function openNginxCustom(site) {
@@ -2113,6 +2139,13 @@ function App() {
     return () => clearInterval(timer);
   }, [isAuthenticated, page]);
 
+  useEffect(() => {
+    if (!currentSite) return;
+    setSslMode(currentSite.ssl_mode === 'manual' ? 'manual' : 'letsencrypt');
+    setManualSslForm({ certificate: '', private_key: '', ca_bundle: '' });
+    setManualSslFiles({ certificate: null, private_key: null, ca_bundle: null });
+  }, [currentSite?.id]);
+
   useEffect(() => { if (selectedWebsiteId && page === 'backups') { listBackups(); loadBackupJobs(); } }, [selectedWebsiteId, page]);
 
   useEffect(() => { if (selectedWebsiteId && page === 'cron') listCron(); }, [selectedWebsiteId, page]);
@@ -2532,15 +2565,46 @@ function App() {
   }
 
   function renderSsl() {
+    const sslLabel = currentSite?.ssl_mode === 'manual'
+      ? 'Manual SSL Enabled'
+      : currentSite?.ssl_enabled
+        ? 'SSL Enabled'
+        : 'SSL Disabled';
+    const sslUpdated = currentSite?.ssl_updated_at ? new Date(currentSite.ssl_updated_at).toLocaleString() : '';
     return <section className="section">
       <h2>SSL Certificate</h2>
       <WebsiteSelect />
       {currentSite && <div className="info-box" style={{marginTop:8}}>
         <strong>{currentSite.domain}</strong>
-        <span className={currentSite.ssl_enabled ? 'badge ok' : 'badge'} style={{justifySelf:'start'}}>{currentSite.ssl_enabled ? 'SSL Enabled' : 'SSL Disabled'}</span>
+        <span className={currentSite.ssl_enabled ? 'badge ok' : 'badge'} style={{justifySelf:'start'}}>{sslLabel}</span>
+        {sslUpdated && <span className="hint">Updated {sslUpdated}</span>}
+        {currentSite.ssl_mode === 'manual' && currentSite.ssl_has_ca && <span className="badge ok" style={{justifySelf:'start'}}>CA Bundle</span>}
       </div>}
-      <button disabled={!selectedWebsiteId || !!loading} onClick={() => enableSsl(selectedWebsiteId)} style={{marginTop:8}}><Lock size={15}/> Install / Renew SSL</button>
-      <p className="hint">The domain must point to the correct VPS IP before issuing SSL.</p>
+      <div className="segmented ssl-mode-tabs">
+        <button className={sslMode === 'letsencrypt' ? 'active' : ''} onClick={() => setSslMode('letsencrypt')}><Lock size={14}/> Let's Encrypt</button>
+        <button className={sslMode === 'manual' ? 'active' : ''} onClick={() => setSslMode('manual')}><KeyRound size={14}/> Manual SSL</button>
+      </div>
+      {sslMode === 'letsencrypt' ? <>
+        <button disabled={!selectedWebsiteId || !!loading} onClick={() => enableSsl(selectedWebsiteId)} style={{marginTop:8}}><Lock size={15}/> Install / Renew SSL</button>
+        <p className="hint">The domain must point to the correct VPS IP before issuing SSL.</p>
+      </> : <div className="manual-ssl-grid">
+        <label>
+          Certificate (.crt/.pem)
+          <input type="file" accept=".crt,.pem" onChange={e => setManualSslFiles(prev => ({ ...prev, certificate: e.target.files?.[0] || null }))} />
+        </label>
+        <label>
+          Private key (.key/.pem)
+          <input type="file" accept=".key,.pem" onChange={e => setManualSslFiles(prev => ({ ...prev, private_key: e.target.files?.[0] || null }))} />
+        </label>
+        <label>
+          CA bundle (.ca/.crt/.pem)
+          <input type="file" accept=".ca,.crt,.pem" onChange={e => setManualSslFiles(prev => ({ ...prev, ca_bundle: e.target.files?.[0] || null }))} />
+        </label>
+        <textarea rows={7} disabled={!!manualSslFiles.certificate} value={manualSslForm.certificate} onChange={e => setManualSslForm(prev => ({ ...prev, certificate: e.target.value }))} placeholder="-----BEGIN CERTIFICATE-----" />
+        <textarea rows={7} disabled={!!manualSslFiles.private_key} value={manualSslForm.private_key} onChange={e => setManualSslForm(prev => ({ ...prev, private_key: e.target.value }))} placeholder="-----BEGIN PRIVATE KEY-----" />
+        <textarea rows={7} disabled={!!manualSslFiles.ca_bundle} value={manualSslForm.ca_bundle} onChange={e => setManualSslForm(prev => ({ ...prev, ca_bundle: e.target.value }))} placeholder="Optional CA bundle" />
+        <button className="manual-ssl-submit" disabled={!selectedWebsiteId || !!loading} onClick={installManualSsl}><Upload size={15}/> Install Manual SSL</button>
+      </div>}
     </section>;
   }
 

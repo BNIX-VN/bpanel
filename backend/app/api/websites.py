@@ -1,7 +1,8 @@
 import json
+from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from jinja2 import Environment, FileSystemLoader
 from sqlalchemy.orm import Session
 from typing import List
@@ -76,11 +77,35 @@ def _website_http_flood_config(website: Website) -> dict:
     return nginx.http_flood_config_for_website(website)
 
 
+def _rewrite_ssl_kwargs(website: Website) -> dict:
+    if (
+        getattr(website, "ssl_mode", "none") == "manual"
+        and website.ssl_cert_path
+        and website.ssl_key_path
+    ):
+        return {
+            "ssl_cert_path": website.ssl_cert_path,
+            "ssl_key_path": website.ssl_key_path,
+            "ssl_ca_path": website.ssl_ca_path,
+        }
+    return {}
+
+
 def _website_rewrite_mode(website: Website) -> str:
     return getattr(website, "nginx_rewrite_mode", "none") or "none"
 
 
-def _has_live_certificate(domain: str) -> bool:
+def _has_live_certificate(website: Website) -> bool:
+    domain = website.domain
+    if (
+        getattr(website, "ssl_mode", "none") == "manual"
+        and website.ssl_cert_path
+        and website.ssl_key_path
+    ):
+        try:
+            return Path(website.ssl_cert_path).is_file() and Path(website.ssl_key_path).is_file()
+        except OSError:
+            return False
     live_dir = Path("/etc/letsencrypt/live") / domain
     try:
         if (live_dir / "fullchain.pem").is_file() and (live_dir / "privkey.pem").is_file():
@@ -101,7 +126,7 @@ def _has_live_certificate(domain: str) -> bool:
 def _sync_live_ssl_flags(db: Session, websites: list[Website]) -> list[Website]:
     changed = False
     for website in websites:
-        if not website.ssl_enabled and _has_live_certificate(website.domain):
+        if not website.ssl_enabled and _has_live_certificate(website):
             website.ssl_enabled = True
             changed = True
     if changed:
@@ -118,6 +143,12 @@ def _http_flood_payload_config(payload: WebsiteHttpFloodUpdate) -> dict:
         "access_limit_burst": payload.access_limit_burst,
         "connection_limit": payload.connection_limit,
     })
+
+
+def _read_ssl_input(upload: UploadFile | None, text: str | None, label: str, required: bool = True) -> bytes:
+    if upload is not None and upload.filename:
+        return ssl.read_ssl_part(upload, label=label, required=required)
+    return ssl.read_ssl_part(text or "", label=label, required=required)
 
 
 @router.post("", response_model=WebsiteOut)
@@ -299,6 +330,7 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
                 http_flood_config=website.http_flood_config or "",
                 document_root=website.document_root or "public_html",
                 rewrite_mode=_website_rewrite_mode(website),
+                **_rewrite_ssl_kwargs(website),
             )
         except (RuntimeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=f"Cannot write Nginx config: {exc}") from exc
@@ -336,6 +368,7 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
                 http_flood_config=website.http_flood_config or "",
                 document_root=website.document_root or "public_html",
                 rewrite_mode=next_rewrite_mode,
+                **_rewrite_ssl_kwargs(website),
             )
         except (RuntimeError, ValueError, OSError) as exc:
             raise HTTPException(status_code=400, detail=f"Cannot change website mode: {exc}") from exc
@@ -366,6 +399,7 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
                 http_flood_config=website.http_flood_config or "",
                 document_root=next_document_root,
                 rewrite_mode=_website_rewrite_mode(website),
+                **_rewrite_ssl_kwargs(website),
             )
         except (RuntimeError, ValueError, OSError) as exc:
             raise HTTPException(status_code=400, detail=f"Cannot change document root: {exc}") from exc
@@ -406,6 +440,7 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
                     http_flood_config=website.http_flood_config or "",
                     document_root=website.document_root or "public_html",
                     rewrite_mode=_website_rewrite_mode(website),
+                    **_rewrite_ssl_kwargs(website),
                 )
                 website.root_path = new_root_path
                 website.linux_user = new_linux_user
@@ -533,6 +568,7 @@ def reset_website_nginx_config(website_id: int, request: Request, db: Session = 
             http_flood_config=website.http_flood_config or "",
             document_root=website.document_root or "public_html",
             rewrite_mode=_website_rewrite_mode(website),
+            **_rewrite_ssl_kwargs(website),
         )
     except (RuntimeError, ValueError, FileNotFoundError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -683,6 +719,7 @@ def fix_nginx_security(website_id: int, db: Session = Depends(get_db), current_u
         http_flood_config=website.http_flood_config or "",
         document_root=website.document_root or "public_html",
         rewrite_mode=_website_rewrite_mode(website),
+        **_rewrite_ssl_kwargs(website),
     )
     log_action(db, current_user.id, "fix_nginx_security", website.domain)
     return {"message": f"Rewrote Nginx security template for {website.domain}", "path": target}
@@ -695,11 +732,125 @@ def enable_ssl(website_id: int, db: Session = Depends(get_db), current_user: Use
         raise HTTPException(status_code=404, detail="Website not found")
     if website.owner_id != current_user.id:
         ensure_role(current_user.role, Role.admin)
+    previous_manual_paths = (website.ssl_cert_path, website.ssl_key_path, website.ssl_ca_path)
+    previous_snapshot = ssl.snapshot_manual_ssl_domain(website.domain)
+    app_type = website.app_type or "wordpress"
+    runtime_php_version = website.php_version if app_type in {"wordpress", "php"} else None
+    if getattr(website, "ssl_mode", "none") == "manual":
+        try:
+            nginx.rewrite_vhost(
+                website.domain,
+                website.root_path,
+                app_type=app_type,
+                php_version=website.php_version,
+                custom_directives=website.nginx_custom or "",
+                php_fpm_socket_override=site_users.site_php_fpm_socket(website.linux_user, website.root_path, runtime_php_version),
+                waf_enabled=website.waf_enabled,
+                http_flood_enabled=website.http_flood_enabled,
+                http_flood_config=website.http_flood_config or "",
+                document_root=website.document_root or "public_html",
+                rewrite_mode=_website_rewrite_mode(website),
+                preserve_existing_ssl=False,
+            )
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=f"Cannot prepare Nginx config for Let's Encrypt: {exc}") from exc
     result = ssl.issue_ssl(website.domain)
     if result.returncode != 0:
+        if getattr(website, "ssl_mode", "none") == "manual":
+            ssl.restore_manual_ssl(previous_snapshot)
+            try:
+                nginx.rewrite_vhost(
+                    website.domain,
+                    website.root_path,
+                    app_type=app_type,
+                    php_version=website.php_version,
+                    custom_directives=website.nginx_custom or "",
+                    php_fpm_socket_override=site_users.site_php_fpm_socket(website.linux_user, website.root_path, runtime_php_version),
+                    waf_enabled=website.waf_enabled,
+                    http_flood_enabled=website.http_flood_enabled,
+                    http_flood_config=website.http_flood_config or "",
+                    document_root=website.document_root or "public_html",
+                    rewrite_mode=_website_rewrite_mode(website),
+                    **_rewrite_ssl_kwargs(website),
+                )
+            except (RuntimeError, ValueError):
+                pass
         raise HTTPException(status_code=500, detail=_command_error(result))
     website.ssl_enabled = True
+    website.ssl_mode = "letsencrypt"
+    website.ssl_updated_at = datetime.utcnow()
+    website.ssl_cert_path = None
+    website.ssl_key_path = None
+    website.ssl_ca_path = None
+    ssl.remove_manual_ssl_files(*previous_manual_paths)
     db.commit()
     db.refresh(website)
     log_action(db, current_user.id, "enable_ssl", website.domain)
+    return website
+
+
+@router.post("/{website_id}/ssl/manual", response_model=WebsiteOut)
+async def install_manual_ssl(
+    website_id: int,
+    request: Request,
+    certificate: UploadFile | None = File(default=None),
+    private_key: UploadFile | None = File(default=None),
+    ca_bundle: UploadFile | None = File(default=None),
+    certificate_text: str | None = Form(default=None),
+    private_key_text: str | None = Form(default=None),
+    ca_bundle_text: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    website = db.query(Website).filter(Website.id == website_id).first()
+    if not website:
+        raise HTTPException(status_code=404, detail="Website not found")
+    if website.owner_id != current_user.id:
+        ensure_role(current_user.role, Role.admin)
+
+    try:
+        cert_raw = _read_ssl_input(certificate, certificate_text, "certificate")
+        key_raw = _read_ssl_input(private_key, private_key_text, "private_key")
+        ca_raw = _read_ssl_input(ca_bundle, ca_bundle_text, "ca_bundle", required=False)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        previous_snapshot = ssl.snapshot_manual_ssl_domain(website.domain)
+        written = ssl.install_manual_ssl(website.domain, cert_raw, key_raw, ca_raw)
+        website.ssl_enabled = True
+        website.ssl_mode = "manual"
+        website.ssl_cert_path = written["cert"]
+        website.ssl_key_path = written["key"]
+        website.ssl_ca_path = written["ca"]
+        website.ssl_updated_at = datetime.utcnow()
+        app_type = website.app_type or "wordpress"
+        runtime_php_version = website.php_version if app_type in {"wordpress", "php"} else None
+        result = waf.sync_website_rules(website)
+        if result.returncode != 0:
+            raise RuntimeError(_command_error(result))
+        if website.http_flood_enabled:
+            _sync_http_flood_zones(db)
+        nginx.rewrite_vhost(
+            website.domain,
+            website.root_path,
+            app_type=app_type,
+            php_version=website.php_version,
+            custom_directives=website.nginx_custom or "",
+            php_fpm_socket_override=site_users.site_php_fpm_socket(website.linux_user, website.root_path, runtime_php_version),
+            waf_enabled=website.waf_enabled,
+            http_flood_enabled=website.http_flood_enabled,
+            http_flood_config=website.http_flood_config or "",
+            document_root=website.document_root or "public_html",
+            **_rewrite_ssl_kwargs(website),
+        )
+    except (RuntimeError, ValueError) as exc:
+        ssl.restore_manual_ssl(previous_snapshot)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        ssl.restore_manual_ssl(previous_snapshot)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    db.commit()
+    db.refresh(website)
+    log_action(db, current_user.id, "install_manual_ssl", website.domain, request=request)
     return website

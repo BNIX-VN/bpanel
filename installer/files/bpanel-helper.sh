@@ -1028,6 +1028,57 @@ copy_panel_live_certificate() {
   fi
 }
 
+install_manual_ssl() {
+  local domain="$1" base tmpdir
+  require_domain "$domain"
+  base="/etc/nginx/bpanel/ssl/sites/${domain}"
+  tmpdir="$(mktemp -d /tmp/bpanel-manual-ssl.XXXXXX)"
+  trap 'rm -rf "$tmpdir"' RETURN
+  local payload_file="$tmpdir/payload.json"
+  cat >"$payload_file"
+  python3 - "$tmpdir" "$payload_file" <<'PY'
+import json
+import pathlib
+import sys
+
+tmpdir = pathlib.Path(sys.argv[1])
+payload_file = pathlib.Path(sys.argv[2])
+data = json.loads(payload_file.read_text(encoding="utf-8"))
+parts = {
+    "cert.crt": data.get("certificate", ""),
+    "privkey.key": data.get("private_key", ""),
+}
+ca_bundle = data.get("ca_bundle", "")
+if ca_bundle:
+    parts["ca.crt"] = ca_bundle
+for name, content in parts.items():
+    if not content or "\x00" in content:
+        raise SystemExit(f"invalid {name}")
+    (tmpdir / name).write_text(content, encoding="utf-8")
+PY
+  install -d -o root -g bpanel -m 0750 "$base"
+  install -m 0640 -o root -g bpanel "$tmpdir/cert.crt" "$base/cert.crt"
+  install -m 0640 -o root -g bpanel "$tmpdir/privkey.key" "$base/privkey.key"
+  if [[ -f "$tmpdir/ca.crt" ]]; then
+    install -m 0640 -o root -g bpanel "$tmpdir/ca.crt" "$base/ca.crt"
+    cat "$tmpdir/cert.crt" "$tmpdir/ca.crt" >"$tmpdir/fullchain.crt"
+    install -m 0640 -o root -g bpanel "$tmpdir/fullchain.crt" "$base/fullchain.crt"
+  else
+    rm -f "$base/ca.crt"
+    install -m 0640 -o root -g bpanel "$tmpdir/cert.crt" "$base/fullchain.crt"
+  fi
+  echo "Manual SSL installed for ${domain}"
+}
+
+remove_manual_ssl() {
+  local domain="$1" base
+  require_domain "$domain"
+  base="/etc/nginx/bpanel/ssl/sites/${domain}"
+  rm -f "$base/cert.crt" "$base/privkey.key" "$base/ca.crt" "$base/fullchain.crt"
+  rmdir "$base" 2>/dev/null || true
+  echo "Manual SSL removed for ${domain}"
+}
+
 renew_ssl_soon() {
   local days="${1:-10}" seconds cert cert_name checked=0 renewed=0 panel_domain
   [[ "$days" =~ ^[0-9]+$ && "$days" -ge 1 && "$days" -le 30 ]] || deny "usage: certbot-renew-soon [1-30 days]"
@@ -2105,6 +2156,14 @@ PY
   certbot-auto-renew-install)
     write_ssl_auto_renew_timer
     echo "SSL auto-renew timer installed"
+    ;;
+  manual-ssl-install)
+    [[ $# -eq 1 ]] || deny "usage: manual-ssl-install <domain>"
+    install_manual_ssl "$1"
+    ;;
+  manual-ssl-remove)
+    [[ $# -eq 1 ]] || deny "usage: manual-ssl-remove <domain>"
+    remove_manual_ssl "$1"
     ;;
 
   # ---- ufw --------------------------------------------------------------
