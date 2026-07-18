@@ -458,6 +458,40 @@ class PanelSettingsOut(BaseModel):
     favicon_url: str = "/favicon.png"
     ssl_enabled: bool = False
     message: Optional[str] = None
+    # Optional ClamAV malware scanning status (always present, defaults off).
+    malware_scan_enabled: bool = False
+    malware_scan_installed: bool = False
+    malware_scan_active: bool = False
+    malware_scan_detail: Optional[str] = None
+
+
+class MalwareScanToggle(BaseModel):
+    enabled: bool = False
+
+
+class MalwareScanRun(BaseModel):
+    website_id: int
+
+
+class MalwareScanThreat(BaseModel):
+    path: str
+    signature: str
+
+
+class MalwareScanResult(BaseModel):
+    scanned: int = 0
+    infected: int = 0
+    threats: list[MalwareScanThreat] = []
+    exit_code: int = 0
+
+
+class MalwareScanStatus(BaseModel):
+    installed: bool = False
+    clamd_running: bool = False
+    enabled: bool = False
+    active: bool = False
+    socket: str = "/run/clamav/clamd.sock"
+    detail: Optional[str] = None
 
 
 class PanelSettingsUpdate(BaseModel):

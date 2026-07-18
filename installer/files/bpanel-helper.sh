@@ -517,6 +517,20 @@ install_waf_engine() {
   echo "WAF engine installed with BPanel lightweight WordPress/Laravel/PHP rules."
 }
 
+install_clamav_engine() {
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update --allow-releaseinfo-change
+  if ! dpkg -s clamav clamav-daemon >/dev/null 2>&1; then
+    apt-get install -y clamav clamav-daemon
+  fi
+  # Ensure the daemon socket directory exists and the service is enabled.
+  install -d -o clamav -g clamav -m 0755 /run/clamav 2>/dev/null || true
+  systemctl enable --now clamav-daemon
+  # Triggers an initial signature database refresh in the background.
+  freshclam >/dev/null 2>&1 || true
+  echo "ClamAV installed and clamav-daemon enabled."
+}
+
 install_php_version() {
   local version="$1"
   export DEBIAN_FRONTEND=noninteractive
@@ -2011,6 +2025,25 @@ case "$cmd" in
 
   waf-install)
     install_waf_engine
+    ;;
+
+  # ---- ClamAV malware scanning (optional) -------------------------------
+  clamav-install)
+    install_clamav_engine
+    ;;
+
+  clamav-status)
+    if command -v clamd >/dev/null 2>&1 || command -v clamscan >/dev/null 2>&1; then
+      installed=1
+    else
+      installed=0
+    fi
+    if systemctl is-active --quiet clamav-daemon 2>/dev/null; then
+      running=1
+    else
+      running=0
+    fi
+    echo "installed=${installed} running=${running}"
     ;;
 
   waf-update)

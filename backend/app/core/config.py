@@ -27,6 +27,13 @@ class Settings(BaseSettings):
     frontend_dist: str = "/opt/bpanel/frontend/dist"
     totp_issuer: str = "BPanel"
     github_token: str = ""
+    # Malware scanning is OPTIONAL and OFF by default. It only becomes active
+    # after an admin enables it in the panel, which triggers an on-demand
+    # install of clamav-daemon. Leaving this False keeps BPanel lightweight.
+    malware_scan_enabled: bool = False
+    clamav_socket_path: str = "/run/clamav/clamd.sock"
+    # When True, uploaded files are scanned in memory before being accepted.
+    malware_scan_on_upload: bool = True
     # When true, ``app.core.secrets.decrypt`` refuses to read legacy plaintext
     # values (the deprecated migration grace path). Production should leave
     # this True so any unmigrated row surfaces as a hard error instead of

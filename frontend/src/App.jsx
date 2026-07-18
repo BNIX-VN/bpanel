@@ -440,6 +440,10 @@ function App() {
   const [twoFactorStatus, setTwoFactorStatus] = useState(null);
   const [twoFactorSetup, setTwoFactorSetup] = useState(null);
   const [twoFactorCode, setTwoFactorCode] = useState('');
+  const [malwareScanStatus, setMalwareScanStatus] = useState(null);
+  const [scanTargetWebsiteId, setScanTargetWebsiteId] = useState('');
+  const [scanResults, setScanResults] = useState(null);
+  const [scanLoading, setScanLoading] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState('');
@@ -554,6 +558,10 @@ function App() {
     setTwoFactorStatus(null);
     setTwoFactorSetup(null);
     setTwoFactorCode('');
+    setMalwareScanStatus(null);
+    setScanTargetWebsiteId('');
+    setScanResults(null);
+    setScanLoading(false);
     setUpdatesStatus(null);
     setFirewallBlocklists(null);
     setWafRules({ status: null, default_rules: '', custom_rules: '' });
@@ -1007,6 +1015,48 @@ function App() {
     if (!confirm(`Reset 2FA for ${user.username}?`)) return;
     const data = await request(`/users/${user.id}/2fa/reset`, { method: 'POST' }, `Resetting 2FA for ${user.username}...`);
     if (data?.message) { setNotice(data.message); await loadUsers(); }
+  }
+
+  async function loadMalwareScanStatus() {
+    const data = await request('/panel-settings/malware-scan', {}, 'Loading malware scan status...');
+    if (data) setMalwareScanStatus(data);
+  }
+
+  async function toggleMalwareScan(enable) {
+    if (enable && !malwareScanStatus?.installed) {
+      if (!confirm('ClamAV is not installed on this server. It will be installed now (may take 1-2 minutes). Continue?')) return;
+    }
+    const data = await request('/panel-settings/malware-scan/toggle', {
+      method: 'POST',
+      body: JSON.stringify({ enabled: enable }),
+    }, enable ? 'Enabling malware scanning...' : 'Disabling malware scanning...');
+    if (data) {
+      setPanelSettings(data);
+      setNotice(data.message || `Malware scanning ${enable ? 'enabled' : 'disabled'}.`);
+      await loadMalwareScanStatus();
+    }
+  }
+
+  async function runMalwareScan() {
+    if (!scanTargetWebsiteId) return;
+    setScanResults(null);
+    setScanLoading(true);
+    try {
+      const data = await request('/panel-settings/malware-scan/run', {
+        method: 'POST',
+        body: JSON.stringify({ website_id: Number(scanTargetWebsiteId) }),
+      }, 'Scanning website for malware...');
+      if (data) {
+        setScanResults(data);
+        if (data.infected > 0) {
+          setNotice(`⚠️ ${data.infected} threat(s) found!`);
+        } else {
+          setNotice(`✅ Scan complete — ${data.scanned} files scanned, no threats found.`);
+        }
+      }
+    } finally {
+      setScanLoading(false);
+    }
   }
 
   async function assignDomainToUser() {
@@ -2203,7 +2253,7 @@ function App() {
     if (isAuthenticated && page === 'firewall') { loadFirewall(); loadFirewallBlocklists(); }
     if (isAuthenticated && page === 'waf') loadWafRules();
     if (isAuthenticated && page === 'updates' && currentUser?.role === 'admin') loadUpdates();
-    if (isAuthenticated && page === 'security') loadTwoFactorStatus();
+    if (isAuthenticated && page === 'security') { loadTwoFactorStatus(); loadMalwareScanStatus(); if (!websites.length) refreshAll(); }
     if (isAuthenticated && page === 'settings') loadPanelSettings();
     if (isAuthenticated && page === 'backups' && currentUser?.role === 'admin') { loadUsers(); loadSftpTargets(); loadBackupSchedules(); loadRestoreBackups(); }
   }, [isAuthenticated, page, currentUser?.role]);
@@ -3248,34 +3298,96 @@ function App() {
 
   function renderSecurity() {
     const enabled = Boolean(twoFactorStatus?.enabled || currentUser?.totp_enabled);
-    return <section className="section">
-      <div className="section-title">
-        <div><h2>Google Authenticator 2FA</h2><p className="hint">Current status: <strong>{enabled ? 'Enabled' : 'Disabled'}</strong></p></div>
-        <button disabled={!!loading} onClick={loadTwoFactorStatus}><RefreshCw size={14}/> Refresh</button>
-      </div>
-      {!enabled && <div className="security-grid">
+    const mw = malwareScanStatus || {};
+    const mwActive = Boolean(mw.active);
+    const mwInstalled = Boolean(mw.installed);
+    const mwEnabled = Boolean(mw.enabled);
+    return <>
+      <section className="section">
+        <div className="section-title">
+          <div><h2>Google Authenticator 2FA</h2><p className="hint">Current status: <strong>{enabled ? 'Enabled' : 'Disabled'}</strong></p></div>
+          <button disabled={!!loading} onClick={loadTwoFactorStatus}><RefreshCw size={14}/> Refresh</button>
+        </div>
+        {!enabled && <div className="security-grid">
+          <div className="info-box">
+            <strong>Setup</strong>
+            {twoFactorSetup?.qr_data_url ? <img className="qr-code" src={twoFactorSetup.qr_data_url} alt="2FA QR code" /> : <p className="hint">No setup code generated.</p>}
+            {twoFactorSetup?.secret && <code className="secret-text">{twoFactorSetup.secret}</code>}
+            <div className="actions">
+              <button disabled={!!loading} onClick={setupTwoFactorAuth}><Shield size={14}/> Generate QR</button>
+            </div>
+          </div>
+          <div className="info-box">
+            <strong>Verify</strong>
+            <input value={twoFactorCode} onChange={e => setTwoFactorCode(e.target.value)} placeholder="123456" inputMode="numeric" />
+            <button disabled={!!loading || !twoFactorSetup || !twoFactorCode} onClick={enableTwoFactorAuth}><Lock size={14}/> Enable 2FA</button>
+          </div>
+        </div>}
+        {enabled && <div className="security-grid one">
+          <div className="info-box">
+            <strong>Disable 2FA</strong>
+            <input value={twoFactorCode} onChange={e => setTwoFactorCode(e.target.value)} placeholder="123456" inputMode="numeric" />
+            <button className="danger" disabled={!!loading || !twoFactorCode} onClick={disableTwoFactorAuth}>Disable 2FA</button>
+          </div>
+        </div>}
+      </section>
+
+      <section className="section">
+        <div className="section-title">
+          <div>
+            <h2>Malware Scanner (ClamAV)</h2>
+            <p className="hint">
+              {mwActive ? <span className="badge ok">Active</span>
+                : mwEnabled && mwInstalled ? <span className="badge warn">Enabled — clamd not running</span>
+                : mwEnabled && !mwInstalled ? <span className="badge warn">Installing ClamAV...</span>
+                : mwInstalled && !mwEnabled ? <span className="badge">Installed — scanning disabled</span>
+                : <span className="badge">Not installed</span>}
+            </p>
+          </div>
+          <button disabled={!!loading} onClick={loadMalwareScanStatus}><RefreshCw size={14}/> Refresh</button>
+        </div>
         <div className="info-box">
-          <strong>Setup</strong>
-          {twoFactorSetup?.qr_data_url ? <img className="qr-code" src={twoFactorSetup.qr_data_url} alt="2FA QR code" /> : <p className="hint">No setup code generated.</p>}
-          {twoFactorSetup?.secret && <code className="secret-text">{twoFactorSetup.secret}</code>}
-          <div className="actions">
-            <button disabled={!!loading} onClick={setupTwoFactorAuth}><Shield size={14}/> Generate QR</button>
+          <p className="hint">{mw.detail || 'Checking status...'}</p>
+          {!mwInstalled && <p className="hint" style={{marginTop:8}}>When enabled, ClamAV will be installed on this server (~150 MB RAM for the virus database). Uploaded files will be scanned in real-time.</p>}
+          {mwInstalled && mwActive && <p className="hint" style={{marginTop:8}}>All uploaded files are automatically scanned. Infected files are rejected.</p>}
+          <div className="actions" style={{marginTop:12}}>
+            {!mwEnabled
+              ? <button disabled={!!loading} onClick={() => toggleMalwareScan(true)}><Shield size={14}/> Enable Malware Scanner</button>
+              : <button className="danger" disabled={!!loading} onClick={() => toggleMalwareScan(false)}>Disable Malware Scanner</button>
+            }
           </div>
         </div>
-        <div className="info-box">
-          <strong>Verify</strong>
-          <input value={twoFactorCode} onChange={e => setTwoFactorCode(e.target.value)} placeholder="123456" inputMode="numeric" />
-          <button disabled={!!loading || !twoFactorSetup || !twoFactorCode} onClick={enableTwoFactorAuth}><Lock size={14}/> Enable 2FA</button>
-        </div>
-      </div>}
-      {enabled && <div className="security-grid one">
-        <div className="info-box">
-          <strong>Disable 2FA</strong>
-          <input value={twoFactorCode} onChange={e => setTwoFactorCode(e.target.value)} placeholder="123456" inputMode="numeric" />
-          <button className="danger" disabled={!!loading || !twoFactorCode} onClick={disableTwoFactorAuth}>Disable 2FA</button>
-        </div>
-      </div>}
-    </section>;
+
+        {mw.clamd_running && <div className="info-box" style={{marginTop:16}}>
+          <strong>Scan a website now</strong>
+          <p className="hint" style={{marginBottom:8}}>Select a website and run an on-demand malware scan.</p>
+          <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+            <select value={scanTargetWebsiteId} onChange={e => { setScanTargetWebsiteId(e.target.value); setScanResults(null); }}>
+              <option value="">-- Select website --</option>
+              {websites.map(w => <option key={w.id} value={w.id}>{w.domain}</option>)}
+            </select>
+            <button disabled={!!loading || scanLoading || !scanTargetWebsiteId} onClick={runMalwareScan}>
+              {scanLoading ? <><RefreshCw size={14} className="spin"/> Scanning...</> : '🔍 Scan Now'}
+            </button>
+          </div>
+          {scanResults && <div style={{marginTop:12}}>
+            <div style={{display:'flex',gap:16,marginBottom:8}}>
+              <span><strong>Files scanned:</strong> {scanResults.scanned || 0}</span>
+              <span><strong>Threats found:</strong> {scanResults.infected > 0
+                ? <span className="badge danger">{scanResults.infected}</span>
+                : <span className="badge ok">0</span>}
+              </span>
+            </div>
+            {scanResults.threats && scanResults.threats.length > 0 && <div style={{maxHeight:200,overflow:'auto',background:'var(--surface-2, #1a1a2e)',borderRadius:6,padding:'8px 12px'}}>
+              {scanResults.threats.map((t, i) => <div key={i} style={{padding:'4px 0',borderBottom:'1px solid var(--border, #333)',fontSize:13}}>
+                <span style={{color:'var(--danger, #ff4444)',fontWeight:600}}>{t.signature}</span>
+                <span className="hint" style={{marginLeft:8}}>{t.path}</span>
+              </div>)}
+            </div>}
+          </div>}
+        </div>}
+      </section>
+    </>;
   }
 
   function renderPanelSettings() {

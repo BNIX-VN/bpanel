@@ -142,6 +142,9 @@ def current_settings() -> dict:
             panel_hostname = ""
             panel_port = settings.panel_port or 2222
     ssl_enabled = panel_url.startswith("https://") and has_panel_certificate()
+    from app.services import malware_scan
+
+    mw = malware_scan.refresh_status()
     return {
         "app_name": app_name,
         "panel_url": panel_url,
@@ -150,6 +153,10 @@ def current_settings() -> dict:
         "logo_url": _asset_url(data.get("logo_filename")),
         "favicon_url": _asset_url(data.get("favicon_filename")) or "/favicon.png",
         "ssl_enabled": ssl_enabled,
+        "malware_scan_enabled": mw["enabled"],
+        "malware_scan_installed": mw["installed"],
+        "malware_scan_active": mw["active"],
+        "malware_scan_detail": mw["detail"],
     }
 
 
@@ -271,3 +278,82 @@ def install_panel_ssl(email: str | None = None, panel_hostname: str | None = Non
     current = current_settings()
     current["message"] = result.stdout.strip() or f"Panel SSL enabled for {host}"
     return current
+
+
+# --------------------------------------------------------------------------
+# Optional ClamAV malware scanning
+# --------------------------------------------------------------------------
+import threading
+
+from app.services import malware_scan as _malware_scan
+
+
+def _persist_malware_enabled(enabled: bool) -> None:
+    """Write the malware_scan_enabled flag to the panel settings file so it
+    survives restarts. The flag is the source of truth that the API reads via
+    ``settings.malware_scan_enabled`` (overridden here from persisted state)."""
+    data = _read_raw()
+    data["malware_scan_enabled"] = bool(enabled)
+    _write_raw(data)
+
+
+def malware_scan_status() -> dict:
+    return _malware_scan.refresh_status()
+
+
+def set_malware_scan(enabled: bool) -> dict:
+    """Toggle malware scanning on/off.
+
+    If enabling and ClamAV is not yet installed, the install runs in a
+    background thread so the API call returns immediately. If disabling, the
+    flag is simply turned off (clamd is left installed but idle).
+    """
+    enabled = bool(enabled)
+    if enabled and not _malware_scan.clamav_installed():
+        # Kick off install + enable in the background; mark flag intent now.
+        _persist_malware_enabled(True)
+        threading.Thread(target=_install_and_enable_flow, daemon=True).start()
+        current = current_settings()
+        current["message"] = (
+            "ClamAV is being installed in the background. Scanning will activate "
+            "automatically once clamav-daemon is running."
+        )
+        return current
+    _persist_malware_enabled(enabled)
+    current = current_settings()
+    current["message"] = "Malware scanning " + ("enabled" if enabled else "disabled")
+    return current
+
+
+def _install_and_enable_flow() -> None:
+    """Background worker: install ClamAV, then leave the persisted flag on.
+
+    The flag was already persisted as True by set_malware_scan(); this just
+    performs the heavy install. Failures are captured in the status file.
+    """
+    try:
+        _malware_scan.install_clamav()
+    except Exception as exc:  # noqa: BLE001 - record failure, do not crash thread
+        _malware_scan._write_status(
+            {
+                "installed": _malware_scan.clamav_installed(),
+                "clamd_running": False,
+                "enabled": True,
+                "active": False,
+                "socket": _malware_scan._socket_path(),
+                "detail": f"ClamAV install failed: {exc}",
+            }
+        )
+
+
+def run_scan(website_id: int, db) -> dict:
+    """Trigger an on-demand malware scan of a website's root directory."""
+    from app.models.entities import Website
+
+    website = db.query(Website).filter(Website.id == website_id).first()
+    if not website:
+        raise ValueError("Website not found")
+    root_path = website.root_path
+    if not root_path or not Path(root_path).is_dir():
+        raise ValueError(f"Website root not found: {root_path}")
+    return _malware_scan.scan_directory(root_path)
