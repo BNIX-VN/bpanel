@@ -2046,6 +2046,12 @@ case "$cmd" in
     echo "installed=${installed} running=${running}"
     ;;
 
+  clamav-start)
+    install -d -o clamav -g clamav -m 0755 /run/clamav 2>/dev/null || true
+    systemctl enable --now clamav-daemon
+    echo "clamav-daemon started"
+    ;;
+
   waf-update)
     write_modsec_main_conf
     nginx -t

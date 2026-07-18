@@ -149,3 +149,19 @@ def run_malware_scan(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     log_action(db, current_user.id, "malware_scan_run", str(payload.website_id), request=request)
     return result
+
+
+@router.post("/malware-scan/start")
+def start_malware_scan_daemon(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    ensure_role(current_user.role, Role.admin)
+    from app.services import malware_scan
+
+    ok = malware_scan.start_clamd()
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to start ClamAV daemon")
+    log_action(db, current_user.id, "clamav_start", "malware-scan", request=request)
+    return {"message": "ClamAV daemon started successfully"}

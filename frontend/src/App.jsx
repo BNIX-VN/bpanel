@@ -1059,6 +1059,14 @@ function App() {
     }
   }
 
+  async function startClamavDaemon() {
+    const data = await request('/panel-settings/malware-scan/start', { method: 'POST' }, 'Starting ClamAV daemon...');
+    if (data) {
+      setNotice(data.message || 'ClamAV daemon started.');
+      await loadMalwareScanStatus();
+    }
+  }
+
   async function assignDomainToUser() {
     if (!assignWebsiteId || !assignUserId) return;
     const data = await request(`/websites/${assignWebsiteId}`, { method: 'PATCH', body: JSON.stringify({ owner_id: Number(assignUserId) }) }, 'Assigning domain to user...');
@@ -3358,7 +3366,12 @@ function App() {
           </div>
         </div>
 
-        {mw.clamd_running && <div className="info-box" style={{marginTop:16}}>
+        {mwInstalled && <div className="info-box" style={{marginTop:16}}>
+          {!mw.clamd_running && <div style={{marginBottom:12}}>
+            <p className="hint" style={{marginBottom:8}}>ClamAV daemon is not running. Start it to enable scanning.</p>
+            <button disabled={!!loading} onClick={startClamavDaemon}><Shield size={14}/> Start ClamAV</button>
+          </div>}
+          {mw.clamd_running && <>
           <strong>Scan a website now</strong>
           <p className="hint" style={{marginBottom:8}}>Select a website and run an on-demand malware scan.</p>
           <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
@@ -3385,6 +3398,7 @@ function App() {
               </div>)}
             </div>}
           </div>}
+          </>}
         </div>}
       </section>
     </>;
