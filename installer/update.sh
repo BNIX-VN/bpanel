@@ -275,6 +275,38 @@ PY
   chmod 0640 "$UPDATE_STATE_FILE" 2>/dev/null || true
 }
 
+# Write progress markers (percent / phase / message) into the update state file
+# without touching the existing status/version fields. Safe to call at any time.
+update_progress() {
+  local percent="$1" phase="$2" message="${3:-}"
+  install -d -m 0750 "$(dirname "$UPDATE_STATE_FILE")"
+  python3 - "$UPDATE_STATE_FILE" "$percent" "$phase" "$message" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+percent, phase, message = sys.argv[2:5]
+try:
+    state = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+except Exception:
+    state = {}
+try:
+    state["progress_percent"] = int(percent)
+except (ValueError, TypeError):
+    state["progress_percent"] = 0
+if phase:
+    state["progress_phase"] = phase
+if message:
+    state["progress_message"] = message
+path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+  if id -u bpanel >/dev/null 2>&1; then
+    chown bpanel:bpanel "$UPDATE_STATE_FILE" 2>/dev/null || true
+  fi
+  chmod 0640 "$UPDATE_STATE_FILE" 2>/dev/null || true
+}
+
 UPDATE_REF=""
 cleanup_release_work_dir() {
   if [[ -n "${RELEASE_WORK_DIR:-}" && -d "$RELEASE_WORK_DIR" ]]; then
@@ -285,12 +317,29 @@ cleanup_release_work_dir() {
 finish_update_script() {
   local rc=$?
   if [[ $rc -ne 0 ]]; then
+    local cur_pct=0
+    if [[ -f "$UPDATE_STATE_FILE" ]]; then
+      cur_pct="$(python3 - "$UPDATE_STATE_FILE" <<'PY' 2>/dev/null || true
+import json, sys
+try:
+    print(json.load(open(sys.argv[1])).get("progress_percent", 0))
+except Exception:
+    print(0)
+PY
+)"
+    fi
+    update_progress "${cur_pct:-0}" "failed" "Update failed with exit code ${rc}" || true
     write_update_state "failed" "${UPDATE_REF:-}" "Update failed with exit code ${rc}" || true
   fi
   cleanup_release_work_dir
   cleanup_stable_copy
 }
 trap finish_update_script EXIT
+
+# Trap ERR so any failing command records a failed progress marker. With
+# `set -e` the EXIT trap above performs the actual state write; this is a
+# secondary safety net for non-fatal paths that call `|| true`/return codes.
+trap 'update_progress "${progress_percent:-0}" "failed" "Update failed at phase: ${progress_phase:-unknown}" 2>/dev/null || true' ERR
 
 ufw_delete_bpanel_rules() {
   local pattern="$1" number
@@ -666,6 +715,7 @@ backup_db() {
 log "Backing up SQLite DB before update"
 backup_db
 write_update_state "checking" "" "Checking for BPanel releases"
+update_progress 5 "checking" "Backing up SQLite DB before update"
 
 # --- Fetch source -----------------------------------------------------------
 if [[ "$SKIP_PULL" == "true" ]]; then
@@ -689,6 +739,7 @@ else
       [[ -n "$RELEASE_TAG" ]] || fail "--tag requires a release tag"
       UPDATE_REF="$RELEASE_TAG"
       write_update_state "updating" "$UPDATE_REF" "Updating BPanel from ${UPDATE_REF}"
+      update_progress 15 "fetching" "Downloading release ${RELEASE_TAG}"
       download_release_source "$RELEASE_TAG"
       echo "Release: ${RELEASE_TAG}"
       ;;
@@ -710,6 +761,7 @@ else
       ensure_git_remote
       remote_branch="${GIT_REMOTE}/${BRANCH}"
       log "Pulling latest from ${remote_branch}"
+      update_progress 15 "fetching" "Pulling latest from ${remote_branch}"
       git fetch --prune "$GIT_REMOTE" "+refs/heads/${BRANCH}:refs/remotes/${GIT_REMOTE}/${BRANCH}" --tags
       UPDATE_REF="$remote_branch"
       write_update_state "updating" "$UPDATE_REF" "Updating BPanel from ${UPDATE_REF}"
@@ -764,6 +816,7 @@ if [[ ! -f "$APP_DIR/backend/.env" ]]; then
   fail "$APP_DIR/backend/.env is missing. Run installer/install.sh first or restore .env from backup."
 fi
 log "Installing direct panel runtime"
+update_progress 25 "syncing" "Syncing source into ${APP_DIR}"
 install_panel_runtime
 log "Configuring Nginx FastCGI cache"
 configure_fastcgi_cache
@@ -783,6 +836,7 @@ fi
 # --- Refresh helper + sudoers (idempotent) ---------------------------------
 if [[ -f "$SOURCE_DIR/installer/files/bpanel-helper.sh" ]]; then
   log "Refreshing /usr/local/sbin/bpanel-helper and /etc/sudoers.d/bpanel"
+  update_progress 40 "runtime" "Refreshing panel helper and runtime"
   if id -u bpanel >/dev/null 2>&1; then
     install -m 0750 -o root -g bpanel "$SOURCE_DIR/installer/files/bpanel-helper.sh" /usr/local/sbin/bpanel-helper
     sed -i "s#^APP_DIR=\"/opt/bpanel\"#APP_DIR=\"${APP_DIR}\"#" /usr/local/sbin/bpanel-helper
@@ -838,6 +892,7 @@ fi
 
 # --- Backend ---------------------------------------------------------------
 log "Updating backend dependencies"
+update_progress 55 "backend" "Updating backend dependencies"
 cd "$APP_DIR/backend"
 if [[ ! -d .venv ]]; then
   python3 -m venv .venv
@@ -851,6 +906,7 @@ log "Refreshing MariaDB grants"
 refresh_bpanel_mariadb_grants
 
 log "Running database migrations"
+update_progress 65 "backend" "Running database migrations"
 if id -u bpanel >/dev/null 2>&1; then
   # Run migrations as the bpanel user so the SQLite file ownership stays correct.
   sudo -u bpanel "$APP_DIR/backend/.venv/bin/python" -c \
@@ -967,6 +1023,7 @@ systemctl restart bpanel-api
 
 # --- Frontend --------------------------------------------------------------
 log "Building frontend (clean rebuild)"
+update_progress 80 "frontend" "Building frontend"
 cd "$APP_DIR/frontend"
 
 # Check Node.js availability
@@ -1004,11 +1061,13 @@ systemctl restart bpanel-api
 
 # --- Reload Nginx ----------------------------------------------------------
 log "Reloading nginx"
+update_progress 92 "restarting" "Restarting services and reloading nginx"
 nginx -t
 systemctl reload nginx
 
 # --- Health check ----------------------------------------------------------
 log "Health check"
+update_progress 98 "healthcheck" "Running API health check"
 for _ in {1..20}; do
   if panel_healthcheck; then
     echo "API is healthy."
@@ -1016,6 +1075,7 @@ for _ in {1..20}; do
     echo "Update completed."
     echo "If the browser still shows the old UI, hard refresh (Ctrl + Shift + R)."
     write_update_state "completed" "${UPDATE_REF:-}" "Update completed"
+    update_progress 100 "completed" "Update completed"
     exit 0
   fi
   sleep 1
@@ -1024,4 +1084,5 @@ done
 echo "API did not respond. Check logs:"
 echo "  journalctl -u bpanel-api -n 100 --no-pager"
 write_update_state "failed" "${UPDATE_REF:-}" "API health check failed after update"
+update_progress 0 "failed" "API health check failed after update"
 exit 1

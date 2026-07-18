@@ -455,6 +455,8 @@ function App() {
   const [showUpdateLog, setShowUpdateLog] = useState(false);
   const [osUpdating, setOsUpdating] = useState(false);
   const [panelUpdating, setPanelUpdating] = useState(false);
+  const [panelUpdateLog, setPanelUpdateLog] = useState([]);
+  const panelUpdateInterval = useRef(null);
   const [osAutoUpdate, setOsAutoUpdate] = useState({ enabled: true, mode: 'security', auto_reboot: false });
   const [panelAutoUpdate, setPanelAutoUpdate] = useState({ enabled: true, time: '03:30' });
   const noticeTimer = useRef(null);
@@ -2081,11 +2083,44 @@ function App() {
   }
 
   async function runPanelUpdate() {
-    if (!confirm('Update BPanel from GitHub now? The API may restart.')) return;
+    if (!confirm('Update BPanel from GitHub now? The API may restart and this page will reload when done.')) return;
     setPanelUpdating(true);
+    setShowUpdateLog(true);
+    setPanelUpdateLog([]);
     const data = await request('/updates/panel/run', { method: 'POST' }, 'Updating BPanel...');
-    setPanelUpdating(false);
-    if (data) { setNotice((data.stdout || data.stderr || 'Panel update completed.').trim()); await loadUpdates(); }
+    if (!data) {
+      setPanelUpdating(false);
+      return;
+    }
+    // Poll /updates/status every 2s until the update finishes, then reload.
+    const pollOnce = async () => {
+      const status = await request('/updates/status', {}, null);
+      if (!status) return;
+      setUpdatesStatus(status);
+      if (Array.isArray(status.panel_update_log)) {
+        setPanelUpdateLog(status.panel_update_log);
+      } else if (typeof status.panel_update_log === 'string' && status.panel_update_log) {
+        setPanelUpdateLog(status.panel_update_log.split('\n'));
+      }
+      const st = status.panel || {};
+      const done = st.last_update_status === 'completed' || st.last_update_status === 'failed';
+      if (done) {
+        if (panelUpdateInterval.current) {
+          clearInterval(panelUpdateInterval.current);
+          panelUpdateInterval.current = null;
+        }
+        setPanelUpdating(false);
+        if (st.last_update_status === 'completed' && Number(st.progress_percent) === 100) {
+          setNotice('Panel update completed. Reloading to apply the new version...');
+          setTimeout(() => { window.location.reload(); }, 2000);
+        } else if (st.last_update_status === 'failed') {
+          setNotice((st.progress_message || st.last_update_message || 'Panel update failed.').trim());
+        }
+      }
+    };
+    await pollOnce();
+    if (panelUpdateInterval.current) clearInterval(panelUpdateInterval.current);
+    panelUpdateInterval.current = setInterval(pollOnce, 2000);
   }
 
   async function savePanelAutoUpdate() {
@@ -3174,6 +3209,22 @@ function App() {
           <div className="update-log-head"><strong>Update logs</strong><button className="secondary-light" disabled={!!loading} onClick={() => loadUpdates(true)}><RefreshCw size={13}/> Refresh</button></div>
           <pre>{statusText}</pre>
         </div>}
+        {(panelUpdating || (panelUpdate.progress_percent && panelUpdate.last_update_status && panelUpdate.last_update_status !== 'completed' && panelUpdate.last_update_status !== 'failed')) && (
+          <div className="info-box firewall-status update-progress-box">
+            <div className="update-progress-row">
+              <span className={panelUpdate.last_update_status === 'failed' ? 'badge bad' : 'badge ok'}>
+                {panelUpdating ? 'Running' : (panelUpdate.last_update_status === 'failed' ? 'Failed' : (panelUpdate.last_update_status || 'Idle'))}
+              </span>
+              <span className="update-progress-phase">{panelUpdate.progress_phase || ''}</span>
+              <span className="update-progress-pct">{Number(panelUpdate.progress_percent) || 0}%</span>
+            </div>
+            <div className="progress-bar"><div className="progress-bar-fill" style={{ width: `${Number(panelUpdate.progress_percent) || 0}%` }} /></div>
+            {panelUpdate.progress_message && <p className="hint update-progress-msg">{panelUpdate.progress_message}</p>}
+            {panelUpdateLog.length > 0 && (
+              <pre className="update-progress-log">{panelUpdateLog.join('\n')}</pre>
+            )}
+          </div>
+        )}
       </section>
       <section className="section">
         <h2>Auto Update OS</h2>

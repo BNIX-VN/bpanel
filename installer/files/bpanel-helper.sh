@@ -1974,6 +1974,16 @@ case "$cmd" in
     echo "Panel update service:"
     systemctl is-active bpanel-panel-update.service 2>/dev/null | sed 's/^inactive$/idle/' || true
     journalctl -u bpanel-panel-update.service -n 16 --no-pager 2>/dev/null | grep -v "Failed to open /run/systemd/transient" || true
+    echo ""
+    echo "Panel update log:"
+    if command -v journalctl >/dev/null 2>&1 && systemctl cat bpanel-panel-update.service >/dev/null 2>&1; then
+      journalctl -u bpanel-panel-update.service -n 60 --no-pager 2>/dev/null | grep -v "Failed to open /run/systemd/transient" || true
+    fi
+    if [[ ! -s /dev/stdin ]]; then :; fi
+    if [[ -f /var/log/bpanel-panel-update.log ]]; then
+      echo "--- /var/log/bpanel-panel-update.log (tail) ---"
+      tail -n 60 /var/log/bpanel-panel-update.log 2>/dev/null || true
+    fi
     ;;
 
   updates-os-run)

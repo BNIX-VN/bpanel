@@ -127,8 +127,49 @@ def panel_release_status(force_refresh: bool = False) -> dict:
         "last_update_status": state.get("last_update_status") or "",
         "last_update_ref": state.get("last_update_ref") or "",
         "check_error": check_error or state.get("check_error") or "",
+        "progress_percent": state.get("progress_percent", 0),
+        "progress_phase": state.get("progress_phase") or "",
+        "progress_message": state.get("progress_message") or "",
         "state_file": str(UPDATE_STATE_FILE),
     }
+
+
+def _read_panel_update_log(max_lines: int = 100) -> list[str]:
+    """Return recent panel update log lines.
+
+    Prefers the systemd journal for `bpanel-panel-update.service`; falls back to
+    the flat log file at /var/log/bpanel-panel-update.log when journald is
+    unavailable (e.g. containers without systemd).
+    """
+    lines: list[str] = []
+    try:
+        have_journal = subprocess.run(
+            ["systemctl", "cat", "bpanel-panel-update.service"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        ).returncode == 0
+        journal_ok = False
+        if have_journal:
+            completed = subprocess.run(
+                ["journalctl", "-u", "bpanel-panel-update.service", "-n", str(max_lines), "--no-pager", "--output=cat"],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=10,
+            )
+            if completed.returncode == 0 and completed.stdout.strip():
+                lines = completed.stdout.splitlines()[-max_lines:]
+                journal_ok = True
+        if not journal_ok:
+            log_path = Path("/var/log/bpanel-panel-update.log")
+            if log_path.exists():
+                with log_path.open("r", encoding="utf-8", errors="replace") as handle:
+                    lines = handle.read().splitlines()[-max_lines:]
+    except Exception:
+        return []
+    return lines
 
 
 def status(force_refresh: bool = False):
@@ -139,6 +180,7 @@ def status(force_refresh: bool = False):
     )
     payload = result.__dict__
     payload["panel"] = panel_release_status(force_refresh=force_refresh)
+    payload["panel_update_log"] = _read_panel_update_log()
     return payload
 
 
@@ -166,11 +208,36 @@ def configure_os_auto_update(enabled: bool, mode: str, auto_reboot: bool):
 
 
 def run_panel_update():
-    return shell.privileged(
+    state = _read_update_state()
+    state.update(
+        {
+            "last_update_status": "checking",
+            "last_update_started_at": _utc_now(),
+            "last_update_message": "Starting panel update",
+            "progress_percent": 0,
+            "progress_phase": "starting",
+            "progress_message": "Starting panel update",
+        }
+    )
+    _write_update_state(state)
+    result = shell.privileged(
         "updates-panel-run",
         check=False,
         fallback=["bash", "installer/update.sh"],
     )
+    if result.returncode != 0:
+        state = _read_update_state()
+        state.update(
+            {
+                "last_update_status": "failed",
+                "last_update_finished_at": _utc_now(),
+                "last_update_message": (result.stderr or result.stdout or "Panel update could not be started").strip(),
+                "progress_phase": "failed",
+                "progress_message": "Panel update could not be started",
+            }
+        )
+        _write_update_state(state)
+    return result
 
 
 def configure_panel_auto_update(enabled: bool, time_value: str):
