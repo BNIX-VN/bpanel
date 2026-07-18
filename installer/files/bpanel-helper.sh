@@ -1339,6 +1339,15 @@ harden_site_dir() {
   chmod -t "$target" 2>/dev/null || true
 }
 
+harden_site_file() {
+  local target="$1" user="$2"
+  chown "$user:$BPANEL_SITES_GROUP" "$target"
+  clear_path_acl "$target"
+  chmod 0640 "$target"
+  chmod a-s "$target" 2>/dev/null || true
+  chmod -t "$target" 2>/dev/null || true
+}
+
 harden_site_dir_path() {
   local root="$1" target="$2" user="$3" relative current part
   ensure_sites_group
@@ -1368,6 +1377,7 @@ ensure_panel_user_home() {
   ensure_sftp_group
   require_linux_user "$user"
   getent group "$user" >/dev/null || groupadd "$user"
+  usermod -aG "$user" www-data 2>/dev/null || true
   chown root:root "$HOME_ROOT"
   chmod 0711 "$HOME_ROOT"
   chmod a-s "$HOME_ROOT" 2>/dev/null || true
@@ -1607,12 +1617,17 @@ apply_php_fpm_tuning_to_pool_file() {
 }
 
 retune_php_fpm_pools() {
-  local pool_file php_version count=0 versions=""
+  local pool_file php_version pool_user count=0 versions=""
   shopt -s nullglob
   for pool_file in /etc/php/*/fpm/pool.d/bpanel-*.conf; do
     [[ -f "$pool_file" ]] || continue
     calculate_php_fpm_pool_tuning "$pool_file"
     apply_php_fpm_tuning_to_pool_file "$pool_file"
+    pool_user="$(awk -F= '/^[[:space:]]*user[[:space:]]*=/ { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit }' "$pool_file")"
+    if [[ -n "$pool_user" ]]; then
+      ensure_php_runtime_dirs "$pool_user"
+      usermod -aG "$pool_user" www-data 2>/dev/null || true
+    fi
     count=$((count + 1))
     php_version="$(echo "$pool_file" | awk -F/ '{print $4}')"
     case " $versions " in
@@ -1808,8 +1823,7 @@ ensure_php_pool() {
   # boundary.
   local sess_dir="/var/lib/php/sessions/${user}"
   local upload_dir="/var/lib/php/uploads/${user}"
-  install -d -o "$user" -g "$user" -m 0700 "$sess_dir"
-  install -d -o "$user" -g "$user" -m 0700 "$upload_dir"
+  ensure_php_runtime_dirs "$user"
   calculate_php_fpm_pool_tuning "$pool_file"
   cat >"$pool_file" <<POOL
 [${pool_name}]
@@ -1836,6 +1850,20 @@ POOL
   systemctl reload "php${php_version}-fpm"
 }
 
+ensure_php_runtime_dirs() {
+  local user="$1"
+  local sess_dir="/var/lib/php/sessions/${user}"
+  local upload_dir="/var/lib/php/uploads/${user}"
+  ensure_sites_group
+  require_linux_user "$user"
+  install -d -o "$user" -g "$user" -m 0700 "$sess_dir"
+  # PHP keeps uploaded files in this directory before WordPress renames them
+  # into wp-content/uploads. Keep the directory private to the site user, but
+  # make it setgid bpanel-sites so moved uploads remain readable by nginx.
+  install -d -o "$user" -g "$BPANEL_SITES_GROUP" -m 2700 "$upload_dir"
+  chmod g+s "$upload_dir" 2>/dev/null || true
+}
+
 fix_site_tree() {
   local target="$1" user="$2"
   ensure_sites_group
@@ -1851,8 +1879,7 @@ fix_site_tree() {
     find "$target" -type d -exec chmod -t {} + 2>/dev/null || true
     find "$target" -type f -exec chmod 640 {} +
   else
-    clear_path_acl "$target"
-    chmod 640 "$target"
+    harden_site_file "$target" "$user"
   fi
 }
 

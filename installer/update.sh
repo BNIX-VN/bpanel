@@ -417,6 +417,7 @@ harden_existing_panel_users() {
     esac
     id -u "$user" >/dev/null 2>&1 || continue
     getent group "$user" >/dev/null || groupadd "$user" 2>/dev/null || true
+    usermod -aG "$user" www-data 2>/dev/null || true
     home_dir="/home/$user"
     usermod --home "$home_dir" --shell /usr/sbin/nologin --gid "$user" "$user" 2>/dev/null || true
     mkdir -p "$home_dir"
@@ -439,6 +440,11 @@ harden_existing_panel_users() {
       find "$site_dir" -type d -exec chmod -t {} + 2>/dev/null || true
       find "$site_dir" -type f -exec chmod 640 {} + 2>/dev/null || true
     done
+    if [[ -d "/var/lib/php/uploads/$user" ]]; then
+      chown "$user:bpanel-sites" "/var/lib/php/uploads/$user" 2>/dev/null || true
+      chmod 2700 "/var/lib/php/uploads/$user" 2>/dev/null || true
+      chmod g+s "/var/lib/php/uploads/$user" 2>/dev/null || true
+    fi
   done < <(getent group bpanel-sftp | awk -F: '{gsub(",", "\n", $4); print $4}')
 }
 

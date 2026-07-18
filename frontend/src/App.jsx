@@ -459,6 +459,7 @@ function App() {
   const [panelAutoUpdate, setPanelAutoUpdate] = useState({ enabled: true, time: '03:30' });
   const noticeTimer = useRef(null);
   const isAdmin = currentUser?.role === 'admin';
+  const currentSite = websites.find(site => String(site.id) === String(selectedWebsiteId));
 
   const navigateToPage = useCallback((nextPage, options = {}) => {
     const route = routeForPage(nextPage);
@@ -2209,7 +2210,6 @@ function App() {
   ];
 
   const navItems = [...mainNavItems, ...settingsNavItems];
-  const currentSite = websites.find(site => String(site.id) === String(selectedWebsiteId));
   const activeNavItem = navItems.find(([key]) => key === page) || navItems[0];
   const settingsIsActive = SETTINGS_PAGE_KEYS.includes(page);
 

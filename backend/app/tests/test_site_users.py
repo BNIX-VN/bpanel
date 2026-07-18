@@ -71,6 +71,7 @@ def test_panel_linux_users_are_sftp_chroot_only():
     assert 'chmod 0711 "$HOME_ROOT"' in helper
     assert 'chown "root:$user" "$home_dir"' in helper
     assert 'chmod 0751 "$home_dir"' in helper
+    assert 'usermod -aG "$user" www-data' in helper
 
 
 def test_site_permissions_do_not_allow_cross_user_reading():
@@ -78,9 +79,21 @@ def test_site_permissions_do_not_allow_cross_user_reading():
     assert 'find "$target" -type d -exec chmod 2750 {} +' in helper
     assert 'find "$target" -type f -exec chmod 640 {} +' in helper
     assert 'chown -R "$user:$BPANEL_SITES_GROUP" "$target"' in helper
+    assert 'harden_site_file "$target" "$user"' in helper
     assert 'install -o "$user" -g "$BPANEL_SITES_GROUP" -m 0640' in helper
     assert 'chmod 0755 "$target" "$target/public_html"' not in helper
     assert 'find "$target" -type d -exec chmod 755 {} +' not in helper
+
+
+def test_php_upload_tmp_dir_keeps_nginx_readable_group():
+    helper = HELPER_SCRIPT.read_text(encoding="utf-8")
+    update = UPDATE_SCRIPT.read_text(encoding="utf-8")
+    assert "ensure_php_runtime_dirs()" in helper
+    assert 'install -d -o "$user" -g "$BPANEL_SITES_GROUP" -m 2700 "$upload_dir"' in helper
+    assert 'chmod g+s "$upload_dir"' in helper
+    assert 'install -d -o "$user" -g "$user" -m 0700 "$sess_dir"' in helper
+    assert 'ensure_php_runtime_dirs "$pool_user"' in helper
+    assert 'chmod 2700 "/var/lib/php/uploads/$user"' in update
 
 
 def test_php_fpm_pools_are_auto_tuned_for_vps_size():
