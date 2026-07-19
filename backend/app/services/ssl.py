@@ -46,9 +46,25 @@ class ManualSslSnapshot:
             remove_manual_ssl(self.domain)
 
 
-def issue_ssl(domain: str) -> CommandResult:
-    helper_args = [domain]
-    fallback = ["certbot", "--nginx", "-d", domain, "--non-interactive", "--agree-tos", "--redirect"]
+def _safe_domain_list(domain: str, aliases: list[str] | tuple[str, ...] | None = None) -> list[str]:
+    names = [_safe_domain(domain)]
+    seen = set(names)
+    for alias in aliases or []:
+        safe_alias = _safe_domain(str(alias))
+        if safe_alias in seen:
+            continue
+        names.append(safe_alias)
+        seen.add(safe_alias)
+    return names
+
+
+def issue_ssl(domain: str, aliases: list[str] | tuple[str, ...] | None = None) -> CommandResult:
+    domains = _safe_domain_list(domain, aliases)
+    helper_args = domains[:]
+    fallback = ["certbot", "--nginx"]
+    for name in domains:
+        fallback.extend(["-d", name])
+    fallback.extend(["--non-interactive", "--agree-tos", "--redirect", "--expand"])
     if settings.ssl_email:
         helper_args.append(settings.ssl_email)
         fallback.extend(["--email", settings.ssl_email])
@@ -90,19 +106,32 @@ def read_ssl_part(value, *, label: str, required: bool = True) -> bytes:
     return _normalize_pem(raw, label, required=required)
 
 
-def validate_manual_ssl(domain: str, certificate: bytes, private_key: bytes, ca_bundle: bytes = b"") -> None:
-    safe_domain = _safe_domain(domain)
+def validate_manual_ssl(
+    domain: str,
+    certificate: bytes,
+    private_key: bytes,
+    ca_bundle: bytes = b"",
+    aliases: list[str] | tuple[str, ...] | None = None,
+) -> None:
+    domains = _safe_domain_list(domain, aliases)
     cert = _load_certificate(certificate, "certificate")
     key = _load_private_key(private_key)
     if ca_bundle:
         _load_ca_bundle(ca_bundle)
     _validate_certificate_time(cert)
-    _validate_certificate_domain(cert, safe_domain)
+    for name in domains:
+        _validate_certificate_domain(cert, name)
     _validate_key_matches_certificate(key, cert)
 
 
-def install_manual_ssl(domain: str, certificate: bytes, private_key: bytes, ca_bundle: bytes = b"") -> dict[str, str | None]:
-    validate_manual_ssl(domain, certificate, private_key, ca_bundle)
+def install_manual_ssl(
+    domain: str,
+    certificate: bytes,
+    private_key: bytes,
+    ca_bundle: bytes = b"",
+    aliases: list[str] | tuple[str, ...] | None = None,
+) -> dict[str, str | None]:
+    validate_manual_ssl(domain, certificate, private_key, ca_bundle, aliases=aliases)
     return _write_manual_ssl_files(domain, certificate, private_key, ca_bundle)
 
 

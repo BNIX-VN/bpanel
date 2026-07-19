@@ -9,10 +9,13 @@ from cryptography.x509.oid import NameOID
 from app.services import nginx, ssl
 
 
-def _cert_pair(domain="example.test", *, days=30, key=None):
+def _cert_pair(domain="example.test", *, days=30, key=None, aliases=None):
     key = key or rsa.generate_private_key(public_exponent=65537, key_size=2048)
     subject = issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, domain)])
     now = datetime.now(timezone.utc)
+    san_names = [x509.DNSName(domain)]
+    for alias in aliases or []:
+        san_names.append(x509.DNSName(alias))
     cert = (
         x509.CertificateBuilder()
         .subject_name(subject)
@@ -21,7 +24,7 @@ def _cert_pair(domain="example.test", *, days=30, key=None):
         .serial_number(x509.random_serial_number())
         .not_valid_before(now - timedelta(days=2))
         .not_valid_after(now + timedelta(days=days))
-        .add_extension(x509.SubjectAlternativeName([x509.DNSName(domain)]), critical=False)
+        .add_extension(x509.SubjectAlternativeName(san_names), critical=False)
         .sign(key, hashes.SHA256())
     )
     cert_pem = cert.public_bytes(serialization.Encoding.PEM)
@@ -39,6 +42,12 @@ def test_validate_manual_ssl_accepts_matching_cert_key_and_optional_ca():
     ssl.validate_manual_ssl("example.test", cert_pem, key_pem, cert_pem)
 
 
+def test_validate_manual_ssl_accepts_alias_san():
+    cert_pem, key_pem = _cert_pair("example.test", aliases=["www.example.test"])
+
+    ssl.validate_manual_ssl("example.test", cert_pem, key_pem, aliases=["www.example.test"])
+
+
 def test_validate_manual_ssl_rejects_mismatched_private_key():
     cert_pem, _key_pem = _cert_pair()
     _other_cert, other_key = _cert_pair("other.test")
@@ -52,6 +61,13 @@ def test_validate_manual_ssl_rejects_wrong_domain():
 
     with pytest.raises(ValueError, match="CN/SAN"):
         ssl.validate_manual_ssl("example.test", cert_pem, key_pem)
+
+
+def test_validate_manual_ssl_rejects_missing_alias_domain():
+    cert_pem, key_pem = _cert_pair()
+
+    with pytest.raises(ValueError, match="CN/SAN"):
+        ssl.validate_manual_ssl("example.test", cert_pem, key_pem, aliases=["alias.example.test"])
 
 
 def test_validate_manual_ssl_rejects_expired_certificate():
@@ -104,3 +120,22 @@ def test_install_manual_ssl_uses_helper_without_logging_key(monkeypatch):
     assert captured["helper_args"] == ["example.test"]
     assert captured["kwargs"]["sensitive"] is True
     assert "PRIVATE KEY" in captured["kwargs"]["input"]
+
+
+def test_issue_ssl_passes_aliases_and_email(monkeypatch):
+    captured = {}
+
+    def fake_privileged(helper_command, helper_args=None, **kwargs):
+        captured["helper_command"] = helper_command
+        captured["helper_args"] = helper_args
+        captured["kwargs"] = kwargs
+        return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(ssl.shell, "privileged", fake_privileged)
+    monkeypatch.setattr(ssl.settings, "ssl_email", "admin@example.test")
+
+    result = ssl.issue_ssl("example.test", aliases=["www.example.test"])
+
+    assert result.returncode == 0
+    assert captured["helper_command"] == "certbot-issue"
+    assert captured["helper_args"] == ["example.test", "www.example.test", "admin@example.test"]

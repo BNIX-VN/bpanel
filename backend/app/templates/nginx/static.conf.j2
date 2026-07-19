@@ -1,6 +1,6 @@
 server {
     listen 80;
-    server_name {{ domain }} www.{{ domain }};
+    server_name {{ server_names | join(' ') }};
     root {{ document_root_path }};
     index index.html index.htm;
 

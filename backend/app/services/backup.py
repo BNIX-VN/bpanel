@@ -19,7 +19,7 @@ from app.core.config import settings
 from app.core.secrets import decrypt, encrypt
 from app.core.security import hash_password
 from app.core.permissions import normalize_role
-from app.models.entities import DatabaseAccount, User, Website
+from app.models.entities import DatabaseAccount, User, Website, WebsiteAlias
 from app.services import mariadb, nginx, site_users, waf, wordpress
 from app.services.shell import shell
 
@@ -29,6 +29,27 @@ logger = logging.getLogger("bpanel.backup")
 MAX_UPLOAD_BYTES = 1024 * 1024 * 1024
 BACKUP_MANIFEST = "manifest.json"
 PANEL_USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]{3,64}$")
+
+
+def _hostname_conflicts(db, domain: str, exclude_website_id: int | None = None) -> bool:
+    safe = (domain or "").strip().lower()
+    if not safe:
+        return True
+    reserved: set[str] = set()
+    for website in db.query(Website).all():
+        if exclude_website_id is not None and website.id == exclude_website_id:
+            continue
+        hostname = (website.domain or "").strip().lower()
+        if hostname:
+            reserved.add(hostname)
+            reserved.add(f"www.{hostname}")
+    for alias in db.query(WebsiteAlias).all():
+        if exclude_website_id is not None and alias.website_id == exclude_website_id:
+            continue
+        alias_host = (alias.domain or "").strip().lower()
+        if alias_host:
+            reserved.add(alias_host)
+    return safe in reserved or f"www.{safe}" in reserved
 
 
 def create_backup(website: Website, db_name: Optional[str] = None) -> str:
@@ -104,6 +125,7 @@ def create_user_backup(user: User, db) -> str:
                 "waf_custom_rules": website.waf_custom_rules or "",
                 "http_flood_enabled": bool(getattr(website, "http_flood_enabled", False)),
                 "http_flood_config": getattr(website, "http_flood_config", "") or "",
+                "aliases": [alias.domain for alias in getattr(website, "aliases", []) or [] if getattr(alias, "mode", "alias") == "alias"],
                 "database": None,
             }
             db_item = db.query(DatabaseAccount).filter(DatabaseAccount.website_id == website.id).first()
@@ -352,6 +374,12 @@ def restore_user_backup(backup_file: str, db) -> dict:
             if nginx_rewrite_mode not in {"none", "front_controller", "laravel", "codeigniter", "seohburl"}:
                 nginx_rewrite_mode = "front_controller" if app_type in {"wordpress", "php"} else "none"
             document_root = site_users.validate_document_root(site_info.get("document_root") or "public_html")
+            backup_aliases = [
+                (alias or "").strip().lower()
+                for alias in (site_info.get("aliases") or [])
+                if (alias or "").strip()
+            ]
+            backup_aliases = sorted({alias for alias in backup_aliases if alias != domain})
             linux_user = site_users.linux_user_for_panel_username(user.username)
             root_path = site_users.site_root_for_panel_user(user.username, domain)
             runtime_php_version = php_version if app_type in {"wordpress", "php"} else None
@@ -405,6 +433,19 @@ def restore_user_backup(backup_file: str, db) -> dict:
                 website.http_flood_config = site_info.get("http_flood_config") or ""
                 db.flush()
 
+            existing_aliases = {
+                alias.domain: alias
+                for alias in db.query(WebsiteAlias).filter(WebsiteAlias.website_id == website.id).all()
+            }
+            for alias_domain in backup_aliases:
+                if _hostname_conflicts(db, alias_domain, exclude_website_id=website.id):
+                    raise ValueError(f"Alias domain already belongs to another website: {alias_domain}")
+                if alias_domain not in existing_aliases:
+                    db.add(WebsiteAlias(website_id=website.id, domain=alias_domain, mode="alias"))
+            for alias_domain, alias_obj in existing_aliases.items():
+                if alias_domain not in backup_aliases:
+                    db.delete(alias_obj)
+
             db_info = site_info.get("database") or None
             if db_info:
                 db_name = db_info.get("db_name")
@@ -455,6 +496,7 @@ def restore_user_backup(backup_file: str, db) -> dict:
                 http_flood_config=website.http_flood_config or "",
                 document_root=document_root,
                 rewrite_mode=nginx_rewrite_mode,
+                aliases=backup_aliases,
             )
             if not website.http_flood_enabled:
                 result = nginx.sync_http_flood_zones(db.query(Website).all())

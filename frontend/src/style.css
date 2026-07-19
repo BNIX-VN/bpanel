@@ -718,7 +718,7 @@ button:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
 .user-main small{color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .row-actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}
 .site-grid{display:grid;grid-template-columns:1fr;gap:12px}
-.site-card{display:grid;grid-template-columns:minmax(220px,1.1fr) minmax(210px,.85fr) minmax(360px,1fr);align-items:center;gap:12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:12px;min-width:0;transition:var(--transition)}
+.site-card{display:grid;grid-template-columns:minmax(220px,1.05fr) minmax(210px,1fr) minmax(210px,auto);align-items:center;gap:12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:12px;min-width:0;transition:var(--transition)}
 .site-card:hover{border-color:var(--border-hover);box-shadow:none}
 .site-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
 .site-head strong{display:block;font-size:15px;color:var(--text)}
@@ -727,6 +727,22 @@ button:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
 .site-meta span{background:var(--surface-alt);border:1px solid var(--border);border-radius:999px;padding:5px 9px;color:var(--text-muted);font-weight:600;font-size:12px}
 .site-meta .site-ssl-badge{display:inline-flex;align-items:center;justify-content:center;min-height:28px;height:28px;min-width:74px;border-radius:20px;padding:0 12px;font-weight:600;line-height:1;white-space:nowrap;flex:none}
 .site-meta strong{color:var(--text)}
+.site-aliases{display:grid;gap:7px;min-width:0}
+.alias-list{display:flex;gap:6px;flex-wrap:wrap;min-width:0}
+.alias-empty{color:var(--text-muted);font-size:12px;font-weight:700}
+.alias-chip{display:inline-flex;align-items:center;gap:5px;max-width:100%;background:var(--surface-alt);border:1px solid var(--border);border-radius:999px;padding:4px 5px 4px 8px;color:var(--text-secondary);font-size:12px;font-weight:700}
+.alias-chip button{width:20px;min-width:20px;height:20px;min-height:20px;padding:0;border-radius:999px}
+.alias-form{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px}
+.alias-form input{height:34px;min-height:34px;font-size:12px}
+.alias-form button{height:34px;min-height:34px;padding:0 8px;font-size:12px;white-space:nowrap}
+.site-aliases .hint{margin:0;font-size:11px}
+.settings-domain-manager{border-top:1px solid var(--border);border-bottom:1px solid var(--border);padding:12px 0;margin-top:4px}
+.domain-manager-head{display:grid;gap:2px}
+.domain-manager-head h3{font-size:14px;margin:0;color:var(--text)}
+.settings-domain-manager .alias-chip span{border-left:1px solid var(--border);padding-left:6px;color:var(--text-muted);font-size:11px}
+.settings-domain-manager .primary-domain{background:var(--surface);color:var(--text)}
+.settings-domain-form{grid-template-columns:minmax(220px,1fr) minmax(120px,160px) auto}
+.settings-domain-form select{height:34px;min-height:34px;padding:0 9px;font-size:12px}
 .site-card>.actions{display:grid;grid-template-columns:120px repeat(3,minmax(82px,1fr));justify-content:end;gap:6px;min-width:0}
 .site-card>.actions select{width:100%;max-width:none;min-width:0}
 .site-card>.actions button{width:100%;min-width:0;height:34px;min-height:34px;padding:0 8px;font-size:12px;white-space:nowrap}

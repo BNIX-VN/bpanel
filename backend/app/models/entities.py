@@ -58,6 +58,24 @@ class Website(Base):
 
     owner: Mapped[User] = relationship(back_populates="websites")
     database: Mapped[Optional["DatabaseAccount"]] = relationship(back_populates="website", uselist=False)
+    aliases: Mapped[List["WebsiteAlias"]] = relationship(
+        back_populates="website",
+        cascade="all, delete-orphan",
+        order_by="WebsiteAlias.domain",
+    )
+
+
+class WebsiteAlias(Base):
+    __tablename__ = "website_aliases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    website_id: Mapped[int] = mapped_column(ForeignKey("websites.id", ondelete="CASCADE"), index=True)
+    domain: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    mode: Mapped[str] = mapped_column(String(16), default="alias")
+    ssl_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    website: Mapped[Website] = relationship(back_populates="aliases")
 
 
 class DatabaseAccount(Base):

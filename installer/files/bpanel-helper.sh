@@ -2176,9 +2176,22 @@ case "$cmd" in
 
   # ---- certbot ----------------------------------------------------------
   certbot-issue)
-    [[ $# -ge 1 ]] || deny "usage: certbot-issue <domain> [email]"
-    domain="$1"; email="${2:-}"
+    [[ $# -ge 1 ]] || deny "usage: certbot-issue <domain> [alias-domain ...] [email]"
+    domain="$1"; shift
+    email=""
+    domains=("$domain")
     require_domain "$domain"
+    while [[ $# -gt 0 ]]; do
+      if [[ "$1" == *@* ]]; then
+        [[ $# -eq 1 ]] || deny "email must be the final certbot-issue argument"
+        email="$1"
+        shift
+        break
+      fi
+      require_domain "$1"
+      domains+=("$1")
+      shift
+    done
     install -d -o root -g bpanel -m 0755 /var/www/bpanel-acme/.well-known/acme-challenge
     if [[ -f "/etc/nginx/conf.d/${domain}.conf" ]]; then
       if grep -q "/var/lib/bpanel/acme-challenges" "/etc/nginx/conf.d/${domain}.conf"; then
@@ -2216,7 +2229,10 @@ PY
         nginx -t && systemctl reload nginx
       fi
     fi
-    args=(certonly --webroot -w /var/www/bpanel-acme -d "$domain" --non-interactive --agree-tos)
+    args=(certonly --webroot -w /var/www/bpanel-acme --cert-name "$domain" --non-interactive --agree-tos --expand)
+    for cert_domain in "${domains[@]}"; do
+      args+=(-d "$cert_domain")
+    done
     if [[ -n "$email" ]]; then
       require_email "$email"
       args+=(--email "$email")
@@ -2224,7 +2240,11 @@ PY
       args+=(--register-unsafely-without-email)
     fi
     certbot "${args[@]}"
-    exec certbot install --nginx --cert-name "$domain" -d "$domain" --non-interactive --redirect
+    install_args=(install --nginx --cert-name "$domain" --non-interactive --redirect --expand)
+    for cert_domain in "${domains[@]}"; do
+      install_args+=(-d "$cert_domain")
+    done
+    exec certbot "${install_args[@]}"
     ;;
 
   certbot-renew)

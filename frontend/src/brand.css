@@ -262,7 +262,7 @@ button:disabled,.upload-button.disabled{background:#dbe7f7;color:#7a8ca4;border-
 
 .site-stack{display:grid;gap:10px;min-width:0}
 .site-stack .inline-nginx-editor,.site-stack .log-viewer{margin:0}
-.site-card{grid-template-columns:minmax(190px,1.05fr) minmax(170px,.8fr) auto}
+.site-card{grid-template-columns:minmax(190px,1.05fr) minmax(190px,1fr) auto}
 .site-actions{display:grid;gap:7px;justify-self:end;width:max-content;min-width:0}
 .site-mode-actions,.site-root-actions{display:grid;grid-template-columns:minmax(0,1fr) 36px;gap:6px;min-width:0}
 .site-mode-actions select,
@@ -337,4 +337,6 @@ button:disabled,.upload-button.disabled{background:#dbe7f7;color:#7a8ca4;border-
   .site-php-actions .site-icon-button{height:40px;min-height:40px}
   .site-feature-actions{display:flex;justify-content:flex-start;gap:8px;width:100%}
   .site-feature-actions .site-icon-button{width:40px;min-width:40px;height:40px;min-height:40px;flex:0 0 40px}
+  .alias-form,.settings-domain-form{grid-template-columns:1fr}
+  .alias-form button{width:100%}
 }

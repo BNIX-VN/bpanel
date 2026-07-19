@@ -326,6 +326,31 @@ class WebsiteHttpFloodUpdate(BaseModel):
     connection_limit: int = Field(default=60, ge=1, le=10000)
 
 
+class WebsiteAliasCreate(BaseModel):
+    domain: str
+    mode: Literal["alias", "redirect"] = "alias"
+
+    @field_validator("domain")
+    @classmethod
+    def validate_domain(cls, value: str) -> str:
+        value = value.strip().lower()
+        if not DOMAIN_RE.match(value):
+            raise ValueError("Invalid domain")
+        return value
+
+
+class WebsiteAliasOut(BaseModel):
+    id: int
+    website_id: int
+    domain: str
+    mode: Literal["alias", "redirect"] = "alias"
+    ssl_enabled: bool = False
+    created_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
 class WebsiteLogOut(BaseModel):
     domain: str
     kind: Literal["access", "error"]
@@ -417,6 +442,7 @@ class WebsiteOut(BaseModel):
     waf_custom_rules: str = ""
     http_flood_enabled: bool = False
     http_flood_config: str = ""
+    aliases: list[WebsiteAliasOut] = Field(default_factory=list)
 
     class Config:
         from_attributes = True

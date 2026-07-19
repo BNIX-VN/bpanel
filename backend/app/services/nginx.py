@@ -312,6 +312,156 @@ def _safe_domain(domain: str) -> str:
     return safe_domain
 
 
+def _safe_alias_domains(aliases: list[str] | tuple[str, ...] | None) -> list[str]:
+    safe_aliases: list[str] = []
+    seen: set[str] = set()
+    for alias in aliases or []:
+        safe_alias = _safe_domain(str(alias))
+        if safe_alias in seen:
+            continue
+        safe_aliases.append(safe_alias)
+        seen.add(safe_alias)
+    return safe_aliases
+
+
+def _server_names(domain: str, aliases: list[str] | tuple[str, ...] | None = None) -> list[str]:
+    safe_domain = _safe_domain(domain)
+    names = [safe_domain, f"www.{safe_domain}"]
+    seen = set(names)
+    for alias in _safe_alias_domains(aliases):
+        if alias == safe_domain or alias in seen:
+            continue
+        names.append(alias)
+        seen.add(alias)
+    return names
+
+
+def _redirect_vhost_blocks(
+    domain: str,
+    redirects: list[str] | tuple[str, ...] | None = None,
+    ssl_cert_path: str | None = None,
+    ssl_key_path: str | None = None,
+    ssl_ca_path: str | None = None,
+) -> str:
+    safe_domain = _safe_domain(domain)
+    reserved = {safe_domain, f"www.{safe_domain}"}
+    cert = key = ca = None
+    if ssl_cert_path or ssl_key_path:
+        cert, key, ca = _manual_ssl_paths(ssl_cert_path, ssl_key_path, ssl_ca_path)
+        if ca:
+            cert = cert.rsplit("/", 1)[0] + "/fullchain.crt"
+    blocks: list[str] = []
+    for redirect_domain in _safe_alias_domains(redirects):
+        if redirect_domain in reserved:
+            continue
+        block_lines = [
+            "server {",
+            "    listen 80;",
+            f"    server_name {redirect_domain};",
+            "",
+            "    # BPANEL ACME CHALLENGE",
+            "    location ^~ /.well-known/acme-challenge/ {",
+            "        root /var/www/bpanel-acme;",
+            "        default_type text/plain;",
+            "        try_files $uri =404;",
+            "        access_log off;",
+            "        auth_basic off;",
+            "    }",
+            "",
+            f"    return 301 https://{safe_domain}$request_uri;",
+            "}",
+        ]
+        if cert and key:
+            block_lines.extend([
+                "",
+                "server {",
+                "    listen 443 ssl http2;",
+                f"    server_name {redirect_domain};",
+                f"    ssl_certificate {cert};",
+                f"    ssl_certificate_key {key};",
+                "    ssl_protocols TLSv1.2 TLSv1.3;",
+                "    ssl_prefer_server_ciphers off;",
+            ])
+            if ca:
+                block_lines.append(f"    ssl_trusted_certificate {ca};")
+            block_lines.extend([
+                f"    return 301 https://{safe_domain}$request_uri;",
+                "}",
+            ])
+        blocks.append("\n".join(block_lines))
+    return "\n\n".join(blocks)
+
+
+def _certbot_ssl_lines(content: str) -> list[str]:
+    lines: list[str] = []
+    seen: set[str] = set()
+    for line in content.splitlines():
+        stripped = line.strip()
+        if (
+            "ssl_certificate" in line
+            or "include /etc/letsencrypt/options-ssl-nginx.conf" in line
+            or "ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem" in line
+        ) and stripped not in seen:
+            lines.append(line)
+            seen.add(stripped)
+    return lines
+
+
+def _append_certbot_redirect_vhosts(content: str, domain: str, redirects: list[str] | tuple[str, ...] | None = None) -> str:
+    safe_domain = _safe_domain(domain)
+    reserved = {safe_domain, f"www.{safe_domain}"}
+    ssl_lines = _certbot_ssl_lines(content)
+    blocks: list[str] = []
+    for redirect_domain in _safe_alias_domains(redirects):
+        if redirect_domain in reserved:
+            continue
+        block_lines = [
+            "server {",
+            "    listen 80;",
+            f"    server_name {redirect_domain};",
+            "",
+            "    # BPANEL ACME CHALLENGE",
+            "    location ^~ /.well-known/acme-challenge/ {",
+            "        root /var/www/bpanel-acme;",
+            "        default_type text/plain;",
+            "        try_files $uri =404;",
+            "        access_log off;",
+            "        auth_basic off;",
+            "    }",
+            "",
+            f"    return 301 https://{safe_domain}$request_uri;",
+            "}",
+        ]
+        if ssl_lines:
+            block_lines.extend([
+                "",
+                "server {",
+                "    listen 443 ssl;",
+                f"    server_name {redirect_domain};",
+                *ssl_lines,
+                f"    return 301 https://{safe_domain}$request_uri;",
+                "}",
+            ])
+        blocks.append("\n".join(block_lines))
+    if not blocks:
+        return content
+    return content.rstrip() + "\n\n" + "\n\n".join(blocks) + "\n"
+
+
+def _append_redirect_vhosts(
+    content: str,
+    domain: str,
+    redirects: list[str] | tuple[str, ...] | None = None,
+    ssl_cert_path: str | None = None,
+    ssl_key_path: str | None = None,
+    ssl_ca_path: str | None = None,
+) -> str:
+    redirect_blocks = _redirect_vhost_blocks(domain, redirects, ssl_cert_path, ssl_key_path, ssl_ca_path)
+    if not redirect_blocks:
+        return content
+    return content.rstrip() + "\n\n" + redirect_blocks + "\n"
+
+
 def _custom_include_path(domain: str) -> Path:
     return CUSTOM_INCLUDE_DIR / f"{_safe_domain(domain)}.conf"
 
@@ -822,19 +972,21 @@ def render_vhost(
     ssl_cert_path: str | None = None,
     ssl_key_path: str | None = None,
     ssl_ca_path: str | None = None,
+    aliases: list[str] | tuple[str, ...] | None = None,
+    redirects: list[str] | tuple[str, ...] | None = None,
 ) -> str:
-    if not DOMAIN_RE.fullmatch((domain or "").lower()):
-        raise ValueError("Invalid domain")
+    server_names = _server_names(domain, aliases)
+    safe_domain = server_names[0]
     _check_app_type(app_type)
     safe_rewrite_mode = _check_rewrite_mode(rewrite_mode)
     _check_php_version(php_version)
     resolved_root = Path(root_path).resolve()
-    if not site_users.is_site_root_for_domain(resolved_root, domain):
+    if not site_users.is_site_root_for_domain(resolved_root, safe_domain):
         raise ValueError("root_path must be the managed root for this domain")
     validate_custom_nginx(custom_directives)
     effective_document_root = _effective_document_root(document_root, safe_rewrite_mode)
     resolved_document_root = site_users.document_root(resolved_root, effective_document_root)
-    include_path = custom_include_path(domain)
+    include_path = custom_include_path(safe_domain)
 
     env = Environment(loader=FileSystemLoader(TEMPLATE_DIR), autoescape=False)
     template_name = {
@@ -847,15 +999,16 @@ def render_vhost(
     safe_http_flood_config = validate_http_flood_config(http_flood_config)
 
     rendered = template.render(
-        domain=domain,
+        domain=safe_domain,
+        server_names=server_names,
         root_path=str(resolved_root),
         document_root_path=str(resolved_document_root),
         php_fpm_socket=php_fpm_socket,
         custom_include_path=include_path,
         waf_enabled=bool(waf_enabled),
-        waf_rules_file=waf_rules_file(domain),
+        waf_rules_file=waf_rules_file(safe_domain),
         http_flood_enabled=bool(http_flood_enabled),
-        http_flood_zone=http_flood_zone_name(domain),
+        http_flood_zone=http_flood_zone_name(safe_domain),
         http_flood_burst=safe_http_flood_config["access_limit_burst"],
         http_flood_connections=safe_http_flood_config["connection_limit"],
         http_flood_challenge_block=_http_flood_challenge_block(),
@@ -863,7 +1016,7 @@ def render_vhost(
     )
     if ssl_cert_path or ssl_key_path:
         rendered = apply_manual_ssl_config(rendered, ssl_cert_path or "", ssl_key_path or "", ssl_ca_path)
-    return rendered
+    return _append_redirect_vhosts(rendered, domain, redirects, ssl_cert_path, ssl_key_path, ssl_ca_path)
 
 
 # Back-compat shim for older imports.
@@ -887,6 +1040,8 @@ def write_vhost(
     ssl_key_path: str | None = None,
     ssl_ca_path: str | None = None,
     preserve_existing_ssl: bool = True,
+    aliases: list[str] | tuple[str, ...] | None = None,
+    redirects: list[str] | tuple[str, ...] | None = None,
 ) -> str:
     return rewrite_vhost(
         domain,
@@ -904,6 +1059,8 @@ def write_vhost(
         ssl_key_path=ssl_key_path,
         ssl_ca_path=ssl_ca_path,
         preserve_existing_ssl=preserve_existing_ssl,
+        aliases=aliases,
+        redirects=redirects,
     )
 
 
@@ -927,6 +1084,8 @@ def rewrite_vhost(
     ssl_key_path: str | None = None,
     ssl_ca_path: str | None = None,
     preserve_existing_ssl: bool = True,
+    aliases: list[str] | tuple[str, ...] | None = None,
+    redirects: list[str] | tuple[str, ...] | None = None,
 ) -> str:
     target = _vhost_path(domain)
     content = render_vhost(
@@ -944,9 +1103,11 @@ def rewrite_vhost(
         ssl_cert_path=ssl_cert_path,
         ssl_key_path=ssl_key_path,
         ssl_ca_path=ssl_ca_path,
+        aliases=aliases,
+        redirects=None,
     )
     if settings.command_dry_run:
-        return content
+        return _append_redirect_vhosts(content, domain, redirects, ssl_cert_path, ssl_key_path, ssl_ca_path)
     custom_snapshot = _custom_include_snapshot(domain)
     _write_custom_include(domain, custom_directives)
     if target.exists():
@@ -954,6 +1115,10 @@ def rewrite_vhost(
         _write_backup(target, existing)
         if preserve_existing_ssl and _has_ssl_config(existing) and not (ssl_cert_path and ssl_key_path):
             content = _merge_certbot_ssl_config(content, existing)
+    if preserve_existing_ssl and not (ssl_cert_path and ssl_key_path):
+        content = _append_certbot_redirect_vhosts(content, domain, redirects)
+    else:
+        content = _append_redirect_vhosts(content, domain, redirects, ssl_cert_path, ssl_key_path, ssl_ca_path)
     old_content = target.read_text(encoding="utf-8") if target.exists() else None
     target.write_text(content, encoding="utf-8")
     _test_and_reload(target, old_content, domain, custom_snapshot)
@@ -1023,6 +1188,8 @@ def harden_existing_wordpress_vhost(
     ssl_cert_path: str | None = None,
     ssl_key_path: str | None = None,
     ssl_ca_path: str | None = None,
+    aliases: list[str] | tuple[str, ...] | None = None,
+    redirects: list[str] | tuple[str, ...] | None = None,
 ) -> str:
     return rewrite_vhost(
         domain,
@@ -1039,6 +1206,8 @@ def harden_existing_wordpress_vhost(
         ssl_cert_path=ssl_cert_path,
         ssl_key_path=ssl_key_path,
         ssl_ca_path=ssl_ca_path,
+        aliases=aliases,
+        redirects=redirects,
     )
 
 

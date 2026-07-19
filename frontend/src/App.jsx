@@ -376,6 +376,8 @@ function App() {
   const [logViewer, setLogViewer] = useState(null); // {id, domain, kind, lines, path, content, exists}
   const [terminalViewer, setTerminalViewer] = useState(null); // {id, domain}
   const [websites, setWebsites] = useState([]);
+  const [aliasDrafts, setAliasDrafts] = useState({});
+  const [aliasModes, setAliasModes] = useState({});
   const [databases, setDatabases] = useState([]);
   const [newDatabase, setNewDatabase] = useState({ db_name: '', db_user: '', db_password: '' });
   const [createdDbInfo, setCreatedDbInfo] = useState(null);
@@ -1164,6 +1166,43 @@ function App() {
   async function enableSsl(id) {
     const data = await request(`/websites/${id}/ssl`, { method: 'POST' }, "Installing Let's Encrypt SSL...");
     if (data) refreshAll();
+  }
+
+  async function addWebsiteAlias(site) {
+    const cleanAlias = String(aliasDrafts[site.id] || '').trim().toLowerCase();
+    const aliasMode = aliasModes[site.id] || 'alias';
+    if (!cleanAlias) { setError('Enter a domain.'); return; }
+    const data = await request(`/websites/${site.id}/aliases`, {
+      method: 'POST',
+      body: JSON.stringify({ domain: cleanAlias, mode: aliasMode }),
+    }, `Adding ${aliasMode === 'redirect' ? 'redirect' : 'alias'} ${cleanAlias}...`);
+    if (data) {
+      setNotice(aliasMode === 'redirect'
+        ? `Added redirect ${cleanAlias} -> ${site.domain}.`
+        : `Added alias ${cleanAlias}. Re-run SSL after DNS points to this server.`);
+      setAliasDrafts(prev => ({ ...prev, [site.id]: '' }));
+      setNginxCustomEditing(prev => {
+        if (!prev || prev.id !== site.id) return prev;
+        const nextSite = prev.site || site;
+        return { ...prev, site: { ...nextSite, aliases: [...(nextSite.aliases || []), data] } };
+      });
+      await refreshAll();
+    }
+  }
+
+  async function deleteWebsiteAlias(site, alias) {
+    const label = alias.mode === 'redirect' ? 'redirect' : 'alias';
+    if (!confirm(`Remove ${label} ${alias.domain} from ${site.domain}?`)) return;
+    const data = await request(`/websites/${site.id}/aliases/${alias.id}`, { method: 'DELETE' }, `Removing ${label} ${alias.domain}...`);
+    if (data) {
+      setNotice(`Removed ${label} ${alias.domain}.`);
+      setNginxCustomEditing(prev => {
+        if (!prev || prev.id !== site.id) return prev;
+        const nextSite = prev.site || site;
+        return { ...prev, site: { ...nextSite, aliases: (nextSite.aliases || []).filter(item => item.id !== alias.id) } };
+      });
+      await refreshAll();
+    }
   }
 
   async function installManualSsl() {
@@ -2520,7 +2559,6 @@ function App() {
               <span className={`badge site-ssl-badge ${site.ssl_enabled ? 'ok' : ''}`}>{site.ssl_enabled ? 'SSL' : 'No SSL'}</span>
               <span>PHP <strong>{site.php_version}</strong></span>
               <span>Root <strong>{site.document_root || 'public_html'}</strong></span>
-              <span>Status <strong>{site.status}</strong></span>
             </div>
           </article>)}
         </div>
@@ -2537,6 +2575,9 @@ function App() {
     const fullConfig = nginxCustomEditing.mode === 'full';
     const selectedAppType = websiteSettingsForm.app_type || nginxCustomEditing.site?.app_type || 'wordpress';
     const rewriteDisabled = selectedAppType !== 'php';
+    const settingsSite = nginxCustomEditing.site || {};
+    const siteDomains = settingsSite.aliases || [];
+    const aliasMode = aliasModes[nginxCustomEditing.id] || 'alias';
     return <section className="section nginx-modal inline-nginx-editor">
       <div className="section-title">
         <div className="nginx-config-title">
@@ -2581,6 +2622,39 @@ function App() {
         </select></label>
         <div className="website-settings-actions">
           <button disabled={!!loading} onClick={saveWebsiteSettings}><Save size={14}/> Save settings</button>
+        </div>
+      </div>}
+      {!fullConfig && <div className="site-aliases settings-domain-manager">
+        <div className="domain-manager-head">
+          <h3>Domains</h3>
+          <p className="hint">Alias serves the same app. Redirect sends visitors to {nginxCustomEditing.domain}.</p>
+        </div>
+        <div className="alias-list">
+          <span className="alias-chip primary-domain"><Globe size={12}/>{nginxCustomEditing.domain}<span>Main</span></span>
+          {siteDomains.length === 0
+            ? <span className="alias-empty">No extra domains</span>
+            : siteDomains.map(alias => <span className="alias-chip" key={alias.id}>
+              <Globe size={12}/>{alias.domain}<span>{alias.mode === 'redirect' ? 'Redirect' : 'Alias'}</span>
+              <button type="button" disabled={!!loading} title={`Remove ${alias.domain}`} aria-label={`Remove ${alias.domain}`} onClick={() => deleteWebsiteAlias(settingsSite, alias)}><X size={12}/></button>
+            </span>)}
+        </div>
+        <div className="alias-form settings-domain-form">
+          <input
+            value={aliasDrafts[nginxCustomEditing.id] || ''}
+            onChange={e => setAliasDrafts(prev => ({ ...prev, [nginxCustomEditing.id]: e.target.value }))}
+            onKeyDown={e => { if (e.key === 'Enter') addWebsiteAlias(settingsSite); }}
+            placeholder="domain-alias.com"
+            disabled={!!loading}
+          />
+          <select
+            value={aliasMode}
+            onChange={e => setAliasModes(prev => ({ ...prev, [nginxCustomEditing.id]: e.target.value }))}
+            disabled={!!loading}
+          >
+            <option value="alias">Alias</option>
+            <option value="redirect">Redirect</option>
+          </select>
+          <button className="secondary-light" disabled={!!loading || !(aliasDrafts[nginxCustomEditing.id] || '').trim()} onClick={() => addWebsiteAlias(settingsSite)}><Plus size={14}/> Add domain</button>
         </div>
       </div>}
       <div className="custom-nginx-block">
@@ -2697,11 +2771,11 @@ function App() {
               <span className={`badge site-ssl-badge ${site.ssl_enabled ? 'ok' : ''}`}>{site.ssl_enabled ? 'SSL OK' : 'No SSL'}</span>
               <span>Type <strong>{site.app_type || 'wordpress'}</strong></span>
               <span>PHP <strong>{site.php_version}</strong></span>
-              <span>Status <strong>{site.status}</strong></span>
               {site.app_type === 'php' && site.nginx_rewrite_mode && site.nginx_rewrite_mode !== 'none' && <span>Rewrite <strong>{site.nginx_rewrite_mode}</strong></span>}
               {site.nginx_custom && <span className="badge ok">Custom Nginx</span>}
               {site.waf_enabled && <span className="badge ok">WAF</span>}
               {site.http_flood_enabled && <span className="badge ok">HTTP Flood</span>}
+              {(site.aliases || []).length > 0 && <span>Domains <strong>{(site.aliases || []).length + 1}</strong></span>}
             </div>
             <div className="site-actions" aria-label={`Website actions for ${site.domain}`}>
               <div className="site-feature-actions">

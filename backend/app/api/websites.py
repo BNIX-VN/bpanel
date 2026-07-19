@@ -12,8 +12,8 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.permissions import Role, ensure_role, is_admin_role
 from app.core.secrets import encrypt
-from app.models.entities import DatabaseAccount, User, Website
-from app.schemas.schemas import WebsiteCreate, WebsiteHttpFloodUpdate, WebsiteLogOut, WebsiteNginxConfig, WebsiteNginxCustom, WebsiteOut, WebsiteUpdate, WebsiteWafUpdate
+from app.models.entities import DatabaseAccount, User, Website, WebsiteAlias
+from app.schemas.schemas import WebsiteAliasCreate, WebsiteAliasOut, WebsiteCreate, WebsiteHttpFloodUpdate, WebsiteLogOut, WebsiteNginxConfig, WebsiteNginxCustom, WebsiteOut, WebsiteUpdate, WebsiteWafUpdate
 from app.services import file_manager, mariadb, nginx, site_users, ssl, storage_quota, waf, wordpress
 from app.services.audit import log_action
 
@@ -95,6 +95,107 @@ def _website_rewrite_mode(website: Website) -> str:
     return getattr(website, "nginx_rewrite_mode", "none") or "none"
 
 
+def _get_authorized_website(db: Session, website_id: int, current_user: User) -> Website:
+    website = db.query(Website).filter(Website.id == website_id).first()
+    if not website:
+        raise HTTPException(status_code=404, detail="Website not found")
+    if website.owner_id != current_user.id:
+        ensure_role(current_user.role, Role.admin)
+    return website
+
+
+def _alias_domains(website: Website) -> list[str]:
+    return [
+        alias.domain
+        for alias in sorted(getattr(website, "aliases", []) or [], key=lambda item: item.domain)
+        if getattr(alias, "mode", "alias") == "alias"
+    ]
+
+
+def _redirect_domains(website: Website) -> list[str]:
+    return [
+        alias.domain
+        for alias in sorted(getattr(website, "aliases", []) or [], key=lambda item: item.domain)
+        if getattr(alias, "mode", "alias") == "redirect"
+    ]
+
+
+def _ssl_domains(website: Website) -> list[str]:
+    return [*_alias_domains(website), *_redirect_domains(website)]
+
+
+def _unique_domains(domains: list[str] | tuple[str, ...]) -> list[str]:
+    unique: list[str] = []
+    seen: set[str] = set()
+    for domain in domains:
+        value = (domain or "").strip().lower()
+        if value and value not in seen:
+            unique.append(value)
+            seen.add(value)
+    return unique
+
+
+def _reserved_hostnames(db: Session, exclude_website_id: int | None = None, exclude_alias_id: int | None = None) -> set[str]:
+    names: set[str] = set()
+    for website in db.query(Website).all():
+        if exclude_website_id is not None and website.id == exclude_website_id:
+            continue
+        domain = (website.domain or "").strip().lower()
+        if not domain:
+            continue
+        names.add(domain)
+        names.add(f"www.{domain}")
+    for alias in db.query(WebsiteAlias).all():
+        if exclude_alias_id is not None and alias.id == exclude_alias_id:
+            continue
+        domain = (alias.domain or "").strip().lower()
+        if domain:
+            names.add(domain)
+    return names
+
+
+def _hostname_conflicts(db: Session, domain: str, *, exclude_website_id: int | None = None, exclude_alias_id: int | None = None) -> bool:
+    safe_domain = (domain or "").strip().lower()
+    if not safe_domain:
+        return True
+    return bool({safe_domain, f"www.{safe_domain}"} & _reserved_hostnames(db, exclude_website_id=exclude_website_id, exclude_alias_id=exclude_alias_id))
+
+
+def _rewrite_website_vhost(website: Website, **overrides) -> str:
+    app_type = overrides.pop("app_type", website.app_type or "wordpress")
+    php_version = overrides.pop("php_version", website.php_version)
+    root_path = overrides.pop("root_path", website.root_path)
+    linux_user = overrides.pop("linux_user", website.linux_user)
+    runtime_php_version = php_version if app_type in {"wordpress", "php"} else None
+    if "php_fpm_socket_override" in overrides:
+        php_fpm_socket_override = overrides.pop("php_fpm_socket_override")
+    elif runtime_php_version:
+        php_fpm_socket_override = site_users.site_php_fpm_socket(linux_user, root_path, runtime_php_version)
+    else:
+        php_fpm_socket_override = None
+    rewrite_kwargs = {
+        "app_type": app_type,
+        "php_version": php_version,
+        "custom_directives": overrides.pop("custom_directives", website.nginx_custom or ""),
+        "php_fpm_socket_override": php_fpm_socket_override,
+        "waf_enabled": overrides.pop("waf_enabled", website.waf_enabled),
+        "http_flood_enabled": overrides.pop("http_flood_enabled", website.http_flood_enabled),
+        "http_flood_config": overrides.pop("http_flood_config", website.http_flood_config or ""),
+        "document_root": overrides.pop("document_root", website.document_root or "public_html"),
+        "rewrite_mode": overrides.pop("rewrite_mode", _website_rewrite_mode(website)),
+        "aliases": overrides.pop("aliases", _alias_domains(website)),
+        "redirects": overrides.pop("redirects", _redirect_domains(website)),
+    }
+    if overrides.pop("include_ssl", True):
+        rewrite_kwargs.update(_rewrite_ssl_kwargs(website))
+    rewrite_kwargs.update(overrides)
+    return nginx.rewrite_vhost(
+        website.domain,
+        root_path,
+        **rewrite_kwargs,
+    )
+
+
 def _has_live_certificate(website: Website) -> bool:
     domain = website.domain
     if (
@@ -108,19 +209,9 @@ def _has_live_certificate(website: Website) -> bool:
             return False
     live_dir = Path("/etc/letsencrypt/live") / domain
     try:
-        if (live_dir / "fullchain.pem").is_file() and (live_dir / "privkey.pem").is_file():
-            return True
-    except OSError:
-        pass
-    vhost = Path("/etc/nginx/conf.d") / f"{domain}.conf"
-    try:
-        content = vhost.read_text(encoding="utf-8")
+        return (live_dir / "fullchain.pem").is_file() and (live_dir / "privkey.pem").is_file()
     except OSError:
         return False
-    return (
-        f"/etc/letsencrypt/live/{domain}/fullchain.pem" in content
-        and f"/etc/letsencrypt/live/{domain}/privkey.pem" in content
-    )
 
 
 def _sync_live_ssl_flags(db: Session, websites: list[Website]) -> list[Website]:
@@ -158,7 +249,7 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
     requested_owner_id = payload.owner_id
     if requested_owner_id is not None and requested_owner_id != current_user.id:
         ensure_role(current_user.role, Role.admin)
-    if db.query(Website).filter(Website.domain == payload.domain).first():
+    if _hostname_conflicts(db, payload.domain):
         raise HTTPException(status_code=409, detail="Domain already exists")
 
     if requested_owner_id is not None:
@@ -295,6 +386,79 @@ def list_websites(db: Session = Depends(get_db), current_user: User = Depends(ge
     return _sync_live_ssl_flags(db, websites)
 
 
+@router.get("/{website_id}/aliases", response_model=List[WebsiteAliasOut])
+def list_website_aliases(website_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    website = _get_authorized_website(db, website_id, current_user)
+    return sorted(website.aliases or [], key=lambda alias: alias.domain)
+
+
+@router.post("/{website_id}/aliases", response_model=WebsiteAliasOut)
+def create_website_alias(
+    website_id: int,
+    payload: WebsiteAliasCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    website = _get_authorized_website(db, website_id, current_user)
+    if payload.domain == website.domain or _hostname_conflicts(db, payload.domain):
+        raise HTTPException(status_code=409, detail="Domain alias already exists")
+    alias = WebsiteAlias(website_id=website.id, domain=payload.domain, mode=payload.mode)
+    db.add(alias)
+    db.flush()
+    try:
+        aliases = _alias_domains(website)
+        redirects = _redirect_domains(website)
+        if payload.mode == "alias" and payload.domain not in aliases:
+            aliases.append(payload.domain)
+        if payload.mode == "redirect" and payload.domain not in redirects:
+            redirects.append(payload.domain)
+        aliases = _unique_domains(aliases)
+        redirects = _unique_domains(redirects)
+        _rewrite_website_vhost(website, aliases=aliases, redirects=redirects)
+        if getattr(website, "ssl_mode", "none") == "letsencrypt":
+            result = ssl.issue_ssl(website.domain, [*aliases, *redirects])
+            if result.returncode != 0:
+                raise RuntimeError(_command_error(result))
+    except (RuntimeError, ValueError, FileNotFoundError) as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Cannot write Nginx config: {exc}") from exc
+    db.commit()
+    db.refresh(alias)
+    log_action(db, current_user.id, "create_website_alias", website.domain, payload.domain, request=request)
+    return alias
+
+
+@router.delete("/{website_id}/aliases/{alias_id}")
+def delete_website_alias(
+    website_id: int,
+    alias_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    website = _get_authorized_website(db, website_id, current_user)
+    alias = db.query(WebsiteAlias).filter(
+        WebsiteAlias.id == alias_id,
+        WebsiteAlias.website_id == website.id,
+    ).first()
+    if not alias:
+        raise HTTPException(status_code=404, detail="Alias not found")
+    domain = alias.domain
+    db.delete(alias)
+    db.flush()
+    try:
+        aliases = [item for item in _alias_domains(website) if item != domain]
+        redirects = [item for item in _redirect_domains(website) if item != domain]
+        _rewrite_website_vhost(website, aliases=aliases, redirects=redirects)
+    except (RuntimeError, ValueError, FileNotFoundError) as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Cannot write Nginx config: {exc}") from exc
+    db.commit()
+    log_action(db, current_user.id, "delete_website_alias", website.domain, domain, request=request)
+    return {"ok": True}
+
+
 @router.patch("/{website_id}", response_model=WebsiteOut)
 def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     website = db.query(Website).filter(Website.id == website_id).first()
@@ -312,25 +476,11 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
                 raise RuntimeError(_command_error(result))
             if website.http_flood_enabled:
                 _sync_http_flood_zones(db)
-            php_fpm_socket_override = site_users.site_php_fpm_socket(
-                website.linux_user,
-                website.root_path,
-                runtime_php_version,
-            )
             app_type = website.app_type or "wordpress"
-            nginx.rewrite_vhost(
-                website.domain,
-                website.root_path,
+            _rewrite_website_vhost(
+                website,
                 app_type=app_type,
                 php_version=payload.php_version,
-                custom_directives=website.nginx_custom or "",
-                php_fpm_socket_override=php_fpm_socket_override if runtime_php_version else None,
-                waf_enabled=website.waf_enabled,
-                http_flood_enabled=website.http_flood_enabled,
-                http_flood_config=website.http_flood_config or "",
-                document_root=website.document_root or "public_html",
-                rewrite_mode=_website_rewrite_mode(website),
-                **_rewrite_ssl_kwargs(website),
             )
         except (RuntimeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=f"Cannot write Nginx config: {exc}") from exc
@@ -356,19 +506,11 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
                 else "none" if next_app_type == "static"
                 else payload.nginx_rewrite_mode or _website_rewrite_mode(website)
             )
-            nginx.rewrite_vhost(
-                website.domain,
-                website.root_path,
+            _rewrite_website_vhost(
+                website,
                 app_type=next_app_type,
                 php_version=website.php_version,
-                custom_directives=website.nginx_custom or "",
-                php_fpm_socket_override=site_users.site_php_fpm_socket(website.linux_user, website.root_path, runtime_php_version),
-                waf_enabled=website.waf_enabled,
-                http_flood_enabled=website.http_flood_enabled,
-                http_flood_config=website.http_flood_config or "",
-                document_root=website.document_root or "public_html",
                 rewrite_mode=next_rewrite_mode,
-                **_rewrite_ssl_kwargs(website),
             )
         except (RuntimeError, ValueError, OSError) as exc:
             raise HTTPException(status_code=400, detail=f"Cannot change website mode: {exc}") from exc
@@ -387,19 +529,11 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
                 raise RuntimeError(_command_error(result))
             if website.http_flood_enabled:
                 _sync_http_flood_zones(db)
-            nginx.rewrite_vhost(
-                website.domain,
-                website.root_path,
+            _rewrite_website_vhost(
+                website,
                 app_type=app_type,
                 php_version=website.php_version,
-                custom_directives=website.nginx_custom or "",
-                php_fpm_socket_override=site_users.site_php_fpm_socket(website.linux_user, website.root_path, runtime_php_version),
-                waf_enabled=website.waf_enabled,
-                http_flood_enabled=website.http_flood_enabled,
-                http_flood_config=website.http_flood_config or "",
                 document_root=next_document_root,
-                rewrite_mode=_website_rewrite_mode(website),
-                **_rewrite_ssl_kwargs(website),
             )
         except (RuntimeError, ValueError, OSError) as exc:
             raise HTTPException(status_code=400, detail=f"Cannot change document root: {exc}") from exc
@@ -428,19 +562,12 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
                     raise RuntimeError(_command_error(result))
                 if website.http_flood_enabled:
                     _sync_http_flood_zones(db)
-                nginx.rewrite_vhost(
-                    website.domain,
-                    new_root_path,
+                _rewrite_website_vhost(
+                    website,
+                    root_path=new_root_path,
+                    linux_user=new_linux_user,
                     app_type=website.app_type or "wordpress",
                     php_version=website.php_version,
-                    custom_directives=website.nginx_custom or "",
-                    php_fpm_socket_override=site_users.site_php_fpm_socket(new_linux_user, new_root_path, runtime_php_version),
-                    waf_enabled=website.waf_enabled,
-                    http_flood_enabled=website.http_flood_enabled,
-                    http_flood_config=website.http_flood_config or "",
-                    document_root=website.document_root or "public_html",
-                    rewrite_mode=_website_rewrite_mode(website),
-                    **_rewrite_ssl_kwargs(website),
                 )
                 website.root_path = new_root_path
                 website.linux_user = new_linux_user
@@ -466,17 +593,10 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
                 raise RuntimeError(_command_error(result))
             if website.http_flood_enabled:
                 _sync_http_flood_zones(db)
-            nginx.rewrite_vhost(
-                website.domain,
-                website.root_path,
+            _rewrite_website_vhost(
+                website,
                 app_type=app_type,
                 php_version=website.php_version,
-                custom_directives=website.nginx_custom or "",
-                php_fpm_socket_override=site_users.site_php_fpm_socket(website.linux_user, website.root_path, runtime_php_version),
-                waf_enabled=website.waf_enabled,
-                http_flood_enabled=website.http_flood_enabled,
-                http_flood_config=website.http_flood_config or "",
-                document_root=website.document_root or "public_html",
                 rewrite_mode=next_rewrite_mode,
             )
         except (RuntimeError, ValueError, OSError, FileNotFoundError) as exc:
@@ -548,27 +668,15 @@ def reset_website_nginx_config(website_id: int, request: Request, db: Session = 
     website = db.query(Website).filter(Website.id == website_id).first()
     if not website:
         raise HTTPException(status_code=404, detail="Website not found")
-    app_type = website.app_type or "wordpress"
-    runtime_php_version = website.php_version if app_type in {"wordpress", "php"} else None
     try:
         result = waf.sync_website_rules(website)
         if result.returncode != 0:
             raise RuntimeError(_command_error(result))
         if website.http_flood_enabled:
             _sync_http_flood_zones(db)
-        nginx.rewrite_vhost(
-            website.domain,
-            website.root_path,
-            app_type=app_type,
-            php_version=website.php_version,
+        _rewrite_website_vhost(
+            website,
             custom_directives="",
-            php_fpm_socket_override=site_users.site_php_fpm_socket(website.linux_user, website.root_path, runtime_php_version),
-            waf_enabled=website.waf_enabled,
-            http_flood_enabled=website.http_flood_enabled,
-            http_flood_config=website.http_flood_config or "",
-            document_root=website.document_root or "public_html",
-            rewrite_mode=_website_rewrite_mode(website),
-            **_rewrite_ssl_kwargs(website),
         )
     except (RuntimeError, ValueError, FileNotFoundError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -665,14 +773,11 @@ def set_website_nginx_custom(website_id: int, payload: WebsiteNginxCustom, reque
 
 @router.delete("/{website_id}")
 def delete_website(website_id: int, request: Request, delete_files: bool = True, delete_database: bool = True, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    website = db.query(Website).filter(Website.id == website_id).first()
-    if not website:
-        raise HTTPException(status_code=404, detail="Website not found")
-    if website.owner_id != current_user.id:
-        ensure_role(current_user.role, Role.admin)
+    website = _get_authorized_website(db, website_id, current_user)
     db_item = db.query(DatabaseAccount).filter(DatabaseAccount.website_id == website.id).first()
     if delete_database and db_item:
         mariadb.drop_database(db_item.db_name, db_item.db_user)
+    db.query(WebsiteAlias).filter(WebsiteAlias.website_id == website.id).delete(synchronize_session=False)
     nginx.delete_wordpress_vhost(website.domain)
     if delete_files:
         if website.linux_user:
@@ -708,19 +813,7 @@ def fix_nginx_security(website_id: int, db: Session = Depends(get_db), current_u
             _sync_http_flood_zones(db)
         except RuntimeError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-    target = nginx.harden_existing_wordpress_vhost(
-        website.domain,
-        website.root_path,
-        website.php_version,
-        custom_directives=website.nginx_custom or "",
-        php_fpm_socket_override=site_users.site_php_fpm_socket(website.linux_user, website.root_path, website.php_version),
-        waf_enabled=website.waf_enabled,
-        http_flood_enabled=website.http_flood_enabled,
-        http_flood_config=website.http_flood_config or "",
-        document_root=website.document_root or "public_html",
-        rewrite_mode=_website_rewrite_mode(website),
-        **_rewrite_ssl_kwargs(website),
-    )
+    target = _rewrite_website_vhost(website)
     log_action(db, current_user.id, "fix_nginx_security", website.domain)
     return {"message": f"Rewrote Nginx security template for {website.domain}", "path": target}
 
@@ -734,45 +827,21 @@ def enable_ssl(website_id: int, db: Session = Depends(get_db), current_user: Use
         ensure_role(current_user.role, Role.admin)
     previous_manual_paths = (website.ssl_cert_path, website.ssl_key_path, website.ssl_ca_path)
     previous_snapshot = ssl.snapshot_manual_ssl_domain(website.domain)
-    app_type = website.app_type or "wordpress"
-    runtime_php_version = website.php_version if app_type in {"wordpress", "php"} else None
     if getattr(website, "ssl_mode", "none") == "manual":
         try:
-            nginx.rewrite_vhost(
-                website.domain,
-                website.root_path,
-                app_type=app_type,
-                php_version=website.php_version,
-                custom_directives=website.nginx_custom or "",
-                php_fpm_socket_override=site_users.site_php_fpm_socket(website.linux_user, website.root_path, runtime_php_version),
-                waf_enabled=website.waf_enabled,
-                http_flood_enabled=website.http_flood_enabled,
-                http_flood_config=website.http_flood_config or "",
-                document_root=website.document_root or "public_html",
-                rewrite_mode=_website_rewrite_mode(website),
+            _rewrite_website_vhost(
+                website,
                 preserve_existing_ssl=False,
+                include_ssl=False,
             )
         except (RuntimeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=f"Cannot prepare Nginx config for Let's Encrypt: {exc}") from exc
-    result = ssl.issue_ssl(website.domain)
+    result = ssl.issue_ssl(website.domain, _ssl_domains(website))
     if result.returncode != 0:
         if getattr(website, "ssl_mode", "none") == "manual":
             ssl.restore_manual_ssl(previous_snapshot)
             try:
-                nginx.rewrite_vhost(
-                    website.domain,
-                    website.root_path,
-                    app_type=app_type,
-                    php_version=website.php_version,
-                    custom_directives=website.nginx_custom or "",
-                    php_fpm_socket_override=site_users.site_php_fpm_socket(website.linux_user, website.root_path, runtime_php_version),
-                    waf_enabled=website.waf_enabled,
-                    http_flood_enabled=website.http_flood_enabled,
-                    http_flood_config=website.http_flood_config or "",
-                    document_root=website.document_root or "public_html",
-                    rewrite_mode=_website_rewrite_mode(website),
-                    **_rewrite_ssl_kwargs(website),
-                )
+                _rewrite_website_vhost(website)
             except (RuntimeError, ValueError):
                 pass
         raise HTTPException(status_code=500, detail=_command_error(result))
@@ -817,33 +886,19 @@ async def install_manual_ssl(
 
     try:
         previous_snapshot = ssl.snapshot_manual_ssl_domain(website.domain)
-        written = ssl.install_manual_ssl(website.domain, cert_raw, key_raw, ca_raw)
+        written = ssl.install_manual_ssl(website.domain, cert_raw, key_raw, ca_raw, aliases=_ssl_domains(website))
         website.ssl_enabled = True
         website.ssl_mode = "manual"
         website.ssl_cert_path = written["cert"]
         website.ssl_key_path = written["key"]
         website.ssl_ca_path = written["ca"]
         website.ssl_updated_at = datetime.utcnow()
-        app_type = website.app_type or "wordpress"
-        runtime_php_version = website.php_version if app_type in {"wordpress", "php"} else None
         result = waf.sync_website_rules(website)
         if result.returncode != 0:
             raise RuntimeError(_command_error(result))
         if website.http_flood_enabled:
             _sync_http_flood_zones(db)
-        nginx.rewrite_vhost(
-            website.domain,
-            website.root_path,
-            app_type=app_type,
-            php_version=website.php_version,
-            custom_directives=website.nginx_custom or "",
-            php_fpm_socket_override=site_users.site_php_fpm_socket(website.linux_user, website.root_path, runtime_php_version),
-            waf_enabled=website.waf_enabled,
-            http_flood_enabled=website.http_flood_enabled,
-            http_flood_config=website.http_flood_config or "",
-            document_root=website.document_root or "public_html",
-            **_rewrite_ssl_kwargs(website),
-        )
+        _rewrite_website_vhost(website)
     except (RuntimeError, ValueError) as exc:
         ssl.restore_manual_ssl(previous_snapshot)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
