@@ -1066,12 +1066,12 @@ function App() {
     const data = await request(`/panel-settings/malware-scan/jobs/${jobId}`, {}, '');
     if (!data) return null;
     setScanJob(data);
-    if (['done', 'infected', 'error'].includes(data.status)) {
+    if (['done', 'infected', 'error', 'interrupted'].includes(data.status)) {
       setScanLoading(false);
       setScanResults(data);
       if (data.status === 'infected' || data.infected > 0) {
         setNotice(`${data.infected} threat(s) found.`);
-      } else if (data.status === 'error') {
+      } else if (['error', 'interrupted'].includes(data.status)) {
         setError(data.error || data.message || 'Malware scan failed.');
       } else {
         setNotice(`Scan complete: ${data.scanned || 0} files scanned, no threats found.`);
@@ -1084,7 +1084,7 @@ function App() {
     const data = await request('/panel-settings/malware-scan/jobs/latest', { silent: true }, '');
     if (!data) return null;
     setScanJob(data);
-    if (['done', 'infected', 'error'].includes(data.status)) {
+    if (['done', 'infected', 'error', 'interrupted'].includes(data.status)) {
       setScanResults(data);
       setScanLoading(false);
     }

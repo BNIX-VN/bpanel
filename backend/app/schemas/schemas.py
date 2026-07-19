@@ -509,6 +509,7 @@ class MalwareScanJob(BaseModel):
     created_at: str = ""
     started_at: str = ""
     finished_at: str = ""
+    updated_at: str = ""
 
 
 class MalwareScanStatus(BaseModel):

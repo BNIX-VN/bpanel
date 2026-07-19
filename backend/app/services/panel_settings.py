@@ -290,7 +290,8 @@ import threading
 from app.services import malware_scan as _malware_scan
 
 MALWARE_JOBS: dict[str, dict] = {}
-MALWARE_JOBS_LOCK = threading.Lock()
+MALWARE_JOB_THREADS: dict[str, threading.Thread] = {}
+MALWARE_JOBS_LOCK = threading.RLock()
 MALWARE_JOBS_DIR = SETTINGS_DIR / "malware-scan-jobs"
 MAX_MALWARE_LOG_LINES = 1000
 
@@ -361,6 +362,28 @@ def _public_malware_job(job: dict) -> dict:
     return dict(job)
 
 
+def _finalize_stale_malware_job(job: dict) -> dict:
+    if job.get("status") not in {"queued", "running"}:
+        return job
+    with MALWARE_JOBS_LOCK:
+        thread = MALWARE_JOB_THREADS.get(job.get("job_id"))
+        if thread and thread.is_alive():
+            return job
+        MALWARE_JOB_THREADS.pop(job.get("job_id"), None)
+    job = dict(job)
+    job.update(
+        status="interrupted",
+        message="Scan interrupted. Start a new scan to continue.",
+        error="Scan worker is no longer running.",
+        finished_at=job.get("finished_at") or _now_iso(),
+        updated_at=_now_iso(),
+    )
+    _write_malware_job(job)
+    with MALWARE_JOBS_LOCK:
+        MALWARE_JOBS[job["job_id"]] = job
+    return job
+
+
 def _write_malware_job(job: dict) -> None:
     try:
         MALWARE_JOBS_DIR.mkdir(parents=True, exist_ok=True)
@@ -382,6 +405,7 @@ def _update_malware_job(job_id: str, **updates) -> None:
         job = MALWARE_JOBS.get(job_id)
         if not job:
             return
+        updates.setdefault("updated_at", _now_iso())
         job.update(updates)
         if len(job.get("log", [])) > MAX_MALWARE_LOG_LINES:
             job["log"] = job["log"][-MAX_MALWARE_LOG_LINES:]
@@ -395,6 +419,7 @@ def _append_malware_log(job_id: str, line: str) -> None:
         if not job:
             return
         job.setdefault("log", []).append(f"{_now_iso()} {line}")
+        job["updated_at"] = _now_iso()
         if len(job["log"]) > MAX_MALWARE_LOG_LINES:
             job["log"] = job["log"][-MAX_MALWARE_LOG_LINES:]
         snapshot = dict(job)
@@ -405,11 +430,11 @@ def get_malware_scan_job(job_id: str) -> dict:
     with MALWARE_JOBS_LOCK:
         job = MALWARE_JOBS.get(job_id)
         if job:
-            return _public_malware_job(job)
+            return _public_malware_job(_finalize_stale_malware_job(job))
     path = MALWARE_JOBS_DIR / f"{job_id}.json"
     try:
         if path.exists():
-            return json.loads(path.read_text(encoding="utf-8"))
+            return _public_malware_job(_finalize_stale_malware_job(json.loads(path.read_text(encoding="utf-8"))))
     except (OSError, json.JSONDecodeError):
         pass
     raise ValueError("Scan job not found")
@@ -427,13 +452,22 @@ def get_latest_malware_scan_job() -> dict:
                     continue
     except OSError:
         pass
-    unique = {job.get("job_id"): job for job in jobs if job.get("job_id")}
+    unique: dict[str, dict] = {}
+    for job in jobs:
+        job_id = job.get("job_id")
+        if not job_id:
+            continue
+        current = unique.get(job_id)
+        if not current or (job.get("updated_at") or job.get("started_at") or job.get("created_at") or "") >= (
+            current.get("updated_at") or current.get("started_at") or current.get("created_at") or ""
+        ):
+            unique[job_id] = job
     if not unique:
         raise ValueError("Scan job not found")
     running = [job for job in unique.values() if job.get("status") in {"queued", "running"}]
     candidates = running or list(unique.values())
     return _public_malware_job(
-        max(candidates, key=lambda job: job.get("started_at") or job.get("created_at") or "")
+        _finalize_stale_malware_job(max(candidates, key=lambda job: job.get("updated_at") or job.get("started_at") or job.get("created_at") or ""))
     )
 
 
@@ -479,9 +513,13 @@ def start_scan_job(website_id: int | None, db) -> dict:
         "created_at": _now_iso(),
         "started_at": "",
         "finished_at": "",
+        "updated_at": _now_iso(),
     }
     _remember_malware_job(job)
-    threading.Thread(target=_run_scan_job, args=(job_id, targets), daemon=True).start()
+    thread = threading.Thread(target=_run_scan_job, args=(job_id, targets), daemon=True)
+    with MALWARE_JOBS_LOCK:
+        MALWARE_JOB_THREADS[job_id] = thread
+    thread.start()
     return _public_malware_job(job)
 
 
@@ -555,6 +593,9 @@ def _run_scan_job(job_id: str, targets: list[dict]) -> None:
             finished_at=_now_iso(),
         )
         _append_malware_log(job_id, f"ERROR scan failed: {exc}")
+    finally:
+        with MALWARE_JOBS_LOCK:
+            MALWARE_JOB_THREADS.pop(job_id, None)
 
 
 def run_scan(website_id: int, db) -> dict:
