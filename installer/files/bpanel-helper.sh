@@ -2052,6 +2052,11 @@ case "$cmd" in
     echo "clamav-daemon started"
     ;;
 
+  clamav-stop)
+    systemctl disable --now clamav-daemon 2>/dev/null || systemctl stop clamav-daemon
+    echo "clamav-daemon stopped"
+    ;;
+
   waf-update)
     write_modsec_main_conf
     nginx -t

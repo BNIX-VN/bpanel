@@ -329,7 +329,16 @@ def set_malware_scan(enabled: bool) -> dict:
         return current
     _persist_malware_enabled(enabled)
     current = current_settings()
-    current["message"] = "Malware scanning " + ("enabled" if enabled else "disabled")
+    if enabled:
+        current["message"] = "Malware scanning enabled"
+    else:
+        stopped = _malware_scan.stop_clamd()
+        current = current_settings()
+        current["message"] = (
+            "Malware scanning disabled and clamav-daemon stopped"
+            if stopped
+            else "Malware scanning disabled, but clamav-daemon could not be stopped"
+        )
     return current
 
 
