@@ -153,6 +153,15 @@ def run_malware_scan(
     return result
 
 
+@router.get("/malware-scan/jobs/latest", response_model=MalwareScanJob)
+def get_latest_malware_scan_job(current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.admin)
+    try:
+        return panel_settings.get_latest_malware_scan_job()
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.get("/malware-scan/jobs/{job_id}", response_model=MalwareScanJob)
 def get_malware_scan_job(job_id: str, current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.admin)

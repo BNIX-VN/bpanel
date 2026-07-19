@@ -415,6 +415,28 @@ def get_malware_scan_job(job_id: str) -> dict:
     raise ValueError("Scan job not found")
 
 
+def get_latest_malware_scan_job() -> dict:
+    with MALWARE_JOBS_LOCK:
+        jobs = list(MALWARE_JOBS.values())
+    try:
+        if MALWARE_JOBS_DIR.exists():
+            for path in MALWARE_JOBS_DIR.glob("*.json"):
+                try:
+                    jobs.append(json.loads(path.read_text(encoding="utf-8")))
+                except (OSError, json.JSONDecodeError):
+                    continue
+    except OSError:
+        pass
+    unique = {job.get("job_id"): job for job in jobs if job.get("job_id")}
+    if not unique:
+        raise ValueError("Scan job not found")
+    running = [job for job in unique.values() if job.get("status") in {"queued", "running"}]
+    candidates = running or list(unique.values())
+    return _public_malware_job(
+        max(candidates, key=lambda job: job.get("started_at") or job.get("created_at") or "")
+    )
+
+
 def _select_scan_websites(website_id: int | None, db) -> list:
     from app.models.entities import Website
 

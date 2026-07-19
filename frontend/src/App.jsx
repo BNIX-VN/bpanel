@@ -592,11 +592,12 @@ function App() {
     try {
       setError('');
       if (label) setLoading(label);
-      const method = (options.method || 'GET').toUpperCase();
-      const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
-      const headers = isFormData ? { ...(options.headers || {}) } : {
+      const { silent, ...fetchOptions } = options;
+      const method = (fetchOptions.method || 'GET').toUpperCase();
+      const isFormData = typeof FormData !== 'undefined' && fetchOptions.body instanceof FormData;
+      const headers = isFormData ? { ...(fetchOptions.headers || {}) } : {
         'Content-Type': 'application/json',
-        ...(options.headers || {}),
+        ...(fetchOptions.headers || {}),
       };
       // CSRF: echo the bpanel_csrf cookie back in a header for mutating
       // requests. The backend rejects mismatches when the request was
@@ -606,7 +607,7 @@ function App() {
         if (csrf) headers['X-CSRF-Token'] = csrf;
       }
       const res = await fetch(`${API}${path}`, {
-        ...options,
+        ...fetchOptions,
         credentials: 'include',
         headers,
       });
@@ -614,7 +615,7 @@ function App() {
       let data;
       try { data = text ? JSON.parse(text) : {}; } catch { data = { detail: text || `HTTP ${res.status}` }; }
       if (!res.ok && handleAuthExpired(res.status, data.detail)) return null;
-      if (!res.ok) setError(formatApiError(data.detail, `Request failed with status ${res.status}`));
+      if (!res.ok && !silent) setError(formatApiError(data.detail, `Request failed with status ${res.status}`));
       if (res.ok && data?.message) setNotice(data.message);
       return res.ok ? data : null;
     } catch (err) {
@@ -1075,6 +1076,17 @@ function App() {
       } else {
         setNotice(`Scan complete: ${data.scanned || 0} files scanned, no threats found.`);
       }
+    }
+    return data;
+  }
+
+  async function loadLatestMalwareScanJob() {
+    const data = await request('/panel-settings/malware-scan/jobs/latest', { silent: true }, '');
+    if (!data) return null;
+    setScanJob(data);
+    if (['done', 'infected', 'error'].includes(data.status)) {
+      setScanResults(data);
+      setScanLoading(false);
     }
     return data;
   }
@@ -2281,7 +2293,7 @@ function App() {
     if (isAuthenticated && page === 'firewall') { loadFirewall(); loadFirewallBlocklists(); }
     if (isAuthenticated && page === 'waf') loadWafRules();
     if (isAuthenticated && page === 'updates' && currentUser?.role === 'admin') loadUpdates();
-    if (isAuthenticated && page === 'security') { loadTwoFactorStatus(); loadMalwareScanStatus(); if (!websites.length) refreshAll(); }
+    if (isAuthenticated && page === 'security') { loadTwoFactorStatus(); loadMalwareScanStatus(); loadLatestMalwareScanJob(); if (!websites.length) refreshAll(); }
     if (isAuthenticated && page === 'settings') loadPanelSettings();
     if (isAuthenticated && page === 'backups' && currentUser?.role === 'admin') { loadUsers(); loadSftpTargets(); loadBackupSchedules(); loadRestoreBackups(); }
   }, [isAuthenticated, page, currentUser?.role]);
