@@ -3380,9 +3380,19 @@ function App() {
       const stamp = job.finished_at || job.updated_at || job.started_at || job.created_at || '';
       if (!stamp) return 'No timestamp';
       const date = new Date(stamp);
-      return Number.isNaN(date.getTime()) ? stamp : date.toLocaleString();
+      return Number.isNaN(date.getTime()) ? stamp : new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Asia/Ho_Chi_Minh',
+        hour12: false,
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+      }).format(date).replace(',', '');
     };
     const scanJobDetail = job => `${job.scanned || 0}/${job.total_files || job.scanned || 0} files, ${job.infected || 0} threats, ${job.errors || 0} errors`;
+    const scanJobMeta = job => `${scanJobStamp(job)} / ${scanJobDetail(job)}`;
     const scanJobBadgeClass = job => {
       if (job.status === 'done') return 'badge ok';
       if (job.status === 'infected') return 'badge danger';
@@ -3485,8 +3495,7 @@ function App() {
                 <Clock size={14}/>
                 <span className="scan-history-main">
                   <strong>{scanJobTitle(job)}</strong>
-                  <small>{scanJobStamp(job)}</small>
-                  <small>{scanJobDetail(job)}</small>
+                  <small>{scanJobMeta(job)}</small>
                 </span>
                 <span className={scanJobBadgeClass(job)}>{job.status}</span>
               </button>)}

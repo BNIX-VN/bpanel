@@ -797,10 +797,10 @@ button:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
 .scan-history-head strong{font-size:14px}
 .scan-history-head span{font-size:12px;color:var(--text-muted);font-weight:700}
 .scan-history-list{display:grid;gap:8px;max-height:320px;overflow:auto;padding-right:4px}
-.scan-history-item{display:grid;grid-template-columns:24px minmax(0,1fr) max-content;align-items:center;gap:10px;width:100%;min-height:58px;padding:10px 12px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:var(--radius-sm);box-shadow:none;text-align:left;overflow:visible}
+.scan-history-item{display:grid;grid-template-columns:24px minmax(0,1fr) max-content;align-items:center;gap:10px;width:100%;min-height:50px;padding:8px 12px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:var(--radius-sm);box-shadow:none;text-align:left;overflow:visible}
 .scan-history-item:hover:not(:disabled),.scan-history-item.active{background:#f8fbff;border-color:#bfdbfe;box-shadow:none}
 .scan-history-item svg{color:var(--text-muted);justify-self:center;flex:none}
-.scan-history-main{display:grid;gap:3px;min-width:0;color:var(--text)}
+.scan-history-main{display:grid;gap:2px;min-width:0;color:var(--text)}
 .scan-history-main strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:1.3}
 .scan-history-main small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-muted);font-size:12px;font-weight:600;line-height:1.35}
 .scan-history-item>.badge{justify-self:end}
