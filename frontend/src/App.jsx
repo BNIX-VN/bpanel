@@ -618,7 +618,7 @@ function App() {
       try { data = text ? JSON.parse(text) : {}; } catch { data = { detail: text || `HTTP ${res.status}` }; }
       if (!res.ok && handleAuthExpired(res.status, data.detail)) return null;
       if (!res.ok && !silent) setError(formatApiError(data.detail, `Request failed with status ${res.status}`));
-      if (res.ok && data?.message) setNotice(data.message);
+      if (res.ok && data?.message && !silent) setNotice(data.message);
       return res.ok ? data : null;
     } catch (err) {
       setError(`Cannot connect to the ${panelSettings.app_name || 'BPanel'} API at ${API}. Check bpanel-api and the panel port.`);
@@ -2313,7 +2313,11 @@ function App() {
     if (isAuthenticated && page === 'firewall') { loadFirewall(); loadFirewallBlocklists(); }
     if (isAuthenticated && page === 'waf') loadWafRules();
     if (isAuthenticated && page === 'updates' && currentUser?.role === 'admin') loadUpdates();
-    if (isAuthenticated && page === 'security') { loadTwoFactorStatus(); loadMalwareScanStatus(); loadMalwareScanJobs(); loadLatestMalwareScanJob(); if (!websites.length) refreshAll(); }
+    if (isAuthenticated && page === 'security') {
+      loadTwoFactorStatus();
+      if (isAdmin) { loadMalwareScanStatus(); loadMalwareScanJobs(); loadLatestMalwareScanJob(); }
+      if (!websites.length) refreshAll();
+    }
     if (isAuthenticated && page === 'settings') loadPanelSettings();
     if (isAuthenticated && page === 'backups' && currentUser?.role === 'admin') { loadUsers(); loadSftpTargets(); loadBackupSchedules(); loadRestoreBackups(); }
   }, [isAuthenticated, page, currentUser?.role]);
@@ -3429,7 +3433,7 @@ function App() {
         </div>}
       </section>
 
-      <section className="section">
+      {isAdmin && <section className="section">
         <div className="section-title">
           <div>
             <h2>Malware Scanner (ClamAV)</h2>
@@ -3524,7 +3528,7 @@ function App() {
             {activeScanJob.log && activeScanJob.log.length > 0 && <pre className="malware-scan-log">{activeScanJob.log.join('\n')}</pre>}
           </div>}
         </div>}
-      </section>
+      </section>}
     </>;
   }
 
