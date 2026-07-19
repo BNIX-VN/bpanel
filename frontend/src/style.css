@@ -782,6 +782,40 @@ button:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
 .login-card h1{letter-spacing:0;color:var(--text)}
 .create-site-row{grid-template-columns:1.4fr 1fr 110px 1.2fr 1fr 1fr auto}
 
+/* Malware scanner */
+.badge.warn{background:#fffbeb;color:#92400e;border-color:#fde68a}
+.badge.danger{background:#fef2f2;color:#991b1b;border-color:#fecaca}
+.malware-scan-panel{gap:14px;margin-top:16px}
+.malware-daemon-warning{display:grid;grid-template-columns:minmax(0,1fr) max-content;align-items:center;gap:10px;padding:10px 12px;background:#fffbeb;border:1px solid #fde68a;border-radius:var(--radius-sm)}
+.malware-scan-runner{display:grid;gap:10px}
+.malware-scan-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;min-width:0}
+.malware-scan-head>div{display:grid;gap:4px;min-width:0}
+.malware-scan-controls{display:grid;grid-template-columns:minmax(220px,1fr) max-content;gap:8px;align-items:center}
+.malware-scan-controls select{width:100%;max-width:none;min-width:0}
+.scan-history-wrap{display:grid;gap:8px;padding-top:2px}
+.scan-history-head{display:flex;justify-content:space-between;align-items:center;gap:10px;color:var(--text)}
+.scan-history-head strong{font-size:14px}
+.scan-history-head span{font-size:12px;color:var(--text-muted);font-weight:700}
+.scan-history-list{display:grid;gap:8px;max-height:320px;overflow:auto;padding-right:4px}
+.scan-history-item{display:grid;grid-template-columns:24px minmax(0,1fr) max-content;align-items:center;gap:10px;width:100%;min-height:58px;padding:10px 12px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:var(--radius-sm);box-shadow:none;text-align:left;overflow:visible}
+.scan-history-item:hover:not(:disabled),.scan-history-item.active{background:#f8fbff;border-color:#bfdbfe;box-shadow:none}
+.scan-history-item svg{color:var(--text-muted);justify-self:center;flex:none}
+.scan-history-main{display:grid;gap:3px;min-width:0;color:var(--text)}
+.scan-history-main strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:1.3}
+.scan-history-main small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-muted);font-size:12px;font-weight:600;line-height:1.35}
+.scan-history-item>.badge{justify-self:end}
+.scan-status-panel{display:grid;gap:10px;margin-top:2px;padding-top:2px}
+.scan-status-summary{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:8px}
+.scan-status-summary>span{display:grid;gap:4px;min-width:0;padding:9px 10px;background:var(--surface-alt);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;color:var(--text)}
+.scan-status-summary strong{display:block;color:var(--text-muted);font-size:11px;line-height:1.2;text-transform:none}
+.scan-status-summary .badge{justify-self:start}
+.scan-threat-list{display:grid;max-height:220px;overflow:auto;background:#fff7f7;border:1px solid #fecaca;border-radius:var(--radius-sm)}
+.scan-threat-item{display:grid;gap:3px;padding:9px 12px;border-bottom:1px solid #fee2e2;font-size:13px;min-width:0}
+.scan-threat-item:last-child{border-bottom:0}
+.scan-threat-item strong{color:#991b1b;line-height:1.3}
+.scan-threat-item span{color:var(--text-secondary);overflow-wrap:anywhere}
+.malware-scan-log{max-height:360px;margin-top:0;color:#f8fafc;background:#07111f;border-color:#1e293b}
+
 @media(max-width:1250px){
   .site-card{grid-template-columns:1fr;align-items:start}
   .site-card>.actions{grid-template-columns:repeat(3,minmax(0,1fr));justify-content:stretch;width:100%}
@@ -829,6 +863,9 @@ button:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
   .stat-card,.card{padding:16px;border-radius:var(--radius-lg)}
   .stat-card strong{font-size:28px}
   .form-row,.user-form,.user-create-card,.assign-row,.toolbar,.editor-tools,.firewall-form,.sftp-run-row,.sftp-form,.security-grid,.security-grid.one,.create-site-row{grid-template-columns:1fr}
+  .malware-daemon-warning,.malware-scan-head,.malware-scan-controls{display:grid;grid-template-columns:1fr}
+  .malware-daemon-warning button,.malware-scan-head button,.malware-scan-controls button{width:100%}
+  .scan-status-summary{grid-template-columns:1fr 1fr}
   .firewall-delete-inline{grid-template-columns:1fr;max-width:none}
   .sftp-form textarea{grid-column:1}
   .actions{display:grid;grid-template-columns:1fr;align-items:stretch}
@@ -856,6 +893,9 @@ button:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
   .account-pill strong{max-width:78px}
   .section,.user-create-card{padding:12px}
   .site-head .actions{grid-template-columns:1fr}
+  .scan-history-item{grid-template-columns:22px minmax(0,1fr);align-items:start}
+  .scan-history-item>.badge{grid-column:2;justify-self:start}
+  .scan-status-summary{grid-template-columns:1fr}
   .notice,.error,.loading{font-size:13px}
   .app-toast-stack{top:68px;right:10px;width:calc(100vw - 20px)}
   .user-edit-grid{grid-template-columns:1fr}

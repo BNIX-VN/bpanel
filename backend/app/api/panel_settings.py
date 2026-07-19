@@ -7,6 +7,7 @@ from app.core.permissions import Role, ensure_role
 from app.models.entities import User
 from app.schemas.schemas import (
     MalwareScanJob,
+    MalwareScanJobsOut,
     MalwareScanRun,
     MalwareScanStatus,
     MalwareScanToggle,
@@ -151,6 +152,12 @@ def run_malware_scan(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     log_action(db, current_user.id, "malware_scan_run", "all" if payload.all else str(payload.website_id), request=request)
     return result
+
+
+@router.get("/malware-scan/jobs", response_model=MalwareScanJobsOut)
+def list_malware_scan_jobs(current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.admin)
+    return {"jobs": panel_settings.list_malware_scan_jobs()}
 
 
 @router.get("/malware-scan/jobs/latest", response_model=MalwareScanJob)

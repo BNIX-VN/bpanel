@@ -512,6 +512,10 @@ class MalwareScanJob(BaseModel):
     updated_at: str = ""
 
 
+class MalwareScanJobsOut(BaseModel):
+    jobs: list[MalwareScanJob] = []
+
+
 class MalwareScanStatus(BaseModel):
     installed: bool = False
     clamd_running: bool = False

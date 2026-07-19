@@ -444,6 +444,7 @@ function App() {
   const [scanTargetWebsiteId, setScanTargetWebsiteId] = useState('');
   const [scanResults, setScanResults] = useState(null);
   const [scanJob, setScanJob] = useState(null);
+  const [scanJobs, setScanJobs] = useState([]);
   const [scanLoading, setScanLoading] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
@@ -563,6 +564,7 @@ function App() {
     setScanTargetWebsiteId('');
     setScanResults(null);
     setScanJob(null);
+    setScanJobs([]);
     setScanLoading(false);
     setUpdatesStatus(null);
     setFirewallBlocklists(null);
@@ -1055,6 +1057,7 @@ function App() {
       }, 'Starting malware scan...');
       if (data) {
         setScanJob(data);
+        await loadMalwareScanJobs();
         setNotice('Malware scan started.');
       }
     } finally {
@@ -1065,10 +1068,10 @@ function App() {
   async function loadMalwareScanJob(jobId) {
     const data = await request(`/panel-settings/malware-scan/jobs/${jobId}`, {}, '');
     if (!data) return null;
-    setScanJob(data);
     if (['done', 'infected', 'error', 'interrupted'].includes(data.status)) {
       setScanLoading(false);
-      setScanResults(data);
+      setScanJob(null);
+      setScanResults(null);
       if (data.status === 'infected' || data.infected > 0) {
         setNotice(`${data.infected} threat(s) found.`);
       } else if (['error', 'interrupted'].includes(data.status)) {
@@ -1076,17 +1079,34 @@ function App() {
       } else {
         setNotice(`Scan complete: ${data.scanned || 0} files scanned, no threats found.`);
       }
+      await loadMalwareScanJobs();
+    } else {
+      setScanJob(data);
     }
     return data;
+  }
+
+  async function loadMalwareScanJobs() {
+    const data = await request('/panel-settings/malware-scan/jobs', { silent: true }, '');
+    if (data?.jobs) setScanJobs(data.jobs);
+    return data?.jobs || [];
+  }
+
+  function showMalwareScanJob(job) {
+    setScanJob(job);
+    setScanResults(job);
+    setScanLoading(['queued', 'running'].includes(job?.status));
   }
 
   async function loadLatestMalwareScanJob() {
     const data = await request('/panel-settings/malware-scan/jobs/latest', { silent: true }, '');
     if (!data) return null;
-    setScanJob(data);
     if (['done', 'infected', 'error', 'interrupted'].includes(data.status)) {
-      setScanResults(data);
+      setScanJob(null);
+      setScanResults(null);
       setScanLoading(false);
+    } else {
+      setScanJob(data);
     }
     return data;
   }
@@ -2293,7 +2313,7 @@ function App() {
     if (isAuthenticated && page === 'firewall') { loadFirewall(); loadFirewallBlocklists(); }
     if (isAuthenticated && page === 'waf') loadWafRules();
     if (isAuthenticated && page === 'updates' && currentUser?.role === 'admin') loadUpdates();
-    if (isAuthenticated && page === 'security') { loadTwoFactorStatus(); loadMalwareScanStatus(); loadLatestMalwareScanJob(); if (!websites.length) refreshAll(); }
+    if (isAuthenticated && page === 'security') { loadTwoFactorStatus(); loadMalwareScanStatus(); loadMalwareScanJobs(); loadLatestMalwareScanJob(); if (!websites.length) refreshAll(); }
     if (isAuthenticated && page === 'settings') loadPanelSettings();
     if (isAuthenticated && page === 'backups' && currentUser?.role === 'admin') { loadUsers(); loadSftpTargets(); loadBackupSchedules(); loadRestoreBackups(); }
   }, [isAuthenticated, page, currentUser?.role]);
@@ -3353,6 +3373,22 @@ function App() {
     const mwEnabled = Boolean(mw.enabled);
     const activeScanJob = scanJob || scanResults || {};
     const scanRunning = ['queued', 'running'].includes(scanJob?.status);
+    const scanJobTitle = job => (job.domains && job.domains.length > 0)
+      ? (job.domains.length === 1 ? job.domains[0] : `${job.domains.length} websites`)
+      : (job.scope === 'all' ? 'All websites' : 'Scan job');
+    const scanJobStamp = job => {
+      const stamp = job.finished_at || job.updated_at || job.started_at || job.created_at || '';
+      if (!stamp) return 'No timestamp';
+      const date = new Date(stamp);
+      return Number.isNaN(date.getTime()) ? stamp : date.toLocaleString();
+    };
+    const scanJobDetail = job => `${job.scanned || 0}/${job.total_files || job.scanned || 0} files, ${job.infected || 0} threats, ${job.errors || 0} errors`;
+    const scanJobBadgeClass = job => {
+      if (job.status === 'done') return 'badge ok';
+      if (job.status === 'infected') return 'badge danger';
+      if (['error', 'interrupted'].includes(job.status)) return 'badge bad';
+      return 'badge warn';
+    };
     return <>
       <section className="section">
         <div className="section-title">
@@ -3409,47 +3445,75 @@ function App() {
           </div>
         </div>
 
-        {mwInstalled && <div className="info-box" style={{marginTop:16}}>
-          {!mw.clamd_running && <div style={{marginBottom:12}}>
-            <p className="hint" style={{marginBottom:8}}>ClamAV daemon is not running. Start it to enable scanning.</p>
+        {mwInstalled && <div className="info-box malware-scan-panel">
+          {!mw.clamd_running && <div className="malware-daemon-warning">
+            <p className="hint">ClamAV daemon is not running. Start it to enable scanning.</p>
             <button disabled={!!loading} onClick={startClamavDaemon}><Shield size={14}/> Start ClamAV</button>
           </div>}
-          {mw.clamd_running && <>
-          <strong>Scan a website now</strong>
-          <p className="hint" style={{marginBottom:8}}>Select a website and run an on-demand malware scan.</p>
-          <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
-            <select value={scanTargetWebsiteId} onChange={e => { setScanTargetWebsiteId(e.target.value); setScanResults(null); setScanJob(null); }}>
-              <option value="">-- Select website --</option>
-              <option value="all">All websites</option>
-              {websites.map(w => <option key={w.id} value={w.id}>{w.domain}</option>)}
-            </select>
-            <button disabled={!!loading || scanRunning || !scanTargetWebsiteId} onClick={runMalwareScan}>
-              {scanRunning || scanLoading ? <><RefreshCw size={14} className="spin"/> Scanning...</> : <><Search size={14}/> Scan Now</>}
-            </button>
-          </div>
-          {(scanJob || scanResults) && <div style={{marginTop:12}}>
-            <div className="progress-bar" style={{marginBottom:8}}>
+          {mw.clamd_running && <div className="malware-scan-runner">
+            <div className="malware-scan-head">
+              <div>
+                <strong>Scan a website now</strong>
+                <p className="hint">Select a website and run an on-demand malware scan.</p>
+              </div>
+              <button className="secondary" disabled={!!loading} onClick={loadMalwareScanJobs}><RefreshCw size={14}/> History</button>
+            </div>
+            <div className="malware-scan-controls">
+              <select value={scanTargetWebsiteId} onChange={e => { setScanTargetWebsiteId(e.target.value); setScanResults(null); setScanJob(null); }}>
+                <option value="">-- Select website --</option>
+                <option value="all">All websites</option>
+                {websites.map(w => <option key={w.id} value={w.id}>{w.domain}</option>)}
+              </select>
+              <button disabled={!!loading || scanRunning || !scanTargetWebsiteId} onClick={runMalwareScan}>
+                {scanRunning || scanLoading ? <><RefreshCw size={14} className="spin"/> Scanning...</> : <><Search size={14}/> Scan Now</>}
+              </button>
+            </div>
+          </div>}
+          {scanJobs.length > 0 && <div className="scan-history-wrap">
+            <div className="scan-history-head">
+              <strong>Scan history</strong>
+              <span>{scanJobs.length} saved</span>
+            </div>
+            <div className="scan-history-list">
+              {scanJobs.slice(0, 8).map(job => <button
+                key={job.job_id}
+                className={`scan-history-item ${job.status}${activeScanJob.job_id === job.job_id ? ' active' : ''}`}
+                onClick={() => showMalwareScanJob(job)}
+                disabled={!!loading}
+                type="button"
+              >
+                <Clock size={14}/>
+                <span className="scan-history-main">
+                  <strong>{scanJobTitle(job)}</strong>
+                  <small>{scanJobStamp(job)}</small>
+                  <small>{scanJobDetail(job)}</small>
+                </span>
+                <span className={scanJobBadgeClass(job)}>{job.status}</span>
+              </button>)}
+            </div>
+          </div>}
+          {(scanJob || scanResults) && <div className="scan-status-panel">
+            <div className="progress-bar">
               <div className="progress-bar-fill" style={{width: `${Number(activeScanJob.progress_percent) || 0}%`}} />
             </div>
-            <div style={{display:'flex',gap:16,marginBottom:8}}>
-              <span><strong>Progress:</strong> {Number(activeScanJob.progress_percent) || 0}%</span>
-              <span><strong>Files scanned:</strong> {activeScanJob.scanned || 0}/{activeScanJob.total_files || activeScanJob.scanned || 0}</span>
-              <span><strong>Threats found:</strong> {activeScanJob.infected > 0
+            <div className="scan-status-summary">
+              <span><strong>Progress</strong>{Number(activeScanJob.progress_percent) || 0}%</span>
+              <span><strong>Files scanned</strong>{activeScanJob.scanned || 0}/{activeScanJob.total_files || activeScanJob.scanned || 0}</span>
+              <span><strong>Threats found</strong>{activeScanJob.infected > 0
                 ? <span className="badge danger">{activeScanJob.infected}</span>
                 : <span className="badge ok">0</span>}
               </span>
-              <span><strong>Errors:</strong> {activeScanJob.errors || 0}</span>
+              <span><strong>Errors</strong>{activeScanJob.errors || 0}</span>
             </div>
-            {activeScanJob.message && <p className="hint" style={{marginBottom:8}}>{activeScanJob.message}</p>}
-            {activeScanJob.threats && activeScanJob.threats.length > 0 && <div style={{maxHeight:200,overflow:'auto',background:'var(--surface-2, #1a1a2e)',borderRadius:6,padding:'8px 12px'}}>
-              {activeScanJob.threats.map((t, i) => <div key={i} style={{padding:'4px 0',borderBottom:'1px solid var(--border, #333)',fontSize:13}}>
-                <span style={{color:'var(--danger, #ff4444)',fontWeight:600}}>{t.signature}</span>
-                <span className="hint" style={{marginLeft:8}}>{t.domain ? `${t.domain}: ` : ''}{t.path}</span>
+            {activeScanJob.message && <p className="hint">{activeScanJob.message}</p>}
+            {activeScanJob.threats && activeScanJob.threats.length > 0 && <div className="scan-threat-list">
+              {activeScanJob.threats.map((t, i) => <div key={i} className="scan-threat-item">
+                <strong>{t.signature}</strong>
+                <span>{t.domain ? `${t.domain}: ` : ''}{t.path}</span>
               </div>)}
             </div>}
             {activeScanJob.log && activeScanJob.log.length > 0 && <pre className="malware-scan-log">{activeScanJob.log.join('\n')}</pre>}
           </div>}
-          </>}
         </div>}
       </section>
     </>;

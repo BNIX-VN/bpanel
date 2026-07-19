@@ -471,6 +471,37 @@ def get_latest_malware_scan_job() -> dict:
     )
 
 
+def list_malware_scan_jobs(limit: int = 50) -> list[dict]:
+    jobs = []
+    with MALWARE_JOBS_LOCK:
+        jobs.extend(MALWARE_JOBS.values())
+    try:
+        if MALWARE_JOBS_DIR.exists():
+            for path in MALWARE_JOBS_DIR.glob("*.json"):
+                try:
+                    jobs.append(json.loads(path.read_text(encoding="utf-8")))
+                except (OSError, json.JSONDecodeError):
+                    continue
+    except OSError:
+        pass
+    unique: dict[str, dict] = {}
+    for job in jobs:
+        job_id = job.get("job_id")
+        if not job_id:
+            continue
+        current = unique.get(job_id)
+        stamp = job.get("updated_at") or job.get("started_at") or job.get("created_at") or ""
+        current_stamp = current.get("updated_at") or current.get("started_at") or current.get("created_at") or "" if current else ""
+        if not current or stamp >= current_stamp:
+            unique[job_id] = job
+    sorted_jobs = sorted(
+        (_finalize_stale_malware_job(job) for job in unique.values()),
+        key=lambda job: job.get("updated_at") or job.get("started_at") or job.get("created_at") or "",
+        reverse=True,
+    )
+    return [_public_malware_job(job) for job in sorted_jobs[: max(1, min(limit, 200))]]
+
+
 def _select_scan_websites(website_id: int | None, db) -> list:
     from app.models.entities import Website
 
