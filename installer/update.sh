@@ -231,6 +231,10 @@ reset_worktree_to_ref() {
 }
 
 current_panel_version() {
+  if [[ -f "$APP_DIR/VERSION" ]]; then
+    tr -d '[:space:]' <"$APP_DIR/VERSION"
+    return 0
+  fi
   sed -nE 's/^APP_VERSION = "([^"]+)"/\1/p' "$APP_DIR/backend/app/core/version.py" 2>/dev/null | head -n 1
 }
 
@@ -807,6 +811,9 @@ if command -v rsync >/dev/null 2>&1; then
 else
   cp -r "$SOURCE_DIR/backend/."  "$APP_DIR/backend/"
   cp -r "$SOURCE_DIR/frontend/." "$APP_DIR/frontend/"
+fi
+if [[ -f "$SOURCE_DIR/VERSION" ]]; then
+  install -m 0644 "$SOURCE_DIR/VERSION" "$APP_DIR/VERSION"
 fi
 ensure_panel_runtime_ownership
 
