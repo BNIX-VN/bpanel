@@ -22,8 +22,16 @@ from app.core.database import get_db
 from app.core.permissions import Role, ensure_role
 from app.core.security import create_access_token, hash_password, needs_rehash, verify_password
 from app.core.secrets import decrypt, encrypt
+from app.core.step_up import require_sensitive_action_step_up, verify_totp
 from app.models.entities import RevokedToken, User
-from app.schemas.schemas import LoginResponse, TwoFactorCode, TwoFactorSetup, TwoFactorStatus
+from app.schemas.schemas import (
+    LoginResponse,
+    TwoFactorDisableRequest,
+    TwoFactorEnableRequest,
+    TwoFactorSetup,
+    TwoFactorSetupRequest,
+    TwoFactorStatus,
+)
 from app.services import storage_quota
 from app.services.audit import log_action
 
@@ -340,11 +348,7 @@ def _get_totp_secret(user: User) -> str:
 
 
 def _verify_totp(user: User, code: str) -> bool:
-    secret = _get_totp_secret(user)
-    code = (code or "").replace(" ", "").strip()
-    if not secret or not code:
-        return False
-    return pyotp.TOTP(secret).verify(code, valid_window=1)
+    return verify_totp(user, code)
 
 
 def _qr_data_url(uri: str) -> str:
@@ -552,9 +556,11 @@ def two_factor_status(current_user: User = Depends(get_current_user)):
 
 @router.post("/2fa/setup", response_model=TwoFactorSetup)
 def setup_two_factor(
+    payload: TwoFactorSetupRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    require_sensitive_action_step_up(current_user, payload.current_password, payload.code)
     if current_user.totp_enabled:
         raise HTTPException(status_code=400, detail="Two-factor authentication is already enabled")
     secret = pyotp.random_base32()
@@ -567,7 +573,7 @@ def setup_two_factor(
 
 @router.post("/2fa/enable", response_model=TwoFactorStatus)
 def enable_two_factor(
-    payload: TwoFactorCode,
+    payload: TwoFactorEnableRequest,
     request: Request,
     response: Response,
     db: Session = Depends(get_db),
@@ -588,14 +594,13 @@ def enable_two_factor(
 
 @router.post("/2fa/disable", response_model=TwoFactorStatus)
 def disable_two_factor(
-    payload: TwoFactorCode,
+    payload: TwoFactorDisableRequest,
     request: Request,
     response: Response,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if current_user.totp_enabled and not _verify_totp(current_user, payload.code):
-        raise HTTPException(status_code=400, detail="Invalid authentication code")
+    require_sensitive_action_step_up(current_user, payload.current_password, payload.code)
     current_user.totp_enabled = False
     current_user.totp_secret = None
     current_user.token_version = (current_user.token_version or 0) + 1

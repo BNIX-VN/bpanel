@@ -197,8 +197,9 @@ def delete_wordpress(root_path: str):
     target = Path(root_path).resolve()
     if not site_users.is_managed_site_path(target):
         raise ValueError("Refusing to delete path outside managed site roots")
+    linux_user = target.relative_to(site_users.HOME_ROOT.resolve()).parts[0]
     return shell.privileged(
         "rm-site",
-        helper_args=[str(target)],
+        helper_args=[linux_user, str(target), str(target)],
         fallback=["rm", "-rf", str(target)],
     )

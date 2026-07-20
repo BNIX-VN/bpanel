@@ -115,8 +115,16 @@ def _assert_sensitive_read_allowed(path: Path, action: str, allow_sensitive: boo
         raise ValueError(f"{action} {path.name} requires admin permissions")
 
 
-def _assert_tree_write_allowed(path: Path, action: str, allow_executable: bool = False) -> None:
+def _assert_tree_write_allowed(
+    path: Path,
+    action: str,
+    allow_executable: bool = False,
+    allow_symlinks: bool = False,
+) -> None:
     if path.is_symlink():
+        if allow_symlinks:
+            _assert_write_allowed(path, action, allow_executable)
+            return
         raise ValueError("Symlinks are not allowed")
     if path.is_dir():
         try:
@@ -133,6 +141,8 @@ def _assert_tree_write_allowed(path: Path, action: str, allow_executable: bool =
             except OSError:
                 continue
             if is_sym:
+                if allow_symlinks:
+                    continue
                 raise ValueError("Symlinks are not allowed")
             try:
                 is_file = item.is_file()
@@ -185,9 +195,12 @@ def _clean_relative_path(path: str) -> str:
     return "/".join(parts)
 
 
-def _safe_path(website: Website, relative_path: str) -> Path:
+def _safe_path(website: Website, relative_path: str, allow_leaf_symlink: bool = False) -> Path:
     """Resolve a relative path under the website root and reject anything that
     escapes via .., absolute paths, or symlinks.
+
+    Deletion can allow a symlink as the final component so Laravel-style links
+    such as public/storage can be unlinked without following them.
     """
     if "\x00" in (relative_path or ""):
         raise ValueError("Invalid path")
@@ -211,11 +224,13 @@ def _safe_path(website: Website, relative_path: str) -> Path:
             if root != resolved and root not in resolved.parents:
                 raise ValueError("Path escapes website root")
             return resolved
-        for part in parts:
+        for index, part in enumerate(parts):
             if part in ("..", "."):
                 raise ValueError("Path escapes website root")
             accumulated = accumulated / part
             if accumulated.is_symlink():
+                if allow_leaf_symlink and index == len(parts) - 1:
+                    return accumulated
                 raise ValueError("Symlinks are not allowed")
     target = accumulated.resolve()
     if root != target and root not in target.parents:
@@ -543,14 +558,15 @@ def upload_file(
 
 
 def delete_file(website: Website, relative_path: str, allow_executable: bool = False) -> str:
-    target = _safe_path(website, relative_path)
-    if target.is_dir():
+    target = _safe_path(website, relative_path, allow_leaf_symlink=True)
+    root = Path(website.root_path).resolve()
+    if target.is_dir() and not target.is_symlink():
         raise ValueError("Cannot delete directory")
     _assert_write_allowed(target, "Deleting", allow_executable)
     if website.linux_user:
         shell.privileged(
             "rm-site",
-            helper_args=[str(target)],
+            helper_args=[website.linux_user, str(root), str(target)],
             fallback=["rm", "-f", "--", str(target)],
         )
     else:
@@ -564,14 +580,12 @@ def delete_entries(website: Website, paths: Iterable[str], allow_executable: boo
     root = Path(website.root_path).resolve()
     targets = []
     for relative_path in paths:
-        target = _safe_path(website, relative_path)
-        if not target.exists():
+        target = _safe_path(website, relative_path, allow_leaf_symlink=True)
+        if not target.exists() and not target.is_symlink():
             raise ValueError("File or folder not found")
         if target == root:
             raise ValueError("Cannot delete website root")
-        if target.is_symlink():
-            raise ValueError("Symlinks are not allowed")
-        _assert_tree_write_allowed(target, "Deleting", allow_executable)
+        _assert_tree_write_allowed(target, "Deleting", allow_executable, allow_symlinks=True)
         targets.append(target)
 
     deleted_dirs = []
@@ -582,7 +596,7 @@ def delete_entries(website: Website, paths: Iterable[str], allow_executable: boo
             if website.linux_user:
                 shell.privileged(
                     "rm-site",
-                    helper_args=[str(target)],
+                    helper_args=[website.linux_user, str(root), str(target)],
                     fallback=["rm", "-rf", "--", str(target)],
                 )
             else:
@@ -592,7 +606,7 @@ def delete_entries(website: Website, paths: Iterable[str], allow_executable: boo
             if website.linux_user:
                 shell.privileged(
                     "rm-site",
-                    helper_args=[str(target)],
+                    helper_args=[website.linux_user, str(root), str(target)],
                     fallback=["rm", "-f", "--", str(target)],
                 )
             else:

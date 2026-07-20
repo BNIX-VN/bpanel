@@ -24,6 +24,32 @@ def test_php_vhost_defaults_to_static_try_files():
     assert "try_files $uri $uri/ /index.php?$query_string;" not in rendered
 
 
+def test_vhost_disables_tenant_symlink_following():
+    rendered = nginx.render_vhost(
+        "example.test",
+        "/home/bp_example_test/example.test",
+        app_type="php",
+        php_version="8.3",
+    )
+
+    line = next(line.strip() for line in rendered.splitlines() if line.strip().startswith("disable_symlinks "))
+    assert line.replace("\\", "/").endswith("/home/bp_example_test/example.test;")
+
+
+def test_laravel_vhost_allows_same_owner_storage_symlink_policy():
+    rendered = nginx.render_vhost(
+        "example.test",
+        "/home/bp_example_test/example.test",
+        app_type="php",
+        php_version="8.3",
+        rewrite_mode="laravel",
+    )
+
+    assert "disable_symlinks if_not_owner" in rendered
+    assert "disable_symlinks on" not in rendered
+    assert "try_files $uri $uri/ /index.php?$query_string;" in rendered
+
+
 def test_vhost_includes_alias_domains_in_server_name():
     rendered = nginx.render_vhost(
         "example.test",

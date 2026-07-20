@@ -1262,6 +1262,105 @@ require_managed_path() {
   echo "$resolved"
 }
 
+require_bound_managed_path() {
+  local user="$1" root="$2" path="$3"
+  local normalized_root normalized target target_relative root_relative
+  require_linux_user "$user"
+  case "$root" in
+    *$'\n'*) deny "unsafe root: $root" ;;
+    "") deny "empty root" ;;
+    "..") deny "root traversal not allowed" ;;
+    "../"*|*"/.."|*"/../"*) deny "root traversal not allowed" ;;
+  esac
+  [[ "$root" == /* ]] || deny "root must be absolute: $root"
+  normalized_root=$(python3 -c 'import os, sys; print(os.path.normpath(sys.argv[1]))' "$root") || deny "cannot normalize $root"
+  case "$normalized_root/" in
+    "$HOME_ROOT/$user/"*) ;;
+    *) deny "root is not owned by panel Linux user $user: $normalized_root" ;;
+  esac
+  root_relative="${normalized_root#${HOME_ROOT}/${user}/}"
+  require_site_domain_segment "${root_relative%%/*}"
+  [[ "$root_relative" == */* ]] && deny "site root must be a direct domain path: $normalized_root"
+
+  case "$path" in
+    *$'\n'*) deny "unsafe path: $path" ;;
+    "") deny "empty path" ;;
+    "..") deny "path traversal not allowed" ;;
+    "../"*|*"/.."|*"/../"*) deny "path traversal not allowed" ;;
+  esac
+  [[ "$path" == /* ]] || deny "path must be absolute: $path"
+  normalized=$(python3 -c 'import os, sys; print(os.path.normpath(sys.argv[1]))' "$path") || deny "cannot normalize $path"
+  case "$normalized/" in
+    "$normalized_root"|"$normalized_root/"*) ;;
+    *) deny "path outside expected site root: $normalized" ;;
+  esac
+  target="$normalized"
+  target_relative="${target#${HOME_ROOT}/${user}/}"
+  [[ "$target" == "$normalized_root" || "$target_relative" == */* ]] || deny "refusing to operate on a panel user home"
+  echo "$target"
+}
+
+delete_no_follow() {
+  local user="$1" root="$2" target="$3"
+  python3 - "$user" "$root" "$target" <<'PY'
+import os
+import stat
+import sys
+
+user, root, target = sys.argv[1:4]
+base = f"/home/{user}"
+root = os.path.normpath(root)
+target = os.path.normpath(target)
+
+if os.path.dirname(root) != base:
+    raise SystemExit("invalid site root")
+if target != root and not target.startswith(root + os.sep):
+    raise SystemExit("target outside site root")
+
+rel = os.path.relpath(target, base)
+if rel.startswith("..") or rel == ".":
+    raise SystemExit("target outside site root")
+
+def open_child(parent_fd, name):
+    return os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+
+base_fd = os.open(base, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+try:
+    parent_fd = base_fd
+    close_parent = False
+    parts = rel.split(os.sep)
+    for part in parts[:-1]:
+        next_fd = open_child(parent_fd, part)
+        if close_parent:
+            os.close(parent_fd)
+        parent_fd = next_fd
+        close_parent = True
+
+    leaf = parts[-1]
+
+    def remove_entry(dir_fd, name):
+        st = os.lstat(name, dir_fd=dir_fd)
+        if stat.S_ISDIR(st.st_mode):
+            child_fd = open_child(dir_fd, name)
+            try:
+                for entry in os.listdir(child_fd):
+                    remove_entry(child_fd, entry)
+            finally:
+                os.close(child_fd)
+            os.rmdir(name, dir_fd=dir_fd)
+        else:
+            os.unlink(name, dir_fd=dir_fd)
+
+    remove_entry(parent_fd, leaf)
+finally:
+    try:
+        if 'parent_fd' in locals() and parent_fd != base_fd:
+            os.close(parent_fd)
+    finally:
+        os.close(base_fd)
+PY
+}
+
 require_terminal_cwd() {
   local path="$1" user="$2" resolved
   require_linux_user "$user"
@@ -2687,11 +2786,10 @@ PY
     ;;
 
   rm-site)
-    [[ $# -eq 1 ]] || deny "usage: rm-site <path>"
-    target=$(require_managed_path "$1")
-    relative="${target#${HOME_ROOT}/}"
-    [[ "$relative" != */* ]] && deny "refusing to delete a panel user home"
-    exec rm -rf "$target"
+    [[ $# -eq 3 ]] || deny "usage: rm-site <site-user> <site-root> <path>"
+    user="$1"; root="$2"; path="$3"
+    target=$(require_bound_managed_path "$user" "$root" "$path")
+    delete_no_follow "$user" "$root" "$target"
     ;;
 
   mkdir-site)

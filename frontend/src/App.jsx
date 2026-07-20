@@ -921,7 +921,18 @@ function App() {
     const password = prompt(`Enter a new password for ${user.username} (minimum 12 characters):`);
     if (!password) return;
     if (password.length < 12) { setError('Password must be at least 12 characters.'); return; }
-    const data = await request(`/users/${user.id}/password`, { method: 'POST', body: JSON.stringify({ password }) }, `Changing password for ${user.username}...`);
+    const payload = { password };
+    if (user.id === currentUser?.id) {
+      const currentPassword = prompt('Enter your current password to confirm this change:');
+      if (!currentPassword) return;
+      payload.current_password = currentPassword;
+      if (currentUser?.totp_enabled) {
+        const code = prompt('Enter the 6-digit code from your authenticator:');
+        if (!code) return;
+        payload.code = code.trim();
+      }
+    }
+    const data = await request(`/users/${user.id}/password`, { method: 'POST', body: JSON.stringify(payload) }, `Changing password for ${user.username}...`);
     if (data?.message) setNotice(data.message);
   }
 
@@ -990,7 +1001,15 @@ function App() {
   }
 
   async function setupTwoFactorAuth() {
-    const data = await request('/auth/2fa/setup', { method: 'POST' }, 'Preparing 2FA...');
+    const currentPassword = prompt('Enter your current password to generate a new 2FA secret:');
+    if (!currentPassword) return;
+    const payload = { current_password: currentPassword };
+    if (currentUser?.totp_enabled) {
+      const code = prompt('Enter the 6-digit code from your authenticator:');
+      if (!code) return;
+      payload.code = code.trim();
+    }
+    const data = await request('/auth/2fa/setup', { method: 'POST', body: JSON.stringify(payload) }, 'Preparing 2FA...');
     if (data) {
       setTwoFactorSetup(data);
       setTwoFactorStatus({ enabled: false });
@@ -1009,7 +1028,13 @@ function App() {
   }
 
   async function disableTwoFactorAuth() {
-    const data = await request('/auth/2fa/disable', { method: 'POST', body: JSON.stringify({ code: twoFactorCode }) }, 'Disabling 2FA...');
+    const currentPassword = prompt('Enter your current password to disable 2FA:');
+    if (!currentPassword) return;
+    const data = await request(
+      '/auth/2fa/disable',
+      { method: 'POST', body: JSON.stringify({ current_password: currentPassword, code: twoFactorCode }) },
+      'Disabling 2FA...',
+    );
     if (data) {
       setTwoFactorStatus(data);
       setTwoFactorCode('');

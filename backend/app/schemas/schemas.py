@@ -127,6 +127,20 @@ class TwoFactorCode(BaseModel):
     code: str = Field(min_length=6, max_length=12)
 
 
+class TwoFactorSetupRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=72)
+    code: Optional[str] = Field(default=None, min_length=6, max_length=12)
+
+
+class TwoFactorEnableRequest(BaseModel):
+    code: str = Field(min_length=6, max_length=12)
+
+
+class TwoFactorDisableRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=72)
+    code: Optional[str] = Field(default=None, min_length=6, max_length=12)
+
+
 class UserCreate(BaseModel):
     username: str = Field(min_length=3, max_length=32, pattern=r"^[a-z_][a-z0-9_-]{2,31}$")
     email: EmailStr
@@ -158,6 +172,8 @@ class UserUpdate(BaseModel):
 
 class UserPasswordUpdate(BaseModel):
     password: str = Field(min_length=12, max_length=72)
+    current_password: Optional[str] = Field(default=None, min_length=1, max_length=72)
+    code: Optional[str] = Field(default=None, min_length=6, max_length=12)
 
     @field_validator("password")
     @classmethod

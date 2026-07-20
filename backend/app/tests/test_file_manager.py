@@ -125,6 +125,88 @@ def test_write_text_file_with_linux_user_normalizes_written_file(tmp_path, monke
     ]
 
 
+def test_delete_entries_with_linux_user_binds_helper_to_site_user_and_root(tmp_path, monkeypatch):
+    root = tmp_path / "site"
+    public = root / "public_html"
+    public.mkdir(parents=True)
+    target = public / "cache"
+    target.mkdir()
+    calls = []
+
+    def fake_privileged(helper_command, helper_args=None, **kwargs):
+        calls.append((helper_command, helper_args, kwargs))
+        return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(file_manager.shell, "privileged", fake_privileged)
+    monkeypatch.setattr(file_manager, "_clear_fastcgi_cache", lambda: None)
+
+    deleted = file_manager.delete_entries(_linux_website(root), ["public_html/cache"], allow_executable=True)
+
+    assert deleted == [str(target)]
+    assert calls == [
+        (
+            "rm-site",
+            ["siteuser", str(root.resolve()), str(target)],
+            {"fallback": ["rm", "-rf", "--", str(target)]},
+        )
+    ]
+
+
+def test_delete_file_allows_laravel_storage_symlink_leaf(tmp_path, monkeypatch):
+    if os.name == "nt":
+        pytest.skip("Windows symlink permissions vary by developer environment")
+    root = tmp_path / "site"
+    public = root / "public_html"
+    storage = root / "storage" / "app" / "public"
+    public.mkdir(parents=True)
+    storage.mkdir(parents=True)
+    link = public / "storage"
+    link.symlink_to(storage, target_is_directory=True)
+    calls = []
+
+    def fake_privileged(helper_command, helper_args=None, **kwargs):
+        calls.append((helper_command, helper_args, kwargs))
+        return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(file_manager.shell, "privileged", fake_privileged)
+    monkeypatch.setattr(file_manager, "_clear_fastcgi_cache", lambda: None)
+
+    deleted = file_manager.delete_file(_linux_website(root), "public_html/storage", allow_executable=True)
+
+    assert deleted == str(link)
+    assert calls == [
+        (
+            "rm-site",
+            ["siteuser", str(root.resolve()), str(link)],
+            {"fallback": ["rm", "-f", "--", str(link)]},
+        )
+    ]
+
+
+def test_delete_entries_allows_laravel_storage_symlink_inside_deleted_tree(tmp_path, monkeypatch):
+    if os.name == "nt":
+        pytest.skip("Windows symlink permissions vary by developer environment")
+    root = tmp_path / "site"
+    public = root / "public_html"
+    storage = root / "storage" / "app" / "public"
+    public.mkdir(parents=True)
+    storage.mkdir(parents=True)
+    (public / "storage").symlink_to(storage, target_is_directory=True)
+    calls = []
+
+    def fake_privileged(helper_command, helper_args=None, **kwargs):
+        calls.append((helper_command, helper_args, kwargs))
+        return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(file_manager.shell, "privileged", fake_privileged)
+    monkeypatch.setattr(file_manager, "_clear_fastcgi_cache", lambda: None)
+
+    deleted = file_manager.delete_entries(_linux_website(root), ["public_html"], allow_executable=True)
+
+    assert deleted == [str(public)]
+    assert calls[0][1] == ["siteuser", str(root.resolve()), str(public)]
+
+
 def test_tar_validation_allows_more_than_legacy_file_limit(tmp_path):
     archive_path = tmp_path / "many.tar.gz"
     destination = tmp_path / "public_html"

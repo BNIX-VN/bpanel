@@ -144,3 +144,18 @@ def test_terminal_helper_rejects_paths_outside_user_home():
     assert 'deny "terminal URL argument uses local file scheme: $arg"' in helper
     assert 'require_terminal_path_args "$user" "$target" "$@"' in helper
     assert 'require_terminal_download_args "$user" "$target" "$@"' in helper
+
+
+def test_rm_site_helper_binds_delete_to_user_root_and_deletes_no_follow():
+    helper = HELPER_SCRIPT.read_text(encoding="utf-8")
+    assert "require_bound_managed_path()" in helper
+    assert "delete_no_follow()" in helper
+    assert 'target=$(require_bound_managed_path "$user" "$root" "$path")' in helper
+    assert "os.path.normpath(sys.argv[1])" in helper
+    assert 'root_relative="${normalized_root#${HOME_ROOT}/${user}/}"' in helper
+    assert '[[ "$root_relative" == */* ]] && deny "site root must be a direct domain path: $normalized_root"' in helper
+    assert '[[ "$target" == "$normalized_root" || "$target_relative" == */* ]] || deny "refusing to operate on a panel user home"' in helper
+    assert 'delete_no_follow "$user" "$root" "$target"' in helper
+    assert "os.O_NOFOLLOW" in helper
+    assert "os.unlink(name, dir_fd=dir_fd)" in helper
+    assert 'usage: rm-site <site-user> <site-root> <path>' in helper

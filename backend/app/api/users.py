@@ -8,6 +8,7 @@ from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.permissions import Role, ensure_role
 from app.core.security import hash_password
+from app.core.step_up import require_sensitive_action_step_up
 from app.models.entities import AuditLog, BackupSchedule, DatabaseAccount, User, Website
 from app.schemas.schemas import (
     AuditLogOut,
@@ -173,6 +174,8 @@ def delete_user(user_id: int, request: Request, db: Session = Depends(get_db), c
 def update_user_password(user_id: int, payload: UserPasswordUpdate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     if user_id != current_user.id:
         ensure_role(current_user.role, Role.admin)
+    else:
+        require_sensitive_action_step_up(current_user, payload.current_password, payload.code)
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
