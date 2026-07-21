@@ -1485,12 +1485,6 @@ function App() {
     if (data) { await listFiles(fileListPath); await loadCurrentUser(); }
   }
 
-  async function deleteFileAction(path) {
-    if (!confirm(`Delete file ${path}?`)) return;
-    const data = await request('/maintenance/files/delete', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), paths: [path] }) }, 'Deleting file...');
-    if (data) { await listFiles(fileListPath); await loadCurrentUser(); }
-  }
-
   async function downloadFile(path) {
     if (!selectedWebsiteId || !path) return;
     try {
@@ -1551,15 +1545,6 @@ function App() {
     if (data) await listFiles(fileListPath);
   }
 
-  async function chmodFileItem(item) {
-    if (!item) return;
-    const currentMode = item.mode || (item.is_dir ? '755' : '644');
-    const mode = prompt('Mode (octal, e.g. 644 or 755):', currentMode);
-    if (!mode || mode === currentMode) return;
-    const data = await request('/maintenance/files/chmod', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), path: item.path, mode }) }, 'Changing permissions...');
-    if (data) await listFiles(fileListPath);
-  }
-
   async function deleteSelectedFiles() {
     if (selectedFilePaths.length === 0) return;
     if (!confirm(`Delete ${selectedFilePaths.length} selected item(s)?`)) return;
@@ -1586,16 +1571,6 @@ function App() {
 
   async function moveSelectedFiles() {
     await transferFileItems('move', selectedFilePaths);
-  }
-
-  async function copyFileItem(item) {
-    if (!item) return;
-    await transferFileItems('copy', [item.path]);
-  }
-
-  async function moveFileItem(item) {
-    if (!item) return;
-    await transferFileItems('move', [item.path]);
   }
 
   async function archiveSelectedFiles() {
@@ -1638,16 +1613,6 @@ function App() {
         ...prev.filter(job => String(job.website_id) !== String(websiteId)),
       ].slice(0, 6));
     }
-  }
-
-  async function extractArchiveFile(path) {
-    if (!path) return;
-    const destination = prompt('Extract to folder:', fileListPath || '.');
-    if (destination === null) return;
-    const targetPath = destination || fileListPath || '.';
-    const data = await request('/maintenance/files/extract', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), archive_path: path, destination_path: targetPath }) }, 'Starting extraction...');
-    if (data?.job_id) upsertFileJob(data);
-    else if (data) { await listFiles(targetPath === '.' ? '' : targetPath); await loadCurrentUser(); }
   }
 
   useEffect(() => {
@@ -2466,11 +2431,6 @@ function App() {
     });
   }
 
-  function isArchiveFile(item) {
-    const name = (item?.name || '').toLowerCase();
-    return !item?.is_dir && (name.endsWith('.zip') || name.endsWith('.tar.gz') || name.endsWith('.tgz'));
-  }
-
   function isTextEditable(item) {
     if (!item || item.is_dir) return false;
     const name = (item.name || '').toLowerCase();
@@ -2992,14 +2952,8 @@ function App() {
               <span className="file-mode">{item.mode || '---'}</span>
               <span className="file-size">{item.is_dir ? 'Folder' : formatBytes(item.size)}</span>
               <div className="file-row-actions">
-                {!item.is_dir && isTextEditable(item) && <button className="mini secondary-light" disabled={!!loading} onClick={() => openFileEditorTab(item.path)}>Edit</button>}
                 {!item.is_dir && <button className="mini secondary-light" disabled={!!loading} onClick={() => downloadFile(item.path)}><Download size={13}/></button>}
-                {isArchiveFile(item) && <button className="mini secondary-light" disabled={!!loading} onClick={() => extractArchiveFile(item.path)}>Extract</button>}
-                <button className="mini secondary-light" disabled={!!loading} onClick={() => chmodFileItem(item)}>Chmod</button>
-                <button className="mini secondary-light" title="Copy" aria-label="Copy" disabled={!!loading} onClick={() => copyFileItem(item)}><Copy size={13}/></button>
-                <button className="mini secondary-light" title="Move" aria-label="Move" disabled={!!loading} onClick={() => moveFileItem(item)}><MoveRight size={13}/></button>
                 <button className="mini secondary-light" disabled={!!loading} onClick={() => renameFileItem(item)}>Rename</button>
-                <button className="mini danger" disabled={!!loading} onClick={() => deleteFileAction(item.path)}><Trash2 size={13}/></button>
               </div>
             </div>)}
           </div>
