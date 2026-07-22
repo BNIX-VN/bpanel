@@ -662,31 +662,50 @@ panel_healthcheck() {
 
 refresh_bpanel_mariadb_grants() {
   local defaults_file="$APP_DIR/.my.cnf"
-  [[ -f "$defaults_file" ]] || return 0
   local mysql_bin
   mysql_bin="$(command -v mariadb || command -v mysql || true)"
   [[ -n "$mysql_bin" ]] || return 0
   local password
-  password="$(awk -F= '
-    /^\[client\]/ { in_client=1; next }
-    /^\[/ { in_client=0 }
-    in_client && $1 == "password" {
-      value=$0; sub(/^[^=]*=/, "", value); gsub(/^"|"$/, "", value); print value; exit
-    }
-  ' "$defaults_file")"
-  [[ -n "$password" ]] || return 0
+  password=""
+  if [[ -f "$defaults_file" ]]; then
+    password="$(awk -F= '
+      /^\[client\]/ { in_client=1; next }
+      /^\[/ { in_client=0 }
+      in_client && $1 == "password" {
+        value=$0; sub(/^[^=]*=/, "", value); gsub(/^"|"$/, "", value); print value; exit
+      }
+    ' "$defaults_file")"
+  fi
+  if [[ -z "$password" ]]; then
+    password="$(openssl rand -base64 32 | tr -d '/+=' | cut -c1-32)"
+  fi
   "$mysql_bin" <<SQL
 CREATE USER IF NOT EXISTS 'bpanel'@'localhost' IDENTIFIED BY '${password}';
 ALTER USER 'bpanel'@'localhost' IDENTIFIED BY '${password}';
 GRANT ALL PRIVILEGES ON *.* TO 'bpanel'@'localhost' WITH GRANT OPTION;
 FLUSH PRIVILEGES;
 SQL
+  cat >"$defaults_file" <<MYCNF
+[client]
+user=bpanel
+password="${password}"
+host=localhost
+
+[mysqldump]
+user=bpanel
+password="${password}"
+host=localhost
+MYCNF
+  chown bpanel:bpanel "$defaults_file"
+  chmod 0600 "$defaults_file"
 }
 
 ensure_panel_runtime_ownership() {
   id -u bpanel >/dev/null 2>&1 || return 0
   [[ -d "$APP_DIR/backend" ]] && chown -R bpanel:bpanel "$APP_DIR/backend" 2>/dev/null || true
   [[ -d "$APP_DIR/frontend" ]] && chown -R bpanel:bpanel "$APP_DIR/frontend" 2>/dev/null || true
+  [[ -f "$APP_DIR/.my.cnf" ]] && chown bpanel:bpanel "$APP_DIR/.my.cnf" 2>/dev/null || true
+  [[ -f "$APP_DIR/.my.cnf" ]] && chmod 0600 "$APP_DIR/.my.cnf" 2>/dev/null || true
   [[ -d /var/lib/bpanel ]] && chown bpanel:bpanel /var/lib/bpanel 2>/dev/null || true
   [[ -d /var/lib/bpanel/assets ]] && chown -R bpanel:bpanel /var/lib/bpanel/assets 2>/dev/null || true
   [[ -f "$APP_DIR/backend/.env" ]] && chmod 0640 "$APP_DIR/backend/.env"
