@@ -10,6 +10,7 @@ def test_wordpress_csp_allows_gutenberg_blob_iframe():
     )
 
     assert "frame-src 'self' https: blob:;" in rendered
+    assert "worker-src 'self' blob:;" in rendered
 
 
 def test_php_vhost_defaults_to_static_try_files():
@@ -215,3 +216,4 @@ def test_ensure_hsts_header_adds_gutenberg_safe_wordpress_csp():
     hardened = nginx._ensure_hsts_header(content)
 
     assert "frame-src 'self' https: blob:;" in hardened
+    assert "worker-src 'self' blob:;" in hardened

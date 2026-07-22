@@ -36,6 +36,7 @@ WORDPRESS_CSP = (
     "font-src 'self' data: https:; "
     "connect-src 'self' https:; "
     "frame-src 'self' https: blob:; "
+    "worker-src 'self' blob:; "
     "object-src 'none'; "
     "base-uri 'self'; "
     "form-action 'self' https:; "

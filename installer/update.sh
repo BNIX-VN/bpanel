@@ -443,6 +443,34 @@ fastcgi_cache_key "$scheme$request_method$host$request_uri";
 NGINX
 }
 
+migrate_nginx_wordpress_csp_worker_src() {
+  python3 - <<'PY'
+from pathlib import Path
+
+roots = [Path("/etc/nginx/conf.d"), Path("/etc/nginx/sites-enabled")]
+needle = "worker-src 'self' blob:;"
+anchor = "frame-src 'self' https: blob:;"
+
+for root in roots:
+    if not root.exists():
+        continue
+    for path in sorted(root.glob("*.conf")):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            text = path.read_text(encoding="latin-1")
+        if "Content-Security-Policy" not in text or needle in text:
+            continue
+        if anchor in text:
+            new_text = text.replace(anchor, f"{anchor} {needle}")
+        else:
+            new_text = text.replace("object-src", f"{needle} object-src")
+        if new_text != text:
+            path.write_text(new_text, encoding="utf-8")
+            print(f"Updated CSP worker-src in {path}")
+PY
+}
+
 ensure_terminal_tools() {
   local missing=()
   command -v composer >/dev/null 2>&1 || missing+=(composer)
@@ -1088,6 +1116,7 @@ systemctl restart bpanel-api
 # --- Reload Nginx ----------------------------------------------------------
 log "Reloading nginx"
 update_progress 92 "restarting" "Restarting services and reloading nginx"
+migrate_nginx_wordpress_csp_worker_src
 nginx -t
 systemctl reload nginx
 
