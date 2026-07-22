@@ -720,7 +720,7 @@ write_tools_nginx_config() {
     api_scheme="https"
     tools_scheme="https"
     pma_secure="true"
-    printf -v ssl_block '\n    listen 443 ssl default_server;\n    ssl_certificate %s;\n    ssl_certificate_key %s;' "$PANEL_SSL_CERT" "$PANEL_SSL_KEY"
+    printf -v ssl_block '\n    listen 443 ssl http2 default_server;\n    ssl_certificate %s;\n    ssl_certificate_key %s;' "$PANEL_SSL_CERT" "$PANEL_SSL_KEY"
   fi
 
   cat >/etc/nginx/conf.d/00-bpanel-tools.conf <<NGINX

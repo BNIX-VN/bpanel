@@ -74,6 +74,15 @@ def test_panel_linux_users_are_sftp_chroot_only():
     assert 'usermod -aG "$user" www-data' in helper
 
 
+def test_panel_tools_ssl_vhosts_enable_http2_for_nginx_1_24():
+    expected = "listen 443 ssl http2 default_server;"
+    helper = HELPER_SCRIPT.read_text(encoding="utf-8")
+    assert expected in helper
+    for script_path in (INSTALL_SCRIPT, UPDATE_SCRIPT):
+        script = script_path.read_text(encoding="utf-8")
+        assert expected in script
+
+
 def test_site_permissions_do_not_allow_cross_user_reading():
     helper = HELPER_SCRIPT.read_text(encoding="utf-8")
     assert 'find "$target" -type d -exec chmod 2750 {} +' in helper

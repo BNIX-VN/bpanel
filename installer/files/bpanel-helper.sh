@@ -212,7 +212,7 @@ refresh_tools_nginx() {
   api_scheme="http"; tools_scheme="http"; pma_secure="false"; ssl_block=""
   if [[ -n "$cert" && -n "$key" && -f "$cert" && -f "$key" ]]; then
     api_scheme="https"; tools_scheme="https"; pma_secure="true"
-    printf -v ssl_block '\n    listen 443 ssl default_server;\n    ssl_certificate %s;\n    ssl_certificate_key %s;' "$cert" "$key"
+    printf -v ssl_block '\n    listen 443 ssl http2 default_server;\n    ssl_certificate %s;\n    ssl_certificate_key %s;' "$cert" "$key"
   fi
   rm -f /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf 2>/dev/null || true
   ensure_nginx_conf_dir_writable

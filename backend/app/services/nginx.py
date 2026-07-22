@@ -436,7 +436,7 @@ def _append_certbot_redirect_vhosts(content: str, domain: str, redirects: list[s
             block_lines.extend([
                 "",
                 "server {",
-                "    listen 443 ssl;",
+                "    listen 443 ssl http2;",
                 f"    server_name {redirect_domain};",
                 *ssl_lines,
                 f"    return 301 https://{safe_domain}$request_uri;",
@@ -740,7 +740,7 @@ def _merge_certbot_ssl_config(new_content: str, existing_content: str) -> str:
     https_lines = []
     for line in new_content.splitlines():
         if "listen 80;" in line:
-            https_lines.append(line.replace("listen 80;", "listen 443 ssl;"))
+            https_lines.append(line.replace("listen 80;", "listen 443 ssl http2;"))
         else:
             https_lines.append(line)
         if "server_name" in line and ssl_lines:

@@ -98,6 +98,43 @@ def test_manual_ssl_vhost_adds_https_redirect_server_for_redirect_domains():
     assert "return 301 https://example.test$request_uri;" in rendered
 
 
+def test_certbot_ssl_vhost_enables_http2():
+    plain_vhost = "\n".join([
+        "server {",
+        "    listen 80;",
+        "    server_name example.test www.example.test;",
+        "}",
+    ])
+    certbot_vhost = "\n".join([
+        "server {",
+        "    listen 443 ssl;",
+        "    server_name example.test www.example.test;",
+        "    ssl_certificate /etc/letsencrypt/live/example.test/fullchain.pem;",
+        "    ssl_certificate_key /etc/letsencrypt/live/example.test/privkey.pem;",
+        "}",
+    ])
+
+    rendered = nginx._merge_certbot_ssl_config(plain_vhost, certbot_vhost)
+
+    assert "listen 443 ssl http2;" in rendered
+
+
+def test_certbot_ssl_redirect_vhost_enables_http2():
+    certbot_vhost = "\n".join([
+        "server {",
+        "    listen 443 ssl;",
+        "    server_name example.test www.example.test;",
+        "    ssl_certificate /etc/letsencrypt/live/example.test/fullchain.pem;",
+        "    ssl_certificate_key /etc/letsencrypt/live/example.test/privkey.pem;",
+        "}",
+    ])
+
+    rendered = nginx._append_certbot_redirect_vhosts(certbot_vhost, "example.test", ["old.example.test"])
+
+    assert "listen 443 ssl http2;" in rendered
+    assert "server_name old.example.test;" in rendered
+
+
 def test_php_vhost_supports_front_controller_rewrite_mode():
     rendered = nginx.render_vhost(
         "example.test",

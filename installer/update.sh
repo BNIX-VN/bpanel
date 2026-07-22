@@ -409,7 +409,7 @@ write_tools_nginx_config() {
   api_scheme="http"; tools_scheme="http"; pma_secure="false"; ssl_block=""
   if [[ -n "$panel_cert" && -n "$panel_key" && -f "$panel_cert" && -f "$panel_key" ]]; then
     api_scheme="https"; tools_scheme="https"; pma_secure="true"
-    printf -v ssl_block '\n    listen 443 ssl default_server;\n    ssl_certificate %s;\n    ssl_certificate_key %s;' "$panel_cert" "$panel_key"
+    printf -v ssl_block '\n    listen 443 ssl http2 default_server;\n    ssl_certificate %s;\n    ssl_certificate_key %s;' "$panel_cert" "$panel_key"
   fi
   cat >/etc/nginx/conf.d/00-bpanel-tools.conf <<NGINX
 server {
