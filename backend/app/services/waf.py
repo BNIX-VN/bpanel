@@ -1,14 +1,37 @@
+import hashlib
 import json
 import re
+from datetime import datetime, timezone
 from typing import Iterable
 
 from app.models.entities import Website
+from app.services import nginx
 from app.services.shell import CommandResult, shell
 
 
 DOMAIN_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$")
 MAX_CUSTOM_BYTES = 64 * 1024
 MAX_SITE_RULE_BYTES = 160 * 1024
+ACCESS_LOG_RE = re.compile(
+    r'^(?P<ip>\S+) \S+ \S+ \[(?P<time>[^\]]+)\] '
+    r'"(?P<request>(?:[^"\\]|\\.)*)" (?P<status>\d{3}) (?P<body_bytes>\S+)'
+    r'(?: "(?P<referer>(?:[^"\\]|\\.)*)" "(?P<user_agent>(?:[^"\\]|\\.)*)")?'
+    r'(?: (?P<request_time>[0-9.]+))?.*$'
+)
+ACCESS_REASON_RULES = [
+    (re.compile(r"(?:^|/)\.env(?:\.|$|[?])", re.I), "Block environment file probe"),
+    (re.compile(r"(?:^|/)\.git/", re.I), "Block git metadata probe"),
+    (re.compile(r"/composer\.(?:json|lock)(?:$|[?])", re.I), "Block Composer metadata probe"),
+    (re.compile(r"/wp-config\.php(?:\.|$|[?])", re.I), "Block WordPress config probe"),
+    (re.compile(r"/wp-content/(?:uploads|cache|upgrade)/[^?]*\.php(?:$|[?])", re.I), "Block WordPress upload PHP probe"),
+    (re.compile(r"/wp-admin/(?:install|setup-config)\.php(?:$|[?])", re.I), "Block WordPress installer probe"),
+    (re.compile(r"[?&]author=[0-9]+(?:&|$)", re.I), "Block WordPress author scan"),
+    (re.compile(r"/_ignition/execute-solution(?:$|[?])", re.I), "Block Laravel Ignition RCE probe"),
+    (re.compile(r"/(?:artisan|server\.php)(?:$|[?])", re.I), "Block Laravel runtime probe"),
+    (re.compile(r"/storage/logs/[^?]*\.log(?:$|[?])", re.I), "Block Laravel log probe"),
+    (re.compile(r"(?:\.\./|\.\.\\|%2e%2e%2f|%252e%252e%252f)", re.I), "Block path traversal"),
+    (re.compile(r"/(?:c99|r57|shell|cmd|wso)\.php(?:$|[?])", re.I), "Block PHP runtime probe"),
+]
 
 DEFAULT_RULES = [
     {
@@ -278,3 +301,144 @@ def save_custom_rules(content: str):
         input=_validate_custom_rules(content),
         fallback=["bash", "-lc", "cat >/tmp/bpanel-waf-custom.conf && echo WAF custom rules saved"],
     )
+
+
+def _parse_nginx_time(value: str) -> datetime | None:
+    try:
+        return datetime.strptime(value, "%d/%b/%Y:%H:%M:%S %z")
+    except (TypeError, ValueError):
+        return None
+
+
+def _split_request(value: str) -> tuple[str, str, str]:
+    parts = (value or "").split()
+    if len(parts) >= 3:
+        return parts[0].upper(), parts[1], parts[2]
+    if len(parts) == 2:
+        return parts[0].upper(), parts[1], ""
+    return "", value or "", ""
+
+
+def _access_verdict(status_code: int) -> str:
+    if status_code in {401, 403, 429, 444}:
+        return "block"
+    if status_code >= 500:
+        return "error"
+    return "allow"
+
+
+def _access_reason(path: str, status_code: int) -> str:
+    verdict = _access_verdict(status_code)
+    if verdict == "allow":
+        return "Allowed"
+    if status_code == 429:
+        return "HTTP flood rate limit"
+    for pattern, reason in ACCESS_REASON_RULES:
+        if pattern.search(path or ""):
+            return reason
+    if status_code == 403:
+        return "Blocked by WAF or Nginx"
+    if verdict == "error":
+        return "Upstream/server error"
+    return "Blocked"
+
+
+def _duration_ms(value: str | None) -> int:
+    try:
+        return max(0, round(float(value or 0) * 1000))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _parse_access_log_line(domain: str, line: str, sequence: int) -> tuple[datetime, dict] | None:
+    match = ACCESS_LOG_RE.match(line or "")
+    if not match:
+        return None
+    status_code = int(match.group("status"))
+    method, path, protocol = _split_request(match.group("request"))
+    timestamp = _parse_nginx_time(match.group("time"))
+    sort_time = timestamp or datetime.min.replace(tzinfo=timezone.utc)
+    digest = hashlib.sha256(f"{domain}\0{sequence}\0{line}".encode("utf-8", errors="ignore")).hexdigest()[:16]
+    item = {
+        "id": digest,
+        "domain": domain,
+        "verdict": _access_verdict(status_code),
+        "timestamp": timestamp.isoformat() if timestamp else "",
+        "duration_ms": _duration_ms(match.group("request_time")),
+        "ip": match.group("ip") or "",
+        "method": method,
+        "path": path,
+        "protocol": protocol,
+        "status": status_code,
+        "reason": _access_reason(path, status_code),
+        "user_agent": match.group("user_agent") or "",
+        "referer": match.group("referer") or "",
+        "raw": line,
+    }
+    return sort_time, item
+
+
+def _matches_access_filter(item: dict, verdict: str, query: str) -> bool:
+    if verdict and verdict != "all" and item.get("verdict") != verdict:
+        return False
+    needle = (query or "").strip().lower()
+    if not needle:
+        return True
+    haystack = " ".join(
+        str(item.get(key, ""))
+        for key in ("domain", "verdict", "method", "path", "ip", "reason", "status", "user_agent", "referer", "protocol", "raw")
+    ).lower()
+    return needle in haystack
+
+
+def access_logs(
+    websites: Iterable[Website],
+    *,
+    verdict: str = "all",
+    query: str = "",
+    limit: int = 50,
+    lines: int = 5000,
+) -> dict:
+    safe_limit = max(1, min(int(limit or 50), 500))
+    safe_lines = max(1, min(int(lines or 5000), 5000))
+    safe_verdict = verdict if verdict in {"all", "allow", "block", "error"} else "all"
+    sortable: list[tuple[datetime, int, dict]] = []
+    parsed_count = 0
+    sequence = 0
+    missing: list[str] = []
+    for website in websites:
+        domain = _validate_domain(website.domain)
+        log_data = nginx.read_site_log(domain, "access", safe_lines)
+        if not log_data.get("exists"):
+            missing.append(domain)
+            continue
+        for line in (log_data.get("content") or "").splitlines():
+            sequence += 1
+            parsed = _parse_access_log_line(domain, line, sequence)
+            if not parsed:
+                continue
+            parsed_count += 1
+            sort_time, item = parsed
+            if _matches_access_filter(item, safe_verdict, query):
+                sortable.append((sort_time, parsed_count, item))
+    sortable.sort(key=lambda row: (row[0], row[1]), reverse=True)
+    items = [item for _, _, item in sortable[:safe_limit]]
+    return {
+        "items": items,
+        "total": len(sortable),
+        "scanned": parsed_count,
+        "limit": safe_limit,
+        "lines": safe_lines,
+        "verdict": safe_verdict,
+        "query": (query or "").strip(),
+        "missing": missing,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def clear_access_logs(websites: Iterable[Website]) -> int:
+    cleared = 0
+    for website in websites:
+        nginx.clear_site_log(_validate_domain(website.domain), "access")
+        cleared += 1
+    return cleared

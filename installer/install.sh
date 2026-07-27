@@ -27,33 +27,33 @@ FRONTEND_SRC="${PROJECT_ROOT}/frontend"
 # so PROJECT_ROOT becomes /dev and BACKEND_SRC becomes /dev/backend which
 # does not exist.  Detect this and download the release tarball via curl
 # (curl is guaranteed to be available - the user just used it to fetch us).
-OPANEL_GITHUB="${OPANEL_GITHUB:-https://github.com/bnixvn/opanel}"
-OPANEL_REPO_SLUG="${OPANEL_GITHUB#*github.com/}"
+BPANEL_GITHUB="${BPANEL_GITHUB:-https://github.com/BNIX-VN/bpanel}"
+BPANEL_REPO_SLUG="${BPANEL_GITHUB#*github.com/}"
 if [[ ! -d "${BACKEND_SRC}" ]]; then
   # --- resolve latest tag via GitHub API (no git required) -----------
-  if [[ -z "${OPANEL_VERSION:-}" ]]; then
-    OPANEL_VERSION="$(curl -fsSL "https://api.github.com/repos/${OPANEL_REPO_SLUG}/tags?per_page=1" \
+  if [[ -z "${BPANEL_VERSION:-}" ]]; then
+    BPANEL_VERSION="$(curl -fsSL "https://api.github.com/repos/${BPANEL_REPO_SLUG}/tags?per_page=1" \
       | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\(v[^"]*\)".*/\1/p' | head -1)" || true
   fi
-  if [[ ! "${OPANEL_VERSION:-}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "ERROR: Could not detect latest OPanel release tag." >&2
-    echo "       Set OPANEL_VERSION=vX.Y.Z and retry, e.g.:" >&2
-    echo "       OPANEL_VERSION=v1.0.46 bash <(curl -fsSL ...)" >&2
+  if [[ ! "${BPANEL_VERSION:-}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "ERROR: Could not detect latest BPanel release tag." >&2
+    echo "       Set BPANEL_VERSION=vX.Y.Z and retry, e.g.:" >&2
+    echo "       BPANEL_VERSION=v1.0.46 bash <(curl -fsSL ...)" >&2
     exit 1
   fi
 
-  OPANEL_CLONE_DIR="$(mktemp -d)"
+  BPANEL_CLONE_DIR="$(mktemp -d)"
   echo ""
-  echo "==> Source not found locally - downloading ${OPANEL_VERSION} to ${OPANEL_CLONE_DIR}"
+  echo "==> Source not found locally - downloading ${BPANEL_VERSION} to ${BPANEL_CLONE_DIR}"
 
-  curl -fsSL "${OPANEL_GITHUB}/archive/refs/tags/${OPANEL_VERSION}.tar.gz" \
-    | tar xz -C "${OPANEL_CLONE_DIR}" --strip-components=1
+  curl -fsSL "${BPANEL_GITHUB}/archive/refs/tags/${BPANEL_VERSION}.tar.gz" \
+    | tar xz -C "${BPANEL_CLONE_DIR}" --strip-components=1
 
-  PROJECT_ROOT="${OPANEL_CLONE_DIR}"
+  PROJECT_ROOT="${BPANEL_CLONE_DIR}"
   SCRIPT_DIR="${PROJECT_ROOT}/installer"
   BACKEND_SRC="${PROJECT_ROOT}/backend"
   FRONTEND_SRC="${PROJECT_ROOT}/frontend"
-  trap 'cd /; rm -rf "${OPANEL_CLONE_DIR}"' EXIT
+  trap 'cd /; rm -rf "${BPANEL_CLONE_DIR}"' EXIT
 fi
 
 PANEL_URL="${PANEL_URL:-}"

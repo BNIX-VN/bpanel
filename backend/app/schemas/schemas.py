@@ -376,6 +376,35 @@ class WebsiteLogOut(BaseModel):
     exists: bool = False
 
 
+class WebsiteAccessLogOut(BaseModel):
+    id: str
+    domain: str
+    verdict: Literal["allow", "block", "error"]
+    timestamp: str = ""
+    duration_ms: int = 0
+    ip: str = ""
+    method: str = ""
+    path: str = ""
+    protocol: str = ""
+    status: int = 0
+    reason: str = ""
+    user_agent: str = ""
+    referer: str = ""
+    raw: str = ""
+
+
+class WebsiteAccessLogsOut(BaseModel):
+    items: list[WebsiteAccessLogOut] = []
+    total: int = 0
+    scanned: int = 0
+    limit: int = 50
+    lines: int = 5000
+    verdict: Literal["all", "allow", "block", "error"] = "all"
+    query: str = ""
+    missing: list[str] = []
+    generated_at: str = ""
+
+
 class SystemAutoUpdateConfig(BaseModel):
     enabled: bool = True
     mode: Literal["security", "all"] = "security"

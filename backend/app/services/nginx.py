@@ -1253,6 +1253,26 @@ def read_site_log(domain: str, kind: str = "access", lines: int = 200) -> dict:
     }
 
 
+def clear_site_log(domain: str, kind: str = "access") -> dict:
+    safe_domain = _safe_domain(domain)
+    safe_kind = _check_log_kind(kind)
+    path = _log_path(safe_domain, safe_kind)
+    result = shell.privileged(
+        "site-log-clear",
+        helper_args=[safe_domain, safe_kind],
+        check=False,
+        fallback=["bash", "-lc", 'test -f "$1" && : >"$1" || true', "bpanel-clear-log", str(path)],
+    )
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout or "Cannot clear log file").strip())
+    return {
+        "domain": safe_domain,
+        "kind": safe_kind,
+        "path": str(path),
+        "cleared": True,
+    }
+
+
 def update_full_config(domain: str, content: str) -> str:
     target = _vhost_path(domain)
     safe_content = validate_full_nginx_config(content)

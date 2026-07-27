@@ -2804,6 +2804,22 @@ PY
     read_site_log "$1" "$2" "$3"
     ;;
 
+  site-log-clear)
+    [[ $# -eq 2 ]] || deny "usage: site-log-clear <domain> <access|error>"
+    domain="$1"; kind="$2"
+    require_domain "$domain"
+    [[ "$kind" == "access" || "$kind" == "error" ]] || deny "invalid log kind: $kind"
+    path="/var/log/nginx/${domain}.${kind}.log"
+    resolved=$(readlink -m "$path") || deny "cannot resolve log path"
+    case "$resolved" in
+      /var/log/nginx/*) ;;
+      *) deny "log path outside /var/log/nginx: $resolved" ;;
+    esac
+    if [[ -f "$resolved" ]]; then
+      : > "$resolved"
+    fi
+    ;;
+
   # ---- WP-CLI as www-data ----------------------------------------------
   wp)
     [[ $# -ge 1 ]] || deny "usage: wp <args...>"

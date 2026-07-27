@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -6,6 +6,7 @@ from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.permissions import Role, ensure_role
 from app.models.entities import User, Website
+from app.schemas.schemas import WebsiteAccessLogsOut
 from app.services import nginx, waf
 
 router = APIRouter(prefix="/waf", tags=["waf"])
@@ -49,6 +50,49 @@ def get_waf_rules(current_user: User = Depends(get_current_user)):
         "default_rule_definitions": waf.default_rule_definitions(),
         "custom_rules": custom_rules.stdout,
     }
+
+
+@router.get("/access-logs", response_model=WebsiteAccessLogsOut)
+def get_waf_access_logs(
+    website_id: int | None = Query(default=None, ge=1),
+    verdict: str = Query(default="all", pattern="^(all|allow|block|error)$"),
+    q: str = Query(default="", max_length=200),
+    limit: int = Query(default=50, ge=1, le=500),
+    lines: int = Query(default=5000, ge=1, le=5000),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _require_admin(current_user)
+    query = db.query(Website).order_by(Website.domain.asc())
+    if website_id is not None:
+        query = query.filter(Website.id == website_id)
+    websites = query.all()
+    if website_id and not websites:
+        raise HTTPException(status_code=404, detail="Website not found")
+    try:
+        return waf.access_logs(websites, verdict=verdict, query=q, limit=limit, lines=lines)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/access-logs")
+def clear_waf_access_logs(
+    website_id: int | None = Query(default=None, ge=1),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _require_admin(current_user)
+    query = db.query(Website).order_by(Website.domain.asc())
+    if website_id is not None:
+        query = query.filter(Website.id == website_id)
+    websites = query.all()
+    if website_id and not websites:
+        raise HTTPException(status_code=404, detail="Website not found")
+    try:
+        cleared = waf.clear_access_logs(websites)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"message": f"Cleared access logs for {cleared} website(s).", "cleared": cleared}
 
 
 @router.get("/websites/{website_id}")
