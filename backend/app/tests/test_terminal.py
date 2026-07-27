@@ -25,6 +25,7 @@ class TestIsCommandAllowed:
         allowed = [
             "php",
             "composer",
+            "wp",
             "node",
             "npm",
             "yarn",
@@ -101,6 +102,10 @@ class TestIsCommandAllowed:
     def test_phpunit_command(self):
         """PHPUnit should be allowed."""
         assert is_command_allowed("phpunit")
+
+    def test_wp_cli_command(self):
+        """WP-CLI should be allowed in website terminals."""
+        assert is_command_allowed("wp option get siteurl")
 
     def test_whitelist_size(self):
         """Whitelist should contain a reasonable number of commands."""
@@ -193,6 +198,38 @@ class TestExecCommand:
                 "composer",
                 "install",
                 "--no-dev",
+            ],
+            "check": False,
+        }
+
+    def test_exec_allows_wp_cli_with_php_version(self, monkeypatch):
+        captured = {}
+
+        def fake_privileged(helper_command, helper_args=None, check=True, **kwargs):
+            captured["helper_command"] = helper_command
+            captured["helper_args"] = helper_args
+            captured["check"] = check
+            return type("Result", (), {"returncode": 0, "stdout": "https://example.com\n", "stderr": ""})()
+
+        monkeypatch.setattr(terminal_service.shell, "privileged", fake_privileged)
+        result = exec_command(
+            "siteuser",
+            "wp option get siteurl",
+            cwd="/home/siteuser/example.com/public_html",
+            php_version="8.3",
+        )
+
+        assert result.exit_code == 0
+        assert captured == {
+            "helper_command": "terminal-exec",
+            "helper_args": [
+                "siteuser",
+                "/home/siteuser/example.com/public_html",
+                "--php-version=8.3",
+                "wp",
+                "option",
+                "get",
+                "siteurl",
             ],
             "check": False,
         }

@@ -2898,6 +2898,10 @@ PY
         [[ -n "$composer_bin" ]] || deny "composer not found"
         exec runuser -u "$user" -- env "${terminal_env[@]}" "$php_bin" "$composer_bin" "$@"
         ;;
+      wp)
+        [[ -f /usr/local/bin/wp ]] || deny "wp-cli not found"
+        exec runuser -u "$user" -- env "${terminal_env[@]}" WP_CLI_PHP_ARGS='-d pcre.jit=0' "$php_bin" -d pcre.jit=0 /usr/local/bin/wp "$@"
+        ;;
       phpunit)
         phpunit_bin="$(command -v phpunit || true)"
         [[ -n "$phpunit_bin" ]] || deny "phpunit not found"
@@ -2927,7 +2931,7 @@ PY
         ;;
       *)
         echo "Command not allowed: $cmd" >&2
-        echo "Allowed commands: php, composer, artisan, node, npm, npx, yarn, git, phpunit, ls, cat, mkdir, rm, cp, mv, chmod, chown, pwd, echo, touch, grep, find, tar, zip, unzip, curl, wget, diff, head, tail, less, du, df, date, whoami, which, clear" >&2
+        echo "Allowed commands: php, composer, artisan, wp, node, npm, npx, yarn, git, phpunit, ls, cat, mkdir, rm, cp, mv, chmod, chown, pwd, echo, touch, grep, find, tar, zip, unzip, curl, wget, diff, head, tail, less, du, df, date, whoami, which, clear" >&2
         exit 126
         ;;
     esac

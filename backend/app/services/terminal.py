@@ -21,6 +21,7 @@ ALLOWED_COMMANDS: Set[str] = {
     "php",
     "composer",
     "artisan",
+    "wp",
     "node",
     "npm",
     "npx",
