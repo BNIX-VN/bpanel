@@ -19,11 +19,15 @@ fi
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 
-ALLOWED_SERVICES=(nginx mariadb redis-server php8.3-fpm php8.4-fpm bpanel-api)
+ALLOWED_SERVICES=(lsws mariadb redis-server bpanel-api)
 ALLOWED_ACTIONS=(start stop restart reload status is-active is-enabled)
 HOME_ROOT="/home"
-NGINX_CONF_DIR="/etc/nginx/conf.d"
-PHP_CONF_DIRS=(/etc/php/{5.6,7.4,8.0,8.1,8.2,8.3,8.4,8.5}/fpm/conf.d)
+OLS_BIN="/usr/local/lsws/bin/lswsctrl"
+OLS_CONF_DIR="/usr/local/lsws/conf"
+OLS_BPANEL_DIR="/usr/local/lsws/conf/bpanel"
+OLS_VHOST_DIR="/usr/local/lsws/conf/bpanel/vhosts"
+OLS_CUSTOM_DIR="/usr/local/lsws/conf/bpanel/custom"
+PHP_CONF_DIRS=(/usr/local/lsws/lsphp{83,84}/etc/php.d)
 BPANEL_SITES_GROUP="bpanel-sites"
 BPANEL_SFTP_GROUP="bpanel-sftp"
 APP_DIR="/opt/bpanel"
@@ -34,17 +38,22 @@ UPDATE_SCRIPT="/usr/local/sbin/bpanel-update"
 BPANEL_DATA_DIR="/var/lib/bpanel"
 FIREWALL_BLOCKLIST_URLS="${BPANEL_DATA_DIR}/firewall-blocklists.urls"
 FIREWALL_BLOCKLIST_WORK="${BPANEL_DATA_DIR}/firewall-blocklists.current"
-NGINX_BLOCKLIST_DIR="/etc/nginx/bpanel"
-NGINX_BLOCKLIST_CONF="/etc/nginx/conf.d/bpanel-ip-blocklist.conf"
-NGINX_BLOCKLIST_RULES="${NGINX_BLOCKLIST_DIR}/ip-blocklist-geo.conf"
-NGINX_BLOCKLIST_SERVER_CONF="${NGINX_BLOCKLIST_DIR}/ip-blocklist-server.conf"
-NGINX_CUSTOM_DIR="${NGINX_BLOCKLIST_DIR}/custom"
-NGINX_HTTP_FLOOD_CONF="/etc/nginx/conf.d/00-bpanel-http-flood.conf"
-NGINX_HTTP_FLOOD_LEGACY_CONF="/etc/nginx/conf.d/bpanel-http-flood.conf"
-NGINX_HTTP_FLOOD_ZONES="${NGINX_BLOCKLIST_DIR}/http-flood-zones.conf"
-NGINX_HTTP_FLOOD_SERVER_CONF="${NGINX_BLOCKLIST_DIR}/http-flood-server.conf"
-PHP_FPM_DEFAULT_WORKER_MB=128
-PHP_FPM_DEFAULT_REQUEST_TERMINATE_TIMEOUT=300
+FIREWALL_BLOCKLIST_IPSET="bpanel-blocklist"
+FIREWALL_CHAIN_INPUT="BPANEL_INPUT"
+FIREWALL_CHAIN_USER="BPANEL_USER"
+FIREWALL_CHAIN_BLOCKLIST="BPANEL_BLOCKLIST"
+LSWS_WAF_DIR="/usr/local/lsws/conf/bpanel/waf"
+LSWS_WAF_BASE_CONF="${LSWS_WAF_DIR}/bpanel-base.conf"
+LSWS_WAF_DEFAULT_CONF="${LSWS_WAF_DIR}/bpanel-default.conf"
+LSWS_WAF_CUSTOM_CONF="${LSWS_WAF_DIR}/bpanel-custom.conf"
+LSWS_WAF_MAIN_CONF="${LSWS_WAF_DIR}/bpanel-main.conf"
+LSWS_WAF_SITE_DIR="${LSWS_WAF_DIR}/sites"
+LSHTTPD_FLOOD_CONF="/usr/local/lsws/conf/bpanel/http-flood.conf"
+LSHTTPD_FLOOD_ZONES="${LSWS_WAF_DIR}/http-flood-zones.conf"
+LSPHP_DEFAULT_WORKER_MB=128
+LSPHP_DEFAULT_REQUEST_TERMINATE_TIMEOUT=300
+LSPHP_DEFAULT_WORKER_MB=128
+LSPHP_DEFAULT_REQUEST_TERMINATE_TIMEOUT=300
 MARIADB_TUNING_CONF="/etc/mysql/mariadb.conf.d/90-bpanel-tuning.cnf"
 
 deny() { echo "bpanel-helper: $*" >&2; exit 1; }
@@ -53,16 +62,13 @@ ensure_bpanel_data_dir() {
   install -d -o bpanel -g bpanel -m 0750 "$BPANEL_DATA_DIR"
 }
 
-ensure_nginx_conf_dir_writable() {
-  install -d -o root -g root -m 0755 "$NGINX_BLOCKLIST_DIR"
+ensure_ols_conf_dir_writable() {
+  install -d -o root -g root -m 0755 "$OLS_BPANEL_DIR"
+  install -d -o root -g root -m 0755 "$OLS_VHOST_DIR"
+  install -d -o root -g root -m 0755 "$OLS_CUSTOM_DIR"
   if getent group bpanel >/dev/null 2>&1; then
-    install -d -o root -g bpanel -m 2775 "$NGINX_CONF_DIR"
-    install -d -o root -g bpanel -m 2775 "$NGINX_CUSTOM_DIR"
-    chmod g+s "$NGINX_CONF_DIR" 2>/dev/null || true
-    chmod g+s "$NGINX_CUSTOM_DIR" 2>/dev/null || true
-  else
-    install -d -o root -g root -m 0755 "$NGINX_CONF_DIR"
-    install -d -o root -g root -m 0755 "$NGINX_CUSTOM_DIR"
+    chgrp bpanel "$OLS_VHOST_DIR" "$OLS_CUSTOM_DIR"
+    chmod 2775 "$OLS_VHOST_DIR" "$OLS_CUSTOM_DIR"
   fi
 }
 
@@ -126,62 +132,92 @@ require_panel_host() {
 
 allow_panel_port() {
   local port="$1"
-  if command -v ufw >/dev/null 2>&1; then
-    ufw_panel_allow_port "$port"
+  iptables_panel_allow_port "$port"
+}
+
+iptables_ensure_chains() {
+  iptables -N "$FIREWALL_CHAIN_INPUT" 2>/dev/null || true
+  iptables -N "$FIREWALL_CHAIN_USER" 2>/dev/null || true
+  iptables -N "$FIREWALL_CHAIN_BLOCKLIST" 2>/dev/null || true
+  iptables -C INPUT -j "$FIREWALL_CHAIN_INPUT" 2>/dev/null || \
+    iptables -I INPUT 1 -j "$FIREWALL_CHAIN_INPUT"
+  iptables -C "$FIREWALL_CHAIN_INPUT" -j "$FIREWALL_CHAIN_USER" 2>/dev/null || \
+    iptables -A "$FIREWALL_CHAIN_INPUT" -j "$FIREWALL_CHAIN_USER"
+  iptables -C "$FIREWALL_CHAIN_INPUT" -j "$FIREWALL_CHAIN_BLOCKLIST" 2>/dev/null || \
+    iptables -A "$FIREWALL_CHAIN_INPUT" -j "$FIREWALL_CHAIN_BLOCKLIST"
+  ipset create "$FIREWALL_BLOCKLIST_IPSET" hash:net -exist 2>/dev/null || true
+}
+
+iptables_panel_allow_port() {
+  local port="$1"
+  require_port "$port"
+  iptables_ensure_chains
+  while iptables -D "$FIREWALL_CHAIN_INPUT" -p tcp --dport "$port" -j ACCEPT 2>/dev/null; do :; done
+  iptables -I "$FIREWALL_CHAIN_INPUT" 1 -p tcp --dport "$port" -j ACCEPT -m comment --comment "bpanel:PanelZone"
+}
+
+iptables_user_allow_port() {
+  local port="$1" proto="${2:-tcp}"
+  require_port "$port"
+  require_proto "$proto"
+  iptables_ensure_chains
+  iptables -A "$FIREWALL_CHAIN_USER" -p "$proto" --dport "$port" -j ACCEPT -m comment --comment "bpanel:UserZone"
+}
+
+iptables_user_deny_port() {
+  local port="$1" proto="${2:-tcp}"
+  require_port "$port"
+  require_proto "$proto"
+  iptables_ensure_chains
+  iptables -A "$FIREWALL_CHAIN_USER" -p "$proto" --dport "$port" -j DROP -m comment --comment "bpanel:UserZone"
+}
+
+iptables_user_allow_ip() {
+  local network="$1" port="${2:-}" proto="${3:-tcp}"
+  require_ip_or_cidr "$network"
+  iptables_ensure_chains
+  if [[ -n "$port" ]]; then
+    require_port "$port"
+    iptables -A "$FIREWALL_CHAIN_USER" -s "$network" -p "$proto" --dport "$port" -j ACCEPT -m comment --comment "bpanel:UserZone"
+  else
+    iptables -A "$FIREWALL_CHAIN_USER" -s "$network" -j ACCEPT -m comment --comment "bpanel:UserZone"
   fi
 }
 
-ufw_commented_rule_numbers() {
-  local comment="$1" target="${2:-}"
-  ufw status numbered 2>/dev/null \
-    | awk -v comment="$comment" -v target="$target" '
-        index($0, comment) {
-          line = $0
-          if (!match(line, /^\[[[:space:]]*[0-9]+\]/)) {
-            next
-          }
-          number = substr(line, RSTART, RLENGTH)
-          gsub(/[^0-9]/, "", number)
-          if (target == "") {
-            print number
-            next
-          }
-          sub(/^\[[[:space:]]*[0-9]+\][[:space:]]*/, "", line)
-          split(line, parts, /[[:space:]]+ALLOW[[:space:]]+/)
-          rule_target = parts[1]
-          if (rule_target == target || rule_target == target " (v6)") {
-            print number
-          }
-        }
-      '
+iptables_user_deny_ip() {
+  local network="$1" port="${2:-}" proto="${3:-tcp}"
+  require_ip_or_cidr "$network"
+  iptables_ensure_chains
+  if [[ -n "$port" ]]; then
+    require_port "$port"
+    iptables -A "$FIREWALL_CHAIN_USER" -s "$network" -p "$proto" --dport "$port" -j DROP -m comment --comment "bpanel:UserZone"
+  else
+    iptables -A "$FIREWALL_CHAIN_USER" -s "$network" -j DROP -m comment --comment "bpanel:UserZone"
+  fi
 }
 
-ufw_delete_commented_rules() {
-  local comment="$1" target="${2:-}" number
-  while read -r number; do
-    [[ -n "$number" ]] || continue
-    ufw --force delete "$number" >/dev/null 2>&1 || true
-  done < <(ufw_commented_rule_numbers "$comment" "$target" | sort -rn)
+iptables_list_rules() {
+  iptables_ensure_chains
+  echo "=== BPANEL_INPUT chain ==="
+  iptables -L "$FIREWALL_CHAIN_INPUT" -n --line-numbers 2>/dev/null || true
+  echo ""
+  echo "=== BPANEL_USER chain ==="
+  iptables -L "$FIREWALL_CHAIN_USER" -n --line-numbers 2>/dev/null || true
+  echo ""
+  echo "=== BPANEL_BLOCKLIST chain ==="
+  iptables -L "$FIREWALL_CHAIN_BLOCKLIST" -n --line-numbers 2>/dev/null || true
+  echo ""
+  echo "=== IPset: ${FIREWALL_BLOCKLIST_IPSET} ==="
+  ipset list "$FIREWALL_BLOCKLIST_IPSET" 2>/dev/null || true
 }
 
-ufw_panel_allow_port() {
-  local port="$1"
-  require_port "$port"
-  ufw_delete_commented_rules "bpanel:PanelZone" "${port}/tcp"
-  ufw insert 1 allow "${port}/tcp" comment "bpanel:PanelZone" >/dev/null 2>&1 \
-    || ufw insert 1 allow "${port}/tcp" >/dev/null 2>&1 \
-    || ufw allow "${port}/tcp" >/dev/null 2>&1 \
-    || true
+iptables_flush_user_rules() {
+  iptables -F "$FIREWALL_CHAIN_USER" 2>/dev/null || true
 }
 
-ufw_panel_allow_app() {
-  local app="$1"
-  [[ "$app" == "OpenSSH" || "$app" == "Nginx Full" ]] || deny "invalid panel firewall app: $app"
-  ufw_delete_commented_rules "bpanel:PanelZone" "$app"
-  ufw insert 1 allow "$app" comment "bpanel:PanelZone" >/dev/null 2>&1 \
-    || ufw insert 1 allow "$app" >/dev/null 2>&1 \
-    || ufw allow "$app" >/dev/null 2>&1 \
-    || true
+iptables_delete_rule() {
+  local chain="$1" rule_num="$2"
+  iptables -D "$chain" "$rule_num" 2>/dev/null || true
 }
 
 require_time_hhmm() {
@@ -203,37 +239,21 @@ schedule_panel_restart() {
   fi
 }
 
-refresh_tools_nginx() {
-  local port cert key domain host api_scheme tools_scheme pma_secure ssl_block php_version
+refresh_tools_ols() {
+  local port cert key domain host api_scheme tools_scheme pma_secure
   port="$(env_get PANEL_PORT)"; port="${port:-$DEFAULT_PANEL_PORT}"
   cert="$(env_get PANEL_SSL_CERT)"; key="$(env_get PANEL_SSL_KEY)"
   domain="$(env_get PANEL_DOMAIN)"; host="${domain:-$(detect_ip)}"
-  php_version="${PHP_DEFAULT:-8.4}"
-  api_scheme="http"; tools_scheme="http"; pma_secure="false"; ssl_block=""
+  api_scheme="http"; tools_scheme="http"; pma_secure="false"
   if [[ -n "$cert" && -n "$key" && -f "$cert" && -f "$key" ]]; then
     api_scheme="https"; tools_scheme="https"; pma_secure="true"
-    printf -v ssl_block '\n    listen 443 ssl http2 default_server;\n    ssl_certificate %s;\n    ssl_certificate_key %s;' "$cert" "$key"
   fi
-  rm -f /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf 2>/dev/null || true
-  ensure_nginx_conf_dir_writable
-  firewall_blocklist_write_nginx_conf 2>/dev/null || true
-  write_http_flood_nginx_conf 2>/dev/null || true
-  cat >/etc/nginx/conf.d/00-bpanel-tools.conf <<NGINX
-server {
-    listen 80 default_server;${ssl_block}
-    server_name _;
-    include /etc/nginx/bpanel/ip-blocklist-server.conf;
-    client_max_body_size 1100M;
-    location = /phpmyadmin { return 301 /phpmyadmin/; }
-    location /phpmyadmin/ { alias /usr/share/phpmyadmin/; index index.php; try_files \$uri \$uri/ =404; }
-    location ~ ^/phpmyadmin/(.+\.php)$ { alias /usr/share/phpmyadmin/\$1; include fastcgi_params; fastcgi_param SCRIPT_FILENAME /usr/share/phpmyadmin/\$1; fastcgi_param SCRIPT_NAME /phpmyadmin/\$1; fastcgi_pass unix:/run/php/php${php_version}-fpm.sock; fastcgi_read_timeout 300; }
-}
-NGINX
+  ensure_ols_conf_dir_writable
+  firewall_blocklist_apply 2>/dev/null || true
   sed -i -E "/api\/databases\/phpmyadmin-sso/s#'[^']+/api/databases/phpmyadmin-sso/'#'${api_scheme}://127.0.0.1:${port}/api/databases/phpmyadmin-sso/'#" /usr/share/phpmyadmin/bpanel-signon.php 2>/dev/null || true
   sed -i -E "s#('secure' => )(true|false)#\1${pma_secure}#" /etc/phpmyadmin/conf.d/bpanel-signon.php /usr/share/phpmyadmin/bpanel-signon.php 2>/dev/null || true
   [[ -n "$host" ]] && sed -i -E "/PmaAbsoluteUri/s#'https?://[^']+/phpmyadmin/'#'${tools_scheme}://${host}/phpmyadmin/'#" /etc/phpmyadmin/conf.d/bpanel-signon.php 2>/dev/null || true
-  nginx -t
-  systemctl reload nginx || true
+  "$OLS_BIN" restart 2>/dev/null || true
 }
 
 configure_unattended_upgrades() {
@@ -398,29 +418,29 @@ run_panel_update() {
   echo "Panel update started in background. Log: /var/log/bpanel-panel-update.log"
 }
 
-write_modsec_base_conf() {
-  install -d -o root -g root -m 0755 /etc/nginx/modsec /etc/nginx/modsec/sites
+write_waf_base_conf() {
+  install -d -o root -g root -m 0755 "$LSWS_WAF_DIR" "$LSWS_WAF_SITE_DIR"
   {
     [[ -f /etc/modsecurity/modsecurity.conf ]] && echo "Include /etc/modsecurity/modsecurity.conf"
     echo "SecRuleEngine On"
     echo "SecRequestBodyAccess Off"
-  } >/etc/nginx/modsec/bpanel-base.conf
+  } >"$LSWS_WAF_BASE_CONF"
 }
 
-write_modsec_main_conf() {
+write_waf_main_conf() {
   write_waf_default_rules
-  write_modsec_base_conf
-  touch /etc/nginx/modsec/bpanel-custom.conf
+  write_waf_base_conf
+  touch "$LSWS_WAF_CUSTOM_CONF"
   {
-    echo "Include /etc/nginx/modsec/bpanel-base.conf"
-    echo "Include /etc/nginx/modsec/bpanel-default.conf"
-    echo "Include /etc/nginx/modsec/bpanel-custom.conf"
-  } >/etc/nginx/modsec/bpanel-main.conf
+    echo "Include ${LSWS_WAF_BASE_CONF}"
+    echo "Include ${LSWS_WAF_DEFAULT_CONF}"
+    echo "Include ${LSWS_WAF_CUSTOM_CONF}"
+  } >"$LSWS_WAF_MAIN_CONF"
 }
 
 write_waf_default_rules() {
-  install -d -o root -g root -m 0755 /etc/nginx/modsec
-  cat >/etc/nginx/modsec/bpanel-default.conf <<'RULES'
+  install -d -o root -g root -m 0755 "$LSWS_WAF_DIR"
+  cat >"$LSWS_WAF_DEFAULT_CONF" <<'RULES'
 # BPanel default WAF rules: lightweight WordPress, Laravel, and PHP probes only.
 SecRule REQUEST_URI "@rx (?i)(?:/\.env(?:\.|$)|/\.user\.ini(?:\.|$)|/\.git/|/composer\.(?:json|lock)(?:$|[?])|/(?:phpinfo|info)\.php(?:$|[?])|/(?:config|database|db)\.php\.(?:bak|old|save|txt)(?:$|[?]))" "id:1001301,phase:1,deny,status:403,log,msg:'BPanel blocked PHP sensitive file probe'"
 SecRule REQUEST_URI|ARGS "@rx (?i)(?:\.\./|\.\.\\|%2e%2e%2f|%252e%252e%252f)" "id:1001302,phase:2,deny,status:403,log,msg:'BPanel blocked PHP path traversal'"
@@ -434,7 +454,7 @@ RULES
 }
 
 save_waf_custom_rules() {
-  install -d -o root -g root -m 0755 /etc/nginx/modsec
+  install -d -o root -g root -m 0755 "$LSWS_WAF_DIR"
   write_waf_default_rules
   local tmp
   tmp="$(mktemp)"
@@ -447,19 +467,18 @@ save_waf_custom_rules() {
     rm -f "$tmp"
     deny "WAF custom rules must be 64 KB or smaller"
   fi
-  install -m 0644 -o root -g root "$tmp" /etc/nginx/modsec/bpanel-custom.conf
+  install -m 0644 -o root -g root "$tmp" "$LSWS_WAF_CUSTOM_CONF"
   rm -f "$tmp"
-  write_modsec_main_conf
-  nginx -t
-  systemctl reload nginx
+  write_waf_main_conf
+  "$OLS_BIN" restart 2>/dev/null || true
   echo "WAF custom rules saved"
 }
 
 save_waf_site_rules() {
   local domain="$1" tmp target backup=""
   require_domain "$domain"
-  install -d -o root -g root -m 0755 /etc/nginx/modsec /etc/nginx/modsec/sites
-  write_modsec_base_conf
+  install -d -o root -g root -m 0755 "$LSWS_WAF_DIR" "$LSWS_WAF_SITE_DIR"
+  write_waf_base_conf
   tmp="$(mktemp)"
   cat >"$tmp"
   if file_has_nul "$tmp"; then
@@ -470,50 +489,43 @@ save_waf_site_rules() {
     rm -f "$tmp"
     deny "WAF site rules must be 160 KB or smaller"
   fi
-  target="/etc/nginx/modsec/sites/${domain}.conf"
+  target="${LSWS_WAF_SITE_DIR}/${domain}.conf"
   if [[ -f "$target" ]]; then
     backup="${target}.bak.$(date +%s)"
     cp "$target" "$backup"
   fi
   install -m 0644 -o root -g root "$tmp" "$target"
   rm -f "$tmp"
-  if ! nginx -t; then
+  if ! "$OLS_BIN" restart 2>/dev/null; then
     if [[ -n "$backup" && -f "$backup" ]]; then
       mv -f "$backup" "$target"
     else
       rm -f "$target"
     fi
-    deny "Nginx rejected WAF site rules"
+    deny "OpenLiteSpeed rejected WAF site rules"
   fi
   rm -f "$backup" 2>/dev/null || true
-  systemctl reload nginx
   echo "WAF site rules saved: ${domain}"
 }
 
 install_waf_engine() {
   export DEBIAN_FRONTEND=noninteractive
-  if ! dpkg -s libnginx-mod-http-modsecurity >/dev/null 2>&1; then
+  if ! dpkg -s libmodsecurity3 >/dev/null 2>&1; then
     apt-get update --allow-releaseinfo-change
-    apt-get install -y libnginx-mod-http-modsecurity modsecurity-crs libmodsecurity3 || \
-      apt-get install -y libnginx-mod-http-modsecurity libmodsecurity3
+    apt-get install -y modsecurity-crs libmodsecurity3 || \
+      apt-get install -y libmodsecurity3
   fi
-  install -d -o root -g root -m 0755 /etc/nginx/modsec /etc/nginx/modsec/sites
+  install -d -o root -g root -m 0755 "$LSWS_WAF_DIR" "$LSWS_WAF_SITE_DIR"
   write_waf_default_rules
-  touch /etc/nginx/modsec/bpanel-custom.conf
+  touch "$LSWS_WAF_CUSTOM_CONF"
   if [[ -f /etc/modsecurity/modsecurity.conf-recommended && ! -f /etc/modsecurity/modsecurity.conf ]]; then
     cp /etc/modsecurity/modsecurity.conf-recommended /etc/modsecurity/modsecurity.conf
   fi
   if [[ -f /etc/modsecurity/modsecurity.conf ]]; then
     sed -i -E 's/^SecRuleEngine .*/SecRuleEngine On/' /etc/modsecurity/modsecurity.conf
   fi
-  if [[ -f /usr/share/nginx/modules-available/mod-http-modsecurity.conf ]]; then
-    install -d /etc/nginx/modules-enabled
-    ln -sfn /usr/share/nginx/modules-available/mod-http-modsecurity.conf /etc/nginx/modules-enabled/50-mod-http-modsecurity.conf
-  fi
-  write_modsec_main_conf
-  write_http_flood_nginx_conf
-  nginx -t
-  systemctl reload nginx
+  write_waf_main_conf
+  "$OLS_BIN" restart 2>/dev/null || true
   echo "WAF engine installed with BPanel lightweight WordPress/Laravel/PHP rules."
 }
 
@@ -532,37 +544,29 @@ install_clamav_engine() {
 }
 
 install_php_version() {
-  local version="$1"
+  local version="$1" lsphp_version
   export DEBIAN_FRONTEND=noninteractive
   require_php_version "$version"
-  if [[ -f /etc/php/"$version"/fpm/php-fpm.conf ]]; then
-    echo "PHP $version is already installed; ensuring BPanel extension set..."
+  lsphp_version="${version//./}"
+  local lsphp_bin="/usr/local/lsws/lsphp${lsphp_version}/bin/lsphp"
+  if [[ -f "$lsphp_bin" ]]; then
+    echo "LSPHP ${lsphp_version} is already installed; ensuring BPanel extension set..."
   fi
-  if ! apt-cache show "php${version}-fpm" >/dev/null 2>&1; then
-    if ! grep -q "ondrej/php" /etc/apt/sources.list.d/*.list 2>/dev/null; then
-      echo "Adding ondrej/php PPA for PHP $version..."
-      apt-get update --allow-releaseinfo-change
-      apt-get install -y software-properties-common || true
-      add-apt-repository -y ppa:ondrej/php 2>/dev/null || true
-    fi
-    apt-get update --allow-releaseinfo-change
-  fi
-  echo "Installing PHP $version..."
+  echo "Installing LSPHP ${lsphp_version}..."
   local packages=(
-    "php${version}-fpm"
-    "php${version}-cli"
-    "php${version}-mysql"
-    "php${version}-sqlite3"
-    "php${version}-curl"
-    "php${version}-gd"
-    "php${version}-mbstring"
-    "php${version}-xml"
-    "php${version}-zip"
-    "php${version}-opcache"
-    "php${version}-intl"
-    "php${version}-bcmath"
-    "php${version}-redis"
-    "php${version}-imagick"
+    "lsphp${lsphp_version}"
+    "lsphp${lsphp_version}-mysql"
+    "lsphp${lsphp_version}-sqlite3"
+    "lsphp${lsphp_version}-curl"
+    "lsphp${lsphp_version}-gd"
+    "lsphp${lsphp_version}-mbstring"
+    "lsphp${lsphp_version}-xml"
+    "lsphp${lsphp_version}-zip"
+    "lsphp${lsphp_version}-opcache"
+    "lsphp${lsphp_version}-intl"
+    "lsphp${lsphp_version}-bcmath"
+    "lsphp${lsphp_version}-redis"
+    "lsphp${lsphp_version}-imagick"
   )
   local available_packages=() missing_packages=() package
   for package in "${packages[@]}"; do
@@ -573,20 +577,18 @@ install_php_version() {
     fi
   done
   if [[ ${#missing_packages[@]} -gt 0 ]]; then
-    echo "Skipping PHP packages not available in repo: ${missing_packages[*]}"
+    echo "Skipping LSPHP packages not available in repo: ${missing_packages[*]}"
   fi
-  [[ ${#available_packages[@]} -gt 0 ]] || deny "No package found for PHP ${version}"
-  apt-get install -y "${available_packages[@]}" || { echo "Failed to install PHP $version"; return 1; }
+  [[ ${#available_packages[@]} -gt 0 ]] || deny "No package found for LSPHP ${lsphp_version}"
+  apt-get install -y "${available_packages[@]}" || { echo "Failed to install LSPHP ${lsphp_version}"; return 1; }
   install_ioncube_loader "$version"
-  # Enable and start PHP-FPM
-  systemctl enable "php${version}-fpm" 2>/dev/null || true
-  systemctl start "php${version}-fpm" 2>/dev/null || true
-  echo "PHP $version installed successfully"
+  echo "LSPHP ${lsphp_version} installed successfully"
 }
 
 install_ioncube_loader() {
-  local version="$1" arch url tmp archive loader target_dir target loader_ini_dir
+  local version="$1" lsphp_version arch url tmp archive loader target_dir target loader_ini_dir
   require_php_version "$version"
+  lsphp_version="${version//./}"
   arch="$(dpkg --print-architecture 2>/dev/null || uname -m)"
   case "$arch" in
     amd64|x86_64)
@@ -622,20 +624,21 @@ install_ioncube_loader() {
   install -m 0644 -o root -g root "$loader" "$target"
   rm -rf -- "$tmp"
 
-  for loader_ini_dir in /etc/php/"$version"/cli/conf.d /etc/php/"$version"/fpm/conf.d; do
+  for loader_ini_dir in /usr/local/lsws/lsphp"${lsphp_version}"/etc/php.d; do
     [[ -d "$loader_ini_dir" ]] || continue
     printf 'zend_extension=%s\n' "$target" >"${loader_ini_dir}/00-ioncube.ini"
     chown root:root "${loader_ini_dir}/00-ioncube.ini"
     chmod 0644 "${loader_ini_dir}/00-ioncube.ini"
   done
 
-  if command -v "php${version}" >/dev/null 2>&1; then
-    if ! "php${version}" -v 2>&1 | grep -qi 'ionCube'; then
-      rm -f /etc/php/"$version"/cli/conf.d/00-ioncube.ini /etc/php/"$version"/fpm/conf.d/00-ioncube.ini
-      deny "ionCube Loader failed to load for PHP ${version}"
+  local lsphp_bin="/usr/local/lsws/lsphp${lsphp_version}/bin/lsphp"
+  if [[ -f "$lsphp_bin" ]]; then
+    if ! "$lsphp_bin" -v 2>&1 | grep -qi 'ionCube'; then
+      rm -f "/usr/local/lsws/lsphp${lsphp_version}/etc/php.d/00-ioncube.ini"
+      deny "ionCube Loader failed to load for LSPHP ${lsphp_version}"
     fi
   fi
-  echo "ionCube Loader enabled for PHP ${version}"
+  echo "ionCube Loader enabled for LSPHP ${lsphp_version}"
 }
 
 validate_php_config_file() {
@@ -669,11 +672,12 @@ validate_php_config_file() {
 }
 
 write_php_config() {
-  local version="$1" conf_dir target tmp size
+  local version="$1" lsphp_version conf_dir target tmp size
   require_php_version "$version"
-  conf_dir="/etc/php/${version}/fpm/conf.d"
+  lsphp_version="${version//./}"
+  conf_dir="/usr/local/lsws/lsphp${lsphp_version}/etc/php.d"
   target="${conf_dir}/99-bpanel.ini"
-  [[ -d "$conf_dir" ]] || deny "PHP FPM config directory not found: $conf_dir"
+  [[ -d "$conf_dir" ]] || deny "LSPHP config directory not found: $conf_dir"
   tmp="$(mktemp "${conf_dir}/.99-bpanel.ini.XXXXXX")" || deny "cannot create temporary PHP config"
   if ! cat >"$tmp"; then
     rm -f -- "$tmp"
@@ -688,23 +692,23 @@ write_php_config() {
   chown root:root "$tmp"
   chmod 0644 "$tmp"
   mv -f -- "$tmp" "$target"
-  systemctl restart "php${version}-fpm"
+  "$OLS_BIN" restart 2>/dev/null || true
   echo "PHP ${version} config updated: ${target}"
 }
 
 waf_status() {
-  echo "ModSecurity module:"
-  if nginx -V 2>&1 | grep -qi modsecurity || [[ -e /etc/nginx/modules-enabled/50-mod-http-modsecurity.conf ]]; then
-    echo "  installed"
+  echo "WAF engine:"
+  if dpkg -s libmodsecurity3 >/dev/null 2>&1; then
+    echo "  installed (libmodsecurity3)"
   else
     echo "  not installed"
   fi
   echo "Rules file:"
-  [[ -f /etc/nginx/modsec/bpanel-main.conf ]] && echo "  /etc/nginx/modsec/bpanel-main.conf" || echo "  missing"
+  [[ -f "$LSWS_WAF_MAIN_CONF" ]] && echo "  ${LSWS_WAF_MAIN_CONF}" || echo "  missing"
   echo "Default rules:"
-  [[ -f /etc/nginx/modsec/bpanel-default.conf ]] && echo "  /etc/nginx/modsec/bpanel-default.conf" || echo "  missing"
+  [[ -f "$LSWS_WAF_DEFAULT_CONF" ]] && echo "  ${LSWS_WAF_DEFAULT_CONF}" || echo "  missing"
   echo "Custom rules:"
-  [[ -f /etc/nginx/modsec/bpanel-custom.conf ]] && echo "  /etc/nginx/modsec/bpanel-custom.conf" || echo "  missing"
+  [[ -f "$LSWS_WAF_CUSTOM_CONF" ]] && echo "  ${LSWS_WAF_CUSTOM_CONF}" || echo "  missing"
   echo "Managed profile:"
   echo "  BPanel built-in lightweight WordPress/Laravel/PHP rules"
   echo "Timers:"
@@ -721,21 +725,28 @@ audit_log() {
   fi
 }
 
-run_ufw_ip_rule() {
+run_ip_rule() {
   local action="$1" network="$2" port="${3:-}" protocol="${4:-tcp}"
   require_ip_or_cidr "$network"
   case "$action" in
     allow|deny) ;;
-    *) deny "invalid ufw action: $action" ;;
+    *) deny "invalid iptables action: $action" ;;
   esac
+  iptables_ensure_chains
   if [[ -z "$port" ]]; then
-    ufw "$action" from "$network" comment "bpanel:UserZone" \
-      || ufw "$action" from "$network"
+    if [[ "$action" == "allow" ]]; then
+      iptables_user_allow_ip "$network"
+    else
+      iptables_user_deny_ip "$network"
+    fi
     return 0
   fi
   require_port "$port"; require_proto "$protocol"
-  ufw "$action" from "$network" to any port "$port" proto "$protocol" comment "bpanel:UserZone" \
-    || ufw "$action" from "$network" to any port "$port" proto "$protocol"
+  if [[ "$action" == "allow" ]]; then
+    iptables_user_allow_ip "$network" "$port" "$protocol"
+  else
+    iptables_user_deny_ip "$network" "$port" "$protocol"
+  fi
 }
 
 require_url() {
@@ -752,18 +763,18 @@ firewall_blocklist_urls() {
 firewall_blocklist_write_timer() {
   cat >/etc/systemd/system/bpanel-firewall-blocklist.service <<SERVICE
 [Unit]
-Description=Refresh BPanel Nginx IP blocklists
+Description=Refresh BPanel IP blocklists
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
 Environment=SUDO_USER=bpanel
-ExecStart=/usr/local/sbin/bpanel-helper nginx-blocklist-run
+ExecStart=/usr/local/sbin/bpanel-helper blocklist-run
 SERVICE
   cat >/etc/systemd/system/bpanel-firewall-blocklist.timer <<TIMER
 [Unit]
-Description=Refresh BPanel Nginx IP blocklists daily
+Description=Refresh BPanel IP blocklists daily
 
 [Timer]
 OnCalendar=*-*-* 01:00:00
@@ -772,59 +783,20 @@ Persistent=true
 [Install]
 WantedBy=timers.target
 TIMER
-  firewall_blocklist_write_nginx_conf
   systemctl daemon-reload
   systemctl enable --now bpanel-firewall-blocklist.timer >/dev/null 2>&1 || true
 }
 
-firewall_blocklist_write_nginx_conf() {
-  ensure_nginx_conf_dir_writable
-  touch "$NGINX_BLOCKLIST_RULES"
-  chown root:root "$NGINX_BLOCKLIST_RULES"
-  chmod 0644 "$NGINX_BLOCKLIST_RULES"
-  cat >"$NGINX_BLOCKLIST_SERVER_CONF" <<'CONF'
-# Managed by BPanel. Included inside server blocks.
-if ($bpanel_blocklisted_ip) {
-    return 444;
-}
-CONF
-  chown root:root "$NGINX_BLOCKLIST_SERVER_CONF"
-  chmod 0644 "$NGINX_BLOCKLIST_SERVER_CONF"
-  cat >"$NGINX_BLOCKLIST_CONF" <<CONF
-# Managed by BPanel. URL IP blocklists are enforced by Nginx instead of UFW.
-geo \$bpanel_blocklisted_ip {
-    default 0;
-    include ${NGINX_BLOCKLIST_RULES};
-}
-CONF
-  chown root:root "$NGINX_BLOCKLIST_CONF"
-  chmod 0644 "$NGINX_BLOCKLIST_CONF"
-}
-
-write_http_flood_nginx_conf() {
-  ensure_nginx_conf_dir_writable
-  if [[ ! -f "$NGINX_HTTP_FLOOD_ZONES" ]]; then
-    cat >"$NGINX_HTTP_FLOOD_ZONES" <<'CONF'
-# Managed by BPanel. Shared zones for per-website HTTP flood protection.
-map $cookie_bpanel_http_flood_ok $bpanel_http_flood_key {
-    default $binary_remote_addr;
-    1 "";
-}
-limit_conn_zone $bpanel_http_flood_key zone=bpanel_conn_flood:10m;
-CONF
-  fi
-  cat >"$NGINX_HTTP_FLOOD_CONF" <<'CONF'
-# Managed by BPanel. Shared zones for per-website HTTP flood protection.
-include /etc/nginx/bpanel/http-flood-zones.conf;
-CONF
-  rm -f "$NGINX_HTTP_FLOOD_LEGACY_CONF" "$NGINX_HTTP_FLOOD_SERVER_CONF" 2>/dev/null || true
-  chown root:root "$NGINX_HTTP_FLOOD_CONF" "$NGINX_HTTP_FLOOD_ZONES"
-  chmod 0644 "$NGINX_HTTP_FLOOD_CONF" "$NGINX_HTTP_FLOOD_ZONES"
+firewall_blocklist_apply() {
+  iptables_ensure_chains
+  ipset create "$FIREWALL_BLOCKLIST_IPSET" hash:net -exist
+  iptables -C "$FIREWALL_CHAIN_BLOCKLIST" -m set --match-set "$FIREWALL_BLOCKLIST_IPSET" src -j DROP 2>/dev/null || \
+    iptables -A "$FIREWALL_CHAIN_BLOCKLIST" -m set --match-set "$FIREWALL_BLOCKLIST_IPSET" src -j DROP
 }
 
 save_http_flood_zones() {
   local tmp backup=""
-  ensure_nginx_conf_dir_writable
+  ensure_ols_conf_dir_writable
   tmp="$(mktemp)"
   cat >"$tmp"
   if [[ $(wc -c <"$tmp") -gt 131072 ]]; then
@@ -835,30 +807,19 @@ save_http_flood_zones() {
     rm -f "$tmp"
     deny "HTTP flood zones cannot contain NUL bytes"
   fi
-  if [[ -f "$NGINX_HTTP_FLOOD_ZONES" ]]; then
-    backup="${NGINX_HTTP_FLOOD_ZONES}.bak.$(date +%s)"
-    cp "$NGINX_HTTP_FLOOD_ZONES" "$backup"
+  if [[ -f "$LSHTTPD_FLOOD_ZONES" ]]; then
+    backup="${LSHTTPD_FLOOD_ZONES}.bak.$(date +%s)"
+    cp "$LSHTTPD_FLOOD_ZONES" "$backup"
   fi
-  install -m 0644 -o root -g root "$tmp" "$NGINX_HTTP_FLOOD_ZONES"
+  install -m 0644 -o root -g root "$tmp" "$LSHTTPD_FLOOD_ZONES"
   rm -f "$tmp"
-  write_http_flood_nginx_conf
-  if ! nginx -t; then
+  if ! "$OLS_BIN" restart 2>/dev/null; then
     if [[ -n "$backup" && -f "$backup" ]]; then
-      mv -f "$backup" "$NGINX_HTTP_FLOOD_ZONES"
-    else
-      cat >"$NGINX_HTTP_FLOOD_ZONES" <<'CONF'
-# Managed by BPanel. Shared zones for per-website HTTP flood protection.
-map $cookie_bpanel_http_flood_ok $bpanel_http_flood_key {
-    default $binary_remote_addr;
-    1 "";
-}
-limit_conn_zone $bpanel_http_flood_key zone=bpanel_conn_flood:10m;
-CONF
+      mv -f "$backup" "$LSHTTPD_FLOOD_ZONES"
     fi
-    deny "Nginx rejected HTTP flood zones"
+    deny "OpenLiteSpeed rejected HTTP flood zones"
   fi
   rm -f "$backup" 2>/dev/null || true
-  systemctl reload nginx
   echo "HTTP flood zones saved"
 }
 
@@ -873,9 +834,15 @@ firewall_blocklist_status() {
   fi
   echo ""
   echo "Engine:"
-  echo "  nginx"
-  echo "Rules file:"
-  [[ -f "$NGINX_BLOCKLIST_RULES" ]] && echo "  ${NGINX_BLOCKLIST_RULES}" || echo "  missing"
+  echo "  iptables + ipset"
+  echo "IPset:"
+  if ipset list "$FIREWALL_BLOCKLIST_IPSET" >/dev/null 2>&1; then
+    local set_count
+    set_count="$(ipset list "$FIREWALL_BLOCKLIST_IPSET" 2>/dev/null | grep -c '^[0-9]' || echo 0)"
+    echo "  ${FIREWALL_BLOCKLIST_IPSET}: ${set_count} network(s)"
+  else
+    echo "  ${FIREWALL_BLOCKLIST_IPSET}: not created"
+  fi
   echo ""
   echo "Networks:"
   if [[ -s "$FIREWALL_BLOCKLIST_WORK" ]]; then
@@ -897,31 +864,22 @@ firewall_blocklist_status() {
 }
 
 firewall_blocklist_clear_rules() {
-  local numbers number
-  numbers="$(ufw_commented_rule_numbers "bpanel:UserZone:blocklist" | sort -rn)"
-  for number in $numbers; do
-    ufw --force delete "$number" >/dev/null 2>&1 || true
-  done
+  ipset flush "$FIREWALL_BLOCKLIST_IPSET" 2>/dev/null || true
 }
 
 firewall_blocklist_run() {
   ensure_bpanel_data_dir
   touch "$FIREWALL_BLOCKLIST_URLS"
-  local tmp fetched rules_tmp count url old_work old_rules
+  local tmp fetched count url
   tmp="$(mktemp)"
   fetched="$(mktemp)"
-  rules_tmp="$(mktemp)"
-  old_work="$(mktemp)"
-  old_rules="$(mktemp)"
-  [[ -f "$FIREWALL_BLOCKLIST_WORK" ]] && cp "$FIREWALL_BLOCKLIST_WORK" "$old_work" || true
-  [[ -f "$NGINX_BLOCKLIST_RULES" ]] && cp "$NGINX_BLOCKLIST_RULES" "$old_rules" || true
   while IFS= read -r url; do
     [[ -n "$url" ]] || continue
     require_url "$url"
     curl -fsSL --connect-timeout 10 --max-time 30 "$url" >>"$fetched" || echo "WARNING: could not fetch $url" >&2
     printf '\n' >>"$fetched"
   done < <(firewall_blocklist_urls)
-  python3 - "$fetched" "$tmp" "$rules_tmp" <<'PY'
+  python3 - "$fetched" "$tmp" <<'PY'
 import ipaddress
 import re
 import sys
@@ -943,37 +901,21 @@ for raw in open(sys.argv[1], encoding="utf-8", errors="ignore"):
 with open(sys.argv[2], "w", encoding="utf-8") as handle:
     for value in networks:
         handle.write(value + "\n")
-
-with open(sys.argv[3], "w", encoding="utf-8") as handle:
-    handle.write("# Managed by BPanel. Generated from URL IP blocklists.\n")
-    handle.write("# Loaded into the bpanel_blocklisted_ip geo map.\n")
-    for value in networks:
-        handle.write(f"{value} 1;\n")
 PY
-  install -d -o root -g root -m 0755 "$NGINX_BLOCKLIST_DIR"
-  install -m 0644 -o root -g root "$rules_tmp" "$NGINX_BLOCKLIST_RULES"
   install -m 0644 -o root -g root "$tmp" "$FIREWALL_BLOCKLIST_WORK"
-  firewall_blocklist_write_nginx_conf
-  if ! nginx -t; then
-    if [[ -s "$old_rules" ]]; then
-      install -m 0644 -o root -g root "$old_rules" "$NGINX_BLOCKLIST_RULES"
-    else
-      : >"$NGINX_BLOCKLIST_RULES"
-    fi
-    if [[ -s "$old_work" ]]; then
-      install -m 0644 -o root -g root "$old_work" "$FIREWALL_BLOCKLIST_WORK"
-    else
-      : >"$FIREWALL_BLOCKLIST_WORK"
-    fi
-    rm -f "$tmp" "$fetched" "$rules_tmp" "$old_work" "$old_rules"
-    deny "Nginx rejected URL blocklist"
-  fi
-  systemctl reload nginx
+  iptables_ensure_chains
   firewall_blocklist_clear_rules
+  if [[ -s "$FIREWALL_BLOCKLIST_WORK" ]]; then
+    while IFS= read -r network; do
+      [[ -n "$network" ]] || continue
+      ipset add "$FIREWALL_BLOCKLIST_IPSET" "$network" -exist 2>/dev/null || true
+    done <"$FIREWALL_BLOCKLIST_WORK"
+  fi
+  firewall_blocklist_apply
   count="$(sed '/^[[:space:]]*$/d' "$FIREWALL_BLOCKLIST_WORK" | wc -l | tr -d '[:space:]')"
   firewall_blocklist_write_timer
-  rm -f "$tmp" "$fetched" "$rules_tmp" "$old_work" "$old_rules"
-  echo "Nginx blocklist refreshed: ${count} network(s)"
+  rm -f "$tmp" "$fetched"
+  echo "Blocklist refreshed: ${count} network(s)"
 }
 
 firewall_blocklist_add_url() {
@@ -985,9 +927,8 @@ firewall_blocklist_add_url() {
     printf '%s\n' "$url" >>"$FIREWALL_BLOCKLIST_URLS"
   fi
   sort -u -o "$FIREWALL_BLOCKLIST_URLS" "$FIREWALL_BLOCKLIST_URLS"
-  firewall_blocklist_write_nginx_conf
   firewall_blocklist_write_timer
-  echo "Nginx blocklist URL added"
+  echo "Blocklist URL added"
 }
 
 firewall_blocklist_delete_url() {
@@ -997,9 +938,8 @@ firewall_blocklist_delete_url() {
   touch "$FIREWALL_BLOCKLIST_URLS"
   grep -Fxv -- "$url" "$FIREWALL_BLOCKLIST_URLS" >"${FIREWALL_BLOCKLIST_URLS}.tmp" || true
   mv -f "${FIREWALL_BLOCKLIST_URLS}.tmp" "$FIREWALL_BLOCKLIST_URLS"
-  firewall_blocklist_write_nginx_conf
   firewall_blocklist_write_timer
-  echo "Nginx blocklist URL removed"
+  echo "Blocklist URL removed"
 }
 
 write_ssl_auto_renew_timer() {
@@ -1045,7 +985,7 @@ copy_panel_live_certificate() {
 install_manual_ssl() {
   local domain="$1" base tmpdir
   require_domain "$domain"
-  base="/etc/nginx/bpanel/ssl/sites/${domain}"
+  base="/usr/local/lsws/conf/bpanel/ssl/sites/${domain}"
   tmpdir="$(mktemp -d /tmp/bpanel-manual-ssl.XXXXXX)"
   trap 'rm -rf "$tmpdir"' RETURN
   local payload_file="$tmpdir/payload.json"
@@ -1087,7 +1027,7 @@ PY
 remove_manual_ssl() {
   local domain="$1" base
   require_domain "$domain"
-  base="/etc/nginx/bpanel/ssl/sites/${domain}"
+  base="/usr/local/lsws/conf/bpanel/ssl/sites/${domain}"
   rm -f "$base/cert.crt" "$base/privkey.key" "$base/ca.crt" "$base/fullchain.crt"
   rmdir "$base" 2>/dev/null || true
   echo "Manual SSL removed for ${domain}"
@@ -1111,7 +1051,7 @@ renew_ssl_soon() {
     if ! openssl x509 -checkend "$seconds" -noout -in "$cert" >/dev/null 2>&1; then
       echo "Renewing certificate: ${cert_name}"
       if certbot renew --cert-name "$cert_name" --quiet --force-renewal \
-        --deploy-hook "systemctl reload nginx || true; systemctl restart bpanel-api || true"; then
+        --deploy-hook "$OLS_BIN restart 2>/dev/null || true; systemctl restart bpanel-api || true"; then
         renewed=$((renewed + 1))
       else
         echo "WARNING: could not renew ${cert_name}" >&2
@@ -1122,7 +1062,7 @@ renew_ssl_soon() {
   panel_domain="$(env_get PANEL_DOMAIN)"
   copy_panel_live_certificate "$panel_domain"
   if [[ "$renewed" -gt 0 ]]; then
-    systemctl reload nginx >/dev/null 2>&1 || true
+    "$OLS_BIN" restart 2>/dev/null || true
     systemctl restart bpanel-api >/dev/null 2>&1 || true
   fi
   echo "SSL auto-renew checked ${checked} certificate(s); renewed ${renewed} certificate(s) within ${days} day(s)."
@@ -1136,13 +1076,9 @@ is_in() {
 }
 
 is_allowed_service() {
-  local service="$1" php_version=""
+  local service="$1"
   if is_in "$service" "${ALLOWED_SERVICES[@]}"; then
     return 0
-  fi
-  if [[ "$service" =~ ^php([0-9]+\.[0-9]+)-fpm$ ]]; then
-    php_version="${BASH_REMATCH[1]}"
-    [[ -f "/etc/php/${php_version}/fpm/php-fpm.conf" ]] && return 0
   fi
   return 1
 }
@@ -1203,7 +1139,7 @@ require_php_version() {
 require_linux_user() {
   [[ "$1" =~ ^[a-z_][a-z0-9_-]{2,31}$ ]] || deny "invalid panel Linux user: $1"
   case "$1" in
-    root|daemon|bin|sys|sync|games|man|lp|mail|news|uucp|proxy|www-data|backup|list|irc|_apt|nobody|bpanel|bpanel-sites|bpanel-sftp|mysql|redis|nginx)
+    root|daemon|bin|sys|sync|games|man|lp|mail|news|uucp|proxy|www-data|backup|list|irc|_apt|nobody|bpanel|bpanel-sites|bpanel-sftp|mysql|redis|nginx|lsws)
       deny "reserved panel Linux user: $1" ;;
   esac
 }
@@ -1230,6 +1166,22 @@ read_site_log() {
     return 0
   fi
   tail -n "$lines" -- "$resolved"
+}
+
+clear_site_log() {
+  local domain="$1" kind="$2" path resolved
+  require_domain "$domain"
+  [[ "$kind" == "access" || "$kind" == "error" ]] || deny "invalid log kind: $kind"
+  path="/var/log/nginx/${domain}.${kind}.log"
+  resolved=$(readlink -m "$path") || deny "cannot resolve log path"
+  case "$resolved" in
+    /var/log/nginx/*) ;;
+    *) deny "log path outside /var/log/nginx: $resolved" ;;
+  esac
+  if [[ -f "$resolved" ]]; then
+    : >"$resolved"
+  fi
+  echo "Cleared log: $resolved"
 }
 
 require_managed_path() {
@@ -1525,16 +1477,14 @@ set_panel_user_password() {
 delete_panel_user_runtime() {
   local user="$1"
   require_linux_user "$user"
-  for dir in /etc/php/*/fpm/pool.d; do
+  for dir in /usr/local/lsws/lsphp*/etc/php.d; do
     [[ -d "$dir" ]] || continue
     for pool_file in "$dir"/bpanel-${user}.conf "$dir"/bpanel-${user}-*.conf; do
       [[ -f "$pool_file" ]] || continue
       rm -f "$pool_file"
-      local php_version
-      php_version="$(echo "$dir" | awk -F/ '{print $4}')"
-      systemctl reload "php${php_version}-fpm" 2>/dev/null || true
     done
   done
+  "$OLS_BIN" restart 2>/dev/null || true
   crontab -r -u "$user" 2>/dev/null || true
   pkill -u "$user" 2>/dev/null || true
   userdel "$user" 2>/dev/null || true
@@ -1593,7 +1543,7 @@ php_fpm_cpu_count() {
 php_fpm_pool_count() {
   local current_pool="${1:-}" count=0 pool_file
   shopt -s nullglob
-  for pool_file in /etc/php/*/fpm/pool.d/bpanel-*.conf; do
+  for pool_file in /usr/local/lsws/lsphp*/etc/php.d/bpanel-*.conf; do
     [[ -f "$pool_file" ]] || continue
     count=$((count + 1))
   done
@@ -1641,7 +1591,7 @@ calculate_php_fpm_pool_tuning() {
   total_mb="$(php_fpm_total_memory_mb)"
   cpu_count="$(php_fpm_cpu_count)"
   pool_count="$(php_fpm_pool_count "$current_pool")"
-  worker_mb="$(positive_int_or_default "$(php_fpm_tuning_value BPANEL_PHP_FPM_WORKER_MB "$PHP_FPM_DEFAULT_WORKER_MB")" "$PHP_FPM_DEFAULT_WORKER_MB" 32 1024)"
+  worker_mb="$(positive_int_or_default "$(php_fpm_tuning_value BPANEL_PHP_FPM_WORKER_MB "$LSPHP_DEFAULT_WORKER_MB")" "$LSPHP_DEFAULT_WORKER_MB" 32 1024)"
   reserve_mb="$(php_fpm_reserved_memory_mb "$total_mb")"
   php_budget_mb=$((total_mb - reserve_mb))
   if (( php_budget_mb < worker_mb )); then
@@ -1707,7 +1657,7 @@ calculate_php_fpm_pool_tuning() {
   PHP_FPM_MAX_CHILDREN="$pool_children"
   PHP_FPM_PROCESS_IDLE_TIMEOUT="$(positive_int_or_default "$(php_fpm_tuning_value BPANEL_PHP_FPM_IDLE_TIMEOUT "$idle_default")" "$idle_default" 5 300)"
   PHP_FPM_MAX_REQUESTS="$(positive_int_or_default "$(php_fpm_tuning_value BPANEL_PHP_FPM_MAX_REQUESTS "$requests_default")" "$requests_default" 50 10000)"
-  PHP_FPM_REQUEST_TERMINATE_TIMEOUT="$(positive_int_or_default "$(php_fpm_tuning_value BPANEL_PHP_FPM_REQUEST_TERMINATE_TIMEOUT "$PHP_FPM_DEFAULT_REQUEST_TERMINATE_TIMEOUT")" "$PHP_FPM_DEFAULT_REQUEST_TERMINATE_TIMEOUT" 30 3600)"
+  PHP_FPM_REQUEST_TERMINATE_TIMEOUT="$(positive_int_or_default "$(php_fpm_tuning_value BPANEL_PHP_FPM_REQUEST_TERMINATE_TIMEOUT "$LSPHP_DEFAULT_REQUEST_TERMINATE_TIMEOUT")" "$LSPHP_DEFAULT_REQUEST_TERMINATE_TIMEOUT" 30 3600)"
 }
 
 php_fpm_set_directive() {
@@ -1730,9 +1680,9 @@ apply_php_fpm_tuning_to_pool_file() {
 }
 
 retune_php_fpm_pools() {
-  local pool_file php_version pool_user count=0 versions=""
+  local pool_file php_version pool_user count=0
   shopt -s nullglob
-  for pool_file in /etc/php/*/fpm/pool.d/bpanel-*.conf; do
+  for pool_file in /usr/local/lsws/lsphp*/etc/php.d/bpanel-*.conf; do
     [[ -f "$pool_file" ]] || continue
     calculate_php_fpm_pool_tuning "$pool_file"
     apply_php_fpm_tuning_to_pool_file "$pool_file"
@@ -1742,17 +1692,10 @@ retune_php_fpm_pools() {
       usermod -aG "$pool_user" www-data 2>/dev/null || true
     fi
     count=$((count + 1))
-    php_version="$(echo "$pool_file" | awk -F/ '{print $4}')"
-    case " $versions " in
-      *" $php_version "*) ;;
-      *) versions="${versions} ${php_version}" ;;
-    esac
   done
   shopt -u nullglob
-  for php_version in $versions; do
-    systemctl reload "php${php_version}-fpm" 2>/dev/null || true
-  done
-  echo "Retuned ${count} BPanel PHP-FPM pool(s)."
+  "$OLS_BIN" restart 2>/dev/null || true
+  echo "Retuned ${count} BPanel PHP pool(s)."
 }
 
 mariadb_tuning_value() {
@@ -1906,16 +1849,14 @@ retune_mariadb() {
 delete_site_php_pools() {
   local user="$1" target="$2" glob
   glob="$(site_php_pool_glob "$user" "$target")"
-  for dir in /etc/php/*/fpm/pool.d; do
+  for dir in /usr/local/lsws/lsphp*/etc/php.d; do
     [[ -d "$dir" ]] || continue
     for pool_file in "$dir"/$glob.conf; do
       [[ -f "$pool_file" ]] || continue
       rm -f "$pool_file"
-      local php_version
-      php_version="$(echo "$dir" | awk -F/ '{print $4}')"
-      systemctl reload "php${php_version}-fpm" 2>/dev/null || true
     done
   done
+  "$OLS_BIN" restart 2>/dev/null || true
 }
 
 ensure_php_pool() {
@@ -1928,7 +1869,9 @@ ensure_php_pool() {
   local site_hash
   site_hash="$(printf '%s' "$target" | sha256sum | awk '{print substr($1, 1, 12)}')"
   local pool_name="bpanel-${user}-${site_hash}-${pool_suffix}"
-  local pool_file="/etc/php/${php_version}/fpm/pool.d/${pool_name}.conf"
+  local lsphp_version
+  lsphp_version="$(echo "$php_version" | tr -d '.')"
+  local pool_file="/usr/local/lsws/lsphp${lsphp_version}/etc/php.d/${pool_name}.conf"
   # Per-user dirs for sessions/uploads. Sharing /tmp across pools lets one
   # site read another's session files (mode 0600 helps but only inside the
   # same uid; uploads land world-writable on tmpfs). Using 0700 dirs owned
@@ -1942,7 +1885,7 @@ ensure_php_pool() {
 [${pool_name}]
 user = ${user}
 group = ${user}
-listen = /run/php/${pool_name}.sock
+listen = /tmp/lshttpd/${pool_name}.sock
 listen.owner = www-data
 listen.group = www-data
 listen.mode = 0660
@@ -1960,7 +1903,7 @@ php_admin_value[open_basedir] = ${target}:${sess_dir}:${upload_dir}:/usr/share/p
 php_admin_value[upload_tmp_dir] = ${upload_dir}
 php_admin_value[session.save_path] = ${sess_dir}
 POOL
-  systemctl reload "php${php_version}-fpm"
+  "$OLS_BIN" restart 2>/dev/null || true
 }
 
 ensure_php_runtime_dirs() {
@@ -1972,7 +1915,7 @@ ensure_php_runtime_dirs() {
   install -d -o "$user" -g "$user" -m 0700 "$sess_dir"
   # PHP keeps uploaded files in this directory before WordPress renames them
   # into wp-content/uploads. Keep the directory private to the site user, but
-  # make it setgid bpanel-sites so moved uploads remain readable by nginx.
+  # make it setgid bpanel-sites so moved uploads remain readable by the web server.
   install -d -o "$user" -g "$BPANEL_SITES_GROUP" -m 2700 "$upload_dir"
   chmod g+s "$upload_dir" 2>/dev/null || true
 }
@@ -1997,7 +1940,7 @@ fix_site_tree() {
 }
 
 require_ip_or_cidr() {
-  # Loose check; we trust ufw to do the final parsing.
+  # Loose check; we trust iptables to do the final parsing.
   [[ "$1" =~ ^[0-9a-fA-F.:/]+$ ]] || deny "invalid IP/CIDR: $1"
 }
 
@@ -2023,41 +1966,40 @@ case "$cmd" in
     exec systemctl daemon-reload
     ;;
 
-  # ---- nginx ------------------------------------------------------------
-  nginx-test)
-    exec nginx -t
+  # ---- ols -------------------------------------------------------------
+  ols-test)
+    "$OLS_BIN" restart 2>&1 || true
     ;;
 
-  nginx-reload)
-    nginx -t
-    exec systemctl reload nginx
+  ols-reload)
+    exec "$OLS_BIN" restart
     ;;
-  nginx-custom-write)
-    [[ $# -eq 1 ]] || deny "usage: nginx-custom-write <domain>"
+  ols-custom-write)
+    [[ $# -eq 1 ]] || deny "usage: ols-custom-write <domain>"
     domain="$1"
     require_domain "$domain"
-    ensure_nginx_conf_dir_writable
-    target="${NGINX_CUSTOM_DIR}/${domain}.conf"
+    ensure_ols_conf_dir_writable
+    target="${OLS_CUSTOM_DIR}/${domain}.conf"
     tmp="${target}.tmp.$$"
     cat >"$tmp"
     if file_has_nul "$tmp"; then
       rm -f "$tmp"
-      deny "custom nginx include contains NUL byte"
+      deny "custom OLS include contains NUL byte"
     fi
     install -m 0664 -o root -g bpanel "$tmp" "$target"
     rm -f "$tmp"
     ;;
-  nginx-custom-delete)
-    [[ $# -eq 1 ]] || deny "usage: nginx-custom-delete <domain>"
+  ols-custom-delete)
+    [[ $# -eq 1 ]] || deny "usage: ols-custom-delete <domain>"
     domain="$1"
     require_domain "$domain"
-    rm -f "${NGINX_CUSTOM_DIR}/${domain}.conf"
+    rm -f "${OLS_CUSTOM_DIR}/${domain}.conf"
     ;;
 
   fastcgi-cache-clear)
     [[ $# -eq 0 ]] || deny "usage: fastcgi-cache-clear"
-    install -d -o www-data -g www-data -m 0755 /var/cache/nginx/bpanel-fastcgi
-    find /var/cache/nginx/bpanel-fastcgi -mindepth 1 -delete
+    # OLS manages its own cache; clear any legacy nginx cache directory
+    rm -rf /var/cache/nginx/bpanel-fastcgi 2>/dev/null || true
     ;;
 
   # ---- updates ----------------------------------------------------------
@@ -2157,20 +2099,19 @@ case "$cmd" in
     ;;
 
   waf-update)
-    write_modsec_main_conf
-    nginx -t
-    systemctl reload nginx
+    write_waf_main_conf
+    "$OLS_BIN" restart 2>/dev/null || true
     echo "BPanel lightweight WAF rules refreshed"
     ;;
 
   waf-default-rules)
     write_waf_default_rules
-    exec cat /etc/nginx/modsec/bpanel-default.conf
+    exec cat "$LSWS_WAF_DEFAULT_CONF"
     ;;
 
   waf-custom-rules)
-    touch /etc/nginx/modsec/bpanel-custom.conf
-    exec cat /etc/nginx/modsec/bpanel-custom.conf
+    touch "$LSWS_WAF_CUSTOM_CONF"
+    exec cat "$LSWS_WAF_CUSTOM_CONF"
     ;;
 
   waf-custom-save)
@@ -2179,7 +2120,7 @@ case "$cmd" in
   waf-site-rules)
     [[ $# -eq 1 ]] || deny "usage: waf-site-rules <domain>"
     require_domain "$1"
-    exec cat "/etc/nginx/modsec/sites/${1}.conf"
+    exec cat "${LSWS_WAF_SITE_DIR}/${1}.conf"
     ;;
   waf-site-save)
     [[ $# -eq 1 ]] || deny "usage: waf-site-save <domain>"
@@ -2231,7 +2172,7 @@ case "$cmd" in
       env_set PANEL_SSL_KEY ""
     fi
     allow_panel_port "$port"
-    refresh_tools_nginx
+    refresh_tools_ols
     schedule_panel_restart
     echo "Panel URL: ${scheme}://${host}:${port}"
     ;;
@@ -2245,8 +2186,8 @@ case "$cmd" in
       -d "$domain" \
       --agree-tos \
       --non-interactive \
-      --pre-hook "systemctl stop nginx || true" \
-      --post-hook "systemctl start nginx || true" \
+      --pre-hook "$OLS_BIN stop || true" \
+      --post-hook "$OLS_BIN start || true" \
       --deploy-hook "install -d -o root -g bpanel -m 0750 /etc/bpanel && install -m 0640 -o root -g bpanel /etc/letsencrypt/live/${domain}/fullchain.pem /etc/bpanel/panel-fullchain.pem && install -m 0640 -o root -g bpanel /etc/letsencrypt/live/${domain}/privkey.pem /etc/bpanel/panel-privkey.pem")
     if [[ -n "$email" ]]; then
       require_email "$email"
@@ -2268,7 +2209,7 @@ case "$cmd" in
       env_set SSL_EMAIL "$email"
     fi
     allow_panel_port "$port"
-    refresh_tools_nginx
+    refresh_tools_ols
     schedule_panel_restart
     echo "Panel SSL enabled: https://${domain}:${port}"
     ;;
@@ -2292,42 +2233,6 @@ case "$cmd" in
       shift
     done
     install -d -o root -g bpanel -m 0755 /var/www/bpanel-acme/.well-known/acme-challenge
-    if [[ -f "/etc/nginx/conf.d/${domain}.conf" ]]; then
-      if grep -q "/var/lib/bpanel/acme-challenges" "/etc/nginx/conf.d/${domain}.conf"; then
-        cp -a "/etc/nginx/conf.d/${domain}.conf" "/etc/nginx/conf.d/${domain}.conf.bak"
-        sed -i 's#/var/lib/bpanel/acme-challenges#/var/www/bpanel-acme#g' "/etc/nginx/conf.d/${domain}.conf"
-        nginx -t && systemctl reload nginx
-      elif ! grep -q "well-known/acme-challenge" "/etc/nginx/conf.d/${domain}.conf"; then
-        cp -a "/etc/nginx/conf.d/${domain}.conf" "/etc/nginx/conf.d/${domain}.conf.bak"
-        python3 - "$domain" <<'PY'
-from pathlib import Path
-import sys
-
-domain = sys.argv[1]
-path = Path(f"/etc/nginx/conf.d/{domain}.conf")
-content = path.read_text(encoding="utf-8")
-block = """\
-
-    # BPANEL ACME CHALLENGE
-    location ^~ /.well-known/acme-challenge/ {
-        root /var/www/bpanel-acme;
-        default_type text/plain;
-        try_files $uri =404;
-        access_log off;
-        auth_basic off;
-    }
-"""
-marker = "    client_max_body_size"
-if marker in content:
-    line_end = content.find("\n", content.find(marker))
-    content = content[: line_end + 1] + block + content[line_end + 1 :]
-else:
-    content = content.replace("\n    location / {", block + "\n    location / {", 1)
-path.write_text(content, encoding="utf-8")
-PY
-        nginx -t && systemctl reload nginx
-      fi
-    fi
     args=(certonly --webroot -w /var/www/bpanel-acme --cert-name "$domain" --non-interactive --agree-tos --expand)
     for cert_domain in "${domains[@]}"; do
       args+=(-d "$cert_domain")
@@ -2339,11 +2244,7 @@ PY
       args+=(--register-unsafely-without-email)
     fi
     certbot "${args[@]}"
-    install_args=(install --nginx --cert-name "$domain" --non-interactive --redirect --expand)
-    for cert_domain in "${domains[@]}"; do
-      install_args+=(-d "$cert_domain")
-    done
-    exec certbot "${install_args[@]}"
+    "$OLS_BIN" restart 2>/dev/null || true
     ;;
 
   certbot-renew)
@@ -2366,58 +2267,93 @@ PY
     remove_manual_ssl "$1"
     ;;
 
-  # ---- ufw --------------------------------------------------------------
+  # ---- firewall ---------------------------------------------------------
+  firewall-status)
+    iptables_list_rules
+    ;;
+  firewall-flush-user)
+    iptables_flush_user_rules
+    echo "User firewall rules flushed"
+    ;;
+  firewall-allow-port)
+    [[ $# -ge 1 && $# -le 2 ]] || deny "usage: firewall-allow-port <port> [proto]"
+    iptables_user_allow_port "$1" "${2:-tcp}"
+    echo "Port $1/${2:-tcp} allowed"
+    ;;
+  firewall-deny-port)
+    [[ $# -ge 1 && $# -le 2 ]] || deny "usage: firewall-deny-port <port> [proto]"
+    iptables_user_deny_port "$1" "${2:-tcp}"
+    echo "Port $1/${2:-tcp} denied"
+    ;;
+  firewall-allow-ip)
+    [[ $# -ge 1 && $# -le 3 ]] || deny "usage: firewall-allow-ip <ip> [port] [proto]"
+    iptables_user_allow_ip "$1" "${2:-}" "${3:-tcp}"
+    echo "IP $1 allowed"
+    ;;
+  firewall-deny-ip)
+    [[ $# -ge 1 && $# -le 3 ]] || deny "usage: firewall-deny-ip <ip> [port] [proto]"
+    iptables_user_deny_ip "$1" "${2:-}" "${3:-tcp}"
+    echo "IP $1 denied"
+    ;;
+  firewall-delete-rule)
+    [[ $# -eq 2 ]] || deny "usage: firewall-delete-rule <chain> <number>"
+    iptables_delete_rule "$1" "$2"
+    echo "Rule $2 deleted from $1"
+    ;;
+  # Legacy aliases for backward compatibility
   ufw-status)
-    exec ufw status numbered
+    iptables_list_rules
     ;;
   ufw-enable)
-    exec ufw --force enable
+    iptables_ensure_chains
+    echo "Firewall chains ensured (iptables)"
     ;;
   ufw-disable)
-    exec ufw --force disable
+    iptables_flush_user_rules
+    echo "User firewall rules flushed"
     ;;
   ufw-reload)
-    exec ufw reload
+    "$OLS_BIN" restart 2>/dev/null || true
+    echo "Firewall reloaded"
     ;;
   ufw-allow-port)
     [[ $# -eq 2 ]] || deny "usage: ufw-allow-port <port> <proto>"
     require_port "$1"; require_proto "$2"
-    ufw allow "${1}/${2}" comment "bpanel:UserZone" \
-      || ufw allow "${1}/${2}"
+    iptables_user_allow_port "$1" "$2"
     ;;
   ufw-panel-allow-port)
     [[ $# -eq 1 ]] || deny "usage: ufw-panel-allow-port <port>"
-    ufw_panel_allow_port "$1"
+    iptables_panel_allow_port "$1"
     ;;
   ufw-allow-ip)
     [[ $# -ge 1 && $# -le 3 ]] || deny "usage: ufw-allow-ip <ip> [port] [proto]"
-    run_ufw_ip_rule allow "$1" "${2:-}" "${3:-tcp}"
+    run_ip_rule allow "$1" "${2:-}" "${3:-tcp}"
     ;;
   ufw-deny-ip)
     [[ $# -ge 1 && $# -le 3 ]] || deny "usage: ufw-deny-ip <ip> [port] [proto]"
-    run_ufw_ip_rule deny "$1" "${2:-}" "${3:-tcp}"
+    run_ip_rule deny "$1" "${2:-}" "${3:-tcp}"
     ;;
   ufw-delete)
-    [[ $# -eq 1 && "$1" =~ ^[0-9]+$ ]] || deny "usage: ufw-delete <number>"
-    exec ufw --force delete "$1"
+    [[ $# -eq 2 ]] || deny "usage: ufw-delete <chain> <number>"
+    iptables_delete_rule "$1" "$2"
     ;;
-  nginx-blocklist-status|ufw-blocklist-status)
+  blocklist-status|nginx-blocklist-status|ufw-blocklist-status)
     firewall_blocklist_status
     ;;
-  nginx-blocklist-timer-install|ufw-blocklist-timer-install)
+  blocklist-timer-install|nginx-blocklist-timer-install|ufw-blocklist-timer-install)
     firewall_blocklist_write_timer
-    echo "Nginx blocklist timer installed"
+    echo "Blocklist timer installed"
     ;;
-  nginx-blocklist-add|ufw-blocklist-add)
-    [[ $# -eq 1 ]] || deny "usage: nginx-blocklist-add <url>"
+  blocklist-add|nginx-blocklist-add|ufw-blocklist-add)
+    [[ $# -eq 1 ]] || deny "usage: blocklist-add <url>"
     firewall_blocklist_add_url "$1"
     ;;
-  nginx-blocklist-delete|ufw-blocklist-delete)
-    [[ $# -eq 1 ]] || deny "usage: nginx-blocklist-delete <url>"
+  blocklist-delete|nginx-blocklist-delete|ufw-blocklist-delete)
+    [[ $# -eq 1 ]] || deny "usage: blocklist-delete <url>"
     firewall_blocklist_delete_url "$1"
     ;;
-  nginx-blocklist-run|ufw-blocklist-run)
-    [[ $# -eq 0 ]] || deny "usage: nginx-blocklist-run"
+  blocklist-run|nginx-blocklist-run|ufw-blocklist-run)
+    [[ $# -eq 0 ]] || deny "usage: blocklist-run"
     firewall_blocklist_run
     ;;
 
@@ -2802,6 +2738,11 @@ PY
   site-log-read)
     [[ $# -eq 3 ]] || deny "usage: site-log-read <domain> <access|error> <lines>"
     read_site_log "$1" "$2" "$3"
+    ;;
+
+  site-log-clear)
+    [[ $# -eq 2 ]] || deny "usage: site-log-clear <domain> <access|error>"
+    clear_site_log "$1" "$2"
     ;;
 
   # ---- WP-CLI as www-data ----------------------------------------------
