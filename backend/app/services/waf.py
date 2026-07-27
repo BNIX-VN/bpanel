@@ -20,6 +20,7 @@ ACCESS_LOG_RE = re.compile(
 
 ACCESS_REASON_RULES = [
     (re.compile(r"/xmlrpc\.php(?:$|[?])", re.I), "Block WordPress XML-RPC"),
+    (re.compile(r"(?:/wp-json/batch/v1(?:$|[?])|[?&]rest_route=/batch/v1(?:&|$))", re.I), "Block WordPress wp2shell probe"),
     (re.compile(r"(?:^|/)\.env(?:\.|$|[?])", re.I), "Block environment file probe"),
     (re.compile(r"(?:^|/)\.git/", re.I), "Block git metadata probe"),
     (re.compile(r"/composer\.(?:json|lock)(?:$|[?])", re.I), "Block Composer metadata probe"),
@@ -76,6 +77,14 @@ DEFAULT_RULES = [
         "title": "WordPress sensitive files",
         "description": "Blocks wp-config probes, uploads PHP execution probes, and internal WordPress PHP paths.",
         "rules": """SecRule REQUEST_URI "@rx (?i)(?:/wp-config\\.php(?:\\.|$|[?])|/wp-content/(?:uploads|cache|upgrade)/[^?]*\\.php(?:$|[?])|/wp-admin/includes/[^?]*\\.php(?:$|[?])|/wp-includes/[^?]*\\.php(?:$|[?]))" "id:1001101,phase:1,deny,status:403,log,msg:'BPanel blocked WordPress sensitive path'""",
+    },
+    {
+        "id": "wordpress-wp2shell",
+        "category": "WordPress",
+        "title": "WordPress wp2shell probes",
+        "description": "Blocks WordPress REST batch probes used by wp2shell.",
+        "rules": """SecRule REQUEST_URI "@contains /wp-json/batch/v1" "id:1000001,phase:2,deny,status:403,log,msg:'Block wp2shell Path'"
+SecRule ARGS:rest_route "@contains /batch/v1" "id:1000002,phase:2,deny,status:403,log,msg:'Block wp2shell Query'""",
     },
     {
         "id": "wordpress-xmlrpc-author-scan",
