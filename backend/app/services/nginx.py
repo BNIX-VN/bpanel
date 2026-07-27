@@ -1238,14 +1238,7 @@ def read_site_log(domain: str, kind: str = "access", lines: int = 200) -> dict:
         "site-log-read",
         helper_args=[safe_domain, safe_kind, str(safe_lines)],
         check=False,
-        fallback=[
-            "bash",
-            "-lc",
-            'if [[ -f "$1" ]]; then tail -n "$2" -- "$1"; else echo BPANEL_LOG_MISSING=1 >&2; fi',
-            "bpanel-site-log",
-            str(path),
-            str(safe_lines),
-        ],
+        fallback=["tail", "-n", str(safe_lines), str(path)],
     )
     missing = "BPANEL_LOG_MISSING=1" in (result.stderr or "")
     if result.returncode != 0 and not missing:
@@ -1257,26 +1250,6 @@ def read_site_log(domain: str, kind: str = "access", lines: int = 200) -> dict:
         "lines": safe_lines,
         "content": result.stdout or "",
         "exists": not missing,
-    }
-
-
-def clear_site_log(domain: str, kind: str = "access") -> dict:
-    safe_domain = _safe_domain(domain)
-    safe_kind = _check_log_kind(kind)
-    path = _log_path(safe_domain, safe_kind)
-    result = shell.privileged(
-        "site-log-clear",
-        helper_args=[safe_domain, safe_kind],
-        check=False,
-        fallback=["bash", "-lc", 'test -f "$1" && : >"$1" || true', "bpanel-clear-log", str(path)],
-    )
-    if result.returncode != 0:
-        raise RuntimeError((result.stderr or result.stdout or "Cannot clear log file").strip())
-    return {
-        "domain": safe_domain,
-        "kind": safe_kind,
-        "path": str(path),
-        "cleared": True,
     }
 
 

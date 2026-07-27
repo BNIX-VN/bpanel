@@ -413,15 +413,13 @@ CONF
 write_waf_default_rules() {
   install -d -o root -g root -m 0755 /etc/nginx/modsec
   cat >/etc/nginx/modsec/bpanel-default.conf <<'RULES'
-# BPanel default WAF rules: lightweight WordPress, Laravel, PHP, and wp2shell probes only.
+# BPanel default WAF rules: lightweight WordPress, Laravel, and PHP probes only.
 SecRule REQUEST_URI "@rx (?i)(?:/\.env(?:\.|$)|/\.user\.ini(?:\.|$)|/\.git/|/composer\.(?:json|lock)(?:$|[?])|/(?:phpinfo|info)\.php(?:$|[?])|/(?:config|database|db)\.php\.(?:bak|old|save|txt)(?:$|[?]))" "id:1001301,phase:1,deny,status:403,log,msg:'BPanel blocked PHP sensitive file probe'"
 SecRule REQUEST_URI|ARGS "@rx (?i)(?:\.\./|\.\.\\|%2e%2e%2f|%252e%252e%252f)" "id:1001302,phase:2,deny,status:403,log,msg:'BPanel blocked PHP path traversal'"
 SecRule REQUEST_URI "@rx (?i)(?:/(?:c99|r57|shell|cmd|wso)\.php(?:$|[?])|/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin\.php(?:$|[?]))" "id:1001303,phase:1,deny,status:403,log,msg:'BPanel blocked PHP runtime probe'"
 SecRule REQUEST_URI "@rx (?i)(?:/\.env(?:\.|$)|/artisan(?:$|[?])|/server\.php(?:$|[?])|/storage/logs/[^?]*\.log(?:$|[?])|/bootstrap/cache/[^?]*\.php(?:$|[?]))" "id:1001201,phase:1,deny,status:403,log,msg:'BPanel blocked Laravel sensitive path'"
 SecRule REQUEST_URI "@rx (?i)(?:/_ignition/execute-solution(?:$|[?]))" "id:1001202,phase:1,deny,status:403,log,msg:'BPanel blocked Laravel Ignition RCE probe'"
 SecRule REQUEST_URI "@rx (?i)(?:/wp-config\.php(?:\.|$|[?])|/wp-content/(?:uploads|cache|upgrade)/[^?]*\.php(?:$|[?])|/wp-admin/includes/[^?]*\.php(?:$|[?])|/wp-includes/[^?]*\.php(?:$|[?]))" "id:1001101,phase:1,deny,status:403,log,msg:'BPanel blocked WordPress sensitive path'"
-SecRule REQUEST_URI "@contains /wp-json/batch/v1" "id:1000001,phase:2,deny,status:403,log,msg:'Block wp2shell Path'"
-SecRule ARGS:rest_route "@contains /batch/v1" "id:1000002,phase:2,deny,status:403,log,msg:'Block wp2shell Query'"
 SecRule ARGS:author "@rx ^[0-9]+$" "id:1001103,phase:2,deny,status:403,log,msg:'BPanel blocked WordPress author enumeration'"
 SecRule REQUEST_URI "@rx (?i)(?:/wp-admin/install\.php(?:$|[?])|/wp-admin/setup-config\.php(?:$|[?]))" "id:1001104,phase:1,deny,status:403,log,msg:'BPanel blocked WordPress installer probe'"
 RULES

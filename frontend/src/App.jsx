@@ -12,7 +12,7 @@ import 'ace-builds/src-noconflict/mode-php';
 import 'ace-builds/src-noconflict/mode-text';
 import 'ace-builds/src-noconflict/mode-yaml';
 import 'ace-builds/src-noconflict/theme-textmate';
-import { Archive, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, MoveRight, Network, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
+import { Archive, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, MoveRight, Network, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
 import { Terminal } from './components/Terminal';
 import './style.css';
 import './brand.css';
@@ -34,7 +34,7 @@ const NGINX_REWRITE_MODES = [
   { value: 'codeigniter', label: 'CodeIgniter' },
   { value: 'seohburl', label: 'SEO HB URL' },
 ];
-const SETTINGS_PAGE_KEYS = ['settings', 'security', 'php', 'firewall', 'waf', 'access-logs', 'updates', 'services'];
+const SETTINGS_PAGE_KEYS = ['settings', 'security', 'php', 'firewall', 'waf', 'updates', 'services'];
 const PAGE_ROUTES = {
   dashboard: '/',
   websites: '/website',
@@ -49,19 +49,11 @@ const PAGE_ROUTES = {
   php: '/php',
   firewall: '/firewall',
   waf: '/waf',
-  'access-logs': '/access-logs',
   updates: '/updates',
   services: '/services',
 };
 const EDITOR_LINE_HEIGHT = 22;
 const EDITOR_FONT_FAMILY = "Consolas, 'SFMono-Regular', 'Liberation Mono', Menlo, monospace";
-const WAF_ACCESS_LOG_DEFAULTS = {
-  websiteId: '',
-  verdict: 'all',
-  query: '',
-  limit: 50,
-  refresh: 5,
-};
 const ROUTE_PAGES = new Map([
   ...Object.entries(PAGE_ROUTES).map(([pageName, path]) => [path, pageName]),
   ['/dashboard', 'dashboard'],
@@ -162,36 +154,6 @@ function formatApiErrorItem(item) {
     ? item.loc.filter(part => part !== 'body' && part !== 'query' && part !== 'path').join('.')
     : '';
   return loc ? `${loc}: ${message}` : message;
-}
-
-function formatAccessLogTime(value = '') {
-  if (!value) return '';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
-}
-
-function accessLogBadgeClass(verdict = '') {
-  if (verdict === 'allow') return 'access-log-verdict allow';
-  if (verdict === 'error') return 'access-log-verdict error';
-  return 'access-log-verdict block';
-}
-
-function accessLogVerdictLabel(verdict = '') {
-  if (verdict === 'allow') return 'Allow';
-  if (verdict === 'error') return 'Error';
-  return 'Block';
-}
-
-function csvCell(value) {
-  const text = String(value ?? '');
-  return `"${text.replace(/"/g, '""')}"`;
 }
 
 function NotificationToast({ type, message, onClose }) {
@@ -475,8 +437,6 @@ function App() {
   const [selectedWafWebsiteId, setSelectedWafWebsiteId] = useState('');
   const [wafSiteConfig, setWafSiteConfig] = useState(null);
   const [httpFloodForm, setHttpFloodForm] = useState({ http_flood_enabled: false, ...HTTP_FLOOD_DEFAULTS });
-  const [wafAccessLogFilters, setWafAccessLogFilters] = useState(WAF_ACCESS_LOG_DEFAULTS);
-  const [wafAccessLogs, setWafAccessLogs] = useState({ items: [], total: 0, scanned: 0, missing: [], generated_at: '' });
   const [assignUserId, setAssignUserId] = useState('');
   const [assignWebsiteId, setAssignWebsiteId] = useState('');
   const [twoFactorStatus, setTwoFactorStatus] = useState(null);
@@ -614,8 +574,6 @@ function App() {
     setWafCustomRules('');
     setSelectedWafWebsiteId('');
     setWafSiteConfig(null);
-    setWafAccessLogFilters(WAF_ACCESS_LOG_DEFAULTS);
-    setWafAccessLogs({ items: [], total: 0, scanned: 0, missing: [], generated_at: '' });
     setLogViewer(null);
     setNginxCustomEditing(null);
     setTerminalViewer(null);
@@ -2240,50 +2198,6 @@ function App() {
     }
   }
 
-  async function loadWafAccessLogs(filters = wafAccessLogFilters, showLoading = true) {
-    const params = new URLSearchParams();
-    if (filters.websiteId) params.set('website_id', filters.websiteId);
-    params.set('verdict', filters.verdict || 'all');
-    params.set('limit', String(filters.limit || 50));
-    params.set('lines', '5000');
-    if (filters.query?.trim()) params.set('q', filters.query.trim());
-    const data = await request(`/waf/access-logs?${params.toString()}`, {}, showLoading ? 'Loading access logs...' : '');
-    if (data) setWafAccessLogs(data);
-  }
-
-  async function clearWafAccessLogs() {
-    const selected = websites.find(site => String(site.id) === String(wafAccessLogFilters.websiteId));
-    const label = selected?.domain || 'all websites';
-    if (!confirm(`Clear access logs for ${label}?`)) return;
-    const params = new URLSearchParams();
-    if (wafAccessLogFilters.websiteId) params.set('website_id', wafAccessLogFilters.websiteId);
-    const suffix = params.toString() ? `?${params.toString()}` : '';
-    const data = await request(`/waf/access-logs${suffix}`, { method: 'DELETE' }, 'Clearing access logs...');
-    if (data) {
-      setNotice(data.message || 'Access logs cleared.');
-      await loadWafAccessLogs(wafAccessLogFilters, false);
-    }
-  }
-
-  function exportWafAccessLogs() {
-    const rows = wafAccessLogs.items || [];
-    const header = ['verdict', 'time', 'domain', 'method', 'path', 'ip', 'reason', 'status', 'duration_ms', 'user_agent'];
-    const csv = [
-      header.join(','),
-      ...rows.map(item => header.map(key => csvCell(key === 'time' ? item.timestamp : item[key])).join(',')),
-    ].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    const site = websites.find(item => String(item.id) === String(wafAccessLogFilters.websiteId));
-    link.href = url;
-    link.download = `bpanel-access-logs-${site?.domain || 'all'}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
-  }
-
   async function loadUpdates(force = false) {
     const data = await request(`/updates/status${force ? '?refresh=true' : ''}`, {}, 'Loading update status...');
     if (data) setUpdatesStatus(data);
@@ -2435,35 +2349,7 @@ function App() {
     }
     if (isAuthenticated && page === 'settings') loadPanelSettings();
     if (isAuthenticated && page === 'backups' && currentUser?.role === 'admin') { loadUsers(); loadSftpTargets(); loadBackupSchedules(); loadRestoreBackups(); }
-  }, [isAuthenticated, page, currentUser?.role, websites.length]);
-
-  useEffect(() => {
-    if (!isAuthenticated || page !== 'access-logs' || currentUser?.role !== 'admin') return undefined;
-    const loadTimer = window.setTimeout(
-      () => loadWafAccessLogs(wafAccessLogFilters, !wafAccessLogs.items.length),
-      wafAccessLogFilters.query?.trim() ? 250 : 0,
-    );
-    let refreshTimer;
-    if (wafAccessLogFilters.refresh) {
-      refreshTimer = window.setInterval(
-        () => loadWafAccessLogs(wafAccessLogFilters, false),
-        Number(wafAccessLogFilters.refresh) * 1000,
-      );
-    }
-    return () => {
-      window.clearTimeout(loadTimer);
-      if (refreshTimer) window.clearInterval(refreshTimer);
-    };
-  }, [
-    isAuthenticated,
-    page,
-    currentUser?.role,
-    wafAccessLogFilters.websiteId,
-    wafAccessLogFilters.verdict,
-    wafAccessLogFilters.query,
-    wafAccessLogFilters.limit,
-    wafAccessLogFilters.refresh,
-  ]);
+  }, [isAuthenticated, page, currentUser?.role]);
 
   useEffect(() => {
     if (!scanJob?.job_id || !['queued', 'running'].includes(scanJob.status)) return undefined;
@@ -2506,7 +2392,6 @@ function App() {
     ...(isAdmin ? [['php', 'PHP config', Code2]] : []),
     ...(isAdmin ? [['firewall', 'Firewall', Shield]] : []),
     ...(isAdmin ? [['waf', 'WAF', Shield]] : []),
-    ...(isAdmin ? [['access-logs', 'Access Logs', FileText]] : []),
     ...(isAdmin ? [['updates', 'Updates', RefreshCw]] : []),
     ['services', 'Services Status', Server],
   ];
@@ -3464,82 +3349,6 @@ function App() {
     </>;
   }
 
-  function renderWafAccessLogs() {
-    if (!isAdmin) return <section className="section"><h2>Access Logs</h2><p className="hint">No permission.</p></section>;
-    const rows = wafAccessLogs.items || [];
-    const selectedSite = websites.find(site => String(site.id) === String(wafAccessLogFilters.websiteId));
-    const entryLabel = wafAccessLogs.total >= 1000 ? `${(wafAccessLogs.total / 1000).toFixed(1)}k entries` : `${wafAccessLogs.total || 0} entries`;
-    return <section className="section access-logs-section">
-      <div className="section-title access-logs-title">
-        <div><p className="eyebrow">Protected Traffic</p><h2>Access Logs</h2></div>
-        <div className="access-log-icon-actions">
-          <button className="secondary-light icon-button" disabled={!!loading} onClick={() => loadWafAccessLogs(wafAccessLogFilters, true)} aria-label="Refresh access logs" title="Refresh access logs"><RefreshCw size={15}/></button>
-          <button className="secondary-light icon-button" onClick={() => selectedSite && window.open(websiteUrl(selectedSite), '_blank', 'noopener,noreferrer')} disabled={!selectedSite} aria-label="Open website" title="Open website"><ExternalLink size={15}/></button>
-        </div>
-      </div>
-      <div className="access-log-panel">
-        <div className="access-log-toolbar">
-          <div className="access-log-toolbar-label"><strong>Access Logs</strong><span>{entryLabel}</span></div>
-          <button className="secondary-light" disabled={rows.length === 0} onClick={exportWafAccessLogs}><Download size={14}/> Export</button>
-          <button className="danger light" disabled={!!loading || websites.length === 0} onClick={clearWafAccessLogs}><Trash2 size={14}/> Clear</button>
-          <select value={wafAccessLogFilters.websiteId} onChange={e => setWafAccessLogFilters(prev => ({ ...prev, websiteId: e.target.value }))}>
-            <option value="">All websites</option>
-            {websites.map(site => <option key={site.id} value={site.id}>{site.domain}</option>)}
-          </select>
-          <select value={wafAccessLogFilters.verdict} onChange={e => setWafAccessLogFilters(prev => ({ ...prev, verdict: e.target.value }))}>
-            <option value="all">All verdicts</option>
-            <option value="block">Blocked</option>
-            <option value="allow">Allowed</option>
-            <option value="error">Errors</option>
-          </select>
-          <input value={wafAccessLogFilters.query} onChange={e => setWafAccessLogFilters(prev => ({ ...prev, query: e.target.value }))} placeholder="Filter logs" />
-          <select value={wafAccessLogFilters.limit} onChange={e => setWafAccessLogFilters(prev => ({ ...prev, limit: Number(e.target.value) }))}>
-            <option value={50}>50 / page</option>
-            <option value={100}>100 / page</option>
-            <option value={200}>200 / page</option>
-            <option value={500}>500 / page</option>
-          </select>
-          <select value={wafAccessLogFilters.refresh} onChange={e => setWafAccessLogFilters(prev => ({ ...prev, refresh: Number(e.target.value) }))}>
-            <option value={0}>Manual refresh</option>
-            <option value={5}>Refresh 5s</option>
-            <option value={10}>Refresh 10s</option>
-            <option value={30}>Refresh 30s</option>
-          </select>
-        </div>
-        <div className="access-log-table-wrap">
-          <table className="access-log-table">
-            <thead>
-              <tr>
-                <th>Verdict</th>
-                <th>Time</th>
-                <th>Site</th>
-                <th>Method</th>
-                <th>Path</th>
-                <th>IP</th>
-                <th>Reason</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map(item => <tr key={item.id}>
-                <td data-label="Verdict"><span className={accessLogBadgeClass(item.verdict)}>{accessLogVerdictLabel(item.verdict)}</span></td>
-                <td data-label="Time"><span className="access-log-time">{formatAccessLogTime(item.timestamp)}</span><small>{item.duration_ms || 0} ms</small></td>
-                <td data-label="Site"><span className="access-log-site">{item.domain}</span></td>
-                <td data-label="Method">{item.method || '-'}</td>
-                <td data-label="Path"><code>{item.path || '-'}</code></td>
-                <td data-label="IP">{item.ip || '-'}</td>
-                <td data-label="Reason">{item.reason || '-'}</td>
-                <td data-label="Status">{item.status || '-'}</td>
-              </tr>)}
-            </tbody>
-          </table>
-          {rows.length === 0 && <EmptyState icon={FileText} message="No access log entries match these filters." />}
-        </div>
-        {(wafAccessLogs.missing || []).length > 0 && <p className="hint">Missing log files: {wafAccessLogs.missing.join(', ')}</p>}
-      </div>
-    </section>;
-  }
-
   function renderUpdates() {
     if (!isAdmin) return <section className="section"><h2>Updates</h2><p className="hint">No permission.</p></section>;
     const statusText = updatesStatus?.stdout || updatesStatus?.stderr || 'Click View logs to load update logs.';
@@ -3936,7 +3745,6 @@ function App() {
     if (page === 'php') return renderPhpConfig();
     if (page === 'firewall') return renderFirewall();
     if (page === 'waf') return renderWaf();
-    if (page === 'access-logs') return renderWafAccessLogs();
     if (page === 'updates') return renderUpdates();
     if (page === 'services') return renderServices();
     if (page === 'settings') return renderPanelSettings();
