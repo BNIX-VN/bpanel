@@ -2251,10 +2251,6 @@ function App() {
     if (data) setWafAccessLogs(data);
   }
 
-  async function applyWafAccessLogFilters() {
-    await loadWafAccessLogs(wafAccessLogFilters, true);
-  }
-
   async function clearWafAccessLogs() {
     const selected = websites.find(site => String(site.id) === String(wafAccessLogFilters.websiteId));
     const label = selected?.domain || 'all websites';
@@ -2431,13 +2427,6 @@ function App() {
     if (isAuthenticated && page === 'php') loadPhpConfig();
     if (isAuthenticated && page === 'firewall') { loadFirewall(); loadFirewallBlocklists(); }
     if (isAuthenticated && page === 'waf') loadWafRules();
-    if (isAuthenticated && page === 'access-logs' && currentUser?.role === 'admin') {
-      const filters = !wafAccessLogFilters.websiteId && websites[0]
-        ? { ...wafAccessLogFilters, websiteId: String(websites[0].id) }
-        : wafAccessLogFilters;
-      if (filters !== wafAccessLogFilters) setWafAccessLogFilters(filters);
-      loadWafAccessLogs(filters, true);
-    }
     if (isAuthenticated && page === 'updates' && currentUser?.role === 'admin') loadUpdates();
     if (isAuthenticated && page === 'security') {
       loadTwoFactorStatus();
@@ -2450,10 +2439,31 @@ function App() {
 
   useEffect(() => {
     if (!isAuthenticated || page !== 'access-logs' || currentUser?.role !== 'admin') return undefined;
-    if (!wafAccessLogFilters.refresh) return undefined;
-    const timer = setInterval(() => loadWafAccessLogs(wafAccessLogFilters, false), Number(wafAccessLogFilters.refresh) * 1000);
-    return () => clearInterval(timer);
-  }, [isAuthenticated, page, currentUser?.role, wafAccessLogFilters]);
+    const loadTimer = window.setTimeout(
+      () => loadWafAccessLogs(wafAccessLogFilters, !wafAccessLogs.items.length),
+      wafAccessLogFilters.query?.trim() ? 250 : 0,
+    );
+    let refreshTimer;
+    if (wafAccessLogFilters.refresh) {
+      refreshTimer = window.setInterval(
+        () => loadWafAccessLogs(wafAccessLogFilters, false),
+        Number(wafAccessLogFilters.refresh) * 1000,
+      );
+    }
+    return () => {
+      window.clearTimeout(loadTimer);
+      if (refreshTimer) window.clearInterval(refreshTimer);
+    };
+  }, [
+    isAuthenticated,
+    page,
+    currentUser?.role,
+    wafAccessLogFilters.websiteId,
+    wafAccessLogFilters.verdict,
+    wafAccessLogFilters.query,
+    wafAccessLogFilters.limit,
+    wafAccessLogFilters.refresh,
+  ]);
 
   useEffect(() => {
     if (!scanJob?.job_id || !['queued', 'running'].includes(scanJob.status)) return undefined;
@@ -3482,7 +3492,7 @@ function App() {
             <option value="allow">Allowed</option>
             <option value="error">Errors</option>
           </select>
-          <input value={wafAccessLogFilters.query} onChange={e => setWafAccessLogFilters(prev => ({ ...prev, query: e.target.value }))} onKeyDown={e => { if (e.key === 'Enter') applyWafAccessLogFilters(); }} placeholder="Filter logs" />
+          <input value={wafAccessLogFilters.query} onChange={e => setWafAccessLogFilters(prev => ({ ...prev, query: e.target.value }))} placeholder="Filter logs" />
           <select value={wafAccessLogFilters.limit} onChange={e => setWafAccessLogFilters(prev => ({ ...prev, limit: Number(e.target.value) }))}>
             <option value={50}>50 / page</option>
             <option value={100}>100 / page</option>
@@ -3495,7 +3505,6 @@ function App() {
             <option value={10}>Refresh 10s</option>
             <option value={30}>Refresh 30s</option>
           </select>
-          <button disabled={!!loading} onClick={applyWafAccessLogFilters}><Search size={14}/> Apply</button>
         </div>
         <div className="access-log-table-wrap">
           <table className="access-log-table">
