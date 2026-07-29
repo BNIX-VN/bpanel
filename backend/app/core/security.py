@@ -31,7 +31,7 @@ pwd_context = CryptContext(
     bcrypt__truncate_error=True,
 )
 ALGORITHM = "HS256"
-SHADOW_HASH_PREFIXES = ("$y$", "$gy$", "$7$", "$6$", "$5$")
+SHADOW_HASH_PREFIXES = ("$y$", "$gy$", "$7$", "$6$", "$5$", "$2a$", "$2b$", "$2y$")
 
 
 def hash_password(password: str) -> str:
