@@ -46,6 +46,12 @@ BPanel versions use semantic versioning: `major.minor.patch`.
 
 Run as root on a fresh Ubuntu 24.04 server.
 
+Simple pinned install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/BNIX-VN/bpanel/refs/tags/v1.0.51/installer/install.sh | bash
+```
+
 Recommended auto latest-tag install:
 
 ```bash
