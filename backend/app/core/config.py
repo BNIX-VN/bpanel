@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     totp_issuer: str = "BPanel"
     github_token: str = ""
     geoip_country_db: str = ""
+    geoip_dbip_country_url: str = "https://download.db-ip.com/free/dbip-country-lite-{year}-{month}.csv.gz"
+    geoip_dbip_cache_dir: str = "/var/lib/bpanel/geoip"
     # Malware scanning is OPTIONAL and OFF by default. It only becomes active
     # after an admin enables it in the panel, which triggers an on-demand
     # install of clamav-daemon. Leaving this False keeps BPanel lightweight.

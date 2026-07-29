@@ -1,11 +1,15 @@
+import csv
+import gzip
 import hashlib
 import ipaddress
 import json
 import re
+import urllib.request
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Iterable
+from urllib.parse import urlparse
 
 from app.core.config import settings
 from app.models.entities import Website
@@ -46,6 +50,31 @@ GEOIP_COUNTRY_DB_CANDIDATES = (
     "/usr/local/share/GeoIP/GeoLite2-Country.mmdb",
     "/var/lib/GeoIP/GeoLite2-Country.mmdb",
 )
+DBIP_CACHE_BASENAME = "dbip-country-lite-{year}-{month}.csv.gz"
+DBIP_DOWNLOAD_TIMEOUT = 20
+COUNTRY_NAMES = {
+    "AU": "Australia",
+    "BR": "Brazil",
+    "CA": "Canada",
+    "CN": "China",
+    "DE": "Germany",
+    "ES": "Spain",
+    "FR": "France",
+    "GB": "United Kingdom",
+    "HK": "Hong Kong",
+    "ID": "Indonesia",
+    "IN": "India",
+    "JP": "Japan",
+    "KR": "South Korea",
+    "MY": "Malaysia",
+    "PH": "Philippines",
+    "RU": "Russia",
+    "SG": "Singapore",
+    "TH": "Thailand",
+    "US": "United States",
+    "VN": "Vietnam",
+    "ZZ": "Unknown",
+}
 
 DEFAULT_RULES = [
     {
@@ -385,6 +414,101 @@ def _geoip_country_reader():
     return None
 
 
+def _dbip_country_url(now: datetime | None = None) -> str:
+    current = now or datetime.now(timezone.utc)
+    template = (settings.geoip_dbip_country_url or "").strip()
+    if not template:
+        return ""
+    return template.format(year=f"{current.year:04d}", month=f"{current.month:02d}")
+
+
+def _dbip_country_cache_path(now: datetime | None = None) -> Path:
+    current = now or datetime.now(timezone.utc)
+    cache_dir = Path((settings.geoip_dbip_cache_dir or "/var/lib/bpanel/geoip").strip())
+    return cache_dir / DBIP_CACHE_BASENAME.format(year=f"{current.year:04d}", month=f"{current.month:02d}")
+
+
+def _ensure_dbip_country_cache() -> Path | None:
+    path = _dbip_country_cache_path()
+    if path.is_file():
+        return path
+    url = _dbip_country_url()
+    if not url:
+        return None
+    parsed_url = urlparse(url)
+    if parsed_url.scheme not in {"https", "http"}:
+        return None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        request = urllib.request.Request(url, headers={"User-Agent": "BPanel GeoIP updater"})
+        with urllib.request.urlopen(request, timeout=DBIP_DOWNLOAD_TIMEOUT) as response:
+            if getattr(response, "status", 200) >= 400:
+                return None
+            tmp_path = path.with_suffix(path.suffix + ".tmp")
+            with tmp_path.open("wb") as handle:
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    handle.write(chunk)
+            tmp_path.replace(path)
+    except Exception:
+        return None
+    return path if path.is_file() else None
+
+
+@lru_cache(maxsize=1)
+def _dbip_country_ranges() -> tuple[tuple[tuple[int, int, str], ...], tuple[tuple[int, int, str], ...]]:
+    path = _ensure_dbip_country_cache()
+    if path is None:
+        return (), ()
+    ipv4_ranges: list[tuple[int, int, str]] = []
+    ipv6_ranges: list[tuple[int, int, str]] = []
+    try:
+        opener = gzip.open if path.suffix == ".gz" else open
+        with opener(path, "rt", encoding="utf-8", newline="") as handle:
+            for row in csv.reader(handle):
+                if len(row) < 3:
+                    continue
+                try:
+                    start_address = ipaddress.ip_address(row[0].strip())
+                    end_address = ipaddress.ip_address(row[1].strip())
+                except ValueError:
+                    continue
+                if start_address.version != end_address.version:
+                    continue
+                country_code = row[2].strip().upper()
+                ranges = ipv4_ranges if start_address.version == 4 else ipv6_ranges
+                ranges.append((int(start_address), int(end_address), country_code))
+    except Exception:
+        return (), ()
+    ipv4_ranges.sort(key=lambda item: item[0])
+    ipv6_ranges.sort(key=lambda item: item[0])
+    return tuple(ipv4_ranges), tuple(ipv6_ranges)
+
+
+def _lookup_dbip_country(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> dict[str, str]:
+    ipv4_ranges, ipv6_ranges = _dbip_country_ranges()
+    ranges = ipv4_ranges if address.version == 4 else ipv6_ranges
+    if not ranges:
+        return {"country": "", "country_code": ""}
+    value = int(address)
+    low = 0
+    high = len(ranges) - 1
+    while low <= high:
+        mid = (low + high) // 2
+        start, end, country_code = ranges[mid]
+        if value < start:
+            high = mid - 1
+        elif value > end:
+            low = mid + 1
+        else:
+            if country_code == "ZZ":
+                return {"country": "", "country_code": ""}
+            return {"country": COUNTRY_NAMES.get(country_code, country_code), "country_code": country_code}
+    return {"country": "", "country_code": ""}
+
+
 def _lookup_ip_country(ip: str) -> dict[str, str]:
     value = (ip or "").strip()
     try:
@@ -400,6 +524,9 @@ def _lookup_ip_country(ip: str) -> dict[str, str]:
         or address.is_unspecified
     ):
         return {"country": "", "country_code": ""}
+    dbip_country = _lookup_dbip_country(address)
+    if dbip_country["country_code"]:
+        return dbip_country
     reader = _geoip_country_reader()
     if reader is None:
         return {"country": "", "country_code": ""}

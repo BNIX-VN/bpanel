@@ -566,7 +566,7 @@ install_panel_runtime() {
   chmod g+s /etc/nginx/conf.d 2>/dev/null || true
   install -d -o root -g bpanel -m 2775 /etc/nginx/bpanel/custom
   chmod g+s /etc/nginx/bpanel/custom 2>/dev/null || true
-  install -d -o bpanel -g bpanel -m 0750 /var/lib/bpanel
+  install -d -o bpanel -g bpanel -m 0750 /var/lib/bpanel /var/lib/bpanel/geoip
   if command -v sshd >/dev/null 2>&1; then
     sshd_config="/etc/ssh/sshd_config"
     sshd_backup="${sshd_config}.bpanel.bak"
@@ -735,6 +735,7 @@ ensure_panel_runtime_ownership() {
   [[ -f "$APP_DIR/.my.cnf" ]] && chown bpanel:bpanel "$APP_DIR/.my.cnf" 2>/dev/null || true
   [[ -f "$APP_DIR/.my.cnf" ]] && chmod 0600 "$APP_DIR/.my.cnf" 2>/dev/null || true
   [[ -d /var/lib/bpanel ]] && chown bpanel:bpanel /var/lib/bpanel 2>/dev/null || true
+  [[ -d /var/lib/bpanel/geoip ]] && chown -R bpanel:bpanel /var/lib/bpanel/geoip 2>/dev/null || true
   [[ -d /var/lib/bpanel/assets ]] && chown -R bpanel:bpanel /var/lib/bpanel/assets 2>/dev/null || true
   [[ -f "$APP_DIR/backend/.env" ]] && chmod 0640 "$APP_DIR/backend/.env"
 }

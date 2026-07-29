@@ -36,6 +36,21 @@ def test_access_logs_include_country_and_filter_by_country(monkeypatch):
     assert result["items"][0]["country_code"] == "US"
 
 
+def test_dbip_country_lookup_uses_cached_csv(monkeypatch, tmp_path):
+    csv_path = tmp_path / "dbip-country-lite-2026-07.csv"
+    csv_path.write_text("8.8.8.0,8.8.8.255,US\n1.1.1.0,1.1.1.255,AU\n", encoding="utf-8")
+
+    monkeypatch.setattr(waf, "_ensure_dbip_country_cache", lambda: csv_path)
+    waf._dbip_country_ranges.cache_clear()
+
+    try:
+        result = waf._lookup_ip_country("8.8.8.8")
+    finally:
+        waf._dbip_country_ranges.cache_clear()
+
+    assert result == {"country": "United States", "country_code": "US"}
+
+
 def test_clear_access_logs_calls_each_site(monkeypatch):
     cleared = []
     monkeypatch.setattr(waf.nginx, "clear_site_log", lambda domain, kind: cleared.append((domain, kind)))

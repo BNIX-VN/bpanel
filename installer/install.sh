@@ -697,7 +697,7 @@ CapabilityBoundingSet=~
 WantedBy=multi-user.target
 SERVICE
 
-  install -d -o bpanel -g bpanel -m 0750 /var/lib/bpanel
+  install -d -o bpanel -g bpanel -m 0750 /var/lib/bpanel /var/lib/bpanel/geoip
   cat >/etc/systemd/system/bpanel-backup-scheduler.service <<SERVICE
 [Unit]
 Description=BPanel scheduled backup runner
@@ -1055,7 +1055,7 @@ write_update_state() {
   version="$(source_version)"
   version="${version:-1.0.4}"
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  install -d -o bpanel -g bpanel -m 0750 /var/lib/bpanel
+  install -d -o bpanel -g bpanel -m 0750 /var/lib/bpanel /var/lib/bpanel/geoip
   cat >/var/lib/bpanel/update-status.json <<STATE
 {
   "current_version": "${version}",
