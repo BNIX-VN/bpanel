@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     frontend_dist: str = "/opt/bpanel/frontend/dist"
     totp_issuer: str = "BPanel"
     github_token: str = ""
+    geoip_country_db: str = ""
     # Malware scanning is OPTIONAL and OFF by default. It only becomes active
     # after an admin enables it in the panel, which triggers an on-demand
     # install of clamav-daemon. Leaving this False keeps BPanel lightweight.

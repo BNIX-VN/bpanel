@@ -22,6 +22,20 @@ def test_access_logs_parse_and_filter(monkeypatch):
     assert result["items"][0]["reason"] == "Block WordPress config probe"
 
 
+def test_access_logs_include_country_and_filter_by_country(monkeypatch):
+    site = SimpleNamespace(domain="example.com")
+    sample = '8.8.8.8 - - [27/Jul/2026:12:00:00 +0700] "GET / HTTP/1.1" 200 153 "-" "curl/8.0" 0.012'
+
+    monkeypatch.setattr(waf.nginx, "read_site_log", lambda domain, kind, lines: {"exists": True, "content": sample})
+    monkeypatch.setattr(waf, "_lookup_ip_country", lambda ip: {"country": "United States", "country_code": "US"})
+
+    result = waf.access_logs([site], verdict="all", query="United States", limit=50, lines=5000)
+
+    assert result["total"] == 1
+    assert result["items"][0]["country"] == "United States"
+    assert result["items"][0]["country_code"] == "US"
+
+
 def test_clear_access_logs_calls_each_site(monkeypatch):
     cleared = []
     monkeypatch.setattr(waf.nginx, "clear_site_log", lambda domain, kind: cleared.append((domain, kind)))

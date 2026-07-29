@@ -383,6 +383,8 @@ class WebsiteAccessLogOut(BaseModel):
     timestamp: str = ""
     duration_ms: int = 0
     ip: str = ""
+    country: str = ""
+    country_code: str = ""
     method: str = ""
     path: str = ""
     protocol: str = ""

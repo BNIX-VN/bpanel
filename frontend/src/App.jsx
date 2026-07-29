@@ -140,6 +140,13 @@ function accessLogVerdictLabel(verdict = '') {
   return 'Block';
 }
 
+function accessLogCountryLabel(item = {}) {
+  const country = item.country || '';
+  const code = item.country_code || '';
+  if (country && code && country !== code) return `${country} (${code})`;
+  return country || code || '-';
+}
+
 function csvCell(value) {
   const text = String(value ?? '');
   return `"${text.replace(/"/g, '""')}"`;
@@ -2279,7 +2286,7 @@ function App() {
 
   function exportWafAccessLogs() {
     const rows = wafAccessLogs.items || [];
-    const header = ['verdict', 'time', 'domain', 'method', 'path', 'ip', 'reason', 'status', 'duration_ms', 'user_agent'];
+    const header = ['verdict', 'time', 'domain', 'method', 'path', 'ip', 'country', 'country_code', 'reason', 'status', 'duration_ms', 'user_agent'];
     const csv = [
       header.join(','),
       ...rows.map(item => header.map(key => csvCell(key === 'time' ? item.timestamp : item[key])).join(',')),
@@ -3511,6 +3518,7 @@ function App() {
                 <th>Method</th>
                 <th>Path</th>
                 <th>IP</th>
+                <th>Country</th>
                 <th>Reason</th>
                 <th>Status</th>
               </tr>
@@ -3522,7 +3530,8 @@ function App() {
                 <td data-label="Site"><span className="access-log-site">{item.domain}</span></td>
                 <td data-label="Method">{item.method || '-'}</td>
                 <td data-label="Path"><code>{item.path || '-'}</code></td>
-                <td data-label="IP">{item.ip || '-'}</td>
+                <td data-label="IP"><span className="access-log-ip">{item.ip || '-'}</span></td>
+                <td data-label="Country">{accessLogCountryLabel(item)}</td>
                 <td data-label="Reason">{item.reason || '-'}</td>
                 <td data-label="Status">{item.status || '-'}</td>
               </tr>)}

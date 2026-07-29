@@ -1,12 +1,21 @@
 import hashlib
+import ipaddress
 import json
 import re
 from datetime import datetime, timezone
+from functools import lru_cache
+from pathlib import Path
 from typing import Iterable
 
+from app.core.config import settings
 from app.models.entities import Website
 from app.services import nginx
 from app.services.shell import CommandResult, shell
+
+try:
+    import maxminddb
+except ImportError:  # pragma: no cover - optional GeoIP support
+    maxminddb = None
 
 
 DOMAIN_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$")
@@ -32,6 +41,11 @@ ACCESS_REASON_RULES = [
     (re.compile(r"(?:\.\./|\.\.\\|%2e%2e%2f|%252e%252e%252f)", re.I), "Block path traversal"),
     (re.compile(r"/(?:c99|r57|shell|cmd|wso)\.php(?:$|[?])", re.I), "Block PHP runtime probe"),
 ]
+GEOIP_COUNTRY_DB_CANDIDATES = (
+    "/usr/share/GeoIP/GeoLite2-Country.mmdb",
+    "/usr/local/share/GeoIP/GeoLite2-Country.mmdb",
+    "/var/lib/GeoIP/GeoLite2-Country.mmdb",
+)
 
 DEFAULT_RULES = [
     {
@@ -350,6 +364,58 @@ def _duration_ms(value: str | None) -> int:
         return 0
 
 
+def _geoip_country_db_paths() -> list[Path]:
+    configured = (settings.geoip_country_db or "").strip()
+    if configured:
+        return [Path(configured)]
+    return [Path(path) for path in GEOIP_COUNTRY_DB_CANDIDATES]
+
+
+@lru_cache(maxsize=1)
+def _geoip_country_reader():
+    if maxminddb is None:
+        return None
+    for path in _geoip_country_db_paths():
+        if not path.is_file():
+            continue
+        try:
+            return maxminddb.open_database(str(path))
+        except Exception:
+            continue
+    return None
+
+
+def _lookup_ip_country(ip: str) -> dict[str, str]:
+    value = (ip or "").strip()
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError:
+        return {"country": "", "country_code": ""}
+    if (
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_reserved
+        or address.is_unspecified
+    ):
+        return {"country": "", "country_code": ""}
+    reader = _geoip_country_reader()
+    if reader is None:
+        return {"country": "", "country_code": ""}
+    try:
+        record = reader.get(value) or {}
+    except Exception:
+        return {"country": "", "country_code": ""}
+    country = record.get("country") or record.get("registered_country") or {}
+    names = country.get("names") or {}
+    country_code = country.get("iso_code") or ""
+    return {
+        "country": names.get("en") or country_code,
+        "country_code": country_code,
+    }
+
+
 def _parse_access_log_line(domain: str, line: str, sequence: int) -> tuple[datetime, dict] | None:
     match = ACCESS_LOG_RE.match(line or "")
     if not match:
@@ -359,13 +425,17 @@ def _parse_access_log_line(domain: str, line: str, sequence: int) -> tuple[datet
     timestamp = _parse_nginx_time(match.group("time"))
     sort_time = timestamp or datetime.min.replace(tzinfo=timezone.utc)
     digest = hashlib.sha256(f"{domain}\0{sequence}\0{line}".encode("utf-8", errors="ignore")).hexdigest()[:16]
+    ip = match.group("ip") or ""
+    country = _lookup_ip_country(ip)
     item = {
         "id": digest,
         "domain": domain,
         "verdict": _access_verdict(status_code),
         "timestamp": timestamp.isoformat() if timestamp else "",
         "duration_ms": _duration_ms(match.group("request_time")),
-        "ip": match.group("ip") or "",
+        "ip": ip,
+        "country": country["country"],
+        "country_code": country["country_code"],
         "method": method,
         "path": path,
         "protocol": protocol,
@@ -386,7 +456,7 @@ def _matches_access_filter(item: dict, verdict: str, query: str) -> bool:
         return True
     haystack = " ".join(
         str(item.get(key, ""))
-        for key in ("domain", "verdict", "method", "path", "ip", "reason", "status", "user_agent", "referer", "protocol", "raw")
+        for key in ("domain", "verdict", "method", "path", "ip", "country", "country_code", "reason", "status", "user_agent", "referer", "protocol", "raw")
     ).lower()
     return needle in haystack
 
