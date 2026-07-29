@@ -337,6 +337,7 @@ bpanel
 
 # Change a cloned/template VM from old IP to the current/new IP
 bpanel change-ip
+bpanel change-ip OLD_IP NEW_IP
 
 # Change the BPanel admin login password
 bpanel change-admin-password
