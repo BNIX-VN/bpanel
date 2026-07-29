@@ -2255,6 +2255,14 @@ function App() {
     await loadWafAccessLogs(wafAccessLogFilters, true);
   }
 
+  function updateWafAccessLogFilters(patch, shouldLoad = false) {
+    setWafAccessLogFilters(prev => {
+      const next = { ...prev, ...patch };
+      if (shouldLoad) loadWafAccessLogs(next, false);
+      return next;
+    });
+  }
+
   async function clearWafAccessLogs() {
     const selected = websites.find(site => String(site.id) === String(wafAccessLogFilters.websiteId));
     const label = selected?.domain || 'all websites';
@@ -2432,11 +2440,7 @@ function App() {
     if (isAuthenticated && page === 'firewall') { loadFirewall(); loadFirewallBlocklists(); }
     if (isAuthenticated && page === 'waf') loadWafRules();
     if (isAuthenticated && page === 'access-logs' && currentUser?.role === 'admin') {
-      const filters = !wafAccessLogFilters.websiteId && websites[0]
-        ? { ...wafAccessLogFilters, websiteId: String(websites[0].id) }
-        : wafAccessLogFilters;
-      if (filters !== wafAccessLogFilters) setWafAccessLogFilters(filters);
-      loadWafAccessLogs(filters, true);
+      loadWafAccessLogs(wafAccessLogFilters, true);
     }
     if (isAuthenticated && page === 'updates' && currentUser?.role === 'admin') loadUpdates();
     if (isAuthenticated && page === 'security') {
@@ -2454,14 +2458,6 @@ function App() {
     const timer = setInterval(() => loadWafAccessLogs(wafAccessLogFilters, false), Number(wafAccessLogFilters.refresh) * 1000);
     return () => clearInterval(timer);
   }, [isAuthenticated, page, currentUser?.role, wafAccessLogFilters]);
-
-  useEffect(() => {
-    if (!isAuthenticated || page !== 'access-logs' || currentUser?.role !== 'admin') return;
-    if (wafAccessLogFilters.websiteId || websites.length === 0) return;
-    const filters = { ...wafAccessLogFilters, websiteId: String(websites[0].id) };
-    setWafAccessLogFilters(filters);
-    loadWafAccessLogs(filters, false);
-  }, [isAuthenticated, page, currentUser?.role, wafAccessLogFilters.websiteId, websites.length]);
 
   useEffect(() => {
     if (!scanJob?.job_id || !['queued', 'running'].includes(scanJob.status)) return undefined;
@@ -3480,24 +3476,24 @@ function App() {
           <div className="access-log-toolbar-label"><strong>Access Logs</strong><span>{entryLabel}</span></div>
           <button className="secondary-light" disabled={rows.length === 0} onClick={exportWafAccessLogs}><Download size={14}/> Export</button>
           <button className="danger light" disabled={!!loading || websites.length === 0} onClick={clearWafAccessLogs}><Trash2 size={14}/> Clear</button>
-          <select value={wafAccessLogFilters.websiteId} onChange={e => setWafAccessLogFilters(prev => ({ ...prev, websiteId: e.target.value }))}>
+          <select value={wafAccessLogFilters.websiteId} onChange={e => updateWafAccessLogFilters({ websiteId: e.target.value }, true)}>
             <option value="">All websites</option>
             {websites.map(site => <option key={site.id} value={site.id}>{site.domain}</option>)}
           </select>
-          <select value={wafAccessLogFilters.verdict} onChange={e => setWafAccessLogFilters(prev => ({ ...prev, verdict: e.target.value }))}>
+          <select value={wafAccessLogFilters.verdict} onChange={e => updateWafAccessLogFilters({ verdict: e.target.value }, true)}>
             <option value="all">All verdicts</option>
             <option value="block">Blocked</option>
             <option value="allow">Allowed</option>
             <option value="error">Errors</option>
           </select>
-          <input value={wafAccessLogFilters.query} onChange={e => setWafAccessLogFilters(prev => ({ ...prev, query: e.target.value }))} onKeyDown={e => { if (e.key === 'Enter') applyWafAccessLogFilters(); }} placeholder="Filter logs" />
-          <select value={wafAccessLogFilters.limit} onChange={e => setWafAccessLogFilters(prev => ({ ...prev, limit: Number(e.target.value) }))}>
+          <input value={wafAccessLogFilters.query} onChange={e => updateWafAccessLogFilters({ query: e.target.value })} onKeyDown={e => { if (e.key === 'Enter') applyWafAccessLogFilters(); }} placeholder="Filter logs" />
+          <select value={wafAccessLogFilters.limit} onChange={e => updateWafAccessLogFilters({ limit: Number(e.target.value) }, true)}>
             <option value={50}>50 / page</option>
             <option value={100}>100 / page</option>
             <option value={200}>200 / page</option>
             <option value={500}>500 / page</option>
           </select>
-          <select value={wafAccessLogFilters.refresh} onChange={e => setWafAccessLogFilters(prev => ({ ...prev, refresh: Number(e.target.value) }))}>
+          <select value={wafAccessLogFilters.refresh} onChange={e => updateWafAccessLogFilters({ refresh: Number(e.target.value) })}>
             <option value={0}>Manual refresh</option>
             <option value={5}>Refresh 5s</option>
             <option value={10}>Refresh 10s</option>
