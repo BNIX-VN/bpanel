@@ -31,7 +31,7 @@ ownership, quotas, backups, SSL, services, and firewall tools built in.
 
 ## Versioning
 
-Current release: `1.0.46`.
+Current release: `1.0.51`.
 
 BPanel versions use semantic versioning: `major.minor.patch`.
 
@@ -98,10 +98,9 @@ chmod +x installer/install.sh installer/update.sh installer/rescue-ufw-blocklist
 bash installer/install.sh
 ```
 
-The commands auto-detect the newest semantic release tag from GitHub; at the
-time of this README, that tag is `v1.0.46`. To pin another release, run the
-same command with `BPANEL_VERSION=v1.0.46` exported or set before the detection
-block. GitHub auto-generates the tag zip, but the `git clone` method avoids
+The commands auto-detect the newest semantic release tag from GitHub. To pin a
+release, run the same command with `BPANEL_VERSION=v1.0.51` exported or set
+before the detection block. GitHub auto-generates the tag zip, but the `git clone` method avoids
 archive cache after a forced tag refresh. The clone path cleans up
 `/tmp/bpanel-source`; the zip path cleans up `/opt/bpanel-source` and its
 temporary archive files.
@@ -146,6 +145,16 @@ firewall ports, reset the panel URL/port, repair panel SSL, fix runtime
 permissions, change the `admin` password, and update BPanel from the latest
 release tag. Website and user management stays in the web panel.
 
+Common SSH rescue commands:
+
+```bash
+# Change the server IP without prompts
+bpanel change-ip OLD_IP NEW_IP
+
+# Make the BPanel admin password match the current Linux root password
+bpanel sync-admin-root-password
+```
+
 ## Updates
 
 BPanel can update itself from the latest stable GitHub release tag. Run it from
@@ -170,7 +179,7 @@ when a newer release is available.
 To stay on a specific release:
 
 ```bash
-bpanel-update --tag v1.0.46
+bpanel-update --tag v1.0.51
 ```
 
 If the browser still shows the old UI, do a hard refresh (Ctrl + Shift + R) or
@@ -335,14 +344,14 @@ systemctl status bpanel-api nginx mariadb redis-server php8.3-fpm php8.4-fpm
 # SSH rescue menu
 bpanel
 
-# Change a cloned/template VM from old IP to the current/new IP
+# Change the server IP
 bpanel change-ip
 bpanel change-ip OLD_IP NEW_IP
 
 # Change the BPanel admin login password
 bpanel change-admin-password
 
-# Make BPanel admin use the current root password after cloning a VPS/template
+# Make BPanel admin use the current root password
 bpanel sync-admin-root-password
 ```
 
