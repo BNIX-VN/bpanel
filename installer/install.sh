@@ -1,5 +1,7 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 set -euo pipefail
+
+BPANEL_INSTALLER_VERSION="${BPANEL_INSTALLER_VERSION:-v1.0.52}"
 
 if [[ $EUID -ne 0 ]]; then
   echo "Please run this installer as root"
@@ -18,19 +20,27 @@ if [[ "${ID}" != "ubuntu" || "${VERSION_ID}" != "24.04" ]]; then
   exit 1
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-BACKEND_SRC="${PROJECT_ROOT}/backend"
-FRONTEND_SRC="${PROJECT_ROOT}/frontend"
+if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+else
+  SCRIPT_DIR=""
+  PROJECT_ROOT=""
+fi
+BACKEND_SRC="${PROJECT_ROOT:+${PROJECT_ROOT}/backend}"
+FRONTEND_SRC="${PROJECT_ROOT:+${PROJECT_ROOT}/frontend}"
 
-# When running via bash <(curl ...), BASH_SOURCE[0] resolves to /dev/fd/N
-# so PROJECT_ROOT becomes /dev and BACKEND_SRC becomes /dev/backend which
-# does not exist.  Detect this and download the release tarball via curl
-# (curl is guaranteed to be available - the user just used it to fetch us).
+# When running via curl ... | bash, BASH_SOURCE[0] may be unset. When running
+# via bash <(curl ...), BASH_SOURCE[0] resolves to /dev/fd/N, so PROJECT_ROOT
+# becomes /dev and BACKEND_SRC becomes /dev/backend. Detect this and download
+# the release tarball via curl.
 BPANEL_GITHUB="${BPANEL_GITHUB:-https://github.com/BNIX-VN/bpanel}"
 BPANEL_REPO_SLUG="${BPANEL_GITHUB#*github.com/}"
-if [[ ! -d "${BACKEND_SRC}" ]]; then
-  # --- resolve latest tag via GitHub API (no git required) -----------
+if [[ -z "${BACKEND_SRC}" || ! -d "${BACKEND_SRC}" ]]; then
+  # --- resolve release tag (no git required) -------------------------
+  if [[ -z "${BPANEL_VERSION:-}" ]]; then
+    BPANEL_VERSION="${BPANEL_INSTALLER_VERSION:-}"
+  fi
   if [[ -z "${BPANEL_VERSION:-}" ]]; then
     BPANEL_VERSION="$(curl -fsSL "https://api.github.com/repos/${BPANEL_REPO_SLUG}/tags?per_page=1" \
       | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\(v[^"]*\)".*/\1/p' | head -1)" || true
