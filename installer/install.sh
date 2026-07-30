@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BPANEL_INSTALLER_VERSION="${BPANEL_INSTALLER_VERSION:-v1.0.54}"
+BPANEL_INSTALLER_VERSION="${BPANEL_INSTALLER_VERSION:-v1.0.55}"
 
 if [[ $EUID -ne 0 ]]; then
   echo "Please run this installer as root"
@@ -158,6 +158,7 @@ need_dir() {
 validate_sources() {
   need_dir "$BACKEND_SRC"
   need_dir "$FRONTEND_SRC"
+  [[ -f "${PROJECT_ROOT}/VERSION" ]] || fail "Missing VERSION"
   [[ -f "${BACKEND_SRC}/requirements.txt" ]] || fail "Missing backend/requirements.txt"
   [[ -f "${FRONTEND_SRC}/package.json" ]] || fail "Missing frontend/package.json"
 }
@@ -483,6 +484,7 @@ copy_sources() {
   rm -rf "${APP_DIR}/backend" "${APP_DIR}/frontend"
   cp -r "$BACKEND_SRC" "${APP_DIR}/backend"
   cp -r "$FRONTEND_SRC" "${APP_DIR}/frontend"
+  install -m 0644 "$PROJECT_ROOT/VERSION" "${APP_DIR}/VERSION"
 }
 
 build_frontend() {

@@ -31,7 +31,7 @@ ownership, quotas, backups, SSL, services, and firewall tools built in.
 
 ## Versioning
 
-Current release: `1.0.54`.
+Current release: `1.0.55`.
 
 BPanel versions use semantic versioning: `major.minor.patch`.
 
@@ -53,7 +53,8 @@ curl -fsSL https://raw.githubusercontent.com/BNIX-VN/bpanel/refs/heads/main/inst
 ```
 
 The bootstrap script downloads the newest semantic release tag from GitHub,
-then runs the installer from that tag.
+then runs the installer from that tag. It also copies `VERSION` into the
+runtime root so the panel shows the installed release, not the fallback.
 
 The installer will:
 
@@ -129,7 +130,7 @@ when a newer release is available.
 To stay on a specific release:
 
 ```bash
-bpanel-update --tag v1.0.54
+bpanel-update --tag v1.0.55
 ```
 
 If the browser still shows the old UI, do a hard refresh (Ctrl + Shift + R) or
