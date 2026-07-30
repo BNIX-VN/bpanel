@@ -141,11 +141,53 @@ class TwoFactorDisableRequest(BaseModel):
     code: Optional[str] = Field(default=None, min_length=6, max_length=12)
 
 
+class UserPackageCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    website_limit: int = Field(default=5, ge=0, le=1000)
+    storage_limit_mb: int = Field(default=1024, ge=0, le=1024 * 1024)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        value = re.sub(r"\s+", " ", value.strip())
+        if not value:
+            raise ValueError("name is required")
+        return value
+
+
+class UserPackageUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    website_limit: Optional[int] = Field(default=None, ge=0, le=1000)
+    storage_limit_mb: Optional[int] = Field(default=None, ge=0, le=1024 * 1024)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        value = re.sub(r"\s+", " ", value.strip())
+        if not value:
+            raise ValueError("name is required")
+        return value
+
+
+class UserPackageOut(BaseModel):
+    id: int
+    name: str
+    website_limit: int
+    storage_limit_mb: int
+    created_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
 class UserCreate(BaseModel):
     username: str = Field(min_length=3, max_length=32, pattern=r"^[a-z_][a-z0-9_-]{2,31}$")
     email: EmailStr
     password: str = Field(min_length=12, max_length=72)  # bcrypt 72-byte limit
     role: Literal["admin", "end_user"] = "end_user"
+    package_id: Optional[int] = Field(default=None, ge=1)
     website_limit: int = Field(default=5, ge=0, le=1000)
     storage_limit_mb: int = Field(default=1024, ge=0, le=1024 * 1024)
 
@@ -166,6 +208,7 @@ class UserUpdate(BaseModel):
     email: Optional[EmailStr] = None
     role: Optional[Literal["admin", "end_user"]] = None
     is_active: Optional[bool] = None
+    package_id: Optional[int] = Field(default=None, ge=1)
     website_limit: Optional[int] = Field(default=None, ge=0, le=1000)
     storage_limit_mb: Optional[int] = Field(default=None, ge=0, le=1024 * 1024)
 
@@ -187,6 +230,8 @@ class UserOut(BaseModel):
     email: str
     role: str
     is_active: bool
+    package_id: Optional[int] = None
+    package_name: Optional[str] = None
     website_limit: int
     storage_limit_mb: int
     storage_used_bytes: int = 0
@@ -224,7 +269,7 @@ class AuditLogOut(BaseModel):
 class WebsiteCreate(BaseModel):
     domain: str
     owner_id: Optional[int] = None
-    php_version: str = "8.3"
+    php_version: str = "8.4"
     app_type: str = "wordpress"
     install_wordpress: bool = True
     title: str = "My WordPress Site"
@@ -804,9 +849,9 @@ class RestoreBackup(BaseModel):
 
 
 class PhpConfigUpdate(BaseModel):
-    php_version: str = "8.3"
+    php_version: str = "8.4"
     display_errors: Literal["On", "Off"] = "Off"
-    memory_limit: str = "512M"
+    memory_limit: str = "1024M"
     upload_max_filesize: str = "1024M"
     post_max_size: str = "1024M"
     max_execution_time: int = Field(default=300, ge=1, le=3600)
@@ -816,7 +861,7 @@ class PhpConfigUpdate(BaseModel):
     @field_validator("php_version")
     @classmethod
     def validate_php_version(cls, value: str) -> str:
-        return _validate_php_version(value) or "8.3"
+        return _validate_php_version(value) or "8.4"
 
     @field_validator("memory_limit", "upload_max_filesize", "post_max_size")
     @classmethod
@@ -834,12 +879,12 @@ class CronCreate(BaseModel):
 
 
 class PhpConfigRestore(BaseModel):
-    php_version: str = "8.3"
+    php_version: str = "8.4"
 
     @field_validator("php_version")
     @classmethod
     def validate_php_version(cls, value: str) -> str:
-        return _validate_php_version(value) or "8.3"
+        return _validate_php_version(value) or "8.4"
 
 
 class WpAction(BaseModel):

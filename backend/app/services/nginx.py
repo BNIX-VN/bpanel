@@ -1320,7 +1320,7 @@ def ensure_wordpress_fastcgi_cache(domain: str) -> str:
     target = _vhost_path(domain)
     if settings.command_dry_run:
         return _replace_fastcgi_cache_blocks(
-            "server {\n    server_name example.com;\n    client_max_body_size 1100M;\n    location ~ \\.php$ {\n        fastcgi_pass unix:/run/php/php8.3-fpm.sock;\n        fastcgi_read_timeout 300;\n    }\n}\n",
+            "server {\n    server_name example.com;\n    client_max_body_size 1100M;\n    location ~ \\.php$ {\n        fastcgi_pass unix:/run/php/php8.4-fpm.sock;\n        fastcgi_read_timeout 300;\n    }\n}\n",
             True,
         )
     if not target.exists():

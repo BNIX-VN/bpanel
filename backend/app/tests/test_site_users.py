@@ -124,6 +124,8 @@ def test_php_fpm_pools_are_auto_tuned_for_vps_size():
 
 def test_mariadb_is_auto_tuned_for_vps_size():
     helper = HELPER_SCRIPT.read_text(encoding="utf-8")
+    install = INSTALL_SCRIPT.read_text(encoding="utf-8")
+    update = UPDATE_SCRIPT.read_text(encoding="utf-8")
     assert "calculate_mariadb_tuning()" in helper
     assert "write_mariadb_tuning()" in helper
     assert "mariadb-retune)" in helper
@@ -132,6 +134,10 @@ def test_mariadb_is_auto_tuned_for_vps_size():
     assert "table_open_cache = ${MARIADB_TABLE_OPEN_CACHE}" in helper
     assert "ensure_mariadb_slow_log" in helper
     assert "BPANEL_MARIADB_BUFFER_POOL_SIZE" in helper
+    for script in (install, update):
+        assert "bpanel-autotune.service" in script
+        assert "ExecStart=/usr/local/sbin/bpanel-helper php-fpm-retune" in script
+        assert "ExecStart=/usr/local/sbin/bpanel-helper mariadb-retune" in script
 
 
 def test_manual_ssl_helper_installs_private_key_outside_web_root():

@@ -7,6 +7,18 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 
 
+class UserPackage(Base):
+    __tablename__ = "user_packages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    website_limit: Mapped[int] = mapped_column(Integer, default=5)
+    storage_limit_mb: Mapped[int] = mapped_column(Integer, default=1024)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    users: Mapped[List["User"]] = relationship(back_populates="package")
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -16,6 +28,7 @@ class User(Base):
     hashed_password: Mapped[str] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(String(32), default="end_user")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    package_id: Mapped[Optional[int]] = mapped_column(ForeignKey("user_packages.id", ondelete="SET NULL"), nullable=True, index=True)
     website_limit: Mapped[int] = mapped_column(Integer, default=5)
     storage_limit_mb: Mapped[int] = mapped_column(Integer, default=1024)
     # Bumped to invalidate previously-issued JWTs (logout-everywhere, role
@@ -26,6 +39,7 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     websites: Mapped[List["Website"]] = relationship(back_populates="owner")
+    package: Mapped[Optional[UserPackage]] = relationship(back_populates="users")
 
 
 class Website(Base):
@@ -37,7 +51,7 @@ class Website(Base):
     root_path: Mapped[str] = mapped_column(String(500))
     document_root: Mapped[str] = mapped_column(String(255), default="public_html")
     linux_user: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
-    php_version: Mapped[str] = mapped_column(String(16), default="8.3")
+    php_version: Mapped[str] = mapped_column(String(16), default="8.4")
     app_type: Mapped[str] = mapped_column(String(32), default="wordpress")
     ssl_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     ssl_mode: Mapped[str] = mapped_column(String(16), default="none")

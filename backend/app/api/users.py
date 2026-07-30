@@ -2,6 +2,7 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
+from sqlalchemy.orm import selectinload
 from typing import List, Optional
 
 from app.api.deps import get_current_user
@@ -9,7 +10,7 @@ from app.core.database import get_db
 from app.core.permissions import Role, ensure_role
 from app.core.security import hash_password
 from app.core.step_up import require_sensitive_action_step_up
-from app.models.entities import AuditLog, BackupSchedule, DatabaseAccount, User, Website
+from app.models.entities import AuditLog, BackupSchedule, DatabaseAccount, User, UserPackage, Website
 from app.schemas.schemas import (
     AuditLogOut,
     UserCreate,
@@ -25,8 +26,25 @@ router = APIRouter(prefix="/users", tags=["users"])
 
 def _user_out(user: User, db: Session) -> dict:
     data = UserOut.model_validate(user).model_dump()
+    data["package_name"] = user.package.name if user.package else None
     data.update(storage_quota.storage_usage_summary(db, user))
     return data
+
+
+def _package_for_payload(db: Session, package_id: int | None) -> UserPackage | None:
+    if package_id is None:
+        return None
+    package = db.query(UserPackage).filter(UserPackage.id == package_id).first()
+    if not package:
+        raise HTTPException(status_code=404, detail="Package not found")
+    return package
+
+
+def _apply_package_limits(user: User, package: UserPackage | None) -> None:
+    user.package_id = package.id if package else None
+    if package:
+        user.website_limit = package.website_limit
+        user.storage_limit_mb = package.storage_limit_mb
 
 
 def _decode_schedule_user_ids(raw: str | None) -> list[int]:
@@ -72,6 +90,7 @@ def create_user(payload: UserCreate, request: Request, db: Session = Depends(get
     ensure_role(current_user.role, Role.admin)
     if db.query(User).filter((User.username == payload.username) | (User.email == payload.email)).first():
         raise HTTPException(status_code=409, detail="User already exists")
+    package = _package_for_payload(db, payload.package_id)
     try:
         site_users.ensure_panel_user(payload.username, payload.password)
     except ValueError as exc:
@@ -83,9 +102,11 @@ def create_user(payload: UserCreate, request: Request, db: Session = Depends(get
         email=payload.email,
         hashed_password=hash_password(payload.password),
         role=payload.role,
+        package_id=package.id if package else None,
         website_limit=payload.website_limit,
         storage_limit_mb=payload.storage_limit_mb,
     )
+    _apply_package_limits(user, package)
     db.add(user)
     db.commit()
     db.refresh(user)
@@ -96,7 +117,7 @@ def create_user(payload: UserCreate, request: Request, db: Session = Depends(get
 @router.get("", response_model=List[UserOut])
 def list_users(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.admin)
-    return [_user_out(user, db) for user in db.query(User).order_by(User.id.desc()).all()]
+    return [_user_out(user, db) for user in db.query(User).options(selectinload(User.package)).order_by(User.id.desc()).all()]
 
 
 @router.get("/me", response_model=UserOut)
@@ -126,10 +147,16 @@ def update_user(user_id: int, payload: UserUpdate, request: Request, db: Session
         if user.is_active != payload.is_active:
             user.is_active = payload.is_active
             user.token_version = (user.token_version or 0) + 1
+    package = None
+    if "package_id" in payload.model_fields_set:
+        package = _package_for_payload(db, payload.package_id)
+        _apply_package_limits(user, package)
     if payload.website_limit is not None:
         user.website_limit = payload.website_limit
     if payload.storage_limit_mb is not None:
         user.storage_limit_mb = payload.storage_limit_mb
+    if package:
+        _apply_package_limits(user, package)
 
     if role_changed:
         # New role -> existing tokens with old role claim should be invalidated.

@@ -5,11 +5,12 @@ WordPress and PHP websites from a single clean web UI with user
 ownership, quotas, backups, SSL, services, and firewall tools built in.
 
 - Dashboard resource monitoring for CPU, RAM, disk, and network throughput
-- WordPress one-click installer (PHP 8.3 / 8.4) with WP-CLI
+- WordPress one-click installer (PHP 8.4 default, 8.3/8.4 supported) with WP-CLI
 - WordPress and PHP sites with editable full Nginx vhosts
 - Panel users map to Linux/SFTP users; website source lives in `/home/<panel-user>/<domain>/public_html`
 - Admin quick-login for creating sites as a selected user, plus one-owner assignment per website
 - Website count limits and BPanel soft storage quotas per end user
+- User packages for reusable website/storage limits on panel accounts
 - MariaDB database creation and management with phpMyAdmin SSO (60s tokens)
 - Let's Encrypt SSL via certbot
 - Native BPanel file manager with upload, edit, archive, and extract support
@@ -31,7 +32,7 @@ ownership, quotas, backups, SSL, services, and firewall tools built in.
 
 ## Versioning
 
-Current release: `1.0.55`.
+Current release: `1.0.56`.
 
 BPanel versions use semantic versioning: `major.minor.patch`.
 
@@ -58,18 +59,19 @@ runtime root so the panel shows the installed release, not the fallback.
 
 The installer will:
 
-1. Install git, Nginx, MariaDB, Redis, OpenSSH/SFTP, PHP 8.3/8.4, Node.js 22,
+1. Install git, Nginx, MariaDB, Redis, OpenSSH/SFTP, PHP 8.4 default (8.3/8.4 supported), Node.js 22,
    certbot, phpMyAdmin, WP-CLI, UFW.
 2. Copy source to `/opt/bpanel`, build the frontend, set up the Python venv.
 3. Create the `bpanel` service account and the `admin` Linux/SFTP account.
 4. Create the systemd service `bpanel-api`.
 5. Configure phpMyAdmin SSO.
-6. Start the panel directly on the configured panel port without relying on Nginx for login.
-7. Issue Let's Encrypt SSL for the panel domain (optional).
-8. Install `/usr/local/sbin/bpanel-update` and `/usr/local/sbin/bpanel-rescue-ufw-blocklist`.
-9. Remove the extracted release source.
-10. Print only the panel URL, user, and password; save the same fields to
-    `/root/login.txt`.
+6. Auto-tune PHP-FPM and MariaDB from VPS RAM/CPU and keep that tuning on reboot.
+7. Start the panel directly on the configured panel port without relying on Nginx for login.
+8. Issue Let's Encrypt SSL for the panel domain (optional).
+9. Install `/usr/local/sbin/bpanel-update` and `/usr/local/sbin/bpanel-rescue-ufw-blocklist`.
+10. Remove the extracted release source.
+11. Print only the panel URL, user, and password; save the same fields to
+   `/root/login.txt`.
 
 You will be prompted for:
 
@@ -130,7 +132,7 @@ when a newer release is available.
 To stay on a specific release:
 
 ```bash
-bpanel-update --tag v1.0.55
+bpanel-update --tag v1.0.56
 ```
 
 If the browser still shows the old UI, do a hard refresh (Ctrl + Shift + R) or

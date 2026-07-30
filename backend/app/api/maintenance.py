@@ -818,7 +818,7 @@ def create_sftp_backup(
 
 
 @router.get("/php-config")
-def get_php_config(php_version: str = Query(default="8.3"), current_user: User = Depends(get_current_user)):
+def get_php_config(php_version: str = Query(default="8.4"), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.admin)
     try:
         return php.read_php_ini(php_version)

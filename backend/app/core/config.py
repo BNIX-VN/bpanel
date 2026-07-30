@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     allowed_origins: str = Field(default="")
     backup_root: str = "/var/backups/bpanel"
     nginx_sites_available: str = "/etc/nginx/conf.d"
-    default_php_version: str = "8.3"
+    default_php_version: str = "8.4"
     ssl_email: str = ""
     redis_url: str = "redis://localhost:6379/0"
     rate_limit_backend: str = "redis"

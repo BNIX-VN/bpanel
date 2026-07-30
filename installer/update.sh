@@ -9,7 +9,7 @@
 # Usage:
 #   sudo bash installer/update.sh
 #   sudo bash installer/update.sh --branch main
-#   sudo bash installer/update.sh --tag v1.0.4
+#   sudo bash installer/update.sh --tag v1.0.56
 #   sudo bash installer/update.sh --help
 
 set -euo pipefail
@@ -21,7 +21,7 @@ usage() {
   cat <<'USAGE'
 Usage:
   sudo bash installer/update.sh [--release]
-  sudo bash installer/update.sh --tag v1.0.4
+  sudo bash installer/update.sh --tag v1.0.56
   sudo bash installer/update.sh --branch main
 
 Options:
@@ -662,7 +662,23 @@ Persistent=true
 [Install]
 WantedBy=timers.target
 SERVICE
+  cat >/etc/systemd/system/bpanel-autotune.service <<'SERVICE'
+[Unit]
+Description=Auto tune BPanel PHP-FPM pools and MariaDB for this VPS
+After=network-online.target mariadb.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/bpanel-helper php-fpm-retune
+ExecStart=/usr/local/sbin/bpanel-helper mariadb-retune
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
   systemctl daemon-reload
+  systemctl enable bpanel-autotune.service >/dev/null 2>&1 || true
   if command -v ufw >/dev/null 2>&1; then
     for default_port in 80 443 465 587 "${panel_port}"; do
       ufw_panel_allow_port "$default_port"
@@ -902,6 +918,9 @@ if [[ -f "$SOURCE_DIR/installer/files/bpanel-helper.sh" ]]; then
       echo "  (warning: could not retune existing PHP-FPM pools; site refresh will retry later)"
     sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper mariadb-retune >/dev/null || \
       echo "  (warning: could not retune MariaDB; update will continue with existing settings)"
+    systemctl enable bpanel-autotune.service >/dev/null 2>&1 || true
+    systemctl start bpanel-autotune.service >/dev/null 2>&1 || \
+      echo "  (warning: could not run bpanel-autotune.service; next reboot will retry)"
   else
     echo "  (bpanel user not found; skipping helper refresh - run install.sh first)"
   fi
@@ -1037,6 +1056,7 @@ python -m py_compile \
   app/api/websites.py \
   app/api/databases.py \
   app/api/maintenance.py \
+  app/api/packages.py \
   app/api/firewall.py \
   app/api/services.py \
   app/api/updates.py \

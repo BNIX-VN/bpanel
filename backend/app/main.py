@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import auth, databases, firewall, maintenance, panel_settings as panel_settings_api, services, terminal, updates, users, waf, websites
+from app.api import auth, databases, firewall, maintenance, packages, panel_settings as panel_settings_api, services, terminal, updates, users, waf, websites
 from app.core.config import settings
 from app.core.database import run_migrations
 from app.core.version import APP_VERSION
@@ -93,6 +93,7 @@ async def security_headers(request, call_next):
 
 app.include_router(auth.router, prefix="/api")
 app.include_router(users.router, prefix="/api")
+app.include_router(packages.router, prefix="/api")
 app.include_router(websites.router, prefix="/api")
 app.include_router(databases.router, prefix="/api")
 app.include_router(firewall.router, prefix="/api")

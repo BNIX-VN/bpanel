@@ -106,7 +106,7 @@ function websiteConfigForm(site = {}) {
   const appType = site.app_type || 'wordpress';
   return {
     app_type: appType,
-    php_version: site.php_version || '8.3',
+    php_version: site.php_version || '8.4',
     nginx_rewrite_mode: appType === 'wordpress'
       ? 'front_controller'
       : appType === 'static'
@@ -412,7 +412,7 @@ function App() {
   const [adminEmail, setAdminEmail] = useState('');
   const [wpAdminUser, setWpAdminUser] = useState('admin');
   const [wpAdminPassword, setWpAdminPassword] = useState('');
-  const [phpVersion, setPhpVersion] = useState('8.3');
+  const [phpVersion, setPhpVersion] = useState('8.4');
   const [siteType, setSiteType] = useState('wordpress');
   const [installSslAfterCreate, setInstallSslAfterCreate] = useState(false);
   const [installWordPress, setInstallWordPress] = useState(true);
@@ -428,6 +428,7 @@ function App() {
   const [createdDbInfo, setCreatedDbInfo] = useState(null);
   const [copiedField, setCopiedField] = useState(null);
   const [users, setUsers] = useState([]);
+  const [packages, setPackages] = useState([]);
   const [resourceUsage, setResourceUsage] = useState(null);
   const [serviceStates, setServiceStates] = useState({});
   const [serviceNames, setServiceNames] = useState(DEFAULT_SERVICE_NAMES);
@@ -460,11 +461,14 @@ function App() {
   const [selectedFilePaths, setSelectedFilePaths] = useState([]);
   const [archiveFormat, setArchiveFormat] = useState('zip');
   const [editorCursor, setEditorCursor] = useState({ line: 1, column: 1 });
-  const [newUser, setNewUser] = useState({ username: '', email: '', password: '', role: 'end_user', website_limit: 5, storage_limit_mb: 1024 });
+  const [newUser, setNewUser] = useState({ username: '', email: '', password: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024 });
   const [editingUser, setEditingUser] = useState(null);
-  const [editingUserForm, setEditingUserForm] = useState({ email: '', role: 'end_user', website_limit: 5, storage_limit_mb: 1024 });
-  const [phpConfig, setPhpConfig] = useState({ php_version: '8.3', display_errors: 'Off', max_execution_time: 300, max_input_time: 600, max_input_vars: 10000, memory_limit: '512M', post_max_size: '1024M', upload_max_filesize: '1024M' });
-  const [phpVersions, setPhpVersions] = useState({ installed: ['8.3', '8.4'], supported: ['5.6', '7.4', '8.0', '8.1', '8.2', '8.3', '8.4', '8.5'] });
+  const [editingUserForm, setEditingUserForm] = useState({ email: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024 });
+  const [newPackage, setNewPackage] = useState({ name: '', website_limit: 5, storage_limit_mb: 1024 });
+  const [editingPackageId, setEditingPackageId] = useState('');
+  const [editingPackageForm, setEditingPackageForm] = useState({ name: '', website_limit: 5, storage_limit_mb: 1024 });
+  const [phpConfig, setPhpConfig] = useState({ php_version: '8.4', display_errors: 'Off', max_execution_time: 300, max_input_time: 600, max_input_vars: 10000, memory_limit: '1024M', post_max_size: '1024M', upload_max_filesize: '1024M' });
+  const [phpVersions, setPhpVersions] = useState({ installed: ['8.4'], supported: ['5.6', '7.4', '8.0', '8.1', '8.2', '8.3', '8.4', '8.5'] });
   const [firewallStatus, setFirewallStatus] = useState(null);
   const [firewallPort, setFirewallPort] = useState('80');
   const [firewallProtocol, setFirewallProtocol] = useState('tcp');
@@ -591,6 +595,7 @@ function App() {
     setWebsites([]);
     setDatabases([]);
     setUsers([]);
+    setPackages([]);
     setResourceUsage(null);
     setServiceStates({});
     setServiceNames(DEFAULT_SERVICE_NAMES);
@@ -894,7 +899,15 @@ function App() {
     }
     const dbData = await request('/databases');
     if (dbData) setDatabases(dbData);
-    if (refreshedUser?.role === 'admin') await loadPhpVersions();
+    if (refreshedUser?.role === 'admin') {
+      await loadPhpVersions();
+      await loadPackages();
+    }
+  }
+
+  async function loadPackages() {
+    const data = await request('/packages');
+    if (data) setPackages(data);
   }
 
   async function loadUsers() {
@@ -912,12 +925,38 @@ function App() {
   }
 
   async function createUser() {
-    const data = await request('/users', { method: 'POST', body: JSON.stringify({ ...newUser, website_limit: Number(newUser.website_limit), storage_limit_mb: Number(newUser.storage_limit_mb) }) }, 'Creating user...');
+    const payload = {
+      ...newUser,
+      package_id: newUser.package_id ? Number(newUser.package_id) : null,
+      website_limit: Number(newUser.website_limit),
+      storage_limit_mb: Number(newUser.storage_limit_mb),
+    };
+    const data = await request('/users', { method: 'POST', body: JSON.stringify(payload) }, 'Creating user...');
     if (data) {
       setNotice(`Created user ${data.username}`);
-      setNewUser({ username: '', email: '', password: '', role: 'end_user', website_limit: 5, storage_limit_mb: 1024 });
+      setNewUser({ username: '', email: '', password: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024 });
       await loadUsers();
     }
+  }
+
+  function applyPackageToNewUser(packageId) {
+    const selected = packages.find(item => String(item.id) === String(packageId));
+    setNewUser(prev => ({
+      ...prev,
+      package_id: packageId,
+      website_limit: selected ? selected.website_limit : 5,
+      storage_limit_mb: selected ? selected.storage_limit_mb : 1024,
+    }));
+  }
+
+  function applyPackageToEditingUser(packageId) {
+    const selected = packages.find(item => String(item.id) === String(packageId));
+    setEditingUserForm(prev => ({
+      ...prev,
+      package_id: packageId,
+      website_limit: selected ? selected.website_limit : 5,
+      storage_limit_mb: selected ? selected.storage_limit_mb : 1024,
+    }));
   }
 
   function startEditingUser(user) {
@@ -925,6 +964,7 @@ function App() {
     setEditingUserForm({
       email: user.email || '',
       role: user.role || 'end_user',
+      package_id: user.package_id ? String(user.package_id) : '',
       website_limit: user.website_limit ?? 5,
       storage_limit_mb: user.storage_limit_mb ?? 1024,
     });
@@ -932,7 +972,10 @@ function App() {
 
   function cancelEditingUser() {
     setEditingUser(null);
-    setEditingUserForm({ email: '', role: 'end_user', website_limit: 5, storage_limit_mb: 1024 });
+    setEditingUserForm({ email: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024 });
+    setNewPackage({ name: '', website_limit: 5, storage_limit_mb: 1024 });
+    setEditingPackageId('');
+    setEditingPackageForm({ name: '', website_limit: 5, storage_limit_mb: 1024 });
   }
 
   async function updatePanelUser() {
@@ -950,6 +993,7 @@ function App() {
     }
     const payload = {
       email: editingUserForm.email.trim(),
+      package_id: editingUserForm.package_id ? Number(editingUserForm.package_id) : null,
       website_limit: websiteLimit,
       storage_limit_mb: storageLimitMb,
     };
@@ -963,6 +1007,77 @@ function App() {
       if (data.id === currentUser?.id) setCurrentUser(prev => ({ ...prev, ...data }));
       cancelEditingUser();
       await loadUsers();
+    }
+  }
+
+  async function createPackage() {
+    const websiteLimit = Number(newPackage.website_limit);
+    const storageLimitMb = Number(newPackage.storage_limit_mb);
+    if (!newPackage.name.trim()) { setError('Package name is required.'); return; }
+    if (!Number.isInteger(websiteLimit) || websiteLimit < 0 || websiteLimit > 1000) {
+      setError('Website limit must be between 0 and 1000.');
+      return;
+    }
+    if (!Number.isInteger(storageLimitMb) || storageLimitMb < 0 || storageLimitMb > 1024 * 1024) {
+      setError('Storage limit must be between 0 and 1048576 MB.');
+      return;
+    }
+    const data = await request('/packages', {
+      method: 'POST',
+      body: JSON.stringify({ name: newPackage.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb }),
+    }, 'Creating package...');
+    if (data) {
+      setNotice(`Created package ${data.name}.`);
+      setNewPackage({ name: '', website_limit: 5, storage_limit_mb: 1024 });
+      await loadPackages();
+    }
+  }
+
+  function startEditingPackage(item) {
+    setEditingPackageId(String(item.id));
+    setEditingPackageForm({
+      name: item.name || '',
+      website_limit: item.website_limit ?? 5,
+      storage_limit_mb: item.storage_limit_mb ?? 1024,
+    });
+  }
+
+  function cancelEditingPackage() {
+    setEditingPackageId('');
+    setEditingPackageForm({ name: '', website_limit: 5, storage_limit_mb: 1024 });
+  }
+
+  async function updatePackage(packageId) {
+    const websiteLimit = Number(editingPackageForm.website_limit);
+    const storageLimitMb = Number(editingPackageForm.storage_limit_mb);
+    if (!editingPackageForm.name.trim()) { setError('Package name is required.'); return; }
+    if (!Number.isInteger(websiteLimit) || websiteLimit < 0 || websiteLimit > 1000) {
+      setError('Website limit must be between 0 and 1000.');
+      return;
+    }
+    if (!Number.isInteger(storageLimitMb) || storageLimitMb < 0 || storageLimitMb > 1024 * 1024) {
+      setError('Storage limit must be between 0 and 1048576 MB.');
+      return;
+    }
+    const data = await request(`/packages/${packageId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name: editingPackageForm.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb }),
+    }, 'Updating package...');
+    if (data) {
+      setNotice(`Updated package ${data.name}.`);
+      cancelEditingPackage();
+      await loadPackages();
+      await loadUsers();
+    }
+  }
+
+  async function deletePackage(item) {
+    if (!confirm(`Delete package ${item.name}?`)) return;
+    const data = await request(`/packages/${item.id}`, { method: 'DELETE' }, `Deleting ${item.name}...`);
+    if (data) {
+      setNotice(`Deleted package ${item.name}.`);
+      if (String(editingPackageId) === String(item.id)) cancelEditingPackage();
+      await loadPackages();
     }
   }
 
@@ -1345,7 +1460,7 @@ function App() {
     const original = nginxCustomEditing.site || {};
     const body = {};
     const nextAppType = websiteSettingsForm.app_type || original.app_type || 'wordpress';
-    const nextPhp = websiteSettingsForm.php_version || original.php_version || '8.3';
+    const nextPhp = websiteSettingsForm.php_version || original.php_version || '8.4';
     const nextRewrite = nextAppType === 'wordpress'
       ? 'front_controller'
       : nextAppType === 'static'
@@ -2442,7 +2557,7 @@ function App() {
   }, [isAuthenticated, page, selectedWebsiteId, selectedBackupUserId]);
 
   useEffect(() => {
-    if (isAuthenticated && page === 'users') loadUsers();
+    if (isAuthenticated && page === 'users') { loadUsers(); loadPackages(); }
     if (isAuthenticated && page === 'php') loadPhpConfig();
     if (isAuthenticated && page === 'firewall') { loadFirewall(); loadFirewallBlocklists(); }
     if (isAuthenticated && page === 'waf') loadWafRules();
@@ -3299,7 +3414,7 @@ function App() {
         <label><span>max_execution_time</span><input type="number" value={phpConfig.max_execution_time} onChange={e => setPhpConfig(prev => ({ ...prev, max_execution_time: e.target.value }))} /></label>
         <label><span>max_input_time</span><input type="number" value={phpConfig.max_input_time} onChange={e => setPhpConfig(prev => ({ ...prev, max_input_time: e.target.value }))} /></label>
         <label><span>max_input_vars</span><input type="number" value={phpConfig.max_input_vars} onChange={e => setPhpConfig(prev => ({ ...prev, max_input_vars: e.target.value }))} /></label>
-        <label><span>memory_limit</span><input value={phpConfig.memory_limit} onChange={e => setPhpConfig(prev => ({ ...prev, memory_limit: e.target.value }))} placeholder="512M" /></label>
+        <label><span>memory_limit</span><input value={phpConfig.memory_limit} onChange={e => setPhpConfig(prev => ({ ...prev, memory_limit: e.target.value }))} placeholder="1024M" /></label>
         <label><span>post_max_size</span><input value={phpConfig.post_max_size} onChange={e => setPhpConfig(prev => ({ ...prev, post_max_size: e.target.value }))} placeholder="1024M" /></label>
         <label><span>upload_max_filesize</span><input value={phpConfig.upload_max_filesize} onChange={e => setPhpConfig(prev => ({ ...prev, upload_max_filesize: e.target.value }))} placeholder="1024M" /></label>
         <button className="secondary-light" disabled={!!loading} onClick={restorePhpDefaults}><RotateCcw size={14}/> Restore defaults</button>
@@ -3820,6 +3935,40 @@ function App() {
     return <>
       <section className="section">
         <div className="section-title">
+          <div><h2>User packages</h2><p className="hint">Reusable website and storage limits for panel users.</p></div>
+          <button disabled={!!loading} onClick={loadPackages}><RefreshCw size={14}/> Refresh</button>
+        </div>
+        <div className="user-create-card package-create-card">
+          <label><span>Package name</span><input value={newPackage.name} onChange={e => setNewPackage(prev => ({ ...prev, name: e.target.value }))} placeholder="Starter" /></label>
+          <label><span>Site limit</span><input type="number" min="0" max="1000" value={newPackage.website_limit} onChange={e => setNewPackage(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
+          <label><span>Storage MB</span><input type="number" min="0" max="1048576" value={newPackage.storage_limit_mb} onChange={e => setNewPackage(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
+          <button disabled={!!loading || !newPackage.name.trim()} onClick={createPackage}><Plus size={14}/> Create package</button>
+        </div>
+        <div className="package-list">
+          {packages.length === 0 && <EmptyState icon={HardDrive} message="No packages found." />}
+          {packages.map(item => <div className="package-row" key={item.id}>
+            {String(editingPackageId) === String(item.id) ? <>
+              <label><span>Name</span><input value={editingPackageForm.name} onChange={e => setEditingPackageForm(prev => ({ ...prev, name: e.target.value }))} /></label>
+              <label><span>Site limit</span><input type="number" min="0" max="1000" value={editingPackageForm.website_limit} onChange={e => setEditingPackageForm(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
+              <label><span>Storage MB</span><input type="number" min="0" max="1048576" value={editingPackageForm.storage_limit_mb} onChange={e => setEditingPackageForm(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
+              <div className="row-actions">
+                <button className="mini secondary-light" onClick={cancelEditingPackage}>Cancel</button>
+                <button className="mini" disabled={!!loading || !editingPackageForm.name.trim()} onClick={() => updatePackage(item.id)}><Save size={14}/> Save</button>
+              </div>
+            </> : <>
+              <div className="user-main"><strong>{item.name}</strong><small>{item.website_limit} sites - {item.storage_limit_mb} MB</small></div>
+              <span className="user-metric"><Globe size={13}/>{item.website_limit} sites</span>
+              <span className="user-metric"><HardDrive size={13}/>{item.storage_limit_mb} MB</span>
+              <div className="row-actions">
+                <button className="mini secondary-light" disabled={!!loading} onClick={() => startEditingPackage(item)}><Pencil size={14}/> Edit</button>
+                <button className="mini danger" disabled={!!loading || users.some(user => user.package_id === item.id)} onClick={() => deletePackage(item)}><Trash2 size={14}/></button>
+              </div>
+            </>}
+          </div>)}
+        </div>
+      </section>
+      <section className="section">
+        <div className="section-title">
           <div><h2>Add panel user</h2><p className="hint">Panel username is also the Linux user. Login as a user before creating websites for that account.</p></div>
         </div>
         <div className="user-create-card">
@@ -3829,8 +3978,12 @@ function App() {
           <label><span>Role</span><select value={newUser.role} onChange={e => setNewUser(prev => ({ ...prev, role: e.target.value }))}>
             <option value="end_user">End user</option><option value="admin">Admin</option>
           </select></label>
-          <label><span>Site limit</span><input type="number" value={newUser.website_limit} onChange={e => setNewUser(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
-          <label><span>Storage MB</span><input type="number" value={newUser.storage_limit_mb} onChange={e => setNewUser(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
+          <label><span>Package</span><select value={newUser.package_id} onChange={e => applyPackageToNewUser(e.target.value)}>
+            <option value="">Custom limits</option>
+            {packages.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+          </select></label>
+          <label><span>Site limit</span><input type="number" disabled={!!newUser.package_id} value={newUser.website_limit} onChange={e => setNewUser(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
+          <label><span>Storage MB</span><input type="number" disabled={!!newUser.package_id} value={newUser.storage_limit_mb} onChange={e => setNewUser(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
           <button disabled={!!loading || !newUser.username || !newUser.password} onClick={createUser}><Plus size={14}/> Create user</button>
         </div>
       </section>
@@ -3858,6 +4011,7 @@ function App() {
           {users.map(user => <div className="row user-row" key={user.id}>
             <div className="user-main"><strong>{user.username}</strong><small>{user.email}</small></div>
             <span className="badge">{roleLabel(user.role)}</span>
+            <span className="badge">{user.package_name || 'Custom'}</span>
             <span className={user.totp_enabled ? 'badge ok' : 'badge'}>{user.totp_enabled ? '2FA' : 'No 2FA'}</span>
             <span className="user-metric"><Globe size={13}/>{user.website_limit} sites</span>
             <span className="user-metric"><HardDrive size={13}/>{storageUsageText(user)}</span>
@@ -3881,8 +4035,12 @@ function App() {
                 <label><span>Role</span><select value={editingUserForm.role} disabled={user.id === currentUser?.id} onChange={e => setEditingUserForm(prev => ({ ...prev, role: e.target.value }))}>
                   <option value="end_user">End user</option><option value="admin">Admin</option>
                 </select></label>
-                <label><span>Website limit</span><input type="number" min="0" max="1000" value={editingUserForm.website_limit} onChange={e => setEditingUserForm(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
-                <label><span>Storage limit (MB)</span><input type="number" min="0" max="1048576" value={editingUserForm.storage_limit_mb} onChange={e => setEditingUserForm(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
+                <label><span>Package</span><select value={editingUserForm.package_id} onChange={e => applyPackageToEditingUser(e.target.value)}>
+                  <option value="">Custom limits</option>
+                  {packages.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+                </select></label>
+                <label><span>Website limit</span><input type="number" min="0" max="1000" disabled={!!editingUserForm.package_id} value={editingUserForm.website_limit} onChange={e => setEditingUserForm(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
+                <label><span>Storage limit (MB)</span><input type="number" min="0" max="1048576" disabled={!!editingUserForm.package_id} value={editingUserForm.storage_limit_mb} onChange={e => setEditingUserForm(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
               </div>
               <div className="user-edit-actions">
                 <button className="secondary-light" onClick={cancelEditingUser}>Cancel</button>

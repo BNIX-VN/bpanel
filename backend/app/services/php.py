@@ -49,7 +49,7 @@ def update_php_ini(payload: PhpConfigUpdate) -> str:
 
 PHP_CONFIG_KEYS = {
     "display_errors": "Off",
-    "memory_limit": "512M",
+    "memory_limit": "1024M",
     "upload_max_filesize": "1024M",
     "post_max_size": "1024M",
     "max_execution_time": "300",

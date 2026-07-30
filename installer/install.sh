@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BPANEL_INSTALLER_VERSION="${BPANEL_INSTALLER_VERSION:-v1.0.55}"
+BPANEL_INSTALLER_VERSION="${BPANEL_INSTALLER_VERSION:-v1.0.56}"
 
 if [[ $EUID -ne 0 ]]; then
   echo "Please run this installer as root"
@@ -58,7 +58,7 @@ if [[ -z "${BACKEND_SRC}" || ! -d "${BACKEND_SRC}" ]]; then
   if [[ ! "${BPANEL_VERSION:-}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo "ERROR: Could not detect latest BPanel release tag." >&2
     echo "       Set BPANEL_VERSION=vX.Y.Z and retry, e.g.:" >&2
-    echo "       BPANEL_VERSION=v1.0.46 bash <(curl -fsSL ...)" >&2
+    echo "       BPANEL_VERSION=v1.0.56 bash <(curl -fsSL ...)" >&2
     exit 1
   fi
 
@@ -367,7 +367,7 @@ install_php() {
       sed -i \
         -e 's/^\s*;\?\s*upload_max_filesize\s*=.*/upload_max_filesize = 1024M/' \
         -e 's/^\s*;\?\s*post_max_size\s*=.*/post_max_size = 1024M/' \
-        -e 's/^\s*;\?\s*memory_limit\s*=.*/memory_limit = 512M/' \
+        -e 's/^\s*;\?\s*memory_limit\s*=.*/memory_limit = 1024M/' \
         -e 's/^\s*;\?\s*max_execution_time\s*=.*/max_execution_time = 300/' \
         -e 's/^\s*;\?\s*max_input_time\s*=.*/max_input_time = 600/' \
         -e 's/^\s*;\?\s*max_input_vars\s*=.*/max_input_vars = 10000/' \
@@ -759,9 +759,27 @@ Persistent=true
 WantedBy=timers.target
 SERVICE
 
+  cat >/etc/systemd/system/bpanel-autotune.service <<'SERVICE'
+[Unit]
+Description=Auto tune BPanel PHP-FPM pools and MariaDB for this VPS
+After=network-online.target mariadb.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/bpanel-helper php-fpm-retune
+ExecStart=/usr/local/sbin/bpanel-helper mariadb-retune
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+
   systemctl daemon-reload
   systemctl enable --now bpanel-api
   systemctl enable --now bpanel-backup-scheduler.timer
+  systemctl enable bpanel-autotune.service >/dev/null 2>&1 || true
+  systemctl start bpanel-autotune.service >/dev/null 2>&1 || true
   if id -u bpanel >/dev/null 2>&1; then
     sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper certbot-auto-renew-install >/dev/null 2>&1 || true
     sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper nginx-blocklist-timer-install >/dev/null 2>&1 || true
@@ -1075,7 +1093,7 @@ source_version() {
 write_update_state() {
   local version now
   version="$(source_version)"
-  version="${version:-1.0.4}"
+  version="${version:-1.0.56}"
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   install -d -o bpanel -g bpanel -m 0750 /var/lib/bpanel /var/lib/bpanel/geoip
   cat >/var/lib/bpanel/update-status.json <<STATE

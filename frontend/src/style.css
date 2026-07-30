@@ -712,10 +712,16 @@ button:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
 .row{display:grid;grid-template-columns:1.5fr 1fr 1fr auto auto;gap:10px;align-items:center;padding:12px;border:1px solid var(--border);border-radius:var(--radius-lg);background:var(--surface);min-width:0;transition:var(--transition)}
 .row:hover{border-color:var(--border-hover);background:var(--surface-alt)}
 .db-row{grid-template-columns:1fr 1fr auto auto auto auto}
-.user-row{grid-template-columns:minmax(170px,1.5fr) auto auto .65fr .65fr auto;padding:12px 14px}
+.user-row{grid-template-columns:minmax(170px,1.5fr) auto auto auto .65fr .65fr auto;padding:12px 14px}
 .user-main{display:grid;gap:2px;min-width:0}
 .user-main strong{font-size:14px}
 .user-main small{color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.package-list{display:grid;gap:8px;margin-top:10px}
+.package-row{display:grid;grid-template-columns:minmax(170px,1.5fr) auto auto auto;gap:10px;align-items:center;padding:12px 14px;border:1px solid var(--border);border-radius:var(--radius-lg);background:var(--surface);min-width:0;transition:var(--transition)}
+.package-row:hover{border-color:var(--border-hover);background:var(--surface-alt)}
+.package-row label{display:grid;gap:6px;min-width:0;font-weight:600;color:var(--text-secondary)}
+.package-row label span{font-size:12px;color:var(--text-muted)}
+.package-row input{width:100%;min-width:0}
 .row-actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}
 .site-grid{display:grid;grid-template-columns:1fr;gap:12px}
 .site-card{display:grid;grid-template-columns:minmax(220px,1.05fr) minmax(210px,1fr) minmax(210px,auto);align-items:center;gap:12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:12px;min-width:0;transition:var(--transition)}
@@ -886,7 +892,7 @@ button:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
   .sftp-form textarea{grid-column:1}
   .actions{display:grid;grid-template-columns:1fr;align-items:stretch}
   .actions button,.actions .button-link,.actions .upload-button,.actions select{width:100%;max-width:none}
-  .row,.db-row,.user-row{grid-template-columns:1fr;gap:7px;padding:12px}
+  .row,.db-row,.user-row,.package-row{grid-template-columns:1fr;gap:7px;padding:12px}
   .row-actions{justify-content:stretch;display:grid;grid-template-columns:1fr}
   .row-actions button{width:100%}
   .site-head{display:grid;gap:8px}
