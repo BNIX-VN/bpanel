@@ -31,7 +31,8 @@ pwd_context = CryptContext(
     bcrypt__truncate_error=True,
 )
 ALGORITHM = "HS256"
-SHADOW_HASH_PREFIXES = ("$y$", "$gy$", "$7$", "$6$", "$5$", "$2a$", "$2b$", "$2y$")
+BCRYPT_HASH_PREFIXES = ("$2a$", "$2b$", "$2y$")
+SHADOW_HASH_PREFIXES = ("$y$", "$gy$", "$7$", "$6$", "$5$", *BCRYPT_HASH_PREFIXES)
 
 
 def hash_password(password: str) -> str:
@@ -53,12 +54,14 @@ def verify_shadow_password(password: str, hashed_password: str) -> bool:
 
 
 def verify_password(password: str, hashed_password: str) -> bool:
-    if is_shadow_password_hash(hashed_password):
+    if is_shadow_password_hash(hashed_password) and not hashed_password.startswith(BCRYPT_HASH_PREFIXES):
         return verify_shadow_password(password, hashed_password)
     try:
         return pwd_context.verify(password, hashed_password)
     except (UnknownHashError, ValueError):
         # truncate_error=True raises ValueError when the password is too long.
+        if hashed_password.startswith(BCRYPT_HASH_PREFIXES):
+            return verify_shadow_password(password, hashed_password)
         return False
 
 

@@ -4,6 +4,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from jinja2 import Environment, FileSystemLoader
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from typing import List
 
@@ -378,11 +379,21 @@ def create_wordpress(payload: WebsiteCreate, request: Request, db: Session = Dep
 
 
 @router.get("", response_model=List[WebsiteOut])
-def list_websites(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def list_websites(q: str = Query(default="", max_length=255), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    search = (q or "").strip().lower()
     if is_admin_role(current_user.role):
-        websites = db.query(Website).order_by(Website.id.desc()).all()
+        query = db.query(Website)
     else:
-        websites = db.query(Website).filter(Website.owner_id == current_user.id).order_by(Website.id.desc()).all()
+        query = db.query(Website).filter(Website.owner_id == current_user.id)
+    if search:
+        pattern = f"%{search}%"
+        query = query.outerjoin(WebsiteAlias).filter(or_(
+            Website.domain.ilike(pattern),
+            Website.root_path.ilike(pattern),
+            Website.linux_user.ilike(pattern),
+            WebsiteAlias.domain.ilike(pattern),
+        )).distinct()
+    websites = query.order_by(Website.id.desc()).all()
     return _sync_live_ssl_flags(db, websites)
 
 

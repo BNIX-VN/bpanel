@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BPANEL_INSTALLER_VERSION="${BPANEL_INSTALLER_VERSION:-v1.0.56}"
+BPANEL_INSTALLER_VERSION="${BPANEL_INSTALLER_VERSION:-v1.0.57}"
 
 if [[ $EUID -ne 0 ]]; then
   echo "Please run this installer as root"
@@ -58,7 +58,7 @@ if [[ -z "${BACKEND_SRC}" || ! -d "${BACKEND_SRC}" ]]; then
   if [[ ! "${BPANEL_VERSION:-}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo "ERROR: Could not detect latest BPanel release tag." >&2
     echo "       Set BPANEL_VERSION=vX.Y.Z and retry, e.g.:" >&2
-    echo "       BPANEL_VERSION=v1.0.56 bash <(curl -fsSL ...)" >&2
+    echo "       BPANEL_VERSION=v1.0.57 bash <(curl -fsSL ...)" >&2
     exit 1
   fi
 
@@ -776,6 +776,9 @@ WantedBy=multi-user.target
 SERVICE
 
   systemctl daemon-reload
+  systemctl disable --now bpanel-auto-update.timer 2>/dev/null || true
+  rm -f /etc/systemd/system/bpanel-auto-update.service /etc/systemd/system/bpanel-auto-update.timer
+  systemctl daemon-reload >/dev/null 2>&1 || true
   systemctl enable --now bpanel-api
   systemctl enable --now bpanel-backup-scheduler.timer
   systemctl enable bpanel-autotune.service >/dev/null 2>&1 || true
@@ -1093,7 +1096,7 @@ source_version() {
 write_update_state() {
   local version now
   version="$(source_version)"
-  version="${version:-1.0.56}"
+  version="${version:-1.0.57}"
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   install -d -o bpanel -g bpanel -m 0750 /var/lib/bpanel /var/lib/bpanel/geoip
   cat >/var/lib/bpanel/update-status.json <<STATE

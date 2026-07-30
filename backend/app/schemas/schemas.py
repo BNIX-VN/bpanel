@@ -458,19 +458,6 @@ class SystemAutoUpdateConfig(BaseModel):
     auto_reboot: bool = False
 
 
-class PanelAutoUpdateConfig(BaseModel):
-    enabled: bool = True
-    time: str = Field(default="03:30", pattern=r"^\d{2}:\d{2}$")
-
-    @field_validator("time")
-    @classmethod
-    def validate_time(cls, value: str) -> str:
-        hour, minute = value.split(":", 1)
-        if int(hour) > 23 or int(minute) > 59:
-            raise ValueError("time must be HH:MM")
-        return value
-
-
 class DatabasePasswordUpdate(BaseModel):
     password: str = Field(min_length=12)
 

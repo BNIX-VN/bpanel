@@ -239,11 +239,3 @@ def run_panel_update():
         _write_update_state(state)
     return result
 
-
-def configure_panel_auto_update(enabled: bool, time_value: str):
-    return shell.privileged(
-        "updates-panel-auto",
-        helper_args=["on" if enabled else "off", time_value],
-        check=False,
-        fallback=["bash", "-lc", "echo panel auto-update helper is not installed"],
-    )

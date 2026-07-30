@@ -184,14 +184,6 @@ ufw_panel_allow_app() {
     || true
 }
 
-require_time_hhmm() {
-  local value="$1" hour minute
-  [[ "$value" =~ ^[0-9]{2}:[0-9]{2}$ ]] || deny "invalid time: $value"
-  hour="${value%%:*}"; minute="${value##*:}"
-  (( 10#$hour >= 0 && 10#$hour <= 23 )) || deny "invalid hour: $hour"
-  (( 10#$minute >= 0 && 10#$minute <= 59 )) || deny "invalid minute: $minute"
-}
-
 schedule_panel_restart() {
   local unit
   systemctl daemon-reload || true
@@ -307,54 +299,6 @@ run_os_update() {
   nohup /bin/bash -lc 'export DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none; apt-get update --allow-releaseinfo-change; apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade -y' \
     >/var/log/bpanel-os-update.log 2>&1 &
   echo "OS update started in background. Log: /var/log/bpanel-os-update.log"
-}
-
-write_panel_auto_update_timer() {
-  local enabled="$1" time_value="$2"
-  [[ "$enabled" == "on" || "$enabled" == "off" ]] || deny "enabled must be on/off"
-  require_time_hhmm "$time_value"
-  if [[ "$enabled" == "off" ]]; then
-    systemctl disable --now bpanel-auto-update.timer 2>/dev/null || true
-    rm -f /etc/systemd/system/bpanel-auto-update.service /etc/systemd/system/bpanel-auto-update.timer
-    systemctl daemon-reload
-    echo "Panel auto update disabled"
-    return 0
-  fi
-  [[ -f "$UPDATE_SCRIPT" ]] || deny "missing $UPDATE_SCRIPT"
-  cat >/etc/systemd/system/bpanel-auto-update.service <<SERVICE
-[Unit]
-Description=Update BPanel from GitHub
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-Environment=SOURCE_DIR=${SOURCE_DIR}
-Environment=APP_DIR=${APP_DIR}
-Environment=REPO_URL=${REPO_URL:-https://github.com/BNIX-VN/bpanel.git}
-Environment=GIT_REMOTE=${GIT_REMOTE:-origin}
-Environment=UPDATE_CHANNEL=${UPDATE_CHANNEL:-release}
-Environment=BRANCH=${BRANCH:-main}
-Environment=RELEASE_TAG=${RELEASE_TAG:-}
-Environment=RELEASE_PATTERN=${RELEASE_PATTERN:-v[0-9]*.[0-9]*.[0-9]*}
-Environment=SKIP_PULL=${SKIP_PULL:-false}
-ExecStart=/bin/bash ${UPDATE_SCRIPT}
-SERVICE
-  cat >/etc/systemd/system/bpanel-auto-update.timer <<TIMER
-[Unit]
-Description=Run BPanel auto update daily
-
-[Timer]
-OnCalendar=*-*-* ${time_value}:00
-Persistent=true
-RandomizedDelaySec=15m
-
-[Install]
-WantedBy=timers.target
-TIMER
-  systemctl daemon-reload
-  systemctl enable --now bpanel-auto-update.timer
-  echo "Panel auto update enabled at ${time_value}"
 }
 
 run_panel_update() {
@@ -708,7 +652,7 @@ waf_status() {
   echo "Managed profile:"
   echo "  BPanel built-in lightweight WordPress/Laravel/PHP rules"
   echo "Timers:"
-  systemctl list-timers bpanel-auto-update.timer apt-daily-upgrade.timer --no-pager 2>/dev/null || true
+  systemctl list-timers apt-daily-upgrade.timer --no-pager 2>/dev/null || true
 }
 
 audit_log() {
@@ -2076,10 +2020,6 @@ case "$cmd" in
     systemctl is-enabled unattended-upgrades.service 2>/dev/null || true
     systemctl is-active unattended-upgrades.service 2>/dev/null || true
     echo ""
-    echo "Panel auto update timer:"
-    systemctl is-enabled bpanel-auto-update.timer 2>/dev/null || true
-    systemctl list-timers bpanel-auto-update.timer apt-daily-upgrade.timer --no-pager 2>/dev/null || true
-    echo ""
     echo "OS update service:"
     systemctl is-active bpanel-os-update.service 2>/dev/null | sed 's/^inactive$/idle/' || true
     journalctl -u bpanel-os-update.service -n 16 --no-pager 2>/dev/null | grep -v "Failed to open /run/systemd/transient" || true
@@ -2110,11 +2050,6 @@ case "$cmd" in
 
   updates-panel-run)
     run_panel_update
-    ;;
-
-  updates-panel-auto)
-    [[ $# -eq 2 ]] || deny "usage: updates-panel-auto <on|off> <HH:MM>"
-    write_panel_auto_update_timer "$1" "$2"
     ;;
 
   # ---- WAF --------------------------------------------------------------

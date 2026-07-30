@@ -9,7 +9,7 @@
 # Usage:
 #   sudo bash installer/update.sh
 #   sudo bash installer/update.sh --branch main
-#   sudo bash installer/update.sh --tag v1.0.56
+#   sudo bash installer/update.sh --tag v1.0.57
 #   sudo bash installer/update.sh --help
 
 set -euo pipefail
@@ -21,7 +21,7 @@ usage() {
   cat <<'USAGE'
 Usage:
   sudo bash installer/update.sh [--release]
-  sudo bash installer/update.sh --tag v1.0.56
+  sudo bash installer/update.sh --tag v1.0.57
   sudo bash installer/update.sh --branch main
 
 Options:
@@ -704,6 +704,12 @@ panel_healthcheck() {
     || curl -fsS --connect-timeout 2 --max-time 5 "http://127.0.0.1:${port}/api/health" >/dev/null 2>&1
 }
 
+remove_panel_auto_update_timer() {
+  systemctl disable --now bpanel-auto-update.timer 2>/dev/null || true
+  rm -f /etc/systemd/system/bpanel-auto-update.service /etc/systemd/system/bpanel-auto-update.timer
+  systemctl daemon-reload >/dev/null 2>&1 || true
+}
+
 refresh_bpanel_mariadb_grants() {
   local defaults_file="$APP_DIR/.my.cnf"
   local mysql_bin
@@ -880,6 +886,9 @@ if [[ -f "$SOURCE_DIR/VERSION" ]]; then
   install -m 0644 "$SOURCE_DIR/VERSION" "$APP_DIR/VERSION"
 fi
 ensure_panel_runtime_ownership
+
+log "Removing deprecated panel auto update timer"
+remove_panel_auto_update_timer
 
 # Defensive: if .env still doesn't exist (e.g. fresh deploy syncing on top of
 # nothing), leave a clear error message.

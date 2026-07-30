@@ -421,6 +421,9 @@ function App() {
   const [logViewer, setLogViewer] = useState(null); // {id, domain, kind, lines, path, content, exists}
   const [terminalViewer, setTerminalViewer] = useState(null); // {id, domain}
   const [websites, setWebsites] = useState([]);
+  const [websiteList, setWebsiteList] = useState([]);
+  const [websiteSearch, setWebsiteSearch] = useState('');
+  const [websiteSearching, setWebsiteSearching] = useState(false);
   const [aliasDrafts, setAliasDrafts] = useState({});
   const [aliasModes, setAliasModes] = useState({});
   const [databases, setDatabases] = useState([]);
@@ -517,7 +520,6 @@ function App() {
   const [panelUpdateLog, setPanelUpdateLog] = useState([]);
   const panelUpdateInterval = useRef(null);
   const [osAutoUpdate, setOsAutoUpdate] = useState({ enabled: true, mode: 'security', auto_reboot: false });
-  const [panelAutoUpdate, setPanelAutoUpdate] = useState({ enabled: true, time: '03:30' });
   const noticeTimer = useRef(null);
   const isAdmin = currentUser?.role === 'admin';
   const currentSite = websites.find(site => String(site.id) === String(selectedWebsiteId));
@@ -620,6 +622,9 @@ function App() {
     setScanJob(null);
     setScanJobs([]);
     setScanLoading(false);
+    setWebsiteList([]);
+    setWebsiteSearch('');
+    setWebsiteSearching(false);
     setUpdatesStatus(null);
     setFirewallBlocklists(null);
     setWafRules({ status: null, default_rules: '', custom_rules: '' });
@@ -895,6 +900,7 @@ function App() {
     const siteData = await request('/websites');
     if (siteData) {
       setWebsites(siteData);
+      if (!websiteSearch.trim()) setWebsiteList(siteData);
       if (!selectedWebsiteId && siteData[0]) setSelectedWebsiteId(String(siteData[0].id));
     }
     const dbData = await request('/databases');
@@ -902,6 +908,20 @@ function App() {
     if (refreshedUser?.role === 'admin') {
       await loadPhpVersions();
       await loadPackages();
+    }
+    if (page === 'websites' && websiteSearch.trim()) await loadWebsiteList(websiteSearch, false);
+  }
+
+  async function loadWebsiteList(search = websiteSearch, showLoading = false) {
+    const query = String(search || '').trim();
+    const suffix = query ? `?q=${encodeURIComponent(query)}` : '';
+    setWebsiteSearching(true);
+    const data = await request(`/websites${suffix}`, {}, showLoading ? 'Loading websites...' : '');
+    setWebsiteSearching(false);
+    if (data) {
+      setWebsiteList(data);
+      if (!query) setWebsites(data);
+      if (!selectedWebsiteId && data[0]) setSelectedWebsiteId(String(data[0].id));
     }
   }
 
@@ -1108,7 +1128,7 @@ function App() {
       const count = data.deleted_websites?.length || 0;
       setNotice(`Deleted user ${user.username}${count ? ` and ${count} website(s)` : ''}`);
       await loadUsers();
-      await loadWebsites();
+      await refreshAll();
     }
   }
 
@@ -2482,11 +2502,6 @@ function App() {
     panelUpdateInterval.current = setInterval(pollOnce, 2000);
   }
 
-  async function savePanelAutoUpdate() {
-    const data = await request('/updates/panel/auto', { method: 'POST', body: JSON.stringify(panelAutoUpdate) }, 'Saving panel auto update...');
-    if (data) { setNotice((data.stdout || data.stderr || 'Panel auto update saved.').trim()); if (showUpdateLog) await loadUpdates(); }
-  }
-
   useEffect(() => {
     if (isAuthenticated) {
       refreshAll();
@@ -2533,6 +2548,14 @@ function App() {
     const timer = setInterval(checkAllServices, 10000);
     return () => clearInterval(timer);
   }, [isAuthenticated, page]);
+
+  useEffect(() => {
+    if (!isAuthenticated || page !== 'websites') return undefined;
+    const timer = window.setTimeout(() => {
+      loadWebsiteList(websiteSearch, false);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [isAuthenticated, page, websiteSearch]);
 
   useEffect(() => {
     if (!currentSite) return;
@@ -2939,6 +2962,8 @@ function App() {
 
   function renderWebsites() {
     const wpFieldsEnabled = siteType === 'wordpress' && installWordPress;
+    const searchActive = !!websiteSearch.trim();
+    const visibleWebsites = searchActive ? websiteList : (websiteList.length ? websiteList : websites);
     return <>
       <section className="section">
         <h2>Create website</h2>
@@ -2970,12 +2995,22 @@ function App() {
       </section>
       <section className="section">
         <div className="section-title">
-          <h2>Website list</h2>
-          <button disabled={!!loading} onClick={refreshAll}><RefreshCw size={15}/> Refresh</button>
+          <div><h2>Website list</h2><p className="hint">{searchActive ? `${visibleWebsites.length} result(s)` : `${visibleWebsites.length} website(s)`}</p></div>
+          <button disabled={!!loading || websiteSearching} onClick={() => loadWebsiteList(websiteSearch, true)}><RefreshCw size={15} className={websiteSearching ? 'spin' : ''}/> Refresh</button>
         </div>
-        {websites.length === 0 && <EmptyState icon={Globe} message="No websites yet." />}
+        <div className="website-search-bar">
+          <Search size={16}/>
+          <input
+            value={websiteSearch}
+            onChange={e => setWebsiteSearch(e.target.value)}
+            placeholder="Search domain, alias, path, or Linux user"
+            aria-label="Search websites"
+          />
+          {websiteSearch && <button className="secondary-light icon-button" type="button" onClick={() => setWebsiteSearch('')} aria-label="Clear website search" title="Clear search"><X size={15}/></button>}
+        </div>
+        {visibleWebsites.length === 0 && <EmptyState icon={Globe} message={searchActive ? "No websites match this search." : "No websites yet."} />}
         <div className="site-grid">
-          {websites.map(site => <div className="site-stack" key={site.id}>
+          {visibleWebsites.map(site => <div className="site-stack" key={site.id}>
           <article className="site-card">
             <div className="site-head">
               <div>
@@ -3719,14 +3754,6 @@ function App() {
           <label><span>Mode</span><select value={osAutoUpdate.mode} onChange={e => setOsAutoUpdate(prev => ({ ...prev, mode: e.target.value }))}><option value="security">Security</option><option value="all">All packages</option></select></label>
           <label><span>Auto reboot</span><select value={osAutoUpdate.auto_reboot ? 'on' : 'off'} onChange={e => setOsAutoUpdate(prev => ({ ...prev, auto_reboot: e.target.value === 'on' }))}><option value="off">Off</option><option value="on">On</option></select></label>
           <button disabled={!!loading} onClick={saveOsAutoUpdate}>Save OS auto update</button>
-        </div>
-      </section>
-      <section className="section">
-        <h2>Auto Update Panel</h2>
-        <div className="firewall-form updates-panel-form">
-          <label><span>Enabled</span><select value={panelAutoUpdate.enabled ? 'on' : 'off'} onChange={e => setPanelAutoUpdate(prev => ({ ...prev, enabled: e.target.value === 'on' }))}><option value="on">On</option><option value="off">Off</option></select></label>
-          <label><span>Daily time</span><input value={panelAutoUpdate.time} onChange={e => setPanelAutoUpdate(prev => ({ ...prev, time: e.target.value }))} placeholder="03:30" /></label>
-          <button disabled={!!loading} onClick={savePanelAutoUpdate}>Save panel auto update</button>
         </div>
       </section>
     </>;
