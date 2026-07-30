@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BPANEL_INSTALLER_VERSION="${BPANEL_INSTALLER_VERSION:-v1.0.52}"
+BPANEL_INSTALLER_VERSION="${BPANEL_INSTALLER_VERSION:-v1.0.53}"
 
 if [[ $EUID -ne 0 ]]; then
   echo "Please run this installer as root"
@@ -29,6 +29,16 @@ else
 fi
 BACKEND_SRC="${PROJECT_ROOT:+${PROJECT_ROOT}/backend}"
 FRONTEND_SRC="${PROJECT_ROOT:+${PROJECT_ROOT}/frontend}"
+
+if [[ ! -t 0 ]]; then
+  if [[ -r /dev/tty ]]; then
+    exec </dev/tty
+  else
+    echo "ERROR: This installer needs an interactive terminal." >&2
+    echo "       Run it from SSH or export BPANEL_URL/PANEL_PORT first." >&2
+    exit 1
+  fi
+fi
 
 # When running via curl ... | bash, BASH_SOURCE[0] may be unset. When running
 # via bash <(curl ...), BASH_SOURCE[0] resolves to /dev/fd/N, so PROJECT_ROOT

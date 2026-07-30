@@ -31,7 +31,7 @@ ownership, quotas, backups, SSL, services, and firewall tools built in.
 
 ## Versioning
 
-Current release: `1.0.52`.
+Current release: `1.0.53`.
 
 BPanel versions use semantic versioning: `major.minor.patch`.
 
@@ -49,7 +49,7 @@ Run as root on a fresh Ubuntu 24.04 server.
 Simple pinned install:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/BNIX-VN/bpanel/refs/tags/v1.0.52/installer/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/BNIX-VN/bpanel/refs/tags/v1.0.53/installer/install.sh | bash
 ```
 
 Recommended auto latest-tag install:
@@ -105,7 +105,7 @@ bash installer/install.sh
 ```
 
 The commands auto-detect the newest semantic release tag from GitHub. To pin a
-release, run the same command with `BPANEL_VERSION=v1.0.52` exported or set
+release, run the same command with `BPANEL_VERSION=v1.0.53` exported or set
 before the detection block. GitHub auto-generates the tag zip, but the `git clone` method avoids
 archive cache after a forced tag refresh. The clone path cleans up
 `/tmp/bpanel-source`; the zip path cleans up `/opt/bpanel-source` and its
@@ -185,7 +185,7 @@ when a newer release is available.
 To stay on a specific release:
 
 ```bash
-bpanel-update --tag v1.0.52
+bpanel-update --tag v1.0.53
 ```
 
 If the browser still shows the old UI, do a hard refresh (Ctrl + Shift + R) or
