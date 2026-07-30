@@ -31,7 +31,7 @@ ownership, quotas, backups, SSL, services, and firewall tools built in.
 
 ## Versioning
 
-Current release: `1.0.53`.
+Current release: `1.0.54`.
 
 BPanel versions use semantic versioning: `major.minor.patch`.
 
@@ -46,70 +46,14 @@ BPanel versions use semantic versioning: `major.minor.patch`.
 
 Run as root on a fresh Ubuntu 24.04 server.
 
-Simple pinned install:
+Single-command install:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/BNIX-VN/bpanel/refs/tags/v1.0.53/installer/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/BNIX-VN/bpanel/refs/heads/main/install.sh | bash
 ```
 
-Recommended auto latest-tag install:
-
-```bash
-set -e
-apt-get update
-apt-get install -y git
-BPANEL_REPO=https://github.com/BNIX-VN/bpanel.git
-if [ -z "${BPANEL_VERSION:-}" ]; then
-  BPANEL_VERSION="$(
-    git ls-remote --tags --refs "${BPANEL_REPO}" 'refs/tags/v*' |
-    awk -F/ '{print $NF}' |
-    grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' |
-    sort -V |
-    tail -n 1
-  )"
-fi
-test -n "${BPANEL_VERSION}" || { echo "Could not detect latest BPanel release tag" >&2; exit 1; }
-echo "Installing BPanel ${BPANEL_VERSION}"
-rm -rf /tmp/bpanel-source
-git clone --depth 1 --branch "${BPANEL_VERSION}" "${BPANEL_REPO}" /tmp/bpanel-source
-cd /tmp/bpanel-source
-trap 'cd /; rm -rf /tmp/bpanel-source' EXIT
-chmod +x installer/install.sh installer/update.sh installer/rescue-ufw-blocklist.sh
-bash installer/install.sh
-```
-
-Release zip install:
-
-```bash
-apt-get update
-apt-get install -y git curl unzip
-BPANEL_REPO=https://github.com/BNIX-VN/bpanel.git
-if [ -z "${BPANEL_VERSION:-}" ]; then
-  BPANEL_VERSION="$(
-    git ls-remote --tags --refs "${BPANEL_REPO}" 'refs/tags/v*' |
-    awk -F/ '{print $NF}' |
-    grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' |
-    sort -V |
-    tail -n 1
-  )"
-fi
-test -n "${BPANEL_VERSION}" || { echo "Could not detect latest BPanel release tag" >&2; exit 1; }
-echo "Installing BPanel ${BPANEL_VERSION}"
-rm -rf /opt/bpanel-source /tmp/bpanel-release /tmp/bpanel-release.zip
-curl -fL --connect-timeout 10 --max-time 300 "https://github.com/BNIX-VN/bpanel/archive/refs/tags/${BPANEL_VERSION}.zip" -o /tmp/bpanel-release.zip
-unzip -q /tmp/bpanel-release.zip -d /tmp/bpanel-release
-mv /tmp/bpanel-release/bpanel-* /opt/bpanel-source
-cd /opt/bpanel-source
-chmod +x installer/install.sh installer/update.sh installer/rescue-ufw-blocklist.sh
-bash installer/install.sh
-```
-
-The commands auto-detect the newest semantic release tag from GitHub. To pin a
-release, run the same command with `BPANEL_VERSION=v1.0.53` exported or set
-before the detection block. GitHub auto-generates the tag zip, but the `git clone` method avoids
-archive cache after a forced tag refresh. The clone path cleans up
-`/tmp/bpanel-source`; the zip path cleans up `/opt/bpanel-source` and its
-temporary archive files.
+The bootstrap script downloads the newest semantic release tag from GitHub,
+then runs the installer from that tag.
 
 The installer will:
 
@@ -185,7 +129,7 @@ when a newer release is available.
 To stay on a specific release:
 
 ```bash
-bpanel-update --tag v1.0.53
+bpanel-update --tag v1.0.54
 ```
 
 If the browser still shows the old UI, do a hard refresh (Ctrl + Shift + R) or
