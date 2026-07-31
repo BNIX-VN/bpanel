@@ -12,7 +12,7 @@ import 'ace-builds/src-noconflict/mode-php';
 import 'ace-builds/src-noconflict/mode-text';
 import 'ace-builds/src-noconflict/mode-yaml';
 import 'ace-builds/src-noconflict/theme-textmate';
-import { Archive, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, MoveRight, Network, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
+import { Archive, ArchiveRestore, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, MoveRight, Network, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
 import { Terminal } from './components/Terminal';
 import './style.css';
 import './brand.css';
@@ -1769,6 +1769,19 @@ function App() {
     if (data) { await listFiles(fileListPath); await loadCurrentUser(); }
   }
 
+  async function extractArchiveFile(path) {
+    if (!selectedWebsiteId || !path) return;
+    const destination = prompt('Extract to folder:', fileListPath || '.');
+    if (destination === null) return;
+    const targetPath = destination.trim() || fileListPath || '.';
+    const data = await request('/maintenance/files/extract', {
+      method: 'POST',
+      body: JSON.stringify({ website_id: Number(selectedWebsiteId), archive_path: path, destination_path: targetPath }),
+    }, 'Starting extraction...');
+    if (data?.job_id) upsertFileJob(data);
+    else if (data) { await listFiles(targetPath === '.' ? '' : targetPath); await loadCurrentUser(); }
+  }
+
   function upsertFileJob(job) {
     if (!job?.job_id) return;
     setFileJobs(prev => [job, ...prev.filter(item => item.job_id !== job.job_id)].slice(0, 6));
@@ -2692,6 +2705,12 @@ function App() {
     return editableDotfiles.has(name) || /\.(txt|md|json|css|js|jsx|ts|tsx|html|htm|xml|yml|yaml|ini|conf|log|php|env|htaccess)$/.test(name) || !name.includes('.');
   }
 
+  function isArchiveFile(item) {
+    if (!item || item.is_dir) return false;
+    const name = (item.name || '').toLowerCase();
+    return name.endsWith('.zip') || name.endsWith('.tar.gz') || name.endsWith('.tgz');
+  }
+
   function toggleFileSelection(path) {
     setSelectedFilePaths(prev => prev.includes(path) ? prev.filter(item => item !== path) : [...prev, path]);
   }
@@ -3160,6 +3179,9 @@ function App() {
 
   function renderFiles() {
     const allSelected = files.length > 0 && selectedFilePaths.length === files.length;
+    const selectedArchiveFile = selectedFilePaths.length === 1
+      ? files.find(item => item.path === selectedFilePaths[0] && isArchiveFile(item))
+      : null;
     const visibleFileJobs = fileJobs.filter(job => String(job.website_id) === String(selectedWebsiteId)).slice(0, 4);
     return <section className="section">
       <div className="section-title">
@@ -3194,6 +3216,7 @@ function App() {
               <button disabled={selectedFilePaths.length === 0 || !!loading} onClick={copySelectedFiles}><Copy size={14}/> Copy</button>
               <button disabled={selectedFilePaths.length === 0 || !!loading} onClick={moveSelectedFiles}><MoveRight size={14}/> Move</button>
               <button disabled={selectedFilePaths.length === 0 || !!loading} onClick={archiveSelectedFiles}><Archive size={14}/> Archive</button>
+              <button disabled={!selectedArchiveFile || !!loading} onClick={() => extractArchiveFile(selectedArchiveFile.path)}><ArchiveRestore size={14}/> Extract</button>
               <button className="danger" disabled={selectedFilePaths.length === 0 || !!loading} onClick={deleteSelectedFiles}><Trash2 size={14}/> Delete</button>
             </div>
             {visibleFileJobs.length > 0 && <div className="file-job-list">
@@ -3219,6 +3242,7 @@ function App() {
               <span className="file-size">{item.is_dir ? 'Folder' : formatBytes(item.size)}</span>
               <div className="file-row-actions">
                 {!item.is_dir && <button className="mini secondary-light" disabled={!!loading} onClick={() => downloadFile(item.path)}><Download size={13}/></button>}
+                {isArchiveFile(item) && <button className="mini secondary-light" disabled={!!loading} onClick={() => extractArchiveFile(item.path)}><ArchiveRestore size={13}/> Extract</button>}
                 <button className="mini secondary-light" disabled={!!loading} onClick={() => renameFileItem(item)}>Rename</button>
               </div>
             </div>)}
