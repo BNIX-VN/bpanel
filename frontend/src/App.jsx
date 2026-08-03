@@ -447,6 +447,10 @@ function App() {
   const [sftpTargets, setSftpTargets] = useState([]);
   const [selectedSftpTargetId, setSelectedSftpTargetId] = useState('');
   const [newSftpTarget, setNewSftpTarget] = useState({ name: '', host: '', port: 22, username: '', password: '', private_key: '', remote_path: '/backups/bpanel' });
+  const [daBackups, setDaBackups] = useState([]);
+  const [daScanResult, setDaScanResult] = useState(null);
+  const [daImportJob, setDaImportJob] = useState(null);
+  const daFileInputRef = React.useRef(null);
   const [selectedWebsiteId, setSelectedWebsiteId] = useState(() => standaloneEditor?.websiteId || '');
   const [sslMode, setSslMode] = useState('letsencrypt');
   const [manualSslForm, setManualSslForm] = useState({ certificate: '', private_key: '', ca_bundle: '' });
@@ -2120,6 +2124,70 @@ function App() {
     finally { setLoading(''); }
   }
 
+  // --- DirectAdmin Import ---
+  async function listDaBackups() {
+    const data = await request('/maintenance/da-import/backups');
+    if (data) setDaBackups(Array.isArray(data) ? data : []);
+  }
+
+  async function uploadDaBackup(file) {
+    if (!file) return;
+    const form = new FormData();
+    form.append('file', file);
+    try {
+      setError(''); setLoading('Uploading DA backup...');
+      const csrfToken = readCookie('bpanel_csrf');
+      const headers = csrfToken ? { 'X-CSRF-Token': csrfToken } : {};
+      const res = await fetch(`${API}/maintenance/da-import/upload`, {
+        method: 'POST', credentials: 'include', headers, body: form,
+      });
+      const text = await res.text();
+      let data;
+      try { data = text ? JSON.parse(text) : {}; } catch { data = { detail: text || `HTTP ${res.status}` }; }
+      if (!res.ok) { if (handleAuthExpired(res.status, data.detail)) return; setError(formatApiError(data.detail, 'Upload failed.')); return; }
+      setNotice(`Uploaded: ${data.filename}`);
+      await listDaBackups();
+    } catch (err) { setError('DA backup upload failed.'); }
+    finally { setLoading(''); }
+  }
+
+  async function scanDaBackup(archivePath) {
+    setDaScanResult(null);
+    const data = await request('/maintenance/da-import/scan', { method: 'POST', body: JSON.stringify({ archive_path: archivePath }) }, 'Scanning DA backup...');
+    if (data) setDaScanResult(data);
+  }
+
+  async function importDaBackup(archivePath, force = false) {
+    if (!force && !confirm('Import this DirectAdmin backup? This will create users, websites, databases, and nginx configs.')) return;
+    setDaImportJob(null);
+    const data = await request('/maintenance/da-import/import', { method: 'POST', body: JSON.stringify({ archive_path: archivePath, force }) }, 'Starting DA import...');
+    if (data?.job_id) {
+      setNotice('DA import started. Polling for result...');
+      setDaImportJob(data);
+      pollDaImportJob(data.job_id);
+    }
+  }
+
+  async function pollDaImportJob(jobId) {
+    let attempts = 0;
+    const maxAttempts = 360;
+    while (attempts < maxAttempts) {
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      const data = await request(`/maintenance/da-import/jobs/${jobId}`, { silent: true });
+      if (!data) { attempts++; continue; }
+      setDaImportJob(data);
+      if (data.status === 'completed') { setNotice('DA import completed successfully!'); await listDaBackups(); return; }
+      if (data.status === 'failed') { setError(`DA import failed: ${data.error || 'Unknown error'}`); return; }
+      attempts++;
+    }
+  }
+
+  async function deleteDaBackup(archivePath) {
+    if (!confirm('Delete this DA backup file?')) return;
+    const data = await request('/maintenance/da-import/backups', { method: 'DELETE', body: JSON.stringify({ archive_path: archivePath }) }, 'Deleting DA backup...');
+    if (data) { setNotice(`Deleted: ${data.deleted}`); setDaScanResult(null); await listDaBackups(); }
+  }
+
   async function openPhpMyAdmin(databaseId) {
     try {
       setError(''); setLoading('Opening phpMyAdmin...');
@@ -2578,6 +2646,8 @@ function App() {
   }, [currentSite?.id]);
 
   useEffect(() => { if (selectedWebsiteId && page === 'backups') { listBackups(); loadBackupJobs(); } }, [selectedWebsiteId, page]);
+
+  useEffect(() => { if (selectedWebsiteId && page === 'backups' && backupTab === 'da-import') listDaBackups(); }, [backupTab, page]);
 
   useEffect(() => { if (selectedWebsiteId && page === 'cron') listCron(); }, [selectedWebsiteId, page]);
 
@@ -3268,6 +3338,7 @@ function App() {
         ['user', 'Backup user', Users],
         ['schedule', 'Scheduled backups', Clock],
         ['destination', 'Backup Destination', Network],
+        ['da-import', 'DA Import', ArchiveRestore],
       ]
       : [['website', 'Backup website', Globe]];
     const activeBackupTab = backupTabs.some(([id]) => id === backupTab) ? backupTab : 'website';
@@ -3426,6 +3497,76 @@ function App() {
             <button className="danger" disabled={!!loading} onClick={() => deleteSftpTarget(target.id)}><Trash2 size={14}/></button>
           </div>)}
         </div>
+      </div>}
+
+      {isAdmin && activeBackupTab === 'da-import' && <div className="backup-tab-panel">
+        <div className="backup-panel-title">
+          <div><h3>DirectAdmin Import</h3><p className="hint">Import websites, databases, and users from a DirectAdmin backup archive.</p></div>
+          <button disabled={!!loading} onClick={() => listDaBackups()}><RefreshCw size={14}/> Refresh</button>
+        </div>
+        <div className="actions backup-toolbar">
+          <label className="upload-button">
+            <Upload size={14}/> Upload DA backup
+            <input ref={daFileInputRef} type="file" accept=".tar.gz,.tgz,.tar.bz2,.tbz2,.tar.xz,.txz,.tar" onChange={e => { uploadDaBackup(e.target.files?.[0]); e.target.value = ''; }} />
+          </label>
+        </div>
+        {daBackups.length === 0 && <EmptyState icon={ArchiveRestore} message="No DirectAdmin backups uploaded. Upload a DA backup archive to get started." />}
+        <div className="backup-list">
+          {daBackups.map(file => <div className="backup-item" key={file.path}>
+            <span>{file.filename}<small>{(file.size / (1024 * 1024)).toFixed(1)} MB</small></span>
+            <div className="actions">
+              <button disabled={!!loading} onClick={() => scanDaBackup(file.path)}><Search size={14}/> Scan</button>
+              <button disabled={!!loading} onClick={() => importDaBackup(file.path)}><ArchiveRestore size={14}/> Import</button>
+              <button className="danger" disabled={!!loading} onClick={() => deleteDaBackup(file.path)}><Trash2 size={14}/></button>
+            </div>
+          </div>)}
+        </div>
+
+        {daScanResult && <div className="da-scan-result">
+          <h4>Scan result: {daScanResult.filename}</h4>
+          {daScanResult.errors?.length > 0 && <div className="error-list">
+            {daScanResult.errors.map((err, i) => <p key={i} className="error-text">{err}</p>)}
+          </div>}
+          {daScanResult.users?.map((user, i) => <div key={i} className="da-user-block">
+            <p><strong>User:</strong> {user.username} {user.email && <small>({user.email})</small>}</p>
+            {user.domains?.length > 0 && <div>
+              <p className="hint">Domains ({user.domains.length}):</p>
+              <ul className="da-domain-list">
+                {user.domains.map((d, j) => <li key={j}>
+                  <Globe size={12}/> {d.domain}
+                  <small>type={d.app_type}, files={d.has_files ? 'yes' : 'no'}{d.db_name ? `, db=${d.db_name}` : ''}{d.has_sql_dump ? ' (SQL dump found)' : ''}</small>
+                </li>)}
+              </ul>
+            </div>}
+            {user.databases?.length > 0 && <div>
+              <p className="hint">Unassigned databases ({user.databases.length}):</p>
+              <ul className="da-domain-list">
+                {user.databases.map((db, j) => <li key={j}>
+                  <Database size={12}/> {db.db_name}
+                  <small>{db.has_sql_dump ? 'SQL dump found' : 'No dump'}</small>
+                </li>)}
+              </ul>
+            </div>}
+          </div>)}
+        </div>}
+
+        {daImportJob && <div className={`backup-job ${daImportJob.status}`} style={{ marginTop: 16 }}>
+          <Clock size={14}/>
+          <span><strong>DA Import</strong><small>{daImportJob.archive || ''} — {daImportJob.status}</small></span>
+          <span className={daImportJob.status === 'completed' ? 'badge ok' : daImportJob.status === 'failed' ? 'badge bad' : 'badge'}>{daImportJob.status}</span>
+        </div>}
+        {daImportJob?.status === 'completed' && daImportJob.result?.summary && <div className="da-scan-result" style={{ marginTop: 12 }}>
+          <h4>Import Summary</h4>
+          {daImportJob.result.summary.map((item, i) => <div key={i} className="da-user-block">
+            <p><strong>{item.username}</strong> — {item.imported_domains?.length || 0} domain(s), {item.databases?.length || 0} database(s)</p>
+            {item.ssl_enabled_domains?.length > 0 && <p className="hint">SSL enabled: {item.ssl_enabled_domains.join(', ')}</p>}
+            {item.warnings?.length > 0 && <p className="hint" style={{ color: 'var(--color-warning)' }}>Warnings: {item.warnings.join('; ')}</p>}
+          </div>)}
+          {daImportJob.result.credentials && <details style={{ marginTop: 8 }}>
+            <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Generated credentials (click to show)</summary>
+            <pre className="da-credentials">{daImportJob.result.credentials.join('\n')}</pre>
+          </details>}
+        </div>}
       </div>}
     </section>;
   }

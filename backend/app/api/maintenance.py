@@ -1193,3 +1193,145 @@ def delete_file(website_id: int, path: str, db: Session = Depends(get_db), curre
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"deleted": target}
+
+
+# ---------------------------------------------------------------------------
+# DirectAdmin Import
+# ---------------------------------------------------------------------------
+
+@router.get("/da-import/backups")
+def list_da_backups(current_user: User = Depends(get_current_user)):
+    """List all uploaded DirectAdmin backup archives."""
+    ensure_role(current_user.role, Role.admin)
+    from app.services import da_import
+    return da_import.list_da_backups()
+
+
+@router.post("/da-import/upload")
+async def upload_da_backup(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Upload a DirectAdmin backup archive to the DA backup directory."""
+    ensure_role(current_user.role, Role.admin)
+    from app.services import da_import
+
+    da_import.DA_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    filename = file.filename or "da_backup.tar.gz"
+    destination = da_import.DA_BACKUP_DIR / filename
+    if destination.exists():
+        raise HTTPException(status_code=409, detail="A backup with this name already exists")
+
+    with open(destination, "wb") as out:
+        while chunk := await file.read(1024 * 1024):
+            out.write(chunk)
+
+    log_action(db, current_user.id, "da_backup_upload", filename)
+    return {"filename": filename, "path": str(destination), "size": destination.stat().st_size}
+
+
+@router.post("/da-import/scan")
+def scan_da_backup(body: dict, current_user: User = Depends(get_current_user)):
+    """Scan a DirectAdmin backup to preview users/domains/databases."""
+    ensure_role(current_user.role, Role.admin)
+    from app.services import da_import
+
+    archive_path = body.get("archive_path", "")
+    if not archive_path:
+        raise HTTPException(status_code=400, detail="archive_path is required")
+    try:
+        return da_import.scan_da_backup(archive_path)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+DA_IMPORT_JOB_LIMIT = 10
+_da_import_job_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bpanel-da-import")
+_da_import_jobs: dict[str, dict] = {}
+_da_import_jobs_lock = threading.Lock()
+
+
+def _run_da_import_job(job_id: str, archive_path: str, force: bool):
+    """Run DA import in background thread."""
+    with _da_import_jobs_lock:
+        _da_import_jobs[job_id]["status"] = "running"
+    try:
+        from app.services import da_import
+        result = da_import.import_da_backup(archive_path, force=force)
+        with _da_import_jobs_lock:
+            _da_import_jobs[job_id].update(status="completed", result=result)
+    except Exception as exc:
+        logger.exception("DA import failed for %s", archive_path)
+        with _da_import_jobs_lock:
+            _da_import_jobs[job_id].update(status="failed", error=str(exc))
+
+
+@router.post("/da-import/import")
+def import_da_backup(body: dict, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Start an async DA backup import job."""
+    ensure_role(current_user.role, Role.admin)
+    from app.services import da_import
+
+    archive_path = body.get("archive_path", "")
+    force = body.get("force", False)
+    if not archive_path:
+        raise HTTPException(status_code=400, detail="archive_path is required")
+    path = Path(archive_path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Backup file not found")
+
+    with _da_import_jobs_lock:
+        running = sum(1 for j in _da_import_jobs.values() if j["status"] == "running")
+        if running >= 1:
+            raise HTTPException(status_code=429, detail="An import is already running. Please wait.")
+
+    job_id = str(uuid.uuid4())
+    with _da_import_jobs_lock:
+        _da_import_jobs[job_id] = {
+            "id": job_id,
+            "status": "pending",
+            "archive": path.name,
+            "archive_path": str(path),
+            "created_at": datetime.utcnow().isoformat(),
+            "result": None,
+            "error": None,
+        }
+
+    _da_import_job_executor.submit(_run_da_import_job, job_id, str(path), force)
+    log_action(db, current_user.id, "da_backup_import_start", f"{job_id} archive={path.name}")
+    return {"job_id": job_id, "status": "pending"}
+
+
+@router.get("/da-import/jobs/{job_id}")
+def get_da_import_job(job_id: str, current_user: User = Depends(get_current_user)):
+    """Get the status and result of a DA import job."""
+    ensure_role(current_user.role, Role.admin)
+    with _da_import_jobs_lock:
+        job = _da_import_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+
+@router.delete("/da-import/backups")
+def delete_da_backup(body: dict, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Delete an uploaded DirectAdmin backup archive."""
+    ensure_role(current_user.role, Role.admin)
+    from app.services import da_import
+
+    archive_path = body.get("archive_path", "")
+    if not archive_path:
+        raise HTTPException(status_code=400, detail="archive_path is required")
+    try:
+        name = da_import.delete_da_backup(archive_path)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    log_action(db, current_user.id, "da_backup_delete", name)
+    return {"deleted": name}

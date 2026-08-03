@@ -877,3 +877,8 @@ class PhpConfigRestore(BaseModel):
 class WpAction(BaseModel):
     website_id: int
     action: str
+
+
+class DaImportRequest(BaseModel):
+    archive_path: str
+    force: bool = False

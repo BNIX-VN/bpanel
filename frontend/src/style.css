@@ -930,3 +930,16 @@ button:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
   .user-edit-actions button{width:100%}
   pre{font-size:12px}
 }
+
+/* DA Import */
+.da-scan-result{margin-top:16px;padding:16px;background:var(--card-bg);border:1px solid var(--border);border-radius:8px}
+.da-scan-result h4{margin:0 0 12px 0;font-size:15px}
+.da-user-block{margin-bottom:12px;padding:12px;background:var(--surface);border-radius:6px}
+.da-user-block p{margin:0 0 8px 0}
+.da-domain-list{list-style:none;padding:0;margin:8px 0 0 0;display:flex;flex-direction:column;gap:6px}
+.da-domain-list li{display:flex;align-items:center;gap:6px;font-size:13px}
+.da-domain-list li small{color:var(--text-muted)}
+.da-domain-list li svg{flex-shrink:0}
+.error-list{margin:8px 0;padding:8px;background:var(--danger-bg);border-radius:4px}
+.error-text{color:var(--color-danger);font-size:13px;margin:4px 0}
+.da-credentials{background:var(--surface);padding:12px;border-radius:6px;font-size:12px;white-space:pre-wrap;word-break:break-all;max-height:300px;overflow-y:auto;margin-top:8px}
