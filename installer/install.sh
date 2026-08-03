@@ -525,6 +525,9 @@ setup_panel_user() {
   # Make the panel data dirs writable by bpanel.
   install -d -o bpanel -g bpanel -m 0750 "$APP_DIR"
   install -d -o bpanel -g bpanel -m 0750 "$BACKUP_ROOT"
+  # DirectAdmin import staging dirs
+  install -d -o bpanel -g bpanel -m 0750 /home/admin/bpanel_backups/da
+  install -d -o bpanel -g bpanel -m 0750 /var/lib/bpanel/da-import
 
   # MariaDB: create an admin user that bpanel can use without password
   # (auth via a defaults-file in ~bpanel/.my.cnf, mode 0600).
@@ -696,7 +699,7 @@ RestartSec=3
 NoNewPrivileges=false
 ProtectSystem=false
 ProtectHome=false
-ReadWritePaths=${APP_DIR} /home ${BACKUP_ROOT} /etc/nginx/conf.d /etc/nginx/bpanel/custom /tmp /var/lib/bpanel
+ReadWritePaths=${APP_DIR} /home ${BACKUP_ROOT} /etc/nginx/conf.d /etc/nginx/bpanel/custom /tmp /var/lib/bpanel /home/admin/bpanel_backups/da /var/lib/bpanel/da-import
 PrivateTmp=true
 PrivateDevices=true
 ProtectKernelTunables=true
@@ -738,7 +741,7 @@ ExecStart=${APP_DIR}/backend/.venv/bin/python -m app.services.backup_scheduler
 NoNewPrivileges=false
 ProtectSystem=false
 ProtectHome=false
-ReadWritePaths=${APP_DIR} /home ${BACKUP_ROOT} /etc/nginx/conf.d /etc/nginx/bpanel/custom /tmp /var/lib/bpanel
+ReadWritePaths=${APP_DIR} /home ${BACKUP_ROOT} /etc/nginx/conf.d /etc/nginx/bpanel/custom /tmp /var/lib/bpanel /home/admin/bpanel_backups/da /var/lib/bpanel/da-import
 PrivateTmp=true
 
 [Install]

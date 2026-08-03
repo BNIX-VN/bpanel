@@ -905,6 +905,7 @@ def create_or_update_website(db, user, domain: str, source: Path | None, app_typ
         log(f"  warning: WAF rules failed for {domain}; vhost will be created with WAF disabled")
 
     socket = site_users.site_php_fpm_socket(linux_user, root_path, DEFAULT_PHP_VERSION if app_type in {"wordpress", "php"} else None)
+    rewrite_mode = "front_controller" if app_type == "wordpress" else "none"
     try:
         nginx.write_vhost(
             domain,
@@ -913,6 +914,7 @@ def create_or_update_website(db, user, domain: str, source: Path | None, app_typ
             php_version=DEFAULT_PHP_VERSION if app_type in {"wordpress", "php"} else None,
             php_fpm_socket_override=socket,
             waf_enabled=waf_enabled,
+            rewrite_mode=rewrite_mode,
         )
     except RuntimeError:
         if not waf_enabled:
@@ -926,6 +928,7 @@ def create_or_update_website(db, user, domain: str, source: Path | None, app_typ
             php_version=DEFAULT_PHP_VERSION if app_type in {"wordpress", "php"} else None,
             php_fpm_socket_override=socket,
             waf_enabled=False,
+            rewrite_mode=rewrite_mode,
         )
 
     website = Website(
@@ -937,6 +940,7 @@ def create_or_update_website(db, user, domain: str, source: Path | None, app_typ
         app_type=app_type,
         status="active",
         waf_enabled=waf_enabled,
+        nginx_rewrite_mode=rewrite_mode,
     )
     db.add(website)
     db.commit()

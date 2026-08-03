@@ -720,6 +720,7 @@ def _enable_ssl_when_dns_matches(db, website, item_summary: dict) -> None:
 
 def list_da_backups() -> list[dict]:
     """Return metadata for every DA backup archive in the upload directory."""
+    DA_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     if not DA_BACKUP_DIR.exists():
         return []
     items = []
@@ -897,6 +898,7 @@ def import_da_backup(archive_path: str, force: bool = False) -> dict:
                     linux_user, root_path,
                     DEFAULT_PHP_VERSION if app_type in {"wordpress", "php"} else None,
                 )
+                rewrite_mode = "front_controller" if app_type == "wordpress" else "none"
                 try:
                     nginx.write_vhost(
                         domain, root_path,
@@ -904,6 +906,7 @@ def import_da_backup(archive_path: str, force: bool = False) -> dict:
                         php_version=DEFAULT_PHP_VERSION if app_type in {"wordpress", "php"} else None,
                         php_fpm_socket_override=php_socket,
                         waf_enabled=waf_enabled,
+                        rewrite_mode=rewrite_mode,
                     )
                 except RuntimeError:
                     if not waf_enabled:
@@ -916,6 +919,7 @@ def import_da_backup(archive_path: str, force: bool = False) -> dict:
                         php_version=DEFAULT_PHP_VERSION if app_type in {"wordpress", "php"} else None,
                         php_fpm_socket_override=php_socket,
                         waf_enabled=False,
+                        rewrite_mode=rewrite_mode,
                     )
 
                 website = db.query(Website).filter(Website.domain == domain).first()
@@ -929,6 +933,7 @@ def import_da_backup(archive_path: str, force: bool = False) -> dict:
                         app_type=app_type,
                         status="active",
                         waf_enabled=waf_enabled,
+                        nginx_rewrite_mode=rewrite_mode,
                     )
                     db.add(website)
                 else:
@@ -938,6 +943,7 @@ def import_da_backup(archive_path: str, force: bool = False) -> dict:
                     website.php_version = DEFAULT_PHP_VERSION
                     website.app_type = app_type
                     website.waf_enabled = waf_enabled
+                    website.nginx_rewrite_mode = rewrite_mode
                 db.commit()
                 db.refresh(website)
                 site_users.fix_site_permissions(root_path, linux_user)
