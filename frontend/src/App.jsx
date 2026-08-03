@@ -450,6 +450,8 @@ function App() {
   const [daBackups, setDaBackups] = useState([]);
   const [daScanResult, setDaScanResult] = useState(null);
   const [daImportJob, setDaImportJob] = useState(null);
+  const [daBulkImportJob, setDaBulkImportJob] = useState(null);
+  const [selectedDaBackups, setSelectedDaBackups] = useState([]);
   const daFileInputRef = React.useRef(null);
   const [selectedWebsiteId, setSelectedWebsiteId] = useState(() => standaloneEditor?.websiteId || '');
   const [sslMode, setSslMode] = useState('letsencrypt');
@@ -2188,6 +2190,59 @@ function App() {
     if (data) { setNotice(`Deleted: ${data.deleted}`); setDaScanResult(null); await listDaBackups(); }
   }
 
+  function toggleDaBackupSelect(path) {
+    setSelectedDaBackups(prev => prev.includes(path) ? prev.filter(p => p !== path) : [...prev, path]);
+  }
+
+  function toggleSelectAllDaBackups() {
+    setSelectedDaBackups(prev => prev.length === daBackups.length ? [] : daBackups.map(f => f.path));
+  }
+
+  async function bulkImportDaBackups(force = false) {
+    if (selectedDaBackups.length === 0) return;
+    if (!force && !confirm(`Restore ${selectedDaBackups.length} backup(s)? This will create users, websites, databases, and nginx configs for each.`)) return;
+    setDaBulkImportJob(null);
+    setDaImportJob(null);
+    setDaScanResult(null);
+    const data = await request('/maintenance/da-import/bulk-import', { method: 'POST', body: JSON.stringify({ archive_paths: selectedDaBackups, force }) }, 'Starting bulk restore...');
+    if (data?.job_id) {
+      setNotice(`Bulk restore started: ${data.total} backup(s). Processing sequentially...`);
+      setSelectedDaBackups([]);
+      pollDaBulkImportJob(data.job_id);
+    }
+  }
+
+  async function pollDaBulkImportJob(jobId) {
+    let attempts = 0;
+    const maxAttempts = 720;
+    while (attempts < maxAttempts) {
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      const data = await request(`/maintenance/da-import/bulk-jobs/${jobId}`, { silent: true });
+      if (!data) { attempts++; continue; }
+      setDaBulkImportJob(data);
+      if (data.status === 'completed') {
+        const ok = (data.results || []).filter(r => r.status === 'completed').length;
+        const fail = (data.results || []).filter(r => r.status === 'failed').length;
+        setNotice(`Bulk restore done: ${ok} succeeded, ${fail} failed.`);
+        await listDaBackups();
+        return;
+      }
+      attempts++;
+    }
+  }
+
+  async function bulkDeleteDaBackups() {
+    if (selectedDaBackups.length === 0) return;
+    if (!confirm(`Delete ${selectedDaBackups.length} selected backup file(s)?`)) return;
+    for (const path of selectedDaBackups) {
+      await request('/maintenance/da-import/backups', { method: 'DELETE', body: JSON.stringify({ archive_path: path }) }, 'Deleting...');
+    }
+    setNotice(`Deleted ${selectedDaBackups.length} backup(s).`);
+    setSelectedDaBackups([]);
+    setDaScanResult(null);
+    await listDaBackups();
+  }
+
   async function openPhpMyAdmin(databaseId) {
     try {
       setError(''); setLoading('Opening phpMyAdmin...');
@@ -2647,7 +2702,7 @@ function App() {
 
   useEffect(() => { if (selectedWebsiteId && page === 'backups') { listBackups(); loadBackupJobs(); } }, [selectedWebsiteId, page]);
 
-  useEffect(() => { if (selectedWebsiteId && page === 'backups' && backupTab === 'da-import') listDaBackups(); }, [backupTab, page]);
+  useEffect(() => { if (selectedWebsiteId && page === 'backups' && backupTab === 'da-import') { listDaBackups(); setSelectedDaBackups([]); setDaBulkImportJob(null); } }, [backupTab, page]);
 
   useEffect(() => { if (selectedWebsiteId && page === 'cron') listCron(); }, [selectedWebsiteId, page]);
 
@@ -3511,16 +3566,31 @@ function App() {
           </label>
         </div>
         {daBackups.length === 0 && <EmptyState icon={ArchiveRestore} message="No DirectAdmin backups uploaded. Upload a DA backup archive to get started." />}
-        <div className="backup-list">
-          {daBackups.map(file => <div className="backup-item" key={file.path}>
-            <span>{file.filename}<small>{(file.size / (1024 * 1024)).toFixed(1)} MB</small></span>
-            <div className="actions">
-              <button disabled={!!loading} onClick={() => scanDaBackup(file.path)}><Search size={14}/> Scan</button>
-              <button disabled={!!loading} onClick={() => importDaBackup(file.path)}><ArchiveRestore size={14}/> Import</button>
-              <button className="danger" disabled={!!loading} onClick={() => deleteDaBackup(file.path)}><Trash2 size={14}/></button>
-            </div>
-          </div>)}
-        </div>
+        {daBackups.length > 0 && <>
+          <div className="actions backup-toolbar" style={{ gap: 12, flexWrap: 'wrap' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: '0.85rem', userSelect: 'none' }}>
+              <input type="checkbox" checked={selectedDaBackups.length === daBackups.length && daBackups.length > 0} onChange={toggleSelectAllDaBackups} />
+              Select all ({daBackups.length})
+            </label>
+            {selectedDaBackups.length > 0 && <>
+              <button disabled={!!loading} onClick={() => bulkImportDaBackups()} className="primary"><ArchiveRestore size={14}/> Restore selected ({selectedDaBackups.length})</button>
+              <button disabled={!!loading} onClick={bulkDeleteDaBackups} className="danger"><Trash2 size={14}/> Delete selected ({selectedDaBackups.length})</button>
+            </>}
+          </div>
+          <div className="backup-list">
+            {daBackups.map(file => <div className="backup-item" key={file.path} style={{ background: selectedDaBackups.includes(file.path) ? 'var(--color-primary-bg, rgba(59,130,246,0.08))' : undefined }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, cursor: 'pointer', minWidth: 0 }}>
+                <input type="checkbox" checked={selectedDaBackups.includes(file.path)} onChange={() => toggleDaBackupSelect(file.path)} />
+                <span style={{ minWidth: 0 }}>{file.filename}<small>{(file.size / (1024 * 1024)).toFixed(1)} MB</small></span>
+              </label>
+              <div className="actions">
+                <button disabled={!!loading} onClick={() => scanDaBackup(file.path)}><Search size={14}/> Scan</button>
+                <button disabled={!!loading} onClick={() => importDaBackup(file.path)}><ArchiveRestore size={14}/> Import</button>
+                <button className="danger" disabled={!!loading} onClick={() => deleteDaBackup(file.path)}><Trash2 size={14}/></button>
+              </div>
+            </div>)}
+          </div>
+        </>}
 
         {daScanResult && <div className="da-scan-result">
           <h4>Scan result: {daScanResult.filename}</h4>
@@ -3566,6 +3636,24 @@ function App() {
             <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Generated credentials (click to show)</summary>
             <pre className="da-credentials">{daImportJob.result.credentials.join('\n')}</pre>
           </details>}
+        </div>}
+
+        {daBulkImportJob && <div className={`backup-job ${daBulkImportJob.status}`} style={{ marginTop: 16 }}>
+          <Clock size={14}/>
+          <span><strong>Bulk Restore</strong><small>{daBulkImportJob.status === 'running' ? `Processing ${daBulkImportJob.current + 1}/${daBulkImportJob.total}: ${daBulkImportJob.current_archive}` : `${daBulkImportJob.total} backup(s)`} — {daBulkImportJob.status}</small></span>
+          <span className={daBulkImportJob.status === 'completed' ? 'badge ok' : daBulkImportJob.status === 'running' ? 'badge' : 'badge'}>{daBulkImportJob.status === 'running' ? `${daBulkImportJob.current}/${daBulkImportJob.total}` : daBulkImportJob.status}</span>
+        </div>}
+        {daBulkImportJob?.status === 'completed' && daBulkImportJob.results && <div className="da-scan-result" style={{ marginTop: 12 }}>
+          <h4>Bulk Restore Results</h4>
+          {daBulkImportJob.results.map((item, i) => <div key={i} className="da-user-block" style={{ borderLeft: item.status === 'completed' ? '3px solid var(--color-success, #22c55e)' : '3px solid var(--color-danger, #ef4444)' }}>
+            <p><strong>{item.archive}</strong> — <span className={item.status === 'completed' ? 'badge ok' : 'badge bad'}>{item.status}</span></p>
+            {item.result?.summary?.map((s, j) => <p key={j} className="hint">{s.username}: {s.imported_domains?.length || 0} domain(s), {s.databases?.length || 0} db(s)</p>)}
+            {item.result?.credentials && <details style={{ marginTop: 4 }}>
+              <summary style={{ cursor: 'pointer', fontSize: '0.8rem' }}>Credentials</summary>
+              <pre className="da-credentials">{item.result.credentials.join('\n')}</pre>
+            </details>}
+            {item.error && <p className="error-text">{item.error}</p>}
+          </div>)}
         </div>}
       </div>}
     </section>;

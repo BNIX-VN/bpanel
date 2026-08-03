@@ -24,6 +24,7 @@ from app.schemas.schemas import (
     BackupCreate,
     CronCreate,
     CronDelete,
+    DaBulkImportRequest,
     PhpConfigUpdate,
     PhpConfigRestore,
     RestoreBackup,
@@ -1313,6 +1314,89 @@ def get_da_import_job(job_id: str, current_user: User = Depends(get_current_user
     ensure_role(current_user.role, Role.admin)
     with _da_import_jobs_lock:
         job = _da_import_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+
+# ---------------------------------------------------------------------------
+#  DA Import – Bulk (sequential) import
+# ---------------------------------------------------------------------------
+_da_bulk_import_jobs: dict[str, dict] = {}
+_da_bulk_import_jobs_lock = threading.Lock()
+
+
+def _run_da_bulk_import_job(job_id: str, archive_paths: list[str], force: bool):
+    """Process multiple DA backup archives sequentially."""
+    with _da_bulk_import_jobs_lock:
+        _da_bulk_import_jobs[job_id]["status"] = "running"
+    results = []
+    for idx, archive_path in enumerate(archive_paths):
+        with _da_bulk_import_jobs_lock:
+            _da_bulk_import_jobs[job_id]["current"] = idx
+            _da_bulk_import_jobs[job_id]["current_archive"] = Path(archive_path).name
+        try:
+            from app.services import da_import
+            result = da_import.import_da_backup(archive_path, force=force)
+            results.append({"archive": Path(archive_path).name, "status": "completed", "result": result})
+        except Exception as exc:
+            logger.exception("DA bulk import: failed for %s", archive_path)
+            results.append({"archive": Path(archive_path).name, "status": "failed", "error": str(exc)})
+    with _da_bulk_import_jobs_lock:
+        _da_bulk_import_jobs[job_id].update(
+            status="completed",
+            results=results,
+            current=len(archive_paths),
+        )
+
+
+@router.post("/da-import/bulk-import")
+def bulk_import_da_backups(body: DaBulkImportRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Start a sequential bulk import of multiple DA backup archives."""
+    ensure_role(current_user.role, Role.admin)
+    if not body.archive_paths:
+        raise HTTPException(status_code=400, detail="archive_paths is required")
+
+    paths = []
+    for p in body.archive_paths:
+        path = Path(p)
+        if not path.exists():
+            raise HTTPException(status_code=404, detail=f"Backup file not found: {path.name}")
+        paths.append(path)
+
+    with _da_bulk_import_jobs_lock:
+        running = sum(1 for j in _da_bulk_import_jobs.values() if j["status"] == "running")
+        if running >= 1:
+            raise HTTPException(status_code=429, detail="A bulk import is already running. Please wait.")
+    with _da_import_jobs_lock:
+        running_single = sum(1 for j in _da_import_jobs.values() if j["status"] == "running")
+        if running_single >= 1:
+            raise HTTPException(status_code=429, detail="A single import is already running. Please wait.")
+
+    job_id = str(uuid.uuid4())
+    with _da_bulk_import_jobs_lock:
+        _da_bulk_import_jobs[job_id] = {
+            "id": job_id,
+            "status": "pending",
+            "total": len(paths),
+            "current": 0,
+            "current_archive": "",
+            "archive_paths": [str(p) for p in paths],
+            "created_at": datetime.utcnow().isoformat(),
+            "results": None,
+        }
+
+    _da_import_job_executor.submit(_run_da_bulk_import_job, job_id, [str(p) for p in paths], body.force)
+    log_action(db, current_user.id, "da_bulk_import_start", f"{job_id} archives={len(paths)}")
+    return {"job_id": job_id, "status": "pending", "total": len(paths)}
+
+
+@router.get("/da-import/bulk-jobs/{job_id}")
+def get_da_bulk_import_job(job_id: str, current_user: User = Depends(get_current_user)):
+    """Get the status and results of a DA bulk import job."""
+    ensure_role(current_user.role, Role.admin)
+    with _da_bulk_import_jobs_lock:
+        job = _da_bulk_import_jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job

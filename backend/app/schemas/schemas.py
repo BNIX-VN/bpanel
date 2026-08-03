@@ -882,3 +882,8 @@ class WpAction(BaseModel):
 class DaImportRequest(BaseModel):
     archive_path: str
     force: bool = False
+
+
+class DaBulkImportRequest(BaseModel):
+    archive_paths: list[str]
+    force: bool = False
