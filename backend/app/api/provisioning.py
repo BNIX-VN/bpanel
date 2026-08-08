@@ -219,7 +219,9 @@ def create_account(payload: ProvisioningAccountCreate, request: Request, db: Ses
     if payload.enable_ssl:
         from app.services import ssl as ssl_service
         try:
-            ssl_service.request_lets_encrypt(payload.domain)
+            result = ssl_service.issue_ssl(payload.domain)
+            if result.returncode != 0:
+                raise RuntimeError(result.stderr or result.stdout or "Could not issue SSL")
             website.ssl_enabled = True
             website.ssl_mode = "letsencrypt"
             website.ssl_updated_at = datetime.now(timezone.utc)

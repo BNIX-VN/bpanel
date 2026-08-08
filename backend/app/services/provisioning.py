@@ -87,7 +87,7 @@ def suspend_account(db: Session, account: ProvisioningAccount, reason: str = "")
             document_root=website.document_root or "public_html",
             custom_directives="# SUSPENDED",
             rewrite_mode="none",
-            include_ssl=False,
+            preserve_existing_ssl=False,
         )
         if website.linux_user:
             try:
