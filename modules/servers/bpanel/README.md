@@ -1,5 +1,7 @@
 # BPanel WHMCS server module
 
+Compatible with WHMCS on PHP 8.1+.
+
 ## Install
 
 Copy this directory to WHMCS:

@@ -43,13 +43,13 @@ function bpanel_ConfigOptions()
     ];
 }
 
-function bpanel_TestConnection(array $params)
+function bpanel_TestConnection($params)
 {
     $result = bpanel_request($params, 'GET', '/api/provisioning/v1/plans');
     return $result['ok'] ? ['success' => true] : ['success' => false, 'error' => $result['error']];
 }
 
-function bpanel_CreateAccount(array $params)
+function bpanel_CreateAccount($params)
 {
     $payload = [
         'external_id' => bpanel_external_id($params),
@@ -77,40 +77,40 @@ function bpanel_CreateAccount(array $params)
     return 'success';
 }
 
-function bpanel_SuspendAccount(array $params)
+function bpanel_SuspendAccount($params)
 {
     $payload = ['reason' => $params['suspendreason'] ?? 'Suspended by WHMCS'];
     $result = bpanel_request($params, 'POST', '/api/provisioning/v1/accounts/' . rawurlencode(bpanel_external_id($params)) . '/suspend', $payload);
     return $result['ok'] ? 'success' : $result['error'];
 }
 
-function bpanel_UnsuspendAccount(array $params)
+function bpanel_UnsuspendAccount($params)
 {
     $result = bpanel_request($params, 'POST', '/api/provisioning/v1/accounts/' . rawurlencode(bpanel_external_id($params)) . '/unsuspend');
     return $result['ok'] ? 'success' : $result['error'];
 }
 
-function bpanel_TerminateAccount(array $params)
+function bpanel_TerminateAccount($params)
 {
     $result = bpanel_request($params, 'DELETE', '/api/provisioning/v1/accounts/' . rawurlencode(bpanel_external_id($params)), null, ['backup' => 'true']);
     return $result['ok'] ? 'success' : $result['error'];
 }
 
-function bpanel_ChangePassword(array $params)
+function bpanel_ChangePassword($params)
 {
     $payload = ['password' => bpanel_password($params)];
     $result = bpanel_request($params, 'PATCH', '/api/provisioning/v1/accounts/' . rawurlencode(bpanel_external_id($params)) . '/password', $payload);
     return $result['ok'] ? 'success' : $result['error'];
 }
 
-function bpanel_ChangePackage(array $params)
+function bpanel_ChangePackage($params)
 {
     $payload = ['package_id' => (int) bpanel_config($params, 1, '1')];
     $result = bpanel_request($params, 'PATCH', '/api/provisioning/v1/accounts/' . rawurlencode(bpanel_external_id($params)) . '/package', $payload);
     return $result['ok'] ? 'success' : $result['error'];
 }
 
-function bpanel_UsageUpdate(array $params)
+function bpanel_UsageUpdate($params)
 {
     if (empty($params['serviceid'])) {
         return 'success';
@@ -125,13 +125,13 @@ function bpanel_UsageUpdate(array $params)
     return 'success';
 }
 
-function bpanel_LoginLink(array $params)
+function bpanel_LoginLink($params)
 {
     $url = bpanel_base_url($params);
     return '<a href="' . htmlspecialchars($url, ENT_QUOTES, 'UTF-8') . '" target="_blank">Open BPanel</a>';
 }
 
-function bpanel_ClientArea(array $params)
+function bpanel_ClientArea($params)
 {
     return [
         'templatefile' => 'clientarea',
@@ -142,7 +142,7 @@ function bpanel_ClientArea(array $params)
     ];
 }
 
-function bpanel_request(array $params, string $method, string $path, ?array $payload = null, array $query = [])
+function bpanel_request($params, $method, $path, $payload = null, $query = [])
 {
     if (!function_exists('curl_init')) {
         return ['ok' => false, 'error' => 'PHP cURL extension is required'];
@@ -206,7 +206,7 @@ function bpanel_request(array $params, string $method, string $path, ?array $pay
     return ['ok' => true, 'data' => is_array($data) ? $data : []];
 }
 
-function bpanel_base_url(array $params): string
+function bpanel_base_url($params)
 {
     $hostname = trim((string) ($params['serverhostname'] ?? ''));
     if ($hostname === '') {
@@ -226,28 +226,28 @@ function bpanel_base_url(array $params): string
     return $scheme . '://' . $hostname;
 }
 
-function bpanel_external_id(array $params): string
+function bpanel_external_id($params)
 {
     return 'whmcs:' . (int) ($params['serviceid'] ?? 0);
 }
 
-function bpanel_username(array $params): string
+function bpanel_username($params)
 {
     $serviceId = (int) ($params['serviceid'] ?? 0);
     return 'bp_' . $serviceId;
 }
 
-function bpanel_password(array $params): string
+function bpanel_password($params)
 {
     return (string) ($params['password'] ?? '');
 }
 
-function bpanel_domain(array $params): string
+function bpanel_domain($params)
 {
     return strtolower(trim((string) ($params['domain'] ?? '')));
 }
 
-function bpanel_client_email(array $params): string
+function bpanel_client_email($params)
 {
     if (!empty($params['clientsdetails']['email'])) {
         return (string) $params['clientsdetails']['email'];
@@ -255,19 +255,19 @@ function bpanel_client_email(array $params): string
     return 'client' . (int) ($params['userid'] ?? 0) . '@example.invalid';
 }
 
-function bpanel_config(array $params, int $index, string $default): string
+function bpanel_config($params, $index, $default)
 {
     $key = 'configoption' . $index;
     $value = $params[$key] ?? $default;
     return trim((string) $value) !== '' ? trim((string) $value) : $default;
 }
 
-function bpanel_yesno(string $value): bool
+function bpanel_yesno($value)
 {
     return in_array(strtolower(trim($value)), ['on', 'yes', 'true', '1'], true);
 }
 
-function bpanel_save_service_note(array $params, array $data): void
+function bpanel_save_service_note($params, $data)
 {
     if (!function_exists('localAPI') || empty($params['serviceid'])) {
         return;
@@ -290,7 +290,7 @@ function bpanel_save_service_note(array $params, array $data): void
     }
 }
 
-function bpanel_log(array $params, string $method, string $path, $request, $response, string $result): void
+function bpanel_log($params, $method, $path, $request, $response, $result)
 {
     if (!function_exists('logModuleCall')) {
         return;
