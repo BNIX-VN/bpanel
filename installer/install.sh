@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BPANEL_INSTALLER_VERSION="${BPANEL_INSTALLER_VERSION:-v1.0.65}"
+BPANEL_INSTALLER_VERSION="${BPANEL_INSTALLER_VERSION:-v1.0.66}"
 
 if [[ $EUID -ne 0 ]]; then
   echo "Please run this installer as root"
@@ -963,6 +963,7 @@ setup_nginx() {
 
 setup_firewall() {
   local default_port seen_ssh_ports ssh_port
+  set +e
   ufw_delete_bpanel_rules() {
     local pattern="$1" number
     while read -r number; do
@@ -1010,7 +1011,8 @@ setup_firewall() {
   ufw default deny incoming || true
   ufw default allow outgoing || true
   ufw_panel_allow_app OpenSSH
-  seen_ssh_ports="$(detect_ssh_ports)"
+  ufw_panel_allow_port 22
+  seen_ssh_ports="$(detect_ssh_ports || true)"
   while read -r ssh_port; do
     [[ -n "$ssh_port" ]] || continue
     [[ "$ssh_port" == "22" ]] && continue
@@ -1021,6 +1023,8 @@ setup_firewall() {
     ufw_panel_allow_port "$default_port"
   done
   ufw --force enable || true
+  set -e
+  return 0
 }
 
 setup_ssl() {
