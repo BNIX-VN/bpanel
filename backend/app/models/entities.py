@@ -12,8 +12,15 @@ class UserPackage(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    slug: Mapped[Optional[str]] = mapped_column(String(100), unique=True, nullable=True, index=True)
     website_limit: Mapped[int] = mapped_column(Integer, default=5)
     storage_limit_mb: Mapped[int] = mapped_column(Integer, default=1024)
+    database_limit: Mapped[int] = mapped_column(Integer, default=5)
+    alias_limit: Mapped[int] = mapped_column(Integer, default=0)
+    backup_retention_days: Mapped[int] = mapped_column(Integer, default=7)
+    terminal_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    waf_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    wordpress_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     users: Mapped[List["User"]] = relationship(back_populates="package")
@@ -163,3 +170,36 @@ class BackupSchedule(Base):
     last_status: Mapped[str] = mapped_column(String(32), default="pending")
     last_message: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class ApiToken(Base):
+    __tablename__ = "api_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(100), index=True)
+    token_hash: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    scopes: Mapped[str] = mapped_column(Text, default="provisioning:read,provisioning:write")
+    allowed_ips: Mapped[str] = mapped_column(Text, default="")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class ProvisioningAccount(Base):
+    __tablename__ = "provisioning_accounts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    external_id: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    primary_website_id: Mapped[Optional[int]] = mapped_column(ForeignKey("websites.id"), nullable=True)
+    package_id: Mapped[Optional[int]] = mapped_column(ForeignKey("user_packages.id"), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="pending")
+    last_action: Mapped[str] = mapped_column(String(64), default="")
+    last_message: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user: Mapped[Optional[User]] = relationship()
+    primary_website: Mapped[Optional[Website]] = relationship(foreign_keys=[primary_website_id])
+    package: Mapped[Optional[UserPackage]] = relationship()

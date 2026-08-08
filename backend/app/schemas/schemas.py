@@ -143,8 +143,15 @@ class TwoFactorDisableRequest(BaseModel):
 
 class UserPackageCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
+    slug: Optional[str] = Field(default=None, max_length=100)
     website_limit: int = Field(default=5, ge=0, le=1000)
     storage_limit_mb: int = Field(default=1024, ge=0, le=1024 * 1024)
+    database_limit: int = Field(default=5, ge=0, le=10000)
+    alias_limit: int = Field(default=0, ge=0, le=1000)
+    backup_retention_days: int = Field(default=7, ge=0, le=365)
+    terminal_enabled: bool = False
+    waf_enabled: bool = True
+    wordpress_enabled: bool = True
 
     @field_validator("name")
     @classmethod
@@ -157,8 +164,15 @@ class UserPackageCreate(BaseModel):
 
 class UserPackageUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    slug: Optional[str] = Field(default=None, max_length=100)
     website_limit: Optional[int] = Field(default=None, ge=0, le=1000)
     storage_limit_mb: Optional[int] = Field(default=None, ge=0, le=1024 * 1024)
+    database_limit: Optional[int] = Field(default=None, ge=0, le=10000)
+    alias_limit: Optional[int] = Field(default=None, ge=0, le=1000)
+    backup_retention_days: Optional[int] = Field(default=None, ge=0, le=365)
+    terminal_enabled: Optional[bool] = None
+    waf_enabled: Optional[bool] = None
+    wordpress_enabled: Optional[bool] = None
 
     @field_validator("name")
     @classmethod
@@ -174,8 +188,15 @@ class UserPackageUpdate(BaseModel):
 class UserPackageOut(BaseModel):
     id: int
     name: str
+    slug: Optional[str] = None
     website_limit: int
     storage_limit_mb: int
+    database_limit: int = 5
+    alias_limit: int = 0
+    backup_retention_days: int = 7
+    terminal_enabled: bool = False
+    waf_enabled: bool = True
+    wordpress_enabled: bool = True
     created_at: Optional[datetime] = None
 
     class Config:
@@ -887,3 +908,86 @@ class DaImportRequest(BaseModel):
 class DaBulkImportRequest(BaseModel):
     archive_paths: list[str]
     force: bool = False
+
+class ProvisioningAccountCreate(BaseModel):
+    external_id: str = Field(min_length=1, max_length=255)
+    username: str = Field(min_length=3, max_length=32, pattern=r"^[a-z_][a-z0-9_-]{2,31}$")
+    email: EmailStr
+    password: str = Field(min_length=12, max_length=72)
+    package_id: int = Field(ge=1)
+    domain: str
+    php_version: str = "8.4"
+    app_type: Literal["wordpress", "php", "static"] = "php"
+    install_wordpress: bool = False
+    enable_ssl: bool = False
+
+    @field_validator("username")
+    @classmethod
+    def validate_username(cls, value: str) -> str:
+        if value in RESERVED_LINUX_USERNAMES:
+            raise ValueError("username is reserved by the system")
+        return value
+
+    @field_validator("domain")
+    @classmethod
+    def validate_domain(cls, value: str) -> str:
+        value = value.strip().lower()
+        if not DOMAIN_RE.fullmatch(value):
+            raise ValueError("Invalid domain")
+        return value
+
+    @field_validator("php_version")
+    @classmethod
+    def validate_php(cls, value: str) -> str:
+        return _validate_php_version(value) or "8.4"
+
+class ProvisioningAccountOut(BaseModel):
+    external_id: str
+    username: str
+    email: str
+    domain: str
+    package_id: Optional[int] = None
+    status: str
+    panel_url: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+class ProvisioningSuspendRequest(BaseModel):
+    reason: str = ""
+
+class ProvisioningPasswordChange(BaseModel):
+    password: str = Field(min_length=12, max_length=72)
+
+class ProvisioningPackageChange(BaseModel):
+    package_id: int = Field(ge=1)
+
+class ApiTokenCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    scopes: str = "provisioning:read,provisioning:write"
+    allowed_ips: str = ""
+
+class ApiTokenOut(BaseModel):
+    id: int
+    name: str
+    scopes: str
+    allowed_ips: str
+    is_active: bool
+    last_used_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+class ApiTokenCreatedResponse(BaseModel):
+    token: str
+    info: ApiTokenOut
+
+class ProvisioningUsageOut(BaseModel):
+    external_id: str
+    storage_used_bytes: int
+    storage_limit_bytes: Optional[int] = None
+    storage_percent: float
+    website_count: int
+    database_count: int

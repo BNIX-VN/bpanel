@@ -237,3 +237,21 @@ def delete_site_runtime(root_path: str, linux_user: Optional[str]) -> None:
         check=False,
         fallback=["true"],
     )
+
+def lock_linux_user(username: str) -> None:
+    linux_user = validate_linux_user(username)
+    shell.privileged(
+        "panel-user-lock",
+        helper_args=[linux_user],
+        check=False,
+        fallback=["usermod", "-L", linux_user],
+    )
+
+def unlock_linux_user(username: str) -> None:
+    linux_user = validate_linux_user(username)
+    shell.privileged(
+        "panel-user-unlock",
+        helper_args=[linux_user],
+        check=False,
+        fallback=["usermod", "-U", linux_user],
+    )

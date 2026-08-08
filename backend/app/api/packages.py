@@ -45,8 +45,15 @@ def create_package(
     _ensure_unique_name(db, payload.name)
     package = UserPackage(
         name=payload.name,
+        slug=payload.slug,
         website_limit=payload.website_limit,
         storage_limit_mb=payload.storage_limit_mb,
+        database_limit=payload.database_limit,
+        alias_limit=payload.alias_limit,
+        backup_retention_days=payload.backup_retention_days,
+        terminal_enabled=payload.terminal_enabled,
+        waf_enabled=payload.waf_enabled,
+        wordpress_enabled=payload.wordpress_enabled,
     )
     db.add(package)
     db.commit()
@@ -68,10 +75,24 @@ def update_package(
     if payload.name is not None and payload.name != package.name:
         _ensure_unique_name(db, payload.name, package_id=package.id)
         package.name = payload.name
+    if payload.slug is not None:
+        package.slug = payload.slug
     if payload.website_limit is not None:
         package.website_limit = payload.website_limit
     if payload.storage_limit_mb is not None:
         package.storage_limit_mb = payload.storage_limit_mb
+    if payload.database_limit is not None:
+        package.database_limit = payload.database_limit
+    if payload.alias_limit is not None:
+        package.alias_limit = payload.alias_limit
+    if payload.backup_retention_days is not None:
+        package.backup_retention_days = payload.backup_retention_days
+    if payload.terminal_enabled is not None:
+        package.terminal_enabled = payload.terminal_enabled
+    if payload.waf_enabled is not None:
+        package.waf_enabled = payload.waf_enabled
+    if payload.wordpress_enabled is not None:
+        package.wordpress_enabled = payload.wordpress_enabled
     for user in db.query(User).filter(User.package_id == package.id).all():
         user.website_limit = package.website_limit
         user.storage_limit_mb = package.storage_limit_mb
