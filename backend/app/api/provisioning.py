@@ -268,7 +268,7 @@ def unsuspend(external_id: str, request: Request, db: Session = Depends(get_db))
 
 
 @router.delete("/accounts/{external_id}")
-def terminate(external_id: str, backup: bool = Query(default=True), request: Request, db: Session = Depends(get_db)):
+def terminate(external_id: str, request: Request, backup: bool = Query(default=True), db: Session = Depends(get_db)):
     token = _get_provisioning_token(request, db)
     _require_scope(token, "provisioning:write")
     account = _account_by_external_id(db, external_id)
