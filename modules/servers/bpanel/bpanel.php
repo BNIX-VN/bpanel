@@ -1,0 +1,307 @@
+<?php
+
+if (!defined('WHMCS')) {
+    die('This file cannot be accessed directly');
+}
+
+function bpanel_MetaData()
+{
+    return [
+        'DisplayName' => 'BPanel Hosting',
+        'APIVersion' => '1.1',
+        'RequiresServer' => true,
+    ];
+}
+
+function bpanel_ConfigOptions()
+{
+    return [
+        'Package ID' => [
+            'Type' => 'text',
+            'Size' => '8',
+            'Default' => '1',
+            'Description' => 'BPanel UserPackage ID',
+        ],
+        'App Type' => [
+            'Type' => 'dropdown',
+            'Options' => 'php,static,wordpress',
+            'Default' => 'php',
+        ],
+        'PHP Version' => [
+            'Type' => 'dropdown',
+            'Options' => '8.4,8.3,8.2,8.1,8.0,7.4,5.6',
+            'Default' => '8.4',
+        ],
+        'Install WordPress' => [
+            'Type' => 'yesno',
+            'Description' => 'Install WordPress during provisioning',
+        ],
+        'Auto SSL' => [
+            'Type' => 'yesno',
+            'Description' => 'Request Let\'s Encrypt SSL after provisioning',
+        ],
+    ];
+}
+
+function bpanel_TestConnection(array $params)
+{
+    $result = bpanel_request($params, 'GET', '/api/provisioning/v1/plans');
+    return $result['ok'] ? ['success' => true] : ['success' => false, 'error' => $result['error']];
+}
+
+function bpanel_CreateAccount(array $params)
+{
+    $payload = [
+        'external_id' => bpanel_external_id($params),
+        'username' => bpanel_username($params),
+        'email' => bpanel_client_email($params),
+        'password' => bpanel_password($params),
+        'package_id' => (int) bpanel_config($params, 1, '1'),
+        'domain' => bpanel_domain($params),
+        'php_version' => bpanel_config($params, 3, '8.4'),
+        'app_type' => bpanel_config($params, 2, 'php'),
+        'install_wordpress' => bpanel_yesno(bpanel_config($params, 4, '')),
+        'enable_ssl' => bpanel_yesno(bpanel_config($params, 5, '')),
+    ];
+
+    if ($payload['install_wordpress']) {
+        $payload['app_type'] = 'wordpress';
+    }
+
+    $result = bpanel_request($params, 'POST', '/api/provisioning/v1/accounts', $payload);
+    if (!$result['ok']) {
+        return $result['error'];
+    }
+
+    bpanel_save_service_note($params, $result['data']);
+    return 'success';
+}
+
+function bpanel_SuspendAccount(array $params)
+{
+    $payload = ['reason' => $params['suspendreason'] ?? 'Suspended by WHMCS'];
+    $result = bpanel_request($params, 'POST', '/api/provisioning/v1/accounts/' . rawurlencode(bpanel_external_id($params)) . '/suspend', $payload);
+    return $result['ok'] ? 'success' : $result['error'];
+}
+
+function bpanel_UnsuspendAccount(array $params)
+{
+    $result = bpanel_request($params, 'POST', '/api/provisioning/v1/accounts/' . rawurlencode(bpanel_external_id($params)) . '/unsuspend');
+    return $result['ok'] ? 'success' : $result['error'];
+}
+
+function bpanel_TerminateAccount(array $params)
+{
+    $result = bpanel_request($params, 'DELETE', '/api/provisioning/v1/accounts/' . rawurlencode(bpanel_external_id($params)), null, ['backup' => 'true']);
+    return $result['ok'] ? 'success' : $result['error'];
+}
+
+function bpanel_ChangePassword(array $params)
+{
+    $payload = ['password' => bpanel_password($params)];
+    $result = bpanel_request($params, 'PATCH', '/api/provisioning/v1/accounts/' . rawurlencode(bpanel_external_id($params)) . '/password', $payload);
+    return $result['ok'] ? 'success' : $result['error'];
+}
+
+function bpanel_ChangePackage(array $params)
+{
+    $payload = ['package_id' => (int) bpanel_config($params, 1, '1')];
+    $result = bpanel_request($params, 'PATCH', '/api/provisioning/v1/accounts/' . rawurlencode(bpanel_external_id($params)) . '/package', $payload);
+    return $result['ok'] ? 'success' : $result['error'];
+}
+
+function bpanel_UsageUpdate(array $params)
+{
+    if (empty($params['serviceid'])) {
+        return 'success';
+    }
+
+    $result = bpanel_request($params, 'GET', '/api/provisioning/v1/accounts/' . rawurlencode(bpanel_external_id($params)) . '/usage');
+    if (!$result['ok']) {
+        return $result['error'];
+    }
+
+    bpanel_save_service_note($params, $result['data']);
+    return 'success';
+}
+
+function bpanel_LoginLink(array $params)
+{
+    $url = bpanel_base_url($params);
+    return '<a href="' . htmlspecialchars($url, ENT_QUOTES, 'UTF-8') . '" target="_blank">Open BPanel</a>';
+}
+
+function bpanel_ClientArea(array $params)
+{
+    return [
+        'templatefile' => 'clientarea',
+        'vars' => [
+            'panelUrl' => bpanel_base_url($params),
+            'username' => bpanel_username($params),
+        ],
+    ];
+}
+
+function bpanel_request(array $params, string $method, string $path, ?array $payload = null, array $query = [])
+{
+    if (!function_exists('curl_init')) {
+        return ['ok' => false, 'error' => 'PHP cURL extension is required'];
+    }
+
+    $token = trim((string) ($params['serveraccesshash'] ?? ''));
+    if ($token === '') {
+        $token = trim((string) ($params['serverpassword'] ?? ''));
+    }
+    if ($token === '') {
+        return ['ok' => false, 'error' => 'Missing BPanel API token in server Access Hash or Password'];
+    }
+
+    $url = bpanel_base_url($params) . $path;
+    if ($query) {
+        $url .= '?' . http_build_query($query);
+    }
+
+    $headers = [
+        'Authorization: Bearer ' . $token,
+        'Accept: application/json',
+    ];
+
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_CUSTOMREQUEST => strtoupper($method),
+        CURLOPT_CONNECTTIMEOUT => 15,
+        CURLOPT_TIMEOUT => 90,
+        CURLOPT_HTTPHEADER => $headers,
+        CURLOPT_SSL_VERIFYPEER => true,
+        CURLOPT_SSL_VERIFYHOST => 2,
+    ]);
+
+    if ($payload !== null) {
+        $body = json_encode($payload);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+        $headers[] = 'Content-Type: application/json';
+        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+    }
+
+    $body = curl_exec($ch);
+    $errno = curl_errno($ch);
+    $error = curl_error($ch);
+    $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($errno) {
+        bpanel_log($params, $method, $path, $payload, null, 'cURL ' . $errno . ': ' . $error);
+        return ['ok' => false, 'error' => 'BPanel connection failed: ' . $error];
+    }
+
+    $data = json_decode((string) $body, true);
+    if ($status < 200 || $status >= 300) {
+        $message = is_array($data) && isset($data['detail']) ? $data['detail'] : (string) $body;
+        bpanel_log($params, $method, $path, $payload, $body, 'HTTP ' . $status . ': ' . $message);
+        return ['ok' => false, 'error' => 'BPanel API error: ' . $message];
+    }
+
+    bpanel_log($params, $method, $path, $payload, $body, 'OK');
+    return ['ok' => true, 'data' => is_array($data) ? $data : []];
+}
+
+function bpanel_base_url(array $params): string
+{
+    $hostname = trim((string) ($params['serverhostname'] ?? ''));
+    if ($hostname === '') {
+        $hostname = trim((string) ($params['serverip'] ?? ''));
+    }
+    $hostname = preg_replace('#^https?://#', '', $hostname);
+    $hostname = rtrim($hostname, '/');
+
+    $secure = !empty($params['serversecure']);
+    $scheme = $secure ? 'https' : 'http';
+    $port = trim((string) ($params['serverport'] ?? ''));
+
+    if ($port !== '' && !in_array($port, ['80', '443'], true)) {
+        return $scheme . '://' . $hostname . ':' . $port;
+    }
+
+    return $scheme . '://' . $hostname;
+}
+
+function bpanel_external_id(array $params): string
+{
+    return 'whmcs:' . (int) ($params['serviceid'] ?? 0);
+}
+
+function bpanel_username(array $params): string
+{
+    $serviceId = (int) ($params['serviceid'] ?? 0);
+    return 'bp_' . $serviceId;
+}
+
+function bpanel_password(array $params): string
+{
+    return (string) ($params['password'] ?? '');
+}
+
+function bpanel_domain(array $params): string
+{
+    return strtolower(trim((string) ($params['domain'] ?? '')));
+}
+
+function bpanel_client_email(array $params): string
+{
+    if (!empty($params['clientsdetails']['email'])) {
+        return (string) $params['clientsdetails']['email'];
+    }
+    return 'client' . (int) ($params['userid'] ?? 0) . '@example.invalid';
+}
+
+function bpanel_config(array $params, int $index, string $default): string
+{
+    $key = 'configoption' . $index;
+    $value = $params[$key] ?? $default;
+    return trim((string) $value) !== '' ? trim((string) $value) : $default;
+}
+
+function bpanel_yesno(string $value): bool
+{
+    return in_array(strtolower(trim($value)), ['on', 'yes', 'true', '1'], true);
+}
+
+function bpanel_save_service_note(array $params, array $data): void
+{
+    if (!function_exists('localAPI') || empty($params['serviceid'])) {
+        return;
+    }
+
+    $lines = ['BPanel'];
+    foreach (['external_id', 'username', 'email', 'domain', 'status', 'package_id', 'storage_used_bytes', 'storage_limit_bytes', 'storage_percent'] as $key) {
+        if (array_key_exists($key, $data)) {
+            $lines[] = $key . ': ' . (is_scalar($data[$key]) ? $data[$key] : json_encode($data[$key]));
+        }
+    }
+
+    try {
+        localAPI('UpdateClientProduct', [
+            'serviceid' => (int) $params['serviceid'],
+            'notes' => implode("\n", $lines),
+        ]);
+    } catch (Throwable $e) {
+        // WHMCS note update is best effort; provisioning already succeeded.
+    }
+}
+
+function bpanel_log(array $params, string $method, string $path, $request, $response, string $result): void
+{
+    if (!function_exists('logModuleCall')) {
+        return;
+    }
+
+    logModuleCall(
+        'bpanel',
+        $method . ' ' . $path,
+        $request,
+        $response,
+        $result,
+        [trim((string) ($params['serveraccesshash'] ?? '')), trim((string) ($params['serverpassword'] ?? ''))]
+    );
+}
