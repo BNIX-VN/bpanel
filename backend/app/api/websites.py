@@ -14,7 +14,19 @@ from app.core.database import get_db
 from app.core.permissions import Role, ensure_role, is_admin_role
 from app.core.secrets import encrypt
 from app.models.entities import DatabaseAccount, User, Website, WebsiteAlias
-from app.schemas.schemas import WebsiteAliasCreate, WebsiteAliasOut, WebsiteCreate, WebsiteHttpFloodUpdate, WebsiteLogOut, WebsiteNginxConfig, WebsiteNginxCustom, WebsiteOut, WebsiteUpdate, WebsiteWafUpdate
+from app.schemas.schemas import (
+    WebsiteAliasCreate,
+    WebsiteAliasOut,
+    WebsiteCreate,
+    WebsiteHttpFloodUpdate,
+    WebsiteLogOut,
+    WebsiteNginxConfig,
+    WebsiteNginxCustom,
+    WebsiteOut,
+    WebsiteUpdate,
+    WebsiteWafUpdate,
+    WebsiteWordPressInstall,
+)
 from app.services import file_manager, mariadb, nginx, site_users, ssl, storage_quota, waf, wordpress
 from app.services.audit import log_action
 
@@ -215,6 +227,14 @@ def _has_live_certificate(website: Website) -> bool:
         return False
 
 
+def _has_wordpress_install(website: Website) -> bool:
+    try:
+        public = site_users.document_root(website.root_path, website.document_root or "public_html")
+        return (public / "wp-config.php").is_file() and (public / "wp-admin").is_dir()
+    except (OSError, ValueError):
+        return False
+
+
 def _sync_live_ssl_flags(db: Session, websites: list[Website]) -> list[Website]:
     changed = False
     for website in websites:
@@ -225,6 +245,8 @@ def _sync_live_ssl_flags(db: Session, websites: list[Website]) -> list[Website]:
         db.commit()
         for website in websites:
             db.refresh(website)
+    for website in websites:
+        website.wordpress_installed = _has_wordpress_install(website)
     return websites
 
 
@@ -368,6 +390,7 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
         payload.domain,
         request=request,
     )
+    website.wordpress_installed = install_wp
     return website
 
 
@@ -376,6 +399,87 @@ def create_wordpress(payload: WebsiteCreate, request: Request, db: Session = Dep
     """Legacy endpoint for backwards compatibility. Forces install_wordpress=True."""
     payload = payload.model_copy(update={"install_wordpress": True, "app_type": "wordpress"})
     return create_website(payload, request, db, current_user)
+
+
+@router.post("/{website_id}/wordpress", response_model=WebsiteOut)
+def install_wordpress_on_website(
+    website_id: int,
+    payload: WebsiteWordPressInstall,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    website = db.query(Website).filter(Website.id == website_id).first()
+    if not website:
+        raise HTTPException(status_code=404, detail="Website not found")
+    if website.owner_id != current_user.id:
+        ensure_role(current_user.role, Role.admin)
+    if _has_wordpress_install(website):
+        raise HTTPException(status_code=400, detail="WordPress is already installed for this website")
+
+    owner = db.query(User).filter(User.id == website.owner_id).first()
+    if not owner:
+        raise HTTPException(status_code=404, detail="Owner not found")
+    try:
+        storage_quota.enforce_user_storage_quota(
+            db,
+            owner,
+            incoming_bytes=storage_quota.WORDPRESS_SITE_ESTIMATE_BYTES,
+        )
+    except storage_quota.StorageQuotaExceeded as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+
+    try:
+        db_info = mariadb.create_database(website.domain, if_not_exists=False)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        root_path = wordpress.install_wordpress(
+            website.domain,
+            db_info,
+            payload.title.strip() or website.domain,
+            payload.admin_user,
+            payload.admin_password,
+            str(payload.admin_email),
+            website.php_version,
+            website.linux_user,
+            root_path=website.root_path,
+        )
+        _ensure_default_waf_file(website.domain)
+        _rewrite_website_vhost(
+            website,
+            app_type="wordpress",
+            php_version=website.php_version,
+            root_path=root_path,
+            rewrite_mode="front_controller",
+        )
+    except (RuntimeError, ValueError, OSError) as exc:
+        mariadb.drop_database(db_info["db_name"], db_info["db_user"])
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    website.root_path = root_path
+    website.app_type = "wordpress"
+    website.nginx_rewrite_mode = "front_controller"
+    db_account = db.query(DatabaseAccount).filter(DatabaseAccount.db_name == db_info["db_name"]).first()
+    if db_account:
+        db_account.owner_id = website.owner_id
+        db_account.website_id = website.id
+        db_account.db_user = db_info["db_user"]
+        db_account.db_password = encrypt(db_info["db_password"])
+    else:
+        db.add(DatabaseAccount(
+            owner_id=website.owner_id,
+            website_id=website.id,
+            db_name=db_info["db_name"],
+            db_user=db_info["db_user"],
+            db_password=encrypt(db_info["db_password"]),
+        ))
+    db.commit()
+    db.refresh(website)
+    website.wordpress_installed = True
+    log_action(db, current_user.id, "install_wordpress", website.domain, request=request)
+    return website
 
 
 @router.get("", response_model=List[WebsiteOut])

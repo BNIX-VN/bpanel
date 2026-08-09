@@ -64,7 +64,7 @@ function bpanel_TestConnection($params)
 function bpanel_CreateAccount($params)
 {
     $domain = bpanel_domain($params);
-    $username = bpanel_username($params);
+    $username = bpanel_provision_username($params);
     $password = bpanel_password($params);
     $payload = [
         'external_id' => bpanel_external_id($params),
@@ -272,6 +272,12 @@ function bpanel_username($params)
         return $username;
     }
 
+    $serviceId = (int) ($params['serviceid'] ?? 0);
+    return bpanel_random_username($serviceId);
+}
+
+function bpanel_provision_username($params)
+{
     $serviceId = (int) ($params['serviceid'] ?? 0);
     return bpanel_random_username($serviceId);
 }

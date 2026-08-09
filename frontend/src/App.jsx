@@ -414,6 +414,7 @@ function App() {
   const [websiteSettingsForm, setWebsiteSettingsForm] = useState(websiteConfigForm());
   const [logViewer, setLogViewer] = useState(null); // {id, domain, kind, lines, path, content, exists}
   const [terminalViewer, setTerminalViewer] = useState(null); // {id, domain}
+  const [wordpressInstaller, setWordpressInstaller] = useState(null);
   const [websites, setWebsites] = useState([]);
   const [websiteList, setWebsiteList] = useState([]);
   const [websiteSearch, setWebsiteSearch] = useState('');
@@ -1542,6 +1543,7 @@ function App() {
   }
 
   async function openNginxCustom(site) {
+    setWordpressInstaller(null);
     setLogViewer(null);
     setTerminalViewer(null);
     setWebsiteSettingsForm(websiteConfigForm(site));
@@ -1644,6 +1646,7 @@ function App() {
 
   async function openWebsiteLogs(site) {
     setNginxCustomEditing(null);
+    setWordpressInstaller(null);
     setTerminalViewer(null);
     setLogViewer({ id: site.id, domain: site.domain, kind: 'access', lines: 200, path: '', content: '', exists: true });
     await loadWebsiteLog(site, 'access', 200, site.domain);
@@ -1651,8 +1654,70 @@ function App() {
 
   function openWebsiteTerminal(site) {
     setNginxCustomEditing(null);
+    setWordpressInstaller(null);
     setLogViewer(null);
     setTerminalViewer({ id: site.id, domain: site.domain });
+  }
+
+  function openWordPressInstaller(site) {
+    setNginxCustomEditing(null);
+    setLogViewer(null);
+    setTerminalViewer(null);
+    setWordpressInstaller({
+      website_id: site.id,
+      domain: site.domain,
+      php_version: site.php_version || phpVersion,
+      title: site.domain,
+      admin_user: 'admin',
+      admin_email: `admin@${site.domain}`,
+      admin_password: generateRandomPassword(20),
+    });
+  }
+
+  async function installWordPressOnSite() {
+    if (!wordpressInstaller) return;
+    const title = String(wordpressInstaller.title || '').trim() || wordpressInstaller.domain;
+    const adminUser = String(wordpressInstaller.admin_user || '').trim();
+    const adminEmailValue = String(wordpressInstaller.admin_email || '').trim();
+    const adminPasswordValue = String(wordpressInstaller.admin_password || '').trim();
+    if (!adminUser || !adminEmailValue || !adminPasswordValue) {
+      setError('Please fill all WordPress admin fields.');
+      return;
+    }
+    if (adminPasswordValue.length < 10) {
+      setError('WordPress admin password must be at least 10 characters.');
+      return;
+    }
+    const data = await request(`/websites/${wordpressInstaller.website_id}/wordpress`, {
+      method: 'POST',
+      body: JSON.stringify({
+        title,
+        admin_user: adminUser,
+        admin_email: adminEmailValue,
+        admin_password: adminPasswordValue,
+      }),
+    }, `Installing WordPress for ${wordpressInstaller.domain}...`);
+    if (data) {
+      setNotice(`Installed WordPress: https://${wordpressInstaller.domain}\nAdmin: ${adminUser} | Password: ${adminPasswordValue}`);
+      setWordpressInstaller(null);
+      await refreshAll();
+    }
+  }
+
+  async function runWordPressAction(site, action) {
+    const labels = { core: 'core', plugins: 'plugins', themes: 'themes' };
+    const label = labels[action] || action;
+    const data = await request('/maintenance/wordpress', {
+      method: 'POST',
+      body: JSON.stringify({ website_id: site.id, action }),
+    }, `Updating WordPress ${label}...`);
+    if (data?.returncode && data.returncode !== 0) {
+      setError(data.stderr || data.stdout || `WordPress ${label} update failed.`);
+      return;
+    }
+    if (data) {
+      setNotice(`Updated WordPress ${label} for ${site.domain}.`);
+    }
   }
 
   async function toggleWebsiteWaf(site) {
@@ -1945,6 +2010,7 @@ function App() {
 
   async function openWebsiteFileManager(site) {
     setNginxCustomEditing(null);
+    setWordpressInstaller(null);
     setLogViewer(null);
     setTerminalViewer(null);
     setSelectedWebsiteId(String(site.id));
@@ -3166,6 +3232,45 @@ function App() {
     </section>;
   }
 
+  function renderWordPressInstaller() {
+    if (!wordpressInstaller) return null;
+    return <section className="section nginx-modal inline-nginx-editor wordpress-install-modal">
+      <div className="section-title">
+        <div className="nginx-config-title">
+          <h2>Install WordPress - {wordpressInstaller.domain}</h2>
+          <p className="hint">PHP {wordpressInstaller.php_version || '8.4'}</p>
+        </div>
+        <button className="secondary-light" onClick={() => setWordpressInstaller(null)}><X size={14}/> Close</button>
+      </div>
+      <div className="website-settings-grid">
+        <label><span>Site title</span><input
+          value={wordpressInstaller.title}
+          onChange={e => setWordpressInstaller(prev => ({ ...prev, title: e.target.value }))}
+          disabled={!!loading}
+        /></label>
+        <label><span>Admin user</span><input
+          value={wordpressInstaller.admin_user}
+          onChange={e => setWordpressInstaller(prev => ({ ...prev, admin_user: e.target.value }))}
+          disabled={!!loading}
+        /></label>
+        <label><span>Admin email</span><input
+          value={wordpressInstaller.admin_email}
+          onChange={e => setWordpressInstaller(prev => ({ ...prev, admin_email: e.target.value }))}
+          disabled={!!loading}
+        /></label>
+        <label><span>Admin password</span><input
+          value={wordpressInstaller.admin_password}
+          onChange={e => setWordpressInstaller(prev => ({ ...prev, admin_password: e.target.value }))}
+          disabled={!!loading}
+        /></label>
+        <div className="website-settings-actions">
+          <button className="secondary-light" disabled={!!loading} onClick={() => setWordpressInstaller(prev => prev ? ({ ...prev, admin_password: generateRandomPassword(20) }) : prev)}><Dices size={14}/> Generate</button>
+          <button disabled={!!loading || !wordpressInstaller.admin_user || !wordpressInstaller.admin_email || !wordpressInstaller.admin_password} onClick={installWordPressOnSite}><Download size={14}/> Install</button>
+        </div>
+      </div>
+    </section>;
+  }
+
 
   function renderWebsiteTerminal() {
     if (!terminalViewer) return null;
@@ -3286,11 +3391,17 @@ function App() {
                 <button className="site-icon-button secondary-light" data-tooltip="Files" title="Files" aria-label={`Open file manager for ${site.domain}`} disabled={!!loading} onClick={() => openWebsiteFileManager(site)}><FolderOpen size={15}/></button>
                 <button className="site-icon-button secondary-light" data-tooltip="Logs" title="Logs" aria-label={`View logs for ${site.domain}`} disabled={!!loading} onClick={() => openWebsiteLogs(site)}><FileText size={15}/></button>
                 <button className="site-icon-button secondary-light" data-tooltip="Terminal" title="Terminal" aria-label={`Open terminal for ${site.domain}`} disabled={!!loading} onClick={() => openWebsiteTerminal(site)}><TerminalIcon size={15}/></button>
+                {site.wordpress_installed ? <>
+                  <button className="site-icon-button secondary-light" data-tooltip="Update WP core" title="Update WordPress core" aria-label={`Update WordPress core for ${site.domain}`} disabled={!!loading} onClick={() => runWordPressAction(site, 'core')}><RefreshCw size={15}/></button>
+                  <button className="site-icon-button secondary-light" data-tooltip="Update plugins" title="Update WordPress plugins" aria-label={`Update WordPress plugins for ${site.domain}`} disabled={!!loading} onClick={() => runWordPressAction(site, 'plugins')}><RefreshCw size={15}/></button>
+                  <button className="site-icon-button secondary-light" data-tooltip="Update themes" title="Update WordPress themes" aria-label={`Update WordPress themes for ${site.domain}`} disabled={!!loading} onClick={() => runWordPressAction(site, 'themes')}><RefreshCw size={15}/></button>
+                </> : <button className="site-icon-button secondary-light" data-tooltip="Install WP" title="Install WordPress" aria-label={`Install WordPress for ${site.domain}`} disabled={!!loading} onClick={() => openWordPressInstaller(site)}><Download size={15}/></button>}
                 <button className="site-icon-button secondary-light" data-tooltip="Settings" title="Settings" aria-label={`Edit settings for ${site.domain}`} disabled={!!loading} onClick={() => openNginxCustom(site)}><SettingsIcon size={15}/></button>
                 <button className="site-icon-button danger" data-tooltip="Delete" title="Delete" aria-label={`Delete ${site.domain}`} disabled={!!loading} onClick={() => deleteWebsite(site.id)}><Trash2 size={15}/></button>
               </div>
             </div>
           </article>
+          {String(wordpressInstaller?.website_id || '') === String(site.id) && renderWordPressInstaller()}
           {nginxCustomEditing?.id === site.id && renderNginxEditor()}
           {logViewer?.id === site.id && renderWebsiteLogViewer()}
           {terminalViewer?.id === site.id && renderWebsiteTerminal()}

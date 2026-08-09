@@ -339,6 +339,13 @@ class WebsiteCreate(BaseModel):
         return value
 
 
+class WebsiteWordPressInstall(BaseModel):
+    title: str = Field(default="", max_length=120)
+    admin_user: str = Field(default="admin", min_length=1, max_length=60)
+    admin_email: EmailStr
+    admin_password: str = Field(min_length=10, max_length=72)
+
+
 class WebsiteUpdate(BaseModel):
     php_version: Optional[str] = None
     app_type: Optional[str] = None
@@ -542,6 +549,7 @@ class WebsiteOut(BaseModel):
     waf_custom_rules: str = ""
     http_flood_enabled: bool = False
     http_flood_config: str = ""
+    wordpress_installed: bool = False
     aliases: list[WebsiteAliasOut] = Field(default_factory=list)
 
     class Config:
