@@ -185,6 +185,14 @@ button:disabled{opacity:.55;cursor:not-allowed;box-shadow:none}
 .segmented button{background:var(--surface-alt);color:var(--text-secondary);border-color:var(--border)}
 .segmented button.active{background:var(--primary);color:white;border-color:var(--primary)}
 .ssl-mode-tabs{margin-top:4px}
+.users-page{display:grid;gap:14px}
+.user-tabs{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));width:100%}
+.user-tabs button{justify-content:center;gap:7px;white-space:nowrap}
+.user-tab-panel{display:grid;gap:14px;min-width:0}
+.user-panel-title{padding-bottom:10px;border-bottom:1px solid var(--border)}
+.user-action-panel{display:grid;gap:10px;background:var(--surface-alt);border:1px solid var(--border);border-radius:var(--radius-md);padding:14px;min-width:0}
+.user-action-panel h3{margin:0 0 3px;color:var(--text);font-size:16px;line-height:1.2}
+.user-action-panel select{min-width:0}
 .manual-ssl-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;align-items:start}
 .manual-ssl-grid label{display:grid;gap:6px;font-weight:700;color:var(--text-secondary);font-size:13px}
 .manual-ssl-grid textarea{min-height:150px;resize:vertical}
