@@ -2074,6 +2074,7 @@ function App() {
   async function loadBackupJobs() {
     const data = await request('/maintenance/backup-jobs');
     if (data?.jobs) {
+      const visibleJobs = data.jobs.filter(job => job.status !== 'done');
       const hasActive = data.jobs.some(job => ['queued', 'running'].includes(job.status));
       setBackupJobs(prev => {
         const hadActive = prev.some(job => ['queued', 'running'].includes(job.status));
@@ -2083,7 +2084,7 @@ function App() {
             if (selectedBackupUserId) listUserBackups(selectedBackupUserId);
           }, 0);
         }
-        return data.jobs;
+        return visibleJobs;
       });
     }
   }
@@ -3629,6 +3630,7 @@ function App() {
       ]
       : [['website', 'Backup website', Globe]];
     const activeBackupTab = backupTabs.some(([id]) => id === backupTab) ? backupTab : 'website';
+    const visibleBackupJobs = backupJobs.filter(job => job.status !== 'done');
 
     return <section className="section backups-page">
       <h2>Backups</h2>
@@ -3642,8 +3644,8 @@ function App() {
           onClick={() => setBackupTab(id)}
         ><Icon size={14}/>{label}</button>)}
       </div>
-      {backupJobs.length > 0 && <div className="backup-job-list">
-        {backupJobs.map(job => <div className={`backup-job ${job.status}`} key={job.job_id}>
+      {visibleBackupJobs.length > 0 && <div className="backup-job-list">
+        {visibleBackupJobs.map(job => <div className={`backup-job ${job.status}`} key={job.job_id}>
           <Clock size={14}/>
           <span><strong>{jobTitle(job)}</strong><small>{jobDetail(job)}</small></span>
           <span className={job.status === 'done' ? 'badge ok' : job.status === 'error' ? 'badge bad' : 'badge'}>{job.status}</span>
