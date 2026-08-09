@@ -680,6 +680,19 @@ class PanelSettingsUpdate(BaseModel):
         return _validate_panel_hostname(value)
 
 
+class AdminAccountUpdate(BaseModel):
+    email: Optional[EmailStr] = None
+    password: Optional[str] = Field(default=None, min_length=12, max_length=72)
+    current_password: Optional[str] = Field(default=None, min_length=1, max_length=72)
+    code: Optional[str] = Field(default=None, min_length=6, max_length=12)
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        return _validate_linux_login_password(value)
+
 class PanelSslInstall(BaseModel):
     panel_hostname: Optional[str] = Field(default=None, min_length=3, max_length=255)
     panel_port: int = Field(default=2222, ge=1, le=65535)

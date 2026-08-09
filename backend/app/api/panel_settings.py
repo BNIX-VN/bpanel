@@ -4,8 +4,11 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.permissions import Role, ensure_role
+from app.core.security import hash_password
+from app.core.step_up import require_sensitive_action_step_up
 from app.models.entities import User
 from app.schemas.schemas import (
+    AdminAccountUpdate,
     MalwareScanJob,
     MalwareScanJobsOut,
     MalwareScanRun,
@@ -15,7 +18,7 @@ from app.schemas.schemas import (
     PanelSettingsUpdate,
     PanelSslInstall,
 )
-from app.services import panel_settings
+from app.services import panel_settings, site_users
 from app.services.audit import log_action
 
 
@@ -54,6 +57,37 @@ def update_panel_settings(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     log_action(db, current_user.id, "update_panel_settings", result.get("panel_url") or "panel", request=request)
     return result
+
+
+@router.patch("/admin-account")
+def update_admin_account(
+    payload: AdminAccountUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    ensure_role(current_user.role, Role.admin)
+    next_email = str(payload.email) if payload.email is not None else None
+    password_changed = bool(payload.password)
+    if password_changed:
+        require_sensitive_action_step_up(current_user, payload.current_password, payload.code)
+    if next_email is not None and next_email != current_user.email:
+        if db.query(User).filter(User.email == next_email, User.id != current_user.id).first():
+            raise HTTPException(status_code=409, detail="Email already in use")
+    if password_changed:
+        try:
+            site_users.set_panel_user_password(current_user.username, payload.password or "")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        current_user.hashed_password = hash_password(payload.password or "")
+        current_user.token_version = (current_user.token_version or 0) + 1
+    if next_email is not None and next_email != current_user.email:
+        current_user.email = next_email
+    db.commit()
+    log_action(db, current_user.id, "update_admin_account", current_user.username, request=request)
+    return {"message": "Admin account updated", "password_changed": password_changed}
 
 
 @router.post("/logo", response_model=PanelSettingsOut)
@@ -98,7 +132,7 @@ def install_panel_ssl(
     ensure_role(current_user.role, Role.admin)
     try:
         result = panel_settings.install_panel_ssl(
-            str(payload.email or ""),
+            str(current_user.email or ""),
             panel_hostname=payload.panel_hostname,
             panel_port=payload.panel_port,
             panel_url=payload.panel_url,

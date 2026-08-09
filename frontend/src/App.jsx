@@ -218,15 +218,6 @@ function NotificationToast({ type, message, onClose }) {
   </div>;
 }
 
-function isHostnameDomain(value = '') {
-  return /^(?!-)([a-z0-9-]{1,63}\.)+[a-z]{2,}$/i.test(String(value).trim());
-}
-
-function defaultPanelSslEmail(hostname = '') {
-  const host = String(hostname || '').trim().toLowerCase();
-  return isHostnameDomain(host) ? `admin@${host}` : '';
-}
-
 function renderAceSelectionTextOverlay(editor, overlay) {
   if (!editor || !overlay) return;
   overlay.innerHTML = '';
@@ -524,7 +515,7 @@ function App() {
   const [appVersion, setAppVersion] = useState('');
   const [panelLogoFile, setPanelLogoFile] = useState(null);
   const [panelFaviconFile, setPanelFaviconFile] = useState(null);
-  const [panelSslEmail, setPanelSslEmail] = useState('');
+  const [adminAccountForm, setAdminAccountForm] = useState({ email: '', current_password: '', password: '', confirm_password: '', code: '' });
   const [updatesStatus, setUpdatesStatus] = useState(null);
   const [showUpdateLog, setShowUpdateLog] = useState(false);
   const [osUpdating, setOsUpdating] = useState(false);
@@ -610,6 +601,7 @@ function App() {
     setDatabases([]);
     setUsers([]);
     setPackages([]);
+    setAdminAccountForm({ email: '', current_password: '', password: '', confirm_password: '', code: '' });
     setResourceUsage(null);
     setServiceStates({});
     setServiceNames(DEFAULT_SERVICE_NAMES);
@@ -774,6 +766,7 @@ function App() {
         return null;
       }
       setCurrentUser(data.user);
+      setAdminAccountForm(prev => ({ ...prev, email: data.user?.email || '' }));
       setIsAuthenticated(true);
       return data.user;
     } catch {
@@ -813,7 +806,6 @@ function App() {
     const hostnameChanged = hostname && hostname !== currentHostname;
 
     if (wantsSsl && (!hasSsl || hostnameChanged)) {
-      const sslEmail = String(panelSslEmail || defaultPanelSslEmail(hostname) || currentUser?.email || '').trim();
       const nameData = await request('/panel-settings', {
         method: 'PATCH',
         body: JSON.stringify({ app_name: panelSettingsForm.app_name }),
@@ -821,7 +813,7 @@ function App() {
       if (!nameData) return;
       const sslData = await request('/panel-settings/ssl', {
         method: 'POST',
-        body: JSON.stringify({ panel_hostname: hostname, panel_port: port, ...(sslEmail ? { email: sslEmail } : {}) }),
+        body: JSON.stringify({ panel_hostname: hostname, panel_port: port }),
       }, 'Installing panel SSL...');
       if (sslData) {
         setPanelSettings(sslData);
@@ -843,6 +835,57 @@ function App() {
       setPanelSettingsForm(formFromPanelSettings(data));
       setNotice(hasSsl && !wantsSsl ? 'Panel SSL disabled. The panel remains reachable by IP and port over HTTP.' : 'Panel settings updated.');
     }
+  }
+
+  async function saveAdminAccount() {
+    const email = String(adminAccountForm.email || '').trim();
+    const password = String(adminAccountForm.password || '');
+    const confirmPassword = String(adminAccountForm.confirm_password || '');
+    const currentPassword = String(adminAccountForm.current_password || '');
+    const code = String(adminAccountForm.code || '').trim();
+
+    if (!email) {
+      setError('Email is required.');
+      return;
+    }
+    if (password && password.length < 12) {
+      setError('Password must be at least 12 characters.');
+      return;
+    }
+    if (password && password !== confirmPassword) {
+      setError('Passwords do not match.');
+      return;
+    }
+
+    const payload = { email };
+    if (password) {
+      if (!currentPassword) {
+        setError('Current password is required to change password.');
+        return;
+      }
+      payload.password = password;
+      payload.current_password = currentPassword;
+      if (currentUser?.totp_enabled) {
+        if (!code) {
+          setError('Authentication code is required.');
+          return;
+        }
+        payload.code = code;
+      }
+    }
+
+    const data = await request('/panel-settings/admin-account', {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }, 'Saving admin account...');
+    if (!data) return;
+    if (data.password_changed) {
+      clearSession('Password changed. Please log in again.');
+      return;
+    }
+    setAdminAccountForm(prev => ({ ...prev, current_password: '', password: '', confirm_password: '', code: '' }));
+    await loadCurrentUser({ clearOnUnauthorized: false });
+    setNotice(data.message || 'Admin account updated.');
   }
 
   async function uploadPanelAsset(kind) {
@@ -902,10 +945,6 @@ function App() {
     link.href = faviconUrl;
     document.head.appendChild(link);
   }, [panelSettings, appVersion]);
-
-  useEffect(() => {
-    if (!panelSslEmail && currentUser?.email) setPanelSslEmail(currentUser.email);
-  }, [currentUser?.email, panelSslEmail]);
 
   async function refreshAll() {
     const refreshedUser = await loadCurrentUser();
@@ -1240,8 +1279,6 @@ function App() {
       await refreshAll();
     }
   }
-
-  async function changeMyPassword() { if (!currentUser) return; await changeUserPassword(currentUser); }
 
   async function loadTwoFactorStatus() {
     const data = await request('/auth/2fa/status');
@@ -4252,6 +4289,19 @@ function App() {
       </section>
       <section className="section">
         <div className="section-title">
+          <div><h2>Admin account</h2></div>
+        </div>
+        <div className="panel-settings-grid admin-account-grid">
+          <label><span>Email</span><input type="email" value={adminAccountForm.email} onChange={e => setAdminAccountForm(prev => ({ ...prev, email: e.target.value }))} placeholder="admin@domain.com" /></label>
+          <label><span>Current password</span><input type="password" value={adminAccountForm.current_password} onChange={e => setAdminAccountForm(prev => ({ ...prev, current_password: e.target.value }))} placeholder="Current password" autoComplete="current-password" /></label>
+          <label><span>New password</span><input type="password" value={adminAccountForm.password} onChange={e => setAdminAccountForm(prev => ({ ...prev, password: e.target.value }))} placeholder="New password" autoComplete="new-password" /></label>
+          <label><span>Confirm password</span><input type="password" value={adminAccountForm.confirm_password} onChange={e => setAdminAccountForm(prev => ({ ...prev, confirm_password: e.target.value }))} placeholder="Repeat new password" autoComplete="new-password" /></label>
+          <label><span>Authenticator code</span><input value={adminAccountForm.code} onChange={e => setAdminAccountForm(prev => ({ ...prev, code: e.target.value }))} placeholder="123456" inputMode="numeric" autoComplete="one-time-code" /></label>
+          <button disabled={!!loading || !adminAccountForm.email.trim() || (!!adminAccountForm.password && adminAccountForm.password !== adminAccountForm.confirm_password)} onClick={saveAdminAccount}><Lock size={14}/> Save account</button>
+        </div>
+      </section>
+      <section className="section">
+        <div className="section-title">
           <div><h2>Brand assets</h2><p className="hint">Upload PNG, JPG, WEBP, or ICO files up to 1 MB.</p></div>
         </div>
         <div className="brand-asset-grid">
@@ -4392,7 +4442,7 @@ function App() {
             <div className="row-actions">
               <button className="mini secondary-light" disabled={!!loading} onClick={() => startEditingUser(user)}><Pencil size={14}/> Edit</button>
               <button className="mini secondary-light" disabled={!!loading} onClick={() => quickLoginUser(user)}><LogIn size={14}/> Login as</button>
-              <button className="mini secondary-light" disabled={!!loading} onClick={() => changeUserPassword(user)}><KeyRound size={14}/> Password</button>
+              {user.id !== currentUser?.id && <button className="mini secondary-light" disabled={!!loading} onClick={() => changeUserPassword(user)}><KeyRound size={14}/> Password</button>}
               {user.totp_enabled && user.id !== currentUser?.id && <button className="mini secondary-light" disabled={!!loading} onClick={() => resetUserTwoFactor(user)}>Reset 2FA</button>}
               {user.id !== currentUser?.id && <button className="mini danger" disabled={!!loading} onClick={() => deletePanelUser(user)}><Trash2 size={14}/></button>}
             </div>
@@ -4559,7 +4609,6 @@ function App() {
           <div className="login logged-in">
             <div className="account-pill"><span>Logged in as</span><strong>{currentUser?.username || username}</strong></div>
             <div className="top-actions">
-              <button className="secondary compact-btn" onClick={changeMyPassword} aria-label="Change password" title="Change password"><KeyRound size={15}/><span className="btn-label">Password</span></button>
               <button className="secondary compact-btn" onClick={logout} aria-label="Logout" title="Logout"><LogOut size={15}/><span className="btn-label">Logout</span></button>
             </div>
           </div>
