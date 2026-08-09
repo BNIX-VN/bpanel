@@ -3125,7 +3125,8 @@ function App() {
   function storageUsageText(user) {
     const used = Number(user?.storage_used_bytes || 0);
     const limit = storageLimitBytes(user);
-    return limit === null ? `${formatBytes(used)} / Unlimited` : `${formatBytes(used)} / ${formatBytes(limit)}`;
+    if (limit === null) return formatBytes(used);
+    return `${formatBytes(used)} / ${formatBytes(limit)}`;
   }
 
   function ResourceCard({ icon: Icon, label, value, detail, percent }) {
@@ -4574,10 +4575,12 @@ function App() {
         <div className="table">
           {users.map(user => <div className="row user-row" key={user.id}>
             <div className="user-main"><strong>{user.username}</strong><small>{user.email}</small></div>
-            <span className={user.is_active ? 'badge ok' : 'badge danger'}>{user.is_active ? 'Active' : 'Suspended'}</span>
-            <span className="badge">{roleLabel(user.role)}</span>
-            <span className="badge">{user.package_name || 'Custom'}</span>
-            {user.totp_enabled && <span className="badge ok">2FA</span>}
+            <div className="user-badges">
+              <span className={user.is_active ? 'badge ok' : 'badge danger'}>{user.is_active ? 'Active' : 'Suspended'}</span>
+              <span className="badge">{roleLabel(user.role)}</span>
+              <span className="badge">{user.package_name || 'Custom'}</span>
+              {user.totp_enabled && <span className="badge ok">2FA</span>}
+            </div>
             <span className="user-metric"><HardDrive size={13}/>{storageUsageText(user)}</span>
             <div className="row-actions">
               <button className="mini secondary-light" disabled={!!loading} onClick={() => startEditingUser(user)}><Pencil size={14}/> Edit</button>
