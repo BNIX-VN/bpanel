@@ -262,7 +262,7 @@ def install_panel_ssl(email: str | None = None, panel_hostname: str | None = Non
     _scheme, host, port = parse_panel_url(normalized)
     if not is_domain(host):
         raise ValueError("Panel SSL requires a domain name, not an IP address")
-    certbot_email = (email or settings.ssl_email or default_ssl_email(host)).strip()
+    certbot_email = (email or settings.ssl_email).strip()
     helper_args = [host, str(port)]
     if certbot_email:
         helper_args.append(certbot_email)

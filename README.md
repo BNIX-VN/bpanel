@@ -32,7 +32,7 @@ ownership, quotas, backups, SSL, services, and firewall tools built in.
 
 ## Versioning
 
-Current release: `1.0.70`.
+Current release: `1.0.71`.
 
 BPanel versions use semantic versioning: `major.minor.patch`.
 
@@ -132,7 +132,7 @@ when a newer release is available.
 To stay on a specific release:
 
 ```bash
-bpanel-update --tag v1.0.70
+bpanel-update --tag v1.0.71
 ```
 
 If the browser still shows the old UI, do a hard refresh (Ctrl + Shift + R) or
@@ -213,7 +213,7 @@ REDIS_URL=redis://localhost:6379/0
 RATE_LIMIT_BACKEND=redis
 ALLOWED_ORIGINS=https://panel.example.com
 BACKUP_ROOT=/var/backups/bpanel
-SSL_EMAIL=admin@example.com
+SSL_EMAIL=you@your-domain.tld
 PANEL_URL=http://SERVER_IP:2222  # uses the selected panel port
 PANEL_DOMAIN=
 PANEL_PORT=2222                  # default; installer can set another port

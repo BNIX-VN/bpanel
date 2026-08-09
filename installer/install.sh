@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BPANEL_INSTALLER_VERSION="${BPANEL_INSTALLER_VERSION:-v1.0.70}"
+BPANEL_INSTALLER_VERSION="${BPANEL_INSTALLER_VERSION:-v1.0.71}"
 
 if [[ $EUID -ne 0 ]]; then
   echo "Please run this installer as root"
@@ -120,6 +120,17 @@ validate_port() {
   (( $1 >= 1 && $1 <= 65535 )) || fail "PANEL_PORT out of range: $1"
 }
 
+is_valid_letsencrypt_email() {
+  local value="${1:-}"
+  [[ "$value" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]] || return 1
+  case "${value,,}" in
+    *@example.com|*@example.net|*@example.org|*@example.test|*@localhost)
+      return 1
+      ;;
+  esac
+  return 0
+}
+
 detect_ssh_ports() {
   local sshd_bin
   sshd_bin="$(find_sshd || true)"
@@ -236,8 +247,16 @@ ask_panel_url() {
   fi
 
   if [[ "$ENABLE_SSL" == "yes" && -z "$SSL_EMAIL" ]]; then
-    read -rp "Enter email for Let's Encrypt registration: " SSL_EMAIL
-    [[ -n "$SSL_EMAIL" ]] || fail "Email is required to issue SSL"
+    while true; do
+      read -rp "Enter real email for Let's Encrypt registration: " SSL_EMAIL
+      if is_valid_letsencrypt_email "$SSL_EMAIL"; then
+        break
+      fi
+      echo "Email required. Use real mailbox, not admin@example.com." >&2
+      SSL_EMAIL=""
+    done
+  elif [[ "$ENABLE_SSL" == "yes" ]] && ! is_valid_letsencrypt_email "$SSL_EMAIL"; then
+    fail "Invalid SSL_EMAIL. Use real mailbox, not admin@example.com"
   fi
 }
 
