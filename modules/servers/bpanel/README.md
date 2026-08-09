@@ -50,6 +50,7 @@ Go to **System Settings → Products/Services → Module Settings**.
 
 Disable **Require Domain** on the WHMCS product if customers should be able to order without entering a domain.
 If **Install WordPress** or **Auto SSL** is enabled, a domain is still required.
+When no domain is provided, BPanel creates only the panel user; the App Type setting is ignored until a website is added later.
 Provisioning generates a unique internal BPanel email alias per service. Customers log in with the BPanel username.
 The module stores the generated BPanel username and password on the WHMCS service before returning success, so WHMCS welcome emails can include service credentials.
 The module also supports one-time SSO login links through the BPanel provisioning API.

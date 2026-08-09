@@ -67,6 +67,13 @@ def _account_by_external_id(db: Session, external_id: str) -> ProvisioningAccoun
 def _provisioning_email(username: str) -> str:
     return f"{username}@users.bpanel.dev"
 
+def _provisioning_app_type(payload: ProvisioningAccountCreate) -> str:
+    if not payload.domain:
+        return "php"
+    if payload.install_wordpress:
+        return "wordpress"
+    return payload.app_type
+
 
 # ── Plans ────────────────────────────────────────────────────────────────
 
@@ -102,11 +109,10 @@ def create_account(payload: ProvisioningAccountCreate, request: Request, db: Ses
 
     existing = db.query(ProvisioningAccount).filter(ProvisioningAccount.external_id == payload.external_id).first()
     if existing:
-        if existing.status in ("active", "pending"):
+        if existing.status in ("active", "pending") and existing.user:
             return account_to_dict(existing, db)
-        if existing.status == "failed":
-            db.delete(existing)
-            db.commit()
+        db.delete(existing)
+        db.commit()
 
     account_email = _provisioning_email(payload.username)
 
@@ -151,7 +157,7 @@ def create_account(payload: ProvisioningAccountCreate, request: Request, db: Ses
     db.flush()
     account.user_id = user.id
 
-    app_type_value = "wordpress" if payload.install_wordpress else payload.app_type
+    app_type_value = _provisioning_app_type(payload)
     install_wp = payload.install_wordpress and app_type_value == "wordpress"
     db_info = None
 

@@ -72,7 +72,7 @@ function bpanel_CreateAccount($params)
         'password' => $password,
         'package_id' => (int) bpanel_config($params, 1, '1'),
         'php_version' => bpanel_config($params, 3, '8.4'),
-        'app_type' => bpanel_config($params, 2, 'php'),
+        'app_type' => $domain === '' ? 'php' : bpanel_config($params, 2, 'php'),
         'install_wordpress' => bpanel_yesno(bpanel_config($params, 4, '')),
         'enable_ssl' => bpanel_yesno(bpanel_config($params, 5, '')),
     ];

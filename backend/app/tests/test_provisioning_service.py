@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from app.api.provisioning import _provisioning_email
+from app.api.provisioning import _provisioning_app_type, _provisioning_email
 from app.services.provisioning import account_to_dict
 
 
@@ -10,6 +10,12 @@ def test_provisioning_email_is_stable_per_username():
 
 def test_provisioning_email_ignores_customer_email():
     assert _provisioning_email("bp456_abcd") != "customer@example.com"
+
+
+def test_provisioning_without_domain_is_panel_user_only():
+    payload = SimpleNamespace(domain=None, install_wordpress=False, app_type="wordpress")
+
+    assert _provisioning_app_type(payload) == "php"
 
 
 def test_account_to_dict_uses_package_and_whmcs_service_id_label():
