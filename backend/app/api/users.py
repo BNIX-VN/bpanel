@@ -235,6 +235,83 @@ def reset_user_two_factor(user_id: int, request: Request, db: Session = Depends(
     log_action(db, current_user.id, "reset_user_2fa", user.username, request=request)
     return {"message": f"Reset 2FA for user {user.username}"}
 
+@router.post("/{user_id}/suspend")
+def suspend_user(user_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Full suspend: block login, rewrite nginx, lock SFTP, kill sessions."""
+    ensure_role(current_user.role, Role.admin)
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="Cannot suspend yourself")
+
+    user.is_active = False
+    user.token_version = (user.token_version or 0) + 1
+
+    websites = db.query(Website).filter(Website.owner_id == user.id).all()
+    for website in websites:
+        website.status = "suspended"
+        nginx.delete_wordpress_vhost(website.domain)
+        nginx.write_vhost(
+            website.domain,
+            website.root_path,
+            app_type="static",
+            php_version=website.php_version,
+            document_root=website.document_root or "public_html",
+            custom_directives="# SUSPENDED",
+            rewrite_mode="none",
+            preserve_existing_ssl=False,
+        )
+        if website.linux_user:
+            try:
+                site_users.lock_linux_user(website.linux_user)
+            except Exception:
+                pass
+
+    db.commit()
+    log_action(db, current_user.id, "suspend_user", user.username, request=request)
+    return {"message": f"Suspended user {user.username}", "affected_websites": len(websites)}
+
+@router.post("/{user_id}/unsuspend")
+def unsuspend_user(user_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Full unsuspend: restore login, nginx config, unlock SFTP."""
+    ensure_role(current_user.role, Role.admin)
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user.is_active = True
+
+    websites = db.query(Website).filter(Website.owner_id == user.id).all()
+    for website in websites:
+        website.status = "active"
+        rewrite_mode = "front_controller" if website.app_type == "wordpress" else (website.nginx_rewrite_mode or "none")
+        php_socket = site_users.site_php_fpm_socket(website.linux_user, website.root_path, website.php_version) if website.app_type in {"wordpress", "php"} else None
+        nginx.rewrite_vhost(
+            website.domain,
+            website.root_path,
+            app_type=website.app_type,
+            php_version=website.php_version,
+            php_fpm_socket_override=php_socket,
+            custom_directives=website.nginx_custom or "",
+            document_root=website.document_root or "public_html",
+            rewrite_mode=rewrite_mode,
+            waf_enabled=website.waf_enabled,
+            http_flood_enabled=website.http_flood_enabled,
+            http_flood_config=website.http_flood_config or "",
+            aliases=[a.domain for a in (website.aliases or []) if a.mode == "alias"],
+            redirects=[a.domain for a in (website.aliases or []) if a.mode == "redirect"],
+        )
+        if website.linux_user:
+            try:
+                site_users.unlock_linux_user(website.linux_user)
+            except Exception:
+                pass
+
+    db.commit()
+    log_action(db, current_user.id, "unsuspend_user", user.username, request=request)
+    return {"message": f"Unsuspended user {user.username}", "affected_websites": len(websites)}
+
 
 @router.get("/audit/log", response_model=List[AuditLogOut])
 def list_audit(

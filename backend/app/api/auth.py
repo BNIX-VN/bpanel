@@ -319,8 +319,10 @@ def _record_success(key: str) -> None:
         _login_lockouts.pop(key, None)
 
 
-def _issue_login_session(response: Response, request: Request, user: User) -> str:
+def _issue_login_session(response: Response, request: Request, user: User, extra_claims: Optional[dict] = None) -> str:
     token_extra = {"role": user.role, "tv": user.token_version or 0}
+    if extra_claims:
+        token_extra.update(extra_claims)
     token = create_access_token(user.username, token_extra)
     _set_session_cookies(response, request, token)
     return token
@@ -511,8 +513,8 @@ def impersonate_user(
     _enforce_rate_limit(_username_key(current_user.username))
 
     target_user = db.query(User).filter(User.id == user_id).first()
-    if target_user is None or not target_user.is_active:
-        raise HTTPException(status_code=404, detail="User not found or inactive")
+    if target_user is None:
+        raise HTTPException(status_code=404, detail="User not found")
 
     # Re-prompt TOTP for admins that have 2FA. Refusing without a code keeps
     # the feature usable from the SPA (which can pop a modal on 401) while
@@ -540,7 +542,7 @@ def impersonate_user(
         detail=f"target_user_id={target_user.id} target_role={target_user.role}",
         request=request,
     )
-    token = _issue_login_session(response, request, target_user)
+    token = _issue_login_session(response, request, target_user, extra_claims={"imp": True})
     return LoginResponse(access_token=token)
 
 

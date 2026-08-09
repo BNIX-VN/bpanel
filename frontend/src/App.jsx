@@ -12,7 +12,7 @@ import 'ace-builds/src-noconflict/mode-php';
 import 'ace-builds/src-noconflict/mode-text';
 import 'ace-builds/src-noconflict/mode-yaml';
 import 'ace-builds/src-noconflict/theme-textmate';
-import { Archive, ArchiveRestore, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, MoveRight, Network, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
+import { Archive, ArchiveRestore, Ban, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, MoveRight, Network, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
 import { Terminal } from './components/Terminal';
 import './style.css';
 import './brand.css';
@@ -1251,9 +1251,31 @@ function App() {
     }
   }
 
+  async function suspendUser(user) {
+    if (!user || user.id === currentUser?.id) return;
+    const siteCount = websites.filter(w => w.owner_id === user.id).length;
+    if (!confirm(`Suspend user ${user.username}? This will block login, disable all ${siteCount} website(s), lock SFTP, and kill active sessions.`)) return;
+    const data = await request(`/users/${user.id}/suspend`, { method: 'POST' }, `Suspending user ${user.username}...`);
+    if (data) {
+      await loadUsers();
+      await refreshAll();
+    }
+  }
+
+  async function unsuspendUser(user) {
+    if (!user || user.id === currentUser?.id) return;
+    if (!confirm(`Unsuspend user ${user.username}? This will restore login, websites, and SFTP access.`)) return;
+    const data = await request(`/users/${user.id}/unsuspend`, { method: 'POST' }, `Unsuspending user ${user.username}...`);
+    if (data) {
+      await loadUsers();
+      await refreshAll();
+    }
+  }
+
   async function quickLoginUser(user) {
     if (!user) return;
-    if (!confirm(`Login as ${user.username}? New websites will belong to this user.`)) return;
+    const suspendedNote = user.is_active ? '' : ' This user is SUSPENDED — websites and SFTP are disabled.';
+    if (!confirm(`Login as ${user.username}?${suspendedNote}`)) return;
     // Impersonation re-prompts TOTP when the calling admin has 2FA enabled.
     // Try without the code first; if the backend says one is required, ask
     // and resend. Sending the OTP via FormData keeps it out of the URL.
@@ -4527,6 +4549,7 @@ function App() {
         <div className="table">
           {users.map(user => <div className="row user-row" key={user.id}>
             <div className="user-main"><strong>{user.username}</strong><small>{user.email}</small></div>
+            <span className={user.is_active ? 'badge ok' : 'badge danger'}>{user.is_active ? 'Active' : 'Suspended'}</span>
             <span className="badge">{roleLabel(user.role)}</span>
             <span className="badge">{user.package_name || 'Custom'}</span>
             <span className={user.totp_enabled ? 'badge ok' : 'badge'}>{user.totp_enabled ? '2FA' : 'No 2FA'}</span>
@@ -4537,6 +4560,10 @@ function App() {
               <button className="mini secondary-light" disabled={!!loading} onClick={() => quickLoginUser(user)}><LogIn size={14}/> Login as</button>
               {user.id !== currentUser?.id && <button className="mini secondary-light" disabled={!!loading} onClick={() => changeUserPassword(user)}><KeyRound size={14}/> Password</button>}
               {user.totp_enabled && user.id !== currentUser?.id && <button className="mini secondary-light" disabled={!!loading} onClick={() => resetUserTwoFactor(user)}>Reset 2FA</button>}
+              {user.id !== currentUser?.id && (user.is_active
+                ? <button className="mini secondary-light" disabled={!!loading} onClick={() => suspendUser(user)}><Ban size={14}/> Suspend</button>
+                : <button className="mini secondary-light" disabled={!!loading} onClick={() => unsuspendUser(user)}><Play size={14}/> Unsuspend</button>
+              )}
               {user.id !== currentUser?.id && <button className="mini danger" disabled={!!loading} onClick={() => deletePanelUser(user)}><Trash2 size={14}/></button>}
             </div>
             {editingUser?.id === user.id && <div className="user-edit-panel">

@@ -48,7 +48,12 @@ def _user_from_token(token: str, db: Session) -> tuple[User, dict]:
         raise credentials_exception from exc
 
     user = db.query(User).filter(User.username == username).first()
-    if user is None or not user.is_active:
+    if user is None:
+        raise credentials_exception
+    # Impersonated sessions (admin "Login as") may target suspended users.
+    # The `imp` claim is only set by the impersonate endpoint which already
+    # verified the caller is an admin, so the bypass is safe.
+    if not user.is_active and not payload.get("imp"):
         raise credentials_exception
     if (user.token_version or 0) != token_version:
         raise credentials_exception
