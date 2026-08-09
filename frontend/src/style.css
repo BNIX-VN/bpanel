@@ -388,6 +388,7 @@ a:hover{color:var(--primary-hover)}
 }
 .empty-state svg{opacity:.4}
 .empty-state p{margin:0;font-weight:600}
+.first-site-action{margin-top:12px}
 
 /* Responsive: Tablet */
 @media(max-width:1150px){

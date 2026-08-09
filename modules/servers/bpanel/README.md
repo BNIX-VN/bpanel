@@ -42,11 +42,14 @@ Go to **System Settings → Products/Services → Module Settings**.
 
 | Option | Example |
 |---|---|
-| Package ID | `1` |
+| Package | select a BPanel package |
 | App Type | `php` |
 | PHP Version | `8.4` |
 | Install WordPress | unchecked by default |
 | Auto SSL | unchecked by default |
+
+Disable **Require Domain** on the WHMCS product if customers should be able to order without entering a domain.
+If **Install WordPress** or **Auto SSL** is enabled, a domain is still required.
 
 ## Mapping
 
@@ -55,8 +58,8 @@ Go to **System Settings → Products/Services → Module Settings**.
 | Service ID | `external_id = whmcs:{serviceid}` |
 | Username | `bp_{serviceid}` |
 | Client email | BPanel user email |
-| Domain | Primary website domain |
-| Product Package ID | BPanel `UserPackage.id` |
+| Domain | Primary website domain, optional |
+| Product Package | BPanel `UserPackage.id` |
 
 ## Supported actions
 

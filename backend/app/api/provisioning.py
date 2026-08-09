@@ -107,7 +107,7 @@ def create_account(payload: ProvisioningAccountCreate, request: Request, db: Ses
         raise HTTPException(status_code=409, detail="Username already exists")
     if db.query(User).filter(User.email == payload.email).first():
         raise HTTPException(status_code=409, detail="Email already exists")
-    if db.query(Website).filter(Website.domain == payload.domain).first():
+    if payload.domain and db.query(Website).filter(Website.domain == payload.domain).first():
         raise HTTPException(status_code=409, detail="Domain already exists")
 
     package = db.query(UserPackage).filter(UserPackage.id == payload.package_id).first()
@@ -144,79 +144,80 @@ def create_account(payload: ProvisioningAccountCreate, request: Request, db: Ses
     db.flush()
     account.user_id = user.id
 
-    root_path = site_users.site_root_for_panel_user(payload.username, payload.domain)
     app_type_value = "wordpress" if payload.install_wordpress else payload.app_type
     install_wp = payload.install_wordpress and app_type_value == "wordpress"
     db_info = None
 
-    try:
-        if install_wp:
-            db_info = mariadb.create_database(payload.domain)
-            linux_user = site_users.ensure_site_runtime(payload.domain, root_path, payload.php_version, linux_user)
-            root_path = wordpress.install_wordpress(
-                payload.domain, db_info, payload.domain,
-                "admin", payload.password, payload.email,
-                payload.php_version, linux_user, root_path=root_path,
+    if payload.domain:
+        root_path = site_users.site_root_for_panel_user(payload.username, payload.domain)
+        try:
+            if install_wp:
+                db_info = mariadb.create_database(payload.domain)
+                linux_user = site_users.ensure_site_runtime(payload.domain, root_path, payload.php_version, linux_user)
+                root_path = wordpress.install_wordpress(
+                    payload.domain, db_info, payload.domain,
+                    "admin", payload.password, payload.email,
+                    payload.php_version, linux_user, root_path=root_path,
+                )
+            else:
+                runtime_php = payload.php_version if app_type_value in {"wordpress", "php"} else None
+                linux_user = site_users.ensure_site_runtime(payload.domain, root_path, runtime_php, linux_user)
+
+            from app.api.websites import _ensure_default_waf_file, _write_placeholder_page
+            _ensure_default_waf_file(payload.domain)
+            if not install_wp:
+                from app.core.config import settings as app_settings
+                if not app_settings.command_dry_run:
+                    _write_placeholder_page(payload.domain, root_path, linux_user, payload.php_version)
+                    site_users.fix_site_path(str(site_users.document_root(root_path)), linux_user)
+
+            rewrite_mode = "front_controller" if app_type_value == "wordpress" else "none"
+            php_socket = site_users.site_php_fpm_socket(linux_user, root_path, payload.php_version) if app_type_value in {"wordpress", "php"} else None
+            nginx.write_vhost(
+                payload.domain, root_path,
+                app_type=app_type_value,
+                php_version=payload.php_version,
+                php_fpm_socket_override=php_socket,
+                document_root="public_html",
+                rewrite_mode=rewrite_mode,
             )
-        else:
-            runtime_php = payload.php_version if app_type_value in {"wordpress", "php"} else None
-            linux_user = site_users.ensure_site_runtime(payload.domain, root_path, runtime_php, linux_user)
+        except (RuntimeError, ValueError, OSError) as exc:
+            if db_info:
+                mariadb.drop_database(db_info["db_name"], db_info["db_user"])
+            account.status = "failed"
+            account.last_message = str(exc)
+            db.commit()
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        from app.api.websites import _ensure_default_waf_file, _write_placeholder_page
-        _ensure_default_waf_file(payload.domain)
-        if not install_wp:
-            from app.core.config import settings as app_settings
-            if not app_settings.command_dry_run:
-                _write_placeholder_page(payload.domain, root_path, linux_user, payload.php_version)
-                site_users.fix_site_path(str(site_users.document_root(root_path)), linux_user)
-
-        rewrite_mode = "front_controller" if app_type_value == "wordpress" else "none"
-        php_socket = site_users.site_php_fpm_socket(linux_user, root_path, payload.php_version) if app_type_value in {"wordpress", "php"} else None
-        nginx.write_vhost(
-            payload.domain, root_path,
-            app_type=app_type_value,
-            php_version=payload.php_version,
-            php_fpm_socket_override=php_socket,
-            document_root="public_html",
-            rewrite_mode=rewrite_mode,
-        )
-    except (RuntimeError, ValueError, OSError) as exc:
-        if db_info:
-            mariadb.drop_database(db_info["db_name"], db_info["db_user"])
-        account.status = "failed"
-        account.last_message = str(exc)
-        db.commit()
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    website = Website(
-        domain=payload.domain,
-        owner_id=user.id,
-        root_path=root_path,
-        document_root="public_html",
-        linux_user=linux_user,
-        php_version=payload.php_version,
-        app_type=app_type_value,
-        nginx_rewrite_mode=rewrite_mode,
-        status="active",
-    )
-    db.add(website)
-    db.flush()
-
-    if db_info:
-        from app.core.secrets import encrypt
-        db.add(DatabaseAccount(
+        website = Website(
+            domain=payload.domain,
             owner_id=user.id,
-            website_id=website.id,
-            db_name=db_info["db_name"],
-            db_user=db_info["db_user"],
-            db_password=encrypt(db_info["db_password"]),
-        ))
+            root_path=root_path,
+            document_root="public_html",
+            linux_user=linux_user,
+            php_version=payload.php_version,
+            app_type=app_type_value,
+            nginx_rewrite_mode=rewrite_mode,
+            status="active",
+        )
+        db.add(website)
+        db.flush()
 
-    account.primary_website_id = website.id
+        if db_info:
+            from app.core.secrets import encrypt
+            db.add(DatabaseAccount(
+                owner_id=user.id,
+                website_id=website.id,
+                db_name=db_info["db_name"],
+                db_user=db_info["db_user"],
+                db_password=encrypt(db_info["db_password"]),
+            ))
+
+        account.primary_website_id = website.id
     account.status = "active"
     account.last_message = ""
 
-    if payload.enable_ssl:
+    if payload.enable_ssl and payload.domain:
         from app.services import ssl as ssl_service
         try:
             result = ssl_service.issue_ssl(payload.domain)
@@ -229,7 +230,7 @@ def create_account(payload: ProvisioningAccountCreate, request: Request, db: Ses
             pass
 
     db.commit()
-    log_action(db, None, "provisioning_create", payload.external_id, detail=payload.domain, request=request)
+    log_action(db, None, "provisioning_create", payload.external_id, detail=payload.domain or payload.username, request=request)
     return account_to_dict(account, db)
 
 

@@ -32,7 +32,7 @@ ownership, quotas, backups, SSL, services, and firewall tools built in.
 
 ## Versioning
 
-Current release: `1.0.72`.
+Current release: `1.0.73`.
 
 BPanel versions use semantic versioning: `major.minor.patch`.
 
@@ -132,7 +132,7 @@ when a newer release is available.
 To stay on a specific release:
 
 ```bash
-bpanel-update --tag v1.0.72
+bpanel-update --tag v1.0.73
 ```
 
 If the browser still shows the old UI, do a hard refresh (Ctrl + Shift + R) or

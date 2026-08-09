@@ -526,6 +526,9 @@ function App() {
   const noticeTimer = useRef(null);
   const isAdmin = currentUser?.role === 'admin';
   const currentSite = websites.find(site => String(site.id) === String(selectedWebsiteId));
+  const accountLabel = currentUser?.package_name
+    ? `${currentUser?.username || username} - ${currentUser.package_name}`
+    : (currentUser?.username || username);
 
   const navigateToPage = useCallback((nextPage, options = {}) => {
     const route = routeForPage(nextPage);
@@ -3015,6 +3018,9 @@ function App() {
     const disk = resourceUsage?.disk || {};
     const network = resourceUsage?.network || {};
     const networkTotal = (Number(network.rx_per_sec) || 0) + (Number(network.tx_per_sec) || 0);
+    const emptyWebsiteMessage = currentUser?.package_name
+      ? `${currentUser.package_name} is ready. Attach your first domain to start hosting.`
+      : 'No domain attached yet.';
     return <>
       {isAdmin && <section className="resource-grid">
         <ResourceCard icon={Cpu} label="CPU" value={formatPercent(cpu.percent)} percent={cpu.percent} detail={cpu.load?.length ? `Load ${cpu.load.join(' / ')}` : `${cpu.cores || '--'} cores`} />
@@ -3045,7 +3051,8 @@ function App() {
         {websites.length > 4 && <p className="hint" style={{marginTop:8}}>Showing 4 of {websites.length} websites. Go to Websites for full list.</p>}
       </section>}
       {websites.length === 0 && <section className="section">
-        <EmptyState icon={Globe} message="No websites yet. Create your first WordPress site from the Websites menu." />
+        <EmptyState icon={Globe} message={emptyWebsiteMessage} />
+        <button className="secondary-light first-site-action" onClick={() => navigateToPage('websites')}><Plus size={15}/> Add domain</button>
       </section>}
     </>;
   }
@@ -3205,9 +3212,14 @@ function App() {
     const wpFieldsEnabled = siteType === 'wordpress' && installWordPress;
     const searchActive = !!websiteSearch.trim();
     const visibleWebsites = searchActive ? websiteList : (websiteList.length ? websiteList : websites);
+    const createTitle = websites.length ? 'Create website' : 'Attach first domain';
+    const createHint = websites.length
+      ? null
+      : 'This creates the first hosted site for the current account.';
     return <>
       <section className="section">
-        <h2>Create website</h2>
+        <h2>{createTitle}</h2>
+        {createHint && <p className="hint">{createHint}</p>}
         <div className="form-row create-site-row">
           <input value={domain} onChange={e => setDomain(e.target.value)} placeholder="domain.com" />
           <select value={siteType} onChange={e => setSiteType(e.target.value)}>
@@ -4607,7 +4619,7 @@ function App() {
             <h1>{activeNavItem?.[1] || panelSettings.app_name || 'BPanel'}</h1>
           </div>
           <div className="login logged-in">
-            <div className="account-pill"><span>Logged in as</span><strong>{currentUser?.username || username}</strong></div>
+            <div className="account-pill" title={accountLabel}><span>Logged in as</span><strong>{accountLabel}</strong></div>
             <div className="top-actions">
               <button className="secondary compact-btn" onClick={logout} aria-label="Logout" title="Logout"><LogOut size={15}/><span className="btn-label">Logout</span></button>
             </div>

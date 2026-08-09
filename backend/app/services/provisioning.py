@@ -56,12 +56,21 @@ def check_ip_allowed(token: ApiToken, client_ip: str) -> bool:
 def account_to_dict(account: ProvisioningAccount, db: Session) -> dict:
     user = account.user
     website = account.primary_website
+    package = account.package
+    package_name = package.name if package else None
+    service_label = package_name or "BPanel Hosting"
+    external_label = account.external_id
+    if external_label.startswith("whmcs:"):
+        external_label = "#" + external_label[6:]
+    service_label = f"{service_label} {external_label}"
     return {
         "external_id": account.external_id,
         "username": user.username if user else None,
         "email": user.email if user else None,
         "domain": website.domain if website else None,
         "package_id": account.package_id,
+        "package_name": package_name,
+        "service_label": service_label,
         "status": account.status,
         "panel_url": None,
         "created_at": account.created_at.isoformat() if account.created_at else None,

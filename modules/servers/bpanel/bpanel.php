@@ -16,11 +16,13 @@ function bpanel_MetaData()
 function bpanel_ConfigOptions()
 {
     return [
-        'Package ID' => [
+        'Package' => [
             'Type' => 'text',
-            'Size' => '8',
+            'Size' => '25',
+            'Loader' => 'bpanel_PackageLoader',
+            'SimpleMode' => true,
             'Default' => '1',
-            'Description' => 'BPanel UserPackage ID',
+            'Description' => 'Select a BPanel package',
         ],
         'App Type' => [
             'Type' => 'dropdown',
@@ -43,6 +45,16 @@ function bpanel_ConfigOptions()
     ];
 }
 
+function bpanel_PackageLoader($params)
+{
+    $result = bpanel_request($params, 'GET', '/api/provisioning/v1/plans');
+    if (!$result['ok']) {
+        throw new Exception($result['error']);
+    }
+
+    return bpanel_package_options($result['data']);
+}
+
 function bpanel_TestConnection($params)
 {
     $result = bpanel_request($params, 'GET', '/api/provisioning/v1/plans');
@@ -51,21 +63,28 @@ function bpanel_TestConnection($params)
 
 function bpanel_CreateAccount($params)
 {
+    $domain = bpanel_domain($params);
     $payload = [
         'external_id' => bpanel_external_id($params),
         'username' => bpanel_username($params),
         'email' => bpanel_client_email($params),
         'password' => bpanel_password($params),
         'package_id' => (int) bpanel_config($params, 1, '1'),
-        'domain' => bpanel_domain($params),
         'php_version' => bpanel_config($params, 3, '8.4'),
         'app_type' => bpanel_config($params, 2, 'php'),
         'install_wordpress' => bpanel_yesno(bpanel_config($params, 4, '')),
         'enable_ssl' => bpanel_yesno(bpanel_config($params, 5, '')),
     ];
 
+    if ($domain !== '') {
+        $payload['domain'] = $domain;
+    }
+
     if ($payload['install_wordpress']) {
         $payload['app_type'] = 'wordpress';
+    }
+    if ($domain === '' && ($payload['install_wordpress'] || $payload['enable_ssl'])) {
+        return 'A domain is required when Install WordPress or Auto SSL is enabled';
     }
 
     $result = bpanel_request($params, 'POST', '/api/provisioning/v1/accounts', $payload);
@@ -133,11 +152,23 @@ function bpanel_LoginLink($params)
 
 function bpanel_ClientArea($params)
 {
+    $account = [];
+    if (!empty($params['serviceid'])) {
+        $result = bpanel_request($params, 'GET', '/api/provisioning/v1/accounts/' . rawurlencode(bpanel_external_id($params)));
+        if ($result['ok']) {
+            $account = $result['data'];
+        }
+    }
+
     return [
         'templatefile' => 'clientarea',
         'vars' => [
             'panelUrl' => bpanel_base_url($params),
             'username' => bpanel_username($params),
+            'serviceLabel' => bpanel_service_label($params, $account),
+            'packageName' => trim((string) ($account['package_name'] ?? '')),
+            'domain' => trim((string) ($account['domain'] ?? '')),
+            'status' => trim((string) ($account['status'] ?? '')),
         ],
     ];
 }
@@ -252,7 +283,7 @@ function bpanel_client_email($params)
     if (!empty($params['clientsdetails']['email'])) {
         return (string) $params['clientsdetails']['email'];
     }
-    return 'client' . (int) ($params['userid'] ?? 0) . '@example.invalid';
+    return 'client' . (int) ($params['userid'] ?? 0) . '@users.bpanel.dev';
 }
 
 function bpanel_config($params, $index, $default)
@@ -267,6 +298,53 @@ function bpanel_yesno($value)
     return in_array(strtolower(trim($value)), ['on', 'yes', 'true', '1'], true);
 }
 
+function bpanel_package_options($packages)
+{
+    if (!is_array($packages)) {
+        throw new Exception('BPanel package list response is invalid');
+    }
+
+    $options = [];
+    foreach ($packages as $package) {
+        if (!is_array($package)) {
+            continue;
+        }
+
+        $id = (int) ($package['id'] ?? 0);
+        if ($id <= 0) {
+            continue;
+        }
+
+        $name = trim((string) ($package['name'] ?? ''));
+        if ($name === '') {
+            $name = 'Package ' . $id;
+        }
+
+        $options[(string) $id] = $name . ' (#' . $id . ')';
+    }
+
+    if ($options === []) {
+        throw new Exception('No BPanel packages found');
+    }
+
+    return $options;
+}
+
+function bpanel_service_label($params, $account)
+{
+    if (is_array($account) && !empty($account['service_label'])) {
+        return (string) $account['service_label'];
+    }
+
+    $product = trim((string) ($params['productname'] ?? ''));
+    if ($product === '') {
+        $product = 'BPanel Hosting';
+    }
+
+    $serviceId = (int) ($params['serviceid'] ?? 0);
+    return $serviceId > 0 ? $product . ' #' . $serviceId : $product;
+}
+
 function bpanel_save_service_note($params, $data)
 {
     if (!function_exists('localAPI') || empty($params['serviceid'])) {
@@ -274,7 +352,7 @@ function bpanel_save_service_note($params, $data)
     }
 
     $lines = ['BPanel'];
-    foreach (['external_id', 'username', 'email', 'domain', 'status', 'package_id', 'storage_used_bytes', 'storage_limit_bytes', 'storage_percent'] as $key) {
+    foreach (['service_label', 'external_id', 'username', 'email', 'domain', 'status', 'package_id', 'package_name', 'storage_used_bytes', 'storage_limit_bytes', 'storage_percent'] as $key) {
         if (array_key_exists($key, $data)) {
             $lines[] = $key . ': ' . (is_scalar($data[$key]) ? $data[$key] : json_encode($data[$key]));
         }

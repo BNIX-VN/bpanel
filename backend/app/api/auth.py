@@ -460,6 +460,7 @@ def session_status(
         "email": current_user.email,
         "role": current_user.role,
         "is_active": current_user.is_active,
+        "package_name": current_user.package.name if current_user.package else None,
         "website_limit": current_user.website_limit,
         "storage_limit_mb": current_user.storage_limit_mb,
         "totp_enabled": current_user.totp_enabled,

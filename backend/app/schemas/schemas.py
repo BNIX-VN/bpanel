@@ -928,7 +928,7 @@ class ProvisioningAccountCreate(BaseModel):
     email: EmailStr
     password: str = Field(min_length=12, max_length=72)
     package_id: int = Field(ge=1)
-    domain: str
+    domain: Optional[str] = None
     php_version: str = "8.4"
     app_type: Literal["wordpress", "php", "static"] = "php"
     install_wordpress: bool = False
@@ -943,8 +943,12 @@ class ProvisioningAccountCreate(BaseModel):
 
     @field_validator("domain")
     @classmethod
-    def validate_domain(cls, value: str) -> str:
+    def validate_domain(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
         value = value.strip().lower()
+        if value == "":
+            return None
         if not DOMAIN_RE.fullmatch(value):
             raise ValueError("Invalid domain")
         return value
@@ -954,12 +958,20 @@ class ProvisioningAccountCreate(BaseModel):
     def validate_php(cls, value: str) -> str:
         return _validate_php_version(value) or "8.4"
 
+    @model_validator(mode="after")
+    def validate_site_options(self):
+        if self.domain is None and (self.install_wordpress or self.enable_ssl):
+            raise ValueError("domain is required for WordPress install or Auto SSL")
+        return self
+
 class ProvisioningAccountOut(BaseModel):
     external_id: str
     username: str
     email: str
-    domain: str
+    domain: Optional[str] = None
     package_id: Optional[int] = None
+    package_name: Optional[str] = None
+    service_label: Optional[str] = None
     status: str
     panel_url: Optional[str] = None
     created_at: Optional[datetime] = None
