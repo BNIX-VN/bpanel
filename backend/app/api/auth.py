@@ -389,18 +389,24 @@ def login(
     _enforce_rate_limit(user_key)
 
     user = db.query(User).filter(User.username == form.username).first()
-    if user and user.is_active:
+    if user:
         password_ok = verify_password(form.password, user.hashed_password)
     else:
         verify_password(form.password, _DUMMY_HASH)
         password_ok = False
 
-    if not user or not user.is_active or not password_ok:
+    if not user or not password_ok:
         _record_failure(ip_key, apply_lockout=True)
         _record_failure(user_key, apply_lockout=False)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password",
+        )
+
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User is suspended",
         )
 
     if user.totp_enabled:
