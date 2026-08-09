@@ -54,6 +54,15 @@ const PAGE_ROUTES = {
   updates: '/updates',
   services: '/services',
 };
+
+function WordPressIcon({ size = 14 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" focusable="false" className="lucide">
+      <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="2" />
+      <text x="12" y="16" textAnchor="middle" fontSize="11" fontWeight="700" fontFamily="Georgia, serif" fill="currentColor">W</text>
+    </svg>
+  );
+}
 const EDITOR_LINE_HEIGHT = 22;
 const EDITOR_FONT_FAMILY = "Consolas, 'SFMono-Regular', 'Liberation Mono', Menlo, monospace";
 const WAF_ACCESS_LOG_DEFAULTS = {
@@ -3265,7 +3274,7 @@ function App() {
         /></label>
         <div className="website-settings-actions">
           <button className="secondary-light" disabled={!!loading} onClick={() => setWordpressInstaller(prev => prev ? ({ ...prev, admin_password: generateRandomPassword(20) }) : prev)}><Dices size={14}/> Generate</button>
-          <button disabled={!!loading || !wordpressInstaller.admin_user || !wordpressInstaller.admin_email || !wordpressInstaller.admin_password} onClick={installWordPressOnSite}><Download size={14}/> Install</button>
+          <button disabled={!!loading || !wordpressInstaller.admin_user || !wordpressInstaller.admin_email || !wordpressInstaller.admin_password} onClick={installWordPressOnSite}><WordPressIcon size={14}/> Install</button>
         </div>
       </div>
     </section>;
@@ -3395,7 +3404,7 @@ function App() {
                   <button className="site-icon-button secondary-light" data-tooltip="Update WP core" title="Update WordPress core" aria-label={`Update WordPress core for ${site.domain}`} disabled={!!loading} onClick={() => runWordPressAction(site, 'core')}><RefreshCw size={15}/></button>
                   <button className="site-icon-button secondary-light" data-tooltip="Update plugins" title="Update WordPress plugins" aria-label={`Update WordPress plugins for ${site.domain}`} disabled={!!loading} onClick={() => runWordPressAction(site, 'plugins')}><RefreshCw size={15}/></button>
                   <button className="site-icon-button secondary-light" data-tooltip="Update themes" title="Update WordPress themes" aria-label={`Update WordPress themes for ${site.domain}`} disabled={!!loading} onClick={() => runWordPressAction(site, 'themes')}><RefreshCw size={15}/></button>
-                </> : <button className="site-icon-button secondary-light" data-tooltip="Install WP" title="Install WordPress" aria-label={`Install WordPress for ${site.domain}`} disabled={!!loading} onClick={() => openWordPressInstaller(site)}><Download size={15}/></button>}
+                </> : <button className="site-icon-button secondary-light" data-tooltip="Install WP" title="Install WordPress" aria-label={`Install WordPress for ${site.domain}`} disabled={!!loading} onClick={() => openWordPressInstaller(site)}><WordPressIcon size={15}/></button>}
                 <button className="site-icon-button secondary-light" data-tooltip="Settings" title="Settings" aria-label={`Edit settings for ${site.domain}`} disabled={!!loading} onClick={() => openNginxCustom(site)}><SettingsIcon size={15}/></button>
                 <button className="site-icon-button danger" data-tooltip="Delete" title="Delete" aria-label={`Delete ${site.domain}`} disabled={!!loading} onClick={() => deleteWebsite(site.id)}><Trash2 size={15}/></button>
               </div>
