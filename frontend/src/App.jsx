@@ -477,7 +477,7 @@ function App() {
   const [editorCursor, setEditorCursor] = useState({ line: 1, column: 1 });
   const [newUser, setNewUser] = useState({ username: '', email: '', password: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024 });
   const [editingUser, setEditingUser] = useState(null);
-  const [editingUserForm, setEditingUserForm] = useState({ email: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024 });
+  const [editingUserForm, setEditingUserForm] = useState({ email: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024, new_password: '', confirm_password: '' });
   const [newPackage, setNewPackage] = useState({ name: '', website_limit: 5, storage_limit_mb: 1024 });
   const [editingPackageId, setEditingPackageId] = useState('');
   const [editingPackageForm, setEditingPackageForm] = useState({ name: '', website_limit: 5, storage_limit_mb: 1024 });
@@ -1106,12 +1106,14 @@ function App() {
       package_id: user.package_id ? String(user.package_id) : '',
       website_limit: user.website_limit ?? 5,
       storage_limit_mb: user.storage_limit_mb ?? 1024,
+      new_password: '',
+      confirm_password: '',
     });
   }
 
   function cancelEditingUser() {
     setEditingUser(null);
-    setEditingUserForm({ email: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024 });
+    setEditingUserForm({ email: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024, new_password: '', confirm_password: '' });
     setNewPackage({ name: '', website_limit: 5, storage_limit_mb: 1024 });
     setEditingPackageId('');
     setEditingPackageForm({ name: '', website_limit: 5, storage_limit_mb: 1024 });
@@ -1146,6 +1148,29 @@ function App() {
       if (data.id === currentUser?.id) setCurrentUser(prev => ({ ...prev, ...data }));
       cancelEditingUser();
       await loadUsers();
+    }
+  }
+
+  async function submitPasswordChange(user) {
+    if (!user) return;
+    const pw = editingUserForm.new_password;
+    if (pw.length < 12) { setError('Password must be at least 12 characters.'); return; }
+    if (pw !== editingUserForm.confirm_password) { setError('Passwords do not match.'); return; }
+    const payload = { password: pw };
+    if (user.id === currentUser?.id) {
+      const currentPassword = prompt('Enter your current password to confirm this change:');
+      if (!currentPassword) return;
+      payload.current_password = currentPassword;
+      if (currentUser?.totp_enabled) {
+        const code = prompt('Enter the 6-digit code from your authenticator:');
+        if (!code) return;
+        payload.code = code.trim();
+      }
+    }
+    const data = await request(`/users/${user.id}/password`, { method: 'POST', body: JSON.stringify(payload) }, `Changing password for ${user.username}...`);
+    if (data?.message) {
+      setNotice(data.message);
+      setEditingUserForm(prev => ({ ...prev, new_password: '', confirm_password: '' }));
     }
   }
 
@@ -4552,13 +4577,11 @@ function App() {
             <span className={user.is_active ? 'badge ok' : 'badge danger'}>{user.is_active ? 'Active' : 'Suspended'}</span>
             <span className="badge">{roleLabel(user.role)}</span>
             <span className="badge">{user.package_name || 'Custom'}</span>
-            <span className={user.totp_enabled ? 'badge ok' : 'badge'}>{user.totp_enabled ? '2FA' : 'No 2FA'}</span>
-            <span className="user-metric"><Globe size={13}/>{user.website_limit} sites</span>
+            {user.totp_enabled && <span className="badge ok">2FA</span>}
             <span className="user-metric"><HardDrive size={13}/>{storageUsageText(user)}</span>
             <div className="row-actions">
               <button className="mini secondary-light" disabled={!!loading} onClick={() => startEditingUser(user)}><Pencil size={14}/> Edit</button>
               <button className="mini secondary-light" disabled={!!loading} onClick={() => quickLoginUser(user)}><LogIn size={14}/> Login as</button>
-              {user.id !== currentUser?.id && <button className="mini secondary-light" disabled={!!loading} onClick={() => changeUserPassword(user)}><KeyRound size={14}/> Password</button>}
               {user.totp_enabled && user.id !== currentUser?.id && <button className="mini secondary-light" disabled={!!loading} onClick={() => resetUserTwoFactor(user)}>Reset 2FA</button>}
               {user.id !== currentUser?.id && (user.is_active
                 ? <button className="mini secondary-light" disabled={!!loading} onClick={() => suspendUser(user)}><Ban size={14}/> Suspend</button>
@@ -4585,6 +4608,16 @@ function App() {
                 </select></label>
                 <label><span>Website limit</span><input type="number" min="0" max="1000" disabled={!!editingUserForm.package_id} value={editingUserForm.website_limit} onChange={e => setEditingUserForm(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
                 <label><span>Storage limit (MB)</span><input type="number" min="0" max="1048576" disabled={!!editingUserForm.package_id} value={editingUserForm.storage_limit_mb} onChange={e => setEditingUserForm(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
+              </div>
+              <div className="user-edit-section">
+                <div className="user-edit-heading"><div><strong>Change password</strong><small>Minimum 12 characters. {user.id === currentUser?.id ? 'Requires current password + 2FA.' : 'Admin can set directly.'}</small></div></div>
+                <div className="user-edit-grid">
+                  <label><span>New password</span><input type="password" placeholder="Min 12 characters" value={editingUserForm.new_password} onChange={e => setEditingUserForm(prev => ({ ...prev, new_password: e.target.value }))} /></label>
+                  <label><span>Confirm password</span><input type="password" placeholder="Repeat password" value={editingUserForm.confirm_password} onChange={e => setEditingUserForm(prev => ({ ...prev, confirm_password: e.target.value }))} /></label>
+                </div>
+                <div className="user-edit-actions">
+                  <button disabled={!!loading || !editingUserForm.new_password || editingUserForm.new_password.length < 12} onClick={() => submitPasswordChange(user)}>Set password</button>
+                </div>
               </div>
               <div className="user-edit-actions">
                 <button className="secondary-light" onClick={cancelEditingUser}>Cancel</button>
