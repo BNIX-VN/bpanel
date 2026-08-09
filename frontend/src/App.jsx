@@ -1790,6 +1790,24 @@ function App() {
     }
   }
 
+  async function updateWordPressAll(site) {
+    if (!site) return;
+    setLoading('Updating WordPress...');
+    for (const action of ['core', 'plugins', 'themes']) {
+      const data = await request('/maintenance/wordpress', {
+        method: 'POST',
+        body: JSON.stringify({ website_id: site.id, action }),
+      });
+      if (data?.returncode && data.returncode !== 0) {
+        setError(data.stderr || data.stdout || `WordPress ${action} update failed.`);
+        setLoading('');
+        return;
+      }
+    }
+    setLoading('');
+    setNotice(`Updated WordPress core, plugins, and themes for ${site.domain}.`);
+  }
+
   async function toggleWebsiteWaf(site) {
     const next = !site.waf_enabled;
     const data = await request(`/websites/${site.id}/waf`, {
@@ -3464,9 +3482,7 @@ function App() {
                 <button className="site-icon-button secondary-light" data-tooltip="Logs" title="Logs" aria-label={`View logs for ${site.domain}`} disabled={!!loading} onClick={() => openWebsiteLogs(site)}><FileText size={15}/></button>
                 <button className="site-icon-button secondary-light" data-tooltip="Terminal" title="Terminal" aria-label={`Open terminal for ${site.domain}`} disabled={!!loading} onClick={() => openWebsiteTerminal(site)}><TerminalIcon size={15}/></button>
                 {site.wordpress_installed ? <>
-                  <button className="site-icon-button secondary-light" data-tooltip="Update WP core" title="Update WordPress core" aria-label={`Update WordPress core for ${site.domain}`} disabled={!!loading} onClick={() => runWordPressAction(site, 'core')}><RefreshCw size={15}/></button>
-                  <button className="site-icon-button secondary-light" data-tooltip="Update plugins" title="Update WordPress plugins" aria-label={`Update WordPress plugins for ${site.domain}`} disabled={!!loading} onClick={() => runWordPressAction(site, 'plugins')}><RefreshCw size={15}/></button>
-                  <button className="site-icon-button secondary-light" data-tooltip="Update themes" title="Update WordPress themes" aria-label={`Update WordPress themes for ${site.domain}`} disabled={!!loading} onClick={() => runWordPressAction(site, 'themes')}><RefreshCw size={15}/></button>
+                  <button className="site-icon-button secondary-light" data-tooltip="Update WordPress" title="Update WordPress (core + plugins + themes)" aria-label={`Update WordPress for ${site.domain}`} disabled={!!loading} onClick={() => updateWordPressAll(site)}><RefreshCw size={15}/></button>
                 </> : <button className="site-icon-button secondary-light" data-tooltip="Install WP" title="Install WordPress" aria-label={`Install WordPress for ${site.domain}`} disabled={!!loading} onClick={() => openWordPressInstaller(site)}><WordPressIcon size={15}/></button>}
                 <button className="site-icon-button secondary-light" data-tooltip="Settings" title="Settings" aria-label={`Edit settings for ${site.domain}`} disabled={!!loading} onClick={() => openNginxCustom(site)}><SettingsIcon size={15}/></button>
                 <button className="site-icon-button danger" data-tooltip="Delete" title="Delete" aria-label={`Delete ${site.domain}`} disabled={!!loading} onClick={() => deleteWebsite(site.id)}><Trash2 size={15}/></button>
