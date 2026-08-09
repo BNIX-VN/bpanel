@@ -935,7 +935,18 @@ function App() {
       try {
         await loadCurrentUser({ clearOnUnauthorized: false });
       } catch {}
-      finally { setBootstrapping(false); }
+      finally {
+        setBootstrapping(false);
+        // SSO redirect may carry an error param (e.g. suspended account).
+        const urlError = new URLSearchParams(window.location.search).get('error');
+        if (urlError) {
+          const messages = {
+            account_suspended: 'Tài khoản đã bị khóa (suspended). Liên hệ quản trị viên.',
+          };
+          setError(messages[urlError] || urlError);
+          window.history.replaceState({}, '', window.location.pathname);
+        }
+      }
     })();
   }, []);
 

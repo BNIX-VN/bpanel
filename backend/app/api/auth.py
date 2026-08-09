@@ -438,8 +438,10 @@ def sso_login(token: str, request: Request, db: Session = Depends(get_db)):
 
     username = (data.get("username") or "").strip()
     user = db.query(User).filter(User.username == username).first()
-    if user is None or not user.is_active:
+    if user is None:
         raise HTTPException(status_code=404, detail="Invalid or expired token")
+    if not user.is_active:
+        return RedirectResponse(url="/?error=account_suspended", status_code=302)
 
     response = RedirectResponse(url="/", status_code=302)
     _issue_login_session(response, request, user)
