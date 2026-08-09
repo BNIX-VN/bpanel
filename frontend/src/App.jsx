@@ -34,7 +34,7 @@ const NGINX_REWRITE_MODES = [
   { value: 'codeigniter', label: 'CodeIgniter' },
   { value: 'seohburl', label: 'SEO HB URL' },
 ];
-const SETTINGS_PAGE_KEYS = ['settings', 'security', 'php', 'firewall', 'waf', 'access-logs', 'updates', 'services'];
+const SETTINGS_PAGE_KEYS = ['settings', 'api-tokens', 'security', 'php', 'firewall', 'waf', 'access-logs', 'updates', 'services'];
 const PAGE_ROUTES = {
   dashboard: '/',
   websites: '/website',
@@ -45,6 +45,7 @@ const PAGE_ROUTES = {
   backups: '/backups',
   users: '/users',
   settings: '/settings',
+  'api-tokens': '/api-tokens',
   security: '/security',
   php: '/php',
   firewall: '/firewall',
@@ -70,6 +71,8 @@ const ROUTE_PAGES = new Map([
   ['/files', 'files'],
   ['/file-manager', 'files'],
   ['/website', 'websites'],
+  ['/api-token', 'api-tokens'],
+  ['/api-tokens', 'api-tokens'],
 ]);
 
 function pageFromPathname(pathname) {
@@ -515,6 +518,9 @@ function App() {
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [panelSettings, setPanelSettings] = useState({ app_name: 'BPanel', panel_url: '', panel_hostname: '', panel_port: 2222, logo_url: '', favicon_url: '/favicon.png', ssl_enabled: false });
   const [panelSettingsForm, setPanelSettingsForm] = useState({ app_name: 'BPanel', panel_hostname: '', panel_port: 2222, ssl_enabled: false });
+  const [apiTokens, setApiTokens] = useState([]);
+  const [newApiToken, setNewApiToken] = useState({ name: 'WHMCS', scopes: 'provisioning:read,provisioning:write', allowed_ips: '' });
+  const [createdApiToken, setCreatedApiToken] = useState('');
   const [appVersion, setAppVersion] = useState('');
   const [panelLogoFile, setPanelLogoFile] = useState(null);
   const [panelFaviconFile, setPanelFaviconFile] = useState(null);
@@ -934,6 +940,38 @@ function App() {
   async function loadPackages() {
     const data = await request('/packages');
     if (data) setPackages(data);
+  }
+
+  async function loadApiTokens() {
+    const data = await request('/provisioning/v1/tokens');
+    if (data) setApiTokens(data);
+  }
+
+  async function createApiToken() {
+    if (!newApiToken.name.trim()) { setError('Token name is required.'); return; }
+    const data = await request('/provisioning/v1/tokens', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: newApiToken.name.trim(),
+        scopes: newApiToken.scopes.trim() || 'provisioning:read,provisioning:write',
+        allowed_ips: newApiToken.allowed_ips.trim(),
+      }),
+    }, 'Creating API token...');
+    if (data) {
+      setCreatedApiToken(data.token || '');
+      setNotice('API token created. Copy it now; it will not be shown again.');
+      setNewApiToken({ name: 'WHMCS', scopes: 'provisioning:read,provisioning:write', allowed_ips: '' });
+      await loadApiTokens();
+    }
+  }
+
+  async function revokeApiToken(token) {
+    if (!confirm(`Revoke API token ${token.name}? WHMCS using it will stop working.`)) return;
+    const data = await request(`/provisioning/v1/tokens/${token.id}`, { method: 'DELETE' }, `Revoking ${token.name}...`);
+    if (data) {
+      setNotice(`Revoked API token ${token.name}.`);
+      await loadApiTokens();
+    }
   }
 
   async function loadUsers() {
@@ -2731,6 +2769,7 @@ function App() {
       if (isAdmin) { loadMalwareScanStatus(); loadMalwareScanJobs(); loadLatestMalwareScanJob(); }
       if (!websites.length) refreshAll();
     }
+    if (isAuthenticated && page === 'api-tokens' && currentUser?.role === 'admin') loadApiTokens();
     if (isAuthenticated && page === 'settings') loadPanelSettings();
     if (isAuthenticated && page === 'backups' && currentUser?.role === 'admin') { loadUsers(); loadSftpTargets(); loadBackupSchedules(); loadRestoreBackups(); }
   }, [isAuthenticated, page, currentUser?.role]);
@@ -2779,6 +2818,7 @@ function App() {
 
   const settingsNavItems = [
     ...(isAdmin ? [['settings', 'Panel settings', SettingsIcon]] : []),
+    ...(isAdmin ? [['api-tokens', 'API Tokens', KeyRound]] : []),
     ['security', 'Security', Shield],
     ...(isAdmin ? [['php', 'PHP config', Code2]] : []),
     ...(isAdmin ? [['firewall', 'Firewall', Shield]] : []),
@@ -4210,6 +4250,40 @@ function App() {
     </>;
   }
 
+  function renderApiTokens() {
+    if (!isAdmin) return <section className="section"><h2>API Tokens</h2><p className="hint">No permission.</p></section>;
+    return <>
+      <section className="section">
+        <div className="section-title">
+          <div><h2>API Tokens</h2><p className="hint">Use these tokens for WHMCS server-to-server provisioning.</p></div>
+          <button disabled={!!loading} onClick={loadApiTokens}><RefreshCw size={14}/> Refresh</button>
+        </div>
+        {createdApiToken && <div className="user-create-card">
+          <label><span>New token (copy now)</span><input readOnly value={createdApiToken} onFocus={e => e.target.select()} /></label>
+          <button disabled={!!loading} onClick={() => { navigator.clipboard?.writeText(createdApiToken); setNotice('Token copied.'); }}><Copy size={14}/> Copy token</button>
+          <button className="secondary-light" onClick={() => setCreatedApiToken('')}>Hide</button>
+        </div>}
+        <div className="user-create-card">
+          <label><span>Name</span><input value={newApiToken.name} onChange={e => setNewApiToken(prev => ({ ...prev, name: e.target.value }))} placeholder="WHMCS" /></label>
+          <label><span>Scopes</span><input value={newApiToken.scopes} onChange={e => setNewApiToken(prev => ({ ...prev, scopes: e.target.value }))} /></label>
+          <label><span>Allowed IPs</span><input value={newApiToken.allowed_ips} onChange={e => setNewApiToken(prev => ({ ...prev, allowed_ips: e.target.value }))} placeholder="optional: 1.2.3.4,5.6.7.8" /></label>
+          <button disabled={!!loading || !newApiToken.name.trim()} onClick={createApiToken}><Plus size={14}/> Create token</button>
+        </div>
+        <div className="package-list">
+          {apiTokens.length === 0 && <EmptyState icon={KeyRound} message="No API tokens found." />}
+          {apiTokens.map(token => <div className="package-row" key={token.id}>
+            <div className="user-main"><strong>{token.name}</strong><small>{token.scopes || 'No scopes'}{token.allowed_ips ? ` - ${token.allowed_ips}` : ''}</small></div>
+            <span className="user-metric"><KeyRound size={13}/>{token.is_active ? 'Active' : 'Revoked'}</span>
+            <span className="user-metric"><Clock size={13}/>{token.last_used_at ? new Date(token.last_used_at).toLocaleString() : 'Never used'}</span>
+            <div className="row-actions">
+              <button className="mini danger" disabled={!!loading || !token.is_active} onClick={() => revokeApiToken(token)}><Trash2 size={14}/> Revoke</button>
+            </div>
+          </div>)}
+        </div>
+      </section>
+    </>;
+  }
+
   function renderUsers() {
     if (!isAdmin) return <section className="section"><h2>Users</h2><p className="hint">No permission.</p></section>;
     return <>
@@ -4382,6 +4456,7 @@ function App() {
     if (page === 'updates') return renderUpdates();
     if (page === 'services') return renderServices();
     if (page === 'settings') return renderPanelSettings();
+    if (page === 'api-tokens') return renderApiTokens();
     if (page === 'users') return renderUsers();
     return renderDashboard();
   }
