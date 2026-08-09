@@ -30,15 +30,15 @@ def test_user_package_create_normalizes_name():
     assert payload.website_limit == 10
     assert payload.storage_limit_mb == 2048
 
-def test_provisioning_account_allows_missing_domain():
+def test_provisioning_account_allows_missing_email_and_domain():
     payload = ProvisioningAccountCreate(
         external_id="whmcs:123",
         username="bp_123",
-        email="client@bpanel.dev",
         password="strong-password-123",
         package_id=1,
     )
 
+    assert payload.email is None
     assert payload.domain is None
 
 def test_provisioning_account_rejects_wordpress_without_domain():
@@ -46,7 +46,6 @@ def test_provisioning_account_rejects_wordpress_without_domain():
         ProvisioningAccountCreate(
             external_id="whmcs:123",
             username="bp_123",
-            email="client@bpanel.dev",
             password="strong-password-123",
             package_id=1,
             install_wordpress=True,

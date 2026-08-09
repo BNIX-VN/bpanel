@@ -1,12 +1,17 @@
 from types import SimpleNamespace
 
+from app.api.provisioning import _provisioning_email
 from app.services.provisioning import account_to_dict
+
+
+def test_provisioning_email_is_stable_per_username():
+    assert _provisioning_email("bp_123") == "bp_123@users.bpanel.dev"
 
 
 def test_account_to_dict_uses_package_and_whmcs_service_id_label():
     account = SimpleNamespace(
         external_id="whmcs:123",
-        user=SimpleNamespace(username="bp_123", email="client@bpanel.dev"),
+        user=SimpleNamespace(username="bp_123", email="bp_123@users.bpanel.dev"),
         primary_website=None,
         package=SimpleNamespace(name="Starter"),
         package_id=2,

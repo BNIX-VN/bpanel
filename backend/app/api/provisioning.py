@@ -63,6 +63,10 @@ def _account_by_external_id(db: Session, external_id: str) -> ProvisioningAccoun
     return account
 
 
+def _provisioning_email(username: str) -> str:
+    return f"{username}@users.bpanel.dev"
+
+
 # ── Plans ────────────────────────────────────────────────────────────────
 
 @router.get("/plans")
@@ -114,6 +118,8 @@ def create_account(payload: ProvisioningAccountCreate, request: Request, db: Ses
     if not package:
         raise HTTPException(status_code=404, detail="Package not found")
 
+    account_email = str(payload.email) if payload.email else _provisioning_email(payload.username)
+
     account = ProvisioningAccount(
         external_id=payload.external_id,
         package_id=payload.package_id,
@@ -133,7 +139,7 @@ def create_account(payload: ProvisioningAccountCreate, request: Request, db: Ses
 
     user = User(
         username=payload.username,
-        email=payload.email,
+        email=account_email,
         hashed_password=hash_password(payload.password),
         role="end_user",
         package_id=package.id,
@@ -156,7 +162,7 @@ def create_account(payload: ProvisioningAccountCreate, request: Request, db: Ses
                 linux_user = site_users.ensure_site_runtime(payload.domain, root_path, payload.php_version, linux_user)
                 root_path = wordpress.install_wordpress(
                     payload.domain, db_info, payload.domain,
-                    "admin", payload.password, payload.email,
+                    "admin", payload.password, account_email,
                     payload.php_version, linux_user, root_path=root_path,
                 )
             else:

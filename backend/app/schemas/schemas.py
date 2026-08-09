@@ -925,7 +925,7 @@ class DaBulkImportRequest(BaseModel):
 class ProvisioningAccountCreate(BaseModel):
     external_id: str = Field(min_length=1, max_length=255)
     username: str = Field(min_length=3, max_length=32, pattern=r"^[a-z_][a-z0-9_-]{2,31}$")
-    email: EmailStr
+    email: Optional[EmailStr] = None
     password: str = Field(min_length=12, max_length=72)
     package_id: int = Field(ge=1)
     domain: Optional[str] = None

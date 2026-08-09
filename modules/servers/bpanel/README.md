@@ -50,6 +50,7 @@ Go to **System Settings → Products/Services → Module Settings**.
 
 Disable **Require Domain** on the WHMCS product if customers should be able to order without entering a domain.
 If **Install WordPress** or **Auto SSL** is enabled, a domain is still required.
+Provisioning generates a unique internal BPanel email alias per service. Customers log in with the BPanel username.
 
 ## Mapping
 
@@ -57,7 +58,7 @@ If **Install WordPress** or **Auto SSL** is enabled, a domain is still required.
 |---|---|
 | Service ID | `external_id = whmcs:{serviceid}` |
 | Username | `bp_{serviceid}` |
-| Client email | BPanel user email |
+| Email | generated internal alias per service |
 | Domain | Primary website domain, optional |
 | Product Package | BPanel `UserPackage.id` |
 

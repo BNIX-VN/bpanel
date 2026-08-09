@@ -67,7 +67,6 @@ function bpanel_CreateAccount($params)
     $payload = [
         'external_id' => bpanel_external_id($params),
         'username' => bpanel_username($params),
-        'email' => bpanel_client_email($params),
         'password' => bpanel_password($params),
         'package_id' => (int) bpanel_config($params, 1, '1'),
         'php_version' => bpanel_config($params, 3, '8.4'),
@@ -276,14 +275,6 @@ function bpanel_password($params)
 function bpanel_domain($params)
 {
     return strtolower(trim((string) ($params['domain'] ?? '')));
-}
-
-function bpanel_client_email($params)
-{
-    if (!empty($params['clientsdetails']['email'])) {
-        return (string) $params['clientsdetails']['email'];
-    }
-    return 'client' . (int) ($params['userid'] ?? 0) . '@users.bpanel.dev';
 }
 
 function bpanel_config($params, $index, $default)
