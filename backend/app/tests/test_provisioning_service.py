@@ -8,6 +8,10 @@ def test_provisioning_email_is_stable_per_username():
     assert _provisioning_email("bp_123") == "bp_123@users.bpanel.dev"
 
 
+def test_provisioning_email_ignores_customer_email():
+    assert _provisioning_email("bp456_abcd") != "customer@example.com"
+
+
 def test_account_to_dict_uses_package_and_whmcs_service_id_label():
     account = SimpleNamespace(
         external_id="whmcs:123",

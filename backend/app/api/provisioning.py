@@ -32,6 +32,7 @@ from app.services.provisioning import (
     terminate_account,
     unsuspend_account,
 )
+from app.services.sso_tokens import create_panel_login_token
 
 router = APIRouter(prefix="/provisioning/v1", tags=["provisioning"])
 
@@ -107,9 +108,11 @@ def create_account(payload: ProvisioningAccountCreate, request: Request, db: Ses
             db.delete(existing)
             db.commit()
 
+    account_email = _provisioning_email(payload.username)
+
     if db.query(User).filter(User.username == payload.username).first():
         raise HTTPException(status_code=409, detail="Username already exists")
-    if db.query(User).filter(User.email == payload.email).first():
+    if db.query(User).filter(User.email == account_email).first():
         raise HTTPException(status_code=409, detail="Email already exists")
     if payload.domain and db.query(Website).filter(Website.domain == payload.domain).first():
         raise HTTPException(status_code=409, detail="Domain already exists")
@@ -117,8 +120,6 @@ def create_account(payload: ProvisioningAccountCreate, request: Request, db: Ses
     package = db.query(UserPackage).filter(UserPackage.id == payload.package_id).first()
     if not package:
         raise HTTPException(status_code=404, detail="Package not found")
-
-    account_email = str(payload.email) if payload.email else _provisioning_email(payload.username)
 
     account = ProvisioningAccount(
         external_id=payload.external_id,
@@ -246,6 +247,18 @@ def get_account(external_id: str, request: Request, db: Session = Depends(get_db
     _require_scope(token, "provisioning:read")
     account = _account_by_external_id(db, external_id)
     return account_to_dict(account, db)
+
+
+@router.post("/accounts/{external_id}/login")
+def create_login_url(external_id: str, request: Request, db: Session = Depends(get_db)):
+    token = _get_provisioning_token(request, db)
+    _require_scope(token, "provisioning:write")
+    account = _account_by_external_id(db, external_id)
+    if not account.user or not account.user.is_active:
+        raise HTTPException(status_code=404, detail="Account user not found or inactive")
+    login_token = create_panel_login_token(account.user.username)
+    log_action(db, None, "provisioning_login", external_id, detail=account.user.username, request=request)
+    return {"url": f"/api/auth/sso/{login_token}"}
 
 
 @router.post("/accounts/{external_id}/suspend")

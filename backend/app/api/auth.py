@@ -11,6 +11,7 @@ from typing import Deque, Dict, Optional
 import pyotp
 import qrcode
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response, status
+from fastapi.responses import RedirectResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from redis import Redis
 from redis.exceptions import RedisError
@@ -34,6 +35,7 @@ from app.schemas.schemas import (
 )
 from app.services import storage_quota
 from app.services.audit import log_action
+from app.services.sso_tokens import consume_panel_login_token
 
 # Hard caps for credentials submitted to /auth/login. bcrypt accepts at most
 # 72 bytes anyway and we never want to spend CPU comparing absurd payloads.
@@ -424,6 +426,23 @@ def login(
     # mobile clients that cannot set cookies. Browser clients should ignore it
     # and rely on the HttpOnly cookie set above.
     return LoginResponse(access_token=token)
+
+
+@router.get("/sso/{token}")
+def sso_login(token: str, request: Request, db: Session = Depends(get_db)):
+    data = consume_panel_login_token(token)
+    if not data:
+        raise HTTPException(status_code=404, detail="Invalid or expired token")
+
+    username = (data.get("username") or "").strip()
+    user = db.query(User).filter(User.username == username).first()
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=404, detail="Invalid or expired token")
+
+    response = RedirectResponse(url="/", status_code=302)
+    _issue_login_session(response, request, user)
+    log_action(db, None, "auth.sso", user.username, detail="provisioning", request=request)
+    return response
 
 
 @router.post("/logout")

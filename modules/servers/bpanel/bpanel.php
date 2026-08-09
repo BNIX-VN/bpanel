@@ -64,10 +64,12 @@ function bpanel_TestConnection($params)
 function bpanel_CreateAccount($params)
 {
     $domain = bpanel_domain($params);
+    $username = bpanel_username($params);
+    $password = bpanel_password($params);
     $payload = [
         'external_id' => bpanel_external_id($params),
-        'username' => bpanel_username($params),
-        'password' => bpanel_password($params),
+        'username' => $username,
+        'password' => $password,
         'package_id' => (int) bpanel_config($params, 1, '1'),
         'php_version' => bpanel_config($params, 3, '8.4'),
         'app_type' => bpanel_config($params, 2, 'php'),
@@ -91,7 +93,8 @@ function bpanel_CreateAccount($params)
         return $result['error'];
     }
 
-    bpanel_save_service_note($params, $result['data']);
+    $accountUsername = trim((string) ($result['data']['username'] ?? $username));
+    bpanel_save_service_record($params, $result['data'], $accountUsername, $password);
     return 'success';
 }
 
@@ -145,8 +148,8 @@ function bpanel_UsageUpdate($params)
 
 function bpanel_LoginLink($params)
 {
-    $url = bpanel_base_url($params);
-    return '<a href="' . htmlspecialchars($url, ENT_QUOTES, 'UTF-8') . '" target="_blank">Open BPanel</a>';
+    $url = bpanel_sso_url($params);
+    return '<a href="' . htmlspecialchars($url, ENT_QUOTES, 'UTF-8') . '" target="_blank">Login to BPanel</a>';
 }
 
 function bpanel_ClientArea($params)
@@ -163,6 +166,7 @@ function bpanel_ClientArea($params)
         'templatefile' => 'clientarea',
         'vars' => [
             'panelUrl' => bpanel_base_url($params),
+            'loginUrl' => bpanel_sso_url($params),
             'username' => bpanel_username($params),
             'serviceLabel' => bpanel_service_label($params, $account),
             'packageName' => trim((string) ($account['package_name'] ?? '')),
@@ -263,13 +267,23 @@ function bpanel_external_id($params)
 
 function bpanel_username($params)
 {
+    $username = trim((string) ($params['username'] ?? ''));
+    if ($username !== '' && preg_match('/^[a-z_][a-z0-9_-]{2,31}$/', $username)) {
+        return $username;
+    }
+
     $serviceId = (int) ($params['serviceid'] ?? 0);
-    return 'bp_' . $serviceId;
+    return bpanel_random_username($serviceId);
 }
 
 function bpanel_password($params)
 {
-    return (string) ($params['password'] ?? '');
+    $password = (string) ($params['password'] ?? '');
+    if (strlen($password) >= 12 && strlen($password) <= 72) {
+        return $password;
+    }
+
+    return bpanel_random_string(24, 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789');
 }
 
 function bpanel_domain($params)
@@ -336,7 +350,25 @@ function bpanel_service_label($params, $account)
     return $serviceId > 0 ? $product . ' #' . $serviceId : $product;
 }
 
-function bpanel_save_service_note($params, $data)
+function bpanel_sso_url($params)
+{
+    if (empty($params['serviceid'])) {
+        return bpanel_base_url($params);
+    }
+
+    $result = bpanel_request($params, 'POST', '/api/provisioning/v1/accounts/' . rawurlencode(bpanel_external_id($params)) . '/login');
+    if ($result['ok'] && !empty($result['data']['url'])) {
+        $url = trim((string) $result['data']['url']);
+        if (preg_match('#^https?://#i', $url)) {
+            return $url;
+        }
+        return rtrim(bpanel_base_url($params), '/') . '/' . ltrim($url, '/');
+    }
+
+    return bpanel_base_url($params);
+}
+
+function bpanel_save_service_record($params, $data, $username = '', $password = '')
 {
     if (!function_exists('localAPI') || empty($params['serviceid'])) {
         return;
@@ -349,14 +381,43 @@ function bpanel_save_service_note($params, $data)
         }
     }
 
-    try {
-        localAPI('UpdateClientProduct', [
-            'serviceid' => (int) $params['serviceid'],
-            'notes' => implode("\n", $lines),
-        ]);
-    } catch (Throwable $e) {
-        // WHMCS note update is best effort; provisioning already succeeded.
+    $update = [
+        'serviceid' => (int) $params['serviceid'],
+        'notes' => implode("\n", $lines),
+    ];
+    if ($username !== '') {
+        $update['serviceusername'] = $username;
     }
+    if ($password !== '') {
+        $update['servicepassword'] = $password;
+    }
+
+    try {
+        localAPI('UpdateClientProduct', $update);
+    } catch (Throwable $e) {
+        // WHMCS record update is best effort; provisioning already succeeded.
+    }
+}
+
+function bpanel_save_service_note($params, $data)
+{
+    bpanel_save_service_record($params, $data);
+}
+
+function bpanel_random_username($serviceId)
+{
+    $prefix = 'bp' . max(0, (int) $serviceId) . '_';
+    return substr($prefix . bpanel_random_string(8, 'abcdefghijklmnopqrstuvwxyz0123456789'), 0, 32);
+}
+
+function bpanel_random_string($length, $alphabet)
+{
+    $result = '';
+    $max = strlen($alphabet) - 1;
+    for ($i = 0; $i < $length; $i++) {
+        $result .= $alphabet[random_int(0, $max)];
+    }
+    return $result;
 }
 
 function bpanel_log($params, $method, $path, $request, $response, $result)
@@ -365,12 +426,17 @@ function bpanel_log($params, $method, $path, $request, $response, $result)
         return;
     }
 
+    $replaceVars = [trim((string) ($params['serveraccesshash'] ?? '')), trim((string) ($params['serverpassword'] ?? ''))];
+    if (is_array($request) && isset($request['password'])) {
+        $replaceVars[] = (string) $request['password'];
+    }
+
     logModuleCall(
         'bpanel',
         $method . ' ' . $path,
         $request,
         $response,
         $result,
-        [trim((string) ($params['serveraccesshash'] ?? '')), trim((string) ($params['serverpassword'] ?? ''))]
+        $replaceVars
     );
 }

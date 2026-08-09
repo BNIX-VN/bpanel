@@ -12,8 +12,8 @@
         <p><strong>Username:</strong> {$username|escape}</p>
         <p><strong>Primary domain:</strong> {if $domain}{$domain|escape}{else}Not attached{/if}</p>
         <p>
-            <a class="btn btn-primary" href="{$panelUrl|escape}" target="_blank" rel="noopener">
-                Open BPanel
+            <a class="btn btn-primary" href="{$loginUrl|escape}" target="_blank" rel="noopener">
+                Login to BPanel
             </a>
         </p>
     </div>

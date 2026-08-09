@@ -51,13 +51,16 @@ Go to **System Settings → Products/Services → Module Settings**.
 Disable **Require Domain** on the WHMCS product if customers should be able to order without entering a domain.
 If **Install WordPress** or **Auto SSL** is enabled, a domain is still required.
 Provisioning generates a unique internal BPanel email alias per service. Customers log in with the BPanel username.
+The module stores the generated BPanel username and password on the WHMCS service before returning success, so WHMCS welcome emails can include service credentials.
+The module also supports one-time SSO login links through the BPanel provisioning API.
+After replacing the module files, save the WHMCS product Module Settings once so WHMCS reloads the service-list hook.
 
 ## Mapping
 
 | WHMCS | BPanel |
 |---|---|
 | Service ID | `external_id = whmcs:{serviceid}` |
-| Username | `bp_{serviceid}` |
+| Username | generated and stored on the WHMCS service |
 | Email | generated internal alias per service |
 | Domain | Primary website domain, optional |
 | Product Package | BPanel `UserPackage.id` |
