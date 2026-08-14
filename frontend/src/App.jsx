@@ -310,44 +310,6 @@ function NotificationToast({ type, message, onClose }) {
   </div>;
 }
 
-function renderAceSelectionTextOverlay(editor, overlay) {
-  if (!editor || !overlay) return;
-  overlay.innerHTML = '';
-  const ranges = editor.selection.getAllRanges?.() || [editor.selection.getRange()];
-  const visibleFirst = editor.renderer.getFirstVisibleRow?.() ?? 0;
-  const visibleLast = editor.renderer.getLastVisibleRow?.() ?? editor.session.getLength();
-  const containerRect = editor.container.getBoundingClientRect();
-  const lineHeight = editor.renderer.lineHeight || 20;
-  const charWidth = editor.renderer.characterWidth || 8;
-
-  ranges.forEach(range => {
-    if (!range || range.isEmpty()) return;
-    const startRow = Math.max(range.start.row, visibleFirst);
-    const endRow = Math.min(range.end.row, visibleLast);
-    for (let row = startRow; row <= endRow; row += 1) {
-      const line = editor.session.getLine(row) || '';
-      const fromColumn = row === range.start.row ? range.start.column : 0;
-      const toColumn = row === range.end.row ? range.end.column : line.length;
-      if (toColumn <= fromColumn) continue;
-
-      const start = editor.renderer.textToScreenCoordinates(row, fromColumn);
-      const end = editor.renderer.textToScreenCoordinates(row, toColumn);
-      const left = start.pageX - containerRect.left;
-      const top = start.pageY - containerRect.top;
-      const width = Math.max(end.pageX - start.pageX, charWidth);
-
-      const node = document.createElement('div');
-      node.className = 'bpanel-ace-selected-text';
-      node.textContent = line.slice(fromColumn, toColumn);
-      node.style.left = `${left}px`;
-      node.style.top = `${top}px`;
-      node.style.width = `${width}px`;
-      node.style.height = `${lineHeight}px`;
-      overlay.appendChild(node);
-    }
-  });
-}
-
 const ACE_THEMES = { light: 'ace/theme/textmate', dark: 'ace/theme/tomorrow_night' };
 const aceThemeFor = theme => ACE_THEMES[theme] || ACE_THEMES.light;
 
@@ -383,11 +345,6 @@ function CodeEditor({ value, mode, disabled, onChange, onCursorChange }) {
       selectionStyle: 'text',
     });
 
-    const selectionOverlay = document.createElement('div');
-    selectionOverlay.className = 'bpanel-ace-selection-overlay';
-    editor.container.appendChild(selectionOverlay);
-    const refreshSelectionOverlay = () => renderAceSelectionTextOverlay(editor, selectionOverlay);
-
     editor.setOptions({
       enableBasicAutocompletion: true,
       enableLiveAutocompletion: true,
@@ -414,11 +371,6 @@ function CodeEditor({ value, mode, disabled, onChange, onCursorChange }) {
 
     editor.session.on('change', handleChange);
     editor.selection.on('changeCursor', reportCursor);
-    editor.selection.on('changeSelection', refreshSelectionOverlay);
-    // Ace repositions its layers on every render (scroll included), so the
-    // overlay has to follow along.
-    const afterRender = refreshSelectionOverlay;
-    editor.renderer.on('afterRender', afterRender);
     editorRef.current = editor;
     reportCursor();
 
@@ -426,9 +378,6 @@ function CodeEditor({ value, mode, disabled, onChange, onCursorChange }) {
       destroyed = true;
       editor.session.off('change', handleChange);
       editor.selection.off('changeCursor', reportCursor);
-      editor.selection.off('changeSelection', refreshSelectionOverlay);
-      editor.renderer.off('afterRender', afterRender);
-      selectionOverlay.remove();
       editor.destroy();
       editorRef.current = null;
       if (hostRef.current) hostRef.current.textContent = '';

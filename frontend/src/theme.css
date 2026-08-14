@@ -112,7 +112,6 @@
   --editor-gutter-fg:#7d8a99;
   --editor-active-line:#eaf3fc;
   --editor-selection:#a9d0f0;
-  --editor-selection-fg:#16202b;
 }
 
 /* ============================ DARK ============================ */
@@ -194,7 +193,6 @@
   --editor-gutter-fg:#7c8a99;
   --editor-active-line:#16222e;
   --editor-selection:#1d4c7a;
-  --editor-selection-fg:#ffffff;
 }
 
 /* Follow the OS when no explicit choice is stored. */
@@ -275,7 +273,6 @@
     --editor-gutter-fg:#7c8a99;
     --editor-active-line:#16222e;
     --editor-selection:#1d4c7a;
-    --editor-selection-fg:#ffffff;
   }
 }
 

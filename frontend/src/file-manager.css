@@ -377,26 +377,12 @@
   background: var(--editor-active-line);
 }
 
+/* Selected text keeps its syntax colours; only the background changes. Do not
+   try to repaint the selected text on top of Ace: a flat copy of the line has
+   no tab expansion and no token styling, so it drifts out of alignment. */
 .code-editor-host .ace_marker-layer .ace_selection {
   background: var(--editor-selection) !important;
   opacity: 1;
-}
-
-.code-editor-host .bpanel-ace-selection-overlay {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
-  pointer-events: none;
-  z-index: 20;
-}
-
-.code-editor-host .bpanel-ace-selected-text {
-  position: absolute;
-  color: var(--editor-selection-fg);
-  font: 13px/22px Consolas, 'SFMono-Regular', 'Liberation Mono', Menlo, monospace;
-  overflow: hidden;
-  white-space: pre;
-  -webkit-text-fill-color: var(--editor-selection-fg);
 }
 
 .code-editor-host .ace_marker-layer .ace_selected-word {
