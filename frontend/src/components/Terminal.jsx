@@ -247,11 +247,11 @@ export function Terminal({ websiteId, apiBase = '/api' }) {
       fontFamily: 'Consolas, "Cascadia Code", "Fira Code", monospace',
       scrollback: 2000,
       theme: {
-        background: '#16120f',
-        foreground: '#e8e1df',
-        cursor: '#ee3124',
-        selectionBackground: '#7a2b23',
-        black: '#16120f',
+        background: '#0f1720',
+        foreground: '#e6edf5',
+        cursor: '#0065bb',
+        selectionBackground: '#1d4c7a',
+        black: '#0f1720',
         red: '#ef4444',
         green: '#22c55e',
         yellow: '#eab308',
@@ -425,14 +425,14 @@ export function Terminal({ websiteId, apiBase = '/api' }) {
       </div>
       <style>{`
         /* A terminal stays dark in both themes; only its chrome follows the brand. */
-        .terminal-wrapper { display:flex; flex-direction:column; height:100%; background:#16120f; border:1px solid var(--border, #332c2a); border-radius:8px; overflow:hidden; }
-        .terminal-toolbar { display:flex; justify-content:space-between; align-items:center; padding:8px 12px; background:#1f1a18; border-bottom:1px solid #332c2a; }
+        .terminal-wrapper { display:flex; flex-direction:column; height:100%; background:#0f1720; border:1px solid var(--border, #26313d); border-radius:8px; overflow:hidden; }
+        .terminal-toolbar { display:flex; justify-content:space-between; align-items:center; padding:8px 12px; background:#182029; border-bottom:1px solid #26313d; }
         .terminal-status { font-size:13px; font-family:Consolas, monospace; }
         .status-connected { color:#4ade80; }
-        .status-disconnected { color:#9c918e; }
+        .status-disconnected { color:#9fb0c0; }
         .status-error { color:#f87171; }
         .terminal-btn { padding:4px 12px; border:0; border-radius:4px; font-size:12px; cursor:pointer; }
-        .terminal-btn.connect { background:#ee3124; color:white; }
+        .terminal-btn.connect { background:#0065bb; color:white; }
         .terminal-btn.disconnect { background:#dc2626; color:white; }
         .terminal-container { flex:1; min-height:0; padding:8px; overflow:hidden; }
         .terminal-fit { width:100%; height:100%; min-height:0; overflow:hidden; }

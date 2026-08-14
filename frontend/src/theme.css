@@ -1,22 +1,22 @@
 /* ============================================================
-   BPanel theme layer — Lexend typography + light/dark tokens.
+   BPanel theme layer — Noto Sans typography + light/dark tokens.
    Loaded last so :root here wins over style.css / brand.css.
    ============================================================ */
 
-/* --- Lexend (self-hosted variable font, no external CDN) --- */
+/* --- Noto Sans (self-hosted variable font, no external CDN) --- */
 @font-face{
-  font-family:'Lexend';font-style:normal;font-weight:100 900;font-display:swap;
-  src:url('./fonts/lexend-vietnamese.woff2') format('woff2');
+  font-family:'Noto Sans';font-style:normal;font-weight:100 900;font-display:swap;
+  src:url('./fonts/noto-sans-vietnamese.woff2') format('woff2');
   unicode-range:U+0102-0103,U+0110-0111,U+0128-0129,U+0168-0169,U+01A0-01A1,U+01AF-01B0,U+0300-0301,U+0303-0304,U+0308-0309,U+0323,U+0329,U+1EA0-1EF9,U+20AB;
 }
 @font-face{
-  font-family:'Lexend';font-style:normal;font-weight:100 900;font-display:swap;
-  src:url('./fonts/lexend-latin-ext.woff2') format('woff2');
+  font-family:'Noto Sans';font-style:normal;font-weight:100 900;font-display:swap;
+  src:url('./fonts/noto-sans-latin-ext.woff2') format('woff2');
   unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;
 }
 @font-face{
-  font-family:'Lexend';font-style:normal;font-weight:100 900;font-display:swap;
-  src:url('./fonts/lexend-latin.woff2') format('woff2');
+  font-family:'Noto Sans';font-style:normal;font-weight:100 900;font-display:swap;
+  src:url('./fonts/noto-sans-latin.woff2') format('woff2');
   unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
 }
 
@@ -25,38 +25,37 @@
   color-scheme:light;
 
   /* Brand */
-  --brand-red:#ee3124;
-  --brand-red-deep:#af2a24;
+  --brand-blue:#0065bb;
+  --brand-blue-deep:#00457d;
   --brand-yellow:#f6c431;
-  --brand-yellow-soft:#fff6dd;
+  --brand-yellow-soft:#fff8db;
 
-  --primary:#ee3124;
-  --primary-hover:#d32a1e;
-  --primary-active:#af2a24;
+  --primary:#0065bb;
+  --primary-hover:#00589f;
+  --primary-active:#00457d;
   --primary-fg:#ffffff;
-  --primary-light:#fdeceb;
-  --primary-light-hover:#fbdcd9;
-  --primary-border:#f7c9c4;
-  --primary-text:#c62a20;
-  --brand-deep:#2a2220;
-  --brand-navy:#2a2220;      /* legacy alias: headings stay neutral, red is the accent */
-  --brand-blue:#ee3124;      /* legacy alias */
-  --ring:rgba(238,49,36,.18);
+  --primary-light:#e8f2fb;
+  --primary-light-hover:#d6e8f8;
+  --primary-border:#b3d4f0;
+  --primary-text:#00579f;
+  --brand-deep:#16202b;
+  --brand-navy:#16202b;      /* legacy alias: headings stay neutral, blue is the accent */
+  --ring:rgba(0,101,187,.18);
 
   /* Neutrals */
-  --text:#1c1917;
-  --text-secondary:#57534e;
-  --text-muted:#7c7370;
+  --text:#16202b;
+  --text-secondary:#4a5765;
+  --text-muted:#6f7c8a;
   --text-inverse:#ffffff;
-  --bg:#f7f5f4;
+  --bg:#f4f7fa;
   --surface:#ffffff;
-  --surface-alt:#fbf8f7;
-  --surface-sunken:#f2eeed;
-  --surface-hover:#f6f2f1;
-  --border:#e7e1df;
-  --border-hover:#d3cbc8;
-  --border-strong:#c4bab6;
-  --overlay:rgba(28,25,23,.45);
+  --surface-alt:#f8fafc;
+  --surface-sunken:#eef2f7;
+  --surface-hover:#f1f5f9;
+  --border:#dde5ee;
+  --border-hover:#c6d2e0;
+  --border-strong:#adbccd;
+  --overlay:rgba(15,23,42,.45);
 
   /* State: danger */
   --danger:#dc2626;
@@ -74,46 +73,46 @@
   --warning-bg:#fffbeb;
   --warning-border:#fde68a;
   --warning-text:#92400e;
-  /* State: info */
-  --info:#2563eb;
-  --info-bg:#eff6ff;
-  --info-border:#bfdbfe;
-  --info-text:#1d4ed8;
+  /* State: info — sky, so it stays distinct from the primary blue */
+  --info:#0ea5e9;
+  --info-bg:#f0f9ff;
+  --info-border:#bae6fd;
+  --info-text:#0369a1;
 
   /* Disabled controls */
-  --disabled-bg:#ece7e5;
-  --disabled-fg:#a8a09d;
-  --disabled-border:#ddd6d3;
+  --disabled-bg:#e6ebf1;
+  --disabled-fg:#9aa6b4;
+  --disabled-border:#d5dde6;
 
   /* Code / log / terminal surfaces (dark in both themes) */
-  --code-bg:#1b1614;
-  --code-fg:#f0e9e7;
-  --code-border:#3a312e;
-  --code-muted:#b9aeaa;
+  --code-bg:#0f1720;
+  --code-fg:#e6edf5;
+  --code-border:#26313d;
+  --code-muted:#9fb0c0;
 
   /* Elevation */
-  --shadow-sm:0 1px 2px rgba(52,24,20,.06);
-  --shadow-md:0 10px 28px rgba(52,24,20,.08);
-  --shadow-lg:0 20px 48px rgba(52,24,20,.12);
+  --shadow-sm:0 1px 2px rgba(15,35,60,.06);
+  --shadow-md:0 10px 28px rgba(15,35,60,.08);
+  --shadow-lg:0 20px 48px rgba(15,35,60,.12);
 
-  --scrollbar-thumb:#d6cecb;
-  --scrollbar-thumb-hover:#bdb2ae;
+  --scrollbar-thumb:#cbd5e1;
+  --scrollbar-thumb-hover:#aebccb;
   --scrollbar-track:transparent;
 
   /* Chrome / surfaces that need their own value per theme */
   --topbar-bg:rgba(255,255,255,.94);
-  --tooltip-bg:#2b1d1a;
+  --tooltip-bg:#16202b;
   --tooltip-fg:#ffffff;
 
   /* Code editor (Ace) */
   --editor-bg:#ffffff;
-  --editor-fg:#1c1917;
-  --editor-border:#e7e1df;
-  --editor-gutter-bg:#f7f4f3;
-  --editor-gutter-fg:#8a807c;
-  --editor-active-line:#fdeceb;
-  --editor-selection:#f7b3ac;
-  --editor-selection-fg:#1c1917;
+  --editor-fg:#16202b;
+  --editor-border:#dde5ee;
+  --editor-gutter-bg:#f5f8fb;
+  --editor-gutter-fg:#7d8a99;
+  --editor-active-line:#eaf3fc;
+  --editor-selection:#a9d0f0;
+  --editor-selection-fg:#16202b;
 }
 
 /* ============================ DARK ============================ */
@@ -121,80 +120,80 @@
    user has not explicitly chosen light. */
 :root[data-theme="dark"]{
   color-scheme:dark;
-  --primary:#ee3124;
-  --primary-hover:#f4483b;
-  --primary-active:#af2a24;
+  --primary:#0065bb;
+  --primary-hover:#1a7ad0;
+  --primary-active:#00457d;
   --primary-fg:#ffffff;
-  --primary-light:#3a1a16;
-  --primary-light-hover:#4a201b;
-  --primary-border:#6b2a23;
-  --primary-text:#ff8a7d;
-  --brand-deep:#f4efee;
-  --brand-navy:#f4efee;
-  --brand-blue:#ff5f4d;
+  --primary-light:#0e2a44;
+  --primary-light-hover:#16375a;
+  --primary-border:#1d4c7a;
+  --primary-text:#7fbdf2;
+  --brand-deep:#e8eef5;
+  --brand-navy:#e8eef5;
+  --brand-blue:#3b93e0;
   --brand-yellow:#f6c431;
-  --brand-yellow-soft:#3a2f14;
-  --ring:rgba(238,49,36,.32);
+  --brand-yellow-soft:#332b12;
+  --ring:rgba(0,101,187,.4);
 
-  --text:#f4efee;
-  --text-secondary:#c6bdba;
-  --text-muted:#998e8a;
-  --text-inverse:#1c1917;
-  --bg:#100d0c;
-  --surface:#1a1615;
-  --surface-alt:#221d1b;
-  --surface-sunken:#141110;
-  --surface-hover:#262120;
-  --border:#332c2a;
-  --border-hover:#463d3a;
-  --border-strong:#5a4f4b;
+  --text:#e8eef5;
+  --text-secondary:#b3c0cd;
+  --text-muted:#8494a4;
+  --text-inverse:#16202b;
+  --bg:#0c1116;
+  --surface:#151b22;
+  --surface-alt:#1c242d;
+  --surface-sunken:#101720;
+  --surface-hover:#212a34;
+  --border:#2a343f;
+  --border-hover:#3a4653;
+  --border-strong:#4d5b6a;
   --overlay:rgba(0,0,0,.62);
 
   --danger:#ef4444;
   --danger-hover:#dc2626;
-  --danger-bg:#331615;
-  --danger-border:#5c2422;
+  --danger-bg:#2d1719;
+  --danger-border:#5a2427;
   --danger-text:#fca5a5;
   --success:#10b981;
-  --success-bg:#0d2a20;
+  --success-bg:#0e2a20;
   --success-border:#1c4c3a;
   --success-text:#6ee7b7;
   --warning:#f59e0b;
-  --warning-bg:#33240c;
-  --warning-border:#5c4416;
+  --warning-bg:#2e2410;
+  --warning-border:#57451a;
   --warning-text:#fcd34d;
-  --info:#3b82f6;
-  --info-bg:#152740;
-  --info-border:#254a78;
-  --info-text:#93c5fd;
+  --info:#38bdf8;
+  --info-bg:#0d2635;
+  --info-border:#1c4a63;
+  --info-text:#7dd3fc;
 
-  --disabled-bg:#2a2422;
-  --disabled-fg:#6e6461;
-  --disabled-border:#3a3230;
+  --disabled-bg:#232c35;
+  --disabled-fg:#66727e;
+  --disabled-border:#303a45;
 
-  --code-bg:#0d0b0a;
-  --code-fg:#e8e1df;
-  --code-border:#2c2523;
-  --code-muted:#9a8f8b;
+  --code-bg:#0a1017;
+  --code-fg:#e2e9f1;
+  --code-border:#222c37;
+  --code-muted:#93a3b3;
 
   --shadow-sm:0 1px 2px rgba(0,0,0,.5);
   --shadow-md:0 10px 28px rgba(0,0,0,.55);
   --shadow-lg:0 20px 48px rgba(0,0,0,.6);
 
-  --scrollbar-thumb:#3d3533;
-  --scrollbar-thumb-hover:#544a47;
+  --scrollbar-thumb:#333e4a;
+  --scrollbar-thumb-hover:#47535f;
 
-  --topbar-bg:rgba(26,22,21,.94);
-  --tooltip-bg:#3a2f2c;
-  --tooltip-fg:#f6f1f0;
+  --topbar-bg:rgba(21,27,34,.94);
+  --tooltip-bg:#2b3541;
+  --tooltip-fg:#eef3f8;
 
-  --editor-bg:#16120f;
-  --editor-fg:#e8e1df;
-  --editor-border:#332c2a;
-  --editor-gutter-bg:#1c1716;
-  --editor-gutter-fg:#8a7f7b;
-  --editor-active-line:#2a2120;
-  --editor-selection:#7a2b23;
+  --editor-bg:#0f151c;
+  --editor-fg:#e2e9f1;
+  --editor-border:#2a343f;
+  --editor-gutter-bg:#141b23;
+  --editor-gutter-fg:#7c8a99;
+  --editor-active-line:#16222e;
+  --editor-selection:#1d4c7a;
   --editor-selection-fg:#ffffff;
 }
 
@@ -202,92 +201,92 @@
 @media (prefers-color-scheme:dark){
   :root:not([data-theme="light"]){
     color-scheme:dark;
-    --primary:#ee3124;
-    --primary-hover:#f4483b;
-    --primary-active:#af2a24;
+    --primary:#0065bb;
+    --primary-hover:#1a7ad0;
+    --primary-active:#00457d;
     --primary-fg:#ffffff;
-    --primary-light:#3a1a16;
-    --primary-light-hover:#4a201b;
-    --primary-border:#6b2a23;
-    --primary-text:#ff8a7d;
-    --brand-deep:#f4efee;
-    --brand-navy:#f4efee;
-    --brand-blue:#ff5f4d;
+    --primary-light:#0e2a44;
+    --primary-light-hover:#16375a;
+    --primary-border:#1d4c7a;
+    --primary-text:#7fbdf2;
+    --brand-deep:#e8eef5;
+    --brand-navy:#e8eef5;
+    --brand-blue:#3b93e0;
     --brand-yellow:#f6c431;
-    --brand-yellow-soft:#3a2f14;
-    --ring:rgba(238,49,36,.32);
+    --brand-yellow-soft:#332b12;
+    --ring:rgba(0,101,187,.4);
 
-    --text:#f4efee;
-    --text-secondary:#c6bdba;
-    --text-muted:#998e8a;
-    --text-inverse:#1c1917;
-    --bg:#100d0c;
-    --surface:#1a1615;
-    --surface-alt:#221d1b;
-    --surface-sunken:#141110;
-    --surface-hover:#262120;
-    --border:#332c2a;
-    --border-hover:#463d3a;
-    --border-strong:#5a4f4b;
+    --text:#e8eef5;
+    --text-secondary:#b3c0cd;
+    --text-muted:#8494a4;
+    --text-inverse:#16202b;
+    --bg:#0c1116;
+    --surface:#151b22;
+    --surface-alt:#1c242d;
+    --surface-sunken:#101720;
+    --surface-hover:#212a34;
+    --border:#2a343f;
+    --border-hover:#3a4653;
+    --border-strong:#4d5b6a;
     --overlay:rgba(0,0,0,.62);
 
     --danger:#ef4444;
     --danger-hover:#dc2626;
-    --danger-bg:#331615;
-    --danger-border:#5c2422;
+    --danger-bg:#2d1719;
+    --danger-border:#5a2427;
     --danger-text:#fca5a5;
     --success:#10b981;
-    --success-bg:#0d2a20;
+    --success-bg:#0e2a20;
     --success-border:#1c4c3a;
     --success-text:#6ee7b7;
     --warning:#f59e0b;
-    --warning-bg:#33240c;
-    --warning-border:#5c4416;
+    --warning-bg:#2e2410;
+    --warning-border:#57451a;
     --warning-text:#fcd34d;
-    --info:#3b82f6;
-    --info-bg:#152740;
-    --info-border:#254a78;
-    --info-text:#93c5fd;
+    --info:#38bdf8;
+    --info-bg:#0d2635;
+    --info-border:#1c4a63;
+    --info-text:#7dd3fc;
 
-    --disabled-bg:#2a2422;
-    --disabled-fg:#6e6461;
-    --disabled-border:#3a3230;
+    --disabled-bg:#232c35;
+    --disabled-fg:#66727e;
+    --disabled-border:#303a45;
 
-    --code-bg:#0d0b0a;
-    --code-fg:#e8e1df;
-    --code-border:#2c2523;
-    --code-muted:#9a8f8b;
+    --code-bg:#0a1017;
+    --code-fg:#e2e9f1;
+    --code-border:#222c37;
+    --code-muted:#93a3b3;
 
     --shadow-sm:0 1px 2px rgba(0,0,0,.5);
     --shadow-md:0 10px 28px rgba(0,0,0,.55);
     --shadow-lg:0 20px 48px rgba(0,0,0,.6);
 
-    --scrollbar-thumb:#3d3533;
-    --scrollbar-thumb-hover:#544a47;
+    --scrollbar-thumb:#333e4a;
+    --scrollbar-thumb-hover:#47535f;
 
-    --topbar-bg:rgba(26,22,21,.94);
-    --tooltip-bg:#3a2f2c;
-    --tooltip-fg:#f6f1f0;
+    --topbar-bg:rgba(21,27,34,.94);
+    --tooltip-bg:#2b3541;
+    --tooltip-fg:#eef3f8;
 
-    --editor-bg:#16120f;
-    --editor-fg:#e8e1df;
-    --editor-border:#332c2a;
-    --editor-gutter-bg:#1c1716;
-    --editor-gutter-fg:#8a7f7b;
-    --editor-active-line:#2a2120;
-    --editor-selection:#7a2b23;
+    --editor-bg:#0f151c;
+    --editor-fg:#e2e9f1;
+    --editor-border:#2a343f;
+    --editor-gutter-bg:#141b23;
+    --editor-gutter-fg:#7c8a99;
+    --editor-active-line:#16222e;
+    --editor-selection:#1d4c7a;
     --editor-selection-fg:#ffffff;
   }
 }
 
 /* ============================ Base ============================ */
 :root{
-  font-family:'Lexend','Segoe UI',system-ui,-apple-system,sans-serif;
+  font-family:'Noto Sans','Segoe UI',system-ui,-apple-system,sans-serif;
   color:var(--text);
   background:var(--bg);
 }
 body{
-  font-family:'Lexend','Segoe UI',system-ui,-apple-system,sans-serif;
+  font-family:'Noto Sans','Segoe UI',system-ui,-apple-system,sans-serif;
   background:var(--bg);
   color:var(--text);
   transition:background-color .2s ease,color .2s ease;
@@ -319,24 +318,14 @@ a:hover{color:var(--primary)}
 .login-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
 .login-card-head .login-brand{flex:1;min-width:0}
 
+/* Loading stays neutral so it never reads as an error banner. */
+.loading{background:var(--surface-alt);color:var(--text-secondary);border-color:var(--border)}
+.loading span{border-color:var(--primary-border);border-top-color:var(--primary)}
+
 /* ============ Dark-mode corrections for hard-coded surfaces ============ */
 :root[data-theme="dark"] .brand-mark.has-logo,
 :root[data-theme="dark"] .brand-preview{background:var(--surface-alt)}
 :root[data-theme="dark"] img.theme-invert-safe{filter:none}
-
-/* Destructive buttons must not read as the brand-red primary button:
-   outlined at rest, filled red on hover. */
-button.danger,a.danger,.button-link.danger,.upload-button.danger{
-  background:var(--surface);color:var(--danger);border:1px solid var(--danger-border);
-}
-button.danger:hover:not(:disabled),a.danger:hover,.button-link.danger:hover,.upload-button.danger:hover{
-  background:var(--danger);color:#fff;border-color:var(--danger);
-}
-button.danger:disabled{background:var(--disabled-bg);color:var(--disabled-fg);border-color:var(--disabled-border)}
-
-/* Loading stays neutral so it never reads as an error banner. */
-.loading{background:var(--surface-alt);color:var(--text-secondary);border-color:var(--border)}
-.loading span{border-color:var(--primary-border);border-top-color:var(--primary)}
 
 /* Ace editor + xterm live in their own dark themes; just match the frame. */
 .ace_editor{border-color:var(--border)}
