@@ -28,6 +28,7 @@ from app.services.provisioning import (
     authenticate_token,
     check_ip_allowed,
     create_api_token,
+    panel_base_url,
     suspend_account,
     terminate_account,
     unsuspend_account,
@@ -264,7 +265,12 @@ def create_login_url(external_id: str, request: Request, db: Session = Depends(g
         raise HTTPException(status_code=404, detail="Account user not found or inactive")
     login_token = create_panel_login_token(account.user.username)
     log_action(db, None, "provisioning_login", external_id, detail=account.user.username, request=request)
-    return {"url": f"/api/auth/sso/{login_token}"}
+    path = f"/api/auth/sso/{login_token}"
+    base = panel_base_url()
+    absolute = f"{base}{path}" if base else path
+    # `login_url` is the documented field; `url` is kept for billing modules
+    # built against the original response shape.
+    return {"login_url": absolute, "url": absolute, "path": path, "expires_in": 300}
 
 
 @router.post("/accounts/{external_id}/suspend")
@@ -296,7 +302,14 @@ def unsuspend(external_id: str, request: Request, db: Session = Depends(get_db))
 
 
 @router.delete("/accounts/{external_id}")
-def terminate(external_id: str, request: Request, backup: bool = Query(default=True), db: Session = Depends(get_db)):
+def terminate(external_id: str, request: Request, backup: bool = Query(default=False), db: Session = Depends(get_db)):
+    """Delete a provisioned account.
+
+    ``backup`` defaults to off: the backup runs inside this request, and a
+    billing module that gives the call a short HTTP timeout would report a
+    failure while the server kept working. Pass ``?backup=true`` when the
+    caller can wait for a full account archive.
+    """
     token = _get_provisioning_token(request, db)
     _require_scope(token, "provisioning:write")
     account = _account_by_external_id(db, external_id)

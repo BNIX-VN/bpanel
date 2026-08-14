@@ -84,6 +84,42 @@ def _is_archive(path: Path) -> bool:
     return path.is_file() and any(name.endswith(s) for s in ARCHIVE_SUFFIXES)
 
 
+def safe_upload_name(filename: str) -> str:
+    """Return a filename that can only ever land inside ``DA_BACKUP_DIR``.
+
+    The uploaded name comes straight from the browser, so strip every
+    directory component before it is joined onto the backup directory.
+    """
+    name = Path((filename or "").replace("\\", "/")).name.strip()
+    if not name or name in {".", ".."} or name.startswith("."):
+        raise ValueError("Invalid backup filename")
+    if not any(name.lower().endswith(suffix) for suffix in ARCHIVE_SUFFIXES):
+        raise ValueError(
+            "Unsupported archive type. Expected one of: " + ", ".join(ARCHIVE_SUFFIXES)
+        )
+    return name
+
+
+def resolve_backup_path(archive_path: str) -> Path:
+    """Resolve a caller-supplied archive path inside ``DA_BACKUP_DIR``.
+
+    Scan, import and delete all take a path from the request body; confining it
+    to the upload directory keeps the endpoints from reading or deleting
+    arbitrary files on the host.
+    """
+    raw = (archive_path or "").strip()
+    if not raw:
+        raise ValueError("archive_path is required")
+    root = DA_BACKUP_DIR.resolve()
+    candidate = Path(raw)
+    resolved = (candidate if candidate.is_absolute() else root / candidate).resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(f"Backup must be inside {root}") from exc
+    return resolved
+
+
 def _strip_archive_suffix(name: str) -> str:
     lower = name.lower()
     for suffix in ARCHIVE_SUFFIXES:
@@ -257,6 +293,61 @@ def _discover_domains(root: Path) -> list[str]:
                 if domain and domain not in found:
                     found.append(domain)
     return found
+
+
+def _discover_domain_pointers(root: Path, domain: str) -> list[tuple[str, str]]:
+    """Return (domain, mode) pairs for a DirectAdmin domain's pointers.
+
+    DirectAdmin writes pointers either as ``<domain>.pointers`` under
+    ``backup/`` or as ``domain.pointers`` inside the domain directory. Lines
+    are ``pointer.tld=alias`` / ``pointer.tld=redirect``; very old backups list
+    one bare domain per line, which DirectAdmin treats as an alias.
+    """
+    candidates = [
+        root / "backup" / f"{domain}.pointers",
+        root / "domains" / domain / "domain.pointers",
+        root / "domains" / domain / "pointers",
+    ]
+    found: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not candidate.exists() or not candidate.is_file():
+            continue
+        for raw in candidate.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            name, _, mode = line.partition("=")
+            pointer = _normalize_domain(name)
+            if not pointer or pointer == domain or pointer in seen:
+                continue
+            seen.add(pointer)
+            found.append((pointer, "redirect" if mode.strip().lower() == "redirect" else "alias"))
+    return found
+
+
+def _sync_website_aliases(db, website, pointers: list[tuple[str, str]], item_summary: dict) -> list[tuple[str, str]]:
+    """Persist discovered pointers as WebsiteAlias rows.
+
+    Alias domains are globally unique, so one already owned by another website
+    is reported as a warning instead of failing the whole import.
+    """
+    applied: list[tuple[str, str]] = []
+    for pointer, mode in pointers:
+        existing = db.query(WebsiteAlias).filter(WebsiteAlias.domain == pointer).first()
+        if existing and existing.website_id != website.id:
+            item_summary["warnings"].append(
+                f"Alias {pointer} skipped: already used by another website"
+            )
+            continue
+        if existing:
+            existing.mode = mode
+        else:
+            db.add(WebsiteAlias(website_id=website.id, domain=pointer, mode=mode))
+        applied.append((pointer, mode))
+    if applied:
+        db.commit()
+    return applied
 
 
 def _source_for_domain(root: Path, domain: str) -> Optional[Path]:
@@ -514,6 +605,30 @@ def _clear_directory(path: Path) -> None:
             child.unlink(missing_ok=True)
 
 
+def _checked_members(tar: tarfile.TarFile, destination: Path, archive_name: str):
+    """Yield archive members after rejecting anything that escapes *destination*.
+
+    This must stay a generator consumed by a single ``extractall`` call: a
+    ``.tar.zst`` archive is decompressed through a pipe, so the tar stream is
+    not seekable and can only be walked once. Validating in a separate pass
+    first would leave nothing for the extraction to read.
+    """
+    base_resolved = destination.resolve()
+    for member in tar:
+        member_path = (destination / member.name).resolve()
+        try:
+            member_path.relative_to(base_resolved)
+        except ValueError:
+            raise RuntimeError(f"Unsafe path in {archive_name}: {member.name}")
+        if member.issym() or member.islnk():
+            # DirectAdmin backups contain no links we need; skipping keeps the
+            # extracted tree free of anything pointing outside the stage dir.
+            continue
+        if not (member.isfile() or member.isdir()):
+            continue
+        yield member
+
+
 def _safe_extract_tar(archive: Path, destination: Path) -> None:
     destination.mkdir(parents=True, exist_ok=True)
     proc = None
@@ -527,22 +642,22 @@ def _safe_extract_tar(archive: Path, destination: Path) -> None:
     else:
         tar = tarfile.open(archive, "r:*")
     try:
-        base_resolved = destination.resolve()
-        for member in tar:
-            member_path = (destination / member.name).resolve()
-            try:
-                member_path.relative_to(base_resolved)
-            except ValueError:
-                raise RuntimeError(f"Unsafe path in {archive.name}: {member.name}")
-            if member.issym() or member.islnk():
-                raise RuntimeError(f"Unsafe link in {archive.name}: {member.name}")
-        tar.extractall(path=str(destination), filter="data")
+        tar.extractall(
+            path=str(destination),
+            members=_checked_members(tar, destination, archive.name),
+            filter="data",
+        )
     finally:
         tar.close()
         if proc is not None:
+            stderr = b""
+            if proc.stderr is not None:
+                stderr = proc.stderr.read()
+                proc.stderr.close()
+            if proc.stdout is not None:
+                proc.stdout.close()
             proc.wait()
-            if proc.returncode != 0:
-                stderr = (proc.stderr or b"").read() if hasattr(proc.stderr, "read") else b""
+            if proc.returncode not in (0, None):
                 raise RuntimeError(stderr.decode("utf-8", errors="replace").strip() or "zstd extraction failed")
 
 
@@ -735,10 +850,10 @@ def list_da_backups() -> list[dict]:
 
 
 def scan_da_backup(archive_path: str) -> dict:
-    """Extract a DA backup into a temp dir, discover users/domains/databases."""
-    path = Path(archive_path)
+    """Extract a DA backup into a staging dir, discover users/domains/databases."""
+    path = resolve_backup_path(archive_path)
     if not path.exists():
-        raise FileNotFoundError(f"Backup not found: {archive_path}")
+        raise FileNotFoundError(f"Backup not found: {path.name}")
     if not _is_archive(path):
         raise ValueError("Not a supported archive format")
 
@@ -750,7 +865,10 @@ def scan_da_backup(archive_path: str) -> dict:
         "errors": [],
     }
 
-    with tempfile.TemporaryDirectory(prefix="bpanel-da-scan-") as tmp:
+    # Scan under the same staging root as the import. /tmp is frequently a
+    # small tmpfs and a DirectAdmin account backup can be tens of gigabytes.
+    STAGE_BASE.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="bpanel-da-scan-", dir=str(STAGE_BASE)) as tmp:
         extracted = Path(tmp) / "extracted"
         try:
             _safe_extract_tar(path, extracted)
@@ -783,6 +901,10 @@ def scan_da_backup(archive_path: str) -> dict:
                 "db_name": app_config.get("DB_NAME") or matched_key or "",
                 "db_user": app_config.get("DB_USER") or "",
                 "has_sql_dump": matched_sql is not None,
+                "aliases": [
+                    {"domain": name, "mode": mode}
+                    for name, mode in _discover_domain_pointers(root, domain)
+                ],
             }
             user_entry["domains"].append(domain_entry)
 
@@ -814,11 +936,15 @@ def import_da_backup(archive_path: str, force: bool = False) -> dict:
     Creates panel users, websites, nginx vhosts, MariaDB databases, and
     optionally SSL certificates.
 
+    ``force`` is required to overwrite anything that already exists: without
+    it, an import that collides with a live panel user or domain stops instead
+    of deleting the running site.
+
     Returns a summary dict with credentials (passwords are generated).
     """
-    path = Path(archive_path)
+    path = resolve_backup_path(archive_path)
     if not path.exists():
-        raise FileNotFoundError(f"Backup not found: {archive_path}")
+        raise FileNotFoundError(f"Backup not found: {path.name}")
     if not _is_archive(path):
         raise ValueError("Not a supported archive format")
 
@@ -849,6 +975,7 @@ def import_da_backup(archive_path: str, force: bool = False) -> dict:
             "domains": domains,
             "imported_domains": [],
             "databases": [],
+            "aliases": [],
             "ssl_enabled_domains": [],
             "warnings": [],
         }
@@ -860,11 +987,30 @@ def import_da_backup(archive_path: str, force: bool = False) -> dict:
 
         db = SessionLocal()
         try:
+            # Importing is destructive: it replaces the panel user, its
+            # websites, files and databases. Refuse unless the caller asked
+            # for it, so a re-run of a finished import cannot wipe a live site.
+            if not force:
+                conflicts = []
+                if db.query(User).filter(User.username == username).first():
+                    conflicts.append(f"panel user '{username}'")
+                for domain in domains:
+                    if db.query(Website).filter(Website.domain == domain).first():
+                        conflicts.append(f"website '{domain}'")
+                if conflicts:
+                    message = (
+                        "Already exists: " + ", ".join(conflicts)
+                        + ". Re-run with force to replace (this deletes the existing files and databases)."
+                    )
+                    item_summary["warnings"].append(message)
+                    summary.append(item_summary)
+                    return {"summary": summary, "credentials": credentials, "errors": [message]}
+
             for domain in domains:
                 _delete_existing_domain(db, domain)
             _delete_existing_user(db, username)
 
-            user, created = _ensure_panel_user_record(db, username, email, domains, credentials)
+            user, _created = _ensure_panel_user_record(db, username, email, domains, credentials)
 
             sql_files = _discover_sql_files(root)
             imported_sql_keys: set[str] = set()
@@ -899,6 +1045,9 @@ def import_da_backup(archive_path: str, force: bool = False) -> dict:
                     DEFAULT_PHP_VERSION if app_type in {"wordpress", "php"} else None,
                 )
                 rewrite_mode = "front_controller" if app_type == "wordpress" else "none"
+                pointers = _discover_domain_pointers(root, domain)
+                # Pointers can only be added to the vhost once we know which of
+                # them this import is allowed to claim, so start without them.
                 try:
                     nginx.write_vhost(
                         domain, root_path,
@@ -946,6 +1095,32 @@ def import_da_backup(archive_path: str, force: bool = False) -> dict:
                     website.nginx_rewrite_mode = rewrite_mode
                 db.commit()
                 db.refresh(website)
+
+                # DirectAdmin domain pointers become BPanel website aliases.
+                applied_pointers = _sync_website_aliases(db, website, pointers, item_summary)
+                if applied_pointers:
+                    alias_domains = [name for name, mode in applied_pointers if mode == "alias"]
+                    redirect_domains = [name for name, mode in applied_pointers if mode == "redirect"]
+                    try:
+                        nginx.rewrite_vhost(
+                            domain, root_path,
+                            app_type=app_type,
+                            php_version=DEFAULT_PHP_VERSION if app_type in {"wordpress", "php"} else None,
+                            php_fpm_socket_override=php_socket,
+                            waf_enabled=waf_enabled,
+                            rewrite_mode=rewrite_mode,
+                            aliases=alias_domains,
+                            redirects=redirect_domains,
+                        )
+                        item_summary.setdefault("aliases", []).extend(
+                            f"{name} ({mode})" for name, mode in applied_pointers
+                        )
+                        _log(f"  imported {len(applied_pointers)} pointer(s) for {domain}")
+                    except RuntimeError as exc:
+                        item_summary["warnings"].append(
+                            f"Pointers for {domain} not applied to Nginx: {exc}"
+                        )
+
                 site_users.fix_site_permissions(root_path, linux_user)
                 websites.append(website)
                 item_summary["imported_domains"].append(domain)
@@ -1004,14 +1179,11 @@ def import_da_backup(archive_path: str, force: bool = False) -> dict:
 
 def delete_da_backup(archive_path: str) -> str:
     """Delete an uploaded DA backup archive."""
-    path = Path(archive_path)
+    path = resolve_backup_path(archive_path)
     if not path.exists():
-        raise FileNotFoundError(f"Backup not found: {archive_path}")
-    # Safety: only allow deleting files inside DA_BACKUP_DIR
-    try:
-        path.resolve().relative_to(DA_BACKUP_DIR.resolve())
-    except ValueError:
-        raise ValueError("Can only delete files from the DA backup directory")
+        raise FileNotFoundError(f"Backup not found: {path.name}")
+    if not _is_archive(path):
+        raise ValueError("Not a supported archive format")
     name = path.name
     path.unlink(missing_ok=True)
     return name

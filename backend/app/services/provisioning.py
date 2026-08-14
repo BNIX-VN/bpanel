@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.core.security import hash_password
 from app.models.entities import ApiToken, DatabaseAccount, ProvisioningAccount, User, Website
+from app.services import backup as backup_service
 from app.services import mariadb, nginx, site_users, storage_quota, wordpress
 
 
@@ -53,6 +54,17 @@ def check_ip_allowed(token: ApiToken, client_ip: str) -> bool:
     return client_ip in ips
 
 
+def panel_base_url() -> str:
+    """Absolute base URL of this panel, for links handed to billing systems."""
+    from app.core.config import settings
+
+    if settings.panel_url:
+        return settings.panel_url.rstrip("/")
+    if settings.panel_domain:
+        return f"https://{settings.panel_domain}".rstrip("/")
+    return ""
+
+
 def account_to_dict(account: ProvisioningAccount, db: Session) -> dict:
     user = account.user
     website = account.primary_website
@@ -65,14 +77,17 @@ def account_to_dict(account: ProvisioningAccount, db: Session) -> dict:
     service_label = f"{service_label} {external_label}"
     return {
         "external_id": account.external_id,
-        "username": user.username if user else None,
-        "email": user.email if user else None,
+        # A terminated account keeps its billing record but no longer has a
+        # panel user, so these stay empty rather than null: the billing module
+        # still reads the row to show the service as terminated.
+        "username": user.username if user else "",
+        "email": user.email if user else "",
         "domain": website.domain if website else None,
         "package_id": account.package_id,
         "package_name": package_name,
         "service_label": service_label,
         "status": account.status,
-        "panel_url": None,
+        "panel_url": panel_base_url() or None,
         "created_at": account.created_at.isoformat() if account.created_at else None,
     }
 
@@ -149,9 +164,19 @@ def unsuspend_account(db: Session, account: ProvisioningAccount) -> None:
     db.commit()
 
 
-def terminate_account(db: Session, account: ProvisioningAccount, backup: bool = True) -> list[str]:
+def terminate_account(db: Session, account: ProvisioningAccount, backup: bool = False) -> list[str]:
     user = account.user
     deleted_domains = []
+
+    if user and backup:
+        # Termination deletes the Linux user and its home directory, so take a
+        # full user backup first. A failure here must not block the
+        # termination the billing system asked for.
+        try:
+            archive = backup_service.create_user_backup(user, db)
+            account.last_message = f"backup={archive}"
+        except Exception as exc:  # pragma: no cover - depends on host state
+            account.last_message = f"backup failed: {exc}"
 
     if user:
         websites = db.query(Website).filter(Website.owner_id == user.id).all()

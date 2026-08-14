@@ -34,5 +34,5 @@ source_dir="$(find "$tmp_dir" -mindepth 1 -maxdepth 1 -type d -name 'bpanel-*' |
   exit 1
 }
 cd "$source_dir"
-chmod +x "$INSTALLER_REL_PATH" installer/update.sh installer/rescue-ufw-blocklist.sh
+chmod +x "$INSTALLER_REL_PATH" installer/update.sh installer/rescue-firewall.sh
 bash "$INSTALLER_REL_PATH"

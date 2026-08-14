@@ -110,7 +110,26 @@ class TestIsCommandAllowed:
     def test_whitelist_size(self):
         """Whitelist should contain a reasonable number of commands."""
         assert len(ALLOWED_COMMANDS) >= 20
-        assert len(ALLOWED_COMMANDS) <= 50
+        assert len(ALLOWED_COMMANDS) <= 80
+
+    def test_php_toolchain_commands_allowed(self):
+        """Everything a WordPress / Laravel / PHP site needs day to day."""
+        for cmd in ("wp plugin list", "php artisan migrate", "composer install",
+                    "artisan queue:work", "phpunit --testsuite=Unit", "npm run build"):
+            assert is_command_allowed(cmd), f"{cmd} should be allowed"
+
+    def test_text_utilities_allowed(self):
+        """Log and config wrangling that PHP work needs."""
+        for cmd in ("sed -n 1,20p wp-config.php", "awk '{print $1}' access.log",
+                    "wc -l error.log", "sort -u list.txt", "uniq list.txt",
+                    "stat index.php", "file index.php", "rmdir cache"):
+            assert is_command_allowed(cmd), f"{cmd} should be allowed"
+
+    def test_shell_builtins_still_blocked(self):
+        """Adding utilities must not open a shell escape."""
+        for cmd in ("bash", "sh", "zsh", "python3", "perl", "ruby", "ssh",
+                    "su", "sudo", "systemctl", "crontab", "mysql", "ln"):
+            assert not is_command_allowed(cmd), f"{cmd} should NOT be allowed"
 
 
 class TestTruncateOutput:
@@ -167,7 +186,15 @@ class TestExecCommand:
         assert result.exit_code == 0
         assert captured == {
             "helper_command": "terminal-exec",
-            "helper_args": ["siteuser", "/home/siteuser/example.com", "php", "artisan", "migrate", "--force"],
+            "helper_args": [
+                "siteuser",
+                "/home/siteuser/example.com",
+                "--timeout=900",
+                "php",
+                "artisan",
+                "migrate",
+                "--force",
+            ],
             "check": False,
         }
 
@@ -194,6 +221,7 @@ class TestExecCommand:
             "helper_args": [
                 "siteuser",
                 "/home/siteuser/example.com/public_html",
+                "--timeout=900",
                 "--php-version=8.3",
                 "composer",
                 "install",
@@ -225,6 +253,7 @@ class TestExecCommand:
             "helper_args": [
                 "siteuser",
                 "/home/siteuser/example.com/public_html",
+                "--timeout=900",
                 "--php-version=8.3",
                 "wp",
                 "option",

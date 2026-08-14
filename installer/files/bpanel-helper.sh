@@ -34,11 +34,17 @@ UPDATE_SCRIPT="/usr/local/sbin/bpanel-update"
 BPANEL_DATA_DIR="/var/lib/bpanel"
 FIREWALL_BLOCKLIST_URLS="${BPANEL_DATA_DIR}/firewall-blocklists.urls"
 FIREWALL_BLOCKLIST_WORK="${BPANEL_DATA_DIR}/firewall-blocklists.current"
-NGINX_BLOCKLIST_DIR="/etc/nginx/bpanel"
+FIREWALL_DIR="${BPANEL_DATA_DIR}/firewall"
+FIREWALL_RULES_FILE="${FIREWALL_DIR}/rules.tsv"
+FIREWALL_STATE_FILE="${FIREWALL_DIR}/state"
+FIREWALL_CHAIN="BPANEL-INPUT"
+FIREWALL_PROTECTED_PORTS=(22 80 443 465 587)
+NGINX_BPANEL_DIR="/etc/nginx/bpanel"
+NGINX_BLOCKLIST_DIR="$NGINX_BPANEL_DIR"
 NGINX_BLOCKLIST_CONF="/etc/nginx/conf.d/bpanel-ip-blocklist.conf"
-NGINX_BLOCKLIST_RULES="${NGINX_BLOCKLIST_DIR}/ip-blocklist-geo.conf"
-NGINX_BLOCKLIST_SERVER_CONF="${NGINX_BLOCKLIST_DIR}/ip-blocklist-server.conf"
-NGINX_CUSTOM_DIR="${NGINX_BLOCKLIST_DIR}/custom"
+NGINX_BLOCKLIST_RULES="${NGINX_BPANEL_DIR}/ip-blocklist-geo.conf"
+NGINX_BLOCKLIST_SERVER_CONF="${NGINX_BPANEL_DIR}/ip-blocklist-server.conf"
+NGINX_CUSTOM_DIR="${NGINX_BPANEL_DIR}/custom"
 NGINX_HTTP_FLOOD_CONF="/etc/nginx/conf.d/00-bpanel-http-flood.conf"
 NGINX_HTTP_FLOOD_LEGACY_CONF="/etc/nginx/conf.d/bpanel-http-flood.conf"
 NGINX_HTTP_FLOOD_ZONES="${NGINX_BLOCKLIST_DIR}/http-flood-zones.conf"
@@ -125,63 +131,11 @@ require_panel_host() {
 }
 
 allow_panel_port() {
-  local port="$1"
-  if command -v ufw >/dev/null 2>&1; then
-    ufw_panel_allow_port "$port"
-  fi
-}
-
-ufw_commented_rule_numbers() {
-  local comment="$1" target="${2:-}"
-  ufw status numbered 2>/dev/null \
-    | awk -v comment="$comment" -v target="$target" '
-        index($0, comment) {
-          line = $0
-          if (!match(line, /^\[[[:space:]]*[0-9]+\]/)) {
-            next
-          }
-          number = substr(line, RSTART, RLENGTH)
-          gsub(/[^0-9]/, "", number)
-          if (target == "") {
-            print number
-            next
-          }
-          sub(/^\[[[:space:]]*[0-9]+\][[:space:]]*/, "", line)
-          split(line, parts, /[[:space:]]+ALLOW[[:space:]]+/)
-          rule_target = parts[1]
-          if (rule_target == target || rule_target == target " (v6)") {
-            print number
-          }
-        }
-      '
-}
-
-ufw_delete_commented_rules() {
-  local comment="$1" target="${2:-}" number
-  while read -r number; do
-    [[ -n "$number" ]] || continue
-    ufw --force delete "$number" >/dev/null 2>&1 || true
-  done < <(ufw_commented_rule_numbers "$comment" "$target" | sort -rn)
-}
-
-ufw_panel_allow_port() {
+  # Panel/SSH/web ports are always derived from the environment, so re-applying
+  # the iptables chain is enough to open a newly selected panel port.
   local port="$1"
   require_port "$port"
-  ufw_delete_commented_rules "bpanel:PanelZone" "${port}/tcp"
-  ufw insert 1 allow "${port}/tcp" comment "bpanel:PanelZone" >/dev/null 2>&1 \
-    || ufw insert 1 allow "${port}/tcp" >/dev/null 2>&1 \
-    || ufw allow "${port}/tcp" >/dev/null 2>&1 \
-    || true
-}
-
-ufw_panel_allow_app() {
-  local app="$1"
-  [[ "$app" == "OpenSSH" || "$app" == "Nginx Full" ]] || deny "invalid panel firewall app: $app"
-  ufw_delete_commented_rules "bpanel:PanelZone" "$app"
-  ufw insert 1 allow "$app" comment "bpanel:PanelZone" >/dev/null 2>&1 \
-    || ufw insert 1 allow "$app" >/dev/null 2>&1 \
-    || ufw allow "$app" >/dev/null 2>&1 \
-    || true
+  firewall_apply >/dev/null 2>&1 || true
 }
 
 schedule_panel_restart() {
@@ -208,13 +162,12 @@ refresh_tools_nginx() {
   fi
   rm -f /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf 2>/dev/null || true
   ensure_nginx_conf_dir_writable
-  firewall_blocklist_write_nginx_conf 2>/dev/null || true
+  firewall_purge_nginx_blocklist 2>/dev/null || true
   write_http_flood_nginx_conf 2>/dev/null || true
   cat >/etc/nginx/conf.d/00-bpanel-tools.conf <<NGINX
 server {
     listen 80 default_server;${ssl_block}
     server_name _;
-    include /etc/nginx/bpanel/ip-blocklist-server.conf;
     client_max_body_size 1100M;
     location = /phpmyadmin { return 301 /phpmyadmin/; }
     location /phpmyadmin/ { alias /usr/share/phpmyadmin/; index index.php; try_files \$uri \$uri/ =404; }
@@ -665,21 +618,598 @@ audit_log() {
   fi
 }
 
-run_ufw_ip_rule() {
-  local action="$1" network="$2" port="${3:-}" protocol="${4:-tcp}"
-  require_ip_or_cidr "$network"
-  case "$action" in
-    allow|deny) ;;
-    *) deny "invalid ufw action: $action" ;;
+##############################################################################
+# Firewall engine: iptables + ipset
+#
+# Single source of truth is $FIREWALL_RULES_FILE (TSV) plus the parsed URL
+# blocklist in $FIREWALL_BLOCKLIST_WORK. Every apply rebuilds the BPANEL-INPUT
+# chain and reloads the ipsets from those files, so the runtime state can
+# always be recreated from disk (including after a reboot).
+#
+# Chain layout (jumped to from INPUT position 1):
+#   lo / ESTABLISHED,RELATED        -> RETURN   (fall through to other tools)
+#   allow sets (ip, ip+port)        -> RETURN
+#   deny sets (ip, ip+port)         -> DROP
+#   URL blocklist set               -> DROP
+#   protected + user open ports     -> RETURN
+#   ICMP / ICMPv6                   -> RETURN
+#   [when enabled] everything else  -> DROP
+#
+# RETURN (not ACCEPT) keeps the chain cooperative: fail2ban and any other
+# INPUT rules still get to inspect packets BPanel allows.
+##############################################################################
+
+FW_SETS_V4=(bpanel-allow4 bpanel-allowp4 bpanel-deny4 bpanel-denyp4 bpanel-block4)
+FW_SETS_V6=(bpanel-allow6 bpanel-allowp6 bpanel-deny6 bpanel-denyp6 bpanel-block6)
+
+firewall_require_tools() {
+  command -v iptables >/dev/null 2>&1 || deny "iptables is not installed"
+  command -v ipset >/dev/null 2>&1 || deny "ipset is not installed (apt-get install -y ipset)"
+}
+
+firewall_has_ipv6() {
+  command -v ip6tables >/dev/null 2>&1 && ip6tables -S INPUT >/dev/null 2>&1
+}
+
+ensure_firewall_dir() {
+  ensure_bpanel_data_dir
+  install -d -o root -g root -m 0750 "$FIREWALL_DIR"
+  [[ -f "$FIREWALL_RULES_FILE" ]] || { : >"$FIREWALL_RULES_FILE"; chmod 0640 "$FIREWALL_RULES_FILE"; }
+  [[ -f "$FIREWALL_STATE_FILE" ]] || printf 'enabled\n' >"$FIREWALL_STATE_FILE"
+}
+
+firewall_state() {
+  ensure_firewall_dir
+  local value
+  value="$(head -n 1 "$FIREWALL_STATE_FILE" 2>/dev/null | tr -d '[:space:]')"
+  [[ "$value" == "disabled" ]] && echo "disabled" || echo "enabled"
+}
+
+firewall_set_state() {
+  ensure_firewall_dir
+  [[ "$1" == "enabled" || "$1" == "disabled" ]] || deny "invalid firewall state: $1"
+  printf '%s\n' "$1" >"$FIREWALL_STATE_FILE"
+}
+
+# Ports that must never be closed by the panel: SSH (from sshd), the panel
+# port, and the standard web/mail ports.
+firewall_protected_ports() {
+  local panel_port ssh_ports
+  panel_port="$(env_get PANEL_PORT)"; panel_port="${panel_port:-$DEFAULT_PANEL_PORT}"
+  ssh_ports="$(sshd -T 2>/dev/null | awk '$1 == "port" { print $2 }' || true)"
+  if [[ -z "$ssh_ports" ]]; then
+    # `sshd -T` fails on a config it cannot validate. Falling back to the raw
+    # config keeps a custom SSH port from being closed on us.
+    ssh_ports="$(awk 'tolower($1) == "port" && $2 ~ /^[0-9]+$/ { print $2 }' \
+      /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null || true)"
+  fi
+  {
+    printf '%s\n' "${FIREWALL_PROTECTED_PORTS[@]}"
+    printf '%s\n' $ssh_ports
+    printf '%s\n' "$panel_port"
+  } | grep -E '^[0-9]{1,5}$' | sort -un
+}
+
+# ---- ipset ----------------------------------------------------------------
+
+firewall_set_spec() {
+  # echo the create spec for a set name
+  case "$1" in
+    *allowp4|*denyp4) echo "hash:net,port family inet hashsize 1024 maxelem 262144" ;;
+    *allowp6|*denyp6) echo "hash:net,port family inet6 hashsize 1024 maxelem 262144" ;;
+    *4) echo "hash:net family inet hashsize 4096 maxelem 1048576" ;;
+    *6) echo "hash:net family inet6 hashsize 4096 maxelem 1048576" ;;
+    *) deny "unknown ipset: $1" ;;
   esac
-  if [[ -z "$port" ]]; then
-    ufw "$action" from "$network" comment "bpanel:UserZone" \
-      || ufw "$action" from "$network"
+}
+
+firewall_ensure_sets() {
+  local name
+  for name in "${FW_SETS_V4[@]}"; do
+    # shellcheck disable=SC2046
+    ipset create "$name" $(firewall_set_spec "$name") -exist
+  done
+  if firewall_has_ipv6; then
+    for name in "${FW_SETS_V6[@]}"; do
+      # shellcheck disable=SC2046
+      ipset create "$name" $(firewall_set_spec "$name") -exist
+    done
+  fi
+}
+
+# Load a set atomically: fill a temporary set, then swap it in. Keeps the
+# running firewall consistent even while a 100k-entry blocklist is loading.
+firewall_load_set() {
+  local name="$1" spec tmp file entry
+  spec="$(firewall_set_spec "$name")"
+  tmp="${name}-tmp"
+  file="$(mktemp)"
+  {
+    printf 'create %s %s\n' "$tmp" "$spec"
+    printf 'flush %s\n' "$tmp"
+    while IFS= read -r entry; do
+      [[ -n "$entry" ]] || continue
+      printf 'add %s %s -exist\n' "$tmp" "$entry"
+    done
+  } >"$file"
+  ipset destroy "$tmp" 2>/dev/null || true
+  if ! ipset restore -! <"$file"; then
+    rm -f "$file"
+    ipset destroy "$tmp" 2>/dev/null || true
+    deny "failed to load firewall set $name"
+  fi
+  rm -f "$file"
+  # shellcheck disable=SC2046
+  ipset create "$name" $spec -exist
+  ipset swap "$tmp" "$name"
+  ipset destroy "$tmp" 2>/dev/null || true
+}
+
+firewall_is_ipv6() {
+  [[ "$1" == *:* ]]
+}
+
+# ---- rules file -----------------------------------------------------------
+# TSV columns: id <TAB> action <TAB> ip <TAB> port <TAB> protocol
+# ip is empty for port-only rules; port is empty for whole-host rules.
+
+firewall_rules() {
+  ensure_firewall_dir
+  grep -E '^[0-9]+\b' "$FIREWALL_RULES_FILE" 2>/dev/null || true
+}
+
+firewall_next_id() {
+  local max
+  max="$(firewall_rules | cut -f1 | sort -n | tail -n 1)"
+  echo $(( ${max:-0} + 1 ))
+}
+
+firewall_add_rule() {
+  local action="$1" ip="$2" port="${3:-}" protocol="${4:-tcp}" id existing
+  case "$action" in allow|deny) ;; *) deny "invalid firewall action: $action" ;; esac
+  if [[ -n "$ip" ]]; then
+    ip="$(require_ip_or_cidr_normalized "$ip")"
+  fi
+  if [[ -n "$port" ]]; then
+    require_port "$port"
+    require_proto "$protocol"
+  else
+    protocol=""
+  fi
+  [[ -n "$ip" || -n "$port" ]] || deny "a firewall rule needs an IP or a port"
+  if [[ -z "$ip" && "$action" == "deny" ]]; then
+    deny "closing a port for every source is not supported; the firewall denies unlisted ports already"
+  fi
+  if [[ -z "$ip" && -n "$port" ]]; then
+    local protected
+    protected="$(firewall_protected_ports | tr '\n' ' ')"
+    case " $protected " in *" $port "*) echo "Port ${port} is already open as a protected panel port"; return 0 ;; esac
+  fi
+  existing="$(firewall_rules | awk -F'\t' -v a="$action" -v i="$ip" -v p="$port" -v pr="$protocol" '$2==a && $3==i && $4==p && $5==pr { print $1; exit }')"
+  if [[ -n "$existing" ]]; then
+    echo "Rule already exists (#${existing})"
+    firewall_apply >/dev/null
     return 0
   fi
-  require_port "$port"; require_proto "$protocol"
-  ufw "$action" from "$network" to any port "$port" proto "$protocol" comment "bpanel:UserZone" \
-    || ufw "$action" from "$network" to any port "$port" proto "$protocol"
+  id="$(firewall_next_id)"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$action" "$ip" "$port" "$protocol" >>"$FIREWALL_RULES_FILE"
+  firewall_apply >/dev/null
+  echo "Rule #${id} added"
+}
+
+firewall_delete_rule() {
+  local id="$1" tmp
+  [[ "$id" =~ ^[0-9]+$ ]] || deny "invalid rule id: $id"
+  firewall_rules | awk -F'\t' -v id="$id" '$1 == id' | grep -q . || deny "rule #${id} not found"
+  tmp="$(mktemp)"
+  firewall_rules | awk -F'\t' -v id="$id" '$1 != id' >"$tmp"
+  install -m 0640 -o root -g root "$tmp" "$FIREWALL_RULES_FILE"
+  rm -f "$tmp"
+  firewall_apply >/dev/null
+  echo "Rule #${id} deleted"
+}
+
+# ---- apply ----------------------------------------------------------------
+
+firewall_sync_sets() {
+  local rules
+  rules="$(firewall_rules)"
+  firewall_ensure_sets
+
+  local want_v6=0
+  firewall_has_ipv6 && want_v6=1
+
+  # Manual allow/deny rules
+  local action ip port protocol entry
+  local -a allow4=() allow6=() allowp4=() allowp6=() deny4=() deny6=() denyp4=() denyp6=()
+  while IFS=$'\t' read -r _id action ip port protocol; do
+    [[ -n "$ip" ]] || continue
+    if [[ -n "$port" ]]; then
+      entry="${ip},${protocol}:${port}"
+      if firewall_is_ipv6 "$ip"; then
+        [[ "$action" == "allow" ]] && allowp6+=("$entry") || denyp6+=("$entry")
+      else
+        [[ "$action" == "allow" ]] && allowp4+=("$entry") || denyp4+=("$entry")
+      fi
+    else
+      if firewall_is_ipv6 "$ip"; then
+        [[ "$action" == "allow" ]] && allow6+=("$ip") || deny6+=("$ip")
+      else
+        [[ "$action" == "allow" ]] && allow4+=("$ip") || deny4+=("$ip")
+      fi
+    fi
+  done <<<"$rules"
+
+  printf '%s\n' "${allow4[@]:-}"  | firewall_load_set bpanel-allow4
+  printf '%s\n' "${allowp4[@]:-}" | firewall_load_set bpanel-allowp4
+  printf '%s\n' "${deny4[@]:-}"   | firewall_load_set bpanel-deny4
+  printf '%s\n' "${denyp4[@]:-}"  | firewall_load_set bpanel-denyp4
+  if (( want_v6 )); then
+    printf '%s\n' "${allow6[@]:-}"  | firewall_load_set bpanel-allow6
+    printf '%s\n' "${allowp6[@]:-}" | firewall_load_set bpanel-allowp6
+    printf '%s\n' "${deny6[@]:-}"   | firewall_load_set bpanel-deny6
+    printf '%s\n' "${denyp6[@]:-}"  | firewall_load_set bpanel-denyp6
+  fi
+
+  # URL blocklists
+  local block4 block6
+  block4="$(mktemp)"; block6="$(mktemp)"
+  if [[ -s "$FIREWALL_BLOCKLIST_WORK" ]]; then
+    grep -v ':' "$FIREWALL_BLOCKLIST_WORK" | sed '/^[[:space:]]*$/d' >"$block4" || true
+    grep ':'    "$FIREWALL_BLOCKLIST_WORK" | sed '/^[[:space:]]*$/d' >"$block6" || true
+  fi
+  firewall_load_set bpanel-block4 <"$block4"
+  (( want_v6 )) && firewall_load_set bpanel-block6 <"$block6"
+  rm -f "$block4" "$block6"
+}
+
+firewall_apply_family() {
+  local ipt="$1" fam="$2" state="$3"
+  local sa sap sd sdp sb icmp
+  if [[ "$fam" == "6" ]]; then
+    sa=bpanel-allow6; sap=bpanel-allowp6; sd=bpanel-deny6; sdp=bpanel-denyp6; sb=bpanel-block6
+    icmp="ipv6-icmp"
+  else
+    sa=bpanel-allow4; sap=bpanel-allowp4; sd=bpanel-deny4; sdp=bpanel-denyp4; sb=bpanel-block4
+    icmp="icmp"
+  fi
+
+  "$ipt" -N "$FIREWALL_CHAIN" 2>/dev/null || true
+  "$ipt" -F "$FIREWALL_CHAIN"
+
+  "$ipt" -A "$FIREWALL_CHAIN" -i lo -j RETURN
+  "$ipt" -A "$FIREWALL_CHAIN" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+  "$ipt" -A "$FIREWALL_CHAIN" -m conntrack --ctstate INVALID -j DROP
+
+  "$ipt" -A "$FIREWALL_CHAIN" -m set --match-set "$sa" src -j RETURN
+  "$ipt" -A "$FIREWALL_CHAIN" -p tcp -m set --match-set "$sap" src,dst -j RETURN
+  "$ipt" -A "$FIREWALL_CHAIN" -p udp -m set --match-set "$sap" src,dst -j RETURN
+
+  "$ipt" -A "$FIREWALL_CHAIN" -m set --match-set "$sd" src -j DROP
+  "$ipt" -A "$FIREWALL_CHAIN" -p tcp -m set --match-set "$sdp" src,dst -j DROP
+  "$ipt" -A "$FIREWALL_CHAIN" -p udp -m set --match-set "$sdp" src,dst -j DROP
+  "$ipt" -A "$FIREWALL_CHAIN" -m set --match-set "$sb" src -j DROP
+
+  # ICMPv6 carries neighbour discovery; dropping it breaks IPv6 entirely.
+  "$ipt" -A "$FIREWALL_CHAIN" -p "$icmp" -j RETURN
+
+  local port
+  while read -r port; do
+    [[ -n "$port" ]] || continue
+    "$ipt" -A "$FIREWALL_CHAIN" -p tcp --dport "$port" -j RETURN
+  done < <(firewall_protected_ports)
+
+  local _id action ip proto
+  while IFS=$'\t' read -r _id action ip port proto; do
+    [[ "$action" == "allow" && -z "$ip" && -n "$port" ]] || continue
+    "$ipt" -A "$FIREWALL_CHAIN" -p "${proto:-tcp}" --dport "$port" -j RETURN
+  done <<<"$(firewall_rules)"
+
+  if [[ "$state" == "enabled" ]]; then
+    "$ipt" -A "$FIREWALL_CHAIN" -j DROP
+    "$ipt" -C INPUT -j "$FIREWALL_CHAIN" 2>/dev/null || "$ipt" -I INPUT 1 -j "$FIREWALL_CHAIN"
+  else
+    # Keep the chain (and its counters) around but stop consulting it.
+    while "$ipt" -C INPUT -j "$FIREWALL_CHAIN" 2>/dev/null; do
+      "$ipt" -D INPUT -j "$FIREWALL_CHAIN" || break
+    done
+  fi
+}
+
+firewall_apply() {
+  local state
+  firewall_require_tools
+  ensure_firewall_dir
+  state="$(firewall_state)"
+  firewall_sync_sets
+  firewall_apply_family iptables 4 "$state"
+  if firewall_has_ipv6; then
+    firewall_apply_family ip6tables 6 "$state"
+  fi
+  firewall_write_boot_unit
+  echo "Firewall applied (${state})"
+}
+
+firewall_flush() {
+  local ipt name
+  for ipt in iptables ip6tables; do
+    command -v "$ipt" >/dev/null 2>&1 || continue
+    while "$ipt" -C INPUT -j "$FIREWALL_CHAIN" 2>/dev/null; do
+      "$ipt" -D INPUT -j "$FIREWALL_CHAIN" || break
+    done
+    "$ipt" -F "$FIREWALL_CHAIN" 2>/dev/null || true
+    "$ipt" -X "$FIREWALL_CHAIN" 2>/dev/null || true
+  done
+  if command -v ipset >/dev/null 2>&1; then
+    for name in "${FW_SETS_V4[@]}" "${FW_SETS_V6[@]}"; do
+      ipset destroy "$name" 2>/dev/null || true
+    done
+  fi
+  echo "Firewall rules removed from the running kernel"
+}
+
+firewall_write_boot_unit() {
+  local unit=/etc/systemd/system/bpanel-firewall.service tmp
+  tmp="$(mktemp)"
+  cat >"$tmp" <<'UNIT'
+[Unit]
+Description=BPanel firewall (iptables + ipset)
+After=network-pre.target
+Wants=network-pre.target
+Before=network.target nginx.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=SUDO_USER=bpanel
+ExecStart=/usr/local/sbin/bpanel-helper firewall-apply
+ExecStop=/usr/local/sbin/bpanel-helper firewall-flush
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  if ! cmp -s "$tmp" "$unit" 2>/dev/null; then
+    install -m 0644 -o root -g root "$tmp" "$unit"
+    systemctl daemon-reload >/dev/null 2>&1 || true
+  fi
+  rm -f "$tmp"
+  systemctl is-enabled bpanel-firewall.service >/dev/null 2>&1 \
+    || systemctl enable bpanel-firewall.service >/dev/null 2>&1 || true
+}
+
+# ---- status ---------------------------------------------------------------
+
+firewall_set_count() {
+  ipset list "$1" -t 2>/dev/null | awk -F': ' '/Number of entries/ { print $2; exit }'
+}
+
+firewall_status() {
+  ensure_firewall_dir
+  local state active="no" protected
+  state="$(firewall_state)"
+  if command -v iptables >/dev/null 2>&1 && iptables -C INPUT -j "$FIREWALL_CHAIN" 2>/dev/null; then
+    active="yes"
+  fi
+  protected="$(firewall_protected_ports | tr '\n' ',' | sed 's/,$//')"
+
+  echo "Status: ${state}"
+  echo "Engine: iptables + ipset"
+  echo "Chain active: ${active}"
+  echo "IPv6: $(firewall_has_ipv6 && echo yes || echo no)"
+  echo "Default incoming: deny (unlisted ports)"
+  echo "Protected ports (tcp): ${protected}"
+  echo ""
+  echo "Rules:"
+  if firewall_rules | grep -q .; then
+    firewall_rules | awk -F'\t' '{
+      target = ($4 == "") ? "any port" : $4 "/" $5
+      src = ($3 == "") ? "any" : $3
+      printf "  [%s] %-5s %-22s from %s\n", $1, toupper($2), target, src
+    }'
+  else
+    echo "  (none)"
+  fi
+  echo ""
+  echo "Sets:"
+  local name count
+  for name in "${FW_SETS_V4[@]}"; do
+    count="$(firewall_set_count "$name")"
+    [[ -n "$count" ]] && printf '  %-18s %s entries\n' "$name" "$count"
+  done
+  if firewall_has_ipv6; then
+    for name in "${FW_SETS_V6[@]}"; do
+      count="$(firewall_set_count "$name")"
+      [[ -n "$count" ]] && printf '  %-18s %s entries\n' "$name" "$count"
+    done
+  fi
+}
+
+firewall_list_json() {
+  ensure_firewall_dir
+  local protected state active="false"
+  state="$(firewall_state)"
+  protected="$(firewall_protected_ports | tr '\n' ' ')"
+  if command -v iptables >/dev/null 2>&1 && iptables -C INPUT -j "$FIREWALL_CHAIN" 2>/dev/null; then
+    active="true"
+  fi
+  firewall_rules | python3 -c '
+import json, sys
+
+rules = []
+for line in sys.stdin:
+    parts = line.rstrip("\n").split("\t")
+    if len(parts) < 5 or not parts[0].isdigit():
+        continue
+    rid, action, ip, port, proto = parts[:5]
+    rules.append({
+        "id": int(rid),
+        "number": int(rid),
+        "action": action.upper(),
+        "to": f"{port}/{proto}" if port else "any",
+        "from": ip or "any",
+        "port": port or None,
+        "protocol": proto or None,
+        "ip": ip or None,
+        "zone": "UserZone",
+        "protected": False,
+    })
+
+protected = [p for p in sys.argv[1].split() if p.isdigit()]
+for port in protected:
+    rules.append({
+        "id": 0,
+        "number": 0,
+        "action": "ALLOW",
+        "to": f"{port}/tcp",
+        "from": "any",
+        "port": port,
+        "protocol": "tcp",
+        "ip": None,
+        "zone": "PanelZone",
+        "protected": True,
+    })
+
+print(json.dumps({
+    "state": sys.argv[2],
+    "active": sys.argv[3] == "true",
+    "engine": "iptables+ipset",
+    "rules": rules,
+}))
+' "$protected" "$state" "$active"
+}
+
+# ---- legacy cleanup -------------------------------------------------------
+
+# Copy any surviving UFW user rules into the new rules file so an upgrade does
+# not silently close ports the admin opened by hand.
+firewall_import_ufw_rules() {
+  command -v ufw >/dev/null 2>&1 || return 0
+  local protected imported=0
+  protected="$(firewall_protected_ports | tr '\n' ' ')"
+  while IFS=$'\t' read -r action ip port proto; do
+    [[ -n "$action" ]] || continue
+    if [[ -z "$ip" && -n "$port" ]]; then
+      case " $protected " in *" $port "*) continue ;; esac
+    fi
+    # Subshell: firewall_add_rule calls deny() on bad input, which exits.
+    if ( firewall_add_rule "$action" "$ip" "$port" "$proto" ) >/dev/null 2>&1; then
+      imported=$((imported + 1))
+    fi
+  done < <(ufw status numbered 2>/dev/null | python3 -c '
+import re, sys
+
+# "ufw status numbered" lines look like:
+#   [ 1] 22/tcp        ALLOW IN    Anywhere        # bpanel:PanelZone
+#   [ 3] 3306/tcp      ALLOW IN    10.0.0.5
+# Application profiles ("Nginx Full"), v6 duplicates and OUT rules are skipped:
+# the ports they cover are protected ports in the new chain.
+LINE = re.compile(
+    r"^(?:\[\s*\d+\]\s*)?(.+?)\s{2,}(ALLOW|DENY)(?:\s+(IN|OUT))?\s{2,}(.+?)\s*$",
+    re.I,
+)
+
+for raw in sys.stdin:
+    line = raw.rstrip()
+    m = LINE.match(line)
+    if not m:
+        continue
+    target, action, direction, source = m.group(1).strip(), m.group(2).lower(), (m.group(3) or "IN").upper(), m.group(4).strip()
+    if direction != "IN":
+        continue
+    source = re.sub(r"\s*#.*$", "", source).strip()
+    if "(v6)" in target or "(v6)" in source:
+        continue
+    if source.lower().startswith("anywhere"):
+        source = ""
+    port, proto = "", "tcp"
+    pm = re.match(r"^(\d{1,5})(?:/(tcp|udp))?$", target)
+    if pm:
+        port, proto = pm.group(1), pm.group(2) or "tcp"
+    elif target.lower() != "anywhere":
+        # Application profile or port range: not portable to a single rule.
+        continue
+    if not port and not source:
+        continue
+    print("\t".join([action, source, port, proto]))
+')
+  [[ "$imported" -gt 0 ]] && echo "Imported ${imported} rule(s) from UFW" || true
+  return 0
+}
+
+firewall_purge_ufw() {
+  command -v ufw >/dev/null 2>&1 || return 0
+  echo "Removing UFW ..."
+  ufw --force disable >/dev/null 2>&1 || true
+  ufw --force reset >/dev/null 2>&1 || true
+  systemctl disable --now ufw >/dev/null 2>&1 || true
+  systemctl mask ufw >/dev/null 2>&1 || true
+  DEBIAN_FRONTEND=noninteractive apt-get purge -y ufw >/dev/null 2>&1 || true
+  rm -rf /etc/ufw /lib/ufw 2>/dev/null || true
+  rm -f /etc/systemd/system/bpanel-firewall-blocklist.service \
+        /etc/systemd/system/bpanel-firewall-blocklist.timer 2>/dev/null || true
+  systemctl daemon-reload >/dev/null 2>&1 || true
+}
+
+# Strip the Nginx geo-map blocklist from every managed vhost. The
+# ip-blocklist-server.conf stub is kept (emptied) so any hand-written vhost
+# that still includes it does not break Nginx.
+firewall_purge_nginx_blocklist() {
+  install -d -o root -g root -m 0755 "$NGINX_BPANEL_DIR"
+  cat >"$NGINX_BLOCKLIST_SERVER_CONF" <<'CONF'
+# Managed by BPanel. IP blocking moved to iptables + ipset; this file is kept
+# empty so older vhosts that still include it keep loading.
+CONF
+  chown root:root "$NGINX_BLOCKLIST_SERVER_CONF"
+  chmod 0644 "$NGINX_BLOCKLIST_SERVER_CONF"
+
+  local changed=0 conf
+  for conf in "$NGINX_CONF_DIR"/*.conf; do
+    [[ -f "$conf" ]] || continue
+    if grep -q 'ip-blocklist-server\.conf' "$conf"; then
+      sed -i '/ip-blocklist-server\.conf/d' "$conf"
+      changed=1
+    fi
+  done
+  [[ -f "$NGINX_BLOCKLIST_CONF" || -f "$NGINX_BLOCKLIST_RULES" ]] && changed=1
+  rm -f "$NGINX_BLOCKLIST_CONF" "$NGINX_BLOCKLIST_RULES" 2>/dev/null || true
+  if (( changed )) && nginx -t >/dev/null 2>&1; then
+    systemctl reload nginx >/dev/null 2>&1 || true
+  fi
+  return 0
+}
+
+firewall_migrate() {
+  firewall_require_tools
+  local first_run=0
+  [[ -f "$FIREWALL_STATE_FILE" ]] || first_run=1
+  ensure_firewall_dir
+  firewall_import_ufw_rules || true
+
+  if (( first_run )); then
+    # Inherit whatever was enforcing traffic before the migration. Switching a
+    # box that had no active firewall to default-deny would cut off services
+    # BPanel does not know about (mail, game servers, custom daemons). A box
+    # with blocklist URLs configured was relying on IP blocking through Nginx,
+    # so that one is switched on.
+    local was_enforcing=0
+    if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | head -n 1 | grep -qi 'active'; then
+      was_enforcing=1
+    fi
+    if [[ -s "$FIREWALL_BLOCKLIST_URLS" ]]; then
+      was_enforcing=1
+    fi
+    if (( was_enforcing )); then
+      firewall_set_state enabled
+    else
+      firewall_set_state disabled
+      echo "No active firewall detected; rules are staged but not enforced."
+      echo "Turn them on from the panel Firewall page or: bpanel-helper firewall-enable"
+    fi
+  fi
+
+  firewall_purge_ufw
+  firewall_purge_nginx_blocklist
+  firewall_apply
 }
 
 require_url() {
@@ -694,55 +1224,50 @@ firewall_blocklist_urls() {
 }
 
 firewall_blocklist_write_timer() {
-  cat >/etc/systemd/system/bpanel-firewall-blocklist.service <<SERVICE
+  local changed=0 tmp
+  tmp="$(mktemp)"
+  cat >"$tmp" <<'SERVICE'
 [Unit]
-Description=Refresh BPanel Nginx IP blocklists
-After=network-online.target
+Description=Refresh BPanel IP blocklists (iptables + ipset)
+After=network-online.target bpanel-firewall.service
 Wants=network-online.target
 
 [Service]
 Type=oneshot
 Environment=SUDO_USER=bpanel
-ExecStart=/usr/local/sbin/bpanel-helper nginx-blocklist-run
+ExecStart=/usr/local/sbin/bpanel-helper firewall-blocklist-run
 SERVICE
-  cat >/etc/systemd/system/bpanel-firewall-blocklist.timer <<TIMER
+  if ! cmp -s "$tmp" /etc/systemd/system/bpanel-blocklist.service 2>/dev/null; then
+    install -m 0644 -o root -g root "$tmp" /etc/systemd/system/bpanel-blocklist.service
+    changed=1
+  fi
+  cat >"$tmp" <<'TIMER'
 [Unit]
-Description=Refresh BPanel Nginx IP blocklists daily
+Description=Refresh BPanel IP blocklists daily
 
 [Timer]
 OnCalendar=*-*-* 01:00:00
+RandomizedDelaySec=1800
 Persistent=true
 
 [Install]
 WantedBy=timers.target
 TIMER
-  firewall_blocklist_write_nginx_conf
-  systemctl daemon-reload
-  systemctl enable --now bpanel-firewall-blocklist.timer >/dev/null 2>&1 || true
-}
-
-firewall_blocklist_write_nginx_conf() {
-  ensure_nginx_conf_dir_writable
-  touch "$NGINX_BLOCKLIST_RULES"
-  chown root:root "$NGINX_BLOCKLIST_RULES"
-  chmod 0644 "$NGINX_BLOCKLIST_RULES"
-  cat >"$NGINX_BLOCKLIST_SERVER_CONF" <<'CONF'
-# Managed by BPanel. Included inside server blocks.
-if ($bpanel_blocklisted_ip) {
-    return 444;
-}
-CONF
-  chown root:root "$NGINX_BLOCKLIST_SERVER_CONF"
-  chmod 0644 "$NGINX_BLOCKLIST_SERVER_CONF"
-  cat >"$NGINX_BLOCKLIST_CONF" <<CONF
-# Managed by BPanel. URL IP blocklists are enforced by Nginx instead of UFW.
-geo \$bpanel_blocklisted_ip {
-    default 0;
-    include ${NGINX_BLOCKLIST_RULES};
-}
-CONF
-  chown root:root "$NGINX_BLOCKLIST_CONF"
-  chmod 0644 "$NGINX_BLOCKLIST_CONF"
+  if ! cmp -s "$tmp" /etc/systemd/system/bpanel-blocklist.timer 2>/dev/null; then
+    install -m 0644 -o root -g root "$tmp" /etc/systemd/system/bpanel-blocklist.timer
+    changed=1
+  fi
+  rm -f "$tmp"
+  # Retire the Nginx-era units.
+  if [[ -f /etc/systemd/system/bpanel-firewall-blocklist.timer ]]; then
+    systemctl disable --now bpanel-firewall-blocklist.timer >/dev/null 2>&1 || true
+    rm -f /etc/systemd/system/bpanel-firewall-blocklist.service \
+          /etc/systemd/system/bpanel-firewall-blocklist.timer
+    changed=1
+  fi
+  (( changed )) && systemctl daemon-reload >/dev/null 2>&1
+  systemctl enable --now bpanel-blocklist.timer >/dev/null 2>&1 || true
+  return 0
 }
 
 write_http_flood_nginx_conf() {
@@ -817,9 +1342,12 @@ firewall_blocklist_status() {
   fi
   echo ""
   echo "Engine:"
-  echo "  nginx"
-  echo "Rules file:"
-  [[ -f "$NGINX_BLOCKLIST_RULES" ]] && echo "  ${NGINX_BLOCKLIST_RULES}" || echo "  missing"
+  echo "  iptables + ipset"
+  echo "Sets:"
+  printf '  bpanel-block4      %s entries\n' "$(firewall_set_count bpanel-block4)"
+  if firewall_has_ipv6; then
+    printf '  bpanel-block6      %s entries\n' "$(firewall_set_count bpanel-block6)"
+  fi
   echo ""
   echo "Networks:"
   if [[ -s "$FIREWALL_BLOCKLIST_WORK" ]]; then
@@ -836,36 +1364,24 @@ firewall_blocklist_status() {
   fi
   echo ""
   echo "Timer:"
-  systemctl is-enabled bpanel-firewall-blocklist.timer 2>/dev/null || true
-  systemctl list-timers bpanel-firewall-blocklist.timer --no-pager 2>/dev/null || true
-}
-
-firewall_blocklist_clear_rules() {
-  local numbers number
-  numbers="$(ufw_commented_rule_numbers "bpanel:UserZone:blocklist" | sort -rn)"
-  for number in $numbers; do
-    ufw --force delete "$number" >/dev/null 2>&1 || true
-  done
+  systemctl is-enabled bpanel-blocklist.timer 2>/dev/null || true
+  systemctl list-timers bpanel-blocklist.timer --no-pager 2>/dev/null || true
 }
 
 firewall_blocklist_run() {
   ensure_bpanel_data_dir
+  ensure_firewall_dir
   touch "$FIREWALL_BLOCKLIST_URLS"
-  local tmp fetched rules_tmp count url old_work old_rules
+  local tmp fetched count url
   tmp="$(mktemp)"
   fetched="$(mktemp)"
-  rules_tmp="$(mktemp)"
-  old_work="$(mktemp)"
-  old_rules="$(mktemp)"
-  [[ -f "$FIREWALL_BLOCKLIST_WORK" ]] && cp "$FIREWALL_BLOCKLIST_WORK" "$old_work" || true
-  [[ -f "$NGINX_BLOCKLIST_RULES" ]] && cp "$NGINX_BLOCKLIST_RULES" "$old_rules" || true
   while IFS= read -r url; do
     [[ -n "$url" ]] || continue
     require_url "$url"
-    curl -fsSL --connect-timeout 10 --max-time 30 "$url" >>"$fetched" || echo "WARNING: could not fetch $url" >&2
+    curl -fsSL --connect-timeout 10 --max-time 60 "$url" >>"$fetched" || echo "WARNING: could not fetch $url" >&2
     printf '\n' >>"$fetched"
   done < <(firewall_blocklist_urls)
-  python3 - "$fetched" "$tmp" "$rules_tmp" <<'PY'
+  python3 - "$fetched" "$tmp" <<'PY'
 import ipaddress
 import re
 import sys
@@ -887,37 +1403,13 @@ for raw in open(sys.argv[1], encoding="utf-8", errors="ignore"):
 with open(sys.argv[2], "w", encoding="utf-8") as handle:
     for value in networks:
         handle.write(value + "\n")
-
-with open(sys.argv[3], "w", encoding="utf-8") as handle:
-    handle.write("# Managed by BPanel. Generated from URL IP blocklists.\n")
-    handle.write("# Loaded into the bpanel_blocklisted_ip geo map.\n")
-    for value in networks:
-        handle.write(f"{value} 1;\n")
 PY
-  install -d -o root -g root -m 0755 "$NGINX_BLOCKLIST_DIR"
-  install -m 0644 -o root -g root "$rules_tmp" "$NGINX_BLOCKLIST_RULES"
-  install -m 0644 -o root -g root "$tmp" "$FIREWALL_BLOCKLIST_WORK"
-  firewall_blocklist_write_nginx_conf
-  if ! nginx -t; then
-    if [[ -s "$old_rules" ]]; then
-      install -m 0644 -o root -g root "$old_rules" "$NGINX_BLOCKLIST_RULES"
-    else
-      : >"$NGINX_BLOCKLIST_RULES"
-    fi
-    if [[ -s "$old_work" ]]; then
-      install -m 0644 -o root -g root "$old_work" "$FIREWALL_BLOCKLIST_WORK"
-    else
-      : >"$FIREWALL_BLOCKLIST_WORK"
-    fi
-    rm -f "$tmp" "$fetched" "$rules_tmp" "$old_work" "$old_rules"
-    deny "Nginx rejected URL blocklist"
-  fi
-  systemctl reload nginx
-  firewall_blocklist_clear_rules
+  install -m 0640 -o root -g root "$tmp" "$FIREWALL_BLOCKLIST_WORK"
   count="$(sed '/^[[:space:]]*$/d' "$FIREWALL_BLOCKLIST_WORK" | wc -l | tr -d '[:space:]')"
+  rm -f "$tmp" "$fetched"
+  firewall_apply >/dev/null
   firewall_blocklist_write_timer
-  rm -f "$tmp" "$fetched" "$rules_tmp" "$old_work" "$old_rules"
-  echo "Nginx blocklist refreshed: ${count} network(s)"
+  echo "IP blocklist refreshed: ${count} network(s) loaded into ipset"
 }
 
 firewall_blocklist_add_url() {
@@ -929,9 +1421,8 @@ firewall_blocklist_add_url() {
     printf '%s\n' "$url" >>"$FIREWALL_BLOCKLIST_URLS"
   fi
   sort -u -o "$FIREWALL_BLOCKLIST_URLS" "$FIREWALL_BLOCKLIST_URLS"
-  firewall_blocklist_write_nginx_conf
   firewall_blocklist_write_timer
-  echo "Nginx blocklist URL added"
+  echo "IP blocklist URL added"
 }
 
 firewall_blocklist_delete_url() {
@@ -941,9 +1432,8 @@ firewall_blocklist_delete_url() {
   touch "$FIREWALL_BLOCKLIST_URLS"
   grep -Fxv -- "$url" "$FIREWALL_BLOCKLIST_URLS" >"${FIREWALL_BLOCKLIST_URLS}.tmp" || true
   mv -f "${FIREWALL_BLOCKLIST_URLS}.tmp" "$FIREWALL_BLOCKLIST_URLS"
-  firewall_blocklist_write_nginx_conf
   firewall_blocklist_write_timer
-  echo "Nginx blocklist URL removed"
+  echo "IP blocklist URL removed"
 }
 
 write_ssl_auto_renew_timer() {
@@ -1941,8 +2431,28 @@ fix_site_tree() {
 }
 
 require_ip_or_cidr() {
-  # Loose check; we trust ufw to do the final parsing.
   [[ "$1" =~ ^[0-9a-fA-F.:/]+$ ]] || deny "invalid IP/CIDR: $1"
+}
+
+# Validate and canonicalise an address/network before it reaches ipset. The
+# value ends up in an `ipset restore` script, so nothing but a normalised
+# network is ever allowed through.
+require_ip_or_cidr_normalized() {
+  local value="$1" normalized
+  require_ip_or_cidr "$value"
+  normalized="$(python3 - "$value" <<'PY' 2>/dev/null || true
+import ipaddress
+import sys
+
+try:
+    print(ipaddress.ip_network(sys.argv[1], strict=False))
+except ValueError:
+    sys.exit(1)
+PY
+)"
+  [[ -n "$normalized" ]] || deny "invalid IP/CIDR: $value"
+  [[ "$normalized" =~ ^[0-9a-fA-F.:]+/[0-9]{1,3}$ ]] || deny "invalid IP/CIDR: $value"
+  printf '%s' "$normalized"
 }
 
 cmd="${1:-}"
@@ -2301,58 +2811,73 @@ PY
     remove_manual_ssl "$1"
     ;;
 
-  # ---- ufw --------------------------------------------------------------
-  ufw-status)
-    exec ufw status numbered
+  # ---- firewall (iptables + ipset) ---------------------------------------
+  # The ufw-* / nginx-blocklist-* names are kept as aliases so an API process
+  # that has not been restarted yet keeps working during an update.
+  firewall-status|ufw-status)
+    firewall_status
     ;;
-  ufw-enable)
-    exec ufw --force enable
+  firewall-list|ufw-list)
+    firewall_list_json
     ;;
-  ufw-disable)
-    exec ufw --force disable
+  firewall-enable|ufw-enable)
+    firewall_set_state enabled
+    firewall_apply
     ;;
-  ufw-reload)
-    exec ufw reload
+  firewall-disable|ufw-disable)
+    firewall_set_state disabled
+    firewall_apply
     ;;
-  ufw-allow-port)
-    [[ $# -eq 2 ]] || deny "usage: ufw-allow-port <port> <proto>"
-    require_port "$1"; require_proto "$2"
-    ufw allow "${1}/${2}" comment "bpanel:UserZone" \
-      || ufw allow "${1}/${2}"
+  firewall-reload|ufw-reload)
+    firewall_apply
     ;;
-  ufw-panel-allow-port)
-    [[ $# -eq 1 ]] || deny "usage: ufw-panel-allow-port <port>"
-    ufw_panel_allow_port "$1"
+  firewall-apply)
+    firewall_apply
     ;;
-  ufw-allow-ip)
-    [[ $# -ge 1 && $# -le 3 ]] || deny "usage: ufw-allow-ip <ip> [port] [proto]"
-    run_ufw_ip_rule allow "$1" "${2:-}" "${3:-tcp}"
+  firewall-flush)
+    firewall_flush
     ;;
-  ufw-deny-ip)
-    [[ $# -ge 1 && $# -le 3 ]] || deny "usage: ufw-deny-ip <ip> [port] [proto]"
-    run_ufw_ip_rule deny "$1" "${2:-}" "${3:-tcp}"
+  firewall-migrate)
+    firewall_migrate
     ;;
-  ufw-delete)
-    [[ $# -eq 1 && "$1" =~ ^[0-9]+$ ]] || deny "usage: ufw-delete <number>"
-    exec ufw --force delete "$1"
+  firewall-allow-port|ufw-allow-port)
+    [[ $# -ge 1 && $# -le 2 ]] || deny "usage: firewall-allow-port <port> [proto]"
+    firewall_add_rule allow "" "$1" "${2:-tcp}"
     ;;
-  nginx-blocklist-status|ufw-blocklist-status)
+  firewall-panel-allow-port|ufw-panel-allow-port)
+    [[ $# -eq 1 ]] || deny "usage: firewall-panel-allow-port <port>"
+    allow_panel_port "$1"
+    echo "Panel port ${1} is open"
+    ;;
+  firewall-allow-ip|ufw-allow-ip)
+    [[ $# -ge 1 && $# -le 3 ]] || deny "usage: firewall-allow-ip <ip> [port] [proto]"
+    firewall_add_rule allow "$1" "${2:-}" "${3:-tcp}"
+    ;;
+  firewall-deny-ip|ufw-deny-ip)
+    [[ $# -ge 1 && $# -le 3 ]] || deny "usage: firewall-deny-ip <ip> [port] [proto]"
+    firewall_add_rule deny "$1" "${2:-}" "${3:-tcp}"
+    ;;
+  firewall-delete|ufw-delete)
+    [[ $# -eq 1 && "$1" =~ ^[0-9]+$ ]] || deny "usage: firewall-delete <rule-id>"
+    firewall_delete_rule "$1"
+    ;;
+  firewall-blocklist-status|nginx-blocklist-status|ufw-blocklist-status)
     firewall_blocklist_status
     ;;
-  nginx-blocklist-timer-install|ufw-blocklist-timer-install)
+  firewall-blocklist-timer-install|nginx-blocklist-timer-install|ufw-blocklist-timer-install)
     firewall_blocklist_write_timer
-    echo "Nginx blocklist timer installed"
+    echo "IP blocklist timer installed"
     ;;
-  nginx-blocklist-add|ufw-blocklist-add)
-    [[ $# -eq 1 ]] || deny "usage: nginx-blocklist-add <url>"
+  firewall-blocklist-add|nginx-blocklist-add|ufw-blocklist-add)
+    [[ $# -eq 1 ]] || deny "usage: firewall-blocklist-add <url>"
     firewall_blocklist_add_url "$1"
     ;;
-  nginx-blocklist-delete|ufw-blocklist-delete)
-    [[ $# -eq 1 ]] || deny "usage: nginx-blocklist-delete <url>"
+  firewall-blocklist-delete|nginx-blocklist-delete|ufw-blocklist-delete)
+    [[ $# -eq 1 ]] || deny "usage: firewall-blocklist-delete <url>"
     firewall_blocklist_delete_url "$1"
     ;;
-  nginx-blocklist-run|ufw-blocklist-run)
-    [[ $# -eq 0 ]] || deny "usage: nginx-blocklist-run"
+  firewall-blocklist-run|nginx-blocklist-run|ufw-blocklist-run)
+    [[ $# -eq 0 ]] || deny "usage: firewall-blocklist-run"
     firewall_blocklist_run
     ;;
 
@@ -2791,16 +3316,28 @@ PY
   # ---- terminal command execution as panel Linux user ------------------
   terminal-exec)
     # Execute a whitelisted command as the panel Linux user
-    # Args: <site-user> <cwd> [--php-version=<version>] <command> [args...]
-    [[ $# -ge 3 ]] || deny "usage: terminal-exec <site-user> <cwd> [--php-version=<version>] <command> [args...]"
+    # Args: <site-user> <cwd> [--timeout=<sec>] [--php-version=<version>] <command> [args...]
+    [[ $# -ge 3 ]] || deny "usage: terminal-exec <site-user> <cwd> [--timeout=<sec>] [--php-version=<version>] <command> [args...]"
     user="$1"; cwd_arg="$2"; shift 2
     php_version=""
-    if [[ "${1:-}" == --php-version=* ]]; then
-      php_version="${1#--php-version=}"
-      require_php_version "$php_version"
-      shift
-    fi
-    [[ $# -ge 1 ]] || deny "usage: terminal-exec <site-user> <cwd> [--php-version=<version>] <command> [args...]"
+    terminal_timeout=""
+    while [[ $# -gt 0 ]]; do
+      case "${1:-}" in
+        --php-version=*)
+          php_version="${1#--php-version=}"
+          require_php_version "$php_version"
+          shift
+          ;;
+        --timeout=*)
+          terminal_timeout="${1#--timeout=}"
+          [[ "$terminal_timeout" =~ ^[0-9]{1,4}$ ]] || deny "invalid terminal timeout: $terminal_timeout"
+          (( 10#$terminal_timeout >= 1 && 10#$terminal_timeout <= 1800 )) || deny "terminal timeout out of range"
+          shift
+          ;;
+        *) break ;;
+      esac
+    done
+    [[ $# -ge 1 ]] || deny "usage: terminal-exec <site-user> <cwd> [--timeout=<sec>] [--php-version=<version>] <command> [args...]"
     cmd="$1"; shift
     require_linux_user "$user"
     id -u "$user" >/dev/null 2>&1 || deny "panel Linux user does not exist: $user"
@@ -2823,50 +3360,66 @@ PY
       command -v "$php_bin" >/dev/null 2>&1 || deny "PHP CLI is not installed: $php_bin"
     fi
 
-    # Whitelist of allowed commands for terminal access
+    # Kill the whole process group when the budget runs out. Composer, npm and
+    # WP-CLI can wedge on a slow network, and without this the API worker would
+    # block on the pipe until the client gives up.
+    terminal_runner=(runuser -u "$user" --)
+    if [[ -n "$terminal_timeout" ]] && command -v timeout >/dev/null 2>&1; then
+      terminal_runner=(timeout --signal=TERM --kill-after=10 "${terminal_timeout}" runuser -u "$user" --)
+    fi
+
+    # Whitelist of allowed commands for terminal access. Keep this in sync with
+    # ALLOWED_COMMANDS in backend/app/services/terminal.py.
     case "$cmd" in
       php)
-        exec runuser -u "$user" -- env "${terminal_env[@]}" "$php_bin" "$@"
+        exec "${terminal_runner[@]}" env "${terminal_env[@]}" "$php_bin" "$@"
         ;;
       composer)
         composer_bin="$(command -v composer || true)"
         [[ -n "$composer_bin" ]] || deny "composer not found"
-        exec runuser -u "$user" -- env "${terminal_env[@]}" "$php_bin" "$composer_bin" "$@"
+        exec "${terminal_runner[@]}" env "${terminal_env[@]}" "$php_bin" "$composer_bin" "$@"
         ;;
       wp)
         [[ -f /usr/local/bin/wp ]] || deny "wp-cli not found"
-        exec runuser -u "$user" -- env "${terminal_env[@]}" WP_CLI_PHP_ARGS='-d pcre.jit=0' "$php_bin" -d pcre.jit=0 /usr/local/bin/wp "$@"
+        exec "${terminal_runner[@]}" env "${terminal_env[@]}" WP_CLI_PHP_ARGS='-d pcre.jit=0' "$php_bin" -d pcre.jit=0 /usr/local/bin/wp "$@"
         ;;
       phpunit)
         phpunit_bin="$(command -v phpunit || true)"
-        [[ -n "$phpunit_bin" ]] || deny "phpunit not found"
-        exec runuser -u "$user" -- env "${terminal_env[@]}" "$php_bin" "$phpunit_bin" "$@"
+        if [[ -z "$phpunit_bin" && -x "$target/vendor/bin/phpunit" ]]; then
+          # Projects normally ship PHPUnit in vendor/bin instead of globally.
+          phpunit_bin="$target/vendor/bin/phpunit"
+        fi
+        [[ -n "$phpunit_bin" ]] || deny "phpunit not found (install it globally or with composer)"
+        exec "${terminal_runner[@]}" env "${terminal_env[@]}" "$php_bin" "$phpunit_bin" "$@"
         ;;
       node|npm|npx|yarn|git)
-        exec runuser -u "$user" -- env "${terminal_env[@]}" "$cmd" "$@"
+        exec "${terminal_runner[@]}" env "${terminal_env[@]}" "$cmd" "$@"
         ;;
-      ls|cat|mkdir|rm|cp|mv|chmod|chown|grep|find|tar|zip|unzip|diff|head|tail|less|du|df)
+      ls|cat|mkdir|rmdir|rm|cp|mv|chmod|chown|grep|find|tar|zip|unzip|diff|head|tail|less|du|df|sed|awk|wc|sort|uniq|stat|file|touch)
         require_terminal_path_args "$user" "$target" "$@"
-        exec runuser -u "$user" -- env "${terminal_env[@]}" "$cmd" "$@"
+        exec "${terminal_runner[@]}" env "${terminal_env[@]}" "$cmd" "$@"
         ;;
-      pwd|echo|touch|date|whoami|which|clear)
-        if [[ "$cmd" == "touch" ]]; then
-          require_terminal_path_args "$user" "$target" "$@"
-        fi
-        exec runuser -u "$user" -- env "${terminal_env[@]}" "$cmd" "$@"
+      pwd|echo|date|whoami|which|clear|id|uname|printenv|basename|dirname|realpath)
+        exec "${terminal_runner[@]}" env "${terminal_env[@]}" "$cmd" "$@"
         ;;
       curl|wget)
         require_terminal_download_args "$user" "$target" "$@"
-        exec runuser -u "$user" -- env "${terminal_env[@]}" "$cmd" "$@"
+        exec "${terminal_runner[@]}" env "${terminal_env[@]}" "$cmd" "$@"
         ;;
       artisan)
-        # artisan is a PHP script, executed via php
-        [[ -f artisan ]] || deny "artisan not found in $target"
-        exec runuser -u "$user" -- env "${terminal_env[@]}" "$php_bin" artisan "$@"
+        # Bare `artisan` is a convenience alias for `php artisan`. Laravel keeps
+        # it at the project root, one level above public_html.
+        if [[ ! -f artisan ]]; then
+          deny "artisan not found in $target (Laravel keeps it in the site root; try 'cd ..' first)"
+        fi
+        exec "${terminal_runner[@]}" env "${terminal_env[@]}" "$php_bin" artisan "$@"
         ;;
       *)
         echo "Command not allowed: $cmd" >&2
-        echo "Allowed commands: php, composer, artisan, wp, node, npm, npx, yarn, git, phpunit, ls, cat, mkdir, rm, cp, mv, chmod, chown, pwd, echo, touch, grep, find, tar, zip, unzip, curl, wget, diff, head, tail, less, du, df, date, whoami, which, clear" >&2
+        echo "Allowed commands: php, composer, artisan, wp, phpunit, node, npm, npx, yarn, git," >&2
+        echo "  ls, cat, mkdir, rmdir, rm, cp, mv, chmod, chown, touch, grep, find, tar, zip, unzip," >&2
+        echo "  diff, head, tail, less, du, df, sed, awk, wc, sort, uniq, stat, file, curl, wget," >&2
+        echo "  pwd, echo, date, whoami, which, clear, id, uname, printenv, basename, dirname, realpath" >&2
         exit 126
         ;;
     esac

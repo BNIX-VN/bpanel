@@ -16,7 +16,8 @@ ownership, quotas, backups, SSL, services, and firewall tools built in.
 - Native BPanel file manager with upload, edit, archive, and extract support
 - Backups: archive site files + SQL, scheduled full-user backups, restore, upload, download
 - SFTP backup targets for off-server backup copies
-- UFW firewall manager with protected panel/web/mail defaults and user rules below them
+- iptables + ipset firewall with protected panel/web/mail ports, per-IP allow/deny rules,
+  and URL blocklists loaded straight into an ipset
 - Update controls for apt-based OS packages and BPanel source updates
 - Nginx ModSecurity/WAF engine installed by default, using lightweight WordPress/Laravel/PHP rules, per-site toggles, and HTTP Flood limits
 - PHP-FPM config editor per version
@@ -32,7 +33,7 @@ ownership, quotas, backups, SSL, services, and firewall tools built in.
 
 ## Versioning
 
-Current release: `1.0.76`.
+Current release: `1.0.84`.
 
 BPanel versions use semantic versioning: `major.minor.patch`.
 
@@ -60,7 +61,7 @@ runtime root so the panel shows the installed release, not the fallback.
 The installer will:
 
 1. Install git, Nginx, MariaDB, Redis, OpenSSH/SFTP, PHP 8.4 default (8.3/8.4 supported), Node.js 22,
-   certbot, phpMyAdmin, WP-CLI, UFW.
+   certbot, phpMyAdmin, WP-CLI, iptables, ipset.
 2. Copy source to `/opt/bpanel`, build the frontend, set up the Python venv.
 3. Create the `bpanel` service account and the `admin` Linux/SFTP account.
 4. Create the systemd service `bpanel-api`.
@@ -68,7 +69,7 @@ The installer will:
 6. Auto-tune PHP-FPM and MariaDB from VPS RAM/CPU and keep that tuning on reboot.
 7. Start the panel directly on the configured panel port without relying on Nginx for login.
 8. Issue Let's Encrypt SSL for the panel domain (optional).
-9. Install `/usr/local/sbin/bpanel-update` and `/usr/local/sbin/bpanel-rescue-ufw-blocklist`.
+9. Install `/usr/local/sbin/bpanel-update` and `/usr/local/sbin/bpanel-rescue-firewall`.
 10. Remove the extracted release source.
 11. Print only the panel URL, user, and password; save the same fields to
    `/root/login.txt`.
@@ -76,7 +77,7 @@ The installer will:
 You will be prompted for:
 
 - Panel hostname (optional; blank uses the server IP)
-- Panel port (default `2222`; UFW opens only the selected panel port)
+- Panel port (default `2222`; the firewall opens only the selected panel port)
 - Whether to enable Let's Encrypt SSL for the panel domain
 - An email for SSL registration
 
@@ -106,7 +107,43 @@ bpanel change-ip OLD_IP NEW_IP
 
 # Make the BPanel admin password match the current Linux root password
 bpanel sync-admin-root-password
+
+# Last resort when a firewall rule locked you out: back up the current state,
+# drop every BPanel/UFW filter rule, and rebuild with protected ports only
+bpanel-rescue-firewall
 ```
+
+## Firewall
+
+IP filtering runs on **iptables + ipset**. The panel never writes rules by
+hand at request time: `/var/lib/bpanel/firewall/rules.tsv` is the source of
+truth, and every change rebuilds the `BPANEL-INPUT` chain and reloads the
+ipsets from disk. `bpanel-firewall.service` replays the same apply at boot, so
+no `iptables-save` state can drift.
+
+- **Protected ports** (SSH from `sshd -T`, the panel port, 80/443/465/587) are
+  always allowed and cannot be deleted from the panel.
+- **Allow/deny IP** rules go into `hash:net` sets; rules with a port go into
+  `hash:net,port` sets. Allow rules are evaluated before deny rules.
+- **URL blocklists** are fetched daily into `bpanel-block4` / `bpanel-block6`.
+  A million-entry list costs one hash lookup per packet instead of a million
+  Nginx `geo` entries or UFW rules.
+- The chain uses `RETURN` (not `ACCEPT`) for allowed traffic, so fail2ban and
+  any other `INPUT` rules still see the packet.
+- Disabling the firewall removes the jump from `INPUT`; it does not change the
+  `INPUT` policy, so nothing else on the box is affected.
+
+Upgrades from a BPanel release that used UFW/Nginx run `bpanel-helper
+firewall-migrate`, which imports surviving UFW user rules, purges UFW and its
+config, removes the Nginx `geo` blocklist (`bpanel-ip-blocklist.conf`,
+`ip-blocklist-geo.conf`, and the per-vhost `include`), then applies the new
+chain.
+
+The migration inherits the previous enforcement state rather than assuming it:
+if UFW was active, or blocklist URLs were configured, the new firewall is
+enabled; on a box that had no active firewall the rules are staged but not
+enforced, so nothing the panel does not know about gets cut off. Turn it on
+from the Firewall page when you are ready. Fresh installs always enforce.
 
 ## Updates
 
@@ -132,7 +169,7 @@ when a newer release is available.
 To stay on a specific release:
 
 ```bash
-bpanel-update --tag v1.0.76
+bpanel-update --tag v1.0.84
 ```
 
 If the browser still shows the old UI, do a hard refresh (Ctrl + Shift + R) or
@@ -159,10 +196,59 @@ bpanel/
 |-- installer/
 |   |-- files/                   bpanel-helper.sh + sudoers rule
 |   |-- install.sh               Full first-time install
-|   |-- rescue-ufw-blocklist.sh  Emergency UFW reset for oversized blocklists
+|   |-- rescue-firewall.sh       Emergency firewall reset (locked-out recovery)
 |   `-- update.sh                Pull from GitHub and redeploy
 `-- README.md
 ```
+
+## Provisioning API and the shared billing module
+
+`modules/servers/bpanel/` is a single WHMCS server module used against **both
+BPanel and OPanel**. The module is the fixed side of this contract: BPanel
+matches what the module already expects, rather than the module being adapted
+per panel. `backend/app/tests/test_provisioning_module_contract.py` pins the
+response keys it reads.
+
+It authenticates with a Bearer token (created under **API Tokens**, pasted into
+the server's Access Hash). Every hook maps to one endpoint:
+
+| WHMCS hook | Endpoint |
+|---|---|
+| `TestConnection`, `PackageLoader` | `GET /plans` |
+| `CreateAccount` | `POST /accounts` |
+| `SuspendAccount` | `POST /accounts/{external_id}/suspend` |
+| `UnsuspendAccount` | `POST /accounts/{external_id}/unsuspend` |
+| `TerminateAccount` | `DELETE /accounts/{external_id}` |
+| `ChangePassword` | `PATCH /accounts/{external_id}/password` |
+| `ChangePackage` | `PATCH /accounts/{external_id}/package` |
+| `UsageUpdate` | `GET /accounts/{external_id}/usage` |
+| `LoginLink`, `ClientArea` | `POST /accounts/{external_id}/login` |
+
+`external_id` is `whmcs:<serviceid>`, so a service maps to exactly one panel
+account across renames.
+
+Cross-panel notes:
+
+- **Response envelope**: OPanel replies with `{"success": ..., "data": ...}`;
+  BPanel replies with bare objects. The module unwraps a body only when it
+  carries *both* keys, so no BPanel response may use that pair together.
+- **SSO**: the module reads `data.login_url` only. BPanel returns it as an
+  absolute URL built from `PANEL_URL` (falling back to a relative path the
+  module prefixes itself), alongside `url` and `path`. The token is single-use
+  and expires after 5 minutes; `/api/auth/sso/<token>` sets the session cookie
+  and redirects. A suspended account is redirected to
+  `/?error=account_suspended` instead of being logged in.
+- **Suspend** disables the panel login, bumps `token_version` (killing live
+  sessions), rewrites each vhost as a static "suspended" site, and locks the
+  site Linux users. **Unsuspend** restores the real vhost, aliases, WAF and
+  flood settings from the database.
+- **Terminate** takes no query string from the module, so `backup` defaults to
+  off. Pass `?backup=true` to write a full user backup to `/var/backups/bpanel`
+  before the account is deleted; it runs inline, so only use it from a caller
+  that can wait. A failed backup is recorded on the account and never blocks
+  the termination.
+- A terminated account keeps its billing row with empty `username`/`email`, so
+  the client area can still render the service.
 
 ## Roles
 
@@ -327,10 +413,34 @@ What the helper allows:
 - `nginx -t`, `nginx reload`
 - `certbot --nginx ...` for a single validated domain
 - create/delete panel Linux users, sync their SFTP password, and manage per-user PHP-FPM pools
-- `ufw status/enable/disable/allow/deny/delete`
+- `firewall-status/enable/disable/allow-port/allow-ip/deny-ip/delete` (iptables + ipset)
 - fix ownership/ACLs for managed site paths under `/home/<panel-user>/<domain>`
 - `rm -rf <managed site path>`
 - WP-CLI and crontab management as the website's Linux user
+- `terminal-exec`: an allowlisted command as the website's Linux user
+
+### Website terminal
+
+The per-site terminal runs commands as the website's own Linux user through
+`bpanel-helper terminal-exec`. Commands are split into argv in Python (no shell
+is involved, so `;`, `|`, backticks and globs are ordinary arguments) and the
+executable must be on the allowlist, which covers the PHP toolchain
+(`php`, `composer`, `artisan`, `wp`, `phpunit`), the JS toolchain
+(`node`, `npm`, `npx`, `yarn`), `git`, and the usual file/text utilities
+(`ls`, `cat`, `sed`, `awk`, `grep`, `find`, `tar`, `wc`, `stat`, …).
+
+- Every path argument to a file utility must resolve inside
+  `/home/<panel-user>/`; `curl`/`wget` additionally reject `file://` and any
+  output path outside that home.
+- `php`/`composer`/`wp` run against the site's configured PHP version
+  (`php8.4`, not the system default), so Composer platform checks pass.
+- Each command gets a wall-clock budget enforced by `timeout` inside the
+  helper: 60s for quick utilities, 900s for installers and updaters
+  (`composer`, `npm`, `wp`, `git`, `php`, …). The API adds a slightly longer
+  backstop so a wedged helper cannot pin a worker.
+- The allowlist is a guardrail, not a privilege boundary: `php -r` can already
+  run arbitrary code **as that site's Linux user**. Isolation comes from the
+  per-site Unix user, the chrooted home, and the helper's path checks.
 
 Anything else is rejected. The helper validates domains, ports, IPs, and
 filesystem paths before invoking the real binary.

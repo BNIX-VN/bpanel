@@ -113,7 +113,9 @@ function bpanel_UnsuspendAccount($params)
 
 function bpanel_TerminateAccount($params)
 {
-    $result = bpanel_request($params, 'DELETE', '/api/provisioning/v1/accounts/' . rawurlencode(bpanel_external_id($params)), null, ['backup' => 'true']);
+    // Terminate fully removes the hosting account, its websites, and the
+    // Linux/SFTP user and home directory.
+    $result = bpanel_request($params, 'DELETE', '/api/provisioning/v1/accounts/' . rawurlencode(bpanel_external_id($params)));
     return $result['ok'] ? 'success' : $result['error'];
 }
 
@@ -231,9 +233,30 @@ function bpanel_request($params, $method, $path, $payload = null, $query = [])
 
     $data = json_decode((string) $body, true);
     if ($status < 200 || $status >= 300) {
-        $message = is_array($data) && isset($data['detail']) ? $data['detail'] : (string) $body;
+        $message = '';
+        if (is_array($data)) {
+            // OPanel envelope error: {"detail": {"success": false, "error": "..."}}
+            if (isset($data['detail']) && is_array($data['detail']) && isset($data['detail']['error'])) {
+                $message = $data['detail']['error'];
+            } elseif (isset($data['detail'])) {
+                $message = is_array($data['detail']) ? json_encode($data['detail']) : (string) $data['detail'];
+            }
+        }
+        if ($message === '') {
+            $message = (string) $body;
+        }
         bpanel_log($params, $method, $path, $payload, $body, 'HTTP ' . $status . ': ' . $message);
         return ['ok' => false, 'error' => 'BPanel API error: ' . $message];
+    }
+
+    // Unwrap provisioning envelope: {"success": true, "data": {...}, "error": null}
+    if (is_array($data) && array_key_exists('data', $data) && array_key_exists('success', $data)) {
+        if (!$data['success']) {
+            $errMsg = $data['error'] ?? 'Unknown API error';
+            bpanel_log($params, $method, $path, $payload, $body, 'Envelope error: ' . $errMsg);
+            return ['ok' => false, 'error' => 'BPanel API error: ' . $errMsg];
+        }
+        $data = $data['data'];
     }
 
     bpanel_log($params, $method, $path, $payload, $body, 'OK');
@@ -359,16 +382,23 @@ function bpanel_service_label($params, $account)
 function bpanel_sso_url($params)
 {
     if (empty($params['serviceid'])) {
+        bpanel_log($params, 'POST', '/api/provisioning/v1/accounts/{external_id}/login', null, null, 'Skipped: params[serviceid] is empty, falling back to plain panel URL (no SSO token requested)');
         return bpanel_base_url($params);
     }
 
     $result = bpanel_request($params, 'POST', '/api/provisioning/v1/accounts/' . rawurlencode(bpanel_external_id($params)) . '/login');
-    if ($result['ok'] && !empty($result['data']['url'])) {
-        $url = trim((string) $result['data']['url']);
+    if ($result['ok'] && !empty($result['data']['login_url'])) {
+        $url = trim((string) $result['data']['login_url']);
         if (preg_match('#^https?://#i', $url)) {
             return $url;
         }
         return rtrim(bpanel_base_url($params), '/') . '/' . ltrim($url, '/');
+    }
+
+    if (!$result['ok']) {
+        bpanel_log($params, 'POST', '/api/provisioning/v1/accounts/' . bpanel_external_id($params) . '/login', null, null, 'SSO link request failed, falling back to plain panel URL: ' . $result['error']);
+    } else {
+        bpanel_log($params, 'POST', '/api/provisioning/v1/accounts/' . bpanel_external_id($params) . '/login', null, $result['data'], 'SSO link request returned no login_url, falling back to plain panel URL');
     }
 
     return bpanel_base_url($params);

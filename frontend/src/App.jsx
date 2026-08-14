@@ -453,6 +453,7 @@ function App() {
   const [selectedSftpTargetId, setSelectedSftpTargetId] = useState('');
   const [newSftpTarget, setNewSftpTarget] = useState({ name: '', host: '', port: 22, username: '', password: '', private_key: '', remote_path: '/backups/bpanel' });
   const [daBackups, setDaBackups] = useState([]);
+  const [daReplaceExisting, setDaReplaceExisting] = useState(false);
   const [daScanResult, setDaScanResult] = useState(null);
   const [daImportJob, setDaImportJob] = useState(null);
   const [daBulkImportJob, setDaBulkImportJob] = useState(null);
@@ -2412,8 +2413,11 @@ function App() {
     if (data) setDaScanResult(data);
   }
 
-  async function importDaBackup(archivePath, force = false) {
-    if (!force && !confirm('Import this DirectAdmin backup? This will create users, websites, databases, and nginx configs.')) return;
+  async function importDaBackup(archivePath, force = daReplaceExisting) {
+    const message = force
+      ? 'Import and REPLACE? Any existing panel user, website, files and databases with the same names are deleted first.'
+      : 'Import this DirectAdmin backup? This will create users, websites, databases, and nginx configs.';
+    if (!confirm(message)) return;
     setDaImportJob(null);
     const data = await request('/maintenance/da-import/import', { method: 'POST', body: JSON.stringify({ archive_path: archivePath, force }) }, 'Starting DA import...');
     if (data?.job_id) {
@@ -2451,9 +2455,12 @@ function App() {
     setSelectedDaBackups(prev => prev.length === daBackups.length ? [] : daBackups.map(f => f.path));
   }
 
-  async function bulkImportDaBackups(force = false) {
+  async function bulkImportDaBackups(force = daReplaceExisting) {
     if (selectedDaBackups.length === 0) return;
-    if (!force && !confirm(`Restore ${selectedDaBackups.length} backup(s)? This will create users, websites, databases, and nginx configs for each.`)) return;
+    const message = force
+      ? `Restore and REPLACE ${selectedDaBackups.length} backup(s)? Existing users, websites, files and databases with the same names are deleted first.`
+      : `Restore ${selectedDaBackups.length} backup(s)? This will create users, websites, databases, and nginx configs for each.`;
+    if (!confirm(message)) return;
     setDaBulkImportJob(null);
     setDaImportJob(null);
     setDaScanResult(null);
@@ -2634,11 +2641,11 @@ function App() {
   }
 
   async function enableFirewall() {
-    if (!confirm('Enable UFW firewall now? Make sure SSH and web ports are allowed.')) return;
+    if (!confirm('Enable the firewall now? SSH, the panel port and 80/443/465/587 stay open automatically.')) return;
     await runFirewallAction('/firewall/enable', { method: 'POST' }, 'Enabling firewall...');
   }
   async function disableFirewall() {
-    if (!confirm('Disable UFW firewall?')) return;
+    if (!confirm('Disable the firewall? Every port will be reachable again.')) return;
     await runFirewallAction('/firewall/disable', { method: 'POST' }, 'Disabling firewall...');
   }
   async function reloadFirewall() { await runFirewallAction('/firewall/reload', { method: 'POST' }, 'Reloading firewall...'); }
@@ -2651,7 +2658,7 @@ function App() {
   async function deleteFirewallRule(numberOverride = firewallDeleteNumber) {
     const ruleNumber = String(numberOverride || '').trim();
     if (!ruleNumber) return;
-    if (!confirm(`Delete UFW rule #${ruleNumber}?`)) return;
+    if (!confirm(`Delete firewall rule #${ruleNumber}?`)) return;
     await runFirewallAction(`/firewall/rules/${encodeURIComponent(ruleNumber)}`, { method: 'DELETE' }, 'Deleting rule...');
     setFirewallDeleteNumber('');
   }
@@ -2670,16 +2677,16 @@ function App() {
   }
 
   async function loadFirewallBlocklists() {
-    const data = await request('/firewall/blocklists', {}, 'Loading Nginx blocklists...');
+    const data = await request('/firewall/blocklists', {}, 'Loading IP blocklists...');
     if (data) setFirewallBlocklists(data);
   }
 
   async function addFirewallBlocklistUrl() {
     const url = firewallBlocklistUrl.trim();
     if (!url) return;
-    const data = await request('/firewall/blocklists', { method: 'POST', body: JSON.stringify({ url }) }, 'Adding Nginx blocklist URL...');
+    const data = await request('/firewall/blocklists', { method: 'POST', body: JSON.stringify({ url }) }, 'Adding IP blocklist URL...');
     if (data) {
-      setNotice((data.stdout || data.stderr || 'Nginx blocklist URL added.').trim());
+      setNotice((data.stdout || data.stderr || 'IP blocklist URL added.').trim());
       setFirewallBlocklistUrl('');
       await loadFirewallBlocklists();
     }
@@ -2687,17 +2694,17 @@ function App() {
 
   async function deleteFirewallBlocklistUrl(url) {
     if (!confirm(`Delete blocklist URL?\n${url}`)) return;
-    const data = await request('/firewall/blocklists/delete', { method: 'POST', body: JSON.stringify({ url }) }, 'Deleting Nginx blocklist URL...');
+    const data = await request('/firewall/blocklists/delete', { method: 'POST', body: JSON.stringify({ url }) }, 'Deleting IP blocklist URL...');
     if (data) {
-      setNotice((data.stdout || data.stderr || 'Nginx blocklist URL removed.').trim());
+      setNotice((data.stdout || data.stderr || 'IP blocklist URL removed.').trim());
       await loadFirewallBlocklists();
     }
   }
 
   async function updateFirewallBlocklistsNow() {
-    const data = await request('/firewall/blocklists/update', { method: 'POST' }, 'Refreshing Nginx blocklists...');
+    const data = await request('/firewall/blocklists/update', { method: 'POST' }, 'Refreshing IP blocklists...');
     if (data) {
-      setNotice((data.stdout || data.stderr || 'Nginx blocklists refreshed.').trim());
+      setNotice((data.stdout || data.stderr || 'IP blocklists refreshed.').trim());
       await loadFirewall();
       await loadFirewallBlocklists();
     }
@@ -3871,9 +3878,16 @@ function App() {
         <div className="actions backup-toolbar">
           <label className="upload-button">
             <Upload size={14}/> Upload DA backup
-            <input ref={daFileInputRef} type="file" accept=".tar.gz,.tgz,.tar.bz2,.tbz2,.tar.xz,.txz,.tar" onChange={e => { uploadDaBackup(e.target.files?.[0]); e.target.value = ''; }} />
+            <input ref={daFileInputRef} type="file" accept=".tar.zst,.tzst,.tar.gz,.tgz,.tar.bz2,.tbz2,.tar.xz,.txz,.tar" onChange={e => { uploadDaBackup(e.target.files?.[0]); e.target.value = ''; }} />
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: '0.85rem', userSelect: 'none' }}>
+            <input type="checkbox" checked={daReplaceExisting} onChange={e => setDaReplaceExisting(e.target.checked)} />
+            Replace existing users/websites
           </label>
         </div>
+        {daReplaceExisting && <p className="hint" style={{ color: 'var(--color-warning)' }}>
+          Imports will delete any existing panel user, website, files and databases that share a name with the backup. Leave this off to have conflicting imports stop instead.
+        </p>}
         {daBackups.length === 0 && <EmptyState icon={ArchiveRestore} message="No DirectAdmin backups uploaded. Upload a DA backup archive to get started." />}
         {daBackups.length > 0 && <>
           <div className="actions backup-toolbar" style={{ gap: 12, flexWrap: 'wrap' }}>
@@ -3913,7 +3927,7 @@ function App() {
               <ul className="da-domain-list">
                 {user.domains.map((d, j) => <li key={j}>
                   <Globe size={12}/> {d.domain}
-                  <small>type={d.app_type}, files={d.has_files ? 'yes' : 'no'}{d.db_name ? `, db=${d.db_name}` : ''}{d.has_sql_dump ? ' (SQL dump found)' : ''}</small>
+                  <small>type={d.app_type}, files={d.has_files ? 'yes' : 'no'}{d.db_name ? `, db=${d.db_name}` : ''}{d.has_sql_dump ? ' (SQL dump found)' : ''}{d.aliases?.length > 0 ? `, pointers: ${d.aliases.map(a => `${a.domain} (${a.mode})`).join(', ')}` : ''}</small>
                 </li>)}
               </ul>
             </div>}
@@ -3938,6 +3952,7 @@ function App() {
           <h4>Import Summary</h4>
           {daImportJob.result.summary.map((item, i) => <div key={i} className="da-user-block">
             <p><strong>{item.username}</strong> — {item.imported_domains?.length || 0} domain(s), {item.databases?.length || 0} database(s)</p>
+            {item.aliases?.length > 0 && <p className="hint">Pointers: {item.aliases.join(', ')}</p>}
             {item.ssl_enabled_domains?.length > 0 && <p className="hint">SSL enabled: {item.ssl_enabled_domains.join(', ')}</p>}
             {item.warnings?.length > 0 && <p className="hint" style={{ color: 'var(--color-warning)' }}>Warnings: {item.warnings.join('; ')}</p>}
           </div>)}
@@ -4031,10 +4046,13 @@ function App() {
     const firewallText = firewallStatus?.stdout || firewallStatus?.stderr || 'Click Refresh to load status.';
     const blocklistText = firewallBlocklists?.stdout || firewallBlocklists?.stderr || 'No blocklist status loaded.';
     const blocklistUrls = parseFirewallBlocklistUrls(blocklistText);
+    const allRules = firewallStatus?.rules || [];
+    const userRules = allRules.filter(rule => !rule.protected);
+    const panelRules = allRules.filter(rule => rule.protected);
     return <>
       <section className="section">
         <div className="section-title">
-          <div><h2>Firewall (UFW)</h2><p className="hint">Keep SSH and web ports allowed before enabling.</p></div>
+          <div><h2>Firewall (iptables + ipset)</h2><p className="hint">SSH, the panel port and 80/443/465/587 are always kept open.</p></div>
         </div>
         <div className="actions">
           <button disabled={!!loading} onClick={loadFirewall}><RefreshCw size={14}/> Refresh</button>
@@ -4042,11 +4060,25 @@ function App() {
           <button disabled={!!loading} onClick={disableFirewall}>Disable</button>
           <button disabled={!!loading} onClick={reloadFirewall}>Reload</button>
         </div>
+        {panelRules.length > 0 && <p className="hint">Protected ports: {panelRules.map(rule => rule.to).join(', ')}</p>}
+        {userRules.length > 0 && <div className="table firewall-rule-table">
+          {userRules.map(rule => <div className="firewall-rule" key={rule.id}>
+            <span>
+              <strong>#{rule.id}</strong>{' '}
+              <span className={rule.action === 'DENY' ? 'badge danger' : 'badge ok'}>{rule.action}</span>{' '}
+              {rule.to} from {rule.from}
+            </span>
+            <div className="firewall-rule-actions">
+              <button className="danger" disabled={!!loading} onClick={() => deleteFirewallRule(rule.id)}><Trash2 size={14}/> Delete</button>
+            </div>
+          </div>)}
+        </div>}
+        {userRules.length === 0 && <p className="hint">No custom rules yet. Only the protected ports are open.</p>}
         <div className="info-box firewall-status">
-          <strong>UFW status</strong>
+          <strong>Firewall status</strong>
           <pre>{firewallText}</pre>
           <div className="firewall-delete-inline">
-            <label><span>Delete UserZone #</span><input value={firewallDeleteNumber} onChange={e => setFirewallDeleteNumber(e.target.value)} placeholder="12" inputMode="numeric" /></label>
+            <label><span>Delete rule #</span><input value={firewallDeleteNumber} onChange={e => setFirewallDeleteNumber(e.target.value)} placeholder="12" inputMode="numeric" /></label>
             <button className="danger" disabled={!!loading || !firewallDeleteNumber} onClick={() => deleteFirewallRule()}>Delete</button>
           </div>
         </div>
@@ -4079,7 +4111,7 @@ function App() {
       </section>
       <section className="section">
         <div className="section-title">
-          <div><h2>Nginx IP blocklist URLs</h2><p className="hint">TXT files are fetched daily at 01:00 and enforced by Nginx, so large lists do not create thousands of UFW rules.</p></div>
+          <div><h2>IP blocklist URLs</h2><p className="hint">TXT files are fetched daily at 01:00 into an ipset, so even million-entry lists cost one kernel lookup per packet.</p></div>
           <button disabled={!!loading} onClick={loadFirewallBlocklists}><RefreshCw size={14}/> Refresh</button>
         </div>
         <div className="firewall-form firewall-blocklist-form">
@@ -4093,7 +4125,7 @@ function App() {
             <div className="firewall-rule-actions"><button className="danger" disabled={!!loading} onClick={() => deleteFirewallBlocklistUrl(url)}><Trash2 size={14}/> Delete</button></div>
           </div>)}
         </div>}
-        <div className="info-box firewall-status"><strong>Nginx blocklist status</strong><pre>{blocklistText}</pre></div>
+        <div className="info-box firewall-status"><strong>IP blocklist status</strong><pre>{blocklistText}</pre></div>
       </section>
     </>;
   }

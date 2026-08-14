@@ -6,7 +6,6 @@ server {
 
     server_tokens off;
     disable_symlinks if_not_owner from={{ root_path }};
-    include /etc/nginx/bpanel/ip-blocklist-server.conf;
 
 {% if http_flood_enabled %}
     # BPANEL HTTP FLOOD BEGIN

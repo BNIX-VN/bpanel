@@ -47,6 +47,15 @@ def _redact_output(value: str) -> str:
     return "\n".join(line for line in value.splitlines() if not any(token in line.lower() for token in blocked))
 
 
+def _decode_stream(value) -> str:
+    """TimeoutExpired carries whatever was captured before the kill."""
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
 class ShellRunner:
     def run(
         self,
@@ -54,9 +63,10 @@ class ShellRunner:
         check: bool = True,
         input: Optional[str] = None,
         sensitive: bool = False,
+        timeout: Optional[float] = None,
     ) -> CommandResult:
         """Run a subprocess as the current API user (non-root in production)."""
-        return self._exec(list(args), check=check, input=input, sensitive=sensitive)
+        return self._exec(list(args), check=check, input=input, sensitive=sensitive, timeout=timeout)
 
     def privileged(
         self,
@@ -66,6 +76,7 @@ class ShellRunner:
         input: Optional[str] = None,
         sensitive: bool = False,
         fallback: Optional[List[str]] = None,
+        timeout: Optional[float] = None,
     ) -> CommandResult:
         """Run a privileged operation through the bpanel-helper sudo trampoline.
 
@@ -74,6 +85,10 @@ class ShellRunner:
         fallback:       alternate command to run when the helper is not
                         installed (development convenience). Only used if
                         BPANEL_USE_HELPER is false / unset and helper missing.
+        timeout:        wall-clock seconds before the child is killed. Callers
+                        that also pass a timeout to the helper should set this
+                        slightly higher so the helper's own kill wins first and
+                        the real command output is preserved.
         """
         helper_args = list(helper_args or [])
         if _use_helper():
@@ -85,7 +100,7 @@ class ShellRunner:
                 f"bpanel-helper is not available and no fallback was provided "
                 f"for privileged operation '{helper_command}'"
             )
-        return self._exec(argv, check=check, input=input, sensitive=sensitive)
+        return self._exec(argv, check=check, input=input, sensitive=sensitive, timeout=timeout)
 
     def _exec(
         self,
@@ -94,18 +109,34 @@ class ShellRunner:
         check: bool,
         input: Optional[str],
         sensitive: bool,
+        timeout: Optional[float] = None,
     ) -> CommandResult:
         quoted = " ".join(shlex.quote(arg) for arg in argv)
         log_command = "[redacted]" if sensitive else quoted
         if settings.command_dry_run:
             return CommandResult(command=log_command, returncode=0, stdout=f"DRY RUN: {log_command}", stderr="")
-        completed = subprocess.run(
-            argv,
-            capture_output=True,
-            text=True,
-            check=False,
-            input=input,
-        )
+        try:
+            completed = subprocess.run(
+                argv,
+                capture_output=True,
+                text=True,
+                check=False,
+                input=input,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            stdout = _decode_stream(exc.stdout)
+            stderr = _decode_stream(exc.stderr)
+            message = f"Command timed out after {timeout:g}s"
+            result = CommandResult(
+                log_command,
+                124,
+                _redact_output(stdout) if sensitive else stdout,
+                (_redact_output(stderr) if sensitive else stderr) + f"\n{message}",
+            )
+            if check:
+                raise RuntimeError(f"{message}: {log_command}") from exc
+            return result
         stdout = _redact_output(completed.stdout) if sensitive else completed.stdout
         stderr = _redact_output(completed.stderr) if sensitive else completed.stderr
         result = CommandResult(log_command, completed.returncode, stdout, stderr)

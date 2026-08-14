@@ -974,8 +974,10 @@ class ProvisioningAccountCreate(BaseModel):
 
 class ProvisioningAccountOut(BaseModel):
     external_id: str
-    username: str
-    email: str
+    # Empty once the account is terminated: the billing record outlives the
+    # panel user it pointed at.
+    username: str = ""
+    email: str = ""
     domain: Optional[str] = None
     package_id: Optional[int] = None
     package_name: Optional[str] = None

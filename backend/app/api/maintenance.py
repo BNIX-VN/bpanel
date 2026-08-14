@@ -1219,14 +1219,23 @@ async def upload_da_backup(
     from app.services import da_import
 
     da_import.DA_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    filename = file.filename or "da_backup.tar.gz"
+    # The browser controls file.filename, so strip any directory component
+    # before it is joined onto the backup directory.
+    try:
+        filename = da_import.safe_upload_name(file.filename or "")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     destination = da_import.DA_BACKUP_DIR / filename
     if destination.exists():
         raise HTTPException(status_code=409, detail="A backup with this name already exists")
 
-    with open(destination, "wb") as out:
-        while chunk := await file.read(1024 * 1024):
-            out.write(chunk)
+    try:
+        with open(destination, "wb") as out:
+            while chunk := await file.read(1024 * 1024):
+                out.write(chunk)
+    except Exception:
+        destination.unlink(missing_ok=True)
+        raise
 
     log_action(db, current_user.id, "da_backup_upload", filename)
     return {"filename": filename, "path": str(destination), "size": destination.stat().st_size}
@@ -1279,10 +1288,11 @@ def import_da_backup(body: dict, db: Session = Depends(get_db), current_user: Us
     from app.services import da_import
 
     archive_path = body.get("archive_path", "")
-    force = body.get("force", False)
-    if not archive_path:
-        raise HTTPException(status_code=400, detail="archive_path is required")
-    path = Path(archive_path)
+    force = bool(body.get("force", False))
+    try:
+        path = da_import.resolve_backup_path(archive_path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not path.exists():
         raise HTTPException(status_code=404, detail="Backup file not found")
 
@@ -1357,9 +1367,14 @@ def bulk_import_da_backups(body: DaBulkImportRequest, db: Session = Depends(get_
     if not body.archive_paths:
         raise HTTPException(status_code=400, detail="archive_paths is required")
 
+    from app.services import da_import
+
     paths = []
     for p in body.archive_paths:
-        path = Path(p)
+        try:
+            path = da_import.resolve_backup_path(p)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         if not path.exists():
             raise HTTPException(status_code=404, detail=f"Backup file not found: {path.name}")
         paths.append(path)

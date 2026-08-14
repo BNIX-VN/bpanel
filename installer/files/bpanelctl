@@ -132,54 +132,23 @@ INFO
   chmod 600 /root/login.txt
 }
 
-delete_bpanel_ufw_rules() {
-  local pattern="$1" number
-  command -v ufw >/dev/null 2>&1 || return 0
-  while read -r number; do
-    [[ -n "$number" ]] || continue
-    ufw --force delete "$number" >/dev/null 2>&1 || true
-  done < <(
-    ufw status numbered 2>/dev/null \
-      | awk -v pattern="$pattern" '
-          index($0, "bpanel:PanelZone") {
-            line = $0
-            if (!match(line, /^\[[[:space:]]*[0-9]+\]/)) {
-              next
-            }
-            number = substr(line, RSTART, RLENGTH)
-            gsub(/[^0-9]/, "", number)
-            sub(/^\[[[:space:]]*[0-9]+\][[:space:]]*/, "", line)
-            split(line, parts, /[[:space:]]+ALLOW[[:space:]]+/)
-            target = parts[1]
-            if (target == pattern || target == pattern " (v6)") {
-              print number
-            }
-          }
-        ' \
-      | sort -rn
-  )
+run_firewall_helper() {
+  [[ -x /usr/local/sbin/bpanel-helper ]] || return 0
+  SUDO_USER=bpanel /usr/local/sbin/bpanel-helper "$@" 2>/dev/null || true
 }
 
 allow_panel_port() {
   local port="$1"
-  if command -v ufw >/dev/null 2>&1; then
-    delete_bpanel_ufw_rules "${port}/tcp"
-    ufw insert 1 allow "${port}/tcp" comment "bpanel:PanelZone" >/dev/null 2>&1 \
-      || ufw insert 1 allow "${port}/tcp" >/dev/null 2>&1 \
-      || ufw allow "${port}/tcp" >/dev/null 2>&1 \
-      || true
-  fi
+  [[ "$port" =~ ^[0-9]{1,5}$ ]] || return 0
+  # SSH, panel, web and mail ports are protected ports the helper derives from
+  # sshd and .env, so re-applying the chain is enough to reopen them.
+  run_firewall_helper firewall-allow-port "$port" tcp >/dev/null
 }
 
 allow_panel_app() {
-  local app="$1"
-  if command -v ufw >/dev/null 2>&1; then
-    delete_bpanel_ufw_rules "$app"
-    ufw insert 1 allow "$app" comment "bpanel:PanelZone" >/dev/null 2>&1 \
-      || ufw insert 1 allow "$app" >/dev/null 2>&1 \
-      || ufw allow "$app" >/dev/null 2>&1 \
-      || true
-  fi
+  # UFW application profiles are gone; the ports they covered are protected
+  # ports in the iptables chain.
+  return 0
 }
 
 close_old_panel_port() {
@@ -188,9 +157,21 @@ close_old_panel_port() {
   case "$old_port" in
     22|80|443|465|587) return 0 ;;
   esac
-  if command -v ufw >/dev/null 2>&1; then
-    delete_bpanel_ufw_rules "${old_port}/tcp"
-  fi
+  local id
+  id="$(run_firewall_helper firewall-list \
+        | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except ValueError:
+    sys.exit(0)
+for rule in data.get("rules", []):
+    if not rule.get("protected") and not rule.get("ip") and str(rule.get("port")) == sys.argv[1]:
+        print(rule["id"])
+        break
+' "$old_port")"
+  [[ -n "$id" ]] && run_firewall_helper firewall-delete "$id" >/dev/null
+  return 0
 }
 
 refresh_phpmyadmin_api_base() {
@@ -571,8 +552,8 @@ show_status() {
   echo "Nginx: $(systemctl is-active nginx 2>/dev/null || echo unknown)"
   echo "MariaDB: $(systemctl is-active mariadb 2>/dev/null || echo unknown)"
   echo "Redis: $(systemctl is-active redis-server 2>/dev/null || echo unknown)"
-  if command -v ufw >/dev/null 2>&1; then
-    echo "UFW: $(ufw status 2>/dev/null | head -n 1)"
+  if [[ -x /usr/local/sbin/bpanel-helper ]]; then
+    echo "Firewall: $(run_firewall_helper firewall-status | awk -F': ' '/^Status:/ {print $2; exit}')"
   fi
 }
 
@@ -624,17 +605,13 @@ repair_firewall() {
     [[ "$ssh_port" == "22" ]] && continue
     allow_panel_port "$ssh_port"
   done <<<"$seen_ssh_ports"
-  allow_panel_app 'Nginx Full'
-  for port in 465 587 "$panel_port"; do
-    case "$port" in
-      80|443) continue ;;
-    esac
-    allow_panel_port "$port"
-  done
-  if command -v ufw >/dev/null 2>&1; then
-    ufw status numbered || true
-  fi
+  # Re-apply rebuilds the whole chain from /var/lib/bpanel/firewall/rules.tsv,
+  # which always includes SSH, the panel port and 80/443/465/587.
+  run_firewall_helper firewall-apply >/dev/null
+  run_firewall_helper firewall-status || true
+  echo ""
   echo "Firewall rescue rules refreshed."
+  echo "If the server is still unreachable, run: bpanel-rescue-firewall"
 }
 
 run_panel_update() {

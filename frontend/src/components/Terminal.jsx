@@ -3,8 +3,33 @@ import { Terminal as XTerminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 
+// A pasted script is queued line by line; these caps keep a stray paste of a
+// whole file from flooding the helper boundary.
+const MAX_PASTE_CHARS = 64 * 1024;
+const MAX_QUEUED_COMMANDS = 200;
+
 function normalizeOutput(value) {
   return String(value || '').replace(/\r?\n/g, '\r\n');
+}
+
+// xterm hands pasted text to onData as a single chunk with CR/LF separators.
+// Every segment but the last was newline-terminated, so it is a complete
+// command; the last one stays on the prompt and remains editable.
+function splitPastedText(text) {
+  const normalized = String(text || '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/\t/g, ' ');
+  // Keep newlines and printable characters; anything else would corrupt the
+  // line editor or smuggle escape sequences into the command.
+  const cleaned = Array.from(normalized)
+    .filter(ch => ch === '\n' || (ch >= ' ' && ch.charCodeAt(0) !== 127))
+    .join('');
+  return cleaned.split('\n');
+}
+
+function isRunnableLine(line) {
+  const trimmed = line.trim();
+  return trimmed.length > 0 && !trimmed.startsWith('#');
 }
 
 function shortPath(path) {
@@ -40,13 +65,11 @@ export function Terminal({ websiteId, apiBase = '/api' }) {
   const runningRef = useRef(false);
   const historyRef = useRef([]);
   const historyIndexRef = useRef(-1);
+  // Commands waiting to run. The websocket protocol is one command at a time,
+  // so a pasted script is queued here and drained on each "exit" message.
+  const queueRef = useRef([]);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState(null);
-
-  const writePrompt = useCallback(() => {
-    termRef.current?.write(promptRef.current);
-    promptVisibleRef.current = true;
-  }, []);
 
   const redrawLine = useCallback(() => {
     const term = termRef.current;
@@ -56,6 +79,88 @@ export function Terminal({ websiteId, apiBase = '/api' }) {
     const back = lineRef.current.length - cursorRef.current;
     if (back > 0) term.write('\b'.repeat(back));
   }, []);
+
+  // Show the prompt again, restoring any text the user had typed (or the
+  // trailing fragment of a paste that had no final newline).
+  const writePrompt = useCallback(() => {
+    if (lineRef.current) redrawLine();
+    else termRef.current?.write(promptRef.current);
+    promptVisibleRef.current = true;
+  }, [redrawLine]);
+
+  const rememberCommand = useCallback((command) => {
+    if (!command.trim()) return;
+    historyRef.current = [command, ...historyRef.current.filter(item => item !== command)].slice(0, 50);
+  }, []);
+
+  const sendCommand = useCallback((command) => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    runningRef.current = true;
+    promptVisibleRef.current = false;
+    historyIndexRef.current = -1;
+    ws.send(JSON.stringify({ type: 'input', data: command }));
+  }, []);
+
+  // Run the next queued command, echoing it so the transcript reads like a
+  // real shell session. Falls back to the prompt when the queue is empty.
+  const runNextQueued = useCallback(() => {
+    const next = queueRef.current.shift();
+    if (next === undefined) {
+      writePrompt();
+      return;
+    }
+    termRef.current?.write(`${promptRef.current}${next}\r\n`);
+    sendCommand(next);
+  }, [sendCommand, writePrompt]);
+
+  const enqueueCommands = useCallback((commands) => {
+    const term = termRef.current;
+    if (commands.length === 0) {
+      writePrompt();
+      return;
+    }
+    if (queueRef.current.length + commands.length > MAX_QUEUED_COMMANDS) {
+      term?.write(`\r\n\x1b[31mToo many pasted commands (max ${MAX_QUEUED_COMMANDS}).\x1b[0m\r\n`);
+      writePrompt();
+      return;
+    }
+    commands.forEach(rememberCommand);
+    queueRef.current.push(...commands);
+    if (!runningRef.current) runNextQueued();
+  }, [rememberCommand, runNextQueued, writePrompt]);
+
+  const handlePaste = useCallback((text) => {
+    const term = termRef.current;
+    if (text.length > MAX_PASTE_CHARS) {
+      term?.write(`\r\n\x1b[31mPaste is too large (max ${MAX_PASTE_CHARS} characters).\x1b[0m\r\n`);
+      writePrompt();
+      return;
+    }
+
+    const segments = splitPastedText(text);
+    const commands = [];
+    segments.forEach((segment, index) => {
+      lineRef.current = lineRef.current.slice(0, cursorRef.current) + segment + lineRef.current.slice(cursorRef.current);
+      cursorRef.current += segment.length;
+      // Every segment except the last was terminated by a newline, so it is a
+      // complete command line.
+      if (index < segments.length - 1) {
+        if (isRunnableLine(lineRef.current)) commands.push(lineRef.current);
+        lineRef.current = '';
+        cursorRef.current = 0;
+      }
+    });
+
+    if (commands.length === 0) {
+      // Single-line paste: just extend the current input line.
+      redrawLine();
+      return;
+    }
+    // Clear the half-drawn input line before the queue echoes each command.
+    term?.write('\r\x1b[K');
+    enqueueCommands(commands);
+  }, [enqueueCommands, redrawLine, writePrompt]);
 
   const disconnect = useCallback(() => {
     wsRef.current?.close(1000);
@@ -75,6 +180,7 @@ export function Terminal({ websiteId, apiBase = '/api' }) {
       cursorRef.current = 0;
       runningRef.current = false;
       promptVisibleRef.current = false;
+      queueRef.current = [];
       termRef.current?.write('\x1b[1;32mConnected\x1b[0m\r\n');
     };
 
@@ -93,8 +199,17 @@ export function Terminal({ websiteId, apiBase = '/api' }) {
         runningRef.current = false;
         if (Number(msg.code) !== 0) {
           termRef.current?.write(`\r\n\x1b[33m[exit code: ${msg.code}]\x1b[0m\r\n`);
+          // Stop a pasted batch on the first failure: the following lines
+          // usually assume the failed one worked (a failed `cd`, for example).
+          if (queueRef.current.length) {
+            const skipped = queueRef.current.length;
+            queueRef.current = [];
+            termRef.current?.write(`\x1b[33m[stopped: ${skipped} pasted line(s) skipped]\x1b[0m\r\n`);
+          }
+          writePrompt();
+        } else {
+          runNextQueued();
         }
-        writePrompt();
       } else if (msg.type === 'cwd') {
         promptRef.current = `${shortPath(msg.data)} $ `;
         if (!runningRef.current && !promptVisibleRef.current) writePrompt();
@@ -120,7 +235,7 @@ export function Terminal({ websiteId, apiBase = '/api' }) {
       setError('Connection failed');
       setConnected(false);
     };
-  }, [apiBase, websiteId, writePrompt]);
+  }, [apiBase, websiteId, runNextQueued, writePrompt]);
 
   useEffect(() => {
     if (!containerRef.current) return undefined;
@@ -185,22 +300,31 @@ export function Terminal({ websiteId, apiBase = '/api' }) {
     term.onData((data) => {
       const ws = wsRef.current;
       if (!ws || ws.readyState !== WebSocket.OPEN) {
-        if (data === '\r') term.write('\r\n\x1b[31mNot connected.\x1b[0m\r\n');
+        if (data === '\r' || data === '\n') term.write('\r\n\x1b[31mNot connected.\x1b[0m\r\n');
         return;
       }
 
-      if (data === '\r') {
+      // Anything longer than one character that is not an escape sequence is a
+      // paste (or a fast IME commit): route it through the paste handler so
+      // embedded newlines become separate commands instead of literal text.
+      if (data.length > 1 && !data.startsWith('\x1b')) {
+        handlePaste(data);
+        return;
+      }
+
+      if (data === '\r' || data === '\n') {
         const command = lineRef.current;
         term.write('\r\n');
-        if (command.trim()) {
-          historyRef.current = [command, ...historyRef.current.filter(item => item !== command)].slice(0, 50);
-        }
+        rememberCommand(command);
         historyIndexRef.current = -1;
         lineRef.current = '';
         cursorRef.current = 0;
-        runningRef.current = true;
-        promptVisibleRef.current = false;
-        ws.send(JSON.stringify({ type: 'input', data: command }));
+        if (runningRef.current) {
+          // A command is still running; queue this one instead of racing it.
+          if (isRunnableLine(command)) queueRef.current.push(command);
+        } else {
+          sendCommand(command);
+        }
         return;
       }
 
@@ -256,6 +380,10 @@ export function Terminal({ websiteId, apiBase = '/api' }) {
         term.write('^C\r\n');
         lineRef.current = '';
         cursorRef.current = 0;
+        if (queueRef.current.length) {
+          term.write(`\x1b[33m[cancelled: ${queueRef.current.length} queued line(s)]\x1b[0m\r\n`);
+          queueRef.current = [];
+        }
         writePrompt();
         return;
       }
@@ -278,7 +406,7 @@ export function Terminal({ websiteId, apiBase = '/api' }) {
       termRef.current = null;
       fitRef.current = null;
     };
-  }, [connect, disconnect, redrawLine, writePrompt]);
+  }, [connect, disconnect, handlePaste, redrawLine, rememberCommand, sendCommand, writePrompt]);
 
   return (
     <div className="terminal-wrapper">

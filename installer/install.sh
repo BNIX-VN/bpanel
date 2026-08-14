@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BPANEL_INSTALLER_VERSION="${BPANEL_INSTALLER_VERSION:-v1.0.76}"
+BPANEL_INSTALLER_VERSION="${BPANEL_INSTALLER_VERSION:-v1.0.84}"
 
 if [[ $EUID -ne 0 ]]; then
   echo "Please run this installer as root"
@@ -244,7 +244,7 @@ ask_panel_url() {
 install_base_packages() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update --allow-releaseinfo-change
-  apt-get install -y software-properties-common ca-certificates curl gnupg git composer nginx mariadb-server redis-server openssh-server python3 python3-pip python3-venv certbot python3-certbot-nginx tar zip unzip openssl ufw phpmyadmin acl
+  apt-get install -y software-properties-common ca-certificates curl gnupg git composer nginx mariadb-server redis-server openssh-server python3 python3-pip python3-venv certbot python3-certbot-nginx tar zip unzip openssl iptables ipset phpmyadmin acl
   systemctl enable --now nginx mariadb redis-server
   systemctl enable --now ssh 2>/dev/null || systemctl enable --now sshd 2>/dev/null || true
 }
@@ -594,7 +594,8 @@ install_privileged_helper() {
   install -m 0755 -o root -g root "${SCRIPT_DIR}/update.sh" /usr/local/sbin/bpanel-update
   install -m 0440 -o root -g root "${SCRIPT_DIR}/files/bpanel-sudoers" /etc/sudoers.d/bpanel
   visudo -c -f /etc/sudoers.d/bpanel >/dev/null
-  install -m 0755 -o root -g root "${SCRIPT_DIR}/rescue-ufw-blocklist.sh" /usr/local/sbin/bpanel-rescue-ufw-blocklist
+  install -m 0755 -o root -g root "${SCRIPT_DIR}/rescue-firewall.sh" /usr/local/sbin/bpanel-rescue-firewall
+  ln -sfn /usr/local/sbin/bpanel-rescue-firewall /usr/local/sbin/bpanel-rescue-ufw-blocklist
   if [[ -f "${PROJECT_ROOT}/change_IP.sh" ]]; then
     install -m 0755 -o root -g root "${PROJECT_ROOT}/change_IP.sh" /usr/local/sbin/bpanel-change-ip
   fi
@@ -788,7 +789,7 @@ SERVICE
   systemctl start bpanel-autotune.service >/dev/null 2>&1 || true
   if id -u bpanel >/dev/null 2>&1; then
     sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper certbot-auto-renew-install >/dev/null 2>&1 || true
-    sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper nginx-blocklist-timer-install >/dev/null 2>&1 || true
+    sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper firewall-blocklist-timer-install >/dev/null 2>&1 || true
   fi
   wait_for_backend
 }
@@ -962,67 +963,20 @@ setup_nginx() {
 }
 
 setup_firewall() {
-  local default_port seen_ssh_ports ssh_port
+  # IP filtering is iptables + ipset, driven by bpanel-helper. Any UFW install
+  # left over from an older BPanel release is removed here.
+  local ssh_port helper="/usr/local/sbin/bpanel-helper"
   set +e
-  ufw_delete_bpanel_rules() {
-    local pattern="$1" number
-    while read -r number; do
-      [[ -n "$number" ]] || continue
-      ufw --force delete "$number" >/dev/null 2>&1 || true
-    done < <(
-      ufw status numbered 2>/dev/null \
-        | awk -v pattern="$pattern" '
-            index($0, "bpanel:PanelZone") {
-              line = $0
-              if (!match(line, /^\[[[:space:]]*[0-9]+\]/)) {
-                next
-              }
-              number = substr(line, RSTART, RLENGTH)
-              gsub(/[^0-9]/, "", number)
-              sub(/^\[[[:space:]]*[0-9]+\][[:space:]]*/, "", line)
-              split(line, parts, /[[:space:]]+ALLOW[[:space:]]+/)
-              target = parts[1]
-              if (target == pattern || target == pattern " (v6)") {
-                print number
-              }
-            }
-          ' \
-        | sort -rn
-    )
-  }
-  ufw_panel_allow_port() {
-    local port="$1"
-    [[ "$port" =~ ^[0-9]+$ ]] || return 0
-    ufw_delete_bpanel_rules "${port}/tcp"
-    ufw insert 1 allow "${port}/tcp" comment "bpanel:PanelZone" >/dev/null 2>&1 \
-      || ufw insert 1 allow "${port}/tcp" >/dev/null 2>&1 \
-      || ufw allow "${port}/tcp" >/dev/null 2>&1 \
-      || true
-  }
-  ufw_panel_allow_app() {
-    local app="$1"
-    ufw_delete_bpanel_rules "$app"
-    ufw insert 1 allow "$app" comment "bpanel:PanelZone" >/dev/null 2>&1 \
-      || ufw insert 1 allow "$app" >/dev/null 2>&1 \
-      || ufw allow "$app" >/dev/null 2>&1 \
-      || true
-  }
-
-  ufw default deny incoming || true
-  ufw default allow outgoing || true
-  ufw_panel_allow_app OpenSSH
-  ufw_panel_allow_port 22
-  seen_ssh_ports="$(detect_ssh_ports || true)"
+  # sshd -T (used by the helper) misses ports only visible from the live SSH
+  # session or a non-default sshd_config, so seed those explicitly first.
   while read -r ssh_port; do
-    [[ -n "$ssh_port" ]] || continue
-    [[ "$ssh_port" == "22" ]] && continue
-    ufw_panel_allow_port "$ssh_port"
-  done <<<"$seen_ssh_ports"
-  ufw_panel_allow_app 'Nginx Full'
-  for default_port in 465 587 "${PANEL_PORT}"; do
-    ufw_panel_allow_port "$default_port"
-  done
-  ufw --force enable || true
+    [[ "$ssh_port" =~ ^[0-9]{1,5}$ ]] || continue
+    sudo -u bpanel env HOME="$APP_DIR" sudo -n "$helper" firewall-allow-port "$ssh_port" tcp >/dev/null 2>&1
+  done < <(detect_ssh_ports || true)
+  sudo -u bpanel env HOME="$APP_DIR" sudo -n "$helper" firewall-migrate
+  # A fresh install always enforces; firewall-migrate only inherits the
+  # previous state when upgrading an existing box.
+  sudo -u bpanel env HOME="$APP_DIR" sudo -n "$helper" firewall-enable
   set -e
   return 0
 }

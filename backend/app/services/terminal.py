@@ -16,48 +16,75 @@ from typing import Optional, Set
 from app.services import site_users
 from app.services.shell import shell
 
-# Whitelist of allowed commands for terminal access
-ALLOWED_COMMANDS: Set[str] = {
+# Toolchains a PHP / WordPress / Laravel site actually needs.
+RUNTIME_COMMANDS: Set[str] = {
     "php",
     "composer",
     "artisan",
     "wp",
+    "phpunit",
     "node",
     "npm",
     "npx",
     "yarn",
     "git",
-    "phpunit",
+}
+
+# General file and text utilities. These are the ones the helper path-checks,
+# so every path argument has to resolve inside the site owner's home.
+UTILITY_COMMANDS: Set[str] = {
     "ls",
     "cat",
     "mkdir",
+    "rmdir",
     "rm",
     "cp",
     "mv",
     "chmod",
     "chown",
-    "pwd",
-    "echo",
-    "cd",
-    "clear",
     "touch",
     "grep",
     "find",
     "tar",
     "zip",
     "unzip",
-    "curl",
-    "wget",
     "diff",
     "head",
     "tail",
     "less",
     "du",
     "df",
+    "sed",
+    "awk",
+    "wc",
+    "sort",
+    "uniq",
+    "stat",
+    "file",
+    "curl",
+    "wget",
+}
+
+# Commands that report state and never touch a caller-supplied path.
+INFO_COMMANDS: Set[str] = {
+    "pwd",
+    "echo",
+    "cd",
+    "clear",
     "date",
     "whoami",
     "which",
+    "id",
+    "uname",
+    "printenv",
+    "basename",
+    "dirname",
+    "realpath",
 }
+
+# Whitelist of allowed commands for terminal access. This mirrors the case
+# statement in bpanel-helper.sh `terminal-exec`; keep both in sync.
+ALLOWED_COMMANDS: Set[str] = RUNTIME_COMMANDS | UTILITY_COMMANDS | INFO_COMMANDS
 
 # Maximum command line length. This keeps accidental paste storms out of the
 # helper boundary while still leaving plenty of room for Composer/NPM flags.
@@ -66,13 +93,36 @@ MAX_COMMAND_CHARS = 4096
 # Maximum output size in bytes (1MB)
 MAX_OUTPUT_BYTES = 1024 * 1024
 
-# Default command timeout in seconds
-DEFAULT_TIMEOUT = 30
-
-# Maximum timeout for long-running commands
-MAX_TIMEOUT = 120
+# Wall-clock budget per command. Dependency installers and WordPress updates
+# routinely run for minutes, so they get their own budget instead of being
+# killed at the interactive default.
+DEFAULT_TIMEOUT = 60
+LONG_RUNNING_TIMEOUT = 900
+MAX_TIMEOUT = 1800
+LONG_RUNNING_COMMANDS: Set[str] = {
+    "composer",
+    "npm",
+    "npx",
+    "yarn",
+    "node",
+    "git",
+    "wp",
+    "artisan",
+    "php",
+    "phpunit",
+    "curl",
+    "wget",
+    "tar",
+    "zip",
+    "unzip",
+}
 
 _PHP_VERSION_RE = re.compile(r"^\d+\.\d+$")
+
+
+def timeout_for(command_name: str) -> int:
+    """Return the wall-clock budget for a command name."""
+    return LONG_RUNNING_TIMEOUT if command_name in LONG_RUNNING_COMMANDS else DEFAULT_TIMEOUT
 
 
 @dataclass
@@ -167,7 +217,7 @@ def exec_command(
     linux_user: str,
     command: str,
     cwd: Optional[str] = None,
-    timeout: int = DEFAULT_TIMEOUT,
+    timeout: Optional[int] = None,
     php_version: Optional[str] = None,
 ) -> CommandResult:
     """Execute a command as the website user.
@@ -176,16 +226,14 @@ def exec_command(
         linux_user: The Linux username for the website.
         command: The command to execute (e.g., "php artisan migrate").
         cwd: Working directory (defaults to user's home).
-        timeout: Maximum execution time in seconds.
+        timeout: Maximum execution time in seconds. Defaults to the per-command
+            budget from :func:`timeout_for`.
         php_version: PHP version to use (e.g. "8.4").  When provided the helper
             will call ``php8.4`` instead of the system default ``php`` binary so
             Composer platform checks pass for the correct version.
 
     Returns:
         CommandResult with exit_code, stdout, and stderr.
-
-    Raises:
-        RuntimeError: If the command is not allowed or execution fails.
     """
     if not linux_user:
         return CommandResult(
@@ -211,20 +259,28 @@ def exec_command(
 
     working_dir = cwd or f"/home/{linux_user}"
 
+    limit = timeout if timeout is not None else timeout_for(argv[0])
+    limit = max(1, min(int(limit), MAX_TIMEOUT))
+
+    helper_flags: list[str] = [f"--timeout={limit}"]
     # When a php_version is known, pass it so bpanel-helper can invoke the
     # correct versioned binary (php8.4) instead of the system default (php).
-    extra_env: list[str] = []
     if php_version and _PHP_VERSION_RE.match(php_version):
-        extra_env = [f"--php-version={php_version}"]
+        helper_flags.append(f"--php-version={php_version}")
 
     result = shell.privileged(
         "terminal-exec",
-        helper_args=[linux_user, working_dir, *extra_env, *argv],
+        helper_args=[linux_user, working_dir, *helper_flags, *argv],
         check=False,
+        # The helper kills the command itself; this is only a backstop for a
+        # wedged sudo/helper process, so give it a little extra headroom.
+        timeout=limit + 15,
     )
 
     stdout = _truncate_output(result.stdout)
     stderr = _truncate_output(result.stderr)
+    if result.returncode == 124 and not stderr.strip():
+        stderr = f"Command timed out after {limit}s"
 
     return CommandResult(
         exit_code=result.returncode,
@@ -237,7 +293,7 @@ def exec_batch(
     linux_user: str,
     commands: list[str],
     cwd: Optional[str] = None,
-    timeout: int = DEFAULT_TIMEOUT,
+    timeout: Optional[int] = None,
     php_version: Optional[str] = None,
 ) -> list[CommandResult]:
     """Execute multiple commands sequentially.

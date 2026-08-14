@@ -220,28 +220,48 @@ def test_write_backup_replaces_existing_backup(tmp_path):
     assert backup.read_text(encoding="utf-8") == "new backup"
 
 
-def test_firewall_numbered_rules_mark_defaults_protected(monkeypatch):
-    monkeypatch.setattr(firewall.settings, "panel_port", 2222)
-
-    rules = firewall.parse_numbered_rules(
-        "[ 1] 22/tcp                     ALLOW IN    Anywhere\n"
-        "[ 2] 2222/tcp                   ALLOW IN    Anywhere\n"
-        "[ 3] 465/tcp                    ALLOW IN    Anywhere\n"
-        "[ 4] 443/tcp                    DENY IN     Anywhere\n"
-        "[ 5] 5.6.7.8                    DENY IN     Anywhere # bpanel:UserZone\n"
-        "[ 6] 80/tcp                     ALLOW IN    Anywhere # bpanel:UserZone\n"
-        "[ 7] Anywhere                   DENY IN     10.0.0.0/8 # bpanel:UserZone:blocklist"
+def test_firewall_parse_rules_reads_helper_json():
+    rules = firewall.parse_rules(
+        '{"state": "enabled", "active": true, "rules": ['
+        '{"id": 1, "action": "DENY", "to": "any", "from": "5.6.7.8/32",'
+        ' "ip": "5.6.7.8/32", "port": null, "protocol": null,'
+        ' "zone": "UserZone", "protected": false},'
+        '{"id": 2, "action": "ALLOW", "to": "3306/tcp", "from": "any",'
+        ' "ip": null, "port": "3306", "protocol": "tcp",'
+        ' "zone": "UserZone", "protected": false},'
+        '{"id": 0, "action": "ALLOW", "to": "22/tcp", "from": "any",'
+        ' "ip": null, "port": "22", "protocol": "tcp",'
+        ' "zone": "PanelZone", "protected": true}]}'
     )
 
-    assert [rule["id"] for rule in rules] == [1, 2, 3, 4, 5, 6, 7]
-    assert rules[0]["protected"] is True
-    assert rules[1]["protected"] is True
-    assert rules[2]["protected"] is True
-    assert rules[3]["protected"] is False
-    assert rules[4]["protected"] is False
-    assert rules[5]["protected"] is False
-    assert rules[6]["protected"] is False
-    assert rules[0]["zone"] == "PanelZone"
-    assert rules[4]["zone"] == "UserZone"
-    assert rules[4]["from"] == "Anywhere"
-    assert rules[6]["from"] == "10.0.0.0/8"
+    assert [rule["id"] for rule in rules] == [1, 2, 0]
+    assert rules[0]["from"] == "5.6.7.8/32"
+    assert rules[1]["to"] == "3306/tcp"
+    assert rules[2]["zone"] == "PanelZone"
+
+
+def test_firewall_parse_rules_tolerates_garbage():
+    assert firewall.parse_rules("not json at all") == []
+    assert firewall.parse_rules("") == []
+
+
+def test_firewall_protected_rules_cannot_be_deleted(monkeypatch):
+    monkeypatch.setattr(firewall.settings, "panel_port", 2222)
+
+    assert firewall.is_protected_rule({"id": 0, "zone": "PanelZone", "protected": True}) is True
+    assert firewall.is_protected_rule(
+        {"id": 4, "action": "ALLOW", "port": "2222", "ip": None, "zone": "UserZone"}
+    ) is True
+    assert firewall.is_protected_rule(
+        {"id": 5, "action": "ALLOW", "port": "3306", "ip": None, "zone": "UserZone"}
+    ) is False
+    assert firewall.is_protected_rule(
+        {"id": 6, "action": "DENY", "port": None, "ip": "5.6.7.8/32", "zone": "UserZone"}
+    ) is False
+
+
+def test_firewall_delete_rule_rejects_unknown_id(monkeypatch):
+    monkeypatch.setattr(firewall, "rules", lambda: [])
+
+    with pytest.raises(ValueError, match="was not found"):
+        firewall.delete_rule(9)

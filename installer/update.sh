@@ -345,44 +345,6 @@ trap finish_update_script EXIT
 # secondary safety net for non-fatal paths that call `|| true`/return codes.
 trap 'update_progress "${progress_percent:-0}" "failed" "Update failed at phase: ${progress_phase:-unknown}" 2>/dev/null || true' ERR
 
-ufw_delete_bpanel_rules() {
-  local pattern="$1" number
-  command -v ufw >/dev/null 2>&1 || return 0
-  while read -r number; do
-    [[ -n "$number" ]] || continue
-    ufw --force delete "$number" >/dev/null 2>&1 || true
-  done < <(
-    ufw status numbered 2>/dev/null \
-      | awk -v pattern="$pattern" '
-          index($0, "bpanel:PanelZone") {
-            line = $0
-            if (!match(line, /^\[[[:space:]]*[0-9]+\]/)) {
-              next
-            }
-            number = substr(line, RSTART, RLENGTH)
-            gsub(/[^0-9]/, "", number)
-            sub(/^\[[[:space:]]*[0-9]+\][[:space:]]*/, "", line)
-            split(line, parts, /[[:space:]]+ALLOW[[:space:]]+/)
-            target = parts[1]
-            if (target == pattern || target == pattern " (v6)") {
-              print number
-            }
-          }
-        ' \
-      | sort -rn
-  )
-}
-
-ufw_panel_allow_port() {
-  local port="$1"
-  [[ "$port" =~ ^[0-9]+$ ]] || return 0
-  ufw_delete_bpanel_rules "${port}/tcp"
-  ufw insert 1 allow "${port}/tcp" comment "bpanel:PanelZone" >/dev/null 2>&1 \
-    || ufw insert 1 allow "${port}/tcp" >/dev/null 2>&1 \
-    || ufw allow "${port}/tcp" >/dev/null 2>&1 \
-    || true
-}
-
 detect_server_ip() {
   hostname -I 2>/dev/null | awk '{print $1}' || true
 }
@@ -682,11 +644,6 @@ WantedBy=multi-user.target
 SERVICE
   systemctl daemon-reload
   systemctl enable bpanel-autotune.service >/dev/null 2>&1 || true
-  if command -v ufw >/dev/null 2>&1; then
-    for default_port in 80 443 465 587 "${panel_port}"; do
-      ufw_panel_allow_port "$default_port"
-    done
-  fi
   rm -f /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf 2>/dev/null || true
   rm -f /etc/nginx/sites-enabled/bpanel.conf /etc/nginx/sites-available/bpanel.conf 2>/dev/null || true
   write_tools_nginx_config
@@ -938,9 +895,10 @@ if [[ -f "$SOURCE_DIR/installer/files/bpanel-helper.sh" ]]; then
   fi
 fi
 
-if [[ -f "$SOURCE_DIR/installer/rescue-ufw-blocklist.sh" ]]; then
-  log "Refreshing UFW blocklist rescue command"
-  install -m 0755 -o root -g root "$SOURCE_DIR/installer/rescue-ufw-blocklist.sh" /usr/local/sbin/bpanel-rescue-ufw-blocklist
+if [[ -f "$SOURCE_DIR/installer/rescue-firewall.sh" ]]; then
+  log "Refreshing firewall rescue command"
+  install -m 0755 -o root -g root "$SOURCE_DIR/installer/rescue-firewall.sh" /usr/local/sbin/bpanel-rescue-firewall
+  ln -sfn /usr/local/sbin/bpanel-rescue-firewall /usr/local/sbin/bpanel-rescue-ufw-blocklist
 fi
 
 if [[ -f "$SOURCE_DIR/change_IP.sh" ]]; then
@@ -965,10 +923,25 @@ if id -u bpanel >/dev/null 2>&1; then
   sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper waf-install || \
     echo "WARNING: WAF engine installation failed; continuing without ModSecurity."
   sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper certbot-auto-renew-install >/dev/null 2>&1 || true
-  sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper nginx-blocklist-timer-install >/dev/null 2>&1 || true
-  sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper nginx-blocklist-run >/dev/null 2>&1 || true
+  sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper firewall-blocklist-timer-install >/dev/null 2>&1 || true
 else
   echo "  (bpanel user not found; skipping WAF install - run install.sh first)"
+fi
+
+# --- Firewall: move IP blocking from UFW/Nginx to iptables + ipset ---------
+log "Migrating firewall to iptables + ipset"
+if ! command -v ipset >/dev/null 2>&1 || ! command -v iptables >/dev/null 2>&1; then
+  DEBIAN_FRONTEND=noninteractive apt-get install -y iptables ipset >/dev/null 2>&1 || \
+    echo "WARNING: could not install iptables/ipset; firewall migration skipped."
+fi
+if id -u bpanel >/dev/null 2>&1 && command -v ipset >/dev/null 2>&1; then
+  # firewall-migrate imports surviving UFW rules, removes UFW and the Nginx
+  # geo-map blocklist, then applies the iptables chain and ipsets.
+  sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper firewall-migrate || \
+    echo "WARNING: firewall migration failed; run 'bpanel-rescue-firewall' if the server is unreachable."
+  sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper firewall-blocklist-run >/dev/null 2>&1 || true
+else
+  echo "  (skipping firewall migration; bpanel user or ipset missing)"
 fi
 
 # --- Restore ownership so bpanel user can read/write the deploy ------------
