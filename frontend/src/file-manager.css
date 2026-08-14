@@ -107,8 +107,8 @@
 }
 
 .file-job.error {
-  border-color: #fecaca;
-  background: #fff1f2;
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
   color: var(--danger);
 }
 
@@ -145,14 +145,14 @@
 
 .crumb:hover:not(:disabled) {
   background: var(--primary-light);
-  border-color: #cfe0f7;
-  color: var(--brand-navy);
+  border-color: var(--primary-border);
+  color: var(--primary-text);
 }
 
 .crumb:disabled {
   background: var(--primary-light);
-  border-color: #cfe0f7;
-  color: var(--primary);
+  border-color: var(--primary-border);
+  color: var(--primary-text);
   opacity: 1;
 }
 
@@ -332,7 +332,7 @@
 
 .file-row-actions .mini.danger {
   background: var(--surface);
-  border: 1px solid #fecaca;
+  border: 1px solid var(--danger-border);
   color: var(--danger);
   min-width: 26px;
   width: 26px;
@@ -340,8 +340,8 @@
 }
 
 .file-row-actions .mini.danger:hover:not(:disabled) {
-  background: #fee2e2;
-  border-color: #fca5a5;
+  background: var(--danger-bg);
+  border-color: var(--danger);
   color: var(--danger);
 }
 
@@ -417,24 +417,24 @@
 /* Ace editor replacement for CodeMirror. */
 .code-editor-host.ace_editor,
 .code-editor-host .ace_editor {
-  background: #ffffff;
-  color: #0f172a;
+  background: var(--editor-bg);
+  color: var(--editor-fg);
   font: 13px/22px Consolas, 'SFMono-Regular', 'Liberation Mono', Menlo, monospace;
 }
 
 .code-editor-host .ace_gutter {
-  background: #f6f8fb;
-  color: #64748b;
-  border-right: 1px solid #dbe4f0;
+  background: var(--editor-gutter-bg);
+  color: var(--editor-gutter-fg);
+  border-right: 1px solid var(--editor-border);
 }
 
 .code-editor-host .ace_marker-layer .ace_active-line,
 .code-editor-host .ace_gutter-active-line {
-  background: #edf6ff;
+  background: var(--editor-active-line);
 }
 
 .code-editor-host .ace_marker-layer .ace_selection {
-  background: #2563eb !important;
+  background: var(--editor-selection) !important;
   opacity: 1;
 }
 
@@ -448,43 +448,43 @@
 
 .code-editor-host .bpanel-ace-selected-text {
   position: absolute;
-  color: #ffffff;
+  color: var(--editor-selection-fg);
   font: 13px/22px Consolas, 'SFMono-Regular', 'Liberation Mono', Menlo, monospace;
   overflow: hidden;
   white-space: pre;
-  -webkit-text-fill-color: #ffffff;
+  -webkit-text-fill-color: var(--editor-selection-fg);
 }
 
 .code-editor-host .ace_marker-layer .ace_selected-word {
-  border: 1px solid #2f6feb;
+  border: 1px solid var(--editor-selection);
 }
 
 /* Search match highlighting for ext-searchbox */
 .code-editor-host .ace_search {
-  background: #f6f8fb;
-  border: 1px solid #dbe4f0;
+  background: var(--editor-gutter-bg);
+  border: 1px solid var(--editor-border);
   border-radius: 4px;
   padding: 4px 8px;
 }
 .code-editor-host .ace_search_field {
-  background: #ffffff;
-  border: 1px solid #dbe4f0;
+  background: var(--editor-bg);
+  border: 1px solid var(--editor-border);
   border-radius: 3px;
   padding: 2px 6px;
 }
 .code-editor-host .ace_searchbtn {
   background: transparent;
   border: none;
-  color: #64748b;
+  color: var(--editor-gutter-fg);
   cursor: pointer;
   padding: 0 4px;
 }
 .code-editor-host .ace_searchbtn:hover {
-  color: #0f172a;
+  color: var(--editor-fg);
 }
 .code-editor-host .ace_replace {
-  background: #ffffff;
-  border: 1px solid #dbe4f0;
+  background: var(--editor-bg);
+  border: 1px solid var(--editor-border);
   border-radius: 3px;
   padding: 2px 6px;
 }
