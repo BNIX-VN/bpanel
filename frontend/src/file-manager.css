@@ -5,19 +5,15 @@
   align-items: stretch;
 }
 
-.file-panel,
-.file-editor {
+.file-panel {
+  display: grid;
+  gap: 0;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 10px;
   min-width: 0;
   box-shadow: none;
-}
-
-.file-panel {
-  display: grid;
-  gap: 0;
 }
 
 .file-controls {
@@ -360,63 +356,11 @@
   font-weight: 700;
 }
 
-.file-editor .editor-tools {
-  display: grid;
-  grid-template-columns: 1fr auto auto auto;
-  gap: 8px;
-  margin: 0 0 10px;
-}
-
-.file-editor {
-  display: flex;
-  flex-direction: column;
-}
-
-.file-editor .file-meta {
-  margin-bottom: 10px;
-}
-
-.editor-status {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px 14px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--text-muted);
-  font-size: 12px;
-  font-weight: 700;
-  margin-bottom: 8px;
-  padding: 8px 10px;
-}
-
-.editor-status strong {
-  color: var(--text);
-}
-
-.code-editor-frame {
-  min-height: min(74vh, 820px);
-  overflow: hidden;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-}
-
-.code-editor-host,
-.code-editor-host .ace_editor {
-  min-height: min(74vh, 820px);
-  height: min(74vh, 820px);
-}
-
-.code-editor-host .ace_scroller {
-  overflow: auto;
-}
-
-/* Ace editor replacement for CodeMirror. */
-.code-editor-host.ace_editor,
-.code-editor-host .ace_editor {
+/* The host div is turned into the Ace editor itself, so it carries .ace_editor.
+   Ace scrolls virtually through .ace_scrollbar-v/-h: never give .ace_scroller
+   its own overflow, or a second (native) scrollbar appears and the last lines
+   become unreachable. */
+.code-editor-host.ace_editor {
   background: var(--editor-bg);
   color: var(--editor-fg);
   font: 13px/22px Consolas, 'SFMono-Regular', 'Liberation Mono', Menlo, monospace;
@@ -493,6 +437,8 @@
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh; /* beats the global `main { min-height: 100vh }` on mobile */
+  min-height: 0;
   overflow: hidden;
   background: var(--surface-alt);
   color: var(--text);
@@ -562,27 +508,22 @@
 }
 
 .standalone-editor-body {
+  display: flex;
   flex: 1 1 auto;
   min-height: 0;
   padding: 10px;
 }
 
-.standalone-editor-body .code-editor-host,
-.standalone-editor-body .code-editor-host .ace_editor {
-  height: 100%;
-  min-height: 0;
-}
-
-.standalone-editor-body .ace_editor {
+.standalone-editor-body .code-editor-host {
+  flex: 1 1 auto;
+  min-width: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  overflow: hidden;
 }
 
 @media (max-width: 1100px) {
   .file-manager,
-  .file-controls,
-  .file-editor .editor-tools {
+  .file-controls {
     grid-template-columns: 1fr;
   }
 
@@ -601,13 +542,6 @@
     grid-column: 2;
     justify-content: flex-start;
     flex-wrap: wrap;
-  }
-
-  .code-editor-frame,
-  .code-editor-host,
-  .code-editor-host .ace_editor {
-    min-height: 520px;
-    height: 520px;
   }
 }
 

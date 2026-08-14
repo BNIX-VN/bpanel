@@ -147,7 +147,6 @@ function WordPressIcon({ size = 14 }) {
     </svg>
   );
 }
-const EDITOR_LINE_HEIGHT = 22;
 const EDITOR_FONT_FAMILY = "Consolas, 'SFMono-Regular', 'Liberation Mono', Menlo, monospace";
 const WAF_ACCESS_LOG_DEFAULTS = {
   websiteId: '',
@@ -349,24 +348,6 @@ function renderAceSelectionTextOverlay(editor, overlay) {
   });
 }
 
-function applyAceLineHeight(editor) {
-  if (!editor?.renderer) return;
-  const { renderer } = editor;
-  const characterWidth = renderer.characterWidth || renderer.$textLayer?.getCharacterWidth?.() || 8;
-  editor.container?.style.setProperty('font-family', EDITOR_FONT_FAMILY);
-  editor.container?.style.setProperty('font-size', '13px');
-  editor.container?.style.setProperty('line-height', `${EDITOR_LINE_HEIGHT}px`);
-  renderer.$textLayer?.$fontMetrics?.checkForSizeChanges?.({ width: characterWidth, height: EDITOR_LINE_HEIGHT });
-  renderer.updateFontSize?.();
-  renderer.updateCharacterSize?.();
-  renderer.lineHeight = EDITOR_LINE_HEIGHT;
-  if (renderer.layerConfig) renderer.layerConfig.lineHeight = EDITOR_LINE_HEIGHT;
-  if (renderer.scroller) renderer.scroller.style.lineHeight = `${EDITOR_LINE_HEIGHT}px`;
-  renderer.updateFull?.(true);
-  renderer.updateText?.();
-  renderer.updateCursor?.();
-}
-
 const ACE_THEMES = { light: 'ace/theme/textmate', dark: 'ace/theme/tomorrow_night' };
 const aceThemeFor = theme => ACE_THEMES[theme] || ACE_THEMES.light;
 
@@ -414,7 +395,6 @@ function CodeEditor({ value, mode, disabled, onChange, onCursorChange }) {
       enableSnippets: false,
       fontFamily: EDITOR_FONT_FAMILY,
     });
-    applyAceLineHeight(editor);
     editor.session.setUseWorker(false);
     editor.session.setNewLineMode('unix');
 
@@ -435,21 +415,12 @@ function CodeEditor({ value, mode, disabled, onChange, onCursorChange }) {
     editor.session.on('change', handleChange);
     editor.selection.on('changeCursor', reportCursor);
     editor.selection.on('changeSelection', refreshSelectionOverlay);
-    const afterRender = () => {
-      if (Math.round(editor.renderer.lineHeight || 0) !== EDITOR_LINE_HEIGHT) {
-        applyAceLineHeight(editor);
-      }
-      refreshSelectionOverlay();
-    };
+    // Ace repositions its layers on every render (scroll included), so the
+    // overlay has to follow along.
+    const afterRender = refreshSelectionOverlay;
     editor.renderer.on('afterRender', afterRender);
     editorRef.current = editor;
-    requestAnimationFrame(() => {
-      if (destroyed) return;
-      applyAceLineHeight(editor);
-      refreshSelectionOverlay();
-    });
     reportCursor();
-    refreshSelectionOverlay();
 
     return () => {
       destroyed = true;
