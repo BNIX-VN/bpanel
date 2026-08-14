@@ -12,11 +12,13 @@ import 'ace-builds/src-noconflict/mode-php';
 import 'ace-builds/src-noconflict/mode-text';
 import 'ace-builds/src-noconflict/mode-yaml';
 import 'ace-builds/src-noconflict/theme-textmate';
-import { Archive, ArchiveRestore, Ban, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, MoveRight, Network, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
+import 'ace-builds/src-noconflict/theme-tomorrow_night';
+import { Archive, ArchiveRestore, Ban, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
 import { Terminal } from './components/Terminal';
 import './style.css';
 import './brand.css';
 import './file-manager.css';
+import './theme.css';
 
 const API = import.meta.env.VITE_API_URL || '/api';
 const DEFAULT_SERVICE_NAMES = ['bpanel-api', 'nginx', 'php8.3-fpm', 'php8.4-fpm', 'mariadb', 'redis-server'];
@@ -54,6 +56,88 @@ const PAGE_ROUTES = {
   updates: '/updates',
   services: '/services',
 };
+
+/* ---------------------------------------------------------------
+   Theme (light / dark)
+   The initial value is applied by the inline script in index.html,
+   so React only has to keep it in sync from here on.
+--------------------------------------------------------------- */
+const THEME_STORAGE_KEY = 'bpanel-theme';
+const THEME_EVENT = 'bpanel-theme-change';
+
+function readStoredTheme() {
+  try {
+    const stored = localStorage.getItem(THEME_STORAGE_KEY);
+    return stored === 'dark' || stored === 'light' ? stored : null;
+  } catch { return null; }
+}
+
+function systemTheme() {
+  try { return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+  catch { return 'light'; }
+}
+
+function currentTheme() {
+  const attr = document.documentElement.getAttribute('data-theme');
+  if (attr === 'dark' || attr === 'light') return attr;
+  return readStoredTheme() || systemTheme();
+}
+
+function applyTheme(theme) {
+  const root = document.documentElement;
+  root.setAttribute('data-theme', theme);
+  root.style.colorScheme = theme;
+  document.dispatchEvent(new CustomEvent(THEME_EVENT, { detail: theme }));
+}
+
+/* Subscribe to the active theme without owning it. */
+function useThemeName() {
+  const [theme, setTheme] = useState(currentTheme);
+  useEffect(() => {
+    const handler = event => setTheme(event.detail);
+    document.addEventListener(THEME_EVENT, handler);
+    return () => document.removeEventListener(THEME_EVENT, handler);
+  }, []);
+  return theme;
+}
+
+/* Owns the theme: persists the user's choice, follows the OS until they pick one. */
+function useTheme() {
+  const [theme, setTheme] = useState(currentTheme);
+
+  useEffect(() => { applyTheme(theme); }, [theme]);
+
+  useEffect(() => {
+    let media;
+    try { media = window.matchMedia('(prefers-color-scheme: dark)'); } catch { return undefined; }
+    const onChange = () => { if (!readStoredTheme()) setTheme(systemTheme()); };
+    media.addEventListener('change', onChange);
+    return () => media.removeEventListener('change', onChange);
+  }, []);
+
+  const toggleTheme = useCallback(() => {
+    setTheme(prev => {
+      const next = prev === 'dark' ? 'light' : 'dark';
+      try { localStorage.setItem(THEME_STORAGE_KEY, next); } catch {}
+      return next;
+    });
+  }, []);
+
+  return [theme, toggleTheme];
+}
+
+function ThemeToggle({ theme, onToggle, className = '' }) {
+  const isDark = theme === 'dark';
+  const label = isDark ? 'Switch to light mode' : 'Switch to dark mode';
+  return <button
+    type="button"
+    className={`theme-toggle ${className}`.trim()}
+    onClick={onToggle}
+    title={label}
+    aria-label={label}
+    aria-pressed={isDark}
+  >{isDark ? <Sun size={16}/> : <Moon size={16}/>}</button>;
+}
 
 function WordPressIcon({ size = 14 }) {
   return (
@@ -283,21 +367,30 @@ function applyAceLineHeight(editor) {
   renderer.updateCursor?.();
 }
 
+const ACE_THEMES = { light: 'ace/theme/textmate', dark: 'ace/theme/tomorrow_night' };
+const aceThemeFor = theme => ACE_THEMES[theme] || ACE_THEMES.light;
+
 function CodeEditor({ value, mode, disabled, onChange, onCursorChange }) {
   const hostRef = useRef(null);
   const editorRef = useRef(null);
   const suppressChangeRef = useRef(false);
   const onChangeRef = useRef(onChange);
   const onCursorChangeRef = useRef(onCursorChange);
+  const themeName = useThemeName();
+  const themeRef = useRef(themeName);
 
   useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
   useEffect(() => { onCursorChangeRef.current = onCursorChange; }, [onCursorChange]);
+  useEffect(() => {
+    themeRef.current = themeName;
+    editorRef.current?.setTheme(aceThemeFor(themeName));
+  }, [themeName]);
 
   useEffect(() => {
     if (!hostRef.current) return undefined;
     const editor = ace.edit(hostRef.current, {
       mode: `ace/mode/${aceModeName(mode)}`,
-      theme: 'ace/theme/textmate',
+      theme: aceThemeFor(themeRef.current),
       value: value || '',
       readOnly: !!disabled,
       showPrintMargin: false,
@@ -403,6 +496,7 @@ function App() {
   // Auth is now cookie-based (HttpOnly bpanel_session). The SPA does not see
   // the JWT at all. We track only whether the user is authenticated in memory.
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [theme, toggleTheme] = useTheme();
   const [currentUser, setCurrentUser] = useState(null);
   const [bootstrapping, setBootstrapping] = useState(true);
   const [standaloneEditor] = useState(() => editorParamsFromLocation());
@@ -3969,7 +4063,7 @@ function App() {
         </div>}
         {daBulkImportJob?.status === 'completed' && daBulkImportJob.results && <div className="da-scan-result" style={{ marginTop: 12 }}>
           <h4>Bulk Restore Results</h4>
-          {daBulkImportJob.results.map((item, i) => <div key={i} className="da-user-block" style={{ borderLeft: item.status === 'completed' ? '3px solid var(--color-success, #22c55e)' : '3px solid var(--color-danger, #ef4444)' }}>
+          {daBulkImportJob.results.map((item, i) => <div key={i} className="da-user-block" style={{ borderLeft: item.status === 'completed' ? '3px solid var(--success)' : '3px solid var(--danger)' }}>
             <p><strong>{item.archive}</strong> — <span className={item.status === 'completed' ? 'badge ok' : 'badge bad'}>{item.status}</span></p>
             {item.result?.summary?.map((s, j) => <p key={j} className="hint">{s.username}: {s.imported_domains?.length || 0} domain(s), {s.databases?.length || 0} db(s)</p>)}
             {item.result?.credentials && <details style={{ marginTop: 4 }}>
@@ -4779,6 +4873,7 @@ function App() {
           <button disabled={!selectedWebsiteId || !!loading} onClick={() => readFile(filePath)}><RefreshCw size={14}/> Reload</button>
           <button disabled={!selectedWebsiteId || !!loading} onClick={writeFile}>Save</button>
           <button disabled={!selectedWebsiteId || !filePath || !!loading} onClick={() => downloadFile(filePath)}><Download size={14}/></button>
+          <ThemeToggle theme={theme} onToggle={toggleTheme}/>
           <button className="secondary-light" onClick={() => window.close()}><X size={14}/> Close</button>
         </div>
       </header>
@@ -4828,13 +4923,16 @@ function App() {
   if (!isAuthenticated) {
     return <main className="login-page">
       <section className="login-card">
-        <div className="login-brand">
-          {renderBrandMark('login-brand-mark')}
-          <div>
-            <p className="eyebrow">Server Management Panel</p>
-            <h1>{panelSettings.app_name || 'BPanel'}</h1>
-            <p className="hint">Manage websites, databases, backups, SSL, and services.</p>
+        <div className="login-card-head">
+          <div className="login-brand">
+            {renderBrandMark('login-brand-mark')}
+            <div>
+              <p className="eyebrow">Server Management Panel</p>
+              <h1>{panelSettings.app_name || 'BPanel'}</h1>
+              <p className="hint">Manage websites, databases, backups, SSL, and services.</p>
+            </div>
           </div>
+          <ThemeToggle theme={theme} onToggle={toggleTheme}/>
         </div>
         <div className="login-form">
           <input value={username} onChange={e => setUsername(e.target.value)} placeholder="Username" autoComplete="username" />
@@ -4894,6 +4992,7 @@ function App() {
           <div className="login logged-in">
             <div className="account-pill" title={accountLabel}><span>Logged in as</span><strong>{accountLabel}</strong></div>
             <div className="top-actions">
+              <ThemeToggle theme={theme} onToggle={toggleTheme}/>
               <button className="secondary compact-btn" onClick={logout} aria-label="Logout" title="Logout"><LogOut size={15}/><span className="btn-label">Logout</span></button>
             </div>
           </div>
