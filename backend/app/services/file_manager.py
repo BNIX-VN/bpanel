@@ -356,10 +356,12 @@ def chmod_entry(website: Website, relative_path: str, mode: str) -> str:
             raise ValueError("File mode cannot be world-writable")
     if website.linux_user:
         root = Path(website.root_path).resolve()
-        relative = str(target.relative_to(root)).replace("\\", "/") if target != root else "."
+        # Deliberately not run as the site user: that account is outside the
+        # site group, so the kernel would strip setgid from directories and
+        # break group inheritance under public_html.
         shell.privileged(
-            "terminal-exec",
-            helper_args=[website.linux_user, str(root), "chmod", clean_mode, relative],
+            "site-chmod",
+            helper_args=[website.linux_user, str(root), str(target), clean_mode],
             fallback=["chmod", clean_mode, str(target)],
         )
         return str(target)

@@ -2916,6 +2916,22 @@ PY
     fix_site_tree "$target" "$2"
     ;;
 
+  site-chmod)
+    # Apply an explicit mode to one entry inside a managed site tree.
+    # Runs as root on purpose: the site user is not a member of the site group,
+    # so a chmod performed as that user has its setgid bit cleared by the
+    # kernel, which would silently break group inheritance on site folders.
+    [[ $# -eq 4 ]] || deny "usage: site-chmod <site-user> <site-root> <absolute-path> <mode>"
+    user="$1"; root_arg="$2"; path_arg="$3"; mode_arg="$4"
+    require_linux_user "$user"
+    [[ "$mode_arg" =~ ^[0-7]{3,4}$ ]] || deny "invalid mode: $mode_arg"
+    target=$(require_bound_managed_path "$user" "$root_arg" "$path_arg")
+    [[ -L "$target" ]] && deny "refusing to chmod a symlink: $target"
+    [[ -e "$target" ]] || deny "path not found: $target"
+    [[ "$(stat -c '%U' "$target")" == "$user" ]] || deny "path is not owned by $user: $target"
+    chmod "$mode_arg" -- "$target"
+    ;;
+
   site-document-root-ensure)
     [[ $# -eq 3 ]] || deny "usage: site-document-root-ensure <site-user> <site-root> <relative-path>"
     user="$1"; root_arg="$2"; rel_arg="$3"

@@ -220,7 +220,7 @@
 
 .file-item {
   display: grid;
-  grid-template-columns: 20px minmax(240px, 1fr) 52px 82px auto;
+  grid-template-columns: 20px minmax(240px, 1fr) 62px 82px auto;
   gap: 8px;
   align-items: center;
   background: var(--surface);
@@ -304,6 +304,29 @@
   font-family: Consolas, 'SFMono-Regular', 'Liberation Mono', Menlo, monospace;
   font-weight: 700;
   white-space: nowrap;
+}
+
+button.file-mode {
+  justify-self: start;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 2px 6px;
+  min-height: 0;
+  height: auto;
+  cursor: pointer;
+}
+
+button.file-mode:hover:not(:disabled) {
+  background: var(--surface-sunken);
+  border-color: var(--border-hover);
+  color: var(--text);
+}
+
+button.file-mode:disabled {
+  cursor: default;
+  min-height: 0;
+  height: auto;
 }
 
 .file-delete {
@@ -695,4 +718,180 @@
   .standalone-editor-actions {
     justify-content: flex-start;
   }
+}
+
+/* --- Permissions (chmod) dialog ------------------------------------------ */
+.chmod-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: var(--overlay);
+  backdrop-filter: blur(2px);
+}
+
+.chmod-dialog {
+  display: grid;
+  gap: 12px;
+  width: min(380px, 100%);
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 18px 48px rgba(15, 23, 42, .28);
+}
+
+.chmod-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.chmod-head h3 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 15px;
+  color: var(--text);
+}
+
+.chmod-head p {
+  margin: 3px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.chmod-grid {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.chmod-grid th {
+  padding: 4px 6px;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.chmod-grid thead th {
+  text-align: center;
+}
+
+.chmod-grid tbody th {
+  text-align: left;
+  color: var(--text);
+}
+
+.chmod-grid td {
+  padding: 4px 6px;
+  text-align: center;
+}
+
+.chmod-grid tbody tr + tr th,
+.chmod-grid tbody tr + tr td {
+  border-top: 1px solid var(--border);
+}
+
+.chmod-grid input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+
+.chmod-grid input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+  opacity: .4;
+}
+
+.chmod-value {
+  display: flex;
+  align-items: end;
+  gap: 10px;
+}
+
+.chmod-value label {
+  display: grid;
+  gap: 4px;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.chmod-value input {
+  width: 84px;
+  font-family: Consolas, 'SFMono-Regular', 'Liberation Mono', Menlo, monospace;
+  font-weight: 700;
+  letter-spacing: .08em;
+}
+
+.chmod-value code {
+  padding-bottom: 8px;
+  font-family: Consolas, 'SFMono-Regular', 'Liberation Mono', Menlo, monospace;
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  color: var(--text-muted);
+}
+
+.chmod-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chmod-presets .mini {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  font-family: Consolas, 'SFMono-Regular', 'Liberation Mono', Menlo, monospace;
+  font-weight: 700;
+}
+
+.chmod-presets .mini small {
+  font-family: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  opacity: .75;
+}
+
+.chmod-setgid {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.chmod-setgid input[type="checkbox"] {
+  margin-top: 2px;
+  width: 15px;
+  height: 15px;
+  accent-color: var(--primary);
+  flex: none;
+}
+
+.chmod-note {
+  margin: 0;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.chmod-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }

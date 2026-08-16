@@ -433,6 +433,84 @@ for root in roots:
 PY
 }
 
+# Cron lines written before the PHP pinning fix call a bare `php`, which
+# resolves through /etc/alternatives to the newest installed version instead of
+# the version the website runs on, and carry shell-quoted redirections such as
+# '>/dev/null' that never redirect anything. Repair both in place.
+migrate_site_cron_php_binary() {
+  local db_path="$APP_DIR/backend/bpanel.db"
+  [[ -f "$db_path" ]] || return 0
+  [[ -d /var/spool/cron/crontabs ]] || return 0
+  BPANEL_DB_PATH="$db_path" python3 - <<'PY'
+import os
+import re
+import shlex
+import sqlite3
+import subprocess
+from pathlib import Path
+
+PHP_VERSION_RE = re.compile(r"^\d\.\d$")
+INTERPRETER_RE = re.compile(r"(&&\s+)((?:/usr/bin/)?php(?:\d\.\d)?)(\s)")
+MARKER_RE = re.compile(r"#\s*bpanel:([a-z0-9.\-]{3,253})\s*$")
+QUOTED_REDIRECT_RE = re.compile(r"""\s'((?:\d?>>?|\d?>&\d)[^']*)'""")
+
+php_versions = {}
+with sqlite3.connect(f"file:{os.environ['BPANEL_DB_PATH']}?mode=ro", uri=True) as db:
+    for domain, php_version in db.execute("select domain, php_version from websites"):
+        php_versions[(domain or "").lower()] = (php_version or "").strip()
+
+
+def php_binary(domain):
+    version = php_versions.get(domain, "")
+    if not PHP_VERSION_RE.fullmatch(version):
+        return None
+    candidate = f"/usr/bin/php{version}"
+    return candidate if Path(candidate).exists() else None
+
+
+for spool in sorted(Path("/var/spool/cron/crontabs").iterdir()):
+    if not spool.is_file():
+        continue
+    try:
+        original = spool.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        continue
+    lines = original.splitlines()
+    changed = False
+    for index, line in enumerate(lines):
+        marker = MARKER_RE.search(line)
+        if not marker:
+            continue
+        new_line = line
+        # Unquote redirections so /bin/sh treats them as syntax again.
+        new_line = QUOTED_REDIRECT_RE.sub(lambda match: " " + match.group(1), new_line)
+        binary = php_binary(marker.group(1).lower())
+        if binary:
+            new_line = INTERPRETER_RE.sub(
+                lambda match: f"{match.group(1)}{shlex.quote(binary)}{match.group(3)}",
+                new_line,
+                count=1,
+            )
+        if new_line != line:
+            lines[index] = new_line
+            changed = True
+    if not changed:
+        continue
+    content = "\n".join(lines) + "\n"
+    result = subprocess.run(
+        ["runuser", "-u", spool.name, "--", "crontab", "-"],
+        input=content,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        print(f"Repaired bpanel cron entries for {spool.name}")
+    else:
+        print(f"WARNING: could not rewrite crontab for {spool.name}: {result.stderr.strip()}")
+PY
+}
+
 ensure_terminal_tools() {
   local missing=()
   command -v composer >/dev/null 2>&1 || missing+=(composer)
@@ -1123,6 +1201,7 @@ systemctl restart bpanel-api
 log "Reloading nginx"
 update_progress 92 "restarting" "Restarting services and reloading nginx"
 migrate_nginx_wordpress_csp_worker_src
+migrate_site_cron_php_binary
 nginx -t
 systemctl reload nginx
 

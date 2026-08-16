@@ -893,7 +893,14 @@ def add_cron(payload: CronCreate, db: Session = Depends(get_db), current_user: U
 def list_cron(website_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     website = get_owned_website(db, current_user, website_id)
     cron_user = cron.cron_user_for_website(website)
-    return {"items": cron.list_cron_entries(website.domain, cron_user), "cron_user": cron_user}
+    return {
+        "items": cron.list_cron_entries(website.domain, cron_user),
+        "cron_user": cron_user,
+        "php_version": website.php_version,
+        # Shown in the add-cron help so it is obvious which interpreter a job runs on.
+        "php_binary": cron.php_binary(website),
+        "document_root": str(site_users.document_root(website.root_path)),
+    }
 
 
 @router.delete("/cron")

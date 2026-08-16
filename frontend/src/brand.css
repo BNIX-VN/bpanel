@@ -48,6 +48,15 @@ h1,h2{color:var(--brand-navy)}
 .cron-item,.backup-job,.firewall-rule{display:grid;grid-template-columns:auto minmax(0,1fr) max-content;gap:10px;align-items:center;padding:10px 12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);min-width:0}
 .cron-item span:not(.badge),.backup-job span:not(.badge),.firewall-rule span:not(.badge){min-width:0;font-size:13px;line-height:1.35;font-weight:700;color:var(--text)}
 .cron-item small,.backup-job small,.firewall-rule small{display:block;margin-top:3px;color:var(--text-muted);font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cron-help{background:var(--surface-alt);border:1px solid var(--border);border-radius:var(--radius-lg);padding:12px 14px;display:grid;gap:8px}
+.cron-help p{margin:0;font-size:12.5px;line-height:1.5;color:var(--text-secondary);font-weight:600}
+.cron-help code{font-family:Consolas,'SFMono-Regular','Liberation Mono',Menlo,monospace;font-size:12px;background:var(--surface-sunken);border:1px solid var(--border);border-radius:6px;padding:1px 5px;color:var(--text)}
+.cron-help ul{margin:0;padding:0;list-style:none;display:grid;gap:6px}
+.cron-help li{display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-width:0}
+.cron-help li small{color:var(--text-muted);font-size:11.5px;font-weight:600}
+button.cron-example{font-family:Consolas,'SFMono-Regular','Liberation Mono',Menlo,monospace;font-size:12px;font-weight:700;background:var(--surface);border:1px solid var(--border);color:var(--primary-text);border-radius:6px;padding:3px 8px;cursor:pointer;min-height:0;height:auto}
+button.cron-example:hover:not(:disabled){background:var(--primary-light);border-color:var(--primary-border)}
+.cron-help-note{font-size:11.5px !important;color:var(--text-muted) !important}
 .firewall-rule-actions{display:inline-flex;align-items:center;justify-content:flex-end;gap:8px;min-width:0}
 .backup-job.running,.backup-job.queued{border-color:var(--info-border);background:var(--info-bg)}
 .backup-job.error{border-color:var(--danger-border);background:var(--danger-bg)}

@@ -336,6 +336,24 @@ def test_chmod_entry_rejects_executable_file_mode(tmp_path):
         file_manager.chmod_entry(_website(root), "public_html/index.php", "755")
 
 
+def test_chmod_entry_uses_the_root_helper_for_site_users(tmp_path, monkeypatch):
+    """Running chmod as the site user would clear setgid on site folders."""
+    root = tmp_path / "site"
+    public = root / "public_html"
+    public.mkdir(parents=True)
+    calls = []
+
+    def fake_privileged(helper_command, helper_args=None, **kwargs):
+        calls.append((helper_command, helper_args))
+        return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(file_manager.shell, "privileged", fake_privileged)
+
+    file_manager.chmod_entry(_linux_website(root), "public_html", "2750")
+
+    assert calls == [("site-chmod", ["siteuser", str(root.resolve()), str(public.resolve()), "2750"])]
+
+
 def test_write_text_file_clears_fastcgi_cache(tmp_path, monkeypatch):
     root = tmp_path / "site"
     public = root / "public_html"

@@ -267,6 +267,51 @@ function aceModeName(mode) {
   return 'text';
 }
 
+// --- File permissions (chmod) ------------------------------------------------
+// The listing reports POSIX modes as octal strings ("644", or "2750" for the
+// setgid site directories), so the dialog works on the same representation.
+const PERMISSION_CLASSES = [
+  { key: 'owner', label: 'Owner' },
+  { key: 'group', label: 'Group' },
+  { key: 'other', label: 'Public' },
+];
+const PERMISSION_BITS = [
+  { key: 'read', label: 'Read', value: 4 },
+  { key: 'write', label: 'Write', value: 2 },
+  { key: 'execute', label: 'Execute', value: 1 },
+];
+const PERMISSION_PRESETS = {
+  file: [['644', 'Default file'], ['600', 'Private file'], ['444', 'Read-only']],
+  dir: [['755', 'Default folder'], ['750', 'Group readable'], ['700', 'Private folder']],
+};
+
+function normalizeOctalMode(mode) {
+  const value = String(mode ?? '').trim();
+  return /^[0-7]{3,4}$/.test(value) ? value : '';
+}
+
+function octalToPermissionBits(mode) {
+  const padded = (normalizeOctalMode(mode) || '0644').padStart(4, '0');
+  return {
+    special: Number(padded[0]),
+    owner: Number(padded[1]),
+    group: Number(padded[2]),
+    other: Number(padded[3]),
+  };
+}
+
+function permissionBitsToOctal({ special, owner, group, other }) {
+  const body = `${owner}${group}${other}`;
+  return special ? `${special}${body}` : body;
+}
+
+function permissionSymbols(mode) {
+  const bits = octalToPermissionBits(mode);
+  return PERMISSION_CLASSES
+    .map(({ key }) => PERMISSION_BITS.map(bit => (bits[key] & bit.value ? bit.key[0] : '-')).join(''))
+    .join('');
+}
+
 function formatApiError(detail, fallback = 'Request failed.') {
   if (detail === null || detail === undefined || detail === '') return fallback;
   if (typeof detail === 'string') return detail.replace(/^Value error,\s*/i, '') || fallback;
@@ -481,6 +526,9 @@ function App() {
   const [cronCommand, setCronCommand] = useState('');
   const [cronItems, setCronItems] = useState([]);
   const [cronUser, setCronUser] = useState('');
+  const [cronPhpInfo, setCronPhpInfo] = useState({ php_binary: '', php_version: '' });
+  const [chmodTarget, setChmodTarget] = useState(null);
+  const [chmodMode, setChmodMode] = useState('644');
   const [filePath, setFilePath] = useState(() => standaloneEditor?.path || 'public_html/index.html');
   const [fileListPath, setFileListPath] = useState('public_html');
   const [fileUploadDir, setFileUploadDir] = useState('public_html');
@@ -640,6 +688,8 @@ function App() {
     setBackupJobs([]);
     setCronItems([]);
     setCronUser('');
+    setCronPhpInfo({ php_binary: '', php_version: '' });
+    setChmodTarget(null);
     setUserBackups([]);
     setRestoreBackups([]);
     setRestoreBackupDir('');
@@ -1905,6 +1955,7 @@ function App() {
     const data = await request(`/maintenance/cron/${selectedWebsiteId}`, {}, 'Loading cron jobs...');
     if (data?.items) setCronItems(data.items);
     if (data?.cron_user) setCronUser(data.cron_user);
+    if (data?.php_binary) setCronPhpInfo({ php_binary: data.php_binary, php_version: data.php_version || '' });
   }
 
   async function deleteCron(index) {
@@ -1999,6 +2050,46 @@ function App() {
     if (!newName || newName === item.name) return;
     const data = await request('/maintenance/files/rename', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), path: item.path, new_name: newName }) }, 'Renaming...');
     if (data) await listFiles(fileListPath);
+  }
+
+  function openChmodDialog(items) {
+    const targets = (Array.isArray(items) ? items : [items]).filter(Boolean);
+    if (targets.length === 0) return;
+    setChmodTarget(targets);
+    if (targets.length === 1 && normalizeOctalMode(targets[0].mode)) {
+      setChmodMode(normalizeOctalMode(targets[0].mode));
+      return;
+    }
+    // With a mixed selection, keep the special bits only when every target
+    // already agrees on them, so a bulk chmod never silently drops setgid.
+    const specials = targets.map(item => octalToPermissionBits(item.mode).special);
+    const special = specials.every(value => value === specials[0]) ? specials[0] : 0;
+    const base = targets.every(item => item.is_dir)
+      ? { owner: 7, group: 5, other: 5 }
+      : { special: 0, owner: 6, group: 4, other: 4 };
+    setChmodMode(permissionBitsToOctal({ special, ...base }));
+  }
+
+  async function applyChmod() {
+    const targets = chmodTarget || [];
+    const typed = chmodMode.trim();
+    if (targets.length === 0) return;
+    if (!/^[0-7]{3,4}$/.test(typed)) { setError('Mode must be octal, for example 644 or 755.'); return; }
+    // GNU chmod keeps a directory's setuid/setgid bits when the mode is only
+    // three digits, so send four whenever a folder is involved and the dialog's
+    // setgid choice actually takes effect.
+    const mode = (typed.length === 3 && targets.some(item => item.is_dir)) ? `0${typed}` : typed;
+    for (const item of targets) {
+      const data = await request('/maintenance/files/chmod', {
+        method: 'POST',
+        body: JSON.stringify({ website_id: Number(selectedWebsiteId), path: item.path, mode }),
+      }, `Setting permissions on ${item.name}...`);
+      // request() already surfaced the reason; stop so the dialog keeps the mode.
+      if (!data) return;
+    }
+    setChmodTarget(null);
+    setNotice(`Permissions set to ${mode} on ${targets.length} item(s).`);
+    await listFiles(fileListPath);
   }
 
   async function deleteSelectedFiles() {
@@ -3608,6 +3699,14 @@ function App() {
   }
 
   function renderCron() {
+    const sitePhpVersion = cronPhpInfo.php_version || currentSite?.php_version || '';
+    const sitePhpBinary = cronPhpInfo.php_binary || (sitePhpVersion ? `/usr/bin/php${sitePhpVersion}` : 'php');
+    const cronExamples = [
+      ['php -q cron.php', 'Path is relative to public_html.'],
+      ['php cron.php >/dev/null 2>&1', 'Discard output so cron does not try to mail it.'],
+      ['php cron.php >> ../logs/cron.log 2>&1', 'Keep output in a log file inside this website.'],
+      ['wp cron event run --due-now', 'WP-CLI, for WordPress sites.'],
+    ];
     return <section className="section">
       <div className="section-title">
         <div><h2>Cron manager</h2></div>
@@ -3616,10 +3715,28 @@ function App() {
       <div className="cron-form">
         <WebsiteSelect />
         <input value={cronSchedule} onChange={e => setCronSchedule(e.target.value)} placeholder="*/15 * * * *" />
-        <input value={cronCommand} onChange={e => setCronCommand(e.target.value)} placeholder="command" />
+        <input value={cronCommand} onChange={e => setCronCommand(e.target.value)} placeholder="php -q cron.php >/dev/null 2>&1" />
         <button disabled={!selectedWebsiteId || !!loading} onClick={addCron}><Plus size={14}/> Add cron</button>
       </div>
       {selectedWebsiteId && <p className="hint">Cron runs as <strong>{cronUser || currentSite?.linux_user || 'www-data'}</strong> for the selected website.</p>}
+      {selectedWebsiteId && <div className="cron-help">
+        <p>
+          Write <code>php</code> and BPanel rewrites it to <code>{sitePhpBinary}</code>
+          {sitePhpVersion ? <> — the PHP {sitePhpVersion} CLI this website is set to</> : null}, so the job never
+          runs on the server default version. Change the website's PHP version and its cron jobs follow.
+        </p>
+        <ul>
+          {cronExamples.map(([example, note]) => <li key={example}>
+            <button type="button" className="cron-example" onClick={() => setCronCommand(example)}>{example}</button>
+            <small>{note}</small>
+          </li>)}
+        </ul>
+        <p className="cron-help-note">
+          Only PHP scripts inside <code>public_html</code> and the safe WP-CLI maintenance commands are allowed.
+          A trailing <code>&gt;</code>, <code>&gt;&gt;</code>, <code>2&gt;</code> or <code>2&gt;&amp;1</code> may
+          redirect to <code>/dev/null</code> or to a file inside this website.
+        </p>
+      </div>}
       <div className="cron-list">
         {selectedWebsiteId && cronItems.length === 0 && <EmptyState icon={Clock} message="No cron jobs found for this website." />}
         {cronItems.map(item => <div className="cron-item" key={`${item.index}-${item.line}`}>
@@ -3631,13 +3748,94 @@ function App() {
     </section>;
   }
 
+  function renderChmodDialog() {
+    const targets = chmodTarget || [];
+    if (targets.length === 0) return null;
+    const bits = octalToPermissionBits(chmodMode);
+    const onlyDirs = targets.every(item => item.is_dir);
+    const hasFiles = targets.some(item => !item.is_dir);
+    // Mirror the server-side rules so the dialog cannot build a mode the API
+    // will reject: files stay non-executable and nothing becomes world-writable.
+    const bitDisabled = (classKey, bitKey) => (bitKey === 'execute' && hasFiles)
+      || (bitKey === 'write' && classKey === 'other');
+    const setBit = (classKey, bitValue) => setChmodMode(permissionBitsToOctal({
+      ...bits,
+      [classKey]: bits[classKey] ^ bitValue,
+    }));
+    const title = targets.length === 1 ? targets[0].name : `${targets.length} selected items`;
+    return <div className="chmod-backdrop" role="presentation" onClick={() => setChmodTarget(null)}>
+      <div className="chmod-dialog" role="dialog" aria-modal="true" aria-label="Change permissions" onClick={e => e.stopPropagation()}>
+        <div className="chmod-head">
+          <div>
+            <h3><Lock size={15}/> Permissions</h3>
+            <p>{title}</p>
+          </div>
+          <button className="mini secondary-light" onClick={() => setChmodTarget(null)} aria-label="Close"><X size={14}/></button>
+        </div>
+        <table className="chmod-grid">
+          <thead>
+            <tr><th scope="col"></th>{PERMISSION_BITS.map(bit => <th scope="col" key={bit.key}>{bit.label}</th>)}</tr>
+          </thead>
+          <tbody>
+            {PERMISSION_CLASSES.map(group => <tr key={group.key}>
+              <th scope="row">{group.label}</th>
+              {PERMISSION_BITS.map(bit => <td key={bit.key}>
+                <input
+                  type="checkbox"
+                  aria-label={`${group.label} ${bit.label}`}
+                  checked={!!(bits[group.key] & bit.value)}
+                  disabled={bitDisabled(group.key, bit.key)}
+                  onChange={() => setBit(group.key, bit.value)}
+                />
+              </td>)}
+            </tr>)}
+          </tbody>
+        </table>
+        <div className="chmod-value">
+          <label>
+            <span>Octal</span>
+            <input value={chmodMode} inputMode="numeric" maxLength={4} onChange={e => setChmodMode(e.target.value.replace(/[^0-7]/g, '').slice(0, 4))} />
+          </label>
+          <code>{permissionSymbols(chmodMode)}</code>
+        </div>
+        <div className="chmod-presets">
+          {(onlyDirs ? PERMISSION_PRESETS.dir : PERMISSION_PRESETS.file).map(([preset, label]) => <button
+            key={preset}
+            type="button"
+            className={`mini ${chmodMode === preset ? '' : 'secondary-light'}`}
+            onClick={() => setChmodMode(preset)}
+          >{preset} <small>{label}</small></button>)}
+        </div>
+        {onlyDirs && <label className="chmod-setgid">
+          <input
+            type="checkbox"
+            checked={bits.special === 2}
+            onChange={() => setChmodMode(permissionBitsToOctal({ ...bits, special: bits.special === 2 ? 0 : 2 }))}
+          />
+          <span>Setgid — new files inside keep the folder's group. BPanel sets this on site folders; leave it on unless you know otherwise.</span>
+        </label>}
+        <p className="chmod-note">
+          {hasFiles
+            ? 'Files cannot be made executable or world-writable from the panel.'
+            : 'Folders need owner execute to be readable, and cannot be world-writable.'}
+        </p>
+        <div className="chmod-actions">
+          <button className="secondary-light" disabled={!!loading} onClick={() => setChmodTarget(null)}>Cancel</button>
+          <button disabled={!!loading} onClick={applyChmod}><Check size={14}/> Apply {chmodMode}</button>
+        </div>
+      </div>
+    </div>;
+  }
+
   function renderFiles() {
     const allSelected = files.length > 0 && selectedFilePaths.length === files.length;
     const selectedArchiveFile = selectedFilePaths.length === 1
       ? files.find(item => item.path === selectedFilePaths[0] && isArchiveFile(item))
       : null;
     const visibleFileJobs = fileJobs.filter(job => String(job.website_id) === String(selectedWebsiteId)).slice(0, 4);
+    const selectedChmodItems = files.filter(item => selectedFilePaths.includes(item.path));
     return <section className="section">
+      {renderChmodDialog()}
       <div className="section-title">
         <div><h2>File manager</h2></div>
         <button disabled={!selectedWebsiteId || !!loading} onClick={() => listFiles(fileListPath)}><RefreshCw size={14}/> Refresh</button>
@@ -3671,6 +3869,7 @@ function App() {
               <button disabled={selectedFilePaths.length === 0 || !!loading} onClick={moveSelectedFiles}><MoveRight size={14}/> Move</button>
               <button disabled={selectedFilePaths.length === 0 || !!loading} onClick={archiveSelectedFiles}><Archive size={14}/> Archive</button>
               <button disabled={!selectedArchiveFile || !!loading} onClick={() => extractArchiveFile(selectedArchiveFile.path)}><ArchiveRestore size={14}/> Extract</button>
+              <button disabled={selectedChmodItems.length === 0 || !!loading} onClick={() => openChmodDialog(selectedChmodItems)}><Lock size={14}/> Permissions</button>
               <button className="danger" disabled={selectedFilePaths.length === 0 || !!loading} onClick={deleteSelectedFiles}><Trash2 size={14}/> Delete</button>
             </div>
             {visibleFileJobs.length > 0 && <div className="file-job-list">
@@ -3692,11 +3891,18 @@ function App() {
               <button className="file-name" onClick={() => item.is_dir ? listFiles(item.path) : (isTextEditable(item) ? openFileEditorTab(item.path) : downloadFile(item.path))}>
                 {item.is_dir ? <FolderOpen size={16}/> : <FileText size={16}/>} <strong>{item.name}</strong>
               </button>
-              <span className="file-mode">{item.mode || '---'}</span>
+              <button
+                className="file-mode"
+                type="button"
+                disabled={!!loading}
+                title={`Permissions ${item.mode || '---'} (${permissionSymbols(item.mode)}) - click to change`}
+                onClick={() => openChmodDialog(item)}
+              >{item.mode || '---'}</button>
               <span className="file-size">{item.is_dir ? 'Folder' : formatBytes(item.size)}</span>
               <div className="file-row-actions">
                 {!item.is_dir && <button className="mini secondary-light" disabled={!!loading} onClick={() => downloadFile(item.path)}><Download size={13}/></button>}
                 {isArchiveFile(item) && <button className="mini secondary-light" disabled={!!loading} onClick={() => extractArchiveFile(item.path)}><ArchiveRestore size={13}/> Extract</button>}
+                <button className="mini secondary-light" disabled={!!loading} onClick={() => openChmodDialog(item)}><Lock size={13}/> Perms</button>
                 <button className="mini secondary-light" disabled={!!loading} onClick={() => renameFileItem(item)}>Rename</button>
               </div>
             </div>)}

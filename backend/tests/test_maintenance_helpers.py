@@ -1,4 +1,5 @@
 import os
+import shlex
 import sys
 from pathlib import Path
 
@@ -28,41 +29,50 @@ def test_cron_user_for_website_uses_site_owner_from_home_path():
     assert cron.cron_user_for_website(website) == "client"
 
 
+@pytest.fixture
+def site_roots(tmp_path):
+    """(site root, document root) pair, so the assertions stay OS independent."""
+    document_root = tmp_path / "example.com" / "public_html"
+    document_root.mkdir(parents=True)
+    return tmp_path / "example.com", document_root
+
+
 @pytest.mark.parametrize(
-    ("command", "expected"),
+    ("command", "script", "extra"),
     [
-        (
-            "php -q /home/minhhien/minhhien.vn/public_html/sieunhim/cron.php profile=default",
-            "php -q /home/minhhien/minhhien.vn/public_html/sieunhim/cron.php profile=default",
-        ),
-        (
-            "php -q /home/minhhien/minhhien.vn/public_html/queue.php",
-            "php -q /home/minhhien/minhhien.vn/public_html/queue.php",
-        ),
+        ("php -q sieunhim/cron.php profile=default", "sieunhim/cron.php", " profile=default"),
+        ("php -q queue.php", "queue.php", ""),
     ],
 )
-def test_cron_command_allows_php_scripts_inside_document_root(command, expected):
-    result = cron._validate_command(command, "/home/minhhien/minhhien.vn/public_html")  # noqa: SLF001
+def test_cron_command_allows_php_scripts_inside_document_root(site_roots, command, script, extra):
+    site_root, document_root = site_roots
 
-    assert result == expected
+    result = cron._validate_command(command, document_root, site_root, "/usr/bin/php8.1")  # noqa: SLF001
+
+    assert result == f"/usr/bin/php8.1 -q {shlex.quote(str(document_root / script))}{extra}"
 
 
 @pytest.mark.parametrize(
     "command",
     [
         "php -r 'echo 1;'",
-        "php /home/minhhien/minhhien.vn/private.php",
-        "php /home/minhhien/minhhien.vn/public_html/../private.php",
-        "php /home/minhhien/minhhien.vn/public_html/readme.txt",
+        "php ../private.php",
+        "php ../../private.php",
+        "php readme.txt",
     ],
 )
-def test_cron_command_rejects_unsafe_php_commands(command):
+def test_cron_command_rejects_unsafe_php_commands(site_roots, command):
+    site_root, document_root = site_roots
+
     with pytest.raises(ValueError):
-        cron._validate_command(command, "/home/minhhien/minhhien.vn/public_html")  # noqa: SLF001
+        cron._validate_command(command, document_root, site_root, "php")  # noqa: SLF001
 
 
-def test_cron_command_keeps_wp_cli_allow_root_behavior():
-    result = cron._validate_command("wp cron event run --due-now", "/home/client/example.com/public_html")  # noqa: SLF001
+def test_cron_command_keeps_wp_cli_allow_root_behavior(site_roots, monkeypatch):
+    site_root, document_root = site_roots
+    monkeypatch.setattr(cron, "WP_CLI_PATH", site_root / "missing-wp")
+
+    result = cron._validate_command("wp cron event run --due-now", document_root, site_root, "php")  # noqa: SLF001
 
     assert result == "wp cron event run --due-now --allow-root"
 

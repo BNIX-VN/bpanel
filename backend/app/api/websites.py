@@ -27,7 +27,7 @@ from app.schemas.schemas import (
     WebsiteWafUpdate,
     WebsiteWordPressInstall,
 )
-from app.services import file_manager, mariadb, nginx, site_users, ssl, storage_quota, waf, wordpress
+from app.services import cron, file_manager, mariadb, nginx, site_users, ssl, storage_quota, waf, wordpress
 from app.services.audit import log_action
 
 _PLACEHOLDER_TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates" / "nginx"
@@ -600,6 +600,12 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
         except (RuntimeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=f"Cannot write Nginx config: {exc}") from exc
         website.php_version = payload.php_version
+        try:
+            # Existing cron lines carry the previous PHP CLI path; leaving them
+            # behind would keep running the site on a version it no longer uses.
+            cron.retarget_php_binary(website)
+        except (RuntimeError, ValueError):
+            pass
     if payload.app_type is not None and payload.app_type != (website.app_type or "wordpress"):
         try:
             next_app_type = payload.app_type
