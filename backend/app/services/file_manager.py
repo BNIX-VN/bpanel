@@ -336,24 +336,23 @@ def chmod_entry(website: Website, relative_path: str, mode: str) -> str:
     numeric_mode = int(clean_mode, 8)
     if numeric_mode > 0o7777:
         raise ValueError("Mode is out of range")
-    is_dir = target.is_dir()
-    if is_dir:
-        if numeric_mode & 0o1000 or numeric_mode & 0o4000:
-            raise ValueError("Directory mode cannot include sticky or setuid bits")
-        if numeric_mode & 0o002:
-            raise ValueError("Directory mode cannot be world-writable")
-        if not numeric_mode & 0o100:
-            raise ValueError("Directory owner must have execute permission")
-        for read_bit, execute_bit in ((0o400, 0o100), (0o040, 0o010), (0o004, 0o001)):
-            if numeric_mode & read_bit and not numeric_mode & execute_bit:
-                raise ValueError("Directory read permission requires execute permission")
-    else:
-        if numeric_mode & 0o7000:
-            raise ValueError("File mode cannot include special bits")
-        if numeric_mode & 0o111:
-            raise ValueError("File mode cannot include execute bits")
-        if numeric_mode & 0o002:
-            raise ValueError("File mode cannot be world-writable")
+    # The nine ordinary permission bits are the owner's to set, the same way
+    # DirectAdmin and cPanel expose them: executable scripts and 777 upload
+    # directories are legitimate, and the website root is already the trust
+    # boundary. Only the special bits stay restricted. setgid is allowed on a
+    # folder because that is what keeps group inheritance working under a site
+    # root; setuid and the sticky bit have no use here and are the classic
+    # shape of a planted backdoor.
+    if numeric_mode & 0o4000:
+        raise ValueError("Mode cannot include the setuid bit")
+    if numeric_mode & 0o1000:
+        raise ValueError("Mode cannot include the sticky bit")
+    if numeric_mode & 0o2000 and not target.is_dir():
+        raise ValueError("The setgid bit can only be set on a folder")
+    # chmod keeps a directory's setuid/setgid bits for an ordinary numeric mode
+    # and only honours the special digit given an extra leading zero, so send
+    # the fully explicit form: what the caller asked for is what gets applied.
+    explicit_mode = f"0{numeric_mode:04o}"
     if website.linux_user:
         root = Path(website.root_path).resolve()
         # Deliberately not run as the site user: that account is outside the
@@ -361,8 +360,8 @@ def chmod_entry(website: Website, relative_path: str, mode: str) -> str:
         # break group inheritance under public_html.
         shell.privileged(
             "site-chmod",
-            helper_args=[website.linux_user, str(root), str(target), clean_mode],
-            fallback=["chmod", clean_mode, str(target)],
+            helper_args=[website.linux_user, str(root), str(target), explicit_mode],
+            fallback=["chmod", explicit_mode, str(target)],
         )
         return str(target)
     target.chmod(numeric_mode)

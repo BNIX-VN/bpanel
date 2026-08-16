@@ -325,15 +325,81 @@ def test_chmod_entry_accepts_read_only_file_mode(tmp_path):
     assert stat.S_IMODE(target.stat().st_mode) == 0o444
 
 
-def test_chmod_entry_rejects_executable_file_mode(tmp_path):
+def _chmod_helper_calls(monkeypatch):
+    """Capture the privileged chmod so the assertions do not need POSIX modes."""
+    calls = []
+
+    def fake_privileged(helper_command, helper_args=None, **kwargs):
+        calls.append((helper_command, helper_args))
+        return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(file_manager.shell, "privileged", fake_privileged)
+    return calls
+
+
+@pytest.mark.parametrize(
+    ("mode", "applied"),
+    [("755", "00755"), ("700", "00700"), ("777", "00777"), ("444", "00444"), ("000", "00000")],
+)
+def test_chmod_entry_allows_any_ordinary_file_mode(tmp_path, monkeypatch, mode, applied):
+    root = tmp_path / "site"
+    public = root / "public_html"
+    public.mkdir(parents=True)
+    target = public / "deploy.sh"
+    target.write_text("#!/bin/sh\n", encoding="utf-8")
+    calls = _chmod_helper_calls(monkeypatch)
+
+    file_manager.chmod_entry(_linux_website(root), "public_html/deploy.sh", mode)
+
+    assert calls[0][1][-1] == applied
+
+
+@pytest.mark.parametrize(
+    ("mode", "applied"),
+    [("777", "00777"), ("070", "00070"), ("2750", "02750"), ("750", "00750")],
+)
+def test_chmod_entry_allows_any_ordinary_directory_mode(tmp_path, monkeypatch, mode, applied):
+    """A three digit mode must clear setgid instead of inheriting chmod's preserve rule."""
+    root = tmp_path / "site"
+    public = root / "public_html"
+    (public / "uploads").mkdir(parents=True)
+    calls = _chmod_helper_calls(monkeypatch)
+
+    file_manager.chmod_entry(_linux_website(root), "public_html/uploads", mode)
+
+    assert calls[0][1][-1] == applied
+
+
+@pytest.mark.parametrize(
+    ("mode", "message"),
+    [
+        ("4755", "setuid"),
+        ("1755", "sticky"),
+        ("2644", "only be set on a folder"),
+    ],
+)
+def test_chmod_entry_rejects_special_bits(tmp_path, monkeypatch, mode, message):
     root = tmp_path / "site"
     public = root / "public_html"
     public.mkdir(parents=True)
     target = public / "index.php"
     target.write_text("<?php echo 'ok';\n", encoding="utf-8")
+    _chmod_helper_calls(monkeypatch)
 
-    with pytest.raises(ValueError, match="execute bits"):
-        file_manager.chmod_entry(_website(root), "public_html/index.php", "755")
+    with pytest.raises(ValueError, match=message):
+        file_manager.chmod_entry(_linux_website(root), "public_html/index.php", mode)
+
+
+@pytest.mark.parametrize("mode", ["", "64", "88888", "9", "64x"])
+def test_chmod_entry_rejects_malformed_modes(tmp_path, monkeypatch, mode):
+    root = tmp_path / "site"
+    public = root / "public_html"
+    public.mkdir(parents=True)
+    (public / "index.php").write_text("<?php echo 'ok';\n", encoding="utf-8")
+    _chmod_helper_calls(monkeypatch)
+
+    with pytest.raises(ValueError, match="octal"):
+        file_manager.chmod_entry(_linux_website(root), "public_html/index.php", mode)
 
 
 def test_chmod_entry_uses_the_root_helper_for_site_users(tmp_path, monkeypatch):
@@ -351,7 +417,7 @@ def test_chmod_entry_uses_the_root_helper_for_site_users(tmp_path, monkeypatch):
 
     file_manager.chmod_entry(_linux_website(root), "public_html", "2750")
 
-    assert calls == [("site-chmod", ["siteuser", str(root.resolve()), str(public.resolve()), "2750"])]
+    assert calls == [("site-chmod", ["siteuser", str(root.resolve()), str(public.resolve()), "02750"])]
 
 
 def test_write_text_file_clears_fastcgi_cache(tmp_path, monkeypatch):

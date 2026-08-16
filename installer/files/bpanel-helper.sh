@@ -2924,7 +2924,9 @@ PY
     [[ $# -eq 4 ]] || deny "usage: site-chmod <site-user> <site-root> <absolute-path> <mode>"
     user="$1"; root_arg="$2"; path_arg="$3"; mode_arg="$4"
     require_linux_user "$user"
-    [[ "$mode_arg" =~ ^[0-7]{3,4}$ ]] || deny "invalid mode: $mode_arg"
+    # Five digits is the fully explicit form the panel sends, so chmod applies
+    # the special digit on directories instead of preserving the existing one.
+    [[ "$mode_arg" =~ ^[0-7]{3,5}$ ]] || deny "invalid mode: $mode_arg"
     target=$(require_bound_managed_path "$user" "$root_arg" "$path_arg")
     [[ -L "$target" ]] && deny "refusing to chmod a symlink: $target"
     [[ -e "$target" ]] || deny "path not found: $target"

@@ -281,8 +281,8 @@ const PERMISSION_BITS = [
   { key: 'execute', label: 'Execute', value: 1 },
 ];
 const PERMISSION_PRESETS = {
-  file: [['644', 'Default file'], ['600', 'Private file'], ['444', 'Read-only']],
-  dir: [['755', 'Default folder'], ['750', 'Group readable'], ['700', 'Private folder']],
+  file: [['644', 'Default'], ['755', 'Executable'], ['600', 'Private'], ['444', 'Read-only']],
+  dir: [['755', 'Default'], ['750', 'Group read'], ['775', 'Group write'], ['700', 'Private']],
 };
 
 function normalizeOctalMode(mode) {
@@ -2072,13 +2072,9 @@ function App() {
 
   async function applyChmod() {
     const targets = chmodTarget || [];
-    const typed = chmodMode.trim();
+    const mode = chmodMode.trim();
     if (targets.length === 0) return;
-    if (!/^[0-7]{3,4}$/.test(typed)) { setError('Mode must be octal, for example 644 or 755.'); return; }
-    // GNU chmod keeps a directory's setuid/setgid bits when the mode is only
-    // three digits, so send four whenever a folder is involved and the dialog's
-    // setgid choice actually takes effect.
-    const mode = (typed.length === 3 && targets.some(item => item.is_dir)) ? `0${typed}` : typed;
+    if (!/^[0-7]{3,4}$/.test(mode)) { setError('Mode must be octal, for example 644 or 755.'); return; }
     for (const item of targets) {
       const data = await request('/maintenance/files/chmod', {
         method: 'POST',
@@ -3754,10 +3750,7 @@ function App() {
     const bits = octalToPermissionBits(chmodMode);
     const onlyDirs = targets.every(item => item.is_dir);
     const hasFiles = targets.some(item => !item.is_dir);
-    // Mirror the server-side rules so the dialog cannot build a mode the API
-    // will reject: files stay non-executable and nothing becomes world-writable.
-    const bitDisabled = (classKey, bitKey) => (bitKey === 'execute' && hasFiles)
-      || (bitKey === 'write' && classKey === 'other');
+    const worldWritable = !!(bits.other & 2);
     const setBit = (classKey, bitValue) => setChmodMode(permissionBitsToOctal({
       ...bits,
       [classKey]: bits[classKey] ^ bitValue,
@@ -3784,7 +3777,6 @@ function App() {
                   type="checkbox"
                   aria-label={`${group.label} ${bit.label}`}
                   checked={!!(bits[group.key] & bit.value)}
-                  disabled={bitDisabled(group.key, bit.key)}
                   onChange={() => setBit(group.key, bit.value)}
                 />
               </td>)}
@@ -3814,10 +3806,13 @@ function App() {
           />
           <span>Setgid — new files inside keep the folder's group. BPanel sets this on site folders; leave it on unless you know otherwise.</span>
         </label>}
+        {worldWritable && <p className="chmod-note warn">
+          <AlertCircle size={13}/> World-writable: anyone with an account on the server can change
+          {hasFiles ? ' these files' : ' what is inside these folders'}. Use 755 unless something really needs it.
+        </p>}
         <p className="chmod-note">
-          {hasFiles
-            ? 'Files cannot be made executable or world-writable from the panel.'
-            : 'Folders need owner execute to be readable, and cannot be world-writable.'}
+          Any permission combination is allowed. The setuid and sticky bits are not — setgid on a folder is the
+          only special bit the panel sets.
         </p>
         <div className="chmod-actions">
           <button className="secondary-light" disabled={!!loading} onClick={() => setChmodTarget(null)}>Cancel</button>
