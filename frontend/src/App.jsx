@@ -2146,6 +2146,10 @@ function App() {
     setFileJobs(prev => [job, ...prev.filter(item => item.job_id !== job.job_id)].slice(0, 6));
   }
 
+  function dismissFileJob(jobId) {
+    setFileJobs(prev => prev.filter(item => item.job_id !== jobId));
+  }
+
   async function loadFileJob(jobId) {
     try {
       const res = await fetch(`${API}/maintenance/files/jobs/${jobId}`, { credentials: 'include' });
@@ -2165,7 +2169,7 @@ function App() {
     const data = await request(`/maintenance/files/jobs?website_id=${encodeURIComponent(websiteId)}`);
     if (data?.jobs) {
       setFileJobs(prev => [
-        ...data.jobs,
+        ...data.jobs.filter(job => job.status !== 'done'),
         ...prev.filter(job => String(job.website_id) !== String(websiteId)),
       ].slice(0, 6));
     }
@@ -2179,12 +2183,17 @@ function App() {
       for (const job of activeJobs) {
         const data = await loadFileJob(job.job_id);
         if (!data) continue;
-        upsertFileJob(data);
         if (data.status === 'done') {
+          // Drop the card rather than parking it on "completed" forever; the
+          // notice and the refreshed listing are the confirmation.
+          dismissFileJob(job.job_id);
           setNotice(data.message || 'Extraction completed');
           await listFiles(data.destination_path || fileListPath);
           await loadCurrentUser();
-        } else if (data.status === 'error') {
+          continue;
+        }
+        upsertFileJob(data);
+        if (data.status === 'error') {
           setError(formatApiError(data.error, 'Extraction failed'));
         }
       }
@@ -3827,7 +3836,9 @@ function App() {
     const selectedArchiveFile = selectedFilePaths.length === 1
       ? files.find(item => item.path === selectedFilePaths[0] && isArchiveFile(item))
       : null;
-    const visibleFileJobs = fileJobs.filter(job => String(job.website_id) === String(selectedWebsiteId)).slice(0, 4);
+    const visibleFileJobs = fileJobs
+      .filter(job => String(job.website_id) === String(selectedWebsiteId) && job.status !== 'done')
+      .slice(0, 4);
     const selectedChmodItems = files.filter(item => selectedFilePaths.includes(item.path));
     return <section className="section">
       {renderChmodDialog()}
@@ -3870,8 +3881,9 @@ function App() {
             {visibleFileJobs.length > 0 && <div className="file-job-list">
               {visibleFileJobs.map(job => <div className={`file-job ${job.status}`} key={job.job_id}>
                 <Clock size={14}/>
-                <span><strong>{job.archive_path?.split('/').pop() || 'Archive'}</strong> {job.status === 'done' ? 'completed' : job.status === 'error' ? 'failed' : job.status}</span>
+                <span><strong>{job.archive_path?.split('/').pop() || 'Archive'}</strong> {job.status === 'error' ? 'failed' : job.status}</span>
                 {job.error && <small>{job.error}</small>}
+                <button className="file-job-dismiss" onClick={() => dismissFileJob(job.job_id)} aria-label="Dismiss"><X size={13}/></button>
               </div>)}
             </div>}
           </div>

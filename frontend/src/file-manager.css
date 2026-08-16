@@ -911,3 +911,32 @@ button.file-mode:disabled {
   flex: none;
   margin-top: 1px;
 }
+
+/* Job cards keep a dismiss control, so a failure can be cleared by hand the
+   same way a completed one clears itself. */
+.file-job > span {
+  flex: 1 1 auto;
+}
+
+.file-job-dismiss {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  min-height: 0;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  opacity: .6;
+  cursor: pointer;
+}
+
+.file-job-dismiss:hover:not(:disabled) {
+  background: var(--surface);
+  border-color: var(--border-hover);
+  opacity: 1;
+}

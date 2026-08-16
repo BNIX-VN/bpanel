@@ -170,6 +170,11 @@ def _list_file_jobs(current_user: User, website_id: int | None = None) -> list[d
             continue
         if website_id is not None and job.get("website_id") != website_id:
             continue
+        # Finished work is already reported by the completion notice and the
+        # refreshed file listing, so only work still in flight or failed is
+        # worth a card. Otherwise every archive ever made piles up in the UI.
+        if job.get("status") == "done":
+            continue
         visible.append(_public_file_job(job))
     return sorted(visible, key=lambda item: item.get("created_at", ""), reverse=True)[:10]
 
