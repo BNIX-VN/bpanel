@@ -262,9 +262,16 @@ def deploy_site_app(app_id: int, db: Session = Depends(get_db), current_user: Us
         _record_status(db, app, "error", str(exc))
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    running = site_apps.is_running(app)
-    _record_status(db, app, "running" if running else "error", "" if running else "Unit did not stay active; check the log.")
-    log_action(db, current_user.id, "deploy_site_app", app.name, f":{app.port}")
+    # Give it a few seconds to fall over before calling the deploy a success.
+    state = site_apps.settled_state(app)
+    running = state == "active"
+    _record_status(
+        db,
+        app,
+        "running" if running else "error",
+        "" if running else f"The application did not stay running (systemd reports '{state}'). Check the log.",
+    )
+    log_action(db, current_user.id, "deploy_site_app", app.name, f":{app.port} {state}")
     return {
         "unit": unit,
         "status": app.status,

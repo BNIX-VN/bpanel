@@ -12,6 +12,7 @@ constraint and the kernel gets the final say through `ss` before a port is used.
 
 import os
 import re
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -356,11 +357,31 @@ def control(app: SiteApp, action: str) -> str:
     return ((result.stdout or "") + (result.stderr or "")).strip()
 
 
-def is_running(app: SiteApp) -> bool:
+def active_state(app: SiteApp) -> str:
     try:
-        return control(app, "is-active").splitlines()[0].strip() == "active"
+        return control(app, "is-active").splitlines()[0].strip()
     except (RuntimeError, ValueError, IndexError):
-        return False
+        return "unknown"
+
+
+def is_running(app: SiteApp) -> bool:
+    return active_state(app) == "active"
+
+
+def settled_state(app: SiteApp, checks: int = 4, delay: float = 1.5) -> str:
+    """The unit's state once it has had a moment to fall over.
+
+    systemd calls a Type=simple unit active the instant it forks, so an app that
+    dies on startup still reads "active" for a second and a deploy would report
+    success on a crash loop. Sampling a few times catches the restart.
+    """
+    state = active_state(app)
+    for _ in range(max(0, checks - 1)):
+        if state != "active":
+            return state
+        time.sleep(delay)
+        state = active_state(app)
+    return state
 
 
 def logs(app: SiteApp, lines: int = 200) -> str:

@@ -474,3 +474,33 @@ def test_installed_node_majors_ignores_junk(monkeypatch):
     )
 
     assert site_apps.installed_node_majors() == ["20", "22"]
+
+
+def test_settled_state_catches_a_crash_loop(monkeypatch):
+    """systemd reports a Type=simple unit active the moment it forks."""
+    states = iter(["active", "activating"])
+    monkeypatch.setattr(site_apps, "active_state", lambda _app: next(states))
+    monkeypatch.setattr(site_apps.time, "sleep", lambda _seconds: None)
+
+    assert site_apps.settled_state(_managed_app("node"), checks=2) == "activating"
+
+
+def test_settled_state_accepts_a_unit_that_stays_up(monkeypatch):
+    monkeypatch.setattr(site_apps, "active_state", lambda _app: "active")
+    monkeypatch.setattr(site_apps.time, "sleep", lambda _seconds: None)
+
+    assert site_apps.settled_state(_managed_app("node"), checks=4) == "active"
+
+
+def test_settled_state_returns_early_on_a_dead_unit(monkeypatch):
+    seen = []
+
+    def fake_state(_app):
+        seen.append(1)
+        return "failed"
+
+    monkeypatch.setattr(site_apps, "active_state", fake_state)
+    monkeypatch.setattr(site_apps.time, "sleep", lambda _seconds: None)
+
+    assert site_apps.settled_state(_managed_app("node"), checks=4) == "failed"
+    assert len(seen) == 1
