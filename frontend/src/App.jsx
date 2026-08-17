@@ -212,6 +212,7 @@ const EMPTY_SITE_APP_DRAFT = {
   cpu_limit: '1',
   env: '',
 };
+const SITE_APP_KIND_LABELS = { proxy: 'Proxy', node: 'Node.js', docker: 'Container' };
 const SITE_APP_KINDS = [
   ['proxy', 'Proxy only', 'You start the process yourself; BPanel routes the domain to it.'],
   ['node', 'Node.js', 'BPanel installs dependencies and keeps the process running under systemd.'],
@@ -3475,7 +3476,7 @@ function App() {
         <h3>Applications</h3>
         <p className="hint">
           Nginx forwards this domain to an app listening on <code>127.0.0.1</code>. Set <strong>Website mode</strong> to
-          Reverse proxy or Node.js app to switch the traffic over.
+          Reverse proxy or Application to switch the traffic over.
           {siteApps.limit > 0 && <> Using {siteApps.used} of {siteApps.limit} allowed.</>}
         </p>
       </div>
@@ -3485,7 +3486,7 @@ function App() {
           {siteApps.items.map(app => <div className="site-app-item" key={app.id}>
             <div className="site-app-head">
               <strong>{app.name}</strong>
-              <span className="badge">{app.kind === 'node' ? 'Node.js' : 'Proxy'}</span>
+              <span className="badge">{SITE_APP_KIND_LABELS[app.kind] || app.kind}</span>
               <code>127.0.0.1:{app.port}</code>
               {proxied && <span className="badge ok">Live</span>}
             </div>
