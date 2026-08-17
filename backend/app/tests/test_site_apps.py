@@ -176,6 +176,14 @@ def test_memory_limit_respects_the_package_ceiling():
             site_apps.validate_memory_mb(bad)
 
 
+def test_no_memory_given_falls_back_to_a_low_package_ceiling():
+    """A package below the default must not refuse every app the customer makes."""
+    assert site_apps.validate_memory_mb(None, ceiling=256) == 256
+    assert site_apps.validate_memory_mb("", ceiling=128) == 128
+    # A generous ceiling still leaves the ordinary default in place.
+    assert site_apps.validate_memory_mb(None, ceiling=4096) == site_apps.DEFAULT_MEMORY_MB
+
+
 def test_node_major_validation():
     assert site_apps.validate_node_major("22") == "22"
     assert site_apps.validate_node_major(None) is None

@@ -86,7 +86,10 @@ def validate_app_root(app_root: str) -> str:
 
 def validate_memory_mb(memory_mb: int | str | None, ceiling: int | None = None) -> int:
     if memory_mb in (None, ""):
-        value = DEFAULT_MEMORY_MB
+        # Fall back to the package ceiling when it is below our own default,
+        # otherwise a package allowing less than 512 MB refuses every app the
+        # customer creates — including ones that asked for no limit at all.
+        value = min(DEFAULT_MEMORY_MB, ceiling) if ceiling else DEFAULT_MEMORY_MB
     else:
         try:
             value = int(memory_mb)
