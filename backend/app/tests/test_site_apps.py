@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from app.models.entities import SiteApp, User, UserPackage, Website
@@ -216,3 +218,267 @@ def test_app_port_for_website_reads_the_first_app():
 
     website.apps = [SiteApp(name="app", kind="proxy", port=21007, app_root="app")]
     assert site_apps.app_port_for_website(website) == 21007
+
+
+# --- container images -------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "image",
+    [
+        "n8nio/n8n",
+        "n8nio/n8n:1.60.0",
+        "ghcr.io/open-webui/open-webui:main",
+        "quay.io/org/app:v2",
+        "nginx@sha256:" + "a" * 64,
+        "nginx:1.27",
+        "redis",
+    ],
+)
+def test_allowed_images_pass(image):
+    assert site_apps.validate_image(image) == image
+
+
+@pytest.mark.parametrize(
+    "image",
+    [
+        "",
+        "-v/etc:/etc",
+        "org/../../etc/passwd",
+        "Org/Image",
+        "org/app:tag with space",
+        "org/app;rm -rf /",
+    ],
+)
+def test_malformed_images_are_rejected(image):
+    with pytest.raises(ValueError):
+        site_apps.validate_image(image)
+
+
+def test_images_from_unlisted_registries_are_rejected():
+    with pytest.raises(ValueError, match="are not allowed"):
+        site_apps.validate_image("evil.example.com/backdoor:latest")
+
+
+def test_admins_can_bypass_the_registry_allowlist():
+    assert site_apps.validate_image("evil.example.com/app:1", enforce_registry=False) == "evil.example.com/app:1"
+
+
+def test_registry_allowlist_is_configurable(monkeypatch):
+    monkeypatch.setenv("BPANEL_ALLOWED_REGISTRIES", "registry.bnix.vn, ghcr.io")
+
+    assert site_apps.allowed_registries() == ("registry.bnix.vn", "ghcr.io")
+    assert site_apps.validate_image("registry.bnix.vn/app:1")
+    with pytest.raises(ValueError):
+        site_apps.validate_image("n8nio/n8n")
+
+
+def test_container_port_and_cpu_limits():
+    assert site_apps.validate_container_port(None) == 3000
+    assert site_apps.validate_container_port("5678") == 5678
+    for bad in (0, 70000, "abc"):
+        with pytest.raises(ValueError):
+            site_apps.validate_container_port(bad)
+    assert site_apps.validate_cpu_limit(None) == "1"
+    assert site_apps.validate_cpu_limit("0.5") == "0.5"
+    for bad in ("0", "-1", "abc", "1.25"):
+        with pytest.raises(ValueError):
+            site_apps.validate_cpu_limit(bad)
+
+
+# --- environment ------------------------------------------------------------
+
+def test_environment_is_normalised():
+    assert site_apps.validate_env("FOO=bar\n\n# comment\n  BAZ=a=b") == "FOO=bar\nBAZ=a=b"
+
+
+@pytest.mark.parametrize("env", ["novalue", "lower=1", "1BAD=x", "FOO"])
+def test_malformed_environment_is_rejected(env):
+    with pytest.raises(ValueError):
+        site_apps.validate_env(env)
+
+
+def test_environment_line_count_is_capped():
+    with pytest.raises(ValueError, match="At most"):
+        site_apps.validate_env("\n".join(f"K{index}=v" for index in range(site_apps.MAX_ENV_LINES + 1)))
+
+
+# --- runtime plumbing -------------------------------------------------------
+
+def _managed_site(kind="node", **overrides):
+    website = Website(
+        domain="example.test",
+        owner_id=1,
+        root_path="/home/siteuser/example.test",
+        linux_user="siteuser",
+        php_version="8.4",
+        app_type="nodejs",
+    )
+    app = SiteApp(
+        name="app",
+        kind=kind,
+        app_root="app",
+        port=21005,
+        memory_limit_mb=512,
+        cpu_limit="1",
+        container_port=3000,
+        env="FOO=bar",
+        start_kind="npm",
+        start_arg="start",
+        node_major="22",
+        image="n8nio/n8n:1.60.0",
+    )
+    for key, value in overrides.items():
+        setattr(app, key, value)
+    website.apps = [app]
+    return website, app
+
+
+def _capture_privileged(monkeypatch, stdout="unit-name"):
+    calls = []
+
+    def fake_privileged(helper_command, helper_args=None, **kwargs):
+        calls.append({"command": helper_command, "args": list(helper_args or []), "input": kwargs.get("input")})
+        return type("R", (), {"returncode": 0, "stdout": stdout, "stderr": ""})()
+
+    monkeypatch.setattr(site_apps.shell, "privileged", fake_privileged)
+    return calls
+
+
+def test_write_runtime_sends_validated_node_flags(monkeypatch):
+    website, app = _managed_site("node")
+    calls = _capture_privileged(monkeypatch)
+
+    site_apps.write_runtime(website, app)
+
+    assert calls[0]["command"] == "site-app-write"
+    args = calls[0]["args"]
+    assert args[0] == "siteuser"
+    assert args[2:4] == ["app", "node"]
+    assert "--port=21005" in args
+    assert "--exec=npm" in args
+    assert "--arg=start" in args
+    assert "--node-major=22" in args
+    # Environment travels on stdin, never as an argument.
+    assert calls[0]["input"].startswith("FOO=bar")
+    assert not any(arg.startswith("--env") for arg in args)
+
+
+def test_write_runtime_sends_validated_docker_flags(monkeypatch):
+    website, app = _managed_site("docker")
+    calls = _capture_privileged(monkeypatch)
+
+    site_apps.write_runtime(website, app)
+
+    args = calls[0]["args"]
+    assert args[3] == "docker"
+    assert "--image=n8nio/n8n:1.60.0" in args
+    assert "--container-port=3000" in args
+    assert "--cpus=1" in args
+
+
+def test_write_runtime_refuses_a_proxy_only_app(monkeypatch):
+    website, app = _managed_site("proxy")
+    _capture_privileged(monkeypatch)
+
+    with pytest.raises(ValueError, match="managed runtime"):
+        site_apps.write_runtime(website, app)
+
+
+def test_write_runtime_needs_a_linux_user(monkeypatch):
+    website, app = _managed_site("node")
+    website.linux_user = None
+    _capture_privileged(monkeypatch)
+
+    with pytest.raises(ValueError, match="no Linux user"):
+        site_apps.write_runtime(website, app)
+
+
+def test_write_runtime_rejects_a_bad_image_before_reaching_root(monkeypatch):
+    website, app = _managed_site("docker", image="evil.example.com/x:1")
+    calls = _capture_privileged(monkeypatch)
+
+    with pytest.raises(ValueError):
+        site_apps.write_runtime(website, app)
+    assert calls == []
+
+
+def test_control_only_passes_the_website_and_app_name(monkeypatch):
+    """The unit name is derived by the helper, so no caller can aim at nginx."""
+    website, app = _managed_site("node")
+    calls = _capture_privileged(monkeypatch, stdout="active")
+
+    site_apps.control(website, app, "restart")
+
+    assert calls[0]["command"] == "site-app-control"
+    expected_root = str(Path("/home/siteuser/example.test").resolve())
+    assert calls[0]["args"] == ["siteuser", expected_root, "app", "restart"]
+
+
+def test_control_rejects_an_action_outside_the_allowed_set(monkeypatch):
+    website, app = _managed_site("node")
+    _capture_privileged(monkeypatch)
+
+    for action in ("mask", "kill", "reload-or-restart", "start; rm -rf /"):
+        with pytest.raises(ValueError, match="Unsupported action"):
+            site_apps.control(website, app, action)
+
+
+def test_is_running_reads_systemd_output(monkeypatch):
+    website, app = _managed_site("node")
+    _capture_privileged(monkeypatch, stdout="active\n")
+    assert site_apps.is_running(website, app) is True
+
+    _capture_privileged(monkeypatch, stdout="inactive\n")
+    assert site_apps.is_running(website, app) is False
+
+
+def test_unit_name_is_scoped_to_the_user_and_site():
+    website, app = _managed_site("node")
+    name = site_apps.unit_name(website, app)
+
+    assert name.startswith("bpanel-app-siteuser-")
+    assert name.endswith("-app")
+
+    other = Website(domain="other.test", owner_id=1, root_path="/home/siteuser/other.test", linux_user="siteuser")
+    other.apps = [app]
+    # Same user, same app name, different site: different unit.
+    assert site_apps.unit_name(other, app) != name
+
+
+def test_logs_clamps_the_requested_line_count(monkeypatch):
+    website, app = _managed_site("node")
+    calls = _capture_privileged(monkeypatch, stdout="log line")
+
+    site_apps.logs(website, app, 99999)
+    assert calls[0]["args"][-1] == "2000"
+
+    site_apps.logs(website, app, -5)
+    assert calls[1]["args"][-1] == "1"
+
+
+def test_docker_status_parses_helper_output(monkeypatch):
+    monkeypatch.setattr(
+        site_apps.shell,
+        "privileged",
+        lambda *a, **k: type("R", (), {
+            "returncode": 0,
+            "stdout": "installed=yes\nversion=Docker version 27.1.1\nactive=active\n",
+            "stderr": "",
+        })(),
+    )
+
+    assert site_apps.docker_status() == {
+        "installed": True,
+        "version": "Docker version 27.1.1",
+        "active": "active",
+    }
+
+
+def test_installed_node_majors_ignores_junk(monkeypatch):
+    monkeypatch.setattr(
+        site_apps.shell,
+        "privileged",
+        lambda *a, **k: type("R", (), {"returncode": 0, "stdout": "22\n20\nnot-a-version\n", "stderr": ""})(),
+    )
+
+    assert site_apps.installed_node_majors() == ["20", "22"]

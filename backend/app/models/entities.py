@@ -112,6 +112,12 @@ class SiteApp(Base):
     start_kind: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
     start_arg: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     node_major: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
+    # Container runtimes: image reference, the port the process listens on inside
+    # the container, and a CPU share. The published side is always loopback.
+    image: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    container_port: Mapped[int] = mapped_column(Integer, default=3000)
+    cpu_limit: Mapped[str] = mapped_column(String(8), default="1")
+    env: Mapped[str] = mapped_column(Text, default="")
     port: Mapped[int] = mapped_column(Integer, unique=True, index=True)
     memory_limit_mb: Mapped[int] = mapped_column(Integer, default=512)
     autostart: Mapped[bool] = mapped_column(Boolean, default=True)

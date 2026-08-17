@@ -927,6 +927,8 @@ firewall_apply() {
     firewall_apply_family ip6tables 6 "$state"
   fi
   firewall_write_boot_unit
+  # Never let a Docker guard failure abort the main firewall apply.
+  install_docker_firewall_guard || echo "WARNING: could not apply the Docker inbound guard" >&2
   echo "Firewall applied (${state})"
 }
 
@@ -1560,6 +1562,325 @@ renew_ssl_soon() {
     systemctl restart bpanel-api >/dev/null 2>&1 || true
   fi
   echo "SSL auto-renew checked ${checked} certificate(s); renewed ${renewed} certificate(s) within ${days} day(s)."
+}
+
+# ---- managed application runtimes ------------------------------------------
+# A site app runs as a systemd unit whose name the panel never gets to choose:
+# it is derived here from the site user and site root, so a caller cannot aim
+# start/stop/logs at nginx, mariadb, or another tenant's unit.
+
+require_app_name() {
+  [[ "$1" =~ ^[a-z0-9]([a-z0-9_-]{0,30}[a-z0-9])?$ ]] || deny "invalid app name: $1"
+}
+
+app_site_hash() {
+  printf '%s' "$1" | sha256sum | awk '{print substr($1, 1, 8)}'
+}
+
+app_unit_name() {
+  local user="$1" site_root="$2" name="$3"
+  printf 'bpanel-app-%s-%s-%s' "$user" "$(app_site_hash "$site_root")" "$name"
+}
+
+app_container_name() {
+  local user="$1" site_root="$2" name="$3"
+  printf 'bpanel-%s-%s-%s' "$user" "$(app_site_hash "$site_root")" "$name"
+}
+
+require_app_port() {
+  [[ "$1" =~ ^[0-9]{4,5}$ ]] || deny "invalid app port: $1"
+  (( $1 >= 21000 && $1 <= 21999 )) || deny "app port outside the managed range: $1"
+}
+
+require_container_port() {
+  [[ "$1" =~ ^[0-9]{1,5}$ ]] || deny "invalid container port: $1"
+  (( $1 >= 1 && $1 <= 65535 )) || deny "container port out of range: $1"
+}
+
+require_app_memory() {
+  [[ "$1" =~ ^[0-9]{2,5}$ ]] || deny "invalid memory limit: $1"
+  (( $1 >= 64 && $1 <= 16384 )) || deny "memory limit out of range: $1"
+}
+
+require_app_cpus() {
+  [[ "$1" =~ ^[0-9]{1,2}(\.[0-9])?$ ]] || deny "invalid cpu limit: $1"
+}
+
+require_node_major() {
+  [[ "$1" =~ ^[1-9][0-9]$ ]] || deny "invalid node major version: $1"
+}
+
+require_docker_image() {
+  # Registry/name[:tag][@digest]. No whitespace and no leading dash, so the
+  # reference can never be read by docker as a flag.
+  [[ "$1" =~ ^[a-z0-9][a-z0-9._/-]{0,159}(:[A-Za-z0-9._-]{1,127})?(@sha256:[a-f0-9]{64})?$ ]] \
+    || deny "invalid container image reference: $1"
+  case "$1" in
+    -*|*..*) deny "invalid container image reference: $1" ;;
+  esac
+}
+
+resolve_node_bin_dir() {
+  local major="$1" sys_major=""
+  if [[ -x "/opt/bpanel/node/${major}/bin/node" ]]; then
+    printf '/opt/bpanel/node/%s/bin' "$major"
+    return 0
+  fi
+  if [[ -x /usr/bin/node ]]; then
+    sys_major="$(/usr/bin/node -p 'process.versions.node.split(".")[0]' 2>/dev/null || true)"
+    if [[ "$sys_major" == "$major" ]]; then
+      printf '/usr/bin'
+      return 0
+    fi
+  fi
+  return 1
+}
+
+write_app_env_file() {
+  # Environment arrives on stdin as KEY=value lines. Written root-owned so the
+  # site user can read secrets but cannot edit them past validation.
+  local target="$1" user="$2" line tmp
+  tmp="${target}.bpanel-tmp"
+  : >"$tmp"
+  chown "root:${user}" "$tmp"
+  chmod 0640 "$tmp"
+  while IFS= read -r line; do
+    [[ -z "${line//[[:space:]]/}" ]] && continue
+    [[ "$line" =~ ^[A-Z_][A-Z0-9_]*= ]] || deny "invalid environment line (expected KEY=value)"
+    printf '%s\n' "$line" >>"$tmp"
+  done
+  mv -f "$tmp" "$target"
+  chown "root:${user}" "$target"
+  chmod 0640 "$target"
+}
+
+write_node_app_unit() {
+  local unit_path="$1" app_label="$2" user="$3" site_root="$4" app_dir="$5" env_file="$6"
+  local port="$7" memory="$8" node_major="$9" app_exec="${10}" app_arg="${11}"
+  local bin_dir exec_start identifier
+  bin_dir="$(resolve_node_bin_dir "$node_major")" \
+    || deny "Node ${node_major} is not installed; run node-install ${node_major} first"
+  case "$app_exec" in
+    node) exec_start="${bin_dir}/node ${app_arg}" ;;
+    npm)  exec_start="${bin_dir}/npm run --silent ${app_arg}" ;;
+    npx)  exec_start="${bin_dir}/npx --yes ${app_arg}" ;;
+    yarn)
+      if [[ -x "${bin_dir}/yarn" ]]; then
+        exec_start="${bin_dir}/yarn ${app_arg}"
+      elif [[ -x /usr/local/bin/yarn ]]; then
+        exec_start="/usr/local/bin/yarn ${app_arg}"
+      else
+        deny "yarn is not installed; use npm instead"
+      fi
+      ;;
+    *) deny "invalid start command: $app_exec" ;;
+  esac
+  identifier="$(basename "$unit_path" .service)"
+  cat >"$unit_path" <<UNIT
+[Unit]
+Description=BPanel application ${app_label} (${user})
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${user}
+Group=${user}
+WorkingDirectory=${app_dir}
+EnvironmentFile=-${env_file}
+# HOST is forced so a misconfigured app cannot bind a public interface. The
+# firewall is the second layer here, not the only one.
+Environment=HOST=127.0.0.1
+Environment=NODE_ENV=production
+Environment=PORT=${port}
+Environment=HOME=${HOME_ROOT}/${user}
+Environment=PATH=${bin_dir}:/usr/local/bin:/usr/bin:/bin
+ExecStart=${exec_start}
+Restart=always
+RestartSec=5
+MemoryAccounting=yes
+MemoryMax=${memory}M
+TasksMax=256
+LimitNOFILE=8192
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=${site_root}
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=${identifier}
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+}
+
+write_docker_app_unit() {
+  local unit_path="$1" app_label="$2" user="$3" container="$4" app_dir="$5" env_file="$6"
+  local port="$7" memory="$8" image="$9" container_port="${10}" cpus="${11}"
+  local uid gid identifier
+  uid="$(id -u "$user")" || deny "cannot resolve uid for $user"
+  gid="$(id -g "$user")" || deny "cannot resolve gid for $user"
+  identifier="$(basename "$unit_path" .service)"
+  # The unit runs as root because it talks to the Docker socket, but the
+  # container is the site user, has no capabilities, cannot gain privileges and
+  # publishes only on loopback. The customer never gets socket access - that
+  # would be equivalent to handing out root.
+  cat >"$unit_path" <<UNIT
+[Unit]
+Description=BPanel container ${app_label} (${user})
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=exec
+ExecStartPre=-/usr/bin/docker rm -f ${container}
+ExecStart=/usr/bin/docker run --rm --name ${container} \\
+  --user ${uid}:${gid} \\
+  --publish 127.0.0.1:${port}:${container_port} \\
+  --env-file ${env_file} \\
+  --env PORT=${container_port} \\
+  --env HOST=0.0.0.0 \\
+  --volume ${app_dir}:/app \\
+  --workdir /app \\
+  --memory ${memory}m \\
+  --memory-swap ${memory}m \\
+  --cpus ${cpus} \\
+  --pids-limit 256 \\
+  --cap-drop ALL \\
+  --security-opt no-new-privileges \\
+  --log-driver json-file --log-opt max-size=10m --log-opt max-file=3 \\
+  ${image}
+ExecStop=/usr/bin/docker stop --time 20 ${container}
+Restart=always
+RestartSec=5
+TimeoutStartSec=300
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=${identifier}
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+}
+
+write_docker_daemon_config() {
+  install -d -m 0755 /etc/docker
+  # Log rotation is not optional on a shared host: an unbounded container log
+  # fills the disk and takes every other site down with it.
+  cat >/etc/docker/daemon.json <<'JSON'
+{
+  "log-driver": "json-file",
+  "log-opts": { "max-size": "10m", "max-file": "3" },
+  "live-restore": true,
+  "no-new-privileges": true,
+  "default-address-pool": [ { "base": "172.31.0.0/16", "size": 24 } ]
+}
+JSON
+}
+
+install_docker_firewall_guard() {
+  # Docker publishes ports by DNAT in PREROUTING and allows them through its own
+  # FORWARD chain, so a published port never passes through BPANEL-INPUT. Panel
+  # apps only ever publish on loopback, but a container started by hand could
+  # publish on 0.0.0.0 and be reachable while the firewall looks enabled.
+  # DOCKER-USER is the one chain Docker leaves to the operator.
+  command -v iptables >/dev/null 2>&1 || return 0
+  command -v docker >/dev/null 2>&1 || return 0
+  local iface
+  iface="$(ip route show default 2>/dev/null | awk '/^default/{print $5; exit}')"
+  [[ -n "$iface" ]] || return 0
+  iptables -w -N DOCKER-USER 2>/dev/null || true
+  iptables -w -D DOCKER-USER -i "$iface" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN 2>/dev/null || true
+  iptables -w -D DOCKER-USER -i "$iface" -j DROP 2>/dev/null || true
+  iptables -w -I DOCKER-USER 1 -i "$iface" -j DROP
+  iptables -w -I DOCKER-USER 1 -i "$iface" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+}
+
+install_docker_engine() {
+  if command -v docker >/dev/null 2>&1; then
+    write_docker_daemon_config
+    systemctl restart docker >/dev/null 2>&1 || true
+    install_docker_firewall_guard
+    echo "Docker is already installed"
+    return 0
+  fi
+  local distro codename arch
+  # shellcheck disable=SC1091
+  . /etc/os-release
+  case "${ID:-}" in
+    ubuntu) distro=ubuntu ;;
+    debian) distro=debian ;;
+    *) deny "unsupported distribution for Docker install: ${ID:-unknown}" ;;
+  esac
+  codename="${VERSION_CODENAME:-}"
+  [[ -n "$codename" ]] || deny "cannot determine distribution codename"
+  arch="$(dpkg --print-architecture)"
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update --allow-releaseinfo-change
+  apt-get install -y ca-certificates curl gnupg
+  install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL "https://download.docker.com/linux/${distro}/gpg" -o /etc/apt/keyrings/docker.asc
+  chmod a+r /etc/apt/keyrings/docker.asc
+  printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/%s %s stable\n' \
+    "$arch" "$distro" "$codename" >/etc/apt/sources.list.d/docker.list
+  apt-get update
+  apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  write_docker_daemon_config
+  systemctl enable --now docker
+  install_docker_firewall_guard
+  echo "Docker installed"
+}
+
+install_node_major() {
+  local major="$1" arch tmp url latest
+  require_node_major "$major"
+  if [[ -x "/opt/bpanel/node/${major}/bin/node" ]]; then
+    echo "Node ${major} is already installed"
+    return 0
+  fi
+  case "$(dpkg --print-architecture)" in
+    amd64) arch=x64 ;;
+    arm64) arch=arm64 ;;
+    *) deny "unsupported architecture for Node install" ;;
+  esac
+  latest="$(curl -fsSL https://nodejs.org/dist/index.json | BPANEL_NODE_MAJOR="$major" python3 -c 'import json, os, sys
+major = os.environ["BPANEL_NODE_MAJOR"]
+names = [item["version"] for item in json.load(sys.stdin) if item["version"].startswith("v" + major + ".")]
+print(names[0] if names else "")')"
+  [[ "$latest" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || deny "no Node ${major} release found upstream"
+  url="https://nodejs.org/dist/${latest}/node-${latest}-linux-${arch}.tar.xz"
+  tmp="$(mktemp -d)"
+  curl -fsSL "$url" -o "${tmp}/node.tar.xz" || { rm -rf "$tmp"; deny "cannot download ${url}"; }
+  install -d -m 0755 /opt/bpanel/node
+  rm -rf "/opt/bpanel/node/${major}.tmp"
+  install -d -m 0755 "/opt/bpanel/node/${major}.tmp"
+  tar -xJf "${tmp}/node.tar.xz" -C "/opt/bpanel/node/${major}.tmp" --strip-components=1
+  rm -rf "$tmp"
+  rm -rf "/opt/bpanel/node/${major}"
+  mv "/opt/bpanel/node/${major}.tmp" "/opt/bpanel/node/${major}"
+  chown -R root:root "/opt/bpanel/node/${major}"
+  echo "Node ${latest} installed to /opt/bpanel/node/${major}"
+}
+
+list_installed_node_majors() {
+  local dir
+  [[ -d /opt/bpanel/node ]] || return 0
+  for dir in /opt/bpanel/node/*; do
+    [[ -x "$dir/bin/node" ]] || continue
+    basename "$dir"
+  done
 }
 
 is_in() {
@@ -3441,6 +3762,164 @@ PY
         exit 126
         ;;
     esac
+    ;;
+
+  # ---- managed application runtimes (node / docker) --------------------
+  site-app-write)
+    [[ $# -ge 4 ]] || deny "usage: site-app-write <site-user> <site-root> <name> <node|docker> [--flags]"
+    user="$1"; root_arg="$2"; app_name="$3"; app_runtime="$4"; shift 4
+    require_linux_user "$user"
+    require_app_name "$app_name"
+    [[ "$app_runtime" == "node" || "$app_runtime" == "docker" ]] || deny "invalid runtime: $app_runtime"
+    site_root="$(require_managed_path "$root_arg" "$user")"
+    app_port=""; app_memory="512"; app_rel_dir="app"; app_node_major=""
+    app_exec=""; app_arg=""; app_image=""; app_container_port="3000"; app_cpus="1"
+    while [[ $# -gt 0 ]]; do
+      case "${1:-}" in
+        --port=*)           app_port="${1#*=}" ;;
+        --memory=*)         app_memory="${1#*=}" ;;
+        --dir=*)            app_rel_dir="${1#*=}" ;;
+        --node-major=*)     app_node_major="${1#*=}" ;;
+        --exec=*)           app_exec="${1#*=}" ;;
+        --arg=*)            app_arg="${1#*=}" ;;
+        --image=*)          app_image="${1#*=}" ;;
+        --container-port=*) app_container_port="${1#*=}" ;;
+        --cpus=*)           app_cpus="${1#*=}" ;;
+        *) deny "unknown site-app-write option: $1" ;;
+      esac
+      shift
+    done
+    require_app_port "$app_port"
+    require_app_memory "$app_memory"
+    require_app_cpus "$app_cpus"
+    [[ "$app_rel_dir" =~ ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ ]] || deny "unsafe app directory: $app_rel_dir"
+    case "$app_rel_dir" in
+      *".."*) deny "unsafe app directory: $app_rel_dir" ;;
+    esac
+    app_dir="$(require_bound_managed_path "$user" "$site_root" "${site_root}/${app_rel_dir}")"
+    mkdir -p -- "$app_dir"
+    harden_site_dir_path "$site_root" "$app_dir" "$user"
+    unit_name="$(app_unit_name "$user" "$site_root" "$app_name")"
+    unit_path="/etc/systemd/system/${unit_name}.service"
+    env_file="${site_root}/.bpanel-app-${app_name}.env"
+    write_app_env_file "$env_file" "$user"
+    if [[ "$app_runtime" == "node" ]]; then
+      require_node_major "$app_node_major"
+      [[ "$app_arg" =~ ^[A-Za-z0-9._@/-]{1,120}$ ]] || deny "invalid start argument: $app_arg"
+      write_node_app_unit "$unit_path" "$app_name" "$user" "$site_root" "$app_dir" "$env_file" \
+        "$app_port" "$app_memory" "$app_node_major" "$app_exec" "$app_arg"
+    else
+      command -v docker >/dev/null 2>&1 || deny "Docker is not installed; run docker-install first"
+      require_docker_image "$app_image"
+      require_container_port "$app_container_port"
+      container_name="$(app_container_name "$user" "$site_root" "$app_name")"
+      write_docker_app_unit "$unit_path" "$app_name" "$user" "$container_name" "$app_dir" "$env_file" \
+        "$app_port" "$app_memory" "$app_image" "$app_container_port" "$app_cpus"
+    fi
+    chown root:root "$unit_path"
+    chmod 0644 "$unit_path"
+    systemctl daemon-reload
+    echo "$unit_name"
+    ;;
+
+  site-app-control)
+    [[ $# -eq 4 ]] || deny "usage: site-app-control <site-user> <site-root> <name> <action>"
+    user="$1"; root_arg="$2"; app_name="$3"; app_action="$4"
+    require_linux_user "$user"
+    require_app_name "$app_name"
+    is_in "$app_action" start stop restart status is-active is-enabled enable disable \
+      || deny "action not allowed: $app_action"
+    site_root="$(require_managed_path "$root_arg" "$user")"
+    unit_name="$(app_unit_name "$user" "$site_root" "$app_name")"
+    [[ -f "/etc/systemd/system/${unit_name}.service" ]] || deny "application unit not found: ${unit_name}"
+    exec systemctl "$app_action" "${unit_name}.service" --no-pager
+    ;;
+
+  site-app-logs)
+    [[ $# -eq 3 || $# -eq 4 ]] || deny "usage: site-app-logs <site-user> <site-root> <name> [lines]"
+    user="$1"; root_arg="$2"; app_name="$3"; log_lines="${4:-200}"
+    require_linux_user "$user"
+    require_app_name "$app_name"
+    [[ "$log_lines" =~ ^[0-9]{1,4}$ ]] || deny "invalid line count: $log_lines"
+    site_root="$(require_managed_path "$root_arg" "$user")"
+    unit_name="$(app_unit_name "$user" "$site_root" "$app_name")"
+    exec journalctl -u "${unit_name}.service" -n "$log_lines" --no-pager --output short-iso
+    ;;
+
+  site-app-delete)
+    [[ $# -eq 3 ]] || deny "usage: site-app-delete <site-user> <site-root> <name>"
+    user="$1"; root_arg="$2"; app_name="$3"
+    require_linux_user "$user"
+    require_app_name "$app_name"
+    site_root="$(require_managed_path "$root_arg" "$user")"
+    unit_name="$(app_unit_name "$user" "$site_root" "$app_name")"
+    systemctl disable --now "${unit_name}.service" 2>/dev/null || true
+    rm -f "/etc/systemd/system/${unit_name}.service"
+    systemctl daemon-reload
+    if command -v docker >/dev/null 2>&1; then
+      docker rm -f "$(app_container_name "$user" "$site_root" "$app_name")" 2>/dev/null || true
+    fi
+    rm -f "${site_root}/.bpanel-app-${app_name}.env"
+    echo "removed ${unit_name}"
+    ;;
+
+  site-app-install-deps)
+    # npm install for a node app, as the site user, with a hard timeout so a
+    # runaway postinstall cannot hold a worker forever.
+    [[ $# -eq 4 ]] || deny "usage: site-app-install-deps <site-user> <site-root> <relative-dir> <node-major>"
+    user="$1"; root_arg="$2"; app_rel_dir="$3"; app_node_major="$4"
+    require_linux_user "$user"
+    require_node_major "$app_node_major"
+    site_root="$(require_managed_path "$root_arg" "$user")"
+    [[ "$app_rel_dir" =~ ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ ]] || deny "unsafe app directory: $app_rel_dir"
+    app_dir="$(require_bound_managed_path "$user" "$site_root" "${site_root}/${app_rel_dir}")"
+    [[ -f "${app_dir}/package.json" ]] || deny "no package.json in ${app_rel_dir}"
+    bin_dir="$(resolve_node_bin_dir "$app_node_major")" \
+      || deny "Node ${app_node_major} is not installed; run node-install ${app_node_major} first"
+    exec timeout 900 runuser -u "$user" -- env -i \
+      HOME="${HOME_ROOT}/${user}" \
+      PATH="${bin_dir}:/usr/local/bin:/usr/bin:/bin" \
+      NODE_ENV=production \
+      "${bin_dir}/npm" install --omit=dev --no-audit --no-fund --prefix "$app_dir"
+    ;;
+
+  site-app-pull)
+    [[ $# -eq 1 ]] || deny "usage: site-app-pull <image>"
+    command -v docker >/dev/null 2>&1 || deny "Docker is not installed; run docker-install first"
+    require_docker_image "$1"
+    exec timeout 900 docker pull -- "$1"
+    ;;
+
+  docker-install)
+    [[ $# -eq 0 ]] || deny "usage: docker-install"
+    install_docker_engine
+    ;;
+
+  docker-status)
+    [[ $# -eq 0 ]] || deny "usage: docker-status"
+    if ! command -v docker >/dev/null 2>&1; then
+      echo "installed=no"
+      exit 0
+    fi
+    echo "installed=yes"
+    echo "version=$(docker --version 2>/dev/null | head -n1)"
+    echo "active=$(systemctl is-active docker 2>/dev/null)"
+    ;;
+
+  docker-firewall-guard)
+    [[ $# -eq 0 ]] || deny "usage: docker-firewall-guard"
+    install_docker_firewall_guard
+    echo "Docker inbound guard applied"
+    ;;
+
+  node-install)
+    [[ $# -eq 1 ]] || deny "usage: node-install <major>"
+    install_node_major "$1"
+    ;;
+
+  node-list)
+    [[ $# -eq 0 ]] || deny "usage: node-list"
+    list_installed_node_majors
     ;;
 
   *)

@@ -1,8 +1,9 @@
 """Application slots for a website.
 
-Phase 1 covers the proxy half: the record says which loopback port the domain
-forwards to, and writing it rewrites the vhost. Owning the process that answers
-on that port lands in the node phase.
+Three kinds, sharing one nginx path. "proxy" only records the loopback port the
+domain forwards to and leaves the process to the customer. "node" and "docker"
+also make the panel own the process: it writes a systemd unit through the
+privileged helper and drives start, stop and logs from there.
 """
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -13,11 +14,14 @@ from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.permissions import Role, ensure_role, is_admin_role
 from app.models.entities import SiteApp, User, Website
-from app.schemas.schemas import SiteAppCreate, SiteAppOut, SiteAppUpdate
+from app.schemas.schemas import NodeInstallRequest, SiteAppControl, SiteAppCreate, SiteAppOut, SiteAppUpdate
 from app.services import nginx, site_apps, site_users
 from app.services.audit import log_action
 
 router = APIRouter(prefix="/site-apps", tags=["site-apps"])
+# Separate prefix on purpose: under /site-apps these would be shadowed by
+# /{app_id}/status and answer 422 instead of dispatching here.
+runtime_router = APIRouter(prefix="/site-runtimes", tags=["site-apps"])
 
 
 def _owned_website(db: Session, current_user: User, website_id: int) -> Website:
@@ -92,8 +96,15 @@ def create_site_app(payload: SiteAppCreate, db: Session = Depends(get_db), curre
         )
         node_major = site_apps.validate_node_major(payload.node_major)
         start_kind, start_arg = (None, None)
+        image, container_port, cpu_limit = (None, 3000, "1")
         if kind == "node":
             start_kind, start_arg = site_apps.validate_start(payload.start_kind, payload.start_arg, app_root)
+            node_major = node_major or "22"
+        elif kind == "docker":
+            image = site_apps.validate_image(payload.image, enforce_registry=not is_admin_role(current_user.role))
+            container_port = site_apps.validate_container_port(payload.container_port)
+            cpu_limit = site_apps.validate_cpu_limit(payload.cpu_limit)
+        env = site_apps.validate_env(payload.env)
         port = site_apps.allocate_port(db, payload.port)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -106,6 +117,10 @@ def create_site_app(payload: SiteAppCreate, db: Session = Depends(get_db), curre
         start_kind=start_kind,
         start_arg=start_arg,
         node_major=node_major,
+        image=image,
+        container_port=container_port,
+        cpu_limit=cpu_limit,
+        env=env,
         port=port,
         memory_limit_mb=memory_limit_mb,
         autostart=bool(payload.autostart),
@@ -150,6 +165,14 @@ def update_site_app(app_id: int, payload: SiteAppUpdate, db: Session = Depends(g
             )
         if payload.autostart is not None:
             app.autostart = bool(payload.autostart)
+        if payload.image is not None:
+            app.image = site_apps.validate_image(payload.image, enforce_registry=not is_admin_role(current_user.role))
+        if payload.container_port is not None:
+            app.container_port = site_apps.validate_container_port(payload.container_port)
+        if payload.cpu_limit is not None:
+            app.cpu_limit = site_apps.validate_cpu_limit(payload.cpu_limit)
+        if payload.env is not None:
+            app.env = site_apps.validate_env(payload.env)
         if payload.start_kind is not None or payload.start_arg is not None:
             app.start_kind, app.start_arg = site_apps.validate_start(
                 payload.start_kind or app.start_kind,
@@ -189,6 +212,12 @@ def delete_site_app(app_id: int, db: Session = Depends(get_db), current_user: Us
             detail="This website is set to proxy mode. Switch Website mode first, or the domain would have nowhere to send traffic.",
         )
     name, port = app.name, app.port
+    # Tear the runtime down before the row goes, otherwise the unit and the
+    # container outlive the record that describes them.
+    try:
+        site_apps.delete_runtime(website, app)
+    except (RuntimeError, ValueError):
+        pass
     db.delete(app)
     db.commit()
     try:
@@ -209,3 +238,131 @@ def suggest_port(website_id: int, db: Session = Depends(get_db), current_user: U
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+
+
+# --- managed runtime lifecycle ----------------------------------------------
+
+def _managed(app: SiteApp) -> None:
+    if app.kind not in site_apps.MANAGED_KINDS:
+        raise HTTPException(
+            status_code=400,
+            detail="This application only records a proxy target. Recreate it as a Node.js or container app for BPanel to run it.",
+        )
+
+
+def _record_status(db: Session, app: SiteApp, status: str, error: str = "") -> None:
+    app.status = status
+    app.last_error = (error or "")[-2000:]
+    db.commit()
+
+
+@router.post("/{app_id}/deploy")
+def deploy_site_app(app_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Fetch what the app needs, write its unit, and start it."""
+    ensure_role(current_user.role, Role.end_user)
+    app = _owned_app(db, current_user, app_id)
+    _managed(app)
+    website = db.query(Website).filter(Website.id == app.website_id).first()
+    steps: list[str] = []
+    try:
+        if app.kind == "docker":
+            steps.append(site_apps.pull_image(app))
+        elif (app.app_root or "") and app.start_kind in {"npm", "npx", "yarn", "node"}:
+            try:
+                steps.append(site_apps.install_dependencies(website, app))
+            except RuntimeError as exc:
+                # No package.json is normal for a single-file entry point.
+                if "no package.json" not in str(exc).lower():
+                    raise
+        unit = site_apps.write_runtime(website, app)
+        site_apps.control(website, app, "enable" if app.autostart else "disable")
+        site_apps.control(website, app, "restart")
+    except (RuntimeError, ValueError) as exc:
+        _record_status(db, app, "error", str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    running = site_apps.is_running(website, app)
+    _record_status(db, app, "running" if running else "error", "" if running else "Unit did not stay active; check the log.")
+    log_action(db, current_user.id, "deploy_site_app", website.domain, f"{app.name} :{app.port}")
+    return {
+        "unit": unit,
+        "status": app.status,
+        "running": running,
+        "output": "\n".join(step for step in steps if step)[-4000:],
+    }
+
+
+@router.post("/{app_id}/control")
+def control_site_app(app_id: int, payload: SiteAppControl, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.end_user)
+    app = _owned_app(db, current_user, app_id)
+    _managed(app)
+    website = db.query(Website).filter(Website.id == app.website_id).first()
+    try:
+        output = site_apps.control(website, app, payload.action)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    running = site_apps.is_running(website, app)
+    _record_status(db, app, "running" if running else "stopped")
+    log_action(db, current_user.id, f"{payload.action}_site_app", website.domain, app.name)
+    return {"action": payload.action, "running": running, "status": app.status, "output": output[-2000:]}
+
+
+@router.get("/{app_id}/status")
+def site_app_status(app_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.end_user)
+    app = _owned_app(db, current_user, app_id)
+    website = db.query(Website).filter(Website.id == app.website_id).first()
+    if app.kind not in site_apps.MANAGED_KINDS:
+        return {"managed": False, "running": False, "unit": ""}
+    return {
+        "managed": True,
+        "running": site_apps.is_running(website, app),
+        "unit": site_apps.unit_name(website, app),
+        "status": app.status,
+        "last_error": app.last_error,
+    }
+
+
+@router.get("/{app_id}/logs")
+def site_app_logs(app_id: int, lines: int = 200, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.end_user)
+    app = _owned_app(db, current_user, app_id)
+    _managed(app)
+    website = db.query(Website).filter(Website.id == app.website_id).first()
+    try:
+        return {"log": site_apps.logs(website, app, lines)}
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# --- server side runtimes (admin) -------------------------------------------
+
+@runtime_router.get("/status")
+def runtime_status(current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.end_user)
+    return {
+        "docker": site_apps.docker_status(),
+        "node_majors": site_apps.installed_node_majors(),
+        "allowed_registries": list(site_apps.allowed_registries()),
+    }
+
+
+@runtime_router.post("/docker-install")
+def runtime_install_docker(current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.admin)
+    try:
+        output = site_apps.install_docker()
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"message": "Docker is ready.", "output": output, "docker": site_apps.docker_status()}
+
+
+@runtime_router.post("/node-install")
+def runtime_install_node(payload: NodeInstallRequest, current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.admin)
+    try:
+        output = site_apps.install_node(payload.major)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"message": f"Node {payload.major} is ready.", "output": output, "node_majors": site_apps.installed_node_majors()}

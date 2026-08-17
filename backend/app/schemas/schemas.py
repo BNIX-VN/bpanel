@@ -531,13 +531,17 @@ class CronDelete(BaseModel):
 class SiteAppCreate(BaseModel):
     website_id: int
     name: str = "app"
-    kind: Literal["proxy", "node"] = "proxy"
+    kind: Literal["proxy", "node", "docker"] = "proxy"
     app_root: str = "app"
     # Omit to let the panel pick a free port from its own range.
     port: Optional[int] = None
     start_kind: Optional[Literal["node", "npm", "npx", "yarn"]] = None
     start_arg: Optional[str] = None
     node_major: Optional[str] = None
+    image: Optional[str] = None
+    container_port: Optional[int] = None
+    cpu_limit: Optional[str] = None
+    env: Optional[str] = None
     memory_limit_mb: Optional[int] = None
     autostart: bool = True
 
@@ -549,8 +553,20 @@ class SiteAppUpdate(BaseModel):
     start_kind: Optional[Literal["node", "npm", "npx", "yarn"]] = None
     start_arg: Optional[str] = None
     node_major: Optional[str] = None
+    image: Optional[str] = None
+    container_port: Optional[int] = None
+    cpu_limit: Optional[str] = None
+    env: Optional[str] = None
     memory_limit_mb: Optional[int] = None
     autostart: Optional[bool] = None
+
+
+class SiteAppControl(BaseModel):
+    action: Literal["start", "stop", "restart"]
+
+
+class NodeInstallRequest(BaseModel):
+    major: str
 
 
 class SiteAppOut(BaseModel):
@@ -563,6 +579,10 @@ class SiteAppOut(BaseModel):
     start_kind: Optional[str] = None
     start_arg: Optional[str] = None
     node_major: Optional[str] = None
+    image: Optional[str] = None
+    container_port: int = 3000
+    cpu_limit: str = "1"
+    env: str = ""
     memory_limit_mb: int = 512
     autostart: bool = True
     status: str = "stopped"

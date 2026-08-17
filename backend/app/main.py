@@ -105,6 +105,7 @@ app.include_router(panel_settings_api.router, prefix="/api")
 app.include_router(terminal.router, prefix="/api")
 app.include_router(provisioning.router, prefix="/api")
 app.include_router(site_apps_api.router, prefix="/api")
+app.include_router(site_apps_api.runtime_router, prefix="/api")
 
 
 @app.get("/api/health")
