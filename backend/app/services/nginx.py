@@ -288,6 +288,24 @@ def _check_app_type(app_type: str) -> str:
     return app_type
 
 
+def ensure_proxy_upgrade_map() -> None:
+    """Make sure the shared WebSocket map exists before a proxied vhost lands.
+
+    The installer writes it, but a panel updated from an older release has not
+    run that step yet, and a proxy vhost referencing $connection_upgrade without
+    it fails `nginx -t` and gets rolled back with a confusing error.
+    """
+    try:
+        shell.privileged(
+            "nginx-upgrade-map-ensure",
+            check=False,
+            fallback=["bash", "-lc", "true"],
+        )
+    except RuntimeError:
+        # Development without the helper installed; the vhost test will speak up.
+        pass
+
+
 def _check_app_port(app_type: str, app_port: int | None) -> int | None:
     """A proxied vhost is useless without somewhere to send the request.
 
@@ -1118,6 +1136,8 @@ def rewrite_vhost(
     app_port: int | None = None,
 ) -> str:
     target = _vhost_path(domain)
+    if app_type in PROXIED_APP_TYPES:
+        ensure_proxy_upgrade_map()
     content = render_vhost(
         domain,
         root_path,

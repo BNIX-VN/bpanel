@@ -1569,6 +1569,23 @@ renew_ssl_soon() {
 # it is derived here from the site user and site root, so a caller cannot aim
 # start/stop/logs at nginx, mariadb, or another tenant's unit.
 
+ensure_proxy_upgrade_map() {
+  # `map` only works at http level, so a proxied vhost needs this file to exist
+  # before nginx will even load. The installer writes it too, but the panel must
+  # not depend on the installer having run since the feature shipped: without it
+  # the first proxy vhost fails `nginx -t` and gets rolled back.
+  local target=/etc/nginx/conf.d/00-bpanel-upgrade-map.conf
+  [[ -s "$target" ]] && return 0
+  cat >"$target" <<'NGINX'
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+NGINX
+  chown root:root "$target"
+  chmod 0644 "$target"
+}
+
 require_app_name() {
   [[ "$1" =~ ^[a-z0-9]([a-z0-9_-]{0,30}[a-z0-9])?$ ]] || deny "invalid app name: $1"
 }
@@ -3762,6 +3779,12 @@ PY
         exit 126
         ;;
     esac
+    ;;
+
+  nginx-upgrade-map-ensure)
+    [[ $# -eq 0 ]] || deny "usage: nginx-upgrade-map-ensure"
+    ensure_proxy_upgrade_map
+    echo "websocket upgrade map present"
     ;;
 
   # ---- managed application runtimes (node / docker) --------------------

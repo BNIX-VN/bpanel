@@ -142,3 +142,19 @@ def test_installers_write_the_websocket_upgrade_map():
         assert "00-bpanel-upgrade-map.conf" in text, script.name
         assert "map $http_upgrade $connection_upgrade" in text, script.name
         assert "configure_proxy_upgrade_map\n" in text, script.name
+
+
+# --- websocket map self-heal ------------------------------------------------
+
+def test_helper_can_write_the_upgrade_map_itself(helper):
+    """A panel updated from an older release never ran the installer step."""
+    assert "nginx-upgrade-map-ensure)" in helper
+    block = helper.split("ensure_proxy_upgrade_map() {", 1)[1].split("\n}", 1)[0]
+    assert "map $http_upgrade $connection_upgrade" in block
+    assert "00-bpanel-upgrade-map.conf" in block
+
+
+def test_proxied_vhost_writes_ensure_the_map_first():
+    service = (PROJECT_ROOT / "backend" / "app" / "services" / "nginx.py").read_text(encoding="utf-8")
+    rewrite = service.split("def rewrite_vhost(", 1)[1]
+    assert "ensure_proxy_upgrade_map()" in rewrite.split("content = render_vhost(", 1)[0]
