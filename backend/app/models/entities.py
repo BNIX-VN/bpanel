@@ -51,6 +51,7 @@ class User(Base):
 
     websites: Mapped[List["Website"]] = relationship(back_populates="owner")
     package: Mapped[Optional[UserPackage]] = relationship(back_populates="users")
+    apps: Mapped[List["SiteApp"]] = relationship(back_populates="owner")
 
 
 class Website(Base):
@@ -79,36 +80,37 @@ class Website(Base):
     waf_custom_rules: Mapped[str] = mapped_column(Text, default="")
     http_flood_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     http_flood_config: Mapped[str] = mapped_column(Text, default="")
+    # Set when app_type is "application": the installed app this domain serves.
+    app_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("site_apps.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     owner: Mapped[User] = relationship(back_populates="websites")
+    app: Mapped[Optional["SiteApp"]] = relationship(back_populates="websites")
     database: Mapped[Optional["DatabaseAccount"]] = relationship(back_populates="website", uselist=False)
     aliases: Mapped[List["WebsiteAlias"]] = relationship(
         back_populates="website",
         cascade="all, delete-orphan",
         order_by="WebsiteAlias.domain",
     )
-    apps: Mapped[List["SiteApp"]] = relationship(
-        back_populates="website",
-        cascade="all, delete-orphan",
-        order_by="SiteApp.id",
-    )
 
 
 class SiteApp(Base):
-    """An application served by proxying to a local port instead of PHP-FPM.
+    """An application the panel installs, runs and keeps alive.
 
-    kind='proxy' only records where nginx should send traffic; kind='node' also
-    means the panel owns the systemd unit that keeps the process running.
+    An app belongs to a panel user and is independent of any website: it lives
+    in its own directory, gets its own loopback port, and runs under its own
+    systemd unit. A website in "application" mode then points at one, and nginx
+    proxies the domain to that app's port.
     """
 
     __tablename__ = "site_apps"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    website_id: Mapped[int] = mapped_column(ForeignKey("websites.id", ondelete="CASCADE"), index=True)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     name: Mapped[str] = mapped_column(String(64), default="app")
-    kind: Mapped[str] = mapped_column(String(16), default="proxy")
-    app_root: Mapped[str] = mapped_column(String(255), default="app")
+    kind: Mapped[str] = mapped_column(String(16), default="node")
     start_kind: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
     start_arg: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     node_major: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
@@ -125,9 +127,10 @@ class SiteApp(Base):
     last_error: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
-    website: Mapped[Website] = relationship(back_populates="apps")
+    owner: Mapped[User] = relationship(back_populates="apps")
+    websites: Mapped[List[Website]] = relationship(back_populates="app")
 
-    __table_args__ = (UniqueConstraint("website_id", "name", name="uq_site_apps_website_name"),)
+    __table_args__ = (UniqueConstraint("owner_id", "name", name="uq_site_apps_owner_name"),)
 
 
 class WebsiteAlias(Base):

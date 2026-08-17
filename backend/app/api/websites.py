@@ -13,7 +13,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.permissions import Role, ensure_role, is_admin_role
 from app.core.secrets import encrypt
-from app.models.entities import DatabaseAccount, User, Website, WebsiteAlias
+from app.models.entities import DatabaseAccount, SiteApp, User, Website, WebsiteAlias
 from app.schemas.schemas import (
     WebsiteAliasCreate,
     WebsiteAliasOut,
@@ -172,6 +172,25 @@ def _hostname_conflicts(db: Session, domain: str, *, exclude_website_id: int | N
     if not safe_domain:
         return True
     return bool({safe_domain, f"www.{safe_domain}"} & _reserved_hostnames(db, exclude_website_id=exclude_website_id, exclude_alias_id=exclude_alias_id))
+
+
+def _resolve_app_for_owner(db: Session, owner_id: int, app_id: int | None, current_user: User) -> SiteApp:
+    """The app a website may serve: one its owner owns.
+
+    Without the ownership check a customer could aim their domain at another
+    tenant's application by guessing an id.
+    """
+    if app_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Pick an installed application for this website, or choose a different website mode.",
+        )
+    app = db.query(SiteApp).filter(SiteApp.id == app_id).first()
+    if not app:
+        raise HTTPException(status_code=404, detail="Application not found")
+    if app.owner_id != owner_id:
+        ensure_role(current_user.role, Role.admin)
+    return app
 
 
 def _rewrite_website_vhost(website: Website, **overrides) -> str:
@@ -338,6 +357,11 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
     else:
         app_type_value = "php" if payload.app_type == "wordpress" else payload.app_type
         runtime_php_version = payload.php_version if app_type_value in {"wordpress", "php"} else None
+        selected_app = (
+            _resolve_app_for_owner(db, owner_id, payload.app_id, current_user)
+            if app_type_value in nginx.PROXIED_APP_TYPES
+            else None
+        )
         try:
             linux_user = site_users.ensure_site_runtime(payload.domain, root_path, runtime_php_version, linux_user)
             # Just create the public_html/ folder skeleton and write a vhost.
@@ -354,6 +378,7 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
                 php_fpm_socket_override=site_users.site_php_fpm_socket(linux_user, root_path, runtime_php_version),
                 document_root="public_html",
                 rewrite_mode="none",
+                app_port=selected_app.port if selected_app else None,
             )
         except (RuntimeError, ValueError, OSError) as exc:
             _cleanup_failed_site(root_path, linux_user)
@@ -369,6 +394,7 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
         php_version=payload.php_version,
         app_type=app_type_value,
         nginx_rewrite_mode="front_controller" if app_type_value == "wordpress" else "none",
+        app_id=selected_app.id if (not install_wp and selected_app) else None,
         status="active",
     )
     db.add(website)
@@ -610,6 +636,11 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
     if payload.app_type is not None and payload.app_type != (website.app_type or "wordpress"):
         try:
             next_app_type = payload.app_type
+            next_app = (
+                _resolve_app_for_owner(db, website.owner_id, payload.app_id, current_user)
+                if next_app_type in nginx.PROXIED_APP_TYPES
+                else None
+            )
             runtime_php_version = website.php_version if next_app_type in {"wordpress", "php"} else None
             if website.linux_user and runtime_php_version:
                 site_users.ensure_site_runtime(
@@ -633,11 +664,21 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
                 app_type=next_app_type,
                 php_version=website.php_version,
                 rewrite_mode=next_rewrite_mode,
+                app_port=next_app.port if next_app else None,
             )
         except (RuntimeError, ValueError, OSError) as exc:
             raise HTTPException(status_code=400, detail=f"Cannot change website mode: {exc}") from exc
         website.app_type = next_app_type
         website.nginx_rewrite_mode = next_rewrite_mode
+        website.app_id = next_app.id if next_app else None
+    elif payload.app_id is not None and (website.app_type or "") in nginx.PROXIED_APP_TYPES:
+        # Same mode, different application behind it.
+        next_app = _resolve_app_for_owner(db, website.owner_id, payload.app_id, current_user)
+        try:
+            _rewrite_website_vhost(website, app_port=next_app.port)
+        except (RuntimeError, ValueError, OSError) as exc:
+            raise HTTPException(status_code=400, detail=f"Cannot point this website at {next_app.name}: {exc}") from exc
+        website.app_id = next_app.id
     if payload.status is not None:
         website.status = payload.status
     if payload.document_root is not None and payload.document_root != (website.document_root or "public_html"):

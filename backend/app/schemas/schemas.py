@@ -9,7 +9,7 @@ from pydantic import BaseModel, EmailStr, Field, field_validator, model_validato
 
 DOMAIN_RE = re.compile(r"^(?!-)([a-zA-Z0-9-]{1,63}\.)+[a-zA-Z]{2,}$")
 SUPPORTED_PHP_VERSIONS = {"5.6", "7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5"}
-SUPPORTED_APP_TYPES = {"wordpress", "php", "static", "proxy", "nodejs"}
+SUPPORTED_APP_TYPES = {"wordpress", "php", "static", "application"}
 SUPPORTED_NGINX_REWRITE_MODES = {"none", "front_controller", "laravel", "codeigniter", "seohburl"}
 SUPPORTED_ROLES = {"admin", "end_user"}
 SIZE_RE = re.compile(r"^\d{1,6}[KMG]?$")  # e.g. "512M", "1024M"
@@ -298,6 +298,8 @@ class WebsiteCreate(BaseModel):
     owner_id: Optional[int] = None
     php_version: str = "8.4"
     app_type: str = "wordpress"
+    # Required when app_type is "application": which installed app to serve.
+    app_id: Optional[int] = None
     install_wordpress: bool = True
     title: str = "My WordPress Site"
     admin_user: str = "admin"
@@ -355,6 +357,7 @@ class WebsiteWordPressInstall(BaseModel):
 class WebsiteUpdate(BaseModel):
     php_version: Optional[str] = None
     app_type: Optional[str] = None
+    app_id: Optional[int] = None
     document_root: Optional[str] = None
     status: Optional[str] = None
     owner_id: Optional[int] = None
@@ -529,10 +532,10 @@ class CronDelete(BaseModel):
 
 
 class SiteAppCreate(BaseModel):
-    website_id: int
     name: str = "app"
-    kind: Literal["proxy", "node", "docker"] = "proxy"
-    app_root: str = "app"
+    kind: Literal["node", "docker"] = "node"
+    # Admins may create an app on behalf of another panel user.
+    owner_id: Optional[int] = None
     # Omit to let the panel pick a free port from its own range.
     port: Optional[int] = None
     start_kind: Optional[Literal["node", "npm", "npx", "yarn"]] = None
@@ -548,7 +551,6 @@ class SiteAppCreate(BaseModel):
 
 class SiteAppUpdate(BaseModel):
     name: Optional[str] = None
-    app_root: Optional[str] = None
     port: Optional[int] = None
     start_kind: Optional[Literal["node", "npm", "npx", "yarn"]] = None
     start_arg: Optional[str] = None
@@ -571,10 +573,9 @@ class NodeInstallRequest(BaseModel):
 
 class SiteAppOut(BaseModel):
     id: int
-    website_id: int
+    owner_id: int
     name: str
     kind: str
-    app_root: str
     port: int
     start_kind: Optional[str] = None
     start_arg: Optional[str] = None
@@ -621,8 +622,8 @@ class WebsiteOut(BaseModel):
     http_flood_enabled: bool = False
     http_flood_config: str = ""
     wordpress_installed: bool = False
+    app_id: Optional[int] = None
     aliases: list[WebsiteAliasOut] = Field(default_factory=list)
-    apps: list[SiteAppOut] = Field(default_factory=list)
 
     class Config:
         from_attributes = True

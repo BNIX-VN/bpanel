@@ -40,6 +40,7 @@ const SETTINGS_PAGE_KEYS = ['settings', 'api-tokens', 'security', 'php', 'firewa
 const PAGE_ROUTES = {
   dashboard: '/',
   websites: '/website',
+  applications: '/applications',
   ssl: '/ssl',
   databases: '/database',
   cron: '/cron',
@@ -197,12 +198,11 @@ function normalizeHttpFloodConfig(config = {}) {
   }));
 }
 
-// Website modes served by proxying to a local port instead of running PHP.
-const PROXIED_APP_TYPES = ['proxy', 'nodejs'];
+// The one website mode served by proxying to an installed application.
+const PROXIED_APP_TYPES = ['application'];
 const EMPTY_SITE_APP_DRAFT = {
   name: 'app',
-  kind: 'proxy',
-  app_root: 'app',
+  kind: 'node',
   port: '',
   start_kind: 'npm',
   start_arg: 'start',
@@ -212,11 +212,16 @@ const EMPTY_SITE_APP_DRAFT = {
   cpu_limit: '1',
   env: '',
 };
-const SITE_APP_KIND_LABELS = { proxy: 'Proxy', node: 'Node.js', docker: 'Container' };
+const SITE_APP_KIND_LABELS = { node: 'Node.js', docker: 'Container' };
 const SITE_APP_KINDS = [
-  ['proxy', 'Proxy only', 'You start the process yourself; BPanel routes the domain to it.'],
   ['node', 'Node.js', 'BPanel installs dependencies and keeps the process running under systemd.'],
   ['docker', 'Container', 'BPanel pulls the image and runs it, published on loopback only.'],
+];
+const WEBSITE_MODES = [
+  ['wordpress', 'WordPress'],
+  ['php', 'PHP'],
+  ['static', 'Static'],
+  ['application', 'Application'],
 ];
 
 function isProxiedAppType(appType) {
@@ -228,6 +233,7 @@ function websiteConfigForm(site = {}) {
   return {
     app_type: appType,
     php_version: site.php_version || '8.4',
+    app_id: site.app_id ? String(site.app_id) : '',
     nginx_rewrite_mode: appType === 'wordpress'
       ? 'front_controller'
       : appType === 'static' || isProxiedAppType(appType)
@@ -555,6 +561,7 @@ function App() {
   const [cronPhpInfo, setCronPhpInfo] = useState({ php_binary: '', php_version: '' });
   const [siteApps, setSiteApps] = useState({ items: [], limit: 0, used: 0, memory_ceiling_mb: 512, port_range: [21000, 21999] });
   const [siteAppDraft, setSiteAppDraft] = useState(EMPTY_SITE_APP_DRAFT);
+  const [createSiteAppId, setCreateSiteAppId] = useState('');
   const [siteAppLog, setSiteAppLog] = useState(null);
   const [siteRuntimes, setSiteRuntimes] = useState({ docker: { installed: false }, node_majors: [], allowed_registries: [] });
   const [chmodTarget, setChmodTarget] = useState(null);
@@ -629,6 +636,8 @@ function App() {
   const [osAutoUpdate, setOsAutoUpdate] = useState({ enabled: true, mode: 'security', auto_reboot: false });
   const noticeTimer = useRef(null);
   const isAdmin = currentUser?.role === 'admin';
+  // Application hosting is off until a package allows it; admins always see it.
+  const appsFeatureEnabled = isAdmin || siteApps.limit > 0;
   const currentSite = websites.find(site => String(site.id) === String(selectedWebsiteId));
   const accountLabel = currentUser?.package_name
     ? `${currentUser?.username || username} - ${currentUser.package_name}`
@@ -1612,6 +1621,10 @@ function App() {
     const cleanAdminEmail = adminEmail.trim();
     if (!cleanDomain) { setError('Please enter a domain name.'); return; }
     const installWp = siteType === 'wordpress' && installWordPress;
+    if (siteType === 'application' && !createSiteAppId) {
+      setError('Pick which application this website should serve.');
+      return;
+    }
     const body = {
       domain: cleanDomain,
       php_version: phpVersion,
@@ -1619,6 +1632,7 @@ function App() {
       install_wordpress: installWp,
       title: cleanDomain,
     };
+    if (siteType === 'application') body.app_id = Number(createSiteAppId);
     if (installWp) {
       body.admin_user = wpAdminUser;
       body.admin_email = cleanAdminEmail || `admin@${cleanDomain}`;
@@ -1629,6 +1643,9 @@ function App() {
     if (data) {
       if (installWp) {
         setNotice(`Created WordPress site: https://${cleanDomain}\nAdmin: ${wpAdminUser} | Password: ${wpAdminPassword || 'StrongPass123!'}`);
+      } else if (siteType === 'application') {
+        setNotice(`Created ${cleanDomain}, serving the selected application.`);
+        setCreateSiteAppId('');
       } else {
         setNotice(`Created site ${cleanDomain}. Upload your files to public_html/ folder.`);
       }
@@ -1713,7 +1730,6 @@ function App() {
     setLogViewer(null);
     setTerminalViewer(null);
     setWebsiteSettingsForm(websiteConfigForm(site));
-    setSiteAppDraft(EMPTY_SITE_APP_DRAFT);
     const data = await request(`/websites/${site.id}/nginx-custom`, {}, 'Loading Custom Nginx...');
     if (data !== null) {
       setNginxCustomEditing({
@@ -1723,14 +1739,12 @@ function App() {
         mode: 'custom',
         content: data?.nginx_custom || '',
       });
-      await loadSiteApps(site.id);
-      await loadSiteRuntimes();
+      await loadSiteApps();
     }
   }
 
-  async function loadSiteApps(websiteId) {
-    if (!websiteId) return;
-    const data = await request(`/site-apps/${websiteId}`, { silent: true });
+  async function loadSiteApps() {
+    const data = await request('/site-apps', { silent: true });
     if (data) setSiteApps({ port_range: [21000, 21999], ...data });
   }
 
@@ -1743,7 +1757,7 @@ function App() {
     const data = await request(`/site-apps/${app.id}/deploy`, { method: 'POST' }, `Deploying ${app.name}...`);
     if (data) {
       setNotice(data.running ? `${app.name} is running on port ${app.port}.` : `${app.name} was deployed but is not running — check the log.`);
-      await loadSiteApps(app.website_id);
+      await loadSiteApps();
     }
   }
 
@@ -1751,7 +1765,7 @@ function App() {
     const data = await request(`/site-apps/${app.id}/control`, { method: 'POST', body: JSON.stringify({ action }) }, `${action} ${app.name}...`);
     if (data) {
       setNotice(`${app.name} is ${data.running ? 'running' : 'stopped'}.`);
-      await loadSiteApps(app.website_id);
+      await loadSiteApps();
     }
   }
 
@@ -1776,13 +1790,10 @@ function App() {
     }
   }
 
-  async function createSiteApp(websiteId) {
-    if (!websiteId) return;
+  async function createSiteApp() {
     const body = {
-      website_id: Number(websiteId),
       name: siteAppDraft.name,
       kind: siteAppDraft.kind,
-      app_root: siteAppDraft.app_root,
     };
     if (String(siteAppDraft.port).trim()) body.port = Number(siteAppDraft.port);
     if (siteAppDraft.env.trim()) body.env = siteAppDraft.env;
@@ -1798,9 +1809,9 @@ function App() {
     }
     const data = await request('/site-apps', { method: 'POST', body: JSON.stringify(body) }, 'Creating application...');
     if (data) {
-      setNotice(`Application ${data.name} listens on port ${data.port}.`);
+      setNotice(`Application ${data.name} created. Upload your files to ${data.directory} and press Deploy.`);
       setSiteAppDraft(EMPTY_SITE_APP_DRAFT);
-      await loadSiteApps(websiteId);
+      await loadSiteApps();
     }
   }
 
@@ -1808,21 +1819,21 @@ function App() {
     const data = await request(`/site-apps/${app.id}`, { method: 'PUT', body: JSON.stringify(patch) }, label);
     if (data) {
       setNotice(`Updated ${data.name}.`);
-      await loadSiteApps(app.website_id);
+      await loadSiteApps();
     }
   }
 
   async function deleteSiteApp(app) {
-    if (!confirm(`Delete application ${app.name}? The domain will stop reaching port ${app.port}.`)) return;
+    if (!confirm(`Delete application ${app.name}? Its files stay on disk; only the runtime is removed.`)) return;
     const data = await request(`/site-apps/${app.id}`, { method: 'DELETE' }, 'Deleting application...');
     if (data) {
       setNotice(`Deleted ${app.name}.`);
-      await loadSiteApps(app.website_id);
+      await loadSiteApps();
     }
   }
 
-  async function suggestSiteAppPort(websiteId) {
-    const data = await request(`/site-apps/${websiteId}/suggest-port`, { silent: true });
+  async function suggestSiteAppPort() {
+    const data = await request('/site-apps/suggest-port', { silent: true });
     if (data?.port) setSiteAppDraft(prev => ({ ...prev, port: String(data.port) }));
   }
 
@@ -1860,9 +1871,18 @@ function App() {
         ? 'none'
         : websiteSettingsForm.nginx_rewrite_mode || 'none';
 
-    if (isProxiedAppType(nextAppType) && siteApps.items.length === 0) {
-      setError('Add an application first — a proxied website needs a port to forward to.');
-      return;
+    if (isProxiedAppType(nextAppType)) {
+      if (siteApps.items.length === 0) {
+        setError('Install an application first, on the Applications page.');
+        return;
+      }
+      if (!websiteSettingsForm.app_id) {
+        setError('Pick which application this website should serve.');
+        return;
+      }
+      if (String(websiteSettingsForm.app_id) !== String(original.app_id || '')) {
+        body.app_id = Number(websiteSettingsForm.app_id);
+      }
     }
     if (nextAppType !== (original.app_type || 'wordpress')) body.app_type = nextAppType;
     if (nextAppType !== 'static' && !isProxiedAppType(nextAppType) && nextPhp !== original.php_version) body.php_version = nextPhp;
@@ -3211,6 +3231,12 @@ function App() {
   useEffect(() => { if (selectedWebsiteId && page === 'backups' && backupTab === 'da-import') { listDaBackups(); setSelectedDaBackups([]); setDaBulkImportJob(null); } }, [backupTab, page]);
 
   useEffect(() => { if (selectedWebsiteId && page === 'cron') listCron(); }, [selectedWebsiteId, page]);
+  // The websites page needs the list too, for the Application picker on create.
+  useEffect(() => {
+    if (!currentUser) return;
+    if (page === 'applications') { loadSiteApps(); loadSiteRuntimes(); }
+    else if (page === 'websites') loadSiteApps();
+  }, [page, currentUser]);
 
   useEffect(() => { if (selectedWebsiteId && page === 'files') listFiles('public_html'); }, [selectedWebsiteId, page]);
 
@@ -3276,6 +3302,7 @@ function App() {
   const mainNavItems = [
     ['dashboard', 'Dashboard', Home],
     ['websites', 'Websites', Globe],
+    ...(appsFeatureEnabled ? [['applications', 'Applications', Server]] : []),
     ['ssl', 'SSL', Lock],
     ['databases', 'Database', Database],
     ['cron', 'Cron', Clock],
@@ -3466,40 +3493,123 @@ function App() {
     </>;
   }
 
-  function renderSiteApps() {
-    const websiteId = nginxCustomEditing?.id;
-    const proxied = isProxiedAppType(websiteSettingsForm.app_type || nginxCustomEditing?.site?.app_type);
+  function renderApplications() {
     const [portFrom, portTo] = siteApps.port_range || [21000, 21999];
     const atLimit = !isAdmin && siteApps.limit > 0 && siteApps.used >= siteApps.limit;
-    return <div className="site-apps-block">
-      <div className="domain-manager-head">
-        <h3>Applications</h3>
-        <p className="hint">
-          Nginx forwards this domain to an app listening on <code>127.0.0.1</code>. Set <strong>Website mode</strong> to
-          Reverse proxy or Application to switch the traffic over.
-          {siteApps.limit > 0 && <> Using {siteApps.used} of {siteApps.limit} allowed.</>}
-        </p>
-      </div>
-      {siteApps.items.length === 0
-        ? <p className="hint site-apps-empty">No application yet. Add one below, then switch Website mode.</p>
-        : <div className="site-app-list">
+    const dockerReady = !!siteRuntimes.docker?.installed;
+    const kindHint = (SITE_APP_KINDS.find(([value]) => value === siteAppDraft.kind) || [])[2];
+    return <>
+      <section className="section">
+        <div className="section-title">
+          <div>
+            <h2>Applications</h2>
+            <p className="hint">
+              Each application runs on its own port under its own systemd unit. Point a website at one by setting its
+              mode to <strong>Application</strong>.
+              {siteApps.limit > 0 && <> Using {siteApps.used} of {siteApps.limit} allowed.</>}
+            </p>
+          </div>
+          <button disabled={!!loading} onClick={() => { loadSiteApps(); loadSiteRuntimes(); }}><RefreshCw size={14}/> Refresh</button>
+        </div>
+        <div className="site-runtime-strip">
+          <span>Docker: <strong>{dockerReady ? (siteRuntimes.docker.version || 'installed') : 'not installed'}</strong></span>
+          <span>Node: <strong>{siteRuntimes.node_majors?.length ? siteRuntimes.node_majors.map(major => `v${major}`).join(', ') : 'system version only'}</strong></span>
+          {isAdmin && !dockerReady && <button className="mini secondary-light" disabled={!!loading} onClick={installDockerEngine}>Install Docker</button>}
+          {isAdmin && <button className="mini secondary-light" disabled={!!loading} onClick={() => { const major = prompt('Install which Node major version?', '22'); if (major) installNodeMajor(major.trim()); }}>Add Node version</button>}
+        </div>
+        {!atLimit && <div className="site-app-form">
+          <label><span>Name</span>
+            <input value={siteAppDraft.name} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, name: e.target.value }))} />
+          </label>
+          <label><span>Runtime</span>
+            <select value={siteAppDraft.kind} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, kind: e.target.value }))}>
+              {SITE_APP_KINDS.map(([value, label]) => <option key={value} value={value} disabled={value === 'docker' && !dockerReady}>{label}</option>)}
+            </select>
+          </label>
+          <label><span>Port</span>
+            <input
+              type="number"
+              value={siteAppDraft.port}
+              min={portFrom}
+              max={portTo}
+              disabled={!!loading}
+              placeholder={`auto (${portFrom}-${portTo})`}
+              onChange={e => setSiteAppDraft(prev => ({ ...prev, port: e.target.value }))}
+            />
+          </label>
+          {siteAppDraft.kind === 'node' && <>
+            <label><span>Start with</span>
+              <select value={siteAppDraft.start_kind} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, start_kind: e.target.value }))}>
+                <option value="npm">npm run</option>
+                <option value="npx">npx</option>
+                <option value="yarn">yarn</option>
+                <option value="node">node</option>
+              </select>
+            </label>
+            <label><span>{siteAppDraft.start_kind === 'node' ? 'Entry file' : 'Script or package'}</span>
+              <input value={siteAppDraft.start_arg} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, start_arg: e.target.value }))} placeholder={siteAppDraft.start_kind === 'node' ? 'server.js' : 'start'} />
+            </label>
+            <label><span>Node version</span>
+              <select value={siteAppDraft.node_major} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, node_major: e.target.value }))}>
+                {(siteRuntimes.node_majors?.length ? siteRuntimes.node_majors : ['22']).map(major => <option key={major} value={major}>Node {major}</option>)}
+              </select>
+            </label>
+          </>}
+          {siteAppDraft.kind === 'docker' && <>
+            <label><span>Image</span>
+              <input value={siteAppDraft.image} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, image: e.target.value }))} placeholder="n8nio/n8n:latest" />
+            </label>
+            <label><span>Port in container</span>
+              <input type="number" value={siteAppDraft.container_port} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, container_port: e.target.value }))} placeholder="3000" />
+            </label>
+            <label><span>CPU</span>
+              <input value={siteAppDraft.cpu_limit} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, cpu_limit: e.target.value }))} placeholder="1" />
+            </label>
+          </>}
+          <label className="site-app-env"><span>Environment (KEY=value, one per line)</span>
+            <textarea
+              className="code-editor"
+              rows={4}
+              value={siteAppDraft.env}
+              disabled={!!loading}
+              onChange={e => setSiteAppDraft(prev => ({ ...prev, env: e.target.value }))}
+              placeholder={'N8N_ENCRYPTION_KEY=...\nGENERIC_TIMEZONE=Asia/Ho_Chi_Minh'}
+            />
+          </label>
+          <div className="site-app-form-actions">
+            <button className="secondary-light" disabled={!!loading} onClick={suggestSiteAppPort}>Pick free port</button>
+            <button disabled={!!loading || !siteAppDraft.name.trim()} onClick={createSiteApp}><Plus size={14}/> Install application</button>
+          </div>
+        </div>}
+        {atLimit && <p className="hint">This package allows {siteApps.limit} application(s). Delete one to install another.</p>}
+        {kindHint && <p className="hint site-apps-note">{kindHint} Containers publish on <code>127.0.0.1</code> only, run as your own user with no capabilities, and are capped at the memory shown. Images come from {(siteRuntimes.allowed_registries || []).join(', ') || 'the allowed registries'}.</p>}
+      </section>
+
+      <section className="section">
+        <div className="section-title">
+          <div><h2>Installed</h2><p className="hint">{siteApps.items.length} application(s)</p></div>
+        </div>
+        {siteApps.items.length === 0 && <EmptyState icon={Server} message="No applications yet. Install one above." />}
+        <div className="site-app-list">
           {siteApps.items.map(app => <div className="site-app-item" key={app.id}>
             <div className="site-app-head">
               <strong>{app.name}</strong>
               <span className="badge">{SITE_APP_KIND_LABELS[app.kind] || app.kind}</span>
               <code>127.0.0.1:{app.port}</code>
-              {proxied && <span className="badge ok">Live</span>}
+              <span className={`badge ${app.status === 'running' ? 'ok' : app.status === 'error' ? 'bad' : ''}`}>
+                {app.status === 'running' ? 'Running' : app.status === 'error' ? 'Failed' : 'Stopped'}
+              </span>
+              {app.websites?.length > 0 && <span className="site-app-domains">{app.websites.join(', ')}</span>}
             </div>
+            {app.last_error && <p className="site-app-error">{app.last_error}</p>}
             <dl className="site-app-meta">
-              <div><dt>Directory</dt><dd><code>{app.directory || app.app_root}</code></dd></div>
+              <div><dt>Upload code to</dt><dd><code>{app.directory}</code></dd></div>
               {app.kind === 'node' && <div><dt>Start</dt><dd><code>{app.start_kind} {app.start_arg}</code></dd></div>}
               {app.kind === 'node' && <div><dt>Node</dt><dd>v{app.node_major || '22'}</dd></div>}
               {app.kind === 'docker' && <div><dt>Image</dt><dd><code>{app.image}</code></dd></div>}
               {app.kind === 'docker' && <div><dt>In container</dt><dd>port {app.container_port} · {app.cpu_limit} CPU</dd></div>}
               <div><dt>Memory</dt><dd>{app.memory_limit_mb} MB</dd></div>
-              {app.kind !== 'proxy' && <div><dt>State</dt><dd>{app.status === 'running' ? 'Running' : app.status === 'error' ? 'Failed' : 'Stopped'}</dd></div>}
             </dl>
-            {app.last_error && <p className="site-app-error">{app.last_error}</p>}
             <div className="site-app-actions">
               <label className="site-app-port">
                 <span>Port</span>
@@ -3516,105 +3626,24 @@ function App() {
                 />
               </label>
               <div className="site-app-buttons">
-                {app.kind !== 'proxy' && <>
-                  <button className="mini" disabled={!!loading} onClick={() => deploySiteApp(app)}><Play size={13}/> Deploy</button>
-                  <button className="mini secondary-light" disabled={!!loading} onClick={() => controlSiteApp(app, 'restart')}><RotateCcw size={13}/> Restart</button>
-                  <button className="mini secondary-light" disabled={!!loading} onClick={() => controlSiteApp(app, 'stop')}><Square size={13}/> Stop</button>
-                  <button className="mini secondary-light" disabled={!!loading} onClick={() => openSiteAppLog(app)}><FileText size={13}/> Log</button>
-                </>}
+                <button className="mini" disabled={!!loading} onClick={() => deploySiteApp(app)}><Play size={13}/> Deploy</button>
+                <button className="mini secondary-light" disabled={!!loading} onClick={() => controlSiteApp(app, 'restart')}><RotateCcw size={13}/> Restart</button>
+                <button className="mini secondary-light" disabled={!!loading} onClick={() => controlSiteApp(app, 'stop')}><Square size={13}/> Stop</button>
+                <button className="mini secondary-light" disabled={!!loading} onClick={() => openSiteAppLog(app)}><FileText size={13}/> Log</button>
                 <button className="mini danger" disabled={!!loading} onClick={() => deleteSiteApp(app)}><Trash2 size={13}/> Delete</button>
               </div>
             </div>
           </div>)}
+        </div>
+        {siteAppLog && <div className="site-app-log">
+          <div className="site-app-log-head">
+            <h4>{siteAppLog.name} log</h4>
+            <button className="mini secondary-light" onClick={() => setSiteAppLog(null)}><X size={13}/> Close</button>
+          </div>
+          <pre>{siteAppLog.log}</pre>
         </div>}
-      {!atLimit && <div className="site-app-form">
-        <label><span>Name</span>
-          <input value={siteAppDraft.name} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, name: e.target.value }))} />
-        </label>
-        <label><span>Runtime</span>
-          <select value={siteAppDraft.kind} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, kind: e.target.value }))}>
-            {SITE_APP_KINDS.map(([value, label]) => <option key={value} value={value} disabled={value === 'docker' && !siteRuntimes.docker?.installed}>{label}</option>)}
-          </select>
-        </label>
-        <label><span>Folder</span>
-          <input value={siteAppDraft.app_root} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, app_root: e.target.value }))} placeholder="app" />
-        </label>
-        <label><span>Port</span>
-          <input
-            type="number"
-            value={siteAppDraft.port}
-            min={portFrom}
-            max={portTo}
-            disabled={!!loading}
-            placeholder={`auto (${portFrom}-${portTo})`}
-            onChange={e => setSiteAppDraft(prev => ({ ...prev, port: e.target.value }))}
-          />
-        </label>
-        {siteAppDraft.kind === 'node' && <>
-          <label><span>Start with</span>
-            <select value={siteAppDraft.start_kind} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, start_kind: e.target.value }))}>
-              <option value="npm">npm run</option>
-              <option value="npx">npx</option>
-              <option value="yarn">yarn</option>
-              <option value="node">node</option>
-            </select>
-          </label>
-          <label><span>{siteAppDraft.start_kind === 'node' ? 'Entry file' : 'Script or package'}</span>
-            <input value={siteAppDraft.start_arg} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, start_arg: e.target.value }))} placeholder={siteAppDraft.start_kind === 'node' ? 'server.js' : 'start'} />
-          </label>
-          <label><span>Node version</span>
-            <select value={siteAppDraft.node_major} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, node_major: e.target.value }))}>
-              {(siteRuntimes.node_majors?.length ? siteRuntimes.node_majors : ['22']).map(major => <option key={major} value={major}>Node {major}</option>)}
-            </select>
-          </label>
-        </>}
-        {siteAppDraft.kind === 'docker' && <>
-          <label><span>Image</span>
-            <input value={siteAppDraft.image} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, image: e.target.value }))} placeholder="n8nio/n8n:latest" />
-          </label>
-          <label><span>Port in container</span>
-            <input type="number" value={siteAppDraft.container_port} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, container_port: e.target.value }))} placeholder="3000" />
-          </label>
-          <label><span>CPU</span>
-            <input value={siteAppDraft.cpu_limit} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, cpu_limit: e.target.value }))} placeholder="1" />
-          </label>
-        </>}
-        {siteAppDraft.kind !== 'proxy' && <label className="site-app-env"><span>Environment (KEY=value, one per line)</span>
-          <textarea
-            className="code-editor"
-            rows={4}
-            value={siteAppDraft.env}
-            disabled={!!loading}
-            onChange={e => setSiteAppDraft(prev => ({ ...prev, env: e.target.value }))}
-            placeholder={'N8N_ENCRYPTION_KEY=...\nGENERIC_TIMEZONE=Asia/Ho_Chi_Minh'}
-          />
-        </label>}
-        <div className="site-app-form-actions">
-          <button className="secondary-light" disabled={!!loading} onClick={() => suggestSiteAppPort(websiteId)}>Pick free port</button>
-          <button disabled={!!loading || !siteAppDraft.name.trim()} onClick={() => createSiteApp(websiteId)}><Plus size={14}/> Add application</button>
-        </div>
-      </div>}
-      {atLimit && <p className="hint">This package allows {siteApps.limit} application(s). Delete one to add another.</p>}
-      <div className="site-runtime-strip">
-        <span>
-          Docker: <strong>{siteRuntimes.docker?.installed ? (siteRuntimes.docker.version || 'installed') : 'not installed'}</strong>
-        </span>
-        <span>Node: <strong>{siteRuntimes.node_majors?.length ? siteRuntimes.node_majors.map(m => `v${m}`).join(', ') : 'system version only'}</strong></span>
-        {isAdmin && !siteRuntimes.docker?.installed && <button className="mini secondary-light" disabled={!!loading} onClick={installDockerEngine}>Install Docker</button>}
-        {isAdmin && <button className="mini secondary-light" disabled={!!loading} onClick={() => { const major = prompt('Install which Node major version?', '22'); if (major) installNodeMajor(major.trim()); }}>Add Node version</button>}
-      </div>
-      <p className="hint site-apps-note">
-        Containers publish on <code>127.0.0.1</code> only, run as your site user with no capabilities, and are capped at
-        the memory shown above. Images are pulled from {(siteRuntimes.allowed_registries || []).join(', ') || 'the allowed registries'}.
-      </p>
-      {siteAppLog && <div className="site-app-log">
-        <div className="site-app-log-head">
-          <h4>{siteAppLog.name} log</h4>
-          <button className="mini secondary-light" onClick={() => setSiteAppLog(null)}><X size={13}/> Close</button>
-        </div>
-        <pre>{siteAppLog.log}</pre>
-      </div>}
-    </div>;
+      </section>
+    </>;
   }
 
   function renderNginxEditor() {
@@ -3623,7 +3652,6 @@ function App() {
     const selectedAppType = websiteSettingsForm.app_type || nginxCustomEditing.site?.app_type || 'wordpress';
     const rewriteDisabled = selectedAppType !== 'php';
     const proxied = isProxiedAppType(selectedAppType);
-    const appsEnabled = siteApps.limit > 0 || isAdmin;
     const settingsSite = nginxCustomEditing.site || {};
     const siteDomains = settingsSite.aliases || [];
     const aliasMode = aliasModes[nginxCustomEditing.id] || 'alias';
@@ -3651,12 +3679,20 @@ function App() {
           }))}
           disabled={!!loading}
         >
-          <option value="wordpress">WordPress</option>
-          <option value="php">PHP</option>
-          <option value="static">Static</option>
-          <option value="proxy" disabled={!appsEnabled}>Reverse proxy</option>
-          <option value="nodejs" disabled={!appsEnabled}>Application (Node.js / container)</option>
+          {WEBSITE_MODES.map(([value, label]) => <option
+            key={value}
+            value={value}
+            disabled={value === 'application' && !appsFeatureEnabled}
+          >{label}</option>)}
         </select></label>
+        {proxied && <label><span>Application</span><select
+          value={websiteSettingsForm.app_id || ''}
+          onChange={e => setWebsiteSettingsForm(prev => ({ ...prev, app_id: e.target.value }))}
+          disabled={!!loading}
+        >
+          <option value="">Select an application</option>
+          {siteApps.items.map(app => <option key={app.id} value={app.id}>{app.name} · {SITE_APP_KIND_LABELS[app.kind] || app.kind} · :{app.port}</option>)}
+        </select></label>}
         {selectedAppType !== 'static' && !proxied && <label><span>PHP version</span><select
           value={websiteSettingsForm.php_version}
           onChange={e => setWebsiteSettingsForm(prev => ({ ...prev, php_version: e.target.value }))}
@@ -3675,7 +3711,6 @@ function App() {
           <button disabled={!!loading} onClick={saveWebsiteSettings}><Save size={14}/> Save settings</button>
         </div>
       </div>}
-      {!fullConfig && appsEnabled && renderSiteApps()}
       {!fullConfig && <div className="site-aliases settings-domain-manager">
         <div className="domain-manager-head">
           <h3>Domains</h3>
@@ -3827,17 +3862,28 @@ function App() {
         <div className="form-row create-site-row">
           <input value={domain} onChange={e => setDomain(e.target.value)} placeholder="domain.com" />
           <select value={siteType} onChange={e => setSiteType(e.target.value)}>
-            <option value="wordpress">WordPress</option>
-            <option value="php">PHP</option>
+            {WEBSITE_MODES.map(([value, label]) => <option
+              key={value}
+              value={value}
+              disabled={value === 'application' && !appsFeatureEnabled}
+            >{label}</option>)}
           </select>
-          <select value={phpVersion} onChange={e => setPhpVersion(e.target.value)}>
-            {phpVersions.installed.map(v => <option key={v} value={v}>PHP {v}</option>)}
-          </select>
+          {siteType === 'application'
+            ? <select value={createSiteAppId} onChange={e => setCreateSiteAppId(e.target.value)}>
+              <option value="">Select an application</option>
+              {siteApps.items.map(app => <option key={app.id} value={app.id}>{app.name} · {SITE_APP_KIND_LABELS[app.kind] || app.kind} · :{app.port}</option>)}
+            </select>
+            : <select value={phpVersion} onChange={e => setPhpVersion(e.target.value)}>
+              {phpVersions.installed.map(v => <option key={v} value={v}>PHP {v}</option>)}
+            </select>}
           {wpFieldsEnabled && <input value={adminEmail} onChange={e => setAdminEmail(e.target.value)} placeholder="admin@domain.com" />}
           {wpFieldsEnabled && <input value={wpAdminUser} onChange={e => setWpAdminUser(e.target.value)} placeholder="WP admin user" />}
           {wpFieldsEnabled && <input value={wpAdminPassword} onChange={e => setWpAdminPassword(e.target.value)} placeholder="WP admin password" type="password" />}
           <button disabled={!!loading || !domain} onClick={createWordPress}><Plus size={15}/> Create</button>
         </div>
+        {siteType === 'application' && siteApps.items.length === 0 && <p className="hint">
+          No applications installed yet. Install one on the <button type="button" className="link-button" onClick={() => navigateToPage('applications')}>Applications</button> page first.
+        </p>}
         {siteType === 'wordpress' && <label className="check-line">
           <input type="checkbox" checked={installWordPress} onChange={e => setInstallWordPress(e.target.checked)} />
           Install WordPress (creates database, downloads WP, configures vhost)
@@ -3848,7 +3894,9 @@ function App() {
         </label>
         <p className="hint">{wpFieldsEnabled
           ? 'WordPress will be installed and the panel will show the URL, admin account, and password after creation.'
-          : 'A PHP-FPM vhost will be created with public_html/ folder. Upload your PHP, HTML, or static files via File Manager.'}</p>
+          : siteType === 'application'
+            ? 'Nginx will forward this domain to the selected application on 127.0.0.1, including WebSocket upgrades.'
+            : 'A PHP-FPM vhost will be created with public_html/ folder. Upload your PHP, HTML, or static files via File Manager.'}</p>
       </section>
       <section className="section">
         <div className="section-title">
@@ -5318,6 +5366,7 @@ function App() {
 
   function renderPage() {
     if (page === 'websites') return renderWebsites();
+    if (page === 'applications') return renderApplications();
     if (page === 'ssl') return renderSsl();
     if (page === 'databases') return renderDatabases();
     if (page === 'cron') return renderCron();

@@ -1590,28 +1590,62 @@ require_app_name() {
   [[ "$1" =~ ^[a-z0-9]([a-z0-9_-]{0,30}[a-z0-9])?$ ]] || deny "invalid app name: $1"
 }
 
-app_site_hash() {
-  printf '%s' "$1" | sha256sum | awk '{print substr($1, 1, 8)}'
-}
-
 app_unit_name() {
-  local user="$1" site_root="$2" name="$3"
-  printf 'bpanel-app-%s-%s-%s' "$user" "$(app_site_hash "$site_root")" "$name"
+  local user="$1" name="$2"
+  printf 'bpanel-app-%s-%s' "$user" "$name"
 }
 
 app_env_file() {
-  # Deliberately outside the site tree. Inside it the file was reachable through
-  # the file manager, went into every site backup, and the permission hardening
-  # pass in update.sh handed ownership back to the site user on the next update.
-  # Nothing but root needs to read it: systemd loads EnvironmentFile before
-  # dropping privileges, and the docker CLI runs as root too.
-  local user="$1" site_root="$2" name="$3"
-  printf '%s/apps/%s-%s-%s.env' "$BPANEL_DATA_DIR" "$user" "$(app_site_hash "$site_root")" "$name"
+  # Deliberately outside the customer's home. Inside it the file was reachable
+  # through the file manager, went into every site backup, and the permission
+  # hardening pass in update.sh handed ownership back to the site user on the
+  # next update. Nothing but root needs to read it: systemd loads
+  # EnvironmentFile before dropping privileges, and the docker CLI runs as root.
+  local user="$1" name="$2"
+  printf '%s/apps/%s-%s.env' "$BPANEL_DATA_DIR" "$user" "$name"
 }
 
 app_container_name() {
-  local user="$1" site_root="$2" name="$3"
-  printf 'bpanel-%s-%s-%s' "$user" "$(app_site_hash "$site_root")" "$name"
+  local user="$1" name="$2"
+  printf 'bpanel-%s-%s' "$user" "$name"
+}
+
+app_directory() {
+  # Apps live side by side under the owner's home, one directory each. The
+  # customer's SFTP is chrooted to that home, so they can upload code without
+  # the app being tied to any website.
+  local user="$1" name="$2"
+  printf '%s/%s/apps/%s' "$HOME_ROOT" "$user" "$name"
+}
+
+ensure_app_directory() {
+  local user="$1" name="$2" apps_root target
+  require_linux_user "$user"
+  require_app_name "$name"
+  apps_root="$(printf '%s/%s/apps' "$HOME_ROOT" "$user")"
+  target="$(app_directory "$user" "$name")"
+  [[ -d "${HOME_ROOT}/${user}" ]] || deny "home directory missing for $user"
+  install -d -o "$user" -g "$user" -m 0750 "$apps_root"
+  install -d -o "$user" -g "$user" -m 0750 "$target"
+  printf '%s' "$target"
+}
+
+remove_legacy_app_units() {
+  # Units and containers from the release where an app was named after the
+  # website it hung off. Nothing else would ever clean them up.
+  local user="$1" name="$2" legacy unit
+  for legacy in /etc/systemd/system/bpanel-app-"${user}"-*-"${name}".service; do
+    [[ -f "$legacy" ]] || continue
+    unit="$(basename "$legacy")"
+    systemctl disable --now "$unit" 2>/dev/null || true
+    rm -f "$legacy"
+  done
+  if command -v docker >/dev/null 2>&1; then
+    docker ps -a --format '{{.Names}}' 2>/dev/null \
+      | grep -E "^bpanel-${user}-[0-9a-f]{8}-${name}\$" \
+      | while IFS= read -r legacy; do docker rm -f "$legacy" >/dev/null 2>&1 || true; done
+  fi
+  rm -f "${BPANEL_DATA_DIR}/apps/${user}"-*-"${name}.env"
 }
 
 require_app_port() {
@@ -1681,8 +1715,8 @@ write_app_env_file() {
 }
 
 write_node_app_unit() {
-  local unit_path="$1" app_label="$2" user="$3" site_root="$4" app_dir="$5" env_file="$6"
-  local port="$7" memory="$8" node_major="$9" app_exec="${10}" app_arg="${11}"
+  local unit_path="$1" app_label="$2" user="$3" app_dir="$4" env_file="$5"
+  local port="$6" memory="$7" node_major="$8" app_exec="${9}" app_arg="${10}"
   local bin_dir exec_start identifier
   bin_dir="$(resolve_node_bin_dir "$node_major")" \
     || deny "Node ${node_major} is not installed; run node-install ${node_major} first"
@@ -1733,7 +1767,7 @@ PrivateTmp=yes
 PrivateDevices=yes
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=${site_root}
+ReadWritePaths=${app_dir}
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectKernelLogs=yes
@@ -3798,19 +3832,17 @@ PY
 
   # ---- managed application runtimes (node / docker) --------------------
   site-app-write)
-    [[ $# -ge 4 ]] || deny "usage: site-app-write <site-user> <site-root> <name> <node|docker> [--flags]"
-    user="$1"; root_arg="$2"; app_name="$3"; app_runtime="$4"; shift 4
+    [[ $# -ge 3 ]] || deny "usage: site-app-write <owner-user> <name> <node|docker> [--flags]"
+    user="$1"; app_name="$2"; app_runtime="$3"; shift 3
     require_linux_user "$user"
     require_app_name "$app_name"
     [[ "$app_runtime" == "node" || "$app_runtime" == "docker" ]] || deny "invalid runtime: $app_runtime"
-    site_root="$(require_managed_path "$root_arg" "$user")"
-    app_port=""; app_memory="512"; app_rel_dir="app"; app_node_major=""
+    app_port=""; app_memory="512"; app_node_major=""
     app_exec=""; app_arg=""; app_image=""; app_container_port="3000"; app_cpus="1"
     while [[ $# -gt 0 ]]; do
       case "${1:-}" in
         --port=*)           app_port="${1#*=}" ;;
         --memory=*)         app_memory="${1#*=}" ;;
-        --dir=*)            app_rel_dir="${1#*=}" ;;
         --node-major=*)     app_node_major="${1#*=}" ;;
         --exec=*)           app_exec="${1#*=}" ;;
         --arg=*)            app_arg="${1#*=}" ;;
@@ -3824,30 +3856,22 @@ PY
     require_app_port "$app_port"
     require_app_memory "$app_memory"
     require_app_cpus "$app_cpus"
-    [[ "$app_rel_dir" =~ ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ ]] || deny "unsafe app directory: $app_rel_dir"
-    case "$app_rel_dir" in
-      *".."*) deny "unsafe app directory: $app_rel_dir" ;;
-    esac
-    app_dir="$(require_bound_managed_path "$user" "$site_root" "${site_root}/${app_rel_dir}")"
-    mkdir -p -- "$app_dir"
-    harden_site_dir_path "$site_root" "$app_dir" "$user"
-    unit_name="$(app_unit_name "$user" "$site_root" "$app_name")"
+    app_dir="$(ensure_app_directory "$user" "$app_name")"
+    remove_legacy_app_units "$user" "$app_name"
+    unit_name="$(app_unit_name "$user" "$app_name")"
     unit_path="/etc/systemd/system/${unit_name}.service"
-    env_file="$(app_env_file "$user" "$site_root" "$app_name")"
+    env_file="$(app_env_file "$user" "$app_name")"
     write_app_env_file "$env_file"
-    # Earlier releases kept this inside the site tree, where the customer could
-    # read and edit it. Remove the leftover.
-    rm -f "${site_root}/.bpanel-app-${app_name}.env"
     if [[ "$app_runtime" == "node" ]]; then
       require_node_major "$app_node_major"
       [[ "$app_arg" =~ ^[A-Za-z0-9._@/-]{1,120}$ ]] || deny "invalid start argument: $app_arg"
-      write_node_app_unit "$unit_path" "$app_name" "$user" "$site_root" "$app_dir" "$env_file" \
+      write_node_app_unit "$unit_path" "$app_name" "$user" "$app_dir" "$env_file" \
         "$app_port" "$app_memory" "$app_node_major" "$app_exec" "$app_arg"
     else
       command -v docker >/dev/null 2>&1 || deny "Docker is not installed; run docker-install first"
       require_docker_image "$app_image"
       require_container_port "$app_container_port"
-      container_name="$(app_container_name "$user" "$site_root" "$app_name")"
+      container_name="$(app_container_name "$user" "$app_name")"
       write_docker_app_unit "$unit_path" "$app_name" "$user" "$container_name" "$app_dir" "$env_file" \
         "$app_port" "$app_memory" "$app_image" "$app_container_port" "$app_cpus"
     fi
@@ -3858,57 +3882,56 @@ PY
     ;;
 
   site-app-control)
-    [[ $# -eq 4 ]] || deny "usage: site-app-control <site-user> <site-root> <name> <action>"
-    user="$1"; root_arg="$2"; app_name="$3"; app_action="$4"
+    [[ $# -eq 3 ]] || deny "usage: site-app-control <owner-user> <name> <action>"
+    user="$1"; app_name="$2"; app_action="$3"
     require_linux_user "$user"
     require_app_name "$app_name"
     is_in "$app_action" start stop restart status is-active is-enabled enable disable \
       || deny "action not allowed: $app_action"
-    site_root="$(require_managed_path "$root_arg" "$user")"
-    unit_name="$(app_unit_name "$user" "$site_root" "$app_name")"
+    unit_name="$(app_unit_name "$user" "$app_name")"
     [[ -f "/etc/systemd/system/${unit_name}.service" ]] || deny "application unit not found: ${unit_name}"
     exec systemctl "$app_action" "${unit_name}.service" --no-pager
     ;;
 
   site-app-logs)
-    [[ $# -eq 3 || $# -eq 4 ]] || deny "usage: site-app-logs <site-user> <site-root> <name> [lines]"
-    user="$1"; root_arg="$2"; app_name="$3"; log_lines="${4:-200}"
+    [[ $# -eq 2 || $# -eq 3 ]] || deny "usage: site-app-logs <owner-user> <name> [lines]"
+    user="$1"; app_name="$2"; log_lines="${3:-200}"
     require_linux_user "$user"
     require_app_name "$app_name"
     [[ "$log_lines" =~ ^[0-9]{1,4}$ ]] || deny "invalid line count: $log_lines"
-    site_root="$(require_managed_path "$root_arg" "$user")"
-    unit_name="$(app_unit_name "$user" "$site_root" "$app_name")"
+    unit_name="$(app_unit_name "$user" "$app_name")"
     exec journalctl -u "${unit_name}.service" -n "$log_lines" --no-pager --output short-iso
     ;;
 
   site-app-delete)
-    [[ $# -eq 3 ]] || deny "usage: site-app-delete <site-user> <site-root> <name>"
-    user="$1"; root_arg="$2"; app_name="$3"
+    [[ $# -eq 2 ]] || deny "usage: site-app-delete <owner-user> <name>"
+    user="$1"; app_name="$2"
     require_linux_user "$user"
     require_app_name "$app_name"
-    site_root="$(require_managed_path "$root_arg" "$user")"
-    unit_name="$(app_unit_name "$user" "$site_root" "$app_name")"
+    unit_name="$(app_unit_name "$user" "$app_name")"
     systemctl disable --now "${unit_name}.service" 2>/dev/null || true
     rm -f "/etc/systemd/system/${unit_name}.service"
+    remove_legacy_app_units "$user" "$app_name"
     systemctl daemon-reload
     if command -v docker >/dev/null 2>&1; then
-      docker rm -f "$(app_container_name "$user" "$site_root" "$app_name")" 2>/dev/null || true
+      docker rm -f "$(app_container_name "$user" "$app_name")" 2>/dev/null || true
     fi
-    rm -f "$(app_env_file "$user" "$site_root" "$app_name")" "${site_root}/.bpanel-app-${app_name}.env"
+    rm -f "$(app_env_file "$user" "$app_name")"
+    # The app's files stay put; deleting a customer's code is never implied by
+    # removing its runtime.
     echo "removed ${unit_name}"
     ;;
 
   site-app-install-deps)
     # npm install for a node app, as the site user, with a hard timeout so a
     # runaway postinstall cannot hold a worker forever.
-    [[ $# -eq 4 ]] || deny "usage: site-app-install-deps <site-user> <site-root> <relative-dir> <node-major>"
-    user="$1"; root_arg="$2"; app_rel_dir="$3"; app_node_major="$4"
+    [[ $# -eq 3 ]] || deny "usage: site-app-install-deps <owner-user> <name> <node-major>"
+    user="$1"; app_name="$2"; app_node_major="$3"
     require_linux_user "$user"
+    require_app_name "$app_name"
     require_node_major "$app_node_major"
-    site_root="$(require_managed_path "$root_arg" "$user")"
-    [[ "$app_rel_dir" =~ ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ ]] || deny "unsafe app directory: $app_rel_dir"
-    app_dir="$(require_bound_managed_path "$user" "$site_root" "${site_root}/${app_rel_dir}")"
-    [[ -f "${app_dir}/package.json" ]] || deny "no package.json in ${app_rel_dir}"
+    app_dir="$(ensure_app_directory "$user" "$app_name")"
+    [[ -f "${app_dir}/package.json" ]] || deny "no package.json in ${app_name}"
     bin_dir="$(resolve_node_bin_dir "$app_node_major")" \
       || deny "Node ${app_node_major} is not installed; run node-install ${app_node_major} first"
     exec timeout 900 runuser -u "$user" -- env -i \

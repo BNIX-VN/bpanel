@@ -221,7 +221,7 @@ def test_ensure_hsts_header_adds_gutenberg_safe_wordpress_csp():
 
 # --- proxied app types ------------------------------------------------------
 
-def _proxy_vhost(app_type="proxy", app_port=21000, **kwargs):
+def _proxy_vhost(app_type="application", app_port=21000, **kwargs):
     return nginx.render_vhost(
         "example.test",
         "/home/bp_example_test/example.test",
@@ -240,8 +240,10 @@ def test_proxy_vhost_forwards_to_the_loopback_app_port():
     assert "fastcgi_pass" not in rendered
 
 
-def test_nodejs_app_type_uses_the_same_proxy_template():
-    assert "proxy_pass http://127.0.0.1:21042;" in _proxy_vhost(app_type="nodejs", app_port=21042)
+def test_the_application_mode_is_the_only_proxied_one():
+    assert nginx.PROXIED_APP_TYPES == {"application"}
+    assert "proxy" not in nginx.ALLOWED_APP_TYPES
+    assert "nodejs" not in nginx.ALLOWED_APP_TYPES
 
 
 def test_proxy_vhost_supports_websocket_upgrade():
@@ -280,7 +282,7 @@ def test_proxy_vhost_requires_an_app_port():
     import pytest
 
     for missing in (None, "", "not-a-port"):
-        with pytest.raises(ValueError, match="application port"):
+        with pytest.raises(ValueError, match="installed application"):
             _proxy_vhost(app_port=missing)
 
 

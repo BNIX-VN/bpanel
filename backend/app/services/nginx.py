@@ -16,9 +16,9 @@ TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates" / "nginx"
 CUSTOM_INCLUDE_DIR = Path("/etc/nginx/bpanel/custom")
 
 ALLOWED_PHP_VERSIONS = {"5.6", "7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5"}
-ALLOWED_APP_TYPES = {"wordpress", "php", "static", "proxy", "nodejs"}
-# Served by proxying to a local application port instead of PHP-FPM.
-PROXIED_APP_TYPES = {"proxy", "nodejs"}
+ALLOWED_APP_TYPES = {"wordpress", "php", "static", "application"}
+# Served by proxying to an installed application's port instead of PHP-FPM.
+PROXIED_APP_TYPES = {"application"}
 PROXY_TIMEOUT_SECONDS = 300
 ALLOWED_REWRITE_MODES = {"none", "front_controller", "laravel", "codeigniter", "seohburl"}
 ALLOWED_LOG_KINDS = {"access", "error"}
@@ -317,7 +317,7 @@ def _check_app_port(app_type: str, app_port: int | None) -> int | None:
     try:
         value = int(app_port)
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"App type '{app_type}' needs an application port") from exc
+        raise ValueError("Pick an installed application for this website first") from exc
     if not 1 <= value <= 65535:
         raise ValueError("Application port is out of range")
     return value
@@ -1034,8 +1034,7 @@ def render_vhost(
         "wordpress": "wordpress.conf.j2",
         "php": "php.conf.j2",
         "static": "static.conf.j2",
-        "proxy": "proxy.conf.j2",
-        "nodejs": "proxy.conf.j2",
+        "application": "proxy.conf.j2",
     }[app_type]
     template = env.get_template(template_name)
     php_fpm_socket = php_fpm_socket_override or _php_fpm_socket(php_version)

@@ -91,7 +91,7 @@ def test_node_unit_caps_memory_and_drops_privileges(helper):
         "NoNewPrivileges=yes",
         "ProtectSystem=strict",
         "ProtectHome=read-only",
-        "ReadWritePaths=${site_root}",
+        "ReadWritePaths=${app_dir}",
         "RestrictSUIDSGID=yes",
     ):
         assert directive in helper
@@ -107,7 +107,7 @@ def test_node_unit_runs_as_the_site_user(helper):
 def test_the_unit_name_is_derived_not_accepted(helper):
     """No caller may hand systemctl a unit name of its choosing."""
     control_block = helper.split("  site-app-control)", 1)[1].split("    ;;", 1)[0]
-    assert 'unit_name="$(app_unit_name "$user" "$site_root" "$app_name")"' in control_block
+    assert 'unit_name="$(app_unit_name "$user" "$app_name")"' in control_block
     # The action is checked against a fixed list; mask/kill are not on it.
     assert "is_in \"$app_action\" start stop restart status is-active is-enabled enable disable" in control_block
 
@@ -132,14 +132,27 @@ def test_environment_file_lives_outside_the_site_tree(helper):
     assert "/apps/" in path_block
 
     write_block = helper.split("  site-app-write)", 1)[1].split("\n    ;;", 1)[0]
-    assert 'env_file="$(app_env_file "$user" "$site_root" "$app_name")"' in write_block
-    # And the copy earlier releases left inside the site gets cleaned up.
-    assert 'rm -f "${site_root}/.bpanel-app-${app_name}.env"' in write_block
+    assert 'env_file="$(app_env_file "$user" "$app_name")"' in write_block
 
 
 def test_deleting_an_app_removes_its_environment_file(helper):
     delete_block = helper.split("  site-app-delete)", 1)[1].split("\n    ;;", 1)[0]
-    assert 'rm -f "$(app_env_file "$user" "$site_root" "$app_name")"' in delete_block
+    assert 'rm -f "$(app_env_file "$user" "$app_name")"' in delete_block
+
+
+def test_deleting_an_app_leaves_the_customers_files_alone(helper):
+    delete_block = helper.split("  site-app-delete)", 1)[1].split("\n    ;;", 1)[0]
+    assert "rm -rf" not in delete_block
+
+
+def test_app_directories_live_under_the_owners_home(helper):
+    path_block = helper.split("app_directory() {", 1)[1].split("\n}", 1)[0]
+    assert "$HOME_ROOT" in path_block
+    assert "/apps/" in path_block
+
+    ensure_block = helper.split("ensure_app_directory() {", 1)[1].split("\n}", 1)[0]
+    assert 'require_linux_user "$user"' in ensure_block
+    assert 'require_app_name "$name"' in ensure_block
 
 
 def test_image_references_cannot_look_like_a_docker_flag(helper):
@@ -148,7 +161,7 @@ def test_image_references_cannot_look_like_a_docker_flag(helper):
 
 
 def test_dependency_install_is_time_limited(helper):
-    deps_block = helper.split("  site-app-install-deps)", 1)[1].split("    ;;", 1)[0]
+    deps_block = helper.split("  site-app-install-deps)", 1)[1].split("\n    ;;", 1)[0]
     assert "timeout 900" in deps_block
     assert 'runuser -u "$user"' in deps_block
 

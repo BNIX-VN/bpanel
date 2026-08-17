@@ -1,19 +1,19 @@
-"""Application slots served by proxying to a local port.
+"""Applications the panel installs, runs and keeps alive.
 
-A site app is the record behind `app_type` "proxy" and "nodejs": it says which
-loopback port nginx should forward the domain to, and — for node apps — what the
-panel has to run to keep something listening there.
+An app belongs to a panel user, not to a website. It lives in its own directory
+under the owner's home, listens on its own loopback port, and runs as a systemd
+unit — either a Node process or a container. A website set to "application" mode
+then points at one and nginx proxies the domain to that port.
 
 Port allocation is the part that has to be right. A port handed out twice means
-two sites silently answering for each other, so the DB holds the unique
+two domains silently answering for each other, so the DB holds the unique
 constraint and the kernel gets the final say through `ss` before a port is used.
 """
 
-import hashlib
 import os
 import re
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -28,9 +28,12 @@ PORT_RANGE_START = 21000
 PORT_RANGE_END = 21999
 
 APP_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,30}[a-z0-9]$|^[a-z0-9]$")
-# proxy: the panel only routes. node/docker: the panel owns the process too.
-APP_KINDS = {"proxy", "node", "docker"}
-MANAGED_KINDS = {"node", "docker"}
+APP_KINDS = {"node", "docker"}
+# Every app is run by the panel now; the old routing-only kind is gone.
+MANAGED_KINDS = APP_KINDS
+# Apps live side by side here, one directory each, reachable over the customer's
+# own SFTP because that is chrooted to their home.
+APPS_DIR_NAME = "apps"
 START_KINDS = {"node", "npm", "npx", "yarn"}
 NODE_MAJOR_RE = re.compile(r"^(1[0-9]|[2-9][0-9])$")
 IMAGE_RE = re.compile(r"^[a-z0-9][a-z0-9._/-]{0,159}(:[A-Za-z0-9._-]{1,127})?(@sha256:[a-f0-9]{64})?$")
@@ -72,16 +75,10 @@ def validate_port(port: int | str) -> int:
     return value
 
 
-def validate_app_root(app_root: str) -> str:
-    """The app directory, relative to the website root.
-
-    Reuses the document-root rules so an app cannot be pointed outside the site
-    or at a path with shell-hostile characters.
-    """
-    value = (app_root or "app").strip().strip("/")
-    if not value:
-        value = "app"
-    return site_users.validate_document_root(value)
+def app_directory(owner_linux_user: str, name: str) -> Path:
+    """Where an app's files live. Derived, never supplied by the caller."""
+    safe_user = site_users.validate_linux_user(owner_linux_user)
+    return site_users.HOME_ROOT / safe_user / APPS_DIR_NAME / validate_name(name)
 
 
 def validate_memory_mb(memory_mb: int | str | None, ceiling: int | None = None) -> int:
@@ -111,7 +108,7 @@ def validate_node_major(node_major: str | None) -> str | None:
     return value
 
 
-def validate_start(start_kind: str | None, start_arg: str | None, app_root: str) -> tuple[str, str]:
+def validate_start(start_kind: str | None, start_arg: str | None) -> tuple[str, str]:
     """Structured start command: a known launcher plus one argument.
 
     Never a free-form shell string — this ends up inside a systemd unit written
@@ -130,11 +127,12 @@ def validate_start(start_kind: str | None, start_arg: str | None, app_root: str)
     if kind == "node":
         if not arg.endswith(".js") and not arg.endswith(".mjs") and not arg.endswith(".cjs"):
             raise ValueError("node must be given a .js, .mjs or .cjs entry file")
-        # Resolve against the app directory and refuse anything that climbs out.
-        base = Path("/") / app_root
+        # The entry file is resolved inside the app directory by the helper, so
+        # anything that climbs out has to be refused here.
+        base = Path("/app").resolve(strict=False)
         target = (base / arg).resolve(strict=False)
         try:
-            target.relative_to(base.resolve(strict=False))
+            target.relative_to(base)
         except ValueError as exc:
             raise ValueError("Entry file must be inside the app directory") from exc
     elif not re.fullmatch(r"[A-Za-z0-9._@/-]{1,120}", arg):
@@ -195,7 +193,7 @@ def memory_ceiling_for(user: User) -> int:
 
 
 def count_apps_for_owner(db: Session, owner_id: int) -> int:
-    return db.query(SiteApp).join(Website).filter(Website.owner_id == owner_id).count()
+    return db.query(SiteApp).filter(SiteApp.owner_id == owner_id).count()
 
 
 def ensure_app_quota(db: Session, user: User, is_admin: bool = False) -> None:
@@ -208,18 +206,9 @@ def ensure_app_quota(db: Session, user: User, is_admin: bool = False) -> None:
         raise ValueError(f"This package allows at most {limit} application(s)")
 
 
-def primary_app(website: Website) -> Optional[SiteApp]:
-    apps: Iterable[SiteApp] = getattr(website, "apps", None) or []
-    return next(iter(apps), None)
-
-
 def app_port_for_website(website: Website) -> Optional[int]:
-    app = primary_app(website)
+    app = getattr(website, "app", None)
     return app.port if app else None
-
-
-def app_directory(website: Website, app: SiteApp) -> Path:
-    return site_users.document_root(website.root_path, validate_app_root(app.app_root))
 
 
 # --- container and environment validation -----------------------------------
@@ -301,44 +290,41 @@ def validate_env(env: str | None) -> str:
 
 # --- runtime lifecycle ------------------------------------------------------
 
-def site_root_of(website: Website) -> str:
-    return str(Path(website.root_path).resolve())
+def owner_linux_user(app: SiteApp) -> str:
+    """The Linux account an app runs as: its owner's panel account."""
+    owner = getattr(app, "owner", None)
+    username = getattr(owner, "username", "") if owner else ""
+    if not username:
+        raise ValueError("This application has no owner, so it cannot be run")
+    return site_users.validate_linux_user(site_users.linux_user_for_panel_username(username))
 
 
-def unit_name(website: Website, app: SiteApp) -> str:
+def unit_name(app: SiteApp) -> str:
     """Mirror of the helper's own derivation, for display only.
 
-    Control commands pass the website and app name and let the helper derive the
-    unit, so a caller can never aim systemctl at a unit it does not own.
+    Control commands pass the owner and the app name and let the helper build the
+    unit name, so a caller can never aim systemctl at a unit it does not own.
     """
-    digest = hashlib.sha256(site_root_of(website).encode("utf-8")).hexdigest()[:8]
-    linux_user = website.linux_user or "www-data"
-    return f"bpanel-app-{linux_user}-{digest}-{validate_name(app.name)}"
+    return f"bpanel-app-{owner_linux_user(app)}-{validate_name(app.name)}"
 
 
-def _require_linux_user(website: Website) -> str:
-    if not website.linux_user:
-        raise ValueError("This website has no Linux user, so it cannot run a managed application")
-    return site_users.validate_linux_user(website.linux_user)
+def directory_for(app: SiteApp) -> Path:
+    return app_directory(owner_linux_user(app), app.name)
 
 
-def write_runtime(website: Website, app: SiteApp) -> str:
-    """Generate and reload the systemd unit for a managed app."""
-    if app.kind not in MANAGED_KINDS:
-        raise ValueError("Only Node.js and container applications have a managed runtime")
-    linux_user = _require_linux_user(website)
+def write_runtime(app: SiteApp) -> str:
+    """Generate and reload the systemd unit for an app."""
+    linux_user = owner_linux_user(app)
     helper_args = [
         linux_user,
-        site_root_of(website),
         validate_name(app.name),
-        "node" if app.kind == "node" else "docker",
+        validate_kind(app.kind),
         f"--port={validate_port(app.port)}",
         f"--memory={validate_memory_mb(app.memory_limit_mb)}",
-        f"--dir={validate_app_root(app.app_root)}",
         f"--cpus={validate_cpu_limit(app.cpu_limit)}",
     ]
     if app.kind == "node":
-        start_kind, start_arg = validate_start(app.start_kind, app.start_arg, validate_app_root(app.app_root))
+        start_kind, start_arg = validate_start(app.start_kind, app.start_arg)
         helper_args += [
             f"--node-major={validate_node_major(app.node_major) or '22'}",
             f"--exec={start_kind}",
@@ -358,61 +344,57 @@ def write_runtime(website: Website, app: SiteApp) -> str:
     return (result.stdout or "").strip()
 
 
-def control(website: Website, app: SiteApp, action: str) -> str:
+def control(app: SiteApp, action: str) -> str:
     if action not in CONTROL_ACTIONS:
         raise ValueError(f"Unsupported action. Allowed: {', '.join(sorted(CONTROL_ACTIONS))}")
-    linux_user = _require_linux_user(website)
     result = shell.privileged(
         "site-app-control",
-        helper_args=[linux_user, site_root_of(website), validate_name(app.name), action],
+        helper_args=[owner_linux_user(app), validate_name(app.name), action],
         check=False,
         fallback=["bash", "-lc", "echo dry-run"],
     )
     return ((result.stdout or "") + (result.stderr or "")).strip()
 
 
-def is_running(website: Website, app: SiteApp) -> bool:
-    if app.kind not in MANAGED_KINDS:
-        return False
+def is_running(app: SiteApp) -> bool:
     try:
-        return control(website, app, "is-active").splitlines()[0].strip() == "active"
+        return control(app, "is-active").splitlines()[0].strip() == "active"
     except (RuntimeError, ValueError, IndexError):
         return False
 
 
-def logs(website: Website, app: SiteApp, lines: int = 200) -> str:
-    linux_user = _require_linux_user(website)
+def logs(app: SiteApp, lines: int = 200) -> str:
     safe_lines = max(1, min(2000, int(lines or 200)))
     result = shell.privileged(
         "site-app-logs",
-        helper_args=[linux_user, site_root_of(website), validate_name(app.name), str(safe_lines)],
+        helper_args=[owner_linux_user(app), validate_name(app.name), str(safe_lines)],
         check=False,
         fallback=["bash", "-lc", "echo 'no journal in development'"],
     )
     return (result.stdout or "") or (result.stderr or "")
 
 
-def delete_runtime(website: Website, app: SiteApp) -> None:
-    if app.kind not in MANAGED_KINDS or not website.linux_user:
+def delete_runtime(app: SiteApp) -> None:
+    try:
+        linux_user = owner_linux_user(app)
+    except ValueError:
         return
     shell.privileged(
         "site-app-delete",
-        helper_args=[site_users.validate_linux_user(website.linux_user), site_root_of(website), validate_name(app.name)],
+        helper_args=[linux_user, validate_name(app.name)],
         check=False,
         fallback=["bash", "-lc", "true"],
     )
 
 
-def install_dependencies(website: Website, app: SiteApp) -> str:
+def install_dependencies(app: SiteApp) -> str:
     if app.kind != "node":
         raise ValueError("Only Node.js applications install dependencies")
-    linux_user = _require_linux_user(website)
     result = shell.privileged(
         "site-app-install-deps",
         helper_args=[
-            linux_user,
-            site_root_of(website),
-            validate_app_root(app.app_root),
+            owner_linux_user(app),
+            validate_name(app.name),
             validate_node_major(app.node_major) or "22",
         ],
         check=False,
