@@ -1599,6 +1599,16 @@ app_unit_name() {
   printf 'bpanel-app-%s-%s-%s' "$user" "$(app_site_hash "$site_root")" "$name"
 }
 
+app_env_file() {
+  # Deliberately outside the site tree. Inside it the file was reachable through
+  # the file manager, went into every site backup, and the permission hardening
+  # pass in update.sh handed ownership back to the site user on the next update.
+  # Nothing but root needs to read it: systemd loads EnvironmentFile before
+  # dropping privileges, and the docker CLI runs as root too.
+  local user="$1" site_root="$2" name="$3"
+  printf '%s/apps/%s-%s-%s.env' "$BPANEL_DATA_DIR" "$user" "$(app_site_hash "$site_root")" "$name"
+}
+
 app_container_name() {
   local user="$1" site_root="$2" name="$3"
   printf 'bpanel-%s-%s-%s' "$user" "$(app_site_hash "$site_root")" "$name"
@@ -1654,21 +1664,20 @@ resolve_node_bin_dir() {
 }
 
 write_app_env_file() {
-  # Environment arrives on stdin as KEY=value lines. Written root-owned so the
-  # site user can read secrets but cannot edit them past validation.
-  local target="$1" user="$2" line tmp
+  # Environment arrives on stdin as KEY=value lines, and only root ever reads
+  # the result, so the site user cannot edit a value past validation.
+  local target="$1" line tmp
+  install -d -o root -g root -m 0700 "${BPANEL_DATA_DIR}/apps"
   tmp="${target}.bpanel-tmp"
-  : >"$tmp"
-  chown "root:${user}" "$tmp"
-  chmod 0640 "$tmp"
+  install -m 0600 -o root -g root /dev/null "$tmp"
   while IFS= read -r line; do
     [[ -z "${line//[[:space:]]/}" ]] && continue
     [[ "$line" =~ ^[A-Z_][A-Z0-9_]*= ]] || deny "invalid environment line (expected KEY=value)"
     printf '%s\n' "$line" >>"$tmp"
   done
   mv -f "$tmp" "$target"
-  chown "root:${user}" "$target"
-  chmod 0640 "$target"
+  chown root:root "$target"
+  chmod 0600 "$target"
 }
 
 write_node_app_unit() {
@@ -3824,8 +3833,11 @@ PY
     harden_site_dir_path "$site_root" "$app_dir" "$user"
     unit_name="$(app_unit_name "$user" "$site_root" "$app_name")"
     unit_path="/etc/systemd/system/${unit_name}.service"
-    env_file="${site_root}/.bpanel-app-${app_name}.env"
-    write_app_env_file "$env_file" "$user"
+    env_file="$(app_env_file "$user" "$site_root" "$app_name")"
+    write_app_env_file "$env_file"
+    # Earlier releases kept this inside the site tree, where the customer could
+    # read and edit it. Remove the leftover.
+    rm -f "${site_root}/.bpanel-app-${app_name}.env"
     if [[ "$app_runtime" == "node" ]]; then
       require_node_major "$app_node_major"
       [[ "$app_arg" =~ ^[A-Za-z0-9._@/-]{1,120}$ ]] || deny "invalid start argument: $app_arg"
@@ -3882,7 +3894,7 @@ PY
     if command -v docker >/dev/null 2>&1; then
       docker rm -f "$(app_container_name "$user" "$site_root" "$app_name")" 2>/dev/null || true
     fi
-    rm -f "${site_root}/.bpanel-app-${app_name}.env"
+    rm -f "$(app_env_file "$user" "$site_root" "$app_name")" "${site_root}/.bpanel-app-${app_name}.env"
     echo "removed ${unit_name}"
     ;;
 

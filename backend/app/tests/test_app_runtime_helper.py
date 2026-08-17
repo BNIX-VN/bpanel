@@ -120,7 +120,26 @@ def test_control_refuses_a_missing_unit(helper):
 def test_environment_lines_are_validated_before_root_writes_them(helper):
     env_block = helper.split("write_app_env_file() {", 1)[1].split("\n}", 1)[0]
     assert '[[ "$line" =~ ^[A-Z_][A-Z0-9_]*= ]]' in env_block
-    assert 'chmod 0640 "$target"' in env_block
+    assert 'chmod 0600 "$target"' in env_block
+    assert 'chown root:root "$target"' in env_block
+
+
+def test_environment_file_lives_outside_the_site_tree(helper):
+    """Inside the site it was file-manager editable, went into every backup, and
+    the update.sh hardening pass handed it back to the site user."""
+    path_block = helper.split("app_env_file() {", 1)[1].split("\n}", 1)[0]
+    assert "$BPANEL_DATA_DIR" in path_block
+    assert "/apps/" in path_block
+
+    write_block = helper.split("  site-app-write)", 1)[1].split("\n    ;;", 1)[0]
+    assert 'env_file="$(app_env_file "$user" "$site_root" "$app_name")"' in write_block
+    # And the copy earlier releases left inside the site gets cleaned up.
+    assert 'rm -f "${site_root}/.bpanel-app-${app_name}.env"' in write_block
+
+
+def test_deleting_an_app_removes_its_environment_file(helper):
+    delete_block = helper.split("  site-app-delete)", 1)[1].split("\n    ;;", 1)[0]
+    assert 'rm -f "$(app_env_file "$user" "$site_root" "$app_name")"' in delete_block
 
 
 def test_image_references_cannot_look_like_a_docker_flag(helper):
