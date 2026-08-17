@@ -197,6 +197,14 @@ function normalizeHttpFloodConfig(config = {}) {
   }));
 }
 
+// Website modes served by proxying to a local port instead of running PHP.
+const PROXIED_APP_TYPES = ['proxy', 'nodejs'];
+const EMPTY_SITE_APP_DRAFT = { name: 'app', kind: 'proxy', app_root: 'app', port: '' };
+
+function isProxiedAppType(appType) {
+  return PROXIED_APP_TYPES.includes(appType);
+}
+
 function websiteConfigForm(site = {}) {
   const appType = site.app_type || 'wordpress';
   return {
@@ -204,7 +212,7 @@ function websiteConfigForm(site = {}) {
     php_version: site.php_version || '8.4',
     nginx_rewrite_mode: appType === 'wordpress'
       ? 'front_controller'
-      : appType === 'static'
+      : appType === 'static' || isProxiedAppType(appType)
         ? 'none'
         : site.nginx_rewrite_mode || 'none',
   };
@@ -527,6 +535,8 @@ function App() {
   const [cronItems, setCronItems] = useState([]);
   const [cronUser, setCronUser] = useState('');
   const [cronPhpInfo, setCronPhpInfo] = useState({ php_binary: '', php_version: '' });
+  const [siteApps, setSiteApps] = useState({ items: [], limit: 0, used: 0, memory_ceiling_mb: 512, port_range: [21000, 21999] });
+  const [siteAppDraft, setSiteAppDraft] = useState(EMPTY_SITE_APP_DRAFT);
   const [chmodTarget, setChmodTarget] = useState(null);
   const [chmodMode, setChmodMode] = useState('644');
   const [filePath, setFilePath] = useState(() => standaloneEditor?.path || 'public_html/index.html');
@@ -1682,6 +1692,7 @@ function App() {
     setLogViewer(null);
     setTerminalViewer(null);
     setWebsiteSettingsForm(websiteConfigForm(site));
+    setSiteAppDraft(EMPTY_SITE_APP_DRAFT);
     const data = await request(`/websites/${site.id}/nginx-custom`, {}, 'Loading Custom Nginx...');
     if (data !== null) {
       setNginxCustomEditing({
@@ -1691,7 +1702,53 @@ function App() {
         mode: 'custom',
         content: data?.nginx_custom || '',
       });
+      await loadSiteApps(site.id);
     }
+  }
+
+  async function loadSiteApps(websiteId) {
+    if (!websiteId) return;
+    const data = await request(`/site-apps/${websiteId}`, { silent: true });
+    if (data) setSiteApps({ port_range: [21000, 21999], ...data });
+  }
+
+  async function createSiteApp(websiteId) {
+    if (!websiteId) return;
+    const body = {
+      website_id: Number(websiteId),
+      name: siteAppDraft.name,
+      kind: siteAppDraft.kind,
+      app_root: siteAppDraft.app_root,
+    };
+    if (String(siteAppDraft.port).trim()) body.port = Number(siteAppDraft.port);
+    const data = await request('/site-apps', { method: 'POST', body: JSON.stringify(body) }, 'Creating application...');
+    if (data) {
+      setNotice(`Application ${data.name} listens on port ${data.port}.`);
+      setSiteAppDraft(EMPTY_SITE_APP_DRAFT);
+      await loadSiteApps(websiteId);
+    }
+  }
+
+  async function updateSiteApp(app, patch, label = 'Updating application...') {
+    const data = await request(`/site-apps/${app.id}`, { method: 'PUT', body: JSON.stringify(patch) }, label);
+    if (data) {
+      setNotice(`Updated ${data.name}.`);
+      await loadSiteApps(app.website_id);
+    }
+  }
+
+  async function deleteSiteApp(app) {
+    if (!confirm(`Delete application ${app.name}? The domain will stop reaching port ${app.port}.`)) return;
+    const data = await request(`/site-apps/${app.id}`, { method: 'DELETE' }, 'Deleting application...');
+    if (data) {
+      setNotice(`Deleted ${app.name}.`);
+      await loadSiteApps(app.website_id);
+    }
+  }
+
+  async function suggestSiteAppPort(websiteId) {
+    const data = await request(`/site-apps/${websiteId}/suggest-port`, { silent: true });
+    if (data?.port) setSiteAppDraft(prev => ({ ...prev, port: String(data.port) }));
   }
 
   async function viewFullNginxConfig() {
@@ -1724,12 +1781,16 @@ function App() {
     const nextPhp = websiteSettingsForm.php_version || original.php_version || '8.4';
     const nextRewrite = nextAppType === 'wordpress'
       ? 'front_controller'
-      : nextAppType === 'static'
+      : nextAppType === 'static' || isProxiedAppType(nextAppType)
         ? 'none'
         : websiteSettingsForm.nginx_rewrite_mode || 'none';
 
+    if (isProxiedAppType(nextAppType) && siteApps.items.length === 0) {
+      setError('Add an application first — a proxied website needs a port to forward to.');
+      return;
+    }
     if (nextAppType !== (original.app_type || 'wordpress')) body.app_type = nextAppType;
-    if (nextAppType !== 'static' && nextPhp !== original.php_version) body.php_version = nextPhp;
+    if (nextAppType !== 'static' && !isProxiedAppType(nextAppType) && nextPhp !== original.php_version) body.php_version = nextPhp;
     if (nextRewrite !== (original.nginx_rewrite_mode || (original.app_type === 'wordpress' ? 'front_controller' : 'none'))) {
       body.nginx_rewrite_mode = nextRewrite;
     }
@@ -3330,11 +3391,93 @@ function App() {
     </>;
   }
 
+  function renderSiteApps() {
+    const websiteId = nginxCustomEditing?.id;
+    const proxied = isProxiedAppType(websiteSettingsForm.app_type || nginxCustomEditing?.site?.app_type);
+    const [portFrom, portTo] = siteApps.port_range || [21000, 21999];
+    const atLimit = !isAdmin && siteApps.limit > 0 && siteApps.used >= siteApps.limit;
+    return <div className="site-apps-block">
+      <div className="domain-manager-head">
+        <h3>Applications</h3>
+        <p className="hint">
+          Nginx forwards this domain to an app listening on <code>127.0.0.1</code>. Set <strong>Website mode</strong> to
+          Reverse proxy or Node.js app to switch the traffic over.
+          {siteApps.limit > 0 && <> Using {siteApps.used} of {siteApps.limit} allowed.</>}
+        </p>
+      </div>
+      {siteApps.items.length === 0
+        ? <p className="hint site-apps-empty">No application yet. Add one below, then switch Website mode.</p>
+        : <div className="site-app-list">
+          {siteApps.items.map(app => <div className="site-app-item" key={app.id}>
+            <div className="site-app-head">
+              <strong>{app.name}</strong>
+              <span className="badge">{app.kind === 'node' ? 'Node.js' : 'Proxy'}</span>
+              <code>127.0.0.1:{app.port}</code>
+              {proxied && <span className="badge ok">Live</span>}
+            </div>
+            <dl className="site-app-meta">
+              <div><dt>Directory</dt><dd><code>{app.directory || app.app_root}</code></dd></div>
+              {app.kind === 'node' && <div><dt>Start</dt><dd><code>{app.start_kind} {app.start_arg}</code></dd></div>}
+              {app.kind === 'node' && <div><dt>Node</dt><dd>v{app.node_major || '22'}</dd></div>}
+              <div><dt>Memory</dt><dd>{app.memory_limit_mb} MB</dd></div>
+            </dl>
+            <div className="site-app-actions">
+              <label className="site-app-port">
+                <span>Port</span>
+                <input
+                  type="number"
+                  defaultValue={app.port}
+                  min={portFrom}
+                  max={portTo}
+                  disabled={!!loading}
+                  onBlur={e => {
+                    const next = Number(e.target.value);
+                    if (next && next !== app.port) updateSiteApp(app, { port: next }, 'Moving application port...');
+                  }}
+                />
+              </label>
+              <button className="mini danger" disabled={!!loading} onClick={() => deleteSiteApp(app)}><Trash2 size={13}/> Delete</button>
+            </div>
+          </div>)}
+        </div>}
+      {!atLimit && <div className="site-app-form">
+        <label><span>Name</span>
+          <input value={siteAppDraft.name} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, name: e.target.value }))} />
+        </label>
+        <label><span>Folder</span>
+          <input value={siteAppDraft.app_root} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, app_root: e.target.value }))} placeholder="app" />
+        </label>
+        <label><span>Port</span>
+          <input
+            type="number"
+            value={siteAppDraft.port}
+            min={portFrom}
+            max={portTo}
+            disabled={!!loading}
+            placeholder={`auto (${portFrom}-${portTo})`}
+            onChange={e => setSiteAppDraft(prev => ({ ...prev, port: e.target.value }))}
+          />
+        </label>
+        <div className="site-app-form-actions">
+          <button className="secondary-light" disabled={!!loading} onClick={() => suggestSiteAppPort(websiteId)}>Pick free port</button>
+          <button disabled={!!loading || !siteAppDraft.name.trim()} onClick={() => createSiteApp(websiteId)}><Plus size={14}/> Add application</button>
+        </div>
+      </div>}
+      {atLimit && <p className="hint">This package allows {siteApps.limit} application(s). Delete one to add another.</p>}
+      <p className="hint site-apps-note">
+        Start the app yourself from the terminal for now — BPanel keeping the process running lands in the next release.
+        Bind it to <code>127.0.0.1</code> on the port above; a public bind is blocked by the firewall.
+      </p>
+    </div>;
+  }
+
   function renderNginxEditor() {
     if (!nginxCustomEditing) return null;
     const fullConfig = nginxCustomEditing.mode === 'full';
     const selectedAppType = websiteSettingsForm.app_type || nginxCustomEditing.site?.app_type || 'wordpress';
     const rewriteDisabled = selectedAppType !== 'php';
+    const proxied = isProxiedAppType(selectedAppType);
+    const appsEnabled = siteApps.limit > 0 || isAdmin;
     const settingsSite = nginxCustomEditing.site || {};
     const siteDomains = settingsSite.aliases || [];
     const aliasMode = aliasModes[nginxCustomEditing.id] || 'alias';
@@ -3365,8 +3508,9 @@ function App() {
           <option value="wordpress">WordPress</option>
           <option value="php">PHP</option>
           <option value="static">Static</option>
+          <option value="proxy" disabled={!appsEnabled}>Reverse proxy</option>
         </select></label>
-        {selectedAppType !== 'static' && <label><span>PHP version</span><select
+        {selectedAppType !== 'static' && !proxied && <label><span>PHP version</span><select
           value={websiteSettingsForm.php_version}
           onChange={e => setWebsiteSettingsForm(prev => ({ ...prev, php_version: e.target.value }))}
           disabled={!!loading}
@@ -3384,6 +3528,7 @@ function App() {
           <button disabled={!!loading} onClick={saveWebsiteSettings}><Save size={14}/> Save settings</button>
         </div>
       </div>}
+      {!fullConfig && appsEnabled && renderSiteApps()}
       {!fullConfig && <div className="site-aliases settings-domain-manager">
         <div className="domain-manager-head">
           <h3>Domains</h3>

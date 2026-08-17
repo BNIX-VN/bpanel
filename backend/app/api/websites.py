@@ -27,7 +27,7 @@ from app.schemas.schemas import (
     WebsiteWafUpdate,
     WebsiteWordPressInstall,
 )
-from app.services import cron, file_manager, mariadb, nginx, site_users, ssl, storage_quota, waf, wordpress
+from app.services import cron, file_manager, mariadb, nginx, site_apps, site_users, ssl, storage_quota, waf, wordpress
 from app.services.audit import log_action
 
 _PLACEHOLDER_TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates" / "nginx"
@@ -198,6 +198,7 @@ def _rewrite_website_vhost(website: Website, **overrides) -> str:
         "rewrite_mode": overrides.pop("rewrite_mode", _website_rewrite_mode(website)),
         "aliases": overrides.pop("aliases", _alias_domains(website)),
         "redirects": overrides.pop("redirects", _redirect_domains(website)),
+        "app_port": overrides.pop("app_port", site_apps.app_port_for_website(website)),
     }
     if overrides.pop("include_ssl", True):
         rewrite_kwargs.update(_rewrite_ssl_kwargs(website))

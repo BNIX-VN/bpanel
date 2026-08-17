@@ -405,6 +405,18 @@ fastcgi_cache_key "$scheme$request_method$host$request_uri";
 NGINX
 }
 
+# WebSocket upgrade map, shared by every proxied vhost. Without it a
+# `proxy_set_header Connection $connection_upgrade` in a site config makes
+# nginx fail to start, so this has to exist before any proxy vhost is written.
+configure_proxy_upgrade_map() {
+  cat >/etc/nginx/conf.d/00-bpanel-upgrade-map.conf <<'NGINX'
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+NGINX
+}
+
 migrate_nginx_wordpress_csp_worker_src() {
   python3 - <<'PY'
 from pathlib import Path
@@ -938,6 +950,7 @@ update_progress 25 "syncing" "Syncing source into ${APP_DIR}"
 install_panel_runtime
 log "Configuring Nginx FastCGI cache"
 configure_fastcgi_cache
+configure_proxy_upgrade_map
 ensure_terminal_tools
 venv_needs_recreate=false
 if [[ ! -x "$APP_DIR/backend/.venv/bin/uvicorn" ]]; then

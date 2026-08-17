@@ -217,3 +217,80 @@ def test_ensure_hsts_header_adds_gutenberg_safe_wordpress_csp():
 
     assert "frame-src 'self' https: blob:;" in hardened
     assert "worker-src 'self' blob:;" in hardened
+
+
+# --- proxied app types ------------------------------------------------------
+
+def _proxy_vhost(app_type="proxy", app_port=21000, **kwargs):
+    return nginx.render_vhost(
+        "example.test",
+        "/home/bp_example_test/example.test",
+        app_type=app_type,
+        php_version=None,
+        app_port=app_port,
+        **kwargs,
+    )
+
+
+def test_proxy_vhost_forwards_to_the_loopback_app_port():
+    rendered = _proxy_vhost(app_port=21042)
+
+    assert "proxy_pass http://127.0.0.1:21042;" in rendered
+    # A proxied site must never hand a request to PHP-FPM.
+    assert "fastcgi_pass" not in rendered
+
+
+def test_nodejs_app_type_uses_the_same_proxy_template():
+    assert "proxy_pass http://127.0.0.1:21042;" in _proxy_vhost(app_type="nodejs", app_port=21042)
+
+
+def test_proxy_vhost_supports_websocket_upgrade():
+    rendered = _proxy_vhost()
+
+    assert "proxy_http_version 1.1;" in rendered
+    assert "proxy_set_header Upgrade $http_upgrade;" in rendered
+    assert "proxy_set_header Connection $connection_upgrade;" in rendered
+
+
+def test_proxy_vhost_passes_the_original_scheme_and_client_ip():
+    rendered = _proxy_vhost()
+
+    for header in (
+        "proxy_set_header Host $host;",
+        "proxy_set_header X-Real-IP $remote_addr;",
+        "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
+        "proxy_set_header X-Forwarded-Proto $scheme;",
+    ):
+        assert header in rendered
+
+
+def test_proxy_vhost_keeps_serving_acme_challenges_from_disk():
+    """Certificate renewal must not depend on the application being up."""
+    rendered = _proxy_vhost()
+
+    assert "location ^~ /.well-known/acme-challenge/ {" in rendered
+    assert "root /var/www/bpanel-acme;" in rendered
+
+
+def test_proxy_vhost_streams_instead_of_buffering():
+    assert "proxy_buffering off;" in _proxy_vhost()
+
+
+def test_proxy_vhost_requires_an_app_port():
+    import pytest
+
+    for missing in (None, "", "not-a-port"):
+        with pytest.raises(ValueError, match="application port"):
+            _proxy_vhost(app_port=missing)
+
+
+def test_app_port_is_ignored_for_php_sites():
+    rendered = nginx.render_vhost(
+        "example.test",
+        "/home/bp_example_test/example.test",
+        app_type="php",
+        php_version="8.3",
+        app_port=21000,
+    )
+
+    assert "proxy_pass" not in rendered

@@ -16,7 +16,10 @@ TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates" / "nginx"
 CUSTOM_INCLUDE_DIR = Path("/etc/nginx/bpanel/custom")
 
 ALLOWED_PHP_VERSIONS = {"5.6", "7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5"}
-ALLOWED_APP_TYPES = {"wordpress", "php", "static"}
+ALLOWED_APP_TYPES = {"wordpress", "php", "static", "proxy", "nodejs"}
+# Served by proxying to a local application port instead of PHP-FPM.
+PROXIED_APP_TYPES = {"proxy", "nodejs"}
+PROXY_TIMEOUT_SECONDS = 300
 ALLOWED_REWRITE_MODES = {"none", "front_controller", "laravel", "codeigniter", "seohburl"}
 ALLOWED_LOG_KINDS = {"access", "error"}
 DOMAIN_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+")
@@ -283,6 +286,23 @@ def _check_app_type(app_type: str) -> str:
     if app_type not in ALLOWED_APP_TYPES:
         raise ValueError(f"Unsupported app type: {app_type}")
     return app_type
+
+
+def _check_app_port(app_type: str, app_port: int | None) -> int | None:
+    """A proxied vhost is useless without somewhere to send the request.
+
+    Refusing here beats writing a vhost that fails `nginx -t` on an empty
+    proxy_pass, or worse, silently proxies to the wrong port.
+    """
+    if app_type not in PROXIED_APP_TYPES:
+        return None
+    try:
+        value = int(app_port)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"App type '{app_type}' needs an application port") from exc
+    if not 1 <= value <= 65535:
+        raise ValueError("Application port is out of range")
+    return value
 
 
 def _check_rewrite_mode(mode: str | None) -> str:
@@ -975,10 +995,12 @@ def render_vhost(
     ssl_ca_path: str | None = None,
     aliases: list[str] | tuple[str, ...] | None = None,
     redirects: list[str] | tuple[str, ...] | None = None,
+    app_port: int | None = None,
 ) -> str:
     server_names = _server_names(domain, aliases)
     safe_domain = server_names[0]
     _check_app_type(app_type)
+    safe_app_port = _check_app_port(app_type, app_port)
     safe_rewrite_mode = _check_rewrite_mode(rewrite_mode)
     _check_php_version(php_version)
     resolved_root = Path(root_path).resolve()
@@ -994,6 +1016,8 @@ def render_vhost(
         "wordpress": "wordpress.conf.j2",
         "php": "php.conf.j2",
         "static": "static.conf.j2",
+        "proxy": "proxy.conf.j2",
+        "nodejs": "proxy.conf.j2",
     }[app_type]
     template = env.get_template(template_name)
     php_fpm_socket = php_fpm_socket_override or _php_fpm_socket(php_version)
@@ -1014,6 +1038,8 @@ def render_vhost(
         http_flood_connections=safe_http_flood_config["connection_limit"],
         http_flood_challenge_block=_http_flood_challenge_block(),
         rewrite_mode=safe_rewrite_mode,
+        app_port=safe_app_port,
+        proxy_timeout=PROXY_TIMEOUT_SECONDS,
     )
     if ssl_cert_path or ssl_key_path:
         rendered = apply_manual_ssl_config(rendered, ssl_cert_path or "", ssl_key_path or "", ssl_ca_path)
@@ -1043,6 +1069,7 @@ def write_vhost(
     preserve_existing_ssl: bool = True,
     aliases: list[str] | tuple[str, ...] | None = None,
     redirects: list[str] | tuple[str, ...] | None = None,
+    app_port: int | None = None,
 ) -> str:
     return rewrite_vhost(
         domain,
@@ -1062,6 +1089,7 @@ def write_vhost(
         preserve_existing_ssl=preserve_existing_ssl,
         aliases=aliases,
         redirects=redirects,
+        app_port=app_port,
     )
 
 
@@ -1087,6 +1115,7 @@ def rewrite_vhost(
     preserve_existing_ssl: bool = True,
     aliases: list[str] | tuple[str, ...] | None = None,
     redirects: list[str] | tuple[str, ...] | None = None,
+    app_port: int | None = None,
 ) -> str:
     target = _vhost_path(domain)
     content = render_vhost(
@@ -1106,6 +1135,7 @@ def rewrite_vhost(
         ssl_ca_path=ssl_ca_path,
         aliases=aliases,
         redirects=None,
+        app_port=app_port,
     )
     if settings.command_dry_run:
         return _append_redirect_vhosts(content, domain, redirects, ssl_cert_path, ssl_key_path, ssl_ca_path)

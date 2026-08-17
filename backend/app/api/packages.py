@@ -54,6 +54,8 @@ def create_package(
         terminal_enabled=payload.terminal_enabled,
         waf_enabled=payload.waf_enabled,
         wordpress_enabled=payload.wordpress_enabled,
+        node_apps_limit=payload.node_apps_limit,
+        node_app_memory_mb=payload.node_app_memory_mb,
     )
     db.add(package)
     db.commit()
@@ -93,6 +95,10 @@ def update_package(
         package.waf_enabled = payload.waf_enabled
     if payload.wordpress_enabled is not None:
         package.wordpress_enabled = payload.wordpress_enabled
+    if payload.node_apps_limit is not None:
+        package.node_apps_limit = payload.node_apps_limit
+    if payload.node_app_memory_mb is not None:
+        package.node_app_memory_mb = payload.node_app_memory_mb
     for user in db.query(User).filter(User.package_id == package.id).all():
         user.website_limit = package.website_limit
         user.storage_limit_mb = package.storage_limit_mb

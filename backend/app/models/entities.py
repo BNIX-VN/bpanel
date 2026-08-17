@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List, Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -21,6 +21,10 @@ class UserPackage(Base):
     terminal_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     waf_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     wordpress_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # 0 keeps app hosting off for every existing package until an admin raises
+    # it, the same way terminal_enabled gates the terminal.
+    node_apps_limit: Mapped[int] = mapped_column(Integer, default=0)
+    node_app_memory_mb: Mapped[int] = mapped_column(Integer, default=512)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     users: Mapped[List["User"]] = relationship(back_populates="package")
@@ -84,6 +88,40 @@ class Website(Base):
         cascade="all, delete-orphan",
         order_by="WebsiteAlias.domain",
     )
+    apps: Mapped[List["SiteApp"]] = relationship(
+        back_populates="website",
+        cascade="all, delete-orphan",
+        order_by="SiteApp.id",
+    )
+
+
+class SiteApp(Base):
+    """An application served by proxying to a local port instead of PHP-FPM.
+
+    kind='proxy' only records where nginx should send traffic; kind='node' also
+    means the panel owns the systemd unit that keeps the process running.
+    """
+
+    __tablename__ = "site_apps"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    website_id: Mapped[int] = mapped_column(ForeignKey("websites.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(64), default="app")
+    kind: Mapped[str] = mapped_column(String(16), default="proxy")
+    app_root: Mapped[str] = mapped_column(String(255), default="app")
+    start_kind: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    start_arg: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    node_major: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
+    port: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    memory_limit_mb: Mapped[int] = mapped_column(Integer, default=512)
+    autostart: Mapped[bool] = mapped_column(Boolean, default=True)
+    status: Mapped[str] = mapped_column(String(16), default="stopped")
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    website: Mapped[Website] = relationship(back_populates="apps")
+
+    __table_args__ = (UniqueConstraint("website_id", "name", name="uq_site_apps_website_name"),)
 
 
 class WebsiteAlias(Base):

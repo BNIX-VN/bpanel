@@ -390,6 +390,18 @@ fastcgi_cache_key "$scheme$request_method$host$request_uri";
 NGINX
 }
 
+# WebSocket upgrade map, shared by every proxied vhost. Without it a
+# `proxy_set_header Connection $connection_upgrade` in a site config makes
+# nginx fail to start, so this has to exist before any proxy vhost is written.
+configure_proxy_upgrade_map() {
+  cat >/etc/nginx/conf.d/00-bpanel-upgrade-map.conf <<'NGINX'
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+NGINX
+}
+
 write_modsec_base_conf() {
   install -d -o root -g root -m 0755 /etc/nginx/modsec /etc/nginx/modsec/sites
   {
@@ -1099,6 +1111,7 @@ main() {
 
   log "Configuring Nginx FastCGI cache"
   configure_fastcgi_cache
+  configure_proxy_upgrade_map
 
   log "Installing Nginx ModSecurity WAF engine"
   if ! install_waf_engine; then

@@ -9,7 +9,7 @@ from pydantic import BaseModel, EmailStr, Field, field_validator, model_validato
 
 DOMAIN_RE = re.compile(r"^(?!-)([a-zA-Z0-9-]{1,63}\.)+[a-zA-Z]{2,}$")
 SUPPORTED_PHP_VERSIONS = {"5.6", "7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5"}
-SUPPORTED_APP_TYPES = {"wordpress", "php", "static"}
+SUPPORTED_APP_TYPES = {"wordpress", "php", "static", "proxy", "nodejs"}
 SUPPORTED_NGINX_REWRITE_MODES = {"none", "front_controller", "laravel", "codeigniter", "seohburl"}
 SUPPORTED_ROLES = {"admin", "end_user"}
 SIZE_RE = re.compile(r"^\d{1,6}[KMG]?$")  # e.g. "512M", "1024M"
@@ -152,6 +152,8 @@ class UserPackageCreate(BaseModel):
     terminal_enabled: bool = False
     waf_enabled: bool = True
     wordpress_enabled: bool = True
+    node_apps_limit: int = Field(default=0, ge=0, le=100)
+    node_app_memory_mb: int = Field(default=512, ge=64, le=16384)
 
     @field_validator("name")
     @classmethod
@@ -173,6 +175,8 @@ class UserPackageUpdate(BaseModel):
     terminal_enabled: Optional[bool] = None
     waf_enabled: Optional[bool] = None
     wordpress_enabled: Optional[bool] = None
+    node_apps_limit: Optional[int] = Field(default=None, ge=0, le=100)
+    node_app_memory_mb: Optional[int] = Field(default=None, ge=64, le=16384)
 
     @field_validator("name")
     @classmethod
@@ -197,6 +201,8 @@ class UserPackageOut(BaseModel):
     terminal_enabled: bool = False
     waf_enabled: bool = True
     wordpress_enabled: bool = True
+    node_apps_limit: int = 0
+    node_app_memory_mb: int = 512
     created_at: Optional[datetime] = None
 
     class Config:
@@ -522,6 +528,51 @@ class CronDelete(BaseModel):
     index: int
 
 
+class SiteAppCreate(BaseModel):
+    website_id: int
+    name: str = "app"
+    kind: Literal["proxy", "node"] = "proxy"
+    app_root: str = "app"
+    # Omit to let the panel pick a free port from its own range.
+    port: Optional[int] = None
+    start_kind: Optional[Literal["node", "npm", "npx", "yarn"]] = None
+    start_arg: Optional[str] = None
+    node_major: Optional[str] = None
+    memory_limit_mb: Optional[int] = None
+    autostart: bool = True
+
+
+class SiteAppUpdate(BaseModel):
+    name: Optional[str] = None
+    app_root: Optional[str] = None
+    port: Optional[int] = None
+    start_kind: Optional[Literal["node", "npm", "npx", "yarn"]] = None
+    start_arg: Optional[str] = None
+    node_major: Optional[str] = None
+    memory_limit_mb: Optional[int] = None
+    autostart: Optional[bool] = None
+
+
+class SiteAppOut(BaseModel):
+    id: int
+    website_id: int
+    name: str
+    kind: str
+    app_root: str
+    port: int
+    start_kind: Optional[str] = None
+    start_arg: Optional[str] = None
+    node_major: Optional[str] = None
+    memory_limit_mb: int = 512
+    autostart: bool = True
+    status: str = "stopped"
+    last_error: str = ""
+    created_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
 class WebsiteOut(BaseModel):
     id: int
     domain: str
@@ -551,6 +602,7 @@ class WebsiteOut(BaseModel):
     http_flood_config: str = ""
     wordpress_installed: bool = False
     aliases: list[WebsiteAliasOut] = Field(default_factory=list)
+    apps: list[SiteAppOut] = Field(default_factory=list)
 
     class Config:
         from_attributes = True
