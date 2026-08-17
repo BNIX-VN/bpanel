@@ -190,3 +190,11 @@ def test_proxied_vhost_writes_ensure_the_map_first():
     service = (PROJECT_ROOT / "backend" / "app" / "services" / "nginx.py").read_text(encoding="utf-8")
     rewrite = service.split("def rewrite_vhost(", 1)[1]
     assert "ensure_proxy_upgrade_map()" in rewrite.split("content = render_vhost(", 1)[0]
+
+
+def test_legacy_cleanup_survives_finding_nothing(helper):
+    """Under `set -o pipefail` a grep with no match kills the helper silently."""
+    block = helper.split("remove_legacy_app_units() {", 1)[1].split("\n}", 1)[0]
+    grep_lines = [line for line in block.splitlines() if "grep -E" in line]
+    assert grep_lines, "expected a grep over existing container names"
+    assert all("|| true" in line for line in grep_lines), grep_lines

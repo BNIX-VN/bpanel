@@ -1633,7 +1633,7 @@ ensure_app_directory() {
 remove_legacy_app_units() {
   # Units and containers from the release where an app was named after the
   # website it hung off. Nothing else would ever clean them up.
-  local user="$1" name="$2" legacy unit
+  local user="$1" name="$2" legacy unit stale
   for legacy in /etc/systemd/system/bpanel-app-"${user}"-*-"${name}".service; do
     [[ -f "$legacy" ]] || continue
     unit="$(basename "$legacy")"
@@ -1641,9 +1641,13 @@ remove_legacy_app_units() {
     rm -f "$legacy"
   done
   if command -v docker >/dev/null 2>&1; then
-    docker ps -a --format '{{.Names}}' 2>/dev/null \
-      | grep -E "^bpanel-${user}-[0-9a-f]{8}-${name}\$" \
-      | while IFS= read -r legacy; do docker rm -f "$legacy" >/dev/null 2>&1 || true; done
+    # The trailing `|| true` matters: under `set -o pipefail` a grep that
+    # matches nothing fails the pipeline, and `set -e` then kills the helper
+    # without printing anything at all.
+    stale="$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E "^bpanel-${user}-[0-9a-f]{8}-${name}$" || true)"
+    for legacy in $stale; do
+      docker rm -f "$legacy" >/dev/null 2>&1 || true
+    done
   fi
   rm -f "${BPANEL_DATA_DIR}/apps/${user}"-*-"${name}.env"
 }
@@ -1918,7 +1922,7 @@ install_node_major() {
   latest="$(curl -fsSL https://nodejs.org/dist/index.json | BPANEL_NODE_MAJOR="$major" python3 -c 'import json, os, sys
 major = os.environ["BPANEL_NODE_MAJOR"]
 names = [item["version"] for item in json.load(sys.stdin) if item["version"].startswith("v" + major + ".")]
-print(names[0] if names else "")')"
+print(names[0] if names else "")' || true)"
   [[ "$latest" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || deny "no Node ${major} release found upstream"
   url="https://nodejs.org/dist/${latest}/node-${latest}-linux-${arch}.tar.xz"
   tmp="$(mktemp -d)"
