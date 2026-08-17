@@ -6,6 +6,8 @@ website set to "application" mode points at one, and nginx proxies the domain to
 that port; that side lives in app/api/websites.py.
 """
 
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -144,6 +146,24 @@ def create_site_app(payload: SiteAppCreate, db: Session = Depends(get_db), curre
     return _app_out(app)
 
 
+def _reapply_runtime(db: Session, app: SiteApp) -> None:
+    """Rewrite the unit and restart, but only for an app already deployed."""
+    if not (Path("/etc/systemd/system") / f"{site_apps.unit_name(app)}.service").exists():
+        return
+    try:
+        site_apps.write_runtime(app)
+        site_apps.control(app, "restart")
+    except (RuntimeError, ValueError) as exc:
+        app.status = "error"
+        app.last_error = f"Could not restart on the new port: {exc}"[-2000:]
+        db.commit()
+        return
+    running = site_apps.settled_state(app) == "active"
+    app.status = "running" if running else "error"
+    app.last_error = "" if running else "The application did not come back on the new port. Check the log."
+    db.commit()
+
+
 def _resync_websites(app: SiteApp) -> None:
     """Every domain serving this app has to follow its port."""
     from app.api.websites import _rewrite_website_vhost  # circular at import time
@@ -204,6 +224,10 @@ def update_site_app(app_id: int, payload: SiteAppUpdate, db: Session = Depends(g
     db.refresh(app)
 
     if app.port != previous_port:
+        # The unit publishes the old port until it is rewritten, so a port change
+        # that only touched nginx would leave the app unreachable until someone
+        # thought to press Deploy.
+        _reapply_runtime(db, app)
         _resync_websites(app)
 
     log_action(db, current_user.id, "update_site_app", app.name, f":{app.port}")
