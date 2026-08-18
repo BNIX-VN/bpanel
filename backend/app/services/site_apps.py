@@ -13,6 +13,7 @@ constraint and the kernel gets the final say through `ss` before a port is used.
 import json
 import os
 import re
+import shlex
 import time
 from pathlib import Path
 from typing import Optional
@@ -723,6 +724,40 @@ def docker_status() -> dict:
         # Server-wide, not per customer: one image serves every tenant using it.
         "disk": disk,
     }
+
+
+def export_payload(app: SiteApp, destination: str) -> int:
+    """Write everything an application owns to *destination*, and say how big.
+
+    Its directory and its volumes are both out of the panel's reach — parts of
+    the directory belong to container users, the volumes live under /var/lib/
+    docker — so this is the only way a backup can contain them.
+    """
+    result = shell.privileged(
+        "site-app-export",
+        helper_args=[owner_linux_user(app), validate_name(app.name), str(destination)],
+        check=False,
+        timeout=3600,
+        fallback=["bash", "-lc", f"printf '' > {shlex.quote(str(destination))}; echo 0"],
+    )
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout or "Could not export the application").strip()[-4000:])
+    text = (result.stdout or "0").strip().splitlines()
+    return int(text[-1]) if text and text[-1].isdigit() else 0
+
+
+def import_payload(app: SiteApp, source: str) -> str:
+    """Put a backed-up application's directory and volumes back."""
+    result = shell.privileged(
+        "site-app-import",
+        helper_args=[owner_linux_user(app), validate_name(app.name), str(source)],
+        check=False,
+        timeout=3600,
+        fallback=["bash", "-lc", "echo dry-run-app-import"],
+    )
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout or "Could not restore the application").strip()[-4000:])
+    return (result.stdout or "").strip()[-4000:]
 
 
 def prune_docker() -> str:

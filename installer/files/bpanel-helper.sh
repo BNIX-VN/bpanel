@@ -32,6 +32,7 @@ DEFAULT_PANEL_PORT="2222"
 SOURCE_DIR="/opt/bpanel-source"
 UPDATE_SCRIPT="/usr/local/sbin/bpanel-update"
 BPANEL_DATA_DIR="/var/lib/bpanel"
+BACKUP_ROOT="/var/backups/bpanel"
 FIREWALL_BLOCKLIST_URLS="${BPANEL_DATA_DIR}/firewall-blocklists.urls"
 FIREWALL_BLOCKLIST_WORK="${BPANEL_DATA_DIR}/firewall-blocklists.current"
 FIREWALL_DIR="${BPANEL_DATA_DIR}/firewall"
@@ -1702,6 +1703,28 @@ app_directory() {
   # the app being tied to any website.
   local user="$1" name="$2"
   printf '%s/%s/apps/%s' "$HOME_ROOT" "$user" "$name"
+}
+
+require_backup_path() {
+  # These commands write and read files as root at a path the panel chose, which
+  # is only safe while that path cannot leave the backup tree — directly, through
+  # .., or through a symlinked parent.
+  local target="$1" parent real_parent
+  [[ -n "$target" ]] || deny "empty backup path"
+  [[ "$target" != *$'\n'* ]] || deny "invalid backup path"
+  [[ "$target" != *".."* ]] || deny "backup path may not contain .."
+  case "$target" in
+    "${BACKUP_ROOT}"/*) : ;;
+    *) deny "backup path must be under ${BACKUP_ROOT}" ;;
+  esac
+  install -d -m 0750 -o root -g bpanel "$BACKUP_ROOT"
+  parent="$(dirname "$target")"
+  [[ -d "$parent" ]] || deny "backup directory does not exist: $parent"
+  real_parent="$(readlink -f "$parent")" || deny "cannot resolve $parent"
+  case "$real_parent" in
+    "${BACKUP_ROOT}"|"${BACKUP_ROOT}"/*) : ;;
+    *) deny "backup directory escapes ${BACKUP_ROOT}" ;;
+  esac
 }
 
 ensure_app_directory() {
@@ -4038,6 +4061,77 @@ PY
     [[ $# -eq 2 ]] || deny "usage: site-app-dir-ensure <owner-user> <name>"
     ensure_app_directory "$1" "$2"
     echo
+    ;;
+
+  site-app-export)
+    # Everything an application owns, in one tar the panel can put in a backup:
+    # its directory (parts of which containers own and the panel cannot read) and
+    # each named volume (which live under /var/lib/docker, root's territory).
+    [[ $# -eq 3 ]] || deny "usage: site-app-export <owner-user> <name> <dest-tar>"
+    user="$1"; app_name="$2"; dest="$3"
+    require_linux_user "$user"
+    require_app_name "$app_name"
+    require_backup_path "$dest"
+    app_dir="$(app_directory "$user" "$app_name")"
+    [[ -d "$app_dir" ]] || deny "application directory not found: $app_dir"
+    stage="$(mktemp -d "${BACKUP_ROOT}/.app-export-XXXXXX")"
+    trap 'rm -rf "$stage"' EXIT
+    install -d -m 0700 "${stage}/volumes"
+    tar -C "$app_dir" -cf "${stage}/files.tar" . 2>/dev/null || deny "could not read the application directory"
+    if command -v docker >/dev/null 2>&1; then
+      while IFS= read -r volume_name; do
+        [[ -n "$volume_name" ]] || continue
+        volume_path="/var/lib/docker/volumes/${volume_name}/_data"
+        [[ -d "$volume_path" ]] || continue
+        # Numeric owners: a database image expects its own uid inside the volume,
+        # and that uid is the image's, not this machine's.
+        tar -C "$volume_path" --numeric-owner -cf "${stage}/volumes/${volume_name}.tar" . 2>/dev/null || true
+      done < <(docker volume ls --format '{{.Name}}' 2>/dev/null \
+        | grep -E "^$(app_container_name "$user" "$app_name")_" || true)
+    fi
+    tar -C "$stage" --numeric-owner -cf "$dest" files.tar volumes
+    chown bpanel:bpanel "$dest"
+    chmod 0600 "$dest"
+    rm -rf "$stage"
+    trap - EXIT
+    du -sb "$dest" | cut -f1
+    ;;
+
+  site-app-import)
+    [[ $# -eq 3 ]] || deny "usage: site-app-import <owner-user> <name> <src-tar>"
+    user="$1"; app_name="$2"; src="$3"
+    require_linux_user "$user"
+    require_app_name "$app_name"
+    require_backup_path "$src"
+    [[ -f "$src" && ! -L "$src" ]] || deny "no such export file: $src"
+    app_dir="$(ensure_app_directory "$user" "$app_name")"
+    stage="$(mktemp -d "${BACKUP_ROOT}/.app-import-XXXXXX")"
+    trap 'rm -rf "$stage"' EXIT
+    tar -C "$stage" -xf "$src" --no-same-owner
+    [[ -f "${stage}/files.tar" ]] || deny "export file has no application directory"
+    # No-same-owner then chown: the uid recorded in the archive may belong to a
+    # different account on this machine, and a site tree is always owned by its
+    # own user.
+    tar -C "$app_dir" -xf "${stage}/files.tar" --no-same-owner
+    chown -R "$user:$BPANEL_SITES_GROUP" "$app_dir"
+    harden_site_dir "$app_dir" "$user"
+    restored=0
+    if command -v docker >/dev/null 2>&1; then
+      for volume_tar in "${stage}/volumes"/*.tar; do
+        [[ -f "$volume_tar" ]] || continue
+        volume_name="$(basename "$volume_tar" .tar)"
+        [[ "$volume_name" == "$(app_container_name "$user" "$app_name")_"* ]] \
+          || deny "export contains a volume for another application: $volume_name"
+        docker volume create "$volume_name" >/dev/null
+        volume_path="/var/lib/docker/volumes/${volume_name}/_data"
+        [[ -d "$volume_path" ]] || continue
+        tar -C "$volume_path" -xf "$volume_tar" --numeric-owner -p
+        restored=$((restored + 1))
+      done
+    fi
+    rm -rf "$stage"
+    trap - EXIT
+    echo "restored ${app_name}: directory + ${restored} volume(s)"
     ;;
 
   site-app-volume-usage)

@@ -19,7 +19,7 @@ from app.core.config import settings
 from app.core.secrets import decrypt, encrypt
 from app.core.security import hash_password
 from app.core.permissions import normalize_role
-from app.models.entities import DatabaseAccount, User, Website, WebsiteAlias
+from app.models.entities import DatabaseAccount, SiteApp, User, Website, WebsiteAlias
 from app.services import mariadb, nginx, site_users, waf, wordpress
 from app.services.shell import shell
 
@@ -107,7 +107,17 @@ def create_user_backup(user: User, db) -> str:
                 "storage_limit_mb": user.storage_limit_mb,
             },
             "websites": [],
+            "applications": [],
         }
+
+        # Applications are not websites and their data is not under a website
+        # root, so without this a restore brought back the sites and quietly
+        # dropped every container's workflows and database.
+        app_payloads: dict[str, Path] = {}
+        for app_entry, payload in _collect_applications(user, db, tmp_dir):
+            manifest["applications"].append(app_entry)
+            if payload:
+                app_payloads[app_entry["name"]] = payload
 
         sql_files: dict[str, Path] = {}
         for website in websites:
@@ -159,7 +169,58 @@ def create_user_backup(user: User, db) -> str:
                 sql_path = sql_files.get(website.domain)
                 if sql_path and sql_path.exists():
                     tar.add(sql_path, arcname=f"databases/{website.domain}.sql")
+            for name, payload in app_payloads.items():
+                if payload.exists():
+                    tar.add(payload, arcname=f"applications/{name}.tar")
     return str(archive)
+
+
+def _collect_applications(user: User, db, tmp_dir: Path) -> list[tuple[dict, Optional[Path]]]:
+    """Each of a user's applications: what it is, and a tar of what it holds.
+
+    An application whose data cannot be read is still recorded — coming back with
+    the settings and an empty directory beats not coming back at all — and the
+    manifest says so, so a restore can tell the customer which ones need their
+    data putting back by hand.
+    """
+    from app.services import addons, site_apps
+
+    if not addons.is_installed(addons.APPLICATION):
+        return []
+    apps = db.query(SiteApp).filter(SiteApp.owner_id == user.id).order_by(SiteApp.id.asc()).all()
+    collected: list[tuple[dict, Optional[Path]]] = []
+    for app in apps:
+        entry = {
+            "name": app.name,
+            "kind": app.kind,
+            "port": app.port,
+            "memory_limit_mb": app.memory_limit_mb,
+            "cpu_limit": app.cpu_limit or "1",
+            "autostart": bool(app.autostart),
+            "env": app.env or "",
+            "start_kind": app.start_kind,
+            "start_arg": app.start_arg,
+            "node_major": app.node_major,
+            "image": app.image,
+            "container_port": app.container_port,
+            "compose_source": app.compose_source or "",
+            "web_service": app.web_service,
+            "websites": [website.domain for website in app.websites],
+            "payload_member": None,
+            "payload_error": "",
+        }
+        payload: Optional[Path] = None
+        try:
+            target = tmp_dir / f"app-{app.name}.tar"
+            site_apps.export_payload(app, str(target))
+            if target.exists():
+                payload = target
+                entry["payload_member"] = f"applications/{app.name}.tar"
+        except (RuntimeError, ValueError) as exc:
+            entry["payload_error"] = str(exc)[-500:]
+            logger.warning("Could not export application %s: %s", app.name, exc)
+        collected.append((entry, payload))
+    return collected
 
 
 def list_user_backups(username: str) -> List[str]:
@@ -202,6 +263,7 @@ def describe_user_backup(backup_file: str) -> dict:
         "username": "",
         "generated_at": "",
         "websites": 0,
+        "applications": 0,
         "valid": False,
         "error": "",
     }
@@ -211,6 +273,7 @@ def describe_user_backup(backup_file: str) -> dict:
         item["username"] = (manifest.get("user") or {}).get("username") or ""
         item["generated_at"] = manifest.get("generated_at") or ""
         item["websites"] = len(manifest.get("websites") or [])
+        item["applications"] = len(manifest.get("applications") or [])
         if not item["valid"]:
             item["error"] = "This is not a full user backup"
     except Exception as exc:
@@ -315,6 +378,7 @@ def _extract_member_to_file(archive: Path, member_name: str, output_dir: Path) -
         source = tar.extractfile(member)
         if source is None:
             return None
+        output_dir.mkdir(parents=True, exist_ok=True)
         target = output_dir / Path(member_name).name
         with target.open("wb") as output:
             while chunk := source.read(1024 * 1024):
@@ -505,8 +569,89 @@ def restore_user_backup(backup_file: str, db) -> dict:
             wordpress.fix_permissions(root_path, linux_user)
             restored_websites.append({"domain": domain, "created": created_site})
 
+        restored_apps = _restore_applications(manifest, user, db, archive, tmp_dir)
+
     db.commit()
-    return {"created_user": created_user, "username": username, "websites": restored_websites}
+    return {
+        "created_user": created_user,
+        "username": username,
+        "websites": restored_websites,
+        "applications": restored_apps,
+    }
+
+
+def _restore_applications(manifest: dict, user: User, db, archive: Path, tmp_dir: Path) -> list[dict]:
+    """Bring back a user's applications, stopped.
+
+    Deliberately not started: the images may not be pulled yet, and a customer
+    should look at what came back before it starts answering on their domain. The
+    panel's Deploy button does the rest.
+    """
+    entries = manifest.get("applications") or []
+    if not entries:
+        return []
+    from app.services import addons, site_apps
+
+    if not addons.is_installed(addons.APPLICATION):
+        # Recorded rather than dropped, so the operator knows what this backup
+        # holds and can install the addon and restore again.
+        return [{"name": entry.get("name"), "skipped": "Addon Application chưa được cài"} for entry in entries]
+
+    results: list[dict] = []
+    for entry in entries:
+        name = (entry.get("name") or "").strip()
+        try:
+            name = site_apps.validate_name(name)
+            kind = entry.get("kind") if entry.get("kind") in site_apps.APP_KINDS else "node"
+        except ValueError as exc:
+            results.append({"name": name, "error": str(exc)})
+            continue
+
+        app = db.query(SiteApp).filter(SiteApp.owner_id == user.id, SiteApp.name == name).first()
+        created = app is None
+        if created:
+            try:
+                port = site_apps.allocate_port(db, entry.get("port"))
+            except ValueError:
+                port = site_apps.allocate_port(db, None)
+            app = SiteApp(owner_id=user.id, name=name, kind=kind, port=port, status="stopped")
+            db.add(app)
+        app.kind = kind
+        app.start_kind = entry.get("start_kind")
+        app.start_arg = entry.get("start_arg")
+        app.node_major = entry.get("node_major")
+        app.image = entry.get("image")
+        app.container_port = int(entry.get("container_port") or 3000)
+        app.cpu_limit = entry.get("cpu_limit") or "1"
+        app.env = entry.get("env") or ""
+        app.compose_source = entry.get("compose_source") or ""
+        app.web_service = entry.get("web_service")
+        app.memory_limit_mb = int(entry.get("memory_limit_mb") or 512)
+        app.autostart = bool(entry.get("autostart", True))
+        app.status = "stopped"
+        db.flush()
+
+        record = {"name": name, "created": created, "data_restored": False}
+        member = entry.get("payload_member")
+        if member:
+            payload = _extract_member_to_file(archive, member, tmp_dir)
+            if payload:
+                # The helper only reads from the backup tree, so the extracted
+                # payload has to live there rather than in /tmp.
+                staged = Path(settings.backup_root) / f".restore-{user.username}-{name}.tar"
+                try:
+                    staged.write_bytes(payload.read_bytes())
+                    site_apps.import_payload(app, str(staged))
+                    record["data_restored"] = True
+                except (OSError, RuntimeError, ValueError) as exc:
+                    record["error"] = str(exc)[-500:]
+                    logger.warning("Could not restore application %s: %s", name, exc)
+                finally:
+                    staged.unlink(missing_ok=True)
+        elif entry.get("payload_error"):
+            record["error"] = f"Backup này không có dữ liệu: {entry['payload_error']}"
+        results.append(record)
+    return results
 
 
 def save_uploaded_backup(domain: str, filename: str, source_file) -> str:
