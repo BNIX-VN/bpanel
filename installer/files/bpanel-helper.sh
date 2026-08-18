@@ -4105,6 +4105,19 @@ PY
       "${bin_dir}/npm" install --omit=dev --no-audit --no-fund --prefix "$app_dir"
     ;;
 
+  site-app-compose-ps)
+    [[ $# -eq 2 ]] || deny "usage: site-app-compose-ps <owner-user> <name>"
+    user="$1"; app_name="$2"
+    require_linux_user "$user"
+    require_app_name "$app_name"
+    command -v docker >/dev/null 2>&1 || deny "Docker is not installed; run docker-install first"
+    compose_file="$(app_compose_file "$user" "$app_name")"
+    [[ -f "$compose_file" ]] || deny "no compose file for ${app_name}; deploy it once first"
+    app_dir="$(app_directory "$user" "$app_name")"
+    exec timeout 60 docker compose -f "$compose_file" --project-directory "$app_dir" \
+      -p "$(app_container_name "$user" "$app_name")" ps --all --format json
+    ;;
+
   site-app-compose-pull)
     [[ $# -eq 2 ]] || deny "usage: site-app-compose-pull <owner-user> <name>"
     user="$1"; app_name="$2"

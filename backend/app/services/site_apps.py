@@ -10,6 +10,7 @@ two domains silently answering for each other, so the DB holds the unique
 constraint and the kernel gets the final say through `ss` before a port is used.
 """
 
+import json
 import os
 import re
 import time
@@ -493,6 +494,47 @@ def active_state(app: SiteApp) -> str:
 
 def is_running(app: SiteApp) -> bool:
     return active_state(app) == "active"
+
+
+def compose_service_states(app: SiteApp) -> dict[str, str]:
+    """What each container in a compose app is actually doing.
+
+    The unit only says whether `docker compose up` is still attached, and it is:
+    a container that crash-loops leaves the unit active, so without asking Docker
+    itself the panel would report a dead application as running.
+    """
+    result = shell.privileged(
+        "site-app-compose-ps",
+        helper_args=[owner_linux_user(app), validate_name(app.name)],
+        check=False,
+        timeout=90,
+        fallback=["bash", "-lc", "echo ''"],
+    )
+    if result.returncode != 0:
+        return {}
+    states: dict[str, str] = {}
+    for line in (result.stdout or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entries = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        # Older Compose prints one object per line, newer ones a single array.
+        for entry in entries if isinstance(entries, list) else [entries]:
+            if isinstance(entry, dict) and entry.get("Service"):
+                states[str(entry["Service"])] = str(entry.get("State") or "unknown")
+    return states
+
+
+def compose_trouble(app: SiteApp) -> str:
+    """A sentence naming the container that is not up, or an empty string."""
+    states = compose_service_states(app)
+    broken = {name: state for name, state in states.items() if state != "running"}
+    if not broken:
+        return ""
+    return "; ".join(f"container '{name}' is {state}" for name, state in sorted(broken.items()))
 
 
 def settled_state(app: SiteApp, checks: int = 4, delay: float = 1.5) -> str:

@@ -467,6 +467,12 @@ def render(
             # official database does — need these to set up their data directory.
             entry["cap_add"] = list(PRIVILEGE_DROP_CAPS)
         entry["security_opt"] = ["no-new-privileges:true"]
+        if service.container_port and service.container_port < 1024:
+            # Nothing in the container holds CAP_NET_BIND_SERVICE once the
+            # capabilities are dropped, and an image told to listen on 80 would
+            # just fail. The setting is scoped to this container's own network
+            # namespace, where a low port means nothing.
+            entry["sysctls"] = {"net.ipv4.ip_unprivileged_port_start": 0}
         entry["mem_limit"] = f"{memory_mb}m"
         entry["memswap_limit"] = f"{memory_mb}m"
         entry["cpus"] = float(cpus)

@@ -375,11 +375,18 @@ def deploy_site_app(app_id: int, db: Session = Depends(get_db), current_user: Us
     # Give it a few seconds to fall over before calling the deploy a success.
     state = site_apps.settled_state(app)
     running = state == "active"
+    trouble = ""
+    if running and app.kind == "compose":
+        # `docker compose up` stays attached through a container's crash loop, so
+        # the unit being active says nothing about the containers themselves.
+        trouble = site_apps.compose_trouble(app)
+        running = not trouble
     _record_status(
         db,
         app,
         "running" if running else "error",
-        "" if running else f"The application did not stay running (systemd reports '{state}'). Check the log.",
+        "" if running
+        else trouble or f"The application did not stay running (systemd reports '{state}'). Check the log.",
     )
     log_action(db, current_user.id, "deploy_site_app", app.name, f":{app.port} {state}")
     return {
@@ -408,11 +415,13 @@ def control_site_app(app_id: int, payload: SiteAppControl, db: Session = Depends
 def site_app_status(app_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.end_user)
     app = _owned_app(db, current_user, app_id)
+    running = site_apps.is_running(app)
+    trouble = site_apps.compose_trouble(app) if running and app.kind == "compose" else ""
     return {
-        "running": site_apps.is_running(app),
+        "running": running and not trouble,
         "unit": site_apps.unit_name(app),
-        "status": app.status,
-        "last_error": app.last_error,
+        "status": "error" if trouble else app.status,
+        "last_error": trouble or app.last_error,
     }
 
 
