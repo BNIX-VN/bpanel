@@ -1806,7 +1806,7 @@ function App() {
     if (data) {
       setSiteAppEdit(null);
       setSiteAppEditPlan(null);
-      setNotice(`Saved ${data.name}. Deploy it to run the new configuration.`);
+      setNotice(`Saved ${data.name}.`);
       await loadSiteApps();
     }
   }
@@ -1820,6 +1820,8 @@ function App() {
     const data = await request(`/site-apps/${app.id}/deploy`, { method: 'POST' }, `Deploying ${app.name}...`);
     if (data) {
       setNotice(data.running ? `${app.name} is running on port ${app.port}.` : `${app.name} was deployed but is not running — check the log.`);
+      // What it downloaded and installed, which is otherwise invisible.
+      if (data.output) setSiteAppLog({ name: `${app.name} deploy`, log: data.output });
       await loadSiteApps();
     }
   }

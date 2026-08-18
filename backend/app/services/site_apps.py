@@ -455,6 +455,21 @@ def compose_pull(app: SiteApp) -> str:
     return (result.stdout or "").strip()[-4000:]
 
 
+def fetch_images(app: SiteApp) -> str:
+    """Download whatever the app needs before it is asked to run.
+
+    Both unit kinds pull implicitly when they start, but that happens with the
+    old containers already gone: the site is down for as long as the download
+    takes, and nothing reports why. Pulling first keeps what is running now
+    serving, and a tag that does not exist is reported without stopping it.
+    """
+    if app.kind == "compose":
+        return compose_pull(app)
+    if app.kind == "docker":
+        return pull_image(app)
+    return ""
+
+
 def write_runtime(app: SiteApp) -> str:
     """Generate and reload the systemd unit for an app."""
     linux_user = owner_linux_user(app)
@@ -513,7 +528,7 @@ def is_running(app: SiteApp) -> bool:
     return active_state(app) == "active"
 
 
-def compose_service_states(app: SiteApp) -> dict[str, str]:
+def compose_service_states(app: SiteApp) -> Optional[dict[str, str]]:
     """What each container in a compose app is actually doing.
 
     The unit only says whether `docker compose up` is still attached, and it is:
@@ -528,7 +543,9 @@ def compose_service_states(app: SiteApp) -> dict[str, str]:
         fallback=["bash", "-lc", "echo ''"],
     )
     if result.returncode != 0:
-        return {}
+        # Docker could not be asked. Saying nothing is wrong is better than
+        # reporting an outage the panel has no evidence for.
+        return None
     states: dict[str, str] = {}
     for line in (result.stdout or "").splitlines():
         line = line.strip()
@@ -548,6 +565,12 @@ def compose_service_states(app: SiteApp) -> dict[str, str]:
 def compose_trouble(app: SiteApp) -> str:
     """A sentence naming the container that is not up, or an empty string."""
     states = compose_service_states(app)
+    if states is None:
+        return ""
+    if not states:
+        # `docker compose up` reaches this state while it downloads an image it
+        # was never given beforehand: unit active, not one container to show.
+        return "no container is running yet (an image may still be downloading)"
     broken = {name: state for name, state in states.items() if state != "running"}
     if not broken:
         return ""

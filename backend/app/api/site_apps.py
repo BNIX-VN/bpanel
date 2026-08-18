@@ -206,6 +206,9 @@ def _reapply_runtime(db: Session, app: SiteApp, previous_name: str | None = None
             pass
     try:
         site_apps.write_runtime(app)
+        # Fetch first, so the containers currently serving stay up while the new
+        # image downloads. A bad tag then fails here, with the old ones running.
+        site_apps.fetch_images(app)
         site_apps.control(app, "restart")
     except (RuntimeError, ValueError) as exc:
         app.status = "error"
@@ -354,10 +357,10 @@ def deploy_site_app(app_id: int, db: Session = Depends(get_db), current_user: Us
         if app.kind == "compose":
             # The unit and the generated file come first: pulling reads that file.
             unit = site_apps.write_runtime(app)
-            steps.append(site_apps.compose_pull(app))
+            steps.append(site_apps.fetch_images(app))
         else:
             if app.kind == "docker":
-                steps.append(site_apps.pull_image(app))
+                steps.append(site_apps.fetch_images(app))
             else:
                 try:
                     steps.append(site_apps.install_dependencies(app))
