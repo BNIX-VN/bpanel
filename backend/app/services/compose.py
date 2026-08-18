@@ -50,6 +50,13 @@ EXPLAINED_SERVICE_KEYS = {
     "deploy": "khai báo deploy của swarm",
 }
 SERVICE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,30}$")
+# An application behind the panel's proxy never sees its own public address:
+# it listens on a loopback port nobody types. These stand in for the domain the
+# website serves it on, so a value like WEBHOOK_URL can be written once and
+# still be right after the domain changes.
+PLACEHOLDERS = {"BPANEL_URL", "BPANEL_DOMAIN"}
+PLACEHOLDER_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+DOLLAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$")
 VOLUME_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
 ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 MAX_SERVICES = 8
@@ -155,6 +162,16 @@ def _parse_environment(raw: Any, service: str, issues: list[Issue]) -> dict[str,
         text = "" if value is None else str(value)
         if any(char in text for char in "\r\n\x00"):
             issues.append(Issue(service, f"giá trị của {name} chứa xuống dòng"))
+            continue
+        unknown = [found for found in PLACEHOLDER_RE.findall(text) if found not in PLACEHOLDERS]
+        if unknown:
+            # Compose would read these from a .env file the panel does not run,
+            # so silently they would end up empty.
+            issues.append(Issue(
+                service,
+                f"{name} dùng biến {'${' + unknown[0] + '}'} mà panel không biết; "
+                f"chỉ có {', '.join('${' + item + '}' for item in sorted(PLACEHOLDERS))}",
+            ))
             continue
         entries[name] = text
     return entries
@@ -401,6 +418,32 @@ def _pick_web_service(plan: Plan, requested: str) -> str:
     return chosen
 
 
+def expand(text: str, public_url: str, domain: str) -> str:
+    """Fill in the panel's placeholders and defuse every other dollar sign.
+
+    Compose interpolates `${VAR}` and `$VAR` in the file it reads, so a password
+    containing a dollar would arrive at the container mangled, and a stray
+    reference would arrive empty. Everything the customer wrote is passed through
+    literally; only the two names the panel owns mean anything.
+    """
+    values = {"BPANEL_URL": public_url, "BPANEL_DOMAIN": domain}
+
+    def replace(match: re.Match) -> str:
+        name = match.group(1)
+        if name is None:
+            return "$$"
+        if name in values:
+            if not values[name]:
+                raise ValueError(
+                    f"${{{name}}} chỉ dùng được khi ứng dụng đã gắn với một website; "
+                    "hãy trỏ một website vào ứng dụng này trước"
+                )
+            return values[name]
+        return "$$" + match.group(0)[1:]
+
+    return DOLLAR_RE.sub(replace, text)
+
+
 def render(
     plan: Plan,
     *,
@@ -410,6 +453,8 @@ def render(
     gid: int,
     memory_mb: int,
     cpus: str,
+    public_url: str = "",
+    domain: str = "",
 ) -> str:
     """Build the compose file the server actually runs."""
     if not plan.ok:
@@ -419,7 +464,10 @@ def render(
     for service in plan.services:
         entry: dict[str, Any] = {"image": service.image}
         if service.environment:
-            entry["environment"] = dict(service.environment)
+            entry["environment"] = {
+                key: expand(value, public_url, domain)
+                for key, value in service.environment.items()
+            }
         if service.command is not None:
             entry["command"] = service.command
         if service.entrypoint is not None:

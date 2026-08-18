@@ -571,6 +571,8 @@ function App() {
   const [fileAppId, setFileAppId] = useState(() => standaloneEditor?.appId || '');
   const [siteAppLog, setSiteAppLog] = useState(null);
   const [composePlan, setComposePlan] = useState(null);
+  const [siteAppEdit, setSiteAppEdit] = useState(null);
+  const [siteAppEditPlan, setSiteAppEditPlan] = useState(null);
   const [siteRuntimes, setSiteRuntimes] = useState({ docker: { installed: false }, node_majors: [], allowed_registries: [] });
   const [chmodTarget, setChmodTarget] = useState(null);
   const [chmodMode, setChmodMode] = useState('644');
@@ -1757,16 +1759,55 @@ function App() {
     if (data) setSiteApps({ port_range: [21000, 21999], ...data });
   }
 
-  async function checkComposeFile() {
-    const data = await request('/site-apps/compose/validate', {
+  async function validateCompose(source, webService) {
+    return await request('/site-apps/compose/validate', {
       method: 'POST',
-      body: JSON.stringify({ compose_source: siteAppDraft.compose_source, web_service: siteAppDraft.web_service || null }),
+      body: JSON.stringify({ compose_source: source, web_service: webService || null }),
     }, 'Checking the compose file...');
+  }
+
+  async function checkComposeFile() {
+    const data = await validateCompose(siteAppDraft.compose_source, siteAppDraft.web_service);
     if (data) {
       setComposePlan(data);
       if (data.web_service && !siteAppDraft.web_service) {
         setSiteAppDraft(prev => ({ ...prev, web_service: data.web_service }));
       }
+    }
+  }
+
+  function openSiteAppEdit(app) {
+    if (siteAppEdit?.id === app.id) { setSiteAppEdit(null); setSiteAppEditPlan(null); return; }
+    setSiteAppEditPlan(null);
+    setSiteAppEdit({
+      id: app.id,
+      kind: app.kind,
+      compose_source: app.compose_source || '',
+      web_service: app.web_service || '',
+      env: app.env || '',
+    });
+  }
+
+  async function checkSiteAppEdit() {
+    const data = await validateCompose(siteAppEdit.compose_source, siteAppEdit.web_service);
+    if (data) {
+      setSiteAppEditPlan(data);
+      if (data.web_service && !siteAppEdit.web_service) {
+        setSiteAppEdit(prev => ({ ...prev, web_service: data.web_service }));
+      }
+    }
+  }
+
+  async function saveSiteAppEdit(app) {
+    const patch = app.kind === 'compose'
+      ? { compose_source: siteAppEdit.compose_source, web_service: siteAppEdit.web_service || null }
+      : { env: siteAppEdit.env };
+    const data = await request(`/site-apps/${app.id}`, { method: 'PUT', body: JSON.stringify(patch) }, 'Saving configuration...');
+    if (data) {
+      setSiteAppEdit(null);
+      setSiteAppEditPlan(null);
+      setNotice(`Saved ${data.name}. Deploy it to run the new configuration.`);
+      await loadSiteApps();
     }
   }
 
@@ -3669,6 +3710,9 @@ function App() {
             <label><span>CPU mỗi service</span>
               <input value={siteAppDraft.cpu_limit} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, cpu_limit: e.target.value }))} placeholder="1" />
             </label>
+            <p className="compose-hint">Ứng dụng chỉ thấy cổng nội bộ, nên chỗ nào cần địa chỉ công khai
+              (callback OAuth, webhook) hãy viết <code>{'${BPANEL_URL}'}</code> hoặc <code>{'${BPANEL_DOMAIN}'}</code>;
+              panel điền domain của website đang trỏ vào ứng dụng.</p>
           </>}
           {siteAppDraft.kind === 'docker' && <>
             <label><span>Image</span>
@@ -3787,6 +3831,7 @@ function App() {
                 </label>}
               </div>
               <div className="site-app-buttons">
+                <button className="mini secondary-light" disabled={!!loading} onClick={() => openSiteAppEdit(app)}><Pencil size={13}/> {app.kind === 'compose' ? 'Compose' : 'Environment'}</button>
                 <button className="mini secondary-light" disabled={!!loading} onClick={() => openAppFileManager(app)}><FolderOpen size={13}/> Files</button>
                 <button className="mini" disabled={!!loading} onClick={() => deploySiteApp(app)}><Play size={13}/> Deploy</button>
                 <button className="mini secondary-light" disabled={!!loading} onClick={() => controlSiteApp(app, 'restart')}><RotateCcw size={13}/> Restart</button>
@@ -3795,6 +3840,51 @@ function App() {
                 <button className="mini danger" disabled={!!loading} onClick={() => deleteSiteApp(app)}><Trash2 size={13}/> Delete</button>
               </div>
             </div>
+            {siteAppEdit?.id === app.id && <div className="site-app-editor">
+              {app.kind === 'compose' ? <>
+                <label className="site-app-env"><span>docker-compose.yml</span>
+                  <textarea
+                    className="code-editor"
+                    rows={14}
+                    value={siteAppEdit.compose_source}
+                    disabled={!!loading}
+                    onChange={e => { setSiteAppEdit(prev => ({ ...prev, compose_source: e.target.value })); setSiteAppEditPlan(null); }}
+                  />
+                </label>
+                <p className="compose-hint">Panel đọc lại file này rồi tự sinh file chạy thật. Dùng
+                  <code>{'${BPANEL_URL}'}</code> / <code>{'${BPANEL_DOMAIN}'}</code> cho địa chỉ công khai
+                  {app.websites?.length > 0 ? ` (hiện là ${app.websites[0]})` : ' (cần trỏ một website vào ứng dụng trước)'}.</p>
+                {siteAppEditPlan?.services?.length > 0 && <label><span>Service phục vụ domain</span>
+                  <select value={siteAppEdit.web_service} disabled={!!loading} onChange={e => setSiteAppEdit(prev => ({ ...prev, web_service: e.target.value }))}>
+                    <option value="">Tự chọn</option>
+                    {siteAppEditPlan.services.map(service => <option key={service.name} value={service.name}>{service.name}{service.container_port ? ` · :${service.container_port}` : ''}</option>)}
+                  </select>
+                </label>}
+              </> : <label className="site-app-env"><span>Environment (KEY=value, one per line)</span>
+                <textarea
+                  className="code-editor"
+                  rows={8}
+                  value={siteAppEdit.env}
+                  disabled={!!loading}
+                  onChange={e => setSiteAppEdit(prev => ({ ...prev, env: e.target.value }))}
+                />
+              </label>}
+              <div className="site-app-form-actions">
+                {app.kind === 'compose' && <button className="secondary-light" disabled={!!loading || !siteAppEdit.compose_source.trim()} onClick={checkSiteAppEdit}>Check file</button>}
+                <button disabled={!!loading} onClick={() => saveSiteAppEdit(app)}><Save size={14}/> Save</button>
+                <button className="secondary-light" disabled={!!loading} onClick={() => { setSiteAppEdit(null); setSiteAppEditPlan(null); }}><X size={14}/> Cancel</button>
+              </div>
+              {siteAppEditPlan && <div className={`compose-report ${siteAppEditPlan.ok ? 'ok' : 'bad'}`}>
+                {siteAppEditPlan.ok
+                  ? <p><Check size={14}/> Chạy được {siteAppEditPlan.services.length} service. <strong>{siteAppEditPlan.web_service}</strong> phục vụ domain.</p>
+                  : <p><AlertCircle size={14}/> Còn {siteAppEditPlan.issues.length} chỗ phải sửa:</p>}
+                {siteAppEditPlan.issues.length > 0 && <ul>
+                  {siteAppEditPlan.issues.map((issue, index) => <li key={index}>
+                    {issue.service && <code>{issue.service}</code>} {issue.message}
+                  </li>)}
+                </ul>}
+              </div>}
+            </div>}
           </div>)}
         </div>
         {siteAppLog && <div className="site-app-log">

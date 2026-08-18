@@ -397,6 +397,20 @@ def compose_plan(app: SiteApp):
     return compose.analyse(app.compose_source or "", app.web_service or "")
 
 
+def public_address(app: SiteApp) -> tuple[str, str]:
+    """The URL visitors reach an app on, and the bare domain.
+
+    An app only ever sees a loopback port, so anything it has to print or hand
+    back to a browser — an OAuth callback, a webhook — has to be told the address
+    the website answers on. Empty when no website points here yet.
+    """
+    site = next(iter(app.websites or []), None)
+    if not site:
+        return "", ""
+    scheme = "https" if getattr(site, "ssl_enabled", False) else "http"
+    return f"{scheme}://{site.domain}", site.domain
+
+
 def compose_project(app: SiteApp) -> str:
     return f"bpanel-{owner_linux_user(app)}-{validate_name(app.name)}"
 
@@ -413,6 +427,7 @@ def render_compose(app: SiteApp) -> str:
     if not plan.ok:
         raise ValueError("; ".join(issue.message for issue in plan.issues) or "Compose file is not usable")
     uid, gid = owner_ids(app)
+    public_url, domain = public_address(app)
     return compose.render(
         plan,
         project=compose_project(app),
@@ -421,6 +436,8 @@ def render_compose(app: SiteApp) -> str:
         gid=gid,
         memory_mb=validate_memory_mb(app.memory_limit_mb),
         cpus=validate_cpu_limit(app.cpu_limit),
+        public_url=public_url,
+        domain=domain,
     )
 
 
