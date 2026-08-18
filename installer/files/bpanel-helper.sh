@@ -1627,6 +1627,11 @@ write_app_compose_file() {
     rm -f "$tmp"
     deny "generated compose mounts a host path"
   fi
+  # The long form of the same thing: the panel only ever writes tmpfs this way.
+  if grep -Eq '^[[:space:]]*(type:[[:space:]]*"?bind|source:[[:space:]]*"?/)' "$tmp"; then
+    rm -f "$tmp"
+    deny "generated compose mounts a host path"
+  fi
   grep -q '^services:' "$tmp" || { rm -f "$tmp"; deny "generated compose has no services"; }
   mv -f "$tmp" "$target"
   chown root:root "$target"

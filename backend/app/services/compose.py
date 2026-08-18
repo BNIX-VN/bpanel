@@ -231,18 +231,25 @@ def _parse_volume(raw: Any, service: str, declared: set[str], issues: list[Issue
     return "named", f"{source}:{target}{suffix}"
 
 
-def home_for(service: "Service") -> str:
+def home_for(service: "Service") -> tuple[str, bool]:
     """Where a service run under a forced uid should keep its home.
 
     Overriding `user` with a numeric id leaves the container with no matching
     passwd entry, so HOME falls back to `/` and the first thing the process
     writes there fails. Point it at the directory the customer mounted, which is
-    the one place inside the container they own. A mount at `/home/node/.n8n` is
-    the app's own dot-directory, so its parent is the home the image expects.
+    the one place inside the container they own.
+
+    A mount at `/home/node/.n8n` is the app's own dot-directory inside a home
+    the image owns, so the home is its parent — and that parent belongs to the
+    image's account, not ours. Returns True alongside it to say the home itself
+    needs to be made writable; the mount underneath it stays persistent either
+    way, because Docker mounts the deeper path last.
     """
     target = service.bind_mounts[0].split(":")[1]
     path = PurePosixPath(target)
-    return str(path.parent) if path.name.startswith(".") else str(path)
+    if path.name.startswith("."):
+        return str(path.parent), True
+    return str(path), False
 
 
 def _parse_service(name: str, raw: Any, declared_volumes: set[str], issues: list[Issue]) -> Service | None:
@@ -437,7 +444,18 @@ def render(
             # the customer or the files come out owned by someone else.
             entry["user"] = f"{uid}:{gid}"
             if "HOME" not in service.environment:
-                entry.setdefault("environment", {})["HOME"] = home_for(service)
+                home, ephemeral = home_for(service)
+                entry.setdefault("environment", {})["HOME"] = home
+                if ephemeral:
+                    # A scratch home, so caches and lockfiles the process expects
+                    # to write beside its data have somewhere to go. Nothing that
+                    # has to survive a restart belongs here — that is what the
+                    # customer's mount underneath it is for.
+                    entry.setdefault("volumes", []).insert(0, {
+                        "type": "tmpfs",
+                        "target": home,
+                        "tmpfs": {"size": 64 * 1024 * 1024},   # Docker's own default mode, 1777
+                    })
 
         entry["cap_drop"] = ["ALL"]
         if not entry.get("user"):
