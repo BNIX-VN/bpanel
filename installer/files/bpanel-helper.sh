@@ -1605,6 +1605,64 @@ app_env_file() {
   printf '%s/apps/%s-%s.env' "$BPANEL_DATA_DIR" "$user" "$name"
 }
 
+app_compose_file() {
+  local user="$1" name="$2"
+  printf '%s/apps/%s-%s.compose.yml' "$BPANEL_DATA_DIR" "$user" "$name"
+}
+
+write_app_compose_file() {
+  # The panel generates this from the customer's imported file, so it should
+  # never contain any of the keys below. Checking anyway means a bug in the
+  # generator cannot quietly hand a container the whole host.
+  local target="$1" line tmp
+  install -d -o root -g root -m 0700 "${BPANEL_DATA_DIR}/apps"
+  tmp="${target}.bpanel-tmp"
+  install -m 0600 -o root -g root /dev/null "$tmp"
+  cat >"$tmp"
+  if grep -Eq '^[[:space:]]*(privileged|network_mode|pid|ipc|userns_mode|devices|cgroup_parent|volumes_from|build|env_file):' "$tmp"; then
+    rm -f "$tmp"
+    deny "generated compose contains a forbidden key"
+  fi
+  if grep -Eq '^[[:space:]]*-[[:space:]]*"?/' "$tmp"; then
+    rm -f "$tmp"
+    deny "generated compose mounts a host path"
+  fi
+  grep -q '^services:' "$tmp" || { rm -f "$tmp"; deny "generated compose has no services"; }
+  mv -f "$tmp" "$target"
+  chown root:root "$target"
+  chmod 0600 "$target"
+}
+
+write_compose_app_unit() {
+  local unit_path="$1" app_label="$2" user="$3" app_dir="$4" compose_file="$5" project="$6"
+  local identifier
+  identifier="$(basename "$unit_path" .service)"
+  # Runs as root because it drives the Docker socket. Every container inside the
+  # generated file is capped, capability-stripped and published on loopback only.
+  cat >"$unit_path" <<UNIT
+[Unit]
+Description=BPanel compose application ${app_label} (${user})
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=exec
+WorkingDirectory=${app_dir}
+ExecStartPre=-/usr/bin/docker compose -f ${compose_file} --project-directory ${app_dir} -p ${project} down --remove-orphans
+ExecStart=/usr/bin/docker compose -f ${compose_file} --project-directory ${app_dir} -p ${project} up --remove-orphans
+ExecStop=/usr/bin/docker compose -f ${compose_file} --project-directory ${app_dir} -p ${project} down
+Restart=always
+RestartSec=5
+TimeoutStartSec=600
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=${identifier}
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+}
+
 app_container_name() {
   local user="$1" name="$2"
   printf 'bpanel-%s-%s' "$user" "$name"
@@ -3865,7 +3923,7 @@ PY
     user="$1"; app_name="$2"; app_runtime="$3"; shift 3
     require_linux_user "$user"
     require_app_name "$app_name"
-    [[ "$app_runtime" == "node" || "$app_runtime" == "docker" ]] || deny "invalid runtime: $app_runtime"
+    is_in "$app_runtime" node docker compose || deny "invalid runtime: $app_runtime"
     app_port=""; app_memory="512"; app_node_major=""
     app_exec=""; app_arg=""; app_image=""; app_container_port="3000"; app_cpus="1"
     while [[ $# -gt 0 ]]; do
@@ -3889,6 +3947,19 @@ PY
     remove_legacy_app_units "$user" "$app_name"
     unit_name="$(app_unit_name "$user" "$app_name")"
     unit_path="/etc/systemd/system/${unit_name}.service"
+    if [[ "$app_runtime" == "compose" ]]; then
+      command -v docker >/dev/null 2>&1 || deny "Docker is not installed; run docker-install first"
+      docker compose version >/dev/null 2>&1 || deny "the docker compose plugin is not installed"
+      compose_file="$(app_compose_file "$user" "$app_name")"
+      write_app_compose_file "$compose_file"
+      write_compose_app_unit "$unit_path" "$app_name" "$user" "$app_dir" "$compose_file" \
+        "$(app_container_name "$user" "$app_name")"
+      chown root:root "$unit_path"
+      chmod 0644 "$unit_path"
+      systemctl daemon-reload
+      echo "$unit_name"
+      exit 0
+    fi
     env_file="$(app_env_file "$user" "$app_name")"
     write_app_env_file "$env_file"
     if [[ "$app_runtime" == "node" ]]; then
@@ -3929,6 +4000,8 @@ PY
     ensure_app_directory "$user" "$app_new_name" >/dev/null
     old_env="$(app_env_file "$user" "$app_name")"
     [[ -f "$old_env" ]] && mv -f -- "$old_env" "$(app_env_file "$user" "$app_new_name")"
+    old_compose="$(app_compose_file "$user" "$app_name")"
+    [[ -f "$old_compose" ]] && mv -f -- "$old_compose" "$(app_compose_file "$user" "$app_new_name")"
     echo "$new_dir"
     ;;
 
@@ -3971,9 +4044,14 @@ PY
     remove_legacy_app_units "$user" "$app_name"
     systemctl daemon-reload
     if command -v docker >/dev/null 2>&1; then
+      compose_file="$(app_compose_file "$user" "$app_name")"
+      if [[ -f "$compose_file" ]]; then
+        docker compose -f "$compose_file" --project-directory "$(app_directory "$user" "$app_name")" \
+          -p "$(app_container_name "$user" "$app_name")" down --volumes 2>/dev/null || true
+      fi
       docker rm -f "$(app_container_name "$user" "$app_name")" 2>/dev/null || true
     fi
-    rm -f "$(app_env_file "$user" "$app_name")"
+    rm -f "$(app_env_file "$user" "$app_name")" "$(app_compose_file "$user" "$app_name")"
     # The app's files stay put; deleting a customer's code is never implied by
     # removing its runtime.
     echo "removed ${unit_name}"
@@ -3996,6 +4074,19 @@ PY
       PATH="${bin_dir}:/usr/local/bin:/usr/bin:/bin" \
       NODE_ENV=production \
       "${bin_dir}/npm" install --omit=dev --no-audit --no-fund --prefix "$app_dir"
+    ;;
+
+  site-app-compose-pull)
+    [[ $# -eq 2 ]] || deny "usage: site-app-compose-pull <owner-user> <name>"
+    user="$1"; app_name="$2"
+    require_linux_user "$user"
+    require_app_name "$app_name"
+    command -v docker >/dev/null 2>&1 || deny "Docker is not installed; run docker-install first"
+    compose_file="$(app_compose_file "$user" "$app_name")"
+    [[ -f "$compose_file" ]] || deny "no compose file for ${app_name}; deploy it once first"
+    app_dir="$(app_directory "$user" "$app_name")"
+    exec timeout 1800 docker compose -f "$compose_file" --project-directory "$app_dir" \
+      -p "$(app_container_name "$user" "$app_name")" pull
     ;;
 
   site-app-pull)

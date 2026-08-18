@@ -16,7 +16,14 @@ from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.permissions import Role, ensure_role, is_admin_role
 from app.models.entities import SiteApp, User
-from app.schemas.schemas import NodeInstallRequest, SiteAppControl, SiteAppCreate, SiteAppOut, SiteAppUpdate
+from app.schemas.schemas import (
+    ComposeValidateRequest,
+    NodeInstallRequest,
+    SiteAppControl,
+    SiteAppCreate,
+    SiteAppOut,
+    SiteAppUpdate,
+)
 from app.services import site_apps
 from app.services.audit import log_action
 
@@ -93,6 +100,19 @@ def suggest_port(db: Session = Depends(get_db), current_user: User = Depends(get
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/compose/validate")
+def validate_compose(payload: ComposeValidateRequest, current_user: User = Depends(get_current_user)):
+    """Report what the panel can run from a pasted compose file.
+
+    A dry run: nothing is stored, so the customer can paste, read the issues and
+    fix them before committing to an application.
+    """
+    ensure_role(current_user.role, Role.end_user)
+    from app.services import compose
+
+    return compose.analyse(payload.compose_source or "", payload.web_service or "").as_dict()
+
+
 @router.post("")
 def create_site_app(payload: SiteAppCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.end_user)
@@ -108,13 +128,27 @@ def create_site_app(payload: SiteAppCreate, db: Session = Depends(get_db), curre
         )
         start_kind, start_arg, node_major = (None, None, None)
         image, container_port, cpu_limit = (None, 3000, "1")
+        compose_source, web_service = ("", None)
         if kind == "node":
             start_kind, start_arg = site_apps.validate_start(payload.start_kind, payload.start_arg)
             node_major = site_apps.validate_node_major(payload.node_major) or "22"
-        else:
+        elif kind == "docker":
             image = site_apps.validate_image(payload.image, enforce_registry=not is_admin)
             container_port = site_apps.validate_container_port(payload.container_port)
             cpu_limit = site_apps.validate_cpu_limit(payload.cpu_limit)
+        else:
+            from app.services import compose as compose_service
+
+            cpu_limit = site_apps.validate_cpu_limit(payload.cpu_limit)
+            plan = compose_service.analyse(payload.compose_source or "", payload.web_service or "")
+            if not plan.ok:
+                raise HTTPException(
+                    status_code=400,
+                    detail={"message": "Compose file cannot be imported as it is", "issues": [i.as_dict() for i in plan.issues]},
+                )
+            compose_source = payload.compose_source or ""
+            web_service = plan.web_service
+            container_port = next(s.container_port for s in plan.services if s.name == plan.web_service)
         env = site_apps.validate_env(payload.env)
         port = site_apps.allocate_port(db, payload.port)
     except ValueError as exc:
@@ -131,6 +165,8 @@ def create_site_app(payload: SiteAppCreate, db: Session = Depends(get_db), curre
         container_port=container_port,
         cpu_limit=cpu_limit,
         env=env,
+        compose_source=compose_source,
+        web_service=web_service,
         port=port,
         memory_limit_mb=memory_limit_mb,
         autostart=bool(payload.autostart),
@@ -202,7 +238,8 @@ def update_site_app(app_id: int, payload: SiteAppUpdate, db: Session = Depends(g
     # Everything the systemd unit is built from. Change any of these on a
     # deployed app and the running process is out of date until it is rewritten.
     UNIT_FIELDS = ("port", "memory_limit_mb", "cpu_limit", "image", "container_port",
-                   "start_kind", "start_arg", "node_major", "env", "name")
+                   "start_kind", "start_arg", "node_major", "env", "name",
+                   "compose_source", "web_service")
     before = {field: getattr(app, field) for field in UNIT_FIELDS}
     try:
         if payload.name is not None:
@@ -224,6 +261,21 @@ def update_site_app(app_id: int, payload: SiteAppUpdate, db: Session = Depends(g
             app.cpu_limit = site_apps.validate_cpu_limit(payload.cpu_limit)
         if payload.env is not None:
             app.env = site_apps.validate_env(payload.env)
+        if app.kind == "compose" and (payload.compose_source is not None or payload.web_service is not None):
+            from app.services import compose as compose_service
+
+            source = payload.compose_source if payload.compose_source is not None else app.compose_source
+            wanted = payload.web_service if payload.web_service is not None else app.web_service
+            plan = compose_service.analyse(source or "", wanted or "")
+            if not plan.ok:
+                db.rollback()
+                raise HTTPException(
+                    status_code=400,
+                    detail={"message": "Compose file cannot be imported as it is", "issues": [i.as_dict() for i in plan.issues]},
+                )
+            app.compose_source = source or ""
+            app.web_service = plan.web_service
+            app.container_port = next(s.container_port for s in plan.services if s.name == plan.web_service)
         if payload.start_kind is not None or payload.start_arg is not None:
             app.start_kind, app.start_arg = site_apps.validate_start(
                 payload.start_kind or app.start_kind,
@@ -295,16 +347,21 @@ def deploy_site_app(app_id: int, db: Session = Depends(get_db), current_user: Us
     app = _owned_app(db, current_user, app_id)
     steps: list[str] = []
     try:
-        if app.kind == "docker":
-            steps.append(site_apps.pull_image(app))
+        if app.kind == "compose":
+            # The unit and the generated file come first: pulling reads that file.
+            unit = site_apps.write_runtime(app)
+            steps.append(site_apps.compose_pull(app))
         else:
-            try:
-                steps.append(site_apps.install_dependencies(app))
-            except RuntimeError as exc:
-                # No package.json is normal for a single-file entry point.
-                if "no package.json" not in str(exc).lower():
-                    raise
-        unit = site_apps.write_runtime(app)
+            if app.kind == "docker":
+                steps.append(site_apps.pull_image(app))
+            else:
+                try:
+                    steps.append(site_apps.install_dependencies(app))
+                except RuntimeError as exc:
+                    # No package.json is normal for a single-file entry point.
+                    if "no package.json" not in str(exc).lower():
+                        raise
+            unit = site_apps.write_runtime(app)
         site_apps.control(app, "enable" if app.autostart else "disable")
         site_apps.control(app, "restart")
     except (RuntimeError, ValueError) as exc:

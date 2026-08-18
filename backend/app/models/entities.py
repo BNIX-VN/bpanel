@@ -120,6 +120,11 @@ class SiteApp(Base):
     container_port: Mapped[int] = mapped_column(Integer, default=3000)
     cpu_limit: Mapped[str] = mapped_column(String(8), default="1")
     env: Mapped[str] = mapped_column(Text, default="")
+    # Compose runtimes: what the customer pasted, and which service the domain
+    # reaches. The file that actually runs is regenerated from these, never
+    # stored as the source of truth.
+    compose_source: Mapped[str] = mapped_column(Text, default="")
+    web_service: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     port: Mapped[int] = mapped_column(Integer, unique=True, index=True)
     memory_limit_mb: Mapped[int] = mapped_column(Integer, default=512)
     autostart: Mapped[bool] = mapped_column(Boolean, default=True)

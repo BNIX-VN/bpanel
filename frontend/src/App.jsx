@@ -205,6 +205,8 @@ const EMPTY_SITE_APP_DRAFT = {
   kind: 'node',
   port: '',
   memory_limit_mb: '',
+  compose_source: '',
+  web_service: '',
   start_kind: 'npm',
   start_arg: 'start',
   node_major: '22',
@@ -213,10 +215,11 @@ const EMPTY_SITE_APP_DRAFT = {
   cpu_limit: '1',
   env: '',
 };
-const SITE_APP_KIND_LABELS = { node: 'Node.js', docker: 'Container' };
+const SITE_APP_KIND_LABELS = { node: 'Node.js', docker: 'Container', compose: 'Compose' };
 const SITE_APP_KINDS = [
   ['node', 'Node.js', 'BPanel installs dependencies and keeps the process running under systemd.'],
   ['docker', 'Container', 'BPanel pulls the image and runs it, published on loopback only.'],
+  ['compose', 'Docker Compose', 'Paste your project\u2019s docker-compose.yml. BPanel checks it and runs a file it generates from what it accepted.'],
 ];
 const WEBSITE_MODES = [
   ['wordpress', 'WordPress'],
@@ -567,6 +570,7 @@ function App() {
   // File manager target: empty means the selected website, otherwise an app.
   const [fileAppId, setFileAppId] = useState(() => standaloneEditor?.appId || '');
   const [siteAppLog, setSiteAppLog] = useState(null);
+  const [composePlan, setComposePlan] = useState(null);
   const [siteRuntimes, setSiteRuntimes] = useState({ docker: { installed: false }, node_majors: [], allowed_registries: [] });
   const [chmodTarget, setChmodTarget] = useState(null);
   const [chmodMode, setChmodMode] = useState('644');
@@ -1753,6 +1757,19 @@ function App() {
     if (data) setSiteApps({ port_range: [21000, 21999], ...data });
   }
 
+  async function checkComposeFile() {
+    const data = await request('/site-apps/compose/validate', {
+      method: 'POST',
+      body: JSON.stringify({ compose_source: siteAppDraft.compose_source, web_service: siteAppDraft.web_service || null }),
+    }, 'Checking the compose file...');
+    if (data) {
+      setComposePlan(data);
+      if (data.web_service && !siteAppDraft.web_service) {
+        setSiteAppDraft(prev => ({ ...prev, web_service: data.web_service }));
+      }
+    }
+  }
+
   async function loadSiteRuntimes() {
     const data = await request('/site-runtimes/status', { silent: true });
     if (data) setSiteRuntimes(data);
@@ -1813,10 +1830,16 @@ function App() {
       body.container_port = Number(siteAppDraft.container_port) || 3000;
       body.cpu_limit = siteAppDraft.cpu_limit;
     }
+    if (siteAppDraft.kind === 'compose') {
+      body.compose_source = siteAppDraft.compose_source;
+      body.cpu_limit = siteAppDraft.cpu_limit;
+      if (siteAppDraft.web_service) body.web_service = siteAppDraft.web_service;
+    }
     const data = await request('/site-apps', { method: 'POST', body: JSON.stringify(body) }, 'Creating application...');
     if (data) {
       setNotice(`Application ${data.name} created. Upload your files to ${data.directory} and press Deploy.`);
       setSiteAppDraft(EMPTY_SITE_APP_DRAFT);
+      setComposePlan(null);
       await loadSiteApps();
     }
   }
@@ -3626,6 +3649,27 @@ function App() {
               </select>
             </label>
           </>}
+          {siteAppDraft.kind === 'compose' && <>
+            <label className="site-app-env"><span>docker-compose.yml</span>
+              <textarea
+                className="code-editor"
+                rows={12}
+                value={siteAppDraft.compose_source}
+                disabled={!!loading}
+                onChange={e => { setSiteAppDraft(prev => ({ ...prev, compose_source: e.target.value })); setComposePlan(null); }}
+                placeholder={'services:\n  app:\n    image: myorg/app:1.0\n    ports: ["3000:3000"]\n  db:\n    image: postgres:16\n    volumes: ["pgdata:/var/lib/postgresql/data"]\nvolumes:\n  pgdata:'}
+              />
+            </label>
+            {composePlan?.services?.length > 0 && <label><span>Service phục vụ domain</span>
+              <select value={siteAppDraft.web_service} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, web_service: e.target.value }))}>
+                <option value="">Tự chọn</option>
+                {composePlan.services.map(service => <option key={service.name} value={service.name}>{service.name}{service.container_port ? ` · :${service.container_port}` : ''}</option>)}
+              </select>
+            </label>}
+            <label><span>CPU mỗi service</span>
+              <input value={siteAppDraft.cpu_limit} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, cpu_limit: e.target.value }))} placeholder="1" />
+            </label>
+          </>}
           {siteAppDraft.kind === 'docker' && <>
             <label><span>Image</span>
               <input value={siteAppDraft.image} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, image: e.target.value }))} placeholder="n8nio/n8n:latest" />
@@ -3637,7 +3681,7 @@ function App() {
               <input value={siteAppDraft.cpu_limit} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, cpu_limit: e.target.value }))} placeholder="1" />
             </label>
           </>}
-          <label className="site-app-env"><span>Environment (KEY=value, one per line)</span>
+          {siteAppDraft.kind !== 'compose' && <label className="site-app-env"><span>Environment (KEY=value, one per line)</span>
             <textarea
               className="code-editor"
               rows={4}
@@ -3646,11 +3690,29 @@ function App() {
               onChange={e => setSiteAppDraft(prev => ({ ...prev, env: e.target.value }))}
               placeholder={'N8N_ENCRYPTION_KEY=...\nGENERIC_TIMEZONE=Asia/Ho_Chi_Minh'}
             />
-          </label>
+          </label>}
           <div className="site-app-form-actions">
+            {siteAppDraft.kind === 'compose' && <button className="secondary-light" disabled={!!loading || !siteAppDraft.compose_source.trim()} onClick={checkComposeFile}>Check file</button>}
             <button className="secondary-light" disabled={!!loading} onClick={suggestSiteAppPort}>Pick free port</button>
             <button disabled={!!loading || !siteAppDraft.name.trim()} onClick={createSiteApp}><Plus size={14}/> Install application</button>
           </div>
+          {composePlan && <div className={`compose-report ${composePlan.ok ? 'ok' : 'bad'}`}>
+            {composePlan.ok
+              ? <p><Check size={14}/> Chạy được {composePlan.services.length} service. <strong>{composePlan.web_service}</strong> phục vụ domain.</p>
+              : <p><AlertCircle size={14}/> Còn {composePlan.issues.length} chỗ phải sửa trước khi import:</p>}
+            {composePlan.issues.length > 0 && <ul>
+              {composePlan.issues.map((issue, index) => <li key={index}>
+                {issue.service && <code>{issue.service}</code>} {issue.message}
+              </li>)}
+            </ul>}
+            {composePlan.ok && <ul className="compose-services">
+              {composePlan.services.map(service => <li key={service.name}>
+                <code>{service.name}</code> {service.image}
+                {service.web ? ' · phục vụ domain' : ' · chỉ nội bộ'}
+                {service.container_port ? ` · cổng ${service.container_port}` : ''}
+              </li>)}
+            </ul>}
+          </div>}
         </div>}
         {atLimit && <p className="hint">This package allows {siteApps.limit} application(s). Delete one to install another.</p>}
         {kindHint && <p className="hint site-apps-note">{kindHint} Containers publish on <code>127.0.0.1</code> only, run as your own user with no capabilities, and are capped at the memory shown. Images come from {(siteRuntimes.allowed_registries || []).join(', ') || 'the allowed registries'}.</p>}
@@ -3677,6 +3739,7 @@ function App() {
               <div><dt>Upload code to</dt><dd><code>{app.directory}</code></dd></div>
               {app.kind === 'node' && <div><dt>Start</dt><dd><code>{app.start_kind} {app.start_arg}</code></dd></div>}
               {app.kind === 'node' && <div><dt>Node</dt><dd>v{app.node_major || '22'}</dd></div>}
+              {app.kind === 'compose' && <div><dt>Serves domain</dt><dd><code>{app.web_service}</code></dd></div>}
               {app.kind === 'docker' && <div><dt>Image</dt><dd><code>{app.image}</code></dd></div>}
               {app.kind === 'docker' && <div><dt>In container</dt><dd>port {app.container_port} · {app.cpu_limit} CPU</dd></div>}
               <div><dt>Unit</dt><dd><code>{app.unit}</code></dd></div>

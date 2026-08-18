@@ -29,7 +29,7 @@ PORT_RANGE_START = 21000
 PORT_RANGE_END = 21999
 
 APP_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,30}[a-z0-9]$|^[a-z0-9]$")
-APP_KINDS = {"node", "docker"}
+APP_KINDS = {"node", "docker", "compose"}
 # Every app is run by the panel now; the old routing-only kind is gone.
 MANAGED_KINDS = APP_KINDS
 # Apps live side by side here, one directory each, reachable over the customer's
@@ -376,6 +376,67 @@ def rename_directory(app: SiteApp, previous_name: str) -> str:
     return (result.stdout or "").strip()
 
 
+def owner_ids(app: SiteApp) -> tuple[int, int]:
+    """uid and gid of the account an app runs as."""
+    import pwd
+
+    try:
+        record = pwd.getpwnam(owner_linux_user(app))
+        return record.pw_uid, record.pw_gid
+    except (KeyError, ImportError, AttributeError):
+        # Development machines have no such account; the helper resolves the
+        # real ids again before anything runs.
+        return 0, 0
+
+
+def compose_plan(app: SiteApp):
+    """Re-read the customer's compose file into the panel's own model."""
+    from app.services import compose  # local import keeps the module cycle open
+
+    return compose.analyse(app.compose_source or "", app.web_service or "")
+
+
+def compose_project(app: SiteApp) -> str:
+    return f"bpanel-{owner_linux_user(app)}-{validate_name(app.name)}"
+
+
+def render_compose(app: SiteApp) -> str:
+    """Build the compose file the server runs, from the imported one.
+
+    Regenerated on every deploy rather than stored, so a port move or a new
+    memory cap lands without the customer importing their file again.
+    """
+    from app.services import compose  # local import keeps the module cycle open
+
+    plan = compose_plan(app)
+    if not plan.ok:
+        raise ValueError("; ".join(issue.message for issue in plan.issues) or "Compose file is not usable")
+    uid, gid = owner_ids(app)
+    return compose.render(
+        plan,
+        project=compose_project(app),
+        published_port=validate_port(app.port),
+        uid=uid,
+        gid=gid,
+        memory_mb=validate_memory_mb(app.memory_limit_mb),
+        cpus=validate_cpu_limit(app.cpu_limit),
+    )
+
+
+def compose_pull(app: SiteApp) -> str:
+    """Fetch every image the compose file names, before the unit starts."""
+    result = shell.privileged(
+        "site-app-compose-pull",
+        helper_args=[owner_linux_user(app), validate_name(app.name)],
+        check=False,
+        timeout=1800,
+        fallback=["bash", "-lc", "echo dry-run-compose-pull"],
+    )
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout or "docker compose pull failed").strip()[-4000:])
+    return (result.stdout or "").strip()[-4000:]
+
+
 def write_runtime(app: SiteApp) -> str:
     """Generate and reload the systemd unit for an app."""
     linux_user = owner_linux_user(app)
@@ -394,15 +455,18 @@ def write_runtime(app: SiteApp) -> str:
             f"--exec={start_kind}",
             f"--arg={start_arg}",
         ]
-    else:
+    elif app.kind == "docker":
         helper_args += [
             f"--image={validate_image(app.image)}",
             f"--container-port={validate_container_port(app.container_port)}",
         ]
+    # A compose app carries its environment inside the generated file, so that
+    # is what goes on stdin instead of an environment file.
+    payload = render_compose(app) if app.kind == "compose" else validate_env(app.env) + "\n"
     result = shell.privileged(
         "site-app-write",
         helper_args=helper_args,
-        input=validate_env(app.env) + "\n",
+        input=payload,
         fallback=["bash", "-lc", "cat >/dev/null && echo dry-run-unit"],
     )
     return (result.stdout or "").strip()

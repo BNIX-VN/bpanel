@@ -387,6 +387,13 @@ button:disabled,.upload-button.disabled{background:var(--disabled-bg);color:var(
 .site-app-error{margin:0;padding:7px 9px;background:var(--danger-bg);border:1px solid var(--danger-border);border-radius:var(--radius-sm);color:var(--danger-text);font-size:12px;font-weight:600;line-height:1.45;overflow-wrap:anywhere}
 .site-app-env{grid-column:1 / -1}
 .site-app-env textarea{min-height:88px;font-family:Consolas,'SFMono-Regular','Liberation Mono',Menlo,monospace;font-size:12.5px;line-height:1.5}
+.compose-report{grid-column:1 / -1;display:grid;gap:6px;padding:9px 11px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-alt);font-size:12.5px;line-height:1.5}
+.compose-report.ok{background:var(--success-bg);border-color:var(--success-border);color:var(--success-text)}
+.compose-report.bad{background:var(--danger-bg);border-color:var(--danger-border);color:var(--danger-text)}
+.compose-report p{display:flex;align-items:center;gap:6px;margin:0;font-weight:700}
+.compose-report ul{margin:0;padding-left:18px;display:grid;gap:3px;font-weight:600}
+.compose-report code{font-family:Consolas,'SFMono-Regular','Liberation Mono',Menlo,monospace;font-size:12px;overflow-wrap:anywhere}
+.compose-report .compose-services{list-style:none;padding-left:0}
 .site-runtime-strip{display:flex;align-items:center;gap:8px 16px;flex-wrap:wrap;padding:9px 12px;background:var(--surface-alt);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;font-weight:600;color:var(--text-secondary)}
 .site-runtime-strip strong{color:var(--text)}
 .site-app-log{display:grid;gap:8px;border:1px solid var(--border);border-radius:var(--radius-lg);background:var(--surface);padding:12px}
