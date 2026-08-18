@@ -454,7 +454,10 @@ def render(
                     entry.setdefault("volumes", []).insert(0, {
                         "type": "tmpfs",
                         "target": home,
-                        "tmpfs": {"size": 64 * 1024 * 1024},   # Docker's own default mode, 1777
+                        "tmpfs": {"size": 64 * 1024 * 1024, "mode": 0o1777},
+                        # Compose reads mode as a number, and its own docs
+                        # write 01777 for it; without one the mount lands
+                        # 0755 root-owned and we are back where we started.
                     })
 
         entry["cap_drop"] = ["ALL"]
