@@ -300,13 +300,15 @@ def owner_linux_user(app: SiteApp) -> str:
     return site_users.validate_linux_user(site_users.linux_user_for_panel_username(username))
 
 
-def unit_name(app: SiteApp) -> str:
+def unit_name(app: SiteApp, name: str | None = None) -> str:
     """Mirror of the helper's own derivation, for display only.
 
     Control commands pass the owner and the app name and let the helper build the
     unit name, so a caller can never aim systemctl at a unit it does not own.
+    Pass *name* to ask about a name the app used to have, which is how a rename
+    finds the unit it has to tear down.
     """
-    return f"bpanel-app-{owner_linux_user(app)}-{validate_name(app.name)}"
+    return f"bpanel-app-{owner_linux_user(app)}-{validate_name(name or app.name)}"
 
 
 def directory_for(app: SiteApp) -> Path:
@@ -437,14 +439,19 @@ def logs(app: SiteApp, lines: int = 200) -> str:
     return (result.stdout or "") or (result.stderr or "")
 
 
-def delete_runtime(app: SiteApp) -> None:
+def delete_runtime(app: SiteApp, name: str | None = None) -> None:
+    """Remove an app's unit, container and environment file.
+
+    *name* lets a rename tear down the unit the app used to run under; its files
+    are never touched either way.
+    """
     try:
         linux_user = owner_linux_user(app)
     except ValueError:
         return
     shell.privileged(
         "site-app-delete",
-        helper_args=[linux_user, validate_name(app.name)],
+        helper_args=[linux_user, validate_name(name or app.name)],
         check=False,
         fallback=["bash", "-lc", "true"],
     )

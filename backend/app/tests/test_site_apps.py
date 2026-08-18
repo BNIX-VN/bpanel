@@ -519,3 +519,30 @@ def test_file_target_exposes_what_the_file_manager_reads():
     # could also claim.
     assert target.id is None
     assert target.app_id == app.id
+
+
+def test_unit_name_can_be_asked_about_a_previous_name():
+    """A rename moves the unit; the old one still has to be findable."""
+    app = _managed_app("node", name="n8n")
+
+    assert site_apps.unit_name(app) == "bpanel-app-siteuser-n8n"
+    assert site_apps.unit_name(app, "old-name") == "bpanel-app-siteuser-old-name"
+
+
+def test_delete_runtime_can_target_a_previous_name(monkeypatch):
+    app = _managed_app("node", name="n8n")
+    calls = _capture_privileged(monkeypatch)
+
+    site_apps.delete_runtime(app, "old-name")
+
+    assert calls[0]["command"] == "site-app-delete"
+    assert calls[0]["args"] == ["siteuser", "old-name"]
+
+
+def test_write_runtime_carries_the_memory_cap(monkeypatch):
+    app = _managed_app("node", memory_limit_mb=256)
+    calls = _capture_privileged(monkeypatch)
+
+    site_apps.write_runtime(app)
+
+    assert "--memory=256" in calls[0]["args"]

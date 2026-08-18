@@ -152,10 +152,18 @@ def create_site_app(payload: SiteAppCreate, db: Session = Depends(get_db), curre
     return _app_out(app)
 
 
-def _reapply_runtime(db: Session, app: SiteApp) -> None:
+def _reapply_runtime(db: Session, app: SiteApp, previous_name: str | None = None) -> None:
     """Rewrite the unit and restart, but only for an app already deployed."""
-    if not (Path("/etc/systemd/system") / f"{site_apps.unit_name(app)}.service").exists():
+    units = Path("/etc/systemd/system")
+    if not (units / f"{site_apps.unit_name(app, previous_name)}.service").exists():
         return
+    if previous_name and previous_name != app.name:
+        # A rename moves the unit, so the old one has to go or it keeps running
+        # the app under a name nothing points at any more.
+        try:
+            site_apps.delete_runtime(app, previous_name)
+        except (RuntimeError, ValueError):
+            pass
     try:
         site_apps.write_runtime(app)
         site_apps.control(app, "restart")
@@ -191,6 +199,11 @@ def update_site_app(app_id: int, payload: SiteAppUpdate, db: Session = Depends(g
     owner = db.query(User).filter(User.id == app.owner_id).first() or current_user
     is_admin = is_admin_role(current_user.role)
     previous_port = app.port
+    # Everything the systemd unit is built from. Change any of these on a
+    # deployed app and the running process is out of date until it is rewritten.
+    UNIT_FIELDS = ("port", "memory_limit_mb", "cpu_limit", "image", "container_port",
+                   "start_kind", "start_arg", "node_major", "env", "name")
+    before = {field: getattr(app, field) for field in UNIT_FIELDS}
     try:
         if payload.name is not None:
             app.name = site_apps.validate_name(payload.name)
@@ -229,11 +242,12 @@ def update_site_app(app_id: int, payload: SiteAppUpdate, db: Session = Depends(g
         raise HTTPException(status_code=409, detail="An application with that name or port already exists") from exc
     db.refresh(app)
 
+    if any(getattr(app, field) != before[field] for field in UNIT_FIELDS):
+        # The unit still carries the old port, memory cap or start command until
+        # it is rewritten, so a change that only touched the database would leave
+        # the running process stale until someone thought to press Deploy.
+        _reapply_runtime(db, app, before["name"])
     if app.port != previous_port:
-        # The unit publishes the old port until it is rewritten, so a port change
-        # that only touched nginx would leave the app unreachable until someone
-        # thought to press Deploy.
-        _reapply_runtime(db, app)
         _resync_websites(app)
 
     log_action(db, current_user.id, "update_site_app", app.name, f":{app.port}")

@@ -204,6 +204,7 @@ const EMPTY_SITE_APP_DRAFT = {
   name: 'app',
   kind: 'node',
   port: '',
+  memory_limit_mb: '',
   start_kind: 'npm',
   start_arg: 'start',
   node_major: '22',
@@ -1800,6 +1801,7 @@ function App() {
       kind: siteAppDraft.kind,
     };
     if (String(siteAppDraft.port).trim()) body.port = Number(siteAppDraft.port);
+    if (String(siteAppDraft.memory_limit_mb).trim()) body.memory_limit_mb = Number(siteAppDraft.memory_limit_mb);
     if (siteAppDraft.env.trim()) body.env = siteAppDraft.env;
     if (siteAppDraft.kind === 'node') {
       body.start_kind = siteAppDraft.start_kind;
@@ -2367,11 +2369,26 @@ function App() {
     setWordpressInstaller(null);
     setLogViewer(null);
     setTerminalViewer(null);
+    setFileAppId('');
     setSelectedWebsiteId(String(site.id));
     navigateToPage('files');
     setFileListPath('public_html');
     setFileUploadDir('public_html');
-    await listFiles('public_html', site.id);
+    setFiles([]);
+    setSelectedFilePaths([]);
+  }
+
+  function openAppFileManager(app) {
+    setNginxCustomEditing(null);
+    setLogViewer(null);
+    setTerminalViewer(null);
+    setFileAppId(String(app.id));
+    // An app root has no public_html; the listing effect picks it up from here.
+    setFileListPath('');
+    setFileUploadDir('');
+    setFiles([]);
+    setSelectedFilePaths([]);
+    navigateToPage('files');
   }
 
   async function uploadSiteFile(file) {
@@ -3580,6 +3597,17 @@ function App() {
               onChange={e => setSiteAppDraft(prev => ({ ...prev, port: e.target.value }))}
             />
           </label>
+          <label><span>Memory (MB)</span>
+            <input
+              type="number"
+              value={siteAppDraft.memory_limit_mb}
+              min={64}
+              max={siteApps.memory_ceiling_mb || 512}
+              disabled={!!loading}
+              placeholder={String(siteApps.memory_ceiling_mb || 512)}
+              onChange={e => setSiteAppDraft(prev => ({ ...prev, memory_limit_mb: e.target.value }))}
+            />
+          </label>
           {siteAppDraft.kind === 'node' && <>
             <label><span>Start with</span>
               <select value={siteAppDraft.start_kind} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, start_kind: e.target.value }))}>
@@ -3651,24 +3679,52 @@ function App() {
               {app.kind === 'node' && <div><dt>Node</dt><dd>v{app.node_major || '22'}</dd></div>}
               {app.kind === 'docker' && <div><dt>Image</dt><dd><code>{app.image}</code></dd></div>}
               {app.kind === 'docker' && <div><dt>In container</dt><dd>port {app.container_port} · {app.cpu_limit} CPU</dd></div>}
-              <div><dt>Memory</dt><dd>{app.memory_limit_mb} MB</dd></div>
+              <div><dt>Unit</dt><dd><code>{app.unit}</code></dd></div>
             </dl>
             <div className="site-app-actions">
-              <label className="site-app-port">
-                <span>Port</span>
-                <input
-                  type="number"
-                  defaultValue={app.port}
-                  min={portFrom}
-                  max={portTo}
-                  disabled={!!loading}
-                  onBlur={e => {
-                    const next = Number(e.target.value);
-                    if (next && next !== app.port) updateSiteApp(app, { port: next }, 'Moving application port...');
-                  }}
-                />
-              </label>
+              <div className="site-app-fields">
+                <label className="site-app-port">
+                  <span>Port</span>
+                  <input
+                    type="number"
+                    defaultValue={app.port}
+                    min={portFrom}
+                    max={portTo}
+                    disabled={!!loading}
+                    onBlur={e => {
+                      const next = Number(e.target.value);
+                      if (next && next !== app.port) updateSiteApp(app, { port: next }, 'Moving application port...');
+                    }}
+                  />
+                </label>
+                <label className="site-app-port">
+                  <span>Memory (MB)</span>
+                  <input
+                    type="number"
+                    defaultValue={app.memory_limit_mb}
+                    min={64}
+                    max={isAdmin ? 16384 : (siteApps.memory_ceiling_mb || 512)}
+                    disabled={!!loading}
+                    onBlur={e => {
+                      const next = Number(e.target.value);
+                      if (next && next !== app.memory_limit_mb) updateSiteApp(app, { memory_limit_mb: next }, 'Applying the new memory limit...');
+                    }}
+                  />
+                </label>
+                {app.kind === 'docker' && <label className="site-app-port">
+                  <span>CPU</span>
+                  <input
+                    defaultValue={app.cpu_limit}
+                    disabled={!!loading}
+                    onBlur={e => {
+                      const next = e.target.value.trim();
+                      if (next && next !== app.cpu_limit) updateSiteApp(app, { cpu_limit: next }, 'Applying the new CPU limit...');
+                    }}
+                  />
+                </label>}
+              </div>
               <div className="site-app-buttons">
+                <button className="mini secondary-light" disabled={!!loading} onClick={() => openAppFileManager(app)}><FolderOpen size={13}/> Files</button>
                 <button className="mini" disabled={!!loading} onClick={() => deploySiteApp(app)}><Play size={13}/> Deploy</button>
                 <button className="mini secondary-light" disabled={!!loading} onClick={() => controlSiteApp(app, 'restart')}><RotateCcw size={13}/> Restart</button>
                 <button className="mini secondary-light" disabled={!!loading} onClick={() => controlSiteApp(app, 'stop')}><Square size={13}/> Stop</button>
