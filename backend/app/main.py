@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import auth, databases, firewall, maintenance, packages, panel_settings as panel_settings_api, provisioning, services, site_apps as site_apps_api, terminal, updates, users, waf, websites
+from app.api import addons as addons_api, auth, databases, firewall, maintenance, packages, panel_settings as panel_settings_api, provisioning, services, site_apps as site_apps_api, terminal, updates, users, waf, websites
 from app.core.config import settings
 from app.core.database import run_migrations
 from app.core.version import APP_VERSION
@@ -15,10 +15,35 @@ from app.services import panel_settings as panel_brand_settings
 
 run_migrations()
 
+logger = logging.getLogger("bpanel")
+
+
+def _adopt_addons_already_in_use() -> None:
+    """A server running applications before the addon existed keeps them.
+
+    Without this, the update that turned Application into an addon would take
+    the feature away from everyone already using it: units still running,
+    nothing in the panel to manage them with.
+    """
+    from sqlalchemy import func, select
+
+    from app.core.database import SessionLocal
+    from app.models.entities import SiteApp
+    from app.services import addons
+
+    try:
+        with SessionLocal() as db:
+            count = db.execute(select(func.count()).select_from(SiteApp)).scalar() or 0
+        if addons.adopt_existing(addons.APPLICATION, count > 0):
+            logger.info("Addon 'application' adopted: %s existing application(s)", count)
+    except Exception:  # noqa: BLE001 - never let this stop the panel booting
+        logger.warning("Could not check for existing applications", exc_info=True)
+
+
+_adopt_addons_already_in_use()
+
 # Secure default umask: files get 644 (-rw-r--r--), dirs get 755 (rwxr-xr-x)
 os.umask(0o022)
-
-logger = logging.getLogger("bpanel")
 
 app = FastAPI(title="BPanel API", version=APP_VERSION)
 
@@ -104,6 +129,10 @@ app.include_router(maintenance.router, prefix="/api")
 app.include_router(panel_settings_api.router, prefix="/api")
 app.include_router(terminal.router, prefix="/api")
 app.include_router(provisioning.router, prefix="/api")
+app.include_router(addons_api.router, prefix="/api")
+# Registered whether or not the Application addon is installed: the routers
+# themselves answer 409 when it is not, which tells the panel why a section is
+# missing instead of leaving it looking broken.
 app.include_router(site_apps_api.router, prefix="/api")
 app.include_router(site_apps_api.runtime_router, prefix="/api")
 

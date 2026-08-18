@@ -27,7 +27,7 @@ from app.schemas.schemas import (
     WebsiteWafUpdate,
     WebsiteWordPressInstall,
 )
-from app.services import cron, file_manager, mariadb, nginx, site_apps, site_users, ssl, storage_quota, waf, wordpress
+from app.services import addons, cron, file_manager, mariadb, nginx, site_apps, site_users, ssl, storage_quota, waf, wordpress
 from app.services.audit import log_action
 
 _PLACEHOLDER_TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates" / "nginx"
@@ -180,6 +180,9 @@ def _resolve_app_for_owner(db: Session, owner_id: int, app_id: int | None, curre
     Without the ownership check a customer could aim their domain at another
     tenant's application by guessing an id.
     """
+    # Application mode belongs to the addon; without it a website cannot be
+    # pointed at one, whichever route the request arrived on.
+    addons.require(addons.APPLICATION)
     if app_id is None:
         raise HTTPException(
             status_code=400,

@@ -13,7 +13,7 @@ import 'ace-builds/src-noconflict/mode-text';
 import 'ace-builds/src-noconflict/mode-yaml';
 import 'ace-builds/src-noconflict/theme-textmate';
 import 'ace-builds/src-noconflict/theme-tomorrow_night';
-import { Archive, ArchiveRestore, Ban, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
+import { Archive, ArchiveRestore, Ban, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
 import { Terminal } from './components/Terminal';
 import './style.css';
 import './brand.css';
@@ -36,7 +36,7 @@ const NGINX_REWRITE_MODES = [
   { value: 'codeigniter', label: 'CodeIgniter' },
   { value: 'seohburl', label: 'SEO HB URL' },
 ];
-const SETTINGS_PAGE_KEYS = ['settings', 'api-tokens', 'security', 'php', 'firewall', 'waf', 'access-logs', 'updates', 'services'];
+const SETTINGS_PAGE_KEYS = ['settings', 'api-tokens', 'security', 'php', 'firewall', 'waf', 'access-logs', 'updates', 'addons', 'services'];
 const PAGE_ROUTES = {
   dashboard: '/',
   websites: '/website',
@@ -56,6 +56,7 @@ const PAGE_ROUTES = {
   'access-logs': '/access-logs',
   updates: '/updates',
   services: '/services',
+  addons: '/addons',
 };
 
 /* ---------------------------------------------------------------
@@ -565,6 +566,9 @@ function App() {
   const [cronUser, setCronUser] = useState('');
   const [cronPhpInfo, setCronPhpInfo] = useState({ php_binary: '', php_version: '' });
   const [siteApps, setSiteApps] = useState({ items: [], limit: 0, used: 0, memory_ceiling_mb: 512, port_range: [21000, 21999] });
+  // Optional features. Until this has loaded nothing addon-owned is offered, so
+  // a slow first request cannot flash a section that turns out not to be there.
+  const [addons, setAddons] = useState({ items: [], can_manage: false, loaded: false });
   const [siteAppDraft, setSiteAppDraft] = useState(EMPTY_SITE_APP_DRAFT);
   const [createSiteAppId, setCreateSiteAppId] = useState('');
   // File manager target: empty means the selected website, otherwise an app.
@@ -646,8 +650,12 @@ function App() {
   const [osAutoUpdate, setOsAutoUpdate] = useState({ enabled: true, mode: 'security', auto_reboot: false });
   const noticeTimer = useRef(null);
   const isAdmin = currentUser?.role === 'admin';
-  // Application hosting is off until a package allows it; admins always see it.
-  const appsFeatureEnabled = isAdmin || siteApps.limit > 0;
+  const applicationAddon = addons.items.find(item => item.slug === 'application');
+  const applicationAddonInstalled = !!applicationAddon?.installed;
+  // Two locks, and both have to be open: the server has to have the addon
+  // installed at all, and the customer's package has to include it. Admins skip
+  // the second one, never the first.
+  const appsFeatureEnabled = applicationAddonInstalled && (isAdmin || siteApps.limit > 0);
   const currentSite = websites.find(site => String(site.id) === String(selectedWebsiteId));
   const accountLabel = currentUser?.package_name
     ? `${currentUser?.username || username} - ${currentUser.package_name}`
@@ -1757,6 +1765,28 @@ function App() {
   async function loadSiteApps() {
     const data = await request('/site-apps', { silent: true });
     if (data) setSiteApps({ port_range: [21000, 21999], ...data });
+  }
+
+  async function loadAddons() {
+    const data = await request('/addons', { silent: true });
+    setAddons({ items: data?.items || [], can_manage: !!data?.can_manage, loaded: true });
+  }
+
+  async function setAddonInstalled(slug, install) {
+    const addon = addons.items.find(item => item.slug === slug);
+    const label = addon?.name || slug;
+    if (!install && !confirm(`Gỡ addon ${label}?\n\nCác ứng dụng đang chạy sẽ được dừng. Thư mục, volume và dữ liệu trong panel giữ nguyên, cài lại là chạy tiếp.`)) return;
+    const data = await request(`/addons/${slug}/${install ? 'install' : 'uninstall'}`, { method: 'POST' },
+      install ? `Đang cài ${label}...` : `Đang gỡ ${label}...`);
+    if (data) {
+      setNotice(install
+        ? `Đã cài ${label}. ${data.next_step || ''}`.trim()
+        : `Đã gỡ ${label}.${data.stopped?.length ? ` Đã dừng ${data.stopped.length} ứng dụng.` : ''}`);
+      await loadAddons();
+      // The nav and the website mode picker both hang off this.
+      if (install) await loadSiteApps();
+      else if (page === 'applications') navigateToPage('dashboard');
+    }
   }
 
   async function validateCompose(source, webService, env) {
@@ -3314,12 +3344,16 @@ function App() {
   useEffect(() => { if (selectedWebsiteId && page === 'backups' && backupTab === 'da-import') { listDaBackups(); setSelectedDaBackups([]); setDaBulkImportJob(null); } }, [backupTab, page]);
 
   useEffect(() => { if (selectedWebsiteId && page === 'cron') listCron(); }, [selectedWebsiteId, page]);
+  // Which optional features exist decides what the nav shows, so this is asked
+  // once per session rather than per page.
+  useEffect(() => { if (currentUser) loadAddons(); }, [currentUser]);
+
   // The websites page needs the list too, for the Application picker on create.
   useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUser || !applicationAddonInstalled) return;
     if (page === 'applications') { loadSiteApps(); loadSiteRuntimes(); }
     else if (page === 'websites' || page === 'files') loadSiteApps();
-  }, [page, currentUser]);
+  }, [page, currentUser, applicationAddonInstalled]);
 
   useEffect(() => {
     if (page !== 'files' || !hasFileTarget()) return;
@@ -3407,6 +3441,7 @@ function App() {
     ...(isAdmin ? [['waf', 'WAF', Shield]] : []),
     ...(isAdmin ? [['access-logs', 'Access Logs', FileText]] : []),
     ...(isAdmin ? [['updates', 'Updates', RefreshCw]] : []),
+    ...(isAdmin ? [['addons', 'Addons', Boxes]] : []),
     ['services', 'Services Status', Server],
   ];
 
@@ -3617,6 +3652,64 @@ function App() {
         <button className="secondary-light first-site-action" onClick={() => navigateToPage('websites')}><Plus size={15}/> Add domain</button>
       </section>}
     </>;
+  }
+
+  function renderAddonMissing() {
+    return <section className="section">
+      <div className="section-title"><div><h2>Applications</h2></div></div>
+      <EmptyState
+        icon={Boxes}
+        message={applicationAddonInstalled
+          ? 'Gói của bạn chưa có tính năng Application. Liên hệ quản trị để nâng cấp.'
+          : 'Addon Application chưa được cài trên server này.'}
+      />
+      {isAdmin && !applicationAddonInstalled && <div className="site-app-form-actions">
+        <button disabled={!!loading} onClick={() => navigateToPage('addons')}><Boxes size={14}/> Đi tới Addons</button>
+      </div>}
+    </section>;
+  }
+
+  function renderAddons() {
+    return <section className="section">
+      <div className="section-title">
+        <div>
+          <h2>Addons</h2>
+          <p className="hint">
+            Những phần không nằm trong bản cài mặc định. Cài khi cần, gỡ lúc không dùng —
+            gỡ chỉ tắt tính năng, không xoá dữ liệu đã tạo.
+          </p>
+        </div>
+        <button className="secondary-light" disabled={!!loading} onClick={loadAddons}><RefreshCw size={14}/> Refresh</button>
+      </div>
+      <div className="addon-list">
+        {addons.items.map(addon => <div className={`addon-card ${addon.installed ? 'installed' : ''}`} key={addon.slug}>
+          <div className="addon-head">
+            <strong>{addon.name}</strong>
+            <code>v{addon.installed ? (addon.installed_version || addon.version) : addon.version}</code>
+            <span className={`badge ${addon.installed ? 'ok' : ''}`}>{addon.installed ? 'Đã cài' : 'Chưa cài'}</span>
+            {addon.installed && addon.installed_version && addon.installed_version !== addon.version
+              && <span className="badge">Có bản v{addon.version}</span>}
+          </div>
+          <p className="addon-summary">{addon.summary}</p>
+          {addon.details?.length > 0 && <ul className="addon-details">
+            {addon.details.map((line, index) => <li key={index}>{line}</li>)}
+          </ul>}
+          {addon.notes?.length > 0 && <div className="addon-notes">
+            <strong><AlertCircle size={13}/> Cần biết trước khi bật</strong>
+            <ul>{addon.notes.map((line, index) => <li key={index}>{line}</li>)}</ul>
+          </div>}
+          {addons.can_manage && <div className="addon-actions">
+            {addon.installed
+              ? <>
+                  {addon.slug === 'application' && <button className="secondary-light" disabled={!!loading} onClick={() => navigateToPage('applications')}>Mở {addon.name}</button>}
+                  <button className="danger" disabled={!!loading} onClick={() => setAddonInstalled(addon.slug, false)}><Trash2 size={14}/> Gỡ</button>
+                </>
+              : <button disabled={!!loading} onClick={() => setAddonInstalled(addon.slug, true)}><Download size={14}/> Cài</button>}
+          </div>}
+        </div>)}
+        {addons.loaded && addons.items.length === 0 && <EmptyState icon={Boxes} message="Chưa có addon nào." />}
+      </div>
+    </section>;
   }
 
   function renderApplications() {
@@ -5638,7 +5731,10 @@ function App() {
 
   function renderPage() {
     if (page === 'websites') return renderWebsites();
-    if (page === 'applications') return renderApplications();
+    if (page === 'addons') return renderAddons();
+    // Reachable by URL after the addon is removed, so it answers for itself
+    // rather than rendering a page whose every request would be refused.
+    if (page === 'applications') return appsFeatureEnabled ? renderApplications() : renderAddonMissing();
     if (page === 'ssl') return renderSsl();
     if (page === 'databases') return renderDatabases();
     if (page === 'cron') return renderCron();

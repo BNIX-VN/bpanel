@@ -37,7 +37,7 @@ from app.schemas.schemas import (
     UserRestoreBackup,
     WpAction,
 )
-from app.services import backup, cron, file_manager, php, site_apps, site_users, storage_quota, wordpress
+from app.services import addons, backup, cron, file_manager, php, site_apps, site_users, storage_quota, wordpress
 from app.services.audit import log_action
 
 router = APIRouter(prefix="/maintenance", tags=["maintenance"])
@@ -407,6 +407,7 @@ def get_file_target(db: Session, current_user: User, website_id=None, app_id=Non
     passed straight through instead of teaching every call site about two types.
     """
     if app_id:
+        addons.require(addons.APPLICATION)
         target = site_apps.file_target(get_owned_app(db, current_user, app_id))
         # Self-heal: an app created before the directory was made at creation
         # time, or by a release that left it unreadable by the panel user.

@@ -24,13 +24,24 @@ from app.schemas.schemas import (
     SiteAppOut,
     SiteAppUpdate,
 )
-from app.services import site_apps
+from app.services import addons, site_apps
 from app.services.audit import log_action
 
-router = APIRouter(prefix="/site-apps", tags=["site-apps"])
+# The whole feature is an addon, so nothing here answers on a panel that has not
+# installed it. One guard on the router rather than a check per handler, which is
+# the kind of thing that gets forgotten on the next route someone adds.
+router = APIRouter(
+    prefix="/site-apps",
+    tags=["site-apps"],
+    dependencies=[Depends(addons.require_application)],
+)
 # Separate prefix on purpose: under /site-apps these would be shadowed by
 # /{app_id}/status and answer 422 instead of dispatching here.
-runtime_router = APIRouter(prefix="/site-runtimes", tags=["site-apps"])
+runtime_router = APIRouter(
+    prefix="/site-runtimes",
+    tags=["site-apps"],
+    dependencies=[Depends(addons.require_application)],
+)
 
 
 def _owned_app(db: Session, current_user: User, app_id: int) -> SiteApp:
