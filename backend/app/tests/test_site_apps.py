@@ -504,3 +504,18 @@ def test_settled_state_returns_early_on_a_dead_unit(monkeypatch):
 
     assert site_apps.settled_state(_managed_app("node"), checks=4) == "failed"
     assert len(seen) == 1
+
+
+# --- file manager target ----------------------------------------------------
+
+def test_file_target_exposes_what_the_file_manager_reads():
+    app = _managed_app("node", name="n8n")
+    target = site_apps.file_target(app)
+
+    assert target.root_path.replace("\\", "/").endswith("/home/siteuser/apps/n8n")
+    assert target.linux_user == "siteuser"
+    assert target.domain == "app:n8n"
+    # No id: a file job keys off target_key, never a bare number that a website
+    # could also claim.
+    assert target.id is None
+    assert target.app_id == app.id

@@ -313,6 +313,32 @@ def directory_for(app: SiteApp) -> Path:
     return app_directory(owner_linux_user(app), app.name)
 
 
+class AppFileTarget:
+    """Adapter letting the file manager browse an app like it browses a site.
+
+    file_manager only ever reads root_path and linux_user off its target, so an
+    app can be handed to it directly instead of duplicating the whole module.
+    """
+
+    def __init__(self, app: SiteApp):
+        # No `id`: a file job keys off target_key so an app can never be mistaken
+        # for the website that happens to share its row id.
+        self.id = None
+        self.app_id = app.id
+        self.name = app.name
+        self.linux_user = owner_linux_user(app)
+        self.root_path = str(directory_for(app))
+        # file_manager logs against a label; an app has no domain of its own.
+        self.domain = f"app:{app.name}"
+        # The storage quota is charged to whoever owns the app.
+        self.owner = app.owner
+        self.owner_id = app.owner_id
+
+
+def file_target(app: SiteApp) -> AppFileTarget:
+    return AppFileTarget(app)
+
+
 def write_runtime(app: SiteApp) -> str:
     """Generate and reload the systemd unit for an app."""
     linux_user = owner_linux_user(app)

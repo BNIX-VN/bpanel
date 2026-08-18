@@ -7,6 +7,7 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import FileResponse
@@ -17,7 +18,7 @@ from app.api.deps import get_current_user
 from app.core.database import SessionLocal, get_db
 from app.core.permissions import Role, ensure_role, is_admin_role
 from app.core.secrets import decrypt, encrypt
-from app.models.entities import BackupSchedule, DatabaseAccount, SftpBackupTarget, User, Website
+from app.models.entities import BackupSchedule, DatabaseAccount, SftpBackupTarget, SiteApp, User, Website
 from app.schemas.schemas import (
     BackupScheduleCreate,
     BackupScheduleOut,
@@ -35,7 +36,7 @@ from app.schemas.schemas import (
     UserRestoreBackup,
     WpAction,
 )
-from app.services import backup, cron, file_manager, php, site_users, storage_quota, wordpress
+from app.services import backup, cron, file_manager, php, site_apps, site_users, storage_quota, wordpress
 from app.services.audit import log_action
 
 router = APIRouter(prefix="/maintenance", tags=["maintenance"])
@@ -54,48 +55,64 @@ _backup_jobs_lock = threading.Lock()
 
 
 class FileWrite(BaseModel):
-    website_id: int
+    # Exactly one of these picks the tree to work in.
+    website_id: Optional[int] = None
+    app_id: Optional[int] = None
     path: str
     content: str
 
 
 class FileMkdir(BaseModel):
-    website_id: int
+    # Exactly one of these picks the tree to work in.
+    website_id: Optional[int] = None
+    app_id: Optional[int] = None
     path: str = site_users.PUBLIC_DIR
     name: str
 
 
 class FileCreate(BaseModel):
-    website_id: int
+    # Exactly one of these picks the tree to work in.
+    website_id: Optional[int] = None
+    app_id: Optional[int] = None
     path: str = ""
     name: str
 
 
 class FileRename(BaseModel):
-    website_id: int
+    # Exactly one of these picks the tree to work in.
+    website_id: Optional[int] = None
+    app_id: Optional[int] = None
     path: str
     new_name: str
 
 
 class FileChmod(BaseModel):
-    website_id: int
+    # Exactly one of these picks the tree to work in.
+    website_id: Optional[int] = None
+    app_id: Optional[int] = None
     path: str
     mode: str
 
 
 class FileBulkDelete(BaseModel):
-    website_id: int
+    # Exactly one of these picks the tree to work in.
+    website_id: Optional[int] = None
+    app_id: Optional[int] = None
     paths: list[str]
 
 
 class FileTransfer(BaseModel):
-    website_id: int
+    # Exactly one of these picks the tree to work in.
+    website_id: Optional[int] = None
+    app_id: Optional[int] = None
     paths: list[str]
     destination_path: str = site_users.PUBLIC_DIR
 
 
 class FileArchive(BaseModel):
-    website_id: int
+    # Exactly one of these picks the tree to work in.
+    website_id: Optional[int] = None
+    app_id: Optional[int] = None
     base_path: str = site_users.PUBLIC_DIR
     paths: list[str]
     output_name: str = ""
@@ -103,9 +120,23 @@ class FileArchive(BaseModel):
 
 
 class FileExtract(BaseModel):
-    website_id: int
+    # Exactly one of these picks the tree to work in.
+    website_id: Optional[int] = None
+    app_id: Optional[int] = None
     archive_path: str
     destination_path: str = ""
+
+
+def file_target_key(target) -> str:
+    """Identifies the tree a file job ran in.
+
+    A website id and an app id are separate sequences, so a bare number would
+    let one target's jobs show up under the other.
+    """
+    app_id = getattr(target, "app_id", None)
+    if app_id:
+        return f"app:{app_id}"
+    return f"site:{getattr(target, 'id', '') or ''}"
 
 
 def _now_iso() -> str:
@@ -117,7 +148,8 @@ def _public_file_job(job: dict) -> dict:
         "job_id": job["job_id"],
         "kind": job["kind"],
         "status": job["status"],
-        "website_id": job["website_id"],
+        "website_id": job.get("website_id"),
+        "target_key": job.get("target_key", ""),
         "archive_path": job.get("archive_path", ""),
         "destination_path": job.get("destination_path", ""),
         "target": job.get("target", ""),
@@ -259,18 +291,36 @@ def _queue_backup_job(current_user: User, kind: str, message: str, **extra) -> d
 
 
 
-def _run_extract_job(job_id: str, user_id: int, website_id: int, archive_path: str, destination_path: str, allow_executable: bool) -> None:
+def _reload_file_target(db: Session, user: User, target_key: str):
+    """Re-resolve the tree in the worker's own session.
+
+    The job only carries a key, so the ownership check runs again here rather
+    than trusting whatever the request thread resolved.
+    """
+    kind, _, raw_id = target_key.partition(":")
+    if kind == "app":
+        app = db.query(SiteApp).filter(SiteApp.id == int(raw_id)).first()
+        if not app:
+            raise ValueError("Application not found")
+        if app.owner_id != user.id and not is_admin_role(user.role):
+            raise ValueError("Access denied")
+        return site_apps.file_target(app)
+    website = db.query(Website).filter(Website.id == int(raw_id)).first()
+    if not website:
+        raise ValueError("Website not found")
+    if website.owner_id != user.id and not is_admin_role(user.role):
+        raise ValueError("Access denied")
+    return website
+
+
+def _run_extract_job(job_id: str, user_id: int, target_key: str, archive_path: str, destination_path: str, allow_executable: bool) -> None:
     _set_file_job(job_id, status="running", started_at=_now_iso(), message="Extracting archive")
     db = SessionLocal()
     try:
         user = db.query(User).filter(User.id == user_id).first()
-        website = db.query(Website).filter(Website.id == website_id).first()
         if not user or not user.is_active:
             raise ValueError("User not found")
-        if not website:
-            raise ValueError("Website not found")
-        if website.owner_id != user.id and not is_admin_role(user.role):
-            raise ValueError("Access denied")
+        website = _reload_file_target(db, user, target_key)
         target = file_manager.extract_archive(
             website,
             archive_path,
@@ -288,7 +338,7 @@ def _run_extract_job(job_id: str, user_id: int, website_id: int, archive_path: s
         )
     except Exception as exc:
         db.rollback()
-        logger.exception("File extract job failed: job_id=%s website_id=%s", job_id, website_id)
+        logger.exception("File extract job failed: job_id=%s target=%s", job_id, target_key)
         _set_file_job(
             job_id,
             status="error",
@@ -307,7 +357,8 @@ def _queue_extract_job(user: User, website: Website, archive_path: str, destinat
         "kind": "extract_archive",
         "status": "queued",
         "user_id": user.id,
-        "website_id": website.id,
+        "website_id": getattr(website, "id", None),
+        "target_key": file_target_key(website),
         "archive_path": archive_path,
         "destination_path": destination_path,
         "target": "",
@@ -322,7 +373,7 @@ def _queue_extract_job(user: User, website: Website, archive_path: str, destinat
         _run_extract_job,
         job_id,
         user.id,
-        website.id,
+        file_target_key(website),
         archive_path,
         destination_path,
         allow_executable,
@@ -337,6 +388,28 @@ def get_owned_website(db: Session, current_user: User, website_id: int) -> Websi
     if website.owner_id != current_user.id:
         ensure_role(current_user.role, Role.admin)
     return website
+
+
+def get_owned_app(db: Session, current_user: User, app_id: int) -> SiteApp:
+    app = db.query(SiteApp).filter(SiteApp.id == app_id).first()
+    if not app:
+        raise HTTPException(status_code=404, detail="Application not found")
+    if app.owner_id != current_user.id:
+        ensure_role(current_user.role, Role.admin)
+    return app
+
+
+def get_file_target(db: Session, current_user: User, website_id=None, app_id=None):
+    """The tree a file operation runs in: a website root or an application root.
+
+    file_manager only reads root_path and linux_user off this, so an app can be
+    passed straight through instead of teaching every call site about two types.
+    """
+    if app_id:
+        return site_apps.file_target(get_owned_app(db, current_user, app_id))
+    if website_id:
+        return get_owned_website(db, current_user, website_id)
+    raise HTTPException(status_code=400, detail="Pick a website or an application to browse")
 
 
 def get_backup_user(db: Session, current_user: User, user_id: int) -> User:
@@ -957,6 +1030,60 @@ def get_file_job(job_id: str, current_user: User = Depends(get_current_user)):
     return _public_file_job(job)
 
 
+@router.get("/app-files/{app_id}")
+def list_app_files(app_id: int, path: str = Query(default=""), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Separate prefix on purpose: under /files this would be shadowed by
+    /files/{website_id} and answer 422 instead of dispatching here."""
+    target = get_file_target(db, current_user, app_id=app_id)
+    return {"items": file_manager.list_files(target, path)}
+
+
+@router.get("/app-files/{app_id}/read")
+def read_app_file(app_id: int, path: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    target = get_file_target(db, current_user, app_id=app_id)
+    try:
+        content = file_manager.read_text_file(target, path, allow_sensitive=is_admin_role(current_user.role))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"content": content}
+
+
+@router.get("/app-files/{app_id}/download")
+def download_app_file(app_id: int, path: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    target = get_file_target(db, current_user, app_id=app_id)
+    try:
+        resolved = file_manager.download_file_path(target, path, allow_sensitive=is_admin_role(current_user.role))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return FileResponse(str(resolved), filename=resolved.name)
+
+
+@router.post("/app-files/{app_id}/upload")
+async def upload_app_file(
+    app_id: int,
+    path: str = Query(default=""),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    target = get_file_target(db, current_user, app_id=app_id)
+    try:
+        stored = file_manager.upload_file(
+            target,
+            path,
+            file.filename or "upload.bin",
+            file.file,
+            allow_executable=True,
+            quota_check=_quota_check_for_website(db, target),
+        )
+    except storage_quota.StorageQuotaExceeded as exc:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    log_action(db, current_user.id, "upload_app_file", target.domain, stored)
+    return {"stored": stored}
+
+
 @router.get("/files/{website_id}")
 def list_files(website_id: int, path: str = Query(default=""), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     website = get_owned_website(db, current_user, website_id)
@@ -990,7 +1117,7 @@ def download_file(website_id: int, path: str, db: Session = Depends(get_db), cur
 @router.post("/files/mkdir")
 def make_directory(payload: FileMkdir, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.end_user)
-    website = get_owned_website(db, current_user, payload.website_id)
+    website = get_file_target(db, current_user, payload.website_id, payload.app_id)
     try:
         target = file_manager.make_directory(website, payload.path, payload.name)
     except ValueError as exc:
@@ -1002,7 +1129,7 @@ def make_directory(payload: FileMkdir, db: Session = Depends(get_db), current_us
 @router.post("/files/create")
 def create_file(payload: FileCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.end_user)
-    website = get_owned_website(db, current_user, payload.website_id)
+    website = get_file_target(db, current_user, payload.website_id, payload.app_id)
     try:
         target = file_manager.create_text_file(
             website,
@@ -1022,7 +1149,7 @@ def create_file(payload: FileCreate, db: Session = Depends(get_db), current_user
 @router.post("/files/rename")
 def rename_entry(payload: FileRename, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.end_user)
-    website = get_owned_website(db, current_user, payload.website_id)
+    website = get_file_target(db, current_user, payload.website_id, payload.app_id)
     try:
         target = file_manager.rename_entry(website, payload.path, payload.new_name, is_admin_role(current_user.role))
     except ValueError as exc:
@@ -1034,7 +1161,7 @@ def rename_entry(payload: FileRename, db: Session = Depends(get_db), current_use
 @router.post("/files/chmod")
 def chmod_entry(payload: FileChmod, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.end_user)
-    website = get_owned_website(db, current_user, payload.website_id)
+    website = get_file_target(db, current_user, payload.website_id, payload.app_id)
     try:
         target = file_manager.chmod_entry(website, payload.path, payload.mode)
     except ValueError as exc:
@@ -1046,7 +1173,7 @@ def chmod_entry(payload: FileChmod, db: Session = Depends(get_db), current_user:
 @router.post("/files/delete")
 def delete_entries(payload: FileBulkDelete, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.end_user)
-    website = get_owned_website(db, current_user, payload.website_id)
+    website = get_file_target(db, current_user, payload.website_id, payload.app_id)
     try:
         deleted = file_manager.delete_entries(website, payload.paths, is_admin_role(current_user.role))
     except ValueError as exc:
@@ -1058,7 +1185,7 @@ def delete_entries(payload: FileBulkDelete, db: Session = Depends(get_db), curre
 @router.post("/files/copy")
 def copy_entries(payload: FileTransfer, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.end_user)
-    website = get_owned_website(db, current_user, payload.website_id)
+    website = get_file_target(db, current_user, payload.website_id, payload.app_id)
     try:
         copied = file_manager.copy_entries(
             website,
@@ -1079,7 +1206,7 @@ def copy_entries(payload: FileTransfer, db: Session = Depends(get_db), current_u
 @router.post("/files/move")
 def move_entries(payload: FileTransfer, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.end_user)
-    website = get_owned_website(db, current_user, payload.website_id)
+    website = get_file_target(db, current_user, payload.website_id, payload.app_id)
     try:
         moved = file_manager.move_entries(
             website,
@@ -1096,7 +1223,7 @@ def move_entries(payload: FileTransfer, db: Session = Depends(get_db), current_u
 @router.post("/files/archive")
 def archive_entries(payload: FileArchive, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.end_user)
-    website = get_owned_website(db, current_user, payload.website_id)
+    website = get_file_target(db, current_user, payload.website_id, payload.app_id)
     try:
         target = file_manager.archive_entries(
             website,
@@ -1118,7 +1245,7 @@ def archive_entries(payload: FileArchive, db: Session = Depends(get_db), current
 @router.post("/files/extract")
 def extract_archive(payload: FileExtract, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.end_user)
-    website = get_owned_website(db, current_user, payload.website_id)
+    website = get_file_target(db, current_user, payload.website_id, payload.app_id)
     # Validate archive format before queuing to catch bad archives early
     archive_file = file_manager._safe_path(website, payload.archive_path)  # noqa: SLF001
     if not archive_file.exists() or not archive_file.is_file():
@@ -1154,7 +1281,7 @@ def extract_archive(payload: FileExtract, db: Session = Depends(get_db), current
 @router.post("/files/write")
 def write_file(payload: FileWrite, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.end_user)
-    website = get_owned_website(db, current_user, payload.website_id)
+    website = get_file_target(db, current_user, payload.website_id, payload.app_id)
     try:
         target = file_manager.write_text_file(
             website,

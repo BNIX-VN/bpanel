@@ -283,9 +283,10 @@ function editorParamsFromLocation() {
   const params = new URLSearchParams(window.location.search);
   if (params.get('view') !== 'editor') return null;
   const websiteId = params.get('website_id');
+  const appId = params.get('app_id');
   const path = params.get('path') || 'public_html/index.html';
-  if (!websiteId) return null;
-  return { websiteId: String(websiteId), path };
+  if (!websiteId && !appId) return null;
+  return { websiteId: websiteId ? String(websiteId) : '', appId: appId ? String(appId) : '', path };
 }
 
 function aceModeName(mode) {
@@ -562,6 +563,8 @@ function App() {
   const [siteApps, setSiteApps] = useState({ items: [], limit: 0, used: 0, memory_ceiling_mb: 512, port_range: [21000, 21999] });
   const [siteAppDraft, setSiteAppDraft] = useState(EMPTY_SITE_APP_DRAFT);
   const [createSiteAppId, setCreateSiteAppId] = useState('');
+  // File manager target: empty means the selected website, otherwise an app.
+  const [fileAppId, setFileAppId] = useState(() => standaloneEditor?.appId || '');
   const [siteAppLog, setSiteAppLog] = useState(null);
   const [siteRuntimes, setSiteRuntimes] = useState({ docker: { installed: false }, node_majors: [], allowed_registries: [] });
   const [chmodTarget, setChmodTarget] = useState(null);
@@ -729,6 +732,7 @@ function App() {
     setCronUser('');
     setCronPhpInfo({ php_binary: '', php_version: '' });
     setChmodTarget(null);
+    setFileAppId('');
     setSiteAppLog(null);
     setUserBackups([]);
     setRestoreBackups([]);
@@ -2126,17 +2130,17 @@ function App() {
     }
   }
 
-  async function listFiles(path = fileListPath, websiteId = selectedWebsiteId) {
-    if (!websiteId) return;
-    const data = await request(`/maintenance/files/${websiteId}?path=${encodeURIComponent(path)}`, {}, 'Loading file list...');
+  async function listFiles(path = fileListPath) {
+    if (!hasFileTarget()) return;
+    const data = await request(`${fileTargetBase()}?path=${encodeURIComponent(path)}`, {}, 'Loading file list...');
     if (data?.items) { setFiles(data.items); setFileListPath(path); setFileUploadDir(path || ''); setSelectedFilePaths([]); }
   }
 
-  async function readFile(pathOverride = filePath, websiteId = selectedWebsiteId) {
+  async function readFile(pathOverride = filePath) {
     const targetPath = pathOverride || filePath;
-    if (!websiteId || !targetPath) return;
+    if (!hasFileTarget() || !targetPath) return;
     if (pathOverride) setFilePath(pathOverride);
-    const data = await request(`/maintenance/files/${websiteId}/read?path=${encodeURIComponent(targetPath)}`, {}, 'Reading file...');
+    const data = await request(`${fileTargetBase()}/read?path=${encodeURIComponent(targetPath)}`, {}, 'Reading file...');
     if (data?.content !== undefined) {
       setFileContent(data.content);
       setEditorCursor({ line: 1, column: 1 });
@@ -2144,15 +2148,15 @@ function App() {
   }
 
   async function writeFile() {
-    const data = await request('/maintenance/files/write', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), path: filePath, content: fileContent }) }, 'Saving file...');
+    const data = await request('/maintenance/files/write', { method: 'POST', body: JSON.stringify({ ...fileTargetBody(), path: filePath, content: fileContent }) }, 'Saving file...');
     if (data) { await listFiles(fileListPath); await loadCurrentUser(); }
   }
 
   async function downloadFile(path) {
-    if (!selectedWebsiteId || !path) return;
+    if (!hasFileTarget() || !path) return;
     try {
       setError(''); setLoading('Downloading file...');
-      const res = await fetch(`${API}/maintenance/files/${selectedWebsiteId}/download?path=${encodeURIComponent(path)}`, { credentials: 'include' });
+      const res = await fetch(`${API}${fileTargetBase()}/download?path=${encodeURIComponent(path)}`, { credentials: 'include' });
       if (!res.ok) { const data = await res.json().catch(() => ({})); if (handleAuthExpired(res.status, data.detail)) return; setError(formatApiError(data.detail, 'Download failed.')); return; }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
@@ -2164,35 +2168,36 @@ function App() {
     finally { setLoading(''); }
   }
 
-  function fileEditorUrl(websiteId, path) {
+  function fileEditorUrl(path) {
     const url = new URL(window.location.href);
     url.pathname = routeForPage('files');
     url.search = '';
     url.hash = '';
     url.searchParams.set('view', 'editor');
-    url.searchParams.set('website_id', String(websiteId));
+    if (fileAppId) url.searchParams.set('app_id', String(fileAppId));
+    else url.searchParams.set('website_id', String(selectedWebsiteId));
     url.searchParams.set('path', path);
     return url.toString();
   }
 
-  function openFileEditorTab(path, websiteId = selectedWebsiteId) {
-    if (!websiteId || !path) return;
-    window.open(fileEditorUrl(websiteId, path), '_blank', 'noopener,noreferrer');
+  function openFileEditorTab(path) {
+    if (!hasFileTarget() || !path) return;
+    window.open(fileEditorUrl(path), '_blank', 'noopener,noreferrer');
   }
 
   async function makeFileDirectory() {
-    if (!selectedWebsiteId) return;
+    if (!hasFileTarget()) return;
     const name = prompt('Folder name:');
     if (!name) return;
-    const data = await request('/maintenance/files/mkdir', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), path: fileListPath || '', name }) }, 'Creating folder...');
+    const data = await request('/maintenance/files/mkdir', { method: 'POST', body: JSON.stringify({ ...fileTargetBody(), path: fileListPath || '', name }) }, 'Creating folder...');
     if (data) await listFiles(fileListPath);
   }
 
   async function makeFile() {
-    if (!selectedWebsiteId) return;
+    if (!hasFileTarget()) return;
     const name = prompt('File name:', 'new-file.txt');
     if (!name) return;
-    const data = await request('/maintenance/files/create', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), path: fileListPath || '', name }) }, 'Creating file...');
+    const data = await request('/maintenance/files/create', { method: 'POST', body: JSON.stringify({ ...fileTargetBody(), path: fileListPath || '', name }) }, 'Creating file...');
     if (data) {
       await listFiles(fileListPath);
       const newPath = [fileListPath, name].filter(Boolean).join('/');
@@ -2204,7 +2209,7 @@ function App() {
     if (!item) return;
     const newName = prompt('New name:', item.name);
     if (!newName || newName === item.name) return;
-    const data = await request('/maintenance/files/rename', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), path: item.path, new_name: newName }) }, 'Renaming...');
+    const data = await request('/maintenance/files/rename', { method: 'POST', body: JSON.stringify({ ...fileTargetBody(), path: item.path, new_name: newName }) }, 'Renaming...');
     if (data) await listFiles(fileListPath);
   }
 
@@ -2234,7 +2239,7 @@ function App() {
     for (const item of targets) {
       const data = await request('/maintenance/files/chmod', {
         method: 'POST',
-        body: JSON.stringify({ website_id: Number(selectedWebsiteId), path: item.path, mode }),
+        body: JSON.stringify({ ...fileTargetBody(), path: item.path, mode }),
       }, `Setting permissions on ${item.name}...`);
       // request() already surfaced the reason; stop so the dialog keeps the mode.
       if (!data) return;
@@ -2247,19 +2252,19 @@ function App() {
   async function deleteSelectedFiles() {
     if (selectedFilePaths.length === 0) return;
     if (!confirm(`Delete ${selectedFilePaths.length} selected item(s)?`)) return;
-    const data = await request('/maintenance/files/delete', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), paths: selectedFilePaths }) }, 'Deleting selected files...');
+    const data = await request('/maintenance/files/delete', { method: 'POST', body: JSON.stringify({ ...fileTargetBody(), paths: selectedFilePaths }) }, 'Deleting selected files...');
     if (data) { await listFiles(fileListPath); await loadCurrentUser(); }
   }
 
   async function transferFileItems(action, paths) {
-    if (!selectedWebsiteId || !paths?.length) return;
+    if (!hasFileTarget() || !paths?.length) return;
     const verb = action === 'copy' ? 'Copy' : 'Move';
     const destination = prompt(`${verb} to folder:`, fileListPath || 'public_html');
     if (destination === null) return;
     const targetPath = destination.trim() || fileListPath || 'public_html';
     const data = await request(`/maintenance/files/${action}`, {
       method: 'POST',
-      body: JSON.stringify({ website_id: Number(selectedWebsiteId), paths, destination_path: targetPath }),
+      body: JSON.stringify({ ...fileTargetBody(), paths, destination_path: targetPath }),
     }, `${verb}ing files...`);
     if (data) { await listFiles(fileListPath); await loadCurrentUser(); }
   }
@@ -2279,19 +2284,19 @@ function App() {
     if (!outputName) return;
     const data = await request('/maintenance/files/archive', {
       method: 'POST',
-      body: JSON.stringify({ website_id: Number(selectedWebsiteId), base_path: fileListPath || '', paths: selectedFilePaths, output_name: outputName, format: archiveFormat }),
+      body: JSON.stringify({ ...fileTargetBody(), base_path: fileListPath || '', paths: selectedFilePaths, output_name: outputName, format: archiveFormat }),
     }, 'Creating archive...');
     if (data) { await listFiles(fileListPath); await loadCurrentUser(); }
   }
 
   async function extractArchiveFile(path) {
-    if (!selectedWebsiteId || !path) return;
+    if (!hasFileTarget() || !path) return;
     const destination = prompt('Extract to folder:', fileListPath || '.');
     if (destination === null) return;
     const targetPath = destination.trim() || fileListPath || '.';
     const data = await request('/maintenance/files/extract', {
       method: 'POST',
-      body: JSON.stringify({ website_id: Number(selectedWebsiteId), archive_path: path, destination_path: targetPath }),
+      body: JSON.stringify({ ...fileTargetBody(), archive_path: path, destination_path: targetPath }),
     }, 'Starting extraction...');
     if (data?.job_id) upsertFileJob(data);
     else if (data) { await listFiles(targetPath === '.' ? '' : targetPath); await loadCurrentUser(); }
@@ -2320,15 +2325,9 @@ function App() {
     }
   }
 
-  async function loadFileJobs(websiteId = selectedWebsiteId) {
-    if (!websiteId) return;
-    const data = await request(`/maintenance/files/jobs?website_id=${encodeURIComponent(websiteId)}`);
-    if (data?.jobs) {
-      setFileJobs(prev => [
-        ...data.jobs.filter(job => job.status !== 'done'),
-        ...prev.filter(job => String(job.website_id) !== String(websiteId)),
-      ].slice(0, 6));
-    }
+  async function loadFileJobs() {
+    const data = await request('/maintenance/files/jobs');
+    if (data?.jobs) setFileJobs(data.jobs.filter(job => job.status !== 'done').slice(0, 6));
   }
 
   useEffect(() => {
@@ -2360,8 +2359,8 @@ function App() {
   }, [fileJobs]);
 
   useEffect(() => {
-    if (page === 'files' && selectedWebsiteId) loadFileJobs(selectedWebsiteId);
-  }, [page, selectedWebsiteId]);
+    if (page === 'files' && hasFileTarget()) loadFileJobs();
+  }, [page, selectedWebsiteId, fileAppId]);
 
   async function openWebsiteFileManager(site) {
     setNginxCustomEditing(null);
@@ -2377,7 +2376,7 @@ function App() {
 
   async function uploadSiteFile(file) {
     if (!file) return;
-    if (!selectedWebsiteId) { setError('Please select a website first.'); return; }
+    if (!hasFileTarget()) { setError('Please select a website or application first.'); return; }
     const uploadDir = fileUploadDir.trim();
     const form = new FormData();
     form.append('file', file);
@@ -2386,7 +2385,7 @@ function App() {
       setLoading('Uploading file...');
       const csrfToken = readCookie('bpanel_csrf');
       const headers = csrfToken ? { 'X-CSRF-Token': csrfToken } : {};
-      const res = await fetch(`${API}/maintenance/files/${selectedWebsiteId}/upload?path=${encodeURIComponent(uploadDir)}`, {
+      const res = await fetch(`${API}${fileTargetBase()}/upload?path=${encodeURIComponent(uploadDir)}`, {
         method: 'POST',
         credentials: 'include',
         headers,
@@ -3181,8 +3180,9 @@ function App() {
   useEffect(() => {
     if (!isAuthenticated || !standaloneEditor) return;
     setSelectedWebsiteId(standaloneEditor.websiteId);
+    setFileAppId(standaloneEditor.appId || '');
     setFilePath(standaloneEditor.path);
-    readFile(standaloneEditor.path, standaloneEditor.websiteId);
+    readFile(standaloneEditor.path);
   }, [isAuthenticated, standaloneEditor]);
 
   useEffect(() => {
@@ -3235,10 +3235,14 @@ function App() {
   useEffect(() => {
     if (!currentUser) return;
     if (page === 'applications') { loadSiteApps(); loadSiteRuntimes(); }
-    else if (page === 'websites') loadSiteApps();
+    else if (page === 'websites' || page === 'files') loadSiteApps();
   }, [page, currentUser]);
 
-  useEffect(() => { if (selectedWebsiteId && page === 'files') listFiles('public_html'); }, [selectedWebsiteId, page]);
+  useEffect(() => {
+    if (page !== 'files' || !hasFileTarget()) return;
+    // An app has no public_html; its root is the code directory itself.
+    listFiles(fileAppId ? '' : 'public_html');
+  }, [selectedWebsiteId, fileAppId, page]);
 
   useEffect(() => { if (selectedBackupUserId && page === 'backups') listUserBackups(selectedBackupUserId); }, [selectedBackupUserId, page]);
 
@@ -3341,6 +3345,45 @@ function App() {
     const value = (site?.domain || '').trim();
     if (/^https?:\/\//i.test(value)) return value;
     return `${site?.ssl_enabled ? 'https' : 'http'}://${value}`;
+  }
+
+  // The file manager browses either a website root or an application root.
+  function fileTargetBody() {
+    return fileAppId ? { app_id: Number(fileAppId) } : { website_id: Number(selectedWebsiteId) };
+  }
+
+  function fileTargetBase() {
+    return fileAppId ? `/maintenance/app-files/${fileAppId}` : `/maintenance/files/${selectedWebsiteId}`;
+  }
+
+  function fileTargetKey() {
+    return fileAppId ? `app:${fileAppId}` : (selectedWebsiteId ? `site:${selectedWebsiteId}` : '');
+  }
+
+  function hasFileTarget() {
+    return !!(fileAppId || selectedWebsiteId);
+  }
+
+  function currentFileApp() {
+    return siteApps.items.find(app => String(app.id) === String(fileAppId)) || null;
+  }
+
+  function FileTargetSelect() {
+    return <select
+      value={fileAppId ? `app:${fileAppId}` : selectedWebsiteId}
+      onChange={e => {
+        const value = e.target.value;
+        if (value.startsWith('app:')) setFileAppId(value.slice(4));
+        else { setFileAppId(''); setSelectedWebsiteId(value); }
+        setFileListPath(value.startsWith('app:') ? '' : 'public_html');
+        setFiles([]);
+        setSelectedFilePaths([]);
+      }}
+    >
+      <option value="">-- Select website or application --</option>
+      {websites.map(site => <option key={`site-${site.id}`} value={site.id}>{site.domain}</option>)}
+      {siteApps.items.map(app => <option key={`app-${app.id}`} value={`app:${app.id}`}>App: {app.name}</option>)}
+    </select>;
   }
 
   function parentFilePath(path) {
@@ -4176,38 +4219,46 @@ function App() {
     const selectedArchiveFile = selectedFilePaths.length === 1
       ? files.find(item => item.path === selectedFilePaths[0] && isArchiveFile(item))
       : null;
+    const activeFileApp = currentFileApp();
+    const targetKey = fileTargetKey();
     const visibleFileJobs = fileJobs
-      .filter(job => String(job.website_id) === String(selectedWebsiteId) && job.status !== 'done')
+      .filter(job => (job.target_key || `site:${job.website_id}`) === targetKey && job.status !== 'done')
       .slice(0, 4);
     const selectedChmodItems = files.filter(item => selectedFilePaths.includes(item.path));
     return <section className="section">
       {renderChmodDialog()}
       <div className="section-title">
         <div><h2>File manager</h2></div>
-        <button disabled={!selectedWebsiteId || !!loading} onClick={() => listFiles(fileListPath)}><RefreshCw size={14}/> Refresh</button>
+        <button disabled={!hasFileTarget() || !!loading} onClick={() => listFiles(fileListPath)}><RefreshCw size={14}/> Refresh</button>
       </div>
       <div className="file-manager">
         <div className="file-panel">
           <div className="file-controls">
-            <WebsiteSelect />
-            {currentSite && <div className="file-meta">
-              <span>Website: <strong>{currentSite.domain}</strong></span>
-              <span>Root: <strong>{currentSite.root_path}{fileListPath ? `/${fileListPath}` : ''}</strong></span>
-              {currentUser && !isAdmin && <span>Storage: <strong>{storageUsageText(currentUser)}</strong></span>}
-            </div>}
+            <FileTargetSelect />
+            {activeFileApp
+              ? <div className="file-meta">
+                <span>Application: <strong>{activeFileApp.name}</strong></span>
+                <span>Root: <strong>{activeFileApp.directory}{fileListPath ? `/${fileListPath}` : ''}</strong></span>
+                {currentUser && !isAdmin && <span>Storage: <strong>{storageUsageText(currentUser)}</strong></span>}
+              </div>
+              : currentSite && <div className="file-meta">
+                <span>Website: <strong>{currentSite.domain}</strong></span>
+                <span>Root: <strong>{currentSite.root_path}{fileListPath ? `/${fileListPath}` : ''}</strong></span>
+                {currentUser && !isAdmin && <span>Storage: <strong>{storageUsageText(currentUser)}</strong></span>}
+              </div>}
             <div className="path-pill breadcrumb-line">
-              <button className="crumb" disabled={!selectedWebsiteId || fileListPath === ''} onClick={() => listFiles('')}>root</button>
+              <button className="crumb" disabled={!hasFileTarget() || fileListPath === ''} onClick={() => listFiles('')}>root</button>
               {fileBreadcrumbs(fileListPath).map(crumb => <button className="crumb" key={crumb.path} onClick={() => listFiles(crumb.path)}>{crumb.label}</button>)}
             </div>
             <div className="file-toolbar">
-              <button disabled={!selectedWebsiteId || fileListPath === '' || !!loading} onClick={() => listFiles(parentFilePath(fileListPath))}>Up</button>
-              <button disabled={!selectedWebsiteId || !!loading} onClick={makeFileDirectory}><Plus size={14}/> Folder</button>
-              <button disabled={!selectedWebsiteId || !!loading} onClick={makeFile}><FileText size={14}/> File</button>
-              <label className={`upload-button ${(!selectedWebsiteId || !!loading) ? 'disabled' : ''}`}>
+              <button disabled={!hasFileTarget() || fileListPath === '' || !!loading} onClick={() => listFiles(parentFilePath(fileListPath))}>Up</button>
+              <button disabled={!hasFileTarget() || !!loading} onClick={makeFileDirectory}><Plus size={14}/> Folder</button>
+              <button disabled={!hasFileTarget() || !!loading} onClick={makeFile}><FileText size={14}/> File</button>
+              <label className={`upload-button ${(!hasFileTarget() || !!loading) ? 'disabled' : ''}`}>
                 <Upload size={14}/> Upload
-                <input type="file" disabled={!selectedWebsiteId || !!loading} onChange={e => { uploadSiteFile(e.target.files?.[0]); e.target.value = ''; }} />
+                <input type="file" disabled={!hasFileTarget() || !!loading} onChange={e => { uploadSiteFile(e.target.files?.[0]); e.target.value = ''; }} />
               </label>
-              <select value={archiveFormat} onChange={e => setArchiveFormat(e.target.value)} disabled={!selectedWebsiteId || !!loading}>
+              <select value={archiveFormat} onChange={e => setArchiveFormat(e.target.value)} disabled={!hasFileTarget() || !!loading}>
                 <option value="zip">zip</option>
                 <option value="tar.gz">tar.gz</option>
               </select>

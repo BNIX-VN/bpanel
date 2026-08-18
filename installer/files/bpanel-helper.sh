@@ -1625,8 +1625,11 @@ ensure_app_directory() {
   apps_root="$(printf '%s/%s/apps' "$HOME_ROOT" "$user")"
   target="$(app_directory "$user" "$name")"
   [[ -d "${HOME_ROOT}/${user}" ]] || deny "home directory missing for $user"
-  install -d -o "$user" -g "$user" -m 0750 "$apps_root"
-  install -d -o "$user" -g "$user" -m 0750 "$target"
+  ensure_sites_group
+  install -d -m 0750 "$apps_root"
+  install -d -m 0750 "$target"
+  harden_site_dir "$apps_root" "$user"
+  harden_site_dir "$target" "$user"
   printf '%s' "$target"
 }
 
@@ -2027,6 +2030,24 @@ require_linux_user() {
   esac
 }
 
+managed_root_depth() {
+  # How many leading components of a path under a user's home make up a managed
+  # root. A website root is <domain>; an application root is apps/<name>. Both
+  # keep operations inside a named subtree instead of the bare home directory.
+  local relative="$1" first second
+  first="${relative%%/*}"
+  if [[ "$first" == "apps" ]]; then
+    [[ "$relative" == */* ]] || deny "application path is missing an application name"
+    second="${relative#*/}"
+    second="${second%%/*}"
+    require_app_name "$second"
+    printf '2'
+    return 0
+  fi
+  require_site_domain_segment "$first"
+  printf '1'
+}
+
 require_site_domain_segment() {
   [[ "$1" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]] \
     || deny "invalid site domain path segment: $1"
@@ -2060,8 +2081,7 @@ require_managed_path() {
     case "$resolved/" in
       "$HOME_ROOT/$user/"*)
         relative="${resolved#${HOME_ROOT}/${user}/}"
-        domain_part="${relative%%/*}"
-        require_site_domain_segment "$domain_part"
+        managed_root_depth "$relative" >/dev/null
         ;;
       *) deny "path is not owned by panel Linux user $user: $resolved" ;;
     esac
@@ -2072,8 +2092,7 @@ require_managed_path() {
         first_part="${first_part%%/*}"
         require_linux_user "$first_part"
         relative="${resolved#${HOME_ROOT}/${first_part}/}"
-        domain_part="${relative%%/*}"
-        require_site_domain_segment "$domain_part"
+        managed_root_depth "$relative" >/dev/null
         ;;
       *) deny "path outside managed site roots: $resolved" ;;
     esac
@@ -2083,7 +2102,7 @@ require_managed_path() {
 
 require_bound_managed_path() {
   local user="$1" root="$2" path="$3"
-  local normalized_root normalized target target_relative root_relative
+  local normalized_root normalized target target_relative root_relative root_depth
   require_linux_user "$user"
   case "$root" in
     *$'\n'*) deny "unsafe root: $root" ;;
@@ -2098,8 +2117,12 @@ require_bound_managed_path() {
     *) deny "root is not owned by panel Linux user $user: $normalized_root" ;;
   esac
   root_relative="${normalized_root#${HOME_ROOT}/${user}/}"
-  require_site_domain_segment "${root_relative%%/*}"
-  [[ "$root_relative" == */* ]] && deny "site root must be a direct domain path: $normalized_root"
+  root_depth="$(managed_root_depth "$root_relative")"
+  if [[ "$root_depth" == "1" ]]; then
+    [[ "$root_relative" == */* ]] && deny "site root must be a direct domain path: $normalized_root"
+  else
+    [[ "$root_relative" == */*/* ]] && deny "application root must be apps/<name>: $normalized_root"
+  fi
 
   case "$path" in
     *$'\n'*) deny "unsafe path: $path" ;;

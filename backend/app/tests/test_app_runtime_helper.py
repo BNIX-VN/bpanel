@@ -198,3 +198,26 @@ def test_legacy_cleanup_survives_finding_nothing(helper):
     grep_lines = [line for line in block.splitlines() if "grep -E" in line]
     assert grep_lines, "expected a grep over existing container names"
     assert all("|| true" in line for line in grep_lines), grep_lines
+
+
+# --- file manager reaching into an app directory ----------------------------
+
+def test_managed_roots_cover_both_sites_and_apps(helper):
+    """The file manager runs its privileged steps through the same path checks."""
+    block = helper.split("managed_root_depth() {", 1)[1].split("\n}", 1)[0]
+    assert 'require_app_name "$second"' in block
+    assert 'require_site_domain_segment "$first"' in block
+    # apps on its own is not a root: an operation must name an application.
+    assert 'deny "application path is missing an application name"' in block
+
+
+def test_a_bound_app_root_must_be_exactly_two_components(helper):
+    block = helper.split("require_bound_managed_path() {", 1)[1].split("\n}", 1)[0]
+    assert 'deny "application root must be apps/<name>' in block
+    assert 'deny "site root must be a direct domain path' in block
+
+
+def test_managed_paths_still_reject_the_bare_home(helper):
+    block = helper.split("require_managed_path() {", 1)[1].split("\n}", 1)[0]
+    assert 'deny "path is not owned by panel Linux user' in block
+    assert 'deny "path outside managed site roots' in block
