@@ -2154,7 +2154,9 @@ base = f"/home/{user}"
 root = os.path.normpath(root)
 target = os.path.normpath(target)
 
-if os.path.dirname(root) != base:
+# A website root is /home/<user>/<domain>; an application root is one level
+# deeper, /home/<user>/apps/<name>. Anything else is not a managed tree.
+if os.path.dirname(root) not in (base, os.path.join(base, "apps")):
     raise SystemExit("invalid site root")
 if target != root and not target.startswith(root + os.sep):
     raise SystemExit("target outside site root")

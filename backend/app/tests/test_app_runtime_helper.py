@@ -221,3 +221,10 @@ def test_managed_paths_still_reject_the_bare_home(helper):
     block = helper.split("require_managed_path() {", 1)[1].split("\n}", 1)[0]
     assert 'deny "path is not owned by panel Linux user' in block
     assert 'deny "path outside managed site roots' in block
+
+
+def test_delete_accepts_an_application_root_too(helper):
+    """delete_no_follow keeps its own root-shape check, separate from the
+    managed-path validator, so it has to know about apps/<name> as well."""
+    block = helper.split("delete_no_follow() {", 1)[1].split("\nPY\n", 1)[0]
+    assert 'os.path.join(base, "apps")' in block
