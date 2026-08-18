@@ -231,6 +231,20 @@ def _parse_volume(raw: Any, service: str, declared: set[str], issues: list[Issue
     return "named", f"{source}:{target}{suffix}"
 
 
+def home_for(service: "Service") -> str:
+    """Where a service run under a forced uid should keep its home.
+
+    Overriding `user` with a numeric id leaves the container with no matching
+    passwd entry, so HOME falls back to `/` and the first thing the process
+    writes there fails. Point it at the directory the customer mounted, which is
+    the one place inside the container they own. A mount at `/home/node/.n8n` is
+    the app's own dot-directory, so its parent is the home the image expects.
+    """
+    target = service.bind_mounts[0].split(":")[1]
+    path = PurePosixPath(target)
+    return str(path.parent) if path.name.startswith(".") else str(path)
+
+
 def _parse_service(name: str, raw: Any, declared_volumes: set[str], issues: list[Issue]) -> Service | None:
     if not SERVICE_NAME_RE.fullmatch(name):
         issues.append(Issue(name, "tên service chỉ được dùng chữ thường, số, gạch ngang và gạch dưới"))
@@ -422,6 +436,8 @@ def render(
             # It writes into the customer's own directory, so it has to write as
             # the customer or the files come out owned by someone else.
             entry["user"] = f"{uid}:{gid}"
+            if "HOME" not in service.environment:
+                entry.setdefault("environment", {})["HOME"] = home_for(service)
 
         entry["cap_drop"] = ["ALL"]
         if not entry.get("user"):
