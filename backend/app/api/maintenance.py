@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import threading
 import tarfile
 import uuid
@@ -406,7 +407,12 @@ def get_file_target(db: Session, current_user: User, website_id=None, app_id=Non
     passed straight through instead of teaching every call site about two types.
     """
     if app_id:
-        return site_apps.file_target(get_owned_app(db, current_user, app_id))
+        target = site_apps.file_target(get_owned_app(db, current_user, app_id))
+        # Self-heal: an app created before the directory was made at creation
+        # time, or by a release that left it unreadable by the panel user.
+        if not os.access(target.root_path, os.R_OK):
+            site_apps.ensure_directory(get_owned_app(db, current_user, app_id))
+        return target
     if website_id:
         return get_owned_website(db, current_user, website_id)
     raise HTTPException(status_code=400, detail="Pick a website or an application to browse")

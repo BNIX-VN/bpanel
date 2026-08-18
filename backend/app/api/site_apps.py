@@ -142,6 +142,12 @@ def create_site_app(payload: SiteAppCreate, db: Session = Depends(get_db), curre
         db.rollback()
         raise HTTPException(status_code=409, detail="You already have an application with that name") from exc
     db.refresh(app)
+    # So the customer can upload code straight away instead of having to deploy
+    # an empty application first.
+    try:
+        site_apps.ensure_directory(app)
+    except (RuntimeError, ValueError):
+        pass
     log_action(db, current_user.id, "create_site_app", owner.username, f"{name} :{port}")
     return _app_out(app)
 

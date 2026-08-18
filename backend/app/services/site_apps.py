@@ -339,6 +339,22 @@ def file_target(app: SiteApp) -> AppFileTarget:
     return AppFileTarget(app)
 
 
+def ensure_directory(app: SiteApp) -> str:
+    """Create the app's directory now, not at first deploy.
+
+    The customer has to upload code before there is anything to deploy, so the
+    directory has to exist as soon as the app does. Also repairs ownership on
+    directories made by an earlier release, which the panel user could not read.
+    """
+    result = shell.privileged(
+        "site-app-dir-ensure",
+        helper_args=[owner_linux_user(app), validate_name(app.name)],
+        check=False,
+        fallback=["bash", "-lc", "true"],
+    )
+    return (result.stdout or "").strip()
+
+
 def write_runtime(app: SiteApp) -> str:
     """Generate and reload the systemd unit for an app."""
     linux_user = owner_linux_user(app)

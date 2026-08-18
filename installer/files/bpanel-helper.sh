@@ -3908,6 +3908,12 @@ PY
     echo "$unit_name"
     ;;
 
+  site-app-dir-ensure)
+    [[ $# -eq 2 ]] || deny "usage: site-app-dir-ensure <owner-user> <name>"
+    ensure_app_directory "$1" "$2"
+    echo
+    ;;
+
   site-app-control)
     [[ $# -eq 3 ]] || deny "usage: site-app-control <owner-user> <name> <action>"
     user="$1"; app_name="$2"; app_action="$3"
