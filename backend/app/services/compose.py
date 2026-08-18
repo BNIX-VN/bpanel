@@ -55,8 +55,15 @@ SERVICE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,30}$")
 # website serves it on, so a value like WEBHOOK_URL can be written once and
 # still be right after the domain changes.
 PLACEHOLDERS = {"BPANEL_URL", "BPANEL_DOMAIN"}
-PLACEHOLDER_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
-DOLLAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$")
+# Compose's own interpolation, because a project's compose file is written
+# against a .env sitting next to it and would mean something different here
+# otherwise: ${VAR}, ${VAR:-default}, ${VAR:?message}, $VAR, and $$ for a
+# literal dollar.
+VARIABLE_RE = re.compile(
+    r"\$\$"
+    r"|\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?[-?])([^}]*))?\}"
+    r"|\$([A-Za-z_][A-Za-z0-9_]*)"
+)
 VOLUME_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
 ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 MAX_SERVICES = 8
@@ -163,16 +170,6 @@ def _parse_environment(raw: Any, service: str, issues: list[Issue]) -> dict[str,
         if any(char in text for char in "\r\n\x00"):
             issues.append(Issue(service, f"giá trị của {name} chứa xuống dòng"))
             continue
-        unknown = [found for found in PLACEHOLDER_RE.findall(text) if found not in PLACEHOLDERS]
-        if unknown:
-            # Compose would read these from a .env file the panel does not run,
-            # so silently they would end up empty.
-            issues.append(Issue(
-                service,
-                f"{name} dùng biến {'${' + unknown[0] + '}'} mà panel không biết; "
-                f"chỉ có {', '.join('${' + item + '}' for item in sorted(PLACEHOLDERS))}",
-            ))
-            continue
         entries[name] = text
     return entries
 
@@ -230,7 +227,11 @@ def _parse_volume(raw: Any, service: str, declared: set[str], issues: list[Issue
         return None
 
     if source.startswith("/"):
-        issues.append(Issue(service, f"mount đường dẫn máy chủ không được phép — {text[:50]}"))
+        issues.append(Issue(
+            service,
+            f"mount đường dẫn máy chủ không được phép — {text[:50]}; "
+            "hãy dùng đường dẫn trong thư mục ứng dụng (./data) hoặc volume có tên",
+        ))
         return None
     if source.startswith(".") or "/" in source:
         # A path relative to the project, which is the application directory.
@@ -336,7 +337,8 @@ def _parse_service(name: str, raw: Any, declared_volumes: set[str], issues: list
     return service
 
 
-def analyse(source: str, web_service: str = "", enforce_registry: bool = True) -> Plan:
+def analyse(source: str, web_service: str = "", enforce_registry: bool = True,
+            variables: dict[str, str] | None = None) -> Plan:
     """Read a customer's compose file and report what the panel can run."""
     plan = Plan()
     if not (source or "").strip():
@@ -352,6 +354,23 @@ def analyse(source: str, web_service: str = "", enforce_registry: bool = True) -
         return plan
     if not isinstance(document, dict):
         plan.issues.append(Issue("", "nội dung phải là một mapping YAML"))
+        return plan
+
+    missing: dict[str, str] = {}
+    document = _interpolate_tree(document, dict(variables or {}), missing)
+    for name, note in sorted(missing.items()):
+        if name in PLACEHOLDERS:
+            plan.issues.append(Issue(
+                "",
+                f"${{{name}}} chỉ có khi ứng dụng đã gắn với một website; "
+                "hãy trỏ một website vào ứng dụng này trước",
+            ))
+        else:
+            plan.issues.append(Issue(
+                "",
+                f"thiếu biến {name} — hãy khai {name}=... trong ô .env" + (f" ({note})" if note else ""),
+            ))
+    if missing:
         return plan
 
     for key in document:
@@ -418,30 +437,76 @@ def _pick_web_service(plan: Plan, requested: str) -> str:
     return chosen
 
 
-def expand(text: str, public_url: str, domain: str) -> str:
-    """Fill in the panel's placeholders and defuse every other dollar sign.
+def read_variables(env_text: str) -> dict[str, str]:
+    """Read the KEY=value box the way Compose reads a .env file."""
+    values: dict[str, str] = {}
+    for raw in (env_text or "").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key, value = key.strip(), value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        if ENV_KEY_RE.fullmatch(key):
+            values[key] = value
+    return values
 
-    Compose interpolates `${VAR}` and `$VAR` in the file it reads, so a password
-    containing a dollar would arrive at the container mangled, and a stray
-    reference would arrive empty. Everything the customer wrote is passed through
-    literally; only the two names the panel owns mean anything.
+
+def interpolate(text: str, values: dict[str, str], missing: dict[str, str]) -> str:
+    """Substitute a compose file's variables from the .env box.
+
+    A project's compose file is written against the .env beside it, so the panel
+    has to resolve the same references or the pasted file quietly means something
+    else here. Anything with no value is collected in *missing* rather than
+    silently becoming an empty string, which is what Compose itself would do.
     """
-    values = {"BPANEL_URL": public_url, "BPANEL_DOMAIN": domain}
-
     def replace(match: re.Match) -> str:
-        name = match.group(1)
-        if name is None:
-            return "$$"
-        if name in values:
-            if not values[name]:
-                raise ValueError(
-                    f"${{{name}}} chỉ dùng được khi ứng dụng đã gắn với một website; "
-                    "hãy trỏ một website vào ứng dụng này trước"
-                )
+        if match.group(0) == "$$":
+            return "$"
+        name = match.group(1) or match.group(4)
+        operator, argument = match.group(2), match.group(3)
+        if name in values and (values[name] or operator not in (":-", ":?")):
             return values[name]
-        return "$$" + match.group(0)[1:]
+        if operator in ("-", ":-"):
+            return argument or ""
+        if operator in ("?", ":?"):
+            missing.setdefault(name, argument or "")
+            return ""
+        missing.setdefault(name, "")
+        return ""
 
-    return DOLLAR_RE.sub(replace, text)
+    return VARIABLE_RE.sub(replace, text)
+
+
+def _interpolate_tree(node, values: dict[str, str], missing: dict[str, str]):
+    if isinstance(node, str):
+        return interpolate(node, values, missing)
+    if isinstance(node, list):
+        return [_interpolate_tree(item, values, missing) for item in node]
+    if isinstance(node, dict):
+        return {key: _interpolate_tree(value, values, missing) for key, value in node.items()}
+    return node
+
+
+def _escape_tree(node):
+    """Stop Compose interpolating the file the panel generated.
+
+    Every reference has already been resolved by this point, so a dollar left in
+    a value is part of the value — a password, a shell command — and has to reach
+    the container as one.
+    """
+    if isinstance(node, str):
+        return node.replace("$", "$$")
+    if isinstance(node, list):
+        return [_escape_tree(item) for item in node]
+    if isinstance(node, dict):
+        return {key: _escape_tree(value) for key, value in node.items()}
+    return node
 
 
 def render(
@@ -453,8 +518,6 @@ def render(
     gid: int,
     memory_mb: int,
     cpus: str,
-    public_url: str = "",
-    domain: str = "",
 ) -> str:
     """Build the compose file the server actually runs."""
     if not plan.ok:
@@ -464,10 +527,7 @@ def render(
     for service in plan.services:
         entry: dict[str, Any] = {"image": service.image}
         if service.environment:
-            entry["environment"] = {
-                key: expand(value, public_url, domain)
-                for key, value in service.environment.items()
-            }
+            entry["environment"] = dict(service.environment)
         if service.command is not None:
             entry["command"] = service.command
         if service.entrypoint is not None:
@@ -529,7 +589,7 @@ def render(
         entry["logging"] = {"driver": "json-file", "options": {"max-size": "10m", "max-file": "3"}}
         services[service.name] = entry
 
-    document: dict[str, Any] = {"name": project, "services": services}
+    document: dict[str, Any] = {"name": project, "services": _escape_tree(services)}
     if plan.volumes:
         document["volumes"] = {name: None for name in plan.volumes}
 

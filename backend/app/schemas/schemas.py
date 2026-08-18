@@ -534,6 +534,8 @@ class CronDelete(BaseModel):
 class ComposeValidateRequest(BaseModel):
     compose_source: str
     web_service: Optional[str] = None
+    # The .env box, so a file written against one validates as it will run.
+    env: str = ""
 
 
 class SiteAppCreate(BaseModel):

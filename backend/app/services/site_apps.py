@@ -390,11 +390,26 @@ def owner_ids(app: SiteApp) -> tuple[int, int]:
         return 0, 0
 
 
+def compose_variables(app: SiteApp) -> dict[str, str]:
+    """What a compose file's ${...} references resolve to for this app."""
+    from app.services import compose  # local import keeps the module cycle open
+
+    public_url, domain = public_address(app)
+    values = compose.read_variables(app.env or "")
+    # The panel's own two names win: they describe where the app is reachable,
+    # which is the panel's business, not the customer's to redefine.
+    if public_url:
+        values["BPANEL_URL"] = public_url
+        values["BPANEL_DOMAIN"] = domain
+    return values
+
+
 def compose_plan(app: SiteApp):
     """Re-read the customer's compose file into the panel's own model."""
     from app.services import compose  # local import keeps the module cycle open
 
-    return compose.analyse(app.compose_source or "", app.web_service or "")
+    return compose.analyse(app.compose_source or "", app.web_service or "",
+                           variables=compose_variables(app))
 
 
 def public_address(app: SiteApp) -> tuple[str, str]:
@@ -427,7 +442,6 @@ def render_compose(app: SiteApp) -> str:
     if not plan.ok:
         raise ValueError("; ".join(issue.message for issue in plan.issues) or "Compose file is not usable")
     uid, gid = owner_ids(app)
-    public_url, domain = public_address(app)
     return compose.render(
         plan,
         project=compose_project(app),
@@ -436,8 +450,6 @@ def render_compose(app: SiteApp) -> str:
         gid=gid,
         memory_mb=validate_memory_mb(app.memory_limit_mb),
         cpus=validate_cpu_limit(app.cpu_limit),
-        public_url=public_url,
-        domain=domain,
     )
 
 

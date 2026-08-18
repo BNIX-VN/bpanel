@@ -1759,15 +1759,15 @@ function App() {
     if (data) setSiteApps({ port_range: [21000, 21999], ...data });
   }
 
-  async function validateCompose(source, webService) {
+  async function validateCompose(source, webService, env) {
     return await request('/site-apps/compose/validate', {
       method: 'POST',
-      body: JSON.stringify({ compose_source: source, web_service: webService || null }),
+      body: JSON.stringify({ compose_source: source, web_service: webService || null, env: env || '' }),
     }, 'Checking the compose file...');
   }
 
   async function checkComposeFile() {
-    const data = await validateCompose(siteAppDraft.compose_source, siteAppDraft.web_service);
+    const data = await validateCompose(siteAppDraft.compose_source, siteAppDraft.web_service, siteAppDraft.env);
     if (data) {
       setComposePlan(data);
       if (data.web_service && !siteAppDraft.web_service) {
@@ -1789,7 +1789,7 @@ function App() {
   }
 
   async function checkSiteAppEdit() {
-    const data = await validateCompose(siteAppEdit.compose_source, siteAppEdit.web_service);
+    const data = await validateCompose(siteAppEdit.compose_source, siteAppEdit.web_service, siteAppEdit.env);
     if (data) {
       setSiteAppEditPlan(data);
       if (data.web_service && !siteAppEdit.web_service) {
@@ -1800,7 +1800,7 @@ function App() {
 
   async function saveSiteAppEdit(app) {
     const patch = app.kind === 'compose'
-      ? { compose_source: siteAppEdit.compose_source, web_service: siteAppEdit.web_service || null }
+      ? { compose_source: siteAppEdit.compose_source, web_service: siteAppEdit.web_service || null, env: siteAppEdit.env }
       : { env: siteAppEdit.env };
     const data = await request(`/site-apps/${app.id}`, { method: 'PUT', body: JSON.stringify(patch) }, 'Saving configuration...');
     if (data) {
@@ -3712,9 +3712,10 @@ function App() {
             <label><span>CPU mỗi service</span>
               <input value={siteAppDraft.cpu_limit} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, cpu_limit: e.target.value }))} placeholder="1" />
             </label>
-            <p className="compose-hint">Ứng dụng chỉ thấy cổng nội bộ, nên chỗ nào cần địa chỉ công khai
-              (callback OAuth, webhook) hãy viết <code>{'${BPANEL_URL}'}</code> hoặc <code>{'${BPANEL_DOMAIN}'}</code>;
-              panel điền domain của website đang trỏ vào ứng dụng.</p>
+            <p className="compose-hint">File tham chiếu <code>{'${BIẾN}'}</code> thì khai giá trị ở ô <strong>.env</strong> bên dưới,
+              đúng như file <code>.env</code> nằm cạnh <code>docker-compose.yml</code>. Riêng địa chỉ công khai
+              (callback OAuth, webhook) dùng <code>{'${BPANEL_URL}'}</code> / <code>{'${BPANEL_DOMAIN}'}</code>:
+              ứng dụng chỉ thấy cổng nội bộ, panel sẽ điền domain của website trỏ vào nó.</p>
           </>}
           {siteAppDraft.kind === 'docker' && <>
             <label><span>Image</span>
@@ -3727,7 +3728,7 @@ function App() {
               <input value={siteAppDraft.cpu_limit} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, cpu_limit: e.target.value }))} placeholder="1" />
             </label>
           </>}
-          {siteAppDraft.kind !== 'compose' && <label className="site-app-env"><span>Environment (KEY=value, one per line)</span>
+          <label className="site-app-env"><span>{siteAppDraft.kind === 'compose' ? '.env (KEY=value, one per line)' : 'Environment (KEY=value, one per line)'}</span>
             <textarea
               className="code-editor"
               rows={4}
@@ -3736,7 +3737,7 @@ function App() {
               onChange={e => setSiteAppDraft(prev => ({ ...prev, env: e.target.value }))}
               placeholder={'N8N_ENCRYPTION_KEY=...\nGENERIC_TIMEZONE=Asia/Ho_Chi_Minh'}
             />
-          </label>}
+          </label>
           <div className="site-app-form-actions">
             {siteAppDraft.kind === 'compose' && <button className="secondary-light" disabled={!!loading || !siteAppDraft.compose_source.trim()} onClick={checkComposeFile}>Check file</button>}
             <button className="secondary-light" disabled={!!loading} onClick={suggestSiteAppPort}>Pick free port</button>
@@ -3853,9 +3854,18 @@ function App() {
                     onChange={e => { setSiteAppEdit(prev => ({ ...prev, compose_source: e.target.value })); setSiteAppEditPlan(null); }}
                   />
                 </label>
-                <p className="compose-hint">Panel đọc lại file này rồi tự sinh file chạy thật. Dùng
-                  <code>{'${BPANEL_URL}'}</code> / <code>{'${BPANEL_DOMAIN}'}</code> cho địa chỉ công khai
+                <p className="compose-hint">Panel đọc lại file này rồi tự sinh file chạy thật. Biến <code>{'${BIẾN}'}</code> lấy
+                  từ ô .env; địa chỉ công khai dùng <code>{'${BPANEL_URL}'}</code> / <code>{'${BPANEL_DOMAIN}'}</code>
                   {app.websites?.length > 0 ? ` (hiện là ${app.websites[0]})` : ' (cần trỏ một website vào ứng dụng trước)'}.</p>
+                <label className="site-app-env"><span>.env (KEY=value, one per line)</span>
+                  <textarea
+                    className="code-editor"
+                    rows={6}
+                    value={siteAppEdit.env}
+                    disabled={!!loading}
+                    onChange={e => { setSiteAppEdit(prev => ({ ...prev, env: e.target.value })); setSiteAppEditPlan(null); }}
+                  />
+                </label>
                 {siteAppEditPlan?.services?.length > 0 && <label><span>Service phục vụ domain</span>
                   <select value={siteAppEdit.web_service} disabled={!!loading} onChange={e => setSiteAppEdit(prev => ({ ...prev, web_service: e.target.value }))}>
                     <option value="">Tự chọn</option>

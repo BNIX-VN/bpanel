@@ -113,7 +113,13 @@ def validate_compose(payload: ComposeValidateRequest, current_user: User = Depen
     # Same registry rule as a container application: admins may reach a registry
     # the panel does not ship in its allowlist, customers may not.
     enforce = not is_admin_role(current_user.role)
-    return compose.analyse(payload.compose_source or "", payload.web_service or "", enforce).as_dict()
+    variables = compose.read_variables(payload.env or "")
+    # A dry run cannot know which website will point here, so the two panel names
+    # stand in for themselves; the real values are filled in at deploy.
+    variables.setdefault("BPANEL_URL", "https://<domain>")
+    variables.setdefault("BPANEL_DOMAIN", "<domain>")
+    return compose.analyse(payload.compose_source or "", payload.web_service or "",
+                           enforce, variables).as_dict()
 
 
 @router.post("")
@@ -143,8 +149,11 @@ def create_site_app(payload: SiteAppCreate, db: Session = Depends(get_db), curre
             from app.services import compose as compose_service
 
             cpu_limit = site_apps.validate_cpu_limit(payload.cpu_limit)
+            variables = compose_service.read_variables(payload.env or "")
+            variables.setdefault("BPANEL_URL", "https://<domain>")
+            variables.setdefault("BPANEL_DOMAIN", "<domain>")
             plan = compose_service.analyse(payload.compose_source or "", payload.web_service or "",
-                                           enforce_registry=not is_admin)
+                                           enforce_registry=not is_admin, variables=variables)
             if not plan.ok:
                 raise HTTPException(
                     status_code=400,
@@ -268,12 +277,16 @@ def update_site_app(app_id: int, payload: SiteAppUpdate, db: Session = Depends(g
             app.cpu_limit = site_apps.validate_cpu_limit(payload.cpu_limit)
         if payload.env is not None:
             app.env = site_apps.validate_env(payload.env)
-        if app.kind == "compose" and (payload.compose_source is not None or payload.web_service is not None):
+        if app.kind == "compose" and (payload.compose_source is not None or payload.web_service is not None
+                                      or payload.env is not None):
             from app.services import compose as compose_service
 
             source = payload.compose_source if payload.compose_source is not None else app.compose_source
             wanted = payload.web_service if payload.web_service is not None else app.web_service
-            plan = compose_service.analyse(source or "", wanted or "")
+            variables = site_apps.compose_variables(app)
+            variables.setdefault("BPANEL_URL", "https://<domain>")
+            variables.setdefault("BPANEL_DOMAIN", "<domain>")
+            plan = compose_service.analyse(source or "", wanted or "", variables=variables)
             if not plan.ok:
                 db.rollback()
                 raise HTTPException(
