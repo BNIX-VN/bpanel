@@ -252,7 +252,8 @@ def home_for(service: "Service") -> tuple[str, bool]:
     return str(path), False
 
 
-def _parse_service(name: str, raw: Any, declared_volumes: set[str], issues: list[Issue]) -> Service | None:
+def _parse_service(name: str, raw: Any, declared_volumes: set[str], issues: list[Issue],
+                   enforce_registry: bool = True) -> Service | None:
     if not SERVICE_NAME_RE.fullmatch(name):
         issues.append(Issue(name, "tên service chỉ được dùng chữ thường, số, gạch ngang và gạch dưới"))
         return None
@@ -274,7 +275,7 @@ def _parse_service(name: str, raw: Any, declared_volumes: set[str], issues: list
         issues.append(Issue(name, "thiếu image"))
         return None
     try:
-        image = site_apps.validate_image(image)
+        image = site_apps.validate_image(image, enforce_registry=enforce_registry)
     except ValueError as exc:
         issues.append(Issue(name, str(exc)))
         return None
@@ -318,7 +319,7 @@ def _parse_service(name: str, raw: Any, declared_volumes: set[str], issues: list
     return service
 
 
-def analyse(source: str, web_service: str = "") -> Plan:
+def analyse(source: str, web_service: str = "", enforce_registry: bool = True) -> Plan:
     """Read a customer's compose file and report what the panel can run."""
     plan = Plan()
     if not (source or "").strip():
@@ -353,7 +354,7 @@ def analyse(source: str, web_service: str = "") -> Plan:
 
     declared: set[str] = set()
     for name, raw in raw_services.items():
-        service = _parse_service(str(name), raw, declared, plan.issues)
+        service = _parse_service(str(name), raw, declared, plan.issues, enforce_registry)
         if service:
             plan.services.append(service)
 

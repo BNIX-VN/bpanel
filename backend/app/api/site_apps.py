@@ -110,7 +110,10 @@ def validate_compose(payload: ComposeValidateRequest, current_user: User = Depen
     ensure_role(current_user.role, Role.end_user)
     from app.services import compose
 
-    return compose.analyse(payload.compose_source or "", payload.web_service or "").as_dict()
+    # Same registry rule as a container application: admins may reach a registry
+    # the panel does not ship in its allowlist, customers may not.
+    enforce = not is_admin_role(current_user.role)
+    return compose.analyse(payload.compose_source or "", payload.web_service or "", enforce).as_dict()
 
 
 @router.post("")
@@ -140,7 +143,8 @@ def create_site_app(payload: SiteAppCreate, db: Session = Depends(get_db), curre
             from app.services import compose as compose_service
 
             cpu_limit = site_apps.validate_cpu_limit(payload.cpu_limit)
-            plan = compose_service.analyse(payload.compose_source or "", payload.web_service or "")
+            plan = compose_service.analyse(payload.compose_source or "", payload.web_service or "",
+                                           enforce_registry=not is_admin)
             if not plan.ok:
                 raise HTTPException(
                     status_code=400,
