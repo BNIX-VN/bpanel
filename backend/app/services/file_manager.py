@@ -271,7 +271,7 @@ def list_files(website: Website, relative_path: str = "") -> List[Dict]:
 
 
 def make_directory(website: Website, parent_path: str, name: str) -> str:
-    parent = _safe_path(website, parent_path or site_users.PUBLIC_DIR)
+    parent = _safe_path(website, parent_path or "")
     if not parent.exists() or not parent.is_dir():
         raise ValueError("Parent directory not found")
     target = parent / _safe_entry_name(name)
@@ -499,7 +499,7 @@ def upload_file(
     allow_executable: bool = False,
     quota_check: Optional[QuotaCheck] = None,
 ) -> str:
-    target_dir = _safe_path(website, directory_path or site_users.PUBLIC_DIR)
+    target_dir = _safe_path(website, directory_path or "")
     if target_dir.exists() and not target_dir.is_dir():
         raise ValueError("Upload target is not a directory")
     if target_dir.is_symlink():
@@ -646,7 +646,7 @@ def _transfer_sources(website: Website, paths: Iterable[str], action: str, allow
 
 
 def _transfer_destination(website: Website, destination_path: str) -> Path:
-    destination = _safe_path(website, destination_path or site_users.PUBLIC_DIR)
+    destination = _safe_path(website, destination_path or "")
     if not destination.exists() or not destination.is_dir():
         raise ValueError("Destination folder not found")
     if destination.is_symlink():
@@ -780,7 +780,7 @@ def archive_entries(
     allow_sensitive: bool = False,
     quota_check: Optional[QuotaCheck] = None,
 ) -> str:
-    base = _safe_path(website, base_path or site_users.PUBLIC_DIR)
+    base = _safe_path(website, base_path or "")
     if not base.exists() or not base.is_dir():
         raise ValueError("Archive directory not found")
     selected = [_safe_path(website, path) for path in paths]
