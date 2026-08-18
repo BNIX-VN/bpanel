@@ -637,9 +637,12 @@ def _restore_applications(manifest: dict, user: User, db, archive: Path, tmp_dir
             payload = _extract_member_to_file(archive, member, tmp_dir)
             if payload:
                 # The helper only reads from the backup tree, so the extracted
-                # payload has to live there rather than in /tmp.
-                staged = Path(settings.backup_root) / f".restore-{user.username}-{name}.tar"
+                # payload has to live there rather than in /tmp — and inside the
+                # user's own directory, the one level of it the panel may write.
+                staging_dir = _user_backup_dir(user.username)
+                staged = staging_dir / f".restore-{name}.tar"
                 try:
+                    staging_dir.mkdir(parents=True, exist_ok=True)
                     staged.write_bytes(payload.read_bytes())
                     site_apps.import_payload(app, str(staged))
                     record["data_restored"] = True
