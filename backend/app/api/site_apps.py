@@ -488,6 +488,23 @@ def runtime_install_docker(current_user: User = Depends(get_current_user)):
     return {"message": "Docker is ready.", "output": output, "docker": site_apps.docker_status()}
 
 
+@runtime_router.post("/docker-prune")
+def runtime_prune_docker(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Reclaim what pulling images left behind.
+
+    Server-wide, so it is an administrator's button: images are shared between
+    tenants and cannot be charged to one customer's quota.
+    """
+    ensure_role(current_user.role, Role.admin)
+    try:
+        output = site_apps.prune_docker()
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    log_action(db, current_user.id, "prune_docker", "docker", "")
+    return {"message": "Đã dọn layer và build cache không dùng.", "output": output,
+            "docker": site_apps.docker_status()}
+
+
 @runtime_router.post("/node-install")
 def runtime_install_node(payload: NodeInstallRequest, current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.admin)

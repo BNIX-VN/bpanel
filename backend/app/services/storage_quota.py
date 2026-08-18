@@ -1,16 +1,25 @@
 import os
 import stat
+import threading
+import time
 from pathlib import Path
 
 from sqlalchemy.orm import Session
 
 from app.core.permissions import is_admin_role
-from app.models.entities import User, Website
+from app.models.entities import SiteApp, User, Website
 
 
 BYTES_PER_MB = 1024 * 1024
 STATIC_SITE_ESTIMATE_BYTES = 1 * BYTES_PER_MB
 WORDPRESS_SITE_ESTIMATE_BYTES = 100 * BYTES_PER_MB
+
+# Container volumes sit outside the customer's home, so measuring them means
+# asking the helper, which means a `du` as root. The dashboard asks for usage on
+# every load, so the answer is held briefly rather than recomputed each time.
+VOLUME_USAGE_TTL_SECONDS = 60
+_volume_usage_cache: dict[str, tuple[float, int]] = {}
+_volume_usage_lock = threading.Lock()
 
 
 class StorageQuotaExceeded(ValueError):
@@ -50,9 +59,78 @@ def website_storage_used_bytes(website: Website) -> int:
     return path_usage_bytes(website.root_path)
 
 
+def volume_usage_bytes(linux_user: str, use_cache: bool = True) -> int:
+    """How much disk a customer's container volumes take.
+
+    Zero when Docker is not installed or the helper cannot answer: a number the
+    panel cannot measure must not be allowed to look like a full disk.
+    """
+    if not linux_user:
+        return 0
+    now = time.monotonic()
+    if use_cache:
+        with _volume_usage_lock:
+            cached = _volume_usage_cache.get(linux_user)
+        if cached and now - cached[0] < VOLUME_USAGE_TTL_SECONDS:
+            return cached[1]
+
+    from app.services.shell import shell
+
+    result = shell.privileged(
+        "site-app-volume-usage",
+        helper_args=[linux_user],
+        check=False,
+        timeout=120,
+        fallback=["bash", "-lc", "echo 0"],
+    )
+    text = (result.stdout or "").strip().splitlines()
+    total = 0
+    if result.returncode == 0 and text and text[-1].isdigit():
+        total = int(text[-1])
+    with _volume_usage_lock:
+        _volume_usage_cache[linux_user] = (now, total)
+    return total
+
+
+def forget_volume_usage(linux_user: str) -> None:
+    """Drop the cached figure after something changed it."""
+    with _volume_usage_lock:
+        _volume_usage_cache.pop(linux_user or "", None)
+
+
+def app_storage_used_bytes(db: Session, user: User) -> int:
+    """An application's own directory plus the volumes its containers write to.
+
+    Both sat outside what the quota measured: the directory because it is not a
+    website root, the volumes because they are not even under /home.
+    """
+    from app.services import addons
+
+    if not addons.is_installed(addons.APPLICATION):
+        return 0
+    from app.services import site_apps
+
+    apps = db.query(SiteApp).filter(SiteApp.owner_id == user.id).all()
+    if not apps:
+        return 0
+    total = 0
+    linux_users = set()
+    for app in apps:
+        try:
+            linux_user = site_apps.owner_linux_user(app)
+            total += path_usage_bytes(site_apps.app_directory(linux_user, app.name))
+        except (ValueError, AttributeError):
+            continue
+        linux_users.add(linux_user)
+    for linux_user in linux_users:
+        total += volume_usage_bytes(linux_user)
+    return total
+
+
 def user_storage_used_bytes(db: Session, user: User) -> int:
     websites = db.query(Website).filter(Website.owner_id == user.id).all()
-    return sum(website_storage_used_bytes(website) for website in websites)
+    return (sum(website_storage_used_bytes(website) for website in websites)
+            + app_storage_used_bytes(db, user))
 
 
 def storage_usage_summary(db: Session, user: User) -> dict:

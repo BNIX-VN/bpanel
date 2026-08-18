@@ -4040,6 +4040,34 @@ PY
     echo
     ;;
 
+  site-app-volume-usage)
+    # Named volumes live under /var/lib/docker, which the panel user cannot read,
+    # so a customer's container data was invisible to the disk quota.
+    [[ $# -eq 1 ]] || deny "usage: site-app-volume-usage <owner-user>"
+    user="$1"
+    require_linux_user "$user"
+    command -v docker >/dev/null 2>&1 || { echo 0; exit 0; }
+    total=0
+    while IFS= read -r volume_name; do
+      [[ -n "$volume_name" ]] || continue
+      volume_path="/var/lib/docker/volumes/${volume_name}/_data"
+      [[ -d "$volume_path" ]] || continue
+      size="$(du -sb --one-file-system "$volume_path" 2>/dev/null | cut -f1)"
+      [[ "$size" =~ ^[0-9]+$ ]] && total=$((total + size))
+    done < <(docker volume ls --format '{{.Name}}' 2>/dev/null | grep -E "^bpanel-${user}-" || true)
+    echo "$total"
+    ;;
+
+  site-app-volume-list)
+    [[ $# -eq 2 ]] || deny "usage: site-app-volume-list <owner-user> <name>"
+    user="$1"; app_name="$2"
+    require_linux_user "$user"
+    require_app_name "$app_name"
+    command -v docker >/dev/null 2>&1 || exit 0
+    docker volume ls --format '{{.Name}}' 2>/dev/null \
+      | grep -E "^$(app_container_name "$user" "$app_name")_" || true
+    ;;
+
   site-app-control)
     [[ $# -eq 3 ]] || deny "usage: site-app-control <owner-user> <name> <action>"
     user="$1"; app_name="$2"; app_action="$3"
@@ -4159,6 +4187,22 @@ PY
     echo "installed=yes"
     echo "version=$(docker --version 2>/dev/null | head -n1)"
     echo "active=$(systemctl is-active docker 2>/dev/null)"
+    # Images are shared by every tenant on the box, so they cannot be billed to
+    # one customer's quota; an administrator still has to see what they cost.
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && echo "df=$line"
+    done < <(docker system df --format '{{.Type}}|{{.Size}}|{{.Reclaimable}}' 2>/dev/null || true)
+    ;;
+
+  docker-prune)
+    # Dangling layers and build cache only: nothing that a tagged image, a
+    # volume or a container still refers to is touched.
+    [[ $# -eq 0 ]] || deny "usage: docker-prune"
+    command -v docker >/dev/null 2>&1 || deny "Docker is not installed"
+    docker image prune -f 2>&1 || true
+    docker builder prune -f 2>&1 || true
+    echo "--- remaining ---"
+    docker system df --format '{{.Type}}|{{.Size}}|{{.Reclaimable}}' 2>/dev/null || true
     ;;
 
   docker-firewall-guard)

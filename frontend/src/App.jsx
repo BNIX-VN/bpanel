@@ -1877,6 +1877,15 @@ function App() {
     }
   }
 
+  async function pruneDocker() {
+    const data = await request('/site-runtimes/docker-prune', { method: 'POST' }, 'Đang dọn layer Docker không dùng...');
+    if (data) {
+      setNotice(data.message || 'Đã dọn.');
+      if (data.output) setSiteAppLog({ name: 'docker prune', log: data.output });
+      await loadSiteRuntimes();
+    }
+  }
+
   async function installNodeMajor(major) {
     const data = await request('/site-runtimes/node-install', { method: 'POST', body: JSON.stringify({ major }) }, `Installing Node ${major}...`);
     if (data) {
@@ -3736,6 +3745,13 @@ function App() {
           {isAdmin && !dockerReady && <button className="mini secondary-light" disabled={!!loading} onClick={installDockerEngine}>Install Docker</button>}
           {isAdmin && <button className="mini secondary-light" disabled={!!loading} onClick={() => { const major = prompt('Install which Node major version?', '22'); if (major) installNodeMajor(major.trim()); }}>Add Node version</button>}
         </div>
+        {isAdmin && dockerReady && siteRuntimes.docker?.disk?.length > 0 && <div className="site-runtime-strip">
+          <span>Đĩa Docker (toàn server, không tính vào quota khách):</span>
+          {siteRuntimes.docker.disk.map(row => <span key={row.type}>
+            {row.type}: <strong>{row.size}</strong>{row.reclaimable && !row.reclaimable.startsWith('0B') ? <> · dọn được {row.reclaimable}</> : null}
+          </span>)}
+          <button className="mini secondary-light" disabled={!!loading} onClick={pruneDocker}>Dọn layer không dùng</button>
+        </div>}
         {!atLimit && <div className="site-app-form">
           <label><span>Name</span>
             <input value={siteAppDraft.name} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, name: e.target.value }))} />

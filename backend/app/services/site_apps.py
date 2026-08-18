@@ -705,7 +705,14 @@ def pull_image(app: SiteApp) -> str:
 def docker_status() -> dict:
     result = shell.privileged("docker-status", check=False, fallback=["bash", "-lc", "echo installed=no"])
     parsed = {}
+    disk = []
     for line in (result.stdout or "").splitlines():
+        if line.startswith("df="):
+            # Type|Size|Reclaimable, straight from `docker system df`.
+            parts = line[3:].split("|")
+            if len(parts) == 3:
+                disk.append({"type": parts[0], "size": parts[1], "reclaimable": parts[2]})
+            continue
         if "=" in line:
             key, value = line.split("=", 1)
             parsed[key.strip()] = value.strip()
@@ -713,7 +720,22 @@ def docker_status() -> dict:
         "installed": parsed.get("installed") == "yes",
         "version": parsed.get("version", ""),
         "active": parsed.get("active", ""),
+        # Server-wide, not per customer: one image serves every tenant using it.
+        "disk": disk,
     }
+
+
+def prune_docker() -> str:
+    """Reclaim dead layers and build cache. Nothing in use is removed."""
+    result = shell.privileged(
+        "docker-prune",
+        check=False,
+        timeout=900,
+        fallback=["bash", "-lc", "echo dry-run-docker-prune"],
+    )
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout or "Docker prune failed").strip()[-4000:])
+    return (result.stdout or "").strip()[-4000:]
 
 
 def install_docker() -> str:
