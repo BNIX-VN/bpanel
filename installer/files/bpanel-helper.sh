@@ -4114,8 +4114,15 @@ PY
     compose_file="$(app_compose_file "$user" "$app_name")"
     [[ -f "$compose_file" ]] || deny "no compose file for ${app_name}; deploy it once first"
     app_dir="$(app_directory "$user" "$app_name")"
-    exec timeout 60 docker compose -f "$compose_file" --project-directory "$app_dir" \
-      -p "$(app_container_name "$user" "$app_name")" ps --all --format json
+    project="$(app_container_name "$user" "$app_name")"
+    container_ids="$(timeout 60 docker compose -f "$compose_file" --project-directory "$app_dir" \
+      -p "$project" ps --all --quiet 2>/dev/null || true)"
+    [[ -n "$container_ids" ]] || exit 0
+    # A container that keeps dying is restarted by Docker, so at any moment it
+    # reads as running; only the restart count tells the panel it is looping.
+    exec timeout 60 docker inspect --format \
+      '{"service":"{{index .Config.Labels "com.docker.compose.service"}}","state":"{{.State.Status}}","restarts":{{.RestartCount}},"exit":{{.State.ExitCode}},"oom":{{.State.OOMKilled}},"started":"{{.State.StartedAt}}"}' \
+      $container_ids
     ;;
 
   site-app-compose-pull)

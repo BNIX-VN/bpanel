@@ -540,7 +540,7 @@ def is_running(app: SiteApp) -> bool:
     return active_state(app) == "active"
 
 
-def compose_service_states(app: SiteApp) -> Optional[dict[str, str]]:
+def compose_service_states(app: SiteApp) -> Optional[list[dict]]:
     """What each container in a compose app is actually doing.
 
     The unit only says whether `docker compose up` is still attached, and it is:
@@ -558,7 +558,7 @@ def compose_service_states(app: SiteApp) -> Optional[dict[str, str]]:
         # Docker could not be asked. Saying nothing is wrong is better than
         # reporting an outage the panel has no evidence for.
         return None
-    states: dict[str, str] = {}
+    states: list[dict] = []
     for line in (result.stdout or "").splitlines():
         line = line.strip()
         if not line:
@@ -567,11 +567,34 @@ def compose_service_states(app: SiteApp) -> Optional[dict[str, str]]:
             entries = json.loads(line)
         except json.JSONDecodeError:
             continue
-        # Older Compose prints one object per line, newer ones a single array.
         for entry in entries if isinstance(entries, list) else [entries]:
-            if isinstance(entry, dict) and entry.get("Service"):
-                states[str(entry["Service"])] = str(entry.get("State") or "unknown")
+            if isinstance(entry, dict) and entry.get("service"):
+                states.append(entry)
     return states
+
+
+# A container Docker has restarted this many times, and which has been up for
+# less than a moment, is going round in a loop rather than having had a bad day.
+CRASH_LOOP_RESTARTS = 3
+CRASH_LOOP_UPTIME_SECONDS = 180
+
+
+def _container_uptime(started: str) -> float:
+    """Seconds since a container last started, or a large number if unreadable."""
+    from datetime import datetime, timezone
+
+    text = (started or "").replace("Z", "+00:00")
+    if "." in text:  # Docker prints nanoseconds; datetime stops at microseconds
+        head, _, tail = text.partition(".")
+        fraction, sign, offset = tail.partition("+")
+        text = f"{head}.{fraction[:6]}{sign}{offset}" if sign else f"{head}.{fraction[:6]}"
+    try:
+        moment = datetime.fromisoformat(text)
+    except ValueError:
+        return float("inf")
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - moment).total_seconds()
 
 
 def compose_trouble(app: SiteApp) -> str:
@@ -583,10 +606,19 @@ def compose_trouble(app: SiteApp) -> str:
         # `docker compose up` reaches this state while it downloads an image it
         # was never given beforehand: unit active, not one container to show.
         return "no container is running yet (an image may still be downloading)"
-    broken = {name: state for name, state in states.items() if state != "running"}
-    if not broken:
-        return ""
-    return "; ".join(f"container '{name}' is {state}" for name, state in sorted(broken.items()))
+
+    problems: list[str] = []
+    for entry in sorted(states, key=lambda item: str(item.get("service"))):
+        name = str(entry.get("service"))
+        state = str(entry.get("state") or "unknown")
+        restarts = int(entry.get("restarts") or 0)
+        if state != "running":
+            problems.append(f"container '{name}' is {state}")
+        elif restarts >= CRASH_LOOP_RESTARTS and _container_uptime(entry.get("started", "")) < CRASH_LOOP_UPTIME_SECONDS:
+            # Up right now, but only because Docker just restarted it again.
+            reason = " (out of memory)" if entry.get("oom") else f" (last exit code {entry.get('exit')})"
+            problems.append(f"container '{name}' keeps restarting — {restarts} times so far{reason}")
+    return "; ".join(problems)
 
 
 def settled_state(app: SiteApp, checks: int = 4, delay: float = 1.5) -> str:

@@ -97,6 +97,7 @@ class Service:
     user: str | None = None
     working_dir: str | None = None
     healthcheck: dict | None = None
+    memory_mb: int | None = None
 
     @property
     def touches_app_files(self) -> bool:
@@ -270,6 +271,21 @@ def home_for(service: "Service") -> tuple[str, bool]:
     return str(path), False
 
 
+def parse_memory(value: Any) -> int | None:
+    """Read a compose memory value — 512m, 1g, or a plain byte count — as MB."""
+    text = str(value or "").strip().lower()
+    if not text:
+        return None
+    units = {"k": 1 / 1024, "m": 1, "g": 1024, "b": 1 / (1024 * 1024)}
+    factor = units.get(text[-1], None)
+    number = text[:-1] if factor is not None else text
+    try:
+        megabytes = float(number) * (factor if factor is not None else 1 / (1024 * 1024))
+    except ValueError:
+        return None
+    return max(1, int(megabytes))
+
+
 def _parse_service(name: str, raw: Any, declared_volumes: set[str], issues: list[Issue],
                    enforce_registry: bool = True) -> Service | None:
     if not SERVICE_NAME_RE.fullmatch(name):
@@ -299,6 +315,7 @@ def _parse_service(name: str, raw: Any, declared_volumes: set[str], issues: list
         return None
 
     service = Service(name=name, image=image)
+    service.memory_mb = parse_memory(raw.get("mem_limit"))
     service.environment = _parse_environment(raw.get("environment"), name, issues)
     service.command = raw.get("command")
     service.entrypoint = raw.get("entrypoint")
@@ -581,8 +598,13 @@ def render(
             # just fail. The setting is scoped to this container's own network
             # namespace, where a low port means nothing.
             entry["sysctls"] = {"net.ipv4.ip_unprivileged_port_start": 0}
-        entry["mem_limit"] = f"{memory_mb}m"
-        entry["memswap_limit"] = f"{memory_mb}m"
+        # The application's cap is a ceiling per service, not a budget shared
+        # between them. A file that asks for less keeps its own number, so a
+        # database beside a heavy web service does not have to be given the same
+        # room just to let the web service have enough.
+        limit = min(service.memory_mb, memory_mb) if service.memory_mb else memory_mb
+        entry["mem_limit"] = f"{limit}m"
+        entry["memswap_limit"] = f"{limit}m"
         entry["cpus"] = float(cpus)
         entry["pids_limit"] = 256
         entry["restart"] = "unless-stopped"
