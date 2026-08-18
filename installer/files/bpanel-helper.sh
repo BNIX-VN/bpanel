@@ -3910,6 +3910,28 @@ PY
     echo "$unit_name"
     ;;
 
+  site-app-rename)
+    # An app's directory is derived from its name, so a rename has to take the
+    # customer's files with it or they are orphaned in the old path.
+    [[ $# -eq 3 ]] || deny "usage: site-app-rename <owner-user> <old-name> <new-name>"
+    user="$1"; app_name="$2"; app_new_name="$3"
+    require_linux_user "$user"
+    require_app_name "$app_name"
+    require_app_name "$app_new_name"
+    [[ "$app_name" != "$app_new_name" ]] || exit 0
+    old_dir="$(app_directory "$user" "$app_name")"
+    new_dir="$(app_directory "$user" "$app_new_name")"
+    if [[ -d "$old_dir" ]]; then
+      [[ -e "$new_dir" ]] && deny "a directory already exists at ${new_dir}"
+      install -d -m 0750 "$(dirname "$new_dir")"
+      mv -T -- "$old_dir" "$new_dir"
+    fi
+    ensure_app_directory "$user" "$app_new_name" >/dev/null
+    old_env="$(app_env_file "$user" "$app_name")"
+    [[ -f "$old_env" ]] && mv -f -- "$old_env" "$(app_env_file "$user" "$app_new_name")"
+    echo "$new_dir"
+    ;;
+
   site-app-dir-ensure)
     [[ $# -eq 2 ]] || deny "usage: site-app-dir-ensure <owner-user> <name>"
     ensure_app_directory "$1" "$2"

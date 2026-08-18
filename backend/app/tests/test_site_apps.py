@@ -546,3 +546,23 @@ def test_write_runtime_carries_the_memory_cap(monkeypatch):
     site_apps.write_runtime(app)
 
     assert "--memory=256" in calls[0]["args"]
+
+
+def test_rename_moves_the_application_directory(monkeypatch):
+    """The directory is derived from the name, so files must follow a rename."""
+    app = _managed_app("node", name="demoapp")
+    calls = _capture_privileged(monkeypatch, stdout="/home/siteuser/apps/demoapp")
+
+    site_apps.rename_directory(app, "nodeapp")
+
+    assert calls[0]["command"] == "site-app-rename"
+    assert calls[0]["args"] == ["siteuser", "nodeapp", "demoapp"]
+
+
+def test_rename_is_a_no_op_when_the_name_did_not_change(monkeypatch):
+    app = _managed_app("node", name="demoapp")
+    calls = _capture_privileged(monkeypatch)
+
+    assert site_apps.rename_directory(app, "demoapp") == ""
+    assert site_apps.rename_directory(app, "") == ""
+    assert calls == []

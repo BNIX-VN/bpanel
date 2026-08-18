@@ -242,6 +242,11 @@ def update_site_app(app_id: int, payload: SiteAppUpdate, db: Session = Depends(g
         raise HTTPException(status_code=409, detail="An application with that name or port already exists") from exc
     db.refresh(app)
 
+    if app.name != before["name"]:
+        try:
+            site_apps.rename_directory(app, before["name"])
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     if any(getattr(app, field) != before[field] for field in UNIT_FIELDS):
         # The unit still carries the old port, memory cap or start command until
         # it is rewritten, so a change that only touched the database would leave

@@ -228,3 +228,11 @@ def test_delete_accepts_an_application_root_too(helper):
     managed-path validator, so it has to know about apps/<name> as well."""
     block = helper.split("delete_no_follow() {", 1)[1].split("\nPY\n", 1)[0]
     assert 'os.path.join(base, "apps")' in block
+
+
+def test_rename_refuses_to_overwrite_an_existing_directory(helper):
+    block = helper.split("  site-app-rename)", 1)[1].split("\n    ;;", 1)[0]
+    assert 'deny "a directory already exists at' in block
+    assert 'require_app_name "$app_new_name"' in block
+    # mv -T so a rename into an existing name cannot nest one app inside another.
+    assert "mv -T --" in block

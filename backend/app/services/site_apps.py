@@ -357,6 +357,25 @@ def ensure_directory(app: SiteApp) -> str:
     return (result.stdout or "").strip()
 
 
+def rename_directory(app: SiteApp, previous_name: str) -> str:
+    """Carry an app's files across a rename.
+
+    The directory is derived from the name, so without this the customer's code
+    stays behind in the old path and the renamed app starts against nothing.
+    """
+    if not previous_name or previous_name == app.name:
+        return ""
+    result = shell.privileged(
+        "site-app-rename",
+        helper_args=[owner_linux_user(app), validate_name(previous_name), validate_name(app.name)],
+        check=False,
+        fallback=["bash", "-lc", "true"],
+    )
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout or "Could not move the application directory").strip())
+    return (result.stdout or "").strip()
+
+
 def write_runtime(app: SiteApp) -> str:
     """Generate and reload the systemd unit for an app."""
     linux_user = owner_linux_user(app)
