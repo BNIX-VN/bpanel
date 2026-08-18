@@ -319,10 +319,14 @@ def update_site_app(app_id: int, payload: SiteAppUpdate, db: Session = Depends(g
             site_apps.rename_directory(app, before["name"])
         except (RuntimeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if any(getattr(app, field) != before[field] for field in UNIT_FIELDS):
+    if app.kind in ("docker", "compose") or any(getattr(app, field) != before[field] for field in UNIT_FIELDS):
         # The unit still carries the old port, memory cap or start command until
         # it is rewritten, so a change that only touched the database would leave
         # the running process stale until someone thought to press Deploy.
+        #
+        # A container app re-applies even when nothing in the file changed: with
+        # a tag like :latest the version that should run moves without the text
+        # moving, and saving is how someone asks for what the tag points at now.
         _reapply_runtime(db, app, before["name"])
     if app.port != previous_port:
         _resync_websites(app)
