@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     panel_port: int = 2222
     panel_ssl_cert: str = ""
     panel_ssl_key: str = ""
+    # Where that certificate came from: selfsigned | letsencrypt | domain.
+    # Blank on a panel installed before the panel had a certificate at all.
+    panel_ssl_mode: str = ""
     frontend_dist: str = "/opt/bpanel/frontend/dist"
     totp_issuer: str = "BPanel"
     github_token: str = ""

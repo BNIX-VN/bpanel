@@ -131,7 +131,7 @@ def panel_ssl_mode() -> str:
     'selfsigned' is the default a server with no domain gets; 'none' means the
     panel is answering in the clear, which should not happen any more.
     """
-    mode = (os.environ.get("PANEL_SSL_MODE") or "").strip().lower()
+    mode = (getattr(settings, "panel_ssl_mode", "") or os.environ.get("PANEL_SSL_MODE") or "").strip().lower()
     if mode in {"letsencrypt", "domain", "selfsigned"}:
         return mode if has_panel_certificate() else "none"
     if not has_panel_certificate():

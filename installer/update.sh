@@ -955,6 +955,15 @@ fi
 [[ -d "$SOURCE_DIR/backend"  ]] || fail "Missing $SOURCE_DIR/backend"
 [[ -d "$SOURCE_DIR/frontend" ]] || fail "Missing $SOURCE_DIR/frontend"
 
+# The installed updater is a copy of this file, and it used to be replaced at
+# the very end. One failure anywhere before that point left the broken copy in
+# place with no way to update past it — the updater could never fix itself.
+# Refreshing it here, as soon as the new source is known good enough to read,
+# means the next run always has the newer script.
+if [[ -f "$SOURCE_DIR/installer/update.sh" ]]; then
+  install -m 0755 -o root -g root "$SOURCE_DIR/installer/update.sh" /usr/local/sbin/bpanel-update
+fi
+
 # --- Sync code into APP_DIR -------------------------------------------------
 log "Syncing source to $APP_DIR"
 mkdir -p "$APP_DIR"
