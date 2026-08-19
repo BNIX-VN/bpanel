@@ -686,7 +686,7 @@ class PanelSettingsOut(BaseModel):
     # so the panel can say whether the browser warning is expected.
     ssl_mode: str = "none"
     # Websites on this server whose certificate the panel could borrow.
-    ssl_domains_available: List[str] = []
+    ssl_domains_available: list[str] = []
     message: Optional[str] = None
     # Optional ClamAV malware scanning status (always present, defaults off).
     malware_scan_enabled: bool = False
