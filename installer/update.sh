@@ -380,13 +380,34 @@ ensure_panel_https() {
   # no business answering in the clear. A server with no domain has nothing a
   # certificate authority will sign, so it gets a self-signed certificate: a
   # warning the operator clicks through once beats a password on the wire.
-  local panel_port="$1" server_ip="$2" cert key host
+  local panel_port="$1" server_ip="$2" cert key host mode live_dir
   cert="$(env_get PANEL_SSL_CERT)"
   key="$(env_get PANEL_SSL_KEY)"
+  host="$(env_get PANEL_DOMAIN)"
+  mode="$(env_get PANEL_SSL_MODE)"
+
+  # If the panel answers on a domain that already has a real certificate, use
+  # it: a name the browser trusts beats one it warns about, and there is nothing
+  # to choose between when the panel's own hostname is the domain in question.
+  live_dir="/etc/letsencrypt/live/${host}"
+  if [[ -n "$host" && -f "${live_dir}/fullchain.pem" && -f "${live_dir}/privkey.pem" \
+        && "$mode" != "letsencrypt" && "$mode" != "domain" ]]; then
+    log "Panel domain ${host} already has a certificate; using it"
+    install -d -o root -g bpanel -m 0750 /etc/bpanel
+    install -m 0640 -o root -g bpanel "${live_dir}/fullchain.pem" /etc/bpanel/panel-fullchain.pem
+    install -m 0640 -o root -g bpanel "${live_dir}/privkey.pem" /etc/bpanel/panel-privkey.pem
+    env_set PANEL_SSL_CERT "/etc/bpanel/panel-fullchain.pem"
+    env_set PANEL_SSL_KEY "/etc/bpanel/panel-privkey.pem"
+    env_set PANEL_SSL_MODE "domain"
+    env_set PANEL_URL "https://${host}:${panel_port}"
+    env_set ALLOWED_ORIGINS "https://${host}:${panel_port}"
+    PANEL_SWITCHED_TO_HTTPS="https://${host}:${panel_port}"
+    return 0
+  fi
+
   if [[ -n "$cert" && -n "$key" && -f "$cert" && -f "$key" ]]; then
     return 0
   fi
-  host="$(env_get PANEL_DOMAIN)"
   host="${host:-${server_ip:-127.0.0.1}}"
   echo "==> Panel has no certificate; generating a self-signed one"
   install -d -o root -g bpanel -m 0750 /etc/bpanel
