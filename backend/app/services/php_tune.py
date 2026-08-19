@@ -122,15 +122,18 @@ def _tier(total_mb: int) -> dict:
     the pool arithmetic budgeted for it, and so opcache is big enough to hold a
     WordPress install without evicting on every request.
     """
+    # opcache is one shared segment per FPM master, not per worker, so it is
+    # cheap: the package already ships 128 MB and recommending less would be a
+    # downgrade dressed up as tuning. These start at that and go up.
     if total_mb <= 1024:
-        return {"memory_limit": 128, "opcache_mb": 64, "interned": 8, "files": 10000}
+        return {"memory_limit": 128, "opcache_mb": 96, "interned": 8, "files": 16229}
     if total_mb <= 2048:
-        return {"memory_limit": 192, "opcache_mb": 96, "interned": 8, "files": 16229}
+        return {"memory_limit": 192, "opcache_mb": 128, "interned": 8, "files": 16229}
     if total_mb <= 4096:
-        return {"memory_limit": 256, "opcache_mb": 128, "interned": 16, "files": 32531}
+        return {"memory_limit": 256, "opcache_mb": 192, "interned": 16, "files": 32531}
     if total_mb <= 8192:
-        return {"memory_limit": 384, "opcache_mb": 192, "interned": 24, "files": 65407}
-    return {"memory_limit": 512, "opcache_mb": 256, "interned": 32, "files": 130987}
+        return {"memory_limit": 384, "opcache_mb": 256, "interned": 24, "files": 65407}
+    return {"memory_limit": 512, "opcache_mb": 384, "interned": 32, "files": 130987}
 
 
 def recommendations(facts: dict | None = None) -> list[dict]:
@@ -230,8 +233,42 @@ def _read_ini_values(paths: list[Path], keys: set[str]) -> dict:
     return values
 
 
+def _effective_values(php_version: str) -> dict:
+    """Ask PHP what it resolves these settings to, built-in defaults included.
+
+    Reading the ini files alone misses everything PHP defaults to without being
+    told — realpath_cache_size and opcache's own sizes are already set that way —
+    and the panel would report a change where there is none. Run the CLI binary
+    pointed at the FPM configuration so the answer is what FPM would use.
+    """
+    import subprocess
+
+    ini_dir = Path(f"/etc/php/{php_version}/fpm")
+    binary = f"php{php_version}"
+    try:
+        result = subprocess.run(
+            [binary, "-c", str(ini_dir / "php.ini"), "-i"],
+            capture_output=True, text=True, timeout=20,
+            env={"PATH": "/usr/bin:/bin", "PHP_INI_SCAN_DIR": str(ini_dir / "conf.d")},
+        )
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    if result.returncode != 0:
+        return {}
+    wanted = set(TUNABLE_KEYS)
+    values: dict[str, str] = {}
+    for line in (result.stdout or "").splitlines():
+        if "=>" not in line:
+            continue
+        parts = [part.strip() for part in line.split("=>")]
+        if len(parts) >= 2 and parts[0] in wanted:
+            # "key => local => master"; the local value is what runs.
+            values[parts[0]] = parts[1]
+    return values
+
+
 def current_values(php_version: str) -> dict:
-    """What PHP is using now, later files winning as PHP itself resolves them."""
+    """What PHP is using now, defaults included where nothing was written down."""
     if php_version not in php.SUPPORTED_PHP_VERSIONS:
         raise ValueError(f"Unsupported PHP version: {php_version}")
     base = Path(f"/etc/php/{php_version}/fpm")
@@ -239,14 +276,21 @@ def current_values(php_version: str) -> dict:
     conf_d = base / "conf.d"
     if conf_d.is_dir():
         paths.extend(sorted(conf_d.glob("*.ini")))
-    return _read_ini_values(paths, set(TUNABLE_KEYS))
+    values = _read_ini_values(paths, set(TUNABLE_KEYS))
+    # PHP itself is the authority; the files are the fallback when it cannot run.
+    values.update({key: value for key, value in _effective_values(php_version).items() if value})
+    return values
 
 
 def _normalise(value: str) -> str:
     text = (value or "").strip().strip('"').lower()
     if text in {"on", "true", "yes"}:
         return "1"
-    if text in {"off", "false", "no", ""}:
+    if text in {"", "no value"}:
+        # Nothing to compare against: treated as different from any setting, so
+        # the panel offers to write it rather than quietly calling it correct.
+        return "\x00unset"
+    if text in {"off", "false", "no"}:
         return "0"
     match = re.fullmatch(r"(\d+)\s*([kmg])?", text)
     if match:
