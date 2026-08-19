@@ -451,6 +451,16 @@ server {
     server_name _;
     client_max_body_size 1100M;
 
+    # Panel certificates are issued through this, so the panel no longer has to
+    # stop nginx to prove it owns its own hostname.
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/bpanel-acme;
+        default_type text/plain;
+        try_files \$uri =404;
+        access_log off;
+        auth_basic off;
+    }
+
     location = /phpmyadmin { return 301 /phpmyadmin/; }
     location /phpmyadmin/ { alias /usr/share/phpmyadmin/; index index.php; try_files \$uri \$uri/ =404; }
     location ~ ^/phpmyadmin/(.+\.php)$ {

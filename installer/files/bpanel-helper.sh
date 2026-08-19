@@ -170,6 +170,16 @@ server {
     listen 80 default_server;${ssl_block}
     server_name _;
     client_max_body_size 1100M;
+
+    # Panel certificates are issued through this, so the panel no longer has to
+    # stop nginx to prove it owns its own hostname.
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/bpanel-acme;
+        default_type text/plain;
+        try_files \$uri =404;
+        access_log off;
+        auth_basic off;
+    }
     location = /phpmyadmin { return 301 /phpmyadmin/; }
     location /phpmyadmin/ { alias /usr/share/phpmyadmin/; index index.php; try_files \$uri \$uri/ =404; }
     location ~ ^/phpmyadmin/(.+\.php)$ { alias /usr/share/phpmyadmin/\$1; include fastcgi_params; fastcgi_param SCRIPT_FILENAME /usr/share/phpmyadmin/\$1; fastcgi_param SCRIPT_NAME /phpmyadmin/\$1; fastcgi_pass unix:/run/php/php${php_version}-fpm.sock; fastcgi_read_timeout 300; }
@@ -728,10 +738,10 @@ firewall_load_set() {
   {
     printf 'create %s %s\n' "$tmp" "$spec"
     printf 'flush %s\n' "$tmp"
-    while IFS= read -r entry; do
-      [[ -n "$entry" ]] || continue
-      printf 'add %s %s -exist\n' "$tmp" "$entry"
-    done
+    # A blocklist can run to hundreds of thousands of addresses, and bash reads
+    # them one at a time; awk does the same work in a fraction of the time, and
+    # this runs on every firewall change.
+    awk -v set="$tmp" 'NF { print "add " set " " $0 " -exist" }'
   } >"$file"
   ipset destroy "$tmp" 2>/dev/null || true
   if ! ipset restore -! <"$file"; then
@@ -3298,12 +3308,15 @@ case "$cmd" in
     domain="$1"; port="$2"; email="${3:-}"
     require_domain "$domain"
     require_port "$port"
-    certbot_args=(certonly --standalone
+    # Webroot, not standalone: standalone needs port 80 to itself, which meant
+    # stopping nginx — every website on the box went down for the ten seconds
+    # certbot spent talking to Let's Encrypt, to issue a certificate for the
+    # panel. The default vhost serves the challenge instead.
+    install -d -o root -g bpanel -m 0755 /var/www/bpanel-acme/.well-known/acme-challenge
+    certbot_args=(certonly --webroot -w /var/www/bpanel-acme
       -d "$domain" \
       --agree-tos \
       --non-interactive \
-      --pre-hook "systemctl stop nginx || true" \
-      --post-hook "systemctl start nginx || true" \
       --deploy-hook "install -d -o root -g bpanel -m 0750 /etc/bpanel && install -m 0640 -o root -g bpanel /etc/letsencrypt/live/${domain}/fullchain.pem /etc/bpanel/panel-fullchain.pem && install -m 0640 -o root -g bpanel /etc/letsencrypt/live/${domain}/privkey.pem /etc/bpanel/panel-privkey.pem")
     if [[ -n "$email" ]]; then
       require_email "$email"
@@ -3404,7 +3417,10 @@ PY
     ;;
 
   certbot-renew)
-    exec certbot renew --quiet
+    # certbot spreads scheduled renewals over up to eight minutes so every
+    # server on earth does not call Let's Encrypt at midnight. That is right for
+    # the timer and wrong here: somebody pressed a button and is watching.
+    exec certbot renew --quiet --no-random-sleep-on-renew
     ;;
   certbot-renew-soon)
     [[ $# -le 1 ]] || deny "usage: certbot-renew-soon [days]"
