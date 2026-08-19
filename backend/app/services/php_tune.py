@@ -26,6 +26,10 @@ from app.services import php
 # the PHP budget by this, so it is also what a sensible memory_limit is built
 # from: a limit far above it means the arithmetic protecting the box is fiction.
 WORKER_MB = 128
+# A hosting customer's PHP has to survive a WooCommerce import, a big backup
+# plugin and a theme demo installer. Anything below this generates support
+# tickets, so no amount of arithmetic about small servers pushes it lower.
+MIN_MEMORY_LIMIT_MB = 1024
 TUNE_FILE_NAME = "95-bpanel-tune.ini"
 
 # Keys the tuner is allowed to write. The helper enforces the same list; this
@@ -125,15 +129,23 @@ def _tier(total_mb: int) -> dict:
     # opcache is one shared segment per FPM master, not per worker, so it is
     # cheap: the package already ships 128 MB and recommending less would be a
     # downgrade dressed up as tuning. These start at that and go up.
+    #
+    # memory_limit never goes below MIN_MEMORY_LIMIT_MB. It is a ceiling per
+    # request, not memory reserved up front, and pm.max_children is what
+    # actually bounds how many requests run at once; a limit low enough to kill
+    # an import costs more than the headroom saves.
     if total_mb <= 1024:
-        return {"memory_limit": 128, "opcache_mb": 96, "interned": 8, "files": 16229}
-    if total_mb <= 2048:
-        return {"memory_limit": 192, "opcache_mb": 128, "interned": 8, "files": 16229}
-    if total_mb <= 4096:
-        return {"memory_limit": 256, "opcache_mb": 192, "interned": 16, "files": 32531}
-    if total_mb <= 8192:
-        return {"memory_limit": 384, "opcache_mb": 256, "interned": 24, "files": 65407}
-    return {"memory_limit": 512, "opcache_mb": 384, "interned": 32, "files": 130987}
+        tier = {"memory_limit": 1024, "opcache_mb": 96, "interned": 8, "files": 16229}
+    elif total_mb <= 2048:
+        tier = {"memory_limit": 1024, "opcache_mb": 128, "interned": 8, "files": 16229}
+    elif total_mb <= 4096:
+        tier = {"memory_limit": 1024, "opcache_mb": 192, "interned": 16, "files": 32531}
+    elif total_mb <= 8192:
+        tier = {"memory_limit": 1536, "opcache_mb": 256, "interned": 24, "files": 65407}
+    else:
+        tier = {"memory_limit": 2048, "opcache_mb": 384, "interned": 32, "files": 130987}
+    tier["memory_limit"] = max(MIN_MEMORY_LIMIT_MB, tier["memory_limit"])
+    return tier
 
 
 def recommendations(facts: dict | None = None) -> list[dict]:
@@ -148,9 +160,9 @@ def recommendations(facts: dict | None = None) -> list[dict]:
             "key": "memory_limit",
             "value": f"{tier['memory_limit']}M",
             "reason": (
-                f"{total} MB RAM, {facts['reserved_memory_mb']} MB để cho MariaDB/nginx/panel, "
-                f"còn {facts['php_budget_mb']} MB cho PHP (~{workers} request cùng lúc). "
-                "Một request không nên tự mình ăn hết phần đó."
+                f"Trần cho mỗi request. {total} MB RAM, {facts['reserved_memory_mb']} MB để cho "
+                f"MariaDB/nginx/panel, còn {facts['php_budget_mb']} MB cho PHP; số request chạy "
+                f"cùng lúc do pm.max_children chặn (~{workers}), không phải do trần này."
             ),
         },
         {

@@ -649,6 +649,7 @@ function App() {
   const [panelSettings, setPanelSettings] = useState({ app_name: 'BPanel', panel_url: '', panel_hostname: '', panel_port: 2222, logo_url: '', favicon_url: '/favicon.png', ssl_enabled: false });
   const [panelCertDomain, setPanelCertDomain] = useState('');
   const [phpTune, setPhpTune] = useState(null);
+  const [phpTuneApplied, setPhpTuneApplied] = useState(false);
   const [panelSettingsForm, setPanelSettingsForm] = useState({ app_name: 'BPanel', panel_hostname: '', panel_port: 2222, ssl_enabled: false });
   const [apiTokens, setApiTokens] = useState([]);
   const [newApiToken, setNewApiToken] = useState({ name: 'WHMCS', allowed_ips: '' });
@@ -3024,6 +3025,7 @@ function App() {
   async function loadPhpTune(version) {
     const data = await request(`/maintenance/php-tune?php_version=${encodeURIComponent(version)}`, { silent: true });
     setPhpTune(data || null);
+    setPhpTuneApplied(false);
   }
 
   async function applyPhpTune() {
@@ -3036,6 +3038,7 @@ function App() {
     if (data) {
       setNotice(data.message || 'Đã tune PHP.');
       if (data.plan) setPhpTune(data.plan);
+      setPhpTuneApplied(true);
       await loadPhpConfig(version);
     }
   }
@@ -5070,10 +5073,10 @@ function App() {
       {phpTune && <div className="php-tune" style={{ marginTop: 16 }}>
         <div className="section-title">
           <div>
-            <h3>Tune theo cấu hình VPS</h3>
+            <h3>Auto tune PHP</h3>
             <p className="hint">
-              Đọc CPU và RAM của máy rồi đề xuất thông số. Ghi vào <code>95-bpanel-tune.ini</code>;
-              những gì bạn đặt tay ở trên nằm trong <code>99-bpanel.ini</code> nên vẫn được ưu tiên.
+              Tính thông số theo CPU và RAM của máy này rồi ghi vào <code>95-bpanel-tune.ini</code>.
+              Giá trị bạn đặt tay ở ô phía trên vẫn được ưu tiên.
             </p>
           </div>
           <button className="secondary-light" disabled={!!loading} onClick={() => loadPhpTune(phpConfig.php_version)}><RefreshCw size={14}/> Refresh</button>
@@ -5086,31 +5089,33 @@ function App() {
           <span>≈ <strong>{phpTune.facts.concurrent_requests}</strong> request PHP cùng lúc ({phpTune.facts.worker_mb} MB/worker)</span>
           <span><strong>{phpTune.facts.pool_count}</strong> pool đang quản lý</span>
         </div>
-        <div className="php-tune-table" role="table">
+        <div className="site-app-form-actions">
+          <button disabled={!!loading} onClick={applyPhpTune}>
+            <Cpu size={14}/> Auto tune
+          </button>
+          <button className="secondary-light" disabled={!!loading} onClick={retunePhpPools}>Tính lại pool PHP-FPM</button>
+          {!phpTuneApplied && phpTune.changes > 0 && <span className="hint">{phpTune.changes} thông số đang lệch chuẩn.</span>}
+          {!phpTuneApplied && phpTune.changes === 0 && <span className="hint">Đang đúng chuẩn của máy này.</span>}
+        </div>
+        {phpTuneApplied && <div className="php-tune-table" role="table">
           <div className="php-tune-row php-tune-head" role="row">
-            <span>Thông số</span><span>Hiện tại</span><span>Đề xuất</span><span>Vì sao</span>
+            <span>Thông số</span><span>Trước</span><span>Đang dùng</span><span></span>
           </div>
-          {phpTune.settings.map(row => <div className={`php-tune-row ${row.overridden_value ? 'pinned' : row.changes ? 'changed' : ''}`} role="row" key={row.key}>
+          {phpTune.settings.map(row => <div className={`php-tune-row ${row.overridden_value ? 'pinned' : ''}`} role="row" key={row.key}>
             <span><code>{row.key}</code></span>
             <span>{row.current || <em>chưa đặt</em>}</span>
-            <span><strong>{row.value}</strong></span>
+            <span><strong>{row.overridden_value || row.value}</strong></span>
             <span className="php-tune-reason">
               {row.overridden_value
-                ? <>Đang bị <strong>{row.overridden_value}</strong> ở ô PHP Configuration phía trên ghi đè — sửa ở đó nếu muốn dùng {row.value}.</>
-                : row.reason}
+                ? <>Bị ô PHP Configuration phía trên giữ ở {row.overridden_value}; sửa ở đó nếu muốn {row.value}.</>
+                : ''}
             </span>
           </div>)}
-        </div>
+        </div>}
         {phpTune.overridden > 0 && <p className="hint">
           {phpTune.overridden} thông số đang được đặt tay ở ô PHP Configuration phía trên. PHP đọc file đó sau
           nên nó thắng — muốn dùng số đề xuất thì sửa trực tiếp ở trên.
         </p>}
-        <div className="site-app-form-actions">
-          <button disabled={!!loading || phpTune.changes === 0} onClick={applyPhpTune}>
-            <Check size={14}/> {phpTune.changes > 0 ? `Áp dụng ${phpTune.changes} thay đổi` : 'Đang đúng chuẩn'}
-          </button>
-          <button className="secondary-light" disabled={!!loading} onClick={retunePhpPools}>Tính lại pool PHP-FPM</button>
-        </div>
       </div>}
       {notInstalled.length > 0 && <div className="user-create-card" style={{ marginTop: 16 }}>
         <h3>Install PHP</h3>
