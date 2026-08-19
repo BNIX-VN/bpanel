@@ -5090,13 +5090,21 @@ function App() {
           <div className="php-tune-row php-tune-head" role="row">
             <span>Thông số</span><span>Hiện tại</span><span>Đề xuất</span><span>Vì sao</span>
           </div>
-          {phpTune.settings.map(row => <div className={`php-tune-row ${row.changes ? 'changed' : ''}`} role="row" key={row.key}>
+          {phpTune.settings.map(row => <div className={`php-tune-row ${row.overridden_value ? 'pinned' : row.changes ? 'changed' : ''}`} role="row" key={row.key}>
             <span><code>{row.key}</code></span>
             <span>{row.current || <em>chưa đặt</em>}</span>
             <span><strong>{row.value}</strong></span>
-            <span className="php-tune-reason">{row.reason}</span>
+            <span className="php-tune-reason">
+              {row.overridden_value
+                ? <>Đang bị <strong>{row.overridden_value}</strong> ở ô PHP Configuration phía trên ghi đè — sửa ở đó nếu muốn dùng {row.value}.</>
+                : row.reason}
+            </span>
           </div>)}
         </div>
+        {phpTune.overridden > 0 && <p className="hint">
+          {phpTune.overridden} thông số đang được đặt tay ở ô PHP Configuration phía trên. PHP đọc file đó sau
+          nên nó thắng — muốn dùng số đề xuất thì sửa trực tiếp ở trên.
+        </p>}
         <div className="site-app-form-actions">
           <button disabled={!!loading || phpTune.changes === 0} onClick={applyPhpTune}>
             <Check size={14}/> {phpTune.changes > 0 ? `Áp dụng ${phpTune.changes} thay đổi` : 'Đang đúng chuẩn'}

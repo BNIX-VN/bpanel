@@ -301,23 +301,42 @@ def _normalise(value: str) -> str:
     return text
 
 
+def pinned_by_php_config(php_version: str) -> dict:
+    """Values the panel's own PHP config page has written.
+
+    PHP reads that file after the tuning one, so anything in it wins. The page
+    writes every one of its fields on each save, which means memory_limit is
+    pinned there the moment an administrator saves it once — and the tuner's
+    figure would be quietly ignored. Better to say so on the row than to show a
+    recommendation that cannot take effect.
+    """
+    path = Path(f"/etc/php/{php_version}/fpm/conf.d/99-bpanel.ini")
+    return _read_ini_values([path], set(TUNABLE_KEYS))
+
+
 def plan(php_version: str) -> dict:
     """Current beside recommended, so an administrator can see the difference."""
     facts = server_facts()
     live = current_values(php_version)
+    pinned = pinned_by_php_config(php_version)
     rows = []
     for item in recommendations(facts):
         now = live.get(item["key"], "")
+        held = pinned.get(item["key"], "")
         rows.append({
             **item,
             "current": now,
             "changes": _normalise(now) != _normalise(item["value"]),
+            # Set above in PHP Configuration, which PHP reads last.
+            "overridden_value": held if held and _normalise(held) != _normalise(item["value"]) else "",
         })
     return {
         "php_version": php_version,
         "facts": facts,
         "settings": rows,
-        "changes": sum(1 for row in rows if row["changes"]),
+        # A row that cannot take effect is not offered as a change to make.
+        "changes": sum(1 for row in rows if row["changes"] and not row["overridden_value"]),
+        "overridden": sum(1 for row in rows if row["overridden_value"]),
         "tune_file": f"/etc/php/{php_version}/fpm/conf.d/{TUNE_FILE_NAME}",
         # The panel's own PHP config page writes 99-bpanel.ini, which PHP reads
         # after this file: anything set there keeps winning.
