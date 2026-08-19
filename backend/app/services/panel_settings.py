@@ -141,16 +141,26 @@ def panel_ssl_mode() -> str:
 
 
 def domains_with_certificate() -> list[str]:
-    """Websites on this server whose certificate the panel could borrow."""
-    live = Path("/etc/letsencrypt/live")
-    found = []
-    try:
-        for entry in sorted(live.iterdir()):
-            if (entry / "fullchain.pem").exists() and (entry / "privkey.pem").exists():
-                found.append(entry.name)
-    except OSError:
+    """Websites on this server whose certificate the panel could borrow.
+
+    Asked through the helper: /etc/letsencrypt/live is root-only, so the panel
+    reading it directly finds nothing and reports, wrongly, that there is
+    nothing to borrow.
+    """
+    result = shell.privileged(
+        "panel-ssl-domains",
+        check=False,
+        timeout=30,
+        fallback=["bash", "-lc", "echo ''"],
+    )
+    if result.returncode != 0:
         return []
-    return found
+    found = []
+    for line in (result.stdout or "").splitlines():
+        name = line.strip().strip("/")
+        if name and name != "README" and DOMAIN_RE.fullmatch(name):
+            found.append(name)
+    return sorted(set(found))
 
 
 def use_domain_certificate(domain: str, panel_port: int | None = None) -> dict:

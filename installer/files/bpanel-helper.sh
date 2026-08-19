@@ -3224,6 +3224,16 @@ case "$cmd" in
     echo "Panel URL: ${scheme}://${host}:${port}"
     ;;
 
+  panel-ssl-domains)
+    # /etc/letsencrypt/live is root-only, so the panel cannot see for itself
+    # which of its websites already have a certificate it could borrow.
+    [[ $# -eq 0 ]] || deny "usage: panel-ssl-domains"
+    for live_dir in /etc/letsencrypt/live/*/; do
+      [[ -f "${live_dir}fullchain.pem" && -f "${live_dir}privkey.pem" ]] || continue
+      basename "$live_dir"
+    done
+    ;;
+
   panel-ssl-selfsigned)
     # The panel should never be reachable in the clear, and a brand new server
     # has no domain and no certificate authority that will vouch for its IP.
