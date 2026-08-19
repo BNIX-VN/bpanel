@@ -944,6 +944,13 @@ def apply_php_tune(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    # One button, both halves: the settings PHP reads and the pool sizes FPM
+    # runs with, which are otherwise only recalculated when a site is touched.
+    try:
+        result["pools"] = php_tune.retune_pools().get("output", "")
+    except RuntimeError as exc:
+        result["pools"] = ""
+        result["pools_error"] = str(exc)[-500:]
     log_action(db, current_user.id, "php_tune", payload.php_version, request=request)
     return result
 
