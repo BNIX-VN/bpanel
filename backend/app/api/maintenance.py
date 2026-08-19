@@ -912,6 +912,60 @@ def get_php_config(php_version: str = Query(default="8.4"), current_user: User =
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.get("/php-tune")
+def get_php_tune(php_version: str = Query(default="8.4"), current_user: User = Depends(get_current_user)):
+    """What this machine can carry, and what PHP is set to right now.
+
+    Read-only: the numbers and the reasoning, so an administrator can see what
+    would change before anything does.
+    """
+    ensure_role(current_user.role, Role.admin)
+    from app.services import php_tune
+
+    try:
+        return php_tune.plan(php_version)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/php-tune")
+def apply_php_tune(
+    payload: PhpConfigRestore,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    ensure_role(current_user.role, Role.admin)
+    from app.services import php_tune
+
+    try:
+        result = php_tune.apply(payload.php_version)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    log_action(db, current_user.id, "php_tune", payload.php_version, request=request)
+    return result
+
+
+@router.post("/php-tune/pools")
+def retune_php_pools(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Recalculate every site's FPM pool against the machine as it is now."""
+    ensure_role(current_user.role, Role.admin)
+    from app.services import php_tune
+
+    try:
+        result = php_tune.retune_pools()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    log_action(db, current_user.id, "php_retune_pools", "php-fpm", request=request)
+    return result
+
+
 @router.post("/php-config")
 def update_php_config(payload: PhpConfigUpdate, current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.admin)

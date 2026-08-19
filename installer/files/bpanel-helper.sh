@@ -576,6 +576,67 @@ validate_php_config_file() {
   done <"$file"
 }
 
+validate_php_tune_file() {
+  # A separate allowlist from the panel's PHP config page: these are the keys
+  # the tuner is allowed to size from the machine, and nothing else reaches a
+  # file that root writes into PHP's configuration directory.
+  local file="$1" line key value
+  while IFS= read -r line; do
+    line="${line%%;*}"
+    line="$(printf '%s' "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    [[ -n "$line" ]] || continue
+    [[ "$line" == *=* ]] || deny "invalid PHP tuning line: $line"
+    key="$(printf '%s' "${line%%=*}" | sed 's/[[:space:]]*$//')"
+    value="$(printf '%s' "${line#*=}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    case "$key" in
+      memory_limit|realpath_cache_size)
+        [[ "$value" =~ ^[0-9]{1,6}[KkMmGg]?$ ]] || deny "invalid size for $key"
+        ;;
+      realpath_cache_ttl|opcache.memory_consumption|opcache.interned_strings_buffer|opcache.max_accelerated_files|opcache.revalidate_freq)
+        [[ "$value" =~ ^[0-9]{1,7}$ ]] || deny "invalid integer for $key"
+        ;;
+      opcache.enable|opcache.enable_cli|opcache.validate_timestamps|opcache.save_comments)
+        [[ "$value" =~ ^[01]$ ]] || deny "$key must be 0 or 1"
+        ;;
+      expose_php|zlib.output_compression)
+        [[ "$value" =~ ^(On|Off|0|1)$ ]] || deny "$key must be On or Off"
+        ;;
+      *)
+        deny "unsupported PHP tuning directive: $key"
+        ;;
+    esac
+  done <"$file"
+}
+
+write_php_tune() {
+  local version="$1" conf_dir target tmp size
+  require_php_version "$version"
+  conf_dir="/etc/php/${version}/fpm/conf.d"
+  [[ -d "$conf_dir" ]] || deny "PHP FPM config directory not found: $conf_dir"
+  target="${conf_dir}/95-bpanel-tune.ini"
+  tmp="$(mktemp "${conf_dir}/.95-bpanel-tune.ini.XXXXXX")" || deny "cannot create temporary PHP tuning file"
+  if ! cat >"$tmp"; then
+    rm -f -- "$tmp"
+    deny "failed to read PHP tuning file"
+  fi
+  size="$(wc -c <"$tmp" | tr -d '[:space:]')"
+  if (( size <= 0 || size > 8192 )); then
+    rm -f -- "$tmp"
+    deny "PHP tuning file size out of range"
+  fi
+  validate_php_tune_file "$tmp"
+  chown root:root "$tmp"
+  chmod 0644 "$tmp"
+  mv -f -- "$tmp" "$target"
+  # The CLI reads its own directory; opcache settings there are harmless and
+  # realpath cache helps WP-CLI too.
+  if [[ -d "/etc/php/${version}/cli/conf.d" ]]; then
+    install -m 0644 -o root -g root "$target" "/etc/php/${version}/cli/conf.d/95-bpanel-tune.ini"
+  fi
+  systemctl reload "php${version}-fpm" 2>/dev/null || systemctl restart "php${version}-fpm"
+  echo "PHP ${version} tuned: ${target}"
+}
+
 write_php_config() {
   local version="$1" conf_dir target tmp size
   require_php_version "$version"
@@ -3192,6 +3253,38 @@ case "$cmd" in
   php-install)
     [[ $# -eq 1 ]] || deny "usage: php-install <version>"
     install_php_version "$1"
+    ;;
+
+  php-tune-write)
+    [[ $# -eq 1 ]] || deny "usage: php-tune-write <php-version>"
+    write_php_tune "$1"
+    ;;
+
+  php-pools-retune)
+    # Pool sizes are decided when a pool is written. A server that gained RAM
+    # keeps the old numbers until every site happens to be touched; this walks
+    # them all and rewrites each one against the machine as it is now.
+    [[ $# -eq 0 ]] || deny "usage: php-pools-retune"
+    shopt -s nullglob
+    retuned=0
+    for pool_file in /etc/php/*/fpm/pool.d/bpanel-*.conf; do
+      [[ -f "$pool_file" ]] || continue
+      calculate_php_fpm_pool_tuning "$pool_file"
+      php_fpm_set_directive "$pool_file" "pm" "$PHP_FPM_PM_MODE"
+      php_fpm_set_directive "$pool_file" "pm.max_children" "$PHP_FPM_MAX_CHILDREN"
+      php_fpm_set_directive "$pool_file" "pm.process_idle_timeout" "${PHP_FPM_PROCESS_IDLE_TIMEOUT}s"
+      php_fpm_set_directive "$pool_file" "pm.max_requests" "$PHP_FPM_MAX_REQUESTS"
+      php_fpm_set_directive "$pool_file" "request_terminate_timeout" "${PHP_FPM_REQUEST_TERMINATE_TIMEOUT}s"
+      echo "$(basename "$pool_file"): pm.max_children=${PHP_FPM_MAX_CHILDREN} idle=${PHP_FPM_PROCESS_IDLE_TIMEOUT}s max_requests=${PHP_FPM_MAX_REQUESTS}"
+      retuned=$((retuned + 1))
+    done
+    for fpm_version_dir in /etc/php/*/fpm; do
+      [[ -d "$fpm_version_dir" ]] || continue
+      fpm_version="$(basename "$(dirname "$fpm_version_dir")")"
+      systemctl reload "php${fpm_version}-fpm" 2>/dev/null || true
+    done
+    shopt -u nullglob
+    echo "retuned ${retuned} pool(s)"
     ;;
 
   php-config-write)

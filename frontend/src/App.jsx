@@ -648,6 +648,7 @@ function App() {
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [panelSettings, setPanelSettings] = useState({ app_name: 'BPanel', panel_url: '', panel_hostname: '', panel_port: 2222, logo_url: '', favicon_url: '/favicon.png', ssl_enabled: false });
   const [panelCertDomain, setPanelCertDomain] = useState('');
+  const [phpTune, setPhpTune] = useState(null);
   const [panelSettingsForm, setPanelSettingsForm] = useState({ app_name: 'BPanel', panel_hostname: '', panel_port: 2222, ssl_enabled: false });
   const [apiTokens, setApiTokens] = useState([]);
   const [newApiToken, setNewApiToken] = useState({ name: 'WHMCS', allowed_ips: '' });
@@ -3020,6 +3021,34 @@ function App() {
     await checkService(name);
   }
 
+  async function loadPhpTune(version) {
+    const data = await request(`/maintenance/php-tune?php_version=${encodeURIComponent(version)}`, { silent: true });
+    setPhpTune(data || null);
+  }
+
+  async function applyPhpTune() {
+    const version = phpTune?.php_version || phpConfig.php_version;
+    if (!confirm(`Áp dụng thông số tune cho PHP ${version}?\n\nGhi vào 95-bpanel-tune.ini rồi reload PHP-FPM. Giá trị bạn đặt tay ở trên vẫn được ưu tiên.`)) return;
+    const data = await request('/maintenance/php-tune', {
+      method: 'POST',
+      body: JSON.stringify({ php_version: version }),
+    }, 'Đang áp dụng thông số PHP...');
+    if (data) {
+      setNotice(data.message || 'Đã tune PHP.');
+      if (data.plan) setPhpTune(data.plan);
+      await loadPhpConfig(version);
+    }
+  }
+
+  async function retunePhpPools() {
+    const data = await request('/maintenance/php-tune/pools', { method: 'POST' }, 'Đang tính lại pool PHP-FPM...');
+    if (data) {
+      setNotice(data.message || 'Đã tính lại pool.');
+      if (data.output) setSiteAppLog({ name: 'php-fpm pools', log: data.output });
+      await loadPhpTune(phpConfig.php_version);
+    }
+  }
+
   async function loadPhpConfig(version = phpConfig.php_version) {
     const data = await request(`/maintenance/php-config?php_version=${encodeURIComponent(version)}`, {}, 'Loading PHP config...');
     if (data) setPhpConfig(prev => ({ ...prev, ...data, php_version: version }));
@@ -3423,7 +3452,7 @@ function App() {
 
   useEffect(() => {
     if (isAuthenticated && page === 'users') { loadUsers(); loadPackages(); }
-    if (isAuthenticated && page === 'php') loadPhpConfig();
+    if (isAuthenticated && page === 'php') { loadPhpConfig(); loadPhpTune(phpConfig.php_version); }
     if (isAuthenticated && page === 'firewall') { loadFirewall(); loadFirewallBlocklists(); }
     if (isAuthenticated && page === 'waf') loadWafRules();
     if (isAuthenticated && page === 'access-logs' && currentUser?.role === 'admin') {
@@ -5023,7 +5052,7 @@ function App() {
         <div><h2>PHP Configuration</h2></div>
       </div>
       <div className="user-create-card">
-        <label><span>PHP version</span><select value={phpConfig.php_version} onChange={e => { const v = e.target.value; setPhpConfig(prev => ({ ...prev, php_version: v })); loadPhpConfig(v); }}>
+        <label><span>PHP version</span><select value={phpConfig.php_version} onChange={e => { const v = e.target.value; setPhpConfig(prev => ({ ...prev, php_version: v })); loadPhpConfig(v); loadPhpTune(v); }}>
           {phpVersions.installed.map(v => <option key={v} value={v}>PHP {v}</option>)}
         </select></label>
         <label><span>display_errors</span><select value={phpConfig.display_errors} onChange={e => setPhpConfig(prev => ({ ...prev, display_errors: e.target.value }))}>
@@ -5038,6 +5067,43 @@ function App() {
         <button className="secondary-light" disabled={!!loading} onClick={restorePhpDefaults}><RotateCcw size={14}/> Restore defaults</button>
         <button disabled={!!loading} onClick={updatePhpConfig}>Save</button>
       </div>
+      {phpTune && <div className="php-tune" style={{ marginTop: 16 }}>
+        <div className="section-title">
+          <div>
+            <h3>Tune theo cấu hình VPS</h3>
+            <p className="hint">
+              Đọc CPU và RAM của máy rồi đề xuất thông số. Ghi vào <code>95-bpanel-tune.ini</code>;
+              những gì bạn đặt tay ở trên nằm trong <code>99-bpanel.ini</code> nên vẫn được ưu tiên.
+            </p>
+          </div>
+          <button className="secondary-light" disabled={!!loading} onClick={() => loadPhpTune(phpConfig.php_version)}><RefreshCw size={14}/> Refresh</button>
+        </div>
+        <div className="php-tune-facts">
+          <span><Cpu size={13}/> <strong>{phpTune.facts.cpu_count}</strong> CPU</span>
+          <span><MemoryStick size={13}/> RAM <strong>{phpTune.facts.total_memory_mb} MB</strong> (còn trống {phpTune.facts.available_memory_mb} MB)</span>
+          <span>Dành cho dịch vụ khác: <strong>{phpTune.facts.reserved_memory_mb} MB</strong></span>
+          <span>Ngân sách PHP: <strong>{phpTune.facts.php_budget_mb} MB</strong></span>
+          <span>≈ <strong>{phpTune.facts.concurrent_requests}</strong> request PHP cùng lúc ({phpTune.facts.worker_mb} MB/worker)</span>
+          <span><strong>{phpTune.facts.pool_count}</strong> pool đang quản lý</span>
+        </div>
+        <div className="php-tune-table" role="table">
+          <div className="php-tune-row php-tune-head" role="row">
+            <span>Thông số</span><span>Hiện tại</span><span>Đề xuất</span><span>Vì sao</span>
+          </div>
+          {phpTune.settings.map(row => <div className={`php-tune-row ${row.changes ? 'changed' : ''}`} role="row" key={row.key}>
+            <span><code>{row.key}</code></span>
+            <span>{row.current || <em>chưa đặt</em>}</span>
+            <span><strong>{row.value}</strong></span>
+            <span className="php-tune-reason">{row.reason}</span>
+          </div>)}
+        </div>
+        <div className="site-app-form-actions">
+          <button disabled={!!loading || phpTune.changes === 0} onClick={applyPhpTune}>
+            <Check size={14}/> {phpTune.changes > 0 ? `Áp dụng ${phpTune.changes} thay đổi` : 'Đang đúng chuẩn'}
+          </button>
+          <button className="secondary-light" disabled={!!loading} onClick={retunePhpPools}>Tính lại pool PHP-FPM</button>
+        </div>
+      </div>}
       {notInstalled.length > 0 && <div className="user-create-card" style={{ marginTop: 16 }}>
         <h3>Install PHP</h3>
         <div className="php-install-grid">
