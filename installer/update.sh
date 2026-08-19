@@ -169,6 +169,22 @@ env_set_default() {
   fi
 }
 
+env_set() {
+  # Replace a value, or add it if the key is new. Written through a temporary
+  # file and copied back so the .env keeps its owner and its 0640 mode.
+  local file="$APP_DIR/backend/.env" key="$1" value="$2" tmp
+  [[ -f "$file" ]] || return 0
+  tmp="$(mktemp)"
+  KEY="$key" VALUE="$value" awk '
+    BEGIN { key = ENVIRON["KEY"]; value = ENVIRON["VALUE"]; written = 0 }
+    index($0, key "=") == 1 { if (!written) { print key "=" value; written = 1 } next }
+    { print }
+    END { if (!written) print key "=" value }
+  ' "$file" >"$tmp"
+  cat "$tmp" >"$file"
+  rm -f "$tmp"
+}
+
 ensure_git_remote() {
   if git remote get-url "$GIT_REMOTE" >/dev/null 2>&1; then
     return 0
