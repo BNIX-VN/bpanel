@@ -410,7 +410,8 @@ def compose_plan(app: SiteApp):
     from app.services import compose  # local import keeps the module cycle open
 
     return compose.analyse(app.compose_source or "", app.web_service or "",
-                           variables=compose_variables(app))
+                           variables=compose_variables(app),
+                           web_port=app.container_port or None)
 
 
 def public_address(app: SiteApp) -> tuple[str, str]:

@@ -17,6 +17,7 @@ from app.schemas.schemas import (
     PanelSettingsOut,
     PanelSettingsUpdate,
     PanelSslInstall,
+    PanelSslUseDomain,
 )
 from app.services import panel_settings, site_users
 from app.services.audit import log_action
@@ -142,6 +143,36 @@ def install_panel_ssl(
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     log_action(db, current_user.id, "install_panel_ssl", result.get("panel_url") or payload.panel_hostname or "panel", request=request)
+    return result
+
+
+@router.post("/ssl/use-domain")
+def use_domain_certificate(
+    payload: PanelSslUseDomain,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Serve the panel with a certificate one of this server's websites already has.
+
+    Better than asking a certificate authority for a second certificate covering
+    a name it has already signed, and it renews with the website.
+    """
+    ensure_role(current_user.role, Role.admin)
+    result = panel_settings.use_domain_certificate(payload.domain, payload.panel_port)
+    log_action(db, current_user.id, "panel_ssl_use_domain", payload.domain, request=request)
+    return result
+
+
+@router.post("/ssl/self-signed")
+def regenerate_self_signed(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    ensure_role(current_user.role, Role.admin)
+    result = panel_settings.regenerate_self_signed()
+    log_action(db, current_user.id, "panel_ssl_self_signed", "panel", request=request)
     return result
 
 

@@ -130,7 +130,7 @@ def validate_compose(payload: ComposeValidateRequest, current_user: User = Depen
     variables.setdefault("BPANEL_URL", "https://<domain>")
     variables.setdefault("BPANEL_DOMAIN", "<domain>")
     return compose.analyse(payload.compose_source or "", payload.web_service or "",
-                           enforce, variables).as_dict()
+                           enforce, variables, web_port=payload.web_port).as_dict()
 
 
 @router.post("")
@@ -164,7 +164,8 @@ def create_site_app(payload: SiteAppCreate, db: Session = Depends(get_db), curre
             variables.setdefault("BPANEL_URL", "https://<domain>")
             variables.setdefault("BPANEL_DOMAIN", "<domain>")
             plan = compose_service.analyse(payload.compose_source or "", payload.web_service or "",
-                                           enforce_registry=not is_admin, variables=variables)
+                                           enforce_registry=not is_admin, variables=variables,
+                                           web_port=payload.container_port)
             if not plan.ok:
                 raise HTTPException(
                     status_code=400,
@@ -297,7 +298,8 @@ def update_site_app(app_id: int, payload: SiteAppUpdate, db: Session = Depends(g
             variables = site_apps.compose_variables(app)
             variables.setdefault("BPANEL_URL", "https://<domain>")
             variables.setdefault("BPANEL_DOMAIN", "<domain>")
-            plan = compose_service.analyse(source or "", wanted or "", variables=variables)
+            plan = compose_service.analyse(source or "", wanted or "", variables=variables,
+                                           web_port=payload.container_port)
             if not plan.ok:
                 db.rollback()
                 raise HTTPException(

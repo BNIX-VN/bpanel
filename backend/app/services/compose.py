@@ -91,7 +91,8 @@ class Service:
     command: Any = None
     entrypoint: Any = None
     depends_on: list[str] = field(default_factory=list)
-    container_port: int | None = None
+    container_port: int | None = None          # the one the domain reaches
+    container_ports: list[int] = field(default_factory=list)   # every one declared
     named_volumes: list[str] = field(default_factory=list)   # "data:/var/lib/x"
     bind_mounts: list[str] = field(default_factory=list)      # "./src:/app/src"
     user: str | None = None
@@ -110,6 +111,8 @@ class Plan:
     volumes: list[str] = field(default_factory=list)
     web_service: str = ""
     issues: list[Issue] = field(default_factory=list)
+    # Things worth saying that are not reasons to refuse the file.
+    notes: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -120,11 +123,13 @@ class Plan:
             "ok": self.ok,
             "web_service": self.web_service,
             "issues": [issue.as_dict() for issue in self.issues],
+            "notes": list(self.notes),
             "services": [
                 {
                     "name": service.name,
                     "image": service.image,
                     "container_port": service.container_port,
+                    "container_ports": service.container_ports,
                     "volumes": service.named_volumes + service.bind_mounts,
                     "environment": sorted(service.environment),
                     "web": service.name == self.web_service,
@@ -329,11 +334,14 @@ def _parse_service(name: str, raw: Any, declared_volumes: set[str], issues: list
     else:
         service.depends_on = [str(item) for item in _as_list(depends)]
 
-    ports = _as_list(raw.get("ports"))
-    if ports:
-        service.container_port = _parse_port(ports[0], name, issues)
-    elif raw.get("expose"):
-        service.container_port = _parse_port(_as_list(raw.get("expose"))[0], name, issues)
+    declared = _as_list(raw.get("ports")) or _as_list(raw.get("expose"))
+    for entry in declared:
+        port = _parse_port(entry, name, issues)
+        if port and port not in service.container_ports:
+            service.container_ports.append(port)
+    # Which one the domain reaches is decided later, once the web service is
+    # known; until then the first is the sensible guess.
+    service.container_port = service.container_ports[0] if service.container_ports else None
 
     for entry in _as_list(raw.get("volumes")):
         parsed = _parse_volume(entry, name, declared_volumes, issues)
@@ -355,7 +363,7 @@ def _parse_service(name: str, raw: Any, declared_volumes: set[str], issues: list
 
 
 def analyse(source: str, web_service: str = "", enforce_registry: bool = True,
-            variables: dict[str, str] | None = None) -> Plan:
+            variables: dict[str, str] | None = None, web_port: int | None = None) -> Plan:
     """Read a customer's compose file and report what the panel can run."""
     plan = Plan()
     if not (source or "").strip():
@@ -425,7 +433,42 @@ def analyse(source: str, web_service: str = "", enforce_registry: bool = True,
     plan.volumes = sorted(declared)
 
     plan.web_service = _pick_web_service(plan, web_service)
+    if plan.web_service:
+        _pick_web_port(plan, web_port)
     return plan
+
+
+def _pick_web_port(plan: Plan, requested: int | None) -> None:
+    """Decide which of a service's ports the domain reaches.
+
+    A service may listen on several — an API and a console, an app and its
+    metrics — and only one can be behind the domain. Picking silently, as this
+    used to, leaves someone staring at the wrong screen; the rest stay reachable
+    between the containers, which is where a metrics or admin port belongs.
+    """
+    service = next(item for item in plan.services if item.name == plan.web_service)
+    if requested:
+        if requested not in service.container_ports:
+            plan.issues.append(Issue(
+                service.name,
+                f"service này không khai cổng {requested}; đang khai: "
+                + ", ".join(str(port) for port in service.container_ports),
+            ))
+            return
+        service.container_port = requested
+    others = [port for port in service.container_ports if port != service.container_port]
+    if others:
+        plan.notes.append(
+            f"{service.name} khai {len(service.container_ports)} cổng; domain vào cổng "
+            f"{service.container_port}, còn {', '.join(str(port) for port in others)} chỉ "
+            "dùng nội bộ giữa các container."
+        )
+    for other in plan.services:
+        if other.name != plan.web_service and other.container_ports:
+            plan.notes.append(
+                f"{other.name} khai cổng {', '.join(str(port) for port in other.container_ports)}"
+                " — chỉ dùng nội bộ, không ra ngoài."
+            )
 
 
 def _pick_web_service(plan: Plan, requested: str) -> str:

@@ -993,8 +993,65 @@ setup_firewall() {
   return 0
 }
 
+setup_selfsigned_ssl() {
+  # No domain, or Let's Encrypt declined. The panel still takes an admin
+  # password, so it gets a certificate of its own rather than answering in the
+  # clear: the browser warns once, which is one warning more than plain HTTP
+  # gives anybody.
+  local host san
+  host="${PANEL_DOMAIN:-${SERVER_IP:-127.0.0.1}}"
+  san="DNS:${host}"
+  [[ "$host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && san="IP:${host}"
+  [[ -n "${SERVER_IP:-}" && "$SERVER_IP" != "$host" ]] && san="${san},IP:${SERVER_IP}"
+  install -d -o root -g bpanel -m 0750 /etc/bpanel
+  if ! openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+      -keyout /etc/bpanel/panel-selfsigned-privkey.pem \
+      -out /etc/bpanel/panel-selfsigned-fullchain.pem \
+      -subj "/CN=${host}" -addext "subjectAltName=${san}" >/dev/null 2>&1; then
+    echo "WARNING: could not generate a self-signed certificate; the panel stays on HTTP" >&2
+    return 0
+  fi
+  chown root:bpanel /etc/bpanel/panel-selfsigned-fullchain.pem /etc/bpanel/panel-selfsigned-privkey.pem
+  chmod 0640 /etc/bpanel/panel-selfsigned-fullchain.pem /etc/bpanel/panel-selfsigned-privkey.pem
+  PANEL_SSL_CERT=/etc/bpanel/panel-selfsigned-fullchain.pem
+  PANEL_SSL_KEY=/etc/bpanel/panel-selfsigned-privkey.pem
+  PANEL_URL="https://${host}:${PANEL_PORT}"
+  sed -i \
+    -e "s#^PANEL_SSL_CERT=.*#PANEL_SSL_CERT=${PANEL_SSL_CERT}#" \
+    -e "s#^PANEL_SSL_KEY=.*#PANEL_SSL_KEY=${PANEL_SSL_KEY}#" \
+    -e "s#^PANEL_URL=.*#PANEL_URL=${PANEL_URL}#" \
+    -e "s#^ALLOWED_ORIGINS=.*#ALLOWED_ORIGINS=${PANEL_URL}#" \
+    "${APP_DIR}/backend/.env"
+  grep -q "^PANEL_SSL_MODE=" "${APP_DIR}/backend/.env" \
+    && sed -i "s#^PANEL_SSL_MODE=.*#PANEL_SSL_MODE=selfsigned#" "${APP_DIR}/backend/.env" \
+    || echo "PANEL_SSL_MODE=selfsigned" >>"${APP_DIR}/backend/.env"
+  write_tools_nginx_config
+  nginx -t && systemctl reload nginx
+  systemctl restart bpanel-api
+  for _ in {1..20}; do
+    if curl -kfsS --connect-timeout 2 --max-time 5 "https://127.0.0.1:${PANEL_PORT}/api/health" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  # Better a panel that answers than a locked-out operator: put it back and say so.
+  echo "WARNING: the panel did not come up over HTTPS; reverting to HTTP" >&2
+  PANEL_URL="http://${host}:${PANEL_PORT}"
+  PANEL_SSL_CERT=""
+  PANEL_SSL_KEY=""
+  sed -i \
+    -e "s#^PANEL_SSL_CERT=.*#PANEL_SSL_CERT=#" \
+    -e "s#^PANEL_SSL_KEY=.*#PANEL_SSL_KEY=#" \
+    -e "s#^PANEL_SSL_MODE=.*#PANEL_SSL_MODE=#" \
+    -e "s#^PANEL_URL=.*#PANEL_URL=${PANEL_URL}#" \
+    -e "s#^ALLOWED_ORIGINS=.*#ALLOWED_ORIGINS=${PANEL_URL}#" \
+    "${APP_DIR}/backend/.env"
+  systemctl restart bpanel-api
+}
+
 setup_ssl() {
   if [[ "$ENABLE_SSL" != "yes" ]]; then
+    setup_selfsigned_ssl
     return 0
   fi
 

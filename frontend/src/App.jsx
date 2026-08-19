@@ -36,6 +36,20 @@ const NGINX_REWRITE_MODES = [
   { value: 'codeigniter', label: 'CodeIgniter' },
   { value: 'seohburl', label: 'SEO HB URL' },
 ];
+function composeWebPorts(plan, wanted) {
+  // Which ports the service behind the domain listens on. More than one means
+  // the customer has to say which, rather than the panel guessing.
+  const name = wanted || plan?.web_service;
+  const service = plan?.services?.find(item => item.name === name);
+  return service?.container_ports || [];
+}
+
+const PANEL_SSL_MODE_LABELS = {
+  letsencrypt: "Let's Encrypt (cấp cho hostname của panel)",
+  domain: 'Chứng chỉ của một website trên server này',
+  selfsigned: 'Tự ký',
+  none: 'Không có (HTTP)',
+};
 const SETTINGS_PAGE_KEYS = ['settings', 'api-tokens', 'security', 'php', 'firewall', 'waf', 'access-logs', 'updates', 'addons', 'services'];
 const PAGE_ROUTES = {
   dashboard: '/',
@@ -633,6 +647,7 @@ function App() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [panelSettings, setPanelSettings] = useState({ app_name: 'BPanel', panel_url: '', panel_hostname: '', panel_port: 2222, logo_url: '', favicon_url: '/favicon.png', ssl_enabled: false });
+  const [panelCertDomain, setPanelCertDomain] = useState('');
   const [panelSettingsForm, setPanelSettingsForm] = useState({ app_name: 'BPanel', panel_hostname: '', panel_port: 2222, ssl_enabled: false });
   const [apiTokens, setApiTokens] = useState([]);
   const [newApiToken, setNewApiToken] = useState({ name: 'WHMCS', allowed_ips: '' });
@@ -934,6 +949,21 @@ function App() {
       const data = await res.json();
       setAppVersion(data.version || '');
     } catch {}
+  }
+
+  async function usePanelDomainCertificate() {
+    if (!confirm(`Chuyển panel sang dùng chứng chỉ của ${panelCertDomain}?\n\nPanel sẽ khởi động lại và địa chỉ đăng nhập đổi thành https://${panelCertDomain}:${panelSettings.panel_port || 2222}`)) return;
+    const data = await request('/panel-settings/ssl/use-domain', {
+      method: 'POST',
+      body: JSON.stringify({ domain: panelCertDomain, panel_port: panelSettings.panel_port || 2222 }),
+    }, 'Đang chuyển chứng chỉ panel...');
+    if (data) setNotice(`${data.message || 'Đã chuyển.'} Đăng nhập lại tại ${data.panel_url}`);
+  }
+
+  async function regeneratePanelSelfSigned() {
+    if (!confirm('Quay lại chứng chỉ tự ký?\n\nTrình duyệt sẽ cảnh báo mỗi lần vào panel cho tới khi bạn dùng chứng chỉ thật.')) return;
+    const data = await request('/panel-settings/ssl/self-signed', { method: 'POST' }, 'Đang tạo chứng chỉ tự ký...');
+    if (data) setNotice(`${data.message || 'Đã tạo.'} Panel sẽ khởi động lại.`);
   }
 
   async function savePanelSettings() {
@@ -1789,15 +1819,20 @@ function App() {
     }
   }
 
-  async function validateCompose(source, webService, env) {
+  async function validateCompose(source, webService, env, webPort) {
     return await request('/site-apps/compose/validate', {
       method: 'POST',
-      body: JSON.stringify({ compose_source: source, web_service: webService || null, env: env || '' }),
+      body: JSON.stringify({
+        compose_source: source,
+        web_service: webService || null,
+        env: env || '',
+        web_port: Number(webPort) || null,
+      }),
     }, 'Checking the compose file...');
   }
 
   async function checkComposeFile() {
-    const data = await validateCompose(siteAppDraft.compose_source, siteAppDraft.web_service, siteAppDraft.env);
+    const data = await validateCompose(siteAppDraft.compose_source, siteAppDraft.web_service, siteAppDraft.env, siteAppDraft.container_port);
     if (data) {
       setComposePlan(data);
       if (data.web_service && !siteAppDraft.web_service) {
@@ -1814,12 +1849,13 @@ function App() {
       kind: app.kind,
       compose_source: app.compose_source || '',
       web_service: app.web_service || '',
+      container_port: app.container_port || '',
       env: app.env || '',
     });
   }
 
   async function checkSiteAppEdit() {
-    const data = await validateCompose(siteAppEdit.compose_source, siteAppEdit.web_service, siteAppEdit.env);
+    const data = await validateCompose(siteAppEdit.compose_source, siteAppEdit.web_service, siteAppEdit.env, siteAppEdit.container_port);
     if (data) {
       setSiteAppEditPlan(data);
       if (data.web_service && !siteAppEdit.web_service) {
@@ -1830,7 +1866,12 @@ function App() {
 
   async function saveSiteAppEdit(app) {
     const patch = app.kind === 'compose'
-      ? { compose_source: siteAppEdit.compose_source, web_service: siteAppEdit.web_service || null, env: siteAppEdit.env }
+      ? {
+          compose_source: siteAppEdit.compose_source,
+          web_service: siteAppEdit.web_service || null,
+          env: siteAppEdit.env,
+          container_port: Number(siteAppEdit.container_port) || null,
+        }
       : { env: siteAppEdit.env };
     const data = await request(`/site-apps/${app.id}`, { method: 'PUT', body: JSON.stringify(patch) }, 'Saving configuration...');
     if (data) {
@@ -1916,6 +1957,7 @@ function App() {
       body.compose_source = siteAppDraft.compose_source;
       body.cpu_limit = siteAppDraft.cpu_limit;
       if (siteAppDraft.web_service) body.web_service = siteAppDraft.web_service;
+      if (siteAppDraft.container_port) body.container_port = Number(siteAppDraft.container_port);
     }
     const data = await request('/site-apps', { method: 'POST', body: JSON.stringify(body) }, 'Creating application...');
     if (data) {
@@ -3818,6 +3860,11 @@ function App() {
                 {composePlan.services.map(service => <option key={service.name} value={service.name}>{service.name}{service.container_port ? ` · :${service.container_port}` : ''}</option>)}
               </select>
             </label>}
+            {composeWebPorts(composePlan, siteAppDraft.web_service).length > 1 && <label><span>Cổng phục vụ domain</span>
+              <select value={siteAppDraft.container_port} disabled={!!loading} onChange={e => { setSiteAppDraft(prev => ({ ...prev, container_port: e.target.value })); setComposePlan(null); }}>
+                {composeWebPorts(composePlan, siteAppDraft.web_service).map(port => <option key={port} value={port}>{port}</option>)}
+              </select>
+            </label>}
             <label><span>CPU mỗi service</span>
               <input value={siteAppDraft.cpu_limit} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, cpu_limit: e.target.value }))} placeholder="1" />
             </label>
@@ -3860,6 +3907,9 @@ function App() {
               {composePlan.issues.map((issue, index) => <li key={index}>
                 {issue.service && <code>{issue.service}</code>} {issue.message}
               </li>)}
+            </ul>}
+            {composePlan.notes?.length > 0 && <ul className="compose-notes">
+              {composePlan.notes.map((note, index) => <li key={index}>{note}</li>)}
             </ul>}
             {composePlan.ok && <ul className="compose-services">
               {composePlan.services.map(service => <li key={service.name}>
@@ -3981,6 +4031,11 @@ function App() {
                     {siteAppEditPlan.services.map(service => <option key={service.name} value={service.name}>{service.name}{service.container_port ? ` · :${service.container_port}` : ''}</option>)}
                   </select>
                 </label>}
+                {composeWebPorts(siteAppEditPlan, siteAppEdit.web_service).length > 1 && <label><span>Cổng phục vụ domain</span>
+                  <select value={siteAppEdit.container_port} disabled={!!loading} onChange={e => { setSiteAppEdit(prev => ({ ...prev, container_port: e.target.value })); setSiteAppEditPlan(null); }}>
+                    {composeWebPorts(siteAppEditPlan, siteAppEdit.web_service).map(port => <option key={port} value={port}>{port}</option>)}
+                  </select>
+                </label>}
               </> : <label className="site-app-env"><span>Environment (KEY=value, one per line)</span>
                 <textarea
                   className="code-editor"
@@ -4003,6 +4058,9 @@ function App() {
                   {siteAppEditPlan.issues.map((issue, index) => <li key={index}>
                     {issue.service && <code>{issue.service}</code>} {issue.message}
                   </li>)}
+                </ul>}
+                {siteAppEditPlan.notes?.length > 0 && <ul className="compose-notes">
+                  {siteAppEditPlan.notes.map((note, index) => <li key={index}>{note}</li>)}
                 </ul>}
               </div>}
             </div>}
@@ -5477,6 +5535,20 @@ function App() {
           <label><span>Panel hostname</span><input value={panelSettingsForm.panel_hostname} onChange={e => setPanelSettingsForm(prev => ({ ...prev, panel_hostname: e.target.value }))} placeholder="panel.domain.com" /></label>
           <label className="check-line panel-ssl-status"><input type="checkbox" checked={!!panelSettingsForm.ssl_enabled} onChange={e => setPanelSettingsForm(prev => ({ ...prev, ssl_enabled: e.target.checked }))} /> Panel SSL</label>
           <button disabled={!!loading || !panelSettingsForm.app_name || !panelSettingsForm.panel_hostname} onClick={savePanelSettings}><SettingsIcon size={14}/> Save settings</button>
+        </div>
+        <div className="panel-cert-strip">
+          <span>Chứng chỉ đang dùng: <strong>{PANEL_SSL_MODE_LABELS[panelSettings.ssl_mode] || 'Không có (HTTP)'}</strong></span>
+          {panelSettings.ssl_mode === 'selfsigned' && <span className="hint">
+            Trình duyệt sẽ cảnh báo một lần. Trỏ một domain về server này rồi chọn bên dưới để hết cảnh báo.
+          </span>}
+          {panelSettings.ssl_domains_available?.length > 0 && <label className="panel-cert-pick"><span>Dùng chứng chỉ của domain đã có SSL</span>
+            <select value={panelCertDomain} disabled={!!loading} onChange={e => setPanelCertDomain(e.target.value)}>
+              <option value="">Chọn domain...</option>
+              {panelSettings.ssl_domains_available.map(domain => <option key={domain} value={domain}>{domain}</option>)}
+            </select>
+          </label>}
+          {panelSettings.ssl_domains_available?.length > 0 && <button className="secondary-light" disabled={!!loading || !panelCertDomain} onClick={usePanelDomainCertificate}><Lock size={14}/> Dùng chứng chỉ này</button>}
+          {panelSettings.ssl_mode !== 'selfsigned' && <button className="secondary-light" disabled={!!loading} onClick={regeneratePanelSelfSigned}>Quay lại tự ký</button>}
         </div>
       </section>
       <section className="section">

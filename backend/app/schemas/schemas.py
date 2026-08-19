@@ -534,6 +534,9 @@ class CronDelete(BaseModel):
 class ComposeValidateRequest(BaseModel):
     compose_source: str
     web_service: Optional[str] = None
+    # Which of the web service's ports the domain reaches, when it declares more
+    # than one.
+    web_port: Optional[int] = Field(default=None, ge=1, le=65535)
     # The .env box, so a file written against one validates as it will run.
     env: str = ""
 
@@ -679,6 +682,11 @@ class PanelSettingsOut(BaseModel):
     logo_url: str = ""
     favicon_url: str = "/favicon.png"
     ssl_enabled: bool = False
+    # none | selfsigned | letsencrypt | domain — where the certificate came from,
+    # so the panel can say whether the browser warning is expected.
+    ssl_mode: str = "none"
+    # Websites on this server whose certificate the panel could borrow.
+    ssl_domains_available: List[str] = []
     message: Optional[str] = None
     # Optional ClamAV malware scanning status (always present, defaults off).
     malware_scan_enabled: bool = False
@@ -788,6 +796,11 @@ class AdminAccountUpdate(BaseModel):
         if value is None:
             return value
         return _validate_linux_login_password(value)
+
+class PanelSslUseDomain(BaseModel):
+    domain: str = Field(min_length=3, max_length=253)
+    panel_port: Optional[int] = Field(default=None, ge=1, le=65535)
+
 
 class PanelSslInstall(BaseModel):
     panel_hostname: Optional[str] = Field(default=None, min_length=3, max_length=255)

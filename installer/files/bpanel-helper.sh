@@ -1705,6 +1705,30 @@ app_directory() {
   printf '%s/%s/apps/%s' "$HOME_ROOT" "$user" "$name"
 }
 
+install_panel_cert_renewal_hook() {
+  # A certificate the panel borrowed from a website is a copy, and copies go
+  # stale: certbot renews the website's lineage every couple of months and the
+  # panel would keep serving the expired one until someone noticed.
+  install -d -m 0755 /etc/letsencrypt/renewal-hooks/deploy
+  cat >/etc/letsencrypt/renewal-hooks/deploy/bpanel-panel-cert <<'HOOK'
+#!/usr/bin/env bash
+# Installed by BPanel. Refreshes the panel's copy of a website certificate.
+set -euo pipefail
+env_file="/opt/bpanel/backend/.env"
+[[ -f "$env_file" ]] || exit 0
+mode="$(sed -nE 's/^PANEL_SSL_MODE=//p' "$env_file" | tail -n1 | tr -d '"')"
+domain="$(sed -nE 's/^PANEL_DOMAIN=//p' "$env_file" | tail -n1 | tr -d '"')"
+[[ "$mode" == "domain" && -n "$domain" ]] || exit 0
+# RENEWED_LINEAGE is set by certbot to the live directory that just changed.
+[[ "${RENEWED_LINEAGE:-}" == "/etc/letsencrypt/live/${domain}" ]] || exit 0
+install -d -o root -g bpanel -m 0750 /etc/bpanel
+install -m 0640 -o root -g bpanel "${RENEWED_LINEAGE}/fullchain.pem" /etc/bpanel/panel-fullchain.pem
+install -m 0640 -o root -g bpanel "${RENEWED_LINEAGE}/privkey.pem" /etc/bpanel/panel-privkey.pem
+systemctl restart bpanel-api || true
+HOOK
+  chmod 0755 /etc/letsencrypt/renewal-hooks/deploy/bpanel-panel-cert
+}
+
 require_backup_path() {
   # These commands write and read files as root at a path the panel chose, which
   # is only safe while that path cannot leave the backup tree — directly, through
@@ -3198,6 +3222,65 @@ case "$cmd" in
     refresh_tools_nginx
     schedule_panel_restart
     echo "Panel URL: ${scheme}://${host}:${port}"
+    ;;
+
+  panel-ssl-selfsigned)
+    # The panel should never be reachable in the clear, and a brand new server
+    # has no domain and no certificate authority that will vouch for its IP.
+    # A self-signed certificate warns the browser once; plain HTTP does not warn
+    # anybody while it hands over the admin password.
+    [[ $# -ge 1 && $# -le 2 ]] || deny "usage: panel-ssl-selfsigned <hostname-or-ip> <port>"
+    host="$1"; port="${2:-2222}"
+    require_port "$port"
+    [[ "$host" =~ ^[A-Za-z0-9.:_-]{1,253}$ ]] || deny "invalid panel hostname: $host"
+    install -d -o root -g bpanel -m 0750 /etc/bpanel
+    san="DNS:${host}"
+    [[ "$host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && san="IP:${host}"
+    server_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    [[ -n "$server_ip" && "$server_ip" != "$host" ]] && san="${san},IP:${server_ip}"
+    openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+      -keyout /etc/bpanel/panel-selfsigned-privkey.pem \
+      -out /etc/bpanel/panel-selfsigned-fullchain.pem \
+      -subj "/CN=${host}" -addext "subjectAltName=${san}" >/dev/null 2>&1 \
+      || deny "could not generate a self-signed certificate"
+    chown root:bpanel /etc/bpanel/panel-selfsigned-fullchain.pem /etc/bpanel/panel-selfsigned-privkey.pem
+    chmod 0640 /etc/bpanel/panel-selfsigned-fullchain.pem /etc/bpanel/panel-selfsigned-privkey.pem
+    env_set PANEL_SSL_CERT "/etc/bpanel/panel-selfsigned-fullchain.pem"
+    env_set PANEL_SSL_KEY "/etc/bpanel/panel-selfsigned-privkey.pem"
+    env_set PANEL_SSL_MODE "selfsigned"
+    env_set PANEL_URL "https://${host}:${port}"
+    env_set ALLOWED_ORIGINS "https://${host}:${port}"
+    allow_panel_port "$port"
+    refresh_tools_nginx
+    schedule_panel_restart
+    echo "Panel is on a self-signed certificate: https://${host}:${port}"
+    ;;
+
+  panel-ssl-use-domain)
+    # A domain hosted here that already has a real certificate is a better
+    # answer than a self-signed one, and than asking a certificate authority
+    # for a second certificate covering the same name.
+    [[ $# -eq 2 ]] || deny "usage: panel-ssl-use-domain <domain> <port>"
+    domain="$1"; port="$2"
+    require_domain "$domain"
+    require_port "$port"
+    live_dir="/etc/letsencrypt/live/${domain}"
+    [[ -f "${live_dir}/fullchain.pem" && -f "${live_dir}/privkey.pem" ]] \
+      || deny "no certificate for ${domain}; issue SSL for that website first"
+    install -d -o root -g bpanel -m 0750 /etc/bpanel
+    install -m 0640 -o root -g bpanel "${live_dir}/fullchain.pem" /etc/bpanel/panel-fullchain.pem
+    install -m 0640 -o root -g bpanel "${live_dir}/privkey.pem" /etc/bpanel/panel-privkey.pem
+    env_set PANEL_DOMAIN "$domain"
+    env_set PANEL_SSL_CERT "/etc/bpanel/panel-fullchain.pem"
+    env_set PANEL_SSL_KEY "/etc/bpanel/panel-privkey.pem"
+    env_set PANEL_SSL_MODE "domain"
+    env_set PANEL_URL "https://${domain}:${port}"
+    env_set ALLOWED_ORIGINS "https://${domain}:${port}"
+    install_panel_cert_renewal_hook
+    allow_panel_port "$port"
+    refresh_tools_nginx
+    schedule_panel_restart
+    echo "Panel now uses the certificate of ${domain}: https://${domain}:${port}"
     ;;
 
   panel-ssl-install)

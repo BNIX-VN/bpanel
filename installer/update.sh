@@ -359,6 +359,41 @@ remove_filebrowser_runtime() {
   systemctl daemon-reload
 }
 
+ensure_panel_https() {
+  # The panel takes an admin password and hands out a session token, so it has
+  # no business answering in the clear. A server with no domain has nothing a
+  # certificate authority will sign, so it gets a self-signed certificate: a
+  # warning the operator clicks through once beats a password on the wire.
+  local panel_port="$1" server_ip="$2" cert key host
+  cert="$(env_get PANEL_SSL_CERT)"
+  key="$(env_get PANEL_SSL_KEY)"
+  if [[ -n "$cert" && -n "$key" && -f "$cert" && -f "$key" ]]; then
+    return 0
+  fi
+  host="$(env_get PANEL_DOMAIN)"
+  host="${host:-${server_ip:-127.0.0.1}}"
+  echo "==> Panel has no certificate; generating a self-signed one"
+  install -d -o root -g bpanel -m 0750 /etc/bpanel
+  local san="DNS:${host}"
+  [[ "$host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && san="IP:${host}"
+  [[ -n "$server_ip" && "$server_ip" != "$host" ]] && san="${san},IP:${server_ip}"
+  if ! openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+      -keyout /etc/bpanel/panel-selfsigned-privkey.pem \
+      -out /etc/bpanel/panel-selfsigned-fullchain.pem \
+      -subj "/CN=${host}" -addext "subjectAltName=${san}" >/dev/null 2>&1; then
+    echo "    Could not generate a certificate; leaving the panel on HTTP" >&2
+    return 0
+  fi
+  chown root:bpanel /etc/bpanel/panel-selfsigned-fullchain.pem /etc/bpanel/panel-selfsigned-privkey.pem
+  chmod 0640 /etc/bpanel/panel-selfsigned-fullchain.pem /etc/bpanel/panel-selfsigned-privkey.pem
+  env_set PANEL_SSL_CERT "/etc/bpanel/panel-selfsigned-fullchain.pem"
+  env_set PANEL_SSL_KEY "/etc/bpanel/panel-selfsigned-privkey.pem"
+  env_set PANEL_SSL_MODE "selfsigned"
+  env_set PANEL_URL "https://${host}:${panel_port}"
+  env_set ALLOWED_ORIGINS "https://${host}:${panel_port}"
+  PANEL_SWITCHED_TO_HTTPS="https://${host}:${panel_port}"
+}
+
 write_tools_nginx_config() {
   local panel_port panel_domain panel_cert panel_key php_version server_ip host api_scheme tools_scheme pma_secure ssl_block
   panel_port="$(env_get PANEL_PORT)"; panel_port="${panel_port:-2222}"
@@ -596,6 +631,8 @@ install_panel_runtime() {
   env_set_default PANEL_DOMAIN ""
   env_set_default PANEL_SSL_CERT ""
   env_set_default PANEL_SSL_KEY ""
+  env_set_default PANEL_SSL_MODE ""
+  ensure_panel_https "$panel_port" "$server_ip"
   env_set_default FRONTEND_DIST "$APP_DIR/frontend/dist"
   env_set_default REDIS_URL "redis://localhost:6379/0"
   env_set_default RATE_LIMIT_BACKEND "redis"
@@ -1218,6 +1255,29 @@ migrate_site_cron_php_binary
 nginx -t
 systemctl reload nginx
 
+# --- Did turning HTTPS on actually work? -----------------------------------
+if [[ -n "${PANEL_SWITCHED_TO_HTTPS:-}" ]]; then
+  panel_port_now="$(env_get PANEL_PORT)"; panel_port_now="${panel_port_now:-2222}"
+  https_ok="no"
+  for _ in {1..20}; do
+    if curl -kfsS --connect-timeout 2 --max-time 5 "https://127.0.0.1:${panel_port_now}/api/health" >/dev/null 2>&1; then
+      https_ok="yes"; break
+    fi
+    sleep 1
+  done
+  if [[ "$https_ok" != "yes" ]]; then
+    # An operator locked out of the panel cannot fix the panel. Put it back.
+    log "Panel did not come up over HTTPS; reverting to HTTP"
+    env_set PANEL_SSL_CERT ""
+    env_set PANEL_SSL_KEY ""
+    env_set PANEL_SSL_MODE ""
+    env_set PANEL_URL "http://$(detect_server_ip):${panel_port_now}"
+    env_set ALLOWED_ORIGINS "http://$(detect_server_ip):${panel_port_now}"
+    PANEL_SWITCHED_TO_HTTPS=""
+    systemctl restart bpanel-api
+  fi
+fi
+
 # --- Health check ----------------------------------------------------------
 log "Health check"
 update_progress 98 "healthcheck" "Running API health check"
@@ -1227,6 +1287,14 @@ for _ in {1..20}; do
     echo ""
     echo "Update completed."
     echo "If the browser still shows the old UI, hard refresh (Ctrl + Shift + R)."
+    if [[ -n "${PANEL_SWITCHED_TO_HTTPS:-}" ]]; then
+      echo ""
+      echo "  The panel now answers over HTTPS only:"
+      echo "      ${PANEL_SWITCHED_TO_HTTPS}"
+      echo "  The old http:// address will not load. The certificate is self-signed,"
+      echo "  so the browser warns once; to replace it with a real one, point a domain"
+      echo "  at this server and use Panel settings -> SSL."
+    fi
     write_update_state "completed" "${UPDATE_REF:-}" "Update completed"
     update_progress 100 "completed" "Update completed"
     exit 0

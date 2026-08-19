@@ -123,6 +123,86 @@ def parse_panel_url(value: str) -> tuple[str, str, int]:
     return parsed.scheme, parsed.hostname or "", parsed.port or 2222
 
 
+def panel_ssl_mode() -> str:
+    """How the panel got the certificate it is serving.
+
+    'letsencrypt' and 'domain' are both real certificates — the first issued for
+    the panel's own hostname, the second borrowed from a website hosted here.
+    'selfsigned' is the default a server with no domain gets; 'none' means the
+    panel is answering in the clear, which should not happen any more.
+    """
+    mode = (os.environ.get("PANEL_SSL_MODE") or "").strip().lower()
+    if mode in {"letsencrypt", "domain", "selfsigned"}:
+        return mode if has_panel_certificate() else "none"
+    if not has_panel_certificate():
+        return "none"
+    # Installed before the mode was recorded: the filename says which it is.
+    return "selfsigned" if "selfsigned" in (settings.panel_ssl_cert or "") else "letsencrypt"
+
+
+def domains_with_certificate() -> list[str]:
+    """Websites on this server whose certificate the panel could borrow."""
+    live = Path("/etc/letsencrypt/live")
+    found = []
+    try:
+        for entry in sorted(live.iterdir()):
+            if (entry / "fullchain.pem").exists() and (entry / "privkey.pem").exists():
+                found.append(entry.name)
+    except OSError:
+        return []
+    return found
+
+
+def use_domain_certificate(domain: str, panel_port: int | None = None) -> dict:
+    """Serve the panel with a certificate a website here already has."""
+    host = normalize_panel_hostname(domain)
+    port = int(panel_port or settings.panel_port or 2222)
+    if host not in domains_with_certificate():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{host} chưa có chứng chỉ trên máy này. Cài SSL cho website đó trước.",
+        )
+    result = shell.privileged(
+        "panel-ssl-use-domain",
+        helper_args=[host, str(port)],
+        check=False,
+        timeout=300,
+        fallback=["bash", "-lc", "echo dry-run-panel-ssl-use-domain"],
+    )
+    if result.returncode != 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(result.stderr or result.stdout or "Could not switch the panel certificate").strip()[-500:],
+        )
+    return {"message": f"Panel dùng chứng chỉ của {host}.", "panel_url": f"https://{host}:{port}"}
+
+
+def regenerate_self_signed(panel_port: int | None = None) -> dict:
+    """Go back to a certificate the panel signs for itself."""
+    data = _read_raw()
+    host = ""
+    if data.get("panel_url") or settings.panel_url:
+        try:
+            _scheme, host, _port = parse_panel_url(data.get("panel_url") or settings.panel_url)
+        except ValueError:
+            host = ""
+    host = host or (os.environ.get("PANEL_DOMAIN") or "").strip() or "127.0.0.1"
+    port = int(panel_port or settings.panel_port or 2222)
+    result = shell.privileged(
+        "panel-ssl-selfsigned",
+        helper_args=[host, str(port)],
+        check=False,
+        timeout=300,
+        fallback=["bash", "-lc", "echo dry-run-panel-ssl-selfsigned"],
+    )
+    if result.returncode != 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(result.stderr or result.stdout or "Could not generate a certificate").strip()[-500:],
+        )
+    return {"message": "Panel dùng chứng chỉ tự ký.", "panel_url": f"https://{host}:{port}"}
+
+
 def has_panel_certificate() -> bool:
     cert_pairs = [
         (settings.panel_ssl_cert, settings.panel_ssl_key),
@@ -155,6 +235,8 @@ def current_settings() -> dict:
         "logo_url": _asset_url(data.get("logo_filename")),
         "favicon_url": _asset_url(data.get("favicon_filename")) or "/favicon.png",
         "ssl_enabled": ssl_enabled,
+        "ssl_mode": panel_ssl_mode(),
+        "ssl_domains_available": domains_with_certificate(),
         "malware_scan_enabled": mw["enabled"],
         "malware_scan_installed": mw["installed"],
         "malware_scan_active": mw["active"],
