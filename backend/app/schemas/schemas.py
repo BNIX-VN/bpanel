@@ -1008,6 +1008,11 @@ class CronCreate(BaseModel):
     command: str
 
 
+class PhpOpcacheToggle(BaseModel):
+    php_version: str = "8.4"
+    enabled: bool = True
+
+
 class PhpConfigRestore(BaseModel):
     php_version: str = "8.4"
 

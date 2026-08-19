@@ -29,6 +29,7 @@ from app.schemas.schemas import (
     DaBulkImportRequest,
     PhpConfigUpdate,
     PhpConfigRestore,
+    PhpOpcacheToggle,
     RestoreBackup,
     SftpBackupRun,
     SftpBackupTargetCreate,
@@ -952,6 +953,31 @@ def apply_php_tune(
         result["pools"] = ""
         result["pools_error"] = str(exc)[-500:]
     log_action(db, current_user.id, "php_tune", payload.php_version, request=request)
+    return result
+
+
+@router.post("/php-opcache")
+def toggle_php_opcache(
+    payload: PhpOpcacheToggle,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Turn OPcache on or off for one PHP version.
+
+    Kept out of the tuning file so that running Auto tune afterwards does not
+    switch it back on behind the administrator's back.
+    """
+    ensure_role(current_user.role, Role.admin)
+    from app.services import php_tune
+
+    try:
+        result = php_tune.set_opcache(payload.php_version, payload.enabled)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    log_action(db, current_user.id, "php_opcache", f"{payload.php_version}={int(payload.enabled)}", request=request)
     return result
 
 

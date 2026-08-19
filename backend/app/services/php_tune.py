@@ -31,6 +31,12 @@ WORKER_MB = 128
 # tickets, so no amount of arithmetic about small servers pushes it lower.
 MIN_MEMORY_LIMIT_MB = 1024
 TUNE_FILE_NAME = "95-bpanel-tune.ini"
+# The opcache switch lives in its own file, read after the tuning one: running
+# Auto tune must not quietly turn opcache back on for someone who turned it off
+# on purpose, and the panel's own PHP config page still wins over both.
+OPCACHE_FILE_NAME = "96-bpanel-opcache.ini"
+# JIT arrived in PHP 8.0; writing these on 7.4 would mean nothing.
+JIT_MIN_VERSION = (8, 0)
 
 # Keys the tuner is allowed to write. The helper enforces the same list; this
 # copy is what the panel offers, so a typo here fails loudly rather than being
@@ -47,6 +53,8 @@ TUNABLE_KEYS = (
     "opcache.revalidate_freq",
     "opcache.validate_timestamps",
     "opcache.save_comments",
+    "opcache.jit",
+    "opcache.jit_buffer_size",
     "expose_php",
     "zlib.output_compression",
 )
@@ -119,6 +127,17 @@ def server_facts() -> dict:
     }
 
 
+def _version_tuple(php_version: str) -> tuple:
+    try:
+        return tuple(int(part) for part in str(php_version).split("."))
+    except ValueError:
+        return (0,)
+
+
+def supports_jit(php_version: str) -> bool:
+    return _version_tuple(php_version) >= JIT_MIN_VERSION
+
+
 def _tier(total_mb: int) -> dict:
     """The numbers that follow from how much RAM the machine has.
 
@@ -145,17 +164,40 @@ def _tier(total_mb: int) -> dict:
     else:
         tier = {"memory_limit": 2048, "opcache_mb": 384, "interned": 32, "files": 130987}
     tier["memory_limit"] = max(MIN_MEMORY_LIMIT_MB, tier["memory_limit"])
+    # The JIT buffer is shared memory of its own, on top of opcache's.
+    tier["jit_buffer_mb"] = 32 if total_mb <= 2048 else (64 if total_mb <= 8192 else 128)
     return tier
 
 
-def recommendations(facts: dict | None = None) -> list[dict]:
-    """What to set, and why, for this machine."""
+def recommendations(facts: dict | None = None, php_version: str = "8.4") -> list[dict]:
+    """What to set, and why, for this machine and this PHP."""
     facts = facts or server_facts()
     total = facts["total_memory_mb"]
     tier = _tier(total)
     workers = facts["concurrent_requests"]
 
-    return [
+    jit: list[dict] = []
+    if supports_jit(php_version):
+        jit = [
+            {
+                "key": "opcache.jit",
+                "value": "tracing",
+                "reason": (
+                    "Biên dịch sang mã máy các đoạn chạy nhiều lần. Có lợi rõ với tính toán nặng; "
+                    "với WordPress phần lớn thời gian là chờ database nên lợi ít."
+                ),
+            },
+            {
+                "key": "opcache.jit_buffer_size",
+                "value": f"{tier['jit_buffer_mb']}M",
+                "reason": (
+                    f"Vùng nhớ riêng cho mã JIT sinh ra, ngoài {tier['opcache_mb']} MB của opcache. "
+                    "Đặt 0 là tắt JIT."
+                ),
+            },
+        ]
+
+    return jit + [
         {
             "key": "memory_limit",
             "value": f"{tier['memory_limit']}M",
@@ -313,6 +355,38 @@ def _normalise(value: str) -> str:
     return text
 
 
+def opcache_enabled(php_version: str) -> bool:
+    """Whether opcache is on for this PHP right now, however it was decided."""
+    value = current_values(php_version).get("opcache.enable", "")
+    return _normalise(value) == "1"
+
+
+def set_opcache(php_version: str, enabled: bool) -> dict:
+    """Turn opcache on or off for one PHP version.
+
+    Written to its own file so Auto tune, which regenerates the tuning file
+    wholesale, cannot undo the decision on its next run.
+    """
+    from app.services.shell import shell
+
+    if php_version not in php.SUPPORTED_PHP_VERSIONS:
+        raise ValueError(f"Unsupported PHP version: {php_version}")
+    result = shell.privileged(
+        "php-opcache-set",
+        helper_args=[php_version, "1" if enabled else "0"],
+        check=False,
+        timeout=120,
+        fallback=["bash", "-lc", "echo dry-run-opcache"],
+    )
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout or "Could not change opcache").strip()[-2000:])
+    return {
+        "php_version": php_version,
+        "enabled": enabled,
+        "message": f"OPcache PHP {php_version}: {'bật' if enabled else 'tắt'}.",
+    }
+
+
 def pinned_by_php_config(php_version: str) -> dict:
     """Values the panel's own PHP config page has written.
 
@@ -322,8 +396,10 @@ def pinned_by_php_config(php_version: str) -> dict:
     figure would be quietly ignored. Better to say so on the row than to show a
     recommendation that cannot take effect.
     """
-    path = Path(f"/etc/php/{php_version}/fpm/conf.d/99-bpanel.ini")
-    return _read_ini_values([path], set(TUNABLE_KEYS))
+    base = Path(f"/etc/php/{php_version}/fpm/conf.d")
+    # Both files PHP reads after the tuning one: the opcache switch and the
+    # values an administrator typed on the PHP Configuration form.
+    return _read_ini_values([base / OPCACHE_FILE_NAME, base / "99-bpanel.ini"], set(TUNABLE_KEYS))
 
 
 def plan(php_version: str) -> dict:
@@ -332,7 +408,7 @@ def plan(php_version: str) -> dict:
     live = current_values(php_version)
     pinned = pinned_by_php_config(php_version)
     rows = []
-    for item in recommendations(facts):
+    for item in recommendations(facts, php_version):
         now = live.get(item["key"], "")
         held = pinned.get(item["key"], "")
         rows.append({
@@ -349,6 +425,8 @@ def plan(php_version: str) -> dict:
         # A row that cannot take effect is not offered as a change to make.
         "changes": sum(1 for row in rows if row["changes"] and not row["overridden_value"]),
         "overridden": sum(1 for row in rows if row["overridden_value"]),
+        "opcache_enabled": _normalise(live.get("opcache.enable", "")) == "1",
+        "jit_supported": supports_jit(php_version),
         "tune_file": f"/etc/php/{php_version}/fpm/conf.d/{TUNE_FILE_NAME}",
         # The panel's own PHP config page writes 99-bpanel.ini, which PHP reads
         # after this file: anything set there keeps winning.
@@ -365,7 +443,7 @@ def render_ini(php_version: str) -> str:
         "; Values in 99-bpanel.ini are read after this file and still win.",
         "",
     ]
-    for item in recommendations(facts):
+    for item in recommendations(facts, php_version):
         lines.append(f"{item['key']} = {item['value']}")
     return "\n".join(lines) + "\n"
 

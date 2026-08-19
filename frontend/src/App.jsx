@@ -3029,6 +3029,19 @@ function App() {
     setPhpTuneApplied(false);
   }
 
+  async function toggleOpcache() {
+    const version = phpTune?.php_version || phpConfig.php_version;
+    const next = !phpTune?.opcache_enabled;
+    const data = await request('/maintenance/php-opcache', {
+      method: 'POST',
+      body: JSON.stringify({ php_version: version, enabled: next }),
+    }, next ? `Đang bật OPcache cho PHP ${version}...` : `Đang tắt OPcache cho PHP ${version}...`);
+    if (data) {
+      setNotice(data.message || 'Đã đổi OPcache.');
+      await loadPhpTune(version);
+    }
+  }
+
   async function applyPhpTune() {
     const version = phpTune?.php_version || phpConfig.php_version;
     const data = await request('/maintenance/php-tune', {
@@ -5062,7 +5075,14 @@ function App() {
         <button disabled={!!loading} onClick={updatePhpConfig}>Save</button>
       </div>
       {phpTune && <div className="php-tune" style={{ marginTop: 16 }}>
-        <button disabled={!!loading} onClick={applyPhpTune}><Cpu size={14}/> Auto tune PHP</button>
+        <div className="php-tune-actions">
+          <button disabled={!!loading} onClick={applyPhpTune}><Cpu size={14}/> Auto tune PHP</button>
+          <button className="secondary-light" disabled={!!loading} onClick={toggleOpcache}>
+            {phpTune.opcache_enabled
+              ? <><Ban size={14}/> Tắt OPcache (PHP {phpTune.php_version})</>
+              : <><Play size={14}/> Bật OPcache (PHP {phpTune.php_version})</>}
+          </button>
+        </div>
         {phpTuneApplied && <div className="notice php-tune-result">
           <strong><Check size={14}/> Đã tối ưu PHP {phpTune.php_version} theo máy này
             ({phpTune.facts.cpu_count} CPU, RAM {phpTune.facts.total_memory_mb} MB)</strong>
