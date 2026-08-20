@@ -5092,6 +5092,10 @@ function App() {
               {row.overridden_value && <em> — giữ theo ô PHP Configuration phía trên</em>}
             </li>)}
           </ul>
+          {phpTune.jit_supported && !phpTune.jit_usable && <p>
+            JIT không bật được trên máy này{phpTune.jit_blocked_by ? ` vì ${phpTune.jit_blocked_by} chiếm opcode handler` : ''} —
+            PHP sẽ bỏ qua, nên panel không ghi thông số JIT.
+          </p>}
           {phpTunePools && <p>{phpTunePools.split('\n').filter(Boolean).slice(-1)[0]}</p>}
         </div>}
       </div>}

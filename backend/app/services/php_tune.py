@@ -37,6 +37,11 @@ TUNE_FILE_NAME = "95-bpanel-tune.ini"
 OPCACHE_FILE_NAME = "96-bpanel-opcache.ini"
 # JIT arrived in PHP 8.0; writing these on 7.4 would mean nothing.
 JIT_MIN_VERSION = (8, 0)
+# Extensions that install their own opcode handlers. PHP refuses to run JIT
+# alongside any of them and says so once per worker start. ionCube ships with
+# BPanel because customers run encrypted commercial scripts, so on most servers
+# this is not a hypothetical.
+JIT_BLOCKING_EXTENSIONS = ("ionCube Loader", "xdebug", "SourceGuardian", "snuffleupagus", "pcov", "newrelic")
 
 # Keys the tuner is allowed to write. The helper enforces the same list; this
 # copy is what the panel offers, so a typo here fails loudly rather than being
@@ -135,7 +140,61 @@ def _version_tuple(php_version: str) -> tuple:
 
 
 def supports_jit(php_version: str) -> bool:
+    """Whether this PHP has JIT at all, regardless of whether it can run."""
     return _version_tuple(php_version) >= JIT_MIN_VERSION
+
+
+def jit_status(php_version: str) -> dict:
+    """Whether JIT would actually switch on, and what stops it if not.
+
+    Asked rather than assumed: writing opcache.jit on a server where another
+    extension owns the opcode handlers produces a warning on every worker start
+    and changes nothing at all.
+    """
+    if not supports_jit(php_version):
+        return {"supported": False, "usable": False, "blocked_by": ""}
+
+    import subprocess
+
+    ini_dir = Path(f"/etc/php/{php_version}/fpm")
+    env = {"PATH": "/usr/bin:/bin", "PHP_INI_SCAN_DIR": str(ini_dir / "conf.d")}
+    # Ask PHP to try JIT with the same extensions FPM loads, and to name any of
+    # the known blockers it finds among them.
+    names = ", ".join(f"'{name}'" for name in JIT_BLOCKING_EXTENSIONS)
+    script = (
+        "$s = @opcache_get_status(false);"
+        "$loaded = array_map('strtolower', get_loaded_extensions());"
+        f"$blockers = array_values(array_filter([{names}], "
+        "fn($n) => in_array(strtolower($n), $loaded, true)));"
+        "echo json_encode(['jit' => (bool)($s['jit']['enabled'] ?? false), 'blockers' => $blockers]);"
+    )
+    try:
+        result = subprocess.run(
+            [f"php{php_version}", "-c", str(ini_dir / "php.ini"),
+             "-d", "opcache.enable_cli=1", "-d", "opcache.jit=tracing",
+             "-d", "opcache.jit_buffer_size=16M", "-r", script],
+            capture_output=True, text=True, timeout=25, env=env,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return {"supported": True, "usable": False, "blocked_by": ""}
+
+    import json as _json
+
+    payload = {}
+    for line in (result.stdout or "").splitlines():
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                payload = _json.loads(line)
+            except ValueError:
+                continue
+    usable = bool(payload.get("jit"))
+    blockers = payload.get("blockers") or []
+    return {
+        "supported": True,
+        "usable": usable,
+        "blocked_by": "" if usable else ", ".join(blockers),
+    }
 
 
 def _tier(total_mb: int) -> dict:
@@ -169,15 +228,22 @@ def _tier(total_mb: int) -> dict:
     return tier
 
 
-def recommendations(facts: dict | None = None, php_version: str = "8.4") -> list[dict]:
-    """What to set, and why, for this machine and this PHP."""
+def recommendations(facts: dict | None = None, php_version: str = "8.4",
+                    jit_ok: bool | None = None) -> list[dict]:
+    """What to set, and why, for this machine and this PHP.
+
+    *jit_ok* says whether JIT can actually run here; when it cannot, the keys
+    are left out entirely rather than written to be ignored.
+    """
+    if jit_ok is None:
+        jit_ok = supports_jit(php_version) and jit_status(php_version)["usable"]
     facts = facts or server_facts()
     total = facts["total_memory_mb"]
     tier = _tier(total)
     workers = facts["concurrent_requests"]
 
     jit: list[dict] = []
-    if supports_jit(php_version):
+    if jit_ok:
         jit = [
             {
                 "key": "opcache.jit",
@@ -407,8 +473,9 @@ def plan(php_version: str) -> dict:
     facts = server_facts()
     live = current_values(php_version)
     pinned = pinned_by_php_config(php_version)
+    jit = jit_status(php_version)
     rows = []
-    for item in recommendations(facts, php_version):
+    for item in recommendations(facts, php_version, jit["usable"]):
         now = live.get(item["key"], "")
         held = pinned.get(item["key"], "")
         rows.append({
@@ -426,7 +493,9 @@ def plan(php_version: str) -> dict:
         "changes": sum(1 for row in rows if row["changes"] and not row["overridden_value"]),
         "overridden": sum(1 for row in rows if row["overridden_value"]),
         "opcache_enabled": _normalise(live.get("opcache.enable", "")) == "1",
-        "jit_supported": supports_jit(php_version),
+        "jit_supported": jit["supported"],
+        "jit_usable": jit["usable"],
+        "jit_blocked_by": jit["blocked_by"],
         "tune_file": f"/etc/php/{php_version}/fpm/conf.d/{TUNE_FILE_NAME}",
         # The panel's own PHP config page writes 99-bpanel.ini, which PHP reads
         # after this file: anything set there keeps winning.
@@ -445,6 +514,7 @@ def render_ini(php_version: str) -> str:
     ]
     for item in recommendations(facts, php_version):
         lines.append(f"{item['key']} = {item['value']}")
+
     return "\n".join(lines) + "\n"
 
 
