@@ -229,22 +229,27 @@ def _tier(total_mb: int) -> dict:
 
 
 def recommendations(facts: dict | None = None, php_version: str = "8.4",
-                    jit_ok: bool | None = None) -> list[dict]:
+                    jit: dict | bool | None = None) -> list[dict]:
     """What to set, and why, for this machine and this PHP.
 
-    *jit_ok* says whether JIT can actually run here; when it cannot, the keys
-    are left out entirely rather than written to be ignored.
+    *jit* is the answer from jit_status(): whether JIT exists here, whether it
+    can actually run, and what stops it. A server where it cannot run is told to
+    switch it off rather than left at PHP 8.4's default, which reserves 64 MB
+    for a JIT that never starts and warns about it on every worker start.
     """
-    if jit_ok is None:
-        jit_ok = supports_jit(php_version) and jit_status(php_version)["usable"]
+    if isinstance(jit, bool):
+        jit = {"supported": supports_jit(php_version), "usable": jit, "blocked_by": ""}
+    if jit is None:
+        jit = jit_status(php_version)
+    jit_ok = bool(jit.get("usable"))
     facts = facts or server_facts()
     total = facts["total_memory_mb"]
     tier = _tier(total)
     workers = facts["concurrent_requests"]
 
-    jit: list[dict] = []
+    jit_rows: list[dict] = []
     if jit_ok:
-        jit = [
+        jit_rows = [
             {
                 "key": "opcache.jit",
                 "value": "tracing",
@@ -262,8 +267,28 @@ def recommendations(facts: dict | None = None, php_version: str = "8.4",
                 ),
             },
         ]
+    elif jit.get("supported"):
+        blocker = jit.get("blocked_by") or "một extension khác"
+        jit_rows = [
+            {
+                "key": "opcache.jit",
+                "value": "disable",
+                "reason": (
+                    f"{blocker} chiếm opcode handler nên PHP không chạy JIT được. "
+                    "Tắt hẳn để khỏi cảnh báo mỗi lần PHP-FPM khởi động."
+                ),
+            },
+            {
+                "key": "opcache.jit_buffer_size",
+                "value": "0",
+                "reason": (
+                    "PHP 8.4 mặc định giữ 64 MB cho JIT dù JIT không chạy được — "
+                    "trả lại chỗ đó cho máy."
+                ),
+            },
+        ]
 
-    return jit + [
+    return jit_rows + [
         {
             "key": "memory_limit",
             "value": f"{tier['memory_limit']}M",
@@ -475,7 +500,7 @@ def plan(php_version: str) -> dict:
     pinned = pinned_by_php_config(php_version)
     jit = jit_status(php_version)
     rows = []
-    for item in recommendations(facts, php_version, jit["usable"]):
+    for item in recommendations(facts, php_version, jit):
         now = live.get(item["key"], "")
         held = pinned.get(item["key"], "")
         rows.append({
