@@ -191,3 +191,54 @@ def test_no_ipv6_socket_is_built_while_the_switch_is_off(monkeypatch):
 
     monkeypatch.setattr(serve.panel_ipv6, "is_enabled", lambda: False)
     assert serve.dual_stack_socket(0) is None
+
+
+def test_the_settings_page_is_told_the_server_addresses(monkeypatch):
+    """The page shows IPv4 and IPv6, so both have to reach it."""
+    from app.services import panel_settings, server_network
+
+    monkeypatch.setattr(server_network, "ipv4_addresses", lambda: ["64.118.132.44"])
+    monkeypatch.setattr(
+        panel_ipv6,
+        "status",
+        lambda: {
+            "available": True,
+            "enabled": True,
+            "addresses": ["2404:c140:1f00:32::1e:c2e"],
+            "detail": "ok",
+        },
+    )
+
+    state = panel_settings.current_settings()
+
+    assert state["server_ipv4"] == ["64.118.132.44"]
+    assert state["ipv6"]["addresses"] == ["2404:c140:1f00:32::1e:c2e"]
+
+
+def test_only_reachable_addresses_are_reported(monkeypatch):
+    """Loopback and link-local are real addresses that reach nobody."""
+    from app.services import server_network
+
+    class _Result:
+        returncode = 0
+        stdout = (
+            "1: lo    inet 127.0.0.1/8 scope host lo\  valid_lft forever\n"
+            "2: eth0    inet 64.118.132.44/22 brd 64.118.135.255 scope global eth0\n"
+            "2: eth0    inet6 fe80::f843:38ff:fef7:9a00/64 scope link\n"
+            "2: eth0    inet6 2404:c140:1f00:32::1e:c2e/64 scope global\n"
+        )
+        stderr = ""
+
+    monkeypatch.setattr(server_network.shutil, "which", lambda name: "/usr/sbin/ip")
+    monkeypatch.setattr(server_network.subprocess, "run", lambda *a, **k: _Result())
+
+    found = server_network._query("-4") + server_network._query("-6")
+
+    assert found == ["64.118.132.44", "2404:c140:1f00:32::1e:c2e"]
+
+
+def test_a_machine_without_the_ip_command_reports_nothing(monkeypatch):
+    from app.services import server_network
+
+    monkeypatch.setattr(server_network.shutil, "which", lambda name: None)
+    assert server_network.addresses() == {"ipv4": [], "ipv6": []}

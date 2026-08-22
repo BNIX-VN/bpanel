@@ -5635,17 +5635,30 @@ function App() {
           {panelSettings.ssl_domains_available?.length > 0 && <button className="secondary-light" disabled={!!loading || !panelCertDomain} onClick={usePanelDomainCertificate}><Lock size={14}/> Dùng chứng chỉ này</button>}
           {panelSettings.ssl_mode !== 'selfsigned' && <button className="secondary-light" disabled={!!loading} onClick={regeneratePanelSelfSigned}>Quay lại tự ký</button>}
         </div>
-        <div className="panel-ipv6-strip">
-          <div className="panel-ipv6-head">
-            <span>IPv6: <strong>{panelSettings.ipv6?.enabled ? 'Đang bật' : 'Đang tắt'}</strong></span>
+        <div className="panel-net-strip">
+          <div className="panel-net-row">
+            <span className="panel-net-label">IPv4</span>
+            <div className="panel-net-value">
+              {panelSettings.server_ipv4?.length > 0
+                ? panelSettings.server_ipv4.map(address => <span key={address} className="badge">{address}</span>)
+                : <span className="hint">Không đọc được địa chỉ IPv4 của máy chủ.</span>}
+            </div>
+          </div>
+          <div className="panel-net-row">
+            <span className="panel-net-label">IPv6</span>
+            <div className="panel-net-value">
+              {panelSettings.ipv6?.addresses?.length > 0
+                ? panelSettings.ipv6.addresses.map(address => <span key={address} className="badge">{address}</span>)
+                : <span className="badge">Chưa có</span>}
+              <span className={`badge ${panelSettings.ipv6?.enabled ? 'ok' : ''}`}>
+                {panelSettings.ipv6?.enabled ? 'Đang bật' : 'Đang tắt'}
+              </span>
+            </div>
             {panelSettings.ipv6?.enabled
               ? <button className="secondary-light" disabled={!!loading} onClick={() => toggleIpv6(false)}>Tắt IPv6</button>
               : <button className="secondary-light" disabled={!!loading || !panelSettings.ipv6?.available} onClick={() => toggleIpv6(true)}>Bật IPv6</button>}
           </div>
           <span className="hint">{panelSettings.ipv6?.detail}</span>
-          {panelSettings.ipv6?.addresses?.length > 0 && <div className="panel-host-chips">
-            {panelSettings.ipv6.addresses.map(address => <span key={address} className="badge">{address}</span>)}
-          </div>}
         </div>
         {panelSettings.panel_hostnames?.length > 0 && <div className="panel-host-strip">
           <span className="hint">

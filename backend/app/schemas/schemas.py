@@ -693,6 +693,8 @@ class PanelSettingsOut(BaseModel):
     # available: this machine has a global IPv6 address at all.
     # enabled: the websites and the panel are listening on it.
     ipv6: dict = {}
+    # The server's own public IPv4 addresses, for the settings page to show.
+    server_ipv4: list[str] = []
     message: Optional[str] = None
     # Optional ClamAV malware scanning status (always present, defaults off).
     malware_scan_enabled: bool = False
