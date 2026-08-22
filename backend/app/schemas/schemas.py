@@ -685,11 +685,6 @@ class PanelSettingsOut(BaseModel):
     # none | selfsigned | letsencrypt | domain — where the certificate came from,
     # so the panel can say whether the browser warning is expected.
     ssl_mode: str = "none"
-    # Websites on this server whose certificate the panel could borrow.
-    ssl_domains_available: list[str] = []
-    # Hostnames the panel already answers for with a certificate of their own,
-    # so the page can say where else this panel can be opened.
-    panel_hostnames: list[str] = []
     # available: this machine has a global IPv6 address at all.
     # enabled: the websites and the panel are listening on it.
     ipv6: dict = {}

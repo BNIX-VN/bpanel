@@ -44,12 +44,6 @@ function composeWebPorts(plan, wanted) {
   return service?.container_ports || [];
 }
 
-const PANEL_SSL_MODE_LABELS = {
-  letsencrypt: "Let's Encrypt (cấp cho hostname của panel)",
-  domain: 'Chứng chỉ của một website trên server này',
-  selfsigned: 'Tự ký',
-  none: 'Không có (HTTP)',
-};
 const SETTINGS_PAGE_KEYS = ['settings', 'api-tokens', 'security', 'php', 'firewall', 'waf', 'malware', 'access-logs', 'updates', 'addons', 'services'];
 const PAGE_ROUTES = {
   dashboard: '/',
@@ -654,7 +648,6 @@ function App() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [panelSettings, setPanelSettings] = useState({ app_name: 'BPanel', panel_url: '', panel_hostname: '', panel_port: 2222, logo_url: '', favicon_url: '/favicon.png', ssl_enabled: false });
-  const [panelCertDomain, setPanelCertDomain] = useState('');
   const [phpTune, setPhpTune] = useState(null);
   const [phpTuneApplied, setPhpTuneApplied] = useState(false);
   const [phpTunePools, setPhpTunePools] = useState('');
@@ -963,21 +956,6 @@ function App() {
       const data = await res.json();
       setAppVersion(data.version || '');
     } catch {}
-  }
-
-  async function usePanelDomainCertificate() {
-    if (!confirm(`Đặt chứng chỉ của ${panelCertDomain} làm chứng chỉ mặc định của panel?\n\nPanel sẽ khởi động lại. Các domain khác trên máy vẫn mở panel được bằng chứng chỉ của chính chúng (SNI).`)) return;
-    const data = await request('/panel-settings/ssl/use-domain', {
-      method: 'POST',
-      body: JSON.stringify({ domain: panelCertDomain, panel_port: panelSettings.panel_port || 2222 }),
-    }, 'Đang chuyển chứng chỉ panel...');
-    if (data) setNotice(`${data.message || 'Đã chuyển.'} Đăng nhập lại tại ${data.panel_url}`);
-  }
-
-  async function regeneratePanelSelfSigned() {
-    if (!confirm('Quay lại chứng chỉ tự ký?\n\nTrình duyệt sẽ cảnh báo mỗi lần vào panel cho tới khi bạn dùng chứng chỉ thật.')) return;
-    const data = await request('/panel-settings/ssl/self-signed', { method: 'POST' }, 'Đang tạo chứng chỉ tự ký...');
-    if (data) setNotice(`${data.message || 'Đã tạo.'} Panel sẽ khởi động lại.`);
   }
 
   async function savePanelSettings() {
@@ -5716,20 +5694,6 @@ function App() {
           <label className="check-line panel-ssl-status"><input type="checkbox" checked={!!panelSettingsForm.ssl_enabled} onChange={e => setPanelSettingsForm(prev => ({ ...prev, ssl_enabled: e.target.checked }))} /> Panel SSL</label>
           <button disabled={!!loading || !panelSettingsForm.app_name || !panelSettingsForm.panel_hostname} onClick={savePanelSettings}><SettingsIcon size={14}/> Save settings</button>
         </div>
-        <div className="panel-cert-strip">
-          <span>Chứng chỉ đang dùng: <strong>{PANEL_SSL_MODE_LABELS[panelSettings.ssl_mode] || 'Không có (HTTP)'}</strong></span>
-          {panelSettings.ssl_mode === 'selfsigned' && <span className="hint">
-            Trình duyệt sẽ cảnh báo một lần. Trỏ một domain về server này rồi chọn bên dưới để hết cảnh báo.
-          </span>}
-          {panelSettings.ssl_domains_available?.length > 0 && <label className="panel-cert-pick"><span>Dùng chứng chỉ của domain đã có SSL</span>
-            <select value={panelCertDomain} disabled={!!loading} onChange={e => setPanelCertDomain(e.target.value)}>
-              <option value="">Chọn domain...</option>
-              {panelSettings.ssl_domains_available.map(domain => <option key={domain} value={domain}>{domain}</option>)}
-            </select>
-          </label>}
-          {panelSettings.ssl_domains_available?.length > 0 && <button className="secondary-light" disabled={!!loading || !panelCertDomain} onClick={usePanelDomainCertificate}><Lock size={14}/> Dùng chứng chỉ này</button>}
-          {panelSettings.ssl_mode !== 'selfsigned' && <button className="secondary-light" disabled={!!loading} onClick={regeneratePanelSelfSigned}>Quay lại tự ký</button>}
-        </div>
         <div className="panel-net-strip">
           <div className="panel-net-row">
             <span className="panel-net-label">IPv4</span>
@@ -5755,17 +5719,6 @@ function App() {
           </div>
           <span className="hint">{panelSettings.ipv6?.detail}</span>
         </div>
-        {panelSettings.panel_hostnames?.length > 0 && <div className="panel-host-strip">
-          <span className="hint">
-            Panel mở được ở tất cả domain dưới đây, mỗi domain dùng đúng chứng chỉ của nó (SNI).
-            Hostname ở trên chỉ là chứng chỉ mặc định cho tên miền chưa có SSL.
-          </span>
-          <div className="panel-host-chips">
-            {panelSettings.panel_hostnames.map(host => (host.startsWith('*.')
-              ? <span key={host} className="badge">{host}:{panelSettings.panel_port || 2222}</span>
-              : <a key={host} className="badge" href={`https://${host}:${panelSettings.panel_port || 2222}`} target="_blank" rel="noreferrer">{host}:{panelSettings.panel_port || 2222}</a>))}
-          </div>
-        </div>}
       </section>
       <section className="section">
         <div className="section-title">
