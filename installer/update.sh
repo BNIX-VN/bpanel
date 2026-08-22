@@ -73,7 +73,7 @@ if [[ -z "${BPANEL_UPDATE_STABLE_COPY:-}" ]]; then
 fi
 
 cleanup_stable_copy() {
-  rm -f "${BPANEL_UPDATE_STABLE_COPY:-}" 2>/dev/null || true
+  rm -f "${BPANEL_UPDATE_STABLE_COPY:-}" "${BPANEL_UPDATE_PREVIOUS_COPY:-}" 2>/dev/null || true
 }
 trap cleanup_stable_copy EXIT
 
@@ -101,7 +101,7 @@ RELEASE_PATTERN="${RELEASE_PATTERN:-v[0-9]*.[0-9]*.[0-9]*}"
 RELEASE_ZIP_URL="${RELEASE_ZIP_URL:-}"             # optional archive URL template with {tag}
 SKIP_PULL="${SKIP_PULL:-false}"
 UPDATE_STATE_FILE="${UPDATE_STATE_FILE:-/var/lib/bpanel/update-status.json}"
-RELEASE_WORK_DIR=""
+RELEASE_WORK_DIR="${RELEASE_WORK_DIR:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -924,17 +924,21 @@ backup_db() {
   ls -1t "$snap_dir"/bpanel-*.db 2>/dev/null | tail -n +11 | xargs -r rm -f
 }
 
-log "Backing up SQLite DB before update"
-backup_db
-write_update_state "checking" "" "Checking for BPanel releases"
-update_progress 5 "checking" "Backing up SQLite DB before update"
+if [[ -n "${BPANEL_UPDATE_STAGE2:-}" ]]; then
+  log "Continuing with the updater shipped in this release"
+else
+  log "Backing up SQLite DB before update"
+  backup_db
+  write_update_state "checking" "" "Checking for BPanel releases"
+  update_progress 5 "checking" "Backing up SQLite DB before update"
+fi
 
 # --- Fetch source -----------------------------------------------------------
 if [[ "$SKIP_PULL" == "true" ]]; then
   if [[ "$(readlink -f "$SOURCE_DIR")" == "$(readlink -f "$APP_DIR")" ]]; then
     fail "SOURCE_DIR ($SOURCE_DIR) and APP_DIR ($APP_DIR) must be different."
   fi
-  UPDATE_REF="local:${SOURCE_DIR}"
+  UPDATE_REF="${BPANEL_UPDATE_REF_OVERRIDE:-local:${SOURCE_DIR}}"
   write_update_state "updating" "$UPDATE_REF" "Syncing BPanel from ${SOURCE_DIR}"
 else
   case "$UPDATE_CHANNEL" in
@@ -997,6 +1001,38 @@ fi
 # means the next run always has the newer script.
 if [[ -f "$SOURCE_DIR/installer/update.sh" ]]; then
   install -m 0755 -o root -g root "$SOURCE_DIR/installer/update.sh" /usr/local/sbin/bpanel-update
+fi
+
+# bash reads a script as it runs, which is why this one re-execs a copy of
+# itself out of /tmp. That copy is the updater from the release before this
+# one, so anything an update changes about updating itself only takes effect
+# the next time somebody updates. The release that moved the panel onto its own
+# start-up script showed how that ends: the new panel ran under the old command
+# line, and SNI stayed off, until the server was updated a second time.
+#
+# The new source is on disk and has just been checked, so hand over to its
+# updater here - once, guarded by BPANEL_UPDATE_STAGE2. SOURCE_DIR is passed
+# along already prepared, so the second stage fetches nothing again.
+if [[ -z "${BPANEL_UPDATE_STAGE2:-}" && -f "$SOURCE_DIR/installer/update.sh" ]] \
+  && ! cmp -s "$SOURCE_DIR/installer/update.sh" "${BPANEL_UPDATE_STABLE_COPY:-/nonexistent}"; then
+  log "The updater changed in this release; continuing with the new one"
+  update_progress 20 "syncing" "Handing over to the updater from ${UPDATE_REF:-the new release}"
+  stage2_copy="$(mktemp /tmp/bpanel-update-stage2.XXXXXX.sh)"
+  cp "$SOURCE_DIR/installer/update.sh" "$stage2_copy"
+  chmod 0700 "$stage2_copy"
+  # The command line was consumed by the argument loop at the top, so the
+  # second stage takes its configuration from the environment. exec replaces
+  # this process, so the EXIT trap here never runs: the second stage is handed
+  # everything this one would have cleaned up.
+  BPANEL_UPDATE_STAGE2=1 \
+  BPANEL_UPDATE_STABLE_COPY="$stage2_copy" \
+  BPANEL_UPDATE_PREVIOUS_COPY="${BPANEL_UPDATE_STABLE_COPY:-}" \
+  BPANEL_UPDATE_ORIGINAL_SCRIPT="$SOURCE_DIR/installer/update.sh" \
+  BPANEL_UPDATE_REF_OVERRIDE="${UPDATE_REF:-}" \
+  RELEASE_WORK_DIR="${RELEASE_WORK_DIR:-}" \
+  SOURCE_DIR="$SOURCE_DIR" \
+  SKIP_PULL=true \
+    exec /bin/bash "$stage2_copy"
 fi
 
 # --- Sync code into APP_DIR -------------------------------------------------
