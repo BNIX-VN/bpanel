@@ -43,6 +43,11 @@ PANEL_SNI_DIR="/etc/bpanel/sni"
 # an update re-applies it. World readable on purpose - it holds no secret and
 # the panel runs as 'bpanel'.
 PANEL_IPV6_MARKER="/etc/bpanel/ipv6-enabled"
+MALWARE_JOBS_DIR="/var/lib/bpanel/malware-scan-jobs"
+# Left out of a whole-server scan: kernel filesystems that are not files at
+# all, read-only squashfs images, package caches that are re-downloadable, and
+# the signature database itself. Scanning them costs hours and finds nothing.
+MALWARE_SCAN_PRUNE=(/proc /sys /dev /run /snap /var/lib/docker /var/lib/lxcfs /var/lib/clamav /var/cache/apt/archives)
 APP_DIR="/opt/bpanel"
 ENV_FILE="${APP_DIR}/backend/.env"
 DEFAULT_PANEL_PORT="2222"
@@ -1925,6 +1930,44 @@ nginx_ipv6_apply() {
   systemctl reload nginx
 }
 
+malware_scan_file_list() {
+  # One find over the machine, with the noise pruned. Ten seconds on a normal
+  # VPS, and it buys an exact total so the panel can show real progress.
+  local args=() path
+  for path in "${MALWARE_SCAN_PRUNE[@]}"; do
+    args+=(-path "$path" -prune -o)
+  done
+  find / "${args[@]}" -type f -print 2>/dev/null
+}
+
+run_malware_server_scan() {
+  local job="$1" list log total rc
+  [[ "$job" =~ ^[0-9a-f]{8,64}$ ]] || deny "invalid scan job id"
+  command -v clamdscan >/dev/null 2>&1 || deny "clamdscan is not installed"
+  systemctl is-active --quiet clamav-daemon || deny "clamav-daemon is not running"
+  install -d -o bpanel -g bpanel -m 0750 "$MALWARE_JOBS_DIR"
+  list="${MALWARE_JOBS_DIR}/${job}.files"
+  log="${MALWARE_JOBS_DIR}/${job}.scan.log"
+  rm -f "$list" "$log"
+
+  malware_scan_file_list >"$list"
+  total="$(wc -l <"$list")"
+  # The panel reads its progress out of this file while the scan runs, so the
+  # total has to be in there rather than only in the exit output.
+  printf 'total=%s\n' "$total" >"$log"
+  chown bpanel:bpanel "$list" "$log"
+  chmod 0640 "$list" "$log"
+
+  # --fdpass hands clamd an open descriptor, which is the only way it reads
+  # files its own user cannot. Niced hard: a scan must never be the reason a
+  # website goes slow.
+  rc=0
+  nice -n 19 ionice -c3 clamdscan --fdpass --stdout --no-summary --file-list="$list" >>"$log" 2>&1 || rc=$?
+  rm -f "$list"
+  printf 'total=%s\n' "$total"
+  printf 'exit=%s\n' "$rc"
+}
+
 install_sni_cert_pair() {
   local domain="$1" cert="$2" key="$3" target="${PANEL_SNI_DIR}/${domain}"
   install -d -o root -g bpanel -m 0750 "$target"
@@ -3565,6 +3608,18 @@ case "$cmd" in
     refresh_tools_nginx
     schedule_panel_restart
     echo "Panel URL: ${scheme}://${host}:${port}"
+    ;;
+
+  malware-scan-server)
+    # Scan the whole machine. The panel owns the job bookkeeping; this only
+    # runs the scanner and leaves its output where the panel can read it.
+    [[ $# -eq 1 ]] || deny "usage: malware-scan-server <job-id>"
+    run_malware_server_scan "$1"
+    ;;
+
+  malware-scan-server-estimate)
+    [[ $# -eq 0 ]] || deny "usage: malware-scan-server-estimate"
+    printf 'total=%s\n' "$(malware_scan_file_list | wc -l)"
     ;;
 
   ipv6-status)

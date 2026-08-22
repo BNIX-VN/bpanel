@@ -409,6 +409,12 @@ button:disabled,.upload-button.disabled{background:var(--disabled-bg);color:var(
 .panel-net-value{display:flex;flex-wrap:wrap;align-items:center;gap:6px;flex:1}
 .panel-net-value .hint{margin:0}
 .panel-net-strip > .hint{display:block;margin:7px 0 0}
+.malware-schedule{margin-top:12px;padding:11px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-alt)}
+.malware-schedule-controls{display:flex;flex-wrap:wrap;align-items:end;gap:10px;margin-top:10px}
+.malware-schedule-controls label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text-secondary)}
+.malware-schedule-controls label.check-line{flex-direction:row;align-items:center;gap:7px}
+.malware-schedule-controls select{min-width:130px}
+.malware-schedule > .hint{margin:9px 0 0}
 .panel-cert-pick{display:grid;gap:5px;font-weight:700}
 .panel-cert-pick span{font-size:11px;letter-spacing:.03em;text-transform:uppercase;color:var(--text-muted)}
 .addon-list{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}

@@ -9,11 +9,6 @@ from app.core.step_up import require_sensitive_action_step_up
 from app.models.entities import User
 from app.schemas.schemas import (
     AdminAccountUpdate,
-    MalwareScanJob,
-    MalwareScanJobsOut,
-    MalwareScanRun,
-    MalwareScanStatus,
-    MalwareScanToggle,
     PanelIpv6Toggle,
     PanelSettingsOut,
     PanelSettingsUpdate,
@@ -209,86 +204,3 @@ def toggle_ipv6(
     settings_out = panel_settings.current_settings()
     settings_out["message"] = result.get("message")
     return settings_out
-
-
-@router.get("/malware-scan", response_model=MalwareScanStatus)
-def get_malware_scan_status(current_user: User = Depends(get_current_user)):
-    ensure_role(current_user.role, Role.admin)
-    return panel_settings.malware_scan_status()
-
-
-@router.post("/malware-scan/toggle", response_model=PanelSettingsOut)
-def toggle_malware_scan(
-    payload: MalwareScanToggle,
-    request: Request,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    ensure_role(current_user.role, Role.admin)
-    try:
-        result = panel_settings.set_malware_scan(payload.enabled)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-    action = "enable_malware_scan" if payload.enabled else "disable_malware_scan"
-    log_action(db, current_user.id, action, "malware-scan", request=request)
-    return result
-
-
-@router.post("/malware-scan/run", response_model=MalwareScanJob)
-def run_malware_scan(
-    payload: MalwareScanRun,
-    request: Request,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    ensure_role(current_user.role, Role.admin)
-    try:
-        if not payload.all and payload.website_id is None:
-            raise ValueError("Website is required")
-        result = panel_settings.start_scan_job(None if payload.all else payload.website_id, db)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    log_action(db, current_user.id, "malware_scan_run", "all" if payload.all else str(payload.website_id), request=request)
-    return result
-
-
-@router.get("/malware-scan/jobs", response_model=MalwareScanJobsOut)
-def list_malware_scan_jobs(current_user: User = Depends(get_current_user)):
-    ensure_role(current_user.role, Role.admin)
-    return {"jobs": panel_settings.list_malware_scan_jobs()}
-
-
-@router.get("/malware-scan/jobs/latest", response_model=MalwareScanJob)
-def get_latest_malware_scan_job(current_user: User = Depends(get_current_user)):
-    ensure_role(current_user.role, Role.admin)
-    try:
-        return panel_settings.get_latest_malware_scan_job()
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
-@router.get("/malware-scan/jobs/{job_id}", response_model=MalwareScanJob)
-def get_malware_scan_job(job_id: str, current_user: User = Depends(get_current_user)):
-    ensure_role(current_user.role, Role.admin)
-    try:
-        return panel_settings.get_malware_scan_job(job_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
-@router.post("/malware-scan/start")
-def start_malware_scan_daemon(
-    request: Request,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    ensure_role(current_user.role, Role.admin)
-    from app.services import malware_scan
-
-    ok = malware_scan.start_clamd()
-    if not ok:
-        raise HTTPException(status_code=500, detail="Failed to start ClamAV daemon")
-    log_action(db, current_user.id, "clamav_start", "malware-scan", request=request)
-    return {"message": "ClamAV daemon started successfully"}

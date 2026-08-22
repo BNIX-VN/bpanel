@@ -707,9 +707,33 @@ class MalwareScanToggle(BaseModel):
     enabled: bool = False
 
 
+class MalwareScanScheduleUpdate(BaseModel):
+    enabled: bool = False
+    # Monday is 0, matching datetime.weekday().
+    weekday: int = 6
+    hour: int = 3
+    # server = every file on the machine, websites = the website roots only.
+    scope: str = "server"
+
+
+class MalwareScanScheduleOut(BaseModel):
+    enabled: bool = False
+    weekday: int = 6
+    weekday_label: str = ""
+    hour: int = 3
+    scope: str = "server"
+    next_run_at: str = ""
+    last_run_at: str = ""
+    last_status: str = ""
+    last_message: str = ""
+    last_job_id: str = ""
+
+
 class MalwareScanRun(BaseModel):
     website_id: Optional[int] = None
     all: bool = False
+    # Scan every file on the machine, not just website roots.
+    server: bool = False
 
 
 class MalwareScanThreat(BaseModel):

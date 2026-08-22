@@ -639,6 +639,216 @@ def _select_scan_websites(website_id: int | None, db) -> list:
     return [website]
 
 
+# --- whole-server scan ------------------------------------------------------
+# A website scan walks a few thousand files from the panel's own account. The
+# whole machine is a different job: 150,000 files on a small VPS, most of them
+# unreadable to anyone but root. That one runs through the helper, which hands
+# clamd an open descriptor per file, and reports its progress through a log the
+# panel reads while it works.
+
+SERVER_SCAN_TIMEOUT_SECONDS = 6 * 60 * 60
+SERVER_SCAN_POLL_SECONDS = 3
+
+
+def _server_scan_log(job_id: str) -> Path:
+    return MALWARE_JOBS_DIR / f"{job_id}.scan.log"
+
+
+def _parse_clamdscan_line(line: str) -> tuple[str, str, str]:
+    """One line of clamdscan output as (status, path, detail)."""
+    stripped = line.strip()
+    if not stripped or ":" not in stripped:
+        return ("", "", "")
+    path, _, rest = stripped.rpartition(":")
+    rest = rest.strip()
+    if not path:
+        return ("", "", "")
+    if rest == "OK":
+        return ("clean", path, "")
+    if rest.endswith(" FOUND"):
+        return ("infected", path, rest[: -len(" FOUND")].strip())
+    if rest.endswith(" ERROR") or rest.endswith("ERROR"):
+        return ("error", path, rest.removesuffix("ERROR").strip())
+    return ("", "", "")
+
+
+class _ServerScanProgress:
+    """Reads the scanner's log as it grows and keeps the job in step with it."""
+
+    def __init__(self, job_id: str):
+        self.job_id = job_id
+        self.offset = 0
+        self.total = 0
+        self.scanned = 0
+        self.errors = 0
+        self.threats: list[dict] = []
+        self.pending = b""
+
+    def poll(self) -> None:
+        path = _server_scan_log(self.job_id)
+        try:
+            size = path.stat().st_size
+        except OSError:
+            return
+        if size < self.offset:  # the log was replaced under us
+            self.offset = 0
+        if size == self.offset:
+            return
+        try:
+            with path.open("rb") as handle:
+                handle.seek(self.offset)
+                chunk = handle.read(size - self.offset)
+                self.offset = handle.tell()
+        except OSError:
+            return
+        data = self.pending + chunk
+        lines = data.split(b"\n")
+        self.pending = lines.pop()
+        for raw_line in lines:
+            self._consume(raw_line.decode("utf-8", "replace"))
+        self._publish()
+
+    def _consume(self, line: str) -> None:
+        if line.startswith("total="):
+            try:
+                self.total = int(line.split("=", 1)[1])
+            except ValueError:
+                pass
+            return
+        status, path, detail = _parse_clamdscan_line(line)
+        if not status:
+            return
+        self.scanned += 1
+        if status == "infected":
+            self.threats.append({"path": path, "signature": detail, "domain": ""})
+            _append_malware_log(self.job_id, f"INFECTED {path}: {detail}")
+        elif status == "error":
+            self.errors += 1
+            if self.errors <= 50:  # a log of 150,000 unreadable sockets helps nobody
+                _append_malware_log(self.job_id, f"ERROR {path}: {detail}")
+
+    def _publish(self) -> None:
+        percent = int((self.scanned / self.total) * 100) if self.total else 0
+        _update_malware_job(
+            self.job_id,
+            total_files=self.total,
+            scanned=self.scanned,
+            infected=len(self.threats),
+            errors=self.errors,
+            threats=self.threats,
+            progress_percent=min(percent, 99),
+            message=(
+                f"Scanning {self.scanned}/{self.total} files"
+                if self.total
+                else "Listing files on the server"
+            ),
+        )
+
+
+def start_server_scan_job() -> dict:
+    """Scan every file on the machine, not just the websites."""
+    if not _malware_scan.clamd_running():
+        raise RuntimeError("ClamAV daemon is not running. Enable malware scanning first.")
+    job_id = uuid.uuid4().hex
+    job = {
+        "job_id": job_id,
+        "status": "queued",
+        "scope": "server",
+        "website_id": None,
+        "domains": [],
+        "message": "Queued",
+        "progress_percent": 0,
+        "total_files": 0,
+        "scanned": 0,
+        "infected": 0,
+        "errors": 0,
+        "skipped": 0,
+        "threats": [],
+        "log": [],
+        "created_at": _now_iso(),
+        "started_at": "",
+        "finished_at": "",
+        "updated_at": _now_iso(),
+    }
+    _remember_malware_job(job)
+    thread = threading.Thread(target=_run_server_scan_job, args=(job_id,), daemon=True)
+    with MALWARE_JOBS_LOCK:
+        MALWARE_JOB_THREADS[job_id] = thread
+    thread.start()
+    return _public_malware_job(job)
+
+
+def _run_server_scan_job(job_id: str) -> None:
+    _update_malware_job(
+        job_id,
+        status="running",
+        started_at=_now_iso(),
+        message="Listing files on the server",
+    )
+    _append_malware_log(job_id, "Whole-server scan started")
+    progress = _ServerScanProgress(job_id)
+    stop = threading.Event()
+
+    def watch() -> None:
+        while not stop.is_set():
+            progress.poll()
+            stop.wait(SERVER_SCAN_POLL_SECONDS)
+        progress.poll()
+
+    watcher = threading.Thread(target=watch, daemon=True)
+    watcher.start()
+    try:
+        result = shell.privileged(
+            "malware-scan-server",
+            helper_args=[job_id],
+            check=False,
+            timeout=SERVER_SCAN_TIMEOUT_SECONDS,
+            fallback=["bash", "-lc", "echo dry-run-malware-scan-server"],
+        )
+        stop.set()
+        watcher.join(timeout=30)
+        # clamdscan exits 1 when it found something and 2 on an error; neither
+        # means the scan failed to run.
+        if result.returncode not in (0, 1, 2):
+            detail = (result.stderr or result.stdout or "").strip()[-400:]
+            raise RuntimeError(detail or f"Scanner exited with {result.returncode}")
+        status = "infected" if progress.threats else "done"
+        _update_malware_job(
+            job_id,
+            status=status,
+            progress_percent=100,
+            total_files=progress.total,
+            scanned=progress.scanned,
+            infected=len(progress.threats),
+            errors=progress.errors,
+            threats=progress.threats,
+            message=(
+                f"Scan complete: {progress.scanned} files, "
+                f"{len(progress.threats)} threats, {progress.errors} errors"
+            ),
+            finished_at=_now_iso(),
+        )
+        _append_malware_log(job_id, "Scan finished")
+    except Exception as exc:  # noqa: BLE001 - a failed scan is reported, not raised
+        stop.set()
+        _update_malware_job(
+            job_id,
+            status="error",
+            message="Scan failed",
+            error=str(exc),
+            finished_at=_now_iso(),
+        )
+        _append_malware_log(job_id, f"ERROR scan failed: {exc}")
+    finally:
+        stop.set()
+        with MALWARE_JOBS_LOCK:
+            MALWARE_JOB_THREADS.pop(job_id, None)
+        try:
+            _server_scan_log(job_id).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def start_scan_job(website_id: int | None, db) -> dict:
     """Start a background malware scan for one website or all websites."""
     websites = _select_scan_websites(website_id, db)

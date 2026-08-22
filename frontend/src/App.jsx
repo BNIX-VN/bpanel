@@ -50,7 +50,7 @@ const PANEL_SSL_MODE_LABELS = {
   selfsigned: 'Tự ký',
   none: 'Không có (HTTP)',
 };
-const SETTINGS_PAGE_KEYS = ['settings', 'api-tokens', 'security', 'php', 'firewall', 'waf', 'access-logs', 'updates', 'addons', 'services'];
+const SETTINGS_PAGE_KEYS = ['settings', 'api-tokens', 'security', 'php', 'firewall', 'waf', 'malware', 'access-logs', 'updates', 'addons', 'services'];
 const PAGE_ROUTES = {
   dashboard: '/',
   websites: '/website',
@@ -323,6 +323,10 @@ function aceModeName(mode) {
 // The listing reports POSIX modes as octal strings ("644", and "2755" or the
 // like when a folder carries a special bit), so the dialog works on the same
 // representation.
+// Monday first, matching datetime.weekday() on the server.
+const WEEKDAY_LABELS = ['Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6', 'Thứ 7', 'Chủ nhật'];
+const MALWARE_SCHEDULE_DEFAULT = { enabled: false, weekday: 6, hour: 3, scope: 'server' };
+
 const PERMISSION_CLASSES = [
   { key: 'owner', label: 'Owner' },
   { key: 'group', label: 'Group' },
@@ -641,6 +645,8 @@ function App() {
   const [scanResults, setScanResults] = useState(null);
   const [scanJob, setScanJob] = useState(null);
   const [scanJobs, setScanJobs] = useState([]);
+  const [malwareSchedule, setMalwareSchedule] = useState(MALWARE_SCHEDULE_DEFAULT);
+  const [malwareScheduleForm, setMalwareScheduleForm] = useState(MALWARE_SCHEDULE_DEFAULT);
   const [scanLoading, setScanLoading] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
@@ -1571,7 +1577,7 @@ function App() {
   }
 
   async function loadMalwareScanStatus() {
-    const data = await request('/panel-settings/malware-scan', {}, 'Loading malware scan status...');
+    const data = await request('/malware/status', {}, 'Loading malware scan status...');
     if (data) setMalwareScanStatus(data);
   }
 
@@ -1598,7 +1604,7 @@ function App() {
     if (enable && !malwareScanStatus?.installed) {
       if (!confirm('ClamAV is not installed on this server. It will be installed now (may take 1-2 minutes). Continue?')) return;
     }
-    const data = await request('/panel-settings/malware-scan/toggle', {
+    const data = await request('/malware/toggle', {
       method: 'POST',
       body: JSON.stringify({ enabled: enable }),
     }, enable ? 'Enabling malware scanning...' : 'Disabling malware scanning...');
@@ -1609,16 +1615,44 @@ function App() {
     }
   }
 
+  async function loadMalwareSchedule() {
+    const data = await request('/malware/schedule', { silent: true }, '');
+    if (data) {
+      setMalwareSchedule(data);
+      setMalwareScheduleForm({
+        enabled: !!data.enabled,
+        weekday: Number(data.weekday ?? 6),
+        hour: Number(data.hour ?? 3),
+        scope: data.scope || 'server',
+      });
+    }
+  }
+
+  async function saveMalwareSchedule() {
+    const data = await request('/malware/schedule', {
+      method: 'PUT',
+      body: JSON.stringify(malwareScheduleForm),
+    }, 'Đang lưu lịch quét...');
+    if (data) {
+      setMalwareSchedule(data);
+      setNotice(data.enabled
+        ? `Đã bật lịch quét ${data.weekday_label} lúc ${String(data.hour).padStart(2, '0')}:00 UTC.`
+        : 'Đã tắt lịch quét hàng tuần.');
+    }
+  }
+
   async function runMalwareScan() {
     if (!scanTargetWebsiteId) return;
     setScanResults(null);
     setScanJob(null);
     setScanLoading(true);
     try {
-      const body = scanTargetWebsiteId === 'all'
+      const body = scanTargetWebsiteId === 'server'
+        ? { server: true }
+        : scanTargetWebsiteId === 'all'
         ? { all: true }
         : { website_id: Number(scanTargetWebsiteId) };
-      const data = await request('/panel-settings/malware-scan/run', {
+      const data = await request('/malware/run', {
         method: 'POST',
         body: JSON.stringify(body),
       }, 'Starting malware scan...');
@@ -1633,7 +1667,7 @@ function App() {
   }
 
   async function loadMalwareScanJob(jobId) {
-    const data = await request(`/panel-settings/malware-scan/jobs/${jobId}`, {}, '');
+    const data = await request(`/malware/jobs/${jobId}`, {}, '');
     if (!data) return null;
     if (['done', 'infected', 'error', 'interrupted'].includes(data.status)) {
       setScanLoading(false);
@@ -1654,7 +1688,7 @@ function App() {
   }
 
   async function loadMalwareScanJobs() {
-    const data = await request('/panel-settings/malware-scan/jobs', { silent: true }, '');
+    const data = await request('/malware/jobs', { silent: true }, '');
     if (data?.jobs) setScanJobs(data.jobs);
     return data?.jobs || [];
   }
@@ -1666,7 +1700,7 @@ function App() {
   }
 
   async function loadLatestMalwareScanJob() {
-    const data = await request('/panel-settings/malware-scan/jobs/latest', { silent: true }, '');
+    const data = await request('/malware/jobs/latest', { silent: true }, '');
     if (!data) return null;
     if (['done', 'infected', 'error', 'interrupted'].includes(data.status)) {
       setScanJob(null);
@@ -1679,7 +1713,7 @@ function App() {
   }
 
   async function startClamavDaemon() {
-    const data = await request('/panel-settings/malware-scan/start', { method: 'POST' }, 'Starting ClamAV daemon...');
+    const data = await request('/malware/start-daemon', { method: 'POST' }, 'Starting ClamAV daemon...');
     if (data) {
       setNotice(data.message || 'ClamAV daemon started.');
       await loadMalwareScanStatus();
@@ -3486,6 +3520,13 @@ function App() {
     if (isAuthenticated && page === 'php') { loadPhpConfig(); loadPhpTune(phpConfig.php_version); }
     if (isAuthenticated && page === 'firewall') { loadFirewall(); loadFirewallBlocklists(); }
     if (isAuthenticated && page === 'waf') loadWafRules();
+    if (isAuthenticated && page === 'malware' && isAdmin) {
+      loadMalwareScanStatus();
+      loadMalwareScanJobs();
+      loadLatestMalwareScanJob();
+      loadMalwareSchedule();
+      if (websites.length === 0) loadWebsiteList('', false);
+    }
     if (isAuthenticated && page === 'access-logs' && currentUser?.role === 'admin') {
       loadWafAccessLogs(wafAccessLogFilters, true);
     }
@@ -3550,6 +3591,7 @@ function App() {
     ...(isAdmin ? [['php', 'PHP config', Code2]] : []),
     ...(isAdmin ? [['firewall', 'Firewall', Shield]] : []),
     ...(isAdmin ? [['waf', 'WAF', Shield]] : []),
+    ...(isAdmin ? [['malware', 'Malware Scanner', Search]] : []),
     ...(isAdmin ? [['access-logs', 'Access Logs', FileText]] : []),
     ...(isAdmin ? [['updates', 'Updates', RefreshCw]] : []),
     ...(isAdmin ? [['addons', 'Addons', Boxes]] : []),
@@ -5446,38 +5488,6 @@ function App() {
 
   function renderSecurity() {
     const enabled = Boolean(twoFactorStatus?.enabled || currentUser?.totp_enabled);
-    const mw = malwareScanStatus || {};
-    const mwActive = Boolean(mw.active);
-    const mwInstalled = Boolean(mw.installed);
-    const mwEnabled = Boolean(mw.enabled);
-    const activeScanJob = scanJob || scanResults || {};
-    const scanRunning = ['queued', 'running'].includes(scanJob?.status);
-    const scanJobTitle = job => (job.domains && job.domains.length > 0)
-      ? (job.domains.length === 1 ? job.domains[0] : `${job.domains.length} websites`)
-      : (job.scope === 'all' ? 'All websites' : 'Scan job');
-    const scanJobStamp = job => {
-      const stamp = job.finished_at || job.updated_at || job.started_at || job.created_at || '';
-      if (!stamp) return 'No timestamp';
-      const date = new Date(stamp);
-      return Number.isNaN(date.getTime()) ? stamp : new Intl.DateTimeFormat('en-GB', {
-        timeZone: 'Asia/Ho_Chi_Minh',
-        hour12: false,
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric',
-      }).format(date).replace(',', '');
-    };
-    const scanJobDetail = job => `${job.scanned || 0}/${job.total_files || job.scanned || 0} files, ${job.infected || 0} threats, ${job.errors || 0} errors`;
-    const scanJobMeta = job => `${scanJobStamp(job)} / ${scanJobDetail(job)}`;
-    const scanJobBadgeClass = job => {
-      if (job.status === 'done') return 'badge ok';
-      if (job.status === 'infected') return 'badge danger';
-      if (['error', 'interrupted'].includes(job.status)) return 'badge bad';
-      return 'badge warn';
-    };
     return <>
       <section className="section">
         <div className="section-title">
@@ -5508,7 +5518,47 @@ function App() {
         </div>}
       </section>
 
-      {isAdmin && <section className="section">
+    </>;
+  }
+
+  function renderMalware() {
+    if (!isAdmin) return <section className="section"><h2>Malware Scanner</h2><p className="hint">No permission.</p></section>;
+    const mw = malwareScanStatus || {};
+    const mwActive = Boolean(mw.active);
+    const mwInstalled = Boolean(mw.installed);
+    const mwEnabled = Boolean(mw.enabled);
+    const activeScanJob = scanJob || scanResults || {};
+    const scanRunning = ['queued', 'running'].includes(scanJob?.status);
+    const scanJobTitle = job => job.scope === 'server'
+      ? 'Toàn bộ VPS'
+      : (job.domains && job.domains.length > 0)
+        ? (job.domains.length === 1 ? job.domains[0] : `${job.domains.length} websites`)
+        : (job.scope === 'all' ? 'Tất cả website' : 'Scan job');
+    const scanJobStamp = job => {
+      const stamp = job.finished_at || job.updated_at || job.started_at || job.created_at || '';
+      if (!stamp) return 'No timestamp';
+      const date = new Date(stamp);
+      return Number.isNaN(date.getTime()) ? stamp : new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Asia/Ho_Chi_Minh',
+        hour12: false,
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+      }).format(date).replace(',', '');
+    };
+    const scanJobDetail = job => `${job.scanned || 0}/${job.total_files || job.scanned || 0} tệp, ${job.infected || 0} mối đe doạ, ${job.errors || 0} lỗi`;
+    const scanJobMeta = job => `${scanJobStamp(job)} / ${scanJobDetail(job)}`;
+    const scanJobBadgeClass = job => {
+      if (job.status === 'done') return 'badge ok';
+      if (job.status === 'infected') return 'badge danger';
+      if (['error', 'interrupted'].includes(job.status)) return 'badge bad';
+      return 'badge warn';
+    };
+    return <>
+      <section className="section">
         <div className="section-title">
           <div>
             <h2>Malware Scanner (ClamAV)</h2>
@@ -5542,21 +5592,55 @@ function App() {
           {mw.clamd_running && <div className="malware-scan-runner">
             <div className="malware-scan-head">
               <div>
-                <strong>Scan a website now</strong>
-                <p className="hint">Select a website and run an on-demand malware scan.</p>
+                <strong>Quét ngay</strong>
+                <p className="hint">Chọn một website, tất cả website, hoặc toàn bộ VPS. Quét toàn máy đọc mọi tệp kể cả ngoài thư mục web, chạy ở mức ưu tiên thấp nhất nên không làm chậm website.</p>
               </div>
               <button className="secondary" disabled={!!loading} onClick={loadMalwareScanJobs}><RefreshCw size={14}/> History</button>
             </div>
             <div className="malware-scan-controls">
               <select value={scanTargetWebsiteId} onChange={e => { setScanTargetWebsiteId(e.target.value); setScanResults(null); setScanJob(null); }}>
-                <option value="">-- Select website --</option>
-                <option value="all">All websites</option>
+                <option value="">-- Chọn mục tiêu --</option>
+                <option value="server">Toàn bộ VPS</option>
+                <option value="all">Tất cả website</option>
                 {websites.map(w => <option key={w.id} value={w.id}>{w.domain}</option>)}
               </select>
               <button disabled={!!loading || scanRunning || !scanTargetWebsiteId} onClick={runMalwareScan}>
                 {scanRunning || scanLoading ? <><RefreshCw size={14} className="spin"/> Scanning...</> : <><Search size={14}/> Scan Now</>}
               </button>
             </div>
+          </div>}
+          {mw.clamd_running && <div className="malware-schedule">
+            <div className="malware-scan-head">
+              <div>
+                <strong>Lịch quét hàng tuần</strong>
+                <p className="hint">Panel tự quét theo lịch, không cần ai bấm. Nên đặt vào giờ ít khách.</p>
+              </div>
+              {malwareSchedule.last_run_at && <span className="hint">Lần chạy gần nhất: {malwareSchedule.last_run_at} ({malwareSchedule.last_status || '—'})</span>}
+            </div>
+            <div className="malware-schedule-controls">
+              <label className="check-line">
+                <input type="checkbox" checked={!!malwareScheduleForm.enabled} onChange={e => setMalwareScheduleForm(prev => ({ ...prev, enabled: e.target.checked }))} />
+                Bật lịch
+              </label>
+              <label><span>Thứ</span>
+                <select value={malwareScheduleForm.weekday} disabled={!malwareScheduleForm.enabled} onChange={e => setMalwareScheduleForm(prev => ({ ...prev, weekday: Number(e.target.value) }))}>
+                  {WEEKDAY_LABELS.map((label, index) => <option key={index} value={index}>{label}</option>)}
+                </select>
+              </label>
+              <label><span>Giờ (UTC)</span>
+                <select value={malwareScheduleForm.hour} disabled={!malwareScheduleForm.enabled} onChange={e => setMalwareScheduleForm(prev => ({ ...prev, hour: Number(e.target.value) }))}>
+                  {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>)}
+                </select>
+              </label>
+              <label><span>Phạm vi</span>
+                <select value={malwareScheduleForm.scope} disabled={!malwareScheduleForm.enabled} onChange={e => setMalwareScheduleForm(prev => ({ ...prev, scope: e.target.value }))}>
+                  <option value="server">Toàn bộ VPS</option>
+                  <option value="websites">Chỉ các website</option>
+                </select>
+              </label>
+              <button disabled={!!loading} onClick={saveMalwareSchedule}><Clock size={14}/> Lưu lịch</button>
+            </div>
+            {malwareSchedule.enabled && malwareSchedule.next_run_at && <p className="hint">Lần quét tới: {malwareSchedule.next_run_at} — {malwareSchedule.weekday_label} {String(malwareSchedule.hour).padStart(2, '0')}:00 UTC</p>}
           </div>}
           {scanJobs.length > 0 && <div className="scan-history-wrap">
             <div className="scan-history-head">
@@ -5603,7 +5687,7 @@ function App() {
             {activeScanJob.log && activeScanJob.log.length > 0 && <pre className="malware-scan-log">{activeScanJob.log.join('\n')}</pre>}
           </div>}
         </div>}
-      </section>}
+      </section>
     </>;
   }
 
@@ -5953,6 +6037,7 @@ function App() {
     if (page === 'php') return renderPhpConfig();
     if (page === 'firewall') return renderFirewall();
     if (page === 'waf') return renderWaf();
+    if (page === 'malware') return renderMalware();
     if (page === 'access-logs') return renderWafAccessLogs();
     if (page === 'updates') return renderUpdates();
     if (page === 'services') return renderServices();

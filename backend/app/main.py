@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import addons as addons_api, auth, databases, firewall, maintenance, packages, panel_settings as panel_settings_api, provisioning, services, site_apps as site_apps_api, terminal, updates, users, waf, websites
+from app.api import addons as addons_api, auth, databases, firewall, maintenance, malware, packages, panel_settings as panel_settings_api, provisioning, services, site_apps as site_apps_api, terminal, updates, users, waf, websites
 from app.core.config import settings
 from app.core.database import run_migrations
 from app.core.version import APP_VERSION
@@ -127,6 +127,7 @@ app.include_router(updates.router, prefix="/api")
 app.include_router(waf.router, prefix="/api")
 app.include_router(maintenance.router, prefix="/api")
 app.include_router(panel_settings_api.router, prefix="/api")
+app.include_router(malware.router, prefix="/api")
 app.include_router(terminal.router, prefix="/api")
 app.include_router(provisioning.router, prefix="/api")
 app.include_router(addons_api.router, prefix="/api")

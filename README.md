@@ -469,6 +469,12 @@ Additional hardening on the systemd unit:
   SFTP chroots, and contain user-owned site directories. `/home` is
   executable-only for non-root users, so panel users cannot list other
   usernames.
+- Malware scanning is a page of its own, not a toggle on the Security page.
+  It scans one website, every website, or every file on the machine, and can do
+  the last one on a weekly schedule the admin sets. A whole-machine scan runs
+  through the helper so clamd can read files its own user cannot, skips the
+  kernel filesystems and the signature database, and is niced to the floor so a
+  scan is never the reason a website goes slow.
 - A fresh install turns IPv6 on by itself when the machine already holds a
   global IPv6 address, and says so in the summary it prints. A server that
   updates into this release is left as its admin set it. Neither can conjure

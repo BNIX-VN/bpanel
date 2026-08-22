@@ -805,6 +805,47 @@ Persistent=true
 [Install]
 WantedBy=timers.target
 SERVICE
+  cat >/etc/systemd/system/bpanel-malware-scheduler.service <<SERVICE
+[Unit]
+Description=BPanel weekly malware scan runner
+After=network.target clamav-daemon.service
+
+[Service]
+Type=oneshot
+User=bpanel
+Group=bpanel
+SupplementaryGroups=www-data bpanel-sites
+WorkingDirectory=${APP_DIR}/backend
+EnvironmentFile=${APP_DIR}/backend/.env
+Environment=HOME=${APP_DIR}
+Environment=BPANEL_USE_HELPER=true
+ExecStart=${APP_DIR}/backend/.venv/bin/python -m app.services.malware_schedule
+NoNewPrivileges=false
+ProtectSystem=false
+ProtectHome=false
+ReadWritePaths=${APP_DIR} /home ${BACKUP_ROOT} /tmp /var/lib/bpanel
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+
+  cat >/etc/systemd/system/bpanel-malware-scheduler.timer <<'SERVICE'
+[Unit]
+Description=Ask every quarter of an hour whether the weekly malware scan is due
+
+[Timer]
+# Often enough that a server asleep at the appointed hour still scans when it
+# comes back, while the runner itself refuses to start twice in one window.
+OnBootSec=5min
+OnUnitActiveSec=15min
+AccuracySec=1min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+SERVICE
+
   cat >/etc/systemd/system/bpanel-autotune.service <<'SERVICE'
 [Unit]
 Description=Auto tune BPanel PHP-FPM pools and MariaDB for this VPS
@@ -1204,6 +1245,7 @@ else
   python -c "from app.core.database import run_migrations; run_migrations()"
 fi
 systemctl enable --now bpanel-backup-scheduler.timer >/dev/null 2>&1 || true
+systemctl enable --now bpanel-malware-scheduler.timer >/dev/null 2>&1 || true
 
 log "Refreshing managed site permissions"
 if id -u bpanel >/dev/null 2>&1; then
