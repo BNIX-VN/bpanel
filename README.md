@@ -469,7 +469,12 @@ Additional hardening on the systemd unit:
   SFTP chroots, and contain user-owned site directories. `/home` is
   executable-only for non-root users, so panel users cannot list other
   usernames.
-- IPv6 is off until an admin turns it on in Panel settings. Turning it on
+- A fresh install turns IPv6 on by itself when the machine already holds a
+  global IPv6 address, and says so in the summary it prints. A server that
+  updates into this release is left as its admin set it. Neither can conjure
+  an address a provider assigned but never configured: on most VPS the
+  metadata service publishes no network data at all.
+- Otherwise IPv6 is off until an admin turns it on in Panel settings. Turning it on
   checks for a global IPv6 address first and refuses on a server without one:
   nginx cannot bind an address family the machine does not have, and it would
   refuse to start, taking every website with it. When it is on, the helper adds

@@ -242,3 +242,35 @@ def test_a_machine_without_the_ip_command_reports_nothing(monkeypatch):
 
     monkeypatch.setattr(server_network.shutil, "which", lambda name: None)
     assert server_network.addresses() == {"ipv4": [], "ipv6": []}
+
+
+INSTALL_SCRIPT = PROJECT_ROOT / "installer" / "install.sh"
+
+
+def test_a_fresh_install_switches_ipv6_on_when_the_server_has_it():
+    install = INSTALL_SCRIPT.read_text(encoding="utf-8")
+    assert "enable_ipv6_when_available() {" in install
+    assert "  enable_ipv6_when_available" in install
+    block = install.split("enable_ipv6_when_available() {", 1)[1].split("\nmain() {", 1)[0]
+    # It asks the server first, and only then turns anything on.
+    assert 'bpanel-helper ipv6-status' in block
+    assert '"$status" != *"available=yes"*' in block
+    assert "bpanel-helper ipv6-enable" in block
+
+
+def test_detection_never_fails_the_install():
+    """The installer runs under set -e; a server without IPv6 is not an error."""
+    install = INSTALL_SCRIPT.read_text(encoding="utf-8")
+    block = install.split("enable_ipv6_when_available() {", 1)[1].split("\nmain() {", 1)[0]
+    assert "|| true" in block
+    assert ">/dev/null 2>&1" in block
+    # And the summary says what was decided rather than leaving it a mystery.
+    assert 'echo "IPv6: enabled on ${IPV6_RESULT#on:}"' in install
+
+
+def test_an_update_never_turns_ipv6_on_by_itself():
+    """An existing server keeps whatever its admin chose."""
+    update = UPDATE_SCRIPT.read_text(encoding="utf-8")
+    assert "ipv6-enable" not in update
+    # It only re-applies the switch as it already stands.
+    assert "bpanel-helper ipv6-apply" in update

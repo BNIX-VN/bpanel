@@ -77,6 +77,8 @@ if [[ -z "${BACKEND_SRC}" || ! -d "${BACKEND_SRC}" ]]; then
 fi
 
 PANEL_URL="${PANEL_URL:-}"
+# Filled in by enable_ipv6_when_available: off | on:<address> | failed
+IPV6_RESULT="off"
 PANEL_HOSTNAME="${PANEL_HOSTNAME:-}"
 PANEL_DOMAIN=""
 PANEL_PORT="${PANEL_PORT:-2222}"
@@ -1108,6 +1110,11 @@ print_summary() {
   echo "Panel URL: ${PANEL_URL}"
   echo "User: admin"
   echo "Password: ${ADMIN_PASSWORD}"
+  case "$IPV6_RESULT" in
+    on:*) echo "IPv6: enabled on ${IPV6_RESULT#on:}" ;;
+    failed) echo "IPv6: detected but not enabled - turn it on in Panel settings" ;;
+    *) echo "IPv6: not available on this server" ;;
+  esac
   echo "=================================================="
 }
 
@@ -1165,6 +1172,33 @@ cleanup_release_source() {
   log "Removing release source from ${PROJECT_ROOT}"
   cd /
   rm -rf "$PROJECT_ROOT" /tmp/bpanel-release /tmp/bpanel-release.zip
+}
+
+enable_ipv6_when_available() {
+  # A fresh install takes the network as it finds it: a machine that already
+  # has a global IPv6 address should serve on it without somebody having to go
+  # and find the switch. Servers that update into this are left alone - their
+  # admin decides.
+  #
+  # This cannot conjure an address the provider assigned but never configured;
+  # only the ones the machine actually holds are detected.
+  id -u bpanel >/dev/null 2>&1 || return 0
+  local status
+  status="$(sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper ipv6-status 2>/dev/null || true)"
+  if [[ "$status" != *"available=yes"* ]]; then
+    log "No global IPv6 address on this server; IPv6 stays off"
+    IPV6_RESULT="off"
+    return 0
+  fi
+  local address
+  address="$(printf '%s\n' "$status" | sed -n 's/^addresses=//p' | head -n1)"
+  if sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper ipv6-enable >/dev/null 2>&1; then
+    log "IPv6 detected (${address}); websites and panel will answer on it too"
+    IPV6_RESULT="on:${address}"
+  else
+    log "WARNING: IPv6 was detected but could not be enabled; turn it on from Panel settings"
+    IPV6_RESULT="failed"
+  fi
 }
 
 main() {
@@ -1230,6 +1264,9 @@ main() {
 
   log "Configuring SSL"
   setup_ssl
+
+  log "Checking for IPv6"
+  enable_ipv6_when_available
 
   write_login_info
   write_update_state
