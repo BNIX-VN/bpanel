@@ -164,3 +164,30 @@ def test_the_switch_turns_itself_off_if_the_address_disappears():
     block = helper_text.split("ipv6-apply)", 1)[1].split(";;", 1)[0]
     assert "ipv6_is_enabled && ! ipv6_available" in block
     assert 'rm -f "$PANEL_IPV6_MARKER"' in block
+
+
+def test_the_panel_socket_still_answers_ipv4(monkeypatch):
+    """The panel's socket must serve both families, not IPv6 alone.
+
+    asyncio sets IPV6_V6ONLY on every AF_INET6 socket it binds itself, so
+    simply asking uvicorn to listen on :: took IPv4 away: the panel answered
+    over IPv6 and refused every IPv4 client, on a live server.
+    """
+    import socket
+
+    from app import serve
+
+    monkeypatch.setattr(serve.panel_ipv6, "is_enabled", lambda: True)
+    listener = serve.dual_stack_socket(0)
+    if listener is None:
+        pytest.skip("this machine cannot open an IPv6 socket")
+    with listener:
+        assert listener.getsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY) == 0
+        assert listener.family == socket.AF_INET6
+
+
+def test_no_ipv6_socket_is_built_while_the_switch_is_off(monkeypatch):
+    from app import serve
+
+    monkeypatch.setattr(serve.panel_ipv6, "is_enabled", lambda: False)
+    assert serve.dual_stack_socket(0) is None

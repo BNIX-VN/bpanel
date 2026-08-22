@@ -34,36 +34,42 @@ logger = logging.getLogger("bpanel")
 TRUSTED_FORWARDERS = "127.0.0.1"
 
 
-def _host() -> str:
-    """:: covers IPv4 as well on a dual-stack machine, 0.0.0.0 does not.
+def dual_stack_socket(port: int) -> socket.socket | None:
+    """A listening socket that answers on IPv4 and on IPv6.
 
-    The bind is tried before it is chosen: a server whose IPv6 went away with
-    the switch left on must still start, on IPv4, rather than fail to boot and
-    take the panel with it.
+    Handing uvicorn the host ":: " would not do: asyncio sets IPV6_V6ONLY on
+    every AF_INET6 socket it binds itself - deliberately, to keep the families
+    apart - so the panel would answer over IPv6 and refuse every IPv4 client.
+    The socket is therefore built here, with that option cleared, and passed in
+    ready to serve.
+
+    None means "IPv4 only": IPv6 is switched off, or this machine cannot give
+    us a dual-stack socket. Losing IPv4 is far worse than not gaining IPv6, so
+    every failure lands there rather than raising.
     """
     if not panel_ipv6.is_enabled():
-        return "0.0.0.0"
-    # With bindv6only set, a :: socket refuses IPv4 outright. Reaching the panel
-    # over IPv4 matters more than reaching it over IPv6, so stay where we are.
+        return None
     try:
-        if Path("/proc/sys/net/ipv6/bindv6only").read_text(encoding="utf-8").strip() == "1":
-            logger.warning("net.ipv6.bindv6only is set; listening on IPv4 only")
-            return "0.0.0.0"
-    except OSError:
-        pass
+        sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+    except OSError as exc:
+        logger.warning("IPv6 is on but this machine has no IPv6 (%s); listening on IPv4 only", exc)
+        return None
     try:
-        probe = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
-    except OSError:
-        logger.warning("IPv6 is switched on but this machine has no IPv6; listening on IPv4 only")
-        return "0.0.0.0"
-    with probe:
-        try:
-            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            probe.bind(("::", 0))
-        except OSError:
-            logger.warning("IPv6 is switched on but binding :: failed; listening on IPv4 only")
-            return "0.0.0.0"
-    return "::"
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        # net.ipv6.bindv6only only sets the default; a kernel that refuses to
+        # clear it would cost us IPv4, so check rather than assume.
+        if sock.getsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY) != 0:
+            raise OSError("this kernel will not share the socket with IPv4")
+        sock.bind(("::", port))
+        sock.listen(2048)
+        sock.set_inheritable(True)
+    except OSError as exc:
+        logger.warning("Could not listen on IPv6 (%s); listening on IPv4 only", exc)
+        sock.close()
+        return None
+    logger.info("Listening on IPv4 and IPv6, port %d", port)
+    return sock
 
 
 def _port() -> int:
@@ -84,7 +90,7 @@ def _certificate_pair() -> tuple[str, str] | None:
 def build_config() -> uvicorn.Config:
     pair = _certificate_pair()
     options: dict = {
-        "host": _host(),
+        "host": "0.0.0.0",
         "port": _port(),
         "proxy_headers": True,
         "forwarded_allow_ips": TRUSTED_FORWARDERS,
@@ -113,7 +119,13 @@ def build_config() -> uvicorn.Config:
 
 def main() -> None:
     config = build_config()
-    uvicorn.Server(config).run()
+    server = uvicorn.Server(config)
+    listener = dual_stack_socket(_port())
+    if listener is None:
+        server.run()
+    else:
+        # uvicorn binds config.host only when it is not handed a socket.
+        server.run(sockets=[listener])
 
 
 if __name__ == "__main__":
