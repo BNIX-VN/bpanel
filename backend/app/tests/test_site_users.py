@@ -83,15 +83,38 @@ def test_panel_tools_ssl_vhosts_enable_http2_for_nginx_1_24():
         assert expected in script
 
 
-def test_site_permissions_do_not_allow_cross_user_reading():
+def test_site_trees_use_the_standard_644_755_modes():
     helper = HELPER_SCRIPT.read_text(encoding="utf-8")
-    assert 'find "$target" -type d -exec chmod 2750 {} +' in helper
-    assert 'find "$target" -type f -exec chmod 640 {} +' in helper
+    update = UPDATE_SCRIPT.read_text(encoding="utf-8")
+    assert 'SITE_FILE_MODE="0644"' in helper
+    assert 'SITE_DIR_MODE="0755"' in helper
+    assert 'find "$target" -type d -exec chmod 755 {} +' in helper
+    assert 'find "$target" -type f -exec chmod 644 {} +' in helper
+    assert 'install -o "$user" -g "$BPANEL_SITES_GROUP" -m 0644' in helper
     assert 'chown -R "$user:$BPANEL_SITES_GROUP" "$target"' in helper
     assert 'harden_site_file "$target" "$user"' in helper
-    assert 'install -o "$user" -g "$BPANEL_SITES_GROUP" -m 0640' in helper
-    assert 'chmod 0755 "$target" "$target/public_html"' not in helper
-    assert 'find "$target" -type d -exec chmod 755 {} +' not in helper
+    # The terminal writes with the same default as the file manager.
+    assert "umask 022" in helper
+    assert "umask 027" not in helper
+    # Nothing may put the old restrictive defaults back on a site tree.
+    assert 'find "$target" -type d -exec chmod 2750 {} +' not in helper
+    assert 'find "$target" -type f -exec chmod 640 {} +' not in helper
+    # Existing installs are migrated by the updater.
+    assert 'find "$site_dir" -type d -exec chmod 755 {} +' in update
+    assert 'find "$site_dir" -type f -exec chmod 644 {} +' in update
+
+
+def test_files_holding_database_credentials_stay_group_only():
+    helper = HELPER_SCRIPT.read_text(encoding="utf-8")
+    update = UPDATE_SCRIPT.read_text(encoding="utf-8")
+    assert "SITE_SECRET_FILES=(wp-config.php .env .my.cnf)" in helper
+    assert "protect_site_secret_tree()" in helper
+    assert 'protect_site_secret_file "$target"' in helper
+    assert 'find "$target" -type f -name "$secret" -exec chmod 0640 {} +' in helper
+    assert 'find "$site_dir" -type f -name "$secret" -exec chmod 640 {} +' in update
+    # A site tree is never re-permissioned without the follow-up pass.
+    for block in helper.split('find "$target" -type f -exec chmod 644 {} +')[1:]:
+        assert block.lstrip().startswith('protect_site_secret_tree "$target"')
 
 
 def test_php_upload_tmp_dir_keeps_nginx_readable_group():

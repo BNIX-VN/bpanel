@@ -25,6 +25,14 @@ HOME_ROOT="/home"
 NGINX_CONF_DIR="/etc/nginx/conf.d"
 PHP_CONF_DIRS=(/etc/php/{5.6,7.4,8.0,8.1,8.2,8.3,8.4,8.5}/fpm/conf.d)
 BPANEL_SITES_GROUP="bpanel-sites"
+# Default permissions for everything inside a site tree. 0644/0755 is what every
+# hosting panel gives a customer, and what PHP applications, SFTP clients and
+# their documentation assume. Sites stay separated by the PHP-FPM open_basedir
+# of each pool, by the SFTP chroot and by the panel terminal, not by these bits.
+SITE_FILE_MODE="0644"
+SITE_DIR_MODE="0755"
+# Files that carry database credentials are kept off the default mode.
+SITE_SECRET_FILES=(wp-config.php .env .my.cnf)
 BPANEL_SFTP_GROUP="bpanel-sftp"
 APP_DIR="/opt/bpanel"
 ENV_FILE="${APP_DIR}/backend/.env"
@@ -2522,12 +2530,33 @@ clear_path_acl() {
   fi
 }
 
+protect_site_secret_file() {
+  local target="$1" name
+  name="$(basename -- "$target")"
+  local secret
+  for secret in "${SITE_SECRET_FILES[@]}"; do
+    if [[ "$name" == "$secret" ]]; then
+      chmod 0640 "$target" 2>/dev/null || true
+      return 0
+    fi
+  done
+  return 0
+}
+
+protect_site_secret_tree() {
+  local target="$1" secret
+  for secret in "${SITE_SECRET_FILES[@]}"; do
+    find "$target" -type f -name "$secret" -exec chmod 0640 {} + 2>/dev/null || true
+  done
+  return 0
+}
+
 harden_site_dir() {
   local target="$1" user="$2"
   chown "$user:$BPANEL_SITES_GROUP" "$target"
   clear_path_acl "$target"
-  chmod 2750 "$target"
-  chmod u-s "$target" 2>/dev/null || true
+  chmod "$SITE_DIR_MODE" "$target"
+  chmod a-s "$target" 2>/dev/null || true
   chmod -t "$target" 2>/dev/null || true
 }
 
@@ -2535,9 +2564,10 @@ harden_site_file() {
   local target="$1" user="$2"
   chown "$user:$BPANEL_SITES_GROUP" "$target"
   clear_path_acl "$target"
-  chmod 0640 "$target"
+  chmod "$SITE_FILE_MODE" "$target"
   chmod a-s "$target" 2>/dev/null || true
   chmod -t "$target" 2>/dev/null || true
+  protect_site_secret_file "$target"
 }
 
 harden_site_dir_path() {
@@ -3066,10 +3096,11 @@ fix_site_tree() {
       setfacl -Rb "$target" 2>/dev/null || true
       find "$target" -type d -exec setfacl -k {} + 2>/dev/null || true
     fi
-    find "$target" -type d -exec chmod 2750 {} +
-    find "$target" -type d -exec chmod u-s {} + 2>/dev/null || true
+    find "$target" -type d -exec chmod 755 {} +
+    find "$target" -type d -exec chmod a-s {} + 2>/dev/null || true
     find "$target" -type d -exec chmod -t {} + 2>/dev/null || true
-    find "$target" -type f -exec chmod 640 {} +
+    find "$target" -type f -exec chmod 644 {} +
+    protect_site_secret_tree "$target"
   else
     harden_site_file "$target" "$user"
   fi
@@ -3643,10 +3674,11 @@ PY
     [[ $# -eq 1 ]] || deny "usage: chown-www <path>"
     target=$(require_managed_path "$1")
     chown -R www-data:www-data "$target"
-    find "$target" -type d -exec chmod 750 {} +
+    find "$target" -type d -exec chmod 755 {} +
     find "$target" -type d -exec chmod a-s {} + 2>/dev/null || true
     find "$target" -type d -exec chmod -t {} + 2>/dev/null || true
-    find "$target" -type f -exec chmod 640 {} +
+    find "$target" -type f -exec chmod 644 {} +
+    protect_site_secret_tree "$target"
     ;;
 
   fix-permissions)
@@ -3661,10 +3693,11 @@ PY
       setfacl -Rb "$target" 2>/dev/null || true
       find "$target" -type d -exec setfacl -k {} + 2>/dev/null || true
     fi
-    find "$target" -type d -exec chmod 750 {} +
+    find "$target" -type d -exec chmod 755 {} +
     find "$target" -type d -exec chmod a-s {} + 2>/dev/null || true
     find "$target" -type d -exec chmod -t {} + 2>/dev/null || true
-    find "$target" -type f -exec chmod 640 {} +
+    find "$target" -type f -exec chmod 644 {} +
+    protect_site_secret_tree "$target"
     ;;
 
   site-path-fix)
@@ -3711,7 +3744,6 @@ PY
     user="$1"; root_arg="$2"; rel_arg="$3"; mode_arg="${4:-0644}"
     require_linux_user "$user"
     [[ "$mode_arg" == "0644" || "$mode_arg" == "0640" ]] || deny "invalid file mode: $mode_arg"
-    [[ "$mode_arg" == "0644" ]] && mode_arg="0640"
     root_target=$(require_managed_path "$root_arg" "$user")
     case "$rel_arg" in
       ""|"/"|/*|*$'\n'*|".."|"../"*|*"/.."|*"/../"*) deny "unsafe relative path: $rel_arg" ;;
@@ -3756,7 +3788,7 @@ PY
     base=$(basename -- "$target")
     tmp="$parent/.${base}.bpanel-install-$$"
     rm -f -- "$tmp"
-    install -o "$user" -g "$BPANEL_SITES_GROUP" -m 0640 -- "$staged" "$tmp"
+    install -o "$user" -g "$BPANEL_SITES_GROUP" -m 0644 -- "$staged" "$tmp"
     mv -f -- "$tmp" "$target"
     rm -f -- "$staged"
     ;;
@@ -3948,7 +3980,7 @@ else:
 PY
     # The archive may contain an entry with its own filename. Restore the
     # original source archive after extraction so it cannot overwrite itself.
-    install -o "$user" -g "$BPANEL_SITES_GROUP" -m 0640 -- "$tmp_archive" "$archive_target"
+    install -o "$user" -g "$BPANEL_SITES_GROUP" -m 0644 -- "$tmp_archive" "$archive_target"
     fix_site_tree "$destination_target" "$user"
     rm -f -- "$tmp_archive"
     trap - EXIT
@@ -4122,7 +4154,7 @@ PY
     # Validate cwd exists immediately before cd to avoid TOCTOU
     [[ -d "$target" ]] || deny "working directory does not exist: $target"
     cd "$target" || deny "failed to change to working directory: $target"
-    umask 027
+    umask 022
     terminal_env=(
       "HOME=$HOME_ROOT/$user"
       "COMPOSER_HOME=$HOME_ROOT/$user/.composer"

@@ -618,7 +618,7 @@ ensure_terminal_tools() {
 }
 
 harden_existing_panel_users() {
-  local user home_dir site_dir
+  local user home_dir site_dir secret
   getent group bpanel-sftp >/dev/null || return 0
   chown root:root /home
   chmod 0711 /home
@@ -650,10 +650,13 @@ harden_existing_panel_users() {
         setfacl -Rb "$site_dir" 2>/dev/null || true
         find "$site_dir" -type d -exec setfacl -k {} + 2>/dev/null || true
       fi
-      find "$site_dir" -type d -exec chmod 2750 {} + 2>/dev/null || true
-      find "$site_dir" -type d -exec chmod u-s {} + 2>/dev/null || true
+      find "$site_dir" -type d -exec chmod 755 {} + 2>/dev/null || true
+      find "$site_dir" -type d -exec chmod a-s {} + 2>/dev/null || true
       find "$site_dir" -type d -exec chmod -t {} + 2>/dev/null || true
-      find "$site_dir" -type f -exec chmod 640 {} + 2>/dev/null || true
+      find "$site_dir" -type f -exec chmod 644 {} + 2>/dev/null || true
+      for secret in wp-config.php .env .my.cnf; do
+        find "$site_dir" -type f -name "$secret" -exec chmod 640 {} + 2>/dev/null || true
+      done
     done
     if [[ -d "/var/lib/php/uploads/$user" ]]; then
       chown "$user:bpanel-sites" "/var/lib/php/uploads/$user" 2>/dev/null || true

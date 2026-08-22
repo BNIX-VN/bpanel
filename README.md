@@ -455,9 +455,15 @@ Additional hardening on the systemd unit:
   installs do not create `/home/bpanel` or `/home/bpanel-sites`.
 - Panel login users are Linux users in the `bpanel-sftp` group. Their
   home directories live directly under `/home/<username>`, are root-owned
-  SFTP chroots, and contain user-owned site directories with no `other`
-  read/traverse permission. `/home` is executable-only for non-root users, so
-  panel users cannot list other usernames.
+  SFTP chroots, and contain user-owned site directories. `/home` is
+  executable-only for non-root users, so panel users cannot list other
+  usernames.
+- Inside a site tree the defaults are `644` for files and `755` for folders,
+  the same modes every hosting panel and every PHP application expects.
+  `wp-config.php`, `.env` and `.my.cnf` are put back to `640` after any bulk
+  permission pass. Sites are kept apart by the per-pool PHP-FPM `open_basedir`,
+  by the SFTP chroot, by `nologin` shells and by the panel terminal's path
+  checks - not by the mode bits.
 - Uses `PrivateTmp`, `PrivateDevices`, `ProtectKernelTunables`,
   `ProtectKernelModules`, `ProtectKernelLogs`, `ProtectControlGroups`,
   `ProtectClock`, `ProtectHostname`, and `ProtectProc=invisible`.

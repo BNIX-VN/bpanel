@@ -320,8 +320,9 @@ function aceModeName(mode) {
 }
 
 // --- File permissions (chmod) ------------------------------------------------
-// The listing reports POSIX modes as octal strings ("644", or "2750" for the
-// setgid site directories), so the dialog works on the same representation.
+// The listing reports POSIX modes as octal strings ("644", and "2755" or the
+// like when a folder carries a special bit), so the dialog works on the same
+// representation.
 const PERMISSION_CLASSES = [
   { key: 'owner', label: 'Owner' },
   { key: 'group', label: 'Group' },
