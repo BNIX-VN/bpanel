@@ -266,7 +266,7 @@ def create_login_url(external_id: str, request: Request, db: Session = Depends(g
     login_token = create_panel_login_token(account.user.username)
     log_action(db, None, "provisioning_login", external_id, detail=account.user.username, request=request)
     path = f"/api/auth/sso/{login_token}"
-    base = panel_base_url()
+    base = panel_base_url(request)
     absolute = f"{base}{path}" if base else path
     # `login_url` is the documented field; `url` is kept for billing modules
     # built against the original response shape.

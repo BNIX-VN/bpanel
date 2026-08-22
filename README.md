@@ -85,6 +85,14 @@ After install, open the `Panel URL` printed at the end of the installer. The
 admin password is shown there and saved to `/root/login.txt`; store it in a
 password manager.
 
+The panel is not tied to that one hostname. It holds a copy of every
+certificate on the machine and picks one per TLS handshake (SNI), so
+`https://<any domain hosted here>:<panel port>` opens the same panel with a
+certificate the browser accepts. `bpanel login` and the Panel settings page
+both list the hostnames that work. `PANEL_URL` only decides which certificate
+a browser gets when it asks for a name that has none of its own, and which
+address the installer prints.
+
 ## SSH rescue menu
 
 Run as root:
@@ -233,8 +241,10 @@ Cross-panel notes:
   BPanel replies with bare objects. The module unwraps a body only when it
   carries *both* keys, so no BPanel response may use that pair together.
 - **SSO**: the module reads `data.login_url` only. BPanel returns it as an
-  absolute URL built from `PANEL_URL` (falling back to a relative path the
-  module prefixes itself), alongside `url` and `path`. The token is single-use
+  absolute URL built from the hostname the API call arrived on - so the
+  customer lands on the domain the billing system already uses - falling back
+  to `PANEL_URL` when that hostname is not one this panel serves, and to a
+  relative path the module prefixes itself. `url` and `path` come along too. The token is single-use
   and expires after 5 minutes; `/api/auth/sso/<token>` sets the session cookie
   and redirects. A suspended account is redirected to
   `/?error=account_suspended` instead of being logged in.
@@ -303,8 +313,9 @@ SSL_EMAIL=admin@example.com
 PANEL_URL=http://SERVER_IP:2222  # uses the selected panel port
 PANEL_DOMAIN=
 PANEL_PORT=2222                  # default; installer can set another port
-PANEL_SSL_CERT=
+PANEL_SSL_CERT=                  # default certificate, for hostnames with none
 PANEL_SSL_KEY=
+PANEL_SNI_DIR=/etc/bpanel/sni    # one certificate per hostname, kept by the helper
 FRONTEND_DIST=/opt/bpanel/frontend/dist
 ```
 

@@ -77,14 +77,19 @@ def test_account_dict_exposes_panel_url(monkeypatch):
     "panel_url,panel_domain,expected",
     [
         ("https://panel.example.com/", "", "https://panel.example.com"),
-        ("", "panel.example.com", "https://panel.example.com"),
+        # No URL configured, only a domain: the link still has to name the port
+        # the panel listens on, or it points at Nginx instead of at the panel.
+        ("", "panel.example.com", "https://panel.example.com:2222"),
         ("", "", ""),
     ],
 )
 def test_panel_base_url_prefers_configured_url(monkeypatch, panel_url, panel_domain, expected):
     from app.core import config
+    from app.services import panel_settings
 
+    monkeypatch.setattr(panel_settings, "configured_panel_url", lambda: panel_url.rstrip("/"))
     monkeypatch.setattr(config.settings, "panel_url", panel_url)
     monkeypatch.setattr(config.settings, "panel_domain", panel_domain)
+    monkeypatch.setattr(config.settings, "panel_port", 2222)
 
     assert provisioning_service.panel_base_url() == expected

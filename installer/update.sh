@@ -741,16 +741,17 @@ SSHD
 
   cat >/usr/local/sbin/bpanel-api-start <<STARTER
 #!/usr/bin/env bash
+# app.serve builds the uvicorn server in Python: the same options the command
+# line used to take, plus one certificate per hostname. The panel is therefore
+# reachable on every domain on this machine that has a certificate, instead of
+# only on the one PANEL_DOMAIN names.
+#
 # Trusted forwarders: only the local Nginx (127.0.0.1) is allowed to set
 # X-Forwarded-For / X-Forwarded-Proto. Anything else (direct hits on
 # the configured panel port) cannot spoof the audit log IP or the login rate-limit key.
 set -euo pipefail
 cd ${APP_DIR}/backend
-args=(app.main:app --host 0.0.0.0 --port "\${PANEL_PORT:-2222}" --proxy-headers --forwarded-allow-ips "127.0.0.1")
-if [[ -n "\${PANEL_SSL_CERT:-}" && -n "\${PANEL_SSL_KEY:-}" && -f "\${PANEL_SSL_CERT}" && -f "\${PANEL_SSL_KEY}" ]]; then
-  args+=(--ssl-certfile "\${PANEL_SSL_CERT}" --ssl-keyfile "\${PANEL_SSL_KEY}")
-fi
-exec ${APP_DIR}/backend/.venv/bin/uvicorn "\${args[@]}"
+exec ${APP_DIR}/backend/.venv/bin/python -m app.serve
 STARTER
   chmod 0755 /usr/local/sbin/bpanel-api-start
   mkdir -p /etc/systemd/system/bpanel-api.service.d
@@ -1111,6 +1112,9 @@ if id -u bpanel >/dev/null 2>&1; then
     echo "WARNING: WAF engine installation failed; continuing without ModSecurity."
   sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper certbot-auto-renew-install >/dev/null 2>&1 || true
   sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper firewall-blocklist-timer-install >/dev/null 2>&1 || true
+  # Existing servers get the per-hostname certificate copies on this update, so
+  # the panel opens on every domain here and not only on PANEL_DOMAIN.
+  sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper panel-sni-sync >/dev/null 2>&1 || true
 else
   echo "  (bpanel user not found; skipping WAF install - run install.sh first)"
 fi

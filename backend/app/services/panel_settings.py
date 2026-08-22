@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 
 from fastapi import HTTPException, UploadFile, status
 
+from app.core import panel_sni
 from app.core.config import settings
 from app.services.shell import shell
 
@@ -44,6 +45,15 @@ def _write_raw(data: dict) -> None:
         tmp.write("\n")
         tmp_path = Path(tmp.name)
     tmp_path.replace(SETTINGS_FILE)
+
+
+def configured_panel_url() -> str:
+    """The panel URL an admin set, without the cost of current_settings().
+
+    Link builders need this on every request; refreshing the malware scan
+    status to read one string would be a poor trade.
+    """
+    return (_read_raw().get("panel_url") or settings.panel_url or "").strip()
 
 
 def _asset_url(filename: str | None) -> str:
@@ -184,7 +194,13 @@ def use_domain_certificate(domain: str, panel_port: int | None = None) -> dict:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(result.stderr or result.stdout or "Could not switch the panel certificate").strip()[-500:],
         )
-    return {"message": f"Panel dùng chứng chỉ của {host}.", "panel_url": f"https://{host}:{port}"}
+    return {
+        "message": (
+            f"Panel dùng chứng chỉ của {host} làm mặc định. "
+            "Các domain khác có SSL trên máy vẫn mở panel được bằng chứng chỉ riêng."
+        ),
+        "panel_url": f"https://{host}:{port}",
+    }
 
 
 def regenerate_self_signed(panel_port: int | None = None) -> dict:
@@ -247,6 +263,10 @@ def current_settings() -> dict:
         "ssl_enabled": ssl_enabled,
         "ssl_mode": panel_ssl_mode(),
         "ssl_domains_available": domains_with_certificate(),
+        # Every hostname the panel answers for with a certificate of its own.
+        # The panel is not tied to panel_hostname any more: that one is only
+        # the certificate a browser gets when it asks for a name with none.
+        "panel_hostnames": panel_sni.available_hostnames(),
         "malware_scan_enabled": mw["enabled"],
         "malware_scan_installed": mw["installed"],
         "malware_scan_active": mw["active"],

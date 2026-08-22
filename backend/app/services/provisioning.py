@@ -54,15 +54,16 @@ def check_ip_allowed(token: ApiToken, client_ip: str) -> bool:
     return client_ip in ips
 
 
-def panel_base_url() -> str:
-    """Absolute base URL of this panel, for links handed to billing systems."""
-    from app.core.config import settings
+def panel_base_url(request=None) -> str:
+    """Absolute base URL of this panel, for links handed to billing systems.
 
-    if settings.panel_url:
-        return settings.panel_url.rstrip("/")
-    if settings.panel_domain:
-        return f"https://{settings.panel_domain}".rstrip("/")
-    return ""
+    With a request in hand the link follows the hostname it arrived on, so a
+    customer is sent back to the domain they already use instead of to the one
+    domain PANEL_URL names.
+    """
+    from app.services.panel_urls import panel_base_url as build
+
+    return build(request)
 
 
 def account_to_dict(account: ProvisioningAccount, db: Session) -> dict:

@@ -687,6 +687,9 @@ class PanelSettingsOut(BaseModel):
     ssl_mode: str = "none"
     # Websites on this server whose certificate the panel could borrow.
     ssl_domains_available: list[str] = []
+    # Hostnames the panel already answers for with a certificate of their own,
+    # so the page can say where else this panel can be opened.
+    panel_hostnames: list[str] = []
     message: Optional[str] = None
     # Optional ClamAV malware scanning status (always present, defaults off).
     malware_scan_enabled: bool = False

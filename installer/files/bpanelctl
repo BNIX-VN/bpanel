@@ -547,6 +547,7 @@ show_status() {
     fi
   fi
   echo "Panel URL: $(env_get PANEL_URL)"
+  print_other_panel_urls
   echo "Local health: ${health} (${health_url})"
   echo "API: $(systemctl is-active bpanel-api 2>/dev/null || echo unknown)"
   echo "Nginx: $(systemctl is-active nginx 2>/dev/null || echo unknown)"
@@ -557,16 +558,40 @@ show_status() {
   fi
 }
 
+panel_sni_hostnames() {
+  # Every hostname the panel answers for with a certificate of its own. The
+  # helper keeps these copies; the panel picks one per TLS handshake.
+  local entry port name
+  [[ -d /etc/bpanel/sni ]] || return 0
+  port="$(env_get PANEL_PORT)"; port="${port:-2222}"
+  for entry in /etc/bpanel/sni/*/; do
+    [[ -f "${entry}fullchain.pem" && -f "${entry}privkey.pem" ]] || continue
+    name="$(basename "$entry")"
+    printf '  https://%s:%s
+' "$name" "$port"
+  done
+}
+
+print_other_panel_urls() {
+  local others
+  others="$(panel_sni_hostnames)"
+  [[ -n "$others" ]] || return 0
+  echo "Also reachable at (each domain with its own certificate):"
+  printf '%s
+' "$others"
+}
+
 show_login_info() {
   ensure_env_file
   if [[ -f /root/login.txt ]]; then
     cat /root/login.txt
-    return 0
+  else
+    echo "Panel URL: $(env_get PANEL_URL)"
+    echo "User: admin"
+    echo "Password: <not available; run bpanel change-admin-password>"
+    echo "Note: /root/login.txt is missing and database password hashes cannot be reversed."
   fi
-  echo "Panel URL: $(env_get PANEL_URL)"
-  echo "User: admin"
-  echo "Password: <not available; run bpanel change-admin-password>"
-  echo "Note: /root/login.txt is missing and database password hashes cannot be reversed."
+  print_other_panel_urls
 }
 
 restart_panel_command() {

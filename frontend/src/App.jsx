@@ -934,8 +934,12 @@ function App() {
   }
 
   async function loadPanelSettings() {
+    // Signed in, the panel tells us more than the login page is allowed to
+    // know: the hostnames it answers for and the certificates on this server
+    // only come back from the authenticated route.
+    const path = currentUser ? '/panel-settings' : '/panel-settings/public';
     try {
-      const res = await fetch(`${API}/panel-settings/public`, { credentials: 'include' });
+      const res = await fetch(`${API}${path}`, { credentials: 'include' });
       if (!res.ok) return null;
       const data = await res.json();
       setPanelSettings(data);
@@ -956,7 +960,7 @@ function App() {
   }
 
   async function usePanelDomainCertificate() {
-    if (!confirm(`Chuyển panel sang dùng chứng chỉ của ${panelCertDomain}?\n\nPanel sẽ khởi động lại và địa chỉ đăng nhập đổi thành https://${panelCertDomain}:${panelSettings.panel_port || 2222}`)) return;
+    if (!confirm(`Đặt chứng chỉ của ${panelCertDomain} làm chứng chỉ mặc định của panel?\n\nPanel sẽ khởi động lại. Các domain khác trên máy vẫn mở panel được bằng chứng chỉ của chính chúng (SNI).`)) return;
     const data = await request('/panel-settings/ssl/use-domain', {
       method: 'POST',
       body: JSON.stringify({ domain: panelCertDomain, panel_port: panelSettings.panel_port || 2222 }),
@@ -5612,6 +5616,17 @@ function App() {
           {panelSettings.ssl_domains_available?.length > 0 && <button className="secondary-light" disabled={!!loading || !panelCertDomain} onClick={usePanelDomainCertificate}><Lock size={14}/> Dùng chứng chỉ này</button>}
           {panelSettings.ssl_mode !== 'selfsigned' && <button className="secondary-light" disabled={!!loading} onClick={regeneratePanelSelfSigned}>Quay lại tự ký</button>}
         </div>
+        {panelSettings.panel_hostnames?.length > 0 && <div className="panel-host-strip">
+          <span className="hint">
+            Panel mở được ở tất cả domain dưới đây, mỗi domain dùng đúng chứng chỉ của nó (SNI).
+            Hostname ở trên chỉ là chứng chỉ mặc định cho tên miền chưa có SSL.
+          </span>
+          <div className="panel-host-chips">
+            {panelSettings.panel_hostnames.map(host => (host.startsWith('*.')
+              ? <span key={host} className="badge">{host}:{panelSettings.panel_port || 2222}</span>
+              : <a key={host} className="badge" href={`https://${host}:${panelSettings.panel_port || 2222}`} target="_blank" rel="noreferrer">{host}:{panelSettings.panel_port || 2222}</a>))}
+          </div>
+        </div>}
       </section>
       <section className="section">
         <div className="section-title">

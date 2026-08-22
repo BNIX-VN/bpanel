@@ -34,6 +34,10 @@ SITE_DIR_MODE="0755"
 # Files that carry database credentials are kept off the default mode.
 SITE_SECRET_FILES=(wp-config.php .env .my.cnf)
 BPANEL_SFTP_GROUP="bpanel-sftp"
+# One directory per certificate, so the panel can answer a TLS handshake with
+# the certificate for whichever hostname the browser asked for. The panel runs
+# as 'bpanel' and cannot read /etc/letsencrypt, hence the copies.
+PANEL_SNI_DIR="/etc/bpanel/sni"
 APP_DIR="/opt/bpanel"
 ENV_FILE="${APP_DIR}/backend/.env"
 DEFAULT_PANEL_PORT="2222"
@@ -1815,6 +1819,69 @@ app_directory() {
   printf '%s/%s/apps/%s' "$HOME_ROOT" "$user" "$name"
 }
 
+install_sni_cert_pair() {
+  local domain="$1" cert="$2" key="$3" target="${PANEL_SNI_DIR}/${domain}"
+  install -d -o root -g bpanel -m 0750 "$target"
+  install -m 0640 -o root -g bpanel "$cert" "${target}/fullchain.pem"
+  install -m 0640 -o root -g bpanel "$key" "${target}/privkey.pem"
+}
+
+sync_panel_sni_certificates() {
+  # Every certificate on this machine, copied where the panel can read it.
+  # Manual uploads are written after Let's Encrypt on purpose: when a domain
+  # has both, the uploaded one is what nginx serves, so it is what the panel
+  # should serve too.
+  local live_dir manual_dir domain target keep served_domain
+  local -a served=()
+  install -d -o root -g bpanel -m 0750 /etc/bpanel "$PANEL_SNI_DIR"
+  for live_dir in /etc/letsencrypt/live/*/; do
+    [[ -f "${live_dir}fullchain.pem" && -f "${live_dir}privkey.pem" ]] || continue
+    domain="$(basename "$live_dir")"
+    is_domain "$domain" || continue
+    install_sni_cert_pair "$domain" "${live_dir}fullchain.pem" "${live_dir}privkey.pem"
+    served+=("$domain")
+  done
+  for manual_dir in /etc/nginx/bpanel/ssl/sites/*/; do
+    [[ -f "${manual_dir}fullchain.crt" && -f "${manual_dir}privkey.key" ]] || continue
+    domain="$(basename "$manual_dir")"
+    is_domain "$domain" || continue
+    install_sni_cert_pair "$domain" "${manual_dir}fullchain.crt" "${manual_dir}privkey.key"
+    served+=("$domain")
+  done
+  # A certificate that is gone must stop being served, or the panel would keep
+  # answering for a domain this server no longer hosts.
+  for target in "$PANEL_SNI_DIR"/*/; do
+    [[ -d "$target" ]] || continue
+    domain="$(basename "$target")"
+    keep=0
+    for served_domain in ${served[@]+"${served[@]}"}; do
+      [[ "$served_domain" == "$domain" ]] && { keep=1; break; }
+    done
+    (( keep == 1 )) || rm -rf -- "$target"
+  done
+  printf '%s\n' ${served[@]+"${served[@]}"}
+}
+
+install_sni_renewal_hook() {
+  # The panel reads these copies again whenever they change on disk, so a
+  # renewal needs no restart - only a fresh copy.
+  install -d -m 0755 /etc/letsencrypt/renewal-hooks/deploy
+  cat >/etc/letsencrypt/renewal-hooks/deploy/bpanel-sni-certs <<'HOOK'
+#!/usr/bin/env bash
+# Installed by BPanel. Keeps the panel's per-hostname certificate copies fresh.
+set -euo pipefail
+# RENEWED_LINEAGE is set by certbot to the live directory that just changed.
+[[ -n "${RENEWED_LINEAGE:-}" ]] || exit 0
+domain="$(basename "$RENEWED_LINEAGE")"
+[[ "$domain" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$ ]] || exit 0
+[[ -f "${RENEWED_LINEAGE}/fullchain.pem" && -f "${RENEWED_LINEAGE}/privkey.pem" ]] || exit 0
+install -d -o root -g bpanel -m 0750 /etc/bpanel /etc/bpanel/sni "/etc/bpanel/sni/${domain}"
+install -m 0640 -o root -g bpanel "${RENEWED_LINEAGE}/fullchain.pem" "/etc/bpanel/sni/${domain}/fullchain.pem"
+install -m 0640 -o root -g bpanel "${RENEWED_LINEAGE}/privkey.pem" "/etc/bpanel/sni/${domain}/privkey.pem"
+HOOK
+  chmod 0755 /etc/letsencrypt/renewal-hooks/deploy/bpanel-sni-certs
+}
+
 install_panel_cert_renewal_hook() {
   # A certificate the panel borrowed from a website is a copy, and copies go
   # stale: certbot renews the website's lineage every couple of months and the
@@ -3394,6 +3461,14 @@ case "$cmd" in
     echo "Panel URL: ${scheme}://${host}:${port}"
     ;;
 
+  panel-sni-sync)
+    # Refresh the certificates the panel can answer a handshake with. Safe to
+    # run at any time: it only copies what is already on the machine.
+    [[ $# -eq 0 ]] || deny "usage: panel-sni-sync"
+    install_sni_renewal_hook
+    sync_panel_sni_certificates
+    ;;
+
   panel-ssl-domains)
     # /etc/letsencrypt/live is root-only, so the panel cannot see for itself
     # which of its websites already have a certificate it could borrow.
@@ -3457,6 +3532,8 @@ case "$cmd" in
     env_set PANEL_URL "https://${domain}:${port}"
     env_set ALLOWED_ORIGINS "https://${domain}:${port}"
     install_panel_cert_renewal_hook
+    install_sni_renewal_hook
+    sync_panel_sni_certificates >/dev/null
     allow_panel_port "$port"
     refresh_tools_nginx
     schedule_panel_restart
@@ -3573,7 +3650,12 @@ PY
     for cert_domain in "${domains[@]}"; do
       install_args+=(-d "$cert_domain")
     done
-    exec certbot "${install_args[@]}"
+    rc=0
+    certbot "${install_args[@]}" || rc=$?
+    # The panel can be opened on this domain now, so it needs the certificate.
+    install_sni_renewal_hook
+    sync_panel_sni_certificates >/dev/null
+    exit "$rc"
     ;;
 
   certbot-renew)
@@ -3593,10 +3675,12 @@ PY
   manual-ssl-install)
     [[ $# -eq 1 ]] || deny "usage: manual-ssl-install <domain>"
     install_manual_ssl "$1"
+    sync_panel_sni_certificates >/dev/null
     ;;
   manual-ssl-remove)
     [[ $# -eq 1 ]] || deny "usage: manual-ssl-remove <domain>"
     remove_manual_ssl "$1"
+    sync_panel_sni_certificates >/dev/null
     ;;
 
   # ---- firewall (iptables + ipset) ---------------------------------------
