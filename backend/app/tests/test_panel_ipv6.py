@@ -274,3 +274,29 @@ def test_an_update_never_turns_ipv6_on_by_itself():
     assert "ipv6-enable" not in update
     # It only re-applies the switch as it already stands.
     assert "bpanel-helper ipv6-apply" in update
+
+
+def test_ipv6_detection_reads_everything_before_deciding():
+    """A server with two IPv6 addresses was intermittently told it had none.
+
+    The helper runs under `set -o pipefail`, and `ip ... | grep -q inet6` fails
+    whenever grep exits on the first address while iproute2 is still flushing
+    the second: ip takes SIGPIPE and pipefail hands 141 up as the answer.
+    """
+    helper_text = HELPER_SCRIPT.read_text(encoding="utf-8")
+    body = helper_text.split("ipv6_available() {", 1)[1].split("\n}", 1)[0]
+    assert 'found="$(ip -6 -o addr show scope global 2>/dev/null || true)"' in body
+    assert '[[ -n "$found" ]]' in body
+    code = "\n".join(line for line in body.splitlines() if not line.strip().startswith("#"))
+    assert "grep -q" not in code
+
+
+def test_the_helper_never_pipes_into_a_grep_that_exits_early():
+    """Same trap, anywhere in the helper: pipefail turns it into a false answer."""
+    helper_text = HELPER_SCRIPT.read_text(encoding="utf-8")
+    offenders = [
+        line.strip()
+        for line in helper_text.splitlines()
+        if "| grep -q" in line and not line.strip().startswith("#")
+    ]
+    assert offenders == []

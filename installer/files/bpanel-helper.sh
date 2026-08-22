@@ -561,7 +561,7 @@ install_ioncube_loader() {
   done
 
   if command -v "php${version}" >/dev/null 2>&1; then
-    if ! "php${version}" -v 2>&1 | grep -qi 'ionCube'; then
+    if ! grep -qi 'ionCube' <<<"$("php${version}" -v 2>&1 || true)"; then
       rm -f /etc/php/"$version"/cli/conf.d/00-ioncube.ini /etc/php/"$version"/fpm/conf.d/00-ioncube.ini
       deny "ionCube Loader failed to load for PHP ${version}"
     fi
@@ -717,7 +717,7 @@ write_php_config() {
 
 waf_status() {
   echo "ModSecurity module:"
-  if nginx -V 2>&1 | grep -qi modsecurity || [[ -e /etc/nginx/modules-enabled/50-mod-http-modsecurity.conf ]]; then
+  if grep -qi modsecurity <<<"$(nginx -V 2>&1 || true)" || [[ -e /etc/nginx/modules-enabled/50-mod-http-modsecurity.conf ]]; then
     echo "  installed"
   else
     echo "  not installed"
@@ -926,7 +926,7 @@ firewall_add_rule() {
 firewall_delete_rule() {
   local id="$1" tmp
   [[ "$id" =~ ^[0-9]+$ ]] || deny "invalid rule id: $id"
-  firewall_rules | awk -F'\t' -v id="$id" '$1 == id' | grep -q . || deny "rule #${id} not found"
+  [[ -n "$(firewall_rules | awk -F'\t' -v id="$id" '$1 == id')" ]] || deny "rule #${id} not found"
   tmp="$(mktemp)"
   firewall_rules | awk -F'\t' -v id="$id" '$1 != id' >"$tmp"
   install -m 0640 -o root -g root "$tmp" "$FIREWALL_RULES_FILE"
@@ -1128,7 +1128,7 @@ firewall_status() {
   echo "Protected ports (tcp): ${protected}"
   echo ""
   echo "Rules:"
-  if firewall_rules | grep -q .; then
+  if [[ -n "$(firewall_rules)" ]]; then
     firewall_rules | awk -F'\t' '{
       target = ($4 == "") ? "any port" : $4 "/" $5
       src = ($3 == "") ? "any" : $3
@@ -1320,7 +1320,7 @@ firewall_migrate() {
     # with blocklist URLs configured was relying on IP blocking through Nginx,
     # so that one is switched on.
     local was_enforcing=0
-    if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | head -n 1 | grep -qi 'active'; then
+    if command -v ufw >/dev/null 2>&1 && grep -qi 'active' <<<"$(ufw status 2>/dev/null | head -n 1 || true)"; then
       was_enforcing=1
     fi
     if [[ -s "$FIREWALL_BLOCKLIST_URLS" ]]; then
@@ -1833,7 +1833,15 @@ app_directory() {
 ipv6_available() {
   # A global address, not the loopback and not a link-local one: those cannot
   # carry traffic from outside, so listening on them would prove nothing.
-  ip -6 -o addr show scope global 2>/dev/null | grep -q "inet6"
+  #
+  # Read it all before testing it. `ip | grep -q` looks equivalent and is not:
+  # iproute2 flushes one line per address, so with two addresses grep can exit
+  # on the first while ip is still writing the second, and under pipefail the
+  # SIGPIPE that follows becomes the answer. A server with more than one IPv6
+  # address was intermittently told it had none.
+  local found
+  found="$(ip -6 -o addr show scope global 2>/dev/null || true)"
+  [[ -n "$found" ]]
 }
 
 ipv6_global_addresses() {
