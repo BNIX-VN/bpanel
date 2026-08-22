@@ -9,6 +9,7 @@ from typing import Optional
 from jinja2 import Environment, FileSystemLoader
 
 from app.core.config import settings
+from app.services import panel_ipv6
 from app.services import site_users
 from app.services.shell import shell
 
@@ -1041,6 +1042,7 @@ def render_vhost(
     safe_http_flood_config = validate_http_flood_config(http_flood_config)
 
     rendered = template.render(
+        ipv6=panel_ipv6.is_enabled(),
         domain=safe_domain,
         server_names=server_names,
         root_path=str(resolved_root),

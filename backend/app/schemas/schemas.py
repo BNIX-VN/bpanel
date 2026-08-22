@@ -690,6 +690,9 @@ class PanelSettingsOut(BaseModel):
     # Hostnames the panel already answers for with a certificate of their own,
     # so the page can say where else this panel can be opened.
     panel_hostnames: list[str] = []
+    # available: this machine has a global IPv6 address at all.
+    # enabled: the websites and the panel are listening on it.
+    ipv6: dict = {}
     message: Optional[str] = None
     # Optional ClamAV malware scanning status (always present, defaults off).
     malware_scan_enabled: bool = False
@@ -799,6 +802,10 @@ class AdminAccountUpdate(BaseModel):
         if value is None:
             return value
         return _validate_linux_login_password(value)
+
+class PanelIpv6Toggle(BaseModel):
+    enabled: bool
+
 
 class PanelSslUseDomain(BaseModel):
     domain: str = Field(min_length=3, max_length=253)

@@ -11,6 +11,7 @@ from fastapi import HTTPException, UploadFile, status
 
 from app.core import panel_sni
 from app.core.config import settings
+from app.services import panel_ipv6
 from app.services.shell import shell
 
 
@@ -267,6 +268,7 @@ def current_settings() -> dict:
         # The panel is not tied to panel_hostname any more: that one is only
         # the certificate a browser gets when it asks for a name with none.
         "panel_hostnames": panel_sni.available_hostnames(),
+        "ipv6": panel_ipv6.status(),
         "malware_scan_enabled": mw["enabled"],
         "malware_scan_installed": mw["installed"],
         "malware_scan_active": mw["active"],

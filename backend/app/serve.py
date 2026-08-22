@@ -18,18 +18,52 @@ from __future__ import annotations
 
 import logging
 import os
+import socket
 from pathlib import Path
 
 import uvicorn
 from uvicorn.config import create_ssl_context
 
 from app.core import panel_sni
+from app.services import panel_ipv6
 
 logger = logging.getLogger("bpanel")
 
 # Only the local Nginx may set X-Forwarded-For / X-Forwarded-Proto. A direct
 # hit on the panel port cannot spoof the audit log IP or the rate-limit key.
 TRUSTED_FORWARDERS = "127.0.0.1"
+
+
+def _host() -> str:
+    """:: covers IPv4 as well on a dual-stack machine, 0.0.0.0 does not.
+
+    The bind is tried before it is chosen: a server whose IPv6 went away with
+    the switch left on must still start, on IPv4, rather than fail to boot and
+    take the panel with it.
+    """
+    if not panel_ipv6.is_enabled():
+        return "0.0.0.0"
+    # With bindv6only set, a :: socket refuses IPv4 outright. Reaching the panel
+    # over IPv4 matters more than reaching it over IPv6, so stay where we are.
+    try:
+        if Path("/proc/sys/net/ipv6/bindv6only").read_text(encoding="utf-8").strip() == "1":
+            logger.warning("net.ipv6.bindv6only is set; listening on IPv4 only")
+            return "0.0.0.0"
+    except OSError:
+        pass
+    try:
+        probe = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+    except OSError:
+        logger.warning("IPv6 is switched on but this machine has no IPv6; listening on IPv4 only")
+        return "0.0.0.0"
+    with probe:
+        try:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            probe.bind(("::", 0))
+        except OSError:
+            logger.warning("IPv6 is switched on but binding :: failed; listening on IPv4 only")
+            return "0.0.0.0"
+    return "::"
 
 
 def _port() -> int:
@@ -50,7 +84,7 @@ def _certificate_pair() -> tuple[str, str] | None:
 def build_config() -> uvicorn.Config:
     pair = _certificate_pair()
     options: dict = {
-        "host": "0.0.0.0",
+        "host": _host(),
         "port": _port(),
         "proxy_headers": True,
         "forwarded_allow_ips": TRUSTED_FORWARDERS,

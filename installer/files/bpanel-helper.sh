@@ -38,6 +38,11 @@ BPANEL_SFTP_GROUP="bpanel-sftp"
 # the certificate for whichever hostname the browser asked for. The panel runs
 # as 'bpanel' and cannot read /etc/letsencrypt, hence the copies.
 PANEL_SNI_DIR="/etc/bpanel/sni"
+# IPv6 is off until somebody turns it on, and this file is what says so. It is
+# the only truth: the panel reads it, the tools vhost is rendered from it, and
+# an update re-applies it. World readable on purpose - it holds no secret and
+# the panel runs as 'bpanel'.
+PANEL_IPV6_MARKER="/etc/bpanel/ipv6-enabled"
 APP_DIR="/opt/bpanel"
 ENV_FILE="${APP_DIR}/backend/.env"
 DEFAULT_PANEL_PORT="2222"
@@ -169,9 +174,15 @@ refresh_tools_nginx() {
   domain="$(env_get PANEL_DOMAIN)"; host="${domain:-$(detect_ip)}"
   php_version="${PHP_DEFAULT:-8.4}"
   api_scheme="http"; tools_scheme="http"; pma_secure="false"; ssl_block=""
+  local v6_http="" v6_https=""
+  if ipv6_is_enabled; then
+    # default_server is per address:port, so [::]:80 may carry it as well.
+    v6_http=$'\n    listen [::]:80 default_server;'
+    v6_https=$'\n    listen [::]:443 ssl http2 default_server;'
+  fi
   if [[ -n "$cert" && -n "$key" && -f "$cert" && -f "$key" ]]; then
     api_scheme="https"; tools_scheme="https"; pma_secure="true"
-    printf -v ssl_block '\n    listen 443 ssl http2 default_server;\n    ssl_certificate %s;\n    ssl_certificate_key %s;' "$cert" "$key"
+    printf -v ssl_block '\n    listen 443 ssl http2 default_server;%s\n    ssl_certificate %s;\n    ssl_certificate_key %s;' "$v6_https" "$cert" "$key"
   fi
   rm -f /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf 2>/dev/null || true
   ensure_nginx_conf_dir_writable
@@ -179,7 +190,7 @@ refresh_tools_nginx() {
   write_http_flood_nginx_conf 2>/dev/null || true
   cat >/etc/nginx/conf.d/00-bpanel-tools.conf <<NGINX
 server {
-    listen 80 default_server;${ssl_block}
+    listen 80 default_server;${v6_http}${ssl_block}
     server_name _;
     client_max_body_size 1100M;
 
@@ -1817,6 +1828,93 @@ app_directory() {
   # the app being tied to any website.
   local user="$1" name="$2"
   printf '%s/%s/apps/%s' "$HOME_ROOT" "$user" "$name"
+}
+
+ipv6_available() {
+  # A global address, not the loopback and not a link-local one: those cannot
+  # carry traffic from outside, so listening on them would prove nothing.
+  ip -6 -o addr show scope global 2>/dev/null | grep -q "inet6"
+}
+
+ipv6_global_addresses() {
+  ip -6 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1
+}
+
+ipv6_is_enabled() {
+  [[ -f "$PANEL_IPV6_MARKER" ]]
+}
+
+# Add or remove the IPv6 twin of every listen directive BPanel manages. The
+# 443 lines are written by certbot, not by the panel, so this works on the
+# files as they are rather than re-rendering them.
+nginx_ipv6_rewrite() {
+  local mode="$1"
+  python3 - "$mode" <<'PY'
+import glob
+import re
+import sys
+
+mode = sys.argv[1]
+# BPanel owns everything in conf.d; the distribution's own vhosts are not here.
+# certbot writes "listen 443 ssl; # managed by Certbot", so the trailing
+# comment has to be allowed or every HTTPS vhost would be skipped.
+listen_v4 = re.compile(r"^(\s*)listen\s+((?:\d{1,3}\.){3}\d{1,3}:)?(\d+)([^;]*);\s*(#.*)?$")
+listen_v6 = re.compile(r"^\s*listen\s+\[::\]:")
+changed = []
+
+for path in sorted(glob.glob("/etc/nginx/conf.d/*.conf")):
+    with open(path, "r", encoding="utf-8") as handle:
+        lines = handle.read().splitlines()
+    out = []
+    for index, line in enumerate(lines):
+        if listen_v6.match(line):
+            # Drop the ones we added; "off" keeps nothing, "on" re-adds below.
+            continue
+        out.append(line)
+        if mode != "on":
+            continue
+        match = listen_v4.match(line)
+        if not match:
+            continue
+        indent, address, port, rest, _comment = match.groups()
+        if address and not address.startswith("0.0.0.0"):
+            # A vhost pinned to one IPv4 address has no IPv6 counterpart to
+            # guess, so leave it exactly as the operator wrote it.
+            continue
+        out.append(f"{indent}listen [::]:{port}{rest};")
+    if out != lines:
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(out) + "\n")
+        changed.append(path)
+
+for path in changed:
+    print(path)
+PY
+}
+
+# Apply whatever the marker says, with every touched file restored if nginx
+# refuses the result. Silent no-op when the switch is off and nothing carries
+# an IPv6 listen line already.
+nginx_ipv6_apply() {
+  local mode backup file
+  mode="off"
+  ipv6_is_enabled && mode="on"
+  backup="$(mktemp -d /tmp/bpanel-ipv6-backup.XXXXXX)"
+  for file in /etc/nginx/conf.d/*.conf; do
+    [[ -f "$file" ]] || continue
+    cp -a "$file" "${backup}/$(basename "$file")"
+  done
+  nginx_ipv6_rewrite "$mode" >/dev/null
+  if ! nginx -t >/dev/null 2>&1; then
+    for file in "$backup"/*.conf; do
+      [[ -f "$file" ]] || continue
+      cp -a "$file" "/etc/nginx/conf.d/$(basename "$file")"
+    done
+    rm -rf "$backup"
+    return 1
+  fi
+  rm -rf "$backup"
+  systemctl reload nginx
 }
 
 install_sni_cert_pair() {
@@ -3459,6 +3557,61 @@ case "$cmd" in
     refresh_tools_nginx
     schedule_panel_restart
     echo "Panel URL: ${scheme}://${host}:${port}"
+    ;;
+
+  ipv6-status)
+    [[ $# -eq 0 ]] || deny "usage: ipv6-status"
+    if ipv6_available; then
+      echo "available=yes"
+    else
+      echo "available=no"
+    fi
+    if ipv6_is_enabled; then
+      echo "enabled=yes"
+    else
+      echo "enabled=no"
+    fi
+    echo "addresses=$(ipv6_global_addresses | paste -sd, -)"
+    ;;
+
+  ipv6-enable)
+    [[ $# -eq 0 ]] || deny "usage: ipv6-enable"
+    ipv6_available || deny "this server has no global IPv6 address"
+    install -d -o root -g bpanel -m 0750 /etc/bpanel
+    : >"$PANEL_IPV6_MARKER"
+    chmod 0644 "$PANEL_IPV6_MARKER"
+    if ! nginx_ipv6_apply; then
+      # nginx_ipv6_apply already put every file back the way it found it.
+      rm -f "$PANEL_IPV6_MARKER"
+      deny "nginx refused the IPv6 configuration; nothing was changed"
+    fi
+    refresh_tools_nginx
+    schedule_panel_restart
+    echo "IPv6 enabled: $(ipv6_global_addresses | paste -sd, -)"
+    ;;
+
+  ipv6-disable)
+    [[ $# -eq 0 ]] || deny "usage: ipv6-disable"
+    rm -f "$PANEL_IPV6_MARKER"
+    nginx_ipv6_apply || deny "nginx refused the configuration without IPv6"
+    refresh_tools_nginx
+    schedule_panel_restart
+    echo "IPv6 disabled"
+    ;;
+
+  ipv6-apply)
+    # Re-apply the switch after an update rewrote the vhosts. No-op when off.
+    [[ $# -eq 0 ]] || deny "usage: ipv6-apply"
+    if ipv6_is_enabled && ! ipv6_available; then
+      # The address went away with the switch left on; do not hand nginx a
+      # socket it cannot bind.
+      rm -f "$PANEL_IPV6_MARKER"
+      nginx_ipv6_apply || deny "nginx refused the configuration without IPv6"
+      echo "IPv6 is no longer available on this server; the switch was turned off"
+      exit 0
+    fi
+    nginx_ipv6_apply || deny "nginx refused the IPv6 configuration"
+    ipv6_is_enabled && echo "IPv6 applied" || echo "IPv6 is off"
     ;;
 
   panel-sni-sync)

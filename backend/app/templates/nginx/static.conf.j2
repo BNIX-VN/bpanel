@@ -1,6 +1,7 @@
 server {
     listen 80;
-    server_name {{ server_names | join(' ') }};
+{% if ipv6 %}    listen [::]:80;
+{% endif %}    server_name {{ server_names | join(' ') }};
     root {{ document_root_path }};
     index index.html index.htm;
 

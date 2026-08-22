@@ -14,12 +14,13 @@ from app.schemas.schemas import (
     MalwareScanRun,
     MalwareScanStatus,
     MalwareScanToggle,
+    PanelIpv6Toggle,
     PanelSettingsOut,
     PanelSettingsUpdate,
     PanelSslInstall,
     PanelSslUseDomain,
 )
-from app.services import panel_settings, site_users
+from app.services import panel_ipv6, panel_settings, site_users
 from app.services.audit import log_action
 
 
@@ -182,6 +183,32 @@ def regenerate_self_signed(
     result = panel_settings.regenerate_self_signed()
     log_action(db, current_user.id, "panel_ssl_self_signed", "panel", request=request)
     return result
+
+
+@router.post("/ipv6", response_model=PanelSettingsOut)
+def toggle_ipv6(
+    payload: PanelIpv6Toggle,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Turn IPv6 on or off for every website and for the panel itself.
+
+    Turning it on is refused when the server has no IPv6 address: nginx cannot
+    bind an address family that is not there, and it would refuse to start.
+    """
+    ensure_role(current_user.role, Role.admin)
+    result = panel_ipv6.set_enabled(bool(payload.enabled))
+    log_action(
+        db,
+        current_user.id,
+        "toggle_ipv6",
+        "on" if payload.enabled else "off",
+        request=request,
+    )
+    settings_out = panel_settings.current_settings()
+    settings_out["message"] = result.get("message")
+    return settings_out
 
 
 @router.get("/malware-scan", response_model=MalwareScanStatus)

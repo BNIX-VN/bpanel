@@ -1151,6 +1151,9 @@ if id -u bpanel >/dev/null 2>&1; then
   # Existing servers get the per-hostname certificate copies on this update, so
   # the panel opens on every domain here and not only on PANEL_DOMAIN.
   sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper panel-sni-sync >/dev/null 2>&1 || true
+  # Vhosts were rewritten above; put the IPv6 listen directives back if the
+  # switch is on. A no-op on the servers that never turned it on.
+  sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper ipv6-apply >/dev/null 2>&1 || true
 else
   echo "  (bpanel user not found; skipping WAF install - run install.sh first)"
 fi

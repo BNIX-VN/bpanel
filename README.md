@@ -469,6 +469,15 @@ Additional hardening on the systemd unit:
   SFTP chroots, and contain user-owned site directories. `/home` is
   executable-only for non-root users, so panel users cannot list other
   usernames.
+- IPv6 is off until an admin turns it on in Panel settings. Turning it on
+  checks for a global IPv6 address first and refuses on a server without one:
+  nginx cannot bind an address family the machine does not have, and it would
+  refuse to start, taking every website with it. When it is on, the helper adds
+  the IPv6 twin of every listen directive it manages - including the
+  certbot-written `listen 443 ssl` lines - runs `nginx -t`, and restores every
+  file it touched if nginx refuses. `/etc/bpanel/ipv6-enabled` is the switch;
+  an update re-applies it, and it turns itself off if the address ever goes
+  away. The firewall was already dual-stack.
 - Inside a site tree the defaults are `644` for files and `755` for folders,
   the same modes every hosting panel and every PHP application expects.
   `wp-config.php`, `.env` and `.my.cnf` are put back to `640` after any bulk

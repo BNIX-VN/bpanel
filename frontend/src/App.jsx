@@ -1575,6 +1575,25 @@ function App() {
     if (data) setMalwareScanStatus(data);
   }
 
+  async function toggleIpv6(enable) {
+    const ipv6 = panelSettings.ipv6 || {};
+    if (enable && !ipv6.available) {
+      setError(ipv6.detail || 'VPS của bạn không có IPv6 nên không thể dùng tính năng này.');
+      return;
+    }
+    if (!confirm(enable
+      ? 'Bật IPv6 cho toàn bộ website và panel?\n\nBPanel sẽ thêm listen [::] vào cấu hình nginx của mọi website, kiểm tra bằng nginx -t và tự hoàn tác nếu có lỗi. Panel sẽ khởi động lại.'
+      : 'Tắt IPv6?\n\nWebsite và panel sẽ chỉ còn nhận kết nối IPv4. Nếu domain đang có bản ghi AAAA, khách đi bằng IPv6 sẽ không vào được.')) return;
+    const data = await request('/panel-settings/ipv6', {
+      method: 'POST',
+      body: JSON.stringify({ enabled: enable }),
+    }, enable ? 'Đang bật IPv6...' : 'Đang tắt IPv6...');
+    if (data) {
+      setPanelSettings(data);
+      setNotice(data.message || (enable ? 'Đã bật IPv6.' : 'Đã tắt IPv6.'));
+    }
+  }
+
   async function toggleMalwareScan(enable) {
     if (enable && !malwareScanStatus?.installed) {
       if (!confirm('ClamAV is not installed on this server. It will be installed now (may take 1-2 minutes). Continue?')) return;
@@ -5615,6 +5634,18 @@ function App() {
           </label>}
           {panelSettings.ssl_domains_available?.length > 0 && <button className="secondary-light" disabled={!!loading || !panelCertDomain} onClick={usePanelDomainCertificate}><Lock size={14}/> Dùng chứng chỉ này</button>}
           {panelSettings.ssl_mode !== 'selfsigned' && <button className="secondary-light" disabled={!!loading} onClick={regeneratePanelSelfSigned}>Quay lại tự ký</button>}
+        </div>
+        <div className="panel-ipv6-strip">
+          <div className="panel-ipv6-head">
+            <span>IPv6: <strong>{panelSettings.ipv6?.enabled ? 'Đang bật' : 'Đang tắt'}</strong></span>
+            {panelSettings.ipv6?.enabled
+              ? <button className="secondary-light" disabled={!!loading} onClick={() => toggleIpv6(false)}>Tắt IPv6</button>
+              : <button className="secondary-light" disabled={!!loading || !panelSettings.ipv6?.available} onClick={() => toggleIpv6(true)}>Bật IPv6</button>}
+          </div>
+          <span className="hint">{panelSettings.ipv6?.detail}</span>
+          {panelSettings.ipv6?.addresses?.length > 0 && <div className="panel-host-chips">
+            {panelSettings.ipv6.addresses.map(address => <span key={address} className="badge">{address}</span>)}
+          </div>}
         </div>
         {panelSettings.panel_hostnames?.length > 0 && <div className="panel-host-strip">
           <span className="hint">
