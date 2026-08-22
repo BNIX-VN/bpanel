@@ -785,6 +785,12 @@ class MalwareScanStatus(BaseModel):
     active: bool = False
     socket: str = "/run/clamav/clamd.sock"
     detail: Optional[str] = None
+    memory_total_mb: int = 0
+    memory_available_mb: int = 0
+    # Set when the machine is too small to scan comfortably; explains in plain
+    # words what running out of memory does, since "OOM" means nothing to most
+    # people who will read it.
+    memory_warning: str = ""
 
 
 class PanelSettingsUpdate(BaseModel):

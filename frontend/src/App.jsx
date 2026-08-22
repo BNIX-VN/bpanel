@@ -1629,6 +1629,9 @@ function App() {
   }
 
   async function saveMalwareSchedule() {
+    if (malwareScheduleForm.enabled && malwareScheduleForm.scope === 'server' && malwareScanStatus?.memory_warning) {
+      if (!confirm(`${malwareScanStatus.memory_warning}\n\nVẫn đặt lịch quét toàn bộ VPS hàng tuần?`)) return;
+    }
     const data = await request('/malware/schedule', {
       method: 'PUT',
       body: JSON.stringify(malwareScheduleForm),
@@ -1643,6 +1646,9 @@ function App() {
 
   async function runMalwareScan() {
     if (!scanTargetWebsiteId) return;
+    if (scanTargetWebsiteId === 'server' && malwareScanStatus?.memory_warning) {
+      if (!confirm(`${malwareScanStatus.memory_warning}\n\nVẫn quét toàn bộ VPS?`)) return;
+    }
     setScanResults(null);
     setScanJob(null);
     setScanLoading(true);
@@ -5572,8 +5578,13 @@ function App() {
           </div>
           <button disabled={!!loading} onClick={loadMalwareScanStatus}><RefreshCw size={14}/> Refresh</button>
         </div>
+        {mw.memory_warning && <div className="info-box malware-ram-warning">
+          <strong><AlertCircle size={15}/> Cảnh báo RAM</strong>
+          <p className="hint">{mw.memory_warning}</p>
+        </div>}
         <div className="info-box">
           <p className="hint">{mw.detail || 'Checking status...'}</p>
+          {mw.memory_total_mb > 0 && <p className="hint">RAM máy chủ: <strong>{mw.memory_total_mb} MB</strong> (còn trống {mw.memory_available_mb} MB)</p>}
           {!mwInstalled && <p className="hint" style={{marginTop:8}}>When enabled, ClamAV will be installed on this server (~150 MB RAM for the virus database). Uploaded files will be scanned in real-time.</p>}
           {mwInstalled && mwActive && <p className="hint" style={{marginTop:8}}>All uploaded files are automatically scanned. Infected files are rejected.</p>}
           <div className="actions" style={{marginTop:12}}>
