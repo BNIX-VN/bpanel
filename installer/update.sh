@@ -823,7 +823,7 @@ ExecStart=${APP_DIR}/backend/.venv/bin/python -m app.services.malware_schedule
 NoNewPrivileges=false
 ProtectSystem=false
 ProtectHome=false
-ReadWritePaths=${APP_DIR} /home ${BACKUP_ROOT} /tmp /var/lib/bpanel
+ReadWritePaths=${APP_DIR} /home ${BACKUP_ROOT:-/var/backups/bpanel} /tmp /var/lib/bpanel
 PrivateTmp=true
 
 [Install]
