@@ -882,9 +882,12 @@ SERVICE
   systemctl enable --now bpanel-malware-scheduler.timer
   systemctl enable bpanel-autotune.service >/dev/null 2>&1 || true
   systemctl start bpanel-autotune.service >/dev/null 2>&1 || true
-  systemctl enable --now bpanel-timesync.timer >/dev/null 2>&1 || true
-  systemctl start bpanel-timesync.service >/dev/null 2>&1 || true
+  systemctl enable bpanel-timesync.timer >/dev/null 2>&1 || true
   if id -u bpanel >/dev/null 2>&1; then
+    # Start the clock unit only once the helper that answers `time-sync` is in
+    # place, so it never flashes up as a failed unit mid-install.
+    systemctl start bpanel-timesync.timer >/dev/null 2>&1 || true
+    systemctl start bpanel-timesync.service >/dev/null 2>&1 || true
     sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper certbot-auto-renew-install >/dev/null 2>&1 || true
     sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper firewall-blocklist-timer-install >/dev/null 2>&1 || true
     # Certificates the panel can answer a handshake with, plus the renewal hook

@@ -901,7 +901,7 @@ Persistent=true
 WantedBy=timers.target
 SERVICE
   systemctl daemon-reload
-  systemctl enable --now bpanel-timesync.timer >/dev/null 2>&1 || true
+  systemctl enable bpanel-timesync.timer >/dev/null 2>&1 || true
   rm -f /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf 2>/dev/null || true
   rm -f /etc/nginx/sites-enabled/bpanel.conf /etc/nginx/sites-available/bpanel.conf 2>/dev/null || true
   write_tools_nginx_config
@@ -1194,6 +1194,10 @@ if [[ -f "$SOURCE_DIR/installer/files/bpanel-helper.sh" ]]; then
     systemctl enable bpanel-autotune.service >/dev/null 2>&1 || true
     systemctl start bpanel-autotune.service >/dev/null 2>&1 || \
       echo "  (warning: could not run bpanel-autotune.service; next reboot will retry)"
+    # The helper is fresh now, so the clock unit can run without flashing
+    # up as a failed unit first.
+    systemctl reset-failed bpanel-timesync.service >/dev/null 2>&1 || true
+    systemctl start bpanel-timesync.timer >/dev/null 2>&1 || true
     systemctl start bpanel-timesync.service >/dev/null 2>&1 || \
       echo "  (warning: could not sync the clock now; the timer will retry)"
   else
