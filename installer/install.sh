@@ -839,6 +839,40 @@ RemainAfterExit=no
 WantedBy=multi-user.target
 SERVICE
 
+  # Keep the clock honest. TOTP logins reject every code once it drifts past
+  # ~30s, and many budget VPS hosts block outbound UDP 123 so systemd-timesyncd
+  # never converges - bpanel-helper time-sync then falls back to an HTTPS Date
+  # header. Only claim the timezone when the operator has not set one.
+  timedatectl set-ntp true >/dev/null 2>&1 || true
+  case "$(timedatectl show -p Timezone --value 2>/dev/null || echo UTC)" in
+    ""|UTC|Etc/UTC) timedatectl set-timezone Asia/Ho_Chi_Minh >/dev/null 2>&1 || true ;;
+  esac
+  cat >/etc/systemd/system/bpanel-timesync.service <<'SERVICE'
+[Unit]
+Description=Correct the BPanel server clock when NTP cannot reach the network
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=SUDO_USER=bpanel
+ExecStart=/usr/local/sbin/bpanel-helper time-sync
+RemainAfterExit=no
+SERVICE
+  cat >/etc/systemd/system/bpanel-timesync.timer <<'SERVICE'
+[Unit]
+Description=Check the BPanel server clock at boot and hourly
+
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=1h
+AccuracySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+SERVICE
+
   systemctl daemon-reload
   systemctl disable --now bpanel-auto-update.timer 2>/dev/null || true
   rm -f /etc/systemd/system/bpanel-auto-update.service /etc/systemd/system/bpanel-auto-update.timer
@@ -848,6 +882,8 @@ SERVICE
   systemctl enable --now bpanel-malware-scheduler.timer
   systemctl enable bpanel-autotune.service >/dev/null 2>&1 || true
   systemctl start bpanel-autotune.service >/dev/null 2>&1 || true
+  systemctl enable --now bpanel-timesync.timer >/dev/null 2>&1 || true
+  systemctl start bpanel-timesync.service >/dev/null 2>&1 || true
   if id -u bpanel >/dev/null 2>&1; then
     sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper certbot-auto-renew-install >/dev/null 2>&1 || true
     sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper firewall-blocklist-timer-install >/dev/null 2>&1 || true

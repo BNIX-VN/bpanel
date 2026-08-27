@@ -867,6 +867,41 @@ WantedBy=multi-user.target
 SERVICE
   systemctl daemon-reload
   systemctl enable bpanel-autotune.service >/dev/null 2>&1 || true
+  # Keep the clock honest. TOTP logins reject every code once it drifts past
+  # ~30s, and many budget VPS hosts block outbound UDP 123 so systemd-timesyncd
+  # never converges - bpanel-helper time-sync then falls back to an HTTPS Date
+  # header. Only claim the timezone when the operator has not set one.
+  timedatectl set-ntp true >/dev/null 2>&1 || true
+  case "$(timedatectl show -p Timezone --value 2>/dev/null || echo UTC)" in
+    ""|UTC|Etc/UTC) timedatectl set-timezone Asia/Ho_Chi_Minh >/dev/null 2>&1 || true ;;
+  esac
+  cat >/etc/systemd/system/bpanel-timesync.service <<'SERVICE'
+[Unit]
+Description=Correct the BPanel server clock when NTP cannot reach the network
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=SUDO_USER=bpanel
+ExecStart=/usr/local/sbin/bpanel-helper time-sync
+RemainAfterExit=no
+SERVICE
+  cat >/etc/systemd/system/bpanel-timesync.timer <<'SERVICE'
+[Unit]
+Description=Check the BPanel server clock at boot and hourly
+
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=1h
+AccuracySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+SERVICE
+  systemctl daemon-reload
+  systemctl enable --now bpanel-timesync.timer >/dev/null 2>&1 || true
   rm -f /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf 2>/dev/null || true
   rm -f /etc/nginx/sites-enabled/bpanel.conf /etc/nginx/sites-available/bpanel.conf 2>/dev/null || true
   write_tools_nginx_config
@@ -1159,6 +1194,8 @@ if [[ -f "$SOURCE_DIR/installer/files/bpanel-helper.sh" ]]; then
     systemctl enable bpanel-autotune.service >/dev/null 2>&1 || true
     systemctl start bpanel-autotune.service >/dev/null 2>&1 || \
       echo "  (warning: could not run bpanel-autotune.service; next reboot will retry)"
+    systemctl start bpanel-timesync.service >/dev/null 2>&1 || \
+      echo "  (warning: could not sync the clock now; the timer will retry)"
   else
     echo "  (bpanel user not found; skipping helper refresh - run install.sh first)"
   fi

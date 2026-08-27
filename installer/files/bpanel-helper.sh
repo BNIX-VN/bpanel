@@ -3228,6 +3228,53 @@ retune_mariadb() {
   echo "Retuned MariaDB: innodb_buffer_pool_size=${MARIADB_INNODB_BUFFER_POOL_SIZE}, max_connections=${MARIADB_MAX_CONNECTIONS}, table_open_cache=${MARIADB_TABLE_OPEN_CACHE}."
 }
 
+# --- clock --------------------------------------------------------------------
+# Cheap VPS hosts routinely block outbound UDP 123, so systemd-timesyncd and
+# chrony never converge and the clock drifts until TOTP logins stop matching.
+# When the kernel clock is not disciplined, read the time from an HTTPS Date
+# header instead - it travels over the same 443 the panel already needs - and
+# step the clock to it.
+# See https://doc.bnix.vn/huong-dan-sua-nhanh-loi-vps-bi-sai-gio-loi-ntp/
+TIME_HTTP_SOURCES=(https://time.google.com https://www.cloudflare.com https://www.google.com)
+CLOCK_SKEW_THRESHOLD=2   # seconds; a smaller drift is left alone
+
+clock_is_synchronized() {
+  [[ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" == "yes" ]]
+}
+
+http_date_epoch() {
+  # Print epoch seconds from the first reachable source's Date header.
+  local url header
+  for url in "$@"; do
+    header="$(curl -sI --max-time 8 -H 'Cache-Control: no-cache' "$url" 2>/dev/null \
+      | tr -d '\r' | awk -F': ' 'tolower($1) == "date" { print $2; exit }')"
+    [[ -n "$header" ]] || continue
+    date -u -d "$header" +%s 2>/dev/null && return 0
+  done
+  return 1
+}
+
+time_sync() {
+  local before target skew
+  before="$(date -u +%s)"
+  if clock_is_synchronized; then
+    echo "clock already disciplined by NTP; nothing to do"
+    return 0
+  fi
+  target="$(http_date_epoch "${TIME_HTTP_SOURCES[@]}" || true)"
+  [[ -n "$target" ]] || deny "no HTTPS time source was reachable to check the clock"
+  skew=$(( target - before ))
+  if (( skew < 0 )); then skew=$(( -skew )); fi
+  if (( skew < CLOCK_SKEW_THRESHOLD )); then
+    echo "clock is within ${skew}s of the HTTPS time source; left as is"
+    return 0
+  fi
+  date -u -s "@${target}" >/dev/null || deny "could not step the system clock"
+  hwclock --systohc 2>/dev/null || true
+  logger -t bpanel-helper -- "time-sync: stepped the clock by ${skew}s (HTTPS Date header)"
+  echo "clock stepped by ${skew}s from an HTTPS Date header; now $(date -u +%FT%TZ)"
+}
+
 delete_site_php_pools() {
   local user="$1" target="$2" glob
   glob="$(site_php_pool_glob "$user" "$target")"
@@ -3583,6 +3630,26 @@ case "$cmd" in
   mariadb-retune)
     [[ $# -eq 0 ]] || deny "usage: mariadb-retune"
     retune_mariadb
+    ;;
+
+  time-sync)
+    [[ $# -eq 0 ]] || deny "usage: time-sync"
+    time_sync
+    ;;
+
+  time-status)
+    [[ $# -eq 0 ]] || deny "usage: time-status"
+    if clock_is_synchronized; then echo "synchronized=yes"; else echo "synchronized=no"; fi
+    echo "timezone=$(timedatectl show -p Timezone --value 2>/dev/null)"
+    now="$(date -u +%s)"
+    ref="$(http_date_epoch "${TIME_HTTP_SOURCES[@]}" || true)"
+    if [[ -n "$ref" ]]; then
+      echo "skew_seconds=$(( ref - now ))"
+      echo "reference=https-date"
+    else
+      echo "skew_seconds="
+      echo "reference=none"
+    fi
     ;;
 
   # ---- panel runtime ----------------------------------------------------
