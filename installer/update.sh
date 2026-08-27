@@ -846,6 +846,9 @@ Persistent=true
 WantedBy=timers.target
 SERVICE
 
+  # bpanel-helper refuses to run unless SUDO_USER names the panel account, so
+  # this unit sets it. The sibling boot units (firewall, blocklist) do the same:
+  # the helper then runs as root here with no real sudo in front of it.
   cat >/etc/systemd/system/bpanel-autotune.service <<'SERVICE'
 [Unit]
 Description=Auto tune BPanel PHP-FPM pools and MariaDB for this VPS
@@ -854,6 +857,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+Environment=SUDO_USER=bpanel
 ExecStart=/usr/local/sbin/bpanel-helper php-fpm-retune
 ExecStart=/usr/local/sbin/bpanel-helper mariadb-retune
 RemainAfterExit=no
