@@ -64,6 +64,8 @@ h2{font-size:19px;margin:0 0 10px;font-weight:700;color:var(--text)}
 .login-card h1{color:var(--primary)}
 .login-form{display:grid;gap:12px}
 .login-form button{width:100%}
+.login-remember{display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;user-select:none}
+.login-remember input{width:auto;margin:0}
 
 @keyframes fadeUp{
   from{opacity:0;transform:translateY(12px)}

@@ -10,6 +10,10 @@ class Settings(BaseSettings):
     app_env: str = "development"
     secret_key: str = DEFAULT_SECRET_KEY
     access_token_expire_minutes: int = 120  # was 720; shorter window if a token is stolen
+    # A session is silently re-issued while it is in use (see the slide-session
+    # middleware), so this is really an *idle* timeout: leave the panel alone
+    # this long and the next visit asks for the password again.
+    remember_me_expire_minutes: int = 60 * 24 * 30  # opt-in "remember me" at login
     database_url: str = "sqlite:///./bpanel.db"
     command_dry_run: bool = True
     allowed_origins: str = Field(default="")

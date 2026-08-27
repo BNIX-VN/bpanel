@@ -520,6 +520,7 @@ function App() {
   const [password, setPassword] = useState('');
   const [otpCode, setOtpCode] = useState('');
   const [needsTwoFactor, setNeedsTwoFactor] = useState(false);
+  const [rememberMe, setRememberMe] = useState(false);
   const [page, setPage] = useState(() => pageFromPathname(window.location.pathname));
   const [domain, setDomain] = useState('');
   const [adminEmail, setAdminEmail] = useState('');
@@ -856,6 +857,7 @@ function App() {
       setLoading('Logging in...');
       const body = new URLSearchParams({ username, password });
       if (needsTwoFactor || otpCode) body.set('otp', otpCode);
+      if (rememberMe) body.set('remember', 'true');
       const res = await fetch(`${API}/auth/login`, {
         method: 'POST',
         body,
@@ -6038,6 +6040,10 @@ function App() {
           <input value={username} onChange={e => setUsername(e.target.value)} placeholder="Username" autoComplete="username" />
           <input value={password} onChange={e => setPassword(e.target.value)} placeholder="Password" type="password" autoComplete="current-password" onKeyDown={e => { if (e.key === 'Enter') login(); }} />
           {needsTwoFactor && <input value={otpCode} onChange={e => setOtpCode(e.target.value)} placeholder="Authentication code" inputMode="numeric" autoComplete="one-time-code" onKeyDown={e => { if (e.key === 'Enter') login(); }} />}
+          <label className="login-remember">
+            <input type="checkbox" checked={rememberMe} onChange={e => setRememberMe(e.target.checked)} />
+            Keep me signed in for 30 days
+          </label>
           <button disabled={!!loading || !username || !password} onClick={login}>{loading ? 'Logging in...' : 'Login'}</button>
         </div>
       </section>

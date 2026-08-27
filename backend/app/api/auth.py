@@ -94,10 +94,22 @@ def _is_secure_request(request: Request) -> bool:
     return False
 
 
-def _set_session_cookies(response: Response, request: Request, token: str) -> str:
-    csrf_token = secrets.token_urlsafe(32)
+def _set_session_cookies(
+    response: Response,
+    request: Request,
+    token: str,
+    max_age_seconds: Optional[int] = None,
+    csrf_token: Optional[str] = None,
+) -> str:
+    # A slide-renewed session keeps its CSRF value so a POST already in flight
+    # with the old header still matches; a fresh login mints a new one.
+    csrf_token = csrf_token or secrets.token_urlsafe(32)
     secure = _is_secure_request(request)
-    max_age = settings.access_token_expire_minutes * 60
+    max_age = (
+        max_age_seconds
+        if max_age_seconds is not None
+        else settings.access_token_expire_minutes * 60
+    )
     # HttpOnly session cookie: never visible to JS.
     response.set_cookie(
         SESSION_COOKIE,
@@ -319,13 +331,65 @@ def _record_success(key: str) -> None:
         _login_lockouts.pop(key, None)
 
 
-def _issue_login_session(response: Response, request: Request, user: User, extra_claims: Optional[dict] = None) -> str:
+def _issue_login_session(
+    response: Response,
+    request: Request,
+    user: User,
+    extra_claims: Optional[dict] = None,
+    lifetime_minutes: Optional[int] = None,
+) -> str:
     token_extra = {"role": user.role, "tv": user.token_version or 0}
     if extra_claims:
         token_extra.update(extra_claims)
-    token = create_access_token(user.username, token_extra)
-    _set_session_cookies(response, request, token)
+    token = create_access_token(user.username, token_extra, expires_minutes=lifetime_minutes)
+    max_age = (lifetime_minutes or settings.access_token_expire_minutes) * 60
+    _set_session_cookies(response, request, token, max_age_seconds=max_age)
     return token
+
+
+# Re-issue a cookie session once it is more than halfway through its life, so an
+# admin who keeps the panel open is never bounced to the login screen and the
+# fixed lifetime becomes an *idle* timeout instead. token_version still revokes
+# every session at once; a stolen token still dies at its original expiry unless
+# the thief keeps it warm - the usual sliding-session trade-off.
+_SESSION_RENEW_RATIO = 0.5
+
+
+def maybe_renew_session_cookie(request: Request, response: Response) -> None:
+    payload = getattr(request.state, "jwt_payload", None)
+    token = getattr(request.state, "jwt_token", None)
+    if not payload or not token:
+        return
+    # Slide browser (cookie) sessions only, never a bearer token.
+    if request.cookies.get(SESSION_COOKIE) != token:
+        return
+    # Leave alone any response that already set its own session cookie
+    # (login, logout, 2FA toggle, impersonate).
+    for raw_name, raw_value in response.raw_headers:
+        if raw_name.lower() == b"set-cookie" and raw_value.startswith(SESSION_COOKIE.encode() + b"="):
+            return
+    try:
+        iat = float(payload["iat"])
+        exp = float(payload["exp"])
+    except (KeyError, TypeError, ValueError):
+        return
+    lifetime = exp - iat
+    now = time.time()
+    if lifetime <= 0 or exp <= now:
+        return
+    if (exp - now) > lifetime * _SESSION_RENEW_RATIO:
+        return
+    extra = {"role": payload.get("role"), "tv": payload.get("tv", 0)}
+    if payload.get("imp"):
+        extra["imp"] = True
+    new_token = create_access_token(payload["sub"], extra, expires_minutes=int(lifetime / 60))
+    _set_session_cookies(
+        response,
+        request,
+        new_token,
+        max_age_seconds=int(lifetime),
+        csrf_token=request.cookies.get(CSRF_COOKIE),
+    )
 
 
 def _jwt_expiry_from_payload(payload: dict) -> datetime:
@@ -369,6 +433,7 @@ def login(
     response: Response,
     form: OAuth2PasswordRequestForm = Depends(),
     otp: str = Form(default=""),
+    remember: str = Form(default=""),
     db: Session = Depends(get_db),
 ):
     # Reject oversize credentials early — protects bcrypt and avoids using a
@@ -428,7 +493,9 @@ def login(
             db.commit()
         except Exception:  # pragma: no cover
             db.rollback()
-    token = _issue_login_session(response, request, user)
+    remember_me = remember.strip().lower() in {"1", "true", "on", "yes"}
+    lifetime = settings.remember_me_expire_minutes if remember_me else None
+    token = _issue_login_session(response, request, user, lifetime_minutes=lifetime)
 
     # Bearer token still returned for backward compatibility with CLI tools or
     # mobile clients that cannot set cookies. Browser clients should ignore it

@@ -82,6 +82,17 @@ async def unhandled_exception_handler(request, exc):
 
 
 @app.middleware("http")
+async def slide_session(request, call_next):
+    """Keep an in-use panel session alive so it never expires under an admin."""
+    response = await call_next(request)
+    try:
+        auth.maybe_renew_session_cookie(request, response)
+    except Exception:  # noqa: BLE001 - session renewal must never break a response
+        logger.warning("Session renewal failed", exc_info=True)
+    return response
+
+
+@app.middleware("http")
 async def security_headers(request, call_next):
     response = await call_next(request)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
