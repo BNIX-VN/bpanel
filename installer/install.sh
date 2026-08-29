@@ -82,6 +82,10 @@ IPV6_RESULT="off"
 PANEL_HOSTNAME="${PANEL_HOSTNAME:-}"
 PANEL_DOMAIN=""
 PANEL_PORT="${PANEL_PORT:-2222}"
+# Opt-in only: set PANEL_TIMEZONE=Asia/Ho_Chi_Minh (or any zoneinfo name) to have
+# the installer set the server timezone. Left blank, the installer never touches
+# it - TOTP runs off UTC, so the clock sync below is what actually matters.
+PANEL_TIMEZONE="${PANEL_TIMEZONE:-}"
 SERVER_IP=""
 ENABLE_SSL="${ENABLE_SSL:-auto}"
 SSL_EMAIL="${SSL_EMAIL:-}"
@@ -842,11 +846,16 @@ SERVICE
   # Keep the clock honest. TOTP logins reject every code once it drifts past
   # ~30s, and many budget VPS hosts block outbound UDP 123 so systemd-timesyncd
   # never converges - bpanel-helper time-sync then falls back to an HTTPS Date
-  # header. Only claim the timezone when the operator has not set one.
+  # header.
   timedatectl set-ntp true >/dev/null 2>&1 || true
-  case "$(timedatectl show -p Timezone --value 2>/dev/null || echo UTC)" in
-    ""|UTC|Etc/UTC) timedatectl set-timezone Asia/Ho_Chi_Minh >/dev/null 2>&1 || true ;;
-  esac
+  # Timezone is the operator's call - only touched when PANEL_TIMEZONE is set.
+  if [[ -n "$PANEL_TIMEZONE" ]]; then
+    if timedatectl set-timezone "$PANEL_TIMEZONE" >/dev/null 2>&1; then
+      log "Server timezone set to ${PANEL_TIMEZONE}"
+    else
+      log "WARNING: PANEL_TIMEZONE='${PANEL_TIMEZONE}' is not a valid zone; timezone left unchanged"
+    fi
+  fi
   cat >/etc/systemd/system/bpanel-timesync.service <<'SERVICE'
 [Unit]
 Description=Correct the BPanel server clock when NTP cannot reach the network

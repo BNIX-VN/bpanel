@@ -103,13 +103,14 @@ def test_no_renewal_when_handler_already_set_a_session_cookie():
     assert _new_token_from(response) == "handler-issued"
 
 
-def test_impersonation_claim_survives_renewal():
+def test_impersonation_session_is_not_slid():
+    # An impersonation session keeps its hard expiry; the admin must re-initiate
+    # "Login as" rather than stay in it indefinitely by keeping the tab busy.
     payload = _payload(age_seconds=3700, lifetime_seconds=7200, role="end_user", tv=0, imp=True)
     token = "imp-token"
     response = Response()
     auth.maybe_renew_session_cookie(_request({"bpanel_session": token}, payload, token), response)
-    claims = jwt.decode(_new_token_from(response), settings.secret_key, algorithms=[ALGORITHM])
-    assert claims.get("imp") is True
+    assert _session_cookie(response) is None
 
 
 def test_expired_session_is_left_for_the_auth_layer_to_reject():

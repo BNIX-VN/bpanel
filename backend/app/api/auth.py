@@ -363,6 +363,10 @@ def maybe_renew_session_cookie(request: Request, response: Response) -> None:
     # Slide browser (cookie) sessions only, never a bearer token.
     if request.cookies.get(SESSION_COOKIE) != token:
         return
+    # Impersonation ("Login as") sessions keep their hard expiry - an admin
+    # acting as another user must re-initiate rather than stay in it forever.
+    if payload.get("imp"):
+        return
     # Leave alone any response that already set its own session cookie
     # (login, logout, 2FA toggle, impersonate).
     for raw_name, raw_value in response.raw_headers:
@@ -380,8 +384,6 @@ def maybe_renew_session_cookie(request: Request, response: Response) -> None:
     if (exp - now) > lifetime * _SESSION_RENEW_RATIO:
         return
     extra = {"role": payload.get("role"), "tv": payload.get("tv", 0)}
-    if payload.get("imp"):
-        extra["imp"] = True
     # round(), not truncate, so the lifetime does not creep downward a little
     # with every renewal; clamp to at least a minute so a short token cannot be
     # re-issued already expired.
