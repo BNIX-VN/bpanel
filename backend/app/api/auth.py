@@ -382,7 +382,12 @@ def maybe_renew_session_cookie(request: Request, response: Response) -> None:
     extra = {"role": payload.get("role"), "tv": payload.get("tv", 0)}
     if payload.get("imp"):
         extra["imp"] = True
-    new_token = create_access_token(payload["sub"], extra, expires_minutes=int(lifetime / 60))
+    # round(), not truncate, so the lifetime does not creep downward a little
+    # with every renewal; clamp to at least a minute so a short token cannot be
+    # re-issued already expired.
+    new_token = create_access_token(
+        payload["sub"], extra, expires_minutes=max(1, round(lifetime / 60))
+    )
     _set_session_cookies(
         response,
         request,

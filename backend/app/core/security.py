@@ -80,7 +80,11 @@ def create_access_token(
     expires_minutes: Optional[int] = None,
 ) -> str:
     now = datetime.now(timezone.utc)
-    lifetime = expires_minutes or settings.access_token_expire_minutes
+    lifetime = (
+        expires_minutes
+        if expires_minutes is not None
+        else settings.access_token_expire_minutes
+    )
     expire = now + timedelta(minutes=lifetime)
     payload: Dict[str, Any] = {"sub": subject, "exp": expire, "iat": now, "jti": secrets.token_urlsafe(32)}
     if extra:

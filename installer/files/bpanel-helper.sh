@@ -3256,13 +3256,18 @@ http_date_epoch() {
 
 time_sync() {
   local before target skew
-  before="$(date -u +%s)"
   if clock_is_synchronized; then
     echo "clock already disciplined by NTP; nothing to do"
     return 0
   fi
   target="$(http_date_epoch "${TIME_HTTP_SOURCES[@]}" || true)"
-  [[ -n "$target" ]] || deny "no HTTPS time source was reachable to check the clock"
+  if [[ -z "$target" ]]; then
+    echo "no HTTPS time source was reachable; leaving the clock as is (the timer will retry)"
+    return 0
+  fi
+  # Sample the local clock now, after the fetch, so curl round-trip latency
+  # is not counted as skew.
+  before="$(date -u +%s)"
   skew=$(( target - before ))
   if (( skew < 0 )); then skew=$(( -skew )); fi
   if (( skew < CLOCK_SKEW_THRESHOLD )); then
