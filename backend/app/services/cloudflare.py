@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime
 
@@ -62,29 +63,39 @@ def verify_token(token: str) -> dict:
 
 
 def list_zones(token: str) -> list[dict]:
-    payload = _get("/zones?per_page=50", token)
-    return payload.get("result") or []
+    """Every zone the token can see, following Cloudflare's pagination."""
+    zones: list[dict] = []
+    page = 1
+    while True:
+        payload = _get(f"/zones?per_page=50&page={page}", token)
+        zones.extend(payload.get("result") or [])
+        info = payload.get("result_info") or {}
+        if page >= (info.get("total_pages") or 1) or not payload.get("result"):
+            break
+        page += 1
+    return zones
 
 
 def zone_for_domain(token: str, domain: str) -> str:
-    """The longest zone name the token can see that is a suffix of ``domain``.
+    """The most specific zone the token manages that covers ``domain``.
 
-    For ``blog.shop.example.com`` with zones ``example.com`` and
-    ``shop.example.com`` visible, this returns ``shop.example.com``.
+    Asks Cloudflare for each candidate name directly (``?name=``) rather than
+    listing every zone, so it works on accounts with hundreds of zones. For
+    ``blog.shop.example.com`` it checks ``blog.shop.example.com``, then
+    ``shop.example.com``, then ``example.com`` and returns the first that is a
+    real zone.
     """
     name = (domain or "").strip().lower().rstrip(".")
-    candidates = [
-        (z.get("name") or "").lower()
-        for z in list_zones(token)
-        if (z.get("name") or "").lower()
-        and (name == (z.get("name") or "").lower() or name.endswith("." + (z.get("name") or "").lower()))
-    ]
-    if not candidates:
-        raise CloudflareError(
-            f"No Cloudflare zone visible to this token covers {name}. "
-            "Check the token's zone scope."
-        )
-    return max(candidates, key=len)
+    labels = name.split(".")
+    for start in range(len(labels) - 1):
+        candidate = ".".join(labels[start:])
+        result = _get(f"/zones?name={urllib.parse.quote(candidate)}", token).get("result") or []
+        if result:
+            return result[0].get("name") or candidate
+    raise CloudflareError(
+        f"No Cloudflare zone this token manages covers {name}. "
+        "Check the token's zone scope, or that the domain's DNS is on Cloudflare."
+    )
 
 
 def get_token(db: Session, zone: str) -> str | None:

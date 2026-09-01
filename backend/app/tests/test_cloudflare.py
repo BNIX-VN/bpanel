@@ -15,18 +15,25 @@ def _db():
     return sessionmaker(bind=engine)()
 
 
-def test_zone_for_domain_picks_the_longest_visible_zone(monkeypatch):
-    monkeypatch.setattr(
-        cloudflare,
-        "list_zones",
-        lambda token: [{"name": "example.com"}, {"name": "shop.example.com"}],
-    )
+def _fake_get(zones):
+    seen = {z.lower() for z in zones}
+
+    def _get(path, token):
+        name = path.split("name=", 1)[1].split("&", 1)[0]
+        return {"success": True, "result": [{"name": name}] if name in seen else []}
+
+    return _get
+
+
+def test_zone_for_domain_picks_the_most_specific_real_zone(monkeypatch):
+    monkeypatch.setattr(cloudflare, "_get", _fake_get(["example.com", "shop.example.com"]))
     assert cloudflare.zone_for_domain("t", "blog.shop.example.com") == "shop.example.com"
     assert cloudflare.zone_for_domain("t", "example.com") == "example.com"
+    assert cloudflare.zone_for_domain("t", "sub.example.com") == "example.com"
 
 
 def test_zone_for_domain_raises_when_no_zone_covers_it(monkeypatch):
-    monkeypatch.setattr(cloudflare, "list_zones", lambda token: [{"name": "other.net"}])
+    monkeypatch.setattr(cloudflare, "_get", _fake_get(["other.net"]))
     with pytest.raises(cloudflare.CloudflareError):
         cloudflare.zone_for_domain("t", "example.com")
 
