@@ -48,23 +48,32 @@ def user_storage_limit_bytes(user: User) -> int | None:
 
 
 def path_usage_bytes(path: str | Path) -> int:
-    root = Path(path)
+    # os.scandir carries each entry's stat from the dirent on Linux, so a tree
+    # walk is one syscall per entry instead of two - it matters on a WordPress
+    # tree of tens of thousands of files, walked once per user on the user list.
+    root = os.fspath(path)
     total = 0
+    try:
+        total += os.lstat(root).st_size
+    except OSError:
+        return 0
     stack = [root]
     while stack:
         current = stack.pop()
         try:
-            item_stat = current.lstat()
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    try:
+                        entry_stat = entry.stat(follow_symlinks=False)
+                    except OSError:
+                        continue
+                    if stat.S_ISLNK(entry_stat.st_mode):
+                        continue
+                    total += entry_stat.st_size
+                    if entry.is_dir(follow_symlinks=False):
+                        stack.append(entry.path)
         except OSError:
             continue
-        if stat.S_ISLNK(item_stat.st_mode):
-            continue
-        total += item_stat.st_size
-        if stat.S_ISDIR(item_stat.st_mode):
-            try:
-                stack.extend(current.iterdir())
-            except OSError:
-                continue
     return total
 
 
