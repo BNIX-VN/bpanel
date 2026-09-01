@@ -25,7 +25,12 @@ BPANEL_UPDATE_STATE_DIR=/var/lib/bpanel/update-state
 fingerprint() {
   # fingerprint <path> [path ...] -> one sha256 over the contents of every
   # file under those paths (paths are stable, so hashing them too is fine).
-  find "$@" -type f -exec sha256sum {} + 2>/dev/null | LC_ALL=C sort | sha256sum | awk '{print $1}'
+  # Missing paths are skipped, not an error: if one later appears the hash
+  # changes and the step re-runs. Returns non-zero only when nothing exists.
+  local existing=() p
+  for p in "$@"; do [[ -e "$p" ]] && existing+=("$p"); done
+  [[ ${#existing[@]} -gt 0 ]] || return 1
+  find "${existing[@]}" -type f -exec sha256sum {} + 2>/dev/null | LC_ALL=C sort | sha256sum | awk '{print $1}'
 }
 
 step_inputs_changed() {
@@ -1448,7 +1453,7 @@ systemctl restart bpanel-api
 update_progress 80 "frontend" "Building frontend"
 cd "$APP_DIR/frontend"
 
-FRONTEND_INPUTS=(src package.json index.html vite.config.js)
+FRONTEND_INPUTS=(src public index.html package.json package-lock.json)
 FRONTEND_REBUILT=0
 if [[ -f dist/index.html ]] && ! step_inputs_changed frontend "${FRONTEND_INPUTS[@]}"; then
   log "Frontend unchanged since last update; keeping the built bundle"
