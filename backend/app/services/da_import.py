@@ -1354,8 +1354,16 @@ def import_da_backup(archive_path: str, force: bool = False) -> dict:
                     user.username,
                 )
                 public = site_users.document_root(root_path)
-                _clear_directory(public)
-                _copy_site_files(source, public)
+                if source is not None:
+                    # The site dir belongs to its Linux user; copy the extracted
+                    # files in through the helper (as root), from the panel-owned
+                    # staging tree, then let it re-apply the permission model.
+                    staged = stage_dir / "payload" / domain
+                    staged.mkdir(parents=True, exist_ok=True)
+                    _copy_site_files(source, staged)
+                    site_users.import_site_files(root_path, linux_user, str(staged))
+                else:
+                    _log(f"  {domain}: backup carried no files, importing empty")
 
                 selected_rules = [rule["id"] for rule in waf.DEFAULT_RULES]
                 waf_enabled = True

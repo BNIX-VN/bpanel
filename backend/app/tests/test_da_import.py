@@ -1,10 +1,13 @@
 """Tests for the DirectAdmin backup import service."""
 
 import tarfile
+from pathlib import Path
 
 import pytest
 
 from app.services import da_import
+
+HELPER_SCRIPT = Path(__file__).resolve().parents[3] / "installer" / "files" / "bpanel-helper.sh"
 
 
 def _make_da_backup(tmp_path, name="user.admin.demo.tar", pointers=None):
@@ -294,6 +297,19 @@ class TestNestedArchivesAndSubdomains:
         assert staged is not None and (staged / "index.php").is_file()
         # Moved, not copied: gone from the parent's public_html.
         assert not blog.exists()
+
+
+class TestHelperVerb:
+    def test_da_site_populate_is_defined_and_confined(self):
+        helper = HELPER_SCRIPT.read_text(encoding="utf-8")
+        assert "da-site-populate)" in helper
+        # The staged source must live under the panel-owned import tree.
+        assert "staged source must be under /var/lib/bpanel/da-import" in helper
+        # Runs the copy as root, then re-applies the site permission model.
+        assert 'cp -a --no-preserve=ownership -- "$src/." "$dest/"' in helper
+        assert 'fix_site_tree "$root_target" "$user"' in helper
+        # Drops anything a crafted backup could smuggle in.
+        assert "-type l -o -type b -o -type c -o -type p -o -type s" in helper
 
 
 class TestUsernameDiscovery:

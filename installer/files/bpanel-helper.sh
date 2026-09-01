@@ -4243,6 +4243,38 @@ PY
     rm -f -- "$staged"
     ;;
 
+  da-site-populate)
+    # Copy a DirectAdmin import's already-extracted document root into a managed
+    # site, as root, because the site directory is owned by the site's Linux
+    # user and the panel process (bpanel) cannot write into it. The source lives
+    # under the panel-owned DA import staging tree; symlinks are dropped so a
+    # crafted backup cannot plant one pointing outside the site.
+    [[ $# -eq 3 ]] || deny "usage: da-site-populate <site-user> <site-root> <staged-source-dir>"
+    user="$1"; root_arg="$2"; src_arg="$3"
+    require_linux_user "$user"
+    root_target=$(require_managed_path "$root_arg" "$user")
+    case "$src_arg" in
+      /var/lib/bpanel/da-import/*) : ;;
+      *) deny "staged source must be under /var/lib/bpanel/da-import" ;;
+    esac
+    [[ ! -L "$src_arg" ]] || deny "staged source cannot be a symlink"
+    src=$(readlink -e -- "$src_arg") || deny "staged source not found"
+    case "$src/" in
+      /var/lib/bpanel/da-import/*/) : ;;
+      *) deny "staged source escaped /var/lib/bpanel/da-import" ;;
+    esac
+    [[ -d "$src" ]] || deny "staged source is not a directory"
+    [[ "$(stat -c '%U' -- "$src")" == "bpanel" ]] || deny "staged source must be owned by bpanel"
+    dest="$root_target/public_html"
+    runuser -u "$user" -- mkdir -p -- "$dest"
+    find "$dest" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+    cp -a --no-preserve=ownership -- "$src/." "$dest/"
+    # Regular files and directories only: drop anything a crafted backup could
+    # smuggle past the panel's own filter (symlinks, device nodes, sockets).
+    find "$dest" \( -type l -o -type b -o -type c -o -type p -o -type s \) -delete 2>/dev/null || true
+    fix_site_tree "$root_target" "$user"
+    ;;
+
   site-archive-extract)
     [[ $# -eq 7 ]] || deny "usage: site-archive-extract <site-user> <site-root> <archive-path> <destination-path> <zip|tar.gz> <max-items> <max-bytes>"
     user="$1"; root_arg="$2"; archive_rel="$3"; destination_rel="$4"; archive_kind="$5"

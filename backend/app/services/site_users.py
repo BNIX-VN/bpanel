@@ -217,6 +217,22 @@ def fix_site_permissions(root_path: str, linux_user: Optional[str]) -> None:
     )
 
 
+def import_site_files(root_path: str, linux_user: str, staged_source: str) -> None:
+    """Populate a site's document root from a DirectAdmin import staging dir.
+
+    The site directory is owned by its Linux user, so the panel process cannot
+    write into it; the helper does the copy as root and re-applies the site
+    permission model. ``staged_source`` must be a panel-owned directory under
+    ``/var/lib/bpanel/da-import``.
+    """
+    username = validate_linux_user(linux_user)
+    shell.privileged(
+        "da-site-populate",
+        helper_args=[username, root_path, staged_source],
+        fallback=["cp", "-aT", staged_source, str(document_root(root_path))],
+    )
+
+
 def fix_site_path(path: str, linux_user: Optional[str], check: bool = False) -> None:
     if not linux_user:
         return
