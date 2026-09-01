@@ -543,6 +543,8 @@ function App() {
   const [aliasDrafts, setAliasDrafts] = useState({});
   const [aliasModes, setAliasModes] = useState({});
   const [databases, setDatabases] = useState([]);
+  const [dbSearch, setDbSearch] = useState('');
+  const [dbSearching, setDbSearching] = useState(false);
   const [newDatabase, setNewDatabase] = useState({ db_name: '', db_user: '', db_password: '' });
   const [createdDbInfo, setCreatedDbInfo] = useState(null);
   const [copiedField, setCopiedField] = useState(null);
@@ -1153,6 +1155,15 @@ function App() {
       if (!query) setWebsites(data);
       if (!selectedWebsiteId && data[0]) setSelectedWebsiteId(String(data[0].id));
     }
+  }
+
+  async function loadDatabases(search = dbSearch, showLoading = false) {
+    const query = String(search || '').trim();
+    const suffix = query ? `?q=${encodeURIComponent(query)}` : '';
+    setDbSearching(true);
+    const data = await request(`/databases${suffix}`, {}, showLoading ? 'Loading databases...' : '');
+    setDbSearching(false);
+    if (data) setDatabases(data);
   }
 
   async function loadPackages() {
@@ -3550,6 +3561,14 @@ function App() {
   }, [isAuthenticated, page, websiteSearch]);
 
   useEffect(() => {
+    if (!isAuthenticated || page !== 'databases') return undefined;
+    const timer = window.setTimeout(() => {
+      loadDatabases(dbSearch, false);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [isAuthenticated, page, dbSearch]);
+
+  useEffect(() => {
     if (!currentSite) return;
     const modeMap = { manual: 'manual', cloudflare: 'wildcard', shared: 'shared' };
     setSslMode(modeMap[currentSite.ssl_mode] || 'letsencrypt');
@@ -4502,25 +4521,26 @@ function App() {
           <input type="checkbox" checked={installWordPress} onChange={e => setInstallWordPress(e.target.checked)} />
           Install WordPress (creates database, downloads WP, configures vhost)
         </label>}
-        <label className="check-line">
-          <span>SSL after creating</span>
-          <select value={createSslMode} onChange={e => setCreateSslMode(e.target.value)}>
-            <option value="none">None — set up later</option>
-            <option value="letsencrypt">Let's Encrypt (needs DNS pointed here)</option>
-            <option value="wildcard">Wildcard via Cloudflare (*.zone)</option>
-            <option value="shared">Use an existing site's certificate</option>
-            <option value="manual">Manual — paste cert on the SSL page</option>
-          </select>
-        </label>
-        {createSslMode === 'wildcard' && <input
-          value={createSslToken}
-          onChange={e => setCreateSslToken(e.target.value)}
-          placeholder="Cloudflare API token (leave empty if already saved for this zone)"
-        />}
-        {createSslMode === 'shared' && <p className="hint">
-          After the site is created the panel picks a certificate that already covers this domain
-          (a wildcard first). If none does, the site is created without SSL.
-        </p>}
+        <div className="create-ssl-row">
+          <span className="create-ssl-label">SSL after creating</span>
+          <div className="segmented ssl-mode-tabs">
+            <button type="button" className={createSslMode === 'none' ? 'active' : ''} onClick={() => setCreateSslMode('none')}>Off</button>
+            <button type="button" className={createSslMode === 'letsencrypt' ? 'active' : ''} onClick={() => setCreateSslMode('letsencrypt')}><Lock size={13}/> Let's Encrypt</button>
+            <button type="button" className={createSslMode === 'wildcard' ? 'active' : ''} onClick={() => setCreateSslMode('wildcard')}><Globe size={13}/> Wildcard</button>
+            <button type="button" className={createSslMode === 'shared' ? 'active' : ''} onClick={() => setCreateSslMode('shared')}><Copy size={13}/> Existing cert</button>
+            <button type="button" className={createSslMode === 'manual' ? 'active' : ''} onClick={() => setCreateSslMode('manual')}><KeyRound size={13}/> Manual</button>
+          </div>
+        </div>
+        {createSslMode !== 'none' && <div className="ssl-sub-form create-ssl-sub">
+          {createSslMode === 'letsencrypt' && <p className="hint">A certificate is issued right after the site is created — the domain must already point to this server.</p>}
+          {createSslMode === 'wildcard' && <>
+            <p className="hint">Issues <code>zone + *.zone</code> over Cloudflare DNS. Leave the token blank to reuse one already saved for the zone.</p>
+            <input type="password" autoComplete="off" placeholder="Cloudflare API token (Zone → DNS → Edit)"
+              value={createSslToken} onChange={e => setCreateSslToken(e.target.value)} />
+          </>}
+          {createSslMode === 'shared' && <p className="hint">After the site is created the panel points it at an existing certificate that covers this domain (a wildcard first). If none does, the site is created without SSL.</p>}
+          {createSslMode === 'manual' && <p className="hint">The site is created, then the panel opens the SSL page so you can paste the certificate and key.</p>}
+        </div>}
         <p className="hint">{wpFieldsEnabled
           ? 'WordPress will be installed and the panel will show the URL, admin account, and password after creation.'
           : siteType === 'application'
@@ -4670,10 +4690,21 @@ function App() {
       });
       doCopy.then(() => { setCopiedField(field); setTimeout(() => setCopiedField(null), 2000); }).catch(() => setError('Copy failed.'));
     }
+    const dbSearchActive = !!dbSearch.trim();
     return <section className="section">
       <div className="section-title">
         <h2>Databases</h2>
-        <button disabled={!!loading} onClick={refreshAll}><RefreshCw size={15}/> Refresh</button>
+        <button disabled={!!loading || dbSearching} onClick={() => loadDatabases(dbSearch, true)}><RefreshCw size={15} className={dbSearching ? 'spin' : ''}/> Refresh</button>
+      </div>
+      <div className="website-search-bar">
+        <Search size={16}/>
+        <input
+          value={dbSearch}
+          onChange={e => setDbSearch(e.target.value)}
+          placeholder="Search by database or user name"
+          aria-label="Search databases"
+        />
+        {dbSearch && <button className="secondary-light icon-button" type="button" onClick={() => setDbSearch('')} aria-label="Clear database search" title="Clear search"><X size={15}/></button>}
       </div>
       <div className="form-row">
         <input value={newDatabase.db_name} onChange={e => setNewDatabase(prev => ({ ...prev, db_name: e.target.value }))} placeholder="database_name" />
@@ -4690,7 +4721,7 @@ function App() {
           <label>Password</label><span><code>{createdDbInfo.db_password}</code> <button className="mini secondary-light" title={copiedField === 'db_password' ? 'Copied!' : 'Copy'} onClick={() => copyToClipboard(createdDbInfo.db_password, 'db_password')}>{copiedField === 'db_password' ? <Check size={12} style={{color:'var(--green)'}}/> : <Copy size={12}/>}</button></span>
         </div>
       </div>}
-      {databases.length === 0 && !createdDbInfo && <EmptyState icon={Database} message="No databases found." />}
+      {databases.length === 0 && !createdDbInfo && <EmptyState icon={Database} message={dbSearchActive ? 'No databases match this search.' : 'No databases found.'} />}
       <div className="table">
         {databases.map(db => {
           return <div className="row db-row" key={db.id}>
@@ -5113,38 +5144,38 @@ function App() {
           <div><h3>DirectAdmin Import</h3><p className="hint">Import websites, databases, and users from a DirectAdmin backup archive.</p></div>
           <button disabled={!!loading} onClick={() => listDaBackups()}><RefreshCw size={14}/> Refresh</button>
         </div>
-        <div className="actions backup-toolbar">
+        <div className="da-toolbar">
           <label className="upload-button">
             <Upload size={14}/> Upload DA backup
             <input ref={daFileInputRef} type="file" accept=".tar.zst,.tzst,.tar.gz,.tgz,.tar.bz2,.tbz2,.tar.xz,.txz,.tar" onChange={e => { uploadDaBackup(e.target.files?.[0]); e.target.value = ''; }} />
           </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: '0.85rem', userSelect: 'none' }}>
+          <label className="da-toggle">
             <input type="checkbox" checked={daReplaceExisting} onChange={e => setDaReplaceExisting(e.target.checked)} />
             Replace existing users/websites
           </label>
         </div>
-        {daReplaceExisting && <p className="hint" style={{ color: 'var(--color-warning)' }}>
+        {daReplaceExisting && <p className="hint da-warn">
           Imports will delete any existing panel user, website, files and databases that share a name with the backup. Leave this off to have conflicting imports stop instead.
         </p>}
         {daBackups.length === 0 && <EmptyState icon={ArchiveRestore} message="No DirectAdmin backups uploaded. Upload a DA backup archive to get started." />}
         {daBackups.length > 0 && <>
-          <div className="actions backup-toolbar" style={{ gap: 12, flexWrap: 'wrap' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: '0.85rem', userSelect: 'none' }}>
+          <div className="da-list-head">
+            <label className="da-toggle">
               <input type="checkbox" checked={selectedDaBackups.length === daBackups.length && daBackups.length > 0} onChange={toggleSelectAllDaBackups} />
               Select all ({daBackups.length})
             </label>
-            {selectedDaBackups.length > 0 && <>
+            {selectedDaBackups.length > 0 && <div className="da-actions">
               <button disabled={!!loading} onClick={() => bulkImportDaBackups()} className="primary"><ArchiveRestore size={14}/> Restore selected ({selectedDaBackups.length})</button>
               <button disabled={!!loading} onClick={bulkDeleteDaBackups} className="danger"><Trash2 size={14}/> Delete selected ({selectedDaBackups.length})</button>
-            </>}
+            </div>}
           </div>
           <div className="backup-list">
-            {daBackups.map(file => <div className="backup-item" key={file.path} style={{ background: selectedDaBackups.includes(file.path) ? 'var(--color-primary-bg, rgba(59,130,246,0.08))' : undefined }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, cursor: 'pointer', minWidth: 0 }}>
+            {daBackups.map(file => <div className={`backup-item da-backup-row${selectedDaBackups.includes(file.path) ? ' selected' : ''}`} key={file.path}>
+              <label className="da-backup-pick">
                 <input type="checkbox" checked={selectedDaBackups.includes(file.path)} onChange={() => toggleDaBackupSelect(file.path)} />
-                <span style={{ minWidth: 0 }}>{file.filename}<small>{(file.size / (1024 * 1024)).toFixed(1)} MB</small></span>
+                <span>{file.filename}<small>{(file.size / (1024 * 1024)).toFixed(1)} MB</small></span>
               </label>
-              <div className="actions">
+              <div className="da-actions">
                 <button disabled={!!loading} onClick={() => scanDaBackup(file.path)}><Search size={14}/> Scan</button>
                 <button disabled={!!loading} onClick={() => importDaBackup(file.path)}><ArchiveRestore size={14}/> Import</button>
                 <button className="danger" disabled={!!loading} onClick={() => deleteDaBackup(file.path)}><Trash2 size={14}/></button>
@@ -5159,59 +5190,68 @@ function App() {
             {daScanResult.errors.map((err, i) => <p key={i} className="error-text">{err}</p>)}
           </div>}
           {daScanResult.users?.map((user, i) => <div key={i} className="da-user-block">
-            <p><strong>User:</strong> {user.username} {user.email && <small>({user.email})</small>}</p>
-            {user.domains?.length > 0 && <div>
-              <p className="hint">Domains ({user.domains.length}):</p>
-              <ul className="da-domain-list">
-                {user.domains.map((d, j) => <li key={j}>
-                  <Globe size={12}/> {d.domain}
-                  <small>type={d.app_type}, files={d.has_files ? 'yes' : 'no'}{d.db_name ? `, db=${d.db_name}` : ''}{d.has_sql_dump ? ' (SQL dump found)' : ''}{d.aliases?.length > 0 ? `, pointers: ${d.aliases.map(a => `${a.domain} (${a.mode})`).join(', ')}` : ''}</small>
-                </li>)}
-              </ul>
+            <p className="da-user-head"><Users size={13}/> <strong>{user.username}</strong>{user.email && <small>{user.email}</small>}</p>
+            {user.domains?.length > 0 && <div className="da-table-wrap">
+              <table className="da-scan-table">
+                <thead><tr><th>Domain</th><th>Type</th><th>Files</th><th>Database</th><th>SQL dump</th><th>Pointers</th></tr></thead>
+                <tbody>
+                  {user.domains.map((d, j) => <tr key={j}>
+                    <td><Globe size={12}/> {d.domain}</td>
+                    <td>{d.app_type}</td>
+                    <td>{d.has_files ? <Check size={13} className="da-yes"/> : <X size={13} className="da-no"/>}</td>
+                    <td>{d.db_name || <span className="da-muted">—</span>}</td>
+                    <td>{d.has_sql_dump ? <Check size={13} className="da-yes"/> : <X size={13} className="da-no"/>}</td>
+                    <td>{d.aliases?.length > 0 ? d.aliases.map(a => `${a.domain} (${a.mode})`).join(', ') : <span className="da-muted">—</span>}</td>
+                  </tr>)}
+                </tbody>
+              </table>
             </div>}
-            {user.databases?.length > 0 && <div>
-              <p className="hint">Unassigned databases ({user.databases.length}):</p>
-              <ul className="da-domain-list">
-                {user.databases.map((db, j) => <li key={j}>
-                  <Database size={12}/> {db.db_name}
-                  <small>{db.has_sql_dump ? 'SQL dump found' : 'No dump'}</small>
-                </li>)}
-              </ul>
+            {user.databases?.length > 0 && <div className="da-table-wrap">
+              <p className="hint">Unassigned databases ({user.databases.length})</p>
+              <table className="da-scan-table">
+                <thead><tr><th>Database</th><th>SQL dump</th></tr></thead>
+                <tbody>
+                  {user.databases.map((db, j) => <tr key={j}>
+                    <td><Database size={12}/> {db.db_name}</td>
+                    <td>{db.has_sql_dump ? <Check size={13} className="da-yes"/> : <X size={13} className="da-no"/>}</td>
+                  </tr>)}
+                </tbody>
+              </table>
             </div>}
           </div>)}
         </div>}
 
-        {daImportJob && <div className={`backup-job ${daImportJob.status}`} style={{ marginTop: 16 }}>
+        {daImportJob && <div className={`backup-job da-job ${daImportJob.status}`}>
           <Clock size={14}/>
-          <span><strong>DA Import</strong><small>{daImportJob.archive || ''} — {daImportJob.status}</small></span>
+          <span><strong>DA Import</strong><small>{daImportJob.archive || ''}</small></span>
           <span className={daImportJob.status === 'completed' ? 'badge ok' : daImportJob.status === 'failed' ? 'badge bad' : 'badge'}>{daImportJob.status}</span>
         </div>}
-        {daImportJob?.status === 'completed' && daImportJob.result?.summary && <div className="da-scan-result" style={{ marginTop: 12 }}>
-          <h4>Import Summary</h4>
+        {daImportJob?.status === 'completed' && daImportJob.result?.summary && <div className="da-scan-result">
+          <h4>Import summary</h4>
           {daImportJob.result.summary.map((item, i) => <div key={i} className="da-user-block">
-            <p><strong>{item.username}</strong> — {item.imported_domains?.length || 0} domain(s), {item.databases?.length || 0} database(s)</p>
+            <p className="da-user-head"><strong>{item.username}</strong> <span className="badge ok">{item.imported_domains?.length || 0} domain(s)</span> <span className="badge">{item.databases?.length || 0} database(s)</span></p>
             {item.aliases?.length > 0 && <p className="hint">Pointers: {item.aliases.join(', ')}</p>}
             {item.ssl_enabled_domains?.length > 0 && <p className="hint">SSL enabled: {item.ssl_enabled_domains.join(', ')}</p>}
-            {item.warnings?.length > 0 && <p className="hint" style={{ color: 'var(--color-warning)' }}>Warnings: {item.warnings.join('; ')}</p>}
+            {item.warnings?.length > 0 && <p className="hint da-warn">Warnings: {item.warnings.join('; ')}</p>}
           </div>)}
-          {daImportJob.result.credentials && <details style={{ marginTop: 8 }}>
-            <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Generated credentials (click to show)</summary>
+          {daImportJob.result.credentials && <details className="da-creds-details">
+            <summary>Generated credentials (click to show)</summary>
             <pre className="da-credentials">{daImportJob.result.credentials.join('\n')}</pre>
           </details>}
         </div>}
 
-        {daBulkImportJob && <div className={`backup-job ${daBulkImportJob.status}`} style={{ marginTop: 16 }}>
+        {daBulkImportJob && <div className={`backup-job da-job ${daBulkImportJob.status}`}>
           <Clock size={14}/>
-          <span><strong>Bulk Restore</strong><small>{daBulkImportJob.status === 'running' ? `Processing ${daBulkImportJob.current + 1}/${daBulkImportJob.total}: ${daBulkImportJob.current_archive}` : `${daBulkImportJob.total} backup(s)`} — {daBulkImportJob.status}</small></span>
-          <span className={daBulkImportJob.status === 'completed' ? 'badge ok' : daBulkImportJob.status === 'running' ? 'badge' : 'badge'}>{daBulkImportJob.status === 'running' ? `${daBulkImportJob.current}/${daBulkImportJob.total}` : daBulkImportJob.status}</span>
+          <span><strong>Bulk restore</strong><small>{daBulkImportJob.status === 'running' ? `Processing ${daBulkImportJob.current + 1}/${daBulkImportJob.total}: ${daBulkImportJob.current_archive}` : `${daBulkImportJob.total} backup(s)`}</small></span>
+          <span className={daBulkImportJob.status === 'completed' ? 'badge ok' : 'badge'}>{daBulkImportJob.status === 'running' ? `${daBulkImportJob.current}/${daBulkImportJob.total}` : daBulkImportJob.status}</span>
         </div>}
-        {daBulkImportJob?.status === 'completed' && daBulkImportJob.results && <div className="da-scan-result" style={{ marginTop: 12 }}>
-          <h4>Bulk Restore Results</h4>
-          {daBulkImportJob.results.map((item, i) => <div key={i} className="da-user-block" style={{ borderLeft: item.status === 'completed' ? '3px solid var(--success)' : '3px solid var(--danger)' }}>
-            <p><strong>{item.archive}</strong> — <span className={item.status === 'completed' ? 'badge ok' : 'badge bad'}>{item.status}</span></p>
+        {daBulkImportJob?.status === 'completed' && daBulkImportJob.results && <div className="da-scan-result">
+          <h4>Bulk restore results</h4>
+          {daBulkImportJob.results.map((item, i) => <div key={i} className={`da-user-block ${item.status === 'completed' ? 'ok' : 'bad'}`}>
+            <p className="da-user-head"><strong>{item.archive}</strong> <span className={item.status === 'completed' ? 'badge ok' : 'badge bad'}>{item.status}</span></p>
             {item.result?.summary?.map((s, j) => <p key={j} className="hint">{s.username}: {s.imported_domains?.length || 0} domain(s), {s.databases?.length || 0} db(s)</p>)}
-            {item.result?.credentials && <details style={{ marginTop: 4 }}>
-              <summary style={{ cursor: 'pointer', fontSize: '0.8rem' }}>Credentials</summary>
+            {item.result?.credentials && <details className="da-creds-details">
+              <summary>Credentials</summary>
               <pre className="da-credentials">{item.result.credentials.join('\n')}</pre>
             </details>}
             {item.error && <p className="error-text">{item.error}</p>}

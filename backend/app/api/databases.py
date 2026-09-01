@@ -1,8 +1,9 @@
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.background import BackgroundTask
+from sqlalchemy import or_
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from typing import List
@@ -49,10 +50,21 @@ def get_accessible_database(database_id: int, db: Session, current_user: User) -
 
 
 @router.get("", response_model=List[DatabaseOut])
-def list_databases(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def list_databases(
+    q: str = Query(default="", max_length=255),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     query = db.query(DatabaseAccount)
     if not is_admin_role(current_user.role):
         query = query.filter(DatabaseAccount.owner_id == current_user.id)
+    search = (q or "").strip().lower()
+    if search:
+        like = f"%{search}%"
+        query = query.filter(or_(
+            DatabaseAccount.db_name.ilike(like),
+            DatabaseAccount.db_user.ilike(like),
+        ))
     return query.order_by(DatabaseAccount.id.desc()).all()
 
 
