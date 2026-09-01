@@ -23,6 +23,7 @@ import socket
 import subprocess
 import tarfile
 import tempfile
+import urllib.parse
 from pathlib import Path
 from typing import Optional
 
@@ -55,6 +56,21 @@ ARCHIVE_SUFFIXES = (
     ".tar.zst", ".tzst", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2", ".tar.xz", ".txz", ".tar",
 )
 SQL_SUFFIXES = (".sql", ".sql.gz", ".sql.bz2", ".sql.zst")
+
+# Directories that never hold an application's database config; skipped when
+# walking a site tree looking for wp-config.php / .env / configuration.php.
+APP_CONFIG_SKIP_DIRS = {
+    "wp-content", "wp-includes", "wp-admin", "node_modules", "vendor", "cache",
+    "storage", "uploads", "images", "img", "assets", "media", "backup", "backups",
+    ".git", ".well-known", "logs", "log", "tmp", "temp",
+}
+APP_CONFIG_SCAN_DEPTH = 2
+
+# mysql_native_password stores "*" followed by 40 hex characters. DirectAdmin's
+# <db>.conf keeps the original hash; reusing it lets the imported site keep its
+# existing config untouched.
+DA_PASSWORD_HASH_RE = re.compile(r"^\*[0-9A-Fa-f]{40}$")
+_SUBDOMAIN_LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 
 SQL_DATABASE_DIRECTIVE_RE = re.compile(
     r"^\s*(?:/\*![0-9]{5}\s*)?(?:CREATE\s+DATABASE|DROP\s+DATABASE|USE)\b",
@@ -263,7 +279,9 @@ def _discover_username(root: Path, archive_name: str) -> tuple[str, str]:
     raw = (
         user_conf.get("username")
         or user_conf.get("user")
-        or user_conf.get("account")
+        # DirectAdmin's own key for the account name (its "account" key is the
+        # on/off flag, not a name).
+        or user_conf.get("name")
         or _archive_username(archive_name)
     )
     email = user_conf.get("email") or user_conf.get("emailaddress") or ""
@@ -350,6 +368,50 @@ def _sync_website_aliases(db, website, pointers: list[tuple[str, str]], item_sum
     return applied
 
 
+def _extract_nested_domain_archives(root: Path) -> None:
+    """Extract per-domain archives some DirectAdmin backups ship.
+
+    Newer / compressed DA backups store a domain's files as
+    ``backup/example.com.tar.gz`` (or ``.tar.zst``) instead of an extracted
+    ``domains/example.com/`` tree. Unpack each one into ``domains/`` so the rest
+    of the importer sees the layout it expects.
+    """
+    backup_dir = root / "backup"
+    if not backup_dir.is_dir():
+        return
+    domains_dir = root / "domains"
+    for item in sorted(backup_dir.iterdir()):
+        if not item.is_file() or not _is_archive(item):
+            continue
+        domain = _normalize_domain(_strip_archive_suffix(item.name))
+        if not domain:
+            continue
+        target_dir = domains_dir / domain
+        if target_dir.exists():
+            continue
+        _log(f"  Extracting nested domain archive: {item.name}")
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            _safe_extract_tar(item, target_dir)
+            # DA sometimes wraps the whole domain in one subdirectory
+            # (<domain>/public_html/...). Unwrap that, but leave an archive
+            # whose own root is public_html/ alone.
+            children = list(target_dir.iterdir())
+            if (
+                len(children) == 1
+                and children[0].is_dir()
+                and children[0].name not in {"public_html", "private_html"}
+                and ((children[0] / "public_html").exists() or (children[0] / "private_html").exists())
+            ):
+                inner = children[0]
+                for child in sorted(inner.iterdir(), reverse=True):
+                    shutil.move(str(child), str(target_dir / child.name))
+                inner.rmdir()
+        except Exception as exc:  # noqa: BLE001 - one bad archive must not stop the import
+            _log(f"  WARNING: could not extract {item.name}: {exc}")
+            shutil.rmtree(target_dir, ignore_errors=True)
+
+
 def _source_for_domain(root: Path, domain: str) -> Optional[Path]:
     candidates = [
         root / "domains" / domain / "public_html",
@@ -369,15 +431,124 @@ def _source_for_domain(root: Path, domain: str) -> Optional[Path]:
     return None
 
 
+def _discover_subdomains(root: Path, parent_domain: str) -> list[str]:
+    """DirectAdmin subdomain labels declared for a parent domain.
+
+    DA records them one label per line, in one of a few places depending on the
+    version. Each label's document root lives at
+    ``domains/<domain>/public_html/<label>``.
+    """
+    labels: list[str] = []
+    candidates = [
+        root / "backup" / parent_domain / "subdomain.list",
+        root / "backup" / f"{parent_domain}.subdomains",
+        root / "backup" / "domains" / f"{parent_domain}.subdomains",
+        root / "backup" / "domains" / parent_domain / "subdomain.list",
+    ]
+    for path in candidates:
+        if not path.is_file():
+            continue
+        for raw in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            label = raw.strip().lower()
+            if not label or label.startswith("#"):
+                continue
+            label = label.split(":", 1)[0].split("=", 1)[0].strip()
+            if _SUBDOMAIN_LABEL_RE.fullmatch(label) and label not in labels:
+                labels.append(label)
+    return labels
+
+
+def _relocate_da_subdomain_sources(root: Path, parent_domains: list[str]) -> "dict[str, Optional[Path]]":
+    """Move DirectAdmin subdomain docroots out of their parent's public_html.
+
+    DA nests ``sub.example.com`` inside ``example.com``'s public_html
+    (``.../public_html/sub``). BPanel has no parent/child website concept, so
+    each DA subdomain becomes its own website with its own root. Moving each
+    docroot into a staging sibling keeps the parent import from copying the same
+    files again and gives the subdomain import a clean source. The move is a
+    rename inside the BPanel-owned staging tree, so it is cheap and touches no
+    live files.
+
+    Returns subdomain FQDN -> staged source dir (or ``None`` when the label is
+    declared but ships no files).
+    """
+    holding = root / "_bpanel_subdomains"
+    sources: "dict[str, Optional[Path]]" = {}
+    for parent in parent_domains:
+        labels = _discover_subdomains(root, parent)
+        if not labels:
+            continue
+        parent_public = _source_for_domain(root, parent)
+        _log(f"  {parent}: {len(labels)} DirectAdmin subdomain(s) declared")
+        for label in labels:
+            fqdn = _normalize_domain(f"{label}.{parent}")
+            if not fqdn or fqdn in sources:
+                continue
+            src = (parent_public / label) if parent_public else None
+            if src and src.is_dir() and not src.is_symlink():
+                dest = holding / fqdn
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                if dest.exists():
+                    shutil.rmtree(dest, ignore_errors=True)
+                shutil.move(str(src), str(dest))
+                sources[fqdn] = dest
+                _log(f"    staged subdomain {fqdn} from {parent}/public_html/{label}")
+            else:
+                sources[fqdn] = None
+                _log(f"    subdomain {fqdn}: no files under public_html/{label}, importing empty")
+    return sources
+
+
 def _has_php_files(path: Path) -> bool:
     return any(item.is_file() and item.suffix.lower() in {".php", ".phtml"} for item in path.rglob("*"))
+
+
+def _candidate_config_dirs(path: Path) -> list[Path]:
+    """Directories that may hold the app's database config, closest first.
+
+    Looking only at the top of the document root misses two very common
+    layouts: WordPress allows wp-config.php one level above the document root,
+    and plenty of accounts keep the site itself in a subfolder. Both hold the
+    credentials the imported database has to match.
+    """
+    found: list[Path] = []
+    seen: set[Path] = set()
+
+    def add(candidate: Path) -> None:
+        try:
+            if candidate.is_dir() and candidate not in seen:
+                seen.add(candidate)
+                found.append(candidate)
+        except OSError:
+            return
+
+    add(path)
+    add(path.parent)
+    level = [path]
+    for _depth in range(APP_CONFIG_SCAN_DEPTH):
+        children: list[Path] = []
+        for parent in level:
+            try:
+                entries = sorted(parent.iterdir())
+            except OSError:
+                continue
+            for entry in entries:
+                if not entry.is_dir() or entry.name.startswith("."):
+                    continue
+                if entry.name.lower() in APP_CONFIG_SKIP_DIRS:
+                    continue
+                add(entry)
+                children.append(entry)
+        level = children
+    return found
 
 
 def _detect_app_type(source: Optional[Path]) -> str:
     if not source:
         return "php"
-    if (source / "wp-config.php").exists() or (source / "wp-config-sample.php").exists():
-        return "wordpress"
+    for directory in _candidate_config_dirs(source):
+        if (directory / "wp-config.php").exists() or (directory / "wp-config-sample.php").exists():
+            return "wordpress"
     return "php" if _has_php_files(source) else "static"
 
 
@@ -505,12 +676,19 @@ def _parse_php_variable_config(path: Path) -> dict[str, str]:
     return result
 
 
+def _locate_app_db_config(path: Path) -> tuple[dict[str, str], Optional[Path]]:
+    """(parsed DB settings, the directory they were found in), closest first."""
+    for directory in _candidate_config_dirs(path):
+        for parser in (_parse_wp_config, _parse_dotenv_config, _parse_php_variable_config):
+            values = parser(directory)
+            if values.get("DB_NAME"):
+                return values, directory
+    return {}, None
+
+
 def _parse_app_db_config(path: Path) -> dict[str, str]:
-    for parser in (_parse_wp_config, _parse_dotenv_config, _parse_php_variable_config):
-        values = parser(path)
-        if values.get("DB_NAME"):
-            return values
-    return {}
+    values, _directory = _locate_app_db_config(path)
+    return values
 
 
 def _replace_define(text: str, key: str, value: str) -> str:
@@ -521,6 +699,15 @@ def _replace_define(text: str, key: str, value: str) -> str:
 
 
 def _update_app_db_config(public: Path, db_name: str, db_user: str, db_password: str) -> None:
+    # A site's config is not always at the top of the document root - WordPress
+    # allows wp-config.php one level up, and subfolder installs keep everything
+    # deeper. Rewrite every recognised config file across the same directories
+    # the credentials were discovered in.
+    for directory in _candidate_config_dirs(public):
+        _update_config_dir(directory, db_name, db_user, db_password)
+
+
+def _update_config_dir(public: Path, db_name: str, db_user: str, db_password: str) -> None:
     wp = public / "wp-config.php"
     if wp.exists():
         text = wp.read_text(encoding="utf-8", errors="ignore")
@@ -670,6 +857,102 @@ def _existing_identifiers(db) -> tuple[set[str], set[str]]:
     return {row.db_name for row in rows}, {row.db_user for row in rows}
 
 
+def _da_db_conf_candidates(sql_file: Path, root: Path, base: str) -> list[Path]:
+    """Every file that could be the DirectAdmin conf for this dump, closest first.
+
+    DA has moved these between versions - beside the dump, under ``backup/``,
+    under ``mysql/`` - and the compression suffix on the dump is not always part
+    of the conf name, so the stem is matched case-insensitively.
+    """
+    candidates = [sql_file.with_name(f"{base}.conf"), root / "backup" / f"{base}.conf"]
+    seen: set[Path] = set(candidates)
+    for directory in (sql_file.parent, root / "backup", root / "mysql"):
+        if not directory.is_dir():
+            continue
+        try:
+            entries = sorted(directory.rglob("*.conf"))
+        except OSError:
+            continue
+        for entry in entries:
+            if entry in seen:
+                continue
+            if entry.stem.lower() == base.lower():
+                seen.add(entry)
+                candidates.append(entry)
+    return candidates
+
+
+def _decode_da_conf_password(text: str, db_name: str) -> dict[str, str]:
+    """Pull the MySQL password out of a DirectAdmin database .conf file.
+
+    Two shapes seen in the wild:
+      - flat ``passwd=...`` / ``password=...`` one per line;
+      - the whole grant packed into one line as
+        ``<db>=accesshosts=localhost&passwd=%2A<hash>&plugin=mysql_native_password``
+        (an '&'-delimited, URL-encoded query string).
+    """
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip().lower()
+        value = value.strip()
+        if key in {"passwd", "password", "pass", "db_password", "dbpass"}:
+            decoded = urllib.parse.unquote(value).strip("'\"")
+            if decoded:
+                return {"password": "", "password_hash": decoded} if DA_PASSWORD_HASH_RE.match(decoded) \
+                    else {"password": decoded, "password_hash": ""}
+        if "&" in value and ("passwd=" in value.lower() or "password=" in value.lower()):
+            fields = urllib.parse.parse_qs(value, keep_blank_values=True)
+            for name in ("passwd", "password", "pass"):
+                got = (fields.get(name) or [""])[0].strip()
+                if not got:
+                    continue
+                if DA_PASSWORD_HASH_RE.match(got):
+                    return {"password": "", "password_hash": got}
+                return {"password": got, "password_hash": ""}
+    return {"password": "", "password_hash": ""}
+
+
+def _da_db_credentials(sql_file: Path, root: Path) -> dict[str, str]:
+    """Recover the original MySQL password (or its hash) for a DA dump."""
+    base = _sql_base_name(sql_file)
+    for candidate in _da_db_conf_candidates(sql_file, root, base):
+        if not candidate.is_file():
+            continue
+        try:
+            text = candidate.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        found = _decode_da_conf_password(text, base)
+        if found["password"] or found["password_hash"]:
+            return found
+    return {"password": "", "password_hash": ""}
+
+
+def _import_db_password(app_config: dict[str, str], da_credentials: dict[str, str]) -> tuple[str, str, bool]:
+    """Choose the password for an imported database user.
+
+    Returns ``(password, password_hash, reused)``. Reusing what the site already
+    carries is what keeps it online: the panel rewrites the configs it knows,
+    but a custom include or a second copy outside the document root would still
+    point at the old secret. Prefer the app's own config value, then the hash
+    from DirectAdmin's <db>.conf, and only generate a fresh password when the
+    backup carries neither.
+    """
+    from_config = (app_config or {}).get("DB_PASSWORD") or ""
+    if from_config:
+        return from_config, "", True
+    hashed = (da_credentials or {}).get("password_hash") or ""
+    if hashed:
+        return "", hashed, True
+    clear = (da_credentials or {}).get("password") or ""
+    if clear:
+        return clear, "", True
+    return secrets.token_urlsafe(18), "", False
+
+
 def _matched_sql_for_config(
     app_config: dict[str, str],
     sql_files: dict[str, Path],
@@ -768,16 +1051,29 @@ def _ensure_panel_user_record(db, username: str, email: str, domains: list[str],
 def _create_panel_database(
     db, owner, website, old_db: str, old_user: Optional[str],
     sql_file: Optional[Path], credentials: list[str],
-) -> tuple[str, str, str]:
+    *, app_config: Optional[dict[str, str]] = None, da_credentials: Optional[dict[str, str]] = None,
+) -> tuple[str, str, str, bool]:
     used_names, used_users = _existing_identifiers(db)
     fallback = mariadb.safe_db_identifier(
         website.domain if website else owner.username, "da"
     )
     db_name = _normalize_db_identifier(old_db, fallback, used_names)
     db_user = _normalize_db_identifier(old_user or db_name, f"u_{db_name}"[:64], used_users)
-    db_password = mariadb.random_password()
 
-    mariadb.create_database_credentials(db_name, db_user, db_password)
+    db_password, db_password_hash, reused = _import_db_password(app_config or {}, da_credentials or {})
+    # A reused secret only helps if the site's config still points at this
+    # database and user. If normalisation renamed either, fall back to a fresh
+    # password and let the caller rewrite the config.
+    renamed = (
+        (old_db and db_name != (old_db or "").strip().lower())
+        or (old_user and db_user != (old_user or "").strip().lower())
+    )
+    if renamed and reused:
+        db_password, db_password_hash, reused = mariadb.random_password(), "", False
+
+    mariadb.create_database_credentials(
+        db_name, db_user, db_password, password_hash=db_password_hash or None
+    )
     temp_sql: Optional[Path] = None
     try:
         if sql_file is not None:
@@ -791,18 +1087,28 @@ def _create_panel_database(
             temp_sql.unlink(missing_ok=True)
 
     from app.core.secrets import encrypt
+    # The panel cannot recover the plaintext behind a reused mysql_native hash,
+    # so it stores what it can: an empty secret the operator resets if needed.
     item = DatabaseAccount(
         owner_id=owner.id,
         website_id=website.id if website else None,
         db_name=db_name,
         db_user=db_user,
-        db_password=encrypt(db_password),
+        db_password=encrypt(db_password) if db_password else "",
     )
     db.add(item)
     db.commit()
     target = website.domain if website else owner.username
-    credentials.append(f"database target={target} db_name={db_name} db_user={db_user} db_password={db_password}")
-    return db_name, db_user, db_password
+    if db_password:
+        credentials.append(
+            f"database target={target} db_name={db_name} db_user={db_user} db_password={db_password}"
+        )
+    else:
+        credentials.append(
+            f"database target={target} db_name={db_name} db_user={db_user} "
+            f"db_password=<kept DirectAdmin password hash; unchanged>"
+        )
+    return db_name, db_user, db_password, reused
 
 
 def _enable_ssl_when_dns_matches(db, website, item_summary: dict) -> None:
@@ -877,9 +1183,22 @@ def scan_da_backup(archive_path: str) -> dict:
             return result
 
         root = _find_backup_root(extracted)
+        _extract_nested_domain_archives(root)
         username, email = _discover_username(root, path.name)
         domains = _discover_domains(root)
         sql_files = _discover_sql_files(root)
+
+        # DirectAdmin subdomains (sub.example.com nested under example.com) come
+        # in as their own websites; list them alongside the parent domains.
+        subdomains: list[tuple[str, Optional[Path]]] = []
+        for parent in list(domains):
+            parent_public = _source_for_domain(root, parent)
+            for label in _discover_subdomains(root, parent):
+                fqdn = _normalize_domain(f"{label}.{parent}")
+                if not fqdn or fqdn in domains or any(fqdn == s for s, _ in subdomains):
+                    continue
+                src = (parent_public / label) if parent_public else None
+                subdomains.append((fqdn, src if src and src.is_dir() else None))
 
         user_entry: dict = {
             "username": username,
@@ -888,11 +1207,12 @@ def scan_da_backup(archive_path: str) -> dict:
             "databases": [],
         }
 
-        for domain in domains:
-            source = _source_for_domain(root, domain)
+        scan_targets = [(d, _source_for_domain(root, d)) for d in domains] + subdomains
+        total_sites = len(scan_targets)
+        for domain, source in scan_targets:
             app_type = _detect_app_type(source)
             app_config = _parse_app_db_config(source) if source else {}
-            matched_key, matched_sql = _matched_sql_for_config(app_config, sql_files, len(domains) == 1)
+            matched_key, matched_sql = _matched_sql_for_config(app_config, sql_files, total_sites == 1)
 
             domain_entry: dict = {
                 "domain": domain,
@@ -966,13 +1286,16 @@ def import_da_backup(archive_path: str, force: bool = False) -> dict:
         _safe_extract_tar(path, extracted)
 
         root = _find_backup_root(extracted)
+        _extract_nested_domain_archives(root)
         domains = _discover_domains(root)
         username, email = _discover_username(root, path.name)
+        subdomain_sources = _relocate_da_subdomain_sources(root, domains)
+        all_domains = domains + [d for d in subdomain_sources if d not in domains]
 
         item_summary: dict = {
             "archive": path.name,
             "username": username,
-            "domains": domains,
+            "domains": all_domains,
             "imported_domains": [],
             "databases": [],
             "aliases": [],
@@ -980,7 +1303,7 @@ def import_da_backup(archive_path: str, force: bool = False) -> dict:
             "warnings": [],
         }
 
-        if not domains:
+        if not all_domains:
             item_summary["warnings"].append("No domains found")
             summary.append(item_summary)
             return {"summary": summary, "credentials": credentials, "errors": ["No domains found"]}
@@ -994,7 +1317,7 @@ def import_da_backup(archive_path: str, force: bool = False) -> dict:
                 conflicts = []
                 if db.query(User).filter(User.username == username).first():
                     conflicts.append(f"panel user '{username}'")
-                for domain in domains:
+                for domain in all_domains:
                     if db.query(Website).filter(Website.domain == domain).first():
                         conflicts.append(f"website '{domain}'")
                 if conflicts:
@@ -1006,18 +1329,19 @@ def import_da_backup(archive_path: str, force: bool = False) -> dict:
                     summary.append(item_summary)
                     return {"summary": summary, "credentials": credentials, "errors": [message]}
 
-            for domain in domains:
+            for domain in all_domains:
                 _delete_existing_domain(db, domain)
             _delete_existing_user(db, username)
 
-            user, _created = _ensure_panel_user_record(db, username, email, domains, credentials)
+            user, _created = _ensure_panel_user_record(db, username, email, all_domains, credentials)
 
             sql_files = _discover_sql_files(root)
             imported_sql_keys: set[str] = set()
             websites = []
 
-            for domain in domains:
-                source = _source_for_domain(root, domain)
+            import_targets = [(d, _source_for_domain(root, d)) for d in domains]
+            import_targets += [(fqdn, src) for fqdn, src in subdomain_sources.items()]
+            for domain, source in import_targets:
                 app_type = _detect_app_type(source)
                 app_config = _parse_app_db_config(source) if source else {}
 
@@ -1128,16 +1452,24 @@ def import_da_backup(archive_path: str, force: bool = False) -> dict:
                 # Database import
                 public = site_users.document_root(website.root_path)
                 app_config = app_config or _parse_app_db_config(public)
-                matched_key, matched_sql = _matched_sql_for_config(app_config, sql_files, len(domains) == 1)
+                matched_key, matched_sql = _matched_sql_for_config(
+                    app_config, sql_files, len(import_targets) == 1
+                )
                 if matched_sql:
-                    db_name, db_user, db_password = _create_panel_database(
+                    da_creds = _da_db_credentials(matched_sql, root)
+                    db_name, db_user, db_password, reused = _create_panel_database(
                         db, user, website,
                         app_config.get("DB_NAME") or matched_key,
                         app_config.get("DB_USER"),
                         matched_sql, credentials,
+                        app_config=app_config, da_credentials=da_creds,
                     )
                     imported_sql_keys.add(matched_key)
-                    _update_app_db_config(public, db_name, db_user, db_password)
+                    # When the site's own config already carries the working
+                    # secret (reused), leave it alone; only rewrite when the
+                    # panel changed the password.
+                    if not reused:
+                        _update_app_db_config(public, db_name, db_user, db_password)
                     site_users.fix_site_permissions(website.root_path, website.linux_user)
                     item_summary["databases"].append({
                         "domain": domain, "source": str(matched_sql), "db_name": db_name,
@@ -1150,8 +1482,9 @@ def import_da_backup(archive_path: str, force: bool = False) -> dict:
                 if db.query(DatabaseAccount).filter(DatabaseAccount.db_name == key).first() and not force:
                     continue
                 _log(f"Importing unassigned database {key} for user {username} ...")
-                db_name, db_user, _db_password = _create_panel_database(
+                db_name, db_user, _db_password, _reused = _create_panel_database(
                     db, user, None, key, key, sql_path, credentials,
+                    da_credentials=_da_db_credentials(sql_path, root),
                 )
                 item_summary["databases"].append({
                     "domain": None, "source": str(sql_path), "db_name": db_name, "db_user": db_user,

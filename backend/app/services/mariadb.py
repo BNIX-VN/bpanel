@@ -1,5 +1,6 @@
 from datetime import datetime
 from pathlib import Path
+import re
 import secrets
 import string
 import subprocess
@@ -36,6 +37,24 @@ def _quote_identifier(value: str) -> str:
     return f"`{_validate_identifier(value)}`"
 
 
+_NATIVE_PASSWORD_HASH_RE = re.compile(r"^\*[0-9A-Fa-f]{40}$")
+
+
+def _auth_clause(db_password: str, password_hash: str | None) -> str:
+    """The IDENTIFIED ... clause for CREATE/ALTER USER.
+
+    When a mysql_native_password hash is given (DirectAdmin keeps the original
+    in its <db>.conf), the user is recreated with that exact hash so the
+    imported site's existing config keeps working untouched. The hash is a
+    fixed shape (``*`` + 40 hex) and is validated before it reaches any SQL.
+    """
+    if password_hash:
+        if not _NATIVE_PASSWORD_HASH_RE.match(password_hash):
+            raise ValueError("Invalid mysql_native_password hash")
+        return f"IDENTIFIED VIA mysql_native_password USING '{password_hash}'"
+    return f"IDENTIFIED BY {_quote_sql_string(db_password)}"
+
+
 def _mysql_args(extra: list = None) -> list:
     args = ["mysql"]
     home_cnf = Path.home() / ".my.cnf"
@@ -67,13 +86,16 @@ def create_database(seed: str, prefix: str = "wp", db_name: str | None = None, i
     return {"db_name": db_name, "db_user": db_user, "db_password": db_password}
 
 
-def create_database_credentials(db_name: str, db_user: str, db_password: str) -> Dict[str, str]:
+def create_database_credentials(
+    db_name: str, db_user: str, db_password: str, *, password_hash: str | None = None
+) -> Dict[str, str]:
     db_name = _validate_identifier(db_name)
     db_user = _validate_identifier(db_user)
+    auth = _auth_clause(db_password, password_hash)
     sql = (
         f"CREATE DATABASE IF NOT EXISTS {_quote_identifier(db_name)} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;\n"
-        f"CREATE USER IF NOT EXISTS {_quote_sql_string(db_user)}@'localhost' IDENTIFIED BY {_quote_sql_string(db_password)};\n"
-        f"ALTER USER {_quote_sql_string(db_user)}@'localhost' IDENTIFIED BY {_quote_sql_string(db_password)};\n"
+        f"CREATE USER IF NOT EXISTS {_quote_sql_string(db_user)}@'localhost' {auth};\n"
+        f"ALTER USER {_quote_sql_string(db_user)}@'localhost' {auth};\n"
         f"GRANT ALL PRIVILEGES ON {_quote_identifier(db_name)}.* TO {_quote_sql_string(db_user)}@'localhost';\n"
         "FLUSH PRIVILEGES;\n"
     )

@@ -163,3 +163,147 @@ class TestScan:
 
         with pytest.raises(ValueError):
             da_import.scan_da_backup(str(outside))
+
+
+class TestAppConfigDiscovery:
+    def test_wp_config_one_level_above_docroot_is_found(self, tmp_path):
+        site = tmp_path / "domains" / "example.com"
+        public = site / "public_html"
+        public.mkdir(parents=True)
+        (public / "index.php").write_text("<?php", encoding="utf-8")
+        # WordPress allows wp-config.php in the parent of the document root.
+        (site / "wp-config.php").write_text(
+            "<?php define('DB_NAME','wp_live'); define('DB_USER','wp_user');"
+            " define('DB_PASSWORD','s3cret');",
+            encoding="utf-8",
+        )
+
+        assert da_import._detect_app_type(public) == "wordpress"
+        values, matched_dir = da_import._locate_app_db_config(public)
+        assert values["DB_NAME"] == "wp_live"
+        assert values["DB_PASSWORD"] == "s3cret"
+        assert matched_dir == site
+
+    def test_config_in_subfolder_is_found(self, tmp_path):
+        public = tmp_path / "public_html"
+        app = public / "app"
+        app.mkdir(parents=True)
+        (app / ".env").write_text("DB_DATABASE=laravel\nDB_PASSWORD=pw\n", encoding="utf-8")
+
+        values, matched_dir = da_import._locate_app_db_config(public)
+        assert values["DB_NAME"] == "laravel"
+        assert matched_dir == app
+
+    def test_junk_dirs_are_skipped(self, tmp_path):
+        public = tmp_path / "public_html"
+        (public / "wp-content" / "cache").mkdir(parents=True)
+        (public / "wp-content" / "cache" / "wp-config.php").write_text(
+            "<?php define('DB_NAME','stale');", encoding="utf-8"
+        )
+        assert public / "wp-content" not in da_import._candidate_config_dirs(public)
+
+
+class TestDaDbCredentials:
+    def test_reads_nested_query_string_hash(self, tmp_path):
+        root = tmp_path / "extracted"
+        backup = root / "backup"
+        backup.mkdir(parents=True)
+        sql = backup / "nhs_data1402.sql"
+        sql.write_text("CREATE TABLE t (id int);\n", encoding="utf-8")
+        (backup / "nhs_data1402.conf").write_text(
+            "accesshosts=0=localhost\n"
+            "nhs_data1402=accesshosts=localhost&passwd=%2A03D98834235F3AD4CE858733AA33C455088FAEF1"
+            "&plugin=mysql_native_password&select_priv=Y\n",
+            encoding="utf-8",
+        )
+
+        creds = da_import._da_db_credentials(sql, root)
+        assert creds["password_hash"] == "*03D98834235F3AD4CE858733AA33C455088FAEF1"
+        assert creds["password"] == ""
+
+    def test_reads_flat_clear_password(self, tmp_path):
+        root = tmp_path / "extracted"
+        backup = root / "backup"
+        backup.mkdir(parents=True)
+        sql = backup / "shop.sql"
+        sql.write_text("-- dump\n", encoding="utf-8")
+        (backup / "shop.conf").write_text("passwd=plain-text-pw\n", encoding="utf-8")
+
+        creds = da_import._da_db_credentials(sql, root)
+        assert creds == {"password": "plain-text-pw", "password_hash": ""}
+
+    def test_missing_conf_returns_empty(self, tmp_path):
+        root = tmp_path / "extracted"
+        (root / "backup").mkdir(parents=True)
+        sql = root / "backup" / "lonely.sql"
+        sql.write_text("-- dump\n", encoding="utf-8")
+        assert da_import._da_db_credentials(sql, root) == {"password": "", "password_hash": ""}
+
+    def test_import_db_password_priority(self):
+        # App config wins, then the DA hash, then a DA clear password.
+        pw, h, reused = da_import._import_db_password(
+            {"DB_PASSWORD": "from-wp"}, {"password_hash": "*" + "a" * 40}
+        )
+        assert (pw, h, reused) == ("from-wp", "", True)
+        pw, h, reused = da_import._import_db_password({}, {"password_hash": "*" + "b" * 40})
+        assert (pw, h, reused) == ("", "*" + "b" * 40, True)
+        pw, h, reused = da_import._import_db_password({}, {"password": "da-clear"})
+        assert (pw, h, reused) == ("da-clear", "", True)
+        pw, h, reused = da_import._import_db_password({}, {})
+        assert reused is False and pw and h == ""
+
+
+class TestNestedArchivesAndSubdomains:
+    def test_nested_domain_archive_is_unpacked(self, tmp_path):
+        root = tmp_path / "extracted"
+        backup = root / "backup"
+        backup.mkdir(parents=True)
+        # A per-domain archive shipped inside backup/ instead of domains/.
+        inner = tmp_path / "inner"
+        (inner / "public_html").mkdir(parents=True)
+        (inner / "public_html" / "index.php").write_text("<?php", encoding="utf-8")
+        nested = backup / "shop.example.com.tar.gz"
+        with tarfile.open(nested, "w:gz") as handle:
+            handle.add(inner, arcname=".")
+
+        da_import._extract_nested_domain_archives(root)
+
+        assert (root / "domains" / "shop.example.com" / "public_html" / "index.php").is_file()
+        assert da_import._normalize_domain("shop.example.com") in da_import._discover_domains(root)
+
+    def test_discover_subdomains_reads_the_list(self, tmp_path):
+        root = tmp_path / "extracted"
+        (root / "backup" / "example.com").mkdir(parents=True)
+        (root / "backup" / "example.com" / "subdomain.list").write_text(
+            "blog\nshop\n# note\n", encoding="utf-8"
+        )
+        assert da_import._discover_subdomains(root, "example.com") == ["blog", "shop"]
+
+    def test_relocate_moves_subdomain_docroot(self, tmp_path):
+        root = tmp_path / "extracted"
+        (root / "backup" / "example.com").mkdir(parents=True)
+        (root / "backup" / "example.com" / "subdomain.list").write_text("blog\n", encoding="utf-8")
+        blog = root / "domains" / "example.com" / "public_html" / "blog"
+        blog.mkdir(parents=True)
+        (blog / "index.php").write_text("<?php", encoding="utf-8")
+
+        sources = da_import._relocate_da_subdomain_sources(root, ["example.com"])
+
+        assert "blog.example.com" in sources
+        staged = sources["blog.example.com"]
+        assert staged is not None and (staged / "index.php").is_file()
+        # Moved, not copied: gone from the parent's public_html.
+        assert not blog.exists()
+
+
+class TestUsernameDiscovery:
+    def test_directadmin_name_key_is_used(self, tmp_path):
+        root = tmp_path / "extracted"
+        (root / "backup").mkdir(parents=True)
+        (root / "backup" / "user.conf").write_text(
+            "account=ON\ndomain=nganhaso.net\nname=nhs\nemail=legiang360@gmail.com\n",
+            encoding="utf-8",
+        )
+        username, email = da_import._discover_username(root, "user.admin.nhs.tar.zst")
+        assert username == "nhs"
+        assert email == "legiang360@gmail.com"
