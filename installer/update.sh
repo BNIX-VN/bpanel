@@ -759,6 +759,7 @@ install_panel_runtime() {
   # DirectAdmin import staging dirs
   install -d -o bpanel -g bpanel -m 0750 /home/admin/bpanel_backups/da
   install -d -o bpanel -g bpanel -m 0750 /var/lib/bpanel/da-import
+  install -d -o bpanel -g bpanel -m 0750 /var/lib/bpanel/import-stage
   if command -v sshd >/dev/null 2>&1; then
     sshd_config="/etc/ssh/sshd_config"
     sshd_backup="${sshd_config}.bpanel.bak"
@@ -816,7 +817,7 @@ ExecStart=/usr/local/sbin/bpanel-api-start
 SupplementaryGroups=www-data bpanel-sites
 ProtectHome=false
 ReadWritePaths=
-ReadWritePaths=${APP_DIR} /home /var/backups/bpanel /etc/nginx/conf.d /etc/nginx/bpanel/custom /tmp /var/lib/bpanel /home/admin/bpanel_backups/da /var/lib/bpanel/da-import
+ReadWritePaths=${APP_DIR} /home /var/backups/bpanel /etc/nginx/conf.d /etc/nginx/bpanel/custom /tmp /var/lib/bpanel /home/admin/bpanel_backups/da /var/lib/bpanel/da-import /var/lib/bpanel/import-stage
 SERVICE
   cat >/etc/systemd/system/bpanel-backup-scheduler.service <<SERVICE
 [Unit]
@@ -836,7 +837,7 @@ ExecStart=${APP_DIR}/backend/.venv/bin/python -m app.services.backup_scheduler
 NoNewPrivileges=false
 ProtectSystem=false
 ProtectHome=false
-ReadWritePaths=/home /var/backups/bpanel /etc/nginx/conf.d /etc/nginx/bpanel/custom /tmp /var/lib/bpanel ${APP_DIR} /home/admin/bpanel_backups/da /var/lib/bpanel/da-import
+ReadWritePaths=/home /var/backups/bpanel /etc/nginx/conf.d /etc/nginx/bpanel/custom /tmp /var/lib/bpanel ${APP_DIR} /home/admin/bpanel_backups/da /var/lib/bpanel/da-import /var/lib/bpanel/import-stage
 PrivateTmp=true
 
 [Install]

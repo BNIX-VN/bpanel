@@ -1356,11 +1356,10 @@ def import_da_backup(archive_path: str, force: bool = False) -> dict:
                 public = site_users.document_root(root_path)
                 if source is not None:
                     # The site dir belongs to its Linux user; copy the extracted
-                    # files in through the helper (as root), from the panel-owned
-                    # staging tree, then let it re-apply the permission model.
+                    # files in through the helper (as root), from a panel-owned
+                    # staging tree laid out like the site root.
                     staged = stage_dir / "payload" / domain
-                    staged.mkdir(parents=True, exist_ok=True)
-                    _copy_site_files(source, staged)
+                    _copy_site_files(source, staged / "public_html")
                     site_users.import_site_files(root_path, linux_user, str(staged))
                 else:
                     _log(f"  {domain}: backup carried no files, importing empty")

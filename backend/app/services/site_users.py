@@ -1,4 +1,5 @@
 import hashlib
+import os
 import re
 from pathlib import Path, PurePosixPath
 from typing import Optional
@@ -217,19 +218,23 @@ def fix_site_permissions(root_path: str, linux_user: Optional[str]) -> None:
     )
 
 
-def import_site_files(root_path: str, linux_user: str, staged_source: str) -> None:
-    """Populate a site's document root from a DirectAdmin import staging dir.
+IMPORT_STAGE_BASE = Path(os.environ.get("BPANEL_IMPORT_STAGE_BASE", "/var/lib/bpanel/import-stage"))
 
-    The site directory is owned by its Linux user, so the panel process cannot
+
+def import_site_files(root_path: str, linux_user: str, staged_source: str) -> None:
+    """Replace a site's tree from a panel-staged copy.
+
+    The site directory belongs to its Linux user, so the panel process cannot
     write into it; the helper does the copy as root and re-applies the site
-    permission model. ``staged_source`` must be a panel-owned directory under
-    ``/var/lib/bpanel/da-import``.
+    permission model. ``staged_source`` is a panel-owned directory (under the
+    import staging area) laid out like the site root, i.e. with ``public_html/``
+    at its top.
     """
     username = validate_linux_user(linux_user)
     shell.privileged(
-        "da-site-populate",
+        "site-populate",
         helper_args=[username, root_path, staged_source],
-        fallback=["cp", "-aT", staged_source, str(document_root(root_path))],
+        fallback=["cp", "-aT", staged_source, str(root_path)],
     )
 
 

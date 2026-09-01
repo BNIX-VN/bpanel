@@ -438,7 +438,12 @@ def restore_user_backup(backup_file: str, db) -> dict:
     site_users.ensure_panel_user(user.username)
 
     restored_websites = []
-    with tempfile.TemporaryDirectory(prefix="bpanel-user-restore-") as tmp:
+    # Stage under the panel-owned import area: the helper only copies site files
+    # into place from there (the site dir belongs to its Linux user, not bpanel).
+    site_users.IMPORT_STAGE_BASE.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix="bpanel-user-restore-", dir=str(site_users.IMPORT_STAGE_BASE)
+    ) as tmp:
         tmp_dir = Path(tmp)
         for site_info in manifest.get("websites") or []:
             domain = (site_info.get("domain") or "").strip().lower()
@@ -462,7 +467,9 @@ def restore_user_backup(backup_file: str, db) -> dict:
             root_path = site_users.site_root_for_panel_user(user.username, domain)
             runtime_php_version = php_version if app_type in {"wordpress", "php"} else None
             site_users.ensure_site_runtime(domain, root_path, runtime_php_version, linux_user)
-            _safe_extract_prefix(archive, f"sites/{domain}/site", Path(root_path).resolve())
+            site_stage = tmp_dir / "site" / domain
+            _safe_extract_prefix(archive, f"sites/{domain}/site", site_stage)
+            site_users.import_site_files(root_path, linux_user, str(site_stage))
             # Backups from older BPanel releases may contain public/. Normalize
             # the document root after extraction before rewriting the vhost.
             site_users.ensure_site_runtime(domain, root_path, runtime_php_version, linux_user)

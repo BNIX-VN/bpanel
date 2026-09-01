@@ -300,13 +300,13 @@ class TestNestedArchivesAndSubdomains:
 
 
 class TestHelperVerb:
-    def test_da_site_populate_is_defined_and_confined(self):
+    def test_site_populate_is_defined_and_confined(self):
         helper = HELPER_SCRIPT.read_text(encoding="utf-8")
-        assert "da-site-populate)" in helper
-        # The staged source must live under the panel-owned import tree.
-        assert "staged source must be under /var/lib/bpanel/da-import" in helper
+        assert "site-populate)" in helper
+        # The staged source must live under the panel-owned import staging area.
+        assert "staged source must be under /var/lib/bpanel/import-stage" in helper
         # Runs the copy as root, then re-applies the site permission model.
-        assert 'cp -a --no-preserve=ownership -- "$src/." "$dest/"' in helper
+        assert 'cp -a --no-preserve=ownership -- "$src/." "$root_target/"' in helper
         assert 'fix_site_tree "$root_target" "$user"' in helper
         # Drops anything a crafted backup could smuggle in.
         assert "-type l -o -type b -o -type c -o -type p -o -type s" in helper
