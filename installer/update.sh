@@ -17,6 +17,37 @@ set -euo pipefail
 log()  { echo ""; echo "==> $1"; }
 fail() { echo "ERROR: $1" >&2; exit 1; }
 
+# Skip expensive, idempotent steps when the inputs that drive them have not
+# changed since the last successful update. State lives in /var/lib/bpanel so
+# it survives everything except a fresh install.
+BPANEL_UPDATE_STATE_DIR=/var/lib/bpanel/update-state
+
+fingerprint() {
+  # fingerprint <path> [path ...] -> one sha256 over the contents of every
+  # file under those paths (paths are stable, so hashing them too is fine).
+  find "$@" -type f -exec sha256sum {} + 2>/dev/null | LC_ALL=C sort | sha256sum | awk '{print $1}'
+}
+
+step_inputs_changed() {
+  # step_inputs_changed <name> <path> [path ...]
+  # true (0) when the fingerprint differs from the stored one (or is forced).
+  local name="$1"; shift
+  [[ "${BPANEL_FORCE_FULL_UPDATE:-}" == "1" ]] && return 0
+  local now stored=""
+  now="$(fingerprint "$@")" || return 0
+  [[ -n "$now" ]] || return 0
+  [[ -f "$BPANEL_UPDATE_STATE_DIR/$name" ]] && stored="$(cat "$BPANEL_UPDATE_STATE_DIR/$name" 2>/dev/null)"
+  [[ "$now" != "$stored" ]]
+}
+
+step_mark_done() {
+  # step_mark_done <name> <path> [path ...] - call only after the step succeeded
+  local name="$1"; shift
+  local now; now="$(fingerprint "$@")" || return 0
+  mkdir -p "$BPANEL_UPDATE_STATE_DIR"
+  printf '%s' "$now" >"$BPANEL_UPDATE_STATE_DIR/$name"
+}
+
 usage() {
   cat <<'USAGE'
 Usage:
@@ -1274,8 +1305,15 @@ if [[ ! -d .venv ]]; then
 fi
 # shellcheck disable=SC1091
 source .venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
+# pip resolves the whole requirements file on every run even when nothing moved;
+# skip it unless requirements.txt changed or the venv was just rebuilt.
+if [[ "$venv_needs_recreate" == "true" ]] || step_inputs_changed backend-deps requirements.txt; then
+  pip install --upgrade pip
+  pip install -r requirements.txt
+  step_mark_done backend-deps requirements.txt
+else
+  log "Backend dependencies unchanged since last update; skipping pip install"
+fi
 
 log "Refreshing MariaDB grants"
 refresh_bpanel_mariadb_grants
@@ -1292,8 +1330,15 @@ fi
 systemctl enable --now bpanel-backup-scheduler.timer >/dev/null 2>&1 || true
 systemctl enable --now bpanel-malware-scheduler.timer >/dev/null 2>&1 || true
 
-log "Refreshing managed site permissions"
-if id -u bpanel >/dev/null 2>&1; then
+SITE_REFRESH_INPUTS=(
+  "$SOURCE_DIR/installer/files/bpanel-helper.sh"
+  "$SOURCE_DIR/backend/app/services"
+  "$SOURCE_DIR/backend/app/templates"
+)
+if ! step_inputs_changed site-refresh "${SITE_REFRESH_INPUTS[@]}"; then
+  log "Managed site config unchanged since last update; skipping the per-site refresh"
+elif id -u bpanel >/dev/null 2>&1; then
+  log "Refreshing managed site permissions"
   sudo -u bpanel env HOME="$APP_DIR" BPANEL_USE_HELPER=true "$APP_DIR/backend/.venv/bin/python" - <<'PY'
 from app.core.database import SessionLocal
 from app.models.entities import Website
@@ -1348,6 +1393,7 @@ with SessionLocal() as db:
     except Exception as exc:
         print(f"WARNING: could not refresh HTTP flood zones: {exc}")
 PY
+  step_mark_done site-refresh "${SITE_REFRESH_INPUTS[@]}"
 fi
 
 log "Compiling backend modules"
@@ -1399,42 +1445,52 @@ systemctl daemon-reload
 systemctl restart bpanel-api
 
 # --- Frontend --------------------------------------------------------------
-log "Building frontend (clean rebuild)"
 update_progress 80 "frontend" "Building frontend"
 cd "$APP_DIR/frontend"
 
-# Check Node.js availability
-if ! command -v node >/dev/null 2>&1; then
-  log "WARNING: Node.js not found, installing..."
-  DEBIAN_FRONTEND=noninteractive apt-get update --allow-releaseinfo-change
-  DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs npm
+FRONTEND_INPUTS=(src package.json index.html vite.config.js)
+FRONTEND_REBUILT=0
+if [[ -f dist/index.html ]] && ! step_inputs_changed frontend "${FRONTEND_INPUTS[@]}"; then
+  log "Frontend unchanged since last update; keeping the built bundle"
+else
+  FRONTEND_REBUILT=1
+  log "Building frontend"
+  if ! command -v node >/dev/null 2>&1; then
+    log "WARNING: Node.js not found, installing..."
+    DEBIAN_FRONTEND=noninteractive apt-get update --allow-releaseinfo-change
+    DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs npm
+  fi
+  echo "Node version: $(node --version)"
+  echo "npm version: $(npm --version)"
+
+  rm -rf dist .vite node_modules/.vite
+
+  # Reinstall only when the dependency set actually moved, not just its mtime.
+  if [[ ! -d node_modules ]] || step_inputs_changed frontend-deps package.json; then
+    log "Installing npm dependencies..."
+    rm -rf node_modules package-lock.json
+    npm install
+    step_mark_done frontend-deps package.json
+  fi
+  log "Building frontend with VITE_API_URL=/api..."
+  VITE_API_URL=/api npm run build 2>&1 || { log "BUILD FAILED"; exit 1; }
+
+  [[ -f dist/index.html ]] || fail "Frontend build failed: dist/index.html missing"
+  HASHED=$(grep -oE 'index-[a-zA-Z0-9_-]+\.js' dist/index.html | head -n1 || true)
+  echo "Built bundle: ${HASHED:-unknown}"
+  step_mark_done frontend "${FRONTEND_INPUTS[@]}"
 fi
-echo "Node version: $(node --version)"
-echo "npm version: $(npm --version)"
 
-rm -rf dist .vite node_modules/.vite
-
-if [[ ! -d node_modules ]] || [[ package.json -nt node_modules ]]; then
-  log "Installing npm dependencies..."
-  rm -rf node_modules package-lock.json
-  npm install
-fi
-log "Building frontend with VITE_API_URL=/api..."
-VITE_API_URL=/api npm run build 2>&1 || { log "BUILD FAILED"; exit 1; }
-
-[[ -f dist/index.html ]] || fail "Frontend build failed: dist/index.html missing"
-HASHED=$(grep -oE 'index-[a-zA-Z0-9_-]+\.js' dist/index.html | head -n1 || true)
-echo "Built bundle: ${HASHED:-unknown}"
-
-# Make sure nginx (www-data) can read the freshly built bundle.
+# Make sure nginx (www-data) can read the built bundle.
 chmod o+rX "$APP_DIR" "$APP_DIR/frontend" 2>/dev/null || true
-chmod -R o+rX "$APP_DIR/frontend/dist"
+chmod -R o+rX "$APP_DIR/frontend/dist" 2>/dev/null || true
 
-# The API mounts /assets only when the built directory exists at process start.
-# Restart once more after the clean frontend rebuild so newly hashed JS/CSS
-# files are served as static assets instead of falling through to index.html.
-log "Restarting bpanel-api after frontend build"
-systemctl restart bpanel-api
+# The API scans dist/assets at start, so a fresh bundle (new hashed filenames)
+# needs one more restart. An unchanged bundle does not.
+if [[ "$FRONTEND_REBUILT" == "1" ]]; then
+  log "Restarting bpanel-api after frontend build"
+  systemctl restart bpanel-api
+fi
 
 # --- Reload Nginx ----------------------------------------------------------
 log "Reloading nginx"
