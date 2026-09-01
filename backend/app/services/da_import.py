@@ -1129,6 +1129,8 @@ def _enable_ssl_when_dns_matches(db, website, item_summary: dict) -> None:
         item_summary["warnings"].append(f"SSL failed for {website.domain}: {detail[:500]}")
         return
     website.ssl_enabled = True
+    website.ssl_mode = "letsencrypt"
+    website.ssl_updated_at = _dt.datetime.utcnow()
     db.commit()
     db.refresh(website)
     item_summary["ssl_enabled_domains"].append(website.domain)
