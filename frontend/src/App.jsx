@@ -574,6 +574,10 @@ function App() {
   const [sslMode, setSslMode] = useState('letsencrypt');
   const [manualSslForm, setManualSslForm] = useState({ certificate: '', private_key: '', ca_bundle: '' });
   const [manualSslFiles, setManualSslFiles] = useState({ certificate: null, private_key: null, ca_bundle: null });
+  const [wildcardToken, setWildcardToken] = useState('');
+  const [cfZone, setCfZone] = useState({ zone: null, has_token: false });
+  const [sslSources, setSslSources] = useState([]);
+  const [sharedSource, setSharedSource] = useState('');
   const [cronSchedule, setCronSchedule] = useState('*/15 * * * *');
   const [cronCommand, setCronCommand] = useState('');
   const [cronItems, setCronItems] = useState([]);
@@ -1817,6 +1821,41 @@ function App() {
     if (data) {
       setManualSslForm({ certificate: '', private_key: '', ca_bundle: '' });
       setManualSslFiles({ certificate: null, private_key: null, ca_bundle: null });
+      refreshAll();
+    }
+  }
+
+  async function loadCfZone(id) {
+    const data = await request(`/websites/${id}/ssl/cloudflare-zone`, { silent: true });
+    if (data) setCfZone({ zone: data.zone || null, has_token: !!data.has_token });
+  }
+
+  async function loadSslSources(id) {
+    const data = await request(`/websites/${id}/ssl/sources`, { silent: true });
+    setSslSources(Array.isArray(data) ? data : []);
+  }
+
+  async function installWildcardSsl() {
+    if (!selectedWebsiteId) return;
+    const body = {};
+    if (wildcardToken.trim()) body.cloudflare_api_token = wildcardToken.trim();
+    else if (!cfZone.has_token) { setError('Paste a Cloudflare API token (Zone.DNS Edit).'); return; }
+    const data = await request(`/websites/${selectedWebsiteId}/ssl/wildcard`,
+      { method: 'POST', body: JSON.stringify(body) }, 'Issuing wildcard certificate via Cloudflare...');
+    if (data) {
+      setWildcardToken('');
+      setNotice(`Wildcard SSL active — *.${data.ssl_source_domain} covers this site.`);
+      refreshAll();
+    }
+  }
+
+  async function installSharedSsl() {
+    if (!selectedWebsiteId || !sharedSource) return;
+    const data = await request(`/websites/${selectedWebsiteId}/ssl/shared`,
+      { method: 'POST', body: JSON.stringify({ source_domain: sharedSource }) },
+      `Using ${sharedSource}'s certificate...`);
+    if (data) {
+      setNotice(`Now serving ${sharedSource}'s certificate.`);
       refreshAll();
     }
   }
@@ -3465,10 +3504,19 @@ function App() {
 
   useEffect(() => {
     if (!currentSite) return;
-    setSslMode(currentSite.ssl_mode === 'manual' ? 'manual' : 'letsencrypt');
+    const modeMap = { manual: 'manual', cloudflare: 'wildcard', shared: 'shared' };
+    setSslMode(modeMap[currentSite.ssl_mode] || 'letsencrypt');
     setManualSslForm({ certificate: '', private_key: '', ca_bundle: '' });
     setManualSslFiles({ certificate: null, private_key: null, ca_bundle: null });
+    setWildcardToken('');
+    setSharedSource('');
+    setCfZone({ zone: null, has_token: false });
+    setSslSources([]);
   }, [currentSite?.id]);
+
+  useEffect(() => {
+    if (page === 'ssl' && selectedWebsiteId) { loadCfZone(selectedWebsiteId); loadSslSources(selectedWebsiteId); }
+  }, [page, selectedWebsiteId]);
 
   useEffect(() => { if (selectedWebsiteId && page === 'backups') { listBackups(); loadBackupJobs(); } }, [selectedWebsiteId, page]);
 
@@ -4476,11 +4524,12 @@ function App() {
   }
 
   function renderSsl() {
-    const sslLabel = currentSite?.ssl_mode === 'manual'
-      ? 'Manual SSL Enabled'
-      : currentSite?.ssl_enabled
-        ? 'SSL Enabled'
-        : 'SSL Disabled';
+    const sslLabels = {
+      manual: 'Manual SSL', cloudflare: 'Wildcard (Cloudflare)', shared: `Using ${currentSite?.ssl_source_domain || ''}`,
+    };
+    const sslLabel = currentSite?.ssl_enabled
+      ? (sslLabels[currentSite?.ssl_mode] || 'SSL Enabled')
+      : 'SSL Disabled';
     const sslUpdated = currentSite?.ssl_updated_at ? new Date(currentSite.ssl_updated_at).toLocaleString() : '';
     return <section className="section">
       <h2>SSL Certificate</h2>
@@ -4493,12 +4542,45 @@ function App() {
       </div>}
       <div className="segmented ssl-mode-tabs">
         <button className={sslMode === 'letsencrypt' ? 'active' : ''} onClick={() => setSslMode('letsencrypt')}><Lock size={14}/> Let's Encrypt</button>
-        <button className={sslMode === 'manual' ? 'active' : ''} onClick={() => setSslMode('manual')}><KeyRound size={14}/> Manual SSL</button>
+        <button className={sslMode === 'manual' ? 'active' : ''} onClick={() => setSslMode('manual')}><KeyRound size={14}/> Manual</button>
+        <button className={sslMode === 'wildcard' ? 'active' : ''} onClick={() => setSslMode('wildcard')}><Globe size={14}/> Wildcard (Cloudflare)</button>
+        <button className={sslMode === 'shared' ? 'active' : ''} onClick={() => setSslMode('shared')}><Copy size={14}/> Use existing</button>
       </div>
-      {sslMode === 'letsencrypt' ? <>
+      {sslMode === 'letsencrypt' && <>
         <button disabled={!selectedWebsiteId || !!loading} onClick={() => enableSsl(selectedWebsiteId)} style={{marginTop:8}}><Lock size={15}/> Install / Renew SSL</button>
         <p className="hint">The domain must point to the correct VPS IP before issuing SSL.</p>
-      </> : <div className="manual-ssl-grid">
+      </>}
+      {sslMode === 'wildcard' && <div className="ssl-sub-form">
+        <p className="hint">
+          Issues <code>{cfZone.zone ? `${cfZone.zone} + *.${cfZone.zone}` : 'zone + *.zone'}</code> over
+          Cloudflare DNS. Needs an API token with <strong>Zone → DNS → Edit</strong> for the zone.
+        </p>
+        {cfZone.has_token
+          ? <p className="hint">✓ Token saved for <strong>{cfZone.zone}</strong>. Leave the field blank to reuse it.</p>
+          : null}
+        <input type="password" autoComplete="off" placeholder="Cloudflare API token"
+          value={wildcardToken} onChange={e => setWildcardToken(e.target.value)} />
+        <button disabled={!selectedWebsiteId || !!loading} onClick={installWildcardSsl}>
+          <Globe size={15}/> Issue wildcard certificate
+        </button>
+      </div>}
+      {sslMode === 'shared' && <div className="ssl-sub-form">
+        <p className="hint">Point this site at another BPanel website's certificate (e.g. a wildcard). No new certificate is issued.</p>
+        {sslSources.length === 0
+          ? <p className="hint">No other website has a certificate that covers <strong>{currentSite?.domain}</strong>.</p>
+          : <>
+            <select value={sharedSource} onChange={e => setSharedSource(e.target.value)}>
+              <option value="">Select a source website…</option>
+              {sslSources.map(s => <option key={s.domain} value={s.domain}>
+                {s.domain}{s.wildcard ? ' (wildcard)' : ''}{s.not_after ? ` — expires ${s.not_after}` : ''}
+              </option>)}
+            </select>
+            <button disabled={!selectedWebsiteId || !sharedSource || !!loading} onClick={installSharedSsl}>
+              <Copy size={15}/> Use this certificate
+            </button>
+          </>}
+      </div>}
+      {sslMode === 'manual' && <div className="manual-ssl-grid">
         <label>
           Certificate (.crt/.pem)
           <input type="file" accept=".crt,.pem" onChange={e => setManualSslFiles(prev => ({ ...prev, certificate: e.target.files?.[0] || null }))} />

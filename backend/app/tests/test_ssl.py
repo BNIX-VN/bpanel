@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 from cryptography import x509
@@ -7,6 +8,8 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 
 from app.services import nginx, ssl
+
+HELPER_SCRIPT = Path(__file__).resolve().parents[3] / "installer" / "files" / "bpanel-helper.sh"
 
 
 def _cert_pair(domain="example.test", *, days=30, key=None, aliases=None):
@@ -120,6 +123,39 @@ def test_install_manual_ssl_uses_helper_without_logging_key(monkeypatch):
     assert captured["helper_args"] == ["example.test"]
     assert captured["kwargs"]["sensitive"] is True
     assert "PRIVATE KEY" in captured["kwargs"]["input"]
+
+
+def test_cert_covers_matches_wildcard_and_exact_but_not_deeper():
+    assert ssl.cert_covers(["example.test", "*.example.test"], "blog.example.test") is True
+    assert ssl.cert_covers(["example.test", "*.example.test"], "example.test") is True
+    assert ssl.cert_covers(["*.example.test"], "a.b.example.test") is False
+    assert ssl.cert_covers(["shop.example.test"], "blog.example.test") is False
+
+
+def test_wildcard_issue_sends_the_token_on_stdin_never_in_argv(monkeypatch):
+    captured = {}
+
+    def fake_privileged(helper_command, helper_args=None, **kwargs):
+        captured.update(helper_command=helper_command, helper_args=helper_args, kwargs=kwargs)
+        return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(ssl.shell, "privileged", fake_privileged)
+    ssl.issue_wildcard_ssl("example.test", "cf-token-secret", email="admin@example.test")
+
+    assert captured["helper_command"] == "cloudflare-ssl-issue"
+    assert captured["helper_args"] == ["example.test", "admin@example.test"]
+    assert captured["kwargs"]["input"] == "cf-token-secret"
+    assert captured["kwargs"]["sensitive"] is True
+    assert "cf-token-secret" not in str(captured["helper_args"])
+
+
+def test_helper_builds_the_wildcard_arg_itself_and_locks_the_ini():
+    helper = HELPER_SCRIPT.read_text(encoding="utf-8")
+    body = helper.split("cloudflare_ssl_issue() {", 1)[1].split("\nssl_cert_info", 1)[0]
+    assert '-d "$zone" -d "*.${zone}"' in body      # the star is never from argv
+    assert "chmod 0600" in body and "/etc/bpanel/cloudflare/" in body
+    assert "token=\"$(cat)\"" in body               # token arrives on stdin
+    assert "cloudflare-ssl-issue)" in helper and "certbot-dns-cloudflare-install)" in helper
 
 
 def test_issue_ssl_passes_aliases_and_email(monkeypatch):

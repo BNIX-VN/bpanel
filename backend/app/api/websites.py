@@ -13,8 +13,11 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.permissions import Role, ensure_role, is_admin_role
 from app.core.secrets import encrypt
-from app.models.entities import DatabaseAccount, SiteApp, User, Website, WebsiteAlias
+from app.models.entities import CloudflareCredential, DatabaseAccount, SiteApp, User, Website, WebsiteAlias
 from app.schemas.schemas import (
+    CloudflareZoneOut,
+    SharedSslRequest,
+    SslSourceOut,
     WebsiteAliasCreate,
     WebsiteAliasOut,
     WebsiteCreate,
@@ -26,8 +29,9 @@ from app.schemas.schemas import (
     WebsiteUpdate,
     WebsiteWafUpdate,
     WebsiteWordPressInstall,
+    WildcardSslRequest,
 )
-from app.services import addons, cron, file_manager, mariadb, nginx, site_apps, site_users, ssl, storage_quota, waf, wordpress
+from app.services import addons, cloudflare, cron, file_manager, mariadb, nginx, site_apps, site_users, ssl, storage_quota, waf, wordpress
 from app.services.audit import log_action
 
 _PLACEHOLDER_TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates" / "nginx"
@@ -90,17 +94,38 @@ def _website_http_flood_config(website: Website) -> dict:
     return nginx.http_flood_config_for_website(website)
 
 
+def _borrowed_ssl_paths(source_domain: str) -> dict | None:
+    """Where the cert for ``source_domain`` lives — its Let's Encrypt lineage,
+    or, if it uploaded a manual cert, that."""
+    live = Path("/etc/letsencrypt/live") / source_domain
+    if (live / "fullchain.pem").is_file():
+        return {
+            "ssl_cert_path": str(live / "fullchain.pem"),
+            "ssl_key_path": str(live / "privkey.pem"),
+            "ssl_ca_path": None,
+        }
+    manual = ssl.manual_ssl_paths(source_domain)
+    if Path(manual["cert"]).is_file() and Path(manual["key"]).is_file():
+        return {
+            "ssl_cert_path": manual["cert"],
+            "ssl_key_path": manual["key"],
+            "ssl_ca_path": manual["ca"] if manual["ca"] and Path(manual["ca"]).is_file() else None,
+        }
+    return None
+
+
 def _rewrite_ssl_kwargs(website: Website) -> dict:
-    if (
-        getattr(website, "ssl_mode", "none") == "manual"
-        and website.ssl_cert_path
-        and website.ssl_key_path
-    ):
+    mode = getattr(website, "ssl_mode", "none")
+    if mode == "manual" and website.ssl_cert_path and website.ssl_key_path:
         return {
             "ssl_cert_path": website.ssl_cert_path,
             "ssl_key_path": website.ssl_key_path,
             "ssl_ca_path": website.ssl_ca_path,
         }
+    if mode in {"cloudflare", "shared"} and website.ssl_source_domain:
+        borrowed = _borrowed_ssl_paths(website.ssl_source_domain)
+        if borrowed:
+            return borrowed
     return {}
 
 
@@ -234,15 +259,14 @@ def _rewrite_website_vhost(website: Website, **overrides) -> str:
 
 def _has_live_certificate(website: Website) -> bool:
     domain = website.domain
-    if (
-        getattr(website, "ssl_mode", "none") == "manual"
-        and website.ssl_cert_path
-        and website.ssl_key_path
-    ):
+    mode = getattr(website, "ssl_mode", "none")
+    if mode == "manual" and website.ssl_cert_path and website.ssl_key_path:
         try:
             return Path(website.ssl_cert_path).is_file() and Path(website.ssl_key_path).is_file()
         except OSError:
             return False
+    if mode in {"cloudflare", "shared"} and website.ssl_source_domain:
+        return _borrowed_ssl_paths(website.ssl_source_domain) is not None
     live_dir = Path("/etc/letsencrypt/live") / domain
     try:
         return (live_dir / "fullchain.pem").is_file() and (live_dir / "privkey.pem").is_file()
@@ -940,6 +964,7 @@ def set_website_nginx_custom(website_id: int, payload: WebsiteNginxCustom, reque
 @router.delete("/{website_id}")
 def delete_website(website_id: int, request: Request, delete_files: bool = True, delete_database: bool = True, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     website = _get_authorized_website(db, website_id, current_user)
+    _block_if_source(db, website)
     db_item = db.query(DatabaseAccount).filter(DatabaseAccount.website_id == website.id).first()
     if delete_database and db_item:
         mariadb.drop_database(db_item.db_name, db_item.db_user)
@@ -991,6 +1016,7 @@ def enable_ssl(website_id: int, db: Session = Depends(get_db), current_user: Use
         raise HTTPException(status_code=404, detail="Website not found")
     if website.owner_id != current_user.id:
         ensure_role(current_user.role, Role.admin)
+    _block_if_source(db, website)
     previous_manual_paths = (website.ssl_cert_path, website.ssl_key_path, website.ssl_ca_path)
     previous_snapshot = ssl.snapshot_manual_ssl_domain(website.domain)
     if getattr(website, "ssl_mode", "none") == "manual":
@@ -1017,7 +1043,9 @@ def enable_ssl(website_id: int, db: Session = Depends(get_db), current_user: Use
     website.ssl_cert_path = None
     website.ssl_key_path = None
     website.ssl_ca_path = None
+    website.ssl_source_domain = None
     ssl.remove_manual_ssl_files(*previous_manual_paths)
+    _resync_shared_dependents(db, website.domain)
     db.commit()
     db.refresh(website)
     log_action(db, current_user.id, "enable_ssl", website.domain)
@@ -1042,6 +1070,7 @@ async def install_manual_ssl(
         raise HTTPException(status_code=404, detail="Website not found")
     if website.owner_id != current_user.id:
         ensure_role(current_user.role, Role.admin)
+    _block_if_source(db, website)
 
     try:
         cert_raw = _read_ssl_input(certificate, certificate_text, "certificate")
@@ -1071,7 +1100,198 @@ async def install_manual_ssl(
     except Exception as exc:
         ssl.restore_manual_ssl(previous_snapshot)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _resync_shared_dependents(db, website.domain)
     db.commit()
     db.refresh(website)
     log_action(db, current_user.id, "install_manual_ssl", website.domain, request=request)
+    return website
+
+
+# --- shared / wildcard SSL ------------------------------------------------------
+
+
+def _shared_dependents(db: Session, source_domain: str) -> list[Website]:
+    return (
+        db.query(Website)
+        .filter(Website.ssl_mode == "shared", Website.ssl_source_domain == source_domain)
+        .all()
+    )
+
+
+def _block_if_source(db: Session, website: Website) -> None:
+    dependents = _shared_dependents(db, website.domain)
+    if dependents:
+        names = ", ".join(sorted(d.domain for d in dependents))
+        raise HTTPException(
+            status_code=409,
+            detail=f"{len(dependents)} website(s) borrow this certificate ({names}). "
+            "Change their SSL first.",
+        )
+
+
+def _resync_shared_dependents(db: Session, source_domain: str) -> None:
+    """A source's cert just changed — repoint every borrower's vhost at it."""
+    for dependent in _shared_dependents(db, source_domain):
+        try:
+            _rewrite_website_vhost(dependent)
+        except (RuntimeError, ValueError):
+            pass
+
+
+def _cloudflare_zone_for(db: Session, domain: str) -> tuple[str | None, str | None]:
+    """(zone, token) for ``domain``, resolved from a saved Cloudflare credential.
+    Tries each saved zone that is a suffix of the domain, longest first."""
+    domain = domain.strip().lower()
+    rows = db.query(CloudflareCredential).all()
+    matches = [
+        r for r in rows
+        if domain == r.zone or domain.endswith("." + r.zone)
+    ]
+    if not matches:
+        return None, None
+    best = max(matches, key=lambda r: len(r.zone))
+    return best.zone, cloudflare.get_token(db, best.zone)
+
+
+@router.get("/{website_id}/ssl/cloudflare-zone", response_model=CloudflareZoneOut)
+def cloudflare_zone(website_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    website = _get_authorized_website(db, website_id, current_user)
+    zone, _token = _cloudflare_zone_for(db, website.domain)
+    return CloudflareZoneOut(zone=zone, has_token=zone is not None)
+
+
+@router.post("/{website_id}/ssl/wildcard", response_model=WebsiteOut)
+def install_wildcard_ssl(
+    website_id: int,
+    payload: WildcardSslRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    website = _get_authorized_website(db, website_id, current_user)
+
+    token = payload.cloudflare_api_token
+    if token:
+        try:
+            cloudflare.verify_token(token)
+            zone = cloudflare.zone_for_domain(token, website.domain)
+        except cloudflare.CloudflareError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        cloudflare.save_credential(db, zone, token)
+    else:
+        zone, token = _cloudflare_zone_for(db, website.domain)
+        if not token:
+            raise HTTPException(
+                status_code=409,
+                detail="No Cloudflare API token saved for this domain's zone. Provide one.",
+            )
+
+    plugin = ssl.ensure_cloudflare_plugin()
+    if plugin.returncode != 0:
+        raise HTTPException(status_code=500, detail=_command_error(plugin))
+
+    previous = (website.ssl_mode, website.ssl_source_domain, website.ssl_cert_path, website.ssl_key_path, website.ssl_ca_path)
+    result = ssl.issue_wildcard_ssl(zone, token, settings.ssl_email or "")
+    if result.returncode != 0:
+        raise HTTPException(status_code=500, detail=_command_error(result))
+
+    website.ssl_enabled = True
+    website.ssl_mode = "cloudflare"
+    website.ssl_source_domain = zone
+    website.ssl_cert_path = None
+    website.ssl_key_path = None
+    website.ssl_ca_path = None
+    website.ssl_updated_at = datetime.utcnow()
+    try:
+        waf.sync_website_rules(website)
+        if website.http_flood_enabled:
+            _sync_http_flood_zones(db)
+        _rewrite_website_vhost(website)
+    except (RuntimeError, ValueError) as exc:
+        (
+            website.ssl_mode,
+            website.ssl_source_domain,
+            website.ssl_cert_path,
+            website.ssl_key_path,
+            website.ssl_ca_path,
+        ) = previous
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _resync_shared_dependents(db, website.domain)
+    db.commit()
+    db.refresh(website)
+    log_action(db, current_user.id, "install_wildcard_ssl", website.domain, detail=zone, request=request)
+    return website
+
+
+@router.get("/{website_id}/ssl/sources", response_model=List[SslSourceOut])
+def ssl_sources(website_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    website = _get_authorized_website(db, website_id, current_user)
+    candidates = db.query(Website).filter(Website.id != website.id, Website.ssl_enabled.is_(True)).all()
+    if not is_admin_role(current_user.role):
+        candidates = [c for c in candidates if c.owner_id == current_user.id]
+    out: list[SslSourceOut] = []
+    for candidate in candidates:
+        info = ssl.cert_info(candidate.ssl_source_domain or candidate.domain)
+        sans = info.get("sans") or []
+        if not sans or not ssl.cert_covers(sans, website.domain):
+            continue
+        out.append(
+            SslSourceOut(
+                domain=candidate.domain,
+                ssl_mode=candidate.ssl_mode,
+                wildcard=any(name.startswith("*.") for name in sans),
+                not_after=info.get("not_after", ""),
+            )
+        )
+    return out
+
+
+@router.post("/{website_id}/ssl/shared", response_model=WebsiteOut)
+def install_shared_ssl(
+    website_id: int,
+    payload: SharedSslRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    website = _get_authorized_website(db, website_id, current_user)
+    _block_if_source(db, website)
+    if payload.source_domain == website.domain:
+        raise HTTPException(status_code=400, detail="A website cannot borrow its own certificate")
+
+    source = db.query(Website).filter(Website.domain == payload.source_domain).first()
+    if not source:
+        raise HTTPException(status_code=404, detail="Source website not found")
+    if source.owner_id != current_user.id:
+        ensure_role(current_user.role, Role.admin)
+
+    cert_name = source.ssl_source_domain or source.domain
+    info = ssl.cert_info(cert_name)
+    if not info.get("sans") or not ssl.cert_covers(info["sans"], website.domain):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{source.domain}'s certificate does not cover {website.domain}",
+        )
+    if not _borrowed_ssl_paths(cert_name):
+        raise HTTPException(status_code=400, detail=f"No usable certificate files for {source.domain}")
+
+    previous = (website.ssl_mode, website.ssl_source_domain)
+    website.ssl_enabled = True
+    website.ssl_mode = "shared"
+    website.ssl_source_domain = cert_name
+    website.ssl_cert_path = None
+    website.ssl_key_path = None
+    website.ssl_ca_path = None
+    website.ssl_updated_at = datetime.utcnow()
+    try:
+        waf.sync_website_rules(website)
+        if website.http_flood_enabled:
+            _sync_http_flood_zones(db)
+        _rewrite_website_vhost(website)
+    except (RuntimeError, ValueError) as exc:
+        website.ssl_mode, website.ssl_source_domain = previous
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    db.commit()
+    db.refresh(website)
+    log_action(db, current_user.id, "install_shared_ssl", website.domain, detail=cert_name, request=request)
     return website

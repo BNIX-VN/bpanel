@@ -186,7 +186,10 @@ button:disabled{opacity:.55;cursor:not-allowed;box-shadow:none}
 .segmented{display:flex;gap:6px;flex-wrap:wrap}
 .segmented button{background:var(--surface-alt);color:var(--text-secondary);border-color:var(--border)}
 .segmented button.active{background:var(--primary);color:white;border-color:var(--primary)}
-.ssl-mode-tabs{margin-top:4px}
+.ssl-mode-tabs{margin-top:4px;flex-wrap:wrap}
+.ssl-sub-form{display:grid;gap:10px;margin-top:10px;justify-items:start}
+.ssl-sub-form input,.ssl-sub-form select{width:100%;max-width:460px}
+.ssl-sub-form .hint{margin:0}
 .users-page{display:grid;gap:14px}
 .user-tabs{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));width:100%}
 .user-tabs button{justify-content:center;gap:7px;white-space:nowrap}

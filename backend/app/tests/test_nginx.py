@@ -1,3 +1,5 @@
+import pytest
+
 from app.services import nginx
 
 
@@ -97,6 +99,36 @@ def test_manual_ssl_vhost_adds_https_redirect_server_for_redirect_domains():
     assert "root /var/www/bpanel-acme;" in rendered
     assert "ssl_certificate /etc/nginx/bpanel/ssl/sites/example.test/cert.crt;" in rendered
     assert "return 301 https://example.test$request_uri;" in rendered
+
+
+def test_ssl_paths_accept_the_two_bpanel_roots_and_nothing_else():
+    # uploaded certs
+    nginx._manual_ssl_paths(
+        "/etc/nginx/bpanel/ssl/sites/example.test/cert.crt",
+        "/etc/nginx/bpanel/ssl/sites/example.test/privkey.key",
+    )
+    # borrowed / wildcard certs point at the certbot lineage
+    cert, key, ca = nginx._manual_ssl_paths(
+        "/etc/letsencrypt/live/example.test/fullchain.pem",
+        "/etc/letsencrypt/live/example.test/privkey.pem",
+    )
+    assert cert.endswith("/fullchain.pem") and ca is None
+    for bad in ("/etc/passwd", "/etc/letsencrypt/../shadow", "/home/x/cert.pem"):
+        with pytest.raises(ValueError):
+            nginx._manual_ssl_paths(bad, "/etc/letsencrypt/live/example.test/privkey.pem")
+
+
+def test_borrowed_wildcard_cert_is_wired_verbatim():
+    rendered = nginx.render_vhost(
+        "blog.example.test",
+        "/home/bp_example/blog.example.test",
+        app_type="php",
+        php_version="8.3",
+        ssl_cert_path="/etc/letsencrypt/live/example.test/fullchain.pem",
+        ssl_key_path="/etc/letsencrypt/live/example.test/privkey.pem",
+    )
+    assert "ssl_certificate /etc/letsencrypt/live/example.test/fullchain.pem;" in rendered
+    assert "ssl_certificate_key /etc/letsencrypt/live/example.test/privkey.pem;" in rendered
 
 
 def test_certbot_ssl_vhost_enables_http2():

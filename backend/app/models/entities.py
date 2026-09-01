@@ -71,6 +71,9 @@ class Website(Base):
     ssl_key_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     ssl_ca_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     ssl_updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # For ssl_mode "cloudflare" this is the Cloudflare zone whose wildcard cert
+    # this vhost points at; for "shared" it is the source website's domain.
+    ssl_source_domain: Mapped[Optional[str]] = mapped_column(String(253), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="pending")
     nginx_custom: Mapped[str] = mapped_column(Text, default="")
     nginx_config_mode: Mapped[str] = mapped_column(String(16), default="managed")
@@ -236,6 +239,23 @@ class ApiToken(Base):
     last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class CloudflareCredential(Base):
+    """A Cloudflare API token (Zone.DNS Edit), one per zone, stored encrypted.
+
+    Used for DNS-01 wildcard issuance and kept so certbot can auto-renew the
+    wildcard cert unattended. The plaintext token only ever leaves here to be
+    handed to the privileged helper on stdin.
+    """
+
+    __tablename__ = "cloudflare_credentials"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    zone: Mapped[str] = mapped_column(String(253), unique=True, index=True)
+    api_token: Mapped[str] = mapped_column(Text)  # Fernet ciphertext
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class ProvisioningAccount(Base):

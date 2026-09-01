@@ -1660,6 +1660,72 @@ remove_manual_ssl() {
   echo "Manual SSL removed for ${domain}"
 }
 
+install_certbot_dns_cloudflare() {
+  export DEBIAN_FRONTEND=noninteractive
+  if dpkg -s python3-certbot-dns-cloudflare >/dev/null 2>&1; then
+    echo "certbot dns-cloudflare plugin already installed"
+    return 0
+  fi
+  apt-get update --allow-releaseinfo-change
+  apt-get install -y python3-certbot-dns-cloudflare
+  echo "certbot dns-cloudflare plugin installed"
+}
+
+cloudflare_ssl_issue() {
+  # Zone comes from argv (validated); the literal "*." is built here, never
+  # taken from the caller. The token arrives on stdin so it never lands in a
+  # process list or the sudo log.
+  local zone="$1" email="${2:-}" ini token args
+  require_domain "$zone"
+  [[ -n "$email" ]] && require_email "$email"
+  command -v certbot >/dev/null 2>&1 || deny "certbot is not installed"
+  dpkg -s python3-certbot-dns-cloudflare >/dev/null 2>&1 \
+    || deny "certbot dns-cloudflare plugin is not installed (run certbot-dns-cloudflare-install)"
+  token="$(cat)"
+  [[ "$token" =~ ^[A-Za-z0-9_.~-]{20,200}$ ]] || deny "cloudflare API token is missing or malformed"
+  install -d -o root -g root -m 0700 /etc/bpanel /etc/bpanel/cloudflare
+  ini="/etc/bpanel/cloudflare/${zone}.ini"
+  ( umask 077; printf 'dns_cloudflare_api_token = %s\n' "$token" >"$ini" )
+  chown root:root "$ini"; chmod 0600 "$ini"
+  args=(certonly --dns-cloudflare --dns-cloudflare-credentials "$ini"
+    --dns-cloudflare-propagation-seconds 30 --cert-name "$zone"
+    -d "$zone" -d "*.${zone}" --non-interactive --agree-tos --keep-until-expiring)
+  if [[ -n "$email" ]]; then
+    args+=(--email "$email")
+  else
+    args+=(--register-unsafely-without-email)
+  fi
+  certbot "${args[@]}"
+  # The panel may be reachable on this zone now, and renewals must keep the
+  # per-hostname copies fresh.
+  install_sni_renewal_hook
+  sync_panel_sni_certificates >/dev/null
+  echo "Wildcard certificate ready: ${zone} and *.${zone}"
+}
+
+ssl_cert_info() {
+  # Read-only: the panel runs as 'bpanel' and cannot open /etc/letsencrypt/live,
+  # so it asks the helper for a borrowed certificate's expiry and names.
+  local name="$1" cert not_after sans
+  require_domain "$name"
+  if [[ -f "/etc/letsencrypt/live/${name}/cert.pem" ]]; then
+    cert="/etc/letsencrypt/live/${name}/cert.pem"
+  elif [[ -f "/etc/nginx/bpanel/ssl/sites/${name}/cert.crt" ]]; then
+    cert="/etc/nginx/bpanel/ssl/sites/${name}/cert.crt"
+  else
+    deny "no certificate on this server for ${name}"
+  fi
+  not_after="$(openssl x509 -enddate -noout -in "$cert" 2>/dev/null | cut -d= -f2- || true)"
+  sans="$( { openssl x509 -ext subjectAltName -noout -in "$cert" 2>/dev/null || true; } \
+    | grep -oE 'DNS:[^,]+' | sed 's/DNS://g;s/ //g' | paste -sd, - || true)"
+  if [[ -z "$sans" ]]; then
+    sans="$( { openssl x509 -subject -noout -in "$cert" 2>/dev/null || true; } \
+      | grep -oE 'CN ?= ?[^,/]+' | sed -E 's/CN ?= ?//' || true)"
+  fi
+  printf 'not_after=%s\n' "$not_after"
+  printf 'sans=%s\n' "$sans"
+}
+
 renew_ssl_soon() {
   local days="${1:-10}" seconds cert cert_name checked=0 renewed=0 panel_domain
   [[ "$days" =~ ^[0-9]+$ && "$days" -ge 1 && "$days" -le 30 ]] || deny "usage: certbot-renew-soon [1-30 days]"
@@ -3969,6 +4035,18 @@ PY
     [[ $# -eq 1 ]] || deny "usage: manual-ssl-remove <domain>"
     remove_manual_ssl "$1"
     sync_panel_sni_certificates >/dev/null
+    ;;
+  certbot-dns-cloudflare-install)
+    [[ $# -eq 0 ]] || deny "usage: certbot-dns-cloudflare-install"
+    install_certbot_dns_cloudflare
+    ;;
+  cloudflare-ssl-issue)
+    [[ $# -ge 1 && $# -le 2 ]] || deny "usage: cloudflare-ssl-issue <zone> [email]"
+    cloudflare_ssl_issue "$1" "${2:-}"
+    ;;
+  ssl-cert-info)
+    [[ $# -eq 1 ]] || deny "usage: ssl-cert-info <cert-name>"
+    ssl_cert_info "$1"
     ;;
 
   # ---- firewall (iptables + ipset) ---------------------------------------

@@ -726,6 +726,13 @@ def _has_ssl_config(content: str) -> bool:
     return "ssl_certificate" in content or "listen 443" in content
 
 
+# Uploaded certs live here; borrowed certs (wildcard-via-Cloudflare, or a
+# "use existing" reference to another site's Let's Encrypt lineage) point at the
+# certbot live directory. Both roots are BPanel-controlled and every path is
+# built from a validated domain, never from raw request input.
+_SSL_PATH_ROOTS = ("/etc/nginx/bpanel/ssl/sites/", "/etc/letsencrypt/live/")
+
+
 def _manual_ssl_paths(cert_path: str | None, key_path: str | None, ca_path: str | None = None) -> tuple[str, str, str | None]:
     if not cert_path or not key_path:
         raise ValueError("Manual SSL certificate and key paths are required")
@@ -735,10 +742,10 @@ def _manual_ssl_paths(cert_path: str | None, key_path: str | None, ca_path: str 
     for value in (cert, key, ca):
         if not value:
             continue
-        if "\x00" in value or "\n" in value or "\r" in value:
+        if "\x00" in value or "\n" in value or "\r" in value or ".." in value:
             raise ValueError("Manual SSL path contains unsafe characters")
-        if not value.startswith("/etc/nginx/bpanel/ssl/sites/"):
-            raise ValueError("Manual SSL paths must be under /etc/nginx/bpanel/ssl/sites")
+        if not value.startswith(_SSL_PATH_ROOTS):
+            raise ValueError("SSL paths must be under /etc/nginx/bpanel/ssl/sites or /etc/letsencrypt/live")
     return cert, key, ca
 
 

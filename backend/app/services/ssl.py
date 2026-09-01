@@ -77,6 +77,74 @@ def renew_all() -> CommandResult:
     return shell.privileged("certbot-renew", check=False, fallback=["certbot", "renew", "--quiet"])
 
 
+# --- wildcard via Cloudflare DNS-01 -----------------------------------------
+
+LETSENCRYPT_LIVE = Path("/etc/letsencrypt/live")
+
+
+def ensure_cloudflare_plugin() -> CommandResult:
+    return shell.privileged(
+        "certbot-dns-cloudflare-install",
+        check=False,
+        fallback=["bash", "-lc", "apt-get install -y python3-certbot-dns-cloudflare"],
+    )
+
+
+def issue_wildcard_ssl(zone: str, token: str, email: str = "") -> CommandResult:
+    """Issue (or renew, idempotently) a cert covering ``zone`` and ``*.zone``.
+
+    The token is handed to the helper on stdin so it never reaches a process
+    list or the sudo log.
+    """
+    safe_zone = _safe_domain(zone)
+    helper_args = [safe_zone]
+    if email:
+        helper_args.append(email)
+    return shell.privileged(
+        "cloudflare-ssl-issue",
+        helper_args=helper_args,
+        check=False,
+        input=token,
+        sensitive=True,
+        fallback=["bash", "-lc", "echo 'cloudflare-ssl-issue needs the bpanel helper'; exit 1"],
+    )
+
+
+def letsencrypt_live_paths(name: str) -> dict[str, str]:
+    safe = _safe_domain(name)
+    base = f"/etc/letsencrypt/live/{safe}"
+    return {"cert": f"{base}/fullchain.pem", "key": f"{base}/privkey.pem", "ca": None}
+
+
+def cert_info(name: str) -> dict:
+    """Expiry and covered names for a certificate on this machine.
+
+    Reads via the helper because /etc/letsencrypt/live is root-only.
+    """
+    safe = _safe_domain(name)
+    result = shell.privileged(
+        "ssl-cert-info",
+        helper_args=[safe],
+        check=False,
+        fallback=["bash", "-lc", f"echo 'no cert info for {safe}'; exit 1"],
+    )
+    info: dict = {"not_after": "", "sans": []}
+    if result.returncode != 0:
+        return info
+    for line in (result.stdout or "").splitlines():
+        key, _, value = line.partition("=")
+        if key == "not_after":
+            info["not_after"] = value.strip()
+        elif key == "sans":
+            info["sans"] = [name for name in value.strip().split(",") if name]
+    return info
+
+
+def cert_covers(sans: list[str] | tuple[str, ...], domain: str) -> bool:
+    target = _safe_domain(domain)
+    return any(_hostname_matches(target, name.strip().lower()) for name in sans if name.strip())
+
+
 def manual_ssl_paths(domain: str) -> dict[str, str | None]:
     safe_domain = _safe_domain(domain)
     base = f"/etc/nginx/bpanel/ssl/sites/{safe_domain}"

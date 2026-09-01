@@ -449,6 +449,41 @@ class WebsiteAliasOut(BaseModel):
         from_attributes = True
 
 
+class WildcardSslRequest(BaseModel):
+    # Optional: omit to reuse the token already saved for the detected zone.
+    cloudflare_api_token: Optional[str] = None
+
+    @field_validator("cloudflare_api_token")
+    @classmethod
+    def _clean_token(cls, value: Optional[str]) -> Optional[str]:
+        value = (value or "").strip()
+        return value or None
+
+
+class SharedSslRequest(BaseModel):
+    source_domain: str
+
+    @field_validator("source_domain")
+    @classmethod
+    def _validate_source(cls, value: str) -> str:
+        value = value.strip().lower()
+        if not DOMAIN_RE.match(value):
+            raise ValueError("Invalid source domain")
+        return value
+
+
+class SslSourceOut(BaseModel):
+    domain: str
+    ssl_mode: str
+    wildcard: bool = False
+    not_after: str = ""
+
+
+class CloudflareZoneOut(BaseModel):
+    zone: Optional[str] = None
+    has_token: bool = False
+
+
 class WebsiteLogOut(BaseModel):
     domain: str
     kind: Literal["access", "error"]
@@ -625,6 +660,7 @@ class WebsiteOut(BaseModel):
     app_type: str
     ssl_enabled: bool
     ssl_mode: str = "none"
+    ssl_source_domain: Optional[str] = None
     ssl_updated_at: Optional[datetime] = None
     ssl_has_ca: bool = False
     ssl_cert_path: Optional[str] = Field(default=None, exclude=True)
