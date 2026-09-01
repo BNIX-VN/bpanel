@@ -812,6 +812,10 @@ After=network.target clamav-daemon.service
 
 [Service]
 Type=oneshot
+# The runner blocks until the scan it starts finishes (a whole-server scan
+# can take hours). Without this, systemd's 90s default start timeout kills it
+# and the scan lands in 'interrupted'.
+TimeoutStartSec=infinity
 User=bpanel
 Group=bpanel
 SupplementaryGroups=www-data bpanel-sites
