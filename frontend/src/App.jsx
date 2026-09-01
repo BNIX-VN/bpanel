@@ -1135,7 +1135,7 @@ function App() {
       if (!websiteSearch.trim()) setWebsiteList(siteData);
       if (!selectedWebsiteId && siteData[0]) setSelectedWebsiteId(String(siteData[0].id));
     }
-    const dbData = await request('/databases');
+    const dbData = await request(dbSearch.trim() ? `/databases?q=${encodeURIComponent(dbSearch.trim())}` : '/databases');
     if (dbData) setDatabases(dbData);
     if (refreshedUser?.role === 'admin') {
       await loadPhpVersions();
