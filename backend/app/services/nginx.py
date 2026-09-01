@@ -345,6 +345,19 @@ def _vhost_path(domain: str) -> Path:
     return Path(settings.nginx_sites_available) / f"{safe_domain}.conf"
 
 
+def vhost_exists(domain: str) -> bool:
+    """Whether a managed Nginx site config already sits on disk for this domain.
+
+    The websites table is the usual source of truth, but a leftover config from
+    a half-removed site or an out-of-band import would otherwise be silently
+    overwritten by a fresh create.
+    """
+    try:
+        return _vhost_path(domain).is_file()
+    except (ValueError, OSError):
+        return False
+
+
 def _safe_domain(domain: str) -> str:
     safe_domain = (domain or "").strip().lower()
     if not DOMAIN_RE.fullmatch(safe_domain):

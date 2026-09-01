@@ -119,9 +119,10 @@ def create_account(payload: ProvisioningAccountCreate, request: Request, db: Ses
 
     if db.query(User).filter(User.username == payload.username).first():
         raise HTTPException(status_code=409, detail="Username already exists")
-    if db.query(User).filter(User.email == account_email).first():
-        raise HTTPException(status_code=409, detail="Email already exists")
-    if payload.domain and db.query(Website).filter(Website.domain == payload.domain).first():
+    if payload.domain and (
+        db.query(Website).filter(Website.domain == payload.domain).first()
+        or nginx.vhost_exists(payload.domain)
+    ):
         raise HTTPException(status_code=409, detail="Domain already exists")
 
     package = db.query(UserPackage).filter(UserPackage.id == payload.package_id).first()

@@ -1,9 +1,11 @@
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.api import websites
 from app.core.database import Base
 from app.models.entities import User, Website, WebsiteAlias
+from app.schemas.schemas import WebsiteCreate
 
 
 def _db_session():
@@ -53,3 +55,30 @@ def test_list_websites_search_keeps_user_scope(monkeypatch):
     rows = websites.list_websites(q="other", db=db, current_user=user)
 
     assert rows == []
+
+
+def test_create_website_rejects_a_domain_already_in_the_table(monkeypatch):
+    db = _db_session()
+    admin, _ = _seed_websites(db)
+    monkeypatch.setattr(websites.nginx, "vhost_exists", lambda domain: False)
+
+    with pytest.raises(Exception) as exc:
+        websites.create_website(
+            WebsiteCreate(domain="client-site.test", install_wordpress=False, app_type="php"),
+            request=None, db=db, current_user=admin,
+        )
+    assert getattr(exc.value, "status_code", None) == 409
+
+
+def test_create_website_rejects_a_domain_with_a_leftover_nginx_config(monkeypatch):
+    db = _db_session()
+    admin, _ = _seed_websites(db)
+    # Not in the websites table, but a config file is still on disk.
+    monkeypatch.setattr(websites.nginx, "vhost_exists", lambda domain: domain == "ghost.test")
+
+    with pytest.raises(Exception) as exc:
+        websites.create_website(
+            WebsiteCreate(domain="ghost.test", install_wordpress=False, app_type="php"),
+            request=None, db=db, current_user=admin,
+        )
+    assert getattr(exc.value, "status_code", None) == 409

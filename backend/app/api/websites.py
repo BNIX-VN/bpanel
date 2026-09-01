@@ -328,7 +328,7 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
     requested_owner_id = payload.owner_id
     if requested_owner_id is not None and requested_owner_id != current_user.id:
         ensure_role(current_user.role, Role.admin)
-    if _hostname_conflicts(db, payload.domain):
+    if _hostname_conflicts(db, payload.domain) or nginx.vhost_exists(payload.domain):
         raise HTTPException(status_code=409, detail="Domain already exists")
 
     if requested_owner_id is not None:
@@ -453,6 +453,7 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
         payload.domain,
         request=request,
     )
+    storage_quota.forget_user_storage(owner_id)
     website.wordpress_installed = install_wp
     return website
 
@@ -987,6 +988,7 @@ def delete_website(website_id: int, request: Request, delete_files: bool = True,
     if db_item:
         db.delete(db_item)
     had_http_flood = bool(website.http_flood_enabled)
+    owner_id = website.owner_id
     db.delete(website)
     if had_http_flood:
         try:
@@ -994,6 +996,7 @@ def delete_website(website_id: int, request: Request, delete_files: bool = True,
         except RuntimeError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     db.commit()
+    storage_quota.forget_user_storage(owner_id)
     log_action(db, current_user.id, "delete_website", website.domain, request=request)
     return {"ok": True}
 

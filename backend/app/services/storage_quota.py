@@ -21,6 +21,21 @@ VOLUME_USAGE_TTL_SECONDS = 60
 _volume_usage_cache: dict[str, tuple[float, int]] = {}
 _volume_usage_lock = threading.Lock()
 
+# Measuring a user's storage walks every file under every website they own -
+# tens of thousands of them for a WordPress site. The user list renders that
+# figure for every row, so it is cached: a few minutes of staleness on a disk
+# number is fine, and any write that changes it calls forget_user_storage().
+USER_USAGE_TTL_SECONDS = 300
+_user_usage_cache: dict[int, tuple[float, int]] = {}
+_user_usage_lock = threading.Lock()
+
+
+def forget_user_storage(user_id: int | None) -> None:
+    if user_id is None:
+        return
+    with _user_usage_lock:
+        _user_usage_cache.pop(int(user_id), None)
+
 
 class StorageQuotaExceeded(ValueError):
     pass
@@ -127,14 +142,23 @@ def app_storage_used_bytes(db: Session, user: User) -> int:
     return total
 
 
-def user_storage_used_bytes(db: Session, user: User) -> int:
+def user_storage_used_bytes(db: Session, user: User, *, use_cache: bool = False) -> int:
+    if use_cache:
+        with _user_usage_lock:
+            cached = _user_usage_cache.get(user.id)
+        if cached and time.monotonic() - cached[0] < USER_USAGE_TTL_SECONDS:
+            return cached[1]
     websites = db.query(Website).filter(Website.owner_id == user.id).all()
-    return (sum(website_storage_used_bytes(website) for website in websites)
-            + app_storage_used_bytes(db, user))
+    total = (sum(website_storage_used_bytes(website) for website in websites)
+             + app_storage_used_bytes(db, user))
+    if use_cache:
+        with _user_usage_lock:
+            _user_usage_cache[user.id] = (time.monotonic(), total)
+    return total
 
 
-def storage_usage_summary(db: Session, user: User) -> dict:
-    used_bytes = user_storage_used_bytes(db, user)
+def storage_usage_summary(db: Session, user: User, *, use_cache: bool = False) -> dict:
+    used_bytes = user_storage_used_bytes(db, user, use_cache=use_cache)
     limit_bytes = user_storage_limit_bytes(user)
     percent = 0.0
     if limit_bytes and limit_bytes > 0:

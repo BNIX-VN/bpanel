@@ -24,10 +24,10 @@ from app.services import mariadb, nginx, site_users, storage_quota, wordpress
 router = APIRouter(prefix="/users", tags=["users"])
 
 
-def _user_out(user: User, db: Session) -> dict:
+def _user_out(user: User, db: Session, *, cached_usage: bool = False) -> dict:
     data = UserOut.model_validate(user).model_dump()
     data["package_name"] = user.package.name if user.package else None
-    data.update(storage_quota.storage_usage_summary(db, user))
+    data.update(storage_quota.storage_usage_summary(db, user, use_cache=cached_usage))
     return data
 
 
@@ -88,8 +88,10 @@ def _delete_owned_website(db: Session, website: Website) -> None:
 @router.post("", response_model=UserOut)
 def create_user(payload: UserCreate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.admin)
-    if db.query(User).filter((User.username == payload.username) | (User.email == payload.email)).first():
-        raise HTTPException(status_code=409, detail="User already exists")
+    # Only the username has to be unique — several panel users may share one
+    # contact email (a reseller managing many accounts, for example).
+    if db.query(User.id).filter(User.username == payload.username).first():
+        raise HTTPException(status_code=409, detail="Username already exists")
     package = _package_for_payload(db, payload.package_id)
     try:
         site_users.ensure_panel_user(payload.username, payload.password)
@@ -117,7 +119,10 @@ def create_user(payload: UserCreate, request: Request, db: Session = Depends(get
 @router.get("", response_model=List[UserOut])
 def list_users(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.admin)
-    return [_user_out(user, db) for user in db.query(User).options(selectinload(User.package)).order_by(User.id.desc()).all()]
+    return [
+        _user_out(user, db, cached_usage=True)
+        for user in db.query(User).options(selectinload(User.package)).order_by(User.id.desc()).all()
+    ]
 
 
 @router.get("/me", response_model=UserOut)
@@ -138,9 +143,7 @@ def update_user(user_id: int, payload: UserUpdate, request: Request, db: Session
         user.role = payload.role
         role_changed = True
     if payload.email is not None and payload.email != user.email:
-        if db.query(User).filter(User.email == payload.email, User.id != user_id).first():
-            raise HTTPException(status_code=409, detail="Email already in use")
-        user.email = payload.email
+        user.email = payload.email  # emails need not be unique across panel users
     if payload.is_active is not None:
         if user_id == current_user.id and payload.is_active is False:
             raise HTTPException(status_code=400, detail="Cannot deactivate yourself")

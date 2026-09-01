@@ -131,6 +131,15 @@ def test_borrowed_wildcard_cert_is_wired_verbatim():
     assert "ssl_certificate_key /etc/letsencrypt/live/example.test/privkey.pem;" in rendered
 
 
+def test_vhost_exists_reports_a_config_on_disk(tmp_path, monkeypatch):
+    monkeypatch.setattr(nginx.settings, "nginx_sites_available", str(tmp_path))
+    assert nginx.vhost_exists("example.test") is False
+    (tmp_path / "example.test.conf").write_text("server {}\n")
+    assert nginx.vhost_exists("example.test") is True
+    assert nginx.vhost_exists("EXAMPLE.TEST") is True   # case-insensitive
+    assert nginx.vhost_exists("not a domain") is False
+
+
 def test_certbot_ssl_vhost_enables_http2():
     plain_vhost = "\n".join([
         "server {",
