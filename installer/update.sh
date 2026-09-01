@@ -30,7 +30,11 @@ fingerprint() {
   local existing=() p
   for p in "$@"; do [[ -e "$p" ]] && existing+=("$p"); done
   [[ ${#existing[@]} -gt 0 ]] || return 1
-  find "${existing[@]}" -type f -exec sha256sum {} + 2>/dev/null | LC_ALL=C sort | sha256sum | awk '{print $1}'
+  # Hash the content hashes only, not the "  <name>" sha256sum prints after
+  # them: the same files under a different prefix (a release temp dir, or
+  # /usr/local/sbin vs the source tree) must fingerprint the same.
+  find "${existing[@]}" -type f -exec sha256sum {} + 2>/dev/null \
+    | awk '{print $1}' | LC_ALL=C sort | sha256sum | awk '{print $1}'
 }
 
 step_inputs_changed() {
