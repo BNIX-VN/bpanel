@@ -30,6 +30,17 @@ MAX_UPLOAD_BYTES = 1024 * 1024 * 1024
 BACKUP_MANIFEST = "manifest.json"
 PANEL_USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]{3,64}$")
 
+# Full-user archives BPanel will restore. BPanel writes "bpanel_user"; "opanel_user"
+# is the same archive layout (manifest.json, sites/<domain>/site, databases/<domain>.sql)
+# written by opanel, a sibling panel, so accept it too and move accounts between the
+# two. opanel archives carry no "applications" section - only domains, files and
+# databases come across.
+RESTORABLE_BACKUP_KINDS = ("bpanel_user", "opanel_user")
+_PLACEHOLDER_EMAIL_SUFFIXES = (
+    "@users.bpanel.test", "@users.bpanel.vn",
+    "@users.opanel.test", "@users.opanel.vn",
+)
+
 
 def _hostname_conflicts(db, domain: str, exclude_website_id: int | None = None) -> bool:
     safe = (domain or "").strip().lower()
@@ -265,17 +276,20 @@ def describe_user_backup(backup_file: str) -> dict:
         "websites": 0,
         "applications": 0,
         "valid": False,
+        "source": "bpanel",
         "error": "",
     }
     try:
         manifest = read_backup_manifest(str(path))
-        item["valid"] = manifest.get("kind") == "bpanel_user"
+        kind = manifest.get("kind")
+        item["valid"] = kind in RESTORABLE_BACKUP_KINDS
+        item["source"] = "opanel" if kind == "opanel_user" else "bpanel"
         item["username"] = (manifest.get("user") or {}).get("username") or ""
         item["generated_at"] = manifest.get("generated_at") or ""
         item["websites"] = len(manifest.get("websites") or [])
         item["applications"] = len(manifest.get("applications") or [])
         if not item["valid"]:
-            item["error"] = "This is not a full user backup"
+            item["error"] = "This is not a bpanel or opanel user backup"
     except Exception as exc:
         item["error"] = str(exc)
     return item
@@ -389,8 +403,8 @@ def _extract_member_to_file(archive: Path, member_name: str, output_dir: Path) -
 def restore_user_backup(backup_file: str, db) -> dict:
     archive = user_backup_path(backup_file)
     manifest = read_backup_manifest(str(archive))
-    if manifest.get("kind") != "bpanel_user":
-        raise ValueError("This is not a full user backup")
+    if manifest.get("kind") not in RESTORABLE_BACKUP_KINDS:
+        raise ValueError("This is not a bpanel or opanel user backup")
     user_info = manifest.get("user") or {}
     username = user_info.get("username") or ""
     if not PANEL_USERNAME_RE.fullmatch(username):
@@ -400,7 +414,7 @@ def restore_user_backup(backup_file: str, db) -> dict:
     created_user = False
     if user is None:
         email = user_info.get("email") or f"{username}@users.bpanel.invalid"
-        if email.endswith(("@users.bpanel.test", "@users.bpanel.vn")):
+        if email.endswith(_PLACEHOLDER_EMAIL_SUFFIXES):
             email = f"{username}@users.bpanel.invalid"
         if db.query(User).filter(User.email == email).first():
             email = f"{username}-{secrets.token_hex(4)}@users.bpanel.invalid"
