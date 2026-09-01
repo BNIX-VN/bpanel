@@ -736,7 +736,17 @@ install_panel_runtime() {
   fi
   usermod -aG bpanel-sites bpanel 2>/dev/null || true
   usermod -aG bpanel-sites www-data 2>/dev/null || true
-  harden_existing_panel_users
+  # A recursive chown + four chmod sweeps over every file of every site. It
+  # retrofits old installs to the current permission policy; once that policy
+  # (which lives in this script) is applied it does not drift, so re-run it
+  # only when the script itself changed. The panel sets permissions correctly
+  # on every site it creates in between.
+  if step_inputs_changed user-hardening "${BPANEL_UPDATE_ORIGINAL_SCRIPT:-$SOURCE_DIR/installer/update.sh}"; then
+    harden_existing_panel_users
+    step_mark_done user-hardening "${BPANEL_UPDATE_ORIGINAL_SCRIPT:-$SOURCE_DIR/installer/update.sh}"
+  else
+    echo "  (site directory permissions already match this release; skipping the sweep)"
+  fi
   install -d -o root -g bpanel -m 2775 /etc/nginx/conf.d
   chmod g+s /etc/nginx/conf.d 2>/dev/null || true
   install -d -o root -g bpanel -m 2775 /etc/nginx/bpanel/custom
@@ -1223,13 +1233,20 @@ if [[ -f "$SOURCE_DIR/installer/files/bpanel-helper.sh" ]]; then
     install -m 0440 -o root -g root  "$SOURCE_DIR/installer/files/bpanel-sudoers"   /etc/sudoers.d/bpanel
     visudo -c -f /etc/sudoers.d/bpanel >/dev/null
     sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper wp --info >/dev/null
-    sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper php-fpm-retune >/dev/null || \
-      echo "  (warning: could not retune existing PHP-FPM pools; site refresh will retry later)"
-    sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper mariadb-retune >/dev/null || \
-      echo "  (warning: could not retune MariaDB; update will continue with existing settings)"
+    # The retune output is a function of the helper's logic and this machine's
+    # RAM/CPU; neither moves between two updates of the same release. Skip the
+    # pair (and the autotune unit, which just runs the same two) when the
+    # helper is unchanged. `bpanel-autotune.service` stays enabled for boot.
+    if step_inputs_changed autotune "$SOURCE_DIR/installer/files/bpanel-helper.sh"; then
+      sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper php-fpm-retune >/dev/null || \
+        echo "  (warning: could not retune existing PHP-FPM pools; site refresh will retry later)"
+      sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper mariadb-retune >/dev/null || \
+        echo "  (warning: could not retune MariaDB; update will continue with existing settings)"
+      step_mark_done autotune "$SOURCE_DIR/installer/files/bpanel-helper.sh"
+    else
+      echo "  (PHP-FPM and MariaDB tuning unchanged for this release; skipping the retune)"
+    fi
     systemctl enable bpanel-autotune.service >/dev/null 2>&1 || true
-    systemctl start bpanel-autotune.service >/dev/null 2>&1 || \
-      echo "  (warning: could not run bpanel-autotune.service; next reboot will retry)"
     # The helper is fresh now, so the clock unit can run without flashing
     # up as a failed unit first.
     systemctl reset-failed bpanel-timesync.service >/dev/null 2>&1 || true
