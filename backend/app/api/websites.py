@@ -94,24 +94,31 @@ def _website_http_flood_config(website: Website) -> dict:
     return nginx.http_flood_config_for_website(website)
 
 
-def _borrowed_ssl_paths(source_domain: str) -> dict | None:
-    """Where the cert for ``source_domain`` lives — its Let's Encrypt lineage,
-    or, if it uploaded a manual cert, that."""
-    live = Path("/etc/letsencrypt/live") / source_domain
-    if (live / "fullchain.pem").is_file():
-        return {
-            "ssl_cert_path": str(live / "fullchain.pem"),
-            "ssl_key_path": str(live / "privkey.pem"),
-            "ssl_ca_path": None,
-        }
+def _borrowed_ssl_paths(source_domain: str) -> dict:
+    """Cert file paths for ``source_domain``.
+
+    Prefers its manual dir (group-readable by the panel). Otherwise its certbot
+    lineage — ``/etc/letsencrypt/live`` is root-only, so the path is returned
+    unchecked; whoever puts a site into shared/cloudflare mode has already
+    verified the certificate with ``ssl.cert_info`` (the helper).
+    """
     manual = ssl.manual_ssl_paths(source_domain)
-    if Path(manual["cert"]).is_file() and Path(manual["key"]).is_file():
-        return {
-            "ssl_cert_path": manual["cert"],
-            "ssl_key_path": manual["key"],
-            "ssl_ca_path": manual["ca"] if manual["ca"] and Path(manual["ca"]).is_file() else None,
-        }
-    return None
+    try:
+        if Path(manual["cert"]).is_file() and Path(manual["key"]).is_file():
+            has_ca = bool(manual["ca"]) and Path(manual["ca"]).is_file()
+            return {
+                "ssl_cert_path": manual["cert"],
+                "ssl_key_path": manual["key"],
+                "ssl_ca_path": manual["ca"] if has_ca else None,
+            }
+    except OSError:
+        pass
+    live = Path("/etc/letsencrypt/live") / source_domain
+    return {
+        "ssl_cert_path": str(live / "fullchain.pem"),
+        "ssl_key_path": str(live / "privkey.pem"),
+        "ssl_ca_path": None,
+    }
 
 
 def _rewrite_ssl_kwargs(website: Website) -> dict:
@@ -265,8 +272,10 @@ def _has_live_certificate(website: Website) -> bool:
             return Path(website.ssl_cert_path).is_file() and Path(website.ssl_key_path).is_file()
         except OSError:
             return False
-    if mode in {"cloudflare", "shared"} and website.ssl_source_domain:
-        return _borrowed_ssl_paths(website.ssl_source_domain) is not None
+    if mode in {"cloudflare", "shared"}:
+        # The lineage lives under root-only /etc/letsencrypt/live and the daily
+        # renew keeps it alive; trust the mode rather than stat what we can't.
+        return bool(website.ssl_source_domain)
     live_dir = Path("/etc/letsencrypt/live") / domain
     try:
         return (live_dir / "fullchain.pem").is_file() and (live_dir / "privkey.pem").is_file()
@@ -1203,11 +1212,13 @@ def install_wildcard_ssl(
     website.ssl_ca_path = None
     website.ssl_updated_at = datetime.utcnow()
     try:
-        waf.sync_website_rules(website)
+        waf_result = waf.sync_website_rules(website)
+        if waf_result.returncode != 0:
+            raise RuntimeError(_command_error(waf_result))
         if website.http_flood_enabled:
             _sync_http_flood_zones(db)
         _rewrite_website_vhost(website)
-    except (RuntimeError, ValueError) as exc:
+    except Exception as exc:  # noqa: BLE001 - roll the row back on any wiring failure
         (
             website.ssl_mode,
             website.ssl_source_domain,
@@ -1267,15 +1278,15 @@ def install_shared_ssl(
 
     cert_name = source.ssl_source_domain or source.domain
     info = ssl.cert_info(cert_name)
-    if not info.get("sans") or not ssl.cert_covers(info["sans"], website.domain):
+    if not info.get("sans"):
+        raise HTTPException(status_code=400, detail=f"No usable certificate found for {source.domain}")
+    if not ssl.cert_covers(info["sans"], website.domain):
         raise HTTPException(
             status_code=400,
             detail=f"{source.domain}'s certificate does not cover {website.domain}",
         )
-    if not _borrowed_ssl_paths(cert_name):
-        raise HTTPException(status_code=400, detail=f"No usable certificate files for {source.domain}")
 
-    previous = (website.ssl_mode, website.ssl_source_domain)
+    previous = (website.ssl_enabled, website.ssl_mode, website.ssl_source_domain)
     website.ssl_enabled = True
     website.ssl_mode = "shared"
     website.ssl_source_domain = cert_name
@@ -1284,12 +1295,14 @@ def install_shared_ssl(
     website.ssl_ca_path = None
     website.ssl_updated_at = datetime.utcnow()
     try:
-        waf.sync_website_rules(website)
+        waf_result = waf.sync_website_rules(website)
+        if waf_result.returncode != 0:
+            raise RuntimeError(_command_error(waf_result))
         if website.http_flood_enabled:
             _sync_http_flood_zones(db)
         _rewrite_website_vhost(website)
-    except (RuntimeError, ValueError) as exc:
-        website.ssl_mode, website.ssl_source_domain = previous
+    except Exception as exc:  # noqa: BLE001 - roll the row back on any wiring failure
+        website.ssl_enabled, website.ssl_mode, website.ssl_source_domain = previous
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     db.commit()
     db.refresh(website)
