@@ -528,7 +528,8 @@ function App() {
   const [wpAdminPassword, setWpAdminPassword] = useState('');
   const [phpVersion, setPhpVersion] = useState('8.4');
   const [siteType, setSiteType] = useState('wordpress');
-  const [installSslAfterCreate, setInstallSslAfterCreate] = useState(false);
+  const [createSslMode, setCreateSslMode] = useState('none'); // none|letsencrypt|wildcard|shared|manual
+  const [createSslToken, setCreateSslToken] = useState(''); // Cloudflare token for the wildcard mode
   const [installWordPress, setInstallWordPress] = useState(true);
   const [nginxCustomEditing, setNginxCustomEditing] = useState(null); // Website settings editor state
   const [websiteSettingsForm, setWebsiteSettingsForm] = useState(websiteConfigForm());
@@ -1749,7 +1750,7 @@ function App() {
       } else {
         setNotice(`Created site ${cleanDomain}. Upload your files to public_html/ folder.`);
       }
-      if (installSslAfterCreate) await enableSsl(data.id);
+      if (createSslMode !== 'none') await applyCreateSsl(data.id, cleanDomain);
       refreshAll();
     }
   }
@@ -1763,6 +1764,52 @@ function App() {
   async function enableSsl(id) {
     const data = await request(`/websites/${id}/ssl`, { method: 'POST' }, "Installing Let's Encrypt SSL...");
     if (data) refreshAll();
+  }
+
+  // Run the SSL step chosen in the "Create website" form, on the site that was
+  // just created. The site already exists at this point, so a failure here is
+  // reported but never rolls the site back — the operator can retry from the
+  // SSL page.
+  async function applyCreateSsl(id, siteDomain) {
+    if (createSslMode === 'letsencrypt') {
+      await enableSsl(id);
+      return;
+    }
+    if (createSslMode === 'wildcard') {
+      const body = {};
+      if (createSslToken.trim()) body.cloudflare_api_token = createSslToken.trim();
+      const data = await request(`/websites/${id}/ssl/wildcard`,
+        { method: 'POST', body: JSON.stringify(body) },
+        'Issuing wildcard certificate via Cloudflare...');
+      if (data) {
+        setCreateSslToken('');
+        setNotice(`Created ${siteDomain}. Wildcard SSL active — *.${data.ssl_source_domain} covers it.`);
+      }
+      return;
+    }
+    if (createSslMode === 'shared') {
+      const sources = await request(`/websites/${id}/ssl/sources`, { silent: true });
+      const list = Array.isArray(sources) ? sources : [];
+      if (!list.length) {
+        setError(`Created ${siteDomain}, but no existing certificate covers it. Enable SSL from the SSL page.`);
+        return;
+      }
+      // Prefer a wildcard cert, then the longest-matching source domain.
+      const pick = [...list].sort((a, b) =>
+        (b.wildcard - a.wildcard) || (b.domain.length - a.domain.length))[0];
+      const data = await request(`/websites/${id}/ssl/shared`,
+        { method: 'POST', body: JSON.stringify({ source_domain: pick.domain }) },
+        `Using ${pick.domain}'s certificate...`);
+      if (data) setNotice(`Created ${siteDomain}, now serving ${pick.domain}'s certificate.`);
+      return;
+    }
+    if (createSslMode === 'manual') {
+      // Manual SSL needs the cert and key pasted in; send the operator to the
+      // SSL page for this site to finish it there.
+      setSelectedWebsiteId(String(id));
+      setNotice(`Created ${siteDomain}. Open the Manual tab on the SSL page to paste its certificate.`);
+      navigateToPage('ssl');
+    }
   }
 
   async function addWebsiteAlias(site) {
@@ -4456,9 +4503,24 @@ function App() {
           Install WordPress (creates database, downloads WP, configures vhost)
         </label>}
         <label className="check-line">
-          <input type="checkbox" checked={installSslAfterCreate} onChange={e => setInstallSslAfterCreate(e.target.checked)} />
-          Install SSL after creating
+          <span>SSL after creating</span>
+          <select value={createSslMode} onChange={e => setCreateSslMode(e.target.value)}>
+            <option value="none">None — set up later</option>
+            <option value="letsencrypt">Let's Encrypt (needs DNS pointed here)</option>
+            <option value="wildcard">Wildcard via Cloudflare (*.zone)</option>
+            <option value="shared">Use an existing site's certificate</option>
+            <option value="manual">Manual — paste cert on the SSL page</option>
+          </select>
         </label>
+        {createSslMode === 'wildcard' && <input
+          value={createSslToken}
+          onChange={e => setCreateSslToken(e.target.value)}
+          placeholder="Cloudflare API token (leave empty if already saved for this zone)"
+        />}
+        {createSslMode === 'shared' && <p className="hint">
+          After the site is created the panel picks a certificate that already covers this domain
+          (a wildcard first). If none does, the site is created without SSL.
+        </p>}
         <p className="hint">{wpFieldsEnabled
           ? 'WordPress will be installed and the panel will show the URL, admin account, and password after creation.'
           : siteType === 'application'
