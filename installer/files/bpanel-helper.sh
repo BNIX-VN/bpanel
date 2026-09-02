@@ -3821,9 +3821,14 @@ case "$cmd" in
         systemctl disable --now maldet >/dev/null 2>&1 || true
         systemctl reset-failed maldet >/dev/null 2>&1 || true
         "$MALDET_BIN" --kill-monitor >/dev/null 2>&1 || true
+        # Kill the supervisor first (it respawns inotifywait), then the watcher.
+        pkill -f 'maldet .*--monitor' >/dev/null 2>&1 || true
+        sleep 1
         pkill -f 'inotifywait .*maldetect/sess/inotify' >/dev/null 2>&1 || true
+        sleep 1
+        pkill -9 -f 'inotifywait .*maldetect/sess/inotify' >/dev/null 2>&1 || true
         rm -f "${MALDET_HOME}/tmp/inotifywait.pid" 2>/dev/null || true
-        echo "monitor stopped"
+        maldet_monitor_running && deny "monitor still running after stop" || echo "monitor stopped"
         ;;
       status)
         if maldet_monitor_running; then echo "running=1"; else echo "running=0"; fi
