@@ -3815,8 +3815,13 @@ case "$cmd" in
         maldet_monitor_running && echo "monitor started" || deny "monitor did not start"
         ;;
       stop)
-        systemctl disable --now maldet 2>/dev/null || true
+        systemctl disable --now maldet >/dev/null 2>&1 || true
+        systemctl reset-failed maldet >/dev/null 2>&1 || true
         "$MALDET_BIN" -k >/dev/null 2>&1 || true
+        # maldet -k misses an orphaned watcher; kill it by its command line.
+        pkill -f "inotifywait .*sess/inotify" >/dev/null 2>&1 || true
+        pkill -f "maldet .*inotify_thread" >/dev/null 2>&1 || true
+        rm -f "${MALDET_HOME}/tmp/inotifywait.pid" 2>/dev/null || true
         echo "monitor stopped"
         ;;
       status)
