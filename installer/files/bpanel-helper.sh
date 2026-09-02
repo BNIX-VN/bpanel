@@ -2724,6 +2724,27 @@ require_site_domain_segment() {
     || deny "invalid site domain path segment: $1"
 }
 
+read_site_logs_many() {
+  # read_site_logs_many <access|error> <lines> <domain>...
+  # One spawn for every site's log instead of one sudo round-trip each. Output
+  # is per-domain, each block introduced by a US (0x1f) record separator so the
+  # panel can split it without guessing.
+  local kind="$1" lines="$2"; shift 2
+  [[ "$kind" == "access" || "$kind" == "error" ]] || deny "invalid log kind: $kind"
+  require_tail_lines "$lines"
+  local domain path
+  for domain in "$@"; do
+    require_domain "$domain"
+    path="/var/log/nginx/${domain}.${kind}.log"
+    printf '\x1f%s\n' "$domain"
+    if [[ -f "$path" && ! -L "$path" ]]; then
+      tail -n "$lines" -- "$path" 2>/dev/null || true
+    else
+      printf 'BPANEL_LOG_MISSING\n'
+    fi
+  done
+}
+
 read_site_log() {
   local domain="$1" kind="$2" lines="$3" path resolved
   require_domain "$domain"
@@ -4777,6 +4798,11 @@ PY
   site-log-read)
     [[ $# -eq 3 ]] || deny "usage: site-log-read <domain> <access|error> <lines>"
     read_site_log "$1" "$2" "$3"
+    ;;
+
+  site-logs-read-many)
+    [[ $# -ge 3 ]] || deny "usage: site-logs-read-many <access|error> <lines> <domain>..."
+    read_site_logs_many "$@"
     ;;
 
   site-log-clear)

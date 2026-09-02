@@ -1,6 +1,44 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 from app.services import waf
+
+HELPER = Path(__file__).resolve().parents[3] / "installer" / "files" / "bpanel-helper.sh"
+
+
+def test_the_batch_log_reader_splits_per_domain(monkeypatch):
+    monkeypatch.setattr(waf, "_batch_helper_available", lambda: True)
+    blob = "\x1fa.com\nline a1\nline a2\n\x1fb.com\nBPANEL_LOG_MISSING\n\x1fc.com\nline c1\n"
+    monkeypatch.setattr(
+        waf.shell, "privileged",
+        lambda *a, **k: SimpleNamespace(stdout=blob, stderr="", returncode=0),
+    )
+    out = waf._read_site_logs(["a.com", "b.com", "c.com"], 400)
+    assert out["a.com"].splitlines() == ["line a1", "line a2"]
+    assert out["b.com"] is None
+    assert out["c.com"] == "line c1\n"
+
+
+def test_an_unfiltered_view_only_tails_a_shallow_window(monkeypatch):
+    monkeypatch.setattr(waf, "_batch_helper_available", lambda: True)
+    seen = {}
+
+    def fake(*a, **k):
+        seen["lines"] = int(k["helper_args"][1])
+        return SimpleNamespace(stdout="\x1fx.com\n", stderr="", returncode=0)
+
+    monkeypatch.setattr(waf.shell, "privileged", fake)
+    waf.access_logs([SimpleNamespace(domain="x.com")], verdict="all", query="", limit=50, lines=5000)
+    assert seen["lines"] <= 400
+    waf.access_logs([SimpleNamespace(domain="x.com")], verdict="block", query="", limit=50, lines=5000)
+    assert seen["lines"] == 5000
+
+
+def test_helper_has_the_batch_log_verb():
+    helper = HELPER.read_text(encoding="utf-8")
+    assert "site-logs-read-many)" in helper
+    assert "read_site_logs_many()" in helper
+    assert "/var/log/nginx/" in helper
 
 
 def test_access_logs_parse_and_filter(monkeypatch):

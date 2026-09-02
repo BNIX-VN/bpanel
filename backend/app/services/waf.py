@@ -588,6 +588,46 @@ def _matches_access_filter(item: dict, verdict: str, query: str) -> bool:
     return needle in haystack
 
 
+def _read_site_logs(domains: list[str], lines: int) -> dict[str, str | None]:
+    """{domain: content} for every site's access log in one helper spawn.
+
+    ``None`` means the file does not exist. Falls back to per-site reads only
+    when the batch helper is unavailable (dev).
+    """
+    if not domains:
+        return {}
+    result = shell.privileged(
+        "site-logs-read-many",
+        helper_args=["access", str(lines), *domains],
+        check=False,
+        fallback=None,
+    ) if _batch_helper_available() else None
+
+    if result is None or result.returncode != 0:
+        out: dict[str, str | None] = {}
+        for domain in domains:
+            data = nginx.read_site_log(domain, "access", lines)
+            out[domain] = data.get("content") or "" if data.get("exists") else None
+        return out
+
+    blocks: dict[str, str | None] = {domain: None for domain in domains}
+    for chunk in (result.stdout or "").split("\x1f"):
+        if not chunk:
+            continue
+        head, _, body = chunk.partition("\n")
+        domain = head.strip()
+        if domain not in blocks:
+            continue
+        blocks[domain] = None if body.strip() == "BPANEL_LOG_MISSING" else body
+    return blocks
+
+
+def _batch_helper_available() -> bool:
+    from app.services.shell import _use_helper
+
+    return _use_helper()
+
+
 def access_logs(
     websites: Iterable[Website],
     *,
@@ -596,8 +636,6 @@ def access_logs(
     limit: int = 50,
     lines: int = 5000,
 ) -> dict:
-    from concurrent.futures import ThreadPoolExecutor
-
     safe_limit = max(1, min(int(limit or 50), 500))
     safe_lines = max(1, min(int(lines or 5000), 5000))
     safe_verdict = verdict if verdict in {"all", "allow", "block", "error"} else "all"
@@ -608,26 +646,18 @@ def access_logs(
     scan_lines = safe_lines if filtering else min(safe_lines, max(safe_limit * 4, 400))
 
     domains = [_validate_domain(w.domain) for w in websites]
-
-    def _read(domain: str):
-        return domain, nginx.read_site_log(domain, "access", scan_lines)
-
-    # Each read is an independent `sudo bpanel-helper` + tail; running them
-    # concurrently turns a 15-site page from ~15 spawns in series into one wait.
-    results: list[tuple[str, dict]] = []
-    if domains:
-        with ThreadPoolExecutor(max_workers=min(12, len(domains))) as pool:
-            results = list(pool.map(_read, domains))
+    blocks = _read_site_logs(domains, scan_lines)
 
     sortable: list[tuple[datetime, int, dict]] = []
     parsed_count = 0
     sequence = 0
     missing: list[str] = []
-    for domain, log_data in results:
-        if not log_data.get("exists"):
+    for domain in domains:
+        content = blocks.get(domain)
+        if content is None:
             missing.append(domain)
             continue
-        for line in (log_data.get("content") or "").splitlines():
+        for line in content.splitlines():
             sequence += 1
             parsed = _parse_access_log_line(domain, line, sequence)
             if not parsed:
