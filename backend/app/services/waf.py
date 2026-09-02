@@ -4,6 +4,8 @@ import hashlib
 import ipaddress
 import json
 import re
+import socket
+import threading
 import urllib.request
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -25,11 +27,15 @@ except ImportError:  # pragma: no cover - optional GeoIP support
 DOMAIN_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$")
 MAX_CUSTOM_BYTES = 64 * 1024
 MAX_SITE_RULE_BYTES = 160 * 1024
+# nginx escapes " and control chars in its string vars, so a quoted field never
+# contains a bare " - matching with [^"]* keeps this linear. The old
+# (?:[^"\\]|\\.)* form backtracked catastrophically on binary/garbage requests
+# (TLS handshakes hitting :80, fuzzers), turning a few such lines into seconds.
 ACCESS_LOG_RE = re.compile(
     r'^(?P<ip>\S+) \S+ \S+ \[(?P<time>[^\]]+)\] '
-    r'"(?P<request>(?:[^"\\]|\\.)*)" (?P<status>\d{3}) (?P<body_bytes>\S+)'
-    r'(?: "(?P<referer>(?:[^"\\]|\\.)*)" "(?P<user_agent>(?:[^"\\]|\\.)*)")?'
-    r'(?: (?P<request_time>[0-9.]+))?.*$'
+    r'"(?P<request>[^"]*)" (?P<status>\d{3}) (?P<body_bytes>\S+)'
+    r'(?: "(?P<referer>[^"]*)" "(?P<user_agent>[^"]*)")?'
+    r'(?: (?P<request_time>[0-9.]+))?'
 )
 ACCESS_REASON_RULES = [
     (re.compile(r"(?:^|/)\.env(?:\.|$|[?])", re.I), "Block environment file probe"),
@@ -457,6 +463,58 @@ def _ensure_dbip_country_cache() -> Path | None:
     return path if path.is_file() else None
 
 
+def _ip_str_to_int(value: str) -> tuple[int, int] | None:
+    """(version, integer) for a well-formed IP string, or None.
+
+    Uses socket.inet_pton (C) instead of the ipaddress module: the dbip CSV has
+    ~700k rows and ipaddress.ip_address on each start/end pair took ~20-60s to
+    build the table on the first access-log view.
+    """
+    try:
+        if ":" in value:
+            return 6, int.from_bytes(socket.inet_pton(socket.AF_INET6, value), "big")
+        return 4, int.from_bytes(socket.inet_pton(socket.AF_INET, value), "big")
+    except OSError:
+        return None
+
+
+_DBIP_WARM_LOCK = threading.Lock()
+_DBIP_WARM_STATE = {"started": False, "ready": False}
+
+
+def _dbip_ranges_ready() -> bool:
+    """True once the dbip country table is built.
+
+    Building it parses a ~700k-row CSV (~7-20s cold), so the first call kicks
+    the build onto a daemon thread and returns False - an access-log view then
+    renders immediately with empty country columns, and later refreshes (the
+    response has a short TTL cache) show the geo data once the table is warm.
+    """
+    if _DBIP_WARM_STATE["ready"]:
+        return True
+    with _DBIP_WARM_LOCK:
+        if _DBIP_WARM_STATE["ready"]:
+            return True
+        if not _DBIP_WARM_STATE["started"]:
+            _DBIP_WARM_STATE["started"] = True
+
+            def _build() -> None:
+                try:
+                    _dbip_country_ranges()
+                finally:
+                    _DBIP_WARM_STATE["ready"] = True
+
+            threading.Thread(target=_build, name="bpanel-dbip-warm", daemon=True).start()
+    return False
+
+
+def _warm_dbip_ranges_blocking() -> None:
+    """Build the table synchronously (test helper / one-off warmers)."""
+    _dbip_country_ranges()
+    _DBIP_WARM_STATE["started"] = True
+    _DBIP_WARM_STATE["ready"] = True
+
+
 @lru_cache(maxsize=1)
 def _dbip_country_ranges() -> tuple[tuple[tuple[int, int, str], ...], tuple[tuple[int, int, str], ...]]:
     path = _ensure_dbip_country_cache()
@@ -470,16 +528,12 @@ def _dbip_country_ranges() -> tuple[tuple[tuple[int, int, str], ...], tuple[tupl
             for row in csv.reader(handle):
                 if len(row) < 3:
                     continue
-                try:
-                    start_address = ipaddress.ip_address(row[0].strip())
-                    end_address = ipaddress.ip_address(row[1].strip())
-                except ValueError:
-                    continue
-                if start_address.version != end_address.version:
+                start = _ip_str_to_int(row[0].strip())
+                end = _ip_str_to_int(row[1].strip())
+                if not start or not end or start[0] != end[0]:
                     continue
                 country_code = row[2].strip().upper()
-                ranges = ipv4_ranges if start_address.version == 4 else ipv6_ranges
-                ranges.append((int(start_address), int(end_address), country_code))
+                (ipv4_ranges if start[0] == 4 else ipv6_ranges).append((start[1], end[1], country_code))
     except Exception:
         return (), ()
     ipv4_ranges.sort(key=lambda item: item[0])
@@ -488,6 +542,8 @@ def _dbip_country_ranges() -> tuple[tuple[tuple[int, int, str], ...], tuple[tupl
 
 
 def _lookup_dbip_country(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> dict[str, str]:
+    if not _dbip_ranges_ready():
+        return {"country": "", "country_code": ""}
     ipv4_ranges, ipv6_ranges = _dbip_country_ranges()
     ranges = ipv4_ranges if address.version == 4 else ipv6_ranges
     if not ranges:
@@ -658,6 +714,10 @@ def access_logs(
     hit = _ACCESS_LOG_CACHE.get(cache_key)
     if hit and (time.monotonic() - hit[0]) < _ACCESS_LOG_TTL:
         return {**hit[1], "cached": True}
+
+    # Start (once) the background build of the geo table so it overlaps the log
+    # read + parse below instead of blocking the first request that needs it.
+    _dbip_ranges_ready()
 
     domains = [_validate_domain(w.domain) for w in websites]
     blocks = _read_site_logs(domains, scan_lines)

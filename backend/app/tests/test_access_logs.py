@@ -10,9 +10,14 @@ HELPER = Path(__file__).resolve().parents[3] / "installer" / "files" / "bpanel-h
 
 @pytest.fixture(autouse=True)
 def _clear_access_log_cache():
-    waf._ACCESS_LOG_CACHE.clear()
+    def _reset():
+        waf._ACCESS_LOG_CACHE.clear()
+        waf._dbip_country_ranges.cache_clear()
+        waf._DBIP_WARM_STATE.update(started=False, ready=False)
+
+    _reset()
     yield
-    waf._ACCESS_LOG_CACHE.clear()
+    _reset()
 
 
 def test_the_batch_log_reader_splits_per_domain(monkeypatch):
@@ -41,6 +46,25 @@ def test_an_unfiltered_view_only_tails_a_shallow_window(monkeypatch):
     assert seen["lines"] <= 400
     waf.access_logs([SimpleNamespace(domain="x.com")], verdict="block", query="", limit=50, lines=5000)
     assert seen["lines"] == 5000
+
+
+def test_a_garbage_request_line_parses_fast(monkeypatch):
+    import time
+
+    # A TLS ClientHello sent to :80, plus a fuzzer line with many backslashes -
+    # the shapes that used to make ACCESS_LOG_RE backtrack for seconds.
+    garbage = "\n".join([
+        r'1.2.3.4 - - [27/Jul/2026:12:00:00 +0700] "\x16\x03\x01\x00\xa5\x01\x00\x00\xa1" 400 0 "-" "-" 0.001',
+        r'2.3.4.5 - - [27/Jul/2026:12:00:01 +0700] "GET /' + "a\\" * 400 + r' HTTP/1.1" 404 0 "-" "-" 0.001',
+    ] * 50)
+    monkeypatch.setattr(waf, "_batch_helper_available", lambda: True)
+    monkeypatch.setattr(
+        waf.shell, "privileged",
+        lambda *a, **k: SimpleNamespace(stdout="\x1fx.com\n" + garbage, stderr="", returncode=0),
+    )
+    t = time.time()
+    waf.access_logs([SimpleNamespace(domain="x.com")], verdict="block", query="", limit=50, lines=5000)
+    assert time.time() - t < 2.0
 
 
 def test_helper_has_the_batch_log_verb():
@@ -89,6 +113,7 @@ def test_dbip_country_lookup_uses_cached_csv(monkeypatch, tmp_path):
 
     monkeypatch.setattr(waf, "_ensure_dbip_country_cache", lambda: csv_path)
     waf._dbip_country_ranges.cache_clear()
+    waf._warm_dbip_ranges_blocking()
 
     try:
         result = waf._lookup_ip_country("8.8.8.8")
