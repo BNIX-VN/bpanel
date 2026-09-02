@@ -659,7 +659,7 @@ function App() {
   const [malwareSchedules, setMalwareSchedules] = useState(MALWARE_SCHEDULES_DEFAULT);
   const [malwareSchedulesForm, setMalwareSchedulesForm] = useState(MALWARE_SCHEDULES_DEFAULT);
   const [scanLoading, setScanLoading] = useState(false);
-  const [incrementalDays, setIncrementalDays] = useState(7);
+  const [incrementalDays, setIncrementalDays] = useState(2);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState('');
@@ -1674,7 +1674,7 @@ function App() {
       const body = scanTargetWebsiteId === 'server'
         ? { server: true }
         : scanTargetWebsiteId === 'incremental'
-        ? { mode: 'incremental', days: Number(incrementalDays) || 7 }
+        ? { mode: 'incremental', days: Number(incrementalDays) || 2 }
         : scanTargetWebsiteId === 'all'
         ? { all: true }
         : { website_id: Number(scanTargetWebsiteId) };
@@ -5777,7 +5777,7 @@ function App() {
         {isInc && <label><span>Số ngày</span>
           <select value={form.days ?? 7} disabled={!form.enabled}
             onChange={e => setMalwareSchedulesForm(p => ({ ...p, [name]: { ...p[name], days: Number(e.target.value) } }))}>
-            {[1, 2, 3, 7, 14, 30].map(d => <option key={d} value={d}>{d} ngày</option>)}
+            {[1, 2, 3, 7, 14].map(d => <option key={d} value={d}>{d} ngày</option>)}
           </select>
         </label>}
         <button disabled={!!loading} onClick={() => saveMalwareSchedule(name)}><Clock size={13}/> Lưu</button>
@@ -5839,7 +5839,7 @@ function App() {
                 {websites.map(w => <option key={w.id} value={w.id}>{w.domain}</option>)}
               </select>
               {scanTargetWebsiteId === 'incremental' && <select value={incrementalDays} onChange={e => setIncrementalDays(Number(e.target.value))}>
-                {[1, 2, 3, 7, 14, 30].map(d => <option key={d} value={d}>{d} ngày</option>)}
+                {[1, 2, 3, 7, 14].map(d => <option key={d} value={d}>{d} ngày</option>)}
               </select>}
               <button disabled={!!loading || scanRunning || !scanTargetWebsiteId} onClick={runMalwareScan}>
                 {scanRunning || scanLoading ? <><RefreshCw size={14} className="spin"/> Đang quét...</> : <><Search size={14}/> Quét ngay</>}

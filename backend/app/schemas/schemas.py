@@ -743,7 +743,7 @@ class MalwareScheduleEntry(BaseModel):
     weekday: int = 6          # Monday is 0; ignored for the incremental schedule
     weekday_label: str = ""
     hour: int = 3
-    days: int = 7             # incremental only: scan files changed in the last N days
+    days: int = 2             # incremental only: scan files changed in the last N days
     next_run_at: str = ""
     last_run_at: str = ""
     last_status: str = ""
@@ -781,7 +781,7 @@ class MalwareScanRun(BaseModel):
     server: bool = False
     # "incremental" -> maldet -r /home <days>
     mode: str = ""
-    days: int = 7
+    days: int = 2
 
 
 class MalwareScanThreat(BaseModel):

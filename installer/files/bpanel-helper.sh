@@ -482,7 +482,7 @@ maldet_write_conf() {
     "quarantine_hits=0" "quarantine_clean=0" "quarantine_suspend_user=0" \
     "scan_clamscan=1" "scan_ignore_root=0" "scan_find_h10k_alert=0" \
     "autoupdate_signatures=1" "autoupdate_version=1" "cron_daily_scan=0" \
-    "email_alert=0"
+    "email_alert=0" "default_monitor_mode=users"
   do
     key="${kv%%=*}"; val="${kv#*=}"
     if grep -qE "^${key}=" "$MALDET_CONF"; then
@@ -3805,10 +3805,13 @@ case "$cmd" in
         command -v inotifywait >/dev/null 2>&1 || { export DEBIAN_FRONTEND=noninteractive; apt-get install -y inotify-tools >/dev/null 2>&1; }
         command -v inotifywait >/dev/null 2>&1 || deny "inotify-tools is required for real-time protection and could not be installed"
         write_inotify_sysctl
-        "$MALDET_BIN" -b -m users >/dev/null 2>&1 || true
-        # maldet ships maldet.service which re-launches the monitor on boot.
-        systemctl enable --now maldet >/dev/null 2>&1 || true
-        for _ in 1 2 3 4 5 6 7 8; do
+        grep -qE '^default_monitor_mode=' "$MALDET_CONF" 2>/dev/null || printf 'default_monitor_mode="users"\n' >>"$MALDET_CONF"
+        # Run the monitor through maldet.service: its children stay in the unit's
+        # cgroup, so `systemctl stop` cleans them all up. A bare `maldet -b -m`
+        # daemonises outside systemd and orphans its inotifywait.
+        systemctl enable maldet >/dev/null 2>&1 || true
+        systemctl restart maldet >/dev/null 2>&1 || true
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
           maldet_monitor_running && break
           sleep 1
         done
@@ -3817,10 +3820,8 @@ case "$cmd" in
       stop)
         systemctl disable --now maldet >/dev/null 2>&1 || true
         systemctl reset-failed maldet >/dev/null 2>&1 || true
-        "$MALDET_BIN" -k >/dev/null 2>&1 || true
-        # maldet -k misses an orphaned watcher; kill it by its command line.
-        pkill -f "inotifywait .*sess/inotify" >/dev/null 2>&1 || true
-        pkill -f "maldet .*inotify_thread" >/dev/null 2>&1 || true
+        "$MALDET_BIN" --kill-monitor >/dev/null 2>&1 || true
+        pkill -f 'inotifywait .*maldetect/sess/inotify' >/dev/null 2>&1 || true
         rm -f "${MALDET_HOME}/tmp/inotifywait.pid" 2>/dev/null || true
         echo "monitor stopped"
         ;;

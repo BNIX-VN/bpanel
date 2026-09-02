@@ -942,13 +942,13 @@ def _spawn_malware_job(job: dict, run) -> dict:
     return _public_malware_job(job)
 
 
-def start_incremental_scan_job(days: int = 7) -> dict:
+def start_incremental_scan_job(days: int = 2) -> dict:
     """Daily 'recent files' LMD scan of every website root."""
     from app.services import maldet
 
     if not maldet.installed():
         raise RuntimeError("LMD chưa được cài. Bật trình quét malware để cài.")
-    days = max(1, min(int(days or 7), 60))
+    days = max(1, min(int(days or 2), 30))
     job = _new_malware_job(scope="incremental", engine="lmd", message=f"Queued (recent {days}d)")
     return _spawn_malware_job(
         job, lambda: _run_maldet_job(job["job_id"], "/home", recent_days=days)
