@@ -628,6 +628,12 @@ def _batch_helper_available() -> bool:
     return _use_helper()
 
 
+# Reading two dozen nginx logs off a cold disk takes seconds; the page polls
+# every few seconds, so the same answer is served from here in between.
+_ACCESS_LOG_CACHE: dict[tuple, tuple[float, dict]] = {}
+_ACCESS_LOG_TTL = 4.0
+
+
 def access_logs(
     websites: Iterable[Website],
     *,
@@ -636,6 +642,9 @@ def access_logs(
     limit: int = 50,
     lines: int = 5000,
 ) -> dict:
+    import time
+
+    websites = list(websites)
     safe_limit = max(1, min(int(limit or 50), 500))
     safe_lines = max(1, min(int(lines or 5000), 5000))
     safe_verdict = verdict if verdict in {"all", "allow", "block", "error"} else "all"
@@ -644,6 +653,11 @@ def access_logs(
     # there is no reason to tail (and parse) thousands. With a filter we need
     # the deep history to find enough matches.
     scan_lines = safe_lines if filtering else min(safe_lines, max(safe_limit * 4, 400))
+
+    cache_key = (tuple(sorted(w.domain for w in websites)), safe_verdict, (query or "").strip(), safe_limit, scan_lines)
+    hit = _ACCESS_LOG_CACHE.get(cache_key)
+    if hit and (time.monotonic() - hit[0]) < _ACCESS_LOG_TTL:
+        return {**hit[1], "cached": True}
 
     domains = [_validate_domain(w.domain) for w in websites]
     blocks = _read_site_logs(domains, scan_lines)
@@ -668,7 +682,7 @@ def access_logs(
                 sortable.append((sort_time, parsed_count, item))
     sortable.sort(key=lambda row: (row[0], row[1]), reverse=True)
     items = [item for _, _, item in sortable[:safe_limit]]
-    return {
+    payload = {
         "items": items,
         "total": len(sortable),
         "scanned": parsed_count,
@@ -678,10 +692,16 @@ def access_logs(
         "query": (query or "").strip(),
         "missing": missing,
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "cached": False,
     }
+    if len(_ACCESS_LOG_CACHE) > 32:
+        _ACCESS_LOG_CACHE.clear()
+    _ACCESS_LOG_CACHE[cache_key] = (time.monotonic(), payload)
+    return payload
 
 
 def clear_access_logs(websites: Iterable[Website]) -> int:
+    _ACCESS_LOG_CACHE.clear()
     cleared = 0
     for website in websites:
         nginx.clear_site_log(_validate_domain(website.domain), "access")

@@ -1,9 +1,18 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from app.services import waf
 
 HELPER = Path(__file__).resolve().parents[3] / "installer" / "files" / "bpanel-helper.sh"
+
+
+@pytest.fixture(autouse=True)
+def _clear_access_log_cache():
+    waf._ACCESS_LOG_CACHE.clear()
+    yield
+    waf._ACCESS_LOG_CACHE.clear()
 
 
 def test_the_batch_log_reader_splits_per_domain(monkeypatch):
