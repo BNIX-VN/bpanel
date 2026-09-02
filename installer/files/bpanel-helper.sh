@@ -467,6 +467,141 @@ install_clamav_engine() {
   echo "ClamAV installed and clamav-daemon enabled."
 }
 
+# --- Linux Malware Detect (LMD / maldet) ------------------------------------
+MALDET_BIN="/usr/local/sbin/maldet"
+MALDET_HOME="/usr/local/maldetect"
+MALDET_CONF="${MALDET_HOME}/conf.maldet"
+MALDET_TARBALL_URL="https://www.rfxn.com/downloads/maldetect-current.tar.gz"
+
+maldet_write_conf() {
+  # Panel-owned settings on top of whatever the rfxn installer shipped. The
+  # panel drives scheduling and never auto-quarantines, so its cron is off.
+  [[ -f "$MALDET_CONF" ]] || return 0
+  local key val kv
+  for kv in \
+    "quarantine_hits=0" "quarantine_clean=0" "quarantine_suspend_user=0" \
+    "scan_clamscan=1" "scan_ignore_root=0" "scan_find_h10k_alert=0" \
+    "autoupdate_signatures=1" "autoupdate_version=1" "cron_daily_scan=0" \
+    "email_alert=0"
+  do
+    key="${kv%%=*}"; val="${kv#*=}"
+    if grep -qE "^${key}=" "$MALDET_CONF"; then
+      sed -i -E "s#^${key}=.*#${key}=\"${val}\"#" "$MALDET_CONF"
+    else
+      printf '%s="%s"\n' "$key" "$val" >>"$MALDET_CONF"
+    fi
+  done
+  # The panel owns the schedule; disarm the installer's daily cron.
+  [[ -f /etc/cron.daily/maldet ]] && chmod a-x /etc/cron.daily/maldet
+  return 0
+}
+
+install_maldet_engine() {
+  export DEBIAN_FRONTEND=noninteractive
+  # clamscan is the scan engine; the resident daemon is deliberately not
+  # enabled - maldet runs clamscan one-shot so the ~1.3GB of signatures are
+  # only resident during a scan.
+  if ! command -v clamscan >/dev/null 2>&1; then
+    apt-get update --allow-releaseinfo-change
+    apt-get install -y clamav || deny "could not install the clamav package (scan engine)"
+  fi
+  freshclam >/dev/null 2>&1 || true
+  command -v wget >/dev/null 2>&1 || command -v curl >/dev/null 2>&1 || apt-get install -y wget
+
+  if [[ ! -x "$MALDET_BIN" ]]; then
+    local tmp tarball
+    tmp="$(mktemp -d /tmp/bpanel-maldet.XXXXXX)"
+    tarball="${tmp}/maldetect.tar.gz"
+    if command -v wget >/dev/null 2>&1; then
+      wget -q --timeout=30 -O "$tarball" "$MALDET_TARBALL_URL" || { rm -rf "$tmp"; deny "could not download LMD from rfxn.com (offline? use the panel button later)"; }
+    else
+      curl -fsSL --connect-timeout 15 --max-time 120 "$MALDET_TARBALL_URL" -o "$tarball" || { rm -rf "$tmp"; deny "could not download LMD from rfxn.com (offline? use the panel button later)"; }
+    fi
+    [[ "$(file -b "$tarball" 2>/dev/null)" == *[Gg]zip* ]] || { rm -rf "$tmp"; deny "the LMD download is not a gzip archive"; }
+    tar -xzf "$tarball" -C "$tmp" || { rm -rf "$tmp"; deny "could not unpack the LMD archive"; }
+    local srcdir
+    srcdir="$(find "$tmp" -maxdepth 1 -type d -name 'maldetect-*' | head -n1)"
+    [[ -n "$srcdir" && -x "$srcdir/install.sh" ]] || { rm -rf "$tmp"; deny "LMD archive layout not recognised"; }
+    ( cd "$srcdir" && ./install.sh ) || { rm -rf "$tmp"; deny "the LMD installer failed"; }
+    rm -rf "$tmp"
+  fi
+  [[ -x "$MALDET_BIN" ]] || deny "maldet is still not present after install"
+  maldet_write_conf
+  "$MALDET_BIN" -u --force >/dev/null 2>&1 || true
+  echo "LMD installed at ${MALDET_HOME}; ClamAV engine present (daemon not enabled)."
+}
+
+maldet_monitor_running() {
+  [[ -f "${MALDET_HOME}/monitor_pid" ]] || return 1
+  local pid
+  pid="$(cat "${MALDET_HOME}/monitor_pid" 2>/dev/null)"
+  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+}
+
+write_inotify_sysctl() {
+  cat >/etc/sysctl.d/60-bpanel-inotify.conf <<'SYSCTL'
+# Raised by BPanel so the LMD real-time monitor can watch every site file.
+fs.inotify.max_user_watches = 524288
+fs.inotify.max_user_instances = 1024
+SYSCTL
+  sysctl --system >/dev/null 2>&1 || true
+}
+
+run_maldet_scan() {
+  # run_maldet_scan <job-id> <all|recent> <days> <path>...
+  local job="$1" mode="$2" days="$3"; shift 3
+  [[ "$job" =~ ^[0-9a-f]{8,64}$ ]] || deny "invalid scan job id"
+  [[ "$mode" == "all" || "$mode" == "recent" ]] || deny "scan mode must be all|recent"
+  [[ "$days" =~ ^[0-9]{1,4}$ ]] || deny "scan days must be an integer"
+  [[ -x "$MALDET_BIN" ]] || deny "maldet is not installed"
+  install -d -o bpanel -g bpanel -m 0750 "$MALWARE_JOBS_DIR"
+  local out="${MALWARE_JOBS_DIR}/${job}.maldet.out"
+  local rep="${MALWARE_JOBS_DIR}/${job}.maldet.report"
+  rm -f "$out" "$rep"
+
+  local -a targets=()
+  local p resolved
+  for p in "$@"; do
+    resolved="$(readlink -m -- "$p")"
+    case "$resolved" in
+      /) targets+=("/") ;;
+      /home|/home/*) [[ -d "$resolved" ]] && targets+=("$resolved") ;;
+      *) deny "scan path must be / or under /home: $resolved" ;;
+    esac
+  done
+  [[ ${#targets[@]} -gt 0 ]] || deny "no valid scan path"
+
+  local -a co=()
+  # A whole-machine scan skips the kernel/pkg-cache noise; a /home scan does not
+  # need it. maldet takes one -co per override.
+  if [[ " ${targets[*]} " == *" / "* ]]; then
+    local ignore
+    ignore="$(printf '%s\n' "${MALWARE_SCAN_PRUNE[@]}" | paste -sd, -)"
+    co=(-co "scan_ignore=${ignore}")
+  fi
+
+  # Foreground on purpose: -b daemonises and the helper would return before the
+  # report exists. The panel already runs this call in a background job.
+  local rc=0
+  if [[ "$mode" == "recent" ]]; then
+    nice -n 19 ionice -c3 "$MALDET_BIN" "${co[@]}" -r "${targets[0]}" "$days" >"$out" 2>&1 || rc=$?
+  else
+    nice -n 19 ionice -c3 "$MALDET_BIN" "${co[@]}" -a "${targets[@]}" >"$out" 2>&1 || rc=$?
+  fi
+
+  local scanid
+  scanid="$(grep -oE '[0-9]{6}-[0-9]+\.[0-9]+' "$out" | head -n1)"
+  if [[ -z "$scanid" ]]; then
+    scanid="$("$MALDET_BIN" -e list 2>/dev/null | grep -oE '[0-9]{6}-[0-9]+\.[0-9]+' | tail -n1)"
+  fi
+  : >"$rep"
+  [[ -n "$scanid" ]] && "$MALDET_BIN" -e "$scanid" >>"$rep" 2>/dev/null || true
+  chown bpanel:bpanel "$out" "$rep" 2>/dev/null || true
+  chmod 0640 "$out" "$rep" 2>/dev/null || true
+  printf 'scanid=%s\n' "${scanid:-none}"
+  printf 'exit=%s\n' "$rc"
+}
+
 install_php_version() {
   local version="$1"
   export DEBIAN_FRONTEND=noninteractive
@@ -3609,6 +3744,70 @@ case "$cmd" in
   clamav-stop)
     systemctl disable --now clamav-daemon 2>/dev/null || systemctl stop clamav-daemon
     echo "clamav-daemon stopped"
+    ;;
+
+  # ---- Linux Malware Detect (LMD) --------------------------------------
+  maldet-install)
+    [[ $# -eq 0 ]] || deny "usage: maldet-install"
+    install_maldet_engine
+    ;;
+
+  maldet-status)
+    if [[ -x "$MALDET_BIN" ]]; then echo "installed=1"; else echo "installed=0"; fi
+    if maldet_monitor_running; then echo "monitor=1"; else echo "monitor=0"; fi
+    maldet_sig_file="${MALDET_HOME}/sigs/maldet.sigs.ver"
+    if [[ -f "$maldet_sig_file" ]]; then
+      echo "sig_version=$(cat "$maldet_sig_file" 2>/dev/null || echo unknown)"
+      echo "sig_updated=$(date -u -r "$maldet_sig_file" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '')"
+    else
+      echo "sig_version=unknown"
+      echo "sig_updated="
+    fi
+    ;;
+
+  maldet-update-sigs)
+    [[ $# -eq 0 ]] || deny "usage: maldet-update-sigs"
+    [[ -x "$MALDET_BIN" ]] || deny "maldet is not installed"
+    "$MALDET_BIN" -u --force 2>&1 || true
+    freshclam >/dev/null 2>&1 || true
+    echo "signatures updated"
+    ;;
+
+  maldet-scan)
+    # maldet-scan <job-id> <all|recent> <days> <path>...
+    [[ $# -ge 4 ]] || deny "usage: maldet-scan <job-id> <all|recent> <days> <path>..."
+    run_maldet_scan "$@"
+    ;;
+
+  maldet-report)
+    [[ $# -eq 1 ]] || deny "usage: maldet-report <scanid>"
+    [[ "$1" =~ ^[0-9]{6}-[0-9]+\.[0-9]+$ ]] || deny "invalid scanid"
+    [[ -x "$MALDET_BIN" ]] || deny "maldet is not installed"
+    "$MALDET_BIN" -e "$1" 2>/dev/null || true
+    ;;
+
+  maldet-monitor)
+    [[ $# -eq 1 ]] || deny "usage: maldet-monitor <start|stop|status>"
+    [[ -x "$MALDET_BIN" ]] || deny "maldet is not installed"
+    case "$1" in
+      start)
+        write_inotify_sysctl
+        "$MALDET_BIN" -b -m users >/dev/null 2>&1 || true
+        # maldet ships maldet.service which re-launches the monitor on boot.
+        systemctl enable --now maldet 2>/dev/null || true
+        maldet_monitor_running && echo "monitor started" || deny "monitor did not start"
+        ;;
+      stop)
+        systemctl disable --now maldet 2>/dev/null || true
+        "$MALDET_BIN" -k >/dev/null 2>&1 || true
+        echo "monitor stopped"
+        ;;
+      status)
+        if maldet_monitor_running; then echo "running=1"; else echo "running=0"; fi
+        echo "watches=$(cat /proc/sys/fs/inotify/max_user_watches 2>/dev/null || echo 0)"
+        ;;
+      *) deny "usage: maldet-monitor <start|stop|status>" ;;
+    esac
     ;;
 
   waf-update)

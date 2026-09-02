@@ -1302,6 +1302,21 @@ else
   echo "  (bpanel user not found; skipping WAF install - run install.sh first)"
 fi
 
+# --- Malware scanner: retrofit LMD on servers that already run the scanner --
+# The scanner is opt-in; only touch a server whose admin turned it on. LMD adds
+# fast site-root scans, a daily incremental scan and named malware families on
+# top of ClamAV. A failure here is not fatal - the panel has an Install button.
+if id -u bpanel >/dev/null 2>&1 \
+   && grep -q '"malware_scan_enabled":[[:space:]]*true' /var/lib/bpanel/panel-settings.json 2>/dev/null \
+   && [[ ! -x /usr/local/sbin/maldet ]]; then
+  log "Installing Linux Malware Detect (scanner is enabled on this server)"
+  sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper maldet-install || \
+    echo "  (LMD install failed - use the Install LMD button on the Malware page)"
+fi
+if id -u bpanel >/dev/null 2>&1 && [[ -x /usr/local/sbin/maldet ]]; then
+  sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper maldet-update-sigs >/dev/null 2>&1 || true
+fi
+
 # --- Firewall: move IP blocking from UFW/Nginx to iptables + ipset ---------
 log "Migrating firewall to iptables + ipset"
 if ! command -v ipset >/dev/null 2>&1 || ! command -v iptables >/dev/null 2>&1; then

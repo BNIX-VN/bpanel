@@ -416,6 +416,49 @@ def _persist_malware_enabled(enabled: bool) -> None:
     _write_raw(data)
 
 
+def _persist_malware_realtime(enabled: bool) -> None:
+    data = _read_raw()
+    data["malware_realtime_enabled"] = bool(enabled)
+    _write_raw(data)
+
+
+def set_malware_realtime(enabled: bool) -> dict:
+    """Level 2: turn the LMD inotify monitor on or off.
+
+    Installs LMD first (in the background) if it is not present yet, exactly
+    like enabling the scanner does for ClamAV.
+    """
+    from app.services import maldet
+
+    enabled = bool(enabled)
+    if enabled and not maldet.installed():
+        _persist_malware_enabled(True)
+        _persist_malware_realtime(True)
+        threading.Thread(target=_install_realtime_flow, daemon=True).start()
+        current = malware_scan_status()
+        current["detail"] = "Đang cài LMD; bảo vệ thời gian thực sẽ bật khi cài xong."
+        return current
+    _persist_malware_realtime(enabled)
+    try:
+        if enabled:
+            maldet.monitor_start()
+        else:
+            maldet.monitor_stop()
+    except RuntimeError as exc:
+        raise RuntimeError(str(exc)) from exc
+    return malware_scan_status()
+
+
+def _install_realtime_flow() -> None:
+    from app.services import maldet
+
+    try:
+        maldet.install()
+        maldet.monitor_start()
+    except Exception:  # noqa: BLE001 - recorded in the status file
+        _malware_scan._write_status({**_malware_scan.refresh_status(), "detail": "LMD install/monitor failed"})
+
+
 def malware_scan_status() -> dict:
     return _malware_scan.refresh_status()
 
@@ -423,54 +466,58 @@ def malware_scan_status() -> dict:
 def set_malware_scan(enabled: bool) -> dict:
     """Toggle malware scanning on/off.
 
-    If enabling and ClamAV is not yet installed, the install runs in a
-    background thread so the API call returns immediately. If disabling, the
-    flag is simply turned off (clamd is left installed but idle).
+    Enabling on a server without the engine installs LMD + the ClamAV package
+    in a background thread so the API returns immediately. Disabling just turns
+    the flag off (LMD/clamav are left on disk).
     """
+    from app.services import maldet
+
     enabled = bool(enabled)
-    if enabled and not _malware_scan.clamav_installed():
-        # Kick off install + enable in the background; mark flag intent now.
+    if enabled and not (maldet.installed() or _malware_scan.clamav_installed()):
         _persist_malware_enabled(True)
         threading.Thread(target=_install_and_enable_flow, daemon=True).start()
         current = current_settings()
         current["message"] = (
-            "ClamAV is being installed in the background. Scanning will activate "
-            "automatically once clamav-daemon is running."
+            "LMD + ClamAV đang được cài trong nền. Quét sẽ sẵn sàng khi cài xong "
+            "(1-3 phút)."
         )
         return current
     _persist_malware_enabled(enabled)
     current = current_settings()
     if enabled:
-        current["message"] = "Malware scanning enabled"
+        current["message"] = "Đã bật trình quét malware"
     else:
-        stopped = _malware_scan.stop_clamd()
+        _persist_malware_realtime(False)
+        try:
+            maldet.monitor_stop()
+        except Exception:  # noqa: BLE001
+            pass
+        _malware_scan.stop_clamd()
         current = current_settings()
-        current["message"] = (
-            "Malware scanning disabled and clamav-daemon stopped"
-            if stopped
-            else "Malware scanning disabled, but clamav-daemon could not be stopped"
-        )
+        current["message"] = "Đã tắt trình quét malware"
     return current
 
 
 def _install_and_enable_flow() -> None:
-    """Background worker: install ClamAV, then leave the persisted flag on.
+    """Background worker: install the scan engine (LMD + the ClamAV package),
+    then leave the persisted flag on.
 
     The flag was already persisted as True by set_malware_scan(); this just
     performs the heavy install. Failures are captured in the status file.
     """
+    from app.services import maldet
+
     try:
-        _malware_scan.install_clamav()
+        # maldet-install pulls the clamav package (engine) itself and does NOT
+        # enable the resident daemon.
+        maldet.install()
     except Exception as exc:  # noqa: BLE001 - record failure, do not crash thread
+        try:
+            _malware_scan.install_clamav()  # last resort: at least get clamscan
+        except Exception:
+            pass
         _malware_scan._write_status(
-            {
-                "installed": _malware_scan.clamav_installed(),
-                "clamd_running": False,
-                "enabled": True,
-                "active": False,
-                "socket": _malware_scan._socket_path(),
-                "detail": f"ClamAV install failed: {exc}",
-            }
+            {**_malware_scan.refresh_status(), "detail": f"LMD install failed: {exc}"}
         )
 
 
@@ -741,35 +788,15 @@ class _ServerScanProgress:
 
 def start_server_scan_job() -> dict:
     """Scan every file on the machine, not just the websites."""
-    if not _malware_scan.clamd_running():
-        raise RuntimeError("ClamAV daemon is not running. Enable malware scanning first.")
-    job_id = uuid.uuid4().hex
-    job = {
-        "job_id": job_id,
-        "status": "queued",
-        "scope": "server",
-        "website_id": None,
-        "domains": [],
-        "message": "Queued",
-        "progress_percent": 0,
-        "total_files": 0,
-        "scanned": 0,
-        "infected": 0,
-        "errors": 0,
-        "skipped": 0,
-        "threats": [],
-        "log": [],
-        "created_at": _now_iso(),
-        "started_at": "",
-        "finished_at": "",
-        "updated_at": _now_iso(),
-    }
-    _remember_malware_job(job)
-    thread = threading.Thread(target=_run_server_scan_job, args=(job_id,), daemon=True)
-    with MALWARE_JOBS_LOCK:
-        MALWARE_JOB_THREADS[job_id] = thread
-    thread.start()
-    return _public_malware_job(job)
+    from app.services import maldet
+
+    if not (maldet.installed() or _malware_scan.engine_available()):
+        raise RuntimeError("Trình quét malware chưa được cài. Bật nó trước.")
+    job = _new_malware_job(scope="server", message="Queued")
+    if maldet.installed():
+        job["engine"] = "lmd"
+        return _spawn_malware_job(job, lambda: _run_maldet_job(job["job_id"], "/"))
+    return _spawn_malware_job(job, lambda: _run_server_scan_job(job["job_id"]))
 
 
 def _run_server_scan_job(job_id: str) -> None:
@@ -843,6 +870,91 @@ def _run_server_scan_job(job_id: str) -> None:
             pass
 
 
+# --- LMD (Linux Malware Detect) scan path ---------------------------------
+# When maldet is installed it replaces the per-file clamdscan loop: one
+# `maldet -a /home` (or `-r /home <days>` for the incremental) is far faster and
+# reports named malware families. The clamd path stays as the fallback.
+
+_DOMAIN_IN_PATH = re.compile(r"^/home/[^/]+/([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9-]+)+)/")
+
+
+def _domain_from_path(path: str) -> str:
+    m = _DOMAIN_IN_PATH.match(path or "")
+    return m.group(1) if m else ""
+
+
+def _run_maldet_job(job_id: str, target: str, *, recent_days: int | None = None) -> None:
+    from app.services import maldet
+
+    kind = f"tăng dần {recent_days} ngày" if recent_days else "toàn bộ"
+    _update_malware_job(
+        job_id, status="running", started_at=_now_iso(), engine="lmd",
+        message=f"Đang quét ({kind}) bằng LMD: {target}",
+    )
+    _append_malware_log(job_id, f"maldet scan of {target} started")
+    try:
+        result = maldet.scan(job_id, [target], recent_days=recent_days)
+        total, threats = maldet.read_job_report(job_id)
+        for threat in threats:
+            threat["domain"] = threat.get("domain") or _domain_from_path(threat["path"])
+            _append_malware_log(job_id, f"INFECTED {threat['path']}: {threat['signature']}")
+        status = "infected" if threats else "done"
+        # maldet exit: 0 ok, 2 malware found, 1 error running.
+        if result["exit"] not in (0, 2) and not threats:
+            raise RuntimeError((result.get("raw") or "maldet scan failed").strip()[-400:])
+        _update_malware_job(
+            job_id, status=status, progress_percent=100,
+            total_files=total, scanned=total, infected=len(threats),
+            threats=threats, scanid=result["scanid"],
+            message=f"Quét xong: {total} tệp, {len(threats)} mối đe doạ",
+            finished_at=_now_iso(),
+        )
+        _append_malware_log(job_id, "maldet scan finished")
+    except Exception as exc:  # noqa: BLE001 - a failed scan is reported, not raised
+        _update_malware_job(
+            job_id, status="error", message="Scan failed", error=str(exc), finished_at=_now_iso(),
+        )
+        _append_malware_log(job_id, f"ERROR scan failed: {exc}")
+    finally:
+        with MALWARE_JOBS_LOCK:
+            MALWARE_JOB_THREADS.pop(job_id, None)
+
+
+def _new_malware_job(**overrides) -> dict:
+    job = {
+        "job_id": uuid.uuid4().hex, "status": "queued", "scope": "website",
+        "website_id": None, "domains": [], "message": "Queued", "engine": "",
+        "progress_percent": 0, "total_files": 0, "scanned": 0, "infected": 0,
+        "errors": 0, "skipped": 0, "threats": [], "log": [],
+        "created_at": _now_iso(), "started_at": "", "finished_at": "", "updated_at": _now_iso(),
+    }
+    job.update(overrides)
+    return job
+
+
+def _spawn_malware_job(job: dict, run) -> dict:
+    """``run`` is a zero-arg callable that executes the job in a daemon thread."""
+    _remember_malware_job(job)
+    thread = threading.Thread(target=run, daemon=True)
+    with MALWARE_JOBS_LOCK:
+        MALWARE_JOB_THREADS[job["job_id"]] = thread
+    thread.start()
+    return _public_malware_job(job)
+
+
+def start_incremental_scan_job(days: int = 7) -> dict:
+    """Daily 'recent files' LMD scan of every website root."""
+    from app.services import maldet
+
+    if not maldet.installed():
+        raise RuntimeError("LMD chưa được cài. Bật trình quét malware để cài.")
+    days = max(1, min(int(days or 7), 60))
+    job = _new_malware_job(scope="incremental", engine="lmd", message=f"Queued (recent {days}d)")
+    return _spawn_malware_job(
+        job, lambda: _run_maldet_job(job["job_id"], "/home", recent_days=days)
+    )
+
+
 def start_scan_job(website_id: int | None, db) -> dict:
     """Start a background malware scan for one website or all websites."""
     websites = _select_scan_websites(website_id, db)
@@ -855,33 +967,21 @@ def start_scan_job(website_id: int | None, db) -> dict:
             raise ValueError(f"Website root not found: {root_path}")
         targets.append({"id": website.id, "domain": website.domain, "root_path": root_path})
 
-    job_id = uuid.uuid4().hex
-    job = {
-        "job_id": job_id,
-        "status": "queued",
-        "scope": "all" if website_id is None else "website",
-        "website_id": website_id,
-        "domains": [target["domain"] for target in targets],
-        "message": "Queued",
-        "progress_percent": 0,
-        "total_files": 0,
-        "scanned": 0,
-        "infected": 0,
-        "errors": 0,
-        "skipped": 0,
-        "threats": [],
-        "log": [],
-        "created_at": _now_iso(),
-        "started_at": "",
-        "finished_at": "",
-        "updated_at": _now_iso(),
-    }
-    _remember_malware_job(job)
-    thread = threading.Thread(target=_run_scan_job, args=(job_id, targets), daemon=True)
-    with MALWARE_JOBS_LOCK:
-        MALWARE_JOB_THREADS[job_id] = thread
-    thread.start()
-    return _public_malware_job(job)
+    job = _new_malware_job(
+        scope="all" if website_id is None else "website",
+        website_id=website_id,
+        domains=[target["domain"] for target in targets],
+    )
+
+    from app.services import maldet
+
+    if maldet.installed():
+        job["engine"] = "lmd"
+        # One site -> its root; all sites -> /home (covers every user).
+        scan_path = targets[0]["root_path"] if len(targets) == 1 else "/home"
+        return _spawn_malware_job(job, lambda: _run_maldet_job(job["job_id"], scan_path))
+
+    return _spawn_malware_job(job, lambda: _run_scan_job(job["job_id"], targets))
 
 
 def _run_scan_job(job_id: str, targets: list[dict]) -> None:

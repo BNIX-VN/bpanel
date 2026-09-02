@@ -738,21 +738,12 @@ class MalwareScanToggle(BaseModel):
     enabled: bool = False
 
 
-class MalwareScanScheduleUpdate(BaseModel):
+class MalwareScheduleEntry(BaseModel):
     enabled: bool = False
-    # Monday is 0, matching datetime.weekday().
-    weekday: int = 6
-    hour: int = 3
-    # server = every file on the machine, websites = the website roots only.
-    scope: str = "server"
-
-
-class MalwareScanScheduleOut(BaseModel):
-    enabled: bool = False
-    weekday: int = 6
+    weekday: int = 6          # Monday is 0; ignored for the incremental schedule
     weekday_label: str = ""
     hour: int = 3
-    scope: str = "server"
+    days: int = 7             # incremental only: scan files changed in the last N days
     next_run_at: str = ""
     last_run_at: str = ""
     last_status: str = ""
@@ -760,11 +751,37 @@ class MalwareScanScheduleOut(BaseModel):
     last_job_id: str = ""
 
 
+class MalwareSchedulesOut(BaseModel):
+    websites: MalwareScheduleEntry = MalwareScheduleEntry()
+    server: MalwareScheduleEntry = MalwareScheduleEntry()
+    incremental: MalwareScheduleEntry = MalwareScheduleEntry()
+
+
+class MalwareScheduleEntryUpdate(BaseModel):
+    enabled: Optional[bool] = None
+    weekday: Optional[int] = None
+    hour: Optional[int] = None
+    days: Optional[int] = None
+
+
+class MalwareSchedulesUpdate(BaseModel):
+    websites: Optional[MalwareScheduleEntryUpdate] = None
+    server: Optional[MalwareScheduleEntryUpdate] = None
+    incremental: Optional[MalwareScheduleEntryUpdate] = None
+
+
+class MalwareRealtimeToggle(BaseModel):
+    enabled: bool = False
+
+
 class MalwareScanRun(BaseModel):
     website_id: Optional[int] = None
     all: bool = False
     # Scan every file on the machine, not just website roots.
     server: bool = False
+    # "incremental" -> maldet -r /home <days>
+    mode: str = ""
+    days: int = 7
 
 
 class MalwareScanThreat(BaseModel):
@@ -787,6 +804,8 @@ class MalwareScanJob(BaseModel):
     job_id: str
     status: str = "queued"
     scope: str = "website"
+    engine: str = ""
+    scanid: str = ""
     website_id: Optional[int] = None
     domains: list[str] = []
     message: str = ""
@@ -814,6 +833,12 @@ class MalwareScanStatus(BaseModel):
     clamd_running: bool = False
     enabled: bool = False
     active: bool = False
+    engine: str = "none"           # "lmd+clamav" | "clamav" | "none"
+    lmd_installed: bool = False
+    lmd_sig_version: str = ""
+    lmd_updated_at: str = ""
+    realtime_enabled: bool = False
+    monitor_running: bool = False
     socket: str = "/run/clamav/clamd.sock"
     detail: Optional[str] = None
     memory_total_mb: int = 0
