@@ -527,6 +527,9 @@ install_maldet_engine() {
   fi
   [[ -x "$MALDET_BIN" ]] || deny "maldet is still not present after install"
   maldet_write_conf
+  # The rfxn installer enables maldet.service (the inotify monitor). BPanel
+  # owns Level 2: keep it off until the admin turns it on.
+  systemctl disable --now maldet >/dev/null 2>&1 || true
   "$MALDET_BIN" -u --force >/dev/null 2>&1 || true
   echo "LMD installed at ${MALDET_HOME}; ClamAV engine present (daemon not enabled)."
 }
@@ -590,12 +593,15 @@ run_maldet_scan() {
   fi
 
   local scanid
-  scanid="$(grep -oE '[0-9]{6}-[0-9]+\.[0-9]+' "$out" | head -n1)"
-  if [[ -z "$scanid" ]]; then
-    scanid="$("$MALDET_BIN" -e list 2>/dev/null | grep -oE '[0-9]{6}-[0-9]+\.[0-9]+' | tail -n1)"
+  scanid="$(grep -oE '[0-9]{6}-[0-9]{4}\.[0-9]+' "$out" | head -n1)"
+  if [[ -z "$scanid" && -f "${MALDET_HOME}/sess/session.last" ]]; then
+    scanid="$(cat "${MALDET_HOME}/sess/session.last" 2>/dev/null)"
   fi
+  # The report body is the session file maldet wrote, not `maldet -e` output.
   : >"$rep"
-  [[ -n "$scanid" ]] && "$MALDET_BIN" -e "$scanid" >>"$rep" 2>/dev/null || true
+  if [[ -n "$scanid" && -f "${MALDET_HOME}/sess/session.${scanid}" ]]; then
+    cat "${MALDET_HOME}/sess/session.${scanid}" >>"$rep"
+  fi
   chown bpanel:bpanel "$out" "$rep" 2>/dev/null || true
   chmod 0640 "$out" "$rep" 2>/dev/null || true
   printf 'scanid=%s\n' "${scanid:-none}"
@@ -3781,9 +3787,9 @@ case "$cmd" in
 
   maldet-report)
     [[ $# -eq 1 ]] || deny "usage: maldet-report <scanid>"
-    [[ "$1" =~ ^[0-9]{6}-[0-9]+\.[0-9]+$ ]] || deny "invalid scanid"
+    [[ "$1" =~ ^[0-9]{6}-[0-9]{4}\.[0-9]+$ ]] || deny "invalid scanid"
     [[ -x "$MALDET_BIN" ]] || deny "maldet is not installed"
-    "$MALDET_BIN" -e "$1" 2>/dev/null || true
+    [[ -f "${MALDET_HOME}/sess/session.${1}" ]] && cat "${MALDET_HOME}/sess/session.${1}" || true
     ;;
 
   maldet-monitor)

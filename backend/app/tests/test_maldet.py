@@ -72,7 +72,7 @@ class TestHelper:
         # scan paths are confined to / or /home
         assert "scan path must be / or under /home" in helper
         # scanid is anchored
-        assert "^[0-9]{6}-[0-9]+\\.[0-9]+$" in helper
+        assert "^[0-9]{6}-[0-9]{4}\\.[0-9]+$" in helper
         # ClamAV engine on, resident daemon deliberately not enabled
         assert 'scan_clamscan=1' in helper
         assert "quarantine_hits=0" in helper
