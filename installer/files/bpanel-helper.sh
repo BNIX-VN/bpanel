@@ -507,6 +507,8 @@ install_maldet_engine() {
   fi
   freshclam >/dev/null 2>&1 || true
   command -v wget >/dev/null 2>&1 || command -v curl >/dev/null 2>&1 || apt-get install -y wget
+  # inotifywait is what maldet's Level 2 monitor runs; Debian does not ship it.
+  command -v inotifywait >/dev/null 2>&1 || apt-get install -y inotify-tools || true
 
   if [[ ! -x "$MALDET_BIN" ]]; then
     local tmp tarball
@@ -535,10 +537,13 @@ install_maldet_engine() {
 }
 
 maldet_monitor_running() {
-  [[ -f "${MALDET_HOME}/monitor_pid" ]] || return 1
   local pid
-  pid="$(cat "${MALDET_HOME}/monitor_pid" 2>/dev/null)"
-  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+  if [[ -f "${MALDET_HOME}/tmp/inotifywait.pid" ]]; then
+    pid="$(cat "${MALDET_HOME}/tmp/inotifywait.pid" 2>/dev/null)"
+    [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null && return 0
+  fi
+  # Fallback: any inotifywait watching /home is maldet's monitor.
+  pgrep -f "inotifywait.*(/home|maldet)" >/dev/null 2>&1
 }
 
 write_inotify_sysctl() {
@@ -3797,10 +3802,16 @@ case "$cmd" in
     [[ -x "$MALDET_BIN" ]] || deny "maldet is not installed"
     case "$1" in
       start)
+        command -v inotifywait >/dev/null 2>&1 || { export DEBIAN_FRONTEND=noninteractive; apt-get install -y inotify-tools >/dev/null 2>&1; }
+        command -v inotifywait >/dev/null 2>&1 || deny "inotify-tools is required for real-time protection and could not be installed"
         write_inotify_sysctl
         "$MALDET_BIN" -b -m users >/dev/null 2>&1 || true
         # maldet ships maldet.service which re-launches the monitor on boot.
-        systemctl enable --now maldet 2>/dev/null || true
+        systemctl enable --now maldet >/dev/null 2>&1 || true
+        for _ in 1 2 3 4 5 6 7 8; do
+          maldet_monitor_running && break
+          sleep 1
+        done
         maldet_monitor_running && echo "monitor started" || deny "monitor did not start"
         ;;
       stop)

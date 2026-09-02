@@ -1315,6 +1315,11 @@ if id -u bpanel >/dev/null 2>&1 \
 fi
 if id -u bpanel >/dev/null 2>&1 && [[ -x /usr/local/sbin/maldet ]]; then
   sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper maldet-update-sigs >/dev/null 2>&1 || true
+  # rfxn's installer enables maldet.service (the Level 2 monitor). The panel
+  # owns that switch - keep it off unless the admin turned real-time on.
+  if ! grep -q '"malware_realtime_enabled":[[:space:]]*true' /var/lib/bpanel/panel-settings.json 2>/dev/null; then
+    systemctl disable --now maldet >/dev/null 2>&1 || true
+  fi
 fi
 
 # --- Firewall: move IP blocking from UFW/Nginx to iptables + ipset ---------
