@@ -61,6 +61,7 @@ const PAGE_ROUTES = {
   php: '/php',
   firewall: '/firewall',
   waf: '/waf',
+  malware: '/malware',
   'access-logs': '/access-logs',
   updates: '/updates',
   services: '/services',

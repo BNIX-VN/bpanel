@@ -596,16 +596,34 @@ def access_logs(
     limit: int = 50,
     lines: int = 5000,
 ) -> dict:
+    from concurrent.futures import ThreadPoolExecutor
+
     safe_limit = max(1, min(int(limit or 50), 500))
     safe_lines = max(1, min(int(lines or 5000), 5000))
     safe_verdict = verdict if verdict in {"all", "allow", "block", "error"} else "all"
+    filtering = safe_verdict != "all" or bool((query or "").strip())
+    # Without a filter the newest `limit` lines per site are all we can show, so
+    # there is no reason to tail (and parse) thousands. With a filter we need
+    # the deep history to find enough matches.
+    scan_lines = safe_lines if filtering else min(safe_lines, max(safe_limit * 4, 400))
+
+    domains = [_validate_domain(w.domain) for w in websites]
+
+    def _read(domain: str):
+        return domain, nginx.read_site_log(domain, "access", scan_lines)
+
+    # Each read is an independent `sudo bpanel-helper` + tail; running them
+    # concurrently turns a 15-site page from ~15 spawns in series into one wait.
+    results: list[tuple[str, dict]] = []
+    if domains:
+        with ThreadPoolExecutor(max_workers=min(12, len(domains))) as pool:
+            results = list(pool.map(_read, domains))
+
     sortable: list[tuple[datetime, int, dict]] = []
     parsed_count = 0
     sequence = 0
     missing: list[str] = []
-    for website in websites:
-        domain = _validate_domain(website.domain)
-        log_data = nginx.read_site_log(domain, "access", safe_lines)
+    for domain, log_data in results:
         if not log_data.get("exists"):
             missing.append(domain)
             continue
@@ -625,7 +643,7 @@ def access_logs(
         "total": len(sortable),
         "scanned": parsed_count,
         "limit": safe_limit,
-        "lines": safe_lines,
+        "lines": scan_lines,
         "verdict": safe_verdict,
         "query": (query or "").strip(),
         "missing": missing,
