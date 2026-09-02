@@ -322,12 +322,10 @@ const WEEKDAY_LABELS = ['Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6', '
 const MALWARE_SCHEDULES_DEFAULT = {
   websites: { enabled: false, weekday: 6, hour: 3, weekday_label: '', next_run_at: '', last_run_at: '', last_status: '' },
   server: { enabled: false, weekday: 6, hour: 4, weekday_label: '', next_run_at: '', last_run_at: '', last_status: '' },
-  incremental: { enabled: false, hour: 5, days: 7, next_run_at: '', last_run_at: '', last_status: '' },
 };
 const MALWARE_SCHEDULE_LABELS = {
   websites: 'Toàn bộ website',
   server: 'Toàn bộ VPS',
-  incremental: 'Tăng dần (hàng ngày)',
 };
 
 const PERMISSION_CLASSES = [
@@ -1629,19 +1627,22 @@ function App() {
     }
   }
 
-  async function saveMalwareSchedule(name) {
-    const entry = malwareSchedulesForm[name] || {};
-    if (name === 'server' && entry.enabled && malwareScanStatus?.memory_warning) {
+  async function saveMalwareSchedule() {
+    const f = malwareSchedulesForm;
+    if (f.server?.enabled && malwareScanStatus?.memory_warning) {
       if (!confirm(`${malwareScanStatus.memory_warning}\n\nVẫn đặt lịch quét toàn bộ VPS?`)) return;
     }
-    const body = name === 'incremental'
-      ? { incremental: { enabled: !!entry.enabled, hour: Number(entry.hour ?? 5), days: Number(entry.days ?? 7) } }
-      : { [name]: { enabled: !!entry.enabled, weekday: Number(entry.weekday ?? 6), hour: Number(entry.hour ?? 3) } };
+    const body = {};
+    for (const name of ['websites', 'server']) {
+      const e = f[name] || {};
+      body[name] = { enabled: !!e.enabled, weekday: Number(e.weekday ?? 6), hour: Number(e.hour ?? 3) };
+    }
     const data = await request('/malware/schedule', { method: 'PUT', body: JSON.stringify(body) }, 'Đang lưu lịch quét...');
     if (data) {
       setMalwareSchedules(data);
       setMalwareSchedulesForm(data);
-      setNotice(`Đã lưu lịch: ${MALWARE_SCHEDULE_LABELS[name]}.`);
+      const on = ['websites', 'server'].filter(n => data[n]?.enabled).map(n => MALWARE_SCHEDULE_LABELS[n]);
+      setNotice(on.length ? `Đã lưu lịch: ${on.join(', ')}.` : 'Đã tắt tất cả lịch quét.');
     }
   }
 
@@ -5752,37 +5753,42 @@ function App() {
       return 'badge warn';
     };
     const engineLabel = { 'lmd+clamav': 'LMD + ClamAV', clamav: 'ClamAV', none: 'Chưa cài' }[mw.engine] || 'Chưa cài';
+    const fmtStamp = s => {
+      if (!s) return '';
+      const d = new Date(s);
+      return Number.isNaN(d.getTime()) ? s : new Intl.DateTimeFormat('vi-VN', {
+        timeZone: 'Asia/Ho_Chi_Minh', hour12: false,
+        day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+      }).format(d);
+    };
+    const scheduleDirty = ['websites', 'server'].some(n =>
+      JSON.stringify(malwareSchedulesForm[n] || {}) !== JSON.stringify(malwareSchedules[n] || {}));
+    const setSched = (name, patch) =>
+      setMalwareSchedulesForm(p => ({ ...p, [name]: { ...p[name], ...patch } }));
     const renderScheduleRow = name => {
       const form = malwareSchedulesForm[name] || {};
       const saved = malwareSchedules[name] || {};
-      const isInc = name === 'incremental';
-      return <div className="malware-sched-row" key={name}>
-        <label className="check-line">
-          <input type="checkbox" checked={!!form.enabled}
-            onChange={e => setMalwareSchedulesForm(p => ({ ...p, [name]: { ...p[name], enabled: e.target.checked } }))} />
-          {MALWARE_SCHEDULE_LABELS[name]}
+      return <div className={`malware-sched-row${form.enabled ? ' on' : ''}`} key={name}>
+        <label className="malware-sched-toggle">
+          <input type="checkbox" checked={!!form.enabled} onChange={e => setSched(name, { enabled: e.target.checked })} />
+          <span>{MALWARE_SCHEDULE_LABELS[name]}</span>
         </label>
-        {!isInc && <label><span>Thứ</span>
-          <select value={form.weekday ?? 6} disabled={!form.enabled}
-            onChange={e => setMalwareSchedulesForm(p => ({ ...p, [name]: { ...p[name], weekday: Number(e.target.value) } }))}>
+        <div className="malware-sched-when">
+          <select value={form.weekday ?? 6} disabled={!form.enabled} aria-label="Thứ"
+            onChange={e => setSched(name, { weekday: Number(e.target.value) })}>
             {WEEKDAY_LABELS.map((l, i) => <option key={i} value={i}>{l}</option>)}
           </select>
-        </label>}
-        <label><span>Giờ (UTC)</span>
-          <select value={form.hour ?? (isInc ? 5 : 3)} disabled={!form.enabled}
-            onChange={e => setMalwareSchedulesForm(p => ({ ...p, [name]: { ...p[name], hour: Number(e.target.value) } }))}>
-            {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>)}
+          <select value={form.hour ?? 3} disabled={!form.enabled} aria-label="Giờ (UTC)"
+            onChange={e => setSched(name, { hour: Number(e.target.value) })}>
+            {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')}:00 UTC</option>)}
           </select>
-        </label>
-        {isInc && <label><span>Số ngày</span>
-          <select value={form.days ?? 7} disabled={!form.enabled}
-            onChange={e => setMalwareSchedulesForm(p => ({ ...p, [name]: { ...p[name], days: Number(e.target.value) } }))}>
-            {[1, 2, 3, 7, 14].map(d => <option key={d} value={d}>{d} ngày</option>)}
-          </select>
-        </label>}
-        <button disabled={!!loading} onClick={() => saveMalwareSchedule(name)}><Clock size={13}/> Lưu</button>
-        {saved.enabled && saved.next_run_at && <span className="hint malware-sched-next">Kế: {saved.next_run_at}</span>}
-        {saved.last_run_at && <span className="hint">gần nhất {saved.last_run_at} ({saved.last_status || '—'})</span>}
+        </div>
+        <div className="malware-sched-meta">
+          {saved.enabled && saved.next_run_at && <span>Kế tiếp: <strong>{fmtStamp(saved.next_run_at)}</strong></span>}
+          {saved.last_run_at && <span className={`badge ${saved.last_status === 'done' ? 'ok' : saved.last_status === 'infected' ? 'danger' : 'warn'}`}>
+            {fmtStamp(saved.last_run_at)} · {saved.last_status || '—'}
+          </span>}
+        </div>
       </div>;
     };
 
@@ -5848,10 +5854,11 @@ function App() {
           </div>
           <div className="malware-schedule">
             <div className="malware-scan-head">
-              <div><strong>Lịch tự động</strong><p className="hint">Panel tự quét, không cần ai bấm. Đặt vào giờ ít khách.</p></div>
+              <div><strong>Lịch tự động</strong><p className="hint">Panel tự quét theo lịch, không cần ai bấm. Đặt vào giờ ít khách (giờ UTC).</p></div>
+              <button disabled={!!loading || !scheduleDirty} onClick={saveMalwareSchedule}><Clock size={14}/> Lưu lịch</button>
             </div>
             <div className="malware-sched-list">
-              {['websites', 'server', 'incremental'].map(renderScheduleRow)}
+              {['websites', 'server'].map(renderScheduleRow)}
             </div>
           </div>
           <div className="malware-realtime">

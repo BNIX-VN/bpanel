@@ -740,10 +740,9 @@ class MalwareScanToggle(BaseModel):
 
 class MalwareScheduleEntry(BaseModel):
     enabled: bool = False
-    weekday: int = 6          # Monday is 0; ignored for the incremental schedule
+    weekday: int = 6          # Monday is 0
     weekday_label: str = ""
     hour: int = 3
-    days: int = 2             # incremental only: scan files changed in the last N days
     next_run_at: str = ""
     last_run_at: str = ""
     last_status: str = ""
@@ -754,20 +753,17 @@ class MalwareScheduleEntry(BaseModel):
 class MalwareSchedulesOut(BaseModel):
     websites: MalwareScheduleEntry = MalwareScheduleEntry()
     server: MalwareScheduleEntry = MalwareScheduleEntry()
-    incremental: MalwareScheduleEntry = MalwareScheduleEntry()
 
 
 class MalwareScheduleEntryUpdate(BaseModel):
     enabled: Optional[bool] = None
     weekday: Optional[int] = None
     hour: Optional[int] = None
-    days: Optional[int] = None
 
 
 class MalwareSchedulesUpdate(BaseModel):
     websites: Optional[MalwareScheduleEntryUpdate] = None
     server: Optional[MalwareScheduleEntryUpdate] = None
-    incremental: Optional[MalwareScheduleEntryUpdate] = None
 
 
 class MalwareRealtimeToggle(BaseModel):

@@ -411,12 +411,15 @@ button:disabled,.upload-button.disabled{background:var(--disabled-bg);color:var(
 .malware-schedule-controls select{min-width:130px}
 .malware-schedule > .hint{margin:9px 0 0}
 .malware-sched-list{display:grid;gap:8px;margin-top:10px}
-.malware-sched-row{display:flex;flex-wrap:wrap;align-items:end;gap:10px;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface)}
-.malware-sched-row label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text-secondary)}
-.malware-sched-row label.check-line{flex-direction:row;align-items:center;gap:7px;font-weight:600;font-size:13px;min-width:150px}
-.malware-sched-row select{min-width:110px}
-.malware-sched-row .hint{margin:0;align-self:center}
-.malware-sched-next{font-weight:600;color:var(--text)}
+.malware-sched-row{display:grid;grid-template-columns:minmax(150px,auto) max-content 1fr;align-items:center;gap:12px;padding:9px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface)}
+.malware-sched-row.on{border-color:var(--primary);background:var(--surface-alt)}
+.malware-sched-toggle{display:flex;align-items:center;gap:8px;font-weight:600;font-size:13px;cursor:pointer;user-select:none}
+.malware-sched-toggle input{width:16px;height:16px;flex:none;accent-color:var(--primary)}
+.malware-sched-when{display:flex;gap:8px}
+.malware-sched-when select{min-width:112px}
+.malware-sched-when select:disabled{opacity:.5}
+.malware-sched-meta{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12px;color:var(--text-secondary);justify-self:end}
+@media(max-width:760px){.malware-sched-row{grid-template-columns:1fr}.malware-sched-meta{justify-self:start}}
 .malware-realtime{margin-top:12px;padding:11px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-alt)}
 .switch-line{display:flex;align-items:center;gap:8px;font-weight:600;font-size:13px;white-space:nowrap}
 .switch-line input{width:16px;height:16px;flex:none;accent-color:var(--primary)}
