@@ -53,7 +53,14 @@ class _Db:
         pass
 
 
-def test_create_alias_expands_letsencrypt_certificate(monkeypatch):
+def test_create_alias_does_not_attempt_ssl(monkeypatch):
+    # Same split DirectAdmin uses: adding a domain wires it into Nginx right
+    # away, but getting it a certificate is a separate, explicit step on the
+    # SSL page (Install / Renew SSL there already asks for every alias and
+    # redirect - see enable_ssl). Issuing here too meant this request's
+    # success hinged on that domain's DNS being ready this exact second, and
+    # a partial success (--allow-subset-of-names quietly dropping just this
+    # domain) was easy to miss in a one-line toast.
     website = Website(
         id=1,
         domain="example.test",
@@ -68,8 +75,8 @@ def test_create_alias_expands_letsencrypt_certificate(monkeypatch):
     issued = []
 
     monkeypatch.setattr(websites, "_rewrite_website_vhost", lambda *args, **kwargs: "/etc/nginx/conf.d/example.test.conf")
-    monkeypatch.setattr(websites.ssl, "issue_ssl", lambda domain, aliases: issued.append((domain, aliases)) or type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})())
-    monkeypatch.setattr(websites.ssl, "cert_info", lambda domain: {"sans": ["example.test", "old.example.test", "alias.example.test"]})
+    monkeypatch.setattr(websites.ssl, "issue_ssl", lambda *a, **k: issued.append((a, k)))
+    monkeypatch.setattr(websites.ssl, "cert_info", lambda domain: {"sans": ["example.test", "old.example.test"]})
     monkeypatch.setattr(websites, "log_action", lambda *args, **kwargs: None)
 
     alias = websites.create_website_alias(
@@ -83,15 +90,16 @@ def test_create_alias_expands_letsencrypt_certificate(monkeypatch):
     assert alias.domain == "alias.example.test"
     assert db.committed is True
     assert db.rolled_back is False
-    assert issued == [("example.test", ["alias.example.test", "old.example.test"])]
-    assert alias.ssl_enabled is True
+    assert issued == []
+    # Not in the certificate above (added after it was last issued) - the
+    # Domains list should say so plainly, not claim SSL that isn't there.
+    assert alias.ssl_enabled is False
 
 
-def test_create_alias_reports_when_dns_does_not_point_here_yet(monkeypatch):
-    # issue_ssl() can succeed overall while dropping this exact domain
-    # (--allow-subset-of-names, e.g. DNS not pointed here yet) - the alias is
-    # still created (nginx does serve it), but ssl_enabled must say so rather
-    # than a blanket "added" implying it also got working SSL.
+def test_create_alias_reflects_ssl_the_certificate_already_covers(monkeypatch):
+    # A wildcard, or one issued moments ago with --expand from the SSL page,
+    # can already cover a domain being added here - ssl_enabled should say
+    # so without this call ever issuing anything itself.
     website = Website(
         id=1, domain="example.test", owner_id=1,
         root_path="/home/bp_example_test/example.test", linux_user=None,
@@ -101,22 +109,18 @@ def test_create_alias_reports_when_dns_does_not_point_here_yet(monkeypatch):
     db = _Db(website)
 
     monkeypatch.setattr(websites, "_rewrite_website_vhost", lambda *args, **kwargs: "/etc/nginx/conf.d/example.test.conf")
-    monkeypatch.setattr(websites.ssl, "issue_ssl", lambda domain, aliases: type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})())
-    # The certificate exists, but does not (yet) cover the new alias.
-    monkeypatch.setattr(websites.ssl, "cert_info", lambda domain: {"sans": ["example.test"]})
+    monkeypatch.setattr(websites.ssl, "cert_info", lambda domain: {"sans": ["example.test", "already-covered.example.test"]})
     monkeypatch.setattr(websites, "log_action", lambda *args, **kwargs: None)
 
     alias = websites.create_website_alias(
         1,
-        WebsiteAliasCreate(domain="not-pointed.example.test"),
+        WebsiteAliasCreate(domain="already-covered.example.test"),
         request=None,
         db=db,
         current_user=User(id=1, role="admin"),
     )
 
-    assert alias.domain == "not-pointed.example.test"
-    assert alias.ssl_enabled is False
-    assert db.committed is True
+    assert alias.ssl_enabled is True
 
 
 def test_enabling_ssl_wires_up_an_existing_redirect_domain(monkeypatch):

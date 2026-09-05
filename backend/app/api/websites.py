@@ -612,15 +612,16 @@ def create_website_alias(
         aliases = _unique_domains(aliases)
         redirects = _unique_domains(redirects)
         _rewrite_website_vhost(website, aliases=aliases, redirects=redirects)
-        if getattr(website, "ssl_mode", "none") == "letsencrypt":
-            result = ssl.issue_ssl(website.domain, [*aliases, *redirects])
-            if result.returncode != 0:
-                raise RuntimeError(_command_error(result))
-            # --allow-subset-of-names means that call can succeed overall
-            # while dropping this exact domain (DNS not pointed here yet) -
-            # record what the certificate actually covers so the response
-            # tells the truth instead of a blanket "added".
-            _sync_alias_ssl_flags(website)
+        # No SSL attempt here on purpose - same split DirectAdmin uses:
+        # adding a domain wires it into Nginx immediately, but a certificate
+        # covering it is a separate, explicit step on the SSL page. Trying to
+        # issue one right here meant this request's success or failure hinged
+        # on that domain's DNS being ready *this second*, and a partial
+        # success (--allow-subset-of-names dropping just this domain) was
+        # easy to miss in a one-line toast. ssl_enabled below still reflects
+        # whatever the certificate already covers, so the Domains list is
+        # honest about it without this call ever trying to change that.
+        _sync_alias_ssl_flags(website)
     except (RuntimeError, ValueError, FileNotFoundError) as exc:
         db.rollback()
         raise HTTPException(status_code=400, detail=f"Cannot write Nginx config: {exc}") from exc

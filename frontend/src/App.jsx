@@ -1873,16 +1873,13 @@ function App() {
     }, `Adding ${aliasMode === 'redirect' ? 'redirect' : 'alias'} ${cleanAlias}...`);
     if (data) {
       const label = aliasMode === 'redirect' ? 'redirect' : 'alias';
-      // ssl_enabled reflects what the certificate actually covers right now
-      // (issue_ssl can succeed overall while dropping this exact domain if
-      // its DNS is not pointed here yet - --allow-subset-of-names) - a flat
-      // "Added" toast used to say nothing about that.
-      const message = site.ssl_mode !== 'letsencrypt'
-        ? `Đã thêm ${label} ${cleanAlias}.`
-        : data.ssl_enabled
-          ? `Đã thêm ${label} ${cleanAlias}, đã có SSL.`
-          : `Đã thêm ${label} ${cleanAlias}, nhưng chưa cấp được SSL (DNS có thể chưa trỏ về server này). Trỏ DNS xong rồi vào trang SSL bấm "Install / Renew SSL".`;
-      setNotice(message);
+      // Adding a domain only wires it into Nginx - same split DirectAdmin
+      // uses. Getting it a certificate is the separate, explicit step on the
+      // SSL page (Install / Renew SSL there already asks for every alias and
+      // redirect), so nothing SSL-related is attempted or claimed here.
+      setNotice(site.ssl_mode === 'letsencrypt' && !data.ssl_enabled
+        ? `Đã thêm ${label} ${cleanAlias}. Vào trang SSL, bấm "Install / Renew SSL" để cấp chứng chỉ cho domain này.`
+        : `Đã thêm ${label} ${cleanAlias}.`);
       setAliasDrafts(prev => ({ ...prev, [site.id]: '' }));
       setNginxCustomEditing(prev => {
         if (!prev || prev.id !== site.id) return prev;
