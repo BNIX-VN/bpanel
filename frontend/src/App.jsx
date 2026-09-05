@@ -1872,9 +1872,17 @@ function App() {
       body: JSON.stringify({ domain: cleanAlias, mode: aliasMode }),
     }, `Adding ${aliasMode === 'redirect' ? 'redirect' : 'alias'} ${cleanAlias}...`);
     if (data) {
-      setNotice(aliasMode === 'redirect'
-        ? `Added redirect ${cleanAlias} -> ${site.domain}.`
-        : `Added alias ${cleanAlias}. Re-run SSL after DNS points to this server.`);
+      const label = aliasMode === 'redirect' ? 'redirect' : 'alias';
+      // ssl_enabled reflects what the certificate actually covers right now
+      // (issue_ssl can succeed overall while dropping this exact domain if
+      // its DNS is not pointed here yet - --allow-subset-of-names) - a flat
+      // "Added" toast used to say nothing about that.
+      const message = site.ssl_mode !== 'letsencrypt'
+        ? `Đã thêm ${label} ${cleanAlias}.`
+        : data.ssl_enabled
+          ? `Đã thêm ${label} ${cleanAlias}, đã có SSL.`
+          : `Đã thêm ${label} ${cleanAlias}, nhưng chưa cấp được SSL (DNS có thể chưa trỏ về server này). Trỏ DNS xong rồi vào trang SSL bấm "Install / Renew SSL".`;
+      setNotice(message);
       setAliasDrafts(prev => ({ ...prev, [site.id]: '' }));
       setNginxCustomEditing(prev => {
         if (!prev || prev.id !== site.id) return prev;

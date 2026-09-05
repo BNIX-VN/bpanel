@@ -169,6 +169,23 @@ def _ssl_domains(website: Website) -> list[str]:
     return [*_alias_domains(website), *_redirect_domains(website)]
 
 
+def _sync_alias_ssl_flags(website: Website) -> None:
+    """Mark each alias/redirect as covered or not by the certificate that
+    exists right now.
+
+    issue_ssl() can succeed overall while dropping one requested name (bad or
+    not-yet-pointed DNS - see --allow-subset-of-names): a plain "Added alias"
+    toast then told the admin nothing went wrong for that name, even though
+    it still has no working SSL. WebsiteAlias.ssl_enabled already existed for
+    this and was never read or written anywhere.
+    """
+    if getattr(website, "ssl_mode", "none") != "letsencrypt":
+        return
+    sans = ssl.cert_info(website.domain).get("sans") or []
+    for alias in website.aliases or []:
+        alias.ssl_enabled = bool(sans) and ssl.cert_covers(sans, alias.domain)
+
+
 def _unique_domains(domains: list[str] | tuple[str, ...]) -> list[str]:
     unique: list[str] = []
     seen: set[str] = set()
@@ -599,6 +616,11 @@ def create_website_alias(
             result = ssl.issue_ssl(website.domain, [*aliases, *redirects])
             if result.returncode != 0:
                 raise RuntimeError(_command_error(result))
+            # --allow-subset-of-names means that call can succeed overall
+            # while dropping this exact domain (DNS not pointed here yet) -
+            # record what the certificate actually covers so the response
+            # tells the truth instead of a blanket "added".
+            _sync_alias_ssl_flags(website)
     except (RuntimeError, ValueError, FileNotFoundError) as exc:
         db.rollback()
         raise HTTPException(status_code=400, detail=f"Cannot write Nginx config: {exc}") from exc
@@ -1069,6 +1091,7 @@ def enable_ssl(website_id: int, db: Session = Depends(get_db), current_user: Use
             _rewrite_website_vhost(website)
         except (RuntimeError, ValueError):
             pass
+    _sync_alias_ssl_flags(website)
     _resync_shared_dependents(db, website.domain)
     db.commit()
     db.refresh(website)

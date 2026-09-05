@@ -363,3 +363,37 @@ class TestImportSslCoverage:
         assert set(captured["aliases"]) == {"www.example.com", "old-example.com"}
         assert website.ssl_enabled is True
         assert website.ssl_mode == "letsencrypt"
+
+    def test_a_pointer_with_no_working_dns_here_is_reported_not_silently_dropped(self, monkeypatch):
+        # --allow-subset-of-names lets issue_ssl() succeed overall while
+        # dropping a pointer whose DNS points elsewhere - the import used to
+        # report "SSL installed for example.com" with no hint that one of its
+        # pointers still had no certificate coverage at all.
+        from types import SimpleNamespace
+
+        redirect_alias = SimpleNamespace(domain="old-example.com", mode="redirect", ssl_enabled=False)
+        website = SimpleNamespace(
+            domain="example.com",
+            aliases=[redirect_alias],
+            ssl_enabled=False, ssl_mode="none", ssl_updated_at=None,
+        )
+
+        monkeypatch.setattr(da_import, "_domain_ip_addresses", lambda domain: {"203.0.113.10"})
+        monkeypatch.setattr(da_import, "_server_ip_addresses", lambda: {"203.0.113.10"})
+        monkeypatch.setattr(
+            "app.services.ssl.issue_ssl",
+            lambda domain, aliases=None: SimpleNamespace(returncode=0, stdout="", stderr=""),
+        )
+        # The certificate exists (example.com + www), but never got the
+        # redirect pointer - its DNS points somewhere else entirely.
+        monkeypatch.setattr("app.services.ssl.cert_info", lambda domain: {"sans": ["example.com", "www.example.com"]})
+
+        db = SimpleNamespace(commit=lambda: None, refresh=lambda obj: None)
+        item_summary = {"warnings": [], "ssl_enabled_domains": []}
+        da_import._enable_ssl_when_dns_matches(db, website, item_summary)
+
+        assert redirect_alias.ssl_enabled is False
+        assert any("old-example.com" in w for w in item_summary["warnings"])
+        # The bare domain still got SSL - a bad pointer must not undo that.
+        assert website.ssl_enabled is True
+        assert item_summary["ssl_enabled_domains"] == ["example.com"]

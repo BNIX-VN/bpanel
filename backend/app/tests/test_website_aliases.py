@@ -69,6 +69,7 @@ def test_create_alias_expands_letsencrypt_certificate(monkeypatch):
 
     monkeypatch.setattr(websites, "_rewrite_website_vhost", lambda *args, **kwargs: "/etc/nginx/conf.d/example.test.conf")
     monkeypatch.setattr(websites.ssl, "issue_ssl", lambda domain, aliases: issued.append((domain, aliases)) or type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})())
+    monkeypatch.setattr(websites.ssl, "cert_info", lambda domain: {"sans": ["example.test", "old.example.test", "alias.example.test"]})
     monkeypatch.setattr(websites, "log_action", lambda *args, **kwargs: None)
 
     alias = websites.create_website_alias(
@@ -83,6 +84,39 @@ def test_create_alias_expands_letsencrypt_certificate(monkeypatch):
     assert db.committed is True
     assert db.rolled_back is False
     assert issued == [("example.test", ["alias.example.test", "old.example.test"])]
+    assert alias.ssl_enabled is True
+
+
+def test_create_alias_reports_when_dns_does_not_point_here_yet(monkeypatch):
+    # issue_ssl() can succeed overall while dropping this exact domain
+    # (--allow-subset-of-names, e.g. DNS not pointed here yet) - the alias is
+    # still created (nginx does serve it), but ssl_enabled must say so rather
+    # than a blanket "added" implying it also got working SSL.
+    website = Website(
+        id=1, domain="example.test", owner_id=1,
+        root_path="/home/bp_example_test/example.test", linux_user=None,
+        ssl_enabled=True, ssl_mode="letsencrypt",
+    )
+    website.aliases = []
+    db = _Db(website)
+
+    monkeypatch.setattr(websites, "_rewrite_website_vhost", lambda *args, **kwargs: "/etc/nginx/conf.d/example.test.conf")
+    monkeypatch.setattr(websites.ssl, "issue_ssl", lambda domain, aliases: type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})())
+    # The certificate exists, but does not (yet) cover the new alias.
+    monkeypatch.setattr(websites.ssl, "cert_info", lambda domain: {"sans": ["example.test"]})
+    monkeypatch.setattr(websites, "log_action", lambda *args, **kwargs: None)
+
+    alias = websites.create_website_alias(
+        1,
+        WebsiteAliasCreate(domain="not-pointed.example.test"),
+        request=None,
+        db=db,
+        current_user=User(id=1, role="admin"),
+    )
+
+    assert alias.domain == "not-pointed.example.test"
+    assert alias.ssl_enabled is False
+    assert db.committed is True
 
 
 def test_enabling_ssl_wires_up_an_existing_redirect_domain(monkeypatch):

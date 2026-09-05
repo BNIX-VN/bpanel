@@ -1146,6 +1146,22 @@ def _enable_ssl_when_dns_matches(db, website, item_summary: dict) -> None:
     db.refresh(website)
     item_summary["ssl_enabled_domains"].append(website.domain)
     _log(f"  SSL installed for {website.domain}")
+    # --allow-subset-of-names can have dropped a pointer whose DNS is not
+    # here (or not yet) - report that plainly instead of a blanket "SSL
+    # installed" covering every pointer, and record it per-alias the same
+    # way the panel's own "Add domain" does (WebsiteAlias.ssl_enabled).
+    sans = ssl_service.cert_info(website.domain).get("sans") or []
+    uncovered = []
+    for alias in website.aliases or []:
+        alias.ssl_enabled = bool(sans) and ssl_service.cert_covers(sans, alias.domain)
+        if not alias.ssl_enabled:
+            uncovered.append(alias.domain)
+    if uncovered:
+        db.commit()
+        item_summary["warnings"].append(
+            f"SSL not obtained for pointer(s) of {website.domain}: {', '.join(sorted(uncovered))} "
+            "(DNS for these does not point here yet - re-run SSL from the panel once it does)"
+        )
 
 
 # ---------------------------------------------------------------------------
