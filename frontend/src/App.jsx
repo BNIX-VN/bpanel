@@ -328,6 +328,21 @@ const MALWARE_SCHEDULE_LABELS = {
   websites: 'Toàn bộ website',
   server: 'Toàn bộ VPS',
 };
+// The malware scan schedule is stored and sent to the API as UTC weekday/hour
+// (matching datetime.weekday() on the server) - nobody running a Vietnamese
+// host should have to do +7 math to pick "giờ ít khách". These convert only
+// for display/input; malwareSchedulesForm itself always stays in UTC.
+const VN_UTC_OFFSET_HOURS = 7;
+function utcScheduleToVn(weekday, hour) {
+  const vnHour = (hour + VN_UTC_OFFSET_HOURS) % 24;
+  const dayShift = hour + VN_UTC_OFFSET_HOURS >= 24 ? 1 : 0;
+  return { weekday: (weekday + dayShift) % 7, hour: vnHour };
+}
+function vnScheduleToUtc(weekday, hour) {
+  const utcHour = (hour - VN_UTC_OFFSET_HOURS + 24) % 24;
+  const dayShift = hour - VN_UTC_OFFSET_HOURS < 0 ? -1 : 0;
+  return { weekday: (weekday + dayShift + 7) % 7, hour: utcHour };
+}
 
 const PERMISSION_CLASSES = [
   { key: 'owner', label: 'Owner' },
@@ -1582,7 +1597,7 @@ function App() {
   }
 
   async function loadMalwareScanStatus() {
-    const data = await request('/malware/status', {}, 'Loading malware scan status...');
+    const data = await request('/malware/status', {}, 'Đang tải trạng thái quét...');
     if (data) setMalwareScanStatus(data);
   }
 
@@ -1607,15 +1622,15 @@ function App() {
 
   async function toggleMalwareScan(enable) {
     if (enable && !malwareScanStatus?.installed) {
-      if (!confirm('ClamAV is not installed on this server. It will be installed now (may take 1-2 minutes). Continue?')) return;
+      if (!confirm('Trình quét chưa được cài trên máy chủ này. Panel sẽ cài đặt ngay bây giờ (mất khoảng 1-2 phút). Tiếp tục?')) return;
     }
     const data = await request('/malware/toggle', {
       method: 'POST',
       body: JSON.stringify({ enabled: enable }),
-    }, enable ? 'Enabling malware scanning...' : 'Disabling malware scanning...');
+    }, enable ? 'Đang bật trình quét...' : 'Đang tắt trình quét...');
     if (data) {
       setPanelSettings(data);
-      setNotice(data.message || `Malware scanning ${enable ? 'enabled' : 'disabled'}.`);
+      setNotice(data.message || `Đã ${enable ? 'bật' : 'tắt'} trình quét.`);
       await loadMalwareScanStatus();
     }
   }
@@ -1648,15 +1663,15 @@ function App() {
   }
 
   async function toggleMalwareRealtime(enabled) {
-    if (enabled && !confirm('Bật bảo vệ thời gian thực (LMD inotify monitor)? Nếu LMD chưa cài, panel sẽ cài (1-3 phút).')) return;
+    if (enabled && !confirm('Bật bảo vệ thời gian thực? Panel sẽ theo dõi và quét ngay tệp mới trong thư mục website. Nếu chưa cài, panel sẽ cài thêm (1-3 phút).')) return;
     const data = await request('/malware/realtime', { method: 'POST', body: JSON.stringify({ enabled }) },
       enabled ? 'Đang bật bảo vệ thời gian thực...' : 'Đang tắt...');
     if (data) { setMalwareScanStatus(data); setNotice(enabled ? 'Đã bật bảo vệ thời gian thực (cấp 2).' : 'Đã tắt bảo vệ thời gian thực.'); }
   }
 
   async function installLmd() {
-    const data = await request('/malware/lmd/install', { method: 'POST' }, 'Đang cài LMD...');
-    if (data) { setMalwareScanStatus(data); setNotice('Đang cài LMD trong nền (1-3 phút). Bấm Refresh để cập nhật.'); }
+    const data = await request('/malware/lmd/install', { method: 'POST' }, 'Đang cài đặt...');
+    if (data) { setMalwareScanStatus(data); setNotice('Đang cài đặt trình quét trong nền (1-3 phút). Bấm Refresh để cập nhật.'); }
   }
 
   async function updateMalwareSignatures() {
@@ -1683,11 +1698,11 @@ function App() {
       const data = await request('/malware/run', {
         method: 'POST',
         body: JSON.stringify(body),
-      }, 'Starting malware scan...');
+      }, 'Đang bắt đầu quét...');
       if (data) {
         setScanJob(data);
         await loadMalwareScanJobs();
-        setNotice('Malware scan started.');
+        setNotice('Đã bắt đầu quét.');
       }
     } finally {
       setScanLoading(false);
@@ -1702,11 +1717,11 @@ function App() {
       setScanJob(null);
       setScanResults(null);
       if (data.status === 'infected' || data.infected > 0) {
-        setNotice(`${data.infected} threat(s) found.`);
+        setNotice(`Phát hiện ${data.infected} mối đe doạ.`);
       } else if (['error', 'interrupted'].includes(data.status)) {
-        setError(data.error || data.message || 'Malware scan failed.');
+        setError(data.error || data.message || 'Quét thất bại.');
       } else {
-        setNotice(`Scan complete: ${data.scanned || 0} files scanned, no threats found.`);
+        setNotice(`Quét xong: đã kiểm tra ${data.scanned || 0} tệp, không phát hiện mối đe doạ.`);
       }
       await loadMalwareScanJobs();
     } else {
@@ -5728,11 +5743,11 @@ function App() {
     const scanJobTitle = job => job.scope === 'server'
       ? 'Toàn bộ VPS'
       : (job.domains && job.domains.length > 0)
-        ? (job.domains.length === 1 ? job.domains[0] : `${job.domains.length} websites`)
-        : (job.scope === 'all' ? 'Tất cả website' : 'Scan job');
+        ? (job.domains.length === 1 ? job.domains[0] : `${job.domains.length} website`)
+        : (job.scope === 'all' ? 'Tất cả website' : 'Lượt quét');
     const scanJobStamp = job => {
       const stamp = job.finished_at || job.updated_at || job.started_at || job.created_at || '';
-      if (!stamp) return 'No timestamp';
+      if (!stamp) return 'Chưa có thời gian';
       const date = new Date(stamp);
       return Number.isNaN(date.getTime()) ? stamp : new Intl.DateTimeFormat('en-GB', {
         timeZone: 'Asia/Ho_Chi_Minh',
@@ -5753,7 +5768,10 @@ function App() {
       if (['error', 'interrupted'].includes(job.status)) return 'badge bad';
       return 'badge warn';
     };
-    const engineLabel = { 'lmd+clamav': 'LMD + ClamAV', clamav: 'ClamAV', none: 'Chưa cài' }[mw.engine] || 'Chưa cài';
+    const scanStatusLabel = status => ({
+      queued: 'Đang chờ', running: 'Đang chạy', done: 'Hoàn tất',
+      infected: 'Phát hiện đe doạ', error: 'Lỗi', interrupted: 'Bị gián đoạn',
+    }[status] || status || '—');
     const fmtStamp = s => {
       if (!s) return '';
       const d = new Date(s);
@@ -5769,25 +5787,31 @@ function App() {
     const renderScheduleRow = name => {
       const form = malwareSchedulesForm[name] || {};
       const saved = malwareSchedules[name] || {};
+      // form.weekday/hour are UTC on the wire; show and edit them as VN time.
+      const vn = utcScheduleToVn(form.weekday ?? 6, form.hour ?? 3);
+      const setSchedVn = (patch) => {
+        const merged = { weekday: patch.weekday ?? vn.weekday, hour: patch.hour ?? vn.hour };
+        setSched(name, vnScheduleToUtc(merged.weekday, merged.hour));
+      };
       return <div className={`malware-sched-row${form.enabled ? ' on' : ''}`} key={name}>
         <label className="malware-sched-toggle">
           <input type="checkbox" checked={!!form.enabled} onChange={e => setSched(name, { enabled: e.target.checked })} />
           <span>{MALWARE_SCHEDULE_LABELS[name]}</span>
         </label>
         <div className="malware-sched-when">
-          <select value={form.weekday ?? 6} disabled={!form.enabled} aria-label="Thứ"
-            onChange={e => setSched(name, { weekday: Number(e.target.value) })}>
+          <select value={vn.weekday} disabled={!form.enabled} aria-label="Thứ"
+            onChange={e => setSchedVn({ weekday: Number(e.target.value) })}>
             {WEEKDAY_LABELS.map((l, i) => <option key={i} value={i}>{l}</option>)}
           </select>
-          <select value={form.hour ?? 3} disabled={!form.enabled} aria-label="Giờ (UTC)"
-            onChange={e => setSched(name, { hour: Number(e.target.value) })}>
-            {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')}:00 UTC</option>)}
+          <select value={vn.hour} disabled={!form.enabled} aria-label="Giờ"
+            onChange={e => setSchedVn({ hour: Number(e.target.value) })}>
+            {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>)}
           </select>
         </div>
         <div className="malware-sched-meta">
           {saved.enabled && saved.next_run_at && <span>Kế tiếp: <strong>{fmtStamp(saved.next_run_at)}</strong></span>}
           {saved.last_run_at && <span className={`badge ${saved.last_status === 'done' ? 'ok' : saved.last_status === 'infected' ? 'danger' : 'warn'}`}>
-            {fmtStamp(saved.last_run_at)} · {saved.last_status || '—'}
+            {fmtStamp(saved.last_run_at)} · {scanStatusLabel(saved.last_status)}
           </span>}
         </div>
       </div>;
@@ -5799,8 +5823,8 @@ function App() {
           <div>
             <h2>Malware Scanner</h2>
             <p className="hint">
-              {mwActive ? <span className="badge ok">Đang bật · {engineLabel}</span>
-                : mwEnabled && !mwInstalled ? <span className="badge warn">Đang cài LMD...</span>
+              {mwActive ? <span className="badge ok">Đang bật</span>
+                : mwEnabled && !mwInstalled ? <span className="badge warn">Đang cài đặt...</span>
                 : mwInstalled && !mwEnabled ? <span className="badge">Đã cài · đang tắt</span>
                 : <span className="badge">Chưa cài</span>}
               {mw.realtime_enabled && <span className={mw.monitor_running ? 'badge ok' : 'badge warn'} style={{marginLeft:6}}>
@@ -5817,13 +5841,13 @@ function App() {
         <div className="info-box">
           <p className="hint">{mw.detail || 'Đang kiểm tra...'}</p>
           {mw.memory_total_mb > 0 && <p className="hint">RAM máy chủ: <strong>{mw.memory_total_mb} MB</strong> (còn trống {mw.memory_available_mb} MB)</p>}
-          {mw.lmd_installed && <p className="hint">Chữ ký LMD: <strong>{mw.lmd_sig_version || '—'}</strong>{mw.lmd_updated_at ? ` (cập nhật ${mw.lmd_updated_at})` : ''}</p>}
-          {!mwInstalled && <p className="hint" style={{marginTop:8}}>Khi bật, panel cài LMD + engine ClamAV. ClamAV chạy một lần mỗi lượt quét (RAM ~1.3GB chỉ trong lúc quét, xong giải phóng) — không có daemon thường trực.</p>}
+          {mw.lmd_installed && <p className="hint">Dữ liệu nhận diện mã độc: <strong>{mw.lmd_sig_version || '—'}</strong>{mw.lmd_updated_at ? ` (cập nhật ${mw.lmd_updated_at})` : ''}</p>}
+          {!mwInstalled && <p className="hint" style={{marginTop:8}}>Khi bật, panel tự cài trình quét. Trình quét chỉ chạy trong lúc quét (RAM ~1.3GB), quét xong tự giải phóng — không chạy nền liên tục nên không tốn RAM lúc bình thường.</p>}
           <div className="actions" style={{marginTop:12}}>
             {!mwEnabled
               ? <button disabled={!!loading} onClick={() => toggleMalwareScan(true)}><Shield size={14}/> Bật trình quét</button>
               : <button className="danger" disabled={!!loading} onClick={() => toggleMalwareScan(false)}>Tắt trình quét</button>}
-            {mwEnabled && !mw.lmd_installed && <button disabled={!!loading} onClick={installLmd}>Cài LMD</button>}
+            {mwEnabled && !mw.lmd_installed && <button disabled={!!loading} onClick={installLmd}>Cài đặt trình quét</button>}
             {mw.lmd_installed && <button className="secondary" disabled={!!loading} onClick={updateMalwareSignatures}><RefreshCw size={13}/> Cập nhật chữ ký</button>}
           </div>
         </div>
@@ -5833,9 +5857,9 @@ function App() {
             <div className="malware-scan-head">
               <div>
                 <strong>Cấp 1 — Quét theo lịch</strong>
-                <p className="hint">Quét website (chỉ /home, nhanh), quét toàn VPS, hoặc quét tăng dần (chỉ tệp sửa gần đây — rẻ, chạy hàng ngày). LMD báo tên họ malware.</p>
+                <p className="hint">Quét thư mục website (nhanh), quét toàn bộ VPS, hoặc quét tăng dần (chỉ những tệp mới sửa gần đây — chạy thủ công khi cần, không nằm trong lịch tự động).</p>
               </div>
-              <button className="secondary" disabled={!!loading} onClick={loadMalwareScanJobs}><RefreshCw size={14}/> History</button>
+              <button className="secondary" disabled={!!loading} onClick={loadMalwareScanJobs}><RefreshCw size={14}/> Lịch sử</button>
             </div>
             <div className="malware-scan-controls">
               <select value={scanTargetWebsiteId} onChange={e => { setScanTargetWebsiteId(e.target.value); setScanResults(null); setScanJob(null); }}>
@@ -5855,7 +5879,7 @@ function App() {
           </div>
           <div className="malware-schedule">
             <div className="malware-scan-head">
-              <div><strong>Lịch tự động</strong><p className="hint">Panel tự quét theo lịch, không cần ai bấm. Đặt vào giờ ít khách (giờ UTC).</p></div>
+              <div><strong>Lịch tự động</strong><p className="hint">Panel tự quét theo lịch, không cần ai bấm. Nên đặt vào giờ ít khách truy cập.</p></div>
               <button disabled={!!loading || !scheduleDirty} onClick={saveMalwareSchedule}><Clock size={14}/> Lưu lịch</button>
             </div>
             <div className="malware-sched-list">
@@ -5866,7 +5890,7 @@ function App() {
             <div className="malware-scan-head">
               <div>
                 <strong>Cấp 2 — Bảo vệ thời gian thực</strong>
-                <p className="hint">LMD theo dõi /home bằng inotify, quét tệp mới theo lô (~15 giây/lô). Bắt shell upload qua SFTP/plugin mà cấp 1 phải chờ tới lần quét kế tiếp — không phải trong vài giây.</p>
+                <p className="hint">Theo dõi thư mục website liên tục, kiểm tra tệp mới theo từng đợt ngắn (~15 giây). Bắt được ngay tệp lạ upload qua SFTP/plugin, không phải chờ tới lần quét theo lịch kế tiếp như Cấp 1.</p>
               </div>
               <label className="switch-line">
                 <input type="checkbox" checked={!!mw.realtime_enabled} disabled={!!loading}
@@ -5877,8 +5901,8 @@ function App() {
           </div>
           {scanJobs.length > 0 && <div className="scan-history-wrap">
             <div className="scan-history-head">
-              <strong>Scan history</strong>
-              <span>{scanJobs.length} saved</span>
+              <strong>Lịch sử quét</strong>
+              <span>{scanJobs.length} lượt</span>
             </div>
             <div className="scan-history-list">
               {scanJobs.slice(0, 8).map(job => <button
@@ -5893,7 +5917,7 @@ function App() {
                   <strong>{scanJobTitle(job)}</strong>
                   <small>{scanJobMeta(job)}</small>
                 </span>
-                <span className={scanJobBadgeClass(job)}>{job.status}</span>
+                <span className={scanJobBadgeClass(job)}>{scanStatusLabel(job.status)}</span>
               </button>)}
             </div>
           </div>}
@@ -5902,16 +5926,17 @@ function App() {
               <div className="progress-bar-fill" style={{width: `${Number(activeScanJob.progress_percent) || 0}%`}} />
             </div>
             <div className="scan-status-summary">
-              <span><strong>Progress</strong>{Number(activeScanJob.progress_percent) || 0}%</span>
-              <span><strong>Files scanned</strong>{activeScanJob.scanned || 0}/{activeScanJob.total_files || activeScanJob.scanned || 0}</span>
-              <span><strong>Threats found</strong>{activeScanJob.infected > 0
+              <span><strong>Tiến độ</strong>{Number(activeScanJob.progress_percent) || 0}%</span>
+              <span><strong>Tệp đã quét</strong>{activeScanJob.scanned || 0}/{activeScanJob.total_files || activeScanJob.scanned || 0}</span>
+              <span><strong>Mối đe doạ</strong>{activeScanJob.infected > 0
                 ? <span className="badge danger">{activeScanJob.infected}</span>
                 : <span className="badge ok">0</span>}
               </span>
-              <span><strong>Errors</strong>{activeScanJob.errors || 0}</span>
+              <span><strong>Lỗi</strong>{activeScanJob.errors || 0}</span>
             </div>
             {activeScanJob.message && <p className="hint">{activeScanJob.message}</p>}
             {activeScanJob.threats && activeScanJob.threats.length > 0 && <div className="scan-threat-list">
+              <p className="hint">Tên hiển thị là họ mã độc do trình quét tự đặt (ví dụ php.base64...), không phải tên virus thông thường — không cần tra cứu tên này ở đâu khác.</p>
               {activeScanJob.threats.map((t, i) => <div key={i} className="scan-threat-item">
                 <strong>{t.signature}</strong>
                 <span>{t.domain ? `${t.domain}: ` : ''}{t.path}</span>
