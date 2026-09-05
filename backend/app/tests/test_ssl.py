@@ -181,22 +181,25 @@ def test_certbot_calls_are_idempotent_when_the_cert_is_not_due_yet():
     assert "--allow-subset-of-names" in certbot_issue
 
 
-def test_the_nginx_installer_only_gets_names_the_certificate_actually_has(monkeypatch):
-    # --allow-subset-of-names can drop a requested name from the certificate
-    # (bad or foreign DNS). Asking `certbot install --nginx` for a name that
-    # is NOT in the certificate makes its nginx plugin fall back to the first
-    # server block it can find - the default_server tools vhost - and clone
-    # that block under the missing name: wrong certificate, and phpMyAdmin
-    # exposed under an unrelated domain. Reproduced live on a customer box.
+def test_the_nginx_installer_is_never_pointed_at_an_alias_or_redirect_domain(monkeypatch):
+    # Asking `certbot install --nginx -d X` for a domain with no server block
+    # of its own (a redirect-domain alias: BPanel wires those up itself, see
+    # nginx._append_certbot_redirect_vhosts, once the panel re-renders the
+    # vhost) makes certbot's nginx plugin fall back to the first server block
+    # it can find - the default_server tools vhost here - and clone it under
+    # that name: wrong certificate, and phpMyAdmin exposed under an unrelated
+    # domain. Reproduced live on a customer box, twice: once for a redirect
+    # domain with no DNS here, once for one whose DNS got fixed and made it
+    # into the certificate - the missing server block was the real cause
+    # both times, not a missing SAN, so install --nginx now only ever
+    # targets the primary domain (whose block already covers www too, from
+    # the same server_name line - see nginx._server_names).
     helper = HELPER_SCRIPT.read_text(encoding="utf-8")
     certbot_issue = helper.split("\n  certbot-issue)", 1)[1].split("\n  certbot-renew)", 1)[0]
-    assert 'openssl x509 -in "/etc/letsencrypt/live/${domain}/cert.pem" -noout -ext subjectAltName' in certbot_issue
-    # The install step's -d flags must come from what the cert actually has,
-    # not the originally-requested list that --allow-subset-of-names may have
-    # trimmed.
+    assert 'install_args=(install --nginx --cert-name "$domain" --non-interactive --redirect --expand -d "$domain")' in certbot_issue
     install_block = certbot_issue.split("install_args=(install --nginx", 1)[1].split("certbot \"${install_args[@]}\"", 1)[0]
-    assert 'for cert_domain in "${issued_domains[@]}"; do' in install_block
-    assert '"${domains[@]}"' not in install_block
+    assert "domains[@]" not in install_block
+    assert "for cert_domain" not in install_block
 
 
 def test_reapplying_the_firewall_for_a_port_change_cannot_kill_the_caller():

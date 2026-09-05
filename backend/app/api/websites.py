@@ -1057,6 +1057,18 @@ def enable_ssl(website_id: int, db: Session = Depends(get_db), current_user: Use
     website.ssl_ca_path = None
     website.ssl_source_domain = None
     ssl.remove_manual_ssl_files(*previous_manual_paths)
+    if _redirect_domains(website):
+        # A redirect-domain alias has no server block of its own until this
+        # runs (see nginx._append_certbot_redirect_vhosts) - it only gets one
+        # here, reusing the certificate file this site now has, never from
+        # certbot's own nginx plugin (that only ever touches "$domain" for
+        # exactly this reason: it has no way to create a new, correctly
+        # confined block for an alias, and falls back to cloning whatever
+        # server block it finds first).
+        try:
+            _rewrite_website_vhost(website)
+        except (RuntimeError, ValueError):
+            pass
     _resync_shared_dependents(db, website.domain)
     db.commit()
     db.refresh(website)

@@ -83,3 +83,52 @@ def test_create_alias_expands_letsencrypt_certificate(monkeypatch):
     assert db.committed is True
     assert db.rolled_back is False
     assert issued == [("example.test", ["alias.example.test", "old.example.test"])]
+
+
+def test_enabling_ssl_wires_up_an_existing_redirect_domain(monkeypatch):
+    # A redirect-domain alias has no server block of its own until this runs
+    # (see nginx._append_certbot_redirect_vhosts) - reported live on a
+    # DirectAdmin-imported site whose redirect pointer predated SSL being
+    # turned on: the certificate covered it once issue_ssl() started asking
+    # for every alias, but nothing ever re-rendered the vhost to give it a
+    # 443 block reusing that certificate, so it still had no working SSL.
+    website = Website(
+        id=1, domain="example.test", owner_id=1,
+        root_path="/home/bp_example_test/example.test", linux_user=None,
+        ssl_enabled=False, ssl_mode="none",
+    )
+    website.aliases = [WebsiteAlias(domain="old.example.test", mode="redirect")]
+    db = _Db(website)
+    rewritten = []
+
+    monkeypatch.setattr(websites, "_block_if_source", lambda *a, **k: None)
+    monkeypatch.setattr(websites, "_resync_shared_dependents", lambda *a, **k: None)
+    monkeypatch.setattr(websites, "_rewrite_website_vhost", lambda site, **kw: rewritten.append(site) or "/etc/nginx/conf.d/example.test.conf")
+    monkeypatch.setattr(websites.ssl, "issue_ssl", lambda domain, aliases: type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})())
+    monkeypatch.setattr(websites, "log_action", lambda *args, **kwargs: None)
+
+    websites.enable_ssl(1, db=db, current_user=User(id=1, role="admin"))
+
+    assert website.ssl_mode == "letsencrypt"
+    assert rewritten == [website]
+
+
+def test_enabling_ssl_skips_the_rewrite_with_no_redirect_domains(monkeypatch):
+    website = Website(
+        id=1, domain="example.test", owner_id=1,
+        root_path="/home/bp_example_test/example.test", linux_user=None,
+        ssl_enabled=False, ssl_mode="none",
+    )
+    website.aliases = []
+    db = _Db(website)
+    rewritten = []
+
+    monkeypatch.setattr(websites, "_block_if_source", lambda *a, **k: None)
+    monkeypatch.setattr(websites, "_resync_shared_dependents", lambda *a, **k: None)
+    monkeypatch.setattr(websites, "_rewrite_website_vhost", lambda site, **kw: rewritten.append(site) or "/etc/nginx/conf.d/example.test.conf")
+    monkeypatch.setattr(websites.ssl, "issue_ssl", lambda domain, aliases: type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})())
+    monkeypatch.setattr(websites, "log_action", lambda *args, **kwargs: None)
+
+    websites.enable_ssl(1, db=db, current_user=User(id=1, role="admin"))
+
+    assert rewritten == []
