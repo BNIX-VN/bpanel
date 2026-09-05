@@ -5336,6 +5336,16 @@ function App() {
     // form below (it always wins - PHP reads it last), is not a decision to
     // make, so it does not belong in a list someone has to read every time.
     const tuneChanges = (phpTune?.settings || []).filter(row => row.changes && !row.overridden_value);
+    // Every pool on a server is sized from the same CPU/RAM/pool-count budget,
+    // so they normally all carry identical numbers - a row per pool (this test
+    // box alone has 49) is a wall of the same four numbers repeated. Collapse
+    // to "N/N pools run X", and only list the ones that do not match: those are
+    // the only ones worth an administrator's attention.
+    const poolKey = p => `${p.max_children}|${p.idle_timeout}|${p.max_requests}|${p.request_terminate_timeout}`;
+    const poolGroups = {};
+    (phpTune?.pools || []).forEach(p => { (poolGroups[poolKey(p)] ||= []).push(p); });
+    const [commonPools, ...restPoolGroups] = Object.values(poolGroups).sort((a, b) => b.length - a.length);
+    const poolOutliers = restPoolGroups.flat();
     return <section className="section">
       <div className="section-title">
         <div><h2>PHP Configuration</h2></div>
@@ -5380,16 +5390,17 @@ function App() {
           JIT không bật được trên máy này{phpTune.jit_blocked_by ? ` vì ${phpTune.jit_blocked_by} chiếm opcode handler` : ''} —
           PHP sẽ bỏ qua, nên panel không ghi thông số JIT.
         </p>}
-        {phpTune.pools && phpTune.pools.length > 0 && <div className="notice php-tune-result">
-          <strong>Pool PHP-FPM (PHP {phpTune.php_version})</strong>
-          <p>Panel tự tính lại các pool này mỗi khi khởi động máy hoặc bấm Auto tune ở trên.</p>
-          <ul>
-            {phpTune.pools.map(p => <li key={p.pool}>
-              <code>{p.pool}</code>
-              <span>pm.max_children=<strong>{p.max_children || '—'}</strong>, idle {p.idle_timeout || '—'}s, tối đa {p.max_requests || '—'} request/tiến trình</span>
-            </li>)}
-          </ul>
-        </div>}
+        {commonPools && <p className="hint">
+          Pool PHP-FPM: {commonPools.length}/{phpTune.pools.length} pool đang chạy pm.max_children={commonPools[0].max_children || '—'},
+          idle {commonPools[0].idle_timeout || '—'}s, tối đa {commonPools[0].max_requests || '—'} request/tiến trình.
+          {poolOutliers.length > 0 && ` ${poolOutliers.length} pool khác đang chạy thông số khác:`}
+        </p>}
+        {poolOutliers.length > 0 && <ul className="php-tune-pool-outliers">
+          {poolOutliers.map(p => <li key={p.pool}>
+            <code>{p.pool}</code>
+            <span>pm.max_children={p.max_children || '—'}, idle {p.idle_timeout || '—'}s, tối đa {p.max_requests || '—'} request</span>
+          </li>)}
+        </ul>}
         {phpTunePools && <p className="hint">{phpTunePools.split('\n').filter(Boolean).slice(-1)[0]}</p>}
       </div>}
       {notInstalled.length > 0 && <div className="user-create-card" style={{ marginTop: 16 }}>

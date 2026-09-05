@@ -442,6 +442,9 @@ button:disabled,.upload-button.disabled{background:var(--disabled-bg);color:var(
 .php-tune-result code{font-family:Consolas,'SFMono-Regular','Liberation Mono',Menlo,monospace;font-size:12px;opacity:.85}
 .php-tune-result em{font-style:normal;opacity:.75}
 .php-tune-result p{margin:0;opacity:.8}
+.php-tune-pool-outliers{margin:4px 0 0;padding-left:0;list-style:none;display:grid;gap:3px;font-size:12.5px}
+.php-tune-pool-outliers li{display:flex;gap:7px;align-items:baseline;flex-wrap:wrap}
+.php-tune-pool-outliers code{font-family:Consolas,'SFMono-Regular','Liberation Mono',Menlo,monospace;font-size:12px;opacity:.85}
 .addon-card{display:grid;gap:9px;align-content:start;padding:13px 14px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface)}
 .addon-card.installed{border-color:var(--success-border)}
 .addon-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
