@@ -59,12 +59,27 @@ def _safe_domain_list(domain: str, aliases: list[str] | tuple[str, ...] | None =
 
 
 def issue_ssl(domain: str, aliases: list[str] | tuple[str, ...] | None = None) -> CommandResult:
-    domains = _safe_domain_list(domain, aliases)
+    # nginx's own vhost always listens on www.<domain> too (see
+    # nginx._server_names) whether or not anyone added it as an alias - a
+    # certificate that only covers the bare domain leaves every visitor who
+    # types "www." with a hard TLS mismatch instead of the site. Request it
+    # by default here, the one place all four SSL-issuing call sites share,
+    # rather than in _safe_domain_list: that helper also builds the list a
+    # manually-uploaded certificate is checked against, and plenty of real
+    # certificates only cover the bare domain on purpose.
+    safe_domain = _safe_domain(domain)
+    extra_aliases = list(aliases or [])
+    if not safe_domain.startswith("www."):
+        existing = {_safe_domain(str(a)) for a in extra_aliases}
+        www_domain = f"www.{safe_domain}"
+        if www_domain not in existing:
+            extra_aliases.append(www_domain)
+    domains = _safe_domain_list(domain, extra_aliases)
     helper_args = domains[:]
     fallback = ["certbot", "--nginx"]
     for name in domains:
         fallback.extend(["-d", name])
-    fallback.extend(["--non-interactive", "--agree-tos", "--redirect", "--expand"])
+    fallback.extend(["--non-interactive", "--agree-tos", "--redirect", "--expand", "--allow-subset-of-names"])
     if settings.ssl_email:
         helper_args.append(settings.ssl_email)
         fallback.extend(["--email", settings.ssl_email])

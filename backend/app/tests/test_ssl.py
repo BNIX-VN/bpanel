@@ -175,6 +175,10 @@ def test_certbot_calls_are_idempotent_when_the_cert_is_not_due_yet():
     certbot_issue = helper.split("\n  certbot-issue)", 1)[1].split("\n  certbot-renew)", 1)[0]
     assert "--keep-until-expiring" in certbot_issue
     assert '[[ -f "/etc/letsencrypt/live/${domain}/fullchain.pem" ]] || exit "$rc"' in certbot_issue
+    # nginx always listens on www.<domain> too (see nginx._server_names) and
+    # issue_ssl now always requests it - www DNS that does not point here yet
+    # must not turn a working bare-domain issuance into a total failure.
+    assert "--allow-subset-of-names" in certbot_issue
 
 
 def test_reapplying_the_firewall_for_a_port_change_cannot_kill_the_caller():
@@ -208,3 +212,43 @@ def test_issue_ssl_passes_aliases_and_email(monkeypatch):
     assert result.returncode == 0
     assert captured["helper_command"] == "certbot-issue"
     assert captured["helper_args"] == ["example.test", "www.example.test", "admin@example.test"]
+
+
+def test_issue_ssl_adds_www_by_default(monkeypatch):
+    # Adding a website https://minhtrungmedia.vn/ never asked for
+    # www.minhtrungmedia.vn - nginx serves it anyway (every vhost listens on
+    # www.<domain> automatically), so a visitor typing "www." got a hard TLS
+    # mismatch instead of the site. Reported live on a customer's box.
+    captured = {}
+    monkeypatch.setattr(ssl.shell, "privileged", lambda helper_command, helper_args=None, **kw: (
+        captured.update(helper_args=helper_args) or type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+    ))
+    monkeypatch.setattr(ssl.settings, "ssl_email", "")
+
+    ssl.issue_ssl("minhtrungmedia.vn")
+
+    assert captured["helper_args"] == ["minhtrungmedia.vn", "www.minhtrungmedia.vn"]
+
+
+def test_issue_ssl_does_not_double_up_www_already_given_as_an_alias(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(ssl.shell, "privileged", lambda helper_command, helper_args=None, **kw: (
+        captured.update(helper_args=helper_args) or type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+    ))
+    monkeypatch.setattr(ssl.settings, "ssl_email", "")
+
+    ssl.issue_ssl("example.test", aliases=["www.example.test", "shop.example.test"])
+
+    assert captured["helper_args"] == ["example.test", "www.example.test", "shop.example.test"]
+
+
+def test_issue_ssl_does_not_add_a_double_www_for_a_www_host(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(ssl.shell, "privileged", lambda helper_command, helper_args=None, **kw: (
+        captured.update(helper_args=helper_args) or type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+    ))
+    monkeypatch.setattr(ssl.settings, "ssl_email", "")
+
+    ssl.issue_ssl("www.example.test")
+
+    assert captured["helper_args"] == ["www.example.test"]

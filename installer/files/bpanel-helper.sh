@@ -4256,7 +4256,10 @@ PY
         nginx -t && systemctl reload nginx
       fi
     fi
-    args=(certonly --webroot -w /var/www/bpanel-acme --cert-name "$domain" --non-interactive --agree-tos --expand --keep-until-expiring)
+    # --allow-subset-of-names: the panel now always asks for www.<domain> too
+    # (nginx always listens on it) - a domain with no working www DNS record
+    # must not turn a working bare-domain issuance into a total failure.
+    args=(certonly --webroot -w /var/www/bpanel-acme --cert-name "$domain" --non-interactive --agree-tos --expand --keep-until-expiring --allow-subset-of-names)
     for cert_domain in "${domains[@]}"; do
       args+=(-d "$cert_domain")
     done
