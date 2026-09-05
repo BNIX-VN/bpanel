@@ -5386,10 +5386,6 @@ function App() {
         {phpTuneApplied && <div className="notice php-tune-result">
           <strong><Check size={14}/> Đã tối ưu PHP {phpTune.php_version} xong.</strong>
         </div>}
-        {phpTune.jit_supported && !phpTune.jit_usable && <p className="hint">
-          JIT không bật được trên máy này{phpTune.jit_blocked_by ? ` vì ${phpTune.jit_blocked_by} chiếm opcode handler` : ''} —
-          PHP sẽ bỏ qua, nên panel không ghi thông số JIT.
-        </p>}
         {commonPools && <p className="hint">
           Pool PHP-FPM: {commonPools.length}/{phpTune.pools.length} pool đang chạy pm.max_children={commonPools[0].max_children || '—'},
           idle {commonPools[0].idle_timeout || '—'}s, tối đa {commonPools[0].max_requests || '—'} request/tiến trình.
