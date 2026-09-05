@@ -11,6 +11,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 UPDATE_SCRIPT = PROJECT_ROOT / "installer" / "update.sh"
+INSTALL_SCRIPT = PROJECT_ROOT / "installer" / "install.sh"
 
 
 def _script() -> str:
@@ -67,3 +68,28 @@ def test_the_second_stage_does_not_snapshot_the_database_twice():
 else
   log "Backing up SQLite DB before update"
   backup_db''' in script
+
+
+def test_a_stuck_apt_dependency_does_not_leave_ipset_missing_forever():
+    # A stuck package pin (seen in the field: libsystemd-shared) can leave
+    # ipset "not going to be installed" - apt itself suggests --fix-broken.
+    # An update that only warns and moves on means every server that hit this
+    # once stays without an enforced firewall on every future update too.
+    script = _script()
+    start = script.index("# --- Firewall: move IP blocking")
+    block = script[start : script.index("if id -u bpanel", start)]
+    assert "apt-get --fix-broken install -y" in block
+    # The repair is a retry, not the only attempt - it must not run unless the
+    # plain install actually failed.
+    assert "if ! DEBIAN_FRONTEND=noninteractive apt-get install -y iptables ipset" in block
+
+
+def test_a_fresh_install_repairs_the_same_stuck_apt_dependency():
+    # install_base_packages hits the same class of stuck-pin failure a fresh
+    # VPS image can ship with; without a repair+retry the whole install dies
+    # on this one line instead of a targeted, recoverable failure.
+    script = INSTALL_SCRIPT.read_text(encoding="utf-8")
+    start = script.index("install_base_packages() {")
+    block = script[start : script.index("\n}", start)]
+    assert "apt-get --fix-broken install -y" in block
+    assert 'if ! apt-get install -y "${pkgs[@]}"; then' in block

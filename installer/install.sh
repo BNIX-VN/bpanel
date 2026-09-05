@@ -250,7 +250,16 @@ ask_panel_url() {
 install_base_packages() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update --allow-releaseinfo-change
-  apt-get install -y software-properties-common ca-certificates curl gnupg git composer nginx mariadb-server redis-server openssh-server python3 python3-pip python3-venv certbot python3-certbot-nginx tar zip unzip openssl iptables ipset phpmyadmin acl
+  local pkgs=(software-properties-common ca-certificates curl gnupg git composer nginx mariadb-server redis-server openssh-server python3 python3-pip python3-venv certbot python3-certbot-nginx tar zip unzip openssl iptables ipset phpmyadmin acl)
+  if ! apt-get install -y "${pkgs[@]}"; then
+    # Seen on some VPS images: a stuck package pin (e.g. libsystemd-shared)
+    # leaves an unrelated dependency "not going to be installed" and apt
+    # itself suggests this fix. Repair once and retry before giving up -
+    # otherwise the whole install dies here instead of a targeted failure.
+    echo "Package install hit a broken dependency; repairing and retrying..."
+    apt-get --fix-broken install -y || true
+    apt-get install -y "${pkgs[@]}"
+  fi
   systemctl enable --now nginx mariadb redis-server
   systemctl enable --now ssh 2>/dev/null || systemctl enable --now sshd 2>/dev/null || true
 }

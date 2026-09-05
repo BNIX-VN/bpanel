@@ -1325,8 +1325,17 @@ fi
 # --- Firewall: move IP blocking from UFW/Nginx to iptables + ipset ---------
 log "Migrating firewall to iptables + ipset"
 if ! command -v ipset >/dev/null 2>&1 || ! command -v iptables >/dev/null 2>&1; then
-  DEBIAN_FRONTEND=noninteractive apt-get install -y iptables ipset >/dev/null 2>&1 || \
-    echo "WARNING: could not install iptables/ipset; firewall migration skipped."
+  if ! DEBIAN_FRONTEND=noninteractive apt-get install -y iptables ipset >/dev/null 2>&1; then
+    # Seen in the field: a stuck libsystemd-shared pin leaves libipset13 (and
+    # so ipset) "not going to be installed" - apt itself suggests the fix.
+    # Older installs never got iptables/ipset in this state; every update run
+    # is a chance to repair it instead of leaving the firewall unenforced
+    # forever behind a WARNING nobody reads.
+    echo "  iptables/ipset install failed; repairing broken apt dependencies"
+    DEBIAN_FRONTEND=noninteractive apt-get --fix-broken install -y >/dev/null 2>&1 || true
+    DEBIAN_FRONTEND=noninteractive apt-get install -y iptables ipset >/dev/null 2>&1 || \
+      echo "WARNING: could not install iptables/ipset; firewall migration skipped."
+  fi
 fi
 if id -u bpanel >/dev/null 2>&1 && command -v ipset >/dev/null 2>&1; then
   # firewall-migrate imports surviving UFW rules, removes UFW and the Nginx
