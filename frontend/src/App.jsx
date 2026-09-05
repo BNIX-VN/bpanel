@@ -682,7 +682,6 @@ function App() {
   const [panelSettings, setPanelSettings] = useState({ app_name: 'BPanel', panel_url: '', panel_hostname: '', panel_port: 2222, logo_url: '', favicon_url: '/favicon.png', ssl_enabled: false });
   const [phpTune, setPhpTune] = useState(null);
   const [phpTuneApplied, setPhpTuneApplied] = useState(false);
-  const [phpTunePools, setPhpTunePools] = useState('');
   const [panelSettingsForm, setPanelSettingsForm] = useState({ app_name: 'BPanel', panel_hostname: '', panel_port: 2222, ssl_enabled: false });
   const [apiTokens, setApiTokens] = useState([]);
   const [newApiToken, setNewApiToken] = useState({ name: 'WHMCS', allowed_ips: '' });
@@ -3233,7 +3232,6 @@ function App() {
     if (data) {
       if (data.plan) setPhpTune(data.plan);
       setPhpTuneApplied(true);
-      setPhpTunePools(data.pools || '');
       await loadPhpConfig(version);
     }
   }
@@ -5388,16 +5386,15 @@ function App() {
         </div>}
         {commonPools && <p className="hint">
           Pool PHP-FPM: {commonPools.length}/{phpTune.pools.length} pool đang chạy pm.max_children={commonPools[0].max_children || '—'},
-          idle {commonPools[0].idle_timeout || '—'}s, tối đa {commonPools[0].max_requests || '—'} request/tiến trình.
+          idle {commonPools[0].idle_timeout || '—'}, tối đa {commonPools[0].max_requests || '—'} request/tiến trình.
           {poolOutliers.length > 0 && ` ${poolOutliers.length} pool khác đang chạy thông số khác:`}
         </p>}
         {poolOutliers.length > 0 && <ul className="php-tune-pool-outliers">
           {poolOutliers.map(p => <li key={p.pool}>
             <code>{p.pool}</code>
-            <span>pm.max_children={p.max_children || '—'}, idle {p.idle_timeout || '—'}s, tối đa {p.max_requests || '—'} request</span>
+            <span>pm.max_children={p.max_children || '—'}, idle {p.idle_timeout || '—'}, tối đa {p.max_requests || '—'} request</span>
           </li>)}
         </ul>}
-        {phpTunePools && <p className="hint">{phpTunePools.split('\n').filter(Boolean).slice(-1)[0]}</p>}
       </div>}
       {notInstalled.length > 0 && <div className="user-create-card" style={{ marginTop: 16 }}>
         <h3>Install PHP</h3>
