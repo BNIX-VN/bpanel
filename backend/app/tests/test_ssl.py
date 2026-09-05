@@ -177,6 +177,20 @@ def test_certbot_calls_are_idempotent_when_the_cert_is_not_due_yet():
     assert '[[ -f "/etc/letsencrypt/live/${domain}/fullchain.pem" ]] || exit "$rc"' in certbot_issue
 
 
+def test_reapplying_the_firewall_for_a_port_change_cannot_kill_the_caller():
+    # allow_panel_port is called from panel-ssl-install / panel-url-set as a
+    # best-effort side effect ("open this port too"), guarded by `|| true`.
+    # That guard does nothing against a hard `exit` (firewall_apply ->
+    # firewall_require_tools -> deny() -> exit) raised by a plain command in
+    # the same shell - reproduced live on a box missing `ipset`: the whole
+    # panel-ssl-install call died right there, after certbot and the cert
+    # install had already succeeded. A subshell makes `exit` end only the
+    # subshell, so `|| true` actually catches it.
+    helper = HELPER_SCRIPT.read_text(encoding="utf-8")
+    body = helper.split("\nallow_panel_port() {", 1)[1].split("\n}", 1)[0]
+    assert "( firewall_apply ) >/dev/null 2>&1 || true" in body
+
+
 def test_issue_ssl_passes_aliases_and_email(monkeypatch):
     captured = {}
 

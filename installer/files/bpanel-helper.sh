@@ -156,9 +156,16 @@ require_panel_host() {
 allow_panel_port() {
   # Panel/SSH/web ports are always derived from the environment, so re-applying
   # the iptables chain is enough to open a newly selected panel port.
+  #
+  # This must never fail the caller (panel-ssl-install, panel-url-set, ...):
+  # a firewall problem here is not the SSL/URL change failing. `|| true`
+  # alone does not guarantee that - firewall_apply (via firewall_require_tools)
+  # calls deny(), which does `exit`, and exit in a plain command tears down
+  # this whole process before `|| true` ever gets a status to swallow. Run it
+  # in a subshell so that exit only ends the subshell.
   local port="$1"
   require_port "$port"
-  firewall_apply >/dev/null 2>&1 || true
+  ( firewall_apply ) >/dev/null 2>&1 || true
 }
 
 schedule_panel_restart() {
