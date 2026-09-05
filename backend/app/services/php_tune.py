@@ -493,6 +493,44 @@ def pinned_by_php_config(php_version: str) -> dict:
     return _read_ini_values([base / OPCACHE_FILE_NAME, base / "99-bpanel.ini"], set(TUNABLE_KEYS))
 
 
+_POOL_KEYS = ("pm.max_children", "pm.process_idle_timeout", "pm.max_requests", "request_terminate_timeout")
+_POOL_NAME_RE = re.compile(r"^\[([^\]]+)\]", re.M)
+
+
+def _pool_dir(php_version: str) -> Path:
+    return Path(f"/etc/php/{php_version}/fpm/pool.d")
+
+
+def current_pool_settings(php_version: str) -> list[dict]:
+    """What is actually written in each of this version's FPM pool files.
+
+    php-fpm-retune (run at boot by bpanel-autotune.service) and "Auto tune PHP"
+    both write these silently - this reads the same figures back so an
+    administrator can see what a pool ended up running with without waiting
+    to catch a retune in the act. The pool files are root:root 0644, so this
+    reads them directly; no helper round-trip needed.
+    """
+    pools: list[dict] = []
+    pool_dir = _pool_dir(php_version)
+    if not pool_dir.is_dir():
+        return pools
+    for pool_file in sorted(pool_dir.glob("bpanel-*.conf")):
+        try:
+            text = pool_file.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        values = _read_ini_values([pool_file], set(_POOL_KEYS))
+        name = _POOL_NAME_RE.search(text)
+        pools.append({
+            "pool": name.group(1) if name else pool_file.stem,
+            "max_children": values.get("pm.max_children", ""),
+            "idle_timeout": values.get("pm.process_idle_timeout", ""),
+            "max_requests": values.get("pm.max_requests", ""),
+            "request_terminate_timeout": values.get("request_terminate_timeout", ""),
+        })
+    return pools
+
+
 def plan(php_version: str) -> dict:
     """Current beside recommended, so an administrator can see the difference."""
     facts = server_facts()
@@ -514,6 +552,7 @@ def plan(php_version: str) -> dict:
         "php_version": php_version,
         "facts": facts,
         "settings": rows,
+        "pools": current_pool_settings(php_version),
         # A row that cannot take effect is not offered as a change to make.
         "changes": sum(1 for row in rows if row["changes"] and not row["overridden_value"]),
         "overridden": sum(1 for row in rows if row["overridden_value"]),

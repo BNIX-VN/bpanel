@@ -5361,20 +5361,38 @@ function App() {
           </button>
         </div>
         {phpTuneApplied && <div className="notice php-tune-result">
-          <strong><Check size={14}/> Đã tối ưu PHP {phpTune.php_version} theo máy này
-            ({phpTune.facts.cpu_count} CPU, RAM {phpTune.facts.total_memory_mb} MB)</strong>
+          <strong><Check size={14}/> Đã tối ưu PHP {phpTune.php_version} xong.</strong>
+        </div>}
+        {/* Always visible, not just right after clicking Auto tune - this also runs
+            unattended at boot (bpanel-autotune.service), so it must be checkable
+            on a normal visit too, not only right after pressing the button. */}
+        <div className="notice php-tune-result">
+          <strong>PHP {phpTune.php_version} trên máy này ({phpTune.facts.cpu_count} CPU, RAM {phpTune.facts.total_memory_mb} MB, {phpTune.facts.pool_count} pool)</strong>
           <ul>
             {phpTune.settings.map(row => <li key={row.key}>
-              <code>{row.key}</code> <strong>{row.overridden_value || row.value}</strong>
-              {row.overridden_value && <em> — giữ theo ô PHP Configuration phía trên</em>}
+              <code>{row.key}</code>
+              <span>{row.current || '—'} → <strong>{row.overridden_value || row.value}</strong></span>
+              {row.overridden_value
+                ? <em>giữ theo ô PHP Configuration phía trên</em>
+                : row.changes ? <em>khác khuyến nghị — bấm Auto tune để áp dụng</em> : <em>đã khớp</em>}
             </li>)}
           </ul>
           {phpTune.jit_supported && !phpTune.jit_usable && <p>
             JIT không bật được trên máy này{phpTune.jit_blocked_by ? ` vì ${phpTune.jit_blocked_by} chiếm opcode handler` : ''} —
             PHP sẽ bỏ qua, nên panel không ghi thông số JIT.
           </p>}
-          {phpTunePools && <p>{phpTunePools.split('\n').filter(Boolean).slice(-1)[0]}</p>}
+        </div>
+        {phpTune.pools && phpTune.pools.length > 0 && <div className="notice php-tune-result">
+          <strong>Pool PHP-FPM (PHP {phpTune.php_version})</strong>
+          <p>Panel tự tính lại các pool này mỗi khi khởi động máy hoặc bấm Auto tune ở trên.</p>
+          <ul>
+            {phpTune.pools.map(p => <li key={p.pool}>
+              <code>{p.pool}</code>
+              <span>pm.max_children=<strong>{p.max_children || '—'}</strong>, idle {p.idle_timeout || '—'}s, tối đa {p.max_requests || '—'} request/tiến trình</span>
+            </li>)}
+          </ul>
         </div>}
+        {phpTunePools && <p className="hint">{phpTunePools.split('\n').filter(Boolean).slice(-1)[0]}</p>}
       </div>}
       {notInstalled.length > 0 && <div className="user-create-card" style={{ marginTop: 16 }}>
         <h3>Install PHP</h3>
