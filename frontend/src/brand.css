@@ -429,6 +429,10 @@ button:disabled,.upload-button.disabled{background:var(--disabled-bg);color:var(
 .panel-cert-pick{display:grid;gap:5px;font-weight:700}
 .panel-cert-pick span{font-size:11px;letter-spacing:.03em;text-transform:uppercase;color:var(--text-muted)}
 .addon-list{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
+.php-tune-diff{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:10px 13px;border-radius:var(--radius-sm);font-size:12.5px;line-height:1.5}
+.php-tune-diff:not(.notice){border:1px solid var(--warning-border);background:var(--warning-bg);color:var(--warning-text)}
+.php-tune-diff strong{display:flex;align-items:center;gap:6px;font-size:12.5px;flex:none}
+.php-tune-diff span{flex:1 1 260px}
 .php-tune{display:grid;gap:10px;justify-items:start}
 .php-tune-actions{display:flex;flex-wrap:wrap;gap:8px}
 .php-tune-result{display:grid;gap:8px;width:100%;padding:11px 13px;border-radius:var(--radius-sm);font-size:12.5px;line-height:1.5}

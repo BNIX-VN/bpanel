@@ -5331,6 +5331,11 @@ function App() {
   function renderPhpConfig() {
     if (!isAdmin) return <section className="section"><h2>PHP config</h2><p className="hint">You do not have permission to edit PHP config.</p></section>;
     const notInstalled = sortPhpVersions(phpVersions.supported.filter(v => !phpVersions.installed.includes(v)));
+    // The only thing worth an administrator's attention: settings Auto tune
+    // would actually change. A row that already matches, or one pinned by the
+    // form below (it always wins - PHP reads it last), is not a decision to
+    // make, so it does not belong in a list someone has to read every time.
+    const tuneChanges = (phpTune?.settings || []).filter(row => row.changes && !row.overridden_value);
     return <section className="section">
       <div className="section-title">
         <div><h2>PHP Configuration</h2></div>
@@ -5350,6 +5355,14 @@ function App() {
         <label><span>upload_max_filesize</span><input value={phpConfig.upload_max_filesize} onChange={e => setPhpConfig(prev => ({ ...prev, upload_max_filesize: e.target.value }))} placeholder="1024M" /></label>
         <button className="secondary-light" disabled={!!loading} onClick={restorePhpDefaults}><RotateCcw size={14}/> Restore defaults</button>
         <button disabled={!!loading} onClick={updatePhpConfig}>Save</button>
+        {phpTune && tuneChanges.length > 0 && <div className="php-tune-diff">
+          <strong><AlertCircle size={14}/> Auto tune PHP {phpTune.php_version} sẽ đổi {tuneChanges.length} thông số</strong>
+          <span>{tuneChanges.map(row => `${row.key} ${row.current || 'chưa đặt'} → ${row.value}`).join(', ')}.</span>
+          <button className="mini" disabled={!!loading} onClick={applyPhpTune}>Auto tune PHP</button>
+        </div>}
+        {phpTune && tuneChanges.length === 0 && <div className="notice php-tune-diff">
+          <Check size={14}/> PHP {phpTune.php_version} đã khớp khuyến nghị auto tune cho máy này ({phpTune.facts.cpu_count} CPU, {phpTune.facts.total_memory_mb} MB RAM).
+        </div>}
       </div>
       {phpTune && <div className="php-tune" style={{ marginTop: 16 }}>
         <div className="php-tune-actions">
@@ -5363,25 +5376,10 @@ function App() {
         {phpTuneApplied && <div className="notice php-tune-result">
           <strong><Check size={14}/> Đã tối ưu PHP {phpTune.php_version} xong.</strong>
         </div>}
-        {/* Always visible, not just right after clicking Auto tune - this also runs
-            unattended at boot (bpanel-autotune.service), so it must be checkable
-            on a normal visit too, not only right after pressing the button. */}
-        <div className="notice php-tune-result">
-          <strong>PHP {phpTune.php_version} trên máy này ({phpTune.facts.cpu_count} CPU, RAM {phpTune.facts.total_memory_mb} MB, {phpTune.facts.pool_count} pool)</strong>
-          <ul>
-            {phpTune.settings.map(row => <li key={row.key}>
-              <code>{row.key}</code>
-              <span>{row.current || '—'} → <strong>{row.overridden_value || row.value}</strong></span>
-              {row.overridden_value
-                ? <em>giữ theo ô PHP Configuration phía trên</em>
-                : row.changes ? <em>khác khuyến nghị — bấm Auto tune để áp dụng</em> : <em>đã khớp</em>}
-            </li>)}
-          </ul>
-          {phpTune.jit_supported && !phpTune.jit_usable && <p>
-            JIT không bật được trên máy này{phpTune.jit_blocked_by ? ` vì ${phpTune.jit_blocked_by} chiếm opcode handler` : ''} —
-            PHP sẽ bỏ qua, nên panel không ghi thông số JIT.
-          </p>}
-        </div>
+        {phpTune.jit_supported && !phpTune.jit_usable && <p className="hint">
+          JIT không bật được trên máy này{phpTune.jit_blocked_by ? ` vì ${phpTune.jit_blocked_by} chiếm opcode handler` : ''} —
+          PHP sẽ bỏ qua, nên panel không ghi thông số JIT.
+        </p>}
         {phpTune.pools && phpTune.pools.length > 0 && <div className="notice php-tune-result">
           <strong>Pool PHP-FPM (PHP {phpTune.php_version})</strong>
           <p>Panel tự tính lại các pool này mỗi khi khởi động máy hoặc bấm Auto tune ở trên.</p>
