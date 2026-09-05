@@ -323,3 +323,43 @@ class TestUsernameDiscovery:
         username, email = da_import._discover_username(root, "user.admin.nhs.tar.zst")
         assert username == "nhs"
         assert email == "legiang360@gmail.com"
+
+
+class TestImportSslCoverage:
+    def test_pointer_domains_are_requested_alongside_the_bare_domain(self, monkeypatch):
+        # _sync_website_aliases() already persisted every pointer DirectAdmin
+        # had for this site (both "alias" and "redirect" mode) by the time
+        # this runs - nginx serves all of them, including a redirect domain
+        # (it still needs a valid certificate: the browser completes TLS
+        # before it ever sees the 301 that sends it elsewhere). Calling
+        # issue_ssl(website.domain) alone, with nothing else, left every one
+        # of them with no certificate coverage - reported live for both
+        # www.<domain> and a redirect domain on a DirectAdmin-imported site.
+        from types import SimpleNamespace
+
+        website = SimpleNamespace(
+            domain="example.com",
+            aliases=[
+                SimpleNamespace(domain="www.example.com", mode="alias"),
+                SimpleNamespace(domain="old-example.com", mode="redirect"),
+            ],
+            ssl_enabled=False, ssl_mode="none", ssl_updated_at=None,
+        )
+        captured = {}
+
+        def fake_issue_ssl(domain, aliases=None):
+            captured["domain"] = domain
+            captured["aliases"] = aliases
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(da_import, "_domain_ip_addresses", lambda domain: {"203.0.113.10"})
+        monkeypatch.setattr(da_import, "_server_ip_addresses", lambda: {"203.0.113.10"})
+        monkeypatch.setattr("app.services.ssl.issue_ssl", fake_issue_ssl)
+
+        db = SimpleNamespace(commit=lambda: None, refresh=lambda obj: None)
+        da_import._enable_ssl_when_dns_matches(db, website, {"warnings": [], "ssl_enabled_domains": []})
+
+        assert captured["domain"] == "example.com"
+        assert set(captured["aliases"]) == {"www.example.com", "old-example.com"}
+        assert website.ssl_enabled is True
+        assert website.ssl_mode == "letsencrypt"

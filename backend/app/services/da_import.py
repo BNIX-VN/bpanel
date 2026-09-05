@@ -1122,8 +1122,19 @@ def _enable_ssl_when_dns_matches(db, website, item_summary: dict) -> None:
     matching_ips = domain_ips & server_ips
     if not matching_ips:
         return
+    # _sync_website_aliases() already ran and persisted every pointer domain
+    # DirectAdmin had for this site (alias and redirect) - a redirect domain
+    # needs its own valid certificate too, since the browser has to complete
+    # TLS with *something* before it ever sees the 301 that sends it on.
+    # Asking for the bare domain alone here left every pointer domain (and,
+    # before issue_ssl() started adding it itself, www.<domain> too) with no
+    # SSL coverage: nginx already serves them, so a visitor got a hard
+    # certificate mismatch instead of the site. --allow-subset-of-names
+    # (added to certbot-issue) means one pointer with bad DNS no longer
+    # blocks the certificate for the ones that are fine.
+    ssl_domains = [alias.domain for alias in (website.aliases or [])]
     _log(f"  DNS matches ({', '.join(sorted(matching_ips))}); installing SSL for {website.domain} ...")
-    result = ssl_service.issue_ssl(website.domain)
+    result = ssl_service.issue_ssl(website.domain, ssl_domains)
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "certbot failed").strip().replace("\n", " ")
         item_summary["warnings"].append(f"SSL failed for {website.domain}: {detail[:500]}")
