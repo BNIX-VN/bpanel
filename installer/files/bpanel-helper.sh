@@ -4164,13 +4164,17 @@ case "$cmd" in
     else
       certbot_args+=(--register-unsafely-without-email)
     fi
-    # --keep-until-expiring: without it, certbot exits 1 for "certificate not
-    # yet due for renewal" the moment someone presses the button a second time
-    # (or the panel is reinstalled) - set -e then kills this case before the
-    # install/env_set lines below run, and the panel reports the whole thing
-    # as failed even though the certificate is fine. Idempotent success is the
-    # only sane behaviour for a button.
-    certbot "${certbot_args[@]}"
+    # certbot exits 1 for "certificate not yet due for renewal" even with
+    # --keep-until-expiring - that is certbot telling us it did nothing, not
+    # that anything is wrong. Pressing the button a second time (or reinstalling
+    # the panel) hits this every time after the first real issue. The only
+    # thing that actually matters is whether a usable certificate exists on
+    # disk afterwards; if certbot failed and there still isn't one, that is a
+    # real failure and must propagate.
+    certbot "${certbot_args[@]}" || {
+      rc=$?
+      [[ -f "/etc/letsencrypt/live/${domain}/fullchain.pem" ]] || exit "$rc"
+    }
     install -d -o root -g bpanel -m 0750 /etc/bpanel
     install -m 0640 -o root -g bpanel "/etc/letsencrypt/live/${domain}/fullchain.pem" /etc/bpanel/panel-fullchain.pem
     install -m 0640 -o root -g bpanel "/etc/letsencrypt/live/${domain}/privkey.pem" /etc/bpanel/panel-privkey.pem
@@ -4245,11 +4249,6 @@ PY
         nginx -t && systemctl reload nginx
       fi
     fi
-    # --keep-until-expiring: a re-issue request for a certificate that is
-    # already valid and not due must succeed quietly, not exit 1 - otherwise
-    # set -e aborts before the nginx --install step below ever runs, and a
-    # second click on "Cai SSL" (or a retry after a slow first response)
-    # reports failure even though nothing is actually wrong.
     args=(certonly --webroot -w /var/www/bpanel-acme --cert-name "$domain" --non-interactive --agree-tos --expand --keep-until-expiring)
     for cert_domain in "${domains[@]}"; do
       args+=(-d "$cert_domain")
@@ -4260,7 +4259,17 @@ PY
     else
       args+=(--register-unsafely-without-email)
     fi
-    certbot "${args[@]}"
+    # certbot exits 1 for "certificate not yet due for renewal" even with
+    # --keep-until-expiring, even though nothing is wrong - it just means the
+    # existing certificate is still good and it changed nothing. set -e would
+    # otherwise abort here, before the nginx --install step ever runs, on
+    # every re-issue request (a second click on "Cai SSL", --expand adding a
+    # domain to an already-fresh cert, a panel reinstall). Only a call that
+    # leaves no usable certificate on disk is a real failure.
+    certbot "${args[@]}" || {
+      rc=$?
+      [[ -f "/etc/letsencrypt/live/${domain}/fullchain.pem" ]] || exit "$rc"
+    }
     install_args=(install --nginx --cert-name "$domain" --non-interactive --redirect --expand)
     for cert_domain in "${domains[@]}"; do
       install_args+=(-d "$cert_domain")

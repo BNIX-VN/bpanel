@@ -160,18 +160,21 @@ def test_helper_builds_the_wildcard_arg_itself_and_locks_the_ini():
 
 def test_certbot_calls_are_idempotent_when_the_cert_is_not_due_yet():
     # bpanel-helper.sh runs under `set -euo pipefail`. `certbot certonly`
-    # without --keep-until-expiring exits 1 for "certificate not yet due for
-    # renewal" - so a second click on an SSL button (or a panel reinstall)
-    # used to abort panel-ssl-install / certbot-issue before their
+    # exits 1 for "certificate not yet due for renewal" - even with
+    # --keep-until-expiring - so a second click on an SSL button (or a panel
+    # reinstall) used to abort panel-ssl-install / certbot-issue before their
     # install/env_set/nginx steps ran, and the panel reported a working
-    # certificate as a failure.
+    # certificate as a failure. Reproduced live: certbot 2.9.0 exits 1 there
+    # even though the certificate file is present and fine.
     helper = HELPER_SCRIPT.read_text(encoding="utf-8")
     panel_ssl_install = helper.split("\n  panel-ssl-install)", 1)[1].split("\n  # ---- certbot", 1)[0]
     assert "--keep-until-expiring" in panel_ssl_install
     assert "env_set PANEL_SSL_MODE letsencrypt" in panel_ssl_install
+    assert '[[ -f "/etc/letsencrypt/live/${domain}/fullchain.pem" ]] || exit "$rc"' in panel_ssl_install
 
     certbot_issue = helper.split("\n  certbot-issue)", 1)[1].split("\n  certbot-renew)", 1)[0]
     assert "--keep-until-expiring" in certbot_issue
+    assert '[[ -f "/etc/letsencrypt/live/${domain}/fullchain.pem" ]] || exit "$rc"' in certbot_issue
 
 
 def test_issue_ssl_passes_aliases_and_email(monkeypatch):
