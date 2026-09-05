@@ -4156,6 +4156,7 @@ case "$cmd" in
       -d "$domain" \
       --agree-tos \
       --non-interactive \
+      --keep-until-expiring \
       --deploy-hook "install -d -o root -g bpanel -m 0750 /etc/bpanel && install -m 0640 -o root -g bpanel /etc/letsencrypt/live/${domain}/fullchain.pem /etc/bpanel/panel-fullchain.pem && install -m 0640 -o root -g bpanel /etc/letsencrypt/live/${domain}/privkey.pem /etc/bpanel/panel-privkey.pem")
     if [[ -n "$email" ]]; then
       require_email "$email"
@@ -4163,6 +4164,12 @@ case "$cmd" in
     else
       certbot_args+=(--register-unsafely-without-email)
     fi
+    # --keep-until-expiring: without it, certbot exits 1 for "certificate not
+    # yet due for renewal" the moment someone presses the button a second time
+    # (or the panel is reinstalled) - set -e then kills this case before the
+    # install/env_set lines below run, and the panel reports the whole thing
+    # as failed even though the certificate is fine. Idempotent success is the
+    # only sane behaviour for a button.
     certbot "${certbot_args[@]}"
     install -d -o root -g bpanel -m 0750 /etc/bpanel
     install -m 0640 -o root -g bpanel "/etc/letsencrypt/live/${domain}/fullchain.pem" /etc/bpanel/panel-fullchain.pem
@@ -4171,6 +4178,7 @@ case "$cmd" in
     env_set PANEL_PORT "$port"
     env_set PANEL_SSL_CERT "/etc/bpanel/panel-fullchain.pem"
     env_set PANEL_SSL_KEY "/etc/bpanel/panel-privkey.pem"
+    env_set PANEL_SSL_MODE letsencrypt
     env_set PANEL_URL "https://${domain}:${port}"
     env_set ALLOWED_ORIGINS "https://${domain}:${port}"
     if [[ -n "$email" ]]; then
@@ -4237,7 +4245,12 @@ PY
         nginx -t && systemctl reload nginx
       fi
     fi
-    args=(certonly --webroot -w /var/www/bpanel-acme --cert-name "$domain" --non-interactive --agree-tos --expand)
+    # --keep-until-expiring: a re-issue request for a certificate that is
+    # already valid and not due must succeed quietly, not exit 1 - otherwise
+    # set -e aborts before the nginx --install step below ever runs, and a
+    # second click on "Cai SSL" (or a retry after a slow first response)
+    # reports failure even though nothing is actually wrong.
+    args=(certonly --webroot -w /var/www/bpanel-acme --cert-name "$domain" --non-interactive --agree-tos --expand --keep-until-expiring)
     for cert_domain in "${domains[@]}"; do
       args+=(-d "$cert_domain")
     done
