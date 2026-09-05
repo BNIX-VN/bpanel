@@ -4280,8 +4280,23 @@ PY
       rc=$?
       [[ -f "/etc/letsencrypt/live/${domain}/fullchain.pem" ]] || exit "$rc"
     }
+    # --allow-subset-of-names can drop a requested name from the certificate
+    # (bad or foreign DNS). Only wire up install --nginx for names that
+    # actually ended up in it, read back from the cert itself - asking it to
+    # install for a name that is not in the certificate makes certbot's nginx
+    # plugin fall back to the first server block it can find (the
+    # default_server tools vhost here) and clone that block under the
+    # missing name, presenting the wrong certificate there and exposing
+    # whatever that vhost serves (phpMyAdmin) under an unrelated domain.
+    # Reproduced live: a redirect-domain alias whose DNS pointed elsewhere.
+    issued_domains=()
+    while IFS= read -r san; do
+      issued_domains+=("$san")
+    done < <(openssl x509 -in "/etc/letsencrypt/live/${domain}/cert.pem" -noout -ext subjectAltName 2>/dev/null \
+      | grep -oE 'DNS:[^,]+' | sed 's/DNS://g;s/ //g')
+    [[ ${#issued_domains[@]} -gt 0 ]] || issued_domains=("${domains[@]}")
     install_args=(install --nginx --cert-name "$domain" --non-interactive --redirect --expand)
-    for cert_domain in "${domains[@]}"; do
+    for cert_domain in "${issued_domains[@]}"; do
       install_args+=(-d "$cert_domain")
     done
     rc=0

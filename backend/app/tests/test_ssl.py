@@ -181,6 +181,24 @@ def test_certbot_calls_are_idempotent_when_the_cert_is_not_due_yet():
     assert "--allow-subset-of-names" in certbot_issue
 
 
+def test_the_nginx_installer_only_gets_names_the_certificate_actually_has(monkeypatch):
+    # --allow-subset-of-names can drop a requested name from the certificate
+    # (bad or foreign DNS). Asking `certbot install --nginx` for a name that
+    # is NOT in the certificate makes its nginx plugin fall back to the first
+    # server block it can find - the default_server tools vhost - and clone
+    # that block under the missing name: wrong certificate, and phpMyAdmin
+    # exposed under an unrelated domain. Reproduced live on a customer box.
+    helper = HELPER_SCRIPT.read_text(encoding="utf-8")
+    certbot_issue = helper.split("\n  certbot-issue)", 1)[1].split("\n  certbot-renew)", 1)[0]
+    assert 'openssl x509 -in "/etc/letsencrypt/live/${domain}/cert.pem" -noout -ext subjectAltName' in certbot_issue
+    # The install step's -d flags must come from what the cert actually has,
+    # not the originally-requested list that --allow-subset-of-names may have
+    # trimmed.
+    install_block = certbot_issue.split("install_args=(install --nginx", 1)[1].split("certbot \"${install_args[@]}\"", 1)[0]
+    assert 'for cert_domain in "${issued_domains[@]}"; do' in install_block
+    assert '"${domains[@]}"' not in install_block
+
+
 def test_reapplying_the_firewall_for_a_port_change_cannot_kill_the_caller():
     # allow_panel_port is called from panel-ssl-install / panel-url-set as a
     # best-effort side effect ("open this port too"), guarded by `|| true`.
