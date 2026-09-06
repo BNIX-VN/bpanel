@@ -86,6 +86,22 @@ context /.well-known/acme-challenge/ {
     addDefaultCharset     off
 }
 
+{# The nginx template blocks these with `location = ... { deny all; }`. A
+   RewriteRule with [F] does NOT work here - verified on a live server, a POST
+   to xmlrpc.php still answered 200 with the full method list even with the
+   rule present and the rewrite block otherwise working. An accessControl
+   context is OpenLiteSpeed's own way to say "this exact path is off limits",
+   and it does return 403. Contexts must be declared before `context /` so the
+   more specific match wins. #}
+{% for blocked in ["/xmlrpc.php", "/wp-config.php", "/readme.html", "/license.txt"] %}
+context {{ blocked }} {
+    location              {{ root_path }}/{{ document_root }}{{ blocked }}
+    accessControl {
+        deny              ALL
+    }
+}
+
+{% endfor %}
 context / {
     type                  null
     location              {{ root_path }}/{{ document_root }}
@@ -101,16 +117,14 @@ context / {
 
     {# Exactly ONE rewrite block per context: OpenLiteSpeed keeps only the
        last one it parses, so splitting "inherit" and our own rules into two
-       blocks silently threw the rules away. That is how the xmlrpc.php block
-       below ended up doing nothing - a POST to it answered 200 with the full
-       method list, while WordPress permalinks kept working purely because
-       allowOverride reads the site's own .htaccess. #}
+       blocks silently threw the rules away. Sensitive paths are blocked by
+       the accessControl contexts above, not from here - [F] in a rewrite rule
+       does not deny on OLS. #}
     rewrite {
         enable            1
         inherit           1
 {% if lsphp_app %}
         rewriteRules      <<<END_RULES
-RewriteRule ^xmlrpc\.php$ - [F,L]
 RewriteRule ^index\.php$ - [L]
 RewriteCond %{REQUEST_FILENAME} !-f
 RewriteCond %{REQUEST_FILENAME} !-d

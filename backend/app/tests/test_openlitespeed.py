@@ -213,14 +213,25 @@ def test_each_context_has_at_most_one_rewrite_block():
             assert count <= 1, f"{kwargs} rendered {count} rewrite blocks in one context"
 
 
-def test_the_wordpress_xmlrpc_block_survives_into_the_rewrite_rules():
+def test_wordpress_sensitive_paths_are_blocked_with_an_access_control_context():
+    """A RewriteRule with [F] does not block on OpenLiteSpeed - verified live,
+    a POST to xmlrpc.php answered 200 with the full XML-RPC method list even
+    with the rule rendered and the surrounding rewrite block working. Only an
+    accessControl context actually returns 403, and it has to be declared
+    before `context /` for the more specific match to win.
+    """
     rendered = ols.render_vhost(
         "example.test", "/home/bp_example_test/example.test",
         app_type="wordpress", php_version="8.4",
     )
-    body = next(b for b in _context_bodies(rendered) if "xmlrpc" in b)
-    assert "inherit" in body, "the context must still inherit vhost-level rules"
-    assert r"RewriteRule ^xmlrpc\.php$ - [F,L]" in body
+    for blocked in ("/xmlrpc.php", "/wp-config.php", "/readme.html", "/license.txt"):
+        marker = f"context {blocked} {{"
+        assert marker in rendered, f"{blocked} is not blocked"
+        assert rendered.index(marker) < rendered.index("\ncontext / {"), (
+            f"{blocked} must be declared before context /"
+        )
+    # The rule that silently did nothing must not come back.
+    assert "RewriteRule ^xmlrpc" not in rendered
 
 
 def test_laravel_rewrite_rules_survive_into_the_rewrite_block():
