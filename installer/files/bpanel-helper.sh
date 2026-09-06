@@ -19,7 +19,8 @@ fi
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 
-ALLOWED_SERVICES=(nginx mariadb redis-server php8.3-fpm php8.4-fpm bpanel-api)
+# lshttpd is OpenLiteSpeed's unit; only one of it and nginx is ever installed.
+ALLOWED_SERVICES=(nginx lshttpd mariadb redis-server php8.3-fpm php8.4-fpm bpanel-api)
 ALLOWED_ACTIONS=(start stop restart reload status is-active is-enabled)
 HOME_ROOT="/home"
 NGINX_CONF_DIR="/etc/nginx/conf.d"
@@ -75,8 +76,40 @@ NGINX_HTTP_FLOOD_SERVER_CONF="${NGINX_BLOCKLIST_DIR}/http-flood-server.conf"
 PHP_FPM_DEFAULT_WORKER_MB=128
 PHP_FPM_DEFAULT_REQUEST_TERMINATE_TIMEOUT=300
 MARIADB_TUNING_CONF="/etc/mysql/mariadb.conf.d/90-bpanel-tuning.cnf"
+# OpenLiteSpeed: the other web server this panel can drive (WEB_SERVER in
+# .env picks one at install time). These paths only exist on an OLS install;
+# on an nginx install nothing below ever touches them.
+OLS_ROOT="/usr/local/lsws"
+OLS_HTTPD_CONF="${OLS_ROOT}/conf/httpd_config.conf"
+OLS_BPANEL_DIR="${OLS_ROOT}/conf/bpanel"
+OLS_VHOSTS_DIR="${OLS_BPANEL_DIR}/vhosts"
+OLS_CUSTOM_DIR="${OLS_BPANEL_DIR}/custom"
+OLS_WAF_DIR="${OLS_BPANEL_DIR}/waf"
+OLS_LOG_DIR="/var/log/openlitespeed"
+NGINX_LOG_DIR="/var/log/nginx"
 
 deny() { echo "bpanel-helper: $*" >&2; exit 1; }
+
+# Which web server this install runs. Read from .env (written by the
+# installer); anything unrecognised falls back to nginx, matching
+# app/services/webserver.py so the panel and the helper never disagree.
+web_server() {
+  local value
+  value="$(env_get WEB_SERVER 2>/dev/null || true)"
+  case "${value,,}" in
+    openlitespeed|ols|litespeed) echo "openlitespeed" ;;
+    *) echo "nginx" ;;
+  esac
+}
+
+# Site access/error logs live in a different directory per web server.
+site_log_dir() {
+  if [[ "$(web_server)" == "openlitespeed" ]]; then
+    echo "$OLS_LOG_DIR"
+  else
+    echo "$NGINX_LOG_DIR"
+  fi
+}
 
 ensure_bpanel_data_dir() {
   install -d -o bpanel -g bpanel -m 0750 "$BPANEL_DATA_DIR"
@@ -93,6 +126,285 @@ ensure_nginx_conf_dir_writable() {
     install -d -o root -g root -m 0755 "$NGINX_CONF_DIR"
     install -d -o root -g root -m 0755 "$NGINX_CUSTOM_DIR"
   fi
+}
+
+# ---- OpenLiteSpeed ----------------------------------------------------
+# Only reached on an OLS install (WEB_SERVER=openlitespeed). OLS has no
+# `nginx -t` equivalent that validates without applying, so the write path
+# here keeps a backup of httpd_config.conf and restarts; a bad vhost takes
+# only that vhost down rather than the whole server.
+
+restart_openlitespeed() {
+  ensure_lshttpd_runtime_dir
+  if systemctl cat lshttpd.service >/dev/null 2>&1; then
+    systemctl restart lshttpd.service
+  else
+    "${OLS_ROOT}/bin/lswsctrl" restart
+  fi
+}
+
+ensure_lshttpd_runtime_dir() {
+  ensure_sites_group
+  install -d -o www-data -g "$BPANEL_SITES_GROUP" -m 2775 /tmp/lshttpd /tmp/lshttpd/swap
+  chmod g+s /tmp/lshttpd 2>/dev/null || true
+  if [[ -d /tmp/lshttpd/swap ]]; then
+    chown -R www-data:"$BPANEL_SITES_GROUP" /tmp/lshttpd/swap 2>/dev/null || true
+    find /tmp/lshttpd/swap -type d -exec chmod 2775 {} + 2>/dev/null || true
+    find /tmp/lshttpd/swap -type f -exec chmod 0664 {} + 2>/dev/null || true
+  fi
+  chown www-data:"$BPANEL_SITES_GROUP" /tmp/lshttpd/lsphp*.sock /tmp/lshttpd/lsphp*.sock.pid 2>/dev/null || true
+  chmod 0664 /tmp/lshttpd/lsphp*.sock.pid 2>/dev/null || true
+}
+
+ensure_ols_conf_dir_writable() {
+  ensure_sites_group
+  install -d -o www-data -g "$BPANEL_SITES_GROUP" -m 2775 "$OLS_LOG_DIR"
+  chmod g+s "$OLS_LOG_DIR" 2>/dev/null || true
+  ensure_lshttpd_runtime_dir
+  install -d -o root -g root -m 0755 "$OLS_BPANEL_DIR"
+  install -d -o root -g root -m 0755 "$OLS_WAF_DIR" "$OLS_WAF_DIR/sites"
+  if getent group bpanel >/dev/null 2>&1; then
+    install -d -o root -g bpanel -m 2775 "$OLS_VHOSTS_DIR"
+    install -d -o root -g bpanel -m 2775 "$OLS_CUSTOM_DIR"
+    chmod g+s "$OLS_VHOSTS_DIR" 2>/dev/null || true
+    chmod g+s "$OLS_CUSTOM_DIR" 2>/dev/null || true
+  else
+    install -d -o root -g root -m 0755 "$OLS_VHOSTS_DIR"
+    install -d -o root -g root -m 0755 "$OLS_CUSTOM_DIR"
+  fi
+}
+
+ols_disable_conflicting_apache() {
+  # OLS ships listening on :80 alongside whatever Apache the image had.
+  if systemctl list-unit-files apache2.service >/dev/null 2>&1; then
+    systemctl disable --now apache2 >/dev/null 2>&1 || true
+  fi
+}
+
+ensure_ols_modsecurity_enabled() {
+  [[ -f "${OLS_ROOT}/modules/mod_security.so" ]] || return 1
+  python3 - "$OLS_HTTPD_CONF" <<'PY'
+import pathlib
+import re
+import sys
+
+conf = pathlib.Path(sys.argv[1])
+text = conf.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n") if conf.exists() else ""
+text = re.sub(r"(?ms)^# BPANEL managed ModSecurity BEGIN\n.*?^# BPANEL managed ModSecurity END\n?", "", text)
+block = (
+    "# BPANEL managed ModSecurity BEGIN\n"
+    "module mod_security {\n"
+    "    modsecurity             on\n"
+    "    ls_enabled              1\n"
+    "}\n"
+    "# BPANEL managed ModSecurity END\n\n"
+)
+marker = "# BPanel managed vhosts BEGIN"
+pos = text.find(marker)
+text = text[:pos] + block + text[pos:] if pos >= 0 else text.rstrip() + "\n\n" + block
+conf.write_text(text, encoding="utf-8")
+PY
+}
+
+# Rebuilds the managed half of httpd_config.conf: one virtualHost stanza per
+# vhost directory on disk, plus the listeners that map hostnames onto them.
+# Everything outside the BEGIN/END markers is left exactly as found, so an
+# admin's own edits to the main config survive.
+ols_sync_main_config() {
+  ensure_ols_conf_dir_writable
+  ols_disable_conflicting_apache
+  ensure_ols_modsecurity_enabled >/dev/null 2>&1 || true
+  python3 - "$OLS_HTTPD_CONF" "$OLS_VHOSTS_DIR" "$ENV_FILE" "$PANEL_IPV6_MARKER" <<'PY'
+import pathlib
+import re
+import sys
+
+conf = pathlib.Path(sys.argv[1])
+vhosts_dir = pathlib.Path(sys.argv[2])
+env_file = pathlib.Path(sys.argv[3])
+ipv6_marker = pathlib.Path(sys.argv[4])
+tools_conf_name = "00-bpanel-tools.conf"
+tools_conf = vhosts_dir / tools_conf_name
+domain_re = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$")
+ipv4_re = re.compile(r"^(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])(?:\.(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])){3}$")
+
+
+def host_has_global_ipv6() -> bool:
+    """A global (scope 0) address on something other than loopback."""
+    try:
+        for line in pathlib.Path("/proc/net/if_inet6").read_text(encoding="utf-8").splitlines():
+            fields = line.split()
+            if len(fields) >= 6 and fields[3] == "00" and fields[5] != "lo":
+                return True
+    except OSError:
+        return False
+    return False
+
+
+def ipv6_enabled() -> bool:
+    """The panel's own IPv6 marker decides, but the address still has to exist.
+
+    A listener on an address family the kernel no longer has stops OLS from
+    starting at all, which would take every site down over a stale setting.
+    """
+    return ipv6_marker.is_file() and host_has_global_ipv6()
+
+
+def env_get(key: str) -> str:
+    if not env_file.is_file():
+        return ""
+    prefix = f"{key}="
+    for line in env_file.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith(prefix):
+            return line[len(prefix):].strip()
+    return ""
+
+
+def normalized_host(value: str) -> str:
+    value = (value or "").strip().lower()
+    if not value:
+        return ""
+    value = re.sub(r"^https?://", "", value).split("/", 1)[0]
+    if ":" in value:
+        value = value.rsplit(":", 1)[0]
+    return value if (domain_re.fullmatch(value) or ipv4_re.fullmatch(value)) else ""
+
+
+text = conf.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n") if conf.exists() else ""
+# OLS serves every site as www-data plus the shared sites group, the same
+# ownership model the nginx install uses.
+if re.search(r"(?m)^\s*user\s+", text):
+    text = re.sub(r"(?m)^\s*user\s+.*$", "user                             www-data", text, count=1)
+else:
+    text = "user                             www-data\n" + text
+if re.search(r"(?m)^\s*group\s+", text):
+    text = re.sub(r"(?m)^\s*group\s+.*$", "group                            bpanel-sites", text, count=1)
+else:
+    text = "group                            bpanel-sites\n" + text
+
+
+def remove_named_block(source: str, directive: str, name: str) -> str:
+    pattern = re.compile(rf"(?ms)^[ \t]*{re.escape(directive)}[ \t]+{re.escape(name)}[ \t]*\{{.*?^[ \t]*\}}[ \t]*\n?")
+    return pattern.sub("", source)
+
+
+for block_name in ("bpanel_http", "bpanel_https", "bpanel_http6", "bpanel_https6"):
+    text = remove_named_block(text, "listener", block_name)
+text = re.sub(r"(?ms)^# BPanel managed vhosts BEGIN\n.*?^# BPanel managed vhosts END\n?", "", text)
+
+sites = []
+if vhosts_dir.is_dir():
+    for vhost_file in sorted(vhosts_dir.glob("*/vhost.conf")):
+        domain = vhost_file.parent.name.lower()
+        if not domain_re.fullmatch(domain):
+            continue
+        content = vhost_file.read_text(encoding="utf-8", errors="replace")
+        hosts = [domain]
+        for match in re.finditer(r"(?m)^\s*vh(?:Domain|Aliases)\s+(.+?)\s*$", content):
+            for host in re.split(r"[,\s]+", match.group(1).strip()):
+                host = host.strip().lower()
+                if domain_re.fullmatch(host) and host not in hosts:
+                    hosts.append(host)
+        # A site only joins the HTTPS listener once its certificate is really
+        # on disk - mapping one that is not stops OLS from starting.
+        cert_match = re.search(r"(?m)^\s*certFile\s+(.+?)\s*$", content)
+        key_match = re.search(r"(?m)^\s*keyFile\s+(.+?)\s*$", content)
+        has_ssl = bool(
+            cert_match and key_match
+            and pathlib.Path(cert_match.group(1).strip()).is_file()
+            and pathlib.Path(key_match.group(1).strip()).is_file()
+        )
+        sites.append((domain, hosts, has_ssl))
+
+panel_hosts = []
+for raw_host in (env_get("PANEL_DOMAIN"), env_get("PANEL_URL")):
+    host = normalized_host(raw_host)
+    if host and host not in panel_hosts:
+        panel_hosts.append(host)
+site_hosts = {host for _d, hosts, _s in sites for host in hosts}
+tools_hosts = [host for host in panel_hosts if host not in site_hosts]
+include_tools_vhost = tools_conf.is_file() and bool(tools_hosts)
+
+managed = ["# BPanel managed vhosts BEGIN"]
+if include_tools_vhost:
+    managed.extend([
+        "virtualHost bpanel_tools {",
+        "    vhRoot                   conf/bpanel/vhosts/",
+        "    allowSymbolLink          1",
+        "    enableScript             1",
+        "    restrained               1",
+        f"    configFile               conf/bpanel/vhosts/{tools_conf_name}",
+        "}",
+        "",
+    ])
+for domain, _hosts, _has_ssl in sites:
+    managed.extend([
+        f"virtualHost {domain} {{",
+        f"    vhRoot                   conf/bpanel/vhosts/{domain}/",
+        "    allowSymbolLink          1",
+        "    enableScript             1",
+        "    restrained               1",
+        "    setUIDMode               2",
+        f"    configFile               conf/bpanel/vhosts/{domain}/vhost.conf",
+        "}",
+        "",
+    ])
+
+# The HTTPS listener needs a default certificate for the handshake before SNI
+# picks the per-site one; the tools vhost's cert is the panel's own.
+_tools_cert = pathlib.Path("/etc/ssl/certs/ssl-cert-snakeoil.pem")
+_tools_key = pathlib.Path("/etc/ssl/private/ssl-cert-snakeoil.key")
+if tools_conf.is_file():
+    _tc = tools_conf.read_text(encoding="utf-8", errors="replace")
+    _cm = re.search(r"(?m)^\s*certFile\s+(.+?)\s*$", _tc)
+    _km = re.search(r"(?m)^\s*keyFile\s+(.+?)\s*$", _tc)
+    if _cm and _km:
+        _cp = pathlib.Path(_cm.group(1).strip())
+        _kp = pathlib.Path(_km.group(1).strip())
+        if _cp.is_file() and _kp.is_file():
+            _tools_cert, _tools_key = _cp, _kp
+
+
+def listener_block(name: str, address: str, secure: bool, ssl_sites_only: bool) -> list[str]:
+    lines = [f"listener {name} {{", f"    address                  {address}", f"    secure                   {1 if secure else 0}"]
+    if secure:
+        lines.extend([
+            f"    keyFile                  {_tools_key}",
+            f"    certFile                 {_tools_cert}",
+            "    certChain                1",
+            "    enableSpdy               16",
+            "    enableQuic               1",
+        ])
+    if include_tools_vhost:
+        for host in tools_hosts:
+            lines.append(f"    map                      bpanel_tools {host}")
+    for domain, hosts, has_ssl in sites:
+        if ssl_sites_only and not has_ssl:
+            continue
+        lines.append(f"    map                      {domain} {', '.join(hosts)}")
+    lines.extend(["}", ""])
+    return lines
+
+
+managed.extend(listener_block("bpanel_http", "*:80", False, False))
+managed.extend(listener_block("bpanel_https", "*:443", True, True))
+if ipv6_enabled():
+    # "*" is IPv4-only in OpenLiteSpeed; [ANY] is the IPv6 wildcard. Sites are
+    # mapped into both, so every vhost answers on either protocol.
+    managed.extend(listener_block("bpanel_http6", "[ANY]:80", False, False))
+    managed.extend(listener_block("bpanel_https6", "[ANY]:443", True, True))
+managed.extend(["# BPanel managed vhosts END", ""])
+
+new_text = text.rstrip() + "\n\n" + "\n".join(managed)
+conf.parent.mkdir(parents=True, exist_ok=True)
+if conf.exists() and conf.read_text(encoding="utf-8", errors="replace") == new_text:
+    raise SystemExit(0)
+if conf.exists():
+    conf.with_suffix(conf.suffix + ".bpanel.bak").write_text(
+        conf.read_text(encoding="utf-8", errors="replace"), encoding="utf-8"
+    )
+conf.write_text(new_text, encoding="utf-8")
+PY
 }
 
 file_has_nul() {
@@ -225,6 +537,132 @@ NGINX
   [[ -n "$host" ]] && sed -i -E "/PmaAbsoluteUri/s#'https?://[^']+/phpmyadmin/'#'${tools_scheme}://${host}/phpmyadmin/'#" /etc/phpmyadmin/conf.d/bpanel-signon.php 2>/dev/null || true
   nginx -t
   systemctl reload nginx || true
+}
+
+# The OpenLiteSpeed equivalent of refresh_tools_nginx: the panel's own vhost,
+# serving phpMyAdmin and the ACME challenge webroot. Written into the same
+# managed vhosts directory as customer sites, so ols_sync_main_config picks it
+# up and maps the panel hostname onto it.
+refresh_tools_ols() {
+  local port domain host api_scheme tools_scheme pma_secure php_version
+  local panel_cert panel_key ver_no_dot lsphp_sock ssl_stanza=""
+  port="$(env_get PANEL_PORT)"; port="${port:-$DEFAULT_PANEL_PORT}"
+  domain="$(env_get PANEL_DOMAIN)"; host="${domain:-$(detect_ip)}"
+  panel_cert="$(env_get PANEL_SSL_CERT)"; panel_key="$(env_get PANEL_SSL_KEY)"
+  php_version="${PHP_DEFAULT:-8.4}"
+  ver_no_dot="${php_version//./}"
+  lsphp_sock="/tmp/lshttpd/lsphp${ver_no_dot}.sock"
+  api_scheme="http"; tools_scheme="http"; pma_secure="false"
+  if [[ -n "$panel_cert" && -n "$panel_key" && -f "$panel_cert" && -f "$panel_key" ]]; then
+    api_scheme="https"; tools_scheme="https"; pma_secure="true"
+    printf -v ssl_stanza 'vhssl {\n  keyFile                 %s\n  certFile                %s\n  certChain               1\n}\n' "$panel_key" "$panel_cert"
+  fi
+  ensure_ols_conf_dir_writable
+  cat >"${OLS_VHOSTS_DIR}/00-bpanel-tools.conf" <<OLS_VHOST
+docRoot                   /usr/share/phpmyadmin/
+vhDomain                  ${host}
+enableIpGeo               0
+allowSymbolLink           1
+
+context /.well-known/acme-challenge/ {
+  type                    static
+  location                /var/www/bpanel-acme/.well-known/acme-challenge/
+  allowBrowse             1
+  addDefaultCharset       off
+}
+
+context / {
+  type                    null
+  location                /usr/share/phpmyadmin/
+  allowBrowse             1
+}
+
+extprocessor lsphp${ver_no_dot} {
+  type                    lsapi
+  address                 uds://${lsphp_sock}
+  maxConns                10
+  env                     PHP_LSAPI_CHILDREN=10
+  initTimeout             60
+  retryTimeout            0
+  persistConn             1
+  pcKeepAliveTimeout      1
+  respBuffer              0
+  autoStart               1
+  path                    ${OLS_ROOT}/lsphp${ver_no_dot}/bin/lsphp
+  backlog                 100
+  instances               1
+  extUser                 www-data
+  extGroup                www-data
+  runOnStartUp            1
+}
+
+scripthandler {
+  add                     lsapi:lsphp${ver_no_dot} php
+}
+
+rewrite  {
+  enable                  1
+  rules                   rewriteRule ^/phpmyadmin/(.*)\$ /\$1 [L]
+}
+
+${ssl_stanza}
+phpIniOverride  {
+  php_value               include_path .:/usr/share/php
+  php_value               upload_max_filesize 1024M
+  php_value               post_max_size 1024M
+  php_value               memory_limit 512M
+  php_value               max_execution_time 300
+  php_value               max_input_time 600
+}
+OLS_VHOST
+  # OLS will not follow a symlink out of docRoot, so phpMyAdmin's packaged
+  # symlinks into /usr/share/javascript would 404 every stylesheet. Replace
+  # them with real copies once.
+  python3 - <<'PY' 2>/dev/null || true
+import pathlib
+import shutil
+
+phpmyadmin = pathlib.Path("/usr/share/phpmyadmin")
+for link in phpmyadmin.rglob("*"):
+    if not link.is_symlink():
+        continue
+    target = link.resolve()
+    if not target.exists() or str(target).startswith(str(phpmyadmin)):
+        continue
+    link.unlink()
+    if target.is_dir():
+        shutil.copytree(str(target), str(link), symlinks=False)
+    else:
+        shutil.copy2(str(target), str(link))
+PY
+  sed -i -E "/api\/databases\/phpmyadmin-sso/s#'[^']+/api/databases/phpmyadmin-sso/'#'${api_scheme}://127.0.0.1:${port}/api/databases/phpmyadmin-sso/'#" /usr/share/phpmyadmin/bpanel-signon.php 2>/dev/null || true
+  sed -i -E "s#('secure' => )(true|false)#\1${pma_secure}#" /etc/phpmyadmin/conf.d/bpanel-signon.php /usr/share/phpmyadmin/bpanel-signon.php 2>/dev/null || true
+  [[ -n "$host" ]] && sed -i -E "/PmaAbsoluteUri/s#'https?://[^']+/phpmyadmin/'#'${tools_scheme}://${host}/phpmyadmin/'#" /etc/phpmyadmin/conf.d/bpanel-signon.php 2>/dev/null || true
+  # LSPHP runs as www-data:bpanel-sites, so a 0640 root:www-data file is not
+  # readable the way it is under PHP-FPM.
+  chmod 0644 /etc/phpmyadmin/conf.d/bpanel-signon.php 2>/dev/null || true
+  ols_sync_main_config
+  restart_openlitespeed 2>/dev/null || true
+}
+
+# Every caller wants "refresh the panel's own vhost" without caring which web
+# server is underneath.
+refresh_tools_webserver() {
+  if [[ "$(web_server)" == "openlitespeed" ]]; then
+    refresh_tools_ols
+  else
+    refresh_tools_nginx
+  fi
+}
+
+# "Pick up the config that just changed", whichever web server is running.
+# Best-effort: callers use this where a failed reload must not abort them.
+reload_web_server() {
+  if [[ "$(web_server)" == "openlitespeed" ]]; then
+    restart_openlitespeed >/dev/null 2>&1 || true
+  else
+    systemctl reload nginx >/dev/null 2>&1 || true
+  fi
 }
 
 configure_unattended_upgrades() {
@@ -1897,7 +2335,7 @@ renew_ssl_soon() {
     if ! openssl x509 -checkend "$seconds" -noout -in "$cert" >/dev/null 2>&1; then
       echo "Renewing certificate: ${cert_name}"
       if certbot renew --cert-name "$cert_name" --quiet --force-renewal \
-        --deploy-hook "systemctl reload nginx || true; systemctl restart bpanel-api || true"; then
+        --deploy-hook "systemctl reload nginx 2>/dev/null || systemctl restart lshttpd 2>/dev/null || true; systemctl restart bpanel-api || true"; then
         renewed=$((renewed + 1))
       else
         echo "WARNING: could not renew ${cert_name}" >&2
@@ -1908,7 +2346,7 @@ renew_ssl_soon() {
   panel_domain="$(env_get PANEL_DOMAIN)"
   copy_panel_live_certificate "$panel_domain"
   if [[ "$renewed" -gt 0 ]]; then
-    systemctl reload nginx >/dev/null 2>&1 || true
+    reload_web_server
     systemctl restart bpanel-api >/dev/null 2>&1 || true
   fi
   echo "SSL auto-renew checked ${checked} certificate(s); renewed ${renewed} certificate(s) within ${days} day(s)."
@@ -2739,10 +3177,11 @@ read_site_logs_many() {
   local kind="$1" lines="$2"; shift 2
   [[ "$kind" == "access" || "$kind" == "error" ]] || deny "invalid log kind: $kind"
   require_tail_lines "$lines"
-  local domain path
+  local domain path log_dir
+  log_dir="$(site_log_dir)"
   for domain in "$@"; do
     require_domain "$domain"
-    path="/var/log/nginx/${domain}.${kind}.log"
+    path="${log_dir}/${domain}.${kind}.log"
     printf '\x1f%s\n' "$domain"
     if [[ -f "$path" && ! -L "$path" ]]; then
       tail -n "$lines" -- "$path" 2>/dev/null || true
@@ -2753,16 +3192,31 @@ read_site_logs_many() {
 }
 
 read_site_log() {
-  local domain="$1" kind="$2" lines="$3" path resolved
+  local domain="$1" kind="$2" lines="$3" path resolved log_dir php_log
   require_domain "$domain"
   [[ "$kind" == "access" || "$kind" == "error" ]] || deny "invalid log kind: $kind"
   require_tail_lines "$lines"
-  path="/var/log/nginx/${domain}.${kind}.log"
+  log_dir="$(site_log_dir)"
+  path="${log_dir}/${domain}.${kind}.log"
   resolved=$(readlink -m "$path") || deny "cannot resolve log path"
   case "$resolved" in
-    /var/log/nginx/*) ;;
-    *) deny "log path outside /var/log/nginx: $resolved" ;;
+    "$log_dir"/*) ;;
+    *) deny "log path outside ${log_dir}: $resolved" ;;
   esac
+  # On OpenLiteSpeed the site's PHP runs as its own Linux user and cannot
+  # write the OLS-owned <domain>.error.log, so PHP logs to a per-domain file
+  # that user owns. The Error tab has to show both or a PHP fatal leaves no
+  # trace in the panel.
+  if [[ "$kind" == "error" && "$(web_server)" == "openlitespeed" ]]; then
+    php_log="${log_dir}/${domain}/php_error.log"
+    if [[ -f "$php_log" || -f "$resolved" ]]; then
+      echo "BPANEL_LOG_PATH=${php_log} + ${resolved}" >&2
+      tail -n "$lines" -- "$php_log" "$resolved" 2>/dev/null || true
+      return 0
+    fi
+    echo "BPANEL_LOG_MISSING=1" >&2
+    return 0
+  fi
   echo "BPANEL_LOG_PATH=$resolved" >&2
   if [[ ! -f "$resolved" ]]; then
     echo "BPANEL_LOG_MISSING=1" >&2
@@ -3538,6 +3992,13 @@ delete_site_php_pools() {
 ensure_php_pool() {
   local user="$1" target="$2" php_version="$3"
   [[ "$php_version" != "none" ]] || return 0
+  # OpenLiteSpeed has no per-site pool: one shared LSPHP listener per version
+  # serves every site, and per-site isolation (open_basedir, session dir) is
+  # rendered into the vhost's own phpIniOverride block instead. There is no
+  # /etc/php/<ver>/fpm tree here at all, so writing a pool file would fail.
+  if [[ "$(web_server)" == "openlitespeed" ]]; then
+    return 0
+  fi
   require_linux_user "$user"
   require_php_version "$php_version"
   target=$(readlink -m "$target") || deny "cannot resolve $target"
@@ -3690,6 +4151,92 @@ case "$cmd" in
     domain="$1"
     require_domain "$domain"
     rm -f "${NGINX_CUSTOM_DIR}/${domain}.conf"
+    ;;
+
+  # ---- OpenLiteSpeed ----------------------------------------------------
+  ols-sync-main)
+    [[ $# -eq 0 ]] || deny "usage: ols-sync-main"
+    ols_sync_main_config
+    ;;
+
+  ols-reload)
+    [[ $# -eq 0 ]] || deny "usage: ols-reload"
+    restart_openlitespeed
+    ;;
+
+  ols-vhost-write|ols-vhost-write-defer)
+    [[ $# -ge 1 ]] || deny "usage: ols-vhost-write <domain> [hostname ...]"
+    domain="$1"
+    require_domain "$domain"
+    shift
+    for hostname in "$@"; do
+      require_domain "$hostname"
+    done
+    ensure_ols_conf_dir_writable
+    vhost_conf="${OLS_VHOSTS_DIR}/${domain}/vhost.conf"
+    vhost_tmp="$(mktemp)"
+    cat >"$vhost_tmp"
+    if file_has_nul "$vhost_tmp"; then
+      rm -f "$vhost_tmp"
+      deny "vhost config contains NUL byte"
+    fi
+    # A bulk refresh re-renders every vhost identically; when the file is
+    # byte-for-byte what is already there, skip the sync and the restart.
+    if [[ -f "$vhost_conf" ]] && cmp -s "$vhost_tmp" "$vhost_conf"; then
+      rm -f "$vhost_tmp"
+      echo "vhost unchanged: ${domain}"
+      exit 0
+    fi
+    # The site's PHP runs as its own Linux user and cannot write the
+    # OLS-owned <domain>.error.log, so PHP's error_log points at a per-domain
+    # directory that user owns. Create it alongside the vhost referencing it.
+    vhost_site_user="$(sed -nE 's#^[[:space:]]*docRoot[[:space:]]+/home/([^/]+)/.*#\1#p' "$vhost_tmp" | head -1)"
+    if [[ -n "$vhost_site_user" ]] && id "$vhost_site_user" >/dev/null 2>&1; then
+      install -d -o "$vhost_site_user" -g "$vhost_site_user" -m 0750 "${OLS_LOG_DIR}/${domain}"
+    fi
+    install -d -o root -g bpanel -m 2775 "${OLS_VHOSTS_DIR}/${domain}"
+    install -m 0644 -o root -g bpanel "$vhost_tmp" "$vhost_conf"
+    rm -f "$vhost_tmp"
+    # The -defer variant only stages the file; a bulk caller (a DirectAdmin
+    # import writing dozens of vhosts) does one ols-sync-main at the end
+    # instead of paying an OLS restart per vhost.
+    if [[ "$cmd" == "ols-vhost-write" ]]; then
+      ols_sync_main_config
+      restart_openlitespeed 2>/dev/null || true
+    fi
+    ;;
+
+  ols-vhost-delete)
+    [[ $# -eq 1 ]] || deny "usage: ols-vhost-delete <domain>"
+    domain="$1"
+    require_domain "$domain"
+    rm -rf "${OLS_VHOSTS_DIR:?}/${domain}"
+    rm -rf "${OLS_LOG_DIR:?}/${domain}"
+    ols_sync_main_config
+    restart_openlitespeed 2>/dev/null || true
+    ;;
+
+  ols-custom-write)
+    [[ $# -eq 1 ]] || deny "usage: ols-custom-write <domain>"
+    domain="$1"
+    require_domain "$domain"
+    ensure_ols_conf_dir_writable
+    target="${OLS_CUSTOM_DIR}/${domain}.conf"
+    tmp="${target}.tmp.$$"
+    cat >"$tmp"
+    if file_has_nul "$tmp"; then
+      rm -f "$tmp"
+      deny "custom OLS include contains NUL byte"
+    fi
+    install -m 0664 -o root -g bpanel "$tmp" "$target"
+    rm -f "$tmp"
+    ;;
+
+  ols-custom-delete)
+    [[ $# -eq 1 ]] || deny "usage: ols-custom-delete <domain>"
+    domain="$1"
+    require_domain "$domain"
+    rm -f "${OLS_CUSTOM_DIR}/${domain}.conf"
     ;;
 
   fastcgi-cache-clear)
@@ -3998,7 +4545,7 @@ case "$cmd" in
       env_set PANEL_SSL_KEY ""
     fi
     allow_panel_port "$port"
-    refresh_tools_nginx
+    refresh_tools_webserver
     schedule_panel_restart
     echo "Panel URL: ${scheme}://${host}:${port}"
     ;;
@@ -4041,7 +4588,7 @@ case "$cmd" in
       rm -f "$PANEL_IPV6_MARKER"
       deny "nginx refused the IPv6 configuration; nothing was changed"
     fi
-    refresh_tools_nginx
+    refresh_tools_webserver
     schedule_panel_restart
     echo "IPv6 enabled: $(ipv6_global_addresses | paste -sd, -)"
     ;;
@@ -4050,7 +4597,7 @@ case "$cmd" in
     [[ $# -eq 0 ]] || deny "usage: ipv6-disable"
     rm -f "$PANEL_IPV6_MARKER"
     nginx_ipv6_apply || deny "nginx refused the configuration without IPv6"
-    refresh_tools_nginx
+    refresh_tools_webserver
     schedule_panel_restart
     echo "IPv6 disabled"
     ;;
@@ -4115,7 +4662,7 @@ case "$cmd" in
     env_set PANEL_URL "https://${host}:${port}"
     env_set ALLOWED_ORIGINS "https://${host}:${port}"
     allow_panel_port "$port"
-    refresh_tools_nginx
+    refresh_tools_webserver
     schedule_panel_restart
     echo "Panel is on a self-signed certificate: https://${host}:${port}"
     ;;
@@ -4144,7 +4691,7 @@ case "$cmd" in
     install_sni_renewal_hook
     sync_panel_sni_certificates >/dev/null
     allow_panel_port "$port"
-    refresh_tools_nginx
+    refresh_tools_webserver
     schedule_panel_restart
     echo "Panel now uses the certificate of ${domain}: https://${domain}:${port}"
     ;;
@@ -4196,7 +4743,7 @@ case "$cmd" in
       env_set SSL_EMAIL "$email"
     fi
     allow_panel_port "$port"
-    refresh_tools_nginx
+    refresh_tools_webserver
     schedule_panel_restart
     echo "Panel SSL enabled: https://${domain}:${port}"
     ;;
@@ -4220,7 +4767,10 @@ case "$cmd" in
       shift
     done
     install -d -o root -g bpanel -m 0755 /var/www/bpanel-acme/.well-known/acme-challenge
-    if [[ -f "/etc/nginx/conf.d/${domain}.conf" ]]; then
+    # The webroot half below is web-server-neutral (both backends serve
+    # /var/www/bpanel-acme). Only this fix-up of an older nginx vhost, and the
+    # `install --nginx` step at the end, are nginx-specific.
+    if [[ "$(web_server)" != "openlitespeed" && -f "/etc/nginx/conf.d/${domain}.conf" ]]; then
       if grep -q "/var/lib/bpanel/acme-challenges" "/etc/nginx/conf.d/${domain}.conf"; then
         cp -a "/etc/nginx/conf.d/${domain}.conf" "/etc/nginx/conf.d/${domain}.conf.bak"
         sed -i 's#/var/lib/bpanel/acme-challenges#/var/www/bpanel-acme#g' "/etc/nginx/conf.d/${domain}.conf"
@@ -4295,9 +4845,23 @@ PY
     # twice: once for a redirect domain with no DNS here at all, and again
     # for one whose DNS was fixed and made it into the certificate - the
     # missing server block, not a missing SAN, was the actual cause both times.
-    install_args=(install --nginx --cert-name "$domain" --non-interactive --redirect --expand -d "$domain")
     rc=0
-    certbot "${install_args[@]}" || rc=$?
+    if [[ "$(web_server)" == "openlitespeed" ]]; then
+      # OLS has no certbot plugin, and does not need one: the panel re-renders
+      # the vhost with the new certificate itself (openlitespeed.rewrite_vhost
+      # picks up /etc/letsencrypt/live/<domain>/ when preserve_existing_ssl is
+      # on). All that is left here is re-running the main-config sync so the
+      # site joins the HTTPS listener now that its cert is really on disk -
+      # ols_sync_main_config deliberately skips sites whose cert file is
+      # missing, which it was until a moment ago.
+      ols_sync_main_config
+      restart_openlitespeed 2>/dev/null || true
+    else
+      # install --nginx is only ever pointed at the primary domain, never the
+      # aliases/redirects - see the comment above for why.
+      install_args=(install --nginx --cert-name "$domain" --non-interactive --redirect --expand -d "$domain")
+      certbot "${install_args[@]}" || rc=$?
+    fi
     # The panel can be opened on this domain now, so it needs the certificate.
     install_sni_renewal_hook
     sync_panel_sni_certificates >/dev/null
@@ -4854,14 +5418,21 @@ PY
     domain="$1"; kind="$2"
     require_domain "$domain"
     [[ "$kind" == "access" || "$kind" == "error" ]] || deny "invalid log kind: $kind"
-    path="/var/log/nginx/${domain}.${kind}.log"
+    log_dir="$(site_log_dir)"
+    path="${log_dir}/${domain}.${kind}.log"
     resolved=$(readlink -m "$path") || deny "cannot resolve log path"
     case "$resolved" in
-      /var/log/nginx/*) ;;
-      *) deny "log path outside /var/log/nginx: $resolved" ;;
+      "$log_dir"/*) ;;
+      *) deny "log path outside ${log_dir}: $resolved" ;;
     esac
     if [[ -f "$resolved" ]]; then
       : > "$resolved"
+    fi
+    # OLS keeps PHP's own error log beside it (see read_site_log) - clearing
+    # only half would leave the Error tab still showing entries.
+    if [[ "$kind" == "error" && "$(web_server)" == "openlitespeed" ]]; then
+      php_log="${log_dir}/${domain}/php_error.log"
+      [[ -f "$php_log" ]] && : > "$php_log"
     fi
     ;;
 

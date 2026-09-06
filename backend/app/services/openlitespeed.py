@@ -450,6 +450,7 @@ def _build_context(
     app_type: str = "wordpress",
     php_version: Optional[str] = None,
     custom_directives: str = "",
+    # Accepted for interface parity with nginx.py and ignored - see _build_context.
     php_fpm_socket_override: Optional[str] = None,
     waf_enabled: bool = True,
     http_flood_enabled: bool = False,
@@ -479,7 +480,13 @@ def _build_context(
     if checked_php and checked_app not in {"static", *PROXIED_APP_TYPES}:
         lsphp_app = _lsphp_listener_name(checked_php)
         lsphp_path = _lsphp_binary(checked_php)
-        lsphp_socket = php_fpm_socket_override or _lsphp_socket(checked_php)
+        # php_fpm_socket_override is deliberately ignored. Shared callers
+        # (websites.py, provisioning, da_import, backup restore) compute it
+        # with site_users.site_php_fpm_socket(), which returns this install's
+        # *PHP-FPM* pool socket - a path that does not exist on an OLS box.
+        # LSPHP is one shared listener per version; the socket follows from
+        # the version alone.
+        lsphp_socket = _lsphp_socket(checked_php)
 
     return {
         "domain": safe_domain,
@@ -523,6 +530,7 @@ def render_vhost(
     app_type: str = "wordpress",
     php_version: Optional[str] = None,
     custom_directives: str = "",
+    # Accepted for interface parity with nginx.py and ignored - see _build_context.
     php_fpm_socket_override: Optional[str] = None,
     waf_enabled: bool = True,
     http_flood_enabled: bool = False,
@@ -573,6 +581,7 @@ def write_vhost(
     app_type: str = "wordpress",
     php_version: Optional[str] = None,
     custom_directives: str = "",
+    # Accepted for interface parity with nginx.py and ignored - see _build_context.
     php_fpm_socket_override: Optional[str] = None,
     waf_enabled: bool = True,
     http_flood_enabled: bool = False,
@@ -614,6 +623,7 @@ def rewrite_vhost(
     app_type: str = "wordpress",
     php_version: Optional[str] = None,
     custom_directives: str = "",
+    # Accepted for interface parity with nginx.py and ignored - see _build_context.
     php_fpm_socket_override: Optional[str] = None,
     waf_enabled: bool = True,
     http_flood_enabled: bool = False,

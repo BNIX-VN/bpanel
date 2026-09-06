@@ -71,7 +71,14 @@ def test_helper_has_the_batch_log_verb():
     helper = HELPER.read_text(encoding="utf-8")
     assert "site-logs-read-many)" in helper
     assert "read_site_logs_many()" in helper
-    assert "/var/log/nginx/" in helper
+    # The log directory differs per web server (nginx vs OpenLiteSpeed), so
+    # the batch reader must resolve it through site_log_dir rather than
+    # hardcoding one - a hardcoded /var/log/nginx would silently return
+    # "no logs" for every site on an OLS install.
+    assert 'log_dir="$(site_log_dir)"' in helper
+    assert 'path="${log_dir}/${domain}.${kind}.log"' in helper
+    assert 'NGINX_LOG_DIR="/var/log/nginx"' in helper
+    assert 'OLS_LOG_DIR="/var/log/openlitespeed"' in helper
 
 
 def test_access_logs_parse_and_filter(monkeypatch):

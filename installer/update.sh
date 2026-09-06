@@ -209,6 +209,19 @@ env_set_default() {
   fi
 }
 
+# Which web server this install runs, matching bpanel-helper's web_server()
+# and app/services/webserver.py: anything unrecognised means nginx.
+web_server() {
+  local value
+  value="$(env_get WEB_SERVER 2>/dev/null || true)"
+  case "${value,,}" in
+    openlitespeed|ols|litespeed) echo "openlitespeed" ;;
+    *) echo "nginx" ;;
+  esac
+}
+
+is_openlitespeed() { [[ "$(web_server)" == "openlitespeed" ]]; }
+
 env_set() {
   # Replace a value, or add it if the key is new. Written through a temporary
   # file and copied back so the .env keeps its owner and its 0640 mode.
@@ -707,7 +720,14 @@ harden_existing_panel_users() {
 }
 
 install_panel_runtime() {
-  local env_file="$APP_DIR/backend/.env"
+  local env_file="$APP_DIR/backend/.env" web_server_rw_paths
+  # Only the active web server's config tree stays writable inside the API's
+  # systemd sandbox.
+  if is_openlitespeed; then
+    web_server_rw_paths="/usr/local/lsws/conf/bpanel"
+  else
+    web_server_rw_paths="/etc/nginx/conf.d /etc/nginx/bpanel/custom"
+  fi
   [[ -f "$env_file" ]] || return 0
   local panel_port panel_url server_ip sshd_config sshd_backup
   panel_port="$(env_get PANEL_PORT)"
@@ -821,7 +841,7 @@ ExecStart=/usr/local/sbin/bpanel-api-start
 SupplementaryGroups=www-data bpanel-sites
 ProtectHome=false
 ReadWritePaths=
-ReadWritePaths=${APP_DIR} /home /var/backups/bpanel /etc/nginx/conf.d /etc/nginx/bpanel/custom /tmp /var/lib/bpanel /home/admin/bpanel_backups/da /var/lib/bpanel/da-import /var/lib/bpanel/import-stage
+ReadWritePaths=${APP_DIR} /home /var/backups/bpanel ${web_server_rw_paths} /tmp /var/lib/bpanel /home/admin/bpanel_backups/da /var/lib/bpanel/da-import /var/lib/bpanel/import-stage
 SERVICE
   cat >/etc/systemd/system/bpanel-backup-scheduler.service <<SERVICE
 [Unit]
@@ -841,7 +861,7 @@ ExecStart=${APP_DIR}/backend/.venv/bin/python -m app.services.backup_scheduler
 NoNewPrivileges=false
 ProtectSystem=false
 ProtectHome=false
-ReadWritePaths=/home /var/backups/bpanel /etc/nginx/conf.d /etc/nginx/bpanel/custom /tmp /var/lib/bpanel ${APP_DIR} /home/admin/bpanel_backups/da /var/lib/bpanel/da-import /var/lib/bpanel/import-stage
+ReadWritePaths=/home /var/backups/bpanel ${web_server_rw_paths} /tmp /var/lib/bpanel ${APP_DIR} /home/admin/bpanel_backups/da /var/lib/bpanel/da-import /var/lib/bpanel/import-stage
 PrivateTmp=true
 
 [Install]
@@ -957,9 +977,15 @@ WantedBy=timers.target
 SERVICE
   systemctl daemon-reload
   systemctl enable bpanel-timesync.timer >/dev/null 2>&1 || true
-  rm -f /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf 2>/dev/null || true
-  rm -f /etc/nginx/sites-enabled/bpanel.conf /etc/nginx/sites-available/bpanel.conf 2>/dev/null || true
-  write_tools_nginx_config
+  if is_openlitespeed; then
+    # The helper owns the OLS tools vhost (phpMyAdmin + ACME) and the managed
+    # half of httpd_config.conf; there is no nginx default site to remove.
+    sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper ols-sync-main >/dev/null 2>&1 || true
+  else
+    rm -f /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf 2>/dev/null || true
+    rm -f /etc/nginx/sites-enabled/bpanel.conf /etc/nginx/sites-available/bpanel.conf 2>/dev/null || true
+    write_tools_nginx_config
+  fi
   if [[ -f /usr/share/phpmyadmin/bpanel-signon.php ]]; then
     local scheme="http"
     if [[ -n "$(env_get PANEL_SSL_CERT)" && -n "$(env_get PANEL_SSL_KEY)" ]]; then
@@ -1216,9 +1242,13 @@ fi
 log "Installing direct panel runtime"
 update_progress 25 "syncing" "Syncing source into ${APP_DIR}"
 install_panel_runtime
-log "Configuring Nginx FastCGI cache"
-configure_fastcgi_cache
-configure_proxy_upgrade_map
+if is_openlitespeed; then
+  log "OpenLiteSpeed install: skipping the Nginx FastCGI cache and upgrade map"
+else
+  log "Configuring Nginx FastCGI cache"
+  configure_fastcgi_cache
+  configure_proxy_upgrade_map
+fi
 ensure_terminal_tools
 venv_needs_recreate=false
 if [[ ! -x "$APP_DIR/backend/.venv/bin/uvicorn" ]]; then
@@ -1553,12 +1583,20 @@ if [[ "$FRONTEND_REBUILT" == "1" ]]; then
 fi
 
 # --- Reload Nginx ----------------------------------------------------------
-log "Reloading nginx"
-update_progress 92 "restarting" "Restarting services and reloading nginx"
-migrate_nginx_wordpress_csp_worker_src
-migrate_site_cron_php_binary
-nginx -t
-systemctl reload nginx
+if is_openlitespeed; then
+  log "Restarting OpenLiteSpeed"
+  update_progress 92 "restarting" "Restarting services and reloading the web server"
+  migrate_site_cron_php_binary
+  sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper ols-sync-main >/dev/null 2>&1 || true
+  systemctl restart lshttpd.service 2>/dev/null || /usr/local/lsws/bin/lswsctrl restart 2>/dev/null || true
+else
+  log "Reloading nginx"
+  update_progress 92 "restarting" "Restarting services and reloading nginx"
+  migrate_nginx_wordpress_csp_worker_src
+  migrate_site_cron_php_binary
+  nginx -t
+  systemctl reload nginx
+fi
 
 # --- Did turning HTTPS on actually work? -----------------------------------
 if [[ -n "${PANEL_SWITCHED_TO_HTTPS:-}" ]]; then

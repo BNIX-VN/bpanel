@@ -30,16 +30,17 @@ fi
 BACKEND_SRC="${PROJECT_ROOT:+${PROJECT_ROOT}/backend}"
 FRONTEND_SRC="${PROJECT_ROOT:+${PROJECT_ROOT}/frontend}"
 
-# The only prompts below (ask_panel_url) are for PANEL_URL/PANEL_HOSTNAME -
-# already-set PANEL_URL means none of them ever fire, so a fully unattended
+# The only prompts below are ask_web_server's and ask_panel_url's - setting
+# WEB_SERVER and PANEL_URL means none of them ever fire, so a fully unattended
 # install (CI, provisioning scripts) needs no tty at all. Only demand one
 # when we'd actually have to read an answer from it.
-if [[ -z "${PANEL_URL:-}" && ! -t 0 ]]; then
+if [[ ( -z "${PANEL_URL:-}" || -z "${WEB_SERVER:-}" ) && ! -t 0 ]]; then
   if [[ -r /dev/tty ]]; then
     exec </dev/tty
   else
     echo "ERROR: This installer needs an interactive terminal." >&2
-    echo "       Run it from SSH, or export PANEL_URL (e.g. PANEL_URL=http://1.2.3.4:2222) for a fully unattended install." >&2
+    echo "       Run it from SSH, or export PANEL_URL and WEB_SERVER" >&2
+    echo "       (e.g. PANEL_URL=http://1.2.3.4:2222 WEB_SERVER=nginx) for a fully unattended install." >&2
     exit 1
   fi
 fi
@@ -96,6 +97,9 @@ SSL_EMAIL="${SSL_EMAIL:-}"
 NODE_MAJOR="${NODE_MAJOR:-22}"
 PHP_DEFAULT="${PHP_DEFAULT:-8.4}"
 PHP_VERSIONS="${PHP_VERSIONS:-8.3 8.4}"
+# Which web server to install: nginx (with PHP-FPM) or openlitespeed (with
+# LSPHP). Set WEB_SERVER= to skip the prompt for an unattended install.
+WEB_SERVER="${WEB_SERVER:-}"
 APP_DIR="${APP_DIR:-/opt/bpanel}"
 BACKUP_ROOT="${BACKUP_ROOT:-/var/backups/bpanel}"
 ADMIN_PASSWORD=""
@@ -191,6 +195,28 @@ validate_sources() {
   [[ -f "${FRONTEND_SRC}/package.json" ]] || fail "Missing frontend/package.json"
 }
 
+ask_web_server() {
+  # Normalize whatever came in from the environment first, so an unattended
+  # install never reaches the prompt.
+  case "${WEB_SERVER,,}" in
+    nginx) WEB_SERVER="nginx"; return 0 ;;
+    openlitespeed|ols|litespeed) WEB_SERVER="openlitespeed"; return 0 ;;
+    "") ;;
+    *) fail "WEB_SERVER must be 'nginx' or 'openlitespeed' (got: ${WEB_SERVER})" ;;
+  esac
+  echo ""
+  echo "Which web server should this server run?"
+  echo "  [1] Nginx + PHP-FPM      (default)"
+  echo "  [2] OpenLiteSpeed + LSPHP"
+  local answer
+  read -rp "Choice [1]: " answer
+  case "${answer:-1}" in
+    1|"") WEB_SERVER="nginx" ;;
+    2) WEB_SERVER="openlitespeed" ;;
+    *) fail "Invalid choice: ${answer}" ;;
+  esac
+}
+
 ask_panel_url() {
   validate_port "$PANEL_PORT"
   if [[ -n "$PANEL_URL" ]]; then
@@ -272,7 +298,13 @@ ask_panel_url() {
 install_base_packages() {
   export DEBIAN_FRONTEND=noninteractive
   apt_get update --allow-releaseinfo-change
-  local pkgs=(software-properties-common ca-certificates curl gnupg git composer nginx mariadb-server redis-server openssh-server python3 python3-pip python3-venv certbot python3-certbot-nginx tar zip unzip openssl iptables ipset phpmyadmin acl)
+  local pkgs=(software-properties-common ca-certificates curl gnupg git composer mariadb-server redis-server openssh-server python3 python3-pip python3-venv certbot tar zip unzip openssl iptables ipset phpmyadmin acl)
+  if [[ "$WEB_SERVER" == "nginx" ]]; then
+    # python3-certbot-nginx is the plugin that wires an issued certificate into
+    # the vhost; OpenLiteSpeed has no certbot plugin and BPanel re-renders the
+    # vhost itself there instead (see bpanel-helper's certbot-issue).
+    pkgs+=(nginx python3-certbot-nginx)
+  fi
   if ! apt_get install -y "${pkgs[@]}"; then
     # Seen on some VPS images: a stuck package pin (e.g. libsystemd-shared)
     # leaves an unrelated dependency "not going to be installed" and apt
@@ -282,8 +314,51 @@ install_base_packages() {
     apt_get --fix-broken install -y || true
     apt_get install -y "${pkgs[@]}"
   fi
-  systemctl enable --now nginx mariadb redis-server
+  systemctl enable --now mariadb redis-server
+  [[ "$WEB_SERVER" == "nginx" ]] && systemctl enable --now nginx
   systemctl enable --now ssh 2>/dev/null || systemctl enable --now sshd 2>/dev/null || true
+}
+
+# OpenLiteSpeed + one LSPHP per requested PHP version, from LiteSpeed's own
+# repo. Only called when WEB_SERVER=openlitespeed.
+install_openlitespeed() {
+  export DEBIAN_FRONTEND=noninteractive
+  curl -fsSL --connect-timeout 15 --max-time 120 https://repo.litespeed.sh | bash
+  apt_get update --allow-releaseinfo-change
+  local lsphp_packages=() version ver_no_dot
+  for version in $PHP_VERSIONS; do
+    ver_no_dot="${version//./}"
+    # gd, xml, mbstring, zip and bcmath ship inside the base lsphp package.
+    lsphp_packages+=(
+      "lsphp${ver_no_dot}"
+      "lsphp${ver_no_dot}-common"
+      "lsphp${ver_no_dot}-mysql"
+      "lsphp${ver_no_dot}-sqlite3"
+      "lsphp${ver_no_dot}-curl"
+      "lsphp${ver_no_dot}-opcache"
+      "lsphp${ver_no_dot}-intl"
+      "lsphp${ver_no_dot}-redis"
+      "lsphp${ver_no_dot}-imagick"
+    )
+  done
+  # ols-modsecurity is the WAF engine; without it the panel's per-site rules
+  # simply never load, which is worse than no install but not fatal.
+  apt_get install -y openlitespeed "${lsphp_packages[@]}" ols-modsecurity || \
+    apt_get install -y openlitespeed "${lsphp_packages[@]}"
+  # OLS's package pulls in / conflicts with any Apache already listening on :80.
+  systemctl disable --now apache2 2>/dev/null || true
+  install -d -m 0755 /etc/systemd/system/lshttpd.service.d
+  cat >/etc/systemd/system/lshttpd.service.d/10-bpanel.conf <<'UNIT'
+[Service]
+PIDFile=/run/openlitespeed.pid
+KillMode=mixed
+UNIT
+  systemctl daemon-reload
+  systemctl enable --now lshttpd 2>/dev/null || systemctl enable --now lsws 2>/dev/null || true
+  for version in $PHP_VERSIONS; do
+    ver_no_dot="${version//./}"
+    install_ioncube_loader "$version" "/usr/local/lsws/lsphp${ver_no_dot}"
+  done
 }
 
 install_nodejs() {
@@ -300,7 +375,9 @@ NODE
 }
 
 install_ioncube_loader() {
-  local version="$1" arch url tmp archive loader target_dir target loader_ini_dir
+  # $2 (optional) is an LSPHP root such as /usr/local/lsws/lsphp84 - LSPHP
+  # keeps its own php tree there rather than under /etc/php.
+  local version="$1" lsphp_root="${2:-}" arch url tmp archive loader target_dir target loader_ini_dir
   arch="$(dpkg --print-architecture 2>/dev/null || uname -m)"
   case "$arch" in
     amd64|x86_64)
@@ -336,6 +413,22 @@ install_ioncube_loader() {
   install -m 0644 -o root -g root "$loader" "$target"
   rm -rf -- "$tmp"
 
+  if [[ -n "$lsphp_root" ]]; then
+    # LSPHP: one mods-available directory inside the LSPHP tree. No php${ver}
+    # binary on PATH to verify against, so a failure here shows up as a PHP
+    # that silently cannot run ionCube-encoded files rather than a hard fail.
+    loader_ini_dir="${lsphp_root}/etc/php/${version}/mods-available"
+    if [[ -d "$loader_ini_dir" ]]; then
+      printf 'zend_extension=%s\n' "$target" >"${loader_ini_dir}/00-ioncube.ini"
+      chown root:root "${loader_ini_dir}/00-ioncube.ini"
+      chmod 0644 "${loader_ini_dir}/00-ioncube.ini"
+      echo "ionCube Loader enabled for LSPHP ${version}"
+    else
+      echo "Skipping ionCube Loader: ${loader_ini_dir} not found"
+    fi
+    return 0
+  fi
+
   for loader_ini_dir in /etc/php/"$version"/cli/conf.d /etc/php/"$version"/fpm/conf.d; do
     [[ -d "$loader_ini_dir" ]] || continue
     printf 'zend_extension=%s\n' "$target" >"${loader_ini_dir}/00-ioncube.ini"
@@ -350,6 +443,45 @@ install_ioncube_loader() {
     fi
   fi
   echo "ionCube Loader enabled for PHP ${version}"
+}
+
+# OpenLiteSpeed runs PHP through LSPHP, installed alongside OLS itself by
+# install_openlitespeed(). All that is left is the ini overrides - there is no
+# per-site FPM pool here, one shared LSPHP listener per version serves every
+# site (per-site isolation comes from the vhost's own phpIniOverride block).
+install_lsphp_config() {
+  if [[ ! " ${PHP_VERSIONS} " =~ " ${PHP_DEFAULT} " ]]; then
+    fail "PHP_DEFAULT=${PHP_DEFAULT} must be included in PHP_VERSIONS='${PHP_VERSIONS}'"
+  fi
+  local version ver_no_dot lsphp_dir ini_dir
+  for version in $PHP_VERSIONS; do
+    ver_no_dot="${version//./}"
+    lsphp_dir="/usr/local/lsws/lsphp${ver_no_dot}"
+    ini_dir="${lsphp_dir}/etc/php/${version}/mods-available"
+    if [[ ! -d "$lsphp_dir" ]]; then
+      echo "WARNING: LSPHP ${version} not found at ${lsphp_dir}; skipping ini config"
+      continue
+    fi
+    install -d -o root -g root -m 0755 "$ini_dir"
+    cat >"${ini_dir}/99-bpanel.ini" <<INI
+upload_max_filesize = 1024M
+post_max_size = 1024M
+memory_limit = 1024M
+max_execution_time = 300
+max_input_time = 600
+max_input_vars = 10000
+max_file_uploads = 100
+INI
+    chown root:root "${ini_dir}/99-bpanel.ini"
+    chmod 0644 "${ini_dir}/99-bpanel.ini"
+  done
+  local default_ver_no_dot="${PHP_DEFAULT//./}"
+  # WP-CLI and the panel's own shell-outs call `php`; point it at the default
+  # LSPHP so they get the same version the sites run.
+  if [[ -x "/usr/local/lsws/lsphp${default_ver_no_dot}/bin/php" ]]; then
+    ln -sfn "/usr/local/lsws/lsphp${default_ver_no_dot}/bin/php" /usr/local/bin/php
+  fi
+  systemctl restart lshttpd.service 2>/dev/null || /usr/local/lsws/bin/lswsctrl restart 2>/dev/null || true
 }
 
 install_php() {
@@ -674,7 +806,7 @@ setup_backend() {
 APP_ENV=production
 SECRET_KEY=$(openssl rand -hex 32)
 COMMAND_DRY_RUN=false
-WEB_SERVER=nginx
+WEB_SERVER=${WEB_SERVER}
 DATABASE_URL=sqlite:///${APP_DIR}/backend/bpanel.db
 REDIS_URL=redis://localhost:6379/0
 RATE_LIMIT_BACKEND=redis
@@ -713,6 +845,15 @@ wait_for_backend() {
 }
 
 setup_systemd() {
+  # The API writes vhosts directly (not everything goes through the helper), so
+  # the sandbox has to leave the active web server's config tree writable - and
+  # only that one.
+  local WEB_SERVER_RW_PATHS
+  if [[ "$WEB_SERVER" == "openlitespeed" ]]; then
+    WEB_SERVER_RW_PATHS="/usr/local/lsws/conf/bpanel"
+  else
+    WEB_SERVER_RW_PATHS="/etc/nginx/conf.d /etc/nginx/bpanel/custom"
+  fi
   cat >/usr/local/sbin/bpanel-api-start <<STARTER
 #!/usr/bin/env bash
 # app.serve builds the uvicorn server in Python: the same options the command
@@ -752,7 +893,7 @@ RestartSec=3
 NoNewPrivileges=false
 ProtectSystem=false
 ProtectHome=false
-ReadWritePaths=${APP_DIR} /home ${BACKUP_ROOT} /etc/nginx/conf.d /etc/nginx/bpanel/custom /tmp /var/lib/bpanel /home/admin/bpanel_backups/da /var/lib/bpanel/da-import /var/lib/bpanel/import-stage
+ReadWritePaths=${APP_DIR} /home ${BACKUP_ROOT} ${WEB_SERVER_RW_PATHS} /tmp /var/lib/bpanel /home/admin/bpanel_backups/da /var/lib/bpanel/da-import /var/lib/bpanel/import-stage
 PrivateTmp=true
 PrivateDevices=true
 ProtectKernelTunables=true
@@ -794,7 +935,7 @@ ExecStart=${APP_DIR}/backend/.venv/bin/python -m app.services.backup_scheduler
 NoNewPrivileges=false
 ProtectSystem=false
 ProtectHome=false
-ReadWritePaths=${APP_DIR} /home ${BACKUP_ROOT} /etc/nginx/conf.d /etc/nginx/bpanel/custom /tmp /var/lib/bpanel /home/admin/bpanel_backups/da /var/lib/bpanel/da-import /var/lib/bpanel/import-stage
+ReadWritePaths=${APP_DIR} /home ${BACKUP_ROOT} ${WEB_SERVER_RW_PATHS} /tmp /var/lib/bpanel /home/admin/bpanel_backups/da /var/lib/bpanel/da-import /var/lib/bpanel/import-stage
 PrivateTmp=true
 
 [Install]
@@ -1121,6 +1262,29 @@ setup_nginx() {
   systemctl reload nginx
 }
 
+# The OLS counterpart of setup_nginx: create the managed config tree, then let
+# the helper write the panel's own vhost (phpMyAdmin + ACME) and rebuild
+# httpd_config.conf's managed section around it.
+setup_openlitespeed() {
+  local helper="/usr/local/sbin/bpanel-helper"
+  install -d -o root -g root -m 0755 /usr/local/lsws/conf/bpanel
+  install -d -o root -g bpanel -m 2775 /usr/local/lsws/conf/bpanel/vhosts
+  install -d -o root -g bpanel -m 2775 /usr/local/lsws/conf/bpanel/custom
+  install -d -o root -g root -m 0755 /usr/local/lsws/conf/bpanel/waf /usr/local/lsws/conf/bpanel/waf/sites
+  install -d -o www-data -g bpanel-sites -m 2775 /var/log/openlitespeed
+  chmod g+s /usr/local/lsws/conf/bpanel/vhosts /usr/local/lsws/conf/bpanel/custom /var/log/openlitespeed 2>/dev/null || true
+  sudo -u bpanel env HOME="$APP_DIR" sudo -n "$helper" ols-sync-main
+  systemctl restart lshttpd.service 2>/dev/null || /usr/local/lsws/bin/lswsctrl restart 2>/dev/null || true
+}
+
+setup_web_server() {
+  if [[ "$WEB_SERVER" == "openlitespeed" ]]; then
+    setup_openlitespeed
+  else
+    setup_nginx
+  fi
+}
+
 setup_firewall() {
   # IP filtering is iptables + ipset, driven by bpanel-helper. Any UFW install
   # left over from an older BPanel release is removed here.
@@ -1334,6 +1498,7 @@ enable_ipv6_when_available() {
 
 main() {
   validate_sources
+  ask_web_server
   ask_panel_url
 
   log "Installing base packages"
@@ -1342,16 +1507,24 @@ main() {
   log "Installing Node.js ${NODE_MAJOR} from NodeSource"
   install_nodejs
 
-  log "Installing PHP ${PHP_VERSIONS} from Ondrej PPA"
-  install_php
+  if [[ "$WEB_SERVER" == "openlitespeed" ]]; then
+    log "Installing OpenLiteSpeed and LSPHP ${PHP_VERSIONS}"
+    install_openlitespeed
 
-  log "Configuring Nginx FastCGI cache"
-  configure_fastcgi_cache
-  configure_proxy_upgrade_map
+    log "Configuring LSPHP ${PHP_VERSIONS}"
+    install_lsphp_config
+  else
+    log "Installing PHP ${PHP_VERSIONS} from Ondrej PPA"
+    install_php
 
-  log "Installing Nginx ModSecurity WAF engine"
-  if ! install_waf_engine; then
-    echo "WARNING: WAF engine installation failed; continuing without ModSecurity."
+    log "Configuring Nginx FastCGI cache"
+    configure_fastcgi_cache
+    configure_proxy_upgrade_map
+
+    log "Installing Nginx ModSecurity WAF engine"
+    if ! install_waf_engine; then
+      echo "WARNING: WAF engine installation failed; continuing without ModSecurity."
+    fi
   fi
 
   log "Installing WP-CLI"
@@ -1387,8 +1560,8 @@ main() {
   log "Configuring phpMyAdmin SSO"
   setup_phpmyadmin_sso
 
-  log "Preparing Nginx for customer websites"
-  setup_nginx
+  log "Preparing the web server for customer websites"
+  setup_web_server
 
   log "Configuring firewall"
   setup_firewall
