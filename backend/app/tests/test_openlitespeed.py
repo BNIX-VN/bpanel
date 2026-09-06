@@ -273,3 +273,62 @@ def test_www_is_not_duplicated_when_passed_as_an_alias():
     )
     assert rendered.count("vhAliases                 www.example.test") == 1
     assert "vhAliases                 shop.example.test" in rendered
+
+
+def test_opanels_rewrite_blocks_are_left_alone():
+    """OPanel's configuration is the base and works; two claims I made about
+    it were wrong and were reverted. This pins the shape so it does not get
+    "improved" again without evidence: WordPress keeps the front-controller
+    rules in their own block plus the inherit block (two blocks in one context
+    is fine - permalinks resolve and a real file still bypasses the rewrite),
+    and the vhost-level SSL redirect keeps its conditions (they are honoured -
+    HTTPS does not loop and the ACME path is exempt).
+    """
+    rendered = ols.render_vhost(
+        "example.test", "/home/bp_example_test/example.test",
+        app_type="wordpress", php_version="8.4",
+        ssl_cert_path="/etc/letsencrypt/live/example.test/fullchain.pem",
+        ssl_key_path="/etc/letsencrypt/live/example.test/privkey.pem",
+    )
+    assert "RewriteCond %{REQUEST_FILENAME} !-f" in rendered
+    assert "RewriteRule . /index.php [L]" in rendered
+    assert "RewriteCond %{SERVER_PORT} 80" in rendered
+    assert r"RewriteCond %{REQUEST_URI} !^/\.well-known/acme-challenge/" in rendered
+
+
+def test_sensitive_paths_are_denied_with_access_control_not_the_F_flag():
+    """`[F]` does not deny on this OpenLiteSpeed build: a POST to xmlrpc.php
+    answered 200 with the full XML-RPC method list even though every other
+    rule in the same block was firing. accessControl returns 403."""
+    rendered = ols.render_vhost(
+        "example.test", "/home/bp_example_test/example.test",
+        app_type="wordpress", php_version="8.4",
+    )
+    for blocked in ("/xmlrpc.php", "/wp-config.php", "/readme.html", "/license.txt"):
+        marker = f"context {blocked} {{"
+        assert marker in rendered, f"{blocked} is not denied"
+        assert rendered.index(marker) < rendered.index("\ncontext / {"), \
+            f"{blocked} must be declared before context /"
+    assert "accessControl" in rendered
+
+
+def test_redirect_domains_are_claimed_so_the_rule_can_be_reached():
+    """OPanel renders a working host-based redirect rule, but never claims the
+    hostname - ols_sync_main_config maps only vhDomain/vhAliases, so the
+    domain answered 404 and the rule was unreachable. Measured on a live
+    server; this is the one thing the redirect path was missing.
+    """
+    rendered = ols.render_vhost(
+        "example.test", "/home/bp_example_test/example.test",
+        app_type="php", php_version="8.4",
+        aliases=["alias.example.test"], redirects=["old.example.test"],
+    )
+    claimed = {line.split()[1] for line in rendered.splitlines() if line.startswith(("vhDomain", "vhAliases"))}
+    assert "old.example.test" in claimed
+    assert "www.old.example.test" in claimed
+    # OPanel's own rule shape, with a real target - an empty one rendered the
+    # nonsense "RewriteRule ^(.*)$ $1".
+    assert "RewriteRule ^(.*)$ https://example.test$1 [R=301,L]" in rendered
+    # An alias is still served, not redirected.
+    assert "alias.example.test" in claimed
+    assert "alias.example.test$ [NC]" not in rendered

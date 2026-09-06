@@ -2,16 +2,23 @@
    templates' `location ... { deny all; }` blocks, kept in one file so the two
    backends cannot drift apart in what they protect.
 
-   Everything here was verified against a live OpenLiteSpeed server, because
-   the obvious translations do not work:
+   These are additions on top of OPanel's configuration, not a replacement for
+   any of it: OPanel's rewrite blocks are left exactly as they are, because
+   measurement showed they work (WordPress permalinks resolve, and a real file
+   still bypasses the front controller, so RewriteCond is honoured).
 
-   - `RewriteRule ... [F]` does NOT deny on OLS. A POST to xmlrpc.php still
-     answered 200 with the full XML-RPC method list. Only accessControl does.
+   The one thing that does not work is the `[F]` flag: OPanel's
+   `RewriteRule ^xmlrpc\.php$ - [F,L]` does not deny on this build - a POST to
+   xmlrpc.php answered 200 with the full XML-RPC method list while every other
+   rule in the same block was demonstrably firing. An accessControl context
+   does return 403.
+
+   Two details, both measured rather than assumed:
    - A regex context whose pattern is not anchored at the end is treated as a
      directory: `^/\.(?!well-known)` made /.htaccess answer 301 to
      /.htaccess/ instead of 403. Anchoring with `.*$` fixes it.
-   - The negative lookahead really is honoured, so the ACME challenge under
-     /.well-known keeps working - checked, not assumed.
+   - The negative lookahead is honoured, so /.well-known/acme-challenge keeps
+     serving - which SSL issuance depends on.
 
    These must be emitted BEFORE `context /` so the more specific match wins. #}
 {% for blocked in exact_denied | default([]) %}

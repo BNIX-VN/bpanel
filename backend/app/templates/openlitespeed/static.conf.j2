@@ -64,6 +64,7 @@ module mod_security {
 
 # Static site: no PHP processor needed
 
+{% include "_denied_paths.j2" %}
 context / {
     type                  null
     location              {{ root_path }}/{{ document_root }}

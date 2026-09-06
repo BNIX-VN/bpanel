@@ -163,7 +163,7 @@ def _safe_alias_domains(aliases) -> list[str]:
     return safe_aliases
 
 
-def _redirect_entries(redirects) -> list[dict]:
+def _redirect_entries(redirects, primary: str = "") -> list[dict]:
     """Normalize the ``redirects`` argument to [{"source", "target", "code"}, ...].
 
     Callers pass either plain domain strings (BPanel's usual "redirect this
@@ -189,7 +189,10 @@ def _redirect_entries(redirects) -> list[dict]:
             continue
         entries.append({
             "source": safe_source,
-            "target": target or "",
+            # OPanel's template renders {{ redirect.target }} verbatim, so this
+            # must be a full URL - an empty string produced the nonsense rule
+            # "RewriteRule ^(.*)$ $1".
+            "target": target or f"https://{_safe_domain(primary)}",
             "code": int(code) if code else 301,
         })
     return entries
@@ -515,12 +518,22 @@ def _build_context(
     safe_app_port = _check_app_port(checked_app, app_port)
     checked_rewrite = _check_rewrite_mode(rewrite_mode)
     safe_doc_root = _effective_document_root(document_root, checked_rewrite)
-    safe_redirects = _redirect_entries(redirects)
+    safe_redirects = _redirect_entries(redirects, safe_domain)
     # www.<domain> is here because nginx puts it in every server_name (see
     # nginx._server_names) and a site has to answer there on both backends;
     # OLS routes a hostname to a vhost only if the vhost claims it, since
     # ols_sync_main_config builds the listener map from vhDomain/vhAliases.
-    safe_aliases = _safe_alias_domains([f"www.{safe_domain}", *(aliases or [])])
+    # Redirect sources are claimed here too. ols_sync_main_config builds the
+    # listener map from vhDomain/vhAliases, so a hostname this vhost does not
+    # claim never reaches it - the redirect rule below is correct but was
+    # unreachable, and the domain answered 404. Claiming it is safe: the
+    # vhost-level rewrite 301s it before any content is served.
+    safe_aliases = _safe_alias_domains([
+        f"www.{safe_domain}",
+        *(aliases or []),
+        *(entry["source"] for entry in safe_redirects),
+        *(f"www.{entry['source']}" for entry in safe_redirects),
+    ])
     has_ssl = bool(ssl_cert_path and ssl_key_path)
     validate_custom_directives(custom_directives)
     safe_http_flood_config = validate_http_flood_config(http_flood_config)
