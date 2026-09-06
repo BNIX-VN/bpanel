@@ -123,3 +123,10 @@ def test_http_flood_zone_sync_is_a_no_op_on_openlitespeed():
     throttling per vhost. Without this the verb ran `nginx -t` on a box with
     no nginx and every update printed a warning."""
     assert 'if [[ "$(web_server)" == "openlitespeed" ]]; then\n    cat >/dev/null' in HELPER
+
+
+def test_the_stock_openlitespeed_example_vhost_is_removed():
+    """OLS ships an "Example" vhost mapped to "*", so any hostname the panel
+    does not map reaches LiteSpeed's demo page. The nginx installer removes
+    its own default site for exactly this reason."""
+    assert 'remove_named_block(text, "virtualHost", "Example")' in HELPER

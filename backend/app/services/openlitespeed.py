@@ -475,7 +475,12 @@ def _build_context(
     safe_app_port = _check_app_port(checked_app, app_port)
     checked_rewrite = _check_rewrite_mode(rewrite_mode)
     safe_doc_root = _effective_document_root(document_root, checked_rewrite)
-    safe_aliases = _safe_alias_domains(aliases)
+    # nginx puts both "<domain>" and "www.<domain>" in every server_name (see
+    # nginx._server_names), so a site answers on www without anyone asking.
+    # OLS has to be told: without this the listener maps only the bare domain,
+    # and www lands wherever the server happens to fall back to - the stock
+    # Example vhost on a fresh box, or another customer's site on a busy one.
+    safe_aliases = _safe_alias_domains([f"www.{safe_domain}", *(aliases or [])])
     has_ssl = bool(ssl_cert_path and ssl_key_path)
     validate_custom_directives(custom_directives)
     safe_http_flood_config = validate_http_flood_config(http_flood_config)

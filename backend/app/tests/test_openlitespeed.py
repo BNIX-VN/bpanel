@@ -295,3 +295,30 @@ def test_preserve_existing_ssl_reads_the_vhost_not_the_letsencrypt_dir(monkeypat
         app_type="php", php_version="8.4", preserve_existing_ssl=True,
     )
     assert "certFile              /etc/letsencrypt/live/example.test/fullchain.pem" in rendered
+
+
+def test_every_vhost_answers_on_www_like_nginx_does():
+    """nginx._server_names puts <domain> and www.<domain> in every
+    server_name. Without the same on OLS the listener maps only the bare
+    domain and www falls through to whatever catches unmatched hostnames -
+    LiteSpeed's stock Example page on a fresh box, another customer's site on
+    a busy one.
+    """
+    for kwargs in (
+        dict(app_type="wordpress", php_version="8.4"),
+        dict(app_type="php", php_version="8.4"),
+        dict(app_type="static"),
+        dict(app_type="application", app_port=3000),
+    ):
+        rendered = ols.render_vhost("example.test", "/home/bp_example_test/example.test", **kwargs)
+        assert "vhDomain                  example.test" in rendered
+        assert "vhAliases                 www.example.test" in rendered, kwargs
+
+
+def test_www_is_not_duplicated_when_passed_as_an_alias():
+    rendered = ols.render_vhost(
+        "example.test", "/home/bp_example_test/example.test",
+        app_type="php", php_version="8.4", aliases=["www.example.test", "shop.example.test"],
+    )
+    assert rendered.count("vhAliases                 www.example.test") == 1
+    assert "vhAliases                 shop.example.test" in rendered

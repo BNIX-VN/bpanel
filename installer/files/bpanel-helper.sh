@@ -291,6 +291,13 @@ def remove_named_block(source: str, directive: str, name: str) -> str:
 
 for block_name in ("bpanel_http", "bpanel_https", "bpanel_http6", "bpanel_https6"):
     text = remove_named_block(text, "listener", block_name)
+# OpenLiteSpeed ships an "Example" vhost mapped to "*", so any hostname we do
+# not map lands on LiteSpeed's demo page instead of the panel. nginx's own
+# default site is removed by the installer for the same reason; do the
+# equivalent here, along with the stock Default listener that carries it.
+text = remove_named_block(text, "virtualHost", "Example")
+for stock_listener in ("Default", "defaultHttp", "Example"):
+    text = remove_named_block(text, "listener", stock_listener)
 text = re.sub(r"(?ms)^# BPanel managed vhosts BEGIN\n.*?^# BPanel managed vhosts END\n?", "", text)
 
 sites = []
