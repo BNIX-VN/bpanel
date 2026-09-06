@@ -53,9 +53,17 @@ module mod_security {
 
 # Static site: no PHP processor needed
 
+{# The challenge is served from the site's OWN docroot, not the shared
+   /var/www/bpanel-acme the nginx side uses. A customer vhost runs with
+   `restrained 1` - OpenLiteSpeed's defence against a site symlinking its way
+   out of its docroot, which nginx gets from disable_symlinks - and that also
+   blocks a static context pointing anywhere outside. Verified live: with the
+   shared webroot the challenge 404'd and no certificate could ever be issued.
+   A dedicated static context keeps the file away from PHP and from the
+   front-controller rewrite. #}
 context /.well-known/acme-challenge/ {
     type                  static
-    location              {{ acme_webroot }}/.well-known/acme-challenge/
+    location              {{ root_path }}/{{ document_root }}/.well-known/acme-challenge/
     allowBrowse           1
     addDefaultCharset     off
 }

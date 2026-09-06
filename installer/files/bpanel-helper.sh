@@ -333,7 +333,11 @@ if include_tools_vhost:
         "    vhRoot                   conf/bpanel/vhosts/",
         "    allowSymbolLink          1",
         "    enableScript             1",
-        "    restrained               1",
+        # restrained 0 only here: this vhost serves phpMyAdmin and the shared
+        # /var/www/bpanel-acme webroot, both outside its docRoot. No customer
+        # can put a symlink in either, so there is nothing to escape with -
+        # unlike a site vhost, which keeps restrained 1.
+        "    restrained               0",
         f"    configFile               conf/bpanel/vhosts/{tools_conf_name}",
         "}",
         "",
@@ -4826,9 +4830,29 @@ case "$cmd" in
       shift
     done
     install -d -o root -g bpanel -m 0755 /var/www/bpanel-acme/.well-known/acme-challenge
-    # The webroot half below is web-server-neutral (both backends serve
-    # /var/www/bpanel-acme). Only this fix-up of an older nginx vhost, and the
-    # `install --nginx` step at the end, are nginx-specific.
+    # Which directory certbot writes the challenge into. nginx serves the
+    # shared /var/www/bpanel-acme for every site. An OpenLiteSpeed site vhost
+    # cannot: it runs with `restrained 1` (OLS's defence against a site
+    # symlinking out of its docroot - nginx gets the same from
+    # disable_symlinks), and that blocks any context pointing outside the
+    # docroot. Verified live: with the shared webroot the challenge 404'd, so
+    # no certificate could ever be issued. Each OLS site therefore validates
+    # through its own docroot, which its vhost already exposes as a static
+    # context; certbot removes the file afterwards.
+    acme_webroot="/var/www/bpanel-acme"
+    if [[ "$(web_server)" == "openlitespeed" ]]; then
+      site_docroot="$(sed -nE 's#^[[:space:]]*docRoot[[:space:]]+([^[:space:]]+).*$#\1#p' "${OLS_VHOSTS_DIR}/${domain}/vhost.conf" 2>/dev/null | head -1)"
+      if [[ -n "$site_docroot" && -d "$site_docroot" ]]; then
+        acme_webroot="$site_docroot"
+        site_user="$(stat -c %U "$site_docroot" 2>/dev/null || echo root)"
+        install -d -o "$site_user" -g "$site_user" -m 0755 "${acme_webroot}/.well-known"
+        install -d -o "$site_user" -g "$site_user" -m 0755 "${acme_webroot}/.well-known/acme-challenge"
+      else
+        deny "cannot find the document root for ${domain}; issue SSL after the site is created"
+      fi
+    fi
+    # Only this fix-up of an older nginx vhost, and the `install --nginx` step
+    # at the end, are nginx-specific.
     if [[ "$(web_server)" != "openlitespeed" && -f "/etc/nginx/conf.d/${domain}.conf" ]]; then
       if grep -q "/var/lib/bpanel/acme-challenges" "/etc/nginx/conf.d/${domain}.conf"; then
         cp -a "/etc/nginx/conf.d/${domain}.conf" "/etc/nginx/conf.d/${domain}.conf.bak"
@@ -4868,7 +4892,7 @@ PY
     # --allow-subset-of-names: the panel now always asks for www.<domain> too
     # (nginx always listens on it) - a domain with no working www DNS record
     # must not turn a working bare-domain issuance into a total failure.
-    args=(certonly --webroot -w /var/www/bpanel-acme --cert-name "$domain" --non-interactive --agree-tos --expand --keep-until-expiring --allow-subset-of-names)
+    args=(certonly --webroot -w "$acme_webroot" --cert-name "$domain" --non-interactive --agree-tos --expand --keep-until-expiring --allow-subset-of-names)
     for cert_domain in "${domains[@]}"; do
       args+=(-d "$cert_domain")
     done
