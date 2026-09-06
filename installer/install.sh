@@ -35,9 +35,11 @@ FRONTEND_SRC="${PROJECT_ROOT:+${PROJECT_ROOT}/frontend}"
 # install (CI, provisioning scripts) needs no tty at all. Only demand one
 # when we'd actually have to read an answer from it.
 if [[ ( -z "${PANEL_URL:-}" || -z "${WEB_SERVER:-}" ) && ! -t 0 ]]; then
-  if [[ -r /dev/tty ]]; then
-    exec </dev/tty
-  else
+  # `-r /dev/tty` can pass on a machine that still has no controlling terminal
+  # to open (a CI runner is exactly that), so the open has to be the test -
+  # otherwise bash dies on the redirect with a bare "No such device or address"
+  # instead of the explanation below.
+  if ! exec </dev/tty 2>/dev/null; then
     echo "ERROR: This installer needs an interactive terminal." >&2
     echo "       Run it from SSH, or export PANEL_URL and WEB_SERVER" >&2
     echo "       (e.g. PANEL_URL=http://1.2.3.4:2222 WEB_SERVER=nginx) for a fully unattended install." >&2

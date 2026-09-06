@@ -86,26 +86,35 @@ jobs:
 
   # GitHub-hosted ubuntu-24.04 runners are real VMs (systemd as PID 1, full
   # apt/root access) - not containers - so this runs the actual installer end
-  # to end on a disposable box: nginx, MariaDB, PHP-FPM, Redis, the works.
+  # to end on a disposable box: the web server, MariaDB, PHP, Redis, the works.
   # It catches "the installer no longer completes" or "a fresh panel can't
-  # provision a website" before either reaches a real customer VPS. It does
-  # NOT replace manual VPS testing - no real domain/SSL, no OpenLiteSpeed
-  # path, no long-lived load - so it only runs on pushes that land on main,
-  # not on every PR.
+  # provision a website" before either reaches a real customer VPS. Both web
+  # servers get their own runner, because the two install paths share very
+  # little below the panel itself. It does NOT replace manual VPS testing -
+  # no real domain, no real SSL, no long-lived load - so it only runs on
+  # pushes that land on main, not on every PR.
   install-smoke-test:
     # Deliberately not `needs: backend` - the backend job's lint/security
     # steps carry pre-existing debt unrelated to whether the panel installs,
     # and this shouldn't wait on (or be blocked by) that.
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        web_server: [nginx, openlitespeed]
+    name: install-smoke-test (${{ matrix.web_server }})
     env:
       BPANEL_ADMIN_PASSWORD: ${{ github.run_id }}-ci-smoke-Aa1!
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run installer/install.sh (nginx, no domain -> self-signed panel cert)
+      - name: Run installer/install.sh (no domain -> self-signed panel cert)
         env:
           PANEL_URL: http://127.0.0.1:2222
+          # Both are set, so the installer never reaches a prompt and never
+          # needs a controlling terminal.
+          WEB_SERVER: ${{ matrix.web_server }}
         run: sudo -E bash installer/install.sh
 
       - name: Health check
@@ -136,15 +145,30 @@ jobs:
             | tee /tmp/website-create.json
           grep -q '"domain":"smoke-test.example"' /tmp/website-create.json
 
-      - name: Verify the vhost was actually written and nginx is happy
+      - name: Verify the vhost was actually written and the site is served
         run: |
-          sudo test -f /etc/nginx/conf.d/smoke-test.example.conf
-          sudo nginx -t
-          curl -ksf -H 'Host: smoke-test.example' https://127.0.0.1/ -o /dev/null
+          set -euo pipefail
+          if [ "${{ matrix.web_server }}" = "openlitespeed" ]; then
+            sudo test -f /usr/local/lsws/conf/bpanel/vhosts/smoke-test.example/vhost.conf
+            # The vhost only serves once ols_sync_main_config has mapped it
+            # onto a listener, so this checks the sync too, not just the file.
+            sudo grep -q 'virtualHost smoke-test.example' /usr/local/lsws/conf/httpd_config.conf
+            systemctl is-active --quiet lshttpd
+          else
+            sudo test -f /etc/nginx/conf.d/smoke-test.example.conf
+            sudo nginx -t
+          fi
+          curl -sf -H 'Host: smoke-test.example' http://127.0.0.1/ -o /dev/null
 
       - name: Dump service logs on failure
         if: failure()
         run: |
           sudo journalctl -u bpanel-api -n 300 --no-pager || true
-          sudo nginx -t || true
-          sudo tail -n 100 /var/log/nginx/error.log || true
+          if [ "${{ matrix.web_server }}" = "openlitespeed" ]; then
+            sudo journalctl -u lshttpd -n 200 --no-pager || true
+            sudo tail -n 100 /usr/local/lsws/logs/error.log || true
+            sudo cat /usr/local/lsws/conf/httpd_config.conf || true
+          else
+            sudo nginx -t || true
+            sudo tail -n 100 /var/log/nginx/error.log || true
+          fi
