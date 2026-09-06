@@ -646,19 +646,27 @@ def rewrite_vhost(
     """Render and write an OLS vhost config, then reload lshttpd.
 
     ``preserve_existing_ssl`` mirrors nginx.py's flag: with no explicit
-    manual cert given, a certificate this vhost already has (via
-    certbot/Let's Encrypt, written straight to the standard live directory)
-    is kept by pointing back at it, the same way nginx.py folds in whatever
-    ssl_certificate lines the previous file had.
+    certificate given, one this vhost already has is carried over. nginx does
+    that by merging the ssl_certificate lines certbot wrote into the previous
+    file; here the previous vhost's own certFile/keyFile are read back, which
+    the panel can do - unlike stat'ing /etc/letsencrypt/live, which is
+    root-only and raises PermissionError for the 'bpanel' user. A freshly
+    issued certificate arrives as an explicit ssl_cert_path from the caller
+    (see websites._rewrite_ssl_kwargs).
     """
     safe_domain = _safe_domain(domain)
     if app_type in PROXIED_APP_TYPES:
         ensure_proxy_upgrade_map()
     if not ssl_cert_path and not ssl_key_path and preserve_existing_ssl:
-        live_dir = Path("/etc/letsencrypt/live") / safe_domain
-        if (live_dir / "fullchain.pem").exists():
-            ssl_cert_path = str(live_dir / "fullchain.pem")
-            ssl_key_path = str(live_dir / "privkey.pem")
+        try:
+            existing = read_vhost_config(safe_domain)
+        except (FileNotFoundError, OSError):
+            existing = ""
+        cert = re.search(r"(?m)^\s*certFile\s+(.+?)\s*$", existing)
+        key = re.search(r"(?m)^\s*keyFile\s+(.+?)\s*$", existing)
+        if cert and key:
+            ssl_cert_path = cert.group(1)
+            ssl_key_path = key.group(1)
     content = render_vhost(
         safe_domain, root_path,
         app_type=app_type,

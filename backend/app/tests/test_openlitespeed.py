@@ -249,3 +249,49 @@ def test_laravel_rewrite_rules_survive_into_the_rewrite_block():
     body = next(b for b in _context_bodies(rendered) if "rewriteRules" in b)
     assert "RewriteRule ^(.*)$ index.php [QSA,L]" in body
     assert "inherit" in body
+
+
+def test_letsencrypt_paths_reach_a_backend_certbot_cannot_wire(monkeypatch):
+    """The panel runs as 'bpanel' and cannot stat /etc/letsencrypt/live, so
+    the paths have to be passed, not discovered. Guessing with is_file() there
+    raised PermissionError and made Install SSL a 500."""
+    from app.api import websites
+    from app.core.config import settings
+    from types import SimpleNamespace
+
+    site = SimpleNamespace(
+        domain="example.test", ssl_mode="letsencrypt",
+        ssl_cert_path=None, ssl_key_path=None, ssl_ca_path=None, ssl_source_domain=None,
+    )
+    monkeypatch.setattr(settings, "web_server", "openlitespeed")
+    kwargs = websites._rewrite_ssl_kwargs(site)
+    assert kwargs["ssl_cert_path"] == "/etc/letsencrypt/live/example.test/fullchain.pem"
+    assert kwargs["ssl_key_path"] == "/etc/letsencrypt/live/example.test/privkey.pem"
+
+    # nginx must keep getting nothing: certbot's plugin already wrote the
+    # ssl_certificate lines into the vhost, and rewrite_vhost merges them back
+    # out of it. Passing paths here would fight that.
+    monkeypatch.setattr(settings, "web_server", "nginx")
+    assert websites._rewrite_ssl_kwargs(site) == {}
+
+
+def test_preserve_existing_ssl_reads_the_vhost_not_the_letsencrypt_dir(monkeypatch, tmp_path):
+    """Carrying an existing certificate over must not touch root-only paths."""
+    vhost_dir = tmp_path / "example.test"
+    vhost_dir.mkdir()
+    (vhost_dir / "vhost.conf").write_text(
+        "docRoot /home/x/example.test/public_html\n"
+        "vhssl {\n"
+        "    keyFile               /etc/letsencrypt/live/example.test/privkey.pem\n"
+        "    certFile              /etc/letsencrypt/live/example.test/fullchain.pem\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(ols, "OLS_VHOSTS_DIR", tmp_path)
+    monkeypatch.setattr(ols.settings, "command_dry_run", True)
+
+    rendered = ols.rewrite_vhost(
+        "example.test", "/home/bp_example_test/example.test",
+        app_type="php", php_version="8.4", preserve_existing_ssl=True,
+    )
+    assert "certFile              /etc/letsencrypt/live/example.test/fullchain.pem" in rendered

@@ -133,6 +133,24 @@ def _rewrite_ssl_kwargs(website: Website) -> dict:
         borrowed = _borrowed_ssl_paths(website.ssl_source_domain)
         if borrowed:
             return borrowed
+    if mode == "letsencrypt" and not getattr(webserver, "SSL_WIRED_BY_CERTBOT", True):
+        # nginx needs nothing here: certbot's plugin wrote the ssl_certificate
+        # lines into the vhost and rewrite_vhost merges them back out of it.
+        # A backend certbot cannot edit (OpenLiteSpeed) has to be handed the
+        # paths, or it renders a vhost with no certificate at all.
+        #
+        # Deliberately not checked with is_file(): the panel runs as 'bpanel'
+        # and /etc/letsencrypt/live is root-only, so stat'ing it raises
+        # PermissionError rather than answering. The root-side helper that
+        # writes the vhost can read it, and ols_sync_main_config refuses to
+        # map a site onto the HTTPS listener unless the certificate really is
+        # there - so a wrong guess here degrades to "HTTP only", not to a
+        # broken server.
+        live = f"/etc/letsencrypt/live/{website.domain}"
+        return {
+            "ssl_cert_path": f"{live}/fullchain.pem",
+            "ssl_key_path": f"{live}/privkey.pem",
+        }
     return {}
 
 
