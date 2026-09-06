@@ -515,12 +515,24 @@ def _build_context(
     safe_app_port = _check_app_port(checked_app, app_port)
     checked_rewrite = _check_rewrite_mode(rewrite_mode)
     safe_doc_root = _effective_document_root(document_root, checked_rewrite)
-    # nginx puts both "<domain>" and "www.<domain>" in every server_name (see
-    # nginx._server_names), so a site answers on www without anyone asking.
-    # OLS has to be told: without this the listener maps only the bare domain,
-    # and www lands wherever the server happens to fall back to - the stock
-    # Example vhost on a fresh box, or another customer's site on a busy one.
-    safe_aliases = _safe_alias_domains([f"www.{safe_domain}", *(aliases or [])])
+    safe_redirects = _redirect_entries(redirects)
+    # Three things end up in vhAliases, because OLS routes a hostname to a
+    # vhost only if the vhost claims it (ols_sync_main_config builds the
+    # listener map from vhDomain/vhAliases):
+    #   - www.<domain>, because nginx puts it in every server_name (see
+    #     nginx._server_names) and a site must answer there on both backends;
+    #   - the alias domains, which serve the same content;
+    #   - the REDIRECT sources. nginx gives each of those its own server block
+    #     (nginx._redirect_vhost_blocks); OLS has no such block, so unless the
+    #     vhost claims the hostname the redirect rule below is unreachable and
+    #     the domain resolves to nothing at all. Claiming it is safe: the
+    #     vhost-level rewrite 301s it away before any content is served.
+    safe_aliases = _safe_alias_domains([
+        f"www.{safe_domain}",
+        *(aliases or []),
+        *(entry["source"] for entry in safe_redirects),
+        *(f"www.{entry['source']}" for entry in safe_redirects),
+    ])
     has_ssl = bool(ssl_cert_path and ssl_key_path)
     validate_custom_directives(custom_directives)
     safe_http_flood_config = validate_http_flood_config(http_flood_config)
@@ -554,7 +566,7 @@ def _build_context(
         "ssl_key_path": ssl_key_path or "",
         "ssl_ca_path": ssl_ca_path or "",
         "aliases": safe_aliases,
-        "redirects": _redirect_entries(redirects),
+        "redirects": safe_redirects,
         "waf_enabled": bool(waf_enabled),
         "waf_rules_file": waf_rules_file(safe_domain) if waf_enabled else "",
         "http_flood_enabled": bool(http_flood_enabled),

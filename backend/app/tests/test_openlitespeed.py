@@ -414,3 +414,29 @@ def test_the_dotfile_pattern_stays_anchored():
     """An unanchored pattern makes OLS treat the context as a directory and
     answer 301 to /.htaccess/ instead of 403 - seen on a live server."""
     assert ols._DOTFILES_EXCEPT_WELL_KNOWN.endswith(".*$")
+
+
+def test_redirect_domains_are_routable_not_just_rewritten():
+    """nginx gives every redirect source its own server block, so the hostname
+    reaches the server. OLS has no such block - it routes a hostname to a
+    vhost only if the vhost claims it in vhDomain/vhAliases. Rendering the
+    rewrite rule without claiming the hostname left the redirect unreachable:
+    the rule was in the file and the domain resolved to nothing.
+    """
+    rendered = ols.render_vhost(
+        "example.test", "/home/bp_example_test/example.test",
+        app_type="php", php_version="8.4",
+        aliases=["alias.example.test"], redirects=["old.example.test"],
+    )
+    claimed = {
+        line.split()[1] for line in rendered.splitlines()
+        if line.startswith("vhAliases") or line.startswith("vhDomain")
+    }
+    assert "old.example.test" in claimed, "the redirect source is not routable"
+    assert "www.old.example.test" in claimed, "www of the redirect source is not routable"
+    # ...and it still redirects rather than serving the site's content.
+    assert r"RewriteCond %{HTTP_HOST} ^(www\.)?old.example.test$ [NC]" in rendered
+    assert "RewriteRule ^(.*)$ https://example.test$1 [R=301,L]" in rendered
+    # The alias keeps serving content, so the two modes stay distinct.
+    assert "alias.example.test" in claimed
+    assert "alias.example.test$ [NC]" not in rendered
