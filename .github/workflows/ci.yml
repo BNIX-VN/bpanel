@@ -22,23 +22,36 @@ jobs:
           pip install -r backend/requirements.txt
           pip install pytest ruff bandit pip-audit semgrep
 
+      # Each of these steps has its own pre-existing, unrelated debt (581 ruff
+      # findings, 13 bandit medium/high findings, 18 known CVEs in pinned
+      # deps) that predates this workflow fix and isn't something to silently
+      # bulk-fix in passing. `if: always()` just stops one broken step from
+      # hiding whether the others - especially Tests, which used to be
+      # skipped entirely - pass or fail. The job's overall red/green still
+      # reflects every step honestly; it no longer reports "skipped" for
+      # things that never got a chance to run.
       - name: Lint (ruff)
         run: ruff check backend/app
 
       - name: Security scan (bandit)
+        if: always()
         run: bandit -r backend/app -ll -q
 
       - name: Compile-only sanity check
+        if: always()
         run: |
           python -c "import py_compile, glob; [py_compile.compile(f, doraise=True) for f in glob.glob('backend/app/**/*.py', recursive=True)]"
 
       - name: pip-audit
+        if: always()
         run: pip-audit -r backend/requirements.txt --strict
 
       - name: Semgrep
+        if: always()
         run: semgrep --config=auto backend/app
 
       - name: Tests
+        if: always()
         run: pytest backend/app/tests -q
 
   frontend:
@@ -80,8 +93,10 @@ jobs:
   # path, no long-lived load - so it only runs on pushes that land on main,
   # not on every PR.
   install-smoke-test:
+    # Deliberately not `needs: backend` - the backend job's lint/security
+    # steps carry pre-existing debt unrelated to whether the panel installs,
+    # and this shouldn't wait on (or be blocked by) that.
     if: github.event_name == 'push'
-    needs: backend
     runs-on: ubuntu-24.04
     env:
       BPANEL_ADMIN_PASSWORD: ${{ github.run_id }}-ci-smoke-Aa1!
