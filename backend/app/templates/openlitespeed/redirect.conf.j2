@@ -9,8 +9,12 @@
 # host-based `RewriteCond %{HTTP_HOST}` inside the main vhost redirected every
 # hostname the site owned, including its aliases and the primary domain.
 #
-# Here the rule needs no condition at all: this vhost only ever receives the
-# hostname mapped to it, so redirecting everything is precisely correct.
+# The redirect itself is a `type redirect` context, OLS's purpose-built
+# mechanism, not a RewriteRule. Rewrite rules were tried in every position
+# (vhost level, inside the context, with and without `inherit`) and none of
+# them fired in a vhost shaped like this one. The context does, and it
+# appends the request path and query string on its own - so the target must
+# NOT carry a $1, which is emitted literally.
 
 docRoot                   {{ root_path }}/{{ document_root }}
 
@@ -53,14 +57,8 @@ context /.well-known/acme-challenge/ {
 }
 
 context / {
-    type                  null
-    location              {{ root_path }}/{{ document_root }}
-    allowOverride         0
-
-    rewrite {
-        enable            1
-        rewriteRules      <<<END_RULES
-RewriteRule ^(.*)$ {{ redirect_target }}/$1 [R={{ redirect_code }},L]
-END_RULES
-    }
+    type                  redirect
+    externalRedirect      1
+    statusCode            {{ redirect_code }}
+    location              {{ redirect_target }}/
 }

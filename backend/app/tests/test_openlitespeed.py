@@ -151,15 +151,22 @@ def test_a_redirect_domain_gets_its_own_vhost_not_a_conditional_rule():
     )
     assert "vhDomain                  old.example.test" in redirect
     assert "vhAliases                 www.old.example.test" in redirect
-    assert "RewriteRule ^(.*)$ https://example.test/$1 [R=301,L]" in redirect
-    # Unconditional is correct here: this vhost only receives that hostname.
-    # Checked as a directive, not a substring - the comment above explains why
-    # RewriteCond is avoided and would otherwise match.
+    # A `type redirect` context, not a RewriteRule. Rewrite rules were tried
+    # in every position on a live server - vhost level, inside the context,
+    # with and without `inherit` - and none of them fired in a vhost shaped
+    # like this one. This context does.
+    assert "type                  redirect" in redirect
+    assert "statusCode            301" in redirect
+    assert "location              https://example.test/" in redirect
     directives = [line.strip() for line in redirect.splitlines() if not line.lstrip().startswith("#")]
-    assert not [d for d in directives if d.startswith("RewriteCond")]
+    assert not [d for d in directives if d.startswith(("RewriteCond", "RewriteRule"))]
+    # OLS appends the path and query string itself, so a literal $1 would end
+    # up in the Location header - "https://example.test/$1deep/path" was the
+    # actual response before this was fixed.
+    assert "$1" not in redirect
     # The ACME context has to come first, or the redirect would bounce Let's
     # Encrypt away and this domain could never join the certificate.
-    assert redirect.index("acme-challenge") < redirect.index("RewriteRule")
+    assert redirect.index("acme-challenge") < redirect.index("type                  redirect")
     # Ownership marker, so a stale redirect vhost can be pruned later.
     assert "# BPANEL REDIRECT OWNER example.test" in redirect
 
