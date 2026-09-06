@@ -729,15 +729,20 @@ setup_panel_user() {
   # (auth via a defaults-file in ~bpanel/.my.cnf, mode 0600).
   local mariadb_password
   mariadb_password="$(openssl rand -base64 32 | tr -d '/+=' | cut -c1-32)"
-  mariadb -e "
+  # ALTER USER as well as CREATE: on a reinstall over a server that already
+  # had BPanel, the MariaDB user survives (MariaDB is not reinstalled) and
+  # CREATE USER IF NOT EXISTS leaves its OLD password in place - while the
+  # .my.cnf written below carries the new one. The panel then installs
+  # cleanly and every database operation fails with "Access denied for user
+  # 'bpanel'@'localhost'". Setting the password unconditionally keeps the two
+  # in step.
+  local mariadb_sql="
     CREATE USER IF NOT EXISTS 'bpanel'@'localhost' IDENTIFIED BY '${mariadb_password}';
-    GRANT ALL PRIVILEGES ON *.* TO 'bpanel'@'localhost' WITH GRANT OPTION;
-    FLUSH PRIVILEGES;
-  " 2>/dev/null || mysql -e "
-    CREATE USER IF NOT EXISTS 'bpanel'@'localhost' IDENTIFIED BY '${mariadb_password}';
+    ALTER USER 'bpanel'@'localhost' IDENTIFIED BY '${mariadb_password}';
     GRANT ALL PRIVILEGES ON *.* TO 'bpanel'@'localhost' WITH GRANT OPTION;
     FLUSH PRIVILEGES;
   "
+  mariadb -e "$mariadb_sql" 2>/dev/null || mysql -e "$mariadb_sql"
 
   cat >"${APP_DIR}/.my.cnf" <<MYCNF
 [client]

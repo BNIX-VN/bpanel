@@ -95,3 +95,19 @@ def test_a_fresh_install_repairs_the_same_stuck_apt_dependency():
     block = script[start : script.index("\n}", start)]
     assert "apt_get --fix-broken install -y" in block
     assert 'if ! apt_get install -y "${pkgs[@]}"; then' in block
+
+
+def test_a_reinstall_resets_the_panels_mariadb_password():
+    """CREATE USER IF NOT EXISTS leaves an existing user's password alone.
+
+    MariaDB is not reinstalled when BPanel is, so on a reinstall the panel's
+    MariaDB user survives with its OLD password while install.sh writes a
+    freshly generated one into .my.cnf. The panel then installs cleanly and
+    every database operation fails with "Access denied for user
+    'bpanel'@'localhost'" - seen for real on a test server. update.sh already
+    got this right; install.sh has to as well.
+    """
+    script = INSTALL_SCRIPT.read_text(encoding="utf-8")
+    assert "ALTER USER 'bpanel'@'localhost' IDENTIFIED BY" in script
+    update = UPDATE_SCRIPT.read_text(encoding="utf-8")
+    assert "ALTER USER 'bpanel'@'localhost' IDENTIFIED BY" in update
