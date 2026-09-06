@@ -30,12 +30,16 @@ fi
 BACKEND_SRC="${PROJECT_ROOT:+${PROJECT_ROOT}/backend}"
 FRONTEND_SRC="${PROJECT_ROOT:+${PROJECT_ROOT}/frontend}"
 
-if [[ ! -t 0 ]]; then
+# The only prompts below (ask_panel_url) are for PANEL_URL/PANEL_HOSTNAME -
+# already-set PANEL_URL means none of them ever fire, so a fully unattended
+# install (CI, provisioning scripts) needs no tty at all. Only demand one
+# when we'd actually have to read an answer from it.
+if [[ -z "${PANEL_URL:-}" && ! -t 0 ]]; then
   if [[ -r /dev/tty ]]; then
     exec </dev/tty
   else
     echo "ERROR: This installer needs an interactive terminal." >&2
-    echo "       Run it from SSH or export BPANEL_URL/PANEL_PORT first." >&2
+    echo "       Run it from SSH, or export PANEL_URL (e.g. PANEL_URL=http://1.2.3.4:2222) for a fully unattended install." >&2
     exit 1
   fi
 fi
