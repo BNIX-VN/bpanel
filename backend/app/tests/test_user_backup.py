@@ -65,3 +65,25 @@ def test_restore_refuses_a_non_user_archive(tmp_path, monkeypatch):
         assert "opanel" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("restore_user_backup accepted a non-user archive")
+
+
+def test_site_restore_stages_instead_of_extracting_into_the_site():
+    """The panel runs as 'bpanel' and cannot write into a site directory - it
+    belongs to the site's Linux user, and bpanel only has group read. The
+    per-site restore used to call tar.extractall straight into the site and
+    died with PermissionError on public_html/index.php the first time it was
+    run for real, on both web servers.
+
+    restore_user_backup had the right pattern all along (stage under the
+    panel-owned import area, then let the site-populate helper copy it in as
+    root); restore_backup now uses it too.
+    """
+    import inspect
+
+    from app.services import backup as backup_service
+
+    source = inspect.getsource(backup_service.restore_backup)
+    assert "import_site_files" in source, "site restore must go through the helper"
+    assert "IMPORT_STAGE_BASE" in source, "site restore must stage under the import area"
+    # The direct write into the site root is what broke; it must not come back.
+    assert "extractall(path=str(destination)" not in source

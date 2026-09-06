@@ -723,46 +723,53 @@ def save_uploaded_user_backup(filename: str, source_file) -> str:
 
 
 def restore_backup(website: Website, backup_file: str) -> str:
+    """Restore one site's files from its own backup archive.
+
+    Extraction goes through the panel-owned staging area and then the
+    site-populate helper, exactly as restore_user_backup already does. It
+    cannot write into the site directly: that directory belongs to the site's
+    Linux user, and the panel runs as 'bpanel', which has read access through
+    the bpanel-sites group but not write. Extracting straight into it failed
+    with "PermissionError: ... public_html/index.php" on the first real
+    attempt - the site was left untouched, so the failure was safe, but the
+    feature did not work on either web server.
+    """
     archive = backup_path(website.domain, backup_file)
     destination = Path(website.root_path).resolve()
+    linux_user = getattr(website, "linux_user", None)
+    if not linux_user:
+        raise ValueError("This website has no Linux user; cannot restore its files")
 
-    # Single-pass extraction with PEP 706 data filter (Python 3.12+).
-    # The data filter rejects path traversal, absolute paths, and unsafe
-    # symlinks at the tarfile layer itself.
-    with tarfile.open(archive, "r:gz") as tar:
-        members = list(tar.getmembers())
-        has_site_prefix = any(m.name == "site" or m.name.startswith("site/") for m in members)
+    site_users.IMPORT_STAGE_BASE.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix="bpanel-site-restore-", dir=str(site_users.IMPORT_STAGE_BASE)
+    ) as tmp:
+        stage = Path(tmp) / "site"
+        stage.mkdir(parents=True, exist_ok=True)
 
-        def safe_filter(member: tarfile.TarInfo, dest_path: str):
-            # Hard-links inside backups are uncommon and risky; refuse outright.
-            if member.islnk():
-                return None
-            if member.name.startswith("database/"):
-                return None
-            if has_site_prefix:
-                if member.name == "site":
-                    return None
-                if not member.name.startswith("site/"):
-                    return None
-                member.name = member.name[len("site/"):]
-            return tarfile.data_filter(member, dest_path)
+        # Archives come in two shapes: older ones hold the site tree at the
+        # root, newer ones nest it under "site/". _safe_extract_prefix handles
+        # the nested form; the flat form is extracted here with the same
+        # protections (data filter, no hard links, no database/ payload).
+        with tarfile.open(archive, "r:gz") as tar:
+            has_site_prefix = any(
+                m.name == "site" or m.name.startswith("site/") for m in tar.getmembers()
+            )
+        if has_site_prefix:
+            _safe_extract_prefix(archive, "site", stage)
+        else:
+            with tarfile.open(archive, "r:gz") as tar:
+                def safe_filter(member: tarfile.TarInfo, dest_path: str):
+                    # Hard-links inside backups are uncommon and risky.
+                    if member.islnk():
+                        return None
+                    if member.name.startswith("database/"):
+                        return None
+                    return tarfile.data_filter(member, dest_path)
 
-        try:
-            tar.extractall(path=str(destination), filter=safe_filter)
-        except TypeError:
-            # Older Python (<3.12) without the filter parameter — fall back to
-            # manual extraction with the existing safety check.
-            _ensure_safe_tar(archive, destination)
-            for member in members:
-                if member.name.startswith("database/"):
-                    continue
-                if has_site_prefix:
-                    if member.name == "site":
-                        continue
-                    if not member.name.startswith("site/"):
-                        continue
-                    member.name = member.name[len("site/"):]
-                tar.extract(member, str(destination))
+                tar.extractall(path=str(stage), filter=safe_filter)
+
+        site_users.import_site_files(str(destination), linux_user, str(stage))
     return str(destination)
 
 
