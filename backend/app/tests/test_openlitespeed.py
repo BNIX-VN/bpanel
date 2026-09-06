@@ -162,8 +162,9 @@ def test_a_redirect_domain_gets_its_own_vhost_not_a_conditional_rule():
     assert not [d for d in directives if d.startswith(("RewriteCond", "RewriteRule"))]
     # OLS appends the path and query string itself, so a literal $1 would end
     # up in the Location header - "https://example.test/$1deep/path" was the
-    # actual response before this was fixed.
-    assert "$1" not in redirect
+    # actual response before this was fixed. Directives only: the template's
+    # own comment explains the trap and would otherwise match.
+    assert not [d for d in directives if "$1" in d]
     # The ACME context has to come first, or the redirect would bounce Let's
     # Encrypt away and this domain could never join the certificate.
     assert redirect.index("acme-challenge") < redirect.index("type                  redirect")
