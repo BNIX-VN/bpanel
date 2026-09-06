@@ -31,7 +31,7 @@ from app.schemas.schemas import (
     WebsiteWordPressInstall,
     WildcardSslRequest,
 )
-from app.services import addons, cloudflare, cron, file_manager, mariadb, nginx, site_apps, site_users, ssl, storage_quota, waf, wordpress
+from app.services import addons, cloudflare, cron, file_manager, mariadb, site_apps, site_users, ssl, storage_quota, waf, webserver, wordpress
 from app.services.audit import log_action
 
 _PLACEHOLDER_TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates" / "nginx"
@@ -62,7 +62,7 @@ def _ensure_default_waf_file(domain: str) -> None:
 
 def _sync_http_flood_zones(db: Session) -> None:
     db.flush()
-    result = nginx.sync_http_flood_zones(db.query(Website).all())
+    result = webserver.sync_http_flood_zones(db.query(Website).all())
     if result.returncode != 0:
         raise RuntimeError(_command_error(result))
 
@@ -91,7 +91,7 @@ def _write_placeholder_page(domain: str, root_path: str, linux_user: str | None,
 
 
 def _website_http_flood_config(website: Website) -> dict:
-    return nginx.http_flood_config_for_website(website)
+    return webserver.http_flood_config_for_website(website)
 
 
 def _borrowed_ssl_paths(source_domain: str) -> dict:
@@ -274,7 +274,7 @@ def _rewrite_website_vhost(website: Website, **overrides) -> str:
     if overrides.pop("include_ssl", True):
         rewrite_kwargs.update(_rewrite_ssl_kwargs(website))
     rewrite_kwargs.update(overrides)
-    return nginx.rewrite_vhost(
+    return webserver.rewrite_vhost(
         website.domain,
         root_path,
         **rewrite_kwargs,
@@ -324,7 +324,7 @@ def _sync_live_ssl_flags(db: Session, websites: list[Website]) -> list[Website]:
 
 
 def _http_flood_payload_config(payload: WebsiteHttpFloodUpdate) -> dict:
-    return nginx.validate_http_flood_config({
+    return webserver.validate_http_flood_config({
         "access_limit_requests": payload.access_limit_requests,
         "access_limit_window": payload.access_limit_window,
         "access_limit_burst": payload.access_limit_burst,
@@ -345,7 +345,7 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
     requested_owner_id = payload.owner_id
     if requested_owner_id is not None and requested_owner_id != current_user.id:
         ensure_role(current_user.role, Role.admin)
-    if _hostname_conflicts(db, payload.domain) or nginx.vhost_exists(payload.domain):
+    if _hostname_conflicts(db, payload.domain) or webserver.vhost_exists(payload.domain):
         raise HTTPException(status_code=409, detail="Domain already exists")
 
     if requested_owner_id is not None:
@@ -393,7 +393,7 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         try:
             _ensure_default_waf_file(payload.domain)
-            nginx.write_vhost(
+            webserver.write_vhost(
                 payload.domain,
                 root_path,
                 app_type="wordpress",
@@ -412,7 +412,7 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
         runtime_php_version = payload.php_version if app_type_value in {"wordpress", "php"} else None
         selected_app = (
             _resolve_app_for_owner(db, owner_id, payload.app_id, current_user)
-            if app_type_value in nginx.PROXIED_APP_TYPES
+            if app_type_value in webserver.PROXIED_APP_TYPES
             else None
         )
         try:
@@ -423,7 +423,7 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
                 _write_placeholder_page(payload.domain, root_path, linux_user, payload.php_version)
                 site_users.fix_site_path(str(public), linux_user)
             _ensure_default_waf_file(payload.domain)
-            nginx.write_vhost(
+            webserver.write_vhost(
                 payload.domain,
                 root_path,
                 app_type=app_type_value,
@@ -698,7 +698,7 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
             next_app_type = payload.app_type
             next_app = (
                 _resolve_app_for_owner(db, website.owner_id, payload.app_id, current_user)
-                if next_app_type in nginx.PROXIED_APP_TYPES
+                if next_app_type in webserver.PROXIED_APP_TYPES
                 else None
             )
             runtime_php_version = website.php_version if next_app_type in {"wordpress", "php"} else None
@@ -731,7 +731,7 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
         website.app_type = next_app_type
         website.nginx_rewrite_mode = next_rewrite_mode
         website.app_id = next_app.id if next_app else None
-    elif payload.app_id is not None and (website.app_type or "") in nginx.PROXIED_APP_TYPES:
+    elif payload.app_id is not None and (website.app_type or "") in webserver.PROXIED_APP_TYPES:
         # Same mode, different application behind it.
         next_app = _resolve_app_for_owner(db, website.owner_id, payload.app_id, current_user)
         try:
@@ -801,7 +801,7 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
         website.owner_id = payload.owner_id
     if payload.nginx_custom is not None:
         try:
-            nginx.update_custom_block(website.domain, payload.nginx_custom)
+            webserver.update_custom_block(website.domain, payload.nginx_custom)
         except (RuntimeError, ValueError, FileNotFoundError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         website.nginx_custom = payload.nginx_custom
@@ -832,7 +832,7 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
             result = waf.sync_website_rules(website)
             if result.returncode != 0:
                 raise RuntimeError(_command_error(result))
-            nginx.update_waf_block(website.domain, payload.waf_enabled)
+            webserver.update_waf_block(website.domain, payload.waf_enabled)
         except (RuntimeError, ValueError, FileNotFoundError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         website.waf_enabled = payload.waf_enabled
@@ -843,9 +843,9 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
             website.http_flood_enabled = next_enabled
             if next_enabled:
                 _sync_http_flood_zones(db)
-                nginx.update_http_flood_block(website.domain, True, _website_http_flood_config(website))
+                webserver.update_http_flood_block(website.domain, True, _website_http_flood_config(website))
             else:
-                nginx.update_http_flood_block(website.domain, False, _website_http_flood_config(website))
+                webserver.update_http_flood_block(website.domain, False, _website_http_flood_config(website))
                 _sync_http_flood_zones(db)
         except (RuntimeError, ValueError, FileNotFoundError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -872,7 +872,7 @@ def get_website_nginx_config(website_id: int, db: Session = Depends(get_db), cur
     if not website:
         raise HTTPException(status_code=404, detail="Website not found")
     try:
-        return WebsiteNginxConfig(nginx_config=nginx.read_vhost_config(website.domain))
+        return WebsiteNginxConfig(nginx_config=webserver.read_vhost_config(website.domain))
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -921,7 +921,7 @@ def set_website_waf(website_id: int, payload: WebsiteWafUpdate, request: Request
         result = waf.sync_website_rules(website)
         if result.returncode != 0:
             raise RuntimeError(_command_error(result))
-        nginx.update_waf_block(website.domain, payload.waf_enabled)
+        webserver.update_waf_block(website.domain, payload.waf_enabled)
     except (RuntimeError, ValueError, FileNotFoundError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     website.waf_enabled = payload.waf_enabled
@@ -944,9 +944,9 @@ def set_website_http_flood(website_id: int, payload: WebsiteHttpFloodUpdate, req
         website.http_flood_config = json.dumps(config, ensure_ascii=True)
         if next_enabled:
             _sync_http_flood_zones(db)
-            nginx.update_http_flood_block(website.domain, True, config)
+            webserver.update_http_flood_block(website.domain, True, config)
         else:
-            nginx.update_http_flood_block(website.domain, False, config)
+            webserver.update_http_flood_block(website.domain, False, config)
             _sync_http_flood_zones(db)
     except (RuntimeError, ValueError, FileNotFoundError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -970,7 +970,7 @@ def get_website_log(
     if website.owner_id != current_user.id:
         ensure_role(current_user.role, Role.admin)
     try:
-        return nginx.read_site_log(website.domain, kind, lines)
+        return webserver.read_site_log(website.domain, kind, lines)
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -983,7 +983,7 @@ def set_website_nginx_custom(website_id: int, payload: WebsiteNginxCustom, reque
     if website.owner_id != current_user.id:
         ensure_role(current_user.role, Role.admin)
     try:
-        nginx.update_custom_block(website.domain, payload.nginx_custom)
+        webserver.update_custom_block(website.domain, payload.nginx_custom)
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     website.nginx_custom = payload.nginx_custom
@@ -1002,7 +1002,7 @@ def delete_website(website_id: int, request: Request, delete_files: bool = True,
     if delete_database and db_item:
         mariadb.drop_database(db_item.db_name, db_item.db_user)
     db.query(WebsiteAlias).filter(WebsiteAlias.website_id == website.id).delete(synchronize_session=False)
-    nginx.delete_wordpress_vhost(website.domain)
+    webserver.delete_wordpress_vhost(website.domain)
     if delete_files:
         if website.linux_user:
             site_users.delete_site_runtime(website.root_path, website.linux_user)

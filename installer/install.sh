@@ -652,6 +652,7 @@ setup_backend() {
 APP_ENV=production
 SECRET_KEY=$(openssl rand -hex 32)
 COMMAND_DRY_RUN=false
+WEB_SERVER=nginx
 DATABASE_URL=sqlite:///${APP_DIR}/backend/bpanel.db
 REDIS_URL=redis://localhost:6379/0
 RATE_LIMIT_BACKEND=redis

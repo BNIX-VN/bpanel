@@ -31,7 +31,7 @@ from app.core.config import settings
 from app.core.database import SessionLocal
 from app.core.security import hash_password
 from app.models.entities import DatabaseAccount, User, Website, WebsiteAlias
-from app.services import mariadb, nginx, site_users, waf
+from app.services import mariadb, site_users, waf, webserver
 from app.services.shell import shell
 
 logger = logging.getLogger("bpanel.da_import")
@@ -993,7 +993,7 @@ def _delete_website_record(db, website) -> None:
     for db_item in db.query(DatabaseAccount).filter(DatabaseAccount.website_id == website.id).all():
         _delete_database_record(db, db_item)
     try:
-        nginx.delete_wordpress_vhost(website.domain)
+        webserver.delete_wordpress_vhost(website.domain)
     finally:
         try:
             from app.services import wordpress
@@ -1409,7 +1409,7 @@ def import_da_backup(archive_path: str, force: bool = False) -> dict:
                 # Pointers can only be added to the vhost once we know which of
                 # them this import is allowed to claim, so start without them.
                 try:
-                    nginx.write_vhost(
+                    webserver.write_vhost(
                         domain, root_path,
                         app_type=app_type,
                         php_version=DEFAULT_PHP_VERSION if app_type in {"wordpress", "php"} else None,
@@ -1422,7 +1422,7 @@ def import_da_backup(archive_path: str, force: bool = False) -> dict:
                         raise
                     waf_enabled = False
                     _log(f"  warning: nginx rejected WAF for {domain}; retrying with WAF disabled")
-                    nginx.write_vhost(
+                    webserver.write_vhost(
                         domain, root_path,
                         app_type=app_type,
                         php_version=DEFAULT_PHP_VERSION if app_type in {"wordpress", "php"} else None,
@@ -1462,7 +1462,7 @@ def import_da_backup(archive_path: str, force: bool = False) -> dict:
                     alias_domains = [name for name, mode in applied_pointers if mode == "alias"]
                     redirect_domains = [name for name, mode in applied_pointers if mode == "redirect"]
                     try:
-                        nginx.rewrite_vhost(
+                        webserver.rewrite_vhost(
                             domain, root_path,
                             app_type=app_type,
                             php_version=DEFAULT_PHP_VERSION if app_type in {"wordpress", "php"} else None,

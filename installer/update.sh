@@ -726,6 +726,10 @@ install_panel_runtime() {
   env_set_default FRONTEND_DIST "$APP_DIR/frontend/dist"
   env_set_default REDIS_URL "redis://localhost:6379/0"
   env_set_default RATE_LIMIT_BACKEND "redis"
+  # Every install to date is nginx; this just makes that explicit so
+  # app.services.webserver has something to dispatch on once a second
+  # backend (OpenLiteSpeed) exists.
+  env_set_default WEB_SERVER "nginx"
   if [[ -z "$(env_get ALLOWED_ORIGINS)" ]]; then
     env_set_default ALLOWED_ORIGINS "$panel_url"
   fi

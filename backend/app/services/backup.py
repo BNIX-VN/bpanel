@@ -20,7 +20,7 @@ from app.core.secrets import decrypt, encrypt
 from app.core.security import hash_password
 from app.core.permissions import normalize_role
 from app.models.entities import DatabaseAccount, SiteApp, User, Website, WebsiteAlias
-from app.services import mariadb, nginx, site_users, waf, wordpress
+from app.services import mariadb, site_users, waf, webserver, wordpress
 from app.services.shell import shell
 
 
@@ -566,10 +566,10 @@ def restore_user_backup(backup_file: str, db) -> dict:
             if result.returncode != 0:
                 raise RuntimeError((result.stderr or result.stdout or "Could not write WAF rules").strip())
             if website.http_flood_enabled:
-                result = nginx.sync_http_flood_zones(db.query(Website).all())
+                result = webserver.sync_http_flood_zones(db.query(Website).all())
                 if result.returncode != 0:
                     raise RuntimeError((result.stderr or result.stdout or "Could not write HTTP flood zones").strip())
-            nginx.rewrite_vhost(
+            webserver.rewrite_vhost(
                 domain,
                 root_path,
                 app_type=app_type,
@@ -584,7 +584,7 @@ def restore_user_backup(backup_file: str, db) -> dict:
                 aliases=backup_aliases,
             )
             if not website.http_flood_enabled:
-                result = nginx.sync_http_flood_zones(db.query(Website).all())
+                result = webserver.sync_http_flood_zones(db.query(Website).all())
                 if result.returncode != 0:
                     raise RuntimeError((result.stderr or result.stdout or "Could not write HTTP flood zones").strip())
             wordpress.fix_permissions(root_path, linux_user)

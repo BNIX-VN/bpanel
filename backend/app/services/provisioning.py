@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.core.security import hash_password
 from app.models.entities import ApiToken, DatabaseAccount, ProvisioningAccount, User, Website
 from app.services import backup as backup_service
-from app.services import mariadb, nginx, site_users, storage_quota, wordpress
+from app.services import mariadb, site_users, storage_quota, webserver, wordpress
 
 
 def hash_token(raw: str) -> str:
@@ -103,8 +103,8 @@ def suspend_account(db: Session, account: ProvisioningAccount, reason: str = "")
     websites = db.query(Website).filter(Website.owner_id == user.id).all()
     for website in websites:
         website.status = "suspended"
-        nginx.delete_wordpress_vhost(website.domain)
-        nginx.write_vhost(
+        webserver.delete_wordpress_vhost(website.domain)
+        webserver.write_vhost(
             website.domain,
             website.root_path,
             app_type="static",
@@ -138,7 +138,7 @@ def unsuspend_account(db: Session, account: ProvisioningAccount) -> None:
         rewrite_mode = "front_controller" if website.app_type == "wordpress" else (website.nginx_rewrite_mode or "none")
         php_version = website.php_version if website.app_type in {"wordpress", "php"} else website.php_version
         php_socket = site_users.site_php_fpm_socket(website.linux_user, website.root_path, php_version) if website.app_type in {"wordpress", "php"} else None
-        nginx.rewrite_vhost(
+        webserver.rewrite_vhost(
             website.domain,
             website.root_path,
             app_type=website.app_type,
@@ -186,7 +186,7 @@ def terminate_account(db: Session, account: ProvisioningAccount, backup: bool = 
             if db_item:
                 mariadb.drop_database(db_item.db_name, db_item.db_user)
                 db.delete(db_item)
-            nginx.delete_wordpress_vhost(website.domain)
+            webserver.delete_wordpress_vhost(website.domain)
             wordpress.delete_wordpress(website.root_path)
             deleted_domains.append(website.domain)
             db.delete(website)

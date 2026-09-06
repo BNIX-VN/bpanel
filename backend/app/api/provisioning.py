@@ -21,7 +21,7 @@ from app.schemas.schemas import (
     ProvisioningSuspendRequest,
     ProvisioningUsageOut,
 )
-from app.services import mariadb, nginx, site_users, storage_quota, wordpress
+from app.services import mariadb, site_users, storage_quota, webserver, wordpress
 from app.services.audit import log_action
 from app.services.provisioning import (
     account_to_dict,
@@ -121,7 +121,7 @@ def create_account(payload: ProvisioningAccountCreate, request: Request, db: Ses
         raise HTTPException(status_code=409, detail="Username already exists")
     if payload.domain and (
         db.query(Website).filter(Website.domain == payload.domain).first()
-        or nginx.vhost_exists(payload.domain)
+        or webserver.vhost_exists(payload.domain)
     ):
         raise HTTPException(status_code=409, detail="Domain already exists")
 
@@ -188,7 +188,7 @@ def create_account(payload: ProvisioningAccountCreate, request: Request, db: Ses
 
             rewrite_mode = "front_controller" if app_type_value == "wordpress" else "none"
             php_socket = site_users.site_php_fpm_socket(linux_user, root_path, payload.php_version) if app_type_value in {"wordpress", "php"} else None
-            nginx.write_vhost(
+            webserver.write_vhost(
                 payload.domain, root_path,
                 app_type=app_type_value,
                 php_version=payload.php_version,

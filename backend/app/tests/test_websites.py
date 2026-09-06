@@ -60,7 +60,7 @@ def test_list_websites_search_keeps_user_scope(monkeypatch):
 def test_create_website_rejects_a_domain_already_in_the_table(monkeypatch):
     db = _db_session()
     admin, _ = _seed_websites(db)
-    monkeypatch.setattr(websites.nginx, "vhost_exists", lambda domain: False)
+    monkeypatch.setattr(websites.webserver, "vhost_exists", lambda domain: False)
 
     with pytest.raises(Exception) as exc:
         websites.create_website(
@@ -74,7 +74,7 @@ def test_create_website_rejects_a_domain_with_a_leftover_nginx_config(monkeypatc
     db = _db_session()
     admin, _ = _seed_websites(db)
     # Not in the websites table, but a config file is still on disk.
-    monkeypatch.setattr(websites.nginx, "vhost_exists", lambda domain: domain == "ghost.test")
+    monkeypatch.setattr(websites.webserver, "vhost_exists", lambda domain: domain == "ghost.test")
 
     with pytest.raises(Exception) as exc:
         websites.create_website(

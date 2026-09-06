@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 
 from app.core.config import settings
 from app.models.entities import Website
-from app.services import nginx
+from app.services import webserver
 from app.services.shell import CommandResult, shell
 
 try:
@@ -272,7 +272,7 @@ def sync_website_rules(website: Website) -> CommandResult:
 
 
 def site_config(website: Website) -> dict:
-    from app.services import nginx
+    from app.services import webserver
 
     enabled = website_enabled_rule_ids(website)
     return {
@@ -280,7 +280,7 @@ def site_config(website: Website) -> dict:
         "domain": website.domain,
         "waf_enabled": bool(website.waf_enabled),
         "http_flood_enabled": bool(getattr(website, "http_flood_enabled", False)),
-        "http_flood_config": nginx.http_flood_config_for_website(website),
+        "http_flood_config": webserver.http_flood_config_for_website(website),
         "rules_file": site_rules_file(website.domain),
         "default_rules": [
             {
@@ -662,7 +662,7 @@ def _read_site_logs(domains: list[str], lines: int) -> dict[str, str | None]:
     if result is None or result.returncode != 0:
         out: dict[str, str | None] = {}
         for domain in domains:
-            data = nginx.read_site_log(domain, "access", lines)
+            data = webserver.read_site_log(domain, "access", lines)
             out[domain] = data.get("content") or "" if data.get("exists") else None
         return out
 
@@ -764,6 +764,6 @@ def clear_access_logs(websites: Iterable[Website]) -> int:
     _ACCESS_LOG_CACHE.clear()
     cleared = 0
     for website in websites:
-        nginx.clear_site_log(_validate_domain(website.domain), "access")
+        webserver.clear_site_log(_validate_domain(website.domain), "access")
         cleared += 1
     return cleared

@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     allowed_origins: str = Field(default="")
     backup_root: str = "/var/backups/bpanel"
     nginx_sites_available: str = "/etc/nginx/conf.d"
+    # Which web server the installer set up: "nginx" or "openlitespeed".
+    # backend/app/services/webserver.py dispatches on this - nginx is the only
+    # backend today, this just makes the choice explicit and load-bearing once
+    # a second backend exists.
+    web_server: str = "nginx"
     default_php_version: str = "8.4"
     ssl_email: str = ""
     redis_url: str = "redis://localhost:6379/0"
