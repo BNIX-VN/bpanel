@@ -52,12 +52,7 @@ jobs:
 
       - name: Tests
         if: always()
-        # `python -m pytest` prepends the CWD to sys.path, not the target
-        # path - invoked from the repo root (as this used to be) "app" is
-        # never importable and every test file fails to collect. cd into
-        # backend/ first, same as everyone runs it locally.
-        working-directory: backend
-        run: pytest app/tests -q
+        run: pytest backend/app/tests -q
 
   frontend:
     runs-on: ubuntu-latest
