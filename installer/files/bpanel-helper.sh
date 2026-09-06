@@ -4271,12 +4271,60 @@ case "$cmd" in
     fi
     ;;
 
+  ols-redirect-prune)
+    # ols-redirect-prune <owner-domain> [wanted-redirect-domain ...]
+    # Each redirect vhost carries "# BPANEL REDIRECT OWNER <owner>". Remove
+    # the ones owned by this site that are no longer in the wanted list -
+    # without this, deleting an alias would leave a vhost behind still
+    # 301'ing a hostname the panel no longer knows about.
+    [[ $# -ge 1 ]] || deny "usage: ols-redirect-prune <owner-domain> [wanted ...]"
+    owner="$1"
+    require_domain "$owner"
+    shift
+    for hostname in "$@"; do
+      require_domain "$hostname"
+    done
+    changed=0
+    shopt -s nullglob
+    for conf in "$OLS_VHOSTS_DIR"/*/vhost.conf; do
+      grep -q "^# BPANEL REDIRECT OWNER ${owner}\$" "$conf" || continue
+      candidate="$(basename "$(dirname "$conf")")"
+      keep=0
+      for hostname in "$@"; do
+        [[ "$hostname" == "$candidate" ]] && keep=1 && break
+      done
+      if [[ $keep -eq 0 ]]; then
+        rm -rf "${OLS_VHOSTS_DIR:?}/${candidate}"
+        rm -rf "${OLS_LOG_DIR:?}/${candidate}"
+        changed=1
+        echo "removed stale redirect vhost: ${candidate}"
+      fi
+    done
+    shopt -u nullglob
+    if [[ $changed -eq 1 ]]; then
+      ols_sync_main_config
+      restart_openlitespeed 2>/dev/null || true
+    fi
+    ;;
+
   ols-vhost-delete)
     [[ $# -eq 1 ]] || deny "usage: ols-vhost-delete <domain>"
     domain="$1"
     require_domain "$domain"
     rm -rf "${OLS_VHOSTS_DIR:?}/${domain}"
     rm -rf "${OLS_LOG_DIR:?}/${domain}"
+    # A site's redirect domains live in vhosts of their own, so deleting the
+    # site has to take them along - otherwise they keep 301'ing to a domain
+    # that no longer exists here.
+    shopt -s nullglob
+    for conf in "$OLS_VHOSTS_DIR"/*/vhost.conf; do
+      grep -q "^# BPANEL REDIRECT OWNER ${domain}\$" "$conf" || continue
+      orphan="$(basename "$(dirname "$conf")")"
+      rm -rf "${OLS_VHOSTS_DIR:?}/${orphan}"
+      rm -rf "${OLS_LOG_DIR:?}/${orphan}"
+      echo "removed redirect vhost: ${orphan}"
+    done
+    shopt -u nullglob
     ols_sync_main_config
     restart_openlitespeed 2>/dev/null || true
     ;;

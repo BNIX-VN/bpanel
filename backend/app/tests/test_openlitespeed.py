@@ -121,17 +121,57 @@ def test_vhost_includes_alias_domains():
     assert rendered.count("vhAliases                 alias.test") == 1
 
 
-def test_redirect_domains_render_a_301_rewrite():
-    rendered = ols.render_vhost(
+def test_a_redirect_domain_gets_its_own_vhost_not_a_conditional_rule():
+    """OpenLiteSpeed ignores RewriteCond in the rewrite blocks we generate.
+
+    Verified on a live server: a condition that could never match still fired
+    its rule, so a host-based `RewriteCond %{HTTP_HOST}` inside the main vhost
+    301'd every hostname the site owned - the primary (where it looked like a
+    harmless HTTP->HTTPS redirect and hid the bug) and, visibly wrong, every
+    alias. Redirects therefore get a vhost of their own, exactly as nginx
+    gives them their own server block, where an unconditional rule is right.
+    """
+    main = ols.render_vhost(
         "example.test",
         "/home/bp_example_test/example.test",
         app_type="php",
         php_version="8.3",
+        aliases=["alias.example.test"],
         redirects=["old.example.test"],
     )
+    # The main vhost must not claim the redirect hostname, or it steals it
+    # from the redirect vhost that is meant to answer for it.
+    claimed = {line.split()[1] for line in main.splitlines() if line.startswith(("vhDomain", "vhAliases"))}
+    assert claimed == {"example.test", "www.example.test", "alias.example.test"}
+    # ...and carries no host-based condition, which would not work anyway.
+    assert "HTTP_HOST" not in main
 
-    assert "RewriteCond %{HTTP_HOST} ^(www\\.)?old.example.test$ [NC]" in rendered
-    assert "RewriteRule ^(.*)$ https://example.test$1 [R=301,L]" in rendered
+    redirect = ols.render_redirect_vhost(
+        "old.example.test", "example.test", "/home/bp_example_test/example.test"
+    )
+    assert "vhDomain                  old.example.test" in redirect
+    assert "vhAliases                 www.old.example.test" in redirect
+    assert "RewriteRule ^(.*)$ https://example.test/$1 [R=301,L]" in redirect
+    # Unconditional is correct here: this vhost only receives that hostname.
+    # Checked as a directive, not a substring - the comment above explains why
+    # RewriteCond is avoided and would otherwise match.
+    directives = [line.strip() for line in redirect.splitlines() if not line.lstrip().startswith("#")]
+    assert not [d for d in directives if d.startswith("RewriteCond")]
+    # The ACME context has to come first, or the redirect would bounce Let's
+    # Encrypt away and this domain could never join the certificate.
+    assert redirect.index("acme-challenge") < redirect.index("RewriteRule")
+    # Ownership marker, so a stale redirect vhost can be pruned later.
+    assert "# BPANEL REDIRECT OWNER example.test" in redirect
+
+
+def test_a_redirect_vhost_carries_the_sites_certificate_when_there_is_one():
+    redirect = ols.render_redirect_vhost(
+        "old.example.test", "example.test", "/home/bp_example_test/example.test",
+        ssl_cert_path="/etc/letsencrypt/live/example.test/fullchain.pem",
+        ssl_key_path="/etc/letsencrypt/live/example.test/privkey.pem",
+    )
+    assert "vhssl {" in redirect
+    assert "certFile              /etc/letsencrypt/live/example.test/fullchain.pem" in redirect
 
 
 def test_waf_block_toggles_the_modsecurity_module():
@@ -414,29 +454,3 @@ def test_the_dotfile_pattern_stays_anchored():
     """An unanchored pattern makes OLS treat the context as a directory and
     answer 301 to /.htaccess/ instead of 403 - seen on a live server."""
     assert ols._DOTFILES_EXCEPT_WELL_KNOWN.endswith(".*$")
-
-
-def test_redirect_domains_are_routable_not_just_rewritten():
-    """nginx gives every redirect source its own server block, so the hostname
-    reaches the server. OLS has no such block - it routes a hostname to a
-    vhost only if the vhost claims it in vhDomain/vhAliases. Rendering the
-    rewrite rule without claiming the hostname left the redirect unreachable:
-    the rule was in the file and the domain resolved to nothing.
-    """
-    rendered = ols.render_vhost(
-        "example.test", "/home/bp_example_test/example.test",
-        app_type="php", php_version="8.4",
-        aliases=["alias.example.test"], redirects=["old.example.test"],
-    )
-    claimed = {
-        line.split()[1] for line in rendered.splitlines()
-        if line.startswith("vhAliases") or line.startswith("vhDomain")
-    }
-    assert "old.example.test" in claimed, "the redirect source is not routable"
-    assert "www.old.example.test" in claimed, "www of the redirect source is not routable"
-    # ...and it still redirects rather than serving the site's content.
-    assert r"RewriteCond %{HTTP_HOST} ^(www\.)?old.example.test$ [NC]" in rendered
-    assert "RewriteRule ^(.*)$ https://example.test$1 [R=301,L]" in rendered
-    # The alias keeps serving content, so the two modes stay distinct.
-    assert "alias.example.test" in claimed
-    assert "alias.example.test$ [NC]" not in rendered

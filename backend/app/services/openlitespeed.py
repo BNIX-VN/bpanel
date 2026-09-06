@@ -516,23 +516,14 @@ def _build_context(
     checked_rewrite = _check_rewrite_mode(rewrite_mode)
     safe_doc_root = _effective_document_root(document_root, checked_rewrite)
     safe_redirects = _redirect_entries(redirects)
-    # Three things end up in vhAliases, because OLS routes a hostname to a
-    # vhost only if the vhost claims it (ols_sync_main_config builds the
-    # listener map from vhDomain/vhAliases):
-    #   - www.<domain>, because nginx puts it in every server_name (see
-    #     nginx._server_names) and a site must answer there on both backends;
-    #   - the alias domains, which serve the same content;
-    #   - the REDIRECT sources. nginx gives each of those its own server block
-    #     (nginx._redirect_vhost_blocks); OLS has no such block, so unless the
-    #     vhost claims the hostname the redirect rule below is unreachable and
-    #     the domain resolves to nothing at all. Claiming it is safe: the
-    #     vhost-level rewrite 301s it away before any content is served.
-    safe_aliases = _safe_alias_domains([
-        f"www.{safe_domain}",
-        *(aliases or []),
-        *(entry["source"] for entry in safe_redirects),
-        *(f"www.{entry['source']}" for entry in safe_redirects),
-    ])
+    # www.<domain> is here because nginx puts it in every server_name (see
+    # nginx._server_names) and a site has to answer there on both backends;
+    # OLS routes a hostname to a vhost only if the vhost claims it, since
+    # ols_sync_main_config builds the listener map from vhDomain/vhAliases.
+    #
+    # Redirect sources are deliberately NOT claimed here - each gets a vhost
+    # of its own (see redirect.conf.j2 for why).
+    safe_aliases = _safe_alias_domains([f"www.{safe_domain}", *(aliases or [])])
     has_ssl = bool(ssl_cert_path and ssl_key_path)
     validate_custom_directives(custom_directives)
     safe_http_flood_config = validate_http_flood_config(http_flood_config)
@@ -566,7 +557,8 @@ def _build_context(
         "ssl_key_path": ssl_key_path or "",
         "ssl_ca_path": ssl_ca_path or "",
         "aliases": safe_aliases,
-        "redirects": safe_redirects,
+        "redirects": [],
+        "_redirect_entries": safe_redirects,
         "waf_enabled": bool(waf_enabled),
         "waf_rules_file": waf_rules_file(safe_domain) if waf_enabled else "",
         "http_flood_enabled": bool(http_flood_enabled),
@@ -747,9 +739,12 @@ def rewrite_vhost(
     if settings.command_dry_run:
         return content
     hostnames = [safe_domain, *_safe_alias_domains(aliases)]
-    for entry in _redirect_entries(redirects):
-        if entry["source"] not in hostnames:
-            hostnames.append(entry["source"])
+    # Redirect domains get their own vhosts, staged first so the single
+    # ols-vhost-write below syncs the main config once for all of them.
+    _sync_redirect_vhosts(
+        safe_domain, _redirect_entries(redirects), root_path,
+        document_root, ssl_cert_path, ssl_key_path, ssl_ca_path,
+    )
     shell.privileged(
         "ols-vhost-write",
         helper_args=[safe_domain, *hostnames],
@@ -765,6 +760,82 @@ def rewrite_vhost(
         ],
     )
     return str(_vhost_path(safe_domain))
+
+
+
+def render_redirect_vhost(
+    source: str,
+    target_domain: str,
+    root_path: str,
+    document_root: str = "public_html",
+    code: int = 301,
+    ssl_cert_path: str | None = None,
+    ssl_key_path: str | None = None,
+    ssl_ca_path: str | None = None,
+) -> str:
+    """A standalone vhost whose only job is to 301 one hostname to another."""
+    safe_source = _safe_domain(source)
+    safe_target = _safe_domain(target_domain)
+    env = _get_jinja_env()
+    return env.get_template("redirect.conf.j2").render(
+        domain=safe_source,
+        redirect_owner=safe_target,
+        redirect_target=f"https://{safe_target}",
+        redirect_code=int(code) if code else 301,
+        root_path=root_path,
+        document_root=site_users.validate_document_root(document_root),
+        access_log=_log_path(safe_source, "access").as_posix(),
+        error_log=_log_path(safe_source, "error").as_posix(),
+        has_ssl=bool(ssl_cert_path and ssl_key_path),
+        ssl_cert_path=ssl_cert_path or "",
+        ssl_key_path=ssl_key_path or "",
+        ssl_ca_path=ssl_ca_path or "",
+    )
+
+
+def _sync_redirect_vhosts(
+    owner_domain: str,
+    entries: list[dict],
+    root_path: str,
+    document_root: str,
+    ssl_cert_path: str | None,
+    ssl_key_path: str | None,
+    ssl_ca_path: str | None,
+) -> None:
+    """Write a vhost per redirect domain and drop the ones no longer wanted.
+
+    Each file carries a "# BPANEL REDIRECT OWNER <primary>" marker so the
+    helper can tell which stale redirect vhosts belong to this site - without
+    it, removing an alias would leave a vhost behind that keeps 301'ing a
+    hostname the panel no longer knows about.
+    """
+    wanted = []
+    for entry in entries:
+        content = render_redirect_vhost(
+            entry["source"], owner_domain, root_path,
+            document_root=document_root,
+            code=entry.get("code", 301),
+            ssl_cert_path=ssl_cert_path,
+            ssl_key_path=ssl_key_path,
+            ssl_ca_path=ssl_ca_path,
+        )
+        wanted.append(entry["source"])
+        if settings.command_dry_run:
+            continue
+        shell.privileged(
+            "ols-vhost-write-defer",
+            helper_args=[entry["source"], entry["source"], f"www.{entry['source']}"],
+            input=content,
+            fallback=["bash", "-lc", "cat >/dev/null"],
+        )
+    if settings.command_dry_run:
+        return
+    shell.privileged(
+        "ols-redirect-prune",
+        helper_args=[_safe_domain(owner_domain), *wanted],
+        check=False,
+        fallback=["bash", "-lc", "true"],
+    )
 
 
 def delete_wordpress_vhost(domain: str) -> str:

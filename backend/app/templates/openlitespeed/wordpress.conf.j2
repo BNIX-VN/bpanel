@@ -132,15 +132,6 @@ Content-Security-Policy: {{ csp_header }}
 END_HEADERS
 }
 
-{% for redirect in redirects %}
-rewrite {
-    enable                1
-    rewriteRules          <<<END_RULES
-RewriteCond %{HTTP_HOST} ^(www\.)?{{ redirect.source }}$ [NC]
-RewriteRule ^(.*)$ {% if redirect.target %}{{ redirect.target }}{% else %}https://{{ domain }}{% endif %}$1 [R={{ redirect.code }},L]
-END_RULES
-}
-{% endfor %}
 
 
 {# LSCache-equivalent: always on for WordPress, same as nginx's FastCGI cache #}
