@@ -1,0 +1,33 @@
+{# Shared deny contexts - the OpenLiteSpeed counterpart of the nginx
+   templates' `location ... { deny all; }` blocks, kept in one file so the two
+   backends cannot drift apart in what they protect.
+
+   Everything here was verified against a live OpenLiteSpeed server, because
+   the obvious translations do not work:
+
+   - `RewriteRule ... [F]` does NOT deny on OLS. A POST to xmlrpc.php still
+     answered 200 with the full XML-RPC method list. Only accessControl does.
+   - A regex context whose pattern is not anchored at the end is treated as a
+     directory: `^/\.(?!well-known)` made /.htaccess answer 301 to
+     /.htaccess/ instead of 403. Anchoring with `.*$` fixes it.
+   - The negative lookahead really is honoured, so the ACME challenge under
+     /.well-known keeps working - checked, not assumed.
+
+   These must be emitted BEFORE `context /` so the more specific match wins. #}
+{% for blocked in exact_denied | default([]) %}
+context {{ blocked }} {
+    location              {{ root_path }}/{{ document_root }}{{ blocked }}
+    accessControl {
+        deny              ALL
+    }
+}
+
+{% endfor %}
+{% for pattern in regex_denied | default([]) %}
+context exp:{{ pattern }} {
+    accessControl {
+        deny              ALL
+    }
+}
+
+{% endfor %}

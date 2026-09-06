@@ -94,22 +94,7 @@ context /.well-known/acme-challenge/ {
     addDefaultCharset     off
 }
 
-{# The nginx template blocks these with `location = ... { deny all; }`. A
-   RewriteRule with [F] does NOT work here - verified on a live server, a POST
-   to xmlrpc.php still answered 200 with the full method list even with the
-   rule present and the rewrite block otherwise working. An accessControl
-   context is OpenLiteSpeed's own way to say "this exact path is off limits",
-   and it does return 403. Contexts must be declared before `context /` so the
-   more specific match wins. #}
-{% for blocked in ["/xmlrpc.php", "/wp-config.php", "/readme.html", "/license.txt"] %}
-context {{ blocked }} {
-    location              {{ root_path }}/{{ document_root }}{{ blocked }}
-    accessControl {
-        deny              ALL
-    }
-}
-
-{% endfor %}
+{% include "_denied_paths.j2" %}
 context / {
     type                  null
     location              {{ root_path }}/{{ document_root }}

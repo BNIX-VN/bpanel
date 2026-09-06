@@ -84,6 +84,43 @@ SECURITY_HEADERS = (
 )
 HSTS_HEADER = "Strict-Transport-Security: max-age=31536000; includeSubDomains"
 
+# What each app type refuses to serve, mirroring the `deny all` locations in
+# the matching nginx template so a site is no less protected on one backend
+# than the other. See templates/openlitespeed/_denied_paths.j2 for why these
+# are accessControl contexts rather than rewrite rules.
+_SECRET_FILE_EXTENSIONS = r"^/.*\.(sql|bak|backup|old|orig|save|swp|swo|ini|log|conf|env|sh|inc)$"
+# Anchored with .*$ on purpose: an unanchored pattern makes OLS treat the
+# context as a directory and answer 301 instead of 403.
+_DOTFILES_EXCEPT_WELL_KNOWN = r"^/\.(?!well-known).*$"
+_SCRIPT_EXTENSIONS = r"^/.*\.(php|phtml|phar|php3|php4|php5|php7|php8|cgi|pl|py)$"
+
+DENIED_PATHS = {
+    "wordpress": {
+        "exact": ["/xmlrpc.php", "/wp-config.php", "/readme.html", "/license.txt"],
+        "regex": [
+            r"^/(uploads|files)/.*\.php$",
+            r"^/(wp-admin/includes|wp-includes)/.*\.php$",
+            _SECRET_FILE_EXTENSIONS,
+            _DOTFILES_EXCEPT_WELL_KNOWN,
+        ],
+    },
+    "php": {
+        "exact": [],
+        "regex": [_SECRET_FILE_EXTENSIONS, _DOTFILES_EXCEPT_WELL_KNOWN],
+    },
+    "static": {
+        "exact": [],
+        # A static site must never execute anything, so scripts are refused
+        # outright rather than merely left unhandled.
+        "regex": [_SCRIPT_EXTENSIONS, _SECRET_FILE_EXTENSIONS, _DOTFILES_EXCEPT_WELL_KNOWN],
+    },
+    "application": {
+        "exact": [],
+        # Everything else is proxied to the app, which serves its own routes.
+        "regex": [_DOTFILES_EXCEPT_WELL_KNOWN],
+    },
+}
+
 
 # ---------------------------------------------------------------------------
 # Jinja2 renderer
@@ -530,6 +567,8 @@ def _build_context(
         "hsts_header": HSTS_HEADER if has_ssl else "",
         "csp_header": WORDPRESS_CSP if checked_app == "wordpress" else "",
         "custom_include_path": custom_include_path(safe_domain),
+        "exact_denied": DENIED_PATHS.get(checked_app, {}).get("exact", []),
+        "regex_denied": DENIED_PATHS.get(checked_app, {}).get("regex", []),
     }
 
 

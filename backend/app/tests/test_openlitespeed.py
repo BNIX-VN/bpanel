@@ -322,3 +322,79 @@ def test_www_is_not_duplicated_when_passed_as_an_alias():
     )
     assert rendered.count("vhAliases                 www.example.test") == 1
     assert "vhAliases                 shop.example.test" in rendered
+
+
+def test_each_app_type_denies_what_its_nginx_template_denies():
+    """A site must not be less protected just because it runs on OLS.
+
+    The nginx templates deny with `location ... { deny all; }`; the OLS ones
+    with accessControl contexts. Different syntax, same set - this compares
+    them so the two cannot quietly drift.
+    """
+    import re
+    from pathlib import Path
+
+    nginx_dir = Path(ols.TEMPLATE_DIR).parent / "nginx"
+    cases = {
+        "wordpress": dict(app_type="wordpress", php_version="8.4"),
+        "php": dict(app_type="php", php_version="8.4"),
+        "static": dict(app_type="static"),
+        "proxy": dict(app_type="application", app_port=3000),
+    }
+    # What the nginx template protects, reduced to a comparable idea.
+    expected = {
+        "wordpress": {"dotfiles", "secret-extensions", "uploads-php", "wp-internals", "exact-files"},
+        "php": {"dotfiles", "secret-extensions"},
+        "static": {"dotfiles", "secret-extensions", "scripts"},
+        "proxy": {"dotfiles"},
+    }
+
+    def classify(rendered: str, is_nginx: bool) -> set[str]:
+        found = set()
+        blob = rendered
+        if re.search(r"\\.\(\?!well-known\)|\(\?!well-known\)", blob):
+            found.add("dotfiles")
+        if "sql|bak|backup|old|orig|save|swp|swo|ini|log|conf|env|sh|inc" in blob:
+            found.add("secret-extensions")
+        if "uploads|files" in blob:
+            found.add("uploads-php")
+        if "wp-admin/includes|wp-includes" in blob:
+            found.add("wp-internals")
+        if "php|phtml|phar" in blob:
+            found.add("scripts")
+        if ("/xmlrpc.php" in blob and "/wp-config.php" in blob
+                and "/readme.html" in blob and "/license.txt" in blob):
+            found.add("exact-files")
+        return found
+
+    for name, kwargs in cases.items():
+        nginx_src = (nginx_dir / f"{name}.conf.j2").read_text(encoding="utf-8")
+        rendered = ols.render_vhost("example.test", "/home/bp_example_test/example.test", **kwargs)
+        nginx_has = classify(nginx_src, True)
+        ols_has = classify(rendered, False)
+        assert nginx_has == expected[name], f"nginx {name} template changed: {nginx_has}"
+        missing = nginx_has - ols_has
+        assert not missing, f"OLS {name} does not protect: {missing}"
+
+
+def test_deny_contexts_come_before_the_main_context():
+    """OpenLiteSpeed picks the most specific context; a deny declared after
+    `context /` never wins."""
+    for kwargs in (
+        dict(app_type="wordpress", php_version="8.4"),
+        dict(app_type="php", php_version="8.4"),
+        dict(app_type="static"),
+    ):
+        rendered = ols.render_vhost("example.test", "/home/bp_example_test/example.test", **kwargs)
+        main = rendered.index("\ncontext / {")
+        for line in rendered.splitlines():
+            if line.startswith("context ") and "accessControl" not in line:
+                continue
+        last_deny = rendered.rindex("accessControl")
+        assert last_deny < main, f"a deny context lands after context / for {kwargs}"
+
+
+def test_the_dotfile_pattern_stays_anchored():
+    """An unanchored pattern makes OLS treat the context as a directory and
+    answer 301 to /.htaccess/ instead of 403 - seen on a live server."""
+    assert ols._DOTFILES_EXCEPT_WELL_KNOWN.endswith(".*$")

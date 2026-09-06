@@ -50,6 +50,7 @@ module mod_security {
 {{ http_flood_block }}
 {% endif %}
 
+{% include "_denied_paths.j2" %}
 # BPANEL PROXY BEGIN
 # OLS's proxy handler passes Upgrade/Connection through on its own - no
 # equivalent to nginx's $connection_upgrade map is needed for WebSockets.
