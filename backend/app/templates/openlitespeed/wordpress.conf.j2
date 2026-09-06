@@ -91,19 +91,6 @@ context / {
     location              {{ root_path }}/{{ document_root }}
     allowOverride         all
 
-{% if lsphp_app %}
-    rewrite {
-        enable            1
-        rewriteRules      <<<END_RULES
-RewriteRule ^xmlrpc\.php$ - [F,L]
-RewriteRule ^index\.php$ - [L]
-RewriteCond %{REQUEST_FILENAME} !-f
-RewriteCond %{REQUEST_FILENAME} !-d
-RewriteRule . /index.php [L]
-END_RULES
-    }
-{% endif %}
-
     addDefaultCharset     off
 
     phpIniOverride  {
@@ -112,9 +99,24 @@ END_RULES
         php_admin_value   open_basedir {{ root_path }}/:/tmp/
     }
 
+    {# Exactly ONE rewrite block per context: OpenLiteSpeed keeps only the
+       last one it parses, so splitting "inherit" and our own rules into two
+       blocks silently threw the rules away. That is how the xmlrpc.php block
+       below ended up doing nothing - a POST to it answered 200 with the full
+       method list, while WordPress permalinks kept working purely because
+       allowOverride reads the site's own .htaccess. #}
     rewrite {
-        enable              1
-        inherit             1
+        enable            1
+        inherit           1
+{% if lsphp_app %}
+        rewriteRules      <<<END_RULES
+RewriteRule ^xmlrpc\.php$ - [F,L]
+RewriteRule ^index\.php$ - [L]
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule . /index.php [L]
+END_RULES
+{% endif %}
     }
     extraHeaders <<<END_HEADERS
 {% if hsts_header %}{{ hsts_header }}

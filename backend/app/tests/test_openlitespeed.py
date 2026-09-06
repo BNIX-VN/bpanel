@@ -169,3 +169,65 @@ def test_custom_directives_reject_a_dangerous_directive():
 def test_custom_directives_reject_unbalanced_braces():
     with pytest.raises(ValueError):
         ols.validate_custom_directives("foo {")
+
+
+def _context_bodies(rendered: str) -> list[str]:
+    """The body of each `context ... {` block in a rendered vhost."""
+    bodies, depth, current = [], 0, None
+    for line in rendered.splitlines():
+        stripped = line.strip()
+        if current is None and stripped.startswith("context ") and stripped.endswith("{"):
+            current, depth = [], 1
+            continue
+        if current is not None:
+            depth += line.count("{") - line.count("}")
+            if depth <= 0:
+                bodies.append("\n".join(current))
+                current = None
+                continue
+            current.append(line)
+    return bodies
+
+
+def test_each_context_has_at_most_one_rewrite_block():
+    """OpenLiteSpeed keeps only the LAST rewrite block in a context and
+    silently discards the others.
+
+    Splitting `inherit` and our own rules into two blocks therefore threw the
+    rules away. On a live server that meant a POST to xmlrpc.php answered 200
+    with the full XML-RPC method list instead of being blocked, and it would
+    have 404'd every Laravel/CodeIgniter route - those have no .htaccess to
+    fall back on the way WordPress does.
+    """
+    cases = [
+        dict(app_type="wordpress", php_version="8.4"),
+        dict(app_type="php", php_version="8.4", rewrite_mode="laravel"),
+        dict(app_type="php", php_version="8.4", rewrite_mode="codeigniter"),
+        dict(app_type="php", php_version="8.4", rewrite_mode="none"),
+        dict(app_type="static"),
+    ]
+    for kwargs in cases:
+        rendered = ols.render_vhost("example.test", "/home/bp_example_test/example.test", **kwargs)
+        for body in _context_bodies(rendered):
+            count = len([l for l in body.splitlines() if l.strip().startswith("rewrite ")])
+            assert count <= 1, f"{kwargs} rendered {count} rewrite blocks in one context"
+
+
+def test_the_wordpress_xmlrpc_block_survives_into_the_rewrite_rules():
+    rendered = ols.render_vhost(
+        "example.test", "/home/bp_example_test/example.test",
+        app_type="wordpress", php_version="8.4",
+    )
+    body = next(b for b in _context_bodies(rendered) if "xmlrpc" in b)
+    assert "inherit" in body, "the context must still inherit vhost-level rules"
+    assert r"RewriteRule ^xmlrpc\.php$ - [F,L]" in body
+
+
+def test_laravel_rewrite_rules_survive_into_the_rewrite_block():
+    rendered = ols.render_vhost(
+        "example.test", "/home/bp_example_test/example.test",
+        app_type="php", php_version="8.4", rewrite_mode="laravel",
+    )
+    body = next(b for b in _context_bodies(rendered) if "rewriteRules" in b)
+    assert "RewriteRule ^(.*)$ index.php [QSA,L]" in body
+    assert "inherit" in body

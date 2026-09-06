@@ -91,15 +91,6 @@ context / {
     location              {{ root_path }}/{{ document_root }}
     allowOverride         all
 
-{% if lsphp_app and rewrite_mode != 'none' %}
-    rewrite {
-        enable            1
-        rewriteRules      <<<END_RULES
-{{ rewrite_block }}
-END_RULES
-    }
-{% endif %}
-
     addDefaultCharset     off
 
     phpIniOverride  {
@@ -108,9 +99,18 @@ END_RULES
         php_admin_value   open_basedir {{ root_path }}/:/tmp/
     }
 
+    {# One rewrite block only - OLS keeps just the last one in a context, so
+       a separate "inherit" block below would discard these rules. Laravel and
+       CodeIgniter have no .htaccess to fall back on, so losing them here means
+       every route but "/" 404s. #}
     rewrite {
-        enable              1
-        inherit             1
+        enable            1
+        inherit           1
+{% if lsphp_app and rewrite_mode != 'none' %}
+        rewriteRules      <<<END_RULES
+{{ rewrite_block }}
+END_RULES
+{% endif %}
     }
     extraHeaders <<<END_HEADERS
 {% if hsts_header %}{{ hsts_header }}
