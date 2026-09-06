@@ -88,8 +88,10 @@ def test_a_fresh_install_repairs_the_same_stuck_apt_dependency():
     # install_base_packages hits the same class of stuck-pin failure a fresh
     # VPS image can ship with; without a repair+retry the whole install dies
     # on this one line instead of a targeted, recoverable failure.
+    # (apt_get is install.sh's own wrapper - waits out a boot-time
+    # unattended-upgrades holding the dpkg lock - before calling real apt-get.)
     script = INSTALL_SCRIPT.read_text(encoding="utf-8")
     start = script.index("install_base_packages() {")
     block = script[start : script.index("\n}", start)]
-    assert "apt-get --fix-broken install -y" in block
-    assert 'if ! apt-get install -y "${pkgs[@]}"; then' in block
+    assert "apt_get --fix-broken install -y" in block
+    assert 'if ! apt_get install -y "${pkgs[@]}"; then' in block
