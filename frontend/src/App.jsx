@@ -586,9 +586,6 @@ function App() {
   const [resourceUsage, setResourceUsage] = useState(null);
   const [serviceStates, setServiceStates] = useState({});
   const [serviceNames, setServiceNames] = useState(DEFAULT_SERVICE_NAMES);
-  // Set at install time and never changes while the panel is open.
-  const webServer = panelSettings.web_server || 'nginx';
-  const wsLabel = webServerLabel(webServer);
   const [backupTab, setBackupTab] = useState('website');
   const [backups, setBackups] = useState([]);
   const [backupJobs, setBackupJobs] = useState([]);
@@ -692,6 +689,12 @@ function App() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [panelSettings, setPanelSettings] = useState({ app_name: 'BPanel', panel_url: '', panel_hostname: '', panel_port: 2222, logo_url: '', favicon_url: '/favicon.png', ssl_enabled: false, web_server: 'nginx' });
+  // Must come AFTER panelSettings: these read it, and a `const` is in the
+  // temporal dead zone until its own line runs. Declared earlier, every
+  // render threw "Cannot access 'panelSettings' before initialization" and
+  // the panel rendered a blank page - the build does not catch this.
+  const webServer = panelSettings.web_server || 'nginx';
+  const wsLabel = webServerLabel(webServer);
   const [phpTune, setPhpTune] = useState(null);
   const [phpTuneApplied, setPhpTuneApplied] = useState(false);
   const [panelSettingsForm, setPanelSettingsForm] = useState({ app_name: 'BPanel', panel_hostname: '', panel_port: 2222, ssl_enabled: false });
