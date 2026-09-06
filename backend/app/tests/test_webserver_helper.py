@@ -182,15 +182,3 @@ def test_features_nginx_only_are_hidden_on_openlitespeed():
     assert APP_JSX.count(
         "disabled={value === 'application' && (!appsFeatureEnabled || isOpenLiteSpeed(webServer))}"
     ) == 2, "an app-type picker still offers Application on OpenLiteSpeed"
-
-
-def test_redirect_vhosts_are_cleaned_up_when_they_stop_being_wanted():
-    """Redirect domains get vhosts of their own on OLS, so removing an alias
-    or deleting a site has to remove them too - a leftover would keep 301'ing
-    a hostname the panel no longer knows about."""
-    assert "ols-redirect-prune)" in HELPER
-    assert "BPANEL REDIRECT OWNER" in HELPER
-    # Deleting the site must sweep its redirect vhosts as well, not only the
-    # site's own directory.
-    delete_block = HELPER[HELPER.index("  ols-vhost-delete)"):HELPER.index("  ols-custom-write)")]
-    assert "BPANEL REDIRECT OWNER" in delete_block, "site deletion orphans its redirect vhosts"

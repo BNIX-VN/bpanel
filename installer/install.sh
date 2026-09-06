@@ -1292,6 +1292,12 @@ setup_openlitespeed() {
   install -d -o root -g root -m 0755 /usr/local/lsws/conf/bpanel/waf /usr/local/lsws/conf/bpanel/waf/sites
   install -d -o www-data -g bpanel-sites -m 2775 /var/log/openlitespeed
   chmod g+s /usr/local/lsws/conf/bpanel/vhosts /usr/local/lsws/conf/bpanel/custom /var/log/openlitespeed 2>/dev/null || true
+  # The ACME webroot must exist BEFORE OpenLiteSpeed loads a vhost pointing at
+  # it. OLS resolves a static context's location at config load; a directory
+  # created afterwards leaves the context answering 404 until the next
+  # restart, which would make the first Let's Encrypt issuance on a fresh
+  # server fail for no visible reason. Measured, not assumed.
+  install -d -o root -g bpanel -m 0755 /var/www/bpanel-acme /var/www/bpanel-acme/.well-known /var/www/bpanel-acme/.well-known/acme-challenge
   sudo -u bpanel env HOME="$APP_DIR" sudo -n "$helper" ols-sync-main
   systemctl restart lshttpd.service 2>/dev/null || /usr/local/lsws/bin/lswsctrl restart 2>/dev/null || true
 }

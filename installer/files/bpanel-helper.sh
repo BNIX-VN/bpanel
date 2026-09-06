@@ -213,6 +213,10 @@ PY
 # admin's own edits to the main config survive.
 ols_sync_main_config() {
   ensure_ols_conf_dir_writable
+  # OLS resolves a static context's location at config load, so the ACME
+  # webroot has to be on disk before the restart at the end of this function -
+  # otherwise the challenge context 404s until something else restarts OLS.
+  install -d -o root -g bpanel -m 0755 /var/www/bpanel-acme /var/www/bpanel-acme/.well-known /var/www/bpanel-acme/.well-known/acme-challenge 2>/dev/null || true
   ols_disable_conflicting_apache
   ensure_ols_modsecurity_enabled >/dev/null 2>&1 || true
   python3 - "$OLS_HTTPD_CONF" "$OLS_VHOSTS_DIR" "$ENV_FILE" "$PANEL_IPV6_MARKER" <<'PY'
@@ -340,11 +344,7 @@ if include_tools_vhost:
         "    vhRoot                   conf/bpanel/vhosts/",
         "    allowSymbolLink          1",
         "    enableScript             1",
-        # restrained 0 only here: this vhost serves phpMyAdmin and the shared
-        # /var/www/bpanel-acme webroot, both outside its docRoot. No customer
-        # can put a symlink in either, so there is nothing to escape with -
-        # unlike a site vhost, which keeps restrained 1.
-        "    restrained               0",
+        "    restrained               1",
         f"    configFile               conf/bpanel/vhosts/{tools_conf_name}",
         "}",
         "",
@@ -4271,60 +4271,12 @@ case "$cmd" in
     fi
     ;;
 
-  ols-redirect-prune)
-    # ols-redirect-prune <owner-domain> [wanted-redirect-domain ...]
-    # Each redirect vhost carries "# BPANEL REDIRECT OWNER <owner>". Remove
-    # the ones owned by this site that are no longer in the wanted list -
-    # without this, deleting an alias would leave a vhost behind still
-    # 301'ing a hostname the panel no longer knows about.
-    [[ $# -ge 1 ]] || deny "usage: ols-redirect-prune <owner-domain> [wanted ...]"
-    owner="$1"
-    require_domain "$owner"
-    shift
-    for hostname in "$@"; do
-      require_domain "$hostname"
-    done
-    changed=0
-    shopt -s nullglob
-    for conf in "$OLS_VHOSTS_DIR"/*/vhost.conf; do
-      grep -q "^# BPANEL REDIRECT OWNER ${owner}\$" "$conf" || continue
-      candidate="$(basename "$(dirname "$conf")")"
-      keep=0
-      for hostname in "$@"; do
-        [[ "$hostname" == "$candidate" ]] && keep=1 && break
-      done
-      if [[ $keep -eq 0 ]]; then
-        rm -rf "${OLS_VHOSTS_DIR:?}/${candidate}"
-        rm -rf "${OLS_LOG_DIR:?}/${candidate}"
-        changed=1
-        echo "removed stale redirect vhost: ${candidate}"
-      fi
-    done
-    shopt -u nullglob
-    if [[ $changed -eq 1 ]]; then
-      ols_sync_main_config
-      restart_openlitespeed 2>/dev/null || true
-    fi
-    ;;
-
   ols-vhost-delete)
     [[ $# -eq 1 ]] || deny "usage: ols-vhost-delete <domain>"
     domain="$1"
     require_domain "$domain"
     rm -rf "${OLS_VHOSTS_DIR:?}/${domain}"
     rm -rf "${OLS_LOG_DIR:?}/${domain}"
-    # A site's redirect domains live in vhosts of their own, so deleting the
-    # site has to take them along - otherwise they keep 301'ing to a domain
-    # that no longer exists here.
-    shopt -s nullglob
-    for conf in "$OLS_VHOSTS_DIR"/*/vhost.conf; do
-      grep -q "^# BPANEL REDIRECT OWNER ${domain}\$" "$conf" || continue
-      orphan="$(basename "$(dirname "$conf")")"
-      rm -rf "${OLS_VHOSTS_DIR:?}/${orphan}"
-      rm -rf "${OLS_LOG_DIR:?}/${orphan}"
-      echo "removed redirect vhost: ${orphan}"
-    done
-    shopt -u nullglob
     ols_sync_main_config
     restart_openlitespeed 2>/dev/null || true
     ;;
@@ -4885,27 +4837,12 @@ case "$cmd" in
       shift
     done
     install -d -o root -g bpanel -m 0755 /var/www/bpanel-acme/.well-known/acme-challenge
-    # Which directory certbot writes the challenge into. nginx serves the
-    # shared /var/www/bpanel-acme for every site. An OpenLiteSpeed site vhost
-    # cannot: it runs with `restrained 1` (OLS's defence against a site
-    # symlinking out of its docroot - nginx gets the same from
-    # disable_symlinks), and that blocks any context pointing outside the
-    # docroot. Verified live: with the shared webroot the challenge 404'd, so
-    # no certificate could ever be issued. Each OLS site therefore validates
-    # through its own docroot, which its vhost already exposes as a static
-    # context; certbot removes the file afterwards.
-    acme_webroot="/var/www/bpanel-acme"
-    if [[ "$(web_server)" == "openlitespeed" ]]; then
-      site_docroot="$(sed -nE 's#^[[:space:]]*docRoot[[:space:]]+([^[:space:]]+).*$#\1#p' "${OLS_VHOSTS_DIR}/${domain}/vhost.conf" 2>/dev/null | head -1)"
-      if [[ -n "$site_docroot" && -d "$site_docroot" ]]; then
-        acme_webroot="$site_docroot"
-        site_user="$(stat -c %U "$site_docroot" 2>/dev/null || echo root)"
-        install -d -o "$site_user" -g "$site_user" -m 0755 "${acme_webroot}/.well-known"
-        install -d -o "$site_user" -g "$site_user" -m 0755 "${acme_webroot}/.well-known/acme-challenge"
-      else
-        deny "cannot find the document root for ${domain}; issue SSL after the site is created"
-      fi
-    fi
+    # Both backends serve the shared /var/www/bpanel-acme webroot, so the
+    # --webroot half below is web-server-neutral. The directory has to exist
+    # before OpenLiteSpeed loads the vhost that points at it: OLS resolves a
+    # static context's location at config load, and one created afterwards
+    # stays a 404 until the next restart (measured - this is what made the
+    # first SSL attempt on OLS look like a permissions problem).
     # Only this fix-up of an older nginx vhost, and the `install --nginx` step
     # at the end, are nginx-specific.
     if [[ "$(web_server)" != "openlitespeed" && -f "/etc/nginx/conf.d/${domain}.conf" ]]; then
@@ -4947,7 +4884,7 @@ PY
     # --allow-subset-of-names: the panel now always asks for www.<domain> too
     # (nginx always listens on it) - a domain with no working www DNS record
     # must not turn a working bare-domain issuance into a total failure.
-    args=(certonly --webroot -w "$acme_webroot" --cert-name "$domain" --non-interactive --agree-tos --expand --keep-until-expiring --allow-subset-of-names)
+    args=(certonly --webroot -w /var/www/bpanel-acme --cert-name "$domain" --non-interactive --agree-tos --expand --keep-until-expiring --allow-subset-of-names)
     for cert_domain in "${domains[@]}"; do
       args+=(-d "$cert_domain")
     done

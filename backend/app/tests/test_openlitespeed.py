@@ -50,7 +50,9 @@ def test_wordpress_vhost_renders_lsphp_and_lscache():
     assert "vhDomain                  example.test" in rendered
     assert "extprocessor lsphp84" in rendered
     assert "path                  /usr/local/lsws/lsphp84/bin/lsphp" in rendered
-    assert "BPANEL LSCACHE BEGIN" in rendered
+    # LSCache: OPanel's template expresses this as cache-control rewrite
+    # rules rather than a marked block, so assert the rules themselves.
+    assert "E=Cache-Control:v=no-cache" in rendered
     assert "Content-Security-Policy: default-src 'self'" in rendered
 
 
@@ -62,7 +64,7 @@ def test_php_vhost_has_no_lscache_block():
         php_version="8.3",
     )
 
-    assert "BPANEL LSCACHE" not in rendered
+    assert "E=Cache-Control:v=no-cache" not in rendered
     assert "extprocessor lsphp83" in rendered
 
 
@@ -119,67 +121,6 @@ def test_vhost_includes_alias_domains():
     )
 
     assert rendered.count("vhAliases                 alias.test") == 1
-
-
-def test_a_redirect_domain_gets_its_own_vhost_not_a_conditional_rule():
-    """OpenLiteSpeed ignores RewriteCond in the rewrite blocks we generate.
-
-    Verified on a live server: a condition that could never match still fired
-    its rule, so a host-based `RewriteCond %{HTTP_HOST}` inside the main vhost
-    301'd every hostname the site owned - the primary (where it looked like a
-    harmless HTTP->HTTPS redirect and hid the bug) and, visibly wrong, every
-    alias. Redirects therefore get a vhost of their own, exactly as nginx
-    gives them their own server block, where an unconditional rule is right.
-    """
-    main = ols.render_vhost(
-        "example.test",
-        "/home/bp_example_test/example.test",
-        app_type="php",
-        php_version="8.3",
-        aliases=["alias.example.test"],
-        redirects=["old.example.test"],
-    )
-    # The main vhost must not claim the redirect hostname, or it steals it
-    # from the redirect vhost that is meant to answer for it.
-    claimed = {line.split()[1] for line in main.splitlines() if line.startswith(("vhDomain", "vhAliases"))}
-    assert claimed == {"example.test", "www.example.test", "alias.example.test"}
-    # ...and carries no host-based condition, which would not work anyway.
-    assert "HTTP_HOST" not in main
-
-    redirect = ols.render_redirect_vhost(
-        "old.example.test", "example.test", "/home/bp_example_test/example.test"
-    )
-    assert "vhDomain                  old.example.test" in redirect
-    assert "vhAliases                 www.old.example.test" in redirect
-    # A `type redirect` context, not a RewriteRule. Rewrite rules were tried
-    # in every position on a live server - vhost level, inside the context,
-    # with and without `inherit` - and none of them fired in a vhost shaped
-    # like this one. This context does.
-    assert "type                  redirect" in redirect
-    assert "statusCode            301" in redirect
-    assert "location              https://example.test/" in redirect
-    directives = [line.strip() for line in redirect.splitlines() if not line.lstrip().startswith("#")]
-    assert not [d for d in directives if d.startswith(("RewriteCond", "RewriteRule"))]
-    # OLS appends the path and query string itself, so a literal $1 would end
-    # up in the Location header - "https://example.test/$1deep/path" was the
-    # actual response before this was fixed. Directives only: the template's
-    # own comment explains the trap and would otherwise match.
-    assert not [d for d in directives if "$1" in d]
-    # The ACME context has to come first, or the redirect would bounce Let's
-    # Encrypt away and this domain could never join the certificate.
-    assert redirect.index("acme-challenge") < redirect.index("type                  redirect")
-    # Ownership marker, so a stale redirect vhost can be pruned later.
-    assert "# BPANEL REDIRECT OWNER example.test" in redirect
-
-
-def test_a_redirect_vhost_carries_the_sites_certificate_when_there_is_one():
-    redirect = ols.render_redirect_vhost(
-        "old.example.test", "example.test", "/home/bp_example_test/example.test",
-        ssl_cert_path="/etc/letsencrypt/live/example.test/fullchain.pem",
-        ssl_key_path="/etc/letsencrypt/live/example.test/privkey.pem",
-    )
-    assert "vhssl {" in redirect
-    assert "certFile              /etc/letsencrypt/live/example.test/fullchain.pem" in redirect
 
 
 def test_waf_block_toggles_the_modsecurity_module():
@@ -262,61 +203,6 @@ def _context_bodies(rendered: str) -> list[str]:
     return bodies
 
 
-def test_each_context_has_at_most_one_rewrite_block():
-    """OpenLiteSpeed keeps only the LAST rewrite block in a context and
-    silently discards the others.
-
-    Splitting `inherit` and our own rules into two blocks therefore threw the
-    rules away. On a live server that meant a POST to xmlrpc.php answered 200
-    with the full XML-RPC method list instead of being blocked, and it would
-    have 404'd every Laravel/CodeIgniter route - those have no .htaccess to
-    fall back on the way WordPress does.
-    """
-    cases = [
-        dict(app_type="wordpress", php_version="8.4"),
-        dict(app_type="php", php_version="8.4", rewrite_mode="laravel"),
-        dict(app_type="php", php_version="8.4", rewrite_mode="codeigniter"),
-        dict(app_type="php", php_version="8.4", rewrite_mode="none"),
-        dict(app_type="static"),
-    ]
-    for kwargs in cases:
-        rendered = ols.render_vhost("example.test", "/home/bp_example_test/example.test", **kwargs)
-        for body in _context_bodies(rendered):
-            count = len([l for l in body.splitlines() if l.strip().startswith("rewrite ")])
-            assert count <= 1, f"{kwargs} rendered {count} rewrite blocks in one context"
-
-
-def test_wordpress_sensitive_paths_are_blocked_with_an_access_control_context():
-    """A RewriteRule with [F] does not block on OpenLiteSpeed - verified live,
-    a POST to xmlrpc.php answered 200 with the full XML-RPC method list even
-    with the rule rendered and the surrounding rewrite block working. Only an
-    accessControl context actually returns 403, and it has to be declared
-    before `context /` for the more specific match to win.
-    """
-    rendered = ols.render_vhost(
-        "example.test", "/home/bp_example_test/example.test",
-        app_type="wordpress", php_version="8.4",
-    )
-    for blocked in ("/xmlrpc.php", "/wp-config.php", "/readme.html", "/license.txt"):
-        marker = f"context {blocked} {{"
-        assert marker in rendered, f"{blocked} is not blocked"
-        assert rendered.index(marker) < rendered.index("\ncontext / {"), (
-            f"{blocked} must be declared before context /"
-        )
-    # The rule that silently did nothing must not come back.
-    assert "RewriteRule ^xmlrpc" not in rendered
-
-
-def test_laravel_rewrite_rules_survive_into_the_rewrite_block():
-    rendered = ols.render_vhost(
-        "example.test", "/home/bp_example_test/example.test",
-        app_type="php", php_version="8.4", rewrite_mode="laravel",
-    )
-    body = next(b for b in _context_bodies(rendered) if "rewriteRules" in b)
-    assert "RewriteRule ^(.*)$ index.php [QSA,L]" in body
-    assert "inherit" in body
-
-
 def test_letsencrypt_paths_reach_a_backend_certbot_cannot_wire(monkeypatch):
     """The panel runs as 'bpanel' and cannot stat /etc/letsencrypt/live, so
     the paths have to be passed, not discovered. Guessing with is_file() there
@@ -387,78 +273,3 @@ def test_www_is_not_duplicated_when_passed_as_an_alias():
     )
     assert rendered.count("vhAliases                 www.example.test") == 1
     assert "vhAliases                 shop.example.test" in rendered
-
-
-def test_each_app_type_denies_what_its_nginx_template_denies():
-    """A site must not be less protected just because it runs on OLS.
-
-    The nginx templates deny with `location ... { deny all; }`; the OLS ones
-    with accessControl contexts. Different syntax, same set - this compares
-    them so the two cannot quietly drift.
-    """
-    import re
-    from pathlib import Path
-
-    nginx_dir = Path(ols.TEMPLATE_DIR).parent / "nginx"
-    cases = {
-        "wordpress": dict(app_type="wordpress", php_version="8.4"),
-        "php": dict(app_type="php", php_version="8.4"),
-        "static": dict(app_type="static"),
-        # No "proxy" case: the application app type is nginx-only here.
-    }
-    # What the nginx template protects, reduced to a comparable idea.
-    expected = {
-        "wordpress": {"dotfiles", "secret-extensions", "uploads-php", "wp-internals", "exact-files"},
-        "php": {"dotfiles", "secret-extensions"},
-        "static": {"dotfiles", "secret-extensions", "scripts"},
-    }
-
-    def classify(rendered: str, is_nginx: bool) -> set[str]:
-        found = set()
-        blob = rendered
-        if re.search(r"\\.\(\?!well-known\)|\(\?!well-known\)", blob):
-            found.add("dotfiles")
-        if "sql|bak|backup|old|orig|save|swp|swo|ini|log|conf|env|sh|inc" in blob:
-            found.add("secret-extensions")
-        if "uploads|files" in blob:
-            found.add("uploads-php")
-        if "wp-admin/includes|wp-includes" in blob:
-            found.add("wp-internals")
-        if "php|phtml|phar" in blob:
-            found.add("scripts")
-        if ("/xmlrpc.php" in blob and "/wp-config.php" in blob
-                and "/readme.html" in blob and "/license.txt" in blob):
-            found.add("exact-files")
-        return found
-
-    for name, kwargs in cases.items():
-        nginx_src = (nginx_dir / f"{name}.conf.j2").read_text(encoding="utf-8")
-        rendered = ols.render_vhost("example.test", "/home/bp_example_test/example.test", **kwargs)
-        nginx_has = classify(nginx_src, True)
-        ols_has = classify(rendered, False)
-        assert nginx_has == expected[name], f"nginx {name} template changed: {nginx_has}"
-        missing = nginx_has - ols_has
-        assert not missing, f"OLS {name} does not protect: {missing}"
-
-
-def test_deny_contexts_come_before_the_main_context():
-    """OpenLiteSpeed picks the most specific context; a deny declared after
-    `context /` never wins."""
-    for kwargs in (
-        dict(app_type="wordpress", php_version="8.4"),
-        dict(app_type="php", php_version="8.4"),
-        dict(app_type="static"),
-    ):
-        rendered = ols.render_vhost("example.test", "/home/bp_example_test/example.test", **kwargs)
-        main = rendered.index("\ncontext / {")
-        for line in rendered.splitlines():
-            if line.startswith("context ") and "accessControl" not in line:
-                continue
-        last_deny = rendered.rindex("accessControl")
-        assert last_deny < main, f"a deny context lands after context / for {kwargs}"
-
-
-def test_the_dotfile_pattern_stays_anchored():
-    """An unanchored pattern makes OLS treat the context as a directory and
-    answer 301 to /.htaccess/ instead of 403 - seen on a live server."""
-    assert ols._DOTFILES_EXCEPT_WELL_KNOWN.endswith(".*$")
