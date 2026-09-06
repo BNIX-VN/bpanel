@@ -357,6 +357,18 @@ KillMode=mixed
 UNIT
   systemctl daemon-reload
   systemctl enable --now lshttpd 2>/dev/null || systemctl enable --now lsws 2>/dev/null || true
+  # The managed config tree has to exist before setup_systemd writes the unit:
+  # systemd refuses to start a service whose ReadWritePaths names a directory
+  # that is not there ("Failed to set up mount namespacing", 226/NAMESPACE),
+  # and setup_openlitespeed - which would otherwise create these - does not run
+  # until after the unit is already meant to be up. Ownership is fixed up there
+  # once the bpanel group exists; root:root is enough to satisfy systemd.
+  install -d -o root -g root -m 0755 \
+    /usr/local/lsws/conf/bpanel \
+    /usr/local/lsws/conf/bpanel/vhosts \
+    /usr/local/lsws/conf/bpanel/custom \
+    /usr/local/lsws/conf/bpanel/waf \
+    /usr/local/lsws/conf/bpanel/waf/sites
   for version in $PHP_VERSIONS; do
     ver_no_dot="${version//./}"
     install_ioncube_loader "$version" "/usr/local/lsws/lsphp${ver_no_dot}"

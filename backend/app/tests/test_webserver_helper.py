@@ -62,6 +62,19 @@ def test_the_panel_sandbox_only_opens_the_active_web_servers_config_tree():
     assert 'web_server_rw_paths="/usr/local/lsws/conf/bpanel"' in UPDATE
 
 
+def test_the_ols_config_tree_is_created_before_the_systemd_unit_is_written():
+    """systemd refuses to start a unit whose ReadWritePaths names a directory
+    that does not exist ("Failed to set up mount namespacing", 226/NAMESPACE).
+    setup_openlitespeed creates that tree, but it runs long after
+    setup_systemd - so install_openlitespeed has to create it first, or the
+    panel crashloops through the rest of the install.
+    """
+    assert "install -d -o root -g root -m 0755 \\\n    /usr/local/lsws/conf/bpanel \\" in INSTALL
+    create_at = INSTALL.index("/usr/local/lsws/conf/bpanel \\")
+    unit_at = INSTALL.index('WEB_SERVER_RW_PATHS="/usr/local/lsws/conf/bpanel"')
+    assert create_at < unit_at, "the OLS config tree must be created before setup_systemd"
+
+
 def test_certbot_skips_the_nginx_plugin_on_openlitespeed():
     """OLS has no certbot plugin. `certbot install --nginx` there would either
     fail or, worse, edit an nginx config that is not serving anything."""
