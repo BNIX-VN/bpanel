@@ -110,6 +110,24 @@ fail() {
   exit 1
 }
 
+# A freshly booted Ubuntu cloud image runs its own unattended-upgrades /
+# apt.systemd.daily jobs in the background for the first several minutes
+# (sometimes longer, if it decides there's a security update to apply) - long
+# enough to outlast an `apt-get update` and collide with one of ours deeper
+# into the install. Wait out the dpkg lock instead of failing on it.
+apt_get() {
+  local waited=0
+  while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || fuser /var/lib/dpkg/lock >/dev/null 2>&1; do
+    if [[ $waited -eq 0 ]]; then
+      log "Waiting for another apt/dpkg process (likely the OS's own unattended-upgrades) to finish"
+    fi
+    sleep 5
+    waited=$((waited + 5))
+    [[ $waited -ge 600 ]] && break
+  done
+  apt-get "$@"
+}
+
 detect_server_ip() {
   hostname -I 2>/dev/null | awk '{print $1}' || true
 }
@@ -253,16 +271,16 @@ ask_panel_url() {
 
 install_base_packages() {
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update --allow-releaseinfo-change
+  apt_get update --allow-releaseinfo-change
   local pkgs=(software-properties-common ca-certificates curl gnupg git composer nginx mariadb-server redis-server openssh-server python3 python3-pip python3-venv certbot python3-certbot-nginx tar zip unzip openssl iptables ipset phpmyadmin acl)
-  if ! apt-get install -y "${pkgs[@]}"; then
+  if ! apt_get install -y "${pkgs[@]}"; then
     # Seen on some VPS images: a stuck package pin (e.g. libsystemd-shared)
     # leaves an unrelated dependency "not going to be installed" and apt
     # itself suggests this fix. Repair once and retry before giving up -
     # otherwise the whole install dies here instead of a targeted failure.
     echo "Package install hit a broken dependency; repairing and retrying..."
-    apt-get --fix-broken install -y || true
-    apt-get install -y "${pkgs[@]}"
+    apt_get --fix-broken install -y || true
+    apt_get install -y "${pkgs[@]}"
   fi
   systemctl enable --now nginx mariadb redis-server
   systemctl enable --now ssh 2>/dev/null || systemctl enable --now sshd 2>/dev/null || true
@@ -270,7 +288,7 @@ install_base_packages() {
 
 install_nodejs() {
   curl -fsSL --connect-timeout 10 --max-time 180 "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash -
-  apt-get install -y nodejs
+  apt_get install -y nodejs
   node - <<'NODE'
 const major = Number(process.versions.node.split('.')[0]);
 if (major < 20) {
@@ -294,7 +312,7 @@ install_ioncube_loader() {
       ;;
   esac
 
-  apt-get install -y ca-certificates curl tar >/dev/null
+  apt_get install -y ca-certificates curl tar >/dev/null
   tmp="$(mktemp -d)" || fail "Cannot create ionCube temporary directory"
   archive="${tmp}/ioncube_loaders.tar.gz"
   if ! curl -fsSL --connect-timeout 10 --max-time 300 "$url" -o "$archive"; then
@@ -336,7 +354,7 @@ install_ioncube_loader() {
 
 install_php() {
   add-apt-repository -y ppa:ondrej/php
-  apt-get update --allow-releaseinfo-change
+  apt_get update --allow-releaseinfo-change
 
   if [[ ! " ${PHP_VERSIONS} " =~ " ${PHP_DEFAULT} " ]]; then
     fail "PHP_DEFAULT=${PHP_DEFAULT} must be included in PHP_VERSIONS='${PHP_VERSIONS}'"
@@ -378,7 +396,7 @@ install_php() {
       fail "No package found for PHP ${version}. Remove ${version} from PHP_VERSIONS."
     fi
 
-    apt-get install -y "${available_packages[@]}"
+    apt_get install -y "${available_packages[@]}"
     install_ioncube_loader "$version"
 
     ini_file="/etc/php/${version}/fpm/php.ini"
@@ -480,9 +498,9 @@ RULES
 install_waf_engine() {
   export DEBIAN_FRONTEND=noninteractive
   if ! dpkg -s libnginx-mod-http-modsecurity >/dev/null 2>&1; then
-    apt-get update --allow-releaseinfo-change
-    apt-get install -y libnginx-mod-http-modsecurity modsecurity-crs libmodsecurity3 || \
-      apt-get install -y libnginx-mod-http-modsecurity libmodsecurity3
+    apt_get update --allow-releaseinfo-change
+    apt_get install -y libnginx-mod-http-modsecurity modsecurity-crs libmodsecurity3 || \
+      apt_get install -y libnginx-mod-http-modsecurity libmodsecurity3
   fi
   install -d -o root -g root -m 0755 /etc/nginx/modsec /etc/nginx/modsec/sites
   write_waf_default_rules
