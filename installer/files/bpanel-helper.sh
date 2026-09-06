@@ -87,6 +87,7 @@ OLS_CUSTOM_DIR="${OLS_BPANEL_DIR}/custom"
 OLS_WAF_DIR="${OLS_BPANEL_DIR}/waf"
 OLS_LOG_DIR="/var/log/openlitespeed"
 NGINX_LOG_DIR="/var/log/nginx"
+NGINX_MODSEC_DIR="/etc/nginx/modsec"
 
 deny() { echo "bpanel-helper: $*" >&2; exit 1; }
 
@@ -655,6 +656,26 @@ refresh_tools_webserver() {
   fi
 }
 
+# ModSecurity rule files are plain text and web-server-neutral, but they have
+# to live where the running server's config actually points at them.
+modsec_dir() {
+  if [[ "$(web_server)" == "openlitespeed" ]]; then
+    echo "$OLS_WAF_DIR"
+  else
+    echo "$NGINX_MODSEC_DIR"
+  fi
+}
+
+# `nginx -t` validates a config without applying it. OpenLiteSpeed has no
+# equivalent - it only finds out at startup - so on OLS this is a no-op and a
+# bad rule file surfaces when the server restarts, not before.
+webserver_test_config() {
+  if [[ "$(web_server)" == "openlitespeed" ]]; then
+    return 0
+  fi
+  nginx -t
+}
+
 # "Pick up the config that just changed", whichever web server is running.
 # Best-effort: callers use this where a failed reload must not abort them.
 reload_web_server() {
@@ -780,28 +801,31 @@ run_panel_update() {
 }
 
 write_modsec_base_conf() {
-  install -d -o root -g root -m 0755 /etc/nginx/modsec /etc/nginx/modsec/sites
+  local dir; dir="$(modsec_dir)"
+  install -d -o root -g root -m 0755 "$dir" "$dir/sites"
   {
     [[ -f /etc/modsecurity/modsecurity.conf ]] && echo "Include /etc/modsecurity/modsecurity.conf"
     echo "SecRuleEngine On"
     echo "SecRequestBodyAccess Off"
-  } >/etc/nginx/modsec/bpanel-base.conf
+  } >"$dir/bpanel-base.conf"
 }
 
 write_modsec_main_conf() {
+  local dir; dir="$(modsec_dir)"
   write_waf_default_rules
   write_modsec_base_conf
-  touch /etc/nginx/modsec/bpanel-custom.conf
+  touch "$dir/bpanel-custom.conf"
   {
-    echo "Include /etc/nginx/modsec/bpanel-base.conf"
-    echo "Include /etc/nginx/modsec/bpanel-default.conf"
-    echo "Include /etc/nginx/modsec/bpanel-custom.conf"
-  } >/etc/nginx/modsec/bpanel-main.conf
+    echo "Include $dir/bpanel-base.conf"
+    echo "Include $dir/bpanel-default.conf"
+    echo "Include $dir/bpanel-custom.conf"
+  } >"$dir/bpanel-main.conf"
 }
 
 write_waf_default_rules() {
-  install -d -o root -g root -m 0755 /etc/nginx/modsec
-  cat >/etc/nginx/modsec/bpanel-default.conf <<'RULES'
+  local dir; dir="$(modsec_dir)"
+  install -d -o root -g root -m 0755 "$dir"
+  cat >"$dir/bpanel-default.conf" <<'RULES'
 # BPanel default WAF rules: lightweight WordPress, Laravel, and PHP probes only.
 SecRule REQUEST_URI "@rx (?i)(?:/\.env(?:\.|$)|/\.user\.ini(?:\.|$)|/\.git/|/composer\.(?:json|lock)(?:$|[?])|/(?:phpinfo|info)\.php(?:$|[?])|/(?:config|database|db)\.php\.(?:bak|old|save|txt)(?:$|[?]))" "id:1001301,phase:1,deny,status:403,log,msg:'BPanel blocked PHP sensitive file probe'"
 SecRule REQUEST_URI|ARGS "@rx (?i)(?:\.\./|\.\.\\|%2e%2e%2f|%252e%252e%252f)" "id:1001302,phase:2,deny,status:403,log,msg:'BPanel blocked PHP path traversal'"
@@ -815,7 +839,8 @@ RULES
 }
 
 save_waf_custom_rules() {
-  install -d -o root -g root -m 0755 /etc/nginx/modsec
+  local dir; dir="$(modsec_dir)"
+  install -d -o root -g root -m 0755 "$dir"
   write_waf_default_rules
   local tmp
   tmp="$(mktemp)"
@@ -828,18 +853,19 @@ save_waf_custom_rules() {
     rm -f "$tmp"
     deny "WAF custom rules must be 64 KB or smaller"
   fi
-  install -m 0644 -o root -g root "$tmp" /etc/nginx/modsec/bpanel-custom.conf
+  install -m 0644 -o root -g root "$tmp" "$dir/bpanel-custom.conf"
   rm -f "$tmp"
   write_modsec_main_conf
-  nginx -t
-  systemctl reload nginx
+  webserver_test_config
+  reload_web_server
   echo "WAF custom rules saved"
 }
 
 save_waf_site_rules() {
-  local domain="$1" tmp target backup=""
+  local domain="$1" tmp target backup="" dir
+  dir="$(modsec_dir)"
   require_domain "$domain"
-  install -d -o root -g root -m 0755 /etc/nginx/modsec /etc/nginx/modsec/sites
+  install -d -o root -g root -m 0755 "$dir" "$dir/sites"
   write_modsec_base_conf
   tmp="$(mktemp)"
   cat >"$tmp"
@@ -851,36 +877,51 @@ save_waf_site_rules() {
     rm -f "$tmp"
     deny "WAF site rules must be 160 KB or smaller"
   fi
-  target="/etc/nginx/modsec/sites/${domain}.conf"
+  target="${dir}/sites/${domain}.conf"
   if [[ -f "$target" ]]; then
     backup="${target}.bak.$(date +%s)"
     cp "$target" "$backup"
   fi
   install -m 0644 -o root -g root "$tmp" "$target"
   rm -f "$tmp"
-  if ! nginx -t; then
+  if ! webserver_test_config; then
     if [[ -n "$backup" && -f "$backup" ]]; then
       mv -f "$backup" "$target"
     else
       rm -f "$target"
     fi
-    deny "Nginx rejected WAF site rules"
+    deny "Web server rejected WAF site rules"
   fi
   rm -f "$backup" 2>/dev/null || true
-  systemctl reload nginx
+  reload_web_server
   echo "WAF site rules saved: ${domain}"
 }
 
 install_waf_engine() {
   export DEBIAN_FRONTEND=noninteractive
+  local dir; dir="$(modsec_dir)"
+  if [[ "$(web_server)" == "openlitespeed" ]]; then
+    # OLS's engine is the ols-modsecurity package (installed alongside OLS
+    # itself) and is switched on in httpd_config.conf by
+    # ensure_ols_modsecurity_enabled. Only the rule files are left to write.
+    install -d -o root -g root -m 0755 "$dir" "$dir/sites"
+    write_modsec_main_conf
+    touch "$dir/bpanel-custom.conf"
+    if ! ensure_ols_modsecurity_enabled >/dev/null 2>&1; then
+      echo "WARNING: ols-modsecurity is not installed; per-site WAF rules will not load" >&2
+    fi
+    reload_web_server
+    echo "WAF engine configured with BPanel lightweight WordPress/Laravel/PHP rules."
+    return 0
+  fi
   if ! dpkg -s libnginx-mod-http-modsecurity >/dev/null 2>&1; then
     apt-get update --allow-releaseinfo-change
     apt-get install -y libnginx-mod-http-modsecurity modsecurity-crs libmodsecurity3 || \
       apt-get install -y libnginx-mod-http-modsecurity libmodsecurity3
   fi
-  install -d -o root -g root -m 0755 /etc/nginx/modsec /etc/nginx/modsec/sites
+  install -d -o root -g root -m 0755 "$dir" "$dir/sites"
   write_waf_default_rules
-  touch /etc/nginx/modsec/bpanel-custom.conf
+  touch "$dir/bpanel-custom.conf"
   if [[ -f /etc/modsecurity/modsecurity.conf-recommended && ! -f /etc/modsecurity/modsecurity.conf ]]; then
     cp /etc/modsecurity/modsecurity.conf-recommended /etc/modsecurity/modsecurity.conf
   fi
@@ -1312,18 +1353,21 @@ write_php_config() {
 }
 
 waf_status() {
+  local dir; dir="$(modsec_dir)"
   echo "ModSecurity module:"
-  if grep -qi modsecurity <<<"$(nginx -V 2>&1 || true)" || [[ -e /etc/nginx/modules-enabled/50-mod-http-modsecurity.conf ]]; then
+  if [[ "$(web_server)" == "openlitespeed" ]]; then
+    [[ -f /usr/local/lsws/modules/mod_security.so ]] && echo "  installed" || echo "  not installed"
+  elif grep -qi modsecurity <<<"$(nginx -V 2>&1 || true)" || [[ -e /etc/nginx/modules-enabled/50-mod-http-modsecurity.conf ]]; then
     echo "  installed"
   else
     echo "  not installed"
   fi
   echo "Rules file:"
-  [[ -f /etc/nginx/modsec/bpanel-main.conf ]] && echo "  /etc/nginx/modsec/bpanel-main.conf" || echo "  missing"
+  [[ -f "$dir/bpanel-main.conf" ]] && echo "  $dir/bpanel-main.conf" || echo "  missing"
   echo "Default rules:"
-  [[ -f /etc/nginx/modsec/bpanel-default.conf ]] && echo "  /etc/nginx/modsec/bpanel-default.conf" || echo "  missing"
+  [[ -f "$dir/bpanel-default.conf" ]] && echo "  $dir/bpanel-default.conf" || echo "  missing"
   echo "Custom rules:"
-  [[ -f /etc/nginx/modsec/bpanel-custom.conf ]] && echo "  /etc/nginx/modsec/bpanel-custom.conf" || echo "  missing"
+  [[ -f "$dir/bpanel-custom.conf" ]] && echo "  $dir/bpanel-custom.conf" || echo "  missing"
   echo "Managed profile:"
   echo "  BPanel built-in lightweight WordPress/Laravel/PHP rules"
   echo "Timers:"
@@ -4241,8 +4285,13 @@ case "$cmd" in
 
   fastcgi-cache-clear)
     [[ $# -eq 0 ]] || deny "usage: fastcgi-cache-clear"
-    install -d -o www-data -g www-data -m 0755 /var/cache/nginx/bpanel-fastcgi
-    find /var/cache/nginx/bpanel-fastcgi -mindepth 1 -delete
+    # OLS caches through LSCache inside the vhost, with no nginx cache
+    # directory to sweep - and creating /var/cache/nginx on a box with no
+    # nginx would be pure litter.
+    if [[ "$(web_server)" != "openlitespeed" ]]; then
+      install -d -o www-data -g www-data -m 0755 /var/cache/nginx/bpanel-fastcgi
+      find /var/cache/nginx/bpanel-fastcgi -mindepth 1 -delete
+    fi
     ;;
 
   # ---- updates ----------------------------------------------------------
@@ -4415,19 +4464,19 @@ case "$cmd" in
 
   waf-update)
     write_modsec_main_conf
-    nginx -t
-    systemctl reload nginx
+    webserver_test_config
+    reload_web_server
     echo "BPanel lightweight WAF rules refreshed"
     ;;
 
   waf-default-rules)
     write_waf_default_rules
-    exec cat /etc/nginx/modsec/bpanel-default.conf
+    exec cat "$(modsec_dir)/bpanel-default.conf"
     ;;
 
   waf-custom-rules)
-    touch /etc/nginx/modsec/bpanel-custom.conf
-    exec cat /etc/nginx/modsec/bpanel-custom.conf
+    touch "$(modsec_dir)/bpanel-custom.conf"
+    exec cat "$(modsec_dir)/bpanel-custom.conf"
     ;;
 
   waf-custom-save)
@@ -4436,7 +4485,7 @@ case "$cmd" in
   waf-site-rules)
     [[ $# -eq 1 ]] || deny "usage: waf-site-rules <domain>"
     require_domain "$1"
-    exec cat "/etc/nginx/modsec/sites/${1}.conf"
+    exec cat "$(modsec_dir)/sites/${1}.conf"
     ;;
   waf-site-save)
     [[ $# -eq 1 ]] || deny "usage: waf-site-save <domain>"

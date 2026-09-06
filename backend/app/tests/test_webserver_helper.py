@@ -75,6 +75,29 @@ def test_the_ols_config_tree_is_created_before_the_systemd_unit_is_written():
     assert create_at < unit_at, "the OLS config tree must be created before setup_systemd"
 
 
+def test_waf_rules_are_written_where_the_running_server_reads_them():
+    """The panel picks the rules path, the helper writes the file, and the
+    vhost template points at it - all three have to land on the same
+    directory. When they did not, every site creation on OLS failed with
+    "nginx: command not found" from a WAF verb that assumed nginx.
+    """
+    from app.services import openlitespeed as ols, waf
+
+    assert "modsec_dir() {" in HELPER
+    # No WAF path may be hardcoded any more; only the constant may name one.
+    hardcoded = [
+        line for line in HELPER.splitlines()
+        if "/etc/nginx/modsec" in line and not line.startswith("NGINX_MODSEC_DIR=")
+    ]
+    assert not hardcoded, f"hardcoded modsec paths left in the helper: {hardcoded}"
+    # The helper must not shell out to nginx to validate on an OLS box.
+    assert "webserver_test_config() {" in HELPER
+    assert "deny \"Web server rejected WAF site rules\"" in HELPER
+    # Panel side and vhost side agree on the OLS location.
+    assert ols.waf_rules_file("example.test") == "/usr/local/lsws/conf/bpanel/waf/sites/example.test.conf"
+    assert waf.modsec_dir() in ("/etc/nginx/modsec", "/usr/local/lsws/conf/bpanel/waf")
+
+
 def test_certbot_skips_the_nginx_plugin_on_openlitespeed():
     """OLS has no certbot plugin. `certbot install --nginx` there would either
     fail or, worse, edit an nginx config that is not serving anything."""

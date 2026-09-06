@@ -216,9 +216,22 @@ def default_rule_definitions() -> list[dict]:
     ]
 
 
+def modsec_dir() -> str:
+    """Where this install's ModSecurity rule files live.
+
+    The rules themselves are web-server-neutral text, but they have to sit
+    where the running server's config points at them - and bpanel-helper's
+    modsec_dir() has to agree, or the panel writes rules the server never
+    reads. Both switch on the same WEB_SERVER setting.
+    """
+    if webserver.active_name() == "openlitespeed":
+        return "/usr/local/lsws/conf/bpanel/waf"
+    return "/etc/nginx/modsec"
+
+
 def site_rules_file(domain: str) -> str:
     safe_domain = _validate_domain(domain)
-    return f"/etc/nginx/modsec/sites/{safe_domain}.conf"
+    return f"{modsec_dir()}/sites/{safe_domain}.conf"
 
 
 def render_site_rules(domain: str, enabled_rule_ids: Iterable[str], custom_rules: str = "") -> str:
@@ -227,7 +240,7 @@ def render_site_rules(domain: str, enabled_rule_ids: Iterable[str], custom_rules
     custom = _validate_custom_rules(custom_rules)
     chunks = [
         f"# BPanel WAF rules for {safe_domain}",
-        "Include /etc/nginx/modsec/bpanel-base.conf",
+        f"Include {modsec_dir()}/bpanel-base.conf",
         "",
         "# BPanel selected default rules",
     ]
@@ -307,7 +320,7 @@ def status():
     return shell.privileged(
         "waf-status",
         check=False,
-        fallback=["bash", "-lc", "test -f /etc/nginx/modsec/bpanel-base.conf && echo installed || echo not-installed"],
+        fallback=["bash", "-lc", f"test -f {modsec_dir()}/bpanel-base.conf && echo installed || echo not-installed"],
     )
 
 
@@ -331,7 +344,7 @@ def default_rules():
     return shell.privileged(
         "waf-default-rules",
         check=False,
-        fallback=["bash", "-lc", "cat /etc/nginx/modsec/bpanel-default.conf 2>/dev/null || true"],
+        fallback=["bash", "-lc", f"cat {modsec_dir()}/bpanel-default.conf 2>/dev/null || true"],
     )
 
 
@@ -339,7 +352,7 @@ def custom_rules():
     return shell.privileged(
         "waf-custom-rules",
         check=False,
-        fallback=["bash", "-lc", "cat /etc/nginx/modsec/bpanel-custom.conf 2>/dev/null || true"],
+        fallback=["bash", "-lc", f"cat {modsec_dir()}/bpanel-custom.conf 2>/dev/null || true"],
     )
 
 
