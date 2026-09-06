@@ -463,6 +463,7 @@ def test_docker_status_parses_helper_output(monkeypatch):
         "installed": True,
         "version": "Docker version 27.1.1",
         "active": "active",
+        "disk": [],
     }
 
 

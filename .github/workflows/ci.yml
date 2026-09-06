@@ -39,7 +39,7 @@ jobs:
         run: semgrep --config=auto backend/app
 
       - name: Tests
-        run: pytest backend/tests -q || echo "No tests yet"
+        run: pytest backend/app/tests -q
 
   frontend:
     runs-on: ubuntu-latest
@@ -70,3 +70,66 @@ jobs:
           ignore_paths: "node_modules"
         env:
           SHELLCHECK_OPTS: -e SC1091
+
+  # GitHub-hosted ubuntu-24.04 runners are real VMs (systemd as PID 1, full
+  # apt/root access) - not containers - so this runs the actual installer end
+  # to end on a disposable box: nginx, MariaDB, PHP-FPM, Redis, the works.
+  # It catches "the installer no longer completes" or "a fresh panel can't
+  # provision a website" before either reaches a real customer VPS. It does
+  # NOT replace manual VPS testing - no real domain/SSL, no OpenLiteSpeed
+  # path, no long-lived load - so it only runs on pushes that land on main,
+  # not on every PR.
+  install-smoke-test:
+    if: github.event_name == 'push'
+    needs: backend
+    runs-on: ubuntu-24.04
+    env:
+      BPANEL_ADMIN_PASSWORD: ${{ github.run_id }}-ci-smoke-Aa1!
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run installer/install.sh (nginx, no domain -> self-signed panel cert)
+        env:
+          PANEL_URL: http://127.0.0.1:2222
+        run: sudo -E bash installer/install.sh
+
+      - name: Health check
+        run: |
+          for _ in $(seq 1 30); do
+            curl -kfsS --max-time 5 https://127.0.0.1:2222/api/health && exit 0
+            sleep 1
+          done
+          sudo journalctl -u bpanel-api -n 200 --no-pager
+          exit 1
+
+      - name: Log in and create a test website
+        run: |
+          set -euo pipefail
+          token="$(
+            curl -ksf -X POST https://127.0.0.1:2222/api/auth/login \
+              -H 'Content-Type: application/x-www-form-urlencoded' \
+              --data-urlencode "username=admin" \
+              --data-urlencode "password=${BPANEL_ADMIN_PASSWORD}" \
+              | jq -r '.access_token'
+          )"
+          [ -n "$token" ] && [ "$token" != "null" ]
+
+          curl -ksf -X POST https://127.0.0.1:2222/api/websites \
+            -H "Authorization: Bearer ${token}" \
+            -H 'Content-Type: application/json' \
+            -d '{"domain":"smoke-test.example","install_wordpress":false,"app_type":"php"}' \
+            | tee /tmp/website-create.json
+          grep -q '"domain":"smoke-test.example"' /tmp/website-create.json
+
+      - name: Verify the vhost was actually written and nginx is happy
+        run: |
+          sudo test -f /etc/nginx/conf.d/smoke-test.example.conf
+          sudo nginx -t
+          curl -ksf -H 'Host: smoke-test.example' https://127.0.0.1/ -o /dev/null
+
+      - name: Dump service logs on failure
+        if: failure()
+        run: |
+          sudo journalctl -u bpanel-api -n 300 --no-pager || true
+          sudo nginx -t || true
+          sudo tail -n 100 /var/log/nginx/error.log || true
