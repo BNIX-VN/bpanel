@@ -142,9 +142,6 @@ END_RULES
 }
 {% endfor %}
 
-{% if http_flood_enabled %}
-{{ http_flood_block }}
-{% endif %}
 
 {# LSCache-equivalent: always on for WordPress, same as nginx's FastCGI cache #}
 # BPANEL LSCACHE BEGIN

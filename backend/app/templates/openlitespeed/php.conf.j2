@@ -136,7 +136,3 @@ RewriteRule ^(.*)$ {% if redirect.target %}{{ redirect.target }}{% else %}https:
 END_RULES
 }
 {% endfor %}
-
-{% if http_flood_enabled %}
-{{ http_flood_block }}
-{% endif %}

@@ -169,3 +169,16 @@ def test_the_ui_labels_follow_the_active_web_server():
                 continue
             leftovers.append(text.strip())
     assert not leftovers, f"hardcoded Nginx still shown to users: {leftovers}"
+
+
+def test_features_nginx_only_are_hidden_on_openlitespeed():
+    """A control that does nothing is worse than an absent one. HTTP flood
+    has no OLS implementation (no request-rate limiter exists there), and the
+    Application/proxy website type is nginx-only - the UI must not offer
+    either on an OLS server."""
+    assert "wafSiteConfig && !isOpenLiteSpeed(webServer) && <section" in APP_JSX, \
+        "the HTTP flood panel is still shown on OpenLiteSpeed"
+    # Both website-type pickers must refuse "application" on OLS.
+    assert APP_JSX.count(
+        "disabled={value === 'application' && (!appsFeatureEnabled || isOpenLiteSpeed(webServer))}"
+    ) == 2, "an app-type picker still offers Application on OpenLiteSpeed"

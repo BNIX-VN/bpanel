@@ -12,10 +12,11 @@ nginx's per-site FPM pool, PHP here is one shared LSPHP listener per version
 (see php.py's LSPHP branch) - a vhost's `extprocessor` block just points at
 that shared external app, it does not own a private one.
 
-HTTP-flood protection is a per-vhost OLS `extprocessor type proxy` throttle
-rather than a real rate limiter (OLS has no equivalent to nginx's
-limit_req_zone) - this is a known, documented gap carried over from OPanel,
-not a bug. FastCGI cache has no separate toggle here: LSCache-equivalent
+HTTP-flood protection is NOT implemented here. OpenLiteSpeed has no
+equivalent to nginx's limit_req_zone, and the per-vhost throttle OPanel
+shipped did nothing measurable while making the panel report the site as
+protected - so the toggle renders nothing at all on this backend rather than
+something decorative. FastCGI cache has no separate toggle here: LSCache-equivalent
 rewrite rules are always present in the WordPress template, same as nginx's
 FastCGI cache being unconditional once ensure_wordpress_fastcgi_cache runs.
 """
@@ -42,8 +43,13 @@ ACME_WEBROOT = "/var/www/bpanel-acme"
 # Same sets as nginx.py - a website's php_version/app_type/rewrite_mode must
 # mean the same thing regardless of which backend is active.
 ALLOWED_PHP_VERSIONS = {"5.6", "7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5"}
-ALLOWED_APP_TYPES = {"wordpress", "php", "static", "application"}
-PROXIED_APP_TYPES = {"application"}
+# Deliberately NARROWER than nginx.py's. The "application" app type proxies a
+# domain to a locally installed app; that is an nginx-only feature here, so an
+# OLS server simply does not offer it rather than shipping a second, less
+# tested proxy implementation. PROXIED_APP_TYPES stays defined (empty) because
+# callers test membership against it on every website save.
+ALLOWED_APP_TYPES = {"wordpress", "php", "static"}
+PROXIED_APP_TYPES: set[str] = set()
 # No certbot plugin exists for OpenLiteSpeed, so nothing writes the
 # issued certificate into the vhost on our behalf - the panel must
 # re-render it, which is what this flag tells the SSL endpoints.
@@ -113,11 +119,6 @@ DENIED_PATHS = {
         # A static site must never execute anything, so scripts are refused
         # outright rather than merely left unhandled.
         "regex": [_SCRIPT_EXTENSIONS, _SECRET_FILE_EXTENSIONS, _DOTFILES_EXCEPT_WELL_KNOWN],
-    },
-    "application": {
-        "exact": [],
-        # Everything else is proxied to the app, which serves its own routes.
-        "regex": [_DOTFILES_EXCEPT_WELL_KNOWN],
     },
 }
 
@@ -203,6 +204,11 @@ def _check_php_version(php_version: str | None) -> str | None:
 
 
 def _check_app_type(app_type: str) -> str:
+    if app_type == "application":
+        raise ValueError(
+            "Application/proxy websites are only available on Nginx servers. "
+            "This server runs OpenLiteSpeed - use a PHP, WordPress or static website."
+        )
     if app_type not in ALLOWED_APP_TYPES:
         raise ValueError(f"Unsupported app type: {app_type}")
     return app_type
@@ -321,23 +327,20 @@ def _http_flood_rate(config: dict) -> str:
 
 
 def _http_flood_block(domain: str, config: dict) -> str:
-    zone = http_flood_zone_name(domain)
-    rate = _http_flood_rate(config)
-    burst = config.get("access_limit_burst", 0)
-    connections = config.get("connection_limit", 60)
-    return (
-        "# BPANEL HTTP FLOOD BEGIN\n"
-        f"# Throttle zone: {zone}, rate: {rate}/s, burst: {burst}, maxConn: {connections}\n"
-        "extprocessor " + zone + " {\n"
-        "    type                    proxy\n"
-        "    address                 127.0.0.1:1\n"
-        f"    maxConns                {connections}\n"
-        "    initTimeout             10\n"
-        "    retryTimeout            0\n"
-        "    respBuffer              0\n"
-        "}\n"
-        "# BPANEL HTTP FLOOD END"
-    )
+    """Always empty on OpenLiteSpeed.
+
+    OLS has no equivalent of nginx's limit_req_zone: it cannot count HTTP
+    requests per client over a window. What was rendered here before was an
+    `extprocessor type proxy` whose only real effect was a maxConns cap on a
+    processor nothing routed to - it throttled nothing at all, while the panel
+    showed the site as protected. An honest no-op beats a decorative one.
+
+    Connection-level limiting is still possible server-wide through
+    iptables (hashlimit/connlimit), but that counts connections rather than
+    requests and cannot be scoped to one website, so it is not a drop-in
+    replacement and is not wired up here.
+    """
+    return ""
 
 
 def sync_http_flood_zones(websites):
@@ -617,7 +620,6 @@ def render_vhost(
         "wordpress": "wordpress.conf.j2",
         "php": "php.conf.j2",
         "static": "static.conf.j2",
-        "application": "proxy.conf.j2",
     }[ctx["app_type"]]
     template = env.get_template(template_name)
     return template.render(**ctx)

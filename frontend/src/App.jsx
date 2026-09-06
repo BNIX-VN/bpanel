@@ -4371,8 +4371,8 @@ function App() {
           {WEBSITE_MODES.map(([value, label]) => <option
             key={value}
             value={value}
-            disabled={value === 'application' && !appsFeatureEnabled}
-          >{label}</option>)}
+            disabled={value === 'application' && (!appsFeatureEnabled || isOpenLiteSpeed(webServer))}
+          >{value === 'application' && isOpenLiteSpeed(webServer) ? `${label} (Nginx only)` : label}</option>)}
         </select></label>
         {proxied && <label><span>Application</span><select
           value={websiteSettingsForm.app_id || ''}
@@ -4554,8 +4554,8 @@ function App() {
             {WEBSITE_MODES.map(([value, label]) => <option
               key={value}
               value={value}
-              disabled={value === 'application' && !appsFeatureEnabled}
-            >{label}</option>)}
+              disabled={value === 'application' && (!appsFeatureEnabled || isOpenLiteSpeed(webServer))}
+            >{value === 'application' && isOpenLiteSpeed(webServer) ? `${label} (Nginx only)` : label}</option>)}
           </select>
           {siteType === 'application'
             ? <select value={createSiteAppId} onChange={e => setCreateSiteAppId(e.target.value)}>
@@ -4635,7 +4635,7 @@ function App() {
               {site.app_type === 'php' && site.nginx_rewrite_mode && site.nginx_rewrite_mode !== 'none' && <span>Rewrite <strong>{site.nginx_rewrite_mode}</strong></span>}
               {site.nginx_custom && <span className="badge ok">Custom directives</span>}
               {site.waf_enabled && <span className="badge ok">WAF</span>}
-              {site.http_flood_enabled && <span className="badge ok">HTTP Flood</span>}
+              {site.http_flood_enabled && !isOpenLiteSpeed(webServer) && <span className="badge ok">HTTP Flood</span>}
               {(site.aliases || []).length > 0 && <span>Domains <strong>{(site.aliases || []).length + 1}</strong></span>}
             </div>
             <div className="site-actions" aria-label={`Website actions for ${site.domain}`}>
@@ -5544,13 +5544,13 @@ function App() {
             <span><strong>{site.domain}</strong></span>
             <div className="firewall-rule-actions">
               <span className={site.waf_enabled ? 'badge ok' : 'badge'}>{site.waf_enabled ? 'Enabled' : 'Disabled'}</span>
-              <span className={site.http_flood_enabled ? 'badge ok' : 'badge'}>{site.http_flood_enabled ? 'Flood On' : 'Flood Off'}</span>
+              {!isOpenLiteSpeed(webServer) && <span className={site.http_flood_enabled ? 'badge ok' : 'badge'}>{site.http_flood_enabled ? 'Flood On' : 'Flood Off'}</span>}
               <button disabled={!!loading} onClick={() => loadWebsiteWafConfig(site.id)}>Rules</button>
             </div>
           </div>)}
         </div>
       </section>
-      {wafSiteConfig && <section className="section http-flood-panel">
+      {wafSiteConfig && !isOpenLiteSpeed(webServer) && <section className="section http-flood-panel">
         <div className="section-title">
           <h2>HTTP Flood - {wafSiteConfig.domain}</h2>
           <span className={httpFloodForm.http_flood_enabled ? 'badge ok' : 'badge'}>{httpFloodForm.http_flood_enabled ? 'Enabled' : 'Disabled'}</span>

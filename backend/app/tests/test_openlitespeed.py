@@ -20,8 +20,16 @@ def test_interface_matches_nginx_for_every_dispatch_call_site():
         assert hasattr(nginx, name), f"nginx.py is missing {name}"
         assert hasattr(ols, name), f"openlitespeed.py is missing {name}"
 
-    for const in ("PROXIED_APP_TYPES", "ALLOWED_APP_TYPES", "ALLOWED_REWRITE_MODES", "ALLOWED_PHP_VERSIONS"):
+    # PHP versions and rewrite modes must mean the same thing on both.
+    for const in ("ALLOWED_REWRITE_MODES", "ALLOWED_PHP_VERSIONS"):
         assert getattr(nginx, const) == getattr(ols, const), f"{const} differs between backends"
+
+    # App types deliberately do NOT match: "application" (proxy a domain to a
+    # locally installed app) is an nginx-only feature. An OLS server refuses
+    # it outright rather than shipping a second, less tested proxy path.
+    assert ols.ALLOWED_APP_TYPES == {"wordpress", "php", "static"}
+    assert nginx.ALLOWED_APP_TYPES == ols.ALLOWED_APP_TYPES | {"application"}
+    assert ols.PROXIED_APP_TYPES == set()
 
     # Both must declare whether certbot wires SSL into the vhost for them -
     # the SSL endpoints branch on it, and a missing attribute would silently
@@ -69,26 +77,36 @@ def test_static_vhost_has_no_php_processor():
     assert "Static site: no PHP processor needed" in rendered
 
 
-def test_proxy_vhost_points_at_the_app_port():
-    rendered = ols.render_vhost(
-        "example.test",
-        "/home/bp_example_test/example.test",
-        app_type="application",
-        app_port=3000,
-    )
-
-    assert "address                 127.0.0.1:3000" in rendered
-    assert "type                    proxy" in rendered
-    assert "handler                 bpanel_app_example_test" in rendered
-
-
-def test_proxy_vhost_without_a_port_is_rejected():
-    with pytest.raises(ValueError, match="installed application"):
+def test_application_websites_are_refused_with_a_useful_message():
+    """Creating one should say which server types support it, not just
+    "unsupported app type"."""
+    with pytest.raises(ValueError, match="only available on Nginx"):
         ols.render_vhost(
-            "example.test",
-            "/home/bp_example_test/example.test",
-            app_type="application",
+            "example.test", "/home/bp_example_test/example.test",
+            app_type="application", app_port=3000,
         )
+
+
+def test_http_flood_renders_nothing_even_when_enabled():
+    """OpenLiteSpeed cannot count requests per client over a window. The
+    per-vhost extprocessor this used to render throttled nothing measurable
+    while making the panel report the site as protected - a decorative
+    control is worse than an absent one.
+    """
+    for kwargs in (
+        dict(app_type="wordpress", php_version="8.4"),
+        dict(app_type="php", php_version="8.4"),
+        dict(app_type="static"),
+    ):
+        rendered = ols.render_vhost(
+            "example.test", "/home/bp_example_test/example.test",
+            http_flood_enabled=True,
+            http_flood_config={"access_limit_requests": 10, "connection_limit": 5},
+            **kwargs,
+        )
+        assert "HTTP FLOOD" not in rendered, kwargs
+        assert "extprocessor bpanel_hf" not in rendered, kwargs
+    assert ols._http_flood_block("example.test", {}) == ""
 
 
 def test_vhost_includes_alias_domains():
@@ -308,7 +326,6 @@ def test_every_vhost_answers_on_www_like_nginx_does():
         dict(app_type="wordpress", php_version="8.4"),
         dict(app_type="php", php_version="8.4"),
         dict(app_type="static"),
-        dict(app_type="application", app_port=3000),
     ):
         rendered = ols.render_vhost("example.test", "/home/bp_example_test/example.test", **kwargs)
         assert "vhDomain                  example.test" in rendered
@@ -339,14 +356,13 @@ def test_each_app_type_denies_what_its_nginx_template_denies():
         "wordpress": dict(app_type="wordpress", php_version="8.4"),
         "php": dict(app_type="php", php_version="8.4"),
         "static": dict(app_type="static"),
-        "proxy": dict(app_type="application", app_port=3000),
+        # No "proxy" case: the application app type is nginx-only here.
     }
     # What the nginx template protects, reduced to a comparable idea.
     expected = {
         "wordpress": {"dotfiles", "secret-extensions", "uploads-php", "wp-internals", "exact-files"},
         "php": {"dotfiles", "secret-extensions"},
         "static": {"dotfiles", "secret-extensions", "scripts"},
-        "proxy": {"dotfiles"},
     }
 
     def classify(rendered: str, is_nginx: bool) -> set[str]:
