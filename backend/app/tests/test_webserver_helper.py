@@ -103,3 +103,23 @@ def test_certbot_skips_the_nginx_plugin_on_openlitespeed():
     fail or, worse, edit an nginx config that is not serving anything."""
     assert 'if [[ "$(web_server)" == "openlitespeed" ]]; then\n      # OLS has no certbot plugin' in HELPER
     assert "install_args=(install --nginx" in HELPER
+
+
+def test_the_update_site_refresh_goes_through_the_dispatcher():
+    """update.sh re-renders every vhost from an embedded Python block. It
+    lives inside a shell heredoc, so the Milestone 1 sweep of `import nginx`
+    call sites missed it - and on OpenLiteSpeed every site's refresh failed
+    with "exec: nginx: not found".
+    """
+    assert "from app.services import site_users, waf, webserver" in UPDATE
+    assert "webserver.rewrite_vhost(" in UPDATE
+    assert "webserver.sync_http_flood_zones(websites)" in UPDATE
+    assert "nginx.rewrite_vhost(" not in UPDATE
+    assert "nginx.sync_http_flood_zones(" not in UPDATE
+
+
+def test_http_flood_zone_sync_is_a_no_op_on_openlitespeed():
+    """The shared limit_req_zone file is an nginx concept; OLS renders its
+    throttling per vhost. Without this the verb ran `nginx -t` on a box with
+    no nginx and every update printed a warning."""
+    assert 'if [[ "$(web_server)" == "openlitespeed" ]]; then\n    cat >/dev/null' in HELPER

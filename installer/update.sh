@@ -1320,7 +1320,7 @@ if [[ -f "$SOURCE_DIR/installer/files/bpanelctl" ]]; then
   sed -i "s#APP_DIR=\"\${APP_DIR:-/opt/bpanel}\"#APP_DIR=\"\${APP_DIR:-${APP_DIR}}\"#" /usr/local/sbin/bpanel /usr/local/sbin/bpanelctl 2>/dev/null || true
 fi
 
-log "Ensuring Nginx ModSecurity WAF engine is installed"
+log "Ensuring the ModSecurity WAF engine is installed"
 if id -u bpanel >/dev/null 2>&1; then
   sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper waf-install || \
     echo "WARNING: WAF engine installation failed; continuing without ModSecurity."
@@ -1432,12 +1432,12 @@ elif id -u bpanel >/dev/null 2>&1; then
   sudo -u bpanel env HOME="$APP_DIR" BPANEL_USE_HELPER=true "$APP_DIR/backend/.venv/bin/python" - <<'PY'
 from app.core.database import SessionLocal
 from app.models.entities import Website
-from app.services import nginx, site_users, waf
+from app.services import site_users, waf, webserver
 
 with SessionLocal() as db:
     websites = db.query(Website).all()
     try:
-        result = nginx.sync_http_flood_zones(websites)
+        result = webserver.sync_http_flood_zones(websites)
         if result.returncode != 0:
             print(f"WARNING: could not refresh HTTP flood zones: {result.stderr or result.stdout}")
     except Exception as exc:
@@ -1461,7 +1461,7 @@ with SessionLocal() as db:
                 db.commit()
             app_type = website.app_type or "wordpress"
             runtime_php_version = website.php_version if app_type in {"wordpress", "php"} else None
-            nginx.rewrite_vhost(
+            webserver.rewrite_vhost(
                 website.domain,
                 website.root_path,
                 app_type=app_type,
@@ -1477,7 +1477,7 @@ with SessionLocal() as db:
         except Exception as exc:
             print(f"WARNING: could not refresh permissions for {website.domain}: {exc}")
     try:
-        result = nginx.sync_http_flood_zones(websites)
+        result = webserver.sync_http_flood_zones(websites)
         if result.returncode != 0:
             print(f"WARNING: could not refresh HTTP flood zones: {result.stderr or result.stdout}")
     except Exception as exc:

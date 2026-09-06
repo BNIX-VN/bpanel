@@ -2061,6 +2061,16 @@ CONF
 
 save_http_flood_zones() {
   local tmp backup=""
+  # nginx keeps its rate-limit zones in one shared file that every vhost
+  # references. OLS has no equivalent - its throttling is rendered inside each
+  # vhost - so there is nothing to write here, and openlitespeed.py's
+  # sync_http_flood_zones is a no-op to match. Drain stdin so the caller's
+  # write does not hit a closed pipe.
+  if [[ "$(web_server)" == "openlitespeed" ]]; then
+    cat >/dev/null
+    echo "HTTP flood zones are per-vhost on OpenLiteSpeed; nothing to sync"
+    return 0
+  fi
   ensure_nginx_conf_dir_writable
   tmp="$(mktemp)"
   cat >"$tmp"
