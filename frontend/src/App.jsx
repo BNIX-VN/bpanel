@@ -21,7 +21,16 @@ import './file-manager.css';
 import './theme.css';
 
 const API = import.meta.env.VITE_API_URL || '/api';
-const DEFAULT_SERVICE_NAMES = ['bpanel-api', 'nginx', 'php8.3-fpm', 'php8.4-fpm', 'mariadb', 'redis-server'];
+// The web server is chosen once at install time; only one of these is ever
+// present on a server, so the service list and every label below follow
+// panelSettings.web_server rather than assuming nginx.
+const NGINX_SERVICE_NAMES = ['bpanel-api', 'nginx', 'php8.3-fpm', 'php8.4-fpm', 'mariadb', 'redis-server'];
+const OLS_SERVICE_NAMES = ['bpanel-api', 'lshttpd', 'mariadb', 'redis-server'];
+const DEFAULT_SERVICE_NAMES = NGINX_SERVICE_NAMES;
+const isOpenLiteSpeed = (ws) => String(ws || 'nginx') === 'openlitespeed';
+// What to call the web server in front of a customer.
+const webServerLabel = (ws) => (isOpenLiteSpeed(ws) ? 'OpenLiteSpeed' : 'Nginx');
+const serviceNamesFor = (ws) => (isOpenLiteSpeed(ws) ? OLS_SERVICE_NAMES : NGINX_SERVICE_NAMES);
 const HTTP_FLOOD_DEFAULTS = {
   access_limit_requests: 100,
   access_limit_window: 10,
@@ -577,6 +586,9 @@ function App() {
   const [resourceUsage, setResourceUsage] = useState(null);
   const [serviceStates, setServiceStates] = useState({});
   const [serviceNames, setServiceNames] = useState(DEFAULT_SERVICE_NAMES);
+  // Set at install time and never changes while the panel is open.
+  const webServer = panelSettings.web_server || 'nginx';
+  const wsLabel = webServerLabel(webServer);
   const [backupTab, setBackupTab] = useState('website');
   const [backups, setBackups] = useState([]);
   const [backupJobs, setBackupJobs] = useState([]);
@@ -679,7 +691,7 @@ function App() {
   const [loading, setLoading] = useState('');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
-  const [panelSettings, setPanelSettings] = useState({ app_name: 'BPanel', panel_url: '', panel_hostname: '', panel_port: 2222, logo_url: '', favicon_url: '/favicon.png', ssl_enabled: false });
+  const [panelSettings, setPanelSettings] = useState({ app_name: 'BPanel', panel_url: '', panel_hostname: '', panel_port: 2222, logo_url: '', favicon_url: '/favicon.png', ssl_enabled: false, web_server: 'nginx' });
   const [phpTune, setPhpTune] = useState(null);
   const [phpTuneApplied, setPhpTuneApplied] = useState(false);
   const [panelSettingsForm, setPanelSettingsForm] = useState({ app_name: 'BPanel', panel_hostname: '', panel_port: 2222, ssl_enabled: false });
@@ -788,7 +800,7 @@ function App() {
     setAdminAccountForm({ email: '', current_password: '', password: '', confirm_password: '', code: '' });
     setResourceUsage(null);
     setServiceStates({});
-    setServiceNames(DEFAULT_SERVICE_NAMES);
+    setServiceNames(serviceNamesFor(webServer));
     setBackupTab('website');
     setBackups([]);
     setBackupJobs([]);
@@ -1607,7 +1619,7 @@ function App() {
       return;
     }
     if (!confirm(enable
-      ? 'Bật IPv6 cho toàn bộ website và panel?\n\nBPanel sẽ thêm listen [::] vào cấu hình nginx của mọi website, kiểm tra bằng nginx -t và tự hoàn tác nếu có lỗi. Panel sẽ khởi động lại.'
+      ? `Bật IPv6 cho toàn bộ website và panel?\n\nBPanel sẽ thêm listener IPv6 vào cấu hình ${wsLabel} của mọi website, kiểm tra lại cấu hình và tự hoàn tác nếu có lỗi. Panel sẽ khởi động lại.`
       : 'Tắt IPv6?\n\nWebsite và panel sẽ chỉ còn nhận kết nối IPv4. Nếu domain đang có bản ghi AAAA, khách đi bằng IPv6 sẽ không vào được.')) return;
     const data = await request('/panel-settings/ipv6', {
       method: 'POST',
@@ -1968,7 +1980,7 @@ function App() {
     setLogViewer(null);
     setTerminalViewer(null);
     setWebsiteSettingsForm(websiteConfigForm(site));
-    const data = await request(`/websites/${site.id}/nginx-custom`, {}, 'Loading Custom Nginx...');
+    const data = await request(`/websites/${site.id}/nginx-custom`, {}, `Loading custom ${wsLabel} directives...`);
     if (data !== null) {
       setNginxCustomEditing({
         id: site.id,
@@ -2181,7 +2193,7 @@ function App() {
 
   async function viewFullNginxConfig() {
     if (!nginxCustomEditing) return;
-    const data = await request(`/websites/${nginxCustomEditing.id}/nginx-config`, {}, 'Loading full Nginx config...');
+    const data = await request(`/websites/${nginxCustomEditing.id}/nginx-config`, {}, `Loading full ${wsLabel} config...`);
     if (data !== null) {
       setNginxCustomEditing(prev => ({ ...prev, mode: 'full', customContent: prev?.content || '', content: data?.nginx_config || '' }));
     }
@@ -2193,7 +2205,7 @@ function App() {
     const data = await request(`/websites/${nginxCustomEditing.id}/nginx-custom`, {
       method: 'PUT',
       body: JSON.stringify({ nginx_custom: nginxCustomEditing.content }),
-    }, 'Applying Custom Nginx and reloading...');
+    }, `Applying custom directives and reloading ${wsLabel}...`);
     if (data) {
       setNotice(`Updated Custom Nginx for ${nginxCustomEditing.domain}`);
       setNginxCustomEditing(null);
@@ -2251,7 +2263,7 @@ function App() {
     const data = await request(`/websites/${nginxCustomEditing.id}/nginx-custom`, {
       method: 'PUT',
       body: JSON.stringify({ nginx_custom: '' }),
-    }, 'Clearing Custom Nginx...');
+    }, `Clearing custom ${wsLabel} directives...`);
     if (data) {
       setNotice(`Cleared Custom Nginx for ${nginxCustomEditing.domain}.`);
       setNginxCustomEditing(null);
@@ -2390,7 +2402,7 @@ function App() {
   }
 
   async function fixNginxSecurity(id) {
-    const data = await request(`/websites/${id}/fix-nginx-security`, { method: 'POST' }, 'Rewriting Nginx security template...');
+    const data = await request(`/websites/${id}/fix-nginx-security`, { method: 'POST' }, `Rewriting ${wsLabel} security template...`);
     if (data?.message) setNotice(data.message);
   }
 
@@ -3034,7 +3046,7 @@ function App() {
   async function importDaBackup(archivePath, force = daReplaceExisting) {
     const message = force
       ? 'Import and REPLACE? Any existing panel user, website, files and databases with the same names are deleted first.'
-      : 'Import this DirectAdmin backup? This will create users, websites, databases, and nginx configs.';
+      : `Import this DirectAdmin backup? This will create users, websites, databases, and ${wsLabel} configs.`;
     if (!confirm(message)) return;
     setDaImportJob(null);
     const data = await request('/maintenance/da-import/import', { method: 'POST', body: JSON.stringify({ archive_path: archivePath, force }) }, 'Starting DA import...');
@@ -4335,10 +4347,10 @@ function App() {
     return <section className="section nginx-modal inline-nginx-editor">
       <div className="section-title">
         <div className="nginx-config-title">
-          <h2>{fullConfig ? 'Full Nginx config' : 'Website settings'} - {nginxCustomEditing.domain}</h2>
+          <h2>{fullConfig ? `Full ${wsLabel} config` : 'Website settings'} - {nginxCustomEditing.domain}</h2>
           <p className="hint">{fullConfig
             ? 'This is read-only. BPanel manages the main vhost template.'
-            : 'Managed settings rewrite the main vhost safely. Custom Nginx is still stored as a separate include.'}</p>
+            : `Managed settings rewrite the main vhost safely. Custom ${wsLabel} directives are still stored as a separate include.`}</p>
         </div>
         <div className="actions">
           {!fullConfig && isAdmin && <button className="secondary-light" disabled={!!loading} onClick={viewFullNginxConfig}><FileText size={14}/> View all</button>}
@@ -4377,7 +4389,7 @@ function App() {
         >
           {phpVersions.installed.map(v => <option key={v} value={v}>PHP {v}</option>)}
         </select></label>}
-        <label><span>Nginx rewrite</span><select
+        <label><span>URL rewrite</span><select
           value={rewriteDisabled ? (selectedAppType === 'wordpress' ? 'front_controller' : 'none') : websiteSettingsForm.nginx_rewrite_mode}
           onChange={e => setWebsiteSettingsForm(prev => ({ ...prev, nginx_rewrite_mode: e.target.value }))}
           disabled={!!loading || rewriteDisabled}
@@ -4422,7 +4434,7 @@ function App() {
         </div>
       </div>}
       <div className="custom-nginx-block">
-        {!fullConfig && <h3>Custom Nginx</h3>}
+        {!fullConfig && <h3>Custom directives</h3>}
         <textarea
           className="code-editor"
           value={nginxCustomEditing.content}
@@ -4436,7 +4448,7 @@ function App() {
         />
       </div>
       <div className="actions">
-        {!fullConfig && <button disabled={!!loading} onClick={saveNginxCustom}>Save and reload Nginx</button>}
+        {!fullConfig && <button disabled={!!loading} onClick={saveNginxCustom}>{`Save and reload ${wsLabel}`}</button>}
         {!fullConfig && <button className="secondary-light" disabled={!!loading} onClick={resetNginxDefault}><RotateCcw size={14}/> Reset custom</button>}
         <button className="secondary-light" disabled={!!loading} onClick={() => setNginxCustomEditing(null)}>{fullConfig ? 'Close' : 'Cancel'}</button>
       </div>
@@ -4588,7 +4600,7 @@ function App() {
         <p className="hint">{wpFieldsEnabled
           ? 'WordPress will be installed and the panel will show the URL, admin account, and password after creation.'
           : siteType === 'application'
-            ? 'Nginx will forward this domain to the selected application on 127.0.0.1, including WebSocket upgrades.'
+            ? `${wsLabel} will forward this domain to the selected application on 127.0.0.1, including WebSocket upgrades.`
             : 'A PHP-FPM vhost will be created with public_html/ folder. Upload your PHP, HTML, or static files via File Manager.'}</p>
       </section>
       <section className="section">
@@ -4621,7 +4633,7 @@ function App() {
               <span>Type <strong>{site.app_type || 'wordpress'}</strong></span>
               <span>PHP <strong>{site.php_version}</strong></span>
               {site.app_type === 'php' && site.nginx_rewrite_mode && site.nginx_rewrite_mode !== 'none' && <span>Rewrite <strong>{site.nginx_rewrite_mode}</strong></span>}
-              {site.nginx_custom && <span className="badge ok">Custom Nginx</span>}
+              {site.nginx_custom && <span className="badge ok">Custom directives</span>}
               {site.waf_enabled && <span className="badge ok">WAF</span>}
               {site.http_flood_enabled && <span className="badge ok">HTTP Flood</span>}
               {(site.aliases || []).length > 0 && <span>Domains <strong>{(site.aliases || []).length + 1}</strong></span>}
@@ -5585,7 +5597,7 @@ function App() {
     const entryLabel = wafAccessLogs.total >= 1000 ? `${(wafAccessLogs.total / 1000).toFixed(1)}k entries` : `${wafAccessLogs.total || 0} entries`;
     return <section className="section access-logs-section">
       <div className="section-title access-logs-title">
-        <div><h2>Access Logs</h2><p className="hint">Protected Nginx traffic across all websites.</p></div>
+        <div><h2>Access Logs</h2><p className="hint">{`Protected ${wsLabel} traffic across all websites.`}</p></div>
         <div className="access-log-icon-actions">
           <button className="secondary-light icon-button" disabled={!!loading} onClick={() => loadWafAccessLogs(wafAccessLogFilters, true)} aria-label="Refresh access logs" title="Refresh access logs"><RefreshCw size={15}/></button>
           <button className="secondary-light icon-button" onClick={() => selectedSite && window.open(websiteUrl(selectedSite), '_blank', 'noopener,noreferrer')} disabled={!selectedSite} aria-label="Open website" title="Open website"><ExternalLink size={15}/></button>

@@ -726,6 +726,9 @@ class PanelSettingsOut(BaseModel):
     ipv6: dict = {}
     # The server's own public IPv4 addresses, for the settings page to show.
     server_ipv4: list[str] = []
+    # nginx | openlitespeed - fixed at install time. The UI needs it because
+    # the labels, log locations and config editor differ between the two.
+    web_server: str = "nginx"
     message: Optional[str] = None
     # Optional ClamAV malware scanning status (always present, defaults off).
     malware_scan_enabled: bool = False

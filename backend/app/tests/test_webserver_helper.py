@@ -130,3 +130,42 @@ def test_the_stock_openlitespeed_example_vhost_is_removed():
     does not map reaches LiteSpeed's demo page. The nginx installer removes
     its own default site for exactly this reason."""
     assert 'remove_named_block(text, "virtualHost", "Example")' in HELPER
+
+
+APP_JSX = (PROJECT_ROOT / "frontend" / "src" / "App.jsx").read_text(encoding="utf-8")
+
+
+def test_the_panel_reports_which_web_server_is_running():
+    """The choice is made once at install time and never changes, but the UI
+    has to say which one it is - the labels, the service list and the log
+    locations all differ."""
+    from app.schemas.schemas import PanelSettingsOut
+
+    assert "web_server" in PanelSettingsOut.model_fields
+    settings_src = (PROJECT_ROOT / "backend" / "app" / "services" / "panel_settings.py").read_text(encoding="utf-8")
+    assert '"web_server": webserver.active_name()' in settings_src
+
+
+def test_the_ui_labels_follow_the_active_web_server():
+    """Hardcoded "Nginx" in front of an OpenLiteSpeed customer is simply
+    wrong. Internal identifiers, CSS classes and API paths keep their names -
+    only what a customer reads is switched."""
+    assert "const webServerLabel = " in APP_JSX
+    assert "const wsLabel = webServerLabel(webServer)" in APP_JSX
+    # The Services page must not list php-fpm/nginx units on an OLS box.
+    assert "const OLS_SERVICE_NAMES = ['bpanel-api', 'lshttpd'" in APP_JSX
+    assert "setServiceNames(serviceNamesFor(webServer))" in APP_JSX
+
+    # No user-visible "Nginx" left: quoted strings and JSX text nodes only.
+    import re
+    leftovers = []
+    for line in APP_JSX.splitlines():
+        if "Nginx" not in line:
+            continue
+        for m in re.finditer(r"'([^']*Nginx[^']*)'|>([^<>{]*Nginx[^<>{]*)<", line):
+            text = m.group(1) or m.group(2)
+            # The label helper itself is allowed to contain the word.
+            if "webServerLabel" in line:
+                continue
+            leftovers.append(text.strip())
+    assert not leftovers, f"hardcoded Nginx still shown to users: {leftovers}"

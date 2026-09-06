@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 from fastapi import HTTPException, UploadFile, status
 
 from app.core.config import settings
-from app.services import panel_ipv6, server_network
+from app.services import panel_ipv6, server_network, webserver
 from app.services.shell import shell
 
 
@@ -266,6 +266,10 @@ def current_settings() -> dict:
         # Where this server answers. Global addresses only: loopback and
         # link-local reach nobody.
         "server_ipv4": server_network.ipv4_addresses(),
+        # Which web server this install runs. Chosen once at install time and
+        # not switchable afterwards, but the UI has to say which one it is -
+        # the labels, the log paths and the config editor all differ.
+        "web_server": webserver.active_name(),
         "malware_scan_enabled": mw["enabled"],
         "malware_scan_installed": mw["installed"],
         "malware_scan_active": mw["active"],
