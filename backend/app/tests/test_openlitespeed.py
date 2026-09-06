@@ -23,6 +23,13 @@ def test_interface_matches_nginx_for_every_dispatch_call_site():
     for const in ("PROXIED_APP_TYPES", "ALLOWED_APP_TYPES", "ALLOWED_REWRITE_MODES", "ALLOWED_PHP_VERSIONS"):
         assert getattr(nginx, const) == getattr(ols, const), f"{const} differs between backends"
 
+    # Both must declare whether certbot wires SSL into the vhost for them -
+    # the SSL endpoints branch on it, and a missing attribute would silently
+    # default to "yes" and leave an OLS site's certificate referenced by
+    # nothing.
+    assert nginx.SSL_WIRED_BY_CERTBOT is True
+    assert ols.SSL_WIRED_BY_CERTBOT is False
+
 
 def test_wordpress_vhost_renders_lsphp_and_lscache():
     rendered = ols.render_vhost(

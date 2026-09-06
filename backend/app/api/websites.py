@@ -1080,14 +1080,20 @@ def enable_ssl(website_id: int, db: Session = Depends(get_db), current_user: Use
     website.ssl_ca_path = None
     website.ssl_source_domain = None
     ssl.remove_manual_ssl_files(*previous_manual_paths)
-    if _redirect_domains(website):
-        # A redirect-domain alias has no server block of its own until this
-        # runs (see nginx._append_certbot_redirect_vhosts) - it only gets one
-        # here, reusing the certificate file this site now has, never from
-        # certbot's own nginx plugin (that only ever touches "$domain" for
-        # exactly this reason: it has no way to create a new, correctly
-        # confined block for an alias, and falls back to cloning whatever
-        # server block it finds first).
+    # On nginx a re-render is only needed for redirect aliases: a
+    # redirect-domain alias has no server block of its own until this runs
+    # (see nginx._append_certbot_redirect_vhosts) - it only gets one here,
+    # reusing the certificate file this site now has, never from certbot's own
+    # nginx plugin (that only ever touches "$domain" for exactly this reason:
+    # it has no way to create a new, correctly confined block for an alias,
+    # and falls back to cloning whatever server block it finds first).
+    #
+    # On a backend with no certbot plugin (OpenLiteSpeed) the re-render is
+    # what puts the certificate into the vhost at all. Skipping it left the
+    # cert issued and on disk but referenced by nothing, so HTTPS answered
+    # with the panel's default certificate and every browser reported a
+    # hostname mismatch - seen on a live server with a real domain.
+    if not getattr(webserver, "SSL_WIRED_BY_CERTBOT", True) or _redirect_domains(website):
         try:
             _rewrite_website_vhost(website)
         except (RuntimeError, ValueError):

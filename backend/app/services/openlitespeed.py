@@ -44,6 +44,10 @@ ACME_WEBROOT = "/var/www/bpanel-acme"
 ALLOWED_PHP_VERSIONS = {"5.6", "7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5"}
 ALLOWED_APP_TYPES = {"wordpress", "php", "static", "application"}
 PROXIED_APP_TYPES = {"application"}
+# No certbot plugin exists for OpenLiteSpeed, so nothing writes the
+# issued certificate into the vhost on our behalf - the panel must
+# re-render it, which is what this flag tells the SSL endpoints.
+SSL_WIRED_BY_CERTBOT = False
 PROXY_TIMEOUT_SECONDS = 300
 ALLOWED_REWRITE_MODES = {"none", "front_controller", "laravel", "codeigniter", "seohburl"}
 ALLOWED_LOG_KINDS = {"access", "error"}

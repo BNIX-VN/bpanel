@@ -18,6 +18,11 @@ CUSTOM_INCLUDE_DIR = Path("/etc/nginx/bpanel/custom")
 
 ALLOWED_PHP_VERSIONS = {"5.6", "7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5"}
 ALLOWED_APP_TYPES = {"wordpress", "php", "static", "application"}
+# certbot's nginx plugin writes the issued certificate into the vhost
+# itself (`certbot install --nginx`), so the panel does not have to
+# re-render afterwards. openlitespeed.py sets this False - OLS has no
+# certbot plugin, and a cert that is never referenced serves nothing.
+SSL_WIRED_BY_CERTBOT = True
 # Served by proxying to an installed application's port instead of PHP-FPM.
 PROXIED_APP_TYPES = {"application"}
 PROXY_TIMEOUT_SECONDS = 300
