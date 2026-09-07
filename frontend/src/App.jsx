@@ -669,11 +669,14 @@ function App() {
   // Bot blocking. The list is free text so a whole blocklist can be pasted in
   // one go; the backend splits and cleans it. Targets are the websites the
   // paste is applied to - it is normally the same list on many sites.
-  const [botBlockText, setBotBlockText] = useState('');
-  const [botBlockTargets, setBotBlockTargets] = useState([]);
-  const [botBlockMode, setBotBlockMode] = useState('add');
   const [botBlocks, setBotBlocks] = useState(null);
   const [bulkBotOpen, setBulkBotOpen] = useState(false);
+  // The global list as an array so each entry can be removed on its own; the
+  // paste box is only for adding several at once.
+  const [globalBots, setGlobalBots] = useState([]);
+  const [newBotName, setNewBotName] = useState('');
+  const [globalBotPaste, setGlobalBotPaste] = useState('');
+  const [globalBotFilter, setGlobalBotFilter] = useState('');
   // The list for the one site being configured, kept apart from the bulk
   // import above so editing one site cannot disturb a pending bulk paste.
   const [siteBotText, setSiteBotText] = useState('');
@@ -3440,39 +3443,35 @@ function App() {
 
   async function loadBotBlocks() {
     const data = await request('/waf/bots', {}, 'Loading blocked bots...');
-    if (data) setBotBlocks(data);
-  }
-
-  async function applyBotBlocks() {
-    if (botBlockTargets.length === 0) {
-      setNotice('Select at least one website to apply the list to.');
-      return;
-    }
-    const data = await request('/waf/bots/apply', {
-      method: 'POST',
-      body: JSON.stringify({ blocked_bots: botBlockText, website_ids: botBlockTargets, mode: botBlockMode }),
-    }, 'Applying bot blocklist...');
     if (data) {
-      setNotice(data.message || 'Bot blocklist applied.');
-      // Report per-site failures rather than letting a partial apply look
-      // like a clean one.
-      if (data.failed?.length) {
-        setNotice(`${data.message} Failed: ${data.failed.map(f => `${f.domain} (${f.error})`).join('; ')}`);
-      }
-      await loadBotBlocks();
-      await refreshAll();
+      setBotBlocks(data);
+      setGlobalBots(data.global_blocked_bots || []);
     }
   }
 
-  async function clearWebsiteBots(websiteId) {
-    const data = await request(`/waf/websites/${websiteId}/bots`, {
+  async function saveGlobalBots(nextList) {
+    const data = await request('/waf/bots/global', {
       method: 'PUT',
-      body: JSON.stringify({ blocked_bots: '' }),
-    }, 'Clearing blocked bots...');
+      body: JSON.stringify({ blocked_bots: nextList.join('\n') }),
+    }, 'Saving global bad bots...');
     if (data) {
-      setNotice(data.message || 'Bot blocklist cleared.');
+      setGlobalBots(data.global_blocked_bots || []);
+      setNotice(data.failed?.length
+        ? `${data.message} Failed: ${data.failed.map(f => `${f.domain} (${f.error})`).join('; ')}`
+        : (data.message || 'Global bad bots saved.'));
       await loadBotBlocks();
     }
+  }
+
+  function addGlobalBots(text) {
+    const incoming = String(text || '').split(/[\n,;]+/).map(s => s.trim()).filter(Boolean);
+    if (incoming.length === 0) return;
+    const seen = new Set(globalBots.map(s => s.toLowerCase()));
+    const merged = [...globalBots];
+    for (const name of incoming) {
+      if (!seen.has(name.toLowerCase())) { seen.add(name.toLowerCase()); merged.push(name); }
+    }
+    setGlobalBots(merged);
   }
 
   async function saveWebsiteWafRules() {
@@ -5580,7 +5579,11 @@ function App() {
   function renderWaf() {
     if (!isAdmin) return <section className="section"><h2>WAF</h2><p className="hint">No permission.</p></section>;
     const statusText = wafRules.status?.stdout || wafRules.status?.stderr || 'Click Refresh to load WAF status.';
-    const botCountFor = id => (botBlocks?.websites?.find(w => w.website_id === id)?.blocked_bots || []).length;
+    // The effective list, not the site's own: a site with nothing of its own
+    // still enforces the global list, and reporting "No bots" for it was a lie.
+    const rowFor = id => botBlocks?.websites?.find(w => w.website_id === id);
+    const botCountFor = id => (rowFor(id)?.effective_blocked_bots || []).length;
+    const ownCountFor = id => (rowFor(id)?.blocked_bots || []).length;
     return <>
       <section className="section">
         <div className="section-title">
@@ -5601,7 +5604,10 @@ function App() {
               <div className="waf-overview-badges">
                 <span className={site.waf_enabled ? 'badge ok' : 'badge'}>{site.waf_enabled ? 'WAF on' : 'WAF off'}</span>
                 <span className={site.http_flood_enabled ? 'badge ok' : 'badge'}>{site.http_flood_enabled ? 'Flood on' : 'Flood off'}</span>
-                <span className={bots > 0 ? 'badge ok' : 'badge'}>{bots > 0 ? `${bots} bot(s)` : 'No bots'}</span>
+                <span
+                  className={bots > 0 ? 'badge ok' : 'badge'}
+                  title={ownCountFor(site.id) > 0 ? `${ownCountFor(site.id)} set on this site, the rest from the global list` : 'All from the global list'}
+                >{bots > 0 ? `${bots} bot(s)` : 'No bots'}</span>
               </div>
               <button disabled={!!loading} onClick={() => openWafSite(site.id)}><SettingsIcon size={14}/> Configure</button>
             </div>;
@@ -5611,58 +5617,78 @@ function App() {
 
       <section className="section">
         <div className="section-title">
-          <div><h2>Import bot list</h2><p className="hint">Apply one list to several websites at once. To edit a single site, open it above.</p></div>
-          <button disabled={!!loading} onClick={() => setBulkBotOpen(open => !open)}>{bulkBotOpen ? 'Hide' : 'Show'}</button>
-        </div>
-        {bulkBotOpen && <div className="bot-block-grid">
-          <div className="bot-block-editor">
-            <textarea
-              className="code-editor"
-              value={botBlockText}
-              onChange={e => setBotBlockText(e.target.value)}
-              rows={12}
-              spellCheck={false}
-              placeholder={'AhrefsBot\nSemrushBot\nMJ12bot\nDotBot\nPetalBot\nBytespider'}
-            />
+          <div>
+            <h2>Global bad bots</h2>
             <p className="hint">
-              {(() => {
-                const names = botBlockText.split(/[\n,;]+/).map(s => s.trim()).filter(Boolean);
-                const unique = new Set(names.map(s => s.toLowerCase()));
-                return `${unique.size} bot(s)${names.length !== unique.size ? ` (${names.length - unique.size} duplicate(s) will be dropped)` : ''}`;
-              })()}
-              {botBlocks?.max_bots ? ` - max ${botBlocks.max_bots}` : ''}
+              Blocked on every website on this server. A site can add more of its own from its page.
+              {globalBots.length > 0 ? ` Currently ${globalBots.length} bot(s).` : ' Nothing blocked globally yet.'}
             </p>
           </div>
-          <div className="bot-block-targets">
-            <div className="section-title"><h3>Apply to</h3></div>
-            <div className="bot-block-target-actions">
-              <button type="button" disabled={!!loading} onClick={() => setBotBlockTargets(websites.map(s => s.id))}>Select all</button>
-              <button type="button" disabled={!!loading} onClick={() => setBotBlockTargets([])}>Clear</button>
-            </div>
-            <div className="bot-block-target-list">
-              {websites.map(site => <label className="bot-block-target" key={site.id}>
-                <input
-                  type="checkbox"
-                  checked={botBlockTargets.includes(site.id)}
-                  onChange={e => setBotBlockTargets(prev => e.target.checked
-                    ? [...prev, site.id]
-                    : prev.filter(id => id !== site.id))}
-                />
-                <span>
-                  <strong>{site.domain}</strong>
-                  <small>{botCountFor(site.id) > 0 ? `${botCountFor(site.id)} blocked` : 'none blocked'}</small>
-                </span>
-              </label>)}
-            </div>
-            <div className="bot-block-apply">
-              <label><span>Mode</span><select value={botBlockMode} onChange={e => setBotBlockMode(e.target.value)}>
-                <option value="add">Add to existing list</option>
-                <option value="replace">Replace existing list</option>
-              </select></label>
-              <button disabled={!!loading || botBlockTargets.length === 0} onClick={applyBotBlocks}>
-                <Shield size={14}/> Apply to {botBlockTargets.length} website(s)
-              </button>
-            </div>
+          <button disabled={!!loading} onClick={() => setBulkBotOpen(open => !open)}>{bulkBotOpen ? 'Hide' : 'Edit'}</button>
+        </div>
+
+        {bulkBotOpen && <div className="global-bots">
+          <div className="global-bots-add">
+            <input
+              value={newBotName}
+              placeholder="Add one bot, e.g. Amazonbot"
+              onChange={e => setNewBotName(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') { addGlobalBots(newBotName); setNewBotName(''); } }}
+            />
+            <button type="button" disabled={!newBotName.trim()} onClick={() => { addGlobalBots(newBotName); setNewBotName(''); }}>
+              <Plus size={14}/> Add
+            </button>
+            <input
+              className="global-bots-filter"
+              value={globalBotFilter}
+              placeholder="Filter the list"
+              onChange={e => setGlobalBotFilter(e.target.value)}
+            />
+          </div>
+
+          <div className="global-bots-list">
+            {globalBots.length === 0 && <p className="hint">No bots yet. Add one above, or paste a list below.</p>}
+            {globalBots
+              .filter(name => !globalBotFilter.trim() || name.toLowerCase().includes(globalBotFilter.trim().toLowerCase()))
+              .map(name => <span className="global-bot-chip" key={name}>
+                <code>{name}</code>
+                <button
+                  type="button"
+                  title={`Remove ${name}`}
+                  onClick={() => setGlobalBots(prev => prev.filter(n => n !== name))}
+                ><X size={12}/></button>
+              </span>)}
+          </div>
+
+          <details className="global-bots-paste">
+            <summary>Paste a list</summary>
+            <textarea
+              className="code-editor"
+              rows={6}
+              spellCheck={false}
+              value={globalBotPaste}
+              onChange={e => setGlobalBotPaste(e.target.value)}
+              placeholder={'AhrefsBot\nSemrushBot\nMJ12bot'}
+            />
+            <button type="button" disabled={!globalBotPaste.trim()} onClick={() => { addGlobalBots(globalBotPaste); setGlobalBotPaste(''); }}>
+              <Plus size={14}/> Add to list
+            </button>
+          </details>
+
+          <div className="global-bots-actions">
+            <button disabled={!!loading} onClick={() => saveGlobalBots(globalBots)}>
+              <Shield size={14}/> Save and apply to all {websites.length} website(s)
+            </button>
+            <button
+              className="secondary-light"
+              disabled={!!loading}
+              onClick={() => setGlobalBots(botBlocks?.global_blocked_bots || [])}
+            >Reset</button>
+            <span className="hint">
+              {globalBots.length} bot(s)
+              {botBlocks?.max_bots ? ` - max ${botBlocks.max_bots}` : ''}
+              {JSON.stringify(globalBots) !== JSON.stringify(botBlocks?.global_blocked_bots || []) ? ' - unsaved changes' : ''}
+            </span>
           </div>
         </div>}
       </section>

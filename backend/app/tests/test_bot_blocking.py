@@ -98,6 +98,30 @@ def test_rewriting_replaces_rather_than_stacks_blocks():
     assert "AhrefsBot" not in twice
 
 
+def test_a_site_enforces_the_global_list_plus_its_own(tmp_path, monkeypatch):
+    """The two lists are stored apart and merged at render time.
+
+    Flattening the global list into each site would work once and then rot:
+    every later edit would have to find and update 23 copies, and any site
+    added afterwards would silently miss it.
+    """
+    from app.services import panel_settings, waf
+
+    monkeypatch.setattr(panel_settings, "SETTINGS_DIR", tmp_path)
+    monkeypatch.setattr(panel_settings, "SETTINGS_FILE", tmp_path / "panel-settings.json")
+    panel_settings.save_global_blocked_bots("AhrefsBot\nSemrushBot")
+
+    class Site:
+        domain = "example.com"
+        blocked_bots = "Bytespider\nahrefsbot"   # one of these duplicates the global list
+
+    effective = waf.effective_blocked_bots(Site())
+
+    assert effective == ["AhrefsBot", "SemrushBot", "Bytespider"]
+    # The site's own list is untouched by the merge.
+    assert waf.website_blocked_bots(Site()) == ["Bytespider", "ahrefsbot"]
+
+
 def test_update_edits_the_existing_vhost_instead_of_re_rendering_it(tmp_path, monkeypatch):
     """Regression: this went out calling write_vhost(domain, <file content>).
 

@@ -6,8 +6,8 @@ from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.permissions import Role, ensure_role
 from app.models.entities import User, Website
-from app.schemas.schemas import WafBotBlockApply, WebsiteAccessLogsOut, WebsiteBotBlockUpdate
-from app.services import nginx, waf
+from app.schemas.schemas import WafBotBlockApply, WafGlobalBotsUpdate, WebsiteAccessLogsOut, WebsiteBotBlockUpdate
+from app.services import nginx, panel_settings, waf
 
 router = APIRouter(prefix="/waf", tags=["waf"])
 
@@ -136,14 +136,49 @@ def list_blocked_bots(db: Session = Depends(get_db), current_user: User = Depend
     websites = db.query(Website).order_by(Website.domain).all()
     return {
         "max_bots": nginx.MAX_BLOCKED_BOTS,
+        "global_blocked_bots": panel_settings.global_blocked_bots(),
         "websites": [
             {
                 "website_id": site.id,
                 "domain": site.domain,
+                # What the site adds on its own, and what it ends up enforcing.
                 "blocked_bots": waf.website_blocked_bots(site),
+                "effective_blocked_bots": waf.effective_blocked_bots(site),
             }
             for site in websites
         ],
+    }
+
+
+@router.put("/bots/global")
+def save_global_bots(
+    payload: WafGlobalBotsUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Replace the server-wide bad-bot list and re-render every vhost.
+
+    One list for the whole server is the point: adding a bot here protects
+    every site at once instead of being copied into each one, where the copies
+    then drift apart.
+    """
+    _require_admin(current_user)
+    try:
+        bots = panel_settings.save_global_blocked_bots(payload.blocked_bots)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    websites = db.query(Website).order_by(Website.domain).all()
+    applied, failed = waf.resync_bot_blocks(websites)
+
+    message = f"{len(bots)} bot(s) blocked globally; {len(applied)} website(s) updated."
+    if failed:
+        message += f" {len(failed)} failed."
+    return {
+        "global_blocked_bots": bots,
+        "applied": applied,
+        "failed": failed,
+        "message": message,
     }
 
 

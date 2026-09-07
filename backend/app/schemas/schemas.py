@@ -423,6 +423,12 @@ class WebsiteBotBlockUpdate(BaseModel):
     blocked_bots: str = ""
 
 
+class WafGlobalBotsUpdate(BaseModel):
+    """The server-wide bad-bot list. Free text, cleaned by the service layer."""
+
+    blocked_bots: str = ""
+
+
 class WafBotBlockApply(BaseModel):
     """Apply one list to several websites at once.
 

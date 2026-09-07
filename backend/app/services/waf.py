@@ -272,7 +272,7 @@ def sync_website_rules(website: Website) -> CommandResult:
 
 
 def site_config(website: Website) -> dict:
-    from app.services import nginx
+    from app.services import nginx, panel_settings
 
     enabled = website_enabled_rule_ids(website)
     return {
@@ -293,6 +293,8 @@ def site_config(website: Website) -> dict:
         "enabled_rule_ids": [rule["id"] for rule in DEFAULT_RULES if rule["id"] in enabled],
         "custom_rules": website_custom_rules(website),
         "blocked_bots": nginx.normalize_blocked_bots(getattr(website, "blocked_bots", "") or ""),
+        "global_blocked_bots": panel_settings.global_blocked_bots(),
+        "effective_blocked_bots": effective_blocked_bots(website),
     }
 
 
@@ -302,32 +304,68 @@ def website_blocked_bots(website: Website) -> list[str]:
     return nginx.normalize_blocked_bots(getattr(website, "blocked_bots", "") or "")
 
 
-def save_website_blocked_bots(website: Website, raw, mode: str = "replace") -> list[str]:
-    """Store one website's bot list and push it into the live vhost.
+def _merge_bots(first, second) -> list[str]:
+    """Union, order-preserving, case-insensitive, first spelling wins."""
+    from app.services import nginx
 
-    Returns the cleaned list actually stored. Raises ValueError for a list that
-    is too long or malformed, which the API turns into a 400.
+    seen: set[str] = set()
+    merged: list[str] = []
+    for name in list(first) + list(second):
+        key = name.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(name)
+    return nginx.normalize_blocked_bots(merged)
+
+
+def effective_blocked_bots(website: Website) -> list[str]:
+    """What actually gets written into this site's vhost.
+
+    The server-wide list plus anything set on the site itself. Keeping the two
+    apart in storage is what lets a bot added globally protect every site at
+    once, without flattening it into 23 copies that then drift.
+    """
+    from app.services import panel_settings
+
+    return _merge_bots(panel_settings.global_blocked_bots(), website_blocked_bots(website))
+
+
+def save_website_blocked_bots(website: Website, raw, mode: str = "replace") -> list[str]:
+    """Store one website's own list and re-render its vhost.
+
+    Returns the site's own cleaned list - not the effective one - because that
+    is what the caller just edited. Raises ValueError for a list that is too
+    long or malformed, which the API turns into a 400.
     """
     from app.services import nginx
 
     incoming = nginx.normalize_blocked_bots(raw)
-    if mode == "add":
-        # Merge, keeping the existing order and the existing spelling of any
-        # name that appears in both.
-        existing = website_blocked_bots(website)
-        seen = {name.casefold() for name in existing}
-        merged = list(existing)
-        for name in incoming:
-            if name.casefold() not in seen:
-                seen.add(name.casefold())
-                merged.append(name)
-        bots = nginx.normalize_blocked_bots(merged)
-    else:
-        bots = incoming
+    bots = _merge_bots(website_blocked_bots(website), incoming) if mode == "add" else incoming
 
     website.blocked_bots = "\n".join(bots)
-    nginx.update_bot_block(website.domain, bots)
+    nginx.update_bot_block(website.domain, effective_blocked_bots(website))
     return bots
+
+
+def resync_bot_blocks(websites) -> tuple[list[str], list[dict]]:
+    """Re-render every site's bot block, e.g. after the global list changed.
+
+    Each site is written independently and a failure on one does not abandon
+    the rest: changing the global list touches every vhost on the server, and
+    the operator needs to know exactly which ones took it.
+    """
+    from app.services import nginx
+
+    done, failed = [], []
+    for site in websites:
+        try:
+            nginx.update_bot_block(site.domain, effective_blocked_bots(site))
+        except (ValueError, RuntimeError, FileNotFoundError) as exc:
+            failed.append({"domain": site.domain, "error": str(exc)})
+            continue
+        done.append(site.domain)
+    return done, failed
 
 
 def save_website_config(website: Website, enabled_rule_ids: Iterable[str], custom_rules: str) -> CommandResult:

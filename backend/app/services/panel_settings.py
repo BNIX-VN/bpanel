@@ -56,6 +56,30 @@ def configured_panel_url() -> str:
     return (_read_raw().get("panel_url") or settings.panel_url or "").strip()
 
 
+def global_blocked_bots() -> list[str]:
+    """The server-wide bad-bot list.
+
+    Read through _read_raw rather than current_settings(): that one refreshes
+    the malware scan status, which is far too much work to answer "what bots
+    are blocked" on every vhost render.
+    """
+    from app.services import nginx
+
+    return nginx.normalize_blocked_bots(_read_raw().get("global_blocked_bots") or "")
+
+
+def save_global_blocked_bots(raw) -> list[str]:
+    """Store the server-wide list. Callers are responsible for re-rendering the
+    vhosts afterwards - see waf.resync_bot_blocks()."""
+    from app.services import nginx
+
+    bots = nginx.normalize_blocked_bots(raw)
+    data = _read_raw()
+    data["global_blocked_bots"] = "\n".join(bots)
+    _write_raw(data)
+    return bots
+
+
 def _asset_url(filename: str | None) -> str:
     if not filename:
         return ""

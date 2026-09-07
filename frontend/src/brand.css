@@ -320,6 +320,18 @@ button:disabled,.upload-button.disabled{background:var(--disabled-bg);color:var(
 .waf-site-header-actions select{min-width:200px}
 .waf-site-toggles{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 @media (max-width:760px){.waf-overview-row{grid-template-columns:minmax(0,1fr)}}
+.global-bots{display:grid;gap:12px}
+.global-bots-add{display:grid;grid-template-columns:minmax(0,1fr) max-content minmax(0,220px);gap:8px;align-items:center}
+.global-bots-filter{min-width:0}
+.global-bots-list{display:flex;flex-wrap:wrap;gap:6px;max-height:260px;overflow-y:auto;padding:10px;border:1px solid var(--border);border-radius:8px}
+.global-bot-chip{display:inline-flex;align-items:center;gap:6px;padding:3px 6px 3px 9px;border:1px solid var(--border);border-radius:999px;background:var(--surface-muted,transparent)}
+.global-bot-chip code{font-size:12px}
+.global-bot-chip button{padding:2px;min-width:0;width:20px;height:20px;display:grid;place-items:center;border-radius:999px;line-height:0;background:transparent;border:none;color:var(--text-muted)}
+.global-bot-chip button:hover:not(:disabled){background:var(--danger-bg,var(--surface-alt));color:var(--danger,#b91c1c)}
+.global-bots-paste summary{cursor:pointer;font-weight:600;color:var(--text-secondary);margin-bottom:8px}
+.global-bots-paste textarea{width:100%;min-width:0;margin-bottom:8px}
+.global-bots-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+@media (max-width:760px){.global-bots-add{grid-template-columns:minmax(0,1fr)}}
 .bot-block-panel{gap:12px}
 .bot-block-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:start}
 .bot-block-editor{display:grid;gap:8px;min-width:0}
