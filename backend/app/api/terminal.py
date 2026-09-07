@@ -1,6 +1,7 @@
 """Terminal API endpoints."""
 
 import json
+import logging
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -16,6 +17,8 @@ from app.core.permissions import Role, ensure_role, is_admin_role
 from app.core.security import ALGORITHM
 from app.models.entities import RevokedToken, User, Website
 from app.services import terminal
+
+logger = logging.getLogger("bpanel.terminal")
 
 router = APIRouter(prefix="/terminal", tags=["terminal"])
 
@@ -57,18 +60,35 @@ def _current_user_from_session_cookie(websocket: WebSocket, db: Session) -> User
     return user
 
 
+def may_use_terminal(current_user: User) -> bool:
+    """Whether this account is allowed a shell at all.
+
+    Separate from website ownership: owning a site says which site you may act
+    on, not whether the terminal is part of what you are paying for. Admins
+    always may - they administer the server.
+    """
+    if is_admin_role(current_user.role):
+        return True
+    return bool(getattr(current_user, "terminal_enabled", False))
+
+
 async def get_user_website(
     website_id: int,
     db: Session,
     current_user: User,
 ) -> Website:
-    """Get website and verify ownership."""
+    """Get website, verify ownership, and verify terminal is permitted."""
     website = db.query(Website).filter(Website.id == website_id).first()
     if not website:
         raise HTTPException(status_code=404, detail="Website not found")
     # Check ownership or admin role
     if website.owner_id != current_user.id:
         ensure_role(current_user.role, Role.admin)
+    # Owning the site is not the same as being entitled to a shell on it. The
+    # frontend hides the terminal for accounts without it, but hiding a button
+    # is not access control - this endpoint answers curl just as happily.
+    if not may_use_terminal(current_user):
+        raise HTTPException(status_code=403, detail="Terminal is not enabled for your account.")
     return website
 
 
@@ -204,6 +224,13 @@ async def terminal_websocket(
         await websocket.close(code=4003, reason="Access denied")
         return
 
+    # ...and the same entitlement check the REST endpoint makes. Both doors
+    # have to be locked: the websocket is reachable without ever touching
+    # /terminal/exec.
+    if not may_use_terminal(current_user):
+        await websocket.close(code=4003, reason="Terminal is not enabled for your account")
+        return
+
     if not website.linux_user:
         await websocket.close(code=4004, reason="Website runtime user is missing")
         return
@@ -291,11 +318,15 @@ async def terminal_websocket(
 
     except WebSocketDisconnect:
         pass  # Client disconnected
-    except Exception as e:
+    except Exception:
+        # The exception text stays server-side. It carries paths, module names
+        # and occasionally command output, and the client asking for it is an
+        # end user with a shell on one site, not an operator.
+        logger.exception("Terminal websocket failed for website %s", website_id)
         try:
             await websocket.send_json({
                 "type": "error",
-                "data": f"Server error: {str(e)}"
+                "data": "Server error. Check the panel logs for details."
             })
         except Exception:
             pass  # WebSocket already closed

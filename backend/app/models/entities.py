@@ -43,6 +43,14 @@ class User(Base):
     package_id: Mapped[Optional[int]] = mapped_column(ForeignKey("user_packages.id", ondelete="SET NULL"), nullable=True, index=True)
     website_limit: Mapped[int] = mapped_column(Integer, default=5)
     storage_limit_mb: Mapped[int] = mapped_column(Integer, default=1024)
+    # Copied from the package when one is assigned, exactly like website_limit
+    # and storage_limit_mb above, so that enforcement reads one column and a
+    # user without a package still resolves to something. UserPackage has
+    # carried terminal_enabled since packages were added but nothing ever read
+    # it - the terminal checked website ownership only, so the setting did
+    # nothing. New accounts default to off: a shell on the server is not
+    # something to hand out implicitly.
+    terminal_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     # Bumped to invalidate previously-issued JWTs (logout-everywhere, role
     # change, password reset by admin, account disable, etc).
     token_version: Mapped[int] = mapped_column(Integer, default=0)

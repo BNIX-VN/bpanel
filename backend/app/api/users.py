@@ -45,6 +45,9 @@ def _apply_package_limits(user: User, package: UserPackage | None) -> None:
     if package:
         user.website_limit = package.website_limit
         user.storage_limit_mb = package.storage_limit_mb
+        # Assigning a package is what makes its terminal_enabled mean anything;
+        # before this the flag was settable and displayed but never read.
+        user.terminal_enabled = package.terminal_enabled
 
 
 def _decode_schedule_user_ids(raw: str | None) -> list[int]:

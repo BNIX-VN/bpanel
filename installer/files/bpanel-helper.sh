@@ -4945,6 +4945,24 @@ PY
       command -v "$php_bin" >/dev/null 2>&1 || deny "PHP CLI is not installed: $php_bin"
     fi
 
+    # PHP started from the terminal was completely unconfined, while the same
+    # site's PHP-FPM pool runs under open_basedir. That gap let one tenant read
+    # another's files: the terminal runs as the site user, site files are
+    # world-readable by design, and /home/<user> is 0751 - not listable, but
+    # traversable if you know the name. `php -r "readfile('/home/other/...')"`
+    # was enough. Verified on a live test server before the fix: it printed
+    # /etc/passwd.
+    #
+    # The boundary is the tenant's own home, not one site root: a customer with
+    # several sites still has to be able to work across them, and the leak
+    # being closed is between customers.
+    #
+    # /var/lib/php/{sessions,uploads}/<user> match the pool. /tmp and
+    # /usr/share/php are what composer and PEAR-era libraries expect. The
+    # interpreter must also be able to read the phar it is being asked to run,
+    # so the directory of each tool is appended at the call site.
+    terminal_open_basedir="$HOME_ROOT/$user:/var/lib/php/sessions/$user:/var/lib/php/uploads/$user:/tmp:/usr/share/php"
+
     # Kill the whole process group when the budget runs out. Composer, npm and
     # WP-CLI can wedge on a slow network, and without this the API worker would
     # block on the pipe until the client gives up.
@@ -4957,16 +4975,16 @@ PY
     # ALLOWED_COMMANDS in backend/app/services/terminal.py.
     case "$cmd" in
       php)
-        exec "${terminal_runner[@]}" env "${terminal_env[@]}" "$php_bin" "$@"
+        exec "${terminal_runner[@]}" env "${terminal_env[@]}" "$php_bin" -d open_basedir="$terminal_open_basedir" "$@"
         ;;
       composer)
         composer_bin="$(command -v composer || true)"
         [[ -n "$composer_bin" ]] || deny "composer not found"
-        exec "${terminal_runner[@]}" env "${terminal_env[@]}" "$php_bin" "$composer_bin" "$@"
+        exec "${terminal_runner[@]}" env "${terminal_env[@]}" "$php_bin" -d open_basedir="$terminal_open_basedir:$(dirname "$composer_bin")" "$composer_bin" "$@"
         ;;
       wp)
         [[ -f /usr/local/bin/wp ]] || deny "wp-cli not found"
-        exec "${terminal_runner[@]}" env "${terminal_env[@]}" WP_CLI_PHP_ARGS='-d pcre.jit=0' "$php_bin" -d pcre.jit=0 /usr/local/bin/wp "$@"
+        exec "${terminal_runner[@]}" env "${terminal_env[@]}" WP_CLI_PHP_ARGS="-d pcre.jit=0 -d open_basedir=$terminal_open_basedir:/usr/local/bin" "$php_bin" -d pcre.jit=0 -d open_basedir="$terminal_open_basedir:/usr/local/bin" /usr/local/bin/wp "$@"
         ;;
       phpunit)
         phpunit_bin="$(command -v phpunit || true)"
@@ -4975,7 +4993,7 @@ PY
           phpunit_bin="$target/vendor/bin/phpunit"
         fi
         [[ -n "$phpunit_bin" ]] || deny "phpunit not found (install it globally or with composer)"
-        exec "${terminal_runner[@]}" env "${terminal_env[@]}" "$php_bin" "$phpunit_bin" "$@"
+        exec "${terminal_runner[@]}" env "${terminal_env[@]}" "$php_bin" -d open_basedir="$terminal_open_basedir:$(dirname "$phpunit_bin")" "$phpunit_bin" "$@"
         ;;
       node|npm|npx|yarn|git)
         exec "${terminal_runner[@]}" env "${terminal_env[@]}" "$cmd" "$@"
@@ -4997,7 +5015,7 @@ PY
         if [[ ! -f artisan ]]; then
           deny "artisan not found in $target (Laravel keeps it in the site root; try 'cd ..' first)"
         fi
-        exec "${terminal_runner[@]}" env "${terminal_env[@]}" "$php_bin" artisan "$@"
+        exec "${terminal_runner[@]}" env "${terminal_env[@]}" "$php_bin" -d open_basedir="$terminal_open_basedir" artisan "$@"
         ;;
       *)
         echo "Command not allowed: $cmd" >&2
