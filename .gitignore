@@ -49,7 +49,10 @@ style.css
 
 # Dev / CI / tooling (not part of release)
 .codex/
-.github/
+# NOT .github/ - the workflows and the dependabot config have to be committed
+# for GitHub to run them at all. The two files there today predate the rule and
+# survive only because tracked files ignore .gitignore; a *new* workflow would
+# have been skipped by `git add` without saying why.
 .ruff_cache/
 .vendor/
 skills/
