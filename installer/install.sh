@@ -31,8 +31,16 @@ BACKEND_SRC="${PROJECT_ROOT:+${PROJECT_ROOT}/backend}"
 FRONTEND_SRC="${PROJECT_ROOT:+${PROJECT_ROOT}/frontend}"
 
 if [[ ! -t 0 ]]; then
-  if [[ -r /dev/tty ]]; then
+  # `[[ -r /dev/tty ]]` is the wrong test. In a session-less context (a CI
+  # runner, a systemd unit, some container shells) /dev/tty exists and its
+  # permission bits say readable, so the test passes -- then the open fails
+  # with ENXIO and the install dies after claiming a terminal was available.
+  # Make the open itself the test. It is probed in a subshell first because a
+  # failed `exec` redirection terminates a non-interactive shell outright.
+  if (exec </dev/tty) 2>/dev/null; then
     exec </dev/tty
+  elif [[ -n "${PANEL_URL:-}" ]]; then
+    : # Nothing left to prompt for: PANEL_URL supplies hostname and port.
   else
     echo "ERROR: This installer needs an interactive terminal." >&2
     echo "       Run it from SSH or export BPANEL_URL/PANEL_PORT first." >&2
@@ -247,18 +255,37 @@ ask_panel_url() {
   fi
 }
 
+# A freshly-booted Ubuntu runs unattended-upgrades for the first few minutes,
+# holding the dpkg locks. Every apt call here went straight to
+# "Could not get lock /var/lib/dpkg/lock-frontend", which killed the install
+# partway through -- leaving a half-configured box. Wait the lock out instead.
+apt_get() {
+  local waited=0
+  while fuser /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/lib/apt/lists/lock >/dev/null 2>&1; do
+    if (( waited == 0 )); then
+      echo "Waiting for another package manager to finish..."
+    fi
+    if (( waited >= 300 )); then
+      fail "Timed out after 5 minutes waiting for the dpkg lock."
+    fi
+    sleep 5
+    waited=$(( waited + 5 ))
+  done
+  DEBIAN_FRONTEND=noninteractive apt-get "$@"
+}
+
 install_base_packages() {
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update --allow-releaseinfo-change
+  apt_get update --allow-releaseinfo-change
   local pkgs=(software-properties-common ca-certificates curl gnupg git composer nginx mariadb-server redis-server openssh-server python3 python3-pip python3-venv certbot python3-certbot-nginx tar zip unzip openssl iptables ipset phpmyadmin acl)
-  if ! apt-get install -y "${pkgs[@]}"; then
+  if ! apt_get install -y "${pkgs[@]}"; then
     # Seen on some VPS images: a stuck package pin (e.g. libsystemd-shared)
     # leaves an unrelated dependency "not going to be installed" and apt
     # itself suggests this fix. Repair once and retry before giving up -
     # otherwise the whole install dies here instead of a targeted failure.
     echo "Package install hit a broken dependency; repairing and retrying..."
-    apt-get --fix-broken install -y || true
-    apt-get install -y "${pkgs[@]}"
+    apt_get --fix-broken install -y || true
+    apt_get install -y "${pkgs[@]}"
   fi
   systemctl enable --now nginx mariadb redis-server
   systemctl enable --now ssh 2>/dev/null || systemctl enable --now sshd 2>/dev/null || true
@@ -266,7 +293,7 @@ install_base_packages() {
 
 install_nodejs() {
   curl -fsSL --connect-timeout 10 --max-time 180 "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash -
-  apt-get install -y nodejs
+  apt_get install -y nodejs
   node - <<'NODE'
 const major = Number(process.versions.node.split('.')[0]);
 if (major < 20) {
@@ -290,7 +317,7 @@ install_ioncube_loader() {
       ;;
   esac
 
-  apt-get install -y ca-certificates curl tar >/dev/null
+  apt_get install -y ca-certificates curl tar >/dev/null
   tmp="$(mktemp -d)" || fail "Cannot create ionCube temporary directory"
   archive="${tmp}/ioncube_loaders.tar.gz"
   if ! curl -fsSL --connect-timeout 10 --max-time 300 "$url" -o "$archive"; then
@@ -332,7 +359,7 @@ install_ioncube_loader() {
 
 install_php() {
   add-apt-repository -y ppa:ondrej/php
-  apt-get update --allow-releaseinfo-change
+  apt_get update --allow-releaseinfo-change
 
   if [[ ! " ${PHP_VERSIONS} " =~ " ${PHP_DEFAULT} " ]]; then
     fail "PHP_DEFAULT=${PHP_DEFAULT} must be included in PHP_VERSIONS='${PHP_VERSIONS}'"
@@ -374,7 +401,7 @@ install_php() {
       fail "No package found for PHP ${version}. Remove ${version} from PHP_VERSIONS."
     fi
 
-    apt-get install -y "${available_packages[@]}"
+    apt_get install -y "${available_packages[@]}"
     install_ioncube_loader "$version"
 
     ini_file="/etc/php/${version}/fpm/php.ini"
@@ -476,9 +503,9 @@ RULES
 install_waf_engine() {
   export DEBIAN_FRONTEND=noninteractive
   if ! dpkg -s libnginx-mod-http-modsecurity >/dev/null 2>&1; then
-    apt-get update --allow-releaseinfo-change
-    apt-get install -y libnginx-mod-http-modsecurity modsecurity-crs libmodsecurity3 || \
-      apt-get install -y libnginx-mod-http-modsecurity libmodsecurity3
+    apt_get update --allow-releaseinfo-change
+    apt_get install -y libnginx-mod-http-modsecurity modsecurity-crs libmodsecurity3 || \
+      apt_get install -y libnginx-mod-http-modsecurity libmodsecurity3
   fi
   install -d -o root -g root -m 0755 /etc/nginx/modsec /etc/nginx/modsec/sites
   write_waf_default_rules

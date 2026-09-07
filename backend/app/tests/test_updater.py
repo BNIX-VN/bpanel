@@ -91,5 +91,24 @@ def test_a_fresh_install_repairs_the_same_stuck_apt_dependency():
     script = INSTALL_SCRIPT.read_text(encoding="utf-8")
     start = script.index("install_base_packages() {")
     block = script[start : script.index("\n}", start)]
-    assert "apt-get --fix-broken install -y" in block
-    assert 'if ! apt-get install -y "${pkgs[@]}"; then' in block
+    # `apt_get`, not `apt-get`: every call goes through a wrapper that waits
+    # out the dpkg lock a freshly-booted image holds. The repair-and-retry
+    # this test is about is unchanged.
+    assert "apt_get --fix-broken install -y" in block
+    assert 'if ! apt_get install -y "${pkgs[@]}"; then' in block
+
+
+def test_every_apt_call_waits_for_the_dpkg_lock():
+    # A fresh Ubuntu runs unattended-upgrades on boot. Any apt call that races
+    # it dies on "Could not get lock /var/lib/dpkg/lock-frontend" and leaves a
+    # half-configured box, so no call site may reach apt-get directly.
+    script = INSTALL_SCRIPT.read_text(encoding="utf-8")
+    assert "fuser /var/lib/dpkg/lock-frontend" in script
+    direct = [
+        line.strip()
+        for line in script.splitlines()
+        # The wrapper body is the one place the real binary is invoked.
+        if "apt-get " in line and not line.strip().startswith("#")
+        and 'DEBIAN_FRONTEND=noninteractive apt-get "$@"' not in line
+    ]
+    assert direct == []
