@@ -127,18 +127,29 @@ jobs:
           BPANEL_ADMIN_PASSWORD: "ci-smoke-test-not-a-real-secret"
 
       - name: The panel answers
+        # https, and -k: app/serve.py always terminates TLS on the panel port,
+        # with a self-signed per-hostname certificate from the SNI store. Plain
+        # http here just gets "Empty reply from server". The unit is
+        # bpanel-api.service, not bpanel.service.
         run: |
           for _ in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:2222/api/health; then exit 0; fi
+            if curl -fsSk https://127.0.0.1:2222/api/health; then exit 0; fi
             sleep 2
           done
           echo "::error::panel never became healthy"
-          systemctl status bpanel --no-pager -l || true
-          journalctl -u bpanel -n 100 --no-pager || true
+          systemctl status bpanel-api --no-pager -l || true
+          journalctl -u bpanel-api -n 100 --no-pager || true
           exit 1
 
-      - name: nginx config is valid and no unit failed
+      - name: nginx config is valid and the stack is up
         run: |
           sudo nginx -t
+          # Scoped to what the installer is responsible for. A blanket
+          # `systemctl --failed` also catches units the runner image ships
+          # broken, which would make this gate flaky for reasons unrelated
+          # to the change under test.
+          for unit in bpanel-api nginx mariadb redis-server; do
+            systemctl is-active --quiet "$unit" \
+              || { echo "::error::$unit is not active"; systemctl status "$unit" --no-pager -l; exit 1; }
+          done
           systemctl --failed --no-pager
-          test -z "$(systemctl list-units --failed --plain --no-legend)"
