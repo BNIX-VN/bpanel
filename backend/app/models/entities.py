@@ -84,6 +84,10 @@ class Website(Base):
     waf_custom_rules: Mapped[str] = mapped_column(Text, default="")
     http_flood_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     http_flood_config: Mapped[str] = mapped_column(Text, default="")
+    # User-agent substrings to answer with 403, one per line. Text rather than a
+    # side table because it is edited and applied as one list, and the lists
+    # people import run to a few hundred names.
+    blocked_bots: Mapped[str] = mapped_column(Text, default="")
     # Set when app_type is "application": the installed app this domain serves.
     app_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("site_apps.id", ondelete="SET NULL"), nullable=True, index=True

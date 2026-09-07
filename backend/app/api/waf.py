@@ -6,7 +6,7 @@ from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.permissions import Role, ensure_role
 from app.models.entities import User, Website
-from app.schemas.schemas import WebsiteAccessLogsOut
+from app.schemas.schemas import WafBotBlockApply, WebsiteAccessLogsOut, WebsiteBotBlockUpdate
 from app.services import nginx, waf
 
 router = APIRouter(prefix="/waf", tags=["waf"])
@@ -123,6 +123,91 @@ def save_website_waf(payload: WebsiteWafRulesUpdate, website_id: int, db: Sessio
     data = waf.site_config(website)
     data["message"] = "Website WAF rules saved."
     return data
+
+
+@router.get("/bots")
+def list_blocked_bots(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Every website and the bot list it currently blocks.
+
+    This is what the Bot blocking screen reads: the operator needs to see which
+    sites are already covered before applying a list to more of them.
+    """
+    _require_admin(current_user)
+    websites = db.query(Website).order_by(Website.domain).all()
+    return {
+        "max_bots": nginx.MAX_BLOCKED_BOTS,
+        "websites": [
+            {
+                "website_id": site.id,
+                "domain": site.domain,
+                "blocked_bots": waf.website_blocked_bots(site),
+            }
+            for site in websites
+        ],
+    }
+
+
+@router.put("/websites/{website_id}/bots")
+def save_website_bots(
+    payload: WebsiteBotBlockUpdate,
+    website_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _require_admin(current_user)
+    website = _website_or_404(db, website_id)
+    try:
+        bots = waf.save_website_blocked_bots(website, payload.blocked_bots, mode="replace")
+    except (ValueError, RuntimeError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    db.add(website)
+    db.commit()
+    db.refresh(website)
+    return {
+        "website_id": website.id,
+        "domain": website.domain,
+        "blocked_bots": bots,
+        "message": f"{len(bots)} bot(s) blocked on {website.domain}.",
+    }
+
+
+@router.post("/bots/apply")
+def apply_blocked_bots(
+    payload: WafBotBlockApply,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Apply one list to several websites in a single call.
+
+    Each site is written and reloaded independently, and a failure on one is
+    reported without abandoning the rest - applying a list to twenty sites
+    should not leave the operator guessing which of them took effect.
+    """
+    _require_admin(current_user)
+    if not payload.website_ids:
+        raise HTTPException(status_code=400, detail="Select at least one website.")
+
+    websites = db.query(Website).filter(Website.id.in_(payload.website_ids)).all()
+    found = {site.id for site in websites}
+    missing = [wid for wid in payload.website_ids if wid not in found]
+    if missing:
+        raise HTTPException(status_code=404, detail=f"Website not found: {missing}")
+
+    applied, failed = [], []
+    for site in websites:
+        try:
+            bots = waf.save_website_blocked_bots(site, payload.blocked_bots, mode=payload.mode)
+        except (ValueError, RuntimeError, FileNotFoundError) as exc:
+            failed.append({"domain": site.domain, "error": str(exc)})
+            continue
+        db.add(site)
+        applied.append({"website_id": site.id, "domain": site.domain, "blocked_bots": bots})
+    db.commit()
+
+    message = f"Applied to {len(applied)} website(s)."
+    if failed:
+        message += f" {len(failed)} failed."
+    return {"applied": applied, "failed": failed, "message": message}
 
 
 @router.put("/rules/custom")

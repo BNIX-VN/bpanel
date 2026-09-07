@@ -32,6 +32,11 @@ HTTP_FLOOD_DEFAULTS = {
     "connection_limit": 60,
 }
 HTTP_FLOOD_ZONES_FALLBACK = ["bash", "-lc", "cat >/tmp/bpanel-http-flood-zones.conf && echo HTTP flood zones saved"]
+# Bot blocking. The lists people paste in come from tools like CPGuard and run
+# to a few hundred names, so these are generous - they exist to keep one paste
+# from producing a config nginx will not load, not to ration the feature.
+MAX_BLOCKED_BOTS = 500
+MAX_BOT_NAME_LENGTH = 120
 WORDPRESS_CSP = (
     "default-src 'self' https: data: blob:; "
     "script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; "
@@ -168,6 +173,67 @@ def sync_http_flood_zones(websites):
         input=content,
         fallback=HTTP_FLOOD_ZONES_FALLBACK,
     )
+
+
+def normalize_blocked_bots(raw) -> list[str]:
+    """Turn whatever the user pasted into a clean list of user-agent tokens.
+
+    People paste these in bulk - a CPGuard list, a blog post, a column out of a
+    spreadsheet - so accept newlines, commas and semicolons as separators, drop
+    blanks, and de-duplicate case-insensitively while keeping the first spelling
+    seen. Bot names are matched as substrings of User-Agent, not as patterns:
+    "AhrefsBot" is meant to catch "Mozilla/5.0 (compatible; AhrefsBot/7.0...)".
+    """
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        candidates = re.split(r"[\n,;]+", raw)
+    else:
+        candidates = list(raw)
+
+    bots: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        name = str(candidate).strip().strip('"').strip("'").strip()
+        if not name:
+            continue
+        if len(name) > MAX_BOT_NAME_LENGTH:
+            raise ValueError(f"Bot name is too long (max {MAX_BOT_NAME_LENGTH} characters): {name[:40]}...")
+        # The rendered form is a double-quoted nginx string. re.escape() makes
+        # the name literal to PCRE, but it does not touch `"` - that is not a
+        # regex metacharacter - so a name containing one would close the string
+        # early and let the rest be parsed as configuration. Backslashes and
+        # control characters are refused for the same reason: nothing that can
+        # steer the nginx lexer belongs in a User-Agent substring.
+        if any(ch in name for ch in '"\\\r\n'):
+            raise ValueError(f'Bot name cannot contain quotes, backslashes or line breaks: {name[:40]}')
+        if any(ord(ch) < 32 for ch in name):
+            raise ValueError(f"Bot name cannot contain control characters: {name[:40]}")
+        key = name.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        bots.append(name)
+
+    if len(bots) > MAX_BLOCKED_BOTS:
+        raise ValueError(f"Too many bots (max {MAX_BLOCKED_BOTS}); got {len(bots)}")
+    return bots
+
+
+def _bot_block(bots: list[str]) -> str:
+    """One `if` with one combined regex, not one `if` per bot.
+
+    A few hundred separate `if` blocks would be both unreadable and slow; nginx
+    evaluates them in order on every request. A single alternation is matched
+    once. `re.escape` is what makes the names literal - plenty of real bot
+    strings carry regex metacharacters ("Mozilla/5.0", "bingbot/2.0",
+    "Sogou web spider/4.0"), and unescaped they would match far more than the
+    operator asked for, or fail to compile at all.
+    """
+    alternation = "|".join(re.escape(bot) for bot in bots)
+    return f"""    # BPANEL BOT BLOCK BEGIN
+    if ($http_user_agent ~* "({alternation})") {{ return 403; }}
+    # BPANEL BOT BLOCK END"""
 
 
 def _waf_block(domain: str) -> str:
@@ -928,6 +994,43 @@ def _replace_waf_block(content: str, enabled: bool, domain: str | None = None) -
     raise ValueError("Cannot find server block for WAF directives")
 
 
+def _replace_bot_block(content: str, bots) -> str:
+    """Insert ahead of the flood and WAF blocks.
+
+    A blocked bot should cost as little as possible: matching one regex and
+    returning 403 is cheaper than running it through ModSecurity's rule set
+    and the rate-limiting zones first.
+    """
+    pattern = re.compile(
+        r"\n?    # BPANEL BOT BLOCK BEGIN\n.*?\n    # BPANEL BOT BLOCK END",
+        re.DOTALL,
+    )
+    cleaned = pattern.sub("", content)
+    safe_bots = normalize_blocked_bots(bots)
+    if not safe_bots:
+        return cleaned.rstrip() + "\n"
+    block = _bot_block(safe_bots)
+    for anchor in ("    # BPANEL HTTP FLOOD BEGIN", "    # BPANEL WAF BEGIN"):
+        if anchor in cleaned:
+            return cleaned.replace(anchor, f"{block}\n\n{anchor}", 1)
+    if "    server_tokens off;" in cleaned:
+        return cleaned.replace("    server_tokens off;", f"    server_tokens off;\n{block}", 1)
+    if "    server_name " in cleaned:
+        return re.sub(r"(    server_name [^;]+;)", f"\\1\n{block}", cleaned, count=1)
+    match = re.search(r"server\s*\{", cleaned)
+    if match:
+        insert_at = match.end()
+        return cleaned[:insert_at] + "\n" + block + cleaned[insert_at:]
+    raise ValueError("Cannot find server block for bot blocking directives")
+
+
+def update_bot_block(domain: str, bots) -> None:
+    """Rewrite just the bot block in a live vhost, leaving everything else."""
+    safe_domain = _safe_domain(domain)
+    content = read_vhost_config(safe_domain)
+    write_vhost(safe_domain, _replace_bot_block(content, bots))
+
+
 def _replace_http_flood_block(content: str, enabled: bool, domain: str | None = None, config: dict | str | None = None) -> str:
     pattern = re.compile(
         r"\n?    # BPANEL HTTP FLOOD BEGIN\n.*?\n    # BPANEL HTTP FLOOD END",
@@ -1035,6 +1138,7 @@ def render_vhost(
     aliases: list[str] | tuple[str, ...] | None = None,
     redirects: list[str] | tuple[str, ...] | None = None,
     app_port: int | None = None,
+    blocked_bots=None,
 ) -> str:
     server_names = _server_names(domain, aliases)
     safe_domain = server_names[0]
@@ -1080,6 +1184,12 @@ def render_vhost(
         app_port=safe_app_port,
         proxy_timeout=PROXY_TIMEOUT_SECONDS,
     )
+    # Applied to the rendered output rather than through the templates: it is
+    # one block, identical for all four app types, and this keeps it in step
+    # with update_bot_block() - a full rewrite and a targeted edit then produce
+    # exactly the same thing. Done before the redirect vhosts are appended so
+    # it lands in the primary server block, which is the one that serves.
+    rendered = _replace_bot_block(rendered, blocked_bots)
     if ssl_cert_path or ssl_key_path:
         rendered = apply_manual_ssl_config(rendered, ssl_cert_path or "", ssl_key_path or "", ssl_ca_path)
     return _append_redirect_vhosts(rendered, domain, redirects, ssl_cert_path, ssl_key_path, ssl_ca_path)
@@ -1109,6 +1219,7 @@ def write_vhost(
     aliases: list[str] | tuple[str, ...] | None = None,
     redirects: list[str] | tuple[str, ...] | None = None,
     app_port: int | None = None,
+    blocked_bots=None,
 ) -> str:
     return rewrite_vhost(
         domain,
@@ -1155,6 +1266,7 @@ def rewrite_vhost(
     aliases: list[str] | tuple[str, ...] | None = None,
     redirects: list[str] | tuple[str, ...] | None = None,
     app_port: int | None = None,
+    blocked_bots=None,
 ) -> str:
     target = _vhost_path(domain)
     if app_type in PROXIED_APP_TYPES:
@@ -1177,6 +1289,7 @@ def rewrite_vhost(
         aliases=aliases,
         redirects=None,
         app_port=app_port,
+        blocked_bots=blocked_bots,
     )
     if settings.command_dry_run:
         return _append_redirect_vhosts(content, domain, redirects, ssl_cert_path, ssl_key_path, ssl_ca_path)

@@ -658,6 +658,13 @@ function App() {
   const [selectedWafWebsiteId, setSelectedWafWebsiteId] = useState('');
   const [wafSiteConfig, setWafSiteConfig] = useState(null);
   const [httpFloodForm, setHttpFloodForm] = useState({ http_flood_enabled: false, ...HTTP_FLOOD_DEFAULTS });
+  // Bot blocking. The list is free text so a whole blocklist can be pasted in
+  // one go; the backend splits and cleans it. Targets are the websites the
+  // paste is applied to - it is normally the same list on many sites.
+  const [botBlockText, setBotBlockText] = useState('');
+  const [botBlockTargets, setBotBlockTargets] = useState([]);
+  const [botBlockMode, setBotBlockMode] = useState('add');
+  const [botBlocks, setBotBlocks] = useState(null);
   const [wafAccessLogFilters, setWafAccessLogFilters] = useState(WAF_ACCESS_LOG_DEFAULTS);
   const [wafAccessLogs, setWafAccessLogs] = useState({ items: [], total: 0, scanned: 0, missing: [], generated_at: '' });
   const [assignUserId, setAssignUserId] = useState('');
@@ -3400,6 +3407,43 @@ function App() {
     });
   }
 
+  async function loadBotBlocks() {
+    const data = await request('/waf/bots', {}, 'Loading blocked bots...');
+    if (data) setBotBlocks(data);
+  }
+
+  async function applyBotBlocks() {
+    if (botBlockTargets.length === 0) {
+      setNotice('Select at least one website to apply the list to.');
+      return;
+    }
+    const data = await request('/waf/bots/apply', {
+      method: 'POST',
+      body: JSON.stringify({ blocked_bots: botBlockText, website_ids: botBlockTargets, mode: botBlockMode }),
+    }, 'Applying bot blocklist...');
+    if (data) {
+      setNotice(data.message || 'Bot blocklist applied.');
+      // Report per-site failures rather than letting a partial apply look
+      // like a clean one.
+      if (data.failed?.length) {
+        setNotice(`${data.message} Failed: ${data.failed.map(f => `${f.domain} (${f.error})`).join('; ')}`);
+      }
+      await loadBotBlocks();
+      await refreshAll();
+    }
+  }
+
+  async function clearWebsiteBots(websiteId) {
+    const data = await request(`/waf/websites/${websiteId}/bots`, {
+      method: 'PUT',
+      body: JSON.stringify({ blocked_bots: '' }),
+    }, 'Clearing blocked bots...');
+    if (data) {
+      setNotice(data.message || 'Bot blocklist cleared.');
+      await loadBotBlocks();
+    }
+  }
+
   async function saveWebsiteWafRules() {
     if (!selectedWafWebsiteId || !wafSiteConfig) return;
     const data = await request(`/waf/websites/${selectedWafWebsiteId}`, {
@@ -3663,7 +3707,7 @@ function App() {
     if (isAuthenticated && page === 'users') { loadUsers(); loadPackages(); }
     if (isAuthenticated && page === 'php') { loadPhpConfig(); loadPhpTune(phpConfig.php_version); }
     if (isAuthenticated && page === 'firewall') { loadFirewall(); loadFirewallBlocklists(); }
-    if (isAuthenticated && page === 'waf') loadWafRules();
+    if (isAuthenticated && page === 'waf') { loadWafRules(); loadBotBlocks(); }
     if (isAuthenticated && page === 'malware' && isAdmin) {
       loadMalwareScanStatus();
       loadMalwareScanJobs();
@@ -5536,6 +5580,76 @@ function App() {
               <button disabled={!!loading} onClick={() => loadWebsiteWafConfig(site.id)}>Rules</button>
             </div>
           </div>)}
+        </div>
+      </section>
+      <section className="section bot-block-panel">
+        <div className="section-title">
+          <div>
+            <h2>Bot blocking</h2>
+            <p className="hint">One bot name per line, matched anywhere in User-Agent. Names are matched literally, so <code>bingbot/2.0</code> will not also match <code>bingbotX2Y0</code>. Blocked requests get 403 before WAF and rate limiting run.</p>
+          </div>
+          <button disabled={!!loading} onClick={loadBotBlocks}><RefreshCw size={14}/> Refresh</button>
+        </div>
+        <div className="bot-block-grid">
+          <div className="bot-block-editor">
+            <textarea
+              className="code-editor"
+              value={botBlockText}
+              onChange={e => setBotBlockText(e.target.value)}
+              rows={14}
+              spellCheck={false}
+              placeholder={'AhrefsBot\nSemrushBot\nMJ12bot\nDotBot\nPetalBot\nBytespider'}
+            />
+            <p className="hint">
+              {(() => {
+                const names = botBlockText.split(/[\n,;]+/).map(s => s.trim()).filter(Boolean);
+                const unique = new Set(names.map(s => s.toLowerCase()));
+                return `${unique.size} bot(s)${names.length !== unique.size ? ` (${names.length - unique.size} duplicate(s) will be dropped)` : ''}`;
+              })()}
+              {botBlocks?.max_bots ? ` - max ${botBlocks.max_bots}` : ''}
+            </p>
+          </div>
+          <div className="bot-block-targets">
+            <div className="section-title"><h3>Apply to</h3></div>
+            <div className="bot-block-target-actions">
+              <button type="button" disabled={!!loading} onClick={() => setBotBlockTargets(websites.map(s => s.id))}>Select all</button>
+              <button type="button" disabled={!!loading} onClick={() => setBotBlockTargets([])}>Clear</button>
+            </div>
+            <div className="bot-block-target-list">
+              {websites.length === 0 && <EmptyState icon={Globe} message="No websites yet." />}
+              {websites.map(site => {
+                const current = botBlocks?.websites?.find(w => w.website_id === site.id)?.blocked_bots || [];
+                return <label className="bot-block-target" key={site.id}>
+                  <input
+                    type="checkbox"
+                    checked={botBlockTargets.includes(site.id)}
+                    onChange={e => setBotBlockTargets(prev => e.target.checked
+                      ? [...prev, site.id]
+                      : prev.filter(id => id !== site.id))}
+                  />
+                  <span>
+                    <strong>{site.domain}</strong>
+                    <small>{current.length > 0 ? `${current.length} blocked` : 'none blocked'}</small>
+                  </span>
+                  {current.length > 0 && <button
+                    type="button"
+                    className="danger"
+                    disabled={!!loading}
+                    onClick={() => clearWebsiteBots(site.id)}
+                  >Clear</button>}
+                </label>;
+              })}
+            </div>
+            <div className="bot-block-apply">
+              <label><span>Mode</span><select value={botBlockMode} onChange={e => setBotBlockMode(e.target.value)}>
+                <option value="add">Add to existing list</option>
+                <option value="replace">Replace existing list</option>
+              </select></label>
+              <button disabled={!!loading || botBlockTargets.length === 0} onClick={applyBotBlocks}>
+                <Shield size={14}/> Apply to {botBlockTargets.length} website(s)
+              </button>
+            </div>
+          </div>
         </div>
       </section>
       {wafSiteConfig && <section className="section http-flood-panel">

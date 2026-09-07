@@ -292,7 +292,42 @@ def site_config(website: Website) -> dict:
         ],
         "enabled_rule_ids": [rule["id"] for rule in DEFAULT_RULES if rule["id"] in enabled],
         "custom_rules": website_custom_rules(website),
+        "blocked_bots": nginx.normalize_blocked_bots(getattr(website, "blocked_bots", "") or ""),
     }
+
+
+def website_blocked_bots(website: Website) -> list[str]:
+    from app.services import nginx
+
+    return nginx.normalize_blocked_bots(getattr(website, "blocked_bots", "") or "")
+
+
+def save_website_blocked_bots(website: Website, raw, mode: str = "replace") -> list[str]:
+    """Store one website's bot list and push it into the live vhost.
+
+    Returns the cleaned list actually stored. Raises ValueError for a list that
+    is too long or malformed, which the API turns into a 400.
+    """
+    from app.services import nginx
+
+    incoming = nginx.normalize_blocked_bots(raw)
+    if mode == "add":
+        # Merge, keeping the existing order and the existing spelling of any
+        # name that appears in both.
+        existing = website_blocked_bots(website)
+        seen = {name.casefold() for name in existing}
+        merged = list(existing)
+        for name in incoming:
+            if name.casefold() not in seen:
+                seen.add(name.casefold())
+                merged.append(name)
+        bots = nginx.normalize_blocked_bots(merged)
+    else:
+        bots = incoming
+
+    website.blocked_bots = "\n".join(bots)
+    nginx.update_bot_block(website.domain, bots)
+    return bots
 
 
 def save_website_config(website: Website, enabled_rule_ids: Iterable[str], custom_rules: str) -> CommandResult:

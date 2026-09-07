@@ -416,6 +416,27 @@ class WebsiteWafUpdate(BaseModel):
     waf_enabled: bool
 
 
+class WebsiteBotBlockUpdate(BaseModel):
+    """One website's bot list. Free text: the service layer splits and cleans it,
+    so the operator can paste a list in whatever shape they copied it."""
+
+    blocked_bots: str = ""
+
+
+class WafBotBlockApply(BaseModel):
+    """Apply one list to several websites at once.
+
+    `replace` overwrites each site's list; `add` merges into what is already
+    there. Merging is the safer default for importing a public blocklist on top
+    of entries an operator added by hand, but replace is what you want when the
+    imported list is the source of truth, so both are offered explicitly.
+    """
+
+    blocked_bots: str = ""
+    website_ids: list[int] = Field(default_factory=list)
+    mode: Literal["replace", "add"] = "add"
+
+
 class WebsiteHttpFloodUpdate(BaseModel):
     http_flood_enabled: bool
     access_limit_requests: int = Field(default=100, ge=1, le=100000)
@@ -675,6 +696,7 @@ class WebsiteOut(BaseModel):
     waf_custom_rules: str = ""
     http_flood_enabled: bool = False
     http_flood_config: str = ""
+    blocked_bots: str = ""
     wordpress_installed: bool = False
     app_id: Optional[int] = None
     aliases: list[WebsiteAliasOut] = Field(default_factory=list)

@@ -311,6 +311,22 @@ button:disabled,.upload-button.disabled{background:var(--disabled-bg);color:var(
 .http-flood-grid label{display:grid;gap:6px;font-weight:600;color:var(--text-secondary);min-width:0}
 .http-flood-grid span{font-size:13px;color:var(--text-muted)}
 .http-flood-grid input{width:100%;min-width:0}
+.bot-block-panel{gap:12px}
+.bot-block-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:start}
+.bot-block-editor{display:grid;gap:8px;min-width:0}
+.bot-block-editor textarea{width:100%;min-width:0}
+.bot-block-targets{display:grid;gap:10px;min-width:0}
+.bot-block-targets h3{margin:0;font-size:15px}
+.bot-block-target-actions{display:flex;gap:8px}
+.bot-block-target-list{display:grid;gap:6px;max-height:320px;overflow-y:auto;padding-right:4px}
+.bot-block-target{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:center;padding:8px 10px;border:1px solid var(--border);border-radius:8px}
+.bot-block-target span{display:grid;gap:2px;min-width:0}
+.bot-block-target strong{font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bot-block-target small{color:var(--text-muted);font-size:12px}
+.bot-block-apply{display:grid;grid-template-columns:minmax(0,1fr) max-content;gap:10px;align-items:end}
+.bot-block-apply label{display:grid;gap:6px;font-weight:600;color:var(--text-secondary);min-width:0}
+.bot-block-apply span{font-size:13px;color:var(--text-muted)}
+@media (max-width:900px){.bot-block-grid{grid-template-columns:minmax(0,1fr)}}
 .access-logs-section{gap:14px}
 .access-logs-title{align-items:center}
 .access-log-icon-actions{display:flex;gap:8px;align-items:center}
