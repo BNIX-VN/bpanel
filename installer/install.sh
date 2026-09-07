@@ -1336,6 +1336,47 @@ enable_ipv6_when_available() {
   fi
 }
 
+configure_log_limits() {
+  # systemd-journald ships with no size limit: it falls back to 10% of the
+  # filesystem, which on a 72G disk is 7.2G. Measured on a live server, the
+  # journal had reached 2.7G - 53 times the size of every nginx log put
+  # together - fed mostly by SSH password-guessing hitting sshd thousands of
+  # times an hour. nginx's own logs were never the problem; they rotate daily,
+  # keep 14 days and compress, and totalled 51M.
+  #
+  # A drop-in rather than an edit of journald.conf, so a distribution upgrade
+  # cannot quietly revert it.
+  mkdir -p /etc/systemd/journald.conf.d
+  cat >/etc/systemd/journald.conf.d/99-bpanel-size.conf <<'JOURNALD'
+# Managed by BPanel.
+[Journal]
+SystemMaxUse=500M
+SystemKeepFree=1G
+MaxRetentionSec=2week
+JOURNALD
+  systemctl restart systemd-journald 2>/dev/null || true
+  journalctl --vacuum-size=500M >/dev/null 2>&1 || true
+
+  # btmp records every failed login and Ubuntu ships no rule for it. On the
+  # same server it had grown to 130M across two files, holding 62,000 failed
+  # SSH attempts. `su root root` is required because /var/log is root:syslog
+  # and group-writable, and logrotate refuses to act on a file in a directory
+  # it considers unsafe unless told whose identity to use.
+  cat >/etc/logrotate.d/btmp <<'BTMP'
+# Managed by BPanel.
+/var/log/btmp {
+    su root root
+    missingok
+    weekly
+    create 0660 root utmp
+    rotate 4
+    compress
+    notifempty
+}
+BTMP
+  chmod 644 /etc/logrotate.d/btmp
+}
+
 main() {
   validate_sources
   ask_panel_url
@@ -1396,6 +1437,9 @@ main() {
 
   log "Configuring firewall"
   setup_firewall
+
+  log "Capping log growth (journald + btmp)"
+  configure_log_limits
 
   log "Configuring SSL"
   setup_ssl

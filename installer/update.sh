@@ -1452,6 +1452,52 @@ PY
   step_mark_done site-refresh "${SITE_REFRESH_INPUTS[@]}"
 fi
 
+# journald ships with no size limit and falls back to 10% of the filesystem;
+# btmp has no logrotate rule on Ubuntu at all. Measured on a live server: a
+# 2.7G journal and 130M of btmp, against 51M for every nginx log combined,
+# nearly all of it SSH password-guessing noise. Existing installs need this as
+# much as new ones, so update.sh applies it too.
+#
+# Self-gating: the files are only written when their content differs, and
+# journald is only restarted when its drop-in actually changed - an update
+# should not bounce the logging daemon for nothing.
+JOURNALD_DROPIN=/etc/systemd/journald.conf.d/99-bpanel-size.conf
+JOURNALD_WANTED=$(cat <<'JOURNALD'
+# Managed by BPanel.
+[Journal]
+SystemMaxUse=500M
+SystemKeepFree=1G
+MaxRetentionSec=2week
+JOURNALD
+)
+if [[ "$(cat "$JOURNALD_DROPIN" 2>/dev/null)" != "$JOURNALD_WANTED" ]]; then
+  log "Capping journald size"
+  mkdir -p /etc/systemd/journald.conf.d
+  printf '%s\n' "$JOURNALD_WANTED" >"$JOURNALD_DROPIN"
+  systemctl restart systemd-journald 2>/dev/null || true
+  journalctl --vacuum-size=500M >/dev/null 2>&1 || true
+fi
+
+BTMP_RULE=/etc/logrotate.d/btmp
+BTMP_WANTED=$(cat <<'BTMP'
+# Managed by BPanel.
+/var/log/btmp {
+    su root root
+    missingok
+    weekly
+    create 0660 root utmp
+    rotate 4
+    compress
+    notifempty
+}
+BTMP
+)
+if [[ "$(cat "$BTMP_RULE" 2>/dev/null)" != "$BTMP_WANTED" ]]; then
+  log "Adding btmp log rotation"
+  printf '%s\n' "$BTMP_WANTED" >"$BTMP_RULE"
+  chmod 644 "$BTMP_RULE"
+fi
+
 log "Compiling backend modules"
 python -m py_compile \
   app/main.py \
