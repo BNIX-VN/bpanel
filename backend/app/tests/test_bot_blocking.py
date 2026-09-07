@@ -98,6 +98,41 @@ def test_rewriting_replaces_rather_than_stacks_blocks():
     assert "AhrefsBot" not in twice
 
 
+def test_update_edits_the_existing_vhost_instead_of_re_rendering_it(tmp_path, monkeypatch):
+    """Regression: this went out calling write_vhost(domain, <file content>).
+
+    write_vhost's second parameter is root_path, and it re-renders the whole
+    vhost from the template - so every apply failed with "root_path must be the
+    managed root for this domain" and nothing was ever written. A dry-run test
+    would not have caught it, because dry-run returns before touching the
+    filesystem; this exercises the real path.
+
+    Editing in place also matters on its own: a site whose vhost has been
+    customised must keep those customisations when its bot list changes.
+    """
+    vhost = tmp_path / "example.com.conf"
+    vhost.write_text(
+        "server {\n"
+        "    server_name example.com;\n"
+        "    # a hand-added directive that must survive\n"
+        "    client_max_body_size 64m;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(nginx.settings, "command_dry_run", False)
+    monkeypatch.setattr(nginx, "_vhost_path", lambda domain: vhost)
+    monkeypatch.setattr(nginx, "_write_backup", lambda target, content: None)
+    reloaded = []
+    monkeypatch.setattr(nginx, "_test_and_reload", lambda target, previous: reloaded.append(target))
+
+    nginx.update_bot_block("example.com", "AhrefsBot\nSemrushBot")
+
+    written = vhost.read_text(encoding="utf-8")
+    assert "(AhrefsBot|SemrushBot)" in written
+    assert "client_max_body_size 64m;" in written
+    assert reloaded, "nginx was never asked to test and reload the new config"
+
+
 def test_the_block_sits_ahead_of_waf_and_flood():
     """Blocked traffic should cost as little as possible.
 

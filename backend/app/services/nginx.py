@@ -1024,11 +1024,27 @@ def _replace_bot_block(content: str, bots) -> str:
     raise ValueError("Cannot find server block for bot blocking directives")
 
 
-def update_bot_block(domain: str, bots) -> None:
-    """Rewrite just the bot block in a live vhost, leaving everything else."""
+def update_bot_block(domain: str, bots) -> str:
+    """Rewrite just the bot block in a live vhost, leaving everything else.
+
+    Same shape as update_waf_block: edit the file in place rather than
+    re-rendering from the template, so a site whose vhost has been customised
+    keeps its customisations. _test_and_reload puts the previous content back
+    if nginx refuses the result, which matters here because the block is built
+    from operator-supplied text.
+    """
     safe_domain = _safe_domain(domain)
-    content = read_vhost_config(safe_domain)
-    write_vhost(safe_domain, _replace_bot_block(content, bots))
+    target = _vhost_path(safe_domain)
+    if settings.command_dry_run:
+        return _replace_bot_block("server {\n    server_name example.com;\n}\n", bots)
+    if not target.exists():
+        raise FileNotFoundError(str(target))
+    existing = target.read_text(encoding="utf-8")
+    new_content = _replace_bot_block(existing, bots)
+    _write_backup(target, existing)
+    target.write_text(new_content, encoding="utf-8")
+    _test_and_reload(target, existing)
+    return str(target)
 
 
 def _replace_http_flood_block(content: str, enabled: bool, domain: str | None = None, config: dict | str | None = None) -> str:
