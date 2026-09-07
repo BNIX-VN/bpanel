@@ -152,4 +152,34 @@ jobs:
             systemctl is-active --quiet "$unit" \
               || { echo "::error::$unit is not active"; systemctl status "$unit" --no-pager -l; exit 1; }
           done
+          # The PHP version is the installer's choice, so match on the pattern
+          # rather than pinning 8.3 here and having to chase it later.
+          systemctl list-units 'php*-fpm.service' --state=active --plain --no-legend | grep -q . \
+            || { echo "::error::no php-fpm pool is running"; exit 1; }
           systemctl --failed --no-pager
+
+      - name: Create a site end to end
+        # The check that exercises the parts a unit test cannot: the sudo
+        # helper trampoline, the Linux user and its site directory, MariaDB,
+        # the rendered vhost, and a per-site PHP-FPM pool.
+        run: |
+          set -euo pipefail
+          # Form-encoded, not JSON: the endpoint takes an OAuth2PasswordRequestForm.
+          token=$(curl -sSk -X POST https://127.0.0.1:2222/api/auth/login \
+            -d "username=admin&password=$BPANEL_ADMIN_PASSWORD" \
+            | python3 -c "import json,sys; print(json.load(sys.stdin)['access_token'])")
+
+          curl -fsSk -X POST https://127.0.0.1:2222/api/websites \
+            -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+            -d '{"domain":"ci.example.test","install_wordpress":false,"app_type":"php"}' >/dev/null
+
+          test -f /etc/nginx/conf.d/ci.example.test.conf
+          sudo nginx -t
+
+          # ...and it serves. `.test` resolves nowhere, so address the vhost
+          # by Host header rather than relying on DNS.
+          code=$(curl -sS -H 'Host: ci.example.test' http://127.0.0.1/ -o /tmp/page.html -w '%{http_code}')
+          test "$code" = "200" || { echo "::error::site returned $code"; exit 1; }
+          grep -q '<title>ci.example.test</title>' /tmp/page.html
+        env:
+          BPANEL_ADMIN_PASSWORD: "ci-smoke-test-not-a-real-secret"
