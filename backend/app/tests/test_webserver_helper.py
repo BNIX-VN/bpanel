@@ -207,3 +207,25 @@ def test_the_services_page_lists_the_web_server_that_is_actually_running():
         assert "nginx" in ngx and "lshttpd" not in ngx
     finally:
         settings.web_server = original
+
+
+def test_php_versions_are_detected_where_the_active_web_server_keeps_them():
+    """nginx runs PHP-FPM from /etc/php/<ver>/fpm; OpenLiteSpeed runs LSPHP
+    from /usr/local/lsws/lsphp<ver> and has no /etc/php tree. Checking only
+    the FPM path left the PHP-version dropdown empty on an OLS server, so a
+    website could not be created with a version at all - caught by opening
+    the page, not by any assertion on source text.
+    """
+    from app.core.config import settings
+    from app.services import php
+
+    original = settings.web_server
+    try:
+        settings.web_server = "openlitespeed"
+        assert str(php._php_install_marker("8.4")).replace("\\", "/") == \
+            "/usr/local/lsws/lsphp84/bin/lsphp"
+        settings.web_server = "nginx"
+        assert str(php._php_install_marker("8.4")).replace("\\", "/") == \
+            "/etc/php/8.4/fpm/php-fpm.conf"
+    finally:
+        settings.web_server = original

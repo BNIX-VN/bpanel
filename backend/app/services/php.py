@@ -103,13 +103,25 @@ def read_php_ini(php_version: str) -> dict:
     return values
 
 
+def _php_install_marker(version: str) -> Path:
+    """Where to look to decide a PHP version is installed.
+
+    nginx runs PHP-FPM out of /etc/php/<ver>/fpm; OpenLiteSpeed runs LSPHP,
+    which lives entirely under /usr/local/lsws/lsphp<ver> and has no /etc/php
+    tree at all. Looking only at the FPM path made the PHP-version dropdown
+    come up empty on an OLS server, so a website could not be created with a
+    version chosen at all.
+    """
+    from app.services import webserver
+
+    if webserver.active_name() == "openlitespeed":
+        return Path(f"/usr/local/lsws/lsphp{version.replace('.', '')}/bin/lsphp")
+    return Path(f"/etc/php/{version}/fpm/php-fpm.conf")
+
+
 def list_installed_php() -> list[str]:
     """List PHP versions that are currently installed on the system."""
-    installed = []
-    for version in SUPPORTED_PHP_VERSIONS:
-        fpm_path = Path(f"/etc/php/{version}/fpm/php-fpm.conf")
-        if fpm_path.exists():
-            installed.append(version)
+    installed = [v for v in SUPPORTED_PHP_VERSIONS if _php_install_marker(v).exists()]
     return sorted(installed, key=lambda v: [int(x) for x in v.split(".")])
 
 
@@ -119,7 +131,7 @@ def install_php(php_version: str) -> dict:
         allowed = ", ".join(sorted(SUPPORTED_PHP_VERSIONS))
         raise ValueError(f"Unsupported PHP version. Allowed: {allowed}")
 
-    already_installed = Path(f"/etc/php/{php_version}/fpm/php-fpm.conf").exists()
+    already_installed = _php_install_marker(php_version).exists()
 
     if settings.command_dry_run:
         action = "repair" if already_installed else "install"
