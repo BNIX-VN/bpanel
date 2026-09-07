@@ -1024,6 +1024,29 @@ def _replace_bot_block(content: str, bots) -> str:
     raise ValueError("Cannot find server block for bot blocking directives")
 
 
+def blocked_bots_in_vhost(content: str) -> list[str]:
+    """Recover the bot names from an already-rendered block.
+
+    Used to carry the block across a full vhost rewrite. The names went through
+    re.escape on the way in, so they come back through a matching unescape;
+    anything that does not parse yields an empty list, which the caller treats
+    as "nothing to preserve" rather than guessing.
+    """
+    match = re.search(
+        r'# BPANEL BOT BLOCK BEGIN\n\s*if \(\$http_user_agent ~\* "\((.*?)\)"\) \{ return 403; \}',
+        content,
+        re.DOTALL,
+    )
+    if not match:
+        return []
+    names = []
+    for piece in match.group(1).split("|"):
+        if not piece:
+            continue
+        names.append(re.sub(r"\\(.)", r"\1", piece))
+    return names
+
+
 def update_bot_block(domain: str, bots) -> str:
     """Rewrite just the bot block in a live vhost, leaving everything else.
 
@@ -1287,6 +1310,16 @@ def rewrite_vhost(
     target = _vhost_path(domain)
     if app_type in PROXIED_APP_TYPES:
         ensure_proxy_upgrade_map()
+    # blocked_bots=None means "keep whatever this vhost already blocks", the
+    # same contract preserve_existing_ssl has. Without it every full rewrite -
+    # a PHP version change, a new alias, an update that touches nginx.py -
+    # silently dropped the block, because the callers that rebuild a vhost do
+    # not all know about bot lists. Pass an explicit list (or []) to set it.
+    if blocked_bots is None and not settings.command_dry_run and target.exists():
+        try:
+            blocked_bots = blocked_bots_in_vhost(target.read_text(encoding="utf-8"))
+        except OSError:
+            blocked_bots = None
     content = render_vhost(
         domain,
         root_path,

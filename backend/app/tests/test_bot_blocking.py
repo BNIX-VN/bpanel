@@ -157,6 +157,67 @@ def test_update_edits_the_existing_vhost_instead_of_re_rendering_it(tmp_path, mo
     assert reloaded, "nginx was never asked to test and reload the new config"
 
 
+def test_a_full_rewrite_keeps_the_block_that_is_already_there(tmp_path, monkeypatch):
+    """Regression, and it reached production.
+
+    Rewriting a vhost re-renders it from the template. Callers that rebuild one
+    - a PHP version change, a new alias, the per-site loop an update runs when
+    nginx.py changes - do not know about bot lists, so the freshly rendered
+    file had no block and every blocked bot was let straight back in. On the
+    live server that silently turned off 52 bots across 23 sites; nothing
+    failed, nginx -t passed, and the panel still listed the bots as blocked
+    because the database was untouched.
+
+    blocked_bots=None now means "keep what this vhost already blocks", the same
+    contract preserve_existing_ssl has, so no call site has to remember.
+    """
+    domain = "example.com"
+    vhost = tmp_path / f"{domain}.conf"
+    vhost.write_text(
+        "server {\n"
+        "    server_name example.com;\n"
+        + nginx._bot_block(["AhrefsBot", "bingbot/2.0"])
+        + "\n}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(nginx.settings, "command_dry_run", False)
+    monkeypatch.setattr(nginx, "_vhost_path", lambda d: vhost)
+
+    captured = {}
+
+    def fake_render(*args, **kwargs):
+        captured["blocked_bots"] = kwargs.get("blocked_bots")
+        return "server {\n    server_name example.com;\n}\n"
+
+    monkeypatch.setattr(nginx, "render_vhost", fake_render)
+    monkeypatch.setattr(nginx, "_custom_include_snapshot", lambda d: None)
+    monkeypatch.setattr(nginx, "_write_custom_include", lambda d, c: None)
+    monkeypatch.setattr(nginx, "_write_backup", lambda t, c: None)
+    monkeypatch.setattr(nginx, "_test_and_reload", lambda *a, **k: None)
+    monkeypatch.setattr(nginx, "_append_certbot_redirect_vhosts", lambda c, d, r: c)
+    monkeypatch.setattr(nginx, "_append_redirect_vhosts", lambda c, d, r, *a: c)
+
+    nginx.rewrite_vhost(domain, "/home/admin/example.com", "php", "8.3")
+
+    assert captured["blocked_bots"] == ["AhrefsBot", "bingbot/2.0"], (
+        "a rewrite dropped the bot list instead of carrying it over"
+    )
+
+
+def test_an_explicit_empty_list_still_clears_the_block(tmp_path, monkeypatch):
+    # Preserving must not make the block impossible to remove: [] is a real
+    # instruction, only None means "keep what is there".
+    vhost = tmp_path / "example.com.conf"
+    vhost.write_text(
+        "server {\n    server_name example.com;\n" + nginx._bot_block(["AhrefsBot"]) + "\n}\n",
+        encoding="utf-8",
+    )
+
+    cleared = nginx._replace_bot_block(vhost.read_text(encoding="utf-8"), [])
+
+    assert "BOT BLOCK" not in cleared
+
+
 def test_the_block_sits_ahead_of_waf_and_flood():
     """Blocked traffic should cost as little as possible.
 
