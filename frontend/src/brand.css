@@ -311,6 +311,15 @@ button:disabled,.upload-button.disabled{background:var(--disabled-bg);color:var(
 .http-flood-grid label{display:grid;gap:6px;font-weight:600;color:var(--text-secondary);min-width:0}
 .http-flood-grid span{font-size:13px;color:var(--text-muted)}
 .http-flood-grid input{width:100%;min-width:0}
+.waf-overview-list{display:grid;gap:8px}
+.waf-overview-row{display:grid;grid-template-columns:minmax(0,1fr) max-content max-content;gap:12px;align-items:center;padding:10px 12px;border:1px solid var(--border);border-radius:8px}
+.waf-overview-domain{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.waf-overview-badges{display:flex;gap:6px;flex-wrap:wrap}
+.waf-site-header{align-items:flex-start}
+.waf-site-header-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.waf-site-header-actions select{min-width:200px}
+.waf-site-toggles{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+@media (max-width:760px){.waf-overview-row{grid-template-columns:minmax(0,1fr)}}
 .bot-block-panel{gap:12px}
 .bot-block-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:start}
 .bot-block-editor{display:grid;gap:8px;min-width:0}

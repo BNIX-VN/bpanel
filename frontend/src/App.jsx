@@ -13,7 +13,7 @@ import 'ace-builds/src-noconflict/mode-text';
 import 'ace-builds/src-noconflict/mode-yaml';
 import 'ace-builds/src-noconflict/theme-textmate';
 import 'ace-builds/src-noconflict/theme-tomorrow_night';
-import { Archive, ArchiveRestore, Ban, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowLeft, Ban, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
 import { Terminal } from './components/Terminal';
 import './style.css';
 import './brand.css';
@@ -44,7 +44,14 @@ function composeWebPorts(plan, wanted) {
   return service?.container_ports || [];
 }
 
-const SETTINGS_PAGE_KEYS = ['settings', 'api-tokens', 'security', 'php', 'firewall', 'waf', 'malware', 'access-logs', 'updates', 'addons', 'services'];
+// Pages opened from inside another page instead of the sidebar. They have no
+// nav entry of their own, so without this the header falls back to the first
+// item and titles the page "Dashboard".
+const NAV_PARENT_PAGE = { 'waf-site': 'waf' };
+
+// 'waf-site' is reached from the WAF overview rather than the sidebar, but it
+// still belongs to Settings so the menu stays open and WAF stays highlighted.
+const SETTINGS_PAGE_KEYS = ['settings', 'api-tokens', 'security', 'php', 'firewall', 'waf', 'waf-site', 'malware', 'access-logs', 'updates', 'addons', 'services'];
 const PAGE_ROUTES = {
   dashboard: '/',
   websites: '/website',
@@ -61,6 +68,7 @@ const PAGE_ROUTES = {
   php: '/php',
   firewall: '/firewall',
   waf: '/waf',
+  'waf-site': '/waf-site',
   malware: '/malware',
   'access-logs': '/access-logs',
   updates: '/updates',
@@ -665,6 +673,10 @@ function App() {
   const [botBlockTargets, setBotBlockTargets] = useState([]);
   const [botBlockMode, setBotBlockMode] = useState('add');
   const [botBlocks, setBotBlocks] = useState(null);
+  const [bulkBotOpen, setBulkBotOpen] = useState(false);
+  // The list for the one site being configured, kept apart from the bulk
+  // import above so editing one site cannot disturb a pending bulk paste.
+  const [siteBotText, setSiteBotText] = useState('');
   const [wafAccessLogFilters, setWafAccessLogFilters] = useState(WAF_ACCESS_LOG_DEFAULTS);
   const [wafAccessLogs, setWafAccessLogs] = useState({ items: [], total: 0, scanned: 0, missing: [], generated_at: '' });
   const [assignUserId, setAssignUserId] = useState('');
@@ -3391,6 +3403,25 @@ function App() {
       setWafSiteConfig(data);
       setWafCustomRules(data.custom_rules || '');
       setHttpFloodForm({ http_flood_enabled: !!data.http_flood_enabled, ...normalizeHttpFloodConfig(data.http_flood_config) });
+      setSiteBotText((data.blocked_bots || []).join('\n'));
+    }
+  }
+
+  async function openWafSite(websiteId) {
+    await loadWebsiteWafConfig(websiteId);
+    navigateToPage('waf-site');
+  }
+
+  async function saveSiteBots() {
+    if (!selectedWafWebsiteId) return;
+    const data = await request(`/waf/websites/${selectedWafWebsiteId}/bots`, {
+      method: 'PUT',
+      body: JSON.stringify({ blocked_bots: siteBotText }),
+    }, 'Saving blocked bots...');
+    if (data) {
+      setSiteBotText((data.blocked_bots || []).join('\n'));
+      setNotice(data.message || 'Blocked bots saved.');
+      await loadBotBlocks();
     }
   }
 
@@ -3707,7 +3738,7 @@ function App() {
     if (isAuthenticated && page === 'users') { loadUsers(); loadPackages(); }
     if (isAuthenticated && page === 'php') { loadPhpConfig(); loadPhpTune(phpConfig.php_version); }
     if (isAuthenticated && page === 'firewall') { loadFirewall(); loadFirewallBlocklists(); }
-    if (isAuthenticated && page === 'waf') { loadWafRules(); loadBotBlocks(); }
+    if (isAuthenticated && ['waf', 'waf-site'].includes(page)) { loadWafRules(); loadBotBlocks(); }
     if (isAuthenticated && page === 'malware' && isAdmin) {
       loadMalwareScanStatus();
       loadMalwareScanJobs();
@@ -3746,7 +3777,9 @@ function App() {
   }, [scanJob?.job_id, scanJob?.status]);
 
   useEffect(() => {
-    if (!isAuthenticated || page !== 'waf' || selectedWafWebsiteId || websites.length === 0) return;
+    // Only on the per-site page: the overview does not need one selected, and
+    // picking one there used to load a site's rules nobody had asked for.
+    if (!isAuthenticated || page !== 'waf-site' || selectedWafWebsiteId || websites.length === 0) return;
     loadWebsiteWafConfig(websites[0].id, false);
   }, [isAuthenticated, page, selectedWafWebsiteId, websites.length]);
 
@@ -3787,7 +3820,8 @@ function App() {
   ];
 
   const navItems = [...mainNavItems, ...settingsNavItems];
-  const activeNavItem = navItems.find(([key]) => key === page) || navItems[0];
+  const navPage = NAV_PARENT_PAGE[page] || page;
+  const activeNavItem = navItems.find(([key]) => key === navPage) || navItems[0];
   const settingsIsActive = SETTINGS_PAGE_KEYS.includes(page);
 
   function renderNotifications() {
@@ -5546,57 +5580,47 @@ function App() {
   function renderWaf() {
     if (!isAdmin) return <section className="section"><h2>WAF</h2><p className="hint">No permission.</p></section>;
     const statusText = wafRules.status?.stdout || wafRules.status?.stderr || 'Click Refresh to load WAF status.';
-    const selectedSite = websites.find(site => String(site.id) === String(selectedWafWebsiteId));
-    const groupedRules = (wafSiteConfig?.default_rules || wafRules.default_rule_definitions || []).reduce((groups, rule) => {
-      const category = rule.category || 'General';
-      groups[category] = groups[category] || [];
-      groups[category].push(rule);
-      return groups;
-    }, {});
+    const botCountFor = id => (botBlocks?.websites?.find(w => w.website_id === id)?.blocked_bots || []).length;
     return <>
       <section className="section">
         <div className="section-title">
-          <div><h2>WAF</h2><p className="hint">WAF engine is installed by the panel. Rules are configured per website.</p></div>
-          <button disabled={!!loading} onClick={loadWafRules}><RefreshCw size={14}/> Refresh</button>
+          <div><h2>WAF</h2><p className="hint">Engine status and per-website protection. Open a website to configure its rules, flood limits and blocked bots.</p></div>
+          <button disabled={!!loading} onClick={() => { loadWafRules(); loadBotBlocks(); }}><RefreshCw size={14}/> Refresh</button>
         </div>
         <div className="info-box firewall-status"><strong>Status</strong><pre>{statusText}</pre></div>
       </section>
+
       <section className="section">
-        <div className="section-title"><h2>Website WAF</h2></div>
+        <div className="section-title"><h2>Websites</h2></div>
         {websites.length === 0 && <EmptyState icon={Globe} message="No websites yet." />}
-        {websites.length > 0 && <div className="firewall-form waf-website-selector">
-          <label><span>Website</span><select value={selectedWafWebsiteId} onChange={e => loadWebsiteWafConfig(e.target.value)}>
-            <option value="">Select website</option>
-            {websites.map(site => <option key={site.id} value={site.id}>{site.domain}</option>)}
-          </select></label>
-          <button disabled={!selectedWafWebsiteId || !!loading} onClick={() => selectedSite && toggleWebsiteWaf(selectedSite)}><Shield size={14}/> {selectedSite?.waf_enabled ? 'Disable WAF' : 'Enable WAF'}</button>
-        </div>}
-        <div className="table waf-site-list">
-          {websites.map(site => <div className="firewall-rule" key={site.id}>
-            <span><strong>{site.domain}</strong></span>
-            <div className="firewall-rule-actions">
-              <span className={site.waf_enabled ? 'badge ok' : 'badge'}>{site.waf_enabled ? 'Enabled' : 'Disabled'}</span>
-              <span className={site.http_flood_enabled ? 'badge ok' : 'badge'}>{site.http_flood_enabled ? 'Flood On' : 'Flood Off'}</span>
-              <button disabled={!!loading} onClick={() => loadWebsiteWafConfig(site.id)}>Rules</button>
-            </div>
-          </div>)}
+        <div className="table waf-overview-list">
+          {websites.map(site => {
+            const bots = botCountFor(site.id);
+            return <div className="waf-overview-row" key={site.id}>
+              <span className="waf-overview-domain"><strong>{site.domain}</strong></span>
+              <div className="waf-overview-badges">
+                <span className={site.waf_enabled ? 'badge ok' : 'badge'}>{site.waf_enabled ? 'WAF on' : 'WAF off'}</span>
+                <span className={site.http_flood_enabled ? 'badge ok' : 'badge'}>{site.http_flood_enabled ? 'Flood on' : 'Flood off'}</span>
+                <span className={bots > 0 ? 'badge ok' : 'badge'}>{bots > 0 ? `${bots} bot(s)` : 'No bots'}</span>
+              </div>
+              <button disabled={!!loading} onClick={() => openWafSite(site.id)}><SettingsIcon size={14}/> Configure</button>
+            </div>;
+          })}
         </div>
       </section>
-      <section className="section bot-block-panel">
+
+      <section className="section">
         <div className="section-title">
-          <div>
-            <h2>Bot blocking</h2>
-            <p className="hint">One bot name per line, matched anywhere in User-Agent. Names are matched literally, so <code>bingbot/2.0</code> will not also match <code>bingbotX2Y0</code>. Blocked requests get 403 before WAF and rate limiting run.</p>
-          </div>
-          <button disabled={!!loading} onClick={loadBotBlocks}><RefreshCw size={14}/> Refresh</button>
+          <div><h2>Import bot list</h2><p className="hint">Apply one list to several websites at once. To edit a single site, open it above.</p></div>
+          <button disabled={!!loading} onClick={() => setBulkBotOpen(open => !open)}>{bulkBotOpen ? 'Hide' : 'Show'}</button>
         </div>
-        <div className="bot-block-grid">
+        {bulkBotOpen && <div className="bot-block-grid">
           <div className="bot-block-editor">
             <textarea
               className="code-editor"
               value={botBlockText}
               onChange={e => setBotBlockText(e.target.value)}
-              rows={14}
+              rows={12}
               spellCheck={false}
               placeholder={'AhrefsBot\nSemrushBot\nMJ12bot\nDotBot\nPetalBot\nBytespider'}
             />
@@ -5616,29 +5640,19 @@ function App() {
               <button type="button" disabled={!!loading} onClick={() => setBotBlockTargets([])}>Clear</button>
             </div>
             <div className="bot-block-target-list">
-              {websites.length === 0 && <EmptyState icon={Globe} message="No websites yet." />}
-              {websites.map(site => {
-                const current = botBlocks?.websites?.find(w => w.website_id === site.id)?.blocked_bots || [];
-                return <label className="bot-block-target" key={site.id}>
-                  <input
-                    type="checkbox"
-                    checked={botBlockTargets.includes(site.id)}
-                    onChange={e => setBotBlockTargets(prev => e.target.checked
-                      ? [...prev, site.id]
-                      : prev.filter(id => id !== site.id))}
-                  />
-                  <span>
-                    <strong>{site.domain}</strong>
-                    <small>{current.length > 0 ? `${current.length} blocked` : 'none blocked'}</small>
-                  </span>
-                  {current.length > 0 && <button
-                    type="button"
-                    className="danger"
-                    disabled={!!loading}
-                    onClick={() => clearWebsiteBots(site.id)}
-                  >Clear</button>}
-                </label>;
-              })}
+              {websites.map(site => <label className="bot-block-target" key={site.id}>
+                <input
+                  type="checkbox"
+                  checked={botBlockTargets.includes(site.id)}
+                  onChange={e => setBotBlockTargets(prev => e.target.checked
+                    ? [...prev, site.id]
+                    : prev.filter(id => id !== site.id))}
+                />
+                <span>
+                  <strong>{site.domain}</strong>
+                  <small>{botCountFor(site.id) > 0 ? `${botCountFor(site.id)} blocked` : 'none blocked'}</small>
+                </span>
+              </label>)}
             </div>
             <div className="bot-block-apply">
               <label><span>Mode</span><select value={botBlockMode} onChange={e => setBotBlockMode(e.target.value)}>
@@ -5650,11 +5664,75 @@ function App() {
               </button>
             </div>
           </div>
+        </div>}
+      </section>
+    </>;
+  }
+
+  function renderWafSite() {
+    if (!isAdmin) return <section className="section"><h2>WAF</h2><p className="hint">No permission.</p></section>;
+    const selectedSite = websites.find(site => String(site.id) === String(selectedWafWebsiteId));
+    const groupedRules = (wafSiteConfig?.default_rules || wafRules.default_rule_definitions || []).reduce((groups, rule) => {
+      const category = rule.category || 'General';
+      groups[category] = groups[category] || [];
+      groups[category].push(rule);
+      return groups;
+    }, {});
+    const siteBotNames = siteBotText.split(/[\n,;]+/).map(s => s.trim()).filter(Boolean);
+    const siteBotUnique = new Set(siteBotNames.map(s => s.toLowerCase()));
+    return <>
+      <section className="section">
+        <div className="section-title waf-site-header">
+          <div>
+            <h2>{wafSiteConfig?.domain || selectedSite?.domain || 'Website'}</h2>
+            <p className="hint">WAF rules, flood limits and blocked bots for this website.</p>
+          </div>
+          <div className="waf-site-header-actions">
+            <select value={selectedWafWebsiteId} onChange={e => loadWebsiteWafConfig(e.target.value)}>
+              {websites.map(site => <option key={site.id} value={site.id}>{site.domain}</option>)}
+            </select>
+            <button className="secondary-light" onClick={() => navigateToPage('waf')}><ArrowLeft size={14}/> All websites</button>
+          </div>
+        </div>
+        <div className="waf-site-toggles">
+          <span className={selectedSite?.waf_enabled ? 'badge ok' : 'badge'}>{selectedSite?.waf_enabled ? 'WAF enabled' : 'WAF disabled'}</span>
+          <button disabled={!selectedWafWebsiteId || !!loading} onClick={() => selectedSite && toggleWebsiteWaf(selectedSite)}>
+            <Shield size={14}/> {selectedSite?.waf_enabled ? 'Disable WAF' : 'Enable WAF'}
+          </button>
         </div>
       </section>
+
+      {!wafSiteConfig && websites.length === 0 && <section className="section"><EmptyState icon={Globe} message="No websites yet." /></section>}
+
+      {wafSiteConfig && <section className="section bot-block-panel">
+        <div className="section-title">
+          <div>
+            <h2>Blocked bots</h2>
+            <p className="hint">One name per line, matched anywhere in User-Agent. Matched literally, so <code>bingbot/2.0</code> will not also match <code>bingbotX2Y0</code>. Blocked requests get 403 before WAF and rate limiting run.</p>
+          </div>
+        </div>
+        <textarea
+          className="code-editor"
+          value={siteBotText}
+          onChange={e => setSiteBotText(e.target.value)}
+          rows={10}
+          spellCheck={false}
+          placeholder={'AhrefsBot\nSemrushBot\nMJ12bot'}
+        />
+        <p className="hint">
+          {`${siteBotUnique.size} bot(s)`}
+          {siteBotNames.length !== siteBotUnique.size ? ` (${siteBotNames.length - siteBotUnique.size} duplicate(s) will be dropped)` : ''}
+          {botBlocks?.max_bots ? ` - max ${botBlocks.max_bots}` : ''}
+        </p>
+        <div className="actions">
+          <button disabled={!!loading} onClick={saveSiteBots}><Shield size={14}/> Save blocked bots</button>
+          <button className="secondary-light" disabled={!!loading || siteBotNames.length === 0} onClick={() => setSiteBotText('')}>Clear list</button>
+        </div>
+      </section>}
+
       {wafSiteConfig && <section className="section http-flood-panel">
         <div className="section-title">
-          <h2>HTTP Flood - {wafSiteConfig.domain}</h2>
+          <h2>HTTP Flood</h2>
           <span className={httpFloodForm.http_flood_enabled ? 'badge ok' : 'badge'}>{httpFloodForm.http_flood_enabled ? 'Enabled' : 'Disabled'}</span>
         </div>
         <label className="schedule-toggle http-flood-toggle">
@@ -5669,9 +5747,10 @@ function App() {
           <button disabled={!!loading} onClick={saveWebsiteHttpFlood}><Shield size={14}/> Save HTTP Flood</button>
         </div>
       </section>}
+
       {wafSiteConfig && <section className="section waf-rules-grid">
         <div className="waf-rule-panel">
-          <div className="section-title"><h2>Default rules - {wafSiteConfig.domain}</h2></div>
+          <div className="section-title"><h2>Default rules</h2></div>
           <div className="waf-default-groups">
             {Object.entries(groupedRules).map(([category, rules]) => <div className="waf-rule-group" key={category}>
               <h3>{category}</h3>
@@ -5683,7 +5762,7 @@ function App() {
           </div>
         </div>
         <div className="waf-rule-panel">
-          <div className="section-title"><h2>Custom rules - {wafSiteConfig.domain}</h2></div>
+          <div className="section-title"><h2>Custom rules</h2></div>
           <textarea className="code-editor" value={wafCustomRules} onChange={e => setWafCustomRules(e.target.value)} rows={14} spellCheck={false} placeholder="SecRule ..." />
           <p className="hint">Saved into {wafSiteConfig.rules_file}</p>
           <div className="actions"><button disabled={!!loading} onClick={saveWebsiteWafRules}>Save website WAF rules</button></div>
@@ -6409,6 +6488,7 @@ function App() {
     if (page === 'php') return renderPhpConfig();
     if (page === 'firewall') return renderFirewall();
     if (page === 'waf') return renderWaf();
+    if (page === 'waf-site') return renderWafSite();
     if (page === 'malware') return renderMalware();
     if (page === 'access-logs') return renderWafAccessLogs();
     if (page === 'updates') return renderUpdates();
@@ -6476,7 +6556,7 @@ function App() {
           <button className="sidebar-close" onClick={() => setMobileMenuOpen(false)} aria-label="Close menu"><X size={18}/></button>
         </div>
         <nav className="sidebar-nav">
-          {mainNavItems.map(([key, label, Icon]) => <button key={key} type="button" className={page === key ? 'active' : ''} onClick={() => navigateToPage(key)} aria-current={page === key ? 'page' : undefined}>
+          {mainNavItems.map(([key, label, Icon]) => <button key={key} type="button" className={navPage === key ? 'active' : ''} onClick={() => navigateToPage(key)} aria-current={navPage === key ? 'page' : undefined}>
             <Icon size={17}/>{label}
           </button>)}
           <div className={`sidebar-nav-group ${settingsMenuOpen ? 'open' : ''}`}>
@@ -6484,7 +6564,7 @@ function App() {
               <SettingsIcon size={17}/><span>Settings</span><ChevronDown className="sidebar-group-chevron" size={16}/>
             </button>
             {settingsMenuOpen && <div className="sidebar-subnav" id="settings-submenu">
-              {settingsNavItems.map(([key, label, Icon]) => <button key={key} type="button" className={page === key ? 'active' : ''} onClick={() => navigateToPage(key)} aria-current={page === key ? 'page' : undefined}>
+              {settingsNavItems.map(([key, label, Icon]) => <button key={key} type="button" className={navPage === key ? 'active' : ''} onClick={() => navigateToPage(key)} aria-current={navPage === key ? 'page' : undefined}>
                 <Icon size={16}/>{label}
               </button>)}
             </div>}
