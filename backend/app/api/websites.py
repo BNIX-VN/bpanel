@@ -71,7 +71,11 @@ def _write_placeholder_page(domain: str, root_path: str, linux_user: str | None,
     placeholder = site_users.document_root(root_path) / "index.html"
     if placeholder.exists():
         return
-    env = Environment(loader=FileSystemLoader(_PLACEHOLDER_TEMPLATE_DIR), autoescape=False)
+    # This one renders HTML, so it escapes - unlike the vhost templates, where
+    # escaping would corrupt the config. The only variable is `domain`, already
+    # constrained to [a-z0-9-.] by DOMAIN_RE, so escaping is a no-op for every
+    # value that can reach here today; it is here so that stops being load-bearing.
+    env = Environment(loader=FileSystemLoader(_PLACEHOLDER_TEMPLATE_DIR), autoescape=True)
     tmpl = env.get_template("placeholder.html.j2")
     placeholder_site = Website(
         domain=domain,
