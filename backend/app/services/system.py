@@ -3,9 +3,15 @@ import shutil
 import time
 from pathlib import Path
 
+from app.services import webserver
 from app.services.shell import shell
 
-BASE_SERVICES = ("bpanel-api", "nginx", "mariadb", "redis-server")
+# The web server unit differs per install, and only one of them exists on a
+# given box. Listing the wrong one shows the Services page a unit that will
+# never report a status, and hides the one actually serving the sites.
+WEB_SERVER_SERVICES = {"nginx": "nginx", "openlitespeed": "lshttpd"}
+# The web server is NOT in here - it comes from web_server_service().
+BASE_SERVICES = ("bpanel-api", "mariadb", "redis-server")
 PHP_VERSION_ORDER = ("5.6", "7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5")
 PHP_ETC_DIR = Path("/etc/php")
 SUPPORTED_ACTIONS = {"start", "stop", "restart", "reload", "status"}
@@ -41,8 +47,16 @@ def installed_php_services() -> list[str]:
     return sorted(set(services), key=_php_sort_key)
 
 
+def web_server_service() -> str:
+    """The systemd unit for whichever web server this install runs."""
+    return WEB_SERVER_SERVICES.get(webserver.active_name(), "nginx")
+
+
 def list_services() -> list[str]:
-    return [*BASE_SERVICES[:2], *installed_php_services(), *BASE_SERVICES[2:]]
+    # PHP-FPM units only exist on an nginx install; OpenLiteSpeed runs LSPHP
+    # inside lshttpd, so there is no separate unit to list or restart.
+    php_services = installed_php_services() if webserver.active_name() == "nginx" else []
+    return ["bpanel-api", web_server_service(), *php_services, *BASE_SERVICES[1:]]
 
 
 def service_action(name: str, action: str):

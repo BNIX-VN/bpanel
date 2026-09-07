@@ -182,3 +182,28 @@ def test_features_nginx_only_are_hidden_on_openlitespeed():
     assert APP_JSX.count(
         "disabled={value === 'application' && (!appsFeatureEnabled || isOpenLiteSpeed(webServer))}"
     ) == 2, "an app-type picker still offers Application on OpenLiteSpeed"
+
+
+def test_the_services_page_lists_the_web_server_that_is_actually_running():
+    """Only one web server exists on a given box. Listing the other shows a
+    unit that can never report a status and hides the one serving the sites -
+    the Services page showed "nginx ..." on an OpenLiteSpeed server and no
+    lshttpd at all, which a browser check caught and no text assertion would
+    have.
+    """
+    from app.core.config import settings
+    from app.services import system
+
+    original = settings.web_server
+    try:
+        settings.web_server = "openlitespeed"
+        ols = system.list_services()
+        assert "lshttpd" in ols and "nginx" not in ols
+        # LSPHP runs inside lshttpd; there is no php-fpm unit to restart.
+        assert not [s for s in ols if s.endswith("-fpm")]
+
+        settings.web_server = "nginx"
+        ngx = system.list_services()
+        assert "nginx" in ngx and "lshttpd" not in ngx
+    finally:
+        settings.web_server = original
