@@ -95,6 +95,21 @@ class Settings(BaseSettings):
 
     class Config:
         env_file = ".env"
+        # Unknown keys in .env are ignored, not fatal.
+        #
+        # pydantic-settings defaults to extra="forbid", which means one stale
+        # key stops the panel from starting at all. That is the wrong trade for
+        # a control panel: .env is written by the installer and rewritten by
+        # every update, so a key that a newer version added stays behind when
+        # that version is rolled back. Seen for real on a production box, where
+        # a leftover WEB_SERVER=nginx from a since-cancelled branch left the
+        # panel unable to start - and silently, because the running process had
+        # already imported its config. The box looked healthy for two weeks
+        # while being one restart away from being down.
+        #
+        # Ignoring an unknown key costs a typo going unnoticed. Forbidding one
+        # costs the panel. The panel matters more.
+        extra = "ignore"
 
 
 settings = Settings()
