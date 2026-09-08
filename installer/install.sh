@@ -402,6 +402,18 @@ install_php() {
     fi
 
     apt_get install -y "${available_packages[@]}"
+
+    # Installing php<v>-mysql is not the same as enabling it. Found on a
+    # live server: php8.3-mysql was installed, but /etc/php/8.3/cli/conf.d
+    # and .../fpm/conf.d held no symlink to it, so mysqli was missing from
+    # both. Every `wp core update` on a site using that version failed with
+    # "Your PHP installation appears to be missing the MySQL extension",
+    # and a WordPress site on 8.3 would not have reached its database at
+    # all. phpenmod is idempotent, so this is safe to run every time.
+    for mod in mysqlnd mysqli pdo_mysql; do
+      phpenmod -v "$version" "$mod" 2>/dev/null || true
+    done
+
     install_ioncube_loader "$version"
 
     ini_file="/etc/php/${version}/fpm/php.ini"

@@ -1498,6 +1498,26 @@ if [[ "$(cat "$BTMP_RULE" 2>/dev/null)" != "$BTMP_WANTED" ]]; then
   chmod 644 "$BTMP_RULE"
 fi
 
+# Repair for servers installed before the installer enabled these. A
+# php<v>-mysql package can be installed while its conf.d symlinks are
+# absent, which leaves mysqli missing from both the CLI and FPM: WordPress
+# on that version cannot reach its database, and `wp core update` fails
+# with a bare 500 in the panel. Only touched when something is actually
+# missing, so a healthy server is left alone.
+for php_ini_dir in /etc/php/*/; do
+  php_ver="$(basename "$php_ini_dir")"
+  [[ -d "/etc/php/${php_ver}/cli/conf.d" ]] || continue
+  if ! compgen -G "/etc/php/${php_ver}/cli/conf.d/*mysqli*" >/dev/null; then
+    if [[ -f "/etc/php/${php_ver}/mods-available/mysqli.ini" ]]; then
+      log "Enabling missing MySQL extensions for PHP ${php_ver}"
+      for mod in mysqlnd mysqli pdo_mysql; do
+        phpenmod -v "$php_ver" "$mod" 2>/dev/null || true
+      done
+      systemctl reload "php${php_ver}-fpm" 2>/dev/null || true
+    fi
+  fi
+done
+
 log "Compiling backend modules"
 python -m py_compile \
   app/main.py \

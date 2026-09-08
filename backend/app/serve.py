@@ -16,12 +16,14 @@ Everything is read from the environment, which systemd fills from
 
 from __future__ import annotations
 
+import copy
 import logging
 import os
 import socket
 from pathlib import Path
 
 import uvicorn
+import uvicorn.config
 from uvicorn.config import create_ssl_context
 
 from app.core import panel_sni
@@ -87,6 +89,26 @@ def _certificate_pair() -> tuple[str, str] | None:
     return None
 
 
+def _log_config() -> dict:
+    """uvicorn's logging config, extended so the panel's own logger is heard.
+
+    uvicorn only configures the uvicorn.* loggers. Everything the panel logs
+    goes to logging.getLogger("bpanel"), which propagates to a root logger
+    that has no handler - so it went nowhere. Every logger.exception() in the
+    codebase was silently discarded, including the one in the unhandled-error
+    handler. That is how a plain 500 could reach a user with no trace of the
+    cause anywhere on the server: the panel reported "Internal server error"
+    and the journal stayed empty.
+    """
+    config = copy.deepcopy(uvicorn.config.LOGGING_CONFIG)
+    config["loggers"]["bpanel"] = {
+        "handlers": ["default"],
+        "level": "INFO",
+        "propagate": False,
+    }
+    return config
+
+
 def build_config() -> uvicorn.Config:
     pair = _certificate_pair()
     options: dict = {
@@ -94,6 +116,7 @@ def build_config() -> uvicorn.Config:
         "port": _port(),
         "proxy_headers": True,
         "forwarded_allow_ips": TRUSTED_FORWARDERS,
+        "log_config": _log_config(),
     }
     if pair:
         options["ssl_certfile"], options["ssl_keyfile"] = pair

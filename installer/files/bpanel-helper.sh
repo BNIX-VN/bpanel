@@ -4872,10 +4872,25 @@ PY
     ;;
 
   wp-site)
-    [[ $# -ge 2 ]] || deny "usage: wp-site <site-user> <args...>"
+    # WP-CLI has to run under the same PHP the site runs, not whatever the
+    # `php` alternative happens to point at. On a server with several PHP
+    # versions installed those differ, and the difference is not cosmetic: a
+    # site on 8.4 was updated by the 8.3 CLI, which had no mysqli, so every
+    # `wp core update` failed with "Your PHP installation appears to be
+    # missing the MySQL extension" - reported as a bare 500 in the panel.
+    [[ $# -ge 2 ]] || deny "usage: wp-site <site-user> [--php-version=<version>] <args...>"
     user="$1"; shift
     require_linux_user "$user"
-    exec runuser -u "$user" -- env HOME="$HOME_ROOT/$user" WP_CLI_PHP_ARGS='-d pcre.jit=0' php -d pcre.jit=0 /usr/local/bin/wp "$@"
+    wp_php="php"
+    if [[ "${1:-}" == --php-version=* ]]; then
+      wp_php_version="${1#--php-version=}"
+      require_php_version "$wp_php_version"
+      wp_php="php${wp_php_version}"
+      command -v "$wp_php" >/dev/null 2>&1 || deny "PHP CLI is not installed: $wp_php"
+      shift
+    fi
+    [[ $# -ge 1 ]] || deny "usage: wp-site <site-user> [--php-version=<version>] <args...>"
+    exec runuser -u "$user" -- env HOME="$HOME_ROOT/$user" WP_CLI_PHP_ARGS='-d pcre.jit=0' "$wp_php" -d pcre.jit=0 /usr/local/bin/wp "$@"
     ;;
 
   # ---- crontab managed for www-data ------------------------------------

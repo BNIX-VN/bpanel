@@ -93,7 +93,7 @@ def install_wordpress(
     # WP-CLI runs as this website's isolated Linux user through the helper.
     shell.privileged(
         "wp-site",
-        helper_args=[linux_user, "core", "download", wp_path],
+        helper_args=[linux_user, *_wp_php_flag(php_version), "core", "download", wp_path],
         fallback=["wp", "core", "download", wp_path],
     )
 
@@ -134,9 +134,11 @@ def install_wordpress(
         "--skip-email",
         "--allow-root",
     ]
+    # The site's PHP, not the default alternative: `wp core install` writes to
+    # the database, so a CLI without mysqli fails here just as `core update` did.
     shell.privileged(
         "wp-site",
-        helper_args=[linux_user, *install_args],
+        helper_args=[linux_user, *_wp_php_flag(php_version), *install_args],
         fallback=["wp", *install_args],
         input=admin_password + "\n",
         sensitive=True,
@@ -165,7 +167,18 @@ def fix_permissions(root_path: str, linux_user: str | None = None):
     return site_users.fix_site_permissions(root_path, linux_user)
 
 
-def wp_update(path: str, action: str, linux_user: str | None = None):
+def _wp_php_flag(php_version: str | None) -> list[str]:
+    """The --php-version the helper wants, or nothing if we do not know one.
+
+    WP-CLI must run under the site's PHP. Left to the default `php`, a site on
+    one version gets updated by another version's CLI, which may not have the
+    extensions WordPress needs - mysqli in particular.
+    """
+    version = (php_version or "").strip()
+    return [f"--php-version={version}"] if version else []
+
+
+def wp_update(path: str, action: str, linux_user: str | None = None, php_version: str | None = None):
     if action == "core":
         args = ["core", "update", f"--path={path}", "--allow-root"]
     elif action == "plugins":
@@ -175,18 +188,22 @@ def wp_update(path: str, action: str, linux_user: str | None = None):
     else:
         raise ValueError("Unsupported WordPress action")
     if linux_user:
-        return shell.privileged("wp-site", helper_args=[linux_user, *args], fallback=["wp", *args])
+        return shell.privileged(
+            "wp-site",
+            helper_args=[linux_user, *_wp_php_flag(php_version), *args],
+            fallback=["wp", *args],
+        )
     return shell.privileged("wp", helper_args=args, fallback=["wp", *args])
 
 
-def reset_admin_password(path: str, user: str, password: str, linux_user: str | None = None):
+def reset_admin_password(path: str, user: str, password: str, linux_user: str | None = None, php_version: str | None = None):
     safe_user = _safe_value(user, WP_USER_RE, "WordPress username")
     if not isinstance(password, str) or len(password) < 10 or "\x00" in password:
         raise ValueError("Password must be at least 10 characters")
     args = ["user", "update", safe_user, "--user_pass=/dev/stdin", f"--path={path}", "--allow-root"]
     return shell.privileged(
         "wp-site" if linux_user else "wp",
-        helper_args=[linux_user, *args] if linux_user else args,
+        helper_args=[linux_user, *_wp_php_flag(php_version), *args] if linux_user else args,
         fallback=["wp", *args],
         input=password,
         sensitive=True,

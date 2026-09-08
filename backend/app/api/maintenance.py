@@ -1094,6 +1094,7 @@ def wordpress_action(payload: WpAction, db: Session = Depends(get_db), current_u
         str(site_users.document_root(website.root_path, website.document_root or "public_html")),
         payload.action,
         website.linux_user,
+        php_version=website.php_version,
     )
     return result.__dict__
 
