@@ -403,16 +403,16 @@ install_php() {
 
     apt_get install -y "${available_packages[@]}"
 
-    # Installing php<v>-mysql is not the same as enabling it. Found on a
-    # live server: php8.3-mysql was installed, but /etc/php/8.3/cli/conf.d
-    # and .../fpm/conf.d held no symlink to it, so mysqli was missing from
-    # both. Every `wp core update` on a site using that version failed with
-    # "Your PHP installation appears to be missing the MySQL extension",
-    # and a WordPress site on 8.3 would not have reached its database at
-    # all. phpenmod is idempotent, so this is safe to run every time.
-    for mod in mysqlnd mysqli pdo_mysql; do
-      phpenmod -v "$version" "$mod" 2>/dev/null || true
-    done
+    # Installing php<v>-mysql is not the same as enabling it, and enabling a
+    # module whose .so is absent is worse than leaving it alone: phpenmod
+    # writes the symlink anyway and exits 0, after which every `php` run
+    # prints "Unable to load dynamic library". Enable only what is present.
+    php_ext_dir="$("php${version}" -i 2>/dev/null | sed -n 's/^extension_dir => \([^ ]*\).*/\1/p' | head -1)"
+    if [[ -n "$php_ext_dir" && -f "${php_ext_dir}/mysqli.so" ]]; then
+      for mod in mysqlnd mysqli pdo_mysql; do
+        phpenmod -v "$version" "$mod" 2>/dev/null || true
+      done
+    fi
 
     install_ioncube_loader "$version"
 

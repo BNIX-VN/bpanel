@@ -1498,23 +1498,39 @@ if [[ "$(cat "$BTMP_RULE" 2>/dev/null)" != "$BTMP_WANTED" ]]; then
   chmod 644 "$BTMP_RULE"
 fi
 
-# Repair for servers installed before the installer enabled these. A
-# php<v>-mysql package can be installed while its conf.d symlinks are
-# absent, which leaves mysqli missing from both the CLI and FPM: WordPress
-# on that version cannot reach its database, and `wp core update` fails
-# with a bare 500 in the panel. Only touched when something is actually
-# missing, so a healthy server is left alone.
+# Repair for servers where PHP's MySQL extension went missing. Seen for real:
+# php8.3-mysql in dpkg state "rc" - removed, config files left behind - so
+# /etc/php/8.3/mods-available still held mysqli.ini while the matching .so was
+# gone. WordPress on that version could not reach its database at all, and
+# `wp core update` failed with "missing the MySQL extension".
+#
+# phpenmod alone does NOT fix this, and is actively harmful here: with the .so
+# absent it still writes the conf.d symlink, exits 0, and every later `php`
+# invocation prints three "Unable to load dynamic library" warnings. So check
+# for the .so first and reinstall the package when it is missing; only then
+# enable the modules.
 for php_ini_dir in /etc/php/*/; do
   php_ver="$(basename "$php_ini_dir")"
   [[ -d "/etc/php/${php_ver}/cli/conf.d" ]] || continue
-  if ! compgen -G "/etc/php/${php_ver}/cli/conf.d/*mysqli*" >/dev/null; then
-    if [[ -f "/etc/php/${php_ver}/mods-available/mysqli.ini" ]]; then
-      log "Enabling missing MySQL extensions for PHP ${php_ver}"
-      for mod in mysqlnd mysqli pdo_mysql; do
-        phpenmod -v "$php_ver" "$mod" 2>/dev/null || true
-      done
-      systemctl reload "php${php_ver}-fpm" 2>/dev/null || true
-    fi
+  command -v "php${php_ver}" >/dev/null 2>&1 || continue
+  if "php${php_ver}" -m 2>/dev/null | grep -qx mysqli; then
+    continue
+  fi
+
+  php_ext_dir="$("php${php_ver}" -i 2>/dev/null | sed -n 's/^extension_dir => \([^ ]*\).*/\1/p' | head -1)"
+  if [[ -n "$php_ext_dir" && ! -f "${php_ext_dir}/mysqli.so" ]]; then
+    log "PHP ${php_ver} is missing the MySQL extension; installing php${php_ver}-mysql"
+    apt_get install -y "php${php_ver}-mysql" >/dev/null 2>&1 || \
+      log "WARNING: could not install php${php_ver}-mysql; WordPress on PHP ${php_ver} will not reach its database"
+  fi
+
+  # Only enable what is actually present, so a failed install cannot leave
+  # dangling symlinks behind.
+  if [[ -n "$php_ext_dir" && -f "${php_ext_dir}/mysqli.so" ]]; then
+    for mod in mysqlnd mysqli pdo_mysql; do
+      phpenmod -v "$php_ver" "$mod" 2>/dev/null || true
+    done
+    systemctl reload "php${php_ver}-fpm" 2>/dev/null || true
   fi
 done
 
