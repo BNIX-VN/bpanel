@@ -311,8 +311,6 @@ button:disabled,.upload-button.disabled{background:var(--disabled-bg);color:var(
 .http-flood-grid label{display:grid;gap:6px;font-weight:600;color:var(--text-secondary);min-width:0}
 .http-flood-grid span{font-size:13px;color:var(--text-muted)}
 .http-flood-grid input{width:100%;min-width:0}
-.demo-badge{display:inline-flex;align-items:center;gap:6px;padding:0 10px;min-height:30px;border-radius:999px;background:var(--warning-bg,#fef3c7);color:var(--warning-text,#92400e);border:1px solid var(--warning-border,#fcd34d);font-size:12px;font-weight:700;white-space:nowrap}
-.demo-badge svg{flex:none}
 .waf-overview-list{display:grid;gap:8px}
 .waf-overview-row{display:grid;grid-template-columns:minmax(0,1fr) max-content max-content;gap:12px;align-items:center;padding:10px 12px;border:1px solid var(--border);border-radius:8px}
 .waf-overview-domain{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

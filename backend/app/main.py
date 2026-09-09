@@ -9,7 +9,6 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api import addons as addons_api, auth, databases, firewall, maintenance, malware, packages, panel_settings as panel_settings_api, provisioning, services, site_apps as site_apps_api, terminal, updates, users, waf, websites
 from app.core.config import settings
-from app.core import demo
 from app.core.database import run_migrations
 from app.core.version import APP_VERSION
 from app.services import panel_settings as panel_brand_settings
@@ -80,20 +79,6 @@ async def unhandled_exception_handler(request, exc):
     if settings.app_env.lower() == "production":
         return JSONResponse(status_code=500, content={"detail": "Internal server error"})
     return JSONResponse(status_code=500, content={"detail": str(exc)})
-
-
-@app.middleware("http")
-async def demo_mode_guard(request, call_next):
-    """Refuse anything that acts, before it reaches a route.
-
-    In middleware rather than a dependency on each route so that a route added
-    later is covered by default. Getting this wrong in the other direction -
-    a new endpoint that quietly is not covered - is exactly the failure the
-    terminal entitlement had.
-    """
-    if demo.blocks(request.method, request.url.path):
-        return JSONResponse(status_code=403, content={"detail": demo.MESSAGE})
-    return await call_next(request)
 
 
 @app.middleware("http")

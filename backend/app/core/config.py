@@ -16,10 +16,6 @@ class Settings(BaseSettings):
     remember_me_expire_minutes: int = 60 * 24 * 30  # opt-in "remember me" at login
     database_url: str = "sqlite:///./bpanel.db"
     command_dry_run: bool = True
-    # Read-only public demo. Set in .env only: a demo is handed out with
-    # working credentials, so a switch reachable from inside the panel
-    # would be the first thing a visitor turned off.
-    demo_mode: bool = False
     allowed_origins: str = Field(default="")
     backup_root: str = "/var/backups/bpanel"
     nginx_sites_available: str = "/etc/nginx/conf.d"

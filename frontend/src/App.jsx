@@ -13,7 +13,7 @@ import 'ace-builds/src-noconflict/mode-text';
 import 'ace-builds/src-noconflict/mode-yaml';
 import 'ace-builds/src-noconflict/theme-textmate';
 import 'ace-builds/src-noconflict/theme-tomorrow_night';
-import { Archive, ArchiveRestore, ArrowLeft, Ban, Eye, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowLeft, Ban, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
 import { Terminal } from './components/Terminal';
 import './style.css';
 import './brand.css';
@@ -3819,10 +3819,6 @@ function App() {
   ];
 
   const navItems = [...mainNavItems, ...settingsNavItems];
-  // Read-only demo. The API refuses every mutation on its own; this only
-  // stops the panel offering buttons that would come back 403, and says so
-  // once at the top instead of once per click.
-  const isDemo = !!panelSettings.demo_mode;
   const navPage = NAV_PARENT_PAGE[page] || page;
   const activeNavItem = navItems.find(([key]) => key === navPage) || navItems[0];
   const settingsIsActive = SETTINGS_PAGE_KEYS.includes(page);
@@ -6547,11 +6543,7 @@ function App() {
             <div>
               <p className="eyebrow">Server Management Panel</p>
               <h1>{panelSettings.app_name || 'BPanel'}</h1>
-              <p className="hint">
-                {isDemo
-                  ? 'Demo server. Sign in to look around - everything is visible and nothing can be changed.'
-                  : 'Manage websites, databases, backups, SSL, and services.'}
-              </p>
+              <p className="hint">Manage websites, databases, backups, SSL, and services.</p>
             </div>
           </div>
           <ThemeToggle theme={theme} onToggle={toggleTheme}/>
@@ -6615,9 +6607,6 @@ function App() {
             <p className="eyebrow">Server Management Panel</p>
             <h1>{activeNavItem?.[1] || panelSettings.app_name || 'BPanel'}</h1>
           </div>
-          {isDemo && <div className="demo-badge" role="status">
-            <Eye size={14}/> Demo - read only
-          </div>}
           <div className="login logged-in">
             <div className="account-pill" title={accountLabel}><span>Logged in as</span><strong>{accountLabel}</strong></div>
             <div className="top-actions">

@@ -279,7 +279,6 @@ def current_settings() -> dict:
     mw = malware_scan.refresh_status()
     return {
         "app_name": app_name,
-        "demo_mode": bool(getattr(settings, "demo_mode", False)),
         "panel_url": panel_url,
         "panel_hostname": panel_hostname,
         "panel_port": panel_port,
