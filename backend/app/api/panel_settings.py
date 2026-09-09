@@ -26,7 +26,7 @@ router = APIRouter(prefix="/panel-settings", tags=["panel-settings"])
 # panel runs on, and which domains live on this server, are for people who have
 # signed in - an anonymous visitor asking for the login page is not owed the
 # customer list.
-PUBLIC_SETTING_FIELDS = ("app_name", "logo_url", "favicon_url")
+PUBLIC_SETTING_FIELDS = ("app_name", "logo_url", "favicon_url", "demo_mode")
 
 
 @router.get("/public", response_model=PanelSettingsOut)

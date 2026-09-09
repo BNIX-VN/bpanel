@@ -740,6 +740,9 @@ class ServiceAction(BaseModel):
 
 class PanelSettingsOut(BaseModel):
     app_name: str = "BPanel"
+    # Read-only public demo. Sent to the login page too, so the banner is
+    # up before anyone signs in.
+    demo_mode: bool = False
     panel_url: str = ""
     panel_hostname: str = ""
     panel_port: int = 2222

@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.core import demo
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.permissions import Role, ensure_role, is_admin_role
@@ -222,6 +223,12 @@ async def terminal_websocket(
     # Check ownership
     if website.owner_id != current_user.id and not is_admin_role(current_user.role):
         await websocket.close(code=4003, reason="Access denied")
+        return
+
+    # Demo mode checks itself here: a websocket never passes through HTTP
+    # middleware, so the guard in main.py cannot see this route.
+    if demo.enabled():
+        await websocket.close(code=4003, reason="Demo mode: the terminal is disabled")
         return
 
     # ...and the same entitlement check the REST endpoint makes. Both doors
