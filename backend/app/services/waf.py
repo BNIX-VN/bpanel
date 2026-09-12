@@ -94,8 +94,8 @@ DEFAULT_RULES = [
         "id": "php-path-traversal",
         "category": "PHP",
         "title": "Path traversal",
-        "description": "Blocks ../ and encoded traversal probes in URLs and query/form arguments.",
-        "rules": """SecRule REQUEST_URI|ARGS "@rx (?i)(?:\\.\\./|\\.\\.\\\\|%2e%2e%2f|%252e%252e%252f)" "id:1001302,phase:2,deny,status:403,log,msg:'BPanel blocked PHP path traversal'""",
+        "description": "Blocks ../ and encoded traversal probes in URLs and query arguments.",
+        "rules": """SecRule REQUEST_URI|ARGS "@rx (?i)(?:\\.\\./|\\.\\.\\\\|%2e%2e%2f|%252e%252e%252f)" "id:1001302,phase:1,deny,status:403,log,msg:'BPanel blocked PHP path traversal'""",
     },
     {
         "id": "php-runtime-probes",
@@ -130,7 +130,7 @@ DEFAULT_RULES = [
         "category": "WordPress",
         "title": "WordPress author scans",
         "description": "Blocks ?author= enumeration scans while leaving XML-RPC compatibility to site policy.",
-        "rules": """SecRule ARGS:author "@rx ^[0-9]+$" "id:1001103,phase:2,deny,status:403,log,msg:'BPanel blocked WordPress author enumeration'""",
+        "rules": """SecRule ARGS:author "@rx ^[0-9]+$" "id:1001103,phase:1,deny,status:403,log,msg:'BPanel blocked WordPress author enumeration'""",
     },
     {
         "id": "wordpress-install-upgrade",

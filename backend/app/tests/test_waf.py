@@ -1,6 +1,11 @@
+import re
+from pathlib import Path
+
 import pytest
 
 from app.services import waf
+
+HELPER_SCRIPT = Path(__file__).resolve().parents[3] / "installer" / "files" / "bpanel-helper.sh"
 
 
 def test_default_rules_only_cover_wordpress_laravel_and_php():
@@ -40,6 +45,47 @@ def test_default_rules_do_not_scan_request_body_or_headers():
 
     assert "REQUEST_BODY" not in content
     assert "REQUEST_HEADERS" not in content
+
+
+def test_waf_rules_are_phase_1():
+    """A phase:2 rule is silently dead while request bodies are not buffered.
+
+    The nginx connector never runs phase 2 when SecRequestBodyAccess is Off, so
+    such a rule loads, reports as enabled in the UI, and never matches anything.
+    Two shipped rules sat like that until 2026-09-13. If body access is ever
+    turned on - which is what OWASP CRS needs - this test should be revisited
+    together with the exclusion tuning, not simply deleted.
+    """
+    helper = HELPER_SCRIPT.read_text(encoding="utf-8")
+    assert "SecRequestBodyAccess Off" in helper, (
+        "request bodies are buffered now; revisit the phase of every shipped rule"
+    )
+
+    offenders = [
+        rule["id"] for rule in waf.DEFAULT_RULES if "phase:1," not in rule["rules"]
+    ]
+    assert offenders == [], f"these rules would never fire: {offenders}"
+
+
+def test_shipped_rules_match_the_helper_copy():
+    """The rule text lives twice: in DEFAULT_RULES and in the installer helper.
+
+    waf.py drives what a site gets and what the UI lists; the helper writes
+    /etc/nginx/modsec/bpanel-default.conf for the server-wide config. They drift
+    apart silently - a fix applied to one is invisible in the other.
+    """
+    helper = HELPER_SCRIPT.read_text(encoding="utf-8")
+    block = helper.split("cat >/etc/nginx/modsec/bpanel-default.conf <<'RULES'")[1].split("\nRULES\n")[0]
+
+    def rule_ids(text):
+        return sorted(re.findall(r"id:(\d+)", text))
+
+    def phases(text):
+        return sorted(re.findall(r"id:(\d+),phase:(\d)", text))
+
+    shipped = "\n".join(rule["rules"] for rule in waf.DEFAULT_RULES)
+    assert rule_ids(block) == rule_ids(shipped)
+    assert phases(block) == phases(shipped)
 
 
 def test_unknown_rule_ids_are_rejected():

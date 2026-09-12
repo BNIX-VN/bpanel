@@ -346,6 +346,19 @@ write_modsec_base_conf() {
   {
     [[ -f /etc/modsecurity/modsecurity.conf ]] && echo "Include /etc/modsecurity/modsecurity.conf"
     echo "SecRuleEngine On"
+    # Request bodies are not buffered: uploads on a shared host are large and
+    # frequent, and buffering them costs memory on every PHP site at once.
+    #
+    # The consequence is easy to miss and was live for months: with body access
+    # off the nginx connector never runs phase 2 at all, so a phase:2 rule is
+    # silently dead - it loads, it shows as enabled, and it never matches.
+    # Every rule BPanel ships is therefore phase:1, which sees the URI and the
+    # query string. test_waf_rules_are_phase_1 enforces that.
+    #
+    # Turning this on is what a payload-inspecting rule set (OWASP CRS) needs,
+    # and it must arrive together with CRS's exclusion tuning: on its own it
+    # would make the traversal rule match "../" inside any post body a customer
+    # saves.
     echo "SecRequestBodyAccess Off"
   } >/etc/nginx/modsec/bpanel-base.conf
 }
@@ -366,12 +379,12 @@ write_waf_default_rules() {
   cat >/etc/nginx/modsec/bpanel-default.conf <<'RULES'
 # BPanel default WAF rules: lightweight WordPress, Laravel, and PHP probes only.
 SecRule REQUEST_URI "@rx (?i)(?:/\.env(?:\.|$)|/\.user\.ini(?:\.|$)|/\.git/|/composer\.(?:json|lock)(?:$|[?])|/(?:phpinfo|info)\.php(?:$|[?])|/(?:config|database|db)\.php\.(?:bak|old|save|txt)(?:$|[?]))" "id:1001301,phase:1,deny,status:403,log,msg:'BPanel blocked PHP sensitive file probe'"
-SecRule REQUEST_URI|ARGS "@rx (?i)(?:\.\./|\.\.\\|%2e%2e%2f|%252e%252e%252f)" "id:1001302,phase:2,deny,status:403,log,msg:'BPanel blocked PHP path traversal'"
+SecRule REQUEST_URI|ARGS "@rx (?i)(?:\.\./|\.\.\\|%2e%2e%2f|%252e%252e%252f)" "id:1001302,phase:1,deny,status:403,log,msg:'BPanel blocked PHP path traversal'"
 SecRule REQUEST_URI "@rx (?i)(?:/(?:c99|r57|shell|cmd|wso)\.php(?:$|[?])|/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin\.php(?:$|[?]))" "id:1001303,phase:1,deny,status:403,log,msg:'BPanel blocked PHP runtime probe'"
 SecRule REQUEST_URI "@rx (?i)(?:/\.env(?:\.|$)|/artisan(?:$|[?])|/server\.php(?:$|[?])|/storage/logs/[^?]*\.log(?:$|[?])|/bootstrap/cache/[^?]*\.php(?:$|[?]))" "id:1001201,phase:1,deny,status:403,log,msg:'BPanel blocked Laravel sensitive path'"
 SecRule REQUEST_URI "@rx (?i)(?:/_ignition/execute-solution(?:$|[?]))" "id:1001202,phase:1,deny,status:403,log,msg:'BPanel blocked Laravel Ignition RCE probe'"
 SecRule REQUEST_URI "@rx (?i)(?:/wp-config\.php(?:\.|$|[?])|/wp-content/(?:uploads|cache|upgrade)/[^?]*\.php(?:$|[?])|/wp-admin/includes/[^?]*\.php(?:$|[?])|/wp-includes/[^?]*\.php(?:$|[?]))" "id:1001101,phase:1,deny,status:403,log,msg:'BPanel blocked WordPress sensitive path'"
-SecRule ARGS:author "@rx ^[0-9]+$" "id:1001103,phase:2,deny,status:403,log,msg:'BPanel blocked WordPress author enumeration'"
+SecRule ARGS:author "@rx ^[0-9]+$" "id:1001103,phase:1,deny,status:403,log,msg:'BPanel blocked WordPress author enumeration'"
 SecRule REQUEST_URI "@rx (?i)(?:/wp-admin/install\.php(?:$|[?])|/wp-admin/setup-config\.php(?:$|[?]))" "id:1001104,phase:1,deny,status:403,log,msg:'BPanel blocked WordPress installer probe'"
 RULES
 }
