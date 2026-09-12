@@ -67,6 +67,42 @@ def test_waf_rules_are_phase_1():
     assert offenders == [], f"these rules would never fire: {offenders}"
 
 
+def test_removing_site_rules_goes_through_the_helper(monkeypatch):
+    calls = []
+
+    def fake_privileged(helper_command, helper_args=None, **kwargs):
+        calls.append((helper_command, list(helper_args or [])))
+        return waf.CommandResult(command=helper_command, returncode=0,
+                                 stdout="Removed WAF rules for example.com", stderr="")
+
+    monkeypatch.setattr(waf.shell, "privileged", fake_privileged)
+    note = waf.remove_site_rules("example.com")
+
+    assert calls == [("waf-site-delete", ["example.com"])]
+    assert "Removed" in note
+
+
+def test_removing_site_rules_never_raises(monkeypatch):
+    def boom(*args, **kwargs):
+        raise OSError("sudo went missing")
+
+    monkeypatch.setattr(waf.shell, "privileged", boom)
+    assert "could not remove" in waf.remove_site_rules("example.com")
+    # A bogus domain is rejected quietly rather than blocking the deletion.
+    assert waf.remove_site_rules("../../etc/nginx") == ""
+
+
+def test_helper_will_not_delete_rules_a_vhost_still_uses():
+    helper = HELPER_SCRIPT.read_text(encoding="utf-8")
+    body = helper.split("delete_waf_site_rules()")[1].split("\n}\n")[0]
+    # A missing modsecurity_rules_file fails `nginx -t`, so the next reload
+    # anywhere would take every site on the box down.
+    assert "modsecurity_rules_file" in body
+    assert "deny " in body
+    assert "require_domain" in body
+    assert "waf-site-delete)" in helper
+
+
 def test_shipped_rules_match_the_helper_copy():
     """The rule text lives twice: in DEFAULT_RULES and in the installer helper.
 

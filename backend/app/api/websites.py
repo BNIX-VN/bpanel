@@ -1008,9 +1008,11 @@ def delete_website(website_id: int, request: Request, delete_files: bool = True,
         mariadb.drop_database(db_item.db_name, db_item.db_user)
     db.query(WebsiteAlias).filter(WebsiteAlias.website_id == website.id).delete(synchronize_session=False)
     nginx.delete_wordpress_vhost(website.domain)
-    # The vhost is gone, so nothing reads the certificate any more: retire it
-    # before the row disappears and we no longer know which names were ours.
+    # The vhost is gone, so nothing reads the certificate or the rule file any
+    # more: retire both before the row disappears and we no longer know which
+    # names were ours.
     ssl_note = ssl.release_site_certificates(db, website.domain, exclude_website_id=website.id)
+    waf.remove_site_rules(website.domain)
     if delete_files:
         if website.linux_user:
             site_users.delete_site_runtime(website.root_path, website.linux_user)

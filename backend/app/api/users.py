@@ -19,7 +19,7 @@ from app.schemas.schemas import (
     UserUpdate,
 )
 from app.services.audit import log_action
-from app.services import mariadb, nginx, site_users, ssl, storage_quota, wordpress
+from app.services import mariadb, nginx, site_users, ssl, storage_quota, waf, wordpress
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -85,6 +85,7 @@ def _delete_owned_website(db: Session, website: Website) -> None:
     # Deleting the owner deletes the site, so its certificate goes too - left
     # behind it would keep certbot renewing a name this server no longer serves.
     ssl.release_site_certificates(db, website.domain, exclude_website_id=website.id)
+    waf.remove_site_rules(website.domain)
     wordpress.delete_wordpress(website.root_path)
     if db_item:
         db.delete(db_item)

@@ -411,6 +411,24 @@ save_waf_custom_rules() {
   echo "WAF custom rules saved"
 }
 
+delete_waf_site_rules() {
+  # Deleting a website used to leave /etc/nginx/modsec/sites/<domain>.conf
+  # behind for ever. Harmless to serve, but it hides real state: a rule fix
+  # looks half-applied because stale files still carry the old text, and the
+  # directory fills with names nobody hosts.
+  local domain="$1" target
+  require_domain "$domain"
+  target="/etc/nginx/modsec/sites/${domain}.conf"
+  # A vhost still pointing at this file would make `nginx -t` fail on the next
+  # reload and take every site on the box down with it. Never remove a file
+  # something still references, whatever the caller believes.
+  if grep -rqlF "modsecurity_rules_file ${target}" /etc/nginx/conf.d/ 2>/dev/null; then
+    deny "refusing to delete WAF rules for ${domain}: a vhost still references them"
+  fi
+  rm -f "$target" "${target}".bak.*
+  echo "Removed WAF rules for ${domain}"
+}
+
 save_waf_site_rules() {
   local domain="$1" tmp target backup=""
   require_domain "$domain"
@@ -3938,6 +3956,10 @@ case "$cmd" in
   waf-site-save)
     [[ $# -eq 1 ]] || deny "usage: waf-site-save <domain>"
     save_waf_site_rules "$1"
+    ;;
+  waf-site-delete)
+    [[ $# -eq 1 ]] || deny "usage: waf-site-delete <domain>"
+    delete_waf_site_rules "$1"
     ;;
   http-flood-zones-save)
     [[ $# -eq 0 ]] || deny "usage: http-flood-zones-save"

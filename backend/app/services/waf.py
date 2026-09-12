@@ -271,6 +271,33 @@ def sync_website_rules(website: Website) -> CommandResult:
     return sync_site_rules(website.domain, website_enabled_rule_ids(website), website_custom_rules(website))
 
 
+def remove_site_rules(domain: str) -> str:
+    """Drop a deleted site's rule file.
+
+    Call this only after the vhost is gone: the helper refuses while anything
+    still points at the file, because a missing modsecurity_rules_file fails
+    `nginx -t` and the next reload would take every site down.
+
+    Never raises - a website must stay deletable when this does not work.
+    """
+    try:
+        safe_domain = _validate_domain(domain)
+    except ValueError:
+        return ""
+    try:
+        result = shell.privileged(
+            "waf-site-delete",
+            helper_args=[safe_domain],
+            check=False,
+            fallback=["bash", "-lc", f"rm -f /etc/nginx/modsec/sites/{safe_domain}.conf"],
+        )
+    except Exception as exc:  # pragma: no cover - helper failure
+        return f"could not remove the WAF rules for {safe_domain}: {exc}"
+    if result.returncode != 0:
+        return f"could not remove the WAF rules for {safe_domain}: {(result.stderr or result.stdout or '').strip()}"
+    return (result.stdout or "").strip()
+
+
 def site_config(website: Website) -> dict:
     from app.services import nginx, panel_settings
 
