@@ -1071,8 +1071,10 @@ def _create_panel_database(
     if renamed and reused:
         db_password, db_password_hash, reused = mariadb.random_password(), "", False
 
+    # An import recreates the account the DirectAdmin backup already owned.
     mariadb.create_database_credentials(
-        db_name, db_user, db_password, password_hash=db_password_hash or None
+        db_name, db_user, db_password, password_hash=db_password_hash or None,
+        allow_existing_user=True,
     )
     temp_sql: Optional[Path] = None
     try:

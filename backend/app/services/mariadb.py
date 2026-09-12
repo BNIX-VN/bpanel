@@ -29,6 +29,37 @@ def _validate_identifier(value: str) -> str:
     return value
 
 
+# MariaDB's own accounts, plus the one the panel authenticates as. Creating a
+# database must never touch any of them, on any code path - not even a restore.
+RESERVED_DB_USERS = frozenset({
+    "root",
+    "mysql",
+    "mariadb.sys",
+    "debian-sys-maint",
+    "bpanel",
+})
+
+
+def _reject_reserved_user(db_user: str) -> None:
+    if db_user.strip().lower() in RESERVED_DB_USERS:
+        raise ValueError(f"'{db_user}' is a reserved MariaDB account and cannot be used for a website database")
+
+
+def user_exists(db_user: str) -> bool:
+    """Whether this MariaDB account already exists.
+
+    Asked of MariaDB rather than of BPanel's own table: the whole point is to
+    notice accounts BPanel does not know about, which is exactly what the
+    table cannot tell us.
+    """
+    safe = _validate_identifier(db_user)
+    result = _run_sql(
+        f"SELECT 1 FROM mysql.user WHERE user = {_quote_sql_string(safe)} LIMIT 1;\n",
+        check=False,
+    )
+    return "1" in (result.stdout or "")
+
+
 def _quote_sql_string(value: str) -> str:
     return "'" + value.replace("\\", "\\\\").replace("'", "''") + "'"
 
@@ -73,6 +104,7 @@ def _run_sql(sql: str, *, check: bool = True):
 def create_database(seed: str, prefix: str = "wp", db_name: str | None = None, if_not_exists: bool = True) -> Dict[str, str]:
     db_name = _validate_identifier(db_name or safe_db_identifier(seed, prefix))
     db_user = _validate_identifier(safe_db_identifier(db_name, "u"))
+    _reject_reserved_user(db_user)
     db_password = random_password()
     create_clause = "CREATE DATABASE IF NOT EXISTS" if if_not_exists else "CREATE DATABASE"
     sql = (
@@ -87,23 +119,52 @@ def create_database(seed: str, prefix: str = "wp", db_name: str | None = None, i
 
 
 def create_database_credentials(
-    db_name: str, db_user: str, db_password: str, *, password_hash: str | None = None
+    db_name: str, db_user: str, db_password: str, *, password_hash: str | None = None,
+    allow_existing_user: bool = False,
 ) -> Dict[str, str]:
+    """Create a database and the account that owns it.
+
+    `CREATE USER IF NOT EXISTS` followed by an unconditional `ALTER USER` used
+    to mean "create it, or take it over". Since the panel authenticates to
+    MariaDB with ALL PRIVILEGES ON *.*, any panel user who asked for
+    db_user=root got root's password reset to a value of their choosing - and
+    the API handed it back in the response. On a stock Ubuntu box root is
+    `IDENTIFIED VIA mysql_native_password USING 'invalid' OR unix_socket`, so
+    the ALTER also drops the socket clause and locks the system's own root out
+    of MariaDB.
+
+    Creating now refuses an account that already exists. `allow_existing_user`
+    is for the restore paths - a backup or a DirectAdmin import legitimately
+    recreates the account that archive already owned - and even those cannot
+    touch a reserved account.
+    """
     db_name = _validate_identifier(db_name)
     db_user = _validate_identifier(db_user)
+    _reject_reserved_user(db_user)
+
+    if not allow_existing_user and user_exists(db_user):
+        raise ValueError(
+            f"MariaDB account '{db_user}' already exists. Choose another database user name."
+        )
+
     auth = _auth_clause(db_password, password_hash)
-    sql = (
-        f"CREATE DATABASE IF NOT EXISTS {_quote_identifier(db_name)} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;\n"
-        f"CREATE USER IF NOT EXISTS {_quote_sql_string(db_user)}@'localhost' {auth};\n"
-        f"ALTER USER {_quote_sql_string(db_user)}@'localhost' {auth};\n"
-        f"GRANT ALL PRIVILEGES ON {_quote_identifier(db_name)}.* TO {_quote_sql_string(db_user)}@'localhost';\n"
-        "FLUSH PRIVILEGES;\n"
-    )
-    _run_sql(sql)
+    statements = [
+        f"CREATE DATABASE IF NOT EXISTS {_quote_identifier(db_name)} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;",
+        f"CREATE USER IF NOT EXISTS {_quote_sql_string(db_user)}@'localhost' {auth};",
+    ]
+    if allow_existing_user:
+        # Only a restore sets the password of an account that was already there.
+        statements.append(f"ALTER USER {_quote_sql_string(db_user)}@'localhost' {auth};")
+    statements += [
+        f"GRANT ALL PRIVILEGES ON {_quote_identifier(db_name)}.* TO {_quote_sql_string(db_user)}@'localhost';",
+        "FLUSH PRIVILEGES;",
+    ]
+    _run_sql("\n".join(statements) + "\n")
     return {"db_name": db_name, "db_user": db_user, "db_password": db_password}
 
 
 def drop_database(db_name: str, db_user: str):
+    _reject_reserved_user(_validate_identifier(db_user))
     sql = (
         f"DROP DATABASE IF EXISTS {_quote_identifier(db_name)};\n"
         f"DROP USER IF EXISTS {_quote_sql_string(_validate_identifier(db_user))}@'localhost';\n"
@@ -113,6 +174,7 @@ def drop_database(db_name: str, db_user: str):
 
 
 def change_database_password(db_user: str, db_password: str):
+    _reject_reserved_user(_validate_identifier(db_user))
     sql = (
         f"ALTER USER {_quote_sql_string(_validate_identifier(db_user))}@'localhost' "
         f"IDENTIFIED BY {_quote_sql_string(db_password)};\n"

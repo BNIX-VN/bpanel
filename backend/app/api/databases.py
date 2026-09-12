@@ -81,6 +81,10 @@ def create_database(payload: DatabaseCreate, db: Session = Depends(get_db), curr
 
     try:
         mariadb.create_database_credentials(db_name, db_user, db_password)
+    except ValueError as exc:
+        # A reserved account, or one that already exists in MariaDB without
+        # BPanel knowing about it. Both are the caller's mistake, not a fault.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("Failed to create MariaDB database/user")
         raise HTTPException(status_code=500, detail=f"MariaDB error: {exc}") from exc
