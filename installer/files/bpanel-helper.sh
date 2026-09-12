@@ -1879,6 +1879,37 @@ ssl_cert_info() {
   printf 'sans=%s\n' "$sans"
 }
 
+delete_ssl_cert() {
+  # A website that is gone should take its certificate with it. Left behind,
+  # the renewal config still wakes certbot.timer twice a day and starts failing
+  # the moment the domain stops pointing here - which is how a deleted site
+  # turns into a permanently failed unit nobody can explain.
+  local name="$1" panel_domain removed=0
+  require_domain "$name"
+  # The panel serves :2222 on a certificate that may well belong to a hosted
+  # domain (panel-ssl-use-domain). Deleting that one drops every admin onto a
+  # browser warning at the next login, so refuse even when asked directly.
+  panel_domain="$(env_get PANEL_DOMAIN)"
+  if [[ -n "$panel_domain" && "$panel_domain" == "$name" ]]; then
+    deny "refusing to delete ${name}: the panel is served on this certificate"
+  fi
+  if [[ -d "/etc/letsencrypt/live/${name}" || -f "/etc/letsencrypt/renewal/${name}.conf" ]]; then
+    certbot delete --cert-name "$name" --non-interactive >/dev/null 2>&1 \
+      || deny "certbot could not delete the certificate for ${name}"
+    echo "Deleted Let's Encrypt certificate ${name}"
+    removed=1
+  fi
+  if [[ -d "/etc/nginx/bpanel/ssl/sites/${name}" ]]; then
+    remove_manual_ssl "$name" >/dev/null
+    echo "Removed uploaded certificate for ${name}"
+    removed=1
+  fi
+  [[ "$removed" -eq 1 ]] || echo "No certificate on this server for ${name}"
+  # Stop answering for the domain on :2222 as well; the sync drops SNI copies
+  # whose source certificate no longer exists.
+  sync_panel_sni_certificates >/dev/null
+}
+
 renew_ssl_soon() {
   local days="${1:-10}" seconds cert cert_name checked=0 renewed=0 panel_domain
   [[ "$days" =~ ^[0-9]+$ && "$days" -ge 1 && "$days" -le 30 ]] || deny "usage: certbot-renew-soon [1-30 days]"
@@ -4327,6 +4358,10 @@ PY
     [[ $# -eq 1 ]] || deny "usage: manual-ssl-remove <domain>"
     remove_manual_ssl "$1"
     sync_panel_sni_certificates >/dev/null
+    ;;
+  certbot-delete)
+    [[ $# -eq 1 ]] || deny "usage: certbot-delete <domain>"
+    delete_ssl_cert "$1"
     ;;
   certbot-dns-cloudflare-install)
     [[ $# -eq 0 ]] || deny "usage: certbot-dns-cloudflare-install"

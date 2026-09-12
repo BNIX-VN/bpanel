@@ -1002,11 +1002,15 @@ def set_website_nginx_custom(website_id: int, payload: WebsiteNginxCustom, reque
 def delete_website(website_id: int, request: Request, delete_files: bool = True, delete_database: bool = True, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     website = _get_authorized_website(db, website_id, current_user)
     _block_if_source(db, website)
+    domain = website.domain
     db_item = db.query(DatabaseAccount).filter(DatabaseAccount.website_id == website.id).first()
     if delete_database and db_item:
         mariadb.drop_database(db_item.db_name, db_item.db_user)
     db.query(WebsiteAlias).filter(WebsiteAlias.website_id == website.id).delete(synchronize_session=False)
     nginx.delete_wordpress_vhost(website.domain)
+    # The vhost is gone, so nothing reads the certificate any more: retire it
+    # before the row disappears and we no longer know which names were ours.
+    ssl_note = ssl.release_site_certificates(db, website.domain, exclude_website_id=website.id)
     if delete_files:
         if website.linux_user:
             site_users.delete_site_runtime(website.root_path, website.linux_user)
@@ -1024,8 +1028,13 @@ def delete_website(website_id: int, request: Request, delete_files: bool = True,
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     db.commit()
     storage_quota.forget_user_storage(owner_id)
-    log_action(db, current_user.id, "delete_website", website.domain, request=request)
-    return {"ok": True}
+    log_action(db, current_user.id, "delete_website", domain, ssl_note, request=request)
+    # Say what happened to the certificate: "kept" is the surprising outcome and
+    # the admin needs to know the lineage is still on the machine.
+    message = f"Deleted {domain}."
+    if ssl_note:
+        message = f"{message} {ssl_note[0].upper()}{ssl_note[1:]}"
+    return {"ok": True, "message": message}
 
 
 @router.post("/{website_id}/fix-nginx-security")

@@ -160,6 +160,88 @@ def cert_covers(sans: list[str] | tuple[str, ...], domain: str) -> bool:
     return any(_hostname_matches(target, name.strip().lower()) for name in sans if name.strip())
 
 
+def delete_ssl(domain: str) -> CommandResult:
+    """Remove every certificate this server holds for ``domain``.
+
+    Covers the Let's Encrypt lineage (and its renewal config, so certbot stops
+    trying) and any uploaded certificate. Callers should go through
+    :func:`release_site_certificates`, which first checks nothing else is still
+    being served from the same lineage.
+    """
+    safe_domain = _safe_domain(domain)
+    return shell.privileged(
+        "certbot-delete",
+        helper_args=[safe_domain],
+        check=False,
+        fallback=["certbot", "delete", "--cert-name", safe_domain, "--non-interactive"],
+    )
+
+
+def release_site_certificates(db, domain: str, *, exclude_website_id: int | None = None) -> str:
+    """Drop the certificates a deleted site leaves behind.
+
+    One certificate often covers more than the site it was issued for - an
+    alias, a subdomain added later, the hostname the panel itself answers on.
+    Deleting the lineage in that case would take a *live* site's HTTPS down, so
+    anything still covering a name this server hosts is left alone and named in
+    the returned message.
+
+    Never raises: a website must still be deletable when certbot is unhappy.
+    """
+    # Imported here so ssl.py stays usable (and testable) without the ORM, the
+    # same way panel_settings reaches for nginx only when it needs it.
+    from app.models.entities import Website, WebsiteAlias
+    from app.services import panel_settings
+
+    try:
+        safe_domain = _safe_domain(domain)
+    except ValueError:
+        return ""
+
+    keep: set[str] = set()
+    try:
+        query = db.query(Website.domain)
+        if exclude_website_id is not None:
+            query = query.filter(Website.id != exclude_website_id)
+        for (other,) in query.all():
+            if other and other.strip().lower() != safe_domain:
+                keep.add(other.strip().lower())
+        alias_query = db.query(WebsiteAlias.domain)
+        if exclude_website_id is not None:
+            alias_query = alias_query.filter(WebsiteAlias.website_id != exclude_website_id)
+        for (other,) in alias_query.all():
+            if other and other.strip().lower() != safe_domain:
+                keep.add(other.strip().lower())
+    except Exception:  # pragma: no cover - a broken query must not block deletion
+        return ""
+
+    # The panel's own hostname is not a website row when an admin pointed it at
+    # a domain by hand, so read it separately.
+    try:
+        panel_host = panel_settings.parse_panel_url(panel_settings.configured_panel_url())[1]
+        if panel_host:
+            keep.add(panel_host.strip().lower())
+    except Exception:  # pragma: no cover - an unset panel URL is normal
+        pass
+
+    if keep:
+        try:
+            sans = cert_info(safe_domain).get("sans") or []
+        except Exception:  # pragma: no cover - helper failure
+            sans = []
+        still_used = sorted(name for name in keep if cert_covers(sans, name))
+        if still_used:
+            return f"kept the certificate for {safe_domain}: still covers {', '.join(still_used)}"
+
+    try:
+        result = delete_ssl(safe_domain)
+    except Exception as exc:  # pragma: no cover - helper failure
+        return f"could not remove the certificate for {safe_domain}: {exc}"
+    if result.returncode != 0:
+        return f"could not remove the certificate for {safe_domain}: {(result.stderr or result.stdout or '').strip()}"
+    return (result.stdout or "").strip()
+
+
 def manual_ssl_paths(domain: str) -> dict[str, str | None]:
     safe_domain = _safe_domain(domain)
     base = f"/etc/nginx/bpanel/ssl/sites/{safe_domain}"

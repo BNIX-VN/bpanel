@@ -1486,7 +1486,7 @@ function App() {
 
   async function deletePanelUser(user) {
     if (!user || user.id === currentUser?.id) return;
-    if (!confirm(`Delete panel user ${user.username} and permanently delete all owned websites, files, databases, and Linux user data?`)) return;
+    if (!confirm(`Delete panel user ${user.username} and permanently delete all owned websites, files, databases, SSL certificates, and Linux user data?`)) return;
     const data = await request(`/users/${user.id}`, { method: 'DELETE' }, `Deleting user ${user.username}...`);
     if (data) {
       const count = data.deleted_websites?.length || 0;
@@ -1829,7 +1829,7 @@ function App() {
   }
 
   async function deleteWebsite(id) {
-    if (!confirm('Delete this website including files, vhost, and database?')) return;
+    if (!confirm('Delete this website including files, vhost, database, and its SSL certificate?')) return;
     const data = await request(`/websites/${id}?delete_files=true&delete_database=true`, { method: 'DELETE' }, 'Deleting website...');
     if (data) refreshAll();
   }
