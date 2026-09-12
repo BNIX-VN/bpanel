@@ -101,6 +101,11 @@ def test_helper_will_not_delete_rules_a_vhost_still_uses():
     assert "deny " in body
     assert "require_domain" in body
     assert "waf-site-delete)" in helper
+    # The check must read the config nginx actually loads. Grepping conf.d
+    # instead matches the .conf.bak copies sitting next to every vhost, which
+    # refused every real cleanup.
+    assert "nginx -T" in body
+    assert "/etc/nginx/conf.d/" not in body
 
 
 def test_shipped_rules_match_the_helper_copy():

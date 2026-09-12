@@ -416,13 +416,20 @@ delete_waf_site_rules() {
   # behind for ever. Harmless to serve, but it hides real state: a rule fix
   # looks half-applied because stale files still carry the old text, and the
   # directory fills with names nobody hosts.
-  local domain="$1" target
+  local domain="$1" target loaded
   require_domain "$domain"
   target="/etc/nginx/modsec/sites/${domain}.conf"
   # A vhost still pointing at this file would make `nginx -t` fail on the next
   # reload and take every site on the box down with it. Never remove a file
   # something still references, whatever the caller believes.
-  if grep -rqlF "modsecurity_rules_file ${target}" /etc/nginx/conf.d/ 2>/dev/null; then
+  #
+  # Ask nginx what it actually loads rather than grepping conf.d: the directory
+  # is full of .conf.bak copies nginx never reads, and matching those refused
+  # every legitimate cleanup.
+  if ! loaded="$(nginx -T 2>/dev/null)"; then
+    deny "refusing to delete WAF rules for ${domain}: nginx config could not be read"
+  fi
+  if grep -qF "modsecurity_rules_file ${target}" <<<"$loaded"; then
     deny "refusing to delete WAF rules for ${domain}: a vhost still references them"
   fi
   rm -f "$target" "${target}".bak.*
