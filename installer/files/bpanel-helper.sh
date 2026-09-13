@@ -391,6 +391,7 @@ RULES
 
 CRS_MODE_FILE=/etc/nginx/modsec/bpanel-crs-mode
 CRS_CONF=/etc/nginx/modsec/bpanel-crs.conf
+CRS_AUDIT_LOG=/var/log/nginx/bpanel-modsec-audit.log
 
 crs_rules_dir() {
   # Debian/Ubuntu ship the rules under one of these; the setup file sits either
@@ -428,24 +429,37 @@ write_crs_conf() {
   # CRS scores a request across many rules and acts only when the total crosses
   # a threshold, unlike BPanel's own rules which deny on a single match.
   #
-  # Detect mode puts the threshold out of reach, so the rules that act on the
-  # total (949110 inbound, 959100 outbound) never fire and nothing is refused.
-  # Each individual CRS rule still matches and still logs, because crs-setup.conf
-  # carries SecDefaultAction "phase:2,log,auditlog,pass".
+  # Detect mode puts the threshold out of reach so 949110 never refuses
+  # anything, and adds a BPanel rule that reads the same score and only logs.
   #
-  # SecRuleUpdateActionById looks like the tidier way to neuter the two blocking
-  # rules and is not usable here: libmodsecurity answers "action has not expected
-  # to be used with UpdateActionByID" for phase, pass and deny alike, and the
-  # failed directive takes the rest of the rule set down with it.
+  # That extra rule is not decoration. Individual CRS rules score silently -
+  # measured on a live server, a request that 949110 blocks with a 403 in block
+  # mode produces exactly one log line, from 949110 itself. Raise the threshold
+  # and the logging goes with it, so the obvious form of detect mode observes
+  # nothing at all.
   #
-  # Note for anyone checking whether this works: ModSecurity logs to the vhost's
-  # own error_log, /var/log/nginx/<domain>.error.log, not to the shared
-  # /var/log/nginx/error.log. Looking in the wrong one reads exactly like a
-  # feature that silently does nothing.
+  # Two things that look like alternatives and are not. SecRuleUpdateActionById
+  # on 949110: libmodsecurity answers "action has not expected to be used with
+  # UpdateActionByID" and the rejected directive takes the rest of the rule set
+  # with it. SecRuleEngine DetectionOnly: it would also stop BPanel's own rules
+  # denying on that site, trading real protection for observation.
+  #
+  # Where to read the results: the vhost's own error_log,
+  # /var/log/nginx/<domain>.error.log - not the shared /var/log/nginx/error.log,
+  # which a per-site setup never writes to - and the audit log below, which
+  # records every rule that contributed to the score.
   local mode="$1" rules setup
   rules="$(crs_rules_dir)" || deny "OWASP CRS is not installed"
   setup="$(crs_setup_file || true)"
   install -d -o root -g root -m 0755 /etc/nginx/modsec
+  # The audit log is opened by the nginx worker, so it has to exist and be
+  # writable by it before the config is loaded.
+  local nginx_user
+  nginx_user="$(awk '$1=="user"{gsub(/;/,"",$2); print $2; exit}' /etc/nginx/nginx.conf 2>/dev/null)"
+  [[ -n "$nginx_user" ]] || nginx_user=www-data
+  touch "$CRS_AUDIT_LOG"
+  chown "${nginx_user}:adm" "$CRS_AUDIT_LOG" 2>/dev/null || true
+  chmod 0640 "$CRS_AUDIT_LOG"
   {
     echo "# BPanel OWASP CRS include - generated, do not edit"
     echo "# mode: ${mode}"
@@ -457,6 +471,13 @@ write_crs_conf() {
     # Anything over the limit is inspected as far as it goes and then passed.
     # Rejecting instead would turn every large media upload into a 413.
     echo "SecRequestBodyLimitAction ProcessPartial"
+    # Record what matched. Without this there is no audit log at all on this
+    # machine: Debian's modsecurity.conf is not shipped by the nginx connector
+    # package, so nothing configures one.
+    echo "SecAuditEngine RelevantOnly"
+    echo "SecAuditLogParts ABIJDEFHZ"
+    echo "SecAuditLogType Serial"
+    echo "SecAuditLog ${CRS_AUDIT_LOG}"
     [[ -n "$setup" ]] && echo "Include ${setup}"
     if [[ "$mode" == "detect" ]]; then
       echo "SecAction \"id:900110,phase:1,nolog,pass,t:none,setvar:tx.inbound_anomaly_score_threshold=1000000,setvar:tx.outbound_anomaly_score_threshold=1000000\""
@@ -465,6 +486,12 @@ write_crs_conf() {
     fi
     echo "SecAction \"id:900000,phase:1,nolog,pass,t:none,setvar:tx.blocking_paranoia_level=1\""
     echo "Include ${rules}/*.conf"
+    if [[ "$mode" == "detect" ]]; then
+      # After the rules, so the score is final. 5 and 4 are the thresholds block
+      # mode uses, so this reports exactly what block mode would have refused.
+      echo "SecRule TX:ANOMALY_SCORE \"@ge 5\" \"id:1009001,phase:2,pass,log,auditlog,msg:'BPanel CRS detect: inbound score %{tx.anomaly_score}, block mode would have refused this request'\""
+      echo "SecRule TX:OUTBOUND_ANOMALY_SCORE \"@ge 4\" \"id:1009002,phase:4,pass,log,auditlog,msg:'BPanel CRS detect: outbound score %{tx.outbound_anomaly_score}, block mode would have refused this response'\""
+    fi
   } >"${CRS_CONF}.tmp"
   install -m 0644 -o root -g root "${CRS_CONF}.tmp" "$CRS_CONF"
   rm -f "${CRS_CONF}.tmp"

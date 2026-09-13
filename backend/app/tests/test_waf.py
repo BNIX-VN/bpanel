@@ -168,6 +168,13 @@ def test_detect_mode_puts_the_blocking_threshold_out_of_reach():
     assert "inbound_anomaly_score_threshold=1000000" in code
     assert "inbound_anomaly_score_threshold=5" in code   # the blocking mode
     assert "SecRuleUpdateActionById" not in code
+    # Raising the threshold silences 949110, which on a live server is the only
+    # rule that logs at all - a request CRS blocks with a 403 produces exactly
+    # one line, from 949110. Detect mode therefore has to report the score
+    # itself, or it observes nothing.
+    assert "TX:ANOMALY_SCORE" in code
+    assert "id:1009001" in code
+    assert "SecAuditLog" in code
     assert "blocking_paranoia_level=1" in code
     # CRS without request bodies sees only the URL, which is the state this
     # whole feature exists to leave behind.
