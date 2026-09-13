@@ -5655,10 +5655,12 @@ function App() {
           <div className="info-box" style={{ marginBottom: 12 }}>
             <strong>Memory</strong>
             <p className="hint">
-              Every site that loads CRS builds its own copy of the rule set inside nginx —
-              about {crs.rss_mb_per_site || 325} MB each, measured on a live server. Switching it on for
-              nineteen sites at once took nginx from 146 MB to 6.3 GB. Opt sites in one at a time and
-              watch the figure above. Note that memory is only released by restarting nginx, not by a reload.
+              Every site that loads CRS builds its own copy of the rule set inside nginx, so this grows
+              with each site rather than being paid once. The estimate above allows
+              {' '}{crs.rss_mb_per_site || 200} MB per site and is a deliberate upper bound — the real figure moves with
+              worker count and traffic. Switching it on for nineteen sites at once took one server from
+              146 MB to over 6 GB, so opt sites in one at a time and check the server's own memory
+              afterwards. The memory is released only by restarting nginx, never by a reload.
             </p>
           </div>
           <div className="segmented-control">

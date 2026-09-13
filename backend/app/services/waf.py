@@ -368,9 +368,16 @@ def site_uses_crs(website: Website) -> bool:
     return bool(getattr(website, "waf_enabled", False) and getattr(website, "crs_enabled", False))
 
 
-# Measured on a live server: nginx went from 146 MB to 6317 MB RSS when 19 sites
-# each loaded the full rule set, because every server block builds its own.
-CRS_RSS_MB_PER_SITE = 325
+# Every nginx server block builds its own copy of the rule set, so this grows
+# with the number of sites opted in rather than being paid once.
+#
+# The figure is deliberately a rough upper bound, not a precise one. Measured on
+# a live server, one site moved total nginx RSS by 80-90 MB in one reading and
+# past 170 MB in another - it moves with worker count and traffic - and all 19
+# WAF-enabled sites at once took nginx from 146 MB to over 6 GB. An estimate
+# that reads low would be worse than useless on the box where it matters, so it
+# errs high and the UI tells the admin to watch the real number.
+CRS_RSS_MB_PER_SITE = 200
 
 
 def crs_memory_estimate(site_count: int) -> int:
