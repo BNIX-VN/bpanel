@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -8,6 +8,7 @@ from app.core.permissions import Role, ensure_role
 from app.models.entities import User, Website
 from app.schemas.schemas import WafBotBlockApply, WafGlobalBotsUpdate, WebsiteAccessLogsOut, WebsiteBotBlockUpdate
 from app.services import nginx, panel_settings, waf
+from app.services.audit import log_action
 
 router = APIRouter(prefix="/waf", tags=["waf"])
 
@@ -333,7 +334,13 @@ def get_crs(db: Session = Depends(get_db), current_user: User = Depends(get_curr
 
 
 @router.put("/websites/{website_id}/crs")
-def set_website_crs(payload: WebsiteCrsUpdate, website_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def set_website_crs(
+    payload: WebsiteCrsUpdate,
+    website_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     _require_admin(current_user)
     website = _website_or_404(db, website_id)
     website.crs_enabled = bool(payload.enabled)
@@ -347,6 +354,16 @@ def set_website_crs(payload: WebsiteCrsUpdate, website_id: int, db: Session = De
         db.commit()
         raise HTTPException(status_code=400, detail=(result.stderr or result.stdout or "Could not apply CRS").strip())
     mode = waf.active_crs_mode()
+    # Every other per-site protection switch leaves an audit entry; this one did
+    # not, so there was no way to tell who turned CRS on for a site or when.
+    log_action(
+        db,
+        current_user.id,
+        "update_website_crs",
+        website.domain,
+        "enabled" if website.crs_enabled else "disabled",
+        request=request,
+    )
     if not payload.enabled:
         message = f"OWASP CRS is off for {website.domain}."
     elif mode == "off":
@@ -363,7 +380,7 @@ def set_website_crs(payload: WebsiteCrsUpdate, website_id: int, db: Session = De
 
 
 @router.put("/crs")
-def set_crs(payload: CrsModeUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def set_crs(payload: CrsModeUpdate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     _require_admin(current_user)
     websites = db.query(Website).all()
     try:
@@ -382,4 +399,10 @@ def set_crs(payload: CrsModeUpdate, db: Session = Depends(get_db), current_user:
     if outcome["failures"]:
         names = ", ".join(item["domain"] for item in outcome["failures"][:5])
         message = f"{message} {len(outcome['failures'])} site(s) could not be updated: {names}"
+    # Switching every site to blocking is the largest single change an admin can
+    # make here, and it left no trace at all.
+    log_action(
+        db, current_user.id, "update_crs_mode", mode,
+        f"{outcome.get('sites_using_crs', 0)} site(s)", request=request,
+    )
     return {"ok": True, "message": message, **outcome}
