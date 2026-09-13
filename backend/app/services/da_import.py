@@ -1397,7 +1397,8 @@ def import_da_backup(archive_path: str, force: bool = False) -> dict:
 
                 selected_rules = [rule["id"] for rule in waf.DEFAULT_RULES]
                 waf_enabled = True
-                waf_result = waf.sync_site_rules(domain, selected_rules, "")
+                # Imported sites arrive with crs_enabled off like any new site.
+                waf_result = waf.sync_site_rules(domain, selected_rules, "", crs_mode="off")
                 if waf_result.returncode != 0:
                     waf_enabled = False
                     _log(f"  warning: WAF rules failed for {domain}")

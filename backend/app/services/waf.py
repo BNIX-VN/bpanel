@@ -396,10 +396,20 @@ def sync_site_rules(
     domain: str,
     enabled_rule_ids: Iterable[str],
     custom_rules: str = "",
-    crs_mode: str = None,
+    crs_mode: str = "off",
 ) -> CommandResult:
+    """Write one site's rule file.
+
+    crs_mode defaults to off rather than to the server-wide setting. Whether a
+    site loads CRS is a per-site opt-in with a memory bill attached, so a caller
+    that has not thought about it must not turn it on by omission - which is
+    exactly what happened: creating a website on a server in block mode gave the
+    new site CRS while its own crs_enabled flag said off.
+
+    Callers holding a Website should use sync_website_rules instead.
+    """
     safe_domain = _validate_domain(domain)
-    mode = active_crs_mode() if crs_mode is None else normalize_crs_mode(crs_mode)
+    mode = normalize_crs_mode(crs_mode)
     content = render_site_rules(safe_domain, enabled_rule_ids, custom_rules, crs_mode=mode)
     return shell.privileged(
         "waf-site-save",
@@ -554,7 +564,13 @@ def save_website_config(website: Website, enabled_rule_ids: Iterable[str], custo
     custom = _validate_custom_rules(custom_rules)
     website.waf_default_rules = json.dumps(selected, ensure_ascii=True)
     website.waf_custom_rules = custom
-    return sync_site_rules(website.domain, selected, custom)
+    # Editing a site's rule selection must not change whether it loads CRS.
+    return sync_site_rules(
+        website.domain,
+        selected,
+        custom,
+        crs_mode=active_crs_mode() if site_uses_crs(website) else "off",
+    )
 
 
 def status():

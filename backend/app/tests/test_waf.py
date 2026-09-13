@@ -184,6 +184,95 @@ def test_detect_mode_puts_the_blocking_threshold_out_of_reach():
     assert "SecRequestBodyLimitAction ProcessPartial" in code
 
 
+def test_upgrading_an_older_install_never_switches_crs_on():
+    """An existing server must update without CRS appearing on any site.
+
+    CRS costs real memory per site, so a backfill would hand every customer on
+    an upgraded box a bill they did not ask for - and on a small server, an
+    outage. Migration 0030 deliberately backfills; this one deliberately does
+    not, and the difference is easy to erase by copying the wrong template.
+    """
+    migration = (
+        Path(__file__).resolve().parents[3]
+        / "backend" / "alembic" / "versions" / "0031_website_crs_enabled.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'server_default="0"' in migration
+    # 0030 backfills with op.execute("UPDATE users SET terminal_enabled = 1").
+    # Its absence here is the whole point, so assert on it directly.
+    assert "op.execute" not in migration
+
+
+def test_a_website_object_without_the_column_is_treated_as_off(monkeypatch):
+    """Mid-upgrade, code can meet a Website row loaded before the column existed."""
+    class OldRow:
+        waf_enabled = True   # the WAF is on, but this predates crs_enabled
+
+    assert waf.site_uses_crs(OldRow()) is False
+
+
+def test_crs_applies_only_where_both_toggles_agree():
+    class Row:
+        def __init__(self, waf, crs):
+            self.waf_enabled, self.crs_enabled = waf, crs
+
+    assert waf.site_uses_crs(Row(True, True)) is True
+    assert waf.site_uses_crs(Row(True, False)) is False
+    # A site with the WAF switched off gets no CRS even if opted in, or turning
+    # the WAF off would quietly leave the payload rules running.
+    assert waf.site_uses_crs(Row(False, True)) is False
+    assert waf.site_uses_crs(Row(False, False)) is False
+
+
+def test_sync_site_rules_defaults_to_no_crs(monkeypatch):
+    """A caller that says nothing about CRS must not switch it on.
+
+    sync_site_rules used to fall back to the server-wide mode, so creating a
+    website on a server set to block gave the new site CRS while its own
+    crs_enabled flag said off - the opt-in, and the memory budget behind it,
+    quietly stopped meaning anything.
+    """
+    written = {}
+
+    def fake_privileged(helper_command, helper_args=None, **kwargs):
+        written["content"] = kwargs.get("input", "")
+        return waf.CommandResult(command=helper_command, returncode=0, stdout="saved", stderr="")
+
+    monkeypatch.setattr(waf.shell, "privileged", fake_privileged)
+    # Server-wide mode is block, and it must not leak into a caller that did not ask.
+    monkeypatch.setattr(waf, "active_crs_mode", lambda: "block")
+
+    waf.sync_site_rules("newsite.test", ["php-sensitive-files"])
+
+    assert "bpanel-crs.conf" not in written["content"]
+
+
+def test_saving_a_sites_rules_does_not_change_its_crs_state(monkeypatch):
+    written = []
+
+    def fake_privileged(helper_command, helper_args=None, **kwargs):
+        written.append(kwargs.get("input", ""))
+        return waf.CommandResult(command=helper_command, returncode=0, stdout="saved", stderr="")
+
+    monkeypatch.setattr(waf.shell, "privileged", fake_privileged)
+    monkeypatch.setattr(waf, "active_crs_mode", lambda: "block")
+
+    class Site:
+        domain = "editme.test"
+        waf_enabled = True
+        crs_enabled = False
+        waf_default_rules = ""
+        waf_custom_rules = ""
+
+    site = Site()
+    waf.save_website_config(site, ["php-sensitive-files"], "")
+    assert "bpanel-crs.conf" not in written[-1]
+
+    site.crs_enabled = True
+    waf.save_website_config(site, ["php-sensitive-files"], "")
+    assert "bpanel-crs.conf" in written[-1]
+
+
 def test_helper_exposes_the_crs_verbs():
     helper = HELPER_SCRIPT.read_text(encoding="utf-8")
     for verb in ("waf-crs-install)", "waf-crs-mode)", "waf-crs-status)"):
