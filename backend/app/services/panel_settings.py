@@ -68,6 +68,25 @@ def global_blocked_bots() -> list[str]:
     return nginx.normalize_blocked_bots(_read_raw().get("global_blocked_bots") or "")
 
 
+def crs_mode() -> str:
+    """The server-wide OWASP CRS mode an admin chose: off, detect, or block.
+
+    Read through _read_raw for the same reason global_blocked_bots does: this is
+    consulted on every vhost and site-rule render.
+    """
+    return (_read_raw().get("crs_mode") or "off").strip().lower()
+
+
+def save_crs_mode(mode: str) -> str:
+    """Store the CRS mode. Callers re-render the site rule files - see
+    waf.set_crs_mode(), which is the only thing that should call this."""
+    value = (mode or "off").strip().lower()
+    data = _read_raw()
+    data["crs_mode"] = value
+    _write_raw(data)
+    return value
+
+
 def save_global_blocked_bots(raw) -> list[str]:
     """Store the server-wide list. Callers are responsible for re-rendering the
     vhosts afterwards - see waf.resync_bot_blocks()."""

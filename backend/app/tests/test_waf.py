@@ -108,6 +108,65 @@ def test_helper_will_not_delete_rules_a_vhost_still_uses():
     assert "/etc/nginx/conf.d/" not in body
 
 
+def test_crs_is_absent_unless_it_is_switched_on():
+    content = waf.render_site_rules("example.com", ["php-sensitive-files"], crs_mode="off")
+
+    assert "bpanel-crs.conf" not in content
+
+
+@pytest.mark.parametrize("mode", ["detect", "block"])
+def test_crs_include_lands_after_bpanel_rules_and_before_custom(mode):
+    content = waf.render_site_rules(
+        "example.com",
+        ["php-sensitive-files"],
+        custom_rules="SecRuleRemoveById 942100",
+        crs_mode=mode,
+    )
+
+    own = content.index("id:1001301")
+    crs = content.index("bpanel-crs.conf")
+    exclusion = content.index("SecRuleRemoveById 942100")
+    # BPanel's own rules deny on one match and are cheaper, so they run first.
+    assert own < crs
+    # SecRuleRemoveById only affects rules already loaded, so a per-site
+    # exception is worthless before the Include it is meant to act on.
+    assert crs < exclusion
+
+
+def test_an_unknown_crs_mode_never_silently_enables_it():
+    assert waf.normalize_crs_mode("paranoid") == "off"
+    assert waf.normalize_crs_mode(None) == "off"
+    assert waf.normalize_crs_mode("BLOCK") == "block"
+    content = waf.render_site_rules("example.com", ["php-sensitive-files"], crs_mode="paranoid")
+    assert "bpanel-crs.conf" not in content
+
+
+def test_set_crs_mode_rejects_a_bogus_mode():
+    with pytest.raises(ValueError):
+        waf.set_crs_mode("paranoid", [])
+
+
+def test_detect_mode_puts_the_blocking_threshold_out_of_reach():
+    helper = HELPER_SCRIPT.read_text(encoding="utf-8")
+    body = helper.split("write_crs_conf()")[1].split("\n}\n")[0]
+    # Detect mode has to evaluate and log every rule while refusing nothing,
+    # which CRS expresses as an anomaly threshold no request can reach.
+    assert "inbound_anomaly_score_threshold=1000000" in body
+    assert "blocking_paranoia_level=1" in body
+    # CRS without request bodies sees only the URL, which is the state this
+    # whole feature exists to leave behind.
+    assert "SecRequestBodyAccess On" in body
+    # A body over the limit must be inspected as far as it goes, not refused:
+    # rejecting turns every large media upload into a 413.
+    assert "SecRequestBodyLimitAction ProcessPartial" in body
+
+
+def test_helper_exposes_the_crs_verbs():
+    helper = HELPER_SCRIPT.read_text(encoding="utf-8")
+    for verb in ("waf-crs-install)", "waf-crs-mode)", "waf-crs-status)"):
+        assert verb in helper
+
+
 def test_shipped_rules_match_the_helper_copy():
     """The rule text lives twice: in DEFAULT_RULES and in the installer helper.
 

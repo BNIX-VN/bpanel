@@ -389,6 +389,105 @@ SecRule REQUEST_URI "@rx (?i)(?:/wp-admin/install\.php(?:$|[?])|/wp-admin/setup-
 RULES
 }
 
+CRS_MODE_FILE=/etc/nginx/modsec/bpanel-crs-mode
+CRS_CONF=/etc/nginx/modsec/bpanel-crs.conf
+
+crs_rules_dir() {
+  # Debian/Ubuntu ship the rules under one of these; the setup file sits either
+  # beside them or one level up.
+  local dir
+  for dir in /usr/share/modsecurity-crs/rules /etc/modsecurity/crs/rules /usr/local/owasp-crs/rules; do
+    [[ -d "$dir" ]] && { echo "$dir"; return 0; }
+  done
+  return 1
+}
+
+crs_setup_file() {
+  local f
+  for f in /etc/modsecurity/crs/crs-setup.conf /usr/share/modsecurity-crs/crs-setup.conf \
+           /etc/modsecurity/crs/crs-setup.conf.example /usr/share/modsecurity-crs/crs-setup.conf.example; do
+    [[ -f "$f" ]] && { echo "$f"; return 0; }
+  done
+  return 1
+}
+
+install_waf_crs() {
+  export DEBIAN_FRONTEND=noninteractive
+  if ! crs_rules_dir >/dev/null; then
+    apt-get update -y || true
+    apt-get install -y modsecurity-crs || deny "could not install modsecurity-crs"
+  fi
+  crs_rules_dir >/dev/null || deny "modsecurity-crs installed but no rules directory found"
+  echo "OWASP CRS rules: $(crs_rules_dir)"
+  echo "OWASP CRS setup: $(crs_setup_file || echo 'none - using built-in defaults')"
+}
+
+write_crs_conf() {
+  # mode: detect | block
+  #
+  # CRS scores a request across many rules and blocks only when the total
+  # crosses a threshold, unlike BPanel's own rules which deny on a single
+  # match. In detect mode the threshold is put out of reach: every rule still
+  # evaluates and logs, and nothing is ever refused. That is what makes it safe
+  # to switch on across live customer sites to find out what it *would* block.
+  local mode="$1" rules setup
+  rules="$(crs_rules_dir)" || deny "OWASP CRS is not installed"
+  setup="$(crs_setup_file || true)"
+  install -d -o root -g root -m 0755 /etc/nginx/modsec
+  {
+    echo "# BPanel OWASP CRS include - generated, do not edit"
+    echo "# mode: ${mode}"
+    # CRS needs request bodies; without them it sees only the URL and the rule
+    # set is largely decorative.
+    echo "SecRequestBodyAccess On"
+    echo "SecRequestBodyLimit 13107200"
+    echo "SecRequestBodyNoFilesLimit 131072"
+    # Anything over the limit is inspected as far as it goes and then passed.
+    # Rejecting instead would turn every large media upload into a 413.
+    echo "SecRequestBodyLimitAction ProcessPartial"
+    [[ -n "$setup" ]] && echo "Include ${setup}"
+    if [[ "$mode" == "detect" ]]; then
+      echo "SecAction \"id:900110,phase:1,nolog,pass,t:none,setvar:tx.inbound_anomaly_score_threshold=1000000,setvar:tx.outbound_anomaly_score_threshold=1000000\""
+    else
+      echo "SecAction \"id:900110,phase:1,nolog,pass,t:none,setvar:tx.inbound_anomaly_score_threshold=5,setvar:tx.outbound_anomaly_score_threshold=4\""
+    fi
+    echo "SecAction \"id:900000,phase:1,nolog,pass,t:none,setvar:tx.blocking_paranoia_level=1\""
+    echo "Include ${rules}/*.conf"
+  } >"${CRS_CONF}.tmp"
+  install -m 0644 -o root -g root "${CRS_CONF}.tmp" "$CRS_CONF"
+  rm -f "${CRS_CONF}.tmp"
+  printf '%s\n' "$mode" >"$CRS_MODE_FILE"
+  chmod 0644 "$CRS_MODE_FILE"
+}
+
+set_waf_crs_mode() {
+  local mode="$1"
+  case "$mode" in
+    off|detect|block) ;;
+    *) deny "usage: waf-crs-mode <off|detect|block>" ;;
+  esac
+  if [[ "$mode" == "off" ]]; then
+    rm -f "$CRS_CONF"
+    printf 'off\n' >"$CRS_MODE_FILE"
+    chmod 0644 "$CRS_MODE_FILE"
+    echo "OWASP CRS disabled"
+    return 0
+  fi
+  install_waf_crs >/dev/null
+  write_crs_conf "$mode"
+  echo "OWASP CRS mode: ${mode}"
+}
+
+waf_crs_status() {
+  local mode="off"
+  [[ -f "$CRS_MODE_FILE" ]] && mode="$(tr -d '[:space:]' <"$CRS_MODE_FILE")"
+  echo "mode=${mode}"
+  echo "installed=$(crs_rules_dir >/dev/null && echo yes || echo no)"
+  echo "conf=$([[ -f "$CRS_CONF" ]] && echo yes || echo no)"
+  echo "rule_files=$( { crs_rules_dir >/dev/null && ls "$(crs_rules_dir)"/*.conf 2>/dev/null | wc -l; } || echo 0)"
+  echo "sites_including=$(grep -lF "Include ${CRS_CONF}" /etc/nginx/modsec/sites/*.conf 2>/dev/null | wc -l)"
+}
+
 save_waf_custom_rules() {
   install -d -o root -g root -m 0755 /etc/nginx/modsec
   write_waf_default_rules
@@ -3967,6 +4066,18 @@ case "$cmd" in
   waf-site-delete)
     [[ $# -eq 1 ]] || deny "usage: waf-site-delete <domain>"
     delete_waf_site_rules "$1"
+    ;;
+  waf-crs-install)
+    [[ $# -eq 0 ]] || deny "usage: waf-crs-install"
+    install_waf_crs
+    ;;
+  waf-crs-mode)
+    [[ $# -eq 1 ]] || deny "usage: waf-crs-mode <off|detect|block>"
+    set_waf_crs_mode "$1"
+    ;;
+  waf-crs-status)
+    [[ $# -eq 0 ]] || deny "usage: waf-crs-status"
+    waf_crs_status
     ;;
   http-flood-zones-save)
     [[ $# -eq 0 ]] || deny "usage: http-flood-zones-save"

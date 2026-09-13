@@ -221,10 +221,20 @@ def site_rules_file(domain: str) -> str:
     return f"/etc/nginx/modsec/sites/{safe_domain}.conf"
 
 
-def render_site_rules(domain: str, enabled_rule_ids: Iterable[str], custom_rules: str = "") -> str:
+CRS_CONF_PATH = "/etc/nginx/modsec/bpanel-crs.conf"
+CRS_MODES = ("off", "detect", "block")
+
+
+def render_site_rules(
+    domain: str,
+    enabled_rule_ids: Iterable[str],
+    custom_rules: str = "",
+    crs_mode: str = "off",
+) -> str:
     safe_domain = _validate_domain(domain)
     enabled = set(validate_enabled_rule_ids(enabled_rule_ids))
     custom = _validate_custom_rules(custom_rules)
+    mode = normalize_crs_mode(crs_mode)
     chunks = [
         f"# BPanel WAF rules for {safe_domain}",
         "Include /etc/nginx/modsec/bpanel-base.conf",
@@ -238,6 +248,12 @@ def render_site_rules(domain: str, enabled_rule_ids: Iterable[str], custom_rules
         chunks.append(rule["rules"].strip())
         if rule.get("exceptions"):
             chunks.append(rule["exceptions"].strip())
+    if mode != "off":
+        # After BPanel's own rules, which deny outright on a single match and
+        # are cheaper: no point scoring a request that is already refused.
+        chunks.extend(["", f"# OWASP CRS ({mode})", f"Include {CRS_CONF_PATH}"])
+    # Custom rules go last on purpose: SecRuleRemoveById only affects rules that
+    # are already loaded, so this is where a per-site CRS exception belongs.
     chunks.extend(["", "# BPanel custom rules"])
     if custom:
         chunks.append(custom)
@@ -245,6 +261,79 @@ def render_site_rules(domain: str, enabled_rule_ids: Iterable[str], custom_rules
     if len(content.encode("utf-8")) > MAX_SITE_RULE_BYTES:
         raise ValueError("WAF site rules are too large")
     return content
+
+
+def normalize_crs_mode(value) -> str:
+    mode = str(value or "off").strip().lower()
+    return mode if mode in CRS_MODES else "off"
+
+
+def active_crs_mode() -> str:
+    """The server-wide OWASP CRS mode: off, detect, or block."""
+    from app.services import panel_settings
+
+    return normalize_crs_mode(panel_settings.crs_mode())
+
+
+def crs_status() -> dict:
+    """What the machine reports about CRS, plus the mode the panel recorded."""
+    result = shell.privileged(
+        "waf-crs-status",
+        check=False,
+        fallback=["bash", "-lc", "echo mode=off; echo installed=no; echo conf=no; echo rule_files=0; echo sites_including=0"],
+    )
+    info = {"mode": "off", "installed": False, "conf": False, "rule_files": 0, "sites_including": 0}
+    for line in (result.stdout or "").splitlines():
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.strip()
+        if key in {"installed", "conf"}:
+            info[key] = value == "yes"
+        elif key in {"rule_files", "sites_including"}:
+            info[key] = int(value) if value.isdigit() else 0
+        elif key == "mode":
+            info["mode"] = normalize_crs_mode(value)
+    info["panel_mode"] = active_crs_mode()
+    return info
+
+
+def set_crs_mode(mode: str, websites: Iterable[Website]) -> dict:
+    """Switch CRS on or off server-wide and rewrite every site's rule file.
+
+    Persisting the mode without rewriting the site files would change nothing:
+    the include lives in each site's own rules, which is what lets one site
+    carry exceptions the next one does not.
+    """
+    from app.services import panel_settings
+
+    target = normalize_crs_mode(mode)
+    if str(mode or "").strip().lower() not in CRS_MODES:
+        raise ValueError(f"Unknown CRS mode: {mode}")
+
+    result = shell.privileged(
+        "waf-crs-mode",
+        helper_args=[target],
+        check=False,
+        fallback=["bash", "-lc", f"echo 'OWASP CRS mode: {target}'"],
+    )
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout or "Could not change the CRS mode").strip())
+
+    panel_settings.save_crs_mode(target)
+
+    failures = []
+    for website in websites:
+        try:
+            outcome = sync_site_rules(
+                website.domain,
+                website_enabled_rule_ids(website),
+                website_custom_rules(website),
+                crs_mode=target if website.waf_enabled else "off",
+            )
+            if outcome.returncode != 0:
+                failures.append({"domain": website.domain, "error": (outcome.stderr or outcome.stdout or "").strip()[:200]})
+        except (RuntimeError, ValueError) as exc:
+            failures.append({"domain": website.domain, "error": str(exc)[:200]})
+    return {"mode": target, "message": (result.stdout or "").strip(), "failures": failures}
 
 
 def website_enabled_rule_ids(website: Website) -> set[str]:
@@ -255,9 +344,15 @@ def website_custom_rules(website: Website) -> str:
     return _validate_custom_rules(getattr(website, "waf_custom_rules", "") or "")
 
 
-def sync_site_rules(domain: str, enabled_rule_ids: Iterable[str], custom_rules: str = "") -> CommandResult:
+def sync_site_rules(
+    domain: str,
+    enabled_rule_ids: Iterable[str],
+    custom_rules: str = "",
+    crs_mode: str = None,
+) -> CommandResult:
     safe_domain = _validate_domain(domain)
-    content = render_site_rules(safe_domain, enabled_rule_ids, custom_rules)
+    mode = active_crs_mode() if crs_mode is None else normalize_crs_mode(crs_mode)
+    content = render_site_rules(safe_domain, enabled_rule_ids, custom_rules, crs_mode=mode)
     return shell.privileged(
         "waf-site-save",
         helper_args=[safe_domain],
@@ -268,7 +363,15 @@ def sync_site_rules(domain: str, enabled_rule_ids: Iterable[str], custom_rules: 
 
 
 def sync_website_rules(website: Website) -> CommandResult:
-    return sync_site_rules(website.domain, website_enabled_rule_ids(website), website_custom_rules(website))
+    # A site with the WAF switched off gets no CRS either, whatever the
+    # server-wide mode says.
+    mode = active_crs_mode() if website.waf_enabled else "off"
+    return sync_site_rules(
+        website.domain,
+        website_enabled_rule_ids(website),
+        website_custom_rules(website),
+        crs_mode=mode,
+    )
 
 
 def remove_site_rules(domain: str) -> str:

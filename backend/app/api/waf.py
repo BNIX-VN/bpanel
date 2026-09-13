@@ -267,3 +267,38 @@ def install_waf(current_user: User = Depends(get_current_user)):
 def update_waf_rules(current_user: User = Depends(get_current_user)):
     _require_admin(current_user)
     return waf.update_rules().__dict__
+
+
+class CrsModeUpdate(BaseModel):
+    mode: str = "off"
+
+
+@router.get("/crs")
+def get_crs(current_user: User = Depends(get_current_user)):
+    _require_admin(current_user)
+    status = waf.crs_status()
+    status["modes"] = list(waf.CRS_MODES)
+    return status
+
+
+@router.put("/crs")
+def set_crs(payload: CrsModeUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    _require_admin(current_user)
+    websites = db.query(Website).all()
+    try:
+        outcome = waf.set_crs_mode(payload.mode, websites)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    mode = outcome["mode"]
+    if mode == "off":
+        message = "OWASP CRS is off."
+    elif mode == "detect":
+        message = "OWASP CRS is in detect mode: every rule logs, nothing is blocked."
+    else:
+        message = "OWASP CRS is blocking at paranoia level 1."
+    if outcome["failures"]:
+        names = ", ".join(item["domain"] for item in outcome["failures"][:5])
+        message = f"{message} {len(outcome['failures'])} site(s) could not be updated: {names}"
+    return {"ok": True, "message": message, **outcome}

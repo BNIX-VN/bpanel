@@ -674,6 +674,7 @@ function App() {
   // The global list as an array so each entry can be removed on its own; the
   // paste box is only for adding several at once.
   const [globalBots, setGlobalBots] = useState([]);
+  const [crs, setCrs] = useState(null);
   const [newBotName, setNewBotName] = useState('');
   const [globalBotPaste, setGlobalBotPaste] = useState('');
   const [globalBotFilter, setGlobalBotFilter] = useState('');
@@ -3463,6 +3464,24 @@ function App() {
     }
   }
 
+  async function loadCrs() {
+    const data = await request('/waf/crs', { silent: true });
+    if (data) setCrs(data);
+  }
+
+  async function saveCrsMode(mode) {
+    if (mode === 'block' && !confirm(
+      'Switch OWASP CRS to blocking?\n\n'
+      + 'Every website with the WAF on will start refusing requests that score above the threshold. '
+      + 'Run detect mode first and read the logs, or a legitimate request somebody depends on may be the one it stops.'
+    )) return;
+    const data = await request('/waf/crs', {
+      method: 'PUT',
+      body: JSON.stringify({ mode }),
+    }, `Switching OWASP CRS to ${mode}...`);
+    if (data) await loadCrs();
+  }
+
   function addGlobalBots(text) {
     const incoming = String(text || '').split(/[\n,;]+/).map(s => s.trim()).filter(Boolean);
     if (incoming.length === 0) return;
@@ -3737,7 +3756,7 @@ function App() {
     if (isAuthenticated && page === 'users') { loadUsers(); loadPackages(); }
     if (isAuthenticated && page === 'php') { loadPhpConfig(); loadPhpTune(phpConfig.php_version); }
     if (isAuthenticated && page === 'firewall') { loadFirewall(); loadFirewallBlocklists(); }
-    if (isAuthenticated && ['waf', 'waf-site'].includes(page)) { loadWafRules(); loadBotBlocks(); }
+    if (isAuthenticated && ['waf', 'waf-site'].includes(page)) { loadWafRules(); loadBotBlocks(); loadCrs(); }
     if (isAuthenticated && page === 'malware' && isAdmin) {
       loadMalwareScanStatus();
       loadMalwareScanJobs();
@@ -5588,9 +5607,53 @@ function App() {
       <section className="section">
         <div className="section-title">
           <div><h2>WAF</h2><p className="hint">Engine status and per-website protection. Open a website to configure its rules, flood limits and blocked bots.</p></div>
-          <button disabled={!!loading} onClick={() => { loadWafRules(); loadBotBlocks(); }}><RefreshCw size={14}/> Refresh</button>
+          <button disabled={!!loading} onClick={() => { loadWafRules(); loadBotBlocks(); loadCrs(); }}><RefreshCw size={14}/> Refresh</button>
         </div>
         <div className="info-box firewall-status"><strong>Status</strong><pre>{statusText}</pre></div>
+      </section>
+
+      <section className="section">
+        <div className="section-title">
+          <div>
+            <h2>OWASP Core Rule Set</h2>
+            <p className="hint">
+              BPanel's own rules block known bad paths. CRS inspects the payload - SQL injection, XSS,
+              command injection - and scores each request instead of refusing on a single match.
+              Off by default because CRS needs tuning against real traffic before it can be trusted to block.
+            </p>
+          </div>
+          <button disabled={!!loading} onClick={loadCrs}><RefreshCw size={14}/> Check</button>
+        </div>
+        {!crs && <p className="hint">Click Check to read the current state.</p>}
+        {crs && <>
+          <div className="waf-overview-badges" style={{ marginBottom: 12 }}>
+            <span className={crs.mode === 'block' ? 'badge ok' : (crs.mode === 'detect' ? 'badge' : 'badge')}>
+              {crs.mode === 'off' ? 'Off' : (crs.mode === 'detect' ? 'Detect only' : 'Blocking')}
+            </span>
+            <span className={crs.installed ? 'badge ok' : 'badge'}>
+              {crs.installed ? `${crs.rule_files} rule file(s) installed` : 'Not installed'}
+            </span>
+            <span className="badge">{crs.sites_including} site(s) loading it</span>
+          </div>
+          <div className="segmented-control">
+            {[['off', 'Off'], ['detect', 'Detect only'], ['block', 'Block']].map(([value, label]) => (
+              <button
+                key={value}
+                className={crs.mode === value ? 'active' : ''}
+                disabled={!!loading || crs.mode === value}
+                onClick={() => saveCrsMode(value)}
+              >{label}</button>
+            ))}
+          </div>
+          <p className="hint" style={{ marginTop: 10 }}>
+            {crs.mode === 'off' && 'Nothing from CRS is loaded. Payload attacks are not inspected.'}
+            {crs.mode === 'detect' && 'Every CRS rule runs and logs to the nginx error log, and nothing is refused. Watch the logs, then add exceptions per site before switching to Block.'}
+            {crs.mode === 'block' && 'Requests scoring above the threshold are refused on every site with the WAF on. Add SecRuleRemoveById <id> to a site’s custom rules to excuse it from one rule.'}
+          </p>
+          {crs.mode !== 'off' && crs.panel_mode !== crs.mode && (
+            <p className="hint">Panel setting says "{crs.panel_mode}" but the server reports "{crs.mode}".</p>
+          )}
+        </>}
       </section>
 
       <section className="section">
