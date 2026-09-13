@@ -3482,6 +3482,20 @@ function App() {
     if (data) await loadCrs();
   }
 
+  async function toggleSiteCrs(row) {
+    const turningOn = !row.crs_enabled;
+    if (turningOn && !confirm(
+      `Load OWASP CRS on ${row.domain}?\n\n`
+      + `This costs roughly ${crs?.rss_mb_per_site || 325} MB of nginx memory for this site alone, `
+      + 'and the memory is only returned when nginx is restarted.'
+    )) return;
+    const data = await request(`/waf/websites/${row.website_id}/crs`, {
+      method: 'PUT',
+      body: JSON.stringify({ enabled: turningOn }),
+    }, `${turningOn ? 'Enabling' : 'Disabling'} CRS on ${row.domain}...`);
+    if (data) await loadCrs();
+  }
+
   function addGlobalBots(text) {
     const incoming = String(text || '').split(/[\n,;]+/).map(s => s.trim()).filter(Boolean);
     if (incoming.length === 0) return;
@@ -5627,13 +5641,25 @@ function App() {
         {!crs && <p className="hint">Click Check to read the current state.</p>}
         {crs && <>
           <div className="waf-overview-badges" style={{ marginBottom: 12 }}>
-            <span className={crs.mode === 'block' ? 'badge ok' : (crs.mode === 'detect' ? 'badge' : 'badge')}>
+            <span className={crs.mode === 'block' ? 'badge ok' : 'badge'}>
               {crs.mode === 'off' ? 'Off' : (crs.mode === 'detect' ? 'Detect only' : 'Blocking')}
             </span>
             <span className={crs.installed ? 'badge ok' : 'badge'}>
               {crs.installed ? `${crs.rule_files} rule file(s) installed` : 'Not installed'}
             </span>
-            <span className="badge">{crs.sites_including} site(s) loading it</span>
+            <span className="badge">{crs.sites_opted_in ?? 0} site(s) opted in</span>
+            <span className={(crs.estimated_rss_mb || 0) > 1024 ? 'badge danger' : 'badge'}>
+              ~{crs.estimated_rss_mb || 0} MB nginx RSS
+            </span>
+          </div>
+          <div className="info-box" style={{ marginBottom: 12 }}>
+            <strong>Memory</strong>
+            <p className="hint">
+              Every site that loads CRS builds its own copy of the rule set inside nginx —
+              about {crs.rss_mb_per_site || 325} MB each, measured on a live server. Switching it on for
+              nineteen sites at once took nginx from 146 MB to 6.3 GB. Opt sites in one at a time and
+              watch the figure above. Note that memory is only released by restarting nginx, not by a reload.
+            </p>
           </div>
           <div className="segmented-control">
             {[['off', 'Off'], ['detect', 'Detect only'], ['block', 'Block']].map(([value, label]) => (
@@ -5653,6 +5679,22 @@ function App() {
           {crs.mode !== 'off' && crs.panel_mode !== crs.mode && (
             <p className="hint">Panel setting says "{crs.panel_mode}" but the server reports "{crs.mode}".</p>
           )}
+          <div className="table waf-overview-list" style={{ marginTop: 14 }}>
+            {(crs.websites || []).map(row => (
+              <div className="waf-overview-row" key={row.website_id}>
+                <span className="waf-overview-domain"><strong>{row.domain}</strong></span>
+                <div className="waf-overview-badges">
+                  <span className={row.waf_enabled ? 'badge ok' : 'badge'}>{row.waf_enabled ? 'WAF on' : 'WAF off'}</span>
+                  <span className={row.crs_enabled ? 'badge ok' : 'badge'}>{row.crs_enabled ? 'CRS on' : 'CRS off'}</span>
+                  {row.crs_enabled && !row.waf_enabled && <span className="badge">needs the WAF on</span>}
+                </div>
+                <button
+                  disabled={!!loading}
+                  onClick={() => toggleSiteCrs(row)}
+                >{row.crs_enabled ? 'Turn CRS off' : 'Turn CRS on'}</button>
+              </div>
+            ))}
+          </div>
         </>}
       </section>
 

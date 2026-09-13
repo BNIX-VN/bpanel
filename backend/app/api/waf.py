@@ -273,12 +273,62 @@ class CrsModeUpdate(BaseModel):
     mode: str = "off"
 
 
+class WebsiteCrsUpdate(BaseModel):
+    enabled: bool = False
+
+
 @router.get("/crs")
-def get_crs(current_user: User = Depends(get_current_user)):
+def get_crs(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     _require_admin(current_user)
     status = waf.crs_status()
     status["modes"] = list(waf.CRS_MODES)
+    websites = db.query(Website).all()
+    opted_in = [w for w in websites if waf.site_uses_crs(w)]
+    status["websites"] = [
+        {
+            "website_id": w.id,
+            "domain": w.domain,
+            "waf_enabled": bool(w.waf_enabled),
+            "crs_enabled": bool(getattr(w, "crs_enabled", False)),
+        }
+        for w in websites
+    ]
+    status["sites_opted_in"] = len(opted_in)
+    # CRS is the one WAF feature with a memory bill, and it is large enough that
+    # an admin should see it before switching anything on.
+    status["rss_mb_per_site"] = waf.CRS_RSS_MB_PER_SITE
+    status["estimated_rss_mb"] = waf.crs_memory_estimate(len(opted_in))
     return status
+
+
+@router.put("/websites/{website_id}/crs")
+def set_website_crs(payload: WebsiteCrsUpdate, website_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    _require_admin(current_user)
+    website = _website_or_404(db, website_id)
+    website.crs_enabled = bool(payload.enabled)
+    db.add(website)
+    db.commit()
+    db.refresh(website)
+    result = waf.sync_website_rules(website)
+    if result.returncode != 0:
+        website.crs_enabled = not bool(payload.enabled)
+        db.add(website)
+        db.commit()
+        raise HTTPException(status_code=400, detail=(result.stderr or result.stdout or "Could not apply CRS").strip())
+    mode = waf.active_crs_mode()
+    if not payload.enabled:
+        message = f"OWASP CRS is off for {website.domain}."
+    elif mode == "off":
+        message = (
+            f"{website.domain} is opted in, but OWASP CRS is switched off server-wide, "
+            "so nothing is loaded yet."
+        )
+    else:
+        message = (
+            f"OWASP CRS is {mode} on {website.domain}. "
+            f"Restart nginx to see the memory change; expect about {waf.CRS_RSS_MB_PER_SITE} MB for this site."
+        )
+    return {"ok": True, "message": message, "crs_enabled": bool(website.crs_enabled), "mode": mode}
 
 
 @router.put("/crs")

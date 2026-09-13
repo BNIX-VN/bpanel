@@ -146,12 +146,19 @@ def test_set_crs_mode_rejects_a_bogus_mode():
         waf.set_crs_mode("paranoid", [])
 
 
-def test_detect_mode_puts_the_blocking_threshold_out_of_reach():
+def test_detect_mode_logs_instead_of_raising_the_threshold():
     helper = HELPER_SCRIPT.read_text(encoding="utf-8")
     body = helper.split("write_crs_conf()")[1].split("\n}\n")[0]
-    # Detect mode has to evaluate and log every rule while refusing nothing,
-    # which CRS expresses as an anomaly threshold no request can reach.
-    assert "inbound_anomaly_score_threshold=1000000" in body
+    # Detect mode keeps the real threshold and turns the rules that act on it
+    # into pass+log. Raising the threshold out of reach instead silences the
+    # only rules CRS logs from, which produced no output at all under live
+    # attack traffic.
+    assert "inbound_anomaly_score_threshold=5" in body
+    assert "1000000" not in body
+    # Quoting in the script is escaped, so match on the parts that matter.
+    assert "SecRuleUpdateActionById 949110" in body
+    assert "SecRuleUpdateActionById 959100" in body
+    assert "pass,log,auditlog" in body
     assert "blocking_paranoia_level=1" in body
     # CRS without request bodies sees only the URL, which is the state this
     # whole feature exists to leave behind.

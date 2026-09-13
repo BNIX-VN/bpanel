@@ -309,31 +309,72 @@ def set_crs_mode(mode: str, websites: Iterable[Website]) -> dict:
     if str(mode or "").strip().lower() not in CRS_MODES:
         raise ValueError(f"Unknown CRS mode: {mode}")
 
-    result = shell.privileged(
-        "waf-crs-mode",
-        helper_args=[target],
-        check=False,
-        fallback=["bash", "-lc", f"echo 'OWASP CRS mode: {target}'"],
-    )
+    sites = list(websites)
+
+    def rewrite(mode_for_sites: str) -> list[dict]:
+        problems = []
+        for website in sites:
+            try:
+                outcome = sync_site_rules(
+                    website.domain,
+                    website_enabled_rule_ids(website),
+                    website_custom_rules(website),
+                    crs_mode=mode_for_sites if site_uses_crs(website) else "off",
+                )
+                if outcome.returncode != 0:
+                    problems.append({"domain": website.domain, "error": (outcome.stderr or outcome.stdout or "").strip()[:200]})
+            except (RuntimeError, ValueError) as exc:
+                problems.append({"domain": website.domain, "error": str(exc)[:200]})
+        return problems
+
+    if target == "off":
+        # Order matters and cost an outage the first time round. Deleting
+        # bpanel-crs.conf first leaves every site file still including a path
+        # that no longer exists, so the very next `nginx -t` - triggered by
+        # rewriting the first site - fails, and the rest of the rewrite never
+        # happens. Clear the references first, then remove the file.
+        panel_settings.save_crs_mode(target)
+        failures = rewrite("off")
+        result = shell.privileged(
+            "waf-crs-mode", helper_args=["off"], check=False,
+            fallback=["bash", "-lc", "echo 'OWASP CRS disabled'"],
+        )
+    else:
+        result = shell.privileged(
+            "waf-crs-mode", helper_args=[target], check=False,
+            fallback=["bash", "-lc", f"echo 'OWASP CRS mode: {target}'"],
+        )
+        if result.returncode != 0:
+            raise RuntimeError((result.stderr or result.stdout or "Could not change the CRS mode").strip())
+        panel_settings.save_crs_mode(target)
+        failures = rewrite(target)
+
     if result.returncode != 0:
         raise RuntimeError((result.stderr or result.stdout or "Could not change the CRS mode").strip())
+    return {
+        "mode": target,
+        "message": (result.stdout or "").strip(),
+        "failures": failures,
+        "sites_using_crs": sum(1 for w in sites if site_uses_crs(w)) if target != "off" else 0,
+    }
 
-    panel_settings.save_crs_mode(target)
 
-    failures = []
-    for website in websites:
-        try:
-            outcome = sync_site_rules(
-                website.domain,
-                website_enabled_rule_ids(website),
-                website_custom_rules(website),
-                crs_mode=target if website.waf_enabled else "off",
-            )
-            if outcome.returncode != 0:
-                failures.append({"domain": website.domain, "error": (outcome.stderr or outcome.stdout or "").strip()[:200]})
-        except (RuntimeError, ValueError) as exc:
-            failures.append({"domain": website.domain, "error": str(exc)[:200]})
-    return {"mode": target, "message": (result.stdout or "").strip(), "failures": failures}
+def site_uses_crs(website: Website) -> bool:
+    """CRS applies to a site only when both toggles agree.
+
+    waf_enabled is the site's WAF switch; crs_enabled is the separate opt-in
+    that exists because CRS is the one WAF feature with a memory bill.
+    """
+    return bool(getattr(website, "waf_enabled", False) and getattr(website, "crs_enabled", False))
+
+
+# Measured on a live server: nginx went from 146 MB to 6317 MB RSS when 19 sites
+# each loaded the full rule set, because every server block builds its own.
+CRS_RSS_MB_PER_SITE = 325
+
+
+def crs_memory_estimate(site_count: int) -> int:
+    return max(0, int(site_count)) * CRS_RSS_MB_PER_SITE
 
 
 def website_enabled_rule_ids(website: Website) -> set[str]:
@@ -363,9 +404,9 @@ def sync_site_rules(
 
 
 def sync_website_rules(website: Website) -> CommandResult:
-    # A site with the WAF switched off gets no CRS either, whatever the
-    # server-wide mode says.
-    mode = active_crs_mode() if website.waf_enabled else "off"
+    # A site with the WAF switched off, or without its own CRS opt-in, gets no
+    # CRS whatever the server-wide mode says.
+    mode = active_crs_mode() if site_uses_crs(website) else "off"
     return sync_site_rules(
         website.domain,
         website_enabled_rule_ids(website),
@@ -409,6 +450,9 @@ def site_config(website: Website) -> dict:
         "website_id": website.id,
         "domain": website.domain,
         "waf_enabled": bool(website.waf_enabled),
+        "crs_enabled": bool(getattr(website, "crs_enabled", False)),
+        "crs_mode": active_crs_mode(),
+        "crs_active": site_uses_crs(website) and active_crs_mode() != "off",
         "http_flood_enabled": bool(getattr(website, "http_flood_enabled", False)),
         "http_flood_config": nginx.http_flood_config_for_website(website),
         "rules_file": site_rules_file(website.domain),

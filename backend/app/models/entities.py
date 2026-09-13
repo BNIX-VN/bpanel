@@ -90,6 +90,9 @@ class Website(Base):
     waf_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     waf_default_rules: Mapped[str] = mapped_column(Text, default="")
     waf_custom_rules: Mapped[str] = mapped_column(Text, default="")
+    # OWASP CRS is per site and off by default: unlike the other WAF toggles it
+    # costs real memory, roughly 325 MB of nginx RSS per site that loads it.
+    crs_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     http_flood_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     http_flood_config: Mapped[str] = mapped_column(Text, default="")
     # User-agent substrings to answer with 403, one per line. Text rather than a
