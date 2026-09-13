@@ -428,12 +428,20 @@ write_crs_conf() {
   # CRS scores a request across many rules and acts only when the total crosses
   # a threshold, unlike BPanel's own rules which deny on a single match.
   #
-  # Detect mode keeps the real threshold and neuters the two rules that act on
-  # it (949110 inbound, 959100 outbound), turning each into pass+log. Raising
-  # the threshold out of reach instead looks equivalent and is not: the
-  # individual CRS rules score silently, only the threshold rules log, so a
-  # server in that state reports nothing at all. That was the first attempt and
-  # it produced zero log lines under live attack traffic.
+  # Detect mode puts the threshold out of reach, so the rules that act on the
+  # total (949110 inbound, 959100 outbound) never fire and nothing is refused.
+  # Each individual CRS rule still matches and still logs, because crs-setup.conf
+  # carries SecDefaultAction "phase:2,log,auditlog,pass".
+  #
+  # SecRuleUpdateActionById looks like the tidier way to neuter the two blocking
+  # rules and is not usable here: libmodsecurity answers "action has not expected
+  # to be used with UpdateActionByID" for phase, pass and deny alike, and the
+  # failed directive takes the rest of the rule set down with it.
+  #
+  # Note for anyone checking whether this works: ModSecurity logs to the vhost's
+  # own error_log, /var/log/nginx/<domain>.error.log, not to the shared
+  # /var/log/nginx/error.log. Looking in the wrong one reads exactly like a
+  # feature that silently does nothing.
   local mode="$1" rules setup
   rules="$(crs_rules_dir)" || deny "OWASP CRS is not installed"
   setup="$(crs_setup_file || true)"
@@ -450,15 +458,13 @@ write_crs_conf() {
     # Rejecting instead would turn every large media upload into a 413.
     echo "SecRequestBodyLimitAction ProcessPartial"
     [[ -n "$setup" ]] && echo "Include ${setup}"
-    echo "SecAction \"id:900110,phase:1,nolog,pass,t:none,setvar:tx.inbound_anomaly_score_threshold=5,setvar:tx.outbound_anomaly_score_threshold=4\""
+    if [[ "$mode" == "detect" ]]; then
+      echo "SecAction \"id:900110,phase:1,nolog,pass,t:none,setvar:tx.inbound_anomaly_score_threshold=1000000,setvar:tx.outbound_anomaly_score_threshold=1000000\""
+    else
+      echo "SecAction \"id:900110,phase:1,nolog,pass,t:none,setvar:tx.inbound_anomaly_score_threshold=5,setvar:tx.outbound_anomaly_score_threshold=4\""
+    fi
     echo "SecAction \"id:900000,phase:1,nolog,pass,t:none,setvar:tx.blocking_paranoia_level=1\""
     echo "Include ${rules}/*.conf"
-    if [[ "$mode" == "detect" ]]; then
-      # After the Include: SecRuleUpdateActionById only reaches a rule that has
-      # already been loaded.
-      echo "SecRuleUpdateActionById 949110 \"phase:2,pass,log,auditlog\""
-      echo "SecRuleUpdateActionById 959100 \"phase:4,pass,log,auditlog\""
-    fi
   } >"${CRS_CONF}.tmp"
   install -m 0644 -o root -g root "${CRS_CONF}.tmp" "$CRS_CONF"
   rm -f "${CRS_CONF}.tmp"
