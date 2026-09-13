@@ -3493,7 +3493,14 @@ function App() {
       method: 'PUT',
       body: JSON.stringify({ enabled: turningOn }),
     }, `${turningOn ? 'Enabling' : 'Disabling'} CRS on ${row.domain}...`);
-    if (data) await loadCrs();
+    if (data) {
+      await loadCrs();
+      // The site page reads its own copy of this, so refresh it when that is
+      // where the toggle was pressed.
+      if (String(selectedWafWebsiteId) === String(row.website_id)) {
+        await loadWebsiteWafConfig(row.website_id, false);
+      }
+    }
   }
 
   function addGlobalBots(text) {
@@ -5681,22 +5688,9 @@ function App() {
           {crs.mode !== 'off' && crs.panel_mode !== crs.mode && (
             <p className="hint">Panel setting says "{crs.panel_mode}" but the server reports "{crs.mode}".</p>
           )}
-          <div className="table waf-overview-list" style={{ marginTop: 14 }}>
-            {(crs.websites || []).map(row => (
-              <div className="waf-overview-row" key={row.website_id}>
-                <span className="waf-overview-domain"><strong>{row.domain}</strong></span>
-                <div className="waf-overview-badges">
-                  <span className={row.waf_enabled ? 'badge ok' : 'badge'}>{row.waf_enabled ? 'WAF on' : 'WAF off'}</span>
-                  <span className={row.crs_enabled ? 'badge ok' : 'badge'}>{row.crs_enabled ? 'CRS on' : 'CRS off'}</span>
-                  {row.crs_enabled && !row.waf_enabled && <span className="badge">needs the WAF on</span>}
-                </div>
-                <button
-                  disabled={!!loading}
-                  onClick={() => toggleSiteCrs(row)}
-                >{row.crs_enabled ? 'Turn CRS off' : 'Turn CRS on'}</button>
-              </div>
-            ))}
-          </div>
+          <p className="hint">
+            This is the server-wide switch. Which sites load CRS is chosen per website below.
+          </p>
         </>}
       </section>
 
@@ -5706,10 +5700,17 @@ function App() {
         <div className="table waf-overview-list">
           {websites.map(site => {
             const bots = botCountFor(site.id);
+            const crsRow = (crs?.websites || []).find(w => w.website_id === site.id);
+            const crsOn = !!crsRow?.crs_enabled;
+            const crsLive = crsOn && site.waf_enabled && crs?.mode && crs.mode !== 'off';
             return <div className="waf-overview-row" key={site.id}>
               <span className="waf-overview-domain"><strong>{site.domain}</strong></span>
               <div className="waf-overview-badges">
                 <span className={site.waf_enabled ? 'badge ok' : 'badge'}>{site.waf_enabled ? 'WAF on' : 'WAF off'}</span>
+                <span
+                  className={crsLive ? 'badge ok' : 'badge'}
+                  title={crsOn && !crsLive ? 'Opted in, but CRS is off server-wide' : ''}
+                >{crsOn ? (crsLive ? `CRS ${crs.mode}` : 'CRS pending') : 'CRS off'}</span>
                 <span className={site.http_flood_enabled ? 'badge ok' : 'badge'}>{site.http_flood_enabled ? 'Flood on' : 'Flood off'}</span>
                 <span
                   className={bots > 0 ? 'badge ok' : 'badge'}
@@ -5832,7 +5833,33 @@ function App() {
           <button disabled={!selectedWafWebsiteId || !!loading} onClick={() => selectedSite && toggleWebsiteWaf(selectedSite)}>
             <Shield size={14}/> {selectedSite?.waf_enabled ? 'Disable WAF' : 'Enable WAF'}
           </button>
+          <span className={wafSiteConfig?.crs_active ? 'badge ok' : 'badge'}>
+            {wafSiteConfig?.crs_enabled
+              ? (wafSiteConfig?.crs_mode === 'off' ? 'CRS on (server-wide: off)' : `CRS ${wafSiteConfig.crs_mode}`)
+              : 'CRS off'}
+          </span>
+          <button
+            disabled={!selectedWafWebsiteId || !!loading || !selectedSite?.waf_enabled}
+            title={selectedSite?.waf_enabled ? '' : 'Enable the WAF first'}
+            onClick={() => wafSiteConfig && toggleSiteCrs({
+              website_id: wafSiteConfig.website_id,
+              domain: wafSiteConfig.domain,
+              crs_enabled: wafSiteConfig.crs_enabled,
+            })}
+          >
+            <Shield size={14}/> {wafSiteConfig?.crs_enabled ? 'Disable CRS' : 'Enable CRS'}
+          </button>
         </div>
+        <p className="hint">
+          The WAF blocks known bad paths. OWASP CRS adds payload inspection — SQL injection, XSS,
+          command injection — for this site, at roughly {crs?.rss_mb_per_site || 50} MB of nginx memory.
+          {wafSiteConfig?.crs_enabled && wafSiteConfig?.crs_mode === 'off'
+            ? ' This site is opted in, but CRS is switched off server-wide on the WAF page, so nothing is loaded.'
+            : ''}
+          {wafSiteConfig?.crs_active
+            ? ' Add SecRuleRemoveById <id> to the custom rules below to excuse this site from one CRS rule.'
+            : ''}
+        </p>
       </section>
 
       {!wafSiteConfig && websites.length === 0 && <section className="section"><EmptyState icon={Globe} message="No websites yet." /></section>}
