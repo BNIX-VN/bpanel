@@ -444,10 +444,12 @@ write_crs_conf() {
   # with it. SecRuleEngine DetectionOnly: it would also stop BPanel's own rules
   # denying on that site, trading real protection for observation.
   #
-  # Where to read the results: the vhost's own error_log,
-  # /var/log/nginx/<domain>.error.log - not the shared /var/log/nginx/error.log,
-  # which a per-site setup never writes to - and the audit log below, which
-  # records every rule that contributed to the score.
+  # Where to read the results: the audit log configured below. That is where the
+  # verdict lands, together with every CRS rule that contributed to the score -
+  # on a live server, one SQLi probe recorded 942100, 942190 and 942360 next to
+  # the BPanel line saying the score reached 15. The nginx error_log is the
+  # wrong place to look, and the shared /var/log/nginx/error.log doubly so,
+  # since each vhost writes to its own.
   local mode="$1" rules setup
   rules="$(crs_rules_dir)" || deny "OWASP CRS is not installed"
   setup="$(crs_setup_file || true)"

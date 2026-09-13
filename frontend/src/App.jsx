@@ -5673,7 +5673,7 @@ function App() {
           </div>
           <p className="hint" style={{ marginTop: 10 }}>
             {crs.mode === 'off' && 'Nothing from CRS is loaded. Payload attacks are not inspected.'}
-            {crs.mode === 'detect' && 'Every CRS rule runs and logs to the nginx error log, and nothing is refused. Watch the logs, then add exceptions per site before switching to Block.'}
+            {crs.mode === 'detect' && 'Every CRS rule runs and nothing is refused. Each request that Block mode would have stopped is recorded in /var/log/nginx/bpanel-modsec-audit.log, with the rule IDs that scored it. Read that for a while, add exceptions per site, then switch to Block.'}
             {crs.mode === 'block' && 'Requests scoring above the threshold are refused on every site with the WAF on. Add SecRuleRemoveById <id> to a site’s custom rules to excuse it from one rule.'}
           </p>
           {crs.mode !== 'off' && crs.panel_mode !== crs.mode && (
