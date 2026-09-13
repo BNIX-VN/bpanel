@@ -519,10 +519,37 @@ set_waf_crs_mode() {
   echo "OWASP CRS mode: ${mode}"
 }
 
+nginx_memory_pss_mb() {
+  # PSS, not RSS. nginx parses the rule set in the master and the workers fork,
+  # so those pages are shared: summing RSS across processes counts them once per
+  # worker and overstates the cost several times over. Reading smaps_rollup for
+  # another user's processes needs root, which is why this lives in the helper.
+  python3 - <<'PY' 2>/dev/null || echo 0
+import os, re
+pss = 0
+for pid in os.listdir('/proc'):
+    if not pid.isdigit():
+        continue
+    try:
+        if open(f'/proc/{pid}/comm').read().strip() != 'nginx':
+            continue
+        roll = open(f'/proc/{pid}/smaps_rollup').read()
+    except OSError:
+        continue
+    m = re.search(r'^Pss:\s+(\d+) kB', roll, re.M)
+    if m:
+        pss += int(m.group(1))
+print(pss // 1024)
+PY
+}
+
 waf_crs_status() {
   local mode="off"
   [[ -f "$CRS_MODE_FILE" ]] && mode="$(tr -d '[:space:]' <"$CRS_MODE_FILE")"
   echo "mode=${mode}"
+  echo "nginx_pss_mb=$(nginx_memory_pss_mb)"
+  echo "ram_available_mb=$(free -m | awk '/^Mem:/{print $7}')"
+  echo "ram_total_mb=$(free -m | awk '/^Mem:/{print $2}')"
   echo "installed=$(crs_rules_dir >/dev/null && echo yes || echo no)"
   echo "conf=$([[ -f "$CRS_CONF" ]] && echo yes || echo no)"
   echo "rule_files=$( { crs_rules_dir >/dev/null && ls "$(crs_rules_dir)"/*.conf 2>/dev/null | wc -l; } || echo 0)"

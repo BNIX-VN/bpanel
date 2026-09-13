@@ -3486,8 +3486,8 @@ function App() {
     const turningOn = !row.crs_enabled;
     if (turningOn && !confirm(
       `Load OWASP CRS on ${row.domain}?\n\n`
-      + `This costs roughly ${crs?.rss_mb_per_site || 325} MB of nginx memory for this site alone, `
-      + 'and the memory is only returned when nginx is restarted.'
+      + `This adds roughly ${crs?.rss_mb_per_site || 50} MB to nginx for this site. `
+      + 'Check the measured figure on this page afterwards rather than trusting the estimate.'
     )) return;
     const data = await request(`/waf/websites/${row.website_id}/crs`, {
       method: 'PUT',
@@ -5648,19 +5648,19 @@ function App() {
               {crs.installed ? `${crs.rule_files} rule file(s) installed` : 'Not installed'}
             </span>
             <span className="badge">{crs.sites_opted_in ?? 0} site(s) opted in</span>
-            <span className={(crs.estimated_rss_mb || 0) > 1024 ? 'badge danger' : 'badge'}>
-              ~{crs.estimated_rss_mb || 0} MB nginx RSS
+            <span className="badge">nginx now: {crs.nginx_pss_mb || 0} MB</span>
+            <span className={(crs.ram_available_mb || 0) < 1024 ? 'badge danger' : 'badge'}>
+              {crs.ram_available_mb || 0} MB RAM free
             </span>
           </div>
           <div className="info-box" style={{ marginBottom: 12 }}>
             <strong>Memory</strong>
             <p className="hint">
-              Every site that loads CRS builds its own copy of the rule set inside nginx, so this grows
-              with each site rather than being paid once. The estimate above allows
-              {' '}{crs.rss_mb_per_site || 200} MB per site and is a deliberate upper bound — the real figure moves with
-              worker count and traffic. Switching it on for nineteen sites at once took one server from
-              146 MB to over 6 GB, so opt sites in one at a time and check the server's own memory
-              afterwards. The memory is released only by restarting nginx, never by a reload.
+              Each site that loads CRS adds its own copy of the rule set, so the cost grows with the
+              number opted in — roughly {crs.rss_mb_per_site || 50} MB each. "nginx now" above is measured on this
+              server, not estimated, and it is the figure to act on; watch it and the free-RAM figure
+              beside it as you opt sites in. Note that `ps` reports several times this, because it
+              counts pages the nginx workers share once for each worker.
             </p>
           </div>
           <div className="segmented-control">

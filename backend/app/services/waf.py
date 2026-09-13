@@ -282,13 +282,16 @@ def crs_status() -> dict:
         check=False,
         fallback=["bash", "-lc", "echo mode=off; echo installed=no; echo conf=no; echo rule_files=0; echo sites_including=0"],
     )
-    info = {"mode": "off", "installed": False, "conf": False, "rule_files": 0, "sites_including": 0}
+    info = {
+        "mode": "off", "installed": False, "conf": False, "rule_files": 0,
+        "sites_including": 0, "nginx_pss_mb": 0, "ram_available_mb": 0, "ram_total_mb": 0,
+    }
     for line in (result.stdout or "").splitlines():
         key, _, value = line.partition("=")
         key, value = key.strip(), value.strip()
         if key in {"installed", "conf"}:
             info[key] = value == "yes"
-        elif key in {"rule_files", "sites_including"}:
+        elif key in {"rule_files", "sites_including", "nginx_pss_mb", "ram_available_mb", "ram_total_mb"}:
             info[key] = int(value) if value.isdigit() else 0
         elif key == "mode":
             info["mode"] = normalize_crs_mode(value)
@@ -371,13 +374,18 @@ def site_uses_crs(website: Website) -> bool:
 # Every nginx server block builds its own copy of the rule set, so this grows
 # with the number of sites opted in rather than being paid once.
 #
-# The figure is deliberately a rough upper bound, not a precise one. Measured on
-# a live server, one site moved total nginx RSS by 80-90 MB in one reading and
-# past 170 MB in another - it moves with worker count and traffic - and all 19
-# WAF-enabled sites at once took nginx from 146 MB to over 6 GB. An estimate
-# that reads low would be worse than useless on the box where it matters, so it
-# errs high and the UI tells the admin to watch the real number.
-CRS_RSS_MB_PER_SITE = 200
+# Measured in PSS, which is the only figure worth quoting here: nginx parses the
+# rules in the master and the workers fork, so those pages are shared, and
+# summing RSS across processes counts them once per worker. On a live server
+# with 19 sites the two readings were 3976 MB of RSS against 961 MB of PSS -
+# roughly four times' difference, and the RSS number is the one that makes CRS
+# look unaffordable when it is not.
+#
+# 50 MB per site is that 961 MB spread across 19, rounded up. The panel reports
+# the measured PSS next to this estimate, and that measurement is what an admin
+# should act on.
+CRS_PSS_MB_PER_SITE = 50
+CRS_RSS_MB_PER_SITE = CRS_PSS_MB_PER_SITE  # kept: the API field name is public
 
 
 def crs_memory_estimate(site_count: int) -> int:
