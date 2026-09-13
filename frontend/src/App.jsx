@@ -3777,7 +3777,11 @@ function App() {
     if (isAuthenticated && page === 'users') { loadUsers(); loadPackages(); }
     if (isAuthenticated && page === 'php') { loadPhpConfig(); loadPhpTune(phpConfig.php_version); }
     if (isAuthenticated && page === 'firewall') { loadFirewall(); loadFirewallBlocklists(); }
-    if (isAuthenticated && ['waf', 'waf-site'].includes(page)) { loadWafRules(); loadBotBlocks(); loadCrs(); }
+    if (isAuthenticated && ['waf', 'waf-site'].includes(page)) {
+      loadBotBlocks();
+      // /waf/rules and /waf/crs describe the whole server and stay admin-only.
+      if (isAdmin) { loadWafRules(); loadCrs(); }
+    }
     if (isAuthenticated && page === 'malware' && isAdmin) {
       loadMalwareScanStatus();
       loadMalwareScanJobs();
@@ -3850,7 +3854,7 @@ function App() {
     ['security', 'Security', Shield],
     ...(isAdmin ? [['php', 'PHP config', Code2]] : []),
     ...(isAdmin ? [['firewall', 'Firewall', Shield]] : []),
-    ...(isAdmin ? [['waf', 'WAF', Shield]] : []),
+    ['waf', 'WAF', Shield],
     ...(isAdmin ? [['malware', 'Malware Scanner', Search]] : []),
     ...(isAdmin ? [['access-logs', 'Access Logs', FileText]] : []),
     ...(isAdmin ? [['updates', 'Updates', RefreshCw]] : []),
@@ -5617,7 +5621,6 @@ function App() {
   }
 
   function renderWaf() {
-    if (!isAdmin) return <section className="section"><h2>WAF</h2><p className="hint">No permission.</p></section>;
     const statusText = wafRules.status?.stdout || wafRules.status?.stderr || 'Click Refresh to load WAF status.';
     // The effective list, not the site's own: a site with nothing of its own
     // still enforces the global list, and reporting "No bots" for it was a lie.
@@ -5627,13 +5630,18 @@ function App() {
     return <>
       <section className="section">
         <div className="section-title">
-          <div><h2>WAF</h2><p className="hint">Engine status and per-website protection. Open a website to configure its rules, flood limits and blocked bots.</p></div>
-          <button disabled={!!loading} onClick={() => { loadWafRules(); loadBotBlocks(); loadCrs(); }}><RefreshCw size={14}/> Refresh</button>
+          <div>
+            <h2>WAF</h2>
+            <p className="hint">{isAdmin
+              ? 'Engine status and per-website protection. Open a website to configure its rules, flood limits and blocked bots.'
+              : 'Protection for your websites. Open one to configure its rules and blocked bots.'}</p>
+          </div>
+          <button disabled={!!loading} onClick={() => { loadBotBlocks(); if (isAdmin) { loadWafRules(); loadCrs(); } }}><RefreshCw size={14}/> Refresh</button>
         </div>
-        <div className="info-box firewall-status"><strong>Status</strong><pre>{statusText}</pre></div>
+        {isAdmin && <div className="info-box firewall-status"><strong>Status</strong><pre>{statusText}</pre></div>}
       </section>
 
-      <section className="section">
+      {isAdmin && <section className="section">
         <div className="section-title">
           <div>
             <h2>OWASP Core Rule Set</h2>
@@ -5692,7 +5700,7 @@ function App() {
             This is the server-wide switch. Which sites load CRS is chosen per website below.
           </p>
         </>}
-      </section>
+      </section>}
 
       <section className="section">
         <div className="section-title"><h2>Websites</h2></div>
@@ -5723,7 +5731,7 @@ function App() {
         </div>
       </section>
 
-      <section className="section">
+      {isAdmin && <section className="section">
         <div className="section-title">
           <div>
             <h2>Global bad bots</h2>
@@ -5799,12 +5807,11 @@ function App() {
             </span>
           </div>
         </div>}
-      </section>
+      </section>}
     </>;
   }
 
   function renderWafSite() {
-    if (!isAdmin) return <section className="section"><h2>WAF</h2><p className="hint">No permission.</p></section>;
     const selectedSite = websites.find(site => String(site.id) === String(selectedWafWebsiteId));
     const groupedRules = (wafSiteConfig?.default_rules || wafRules.default_rule_definitions || []).reduce((groups, rule) => {
       const category = rule.category || 'General';
@@ -5923,8 +5930,20 @@ function App() {
         </div>
         <div className="waf-rule-panel">
           <div className="section-title"><h2>Custom rules</h2></div>
-          <textarea className="code-editor" value={wafCustomRules} onChange={e => setWafCustomRules(e.target.value)} rows={14} spellCheck={false} placeholder="SecRule ..." />
-          <p className="hint">Saved into {wafSiteConfig.rules_file}</p>
+          <textarea
+            className="code-editor"
+            value={wafCustomRules}
+            onChange={e => setWafCustomRules(e.target.value)}
+            rows={14}
+            spellCheck={false}
+            placeholder="SecRule ..."
+            readOnly={wafSiteConfig.may_edit_custom_rules === false}
+          />
+          <p className="hint">
+            {wafSiteConfig.may_edit_custom_rules === false
+              ? 'Custom rules are arbitrary ModSecurity directives, so only an administrator can change them. Ask your provider if you need a rule added or excluded.'
+              : `Saved into ${wafSiteConfig.rules_file}`}
+          </p>
           <div className="actions"><button disabled={!!loading} onClick={saveWebsiteWafRules}>Save website WAF rules</button></div>
         </div>
       </section>}
@@ -5932,7 +5951,6 @@ function App() {
   }
 
   function renderWafAccessLogs() {
-    if (!isAdmin) return <section className="section"><h2>Access Logs</h2><p className="hint">No permission.</p></section>;
     const rows = wafAccessLogs.items || [];
     const selectedSite = websites.find(site => String(site.id) === String(wafAccessLogFilters.websiteId));
     const entryLabel = wafAccessLogs.total >= 1000 ? `${(wafAccessLogs.total / 1000).toFixed(1)}k entries` : `${wafAccessLogs.total || 0} entries`;

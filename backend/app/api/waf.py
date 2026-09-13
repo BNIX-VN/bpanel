@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
-from app.core.permissions import Role, ensure_role
+from app.core.permissions import Role, ensure_role, is_admin_role
 from app.models.entities import User, Website
 from app.schemas.schemas import WafBotBlockApply, WafGlobalBotsUpdate, WebsiteAccessLogsOut, WebsiteBotBlockUpdate
 from app.services import nginx, panel_settings, waf
@@ -24,6 +24,39 @@ class WebsiteWafRulesUpdate(BaseModel):
 
 def _require_admin(current_user: User) -> None:
     ensure_role(current_user.role, Role.admin)
+
+
+def may_manage_waf(user: User) -> bool:
+    """Whether this account may work on the WAF of a website it owns.
+
+    UserPackage.waf_enabled has existed, been editable and been displayed since
+    packages were added, and was never read by anything - the same state
+    terminal_enabled was in. It is the switch an admin already expects to mean
+    this, so it is the one used. Its default is True, so an account with no
+    package keeps access rather than silently losing a feature that is being
+    granted here for the first time.
+    """
+    if is_admin_role(user.role):
+        return True
+    package = getattr(user, "package", None)
+    return bool(getattr(package, "waf_enabled", True)) if package else True
+
+
+def _owned_website(db: Session, website_id: int, current_user: User) -> Website:
+    """A website the caller may configure: their own, or any if admin.
+
+    404 rather than 403 for a site owned by somebody else, so this cannot be
+    used to enumerate which website ids exist on the server.
+    """
+    website = db.query(Website).filter(Website.id == website_id).first()
+    if not website:
+        raise HTTPException(status_code=404, detail="Website not found")
+    if not is_admin_role(current_user.role):
+        if website.owner_id != current_user.id:
+            raise HTTPException(status_code=404, detail="Website not found")
+        if not may_manage_waf(current_user):
+            raise HTTPException(status_code=403, detail="Your hosting package does not include WAF settings")
+    return website
 
 
 def _website_or_404(db: Session, website_id: int) -> Website:
@@ -63,8 +96,13 @@ def get_waf_access_logs(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    _require_admin(current_user)
     query = db.query(Website).order_by(Website.domain.asc())
+    if not is_admin_role(current_user.role):
+        if not may_manage_waf(current_user):
+            raise HTTPException(status_code=403, detail="Your hosting package does not include WAF settings")
+        # Without this an end user asking for no website_id would be handed
+        # every site's access log on the server.
+        query = query.filter(Website.owner_id == current_user.id)
     if website_id is not None:
         query = query.filter(Website.id == website_id)
     websites = query.all()
@@ -82,8 +120,11 @@ def clear_waf_access_logs(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    _require_admin(current_user)
     query = db.query(Website).order_by(Website.domain.asc())
+    if not is_admin_role(current_user.role):
+        if not may_manage_waf(current_user):
+            raise HTTPException(status_code=403, detail="Your hosting package does not include WAF settings")
+        query = query.filter(Website.owner_id == current_user.id)
     if website_id is not None:
         query = query.filter(Website.id == website_id)
     websites = query.all()
@@ -98,17 +139,32 @@ def clear_waf_access_logs(
 
 @router.get("/websites/{website_id}")
 def get_website_waf(website_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    _require_admin(current_user)
-    website = _website_or_404(db, website_id)
-    return waf.site_config(website)
+    website = _owned_website(db, website_id, current_user)
+    data = waf.site_config(website)
+    # The custom-rules box is admin-only to write; tell the UI so it can show it
+    # read-only rather than offering an edit that will be refused.
+    data["may_edit_custom_rules"] = is_admin_role(current_user.role)
+    return data
 
 
 @router.put("/websites/{website_id}")
 def save_website_waf(payload: WebsiteWafRulesUpdate, website_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    _require_admin(current_user)
-    website = _website_or_404(db, website_id)
+    website = _owned_website(db, website_id, current_user)
+    custom_rules = payload.custom_rules
+    if not is_admin_role(current_user.role):
+        # Custom rules are arbitrary ModSecurity directives loaded into nginx.
+        # A SecRule can run a script, or read a file the nginx worker can reach,
+        # so letting a customer write them would hand out code execution on a
+        # shared server. Toggling the shipped rules is safe; this is not.
+        existing = waf.website_custom_rules(website)
+        if (custom_rules or "").strip() != (existing or "").strip():
+            raise HTTPException(
+                status_code=403,
+                detail="Custom WAF rules can only be changed by an administrator",
+            )
+        custom_rules = existing
     try:
-        result = waf.save_website_config(website, payload.enabled_rule_ids, payload.custom_rules)
+        result = waf.save_website_config(website, payload.enabled_rule_ids, custom_rules)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if result.returncode != 0:
@@ -133,8 +189,12 @@ def list_blocked_bots(db: Session = Depends(get_db), current_user: User = Depend
     This is what the Bot blocking screen reads: the operator needs to see which
     sites are already covered before applying a list to more of them.
     """
-    _require_admin(current_user)
-    websites = db.query(Website).order_by(Website.domain).all()
+    query = db.query(Website).order_by(Website.domain)
+    if not is_admin_role(current_user.role):
+        if not may_manage_waf(current_user):
+            raise HTTPException(status_code=403, detail="Your hosting package does not include WAF settings")
+        query = query.filter(Website.owner_id == current_user.id)
+    websites = query.all()
     return {
         "max_bots": nginx.MAX_BLOCKED_BOTS,
         "global_blocked_bots": panel_settings.global_blocked_bots(),
@@ -190,8 +250,7 @@ def save_website_bots(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    _require_admin(current_user)
-    website = _website_or_404(db, website_id)
+    website = _owned_website(db, website_id, current_user)
     try:
         bots = waf.save_website_blocked_bots(website, payload.blocked_bots, mode="replace")
     except (ValueError, RuntimeError, FileNotFoundError) as exc:

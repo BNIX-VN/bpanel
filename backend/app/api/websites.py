@@ -833,7 +833,12 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
         website.nginx_rewrite_mode = next_rewrite_mode
         website.nginx_config_mode = "managed"
     if payload.waf_enabled is not None:
-        ensure_role(current_user.role, Role.admin)
+        from app.api.waf import may_manage_waf
+
+        # This endpoint already restricts the website itself to its owner, so
+        # the only extra question is whether their package includes the WAF.
+        if not may_manage_waf(current_user):
+            raise HTTPException(status_code=403, detail="Your hosting package does not include WAF settings")
         try:
             result = waf.sync_website_rules(website)
             if result.returncode != 0:
@@ -919,10 +924,13 @@ def reset_website_nginx_config(website_id: int, request: Request, db: Session = 
 
 @router.patch("/{website_id}/waf", response_model=WebsiteOut)
 def set_website_waf(website_id: int, payload: WebsiteWafUpdate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    ensure_role(current_user.role, Role.admin)
-    website = db.query(Website).filter(Website.id == website_id).first()
-    if not website:
-        raise HTTPException(status_code=404, detail="Website not found")
+    # A customer may turn the WAF on and off for a site they own, gated on the
+    # same package flag as the rest of the WAF screens.
+    from app.api.waf import may_manage_waf
+
+    website = _get_authorized_website(db, website_id, current_user)
+    if not may_manage_waf(current_user):
+        raise HTTPException(status_code=403, detail="Your hosting package does not include WAF settings")
     try:
         result = waf.sync_website_rules(website)
         if result.returncode != 0:
