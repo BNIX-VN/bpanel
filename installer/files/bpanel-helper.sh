@@ -389,6 +389,151 @@ SecRule REQUEST_URI "@rx (?i)(?:/wp-admin/install\.php(?:$|[?])|/wp-admin/setup-
 RULES
 }
 
+ORPHAN_ARCHIVE_ROOT=/root/bpanel-removed
+
+orphan_live_domains() {
+  # The panel owns the truth about which domains exist, so it hands the list in
+  # on stdin rather than the helper guessing from the filesystem it is about to
+  # delete from. Anything that is not a valid domain is dropped, not trusted.
+  local line
+  while IFS= read -r line; do
+    line="$(printf '%s' "$line" | tr -d '[:space:]' | tr 'A-Z' 'a-z')"
+    [[ -n "$line" ]] || continue
+    is_domain "$line" || continue
+    printf '%s\n' "$line"
+  done
+}
+
+orphan_cert_covers_live() {
+  # A lineage named for a dead site can still carry a live name as a SAN, and
+  # deleting it would take that live site's HTTPS down.
+  local cert="$1" live_file="$2" san
+  [[ -f "$cert" ]] || return 1
+  while read -r san; do
+    [[ -n "$san" ]] || continue
+    grep -qxF "$san" "$live_file" && return 0
+  done < <( { openssl x509 -ext subjectAltName -noout -in "$cert" 2>/dev/null || true; } \
+            | grep -oE 'DNS:[^,]+' | sed 's/DNS://g; s/ //g' )
+  return 1
+}
+
+cleanup_orphans() {
+  # Remove what is left on disk for websites this panel no longer has.
+  #
+  # Everything is copied into /root/bpanel-removed first. These are customer
+  # certificates and configuration: "unreferenced" is a strong inference, not a
+  # certainty, and an admin who removed a site by accident should be able to get
+  # it back. Nothing here is ever deleted without a copy.
+  local mode="${1:-clean}" live_file stamp archive panel_domain name base
+  local -i certs=0 rules=0 baks=0 manual=0 sni=0
+  live_file="$(mktemp)"
+  orphan_live_domains >"$live_file"
+  panel_domain="$(env_get PANEL_DOMAIN)"
+  [[ -n "$panel_domain" ]] && printf '%s\n' "$panel_domain" >>"$live_file"
+  # An empty list almost certainly means the caller failed, not that the server
+  # hosts nothing. Refuse rather than delete everything on the machine.
+  if [[ ! -s "$live_file" ]]; then
+    rm -f "$live_file"
+    deny "refusing to clean orphans: no live domains were supplied"
+  fi
+
+  stamp="$(date -u +%Y%m%d-%H%M%S)"
+  archive="${ORPHAN_ARCHIVE_ROOT}/orphans-${stamp}"
+  [[ "$mode" == "clean" ]] && install -d -m 0700 "$archive"
+
+  is_live() { grep -qxF "$1" "$live_file"; }
+
+  # 1. Let's Encrypt lineages for sites that are gone. These are the ones that
+  #    matter: the renewal config keeps waking certbot.timer and starts failing
+  #    the day the domain stops pointing here.
+  for conf in /etc/letsencrypt/renewal/*.conf; do
+    [[ -f "$conf" ]] || continue
+    name="$(basename "$conf" .conf)"
+    is_domain "$name" || continue
+    is_live "$name" && continue
+    orphan_cert_covers_live "/etc/letsencrypt/live/${name}/cert.pem" "$live_file" && continue
+    echo "cert	${name}"
+    certs+=1
+    if [[ "$mode" == "clean" ]]; then
+      install -d -m 0700 "${archive}/certs"
+      cp -a "$conf" "${archive}/certs/" 2>/dev/null || true
+      tar czhf "${archive}/certs/${name}.tar.gz" -C /etc/letsencrypt/live "$name" 2>/dev/null || true
+      certbot delete --cert-name "$name" --non-interactive >/dev/null 2>&1 || true
+    fi
+  done
+
+  # 2. Per-site WAF rule files. delete_waf_site_rules has the check that matters
+  #    - a file a running vhost still names must never go - so reuse it.
+  for f in /etc/nginx/modsec/sites/*.conf; do
+    [[ -f "$f" ]] || continue
+    name="$(basename "$f" .conf)"
+    is_domain "$name" || continue
+    is_live "$name" && continue
+    echo "waf-rules	${name}"
+    rules+=1
+    if [[ "$mode" == "clean" ]]; then
+      install -d -m 0700 "${archive}/waf"
+      cp -a "$f" "${archive}/waf/" 2>/dev/null || true
+      delete_waf_site_rules "$name" >/dev/null 2>&1 || true
+    fi
+  done
+
+  # 3. Vhost backups nginx never reads. Only for domains with no vhost left.
+  for f in /etc/nginx/conf.d/*.conf.bak*; do
+    [[ -f "$f" ]] || continue
+    base="$(basename "$f")"
+    name="${base%%.conf.bak*}"
+    is_domain "$name" || continue
+    is_live "$name" && continue
+    [[ -f "/etc/nginx/conf.d/${name}.conf" ]] && continue
+    echo "vhost-backup	${base}"
+    baks+=1
+    if [[ "$mode" == "clean" ]]; then
+      install -d -m 0700 "${archive}/vhost"
+      cp -a "$f" "${archive}/vhost/" 2>/dev/null || true
+      rm -f "$f"
+    fi
+  done
+
+  # 4. Uploaded certificates for sites that are gone.
+  for d in /etc/nginx/bpanel/ssl/sites/*/; do
+    [[ -d "$d" ]] || continue
+    name="$(basename "$d")"
+    is_domain "$name" || continue
+    is_live "$name" && continue
+    echo "manual-ssl	${name}"
+    manual+=1
+    if [[ "$mode" == "clean" ]]; then
+      install -d -m 0700 "${archive}/manual-ssl"
+      tar czf "${archive}/manual-ssl/${name}.tar.gz" -C /etc/nginx/bpanel/ssl/sites "$name" 2>/dev/null || true
+      remove_manual_ssl "$name" >/dev/null 2>&1 || true
+    fi
+  done
+
+  # 5. SNI copies the panel serves on :2222. sync_panel_sni_certificates drops
+  #    copies whose source is gone, so this only reports what it will clear.
+  for d in "$PANEL_SNI_DIR"/*/; do
+    [[ -d "$d" ]] || continue
+    name="$(basename "$d")"
+    is_domain "$name" || continue
+    is_live "$name" && continue
+    echo "sni-copy	${name}"
+    sni+=1
+  done
+
+  if [[ "$mode" == "clean" ]]; then
+    sync_panel_sni_certificates >/dev/null 2>&1 || true
+    if nginx -t >/dev/null 2>&1; then
+      systemctl reload nginx >/dev/null 2>&1 || true
+    fi
+    rmdir "$archive" 2>/dev/null || true
+  fi
+  rm -f "$live_file"
+  echo "summary	certs=${certs} waf-rules=${rules} vhost-backups=${baks} manual-ssl=${manual} sni-copies=${sni}"
+  [[ "$mode" == "clean" && -d "$archive" ]] && echo "archive	${archive}"
+  return 0
+}
+
 CRS_MODE_FILE=/etc/nginx/modsec/bpanel-crs-mode
 CRS_CONF=/etc/nginx/modsec/bpanel-crs.conf
 CRS_AUDIT_LOG=/var/log/nginx/bpanel-modsec-audit.log
@@ -4134,6 +4279,14 @@ case "$cmd" in
   waf-site-delete)
     [[ $# -eq 1 ]] || deny "usage: waf-site-delete <domain>"
     delete_waf_site_rules "$1"
+    ;;
+  orphans-scan)
+    [[ $# -eq 0 ]] || deny "usage: orphans-scan  (live domains on stdin)"
+    cleanup_orphans scan
+    ;;
+  orphans-clean)
+    [[ $# -eq 0 ]] || deny "usage: orphans-clean  (live domains on stdin)"
+    cleanup_orphans clean
     ;;
   waf-crs-install)
     [[ $# -eq 0 ]] || deny "usage: waf-crs-install"

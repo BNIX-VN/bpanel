@@ -269,6 +269,37 @@ def update_waf_rules(current_user: User = Depends(get_current_user)):
     return waf.update_rules().__dict__
 
 
+@router.get("/orphans")
+def scan_orphans(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """What deleted websites left behind. Touches nothing."""
+    _require_admin(current_user)
+    from app.services import orphans
+
+    try:
+        outcome = orphans.scan(db)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    outcome["message"] = (
+        f"{outcome['total']} orphaned item(s) on disk." if outcome["total"]
+        else "Nothing orphaned."
+    )
+    return outcome
+
+
+@router.post("/orphans/clean")
+def clean_orphans(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Remove them, after copying everything to /root/bpanel-removed."""
+    _require_admin(current_user)
+    from app.services import orphans
+
+    try:
+        outcome = orphans.clean(db)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    outcome["message"] = orphans.describe(outcome)
+    return outcome
+
+
 class CrsModeUpdate(BaseModel):
     mode: str = "off"
 

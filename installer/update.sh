@@ -1452,6 +1452,29 @@ PY
   step_mark_done site-refresh "${SITE_REFRESH_INPUTS[@]}"
 fi
 
+# Clear what deleted websites left on disk. A Let's Encrypt renewal config for a
+# site nobody hosts wakes certbot.timer twice a day and starts failing the day
+# the domain stops pointing here, which is how a site removed months ago becomes
+# a permanently failed unit with no obvious cause.
+#
+# Everything is copied into /root/bpanel-removed before it is deleted: these are
+# customer certificates, and "unreferenced" is a strong inference rather than a
+# certainty. The helper refuses outright if the panel cannot say which domains
+# are live, so a failed query cannot turn into a delete.
+if id -u bpanel >/dev/null 2>&1; then
+  log "Clearing orphaned certificates and configs"
+  sudo -u bpanel env HOME="$APP_DIR" BPANEL_USE_HELPER=true "$APP_DIR/backend/.venv/bin/python" - <<'PY' || log "WARNING: orphan cleanup did not complete"
+from app.core.database import SessionLocal
+from app.services import orphans
+
+with SessionLocal() as db:
+    try:
+        print("  " + orphans.describe(orphans.clean(db)))
+    except Exception as exc:
+        print(f"  WARNING: orphan cleanup skipped: {exc}")
+PY
+fi
+
 # journald ships with no size limit and falls back to 10% of the filesystem;
 # btmp has no logrotate rule on Ubuntu at all. Measured on a live server: a
 # 2.7G journal and 130M of btmp, against 51M for every nginx log combined,
