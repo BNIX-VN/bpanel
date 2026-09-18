@@ -1504,25 +1504,10 @@ def scan_da_backup(body: dict, current_user: User = Depends(get_current_user)):
 
 
 DA_IMPORT_JOB_LIMIT = 10
-_da_import_job_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bpanel-da-import")
-_da_import_jobs: dict[str, dict] = {}
-_da_import_jobs_lock = threading.Lock()
-
-
-def _run_da_import_job(job_id: str, archive_path: str, force: bool):
-    """Run DA import in background thread."""
-    with _da_import_jobs_lock:
-        _da_import_jobs[job_id]["status"] = "running"
-    try:
-        from app.services import da_import
-        result = da_import.import_da_backup(archive_path, force=force)
-        with _da_import_jobs_lock:
-            _da_import_jobs[job_id].update(status="completed", result=result)
-    except Exception as exc:
-        logger.exception("DA import failed for %s", archive_path)
-        with _da_import_jobs_lock:
-            _da_import_jobs[job_id].update(status="failed", error=str(exc))
-
+# The single-import guard and the job record both live in systemd now: see
+# da_import.start_detached_import(). The ThreadPoolExecutor that used to run
+# imports in this process is gone, because a restart of bpanel-api killed
+# whatever it was doing and took the job record with it.
 
 @router.post("/da-import/import")
 def import_da_backup(body: dict, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
@@ -1539,42 +1524,47 @@ def import_da_backup(body: dict, db: Session = Depends(get_db), current_user: Us
     if not path.exists():
         raise HTTPException(status_code=404, detail="Backup file not found")
 
-    with _da_import_jobs_lock:
-        running = sum(1 for j in _da_import_jobs.values() if j["status"] == "running")
-        if running >= 1:
-            raise HTTPException(status_code=429, detail="An import is already running. Please wait.")
+    # systemd runs the import, not a thread in this process: an import of a few
+    # GB takes minutes, and a restart of bpanel-api used to kill it halfway.
+    if da_import.detached_import_status()["status"] == "running":
+        raise HTTPException(status_code=429, detail="An import is already running. Please wait.")
+    try:
+        job_id = da_import.start_detached_import(str(path), force)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    job_id = str(uuid.uuid4())
-    with _da_import_jobs_lock:
-        _da_import_jobs[job_id] = {
-            "id": job_id,
-            "status": "pending",
-            "archive": path.name,
-            "archive_path": str(path),
-            "created_at": datetime.utcnow().isoformat(),
-            "result": None,
-            "error": None,
-        }
-
-    _da_import_job_executor.submit(_run_da_import_job, job_id, str(path), force)
     log_action(db, current_user.id, "da_backup_import_start", f"{job_id} archive={path.name}")
-    return {"job_id": job_id, "status": "pending"}
+    return {"job_id": job_id, "status": "running", "archive": path.name}
 
 
 @router.get("/da-import/jobs/{job_id}")
 def get_da_import_job(job_id: str, current_user: User = Depends(get_current_user)):
     """Get the status and result of a DA import job."""
     ensure_role(current_user.role, Role.admin)
-    with _da_import_jobs_lock:
-        job = _da_import_jobs.get(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    return job
+    from app.services import da_import
+
+    info = da_import.detached_import_status()
+    # A job id from before a restart no longer matches the running unit. Say so
+    # rather than 404: the page used to poll a missing id in silence for half an
+    # hour and then stop, leaving whatever was on screen.
+    stale = bool(job_id) and info.get("invocation") and job_id != info["invocation"]
+    return {
+        "id": info.get("invocation") or job_id,
+        "status": "unknown" if stale else info["status"],
+        "stale": stale,
+        "error": "" if not stale else (
+            "This import was started by an earlier session of the panel. "
+            "The log below is from the import the server is tracking now."
+        ),
+        "log": info.get("log", []),
+        "result": None,
+    }
 
 
 # ---------------------------------------------------------------------------
 #  DA Import – Bulk (sequential) import
 # ---------------------------------------------------------------------------
+_da_bulk_import_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bpanel-da-bulk")
 _da_bulk_import_jobs: dict[str, dict] = {}
 _da_bulk_import_jobs_lock = threading.Lock()
 
@@ -1626,10 +1616,10 @@ def bulk_import_da_backups(body: DaBulkImportRequest, db: Session = Depends(get_
         running = sum(1 for j in _da_bulk_import_jobs.values() if j["status"] == "running")
         if running >= 1:
             raise HTTPException(status_code=429, detail="A bulk import is already running. Please wait.")
-    with _da_import_jobs_lock:
-        running_single = sum(1 for j in _da_import_jobs.values() if j["status"] == "running")
-        if running_single >= 1:
-            raise HTTPException(status_code=429, detail="A single import is already running. Please wait.")
+    # The single import lives in systemd now, so ask systemd rather than a dict
+    # this process no longer keeps.
+    if da_import.detached_import_status()["status"] == "running":
+        raise HTTPException(status_code=429, detail="A single import is already running. Please wait.")
 
     job_id = str(uuid.uuid4())
     with _da_bulk_import_jobs_lock:
@@ -1644,7 +1634,7 @@ def bulk_import_da_backups(body: DaBulkImportRequest, db: Session = Depends(get_
             "results": None,
         }
 
-    _da_import_job_executor.submit(_run_da_bulk_import_job, job_id, [str(p) for p in paths], body.force)
+    _da_bulk_import_executor.submit(_run_da_bulk_import_job, job_id, [str(p) for p in paths], body.force)
     log_action(db, current_user.id, "da_bulk_import_start", f"{job_id} archives={len(paths)}")
     return {"job_id": job_id, "status": "pending", "total": len(paths)}
 

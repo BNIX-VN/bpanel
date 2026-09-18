@@ -724,6 +724,55 @@ save_waf_custom_rules() {
 }
 
 DA_BACKUP_DIR="/home/admin/bpanel_backups/da"
+DA_IMPORT_UNIT="bpanel-da-import"
+
+start_da_import() {
+  # Run the import as its own systemd unit rather than a thread inside
+  # bpanel-api. An import of a few GB takes minutes, and anything that restarts
+  # the API during one used to kill it halfway and leave a half-created
+  # account behind, with the job record - an in-memory dict - gone too.
+  local archive="$1" force="$2"
+  [[ "$archive" != *$'\n'* ]] || deny "invalid archive path"
+  case "$archive" in
+    "${DA_BACKUP_DIR}"/*) : ;;
+    *) deny "archive must be inside ${DA_BACKUP_DIR}" ;;
+  esac
+  [[ "$archive" != *".."* ]] || deny "archive path may not contain .."
+  [[ -f "$archive" ]] || deny "archive not found: $archive"
+  case "$force" in
+    force|noforce) : ;;
+    *) deny "usage: da-import-start <archive> <force|noforce>" ;;
+  esac
+  if systemctl is-active --quiet "${DA_IMPORT_UNIT}.service"; then
+    deny "an import is already running"
+  fi
+  systemctl reset-failed "${DA_IMPORT_UNIT}.service" >/dev/null 2>&1 || true
+  systemd-run --unit="${DA_IMPORT_UNIT}" --collect \
+    --uid=bpanel --gid=bpanel \
+    -p WorkingDirectory="${APP_DIR}/backend" \
+    -p EnvironmentFile="${APP_DIR}/backend/.env" \
+    -p Environment=PYTHONPATH="${APP_DIR}/backend" \
+    -p Environment=HOME="${APP_DIR}" \
+    -p Environment=BPANEL_USE_HELPER=true \
+    -p NoNewPrivileges=false \
+    "${APP_DIR}/backend/.venv/bin/python" \
+    "${APP_DIR}/backend/app/services/da_import_run.py" "$archive" "$force" >/dev/null \
+    || deny "could not start the import unit"
+  systemctl show "${DA_IMPORT_UNIT}.service" -p InvocationID --value
+}
+
+da_import_status() {
+  # The unit is the job record. Nothing is held in the API's memory, so this
+  # still answers after bpanel-api has been restarted.
+  local unit="${DA_IMPORT_UNIT}.service"
+  echo "active=$(systemctl is-active "$unit" 2>/dev/null)"
+  echo "result=$(systemctl show "$unit" -p Result --value 2>/dev/null)"
+  echo "exit=$(systemctl show "$unit" -p ExecMainStatus --value 2>/dev/null)"
+  echo "invocation=$(systemctl show "$unit" -p InvocationID --value 2>/dev/null)"
+  echo "---log---"
+  journalctl -u "$unit" --no-pager -n 200 -o cat 2>/dev/null \
+    | grep -viE "CryptographyDeprecation|TripleDES|^ *\"(cipher|class)\":" | tail -60
+}
 
 ensure_da_backup_dir() {
   # The panel runs as bpanel, and /home/admin is root:admin 0751 - bpanel can
@@ -4301,6 +4350,14 @@ case "$cmd" in
   da-backup-dir-ensure)
     [[ $# -eq 0 ]] || deny "usage: da-backup-dir-ensure"
     ensure_da_backup_dir
+    ;;
+  da-import-start)
+    [[ $# -eq 2 ]] || deny "usage: da-import-start <archive> <force|noforce>"
+    start_da_import "$1" "$2"
+    ;;
+  da-import-status)
+    [[ $# -eq 0 ]] || deny "usage: da-import-status"
+    da_import_status
     ;;
   orphans-scan)
     [[ $# -eq 0 ]] || deny "usage: orphans-scan  (live domains on stdin)"

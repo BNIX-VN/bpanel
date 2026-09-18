@@ -117,6 +117,54 @@ def ensure_backup_dir() -> None:
         logger.warning("DA backup directory %s is unusable: %s", DA_BACKUP_DIR, exc)
 
 
+def start_detached_import(archive_path: str, force: bool) -> str:
+    """Hand the import to systemd and return the unit's invocation id.
+
+    The import then outlives bpanel-api. Before this it ran in a thread inside
+    the API process, so an update or a crash killed it mid-archive and left a
+    half-created account behind with no record of what had happened.
+    """
+    result = shell.privileged(
+        "da-import-start",
+        helper_args=[str(archive_path), "force" if force else "noforce"],
+        check=False,
+        fallback=["bash", "-lc", "echo 'da-import-start needs the bpanel helper'; exit 1"],
+    )
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout or "Could not start the import").strip())
+    return (result.stdout or "").strip()
+
+
+def detached_import_status() -> dict:
+    """What systemd says about the import unit, plus its recent output.
+
+    This is deliberately not backed by anything in the API's memory: the whole
+    point is that it still answers after bpanel-api has restarted.
+    """
+    result = shell.privileged(
+        "da-import-status",
+        check=False,
+        fallback=["bash", "-lc", "echo active=unknown"],
+    )
+    info = {"active": "unknown", "result": "", "exit": "", "invocation": "", "log": []}
+    body, _, log = (result.stdout or "").partition("---log---")
+    for line in body.splitlines():
+        key, _, value = line.partition("=")
+        if key.strip() in info:
+            info[key.strip()] = value.strip()
+    info["log"] = [line for line in log.splitlines() if line.strip()]
+
+    if info["active"] == "active":
+        status = "running"
+    elif info["active"] in {"inactive", "failed"} and info["invocation"]:
+        ok = info["result"] == "success" and info["exit"] in {"0", ""}
+        status = "completed" if ok else "failed"
+    else:
+        status = "unknown"
+    info["status"] = status
+    return info
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
