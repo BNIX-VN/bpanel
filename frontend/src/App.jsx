@@ -4134,7 +4134,7 @@ function App() {
           <div className="dash-tiles">
             {group.tiles.map(([key, label, Icon, description]) => (
               <button className="dash-tile" key={key} onClick={() => navigateToPage(key)} title={description}>
-                <span className="dash-tile-icon"><Icon size={17}/></span>
+                <span className="dash-tile-icon"><Icon size={26}/></span>
                 <span className="dash-tile-text">
                   <strong>{label}</strong>
                   <span>{description}</span>
