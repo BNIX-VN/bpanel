@@ -4036,6 +4036,69 @@ function App() {
     const emptyWebsiteMessage = currentUser?.package_name
       ? `${currentUser.package_name} is ready. Attach your first domain to start hosting.`
       : 'No domain attached yet.';
+
+    // The dashboard is a map of the panel, not a second place to read numbers:
+    // every tile opens a page that already exists in the sidebar. Grouped by
+    // what an operator is trying to do, which is why Cron sits with websites
+    // (BPanel's cron jobs are per-site) rather than under the server tools.
+    //
+    // A tile is dropped when the account cannot reach the page, and a group
+    // disappears when that leaves it empty - an end user gets four groups, an
+    // admin five, with no gaps either way.
+    const groups = [
+      {
+        title: 'Websites',
+        hint: 'Domains, certificates and scheduled jobs',
+        tiles: [
+          ['websites', 'Websites', Globe, 'Domains, PHP version, document root'],
+          appsFeatureEnabled ? ['applications', 'Applications', Server, 'Node and Docker apps'] : null,
+          ['ssl', 'SSL', Lock, "Let's Encrypt and uploaded certificates"],
+          ['cron', 'Cron', Clock, 'Scheduled commands per website'],
+        ],
+      },
+      {
+        title: 'Files and databases',
+        hint: 'Content, data and copies of both',
+        tiles: [
+          ['files', 'File manager', FolderOpen, 'Browse, edit and upload site files'],
+          ['databases', 'Database', Database, 'MariaDB users and phpMyAdmin'],
+          ['backups', 'Backups', Archive, 'Schedules, downloads and restores'],
+        ],
+      },
+      {
+        title: 'Security',
+        hint: 'What stands between a site and the internet',
+        tiles: [
+          ['waf', 'WAF', Shield, 'Rules, bad bots and payload inspection'],
+          isAdmin ? ['firewall', 'Firewall', Shield, 'Allowed and blocked addresses'] : null,
+          isAdmin ? ['malware', 'Malware Scanner', Search, 'Scan schedules and findings'] : null,
+          isAdmin ? ['access-logs', 'Access Logs', FileText, 'Who reached which site, and the verdict'] : null,
+          ['security', 'Login security', Shield, 'Two-factor and session settings'],
+        ],
+      },
+      {
+        title: 'Server',
+        hint: 'The machine everything runs on',
+        tiles: [
+          ['services', 'Services Status', Server, 'nginx, PHP, MariaDB, Redis'],
+          isAdmin ? ['php', 'PHP config', Code2, 'Versions, limits and extensions'] : null,
+          isAdmin ? ['updates', 'Updates', RefreshCw, 'Panel and system packages'] : null,
+          isAdmin ? ['addons', 'Addons', Boxes, 'Optional features, off by default'] : null,
+        ],
+      },
+      {
+        title: 'Accounts',
+        hint: 'Who can sign in, and with what',
+        tiles: [
+          isAdmin ? ['users', 'Panel users', Users, 'Customers, packages and quotas'] : null,
+          isAdmin ? ['api-tokens', 'API Tokens', KeyRound, 'Access for billing and automation'] : null,
+          isAdmin ? ['settings', 'Panel settings', SettingsIcon, 'Panel name, URL, branding'] : null,
+        ],
+      },
+    ]
+      .map(group => ({ ...group, tiles: group.tiles.filter(Boolean) }))
+      .filter(group => group.tiles.length > 0);
+
     return <>
       {isAdmin && <section className="resource-grid">
         <ResourceCard icon={Cpu} label="CPU" value={formatPercent(cpu.percent)} percent={cpu.percent} detail={cpu.load?.length ? `Load ${cpu.load.join(' / ')}` : `${cpu.cores || '--'} cores`} />
@@ -4043,32 +4106,44 @@ function App() {
         <ResourceCard icon={HardDrive} label="Disk" value={formatPercent(disk.percent)} percent={disk.percent} detail={`${formatBytes(disk.used)} / ${formatBytes(disk.total)}`} />
         <ResourceCard icon={Network} label="Network" value={`${formatBytes(networkTotal)}/s`} detail={`Down ${formatBytes(network.rx_per_sec)}/s / Up ${formatBytes(network.tx_per_sec)}/s`} />
       </section>}
-      <section className="stats-grid">
-        <div className="stat-card"><strong>{websites.length}</strong><span>Websites</span></div>
-        <div className="stat-card"><strong>{databases.length}</strong><span>Databases</span></div>
-        <div className="stat-card"><strong>{websites.filter(s => s.ssl_enabled).length}</strong><span>SSL active</span></div>
-        {currentUser && !isAdmin && <div className="stat-card"><strong>{formatBytes(currentUser.storage_used_bytes)}</strong><span>Storage / {formatBytes(storageLimitBytes(currentUser))}</span></div>}
-      </section>
-      {websites.length > 0 && <section className="section">
-        <h2>Quick overview</h2>
-        <div className="site-grid">
-          {websites.slice(0, 4).map(site => <article className="site-card" key={site.id}>
-            <div className="site-head">
-              <div><a className="site-link" href={websiteUrl(site)} target="_blank" rel="noopener noreferrer">{site.domain}</a></div>
-            </div>
-            <div className="site-meta">
-              <span className={`badge site-ssl-badge ${site.ssl_enabled ? 'ok' : ''}`}>{site.ssl_enabled ? 'SSL' : 'No SSL'}</span>
-              <span>PHP <strong>{site.php_version}</strong></span>
-              <span>Root <strong>{site.document_root || 'public_html'}</strong></span>
-            </div>
-          </article>)}
-        </div>
-        {websites.length > 4 && <p className="hint" style={{marginTop:8}}>Showing 4 of {websites.length} websites. Go to Websites for full list.</p>}
+
+      {/* An end user never sees the server's CPU or RAM, so without this they
+          would open the dashboard onto no figures at all. Their quota is the
+          one number that is theirs to watch. */}
+      {currentUser && !isAdmin && <section className="resource-grid" style={{gridTemplateColumns:'minmax(0,1fr)'}}>
+        <ResourceCard
+          icon={HardDrive}
+          label="Storage"
+          value={formatBytes(currentUser.storage_used_bytes)}
+          percent={currentUser.storage_percent}
+          detail={`of ${formatBytes(storageLimitBytes(currentUser))} in your package`}
+        />
       </section>}
+
       {websites.length === 0 && <section className="section">
         <EmptyState icon={Globe} message={emptyWebsiteMessage} />
         <button className="secondary-light first-site-action" onClick={() => navigateToPage('websites')}><Plus size={15}/> Add domain</button>
       </section>}
+
+      <div className="dash-groups">
+        {groups.map(group => <section className="dash-group" key={group.title}>
+          <div className="dash-group-head">
+            <h2>{group.title}</h2>
+            <span>{group.hint}</span>
+          </div>
+          <div className="dash-tiles">
+            {group.tiles.map(([key, label, Icon, description]) => (
+              <button className="dash-tile" key={key} onClick={() => navigateToPage(key)} title={description}>
+                <span className="dash-tile-icon"><Icon size={17}/></span>
+                <span className="dash-tile-text">
+                  <strong>{label}</strong>
+                  <span>{description}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+        </section>)}
+      </div>
     </>;
   }
 

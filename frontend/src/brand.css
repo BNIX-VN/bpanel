@@ -30,6 +30,34 @@ h1,h2{color:var(--brand-navy)}
 .resource-track{height:7px;overflow:hidden;border-radius:999px;background:var(--surface-sunken);border:1px solid var(--border)}
 .resource-track span{display:block;height:100%;border-radius:inherit;background:var(--primary)}
 .resource-card small{color:var(--text-muted);font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* Dashboard groups: one card per area of the panel, tiles inside it. */
+.dash-groups{display:grid;gap:12px}
+.dash-group{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px}
+.dash-group:hover{border-color:var(--border-hover)}
+.dash-group-head{display:flex;align-items:baseline;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+.dash-group-head h2{margin:0;font-size:13px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted)}
+.dash-group-head span{font-size:12px;color:var(--text-muted)}
+.dash-tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px}
+.dash-tile{
+  display:flex;align-items:center;gap:10px;min-width:0;width:100%;
+  text-align:left;padding:12px;font:inherit;color:inherit;cursor:pointer;
+  background:var(--surface-alt);border:1px solid var(--border);
+  border-radius:var(--radius-md);box-shadow:none;transition:var(--transition);
+}
+.dash-tile:hover:not(:disabled){background:var(--surface-hover);border-color:var(--primary-border);box-shadow:var(--shadow-sm)}
+.dash-tile-icon{
+  width:34px;height:34px;flex:none;display:grid;place-items:center;
+  border-radius:var(--radius-sm);background:var(--primary-light);
+  color:var(--primary-text);border:1px solid var(--primary-border);
+}
+.dash-tile-text{min-width:0}
+.dash-tile-text strong{display:block;font-size:13px;font-weight:700;color:var(--brand-navy)}
+.dash-tile-text span{display:block;font-size:11px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+@media (max-width:820px){
+  .resource-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .dash-tiles{grid-template-columns:repeat(auto-fill,minmax(160px,1fr))}
+}
 .user-metric{display:inline-flex;align-items:center;gap:6px;min-height:28px;padding:0 10px;background:var(--surface-alt);border:1px solid var(--border);border-radius:999px;color:var(--text-secondary);font-size:12px;font-weight:700;line-height:1;white-space:nowrap;max-width:160px;overflow:hidden;text-overflow:ellipsis}
 .user-metric svg{width:13px;height:13px;flex:none;color:var(--primary)}
 .user-edit-panel{background:var(--surface-alt);border-color:var(--primary-border)}
