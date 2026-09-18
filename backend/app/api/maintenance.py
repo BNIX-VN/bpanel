@@ -1452,7 +1452,16 @@ async def upload_da_backup(
     ensure_role(current_user.role, Role.admin)
     from app.services import da_import
 
-    da_import.DA_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    da_import.ensure_backup_dir()
+    if not os.access(da_import.DA_BACKUP_DIR, os.W_OK):
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Cannot write to {da_import.DA_BACKUP_DIR}. "
+                "Run bpanel-update, or create it with: "
+                f"install -d -m 0770 -o root -g bpanel {da_import.DA_BACKUP_DIR}"
+            ),
+        )
     # The browser controls file.filename, so strip any directory component
     # before it is joined onto the backup directory.
     try:

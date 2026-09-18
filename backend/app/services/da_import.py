@@ -39,6 +39,7 @@ logger = logging.getLogger("bpanel.da_import")
 DA_BACKUP_DIR = Path(os.environ.get("BPANEL_DA_BACKUP_DIR", "/home/admin/bpanel_backups/da"))
 STAGE_BASE = Path(os.environ.get("DA_IMPORT_STAGE_BASE", "/var/lib/bpanel/da-import"))
 DEFAULT_PHP_VERSION = os.environ.get("DA_IMPORT_PHP", "8.3")
+
 DEFAULT_STORAGE_MB = int(os.environ.get("DA_IMPORT_STORAGE_MB", "102400"))
 
 DOMAIN_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$")
@@ -80,6 +81,40 @@ SQL_DEFINER_RE = re.compile(
     r"DEFINER\s*=\s*(?:`[^`]*`|'[^']*'|\"[^\"]*\"|[^\s*/]+)\s*@\s*(?:`[^`]*`|'[^']*'|\"[^\"]*\"|[^\s*/]+)",
     re.IGNORECASE,
 )
+
+
+# The default lives under /home/admin, which is root-owned and not writable by
+# the bpanel user the API runs as. Creating it has to go through the helper.
+DA_BACKUP_DIR_IS_DEFAULT = "BPANEL_DA_BACKUP_DIR" not in os.environ
+
+
+def ensure_backup_dir() -> None:
+    """Make sure the DA upload directory exists and the panel can write to it.
+
+    Both the upload endpoint and the listing behind the DirectAdmin import page
+    used to call DA_BACKUP_DIR.mkdir() directly. On a server where the directory
+    did not already exist that raised PermissionError - /home/admin is
+    root-owned - which nothing caught, so the page and the upload both answered
+    500 and the uploaded file went nowhere.
+
+    Never raises: a caller that cannot create it should still be able to report
+    an empty list rather than fail the whole request.
+    """
+    if DA_BACKUP_DIR.is_dir() and os.access(DA_BACKUP_DIR, os.W_OK):
+        return
+    if DA_BACKUP_DIR_IS_DEFAULT:
+        try:
+            shell.privileged(
+                "da-backup-dir-ensure",
+                check=False,
+                fallback=["bash", "-lc", f"install -d -m 0770 {DA_BACKUP_DIR}"],
+            )
+        except Exception:  # pragma: no cover - helper failure
+            logger.warning("could not create %s through the helper", DA_BACKUP_DIR)
+    try:
+        DA_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        logger.warning("DA backup directory %s is unusable: %s", DA_BACKUP_DIR, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -1172,8 +1207,8 @@ def _enable_ssl_when_dns_matches(db, website, item_summary: dict) -> None:
 
 def list_da_backups() -> list[dict]:
     """Return metadata for every DA backup archive in the upload directory."""
-    DA_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    if not DA_BACKUP_DIR.exists():
+    ensure_backup_dir()
+    if not DA_BACKUP_DIR.is_dir():
         return []
     items = []
     for path in sorted(DA_BACKUP_DIR.iterdir()):

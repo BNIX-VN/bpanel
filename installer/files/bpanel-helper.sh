@@ -723,6 +723,24 @@ save_waf_custom_rules() {
   echo "WAF custom rules saved"
 }
 
+DA_BACKUP_DIR="/home/admin/bpanel_backups/da"
+
+ensure_da_backup_dir() {
+  # The panel runs as bpanel, and /home/admin is root:admin 0751 - bpanel can
+  # traverse it but cannot create anything in it. So on a server where this
+  # directory does not already exist, every DirectAdmin import call died on
+  # PermissionError: the upload, and the listing behind the page itself, both
+  # mkdir here. The user saw "Internal server error" and an upload that went
+  # nowhere, with no trace in the log.
+  #
+  # Root creates it and hands the group to bpanel, matching how BACKUP_ROOT is
+  # owned. Existing servers already have the directory and are unaffected.
+  [[ -d /home/admin ]] || install -d -m 0755 -o root -g root /home/admin
+  install -d -m 0750 -o root -g bpanel /home/admin/bpanel_backups
+  install -d -m 0770 -o root -g bpanel "$DA_BACKUP_DIR"
+  echo "$DA_BACKUP_DIR"
+}
+
 delete_waf_site_rules() {
   # Deleting a website used to leave /etc/nginx/modsec/sites/<domain>.conf
   # behind for ever. Harmless to serve, but it hides real state: a rule fix
@@ -4279,6 +4297,10 @@ case "$cmd" in
   waf-site-delete)
     [[ $# -eq 1 ]] || deny "usage: waf-site-delete <domain>"
     delete_waf_site_rules "$1"
+    ;;
+  da-backup-dir-ensure)
+    [[ $# -eq 0 ]] || deny "usage: da-backup-dir-ensure"
+    ensure_da_backup_dir
     ;;
   orphans-scan)
     [[ $# -eq 0 ]] || deny "usage: orphans-scan  (live domains on stdin)"
