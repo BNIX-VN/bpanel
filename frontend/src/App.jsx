@@ -14,6 +14,17 @@ import 'ace-builds/src-noconflict/mode-yaml';
 import 'ace-builds/src-noconflict/theme-textmate';
 import 'ace-builds/src-noconflict/theme-tomorrow_night';
 import { Archive, ArchiveRestore, ArrowLeft, Ban, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
+// Phosphor for the dashboard tiles: lucide is a single thin outline weight,
+// which at tile size reads as spindly. Phosphor ships weights, and duotone
+// gives these a filled body without needing a plate behind them.
+import {
+  Globe as PhGlobe, Cube as PhCube, Certificate as PhCertificate, Clock as PhClock,
+  FolderOpen as PhFolderOpen, Database as PhDatabase, Archive as PhArchive,
+  ShieldCheck as PhShieldCheck, ShieldWarning as PhShieldWarning, Virus as PhVirus,
+  FileText as PhFileText, Fingerprint as PhFingerprint, HardDrives as PhHardDrives,
+  Code as PhCode, ArrowsClockwise as PhArrowsClockwise, PuzzlePiece as PhPuzzlePiece,
+  UsersThree as PhUsersThree, Key as PhKey, GearSix as PhGearSix,
+} from '@phosphor-icons/react';
 import { Terminal } from './components/Terminal';
 import './style.css';
 import './brand.css';
@@ -4050,49 +4061,49 @@ function App() {
         title: 'Websites',
         hint: 'Domains, certificates and scheduled jobs',
         tiles: [
-          ['websites', 'Websites', Globe, 'Domains, PHP version, document root'],
-          appsFeatureEnabled ? ['applications', 'Applications', Server, 'Node and Docker apps'] : null,
-          ['ssl', 'SSL', Lock, "Let's Encrypt and uploaded certificates"],
-          ['cron', 'Cron', Clock, 'Scheduled commands per website'],
+          ['websites', 'Websites', PhGlobe, 'Domains, PHP version, document root'],
+          appsFeatureEnabled ? ['applications', 'Applications', PhCube, 'Node and Docker apps'] : null,
+          ['ssl', 'SSL', PhCertificate, "Let's Encrypt and uploaded certificates"],
+          ['cron', 'Cron', PhClock, 'Scheduled commands per website'],
         ],
       },
       {
         title: 'Files and databases',
         hint: 'Content, data and copies of both',
         tiles: [
-          ['files', 'File manager', FolderOpen, 'Browse, edit and upload site files'],
-          ['databases', 'Database', Database, 'MariaDB users and phpMyAdmin'],
-          ['backups', 'Backups', Archive, 'Schedules, downloads and restores'],
+          ['files', 'File manager', PhFolderOpen, 'Browse, edit and upload site files'],
+          ['databases', 'Database', PhDatabase, 'MariaDB users and phpMyAdmin'],
+          ['backups', 'Backups', PhArchive, 'Schedules, downloads and restores'],
         ],
       },
       {
         title: 'Security',
         hint: 'What stands between a site and the internet',
         tiles: [
-          ['waf', 'WAF', Shield, 'Rules, bad bots and payload inspection'],
-          isAdmin ? ['firewall', 'Firewall', Shield, 'Allowed and blocked addresses'] : null,
-          isAdmin ? ['malware', 'Malware Scanner', Search, 'Scan schedules and findings'] : null,
-          isAdmin ? ['access-logs', 'Access Logs', FileText, 'Who reached which site, and the verdict'] : null,
-          ['security', 'Login security', Shield, 'Two-factor and session settings'],
+          ['waf', 'WAF', PhShieldCheck, 'Rules, bad bots and payload inspection'],
+          isAdmin ? ['firewall', 'Firewall', PhShieldWarning, 'Allowed and blocked addresses'] : null,
+          isAdmin ? ['malware', 'Malware Scanner', PhVirus, 'Scan schedules and findings'] : null,
+          isAdmin ? ['access-logs', 'Access Logs', PhFileText, 'Who reached which site, and the verdict'] : null,
+          ['security', 'Login security', PhFingerprint, 'Two-factor and session settings'],
         ],
       },
       {
         title: 'Server',
         hint: 'The machine everything runs on',
         tiles: [
-          ['services', 'Services Status', Server, 'nginx, PHP, MariaDB, Redis'],
-          isAdmin ? ['php', 'PHP config', Code2, 'Versions, limits and extensions'] : null,
-          isAdmin ? ['updates', 'Updates', RefreshCw, 'Panel and system packages'] : null,
-          isAdmin ? ['addons', 'Addons', Boxes, 'Optional features, off by default'] : null,
+          ['services', 'Services Status', PhHardDrives, 'nginx, PHP, MariaDB, Redis'],
+          isAdmin ? ['php', 'PHP config', PhCode, 'Versions, limits and extensions'] : null,
+          isAdmin ? ['updates', 'Updates', PhArrowsClockwise, 'Panel and system packages'] : null,
+          isAdmin ? ['addons', 'Addons', PhPuzzlePiece, 'Optional features, off by default'] : null,
         ],
       },
       {
         title: 'Accounts',
         hint: 'Who can sign in, and with what',
         tiles: [
-          isAdmin ? ['users', 'Panel users', Users, 'Customers, packages and quotas'] : null,
-          isAdmin ? ['api-tokens', 'API Tokens', KeyRound, 'Access for billing and automation'] : null,
-          isAdmin ? ['settings', 'Panel settings', SettingsIcon, 'Panel name, URL, branding'] : null,
+          isAdmin ? ['users', 'Panel users', PhUsersThree, 'Customers, packages and quotas'] : null,
+          isAdmin ? ['api-tokens', 'API Tokens', PhKey, 'Access for billing and automation'] : null,
+          isAdmin ? ['settings', 'Panel settings', PhGearSix, 'Panel name, URL, branding'] : null,
         ],
       },
     ]
@@ -4134,7 +4145,7 @@ function App() {
           <div className="dash-tiles">
             {group.tiles.map(([key, label, Icon, description]) => (
               <button className="dash-tile" key={key} onClick={() => navigateToPage(key)} title={description}>
-                <span className="dash-tile-icon"><Icon size={32} strokeWidth={1.75}/></span>
+                <span className="dash-tile-icon"><Icon size={34} weight="duotone"/></span>
                 <span className="dash-tile-text">
                   <strong>{label}</strong>
                   <span>{description}</span>
