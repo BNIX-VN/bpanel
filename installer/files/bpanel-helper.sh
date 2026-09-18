@@ -917,6 +917,38 @@ maldet_write_conf() {
   done
   # The panel owns the schedule; disarm the installer's daily cron.
   [[ -f /etc/cron.daily/maldet ]] && chmod a-x /etc/cron.daily/maldet
+  maldet_write_ignores
+  return 0
+}
+
+# Paths a server scan must not walk. A scan of "/" otherwise reads the scan
+# engine's own signature database, and a signature database is a file full of
+# malware patterns: /var/lib/clamav/rfxn.yara was reported INFECTED by every
+# server scan because it is the file that defines what "infected" means. The
+# rest is storage rather than code - InnoDB pages and compressed archives are
+# never executed and the engine cannot usefully read inside either, so they
+# only add gigabytes of I/O and false matches on stored text.
+MALDET_IGNORE_PATHS=(
+  /usr/local/maldetect
+  /usr/local/sbin/maldet
+  /var/lib/clamav
+  /var/lib/mysql
+  /var/lib/bpanel/backups
+  /proc
+  /sys
+  /dev
+  /run
+)
+
+maldet_write_ignores() {
+  # Append-only: an admin's own entries are never removed, and re-running this
+  # on every update is a no-op once the paths are present.
+  local f="${MALDET_HOME}/ignore_paths" p
+  [[ -d "$MALDET_HOME" ]] || return 0
+  for p in "${MALDET_IGNORE_PATHS[@]}" /home/*/bpanel_backups; do
+    [[ "$p" == /home/*/bpanel_backups && ! -d "$p" ]] && continue
+    grep -qxF "$p" "$f" 2>/dev/null || printf '%s\n' "$p" >>"$f"
+  done
   return 0
 }
 
@@ -4255,6 +4287,9 @@ case "$cmd" in
   maldet-update-sigs)
     [[ $# -eq 0 ]] || deny "usage: maldet-update-sigs"
     [[ -x "$MALDET_BIN" ]] || deny "maldet is not installed"
+    # Update runs this on every release, so it is also where an install that
+    # predates the ignore list picks it up.
+    maldet_write_conf
     "$MALDET_BIN" -u --force 2>&1 || true
     freshclam >/dev/null 2>&1 || true
     echo "signatures updated"

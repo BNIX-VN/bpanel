@@ -81,3 +81,33 @@ class TestHelper:
         assert "nice -n 19" in body and "ionice -c3" in body
         # inotify limits raised before the monitor starts
         assert "fs.inotify.max_user_watches" in helper
+
+    def test_the_scanner_does_not_scan_the_scanner(self):
+        """A server scan walks "/", which includes the signature database.
+
+        /var/lib/clamav/rfxn.yara is a file of malware patterns, so a pattern
+        scan reports it INFECTED on every run - the scanner detecting itself.
+        It was doing exactly that on every server scan before this list existed.
+        """
+        helper = HELPER_SCRIPT.read_text(encoding="utf-8")
+        block = helper.split("MALDET_IGNORE_PATHS=(", 1)[1].split(")", 1)[0]
+        for path in ("/var/lib/clamav", "/usr/local/maldetect"):
+            assert path in block, f"{path} would be scanned and report itself"
+        # Storage, not code: never executed, and gigabytes of pointless I/O.
+        for path in ("/var/lib/mysql", "/proc", "/sys", "/dev", "/run"):
+            assert path in block
+
+        body = helper.split("maldet_write_ignores() {", 1)[1].split("\n}", 1)[0]
+        assert "${MALDET_HOME}/ignore_paths" in body
+        # Append-only, so re-running never duplicates and never drops an entry
+        # the admin added by hand.
+        assert "grep -qxF" in body
+        assert '>>"$f"' in body
+        assert '>"$f"' not in body.replace('>>"$f"', "")
+
+        # Written when the config is written, and refreshed on every update so
+        # installs that predate the list pick it up.
+        conf = helper.split("maldet_write_conf() {", 1)[1].split("\n}", 1)[0]
+        assert "maldet_write_ignores" in conf
+        sigs = helper.split("maldet-update-sigs)", 1)[1].split(";;", 1)[0]
+        assert "maldet_write_conf" in sigs
