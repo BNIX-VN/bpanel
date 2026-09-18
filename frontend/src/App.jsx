@@ -3752,7 +3752,12 @@ function App() {
 
   useEffect(() => { if (selectedWebsiteId && page === 'backups') { listBackups(); loadBackupJobs(); } }, [selectedWebsiteId, page]);
 
-  useEffect(() => { if (selectedWebsiteId && page === 'backups' && backupTab === 'da-import') { listDaBackups(); setSelectedDaBackups([]); setDaBulkImportJob(null); } }, [backupTab, page]);
+  // No selectedWebsiteId guard: a DirectAdmin archive belongs to the server,
+  // not to a website, and importing one is what you do on a server that has
+  // no websites yet. Gated on a selection, the list never loaded on a fresh
+  // machine and the page read "No DirectAdmin backups uploaded" however many
+  // archives were sitting in the directory.
+  useEffect(() => { if (page === 'backups' && backupTab === 'da-import') { listDaBackups(); setSelectedDaBackups([]); setDaBulkImportJob(null); } }, [backupTab, page]);
 
   useEffect(() => { if (selectedWebsiteId && page === 'cron') listCron(); }, [selectedWebsiteId, page]);
   // Which optional features exist decides what the nav shows, so this is asked
