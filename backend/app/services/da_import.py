@@ -1196,6 +1196,80 @@ def _create_panel_database(
     return db_name, db_user, db_password, reused
 
 
+def _import_da_certificate(db, website, root: Path, item_summary: dict) -> bool:
+    """Reuse the certificate DirectAdmin was serving, when there is a usable one.
+
+    A migration cannot get a Let's Encrypt certificate for a domain until DNS
+    points at the new server - and DNS is the last thing you move, by which
+    point visitors are already arriving. The archive carries the certificate the
+    old host was serving, in backup/<domain>/domain.cert with its key and chain,
+    so the site can answer HTTPS from the moment it is imported.
+
+    DirectAdmin also writes a self-signed placeholder when a domain has no real
+    certificate; validate_manual_ssl rejects those along with anything expired
+    or whose key does not match, so a placeholder simply leaves ssl off.
+
+    Returns True when a certificate was installed.
+    """
+    from app.services import ssl as ssl_service
+
+    base = root / "backup" / website.domain
+    cert_path, key_path, ca_path = base / "domain.cert", base / "domain.key", base / "domain.cacert"
+    if not (cert_path.is_file() and key_path.is_file()):
+        return False
+    try:
+        cert = cert_path.read_bytes()
+        key = key_path.read_bytes()
+        ca = ca_path.read_bytes() if ca_path.is_file() else b""
+    except OSError:
+        return False
+    if not cert.strip() or not key.strip():
+        return False
+
+    aliases = [alias.domain for alias in (website.aliases or [])]
+    try:
+        written = ssl_service.install_manual_ssl(website.domain, cert, key, ca, aliases=aliases)
+    except (ValueError, RuntimeError) as exc:
+        # Expired, self-signed, mismatched key, or covering another name: not a
+        # failure of the import, just nothing worth installing.
+        _log(f"  {website.domain}: no usable certificate in the backup ({exc})")
+        return False
+
+    website.ssl_enabled = True
+    website.ssl_mode = "manual"
+    website.ssl_cert_path = written["cert"]
+    website.ssl_key_path = written["key"]
+    website.ssl_ca_path = written["ca"]
+    website.ssl_updated_at = _dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None)
+    db.commit()
+    # Writing the files is not enough: nginx keeps serving whatever the vhost
+    # names, so the vhost has to be rewritten to point at them.
+    try:
+        nginx.rewrite_vhost(
+            website.domain,
+            website.root_path,
+            app_type=website.app_type or "wordpress",
+            php_version=website.php_version,
+            custom_directives=website.nginx_custom or "",
+            waf_enabled=bool(website.waf_enabled),
+            document_root=getattr(website, "document_root", "public_html") or "public_html",
+            rewrite_mode=getattr(website, "nginx_rewrite_mode", "none") or "none",
+            ssl_cert_path=written["cert"],
+            ssl_key_path=written["key"],
+            ssl_ca_path=written["ca"],
+            preserve_existing_ssl=False,
+            aliases=[a.domain for a in (website.aliases or []) if a.mode == "alias"],
+            redirects=[a.domain for a in (website.aliases or []) if a.mode == "redirect"],
+        )
+    except (RuntimeError, ValueError, FileNotFoundError) as exc:
+        _log(f"  {website.domain}: certificate installed but the vhost rewrite failed ({exc})")
+        return False
+
+    item_summary.setdefault("ssl_imported_domains", []).append(website.domain)
+    _log(f"  {website.domain}: installed the certificate from the backup")
+    return True
+
+
 def _enable_ssl_when_dns_matches(db, website, item_summary: dict) -> None:
     from app.services import ssl as ssl_service
     try:
@@ -1414,6 +1488,7 @@ def import_da_backup(archive_path: str, force: bool = False) -> dict:
             "databases": [],
             "aliases": [],
             "ssl_enabled_domains": [],
+            "ssl_imported_domains": [],
             "warnings": [],
         }
 
@@ -1612,9 +1687,14 @@ def import_da_backup(archive_path: str, force: bool = False) -> dict:
                     "domain": None, "source": str(sql_path), "db_name": db_name, "db_user": db_user,
                 })
 
-            # SSL auto-setup
+            # SSL: a fresh Let's Encrypt certificate is better when DNS already
+            # points here, because it renews itself. When it does not - the
+            # normal case mid-migration - fall back to the certificate the old
+            # host was serving, which is in the archive and usually still valid.
             for website in websites:
                 _enable_ssl_when_dns_matches(db, website, item_summary)
+                if not website.ssl_enabled:
+                    _import_da_certificate(db, website, root, item_summary)
 
             summary.append(item_summary)
         finally:
