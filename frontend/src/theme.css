@@ -38,6 +38,9 @@
   --primary-light-hover:#d6e8f8;
   --primary-border:#b3d4f0;
   --primary-text:#00579f;
+  /* Dashboard tile icons: a softened blue. The full-strength --primary read
+     too heavy once the icons lost the plate behind them. */
+  --dash-icon:#5aa3dd;
   --brand-deep:#16202b;
   --brand-navy:#16202b;      /* legacy alias: headings stay neutral, blue is the accent */
   --ring:rgba(0,101,187,.18);
@@ -127,6 +130,7 @@
   --primary-light-hover:#16375a;
   --primary-border:#1d4c7a;
   --primary-text:#7fbdf2;
+  --dash-icon:#6fb4ea;
   --brand-deep:#e8eef5;
   --brand-navy:#e8eef5;
   --brand-blue:#3b93e0;
@@ -207,6 +211,7 @@
     --primary-light-hover:#16375a;
     --primary-border:#1d4c7a;
     --primary-text:#7fbdf2;
+  --dash-icon:#6fb4ea;
     --brand-deep:#e8eef5;
     --brand-navy:#e8eef5;
     --brand-blue:#3b93e0;

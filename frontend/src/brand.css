@@ -52,13 +52,15 @@ h1,h2{color:var(--brand-navy)}
   border-radius:var(--radius-md);box-shadow:none;transition:var(--transition);
 }
 .dash-tile:hover:not(:disabled){background:var(--surface-hover);border-color:var(--primary-border);box-shadow:var(--shadow-sm)}
-.dash-tile:hover:not(:disabled) .dash-tile-icon{color:var(--brand-navy)}
+/* Hover deepens the same blue rather than jumping to near-black, which is
+   too hard a step now the resting colour is soft. */
+.dash-tile:hover:not(:disabled) .dash-tile-icon{color:var(--primary)}
 /* Bare icon, no plate behind it: the tile is already a bordered card, and a
    second rounded box inside it just competed with the first. Colour carries
    the accent instead. */
 .dash-tile-icon{
   flex:none;display:grid;place-items:center;height:36px;
-  color:var(--primary);transition:var(--transition);
+  color:var(--dash-icon);transition:var(--transition);
 }
 .dash-tile-text{min-width:0;width:100%}
 .dash-tile-text strong{display:block;font-size:13px;font-weight:700;color:var(--brand-navy);line-height:1.25}
