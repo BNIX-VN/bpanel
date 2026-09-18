@@ -4041,9 +4041,6 @@ function App() {
     const disk = resourceUsage?.disk || {};
     const network = resourceUsage?.network || {};
     const networkTotal = (Number(network.rx_per_sec) || 0) + (Number(network.tx_per_sec) || 0);
-    const emptyWebsiteMessage = currentUser?.package_name
-      ? `${currentUser.package_name} is ready. Attach your first domain to start hosting.`
-      : 'No domain attached yet.';
 
     // The dashboard is a map of the panel, not a second place to read numbers:
     // every tile opens a page that already exists in the sidebar. Grouped by
@@ -4126,11 +4123,6 @@ function App() {
           percent={currentUser.storage_percent}
           detail={`of ${formatBytes(storageLimitBytes(currentUser))} in your package`}
         />
-      </section>}
-
-      {websites.length === 0 && <section className="section">
-        <EmptyState icon={Globe} message={emptyWebsiteMessage} />
-        <button className="secondary-light first-site-action" onClick={() => navigateToPage('websites')}><Plus size={15}/> Add domain</button>
       </section>}
 
       <div className="dash-groups">
