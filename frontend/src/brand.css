@@ -46,25 +46,26 @@ h1,h2{color:var(--brand-navy)}
      overflow:hidden and white-space:nowrap. Left alone it clipped these tiles
      to 40px while their content needed 86, cutting the icon off at the top and
      the label at the bottom. All four have to be undone here. */
-  height:auto;min-height:126px;overflow:visible;white-space:normal;
+  height:auto;min-height:118px;overflow:visible;white-space:normal;
   text-align:center;padding:16px 10px;font:inherit;color:inherit;cursor:pointer;
   background:var(--surface-alt);border:1px solid var(--border);
   border-radius:var(--radius-md);box-shadow:none;transition:var(--transition);
 }
 .dash-tile:hover:not(:disabled){background:var(--surface-hover);border-color:var(--primary-border);box-shadow:var(--shadow-sm)}
-.dash-tile:hover:not(:disabled) .dash-tile-icon{background:var(--primary);color:var(--primary-fg);border-color:var(--primary)}
+.dash-tile:hover:not(:disabled) .dash-tile-icon{color:var(--brand-navy)}
+/* Bare icon, no plate behind it: the tile is already a bordered card, and a
+   second rounded box inside it just competed with the first. Colour carries
+   the accent instead. */
 .dash-tile-icon{
-  width:52px;height:52px;flex:none;display:grid;place-items:center;
-  border-radius:var(--radius-md);background:var(--primary-light);
-  color:var(--primary-text);border:1px solid var(--primary-border);
-  transition:var(--transition);
+  flex:none;display:grid;place-items:center;height:36px;
+  color:var(--primary);transition:var(--transition);
 }
 .dash-tile-text{min-width:0;width:100%}
 .dash-tile-text strong{display:block;font-size:13px;font-weight:700;color:var(--brand-navy);line-height:1.25}
-/* Wrapped rather than ellipsised: centred text cut mid-word reads as broken,
-   and these lines are what tell a new operator which tile they want. */
-/* Always two lines tall, even for a one-line description: that is what keeps
-   every tile the same height instead of each row finding its own. */
+/* Wrapped rather than ellipsised - centred text cut mid-word reads as broken,
+   and these lines are what tell a new operator which tile they want - and
+   always two lines tall, so a one-line description does not leave its row
+   shorter than the next. */
 .dash-tile-text span{
   display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;
   margin-top:3px;min-height:2.7em;font-size:11px;line-height:1.35;color:var(--text-muted);
@@ -76,8 +77,8 @@ h1,h2{color:var(--brand-navy)}
 }
 @media (max-width:560px){
   .dash-tiles{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .dash-tile-icon{width:44px;height:44px}
-  .dash-tile{min-height:112px}
+  .dash-tile-icon{height:32px}
+  .dash-tile{min-height:106px}
 }
 .user-metric{display:inline-flex;align-items:center;gap:6px;min-height:28px;padding:0 10px;background:var(--surface-alt);border:1px solid var(--border);border-radius:999px;color:var(--text-secondary);font-size:12px;font-weight:700;line-height:1;white-space:nowrap;max-width:160px;overflow:hidden;text-overflow:ellipsis}
 .user-metric svg{width:13px;height:13px;flex:none;color:var(--primary)}
