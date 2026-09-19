@@ -219,7 +219,11 @@ def test_render_vhost_keeps_waf_and_http_flood_blocks():
 
     assert "# BPANEL WAF BEGIN" in content
     assert "# BPANEL HTTP FLOOD BEGIN" in content
-    assert f"limit_req zone={nginx.http_flood_zone_name('example.com')} burst=20;" in content
+    # nodelay: excess is rejected into the 429 challenge rather than queued.
+    # Without it nginx delays every request over the rate, and since the limit
+    # sits at server level that throttles each page's images and stylesheets
+    # too - measured at 7.6x on a real page.
+    assert f"limit_req zone={nginx.http_flood_zone_name('example.com')} burst=20 nodelay;" in content
     assert "limit_conn bpanel_conn_flood 8;" in content
     assert "@bpanel_http_flood_challenge" in content
     assert "bpanel_http_flood_ok=1" in content

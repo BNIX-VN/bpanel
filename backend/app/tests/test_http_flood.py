@@ -6,6 +6,10 @@ and queueing it the difference between a working feature and a tax on every
 visitor, which is what these tests exist to hold down.
 """
 
+import re
+
+import pytest
+
 from app.services import nginx
 
 
@@ -28,6 +32,29 @@ def test_excess_is_rejected_rather_than_queued():
     no_burst = nginx._http_flood_block("example.test", {"access_limit_burst": 0})
     assert "nodelay" in no_burst
     assert "burst=" not in no_burst
+
+
+@pytest.mark.parametrize("app_type", ["wordpress", "php", "static"])
+def test_every_rendered_vhost_carries_nodelay_too(app_type):
+    """There are two copies of this directive, not one.
+
+    _http_flood_block builds the block injected into a vhost that already
+    exists; the Jinja templates build it for a vhost being rendered fresh.
+    Fixing only the first left every rewritten vhost queueing again, which is
+    exactly what happened on a live server: the test above passed while the
+    site went back to serving assets at the throttled rate.
+    """
+    content = nginx.render_vhost(
+        "example.test",
+        "/home/client/example.test",
+        app_type=app_type,
+        php_version="8.3",
+        http_flood_enabled=True,
+    )
+
+    match = re.search(r"limit_req zone=[^;]+;", content)
+    assert match, f"{app_type} renders no limit_req"
+    assert "nodelay" in match.group(0), f"{app_type} queues instead of rejecting"
 
 
 def test_a_browser_can_earn_its_way_out_but_a_bot_cannot():
