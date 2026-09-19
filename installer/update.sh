@@ -1408,40 +1408,47 @@ with SessionLocal() as db:
             print(f"WARNING: could not refresh HTTP flood zones: {result.stderr or result.stdout}")
     except Exception as exc:
         print(f"WARNING: could not refresh HTTP flood zones: {exc}")
-    for website in websites:
-        try:
-            if website.linux_user:
-                runtime_php_version = website.php_version if (website.app_type or "wordpress") in {"wordpress", "php"} else None
-                site_users.ensure_site_runtime(website.domain, website.root_path, runtime_php_version, website.linux_user)
-                site_users.ensure_document_root(
+    # One nginx test and reload for the whole pass instead of one per site.
+    # nginx re-parses the entire configuration on every test, ModSecurity
+    # rules included, so on a box with CRS enabled and 22 sites this was 22
+    # full parses of 18,503 rules - which is what ran a swapless 8 GB server
+    # out of memory partway through an update and took nginx down with it.
+    # A failure still rolls every vhost written in the batch back.
+    with nginx.deferred_reload():
+        for website in websites:
+            try:
+                if website.linux_user:
+                    runtime_php_version = website.php_version if (website.app_type or "wordpress") in {"wordpress", "php"} else None
+                    site_users.ensure_site_runtime(website.domain, website.root_path, runtime_php_version, website.linux_user)
+                    site_users.ensure_document_root(
+                        website.root_path,
+                        getattr(website, "document_root", "public_html") or "public_html",
+                        website.linux_user,
+                    )
+                site_users.fix_site_permissions(website.root_path, website.linux_user)
+                result = waf.sync_website_rules(website)
+                if result.returncode != 0:
+                    print(f"WARNING: could not refresh WAF rules for {website.domain}: {result.stderr or result.stdout}")
+                if getattr(website, "nginx_config_mode", "managed") != "managed":
+                    website.nginx_config_mode = "managed"
+                    db.commit()
+                app_type = website.app_type or "wordpress"
+                runtime_php_version = website.php_version if app_type in {"wordpress", "php"} else None
+                nginx.rewrite_vhost(
+                    website.domain,
                     website.root_path,
-                    getattr(website, "document_root", "public_html") or "public_html",
-                    website.linux_user,
+                    app_type=app_type,
+                    php_version=website.php_version,
+                    custom_directives=website.nginx_custom or "",
+                    php_fpm_socket_override=site_users.site_php_fpm_socket(website.linux_user, website.root_path, runtime_php_version),
+                    waf_enabled=website.waf_enabled,
+                    http_flood_enabled=website.http_flood_enabled,
+                    http_flood_config=website.http_flood_config or "",
+                    document_root=getattr(website, "document_root", "public_html") or "public_html",
+                    rewrite_mode=getattr(website, "nginx_rewrite_mode", "none") or "none",
                 )
-            site_users.fix_site_permissions(website.root_path, website.linux_user)
-            result = waf.sync_website_rules(website)
-            if result.returncode != 0:
-                print(f"WARNING: could not refresh WAF rules for {website.domain}: {result.stderr or result.stdout}")
-            if getattr(website, "nginx_config_mode", "managed") != "managed":
-                website.nginx_config_mode = "managed"
-                db.commit()
-            app_type = website.app_type or "wordpress"
-            runtime_php_version = website.php_version if app_type in {"wordpress", "php"} else None
-            nginx.rewrite_vhost(
-                website.domain,
-                website.root_path,
-                app_type=app_type,
-                php_version=website.php_version,
-                custom_directives=website.nginx_custom or "",
-                php_fpm_socket_override=site_users.site_php_fpm_socket(website.linux_user, website.root_path, runtime_php_version),
-                waf_enabled=website.waf_enabled,
-                http_flood_enabled=website.http_flood_enabled,
-                http_flood_config=website.http_flood_config or "",
-                document_root=getattr(website, "document_root", "public_html") or "public_html",
-                rewrite_mode=getattr(website, "nginx_rewrite_mode", "none") or "none",
-            )
-        except Exception as exc:
-            print(f"WARNING: could not refresh permissions for {website.domain}: {exc}")
+            except Exception as exc:
+                print(f"WARNING: could not refresh permissions for {website.domain}: {exc}")
     try:
         result = nginx.sync_http_flood_zones(websites)
         if result.returncode != 0:

@@ -3,6 +3,7 @@ import json
 import math
 import re
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -1166,20 +1167,74 @@ def _replace_fastcgi_cache_blocks(content: str, enabled: bool = True) -> str:
     )
 
 
+def _undo_write(
+    target: Path,
+    old_content: Optional[str],
+    custom_domain: Optional[str],
+    custom_snapshot: Optional[tuple[bool, str]],
+) -> None:
+    if old_content is not None:
+        target.write_text(old_content, encoding="utf-8")
+    else:
+        target.unlink(missing_ok=True)
+    if custom_domain is not None and custom_snapshot is not None:
+        _restore_custom_include(custom_domain, custom_snapshot)
+
+
+# Set by deferred_reload(). None means every write tests and reloads on its own.
+_DEFERRED_WRITES: Optional[list] = None
+
+
+@contextmanager
+def deferred_reload():
+    """Write many vhosts, then test and reload once at the end.
+
+    One test and reload per vhost is right for a single edit from the panel.
+    For a bulk pass it is not: nginx re-parses the entire configuration each
+    time, ModSecurity rules included, so the updater rewriting every site on a
+    box with CRS enabled and 22 sites meant 22 full parses of 18,503 rules.
+    That is what ran a swapless 8 GB server out of memory partway through an
+    update and took nginx down with it.
+
+    Safety is unchanged in shape: nothing is left half-applied. If the single
+    test at the end fails - or the body raises - every file written inside the
+    block is put back as it was before nginx is asked to reload.
+    """
+    global _DEFERRED_WRITES
+    if _DEFERRED_WRITES is not None:
+        yield  # already inside one; the outermost block owns the reload
+        return
+    _DEFERRED_WRITES = []
+    try:
+        yield
+    except BaseException:
+        pending, _DEFERRED_WRITES = _DEFERRED_WRITES, None
+        for write in reversed(pending):
+            _undo_write(*write)
+        raise
+    pending, _DEFERRED_WRITES = _DEFERRED_WRITES, None
+    if not pending:
+        return
+    test = shell.privileged("nginx-test", check=False, fallback=["nginx", "-t"])
+    if test.returncode != 0:
+        for write in reversed(pending):
+            _undo_write(*write)
+        raise RuntimeError((test.stderr or test.stdout or "nginx -t failed").strip())
+    shell.privileged("nginx-reload", fallback=["bash", "-lc", "nginx -t && systemctl reload nginx"])
+
+
 def _test_and_reload(
     target: Path,
     old_content: Optional[str],
     custom_domain: Optional[str] = None,
     custom_snapshot: Optional[tuple[bool, str]] = None,
 ) -> None:
+    if _DEFERRED_WRITES is not None:
+        _DEFERRED_WRITES.append((target, old_content, custom_domain, custom_snapshot))
+        return
     test = shell.privileged("nginx-test", check=False, fallback=["nginx", "-t"])
     if test.returncode != 0:
-        if old_content is not None:
-            target.write_text(old_content, encoding="utf-8")
-        else:
-            target.unlink(missing_ok=True)
-        if custom_domain is not None and custom_snapshot is not None:
-            _restore_custom_include(custom_domain, custom_snapshot)
+        _undo_write(target, old_content, custom_domain, custom_snapshot)
         raise RuntimeError((test.stderr or test.stdout or "nginx -t failed").strip())
     shell.privileged("nginx-reload", fallback=["bash", "-lc", "nginx -t && systemctl reload nginx"])
 
