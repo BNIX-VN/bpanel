@@ -229,7 +229,22 @@ def test_render_vhost_keeps_waf_and_http_flood_blocks():
     assert f"root {expected_root};" in content
 
 
-def test_wordpress_cache_revalidates_quickly():
+def test_wordpress_cache_serves_anonymous_visitors_and_steps_aside_for_authors():
+    """Replaces test_wordpress_cache_revalidates_quickly.
+
+    That test pinned `fastcgi_cache_valid 200 15s`, `min_uses 2` and
+    `expires -1`, and forbade the directives that fix them by exact string. On
+    a live server those settings measured: the same page 1.33s uncached and
+    0.016s cached, while 15s combined with min_uses 2 meant a page had to be
+    fetched twice inside the same 15 seconds to be cached at all - so below a
+    few requests per second nothing ever was. `expires -1` is not "no expiry":
+    nginx renders it as Cache-Control: no-cache, so every image and stylesheet
+    was refetched on every page view.
+
+    What still has to hold is the part that makes a long lifetime safe: a
+    visitor can force a fresh copy, and anyone who can edit the page is out of
+    the cache entirely.
+    """
     content = nginx.render_vhost(
         "example.com",
         "/home/client/example.com",
@@ -237,13 +252,18 @@ def test_wordpress_cache_revalidates_quickly():
         php_version="8.3",
     )
 
+    # A visitor asking for a fresh copy still gets one.
     assert 'if ($http_cache_control ~* "no-cache|no-store|max-age=0")' in content
     assert 'if ($http_pragma = "no-cache")' in content
-    assert "fastcgi_cache_valid 200 15s;" in content
-    assert "fastcgi_cache_valid 200 301 302 10m;" not in content
-    assert "fastcgi_cache_use_stale" not in content
-    assert "expires -1;" in content
-    assert 'Cache-Control "public, immutable"' not in content
+    # Authors never read from the cache, so their edits appear immediately.
+    assert "wordpress_logged_in" in content
+    assert "woocommerce_cart_hash" in content
+    assert "/wp-admin/" in content
+    # And the cache now actually holds a page.
+    assert "fastcgi_cache_valid 200 301 302 10m;" in content
+    assert "fastcgi_cache_min_uses 1;" in content
+    assert "fastcgi_cache_use_stale" in content
+    assert "expires -1;" not in content
 
 
 def test_set_php_version_preserves_existing_vhost(tmp_path, monkeypatch):

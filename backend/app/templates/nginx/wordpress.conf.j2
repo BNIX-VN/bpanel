@@ -104,8 +104,12 @@ server {
         # BPANEL FASTCGI CACHE LOCATION BEGIN
         fastcgi_cache BPANEL_FASTCGI;
         fastcgi_cache_methods GET HEAD;
-        fastcgi_cache_valid 200 15s;
-        fastcgi_cache_min_uses 2;
+        fastcgi_cache_valid 200 301 302 10m;
+        fastcgi_cache_valid 404 1m;
+        fastcgi_cache_min_uses 1;
+        fastcgi_cache_use_stale error timeout invalid_header updating http_500 http_502 http_503 http_504;
+        fastcgi_cache_background_update on;
+        fastcgi_cache_revalidate on;
         fastcgi_cache_bypass $bpanel_skip_cache;
         fastcgi_no_cache $bpanel_skip_cache;
         fastcgi_no_cache $upstream_http_set_cookie;
@@ -125,7 +129,13 @@ server {
     }
 
     location ~* \.(jpg|jpeg|gif|png|css|js|ico|webp|svg|woff|woff2|ttf|eot)$ {
-        expires -1;
+        # This used to be `expires -1`, which nginx renders as an Expires date
+        # in the past plus Cache-Control: no-cache - so every image, stylesheet
+        # and font was fetched again on every page view. WordPress fingerprints
+        # its CSS and JS with ?ver=, and writes a new filename rather than
+        # overwriting an upload, so a long lifetime here is safe: changing a
+        # file changes its URL.
+        expires 30d;
         access_log off;
     }
 }

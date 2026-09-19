@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BPANEL_INSTALLER_VERSION="${BPANEL_INSTALLER_VERSION:-v1.0.138}"
+BPANEL_INSTALLER_VERSION="${BPANEL_INSTALLER_VERSION:-v1.0.139}"
 
 if [[ $EUID -ne 0 ]]; then
   echo "Please run this installer as root"
@@ -439,7 +439,7 @@ configure_fastcgi_cache() {
   install -d -o www-data -g www-data -m 0755 /var/cache/nginx/bpanel-fastcgi
   find /var/cache/nginx/bpanel-fastcgi -mindepth 1 -delete
   cat >/etc/nginx/conf.d/00-bpanel-fastcgi-cache.conf <<'NGINX'
-fastcgi_cache_path /var/cache/nginx/bpanel-fastcgi levels=1:2 keys_zone=BPANEL_FASTCGI:32m inactive=30m max_size=256m use_temp_path=off;
+fastcgi_cache_path /var/cache/nginx/bpanel-fastcgi levels=1:2 keys_zone=BPANEL_FASTCGI:32m inactive=2h max_size=1g use_temp_path=off;
 fastcgi_cache_key "$scheme$request_method$host$request_uri";
 NGINX
 }

@@ -91,7 +91,13 @@ server {
 {% endif %}
 
     location ~* \.(jpg|jpeg|gif|png|css|js|ico|webp|svg|woff|woff2|ttf|eot)$ {
-        expires -1;
+        # Was `expires -1`, which nginx renders as Cache-Control: no-cache, so
+        # every asset was refetched on every page view. Shorter than the
+        # WordPress template's 30d on purpose: an arbitrary PHP application may
+        # not fingerprint its asset URLs, so a week bounds how long a replaced
+        # file can stay invisible while still sparing repeat visitors the
+        # round trips.
+        expires 7d;
         access_log off;
     }
 }

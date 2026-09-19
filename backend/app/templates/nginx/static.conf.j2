@@ -75,7 +75,12 @@ server {
     }
 
     location ~* \.(jpg|jpeg|gif|png|css|js|ico|webp|svg|woff|woff2|ttf|eot)$ {
-        expires -1;
+        # Was `expires -1`, which nginx renders as Cache-Control: no-cache, so
+        # every asset was refetched on every page view. The shortest of the
+        # three on purpose: a hand-written static site is the one most likely
+        # to have its stylesheet edited in place under an unchanged name, and a
+        # day already spares a repeat visitor nearly all the round trips.
+        expires 1d;
         access_log off;
     }
 }
