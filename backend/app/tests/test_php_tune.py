@@ -1,13 +1,17 @@
 """PHP settings sized from the machine: the arithmetic, and what it refuses."""
 
+from pathlib import Path
+
 import pytest
 
 from app.services import php_tune
 
+HELPER_SCRIPT = Path(__file__).resolve().parents[3] / "installer" / "files" / "bpanel-helper.sh"
+
 
 def facts_for(total_mb, cpu=2, pools=1):
     reserve = php_tune.reserved_memory_mb(total_mb)
-    budget = max(php_tune.WORKER_MB, total_mb - reserve)
+    budget = max(php_tune.WORKER_MB, total_mb)
     return {
         "cpu_count": cpu,
         "total_memory_mb": total_mb,
@@ -59,6 +63,43 @@ def test_the_reserve_never_swallows_the_whole_machine():
         reserve = php_tune.reserved_memory_mb(total_mb)
 
         assert 128 <= reserve <= total_mb - 128
+
+
+def test_workers_are_sized_off_total_ram_not_ram_minus_the_reserve(monkeypatch):
+    """A 6 GB box was sized at 34 workers when its own caps allowed 48.
+
+    Three separate things already hold this number down: WORKER_MB bills a
+    worker at 128 MB when a measured WordPress worker is nearer 24 MB RSS,
+    pm=ondemand means a worker exists only while it is serving, and the
+    helper's cpu_cap/profile_cap bound a small machine. Taking a further
+    20-45% off the top was a fourth cut that left every server short.
+    """
+    monkeypatch.setattr(php_tune, "total_memory_mb", lambda: 5925)
+    monkeypatch.setattr(php_tune, "available_memory_mb", lambda: 4415)
+    monkeypatch.setattr(php_tune, "cpu_count", lambda: 4)
+    monkeypatch.setattr(php_tune, "pool_count", lambda: 3)
+
+    facts = php_tune.server_facts()
+
+    assert facts["php_budget_mb"] == 5925
+    assert facts["concurrent_requests"] == 46
+    # Still reported - an admin wants to see it - just no longer deducted.
+    assert facts["reserved_memory_mb"] == 1481
+
+
+def test_the_helper_sizes_pools_the_same_way():
+    """bash and python must not drift: both size off total RAM."""
+    helper = HELPER_SCRIPT.read_text(encoding="utf-8")
+    body = helper.split("calculate_php_fpm_pool_tuning() {", 1)[1].split("\n}", 1)[0]
+
+    assert 'php_budget_mb="$total_mb"' in body
+    assert "total_mb - reserve_mb" not in body
+    # The dead reserve helper went with it rather than rotting in place.
+    assert "php_fpm_reserved_memory_mb" not in helper
+    # The caps that actually protect a small box are still there.
+    assert "cpu_cap=$((cpu_count * 4))" in body
+    assert "pool_children <= cpu_cap" in body
+    assert "pool_children <= profile_cap" in body
 
 
 # What Debian's PHP package already ships, measured on a stock Ubuntu 24.04.

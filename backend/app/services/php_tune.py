@@ -98,10 +98,11 @@ def pool_count() -> int:
 
 
 def reserved_memory_mb(total_mb: int) -> int:
-    """RAM kept for everything that is not PHP: MariaDB, nginx, the panel, apps.
+    """RAM expected to go to everything that is not PHP: MariaDB, nginx, panel.
 
-    The same tiers the helper uses, so the panel reports the number the pools
-    were actually sized against rather than a second opinion.
+    Reported so an admin can see where the machine's memory goes. It is not
+    subtracted from the pool arithmetic - see server_facts for why - so treat
+    this as an estimate to read, not a number the pools were sized against.
     """
     if total_mb <= 1024:
         reserve = max(total_mb * 45 // 100, 448)
@@ -119,7 +120,14 @@ def reserved_memory_mb(total_mb: int) -> int:
 def server_facts() -> dict:
     total = total_memory_mb()
     reserve = reserved_memory_mb(total)
-    budget = max(WORKER_MB, total - reserve)
+    # Worker count comes off total RAM. The reserve is still reported - it is
+    # a useful thing for an admin to see - but it no longer shrinks the pool:
+    # WORKER_MB already bills a worker at 128 MB when a measured one is nearer
+    # 24 MB RSS, pm=ondemand means a worker only exists while it is serving,
+    # and the helper's cpu_cap/profile_cap are what really bound a small box.
+    # Subtracting a further 20-45% on top of those three left every server
+    # about a third short of what its own caps allowed.
+    budget = max(WORKER_MB, total)
     return {
         "cpu_count": cpu_count(),
         "total_memory_mb": total,
@@ -293,9 +301,9 @@ def recommendations(facts: dict | None = None, php_version: str = "8.4",
             "key": "memory_limit",
             "value": f"{tier['memory_limit']}M",
             "reason": (
-                f"Trần cho mỗi request. {total} MB RAM, {facts['reserved_memory_mb']} MB để cho "
-                f"MariaDB/nginx/panel, còn {facts['php_budget_mb']} MB cho PHP; số request chạy "
-                f"cùng lúc do pm.max_children chặn (~{workers}), không phải do trần này."
+                f"Trần cho mỗi request. {total} MB RAM; số request chạy cùng lúc do "
+                f"pm.max_children chặn (~{workers}), không phải do trần này. "
+                f"Ước tính {facts['reserved_memory_mb']} MB sẽ về MariaDB/nginx/panel."
             ),
         },
         {

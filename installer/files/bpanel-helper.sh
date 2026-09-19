@@ -3652,43 +3652,23 @@ php_fpm_pool_count() {
   printf '%s\n' "$count"
 }
 
-php_fpm_reserved_memory_mb() {
-  local total="$1" reserve
-  if (( total <= 1024 )); then
-    reserve=$((total * 45 / 100))
-    (( reserve >= 448 )) || reserve=448
-  elif (( total <= 2048 )); then
-    reserve=$((total * 35 / 100))
-    (( reserve >= 640 )) || reserve=640
-  elif (( total <= 4096 )); then
-    reserve=$((total * 30 / 100))
-    (( reserve >= 896 )) || reserve=896
-  elif (( total <= 8192 )); then
-    reserve=$((total * 25 / 100))
-    (( reserve >= 1280 )) || reserve=1280
-  else
-    reserve=$((total * 20 / 100))
-    (( reserve >= 2048 )) || reserve=2048
-  fi
-  if (( reserve > total - 128 )); then
-    reserve=$((total - 128))
-  fi
-  if (( reserve < 128 )); then
-    reserve=128
-  fi
-  printf '%s\n' "$reserve"
-}
-
 calculate_php_fpm_pool_tuning() {
-  local current_pool="${1:-}" total_mb reserve_mb php_budget_mb cpu_count pool_count worker_mb
+  local current_pool="${1:-}" total_mb php_budget_mb cpu_count pool_count worker_mb
   local global_children pool_children cpu_cap profile_cap forced_children idle_default requests_default
   local active_pool_divisor pool_floor
   total_mb="$(php_fpm_total_memory_mb)"
   cpu_count="$(php_fpm_cpu_count)"
   pool_count="$(php_fpm_pool_count "$current_pool")"
   worker_mb="$(positive_int_or_default "$(php_fpm_tuning_value BPANEL_PHP_FPM_WORKER_MB "$PHP_FPM_DEFAULT_WORKER_MB")" "$PHP_FPM_DEFAULT_WORKER_MB" 32 1024)"
-  reserve_mb="$(php_fpm_reserved_memory_mb "$total_mb")"
-  php_budget_mb=$((total_mb - reserve_mb))
+  # Workers come off total RAM, not off RAM minus a reserve for MariaDB and
+  # friends. Three separate things already hold this number down: worker_mb
+  # bills a worker at 128 MB when a measured WordPress worker is nearer 24 MB
+  # RSS, pm=ondemand means a worker exists only while it is serving, and
+  # cpu_cap/profile_cap below are what actually bound a small box. Taking a
+  # further 20-45% off the top on top of all three left every server about a
+  # third short of what it could serve - a 6 GB box was sized at 34 workers
+  # when the caps would have allowed 48.
+  php_budget_mb="$total_mb"
   if (( php_budget_mb < worker_mb )); then
     php_budget_mb="$worker_mb"
   fi
