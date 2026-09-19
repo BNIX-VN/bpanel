@@ -425,7 +425,8 @@ cleanup_orphans() {
   # certainty, and an admin who removed a site by accident should be able to get
   # it back. Nothing here is ever deleted without a copy.
   local mode="${1:-clean}" live_file stamp archive panel_domain name base
-  local -i certs=0 rules=0 baks=0 manual=0 sni=0
+  local sock vhost_socks php_version
+  local -i certs=0 rules=0 baks=0 manual=0 sni=0 pools=0
   live_file="$(mktemp)"
   orphan_live_domains >"$live_file"
   panel_domain="$(env_get PANEL_DOMAIN)"
@@ -521,15 +522,54 @@ cleanup_orphans() {
     sni+=1
   done
 
+  # 6. PHP-FPM pools nothing can reach. A pool is only ever addressed through
+  #    its socket, so a socket named by no vhost is a pool no request can be
+  #    routed to. These are not inert: pm.max_children divides the memory
+  #    budget across the pool count, so dead pools quietly shrink every living
+  #    site's worker allowance. One server carried 25 of them against 22 live
+  #    sites and had been cut to 6 workers per site because of it.
+  vhost_socks="$(mktemp)"
+  cat /etc/nginx/conf.d/*.conf 2>/dev/null \
+    | grep -oE '/run/php/[A-Za-z0-9._-]+\.sock' | sort -u >"$vhost_socks"
+  # No sockets at all means nginx is unconfigured or unreadable, not that every
+  # pool is dead. Same refusal as the empty live-domain list above.
+  if [[ -s "$vhost_socks" ]]; then
+    for f in /etc/php/*/fpm/pool.d/bpanel-*.conf; do
+      [[ -f "$f" ]] || continue
+      sock="$(grep -m1 -E '^[[:space:]]*listen[[:space:]]*=' "$f" | sed -E 's/.*=[[:space:]]*//')"
+      [[ "$sock" == /run/php/*.sock ]] || continue
+      grep -qxF "$sock" "$vhost_socks" && continue
+      base="$(basename "$f")"
+      echo "php-pool	${base}"
+      pools+=1
+      if [[ "$mode" == "clean" ]]; then
+        install -d -m 0700 "${archive}/php-pools"
+        cp -a "$f" "${archive}/php-pools/" 2>/dev/null || true
+        rm -f "$f"
+      fi
+    done
+  fi
+  rm -f "$vhost_socks"
+
   if [[ "$mode" == "clean" ]]; then
     sync_panel_sni_certificates >/dev/null 2>&1 || true
     if nginx -t >/dev/null 2>&1; then
       systemctl reload nginx >/dev/null 2>&1 || true
     fi
+    if (( pools > 0 )); then
+      for dir in /etc/php/*/fpm/pool.d; do
+        [[ -d "$dir" ]] || continue
+        php_version="$(echo "$dir" | awk -F/ '{print $4}')"
+        systemctl reload "php${php_version}-fpm" 2>/dev/null || true
+      done
+      # The pool count is an input to pm.max_children, so the sites that are
+      # left are entitled to the share the dead pools were holding.
+      retune_php_fpm_pools >/dev/null 2>&1 || true
+    fi
     rmdir "$archive" 2>/dev/null || true
   fi
   rm -f "$live_file"
-  echo "summary	certs=${certs} waf-rules=${rules} vhost-backups=${baks} manual-ssl=${manual} sni-copies=${sni}"
+  echo "summary	certs=${certs} waf-rules=${rules} vhost-backups=${baks} manual-ssl=${manual} sni-copies=${sni} php-pools=${pools}"
   [[ "$mode" == "clean" && -d "$archive" ]] && echo "archive	${archive}"
   return 0
 }

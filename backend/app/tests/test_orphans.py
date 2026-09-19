@@ -116,6 +116,40 @@ def test_helper_refuses_an_empty_live_list_on_its_own():
         assert verb in helper
 
 
+def test_a_dead_php_pool_is_reported_like_any_other_orphan(monkeypatch):
+    _capture(monkeypatch, stdout=(
+        "php-pool\tbpanel-gone-8_3.conf\n"
+        "summary\tcerts=0 waf-rules=0 php-pools=1\n"
+    ))
+    outcome = orphans.clean(_db())
+
+    assert outcome["total"] == 1
+    assert outcome["items"][0]["label"] == "PHP-FPM pool"
+    assert outcome["summary"]["php-pools"] == 1
+
+
+def test_helper_judges_a_pool_dead_by_its_socket_not_its_name():
+    """Pool files are named after the linux user, not the domain, so the live
+    domain list cannot decide this. A pool is reachable only through its
+    socket: if no vhost names the socket, nothing can route a request to it.
+
+    They are not harmless leftovers - pool count divides pm.max_children, so
+    dead pools take worker slots away from the sites that are still running.
+    """
+    helper = HELPER_SCRIPT.read_text(encoding="utf-8")
+    body = helper.split("cleanup_orphans()")[1].split("\n}\n")[0]
+
+    assert "/run/php/" in body
+    assert "grep -qxF \"$sock\" \"$vhost_socks\" && continue" in body
+    # No sockets found means nginx is unreadable, not that every pool is dead.
+    assert 'if [[ -s "$vhost_socks" ]]; then' in body
+    # Archived before removal, like every other category.
+    assert '${archive}/php-pools' in body
+    # Removing a pool changes the divisor, so the survivors get retuned.
+    assert "retune_php_fpm_pools" in body
+    assert "php-pools=${pools}" in body
+
+
 def test_helper_keeps_a_certificate_that_still_covers_a_live_name():
     """A lineage named for a dead site can carry a live SAN."""
     helper = HELPER_SCRIPT.read_text(encoding="utf-8")

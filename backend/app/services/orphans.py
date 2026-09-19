@@ -24,6 +24,7 @@ CATEGORY_LABELS = {
     "vhost-backup": "vhost backup",
     "manual-ssl": "uploaded certificate",
     "sni-copy": "panel SNI copy",
+    "php-pool": "PHP-FPM pool",
 }
 
 
