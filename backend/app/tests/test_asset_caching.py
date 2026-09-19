@@ -6,6 +6,8 @@ the values and, more importantly, the reasoning that makes them safe.
 """
 
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -97,6 +99,24 @@ def test_a_slow_backend_serves_the_last_good_page_instead_of_an_error():
     assert "fastcgi_cache_background_update on;" in block
 
 
+def test_use_stale_only_names_conditions_nginx_accepts():
+    """`http_502` and `http_504` look like they belong here - they are valid
+    for proxy_next_upstream - but fastcgi_cache_use_stale rejects them, and
+    nginx refuses to load the whole config over it. Shipping that would have
+    broken every vhost rewrite on every server; the string assertions above all
+    passed while it was wrong, so this checks the values themselves.
+    """
+    allowed = {
+        "error", "timeout", "invalid_header", "updating",
+        "http_500", "http_503", "http_403", "http_404", "http_429", "off",
+    }
+    match = re.search(r"fastcgi_cache_use_stale ([^;]+);", nginx.FASTCGI_CACHE_LOCATION_BLOCK)
+    assert match, "no use_stale directive"
+
+    bad = set(match.group(1).split()) - allowed
+    assert not bad, f"nginx will refuse to start on: {sorted(bad)}"
+
+
 def test_the_template_and_the_injected_block_cannot_drift():
     """One copy renders new vhosts, the other is injected into vhosts that
     already exist. A site must not behave differently for having been created
@@ -113,3 +133,50 @@ def test_the_template_and_the_injected_block_cannot_drift():
         )
         assert in_template, f"{marker} block missing from the template"
         assert in_template.group(1) == constant, f"{marker} drifted from nginx.py"
+
+
+@pytest.mark.skipif(shutil.which("nginx") is None, reason="nginx not installed")
+def test_nginx_itself_accepts_the_cache_directives(tmp_path):
+    """The one check the string assertions cannot make.
+
+    `fastcgi_cache_use_stale http_502` passed every test above and still made
+    nginx refuse to load the config, which on a real server means no vhost can
+    be rewritten at all. Ask nginx instead of guessing: build the smallest
+    config that contains these blocks and run `nginx -t` over it.
+    """
+    (tmp_path / "logs").mkdir()
+    conf = tmp_path / "nginx.conf"
+    static = _static_location("wordpress.conf.j2")
+    conf.write_text(
+        "pid logs/nginx.pid;\n"
+        "error_log logs/error.log;\n"
+        "events {}\n"
+        "http {\n"
+        "    access_log off;\n"
+        f"    fastcgi_cache_path {tmp_path / 'cache'} levels=1:2 "
+        "keys_zone=BPANEL_FASTCGI:1m inactive=2h max_size=16m use_temp_path=off;\n"
+        # Defined alongside the zone by the installer; without it nginx warns
+        # and the test output stops being a clean signal.
+        '    fastcgi_cache_key "$scheme$request_method$host$request_uri";\n'
+        "    server {\n"
+        "        listen 8080;\n"
+        "        server_name example.test;\n"
+        f"{nginx.FASTCGI_CACHE_SERVER_BLOCK}\n"
+        "        location ~ \.php$ {\n"
+        "            fastcgi_pass unix:/run/php/nothing.sock;\n"
+        f"{nginx.FASTCGI_CACHE_LOCATION_BLOCK}\n"
+        "        }\n"
+        "        location ~* \.(jpg|jpeg|gif|png|css|js|ico|webp|svg|woff|woff2|ttf|eot)$ {\n"
+        f"{static}\n"
+        "        }\n"
+        "    }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["nginx", "-t", "-p", str(tmp_path), "-c", str(conf)],
+        capture_output=True, text=True,
+    )
+
+    assert result.returncode == 0, (result.stderr or result.stdout).strip()

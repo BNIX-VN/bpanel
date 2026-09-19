@@ -35,6 +35,14 @@ jobs:
           pip install -r backend/requirements.txt
           pip install pytest ruff bandit pip-audit semgrep
 
+      - name: Install nginx
+        # Not for serving anything - it is the only thing that can say whether
+        # a directive we emit is actually valid. `fastcgi_cache_use_stale
+        # http_502` passed every string assertion in the suite and still made
+        # nginx refuse to load the config, which would have broken every vhost
+        # rewrite on every server. Without this the cache tests skip silently.
+        run: sudo apt-get update && sudo apt-get install -y nginx
+
       # --- Blocking -------------------------------------------------------
 
       - name: Tests

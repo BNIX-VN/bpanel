@@ -280,7 +280,7 @@ FASTCGI_CACHE_LOCATION_BLOCK = """        # BPANEL FASTCGI CACHE LOCATION BEGIN
         fastcgi_cache_valid 200 301 302 10m;
         fastcgi_cache_valid 404 1m;
         fastcgi_cache_min_uses 1;
-        fastcgi_cache_use_stale error timeout invalid_header updating http_500 http_502 http_503 http_504;
+        fastcgi_cache_use_stale error timeout invalid_header updating http_500 http_503;
         fastcgi_cache_background_update on;
         fastcgi_cache_revalidate on;
         fastcgi_cache_bypass $bpanel_skip_cache;
