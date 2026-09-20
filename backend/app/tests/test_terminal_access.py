@@ -190,3 +190,50 @@ def test_terminal_command_execution_does_not_block_the_event_loop():
     assert source.count("run_in_threadpool(\n        terminal.exec_command,") + source.count(
         "run_in_threadpool(\n                    terminal.exec_command,"
     ) == 2, "both the REST door and the WebSocket door must offload"
+
+
+def test_the_terminal_runs_in_a_mount_namespace_that_hides_other_tenants():
+    """open_basedir is a PHP mechanism; the terminal is not only PHP.
+
+    node, npm, npx, yarn and git get no open_basedir - deliberately, and the
+    assertion above says so. But `find . -maxdepth 0 -exec sh -c '<cmd>' \;`
+    also walks straight through require_terminal_path_args, which skips every
+    argument matching -*, so the allowlist itself is bypassable and the tenant
+    gets an arbitrary shell as their own uid.
+
+    Argument filtering cannot close that. The tenant already runs their own
+    code as their own uid through npm lifecycle scripts and git hooks, and no
+    scanner models program text. So the filesystem is confined instead: /home
+    becomes a tmpfs holding exactly one directory, the caller's own.
+    """
+    from pathlib import Path
+
+    helper = Path(__file__).resolve().parents[3] / "installer" / "files" / "bpanel-helper.sh"
+    script = helper.read_text(encoding="utf-8")
+
+    start = script.index("  terminal-exec)")
+    end = script.index("  nginx-upgrade-map-ensure)", start)
+    block = script[start:end]
+
+    # A private namespace, so nothing done inside it is visible to the host.
+    assert "unshare --mount --propagation private" in block
+
+    # /home is replaced wholesale and only the caller's own directory moved
+    # back. Binding the tenant's home somewhere would leave the others in
+    # place; the tmpfs is what removes them.
+    assert 'mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs "$jail_root"' in block
+    assert 'mount --move "$hold" "$jail_home"' in block
+
+    # Every arm goes through it: the jail is part of terminal_runner, which all
+    # of them exec, rather than something the PHP arms opt into.
+    joined = block.replace("\\n", " ")
+    runner_start = joined.index("terminal_runner=(")
+    runner = joined[runner_start : joined.index(")", runner_start)]
+    assert "unshare" in runner
+    assert "runuser -u" in runner
+
+    for line in joined.splitlines():
+        if line.strip().startswith('exec "${terminal_runner[@]}"'):
+            break
+    else:
+        raise AssertionError("no arm execs through terminal_runner any more")

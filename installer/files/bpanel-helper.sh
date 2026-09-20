@@ -5556,10 +5556,52 @@ PY
     # so the directory of each tool is appended at the call site.
     terminal_open_basedir="$(site_open_basedir "$user")"
 
+    # open_basedir above confines PHP. It does nothing for node, npm, npx,
+    # yarn or git, and nothing for `find . -maxdepth 0 -exec sh -c '<cmd>' \;`
+    # either - require_terminal_path_args skips every argument matching -*, so
+    # -exec walks straight through it and hands the tenant an arbitrary shell.
+    # Filtering arguments cannot fix that: the tenant already runs their own
+    # code as their own uid through npm lifecycle scripts and git hooks, and no
+    # scanner models program text.
+    #
+    # So confine the filesystem instead of the arguments. In a private mount
+    # namespace, /home is replaced by a tmpfs holding exactly one directory -
+    # this tenant's own - so every other customer's files are simply not there
+    # to read, whatever the tool. Site trees are 0644 and homes 0751 by design
+    # (see the header at the top of this file), which is what made the read
+    # possible; this removes the path rather than the permission.
+    #
+    # Outside the namespace /home is untouched, and the namespace dies with the
+    # command. /etc/passwd stays readable: it is world-readable system data and
+    # tools need it, and it no longer leads anywhere now the homes are gone.
+    terminal_jail='
+      set -e
+      jail_user="$1"
+      jail_root="$2"
+      jail_cwd="$3"
+      shift 3
+      jail_home="$jail_root/$jail_user"
+      hold="$(mktemp -d)"
+      mount --bind "$jail_home" "$hold"
+      mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs "$jail_root"
+      mkdir -p "$jail_home"
+      mount --move "$hold" "$jail_home"
+      rmdir "$hold" 2>/dev/null || true
+      # The parent cd-ed here before unshare, and the tmpfs briefly made that
+      # directory unreachable by path. Re-enter it so the command starts where
+      # the caller asked and pwd agrees with it.
+      cd "$jail_cwd"
+      exec "$@"
+    '
+
     # Kill the whole process group when the budget runs out. Composer, npm and
     # WP-CLI can wedge on a slow network, and without this the API worker would
     # block on the pipe until the client gives up.
-    terminal_runner=(runuser -u "$user" --)
+    terminal_runner=(
+      unshare --mount --propagation private --
+      bash -c "$terminal_jail" bpanel-terminal-jail "$user" "$HOME_ROOT" "$target"
+      runuser -u "$user" --
+    )
     if [[ -n "$terminal_timeout" ]] && command -v timeout >/dev/null 2>&1; then
       terminal_runner=(timeout --signal=TERM --kill-after=10 "${terminal_timeout}" runuser -u "$user" --)
     fi
