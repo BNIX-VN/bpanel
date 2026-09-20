@@ -5428,8 +5428,21 @@ PY
 
   # ---- WP-CLI as www-data ----------------------------------------------
   wp)
-    [[ $# -ge 1 ]] || deny "usage: wp <args...>"
-    exec runuser -u www-data -- env HOME=/var/www WP_CLI_PHP_ARGS='-d pcre.jit=0' php -d pcre.jit=0 /usr/local/bin/wp "$@"
+    # Narrowed to `--info`, which is all this verb is still for: the installer
+    # and the updater call it to prove the sudo trampoline works end to end
+    # (install.sh:678, update.sh:1252).
+    #
+    # It used to take arbitrary WP-CLI argv and run it as www-data. That is the
+    # widest identity on the box - usermod -aG puts www-data in EVERY site's
+    # group (:3596) plus bpanel-sites (:3513), and site secrets are 0640
+    # group-readable, so one `wp eval` there read every tenant's wp-config.php.
+    # It was reached whenever a Website row had no linux_user; services/
+    # wordpress.py now derives one instead of falling back here.
+    #
+    # If a real need for WP-CLI as www-data ever returns, it needs its own verb
+    # with a validated subcommand allowlist - not this one.
+    [[ $# -eq 1 && "${1:-}" == "--info" ]] || deny "usage: wp --info (use wp-site <user> ... to act on a website)"
+    exec runuser -u www-data -- env HOME=/var/www WP_CLI_PHP_ARGS='-d pcre.jit=0' php -d pcre.jit=0 /usr/local/bin/wp --info
     ;;
 
   wp-site)

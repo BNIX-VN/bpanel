@@ -237,3 +237,48 @@ def test_the_terminal_runs_in_a_mount_namespace_that_hides_other_tenants():
             break
     else:
         raise AssertionError("no arm execs through terminal_runner any more")
+
+
+def test_wp_cli_never_runs_as_www_data_for_a_website():
+    """www-data is the widest identity on the box.
+
+    usermod -aG puts it in EVERY site's group (bpanel-helper.sh:3596) and in
+    bpanel-sites (:3513), while wp-config.php, .env and .my.cnf are 0640
+    group-readable - verified on a live server, where www-data read another
+    tenant's wp-config.php. WP-CLI also loads the target install's own plugins,
+    which is tenant-authored PHP. So WP-CLI must never run as www-data for a
+    website; it runs as that site's own Linux user through wp-site.
+
+    The old `wp` verb took arbitrary WP-CLI argv as www-data and was reached
+    whenever a Website row had no linux_user. It is now narrowed to --info,
+    which is the only thing still using it: install.sh and update.sh call it to
+    prove the sudo trampoline works.
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[3]
+    helper = (root / "installer" / "files" / "bpanel-helper.sh").read_text(encoding="utf-8")
+    wordpress = (root / "backend" / "app" / "services" / "wordpress.py").read_text(encoding="utf-8")
+
+    start = helper.index("\n  wp)\n")
+    block = helper[start : helper.index("  wp-site)", start)]
+    assert '"${1:-}" == "--info"' in block, "the wp verb must accept only --info"
+    assert '"$@"' not in block, "the wp verb must not forward caller argv"
+
+    # And nothing in the panel routes a website through it any more.
+    assert 'privileged("wp"' not in wordpress
+    assert '"wp-site" if linux_user else "wp"' not in wordpress
+    assert "_site_user_for_path" in wordpress
+
+
+def test_the_installer_health_check_still_matches_the_narrowed_verb():
+    """The one caller that is left. If it ever needs more than --info, the verb
+    needs a real allowlist rather than a quiet widening."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[3]
+    for name in ("install.sh", "update.sh"):
+        text = (root / "installer" / name).read_text(encoding="utf-8")
+        for line in text.splitlines():
+            if "bpanel-helper wp " in line:
+                assert "wp --info" in line, f"{name}: {line.strip()[:90]}"

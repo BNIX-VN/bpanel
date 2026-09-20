@@ -178,6 +178,28 @@ def _wp_php_flag(php_version: str | None) -> list[str]:
     return [f"--php-version={version}"] if version else []
 
 
+def _site_user_for_path(path: str, linux_user: str | None) -> str:
+    """The Linux user WP-CLI must run as for a site at this path.
+
+    Never falls back to www-data. That account is a supplementary member of
+    every site's group (bpanel-helper.sh:3596) and of bpanel-sites (:3513),
+    while wp-config.php, .env and .my.cnf are 0640 group-readable - so WP-CLI
+    running as www-data could read every tenant's database credentials, and
+    WP-CLI loads the target install's own plugins, which is tenant-authored
+    PHP. Panel-created sites always set linux_user; the fallback existed for
+    legacy and imported rows, and derives the owner from the path instead.
+    """
+    if linux_user:
+        return site_users.validate_linux_user(linux_user)
+    try:
+        parts = Path(path).resolve().relative_to(site_users.HOME_ROOT.resolve()).parts
+    except ValueError as exc:
+        raise ValueError(f"Cannot determine the site owner for {path}") from exc
+    if not parts:
+        raise ValueError(f"Cannot determine the site owner for {path}")
+    return site_users.validate_linux_user(parts[0])
+
+
 def wp_update(path: str, action: str, linux_user: str | None = None, php_version: str | None = None):
     if action == "core":
         args = ["core", "update", f"--path={path}", "--allow-root"]
@@ -187,13 +209,12 @@ def wp_update(path: str, action: str, linux_user: str | None = None, php_version
         args = ["theme", "update", "--all", f"--path={path}", "--allow-root"]
     else:
         raise ValueError("Unsupported WordPress action")
-    if linux_user:
-        return shell.privileged(
-            "wp-site",
-            helper_args=[linux_user, *_wp_php_flag(php_version), *args],
-            fallback=["wp", *args],
-        )
-    return shell.privileged("wp", helper_args=args, fallback=["wp", *args])
+    site_user = _site_user_for_path(path, linux_user)
+    return shell.privileged(
+        "wp-site",
+        helper_args=[site_user, *_wp_php_flag(php_version), *args],
+        fallback=["wp", *args],
+    )
 
 
 def reset_admin_password(path: str, user: str, password: str, linux_user: str | None = None, php_version: str | None = None):
@@ -201,9 +222,10 @@ def reset_admin_password(path: str, user: str, password: str, linux_user: str | 
     if not isinstance(password, str) or len(password) < 10 or "\x00" in password:
         raise ValueError("Password must be at least 10 characters")
     args = ["user", "update", safe_user, "--user_pass=/dev/stdin", f"--path={path}", "--allow-root"]
+    site_user = _site_user_for_path(path, linux_user)
     return shell.privileged(
-        "wp-site" if linux_user else "wp",
-        helper_args=[linux_user, *_wp_php_flag(php_version), *args] if linux_user else args,
+        "wp-site",
+        helper_args=[site_user, *_wp_php_flag(php_version), *args],
         fallback=["wp", *args],
         input=password,
         sensitive=True,
