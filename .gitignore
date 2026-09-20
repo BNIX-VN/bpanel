@@ -19,10 +19,33 @@ dist/
 npm-debug.log*
 
 # Env / secrets
+#
+# Widened after run-1 of the security audit, which found this list covered
+# .env and .env.local but not the other .env.* spellings, and covered *.pem
+# and *.key but not the certificate, keystore or SSH key-file extensions.
+# token.txt is here because one was left in the working tree during that run,
+# unignored, while `git add -A` was being used - it survived on ordering alone.
 .env
-.env.local
+.env*.local
+.env.*
+!.env.example
 *.pem
 *.key
+*.crt
+*.p12
+*.pfx
+*.jks
+id_rsa
+id_ed25519
+id_ecdsa
+token.txt
+*.token
+credentials.json
+secrets.json
+
+# Tooling index, built from this repository. The .zst suffix slipped past the
+# *.db rule below, which is how a 1.6 MB copy came to be tracked.
+.codebase-memory/
 
 # OS
 .DS_Store
