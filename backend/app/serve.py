@@ -31,9 +31,22 @@ from app.services import panel_ipv6
 
 logger = logging.getLogger("bpanel")
 
-# Only the local Nginx may set X-Forwarded-For / X-Forwarded-Proto. A direct
-# hit on the panel port cannot spoof the audit log IP or the rate-limit key.
-TRUSTED_FORWARDERS = "127.0.0.1"
+# Nothing is trusted to set X-Forwarded-For / X-Forwarded-Proto, because nothing
+# sits in front of the panel: this process terminates TLS itself (see the SNI
+# store below) and binds 0.0.0.0 directly. The installer writes no vhost for the
+# panel port - the only proxy_pass BPanel generates is for tenant application
+# sites - so the "local Nginx" this used to trust does not exist.
+#
+# Trusting 127.0.0.1 was therefore trusting every local process, and on a
+# shared-hosting box that includes every tenant's PHP-FPM pool and Node app.
+# uvicorn's ProxyHeadersMiddleware rewrites scope["client"] from the header for
+# any trusted peer, and that value is the login rate-limit key (api/auth.py) and
+# the audit log's source IP (services/audit.py) - so a tenant could evade the
+# lockout and write any address they liked into the panel's own audit trail.
+#
+# If a deployment ever does put a reverse proxy in front, this becomes a setting
+# that names that proxy - it must not go back to a blanket loopback trust.
+TRUSTED_FORWARDERS: list[str] = []
 
 
 def dual_stack_socket(port: int) -> socket.socket | None:
@@ -114,7 +127,7 @@ def build_config() -> uvicorn.Config:
     options: dict = {
         "host": "0.0.0.0",
         "port": _port(),
-        "proxy_headers": True,
+        "proxy_headers": False,
         "forwarded_allow_ips": TRUSTED_FORWARDERS,
         "log_config": _log_config(),
     }

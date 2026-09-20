@@ -331,6 +331,36 @@ def _record_success(key: str) -> None:
         _login_lockouts.pop(key, None)
 
 
+def _redis_clear_window(key: str) -> None:
+    try:
+        _redis().delete(_rate_limit_key("attempts", key))
+    except RedisError as exc:
+        raise _rate_limit_unavailable(exc) from exc
+
+
+def _clear_short_window(key: str) -> None:
+    """Clear only the short burst window, keeping failures and any lockout.
+
+    Used for the source-address key after a successful login. _record_success
+    wipes all three counters, and the lockout lives only on the IP key - so a
+    tenant holding any one valid credential could guess at another account,
+    log into their own before the 20th failure, and start over with a clean
+    slate forever. Their own success says nothing about the failures, so the
+    failure history and the lockout stay and expire on their own TTLs.
+    """
+    if _rate_limit_backend() == "redis":
+        try:
+            _redis_clear_window(key)
+            return
+        except HTTPException as exc:
+            if exc.status_code == 503:
+                _log_redis_fallback(exc.detail)
+            else:
+                raise
+    with _login_lock:
+        _login_attempts.pop(key, None)
+
+
 def _issue_login_session(
     response: Response,
     request: Request,
@@ -492,7 +522,9 @@ def login(
                 detail="Invalid authentication code",
             )
 
-    _record_success(ip_key)
+    # The source key keeps its failure history and lockout; only this account's
+    # own counters are fully cleared.
+    _clear_short_window(ip_key)
     _record_success(user_key)
     if needs_rehash(user.hashed_password):
         try:

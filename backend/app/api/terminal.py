@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisco
 from jose import JWTError, jwt
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from app.api.deps import get_current_user
 from app.core.config import settings
@@ -122,7 +123,13 @@ async def exec_command(
     """
     website = await get_user_website(website_id, db, current_user)
 
-    result = terminal.exec_command(
+    # terminal.exec_command is subprocess.run under the hood, with a timeout of
+    # up to 915s for composer/npm/git/curl and friends. This handler is async,
+    # so calling it inline would block the one uvicorn event loop that serves
+    # every other tenant, the admin UI and /auth/login for that whole time -
+    # `curl <host-that-never-answers>` is enough. Hand it to the threadpool.
+    result = await run_in_threadpool(
+        terminal.exec_command,
         website.linux_user,
         request.command,
         cwd=terminal.default_cwd(website.root_path),
@@ -293,7 +300,10 @@ async def terminal_websocket(
                     await websocket.send_json({"type": "exit", "code": 0})
                     continue
 
-                result = terminal.exec_command(
+                # Same reason as the REST door above: blocking here stalls the
+                # shared event loop, not just this socket.
+                result = await run_in_threadpool(
+                    terminal.exec_command,
                     website.linux_user,
                     command,
                     cwd=cwd,

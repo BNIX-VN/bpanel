@@ -118,3 +118,38 @@ def test_php_run_through_the_terminal_is_confined_to_the_tenant():
     for line in block.splitlines():
         if '"$php_bin"' in line and line.strip().startswith("exec "):
             assert "open_basedir" in line, f"unconfined PHP invocation: {line.strip()[:90]}"
+
+
+def test_terminal_command_execution_does_not_block_the_event_loop():
+    """BPANEL: one tenant must not be able to stall the whole control panel.
+
+    Both terminal doors are `async def`, so FastAPI runs them ON the event
+    loop rather than in the threadpool. terminal.exec_command is subprocess.run
+    with a timeout of up to 915s for composer/npm/git/curl and friends, and
+    serve.py runs a single uvicorn worker with no `workers` option - so calling
+    it inline froze every other tenant's request, the admin UI and /auth/login
+    for that whole time. `curl <host-that-never-answers>` was enough.
+
+    17 of 18 API modules use plain `def` and get the threadpool for free;
+    terminal.py is the outlier that has to ask for it.
+    """
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[1] / "api" / "terminal.py"
+    ).read_text(encoding="utf-8")
+
+    assert "from starlette.concurrency import run_in_threadpool" in source
+
+    # Every call to the blocking helper must go through the threadpool.
+    for line_no, line in enumerate(source.splitlines(), 1):
+        stripped = line.strip()
+        if stripped.startswith("result = terminal.exec_command("):
+            raise AssertionError(
+                f"terminal.py:{line_no} calls exec_command inline on the event "
+                "loop; wrap it in run_in_threadpool"
+            )
+
+    assert source.count("run_in_threadpool(\n        terminal.exec_command,") + source.count(
+        "run_in_threadpool(\n                    terminal.exec_command,"
+    ) == 2, "both the REST door and the WebSocket door must offload"
