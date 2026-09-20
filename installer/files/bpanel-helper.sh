@@ -3436,6 +3436,24 @@ require_terminal_cwd() {
   echo "$resolved"
 }
 
+# The open_basedir a PHP interpreter started for a site user must carry.
+#
+# One definition, three callers: terminal-exec, the wp-site verb, and (mirrored
+# in Python, because it renders a crontab line) services/cron.py. It used to
+# live inline in terminal-exec only, which is how wp-site and cron came to
+# start unconfined interpreters while the terminal was confined.
+#
+# The boundary is the tenant's own home, not one site root: a customer with
+# several sites still has to work across them, and the leak being closed is
+# between customers. /var/lib/php/{sessions,uploads}/<user> match the FPM pool.
+# /tmp and /usr/share/php are what composer and PEAR-era libraries expect. A
+# caller that runs a phar appends that tool's directory itself.
+site_open_basedir() {
+  local user="$1"
+  require_linux_user "$user"
+  printf '%s' "$HOME_ROOT/$user:/var/lib/php/sessions/$user:/var/lib/php/uploads/$user:/tmp:/usr/share/php"
+}
+
 require_terminal_path_args() {
   local user="$1" cwd="$2" arg resolved
   shift 2
@@ -5415,6 +5433,13 @@ PY
     ;;
 
   wp-site)
+    # WP-CLI bootstraps the target install's own wp-config.php and active
+    # plugins, so this is tenant-authored PHP. It needs the same confinement
+    # the terminal's wp branch applies (:5545) - without it this verb was the
+    # third place the panel started an unconfined interpreter as a site user,
+    # after the terminal (fixed) and cron (fixed in services/cron.py). The
+    # value is built by site_open_basedir so the two branches cannot drift.
+    #
     # WP-CLI has to run under the same PHP the site runs, not whatever the
     # `php` alternative happens to point at. On a server with several PHP
     # versions installed those differ, and the difference is not cosmetic: a
@@ -5433,7 +5458,10 @@ PY
       shift
     fi
     [[ $# -ge 1 ]] || deny "usage: wp-site <site-user> [--php-version=<version>] <args...>"
-    exec runuser -u "$user" -- env HOME="$HOME_ROOT/$user" WP_CLI_PHP_ARGS='-d pcre.jit=0' "$wp_php" -d pcre.jit=0 /usr/local/bin/wp "$@"
+    wp_site_basedir="$(site_open_basedir "$user"):/usr/local/bin"
+    exec runuser -u "$user" -- env HOME="$HOME_ROOT/$user" \
+      WP_CLI_PHP_ARGS="-d pcre.jit=0 -d open_basedir=$wp_site_basedir" \
+      "$wp_php" -d pcre.jit=0 -d open_basedir="$wp_site_basedir" /usr/local/bin/wp "$@"
     ;;
 
   # ---- crontab managed for www-data ------------------------------------
@@ -5519,7 +5547,7 @@ PY
     # /usr/share/php are what composer and PEAR-era libraries expect. The
     # interpreter must also be able to read the phar it is being asked to run,
     # so the directory of each tool is appended at the call site.
-    terminal_open_basedir="$HOME_ROOT/$user:/var/lib/php/sessions/$user:/var/lib/php/uploads/$user:/tmp:/usr/share/php"
+    terminal_open_basedir="$(site_open_basedir "$user")"
 
     # Kill the whole process group when the budget runs out. Composer, npm and
     # WP-CLI can wedge on a slow network, and without this the API worker would

@@ -133,7 +133,9 @@ def _validate_redirection(tokens: list[str], document_root: str | Path, site_roo
     return " ".join(parts)
 
 
-def _validate_php_command(args: list[str], document_root: str | Path, php_bin: str) -> str:
+def _validate_php_command(
+    args: list[str], document_root: str | Path, php_bin: str, cron_user: str
+) -> str:
     option_count = 1 if len(args) > 1 and args[1] in ALLOWED_PHP_OPTIONS else 0
     script_index = 1 + option_count
     if len(args) <= script_index or args[script_index].startswith("-"):
@@ -150,23 +152,78 @@ def _validate_php_command(args: list[str], document_root: str | Path, php_bin: s
     except ValueError as exc:
         raise ValueError("PHP cron scripts must be inside this website's public_html directory") from exc
 
-    resolved = [php_bin, *args[1:script_index], str(candidate), *args[script_index + 1:]]
+    # The script has to live inside this website, but its CONTENTS are whatever
+    # the customer wrote - so the interpreter needs the same confinement the
+    # terminal and the FPM pool give it. ALLOWED_PHP_OPTIONS is {"-q"}, so the
+    # caller cannot supply or override this flag.
+    resolved = [
+        php_bin,
+        "-d", f"open_basedir={open_basedir_for(cron_user)}",
+        *args[1:script_index],
+        str(candidate),
+        *args[script_index + 1:],
+    ]
     return " ".join(shlex.quote(arg) for arg in resolved)
 
 
-def _validate_wp_command(args: list[str], php_bin: str) -> str:
+def open_basedir_for(cron_user: str) -> str:
+    """The same confinement the panel terminal gives a PHP CLI.
+
+    bpanel-helper.sh:30-33 states the model: sites stay apart by the PHP-FPM
+    open_basedir of each pool, by the SFTP chroot, and by the panel terminal -
+    "not by these bits", the bits being the 0644/0755 modes site trees carry by
+    design. A cron job is none of those three, so until this was added the
+    interpreter cron started could read every other customer's files. The
+    helper's own comment at :5506-5513 records that exact read being verified
+    on a live server before the terminal was fixed.
+
+    Kept byte-identical to terminal_open_basedir (bpanel-helper.sh:5522) so the
+    two cannot drift: the tenant's whole home, not one site root, because a
+    customer with several sites still has to work across them.
+    """
+    user = site_users.validate_linux_user(cron_user)
+    # as_posix(), not str(): HOME_ROOT is a pathlib.Path, and str() renders it
+    # with the separator of whatever platform imported the module. The crontab
+    # line always runs on the Linux server, so the value must not depend on
+    # where the panel code happens to be read.
+    return (
+        f"{site_users.HOME_ROOT.as_posix()}/{user}"
+        f":/var/lib/php/sessions/{user}"
+        f":/var/lib/php/uploads/{user}"
+        ":/tmp:/usr/share/php"
+    )
+
+
+def _validate_wp_command(args: list[str], php_bin: str, cron_user: str) -> str:
     normalized = [arg for arg in args if arg != "--allow-root"]
     if not any(tuple(normalized[:len(prefix)]) == prefix for prefix in ALLOWED_COMMAND_PREFIXES):
         raise ValueError("Only safe WP-CLI maintenance commands or PHP scripts inside this website are allowed")
     resolved = [*normalized, "--allow-root"]
-    if php_bin != "php" and WP_CLI_PATH.exists():
-        # The wp shebang is `#!/usr/bin/env php`, which would pick the system
-        # default PHP instead of the version this website runs on.
-        resolved = [php_bin, str(WP_CLI_PATH), *resolved[1:]]
+    if WP_CLI_PATH.exists():
+        # Two reasons to name the interpreter explicitly rather than let the
+        # `#!/usr/bin/env php` shebang pick one. It would take the system
+        # default instead of the version this website runs on; and a shebang
+        # leaves nowhere to put -d, so the interpreter would run unconfined.
+        # WP-CLI needs its own directory on the path as well, since the phar it
+        # is being asked to run has to be readable - the terminal's wp branch
+        # does the same (bpanel-helper.sh:5545).
+        basedir = f"{open_basedir_for(cron_user)}:{WP_CLI_PATH.parent}"
+        resolved = [
+            php_bin,
+            "-d", f"open_basedir={basedir}",
+            str(WP_CLI_PATH),
+            *resolved[1:],
+        ]
     return " ".join(shlex.quote(arg) for arg in resolved)
 
 
-def _validate_command(command: str, document_root: str | Path, site_root: str | Path, php_bin: str) -> str:
+def _validate_command(
+    command: str,
+    document_root: str | Path,
+    site_root: str | Path,
+    php_bin: str,
+    cron_user: str,
+) -> str:
     args = shlex.split(command)
     if not args:
         raise ValueError("Cron command is required")
@@ -180,11 +237,11 @@ def _validate_command(command: str, document_root: str | Path, site_root: str | 
         # Listed WP-CLI entries read back as `<php binary> /usr/local/bin/wp ...`,
         # so drop the interpreter prefix before validating them again.
         if len(args) > 1 and Path(args[1]).name == "wp":
-            body = _validate_wp_command(["wp", *args[2:]], php_bin)
+            body = _validate_wp_command(["wp", *args[2:]], php_bin, cron_user)
         else:
-            body = _validate_php_command(args, document_root, php_bin)
+            body = _validate_php_command(args, document_root, php_bin, cron_user)
     else:
-        body = _validate_wp_command(args, php_bin)
+        body = _validate_wp_command(args, php_bin, cron_user)
     suffix = _validate_redirection(redirection, document_root, site_root)
     return f"{body} {suffix}".strip()
 
@@ -212,17 +269,52 @@ def _parse_cron_line(index: int, line: str) -> dict:
     if command.startswith("cd ") and " && " in command:
         command = command.split(" && ", 1)[1].strip()
     command = _unescape_percent(command).replace(" --allow-root", "").strip()
+    command = _strip_open_basedir(command)
     return {"index": index, "schedule": schedule, "command": command, "line": line}
+
+
+def _strip_open_basedir(command: str) -> str:
+    """Hide the confinement flag the renderer adds.
+
+    add_cron emits `php -d open_basedir=... script.php`. Without this the flag
+    would come back through the UI and be re-submitted, and _validate_php_command
+    would reject it - ALLOWED_PHP_OPTIONS is {"-q"}, so `-d` is not an option a
+    caller may pass. It is ours to add, not the customer's, so it is ours to
+    take back out.
+    """
+    try:
+        args = shlex.split(command)
+    except ValueError:
+        return command
+    cleaned: list[str] = []
+    skip_next = False
+    for i, arg in enumerate(args):
+        if skip_next:
+            skip_next = False
+            continue
+        if arg == "-d" and i + 1 < len(args) and args[i + 1].startswith("open_basedir="):
+            skip_next = True
+            continue
+        if arg.startswith("-dopen_basedir="):
+            continue
+        cleaned.append(arg)
+    if cleaned == args:
+        return command
+    return " ".join(shlex.quote(arg) for arg in cleaned)
 
 
 def add_cron(website: Website, schedule: str, command: str) -> str:
     safe_schedule = _validate_schedule(schedule)
     document_root = site_users.document_root(website.root_path)
-    safe_command = _validate_command(command, document_root, website.root_path, php_binary(website))
+    # The cron user has to be known before the command is rendered: it is what
+    # open_basedir confines the interpreter to.
+    cron_user = cron_user_for_website(website)
+    safe_command = _validate_command(
+        command, document_root, website.root_path, php_binary(website), cron_user
+    )
     safe_domain = _validate_domain(website.domain)
     marker = f"# bpanel:{safe_domain}"
     line = f"{safe_schedule} cd {shlex.quote(str(document_root))} && {_escape_percent(safe_command)} {marker}"
-    cron_user = cron_user_for_website(website)
     if cron_user != "www-data":
         runtime_php_version = website.php_version if (website.app_type or "wordpress") in {"wordpress", "php"} else None
         site_users.ensure_site_runtime(website.domain, website.root_path, runtime_php_version, cron_user)

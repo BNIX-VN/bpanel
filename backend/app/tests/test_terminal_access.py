@@ -110,14 +110,51 @@ def test_php_run_through_the_terminal_is_confined_to_the_tenant():
     block = script[start:end]
 
     # The value is built once from the tenant's home, not a single site root:
-    # a customer with several sites still has to work across their own.
-    assert 'terminal_open_basedir="$HOME_ROOT/$user:' in block
+    # a customer with several sites still has to work across their own. It now
+    # lives in one shared function because the terminal was not the only
+    # pipeline that starts a PHP CLI as a site user - wp-site and cron both
+    # did, unconfined, for as long as this assertion only looked in here.
+    assert 'site_open_basedir() {' in script
+    assert '"$HOME_ROOT/$user:/var/lib/php/sessions/$user:' in script
+    assert 'terminal_open_basedir="$(site_open_basedir "$user")"' in block
 
     # Every PHP entry point uses it. node/npm/npx/yarn/git are deliberately
     # absent: open_basedir is a PHP mechanism and does nothing for them.
     for line in block.splitlines():
         if '"$php_bin"' in line and line.strip().startswith("exec "):
             assert "open_basedir" in line, f"unconfined PHP invocation: {line.strip()[:90]}"
+
+
+def test_wp_site_runs_under_the_same_confinement_as_the_terminal():
+    """The verb the terminal's own guarantee did not cover.
+
+    wp-site execs WP-CLI as the site user, and WP-CLI bootstraps that install's
+    wp-config.php and active plugins - tenant-authored PHP. It carried no
+    open_basedir while the terminal's near-identical wp branch set it twice.
+    The old assertion above could not see it, because it sliced the helper down
+    to the terminal-exec block first.
+    """
+    from pathlib import Path
+
+    helper = Path(__file__).resolve().parents[3] / "installer" / "files" / "bpanel-helper.sh"
+    script = helper.read_text(encoding="utf-8")
+
+    start = script.index("  wp-site)")
+    end = script.index("  cron-list)", start)
+    block = script[start:end]
+
+    assert "site_open_basedir" in block, "wp-site must use the shared confinement"
+    # Both halves: WP-CLI honours WP_CLI_PHP_ARGS for the PHP it spawns, and the
+    # interpreter flags cover the phar bootstrap itself.
+    assert "WP_CLI_PHP_ARGS=" in block and "open_basedir=" in block
+
+    # The exec wraps across lines, so join backslash continuations before
+    # scanning - otherwise this reads only the first physical line and passes
+    # on a command whose confinement sits on the next one.
+    joined = block.replace("\\\n", " ")
+    for line in joined.splitlines():
+        if line.strip().startswith("exec runuser"):
+            assert "open_basedir" in line, f"unconfined WP-CLI: {line.strip()[:90]}"
 
 
 def test_terminal_command_execution_does_not_block_the_event_loop():
