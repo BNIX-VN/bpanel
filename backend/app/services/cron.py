@@ -199,21 +199,25 @@ def _validate_wp_command(args: list[str], php_bin: str, cron_user: str) -> str:
     if not any(tuple(normalized[:len(prefix)]) == prefix for prefix in ALLOWED_COMMAND_PREFIXES):
         raise ValueError("Only safe WP-CLI maintenance commands or PHP scripts inside this website are allowed")
     resolved = [*normalized, "--allow-root"]
-    if WP_CLI_PATH.exists():
-        # Two reasons to name the interpreter explicitly rather than let the
-        # `#!/usr/bin/env php` shebang pick one. It would take the system
-        # default instead of the version this website runs on; and a shebang
-        # leaves nowhere to put -d, so the interpreter would run unconfined.
-        # WP-CLI needs its own directory on the path as well, since the phar it
-        # is being asked to run has to be readable - the terminal's wp branch
-        # does the same (bpanel-helper.sh:5545).
-        basedir = f"{open_basedir_for(cron_user)}:{WP_CLI_PATH.parent}"
-        resolved = [
-            php_bin,
-            "-d", f"open_basedir={basedir}",
-            str(WP_CLI_PATH),
-            *resolved[1:],
-        ]
+    # Two reasons to name the interpreter explicitly rather than let WP-CLI's
+    # `#!/usr/bin/env php` shebang pick one. It would take the system default
+    # instead of the version this website runs on; and a shebang leaves nowhere
+    # to put -d, so the interpreter would run unconfined. WP-CLI needs its own
+    # directory on the path as well, since the phar it is being asked to run
+    # has to be readable - the terminal's wp branch does the same
+    # (bpanel-helper.sh:5545).
+    #
+    # This used to be conditional on WP_CLI_PATH.exists(). That made the
+    # rendered command depend on when it was saved rather than on what runs,
+    # and the absent branch emitted an interpreter with no confinement at all.
+    # install.sh:543 puts wp at exactly this path on every server.
+    basedir = f"{open_basedir_for(cron_user)}:{WP_CLI_PATH.parent}"
+    resolved = [
+        php_bin,
+        "-d", f"open_basedir={basedir}",
+        str(WP_CLI_PATH),
+        *resolved[1:],
+    ]
     return " ".join(shlex.quote(arg) for arg in resolved)
 
 

@@ -47,9 +47,16 @@ def site_roots(tmp_path):
 def test_cron_command_allows_php_scripts_inside_document_root(site_roots, command, script, extra):
     site_root, document_root = site_roots
 
-    result = cron._validate_command(command, document_root, site_root, "/usr/bin/php8.1")  # noqa: SLF001
+    result = cron._validate_command(command, document_root, site_root, "/usr/bin/php8.1", "siteuser")  # noqa: SLF001
 
-    assert result == f"/usr/bin/php8.1 -q {shlex.quote(str(document_root / script))}{extra}"
+    # The interpreter carries the tenant's open_basedir: cron is not one of the
+    # three mechanisms the helper says keeps sites apart (bpanel-helper.sh:30-33),
+    # so without it this PHP could read every other customer's files.
+    basedir = cron.open_basedir_for("siteuser")
+    assert result == (
+        f"/usr/bin/php8.1 -d open_basedir={basedir} -q "
+        f"{shlex.quote(str(document_root / script))}{extra}"
+    )
 
 
 @pytest.mark.parametrize(
@@ -65,16 +72,27 @@ def test_cron_command_rejects_unsafe_php_commands(site_roots, command):
     site_root, document_root = site_roots
 
     with pytest.raises(ValueError):
-        cron._validate_command(command, document_root, site_root, "php")  # noqa: SLF001
+        cron._validate_command(command, document_root, site_root, "php", "siteuser")  # noqa: SLF001
 
 
 def test_cron_command_keeps_wp_cli_allow_root_behavior(site_roots, monkeypatch):
     site_root, document_root = site_roots
     monkeypatch.setattr(cron, "WP_CLI_PATH", site_root / "missing-wp")
 
-    result = cron._validate_command("wp cron event run --due-now", document_root, site_root, "php")  # noqa: SLF001
+    result = cron._validate_command("wp cron event run --due-now", document_root, site_root, "php", "siteuser")  # noqa: SLF001
 
-    assert result == "wp cron event run --due-now --allow-root"
+    # --allow-root is still appended, which is what this test guards. The
+    # interpreter prefix and its confinement are no longer conditional on
+    # WP_CLI_PATH existing at render time: a cron line runs later, not when it
+    # is saved, and the absent branch used to emit an unconfined interpreter.
+    assert result.endswith("cron event run --due-now --allow-root")
+    # Not "-d open_basedir=" literally: this test patches WP_CLI_PATH to a
+    # tmp_path, so on a Windows dev box the appended parent is backslashed and
+    # shlex.quote wraps the whole value. On the Linux target it is
+    # /usr/local/bin and nothing is quoted.
+    assert "-d " in result
+    assert "open_basedir=/home/siteuser:" in result
+    assert str(site_root / "missing-wp") in result
 
 
 @pytest.mark.xfail(
