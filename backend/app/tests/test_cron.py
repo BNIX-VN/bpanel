@@ -62,7 +62,8 @@ def test_add_cron_pins_the_website_php_binary(site, monkeypatch, captured_cronta
 
     line = cron.add_cron(_website(site), "*/5 * * * *", "php -q queue.php")
 
-    assert f"&& {shlex.quote(str(bin_dir / 'php8.1'))} -q " in line
+    assert f"&& {shlex.quote(str(bin_dir / 'php8.1'))} -d " in line
+    assert " -q " in line
     assert shlex.quote(str(site / "public_html" / "queue.php")) in line
     assert line.endswith("# bpanel:example.test")
 
@@ -134,8 +135,9 @@ def test_wp_cli_commands_run_on_the_site_php_binary(site, monkeypatch, captured_
     line = cron.add_cron(_website(site), "*/5 * * * *", "wp cron event run --due-now")
 
     php_bin, wp_bin = shlex.quote(str(bin_dir / 'php8.1')), shlex.quote(str(wp))
-    assert f"&& {php_bin} {wp_bin} wp cron event run --due-now --allow-root" not in line
-    assert f"&& {php_bin} {wp_bin} cron event run --due-now --allow-root" in line
+    assert f"&& {php_bin} -d " in line
+    assert f"{wp_bin} wp cron event run --due-now --allow-root" not in line
+    assert f"{wp_bin} cron event run --due-now --allow-root" in line
 
 
 def test_listed_wp_entry_can_be_resubmitted(site, monkeypatch, captured_crontab, tmp_path):
@@ -154,7 +156,8 @@ def test_listed_wp_entry_can_be_resubmitted(site, monkeypatch, captured_crontab,
     )
 
     php_bin, wp_bin = shlex.quote(str(bin_dir / 'php8.1')), shlex.quote(str(wp))
-    assert f"{php_bin} {wp_bin} cron event run --due-now --allow-root" in line
+    assert f"{php_bin} -d " in line
+    assert f"{wp_bin} cron event run --due-now --allow-root" in line
 
 
 def test_add_cron_still_rejects_arbitrary_commands(site, monkeypatch, captured_crontab, tmp_path):
@@ -191,3 +194,79 @@ def test_retarget_php_binary_rewrites_existing_lines(site, monkeypatch, tmp_path
     # The unrelated website keeps its own interpreter and its .php argument is untouched.
     assert "/usr/bin/php8.1 '/home/other/public_html/b.php'" in written[0]
     assert "/home/siteuser/public_html/a.php" in written[0]
+
+
+def test_cron_php_runs_under_open_basedir(site, monkeypatch, captured_crontab, tmp_path):
+    """BPANEL: a cron interpreter must be confined like the terminal's.
+
+    bpanel-helper.sh:30-33 states the model - sites stay apart by the PHP-FPM
+    open_basedir of each pool, by the SFTP chroot and by the panel terminal.
+    Cron is none of those three, so until this was added the interpreter cron
+    started could read every other customer's files: site trees are 0644/0755
+    by design and /home/<user> is 0751, traversable once the name is known,
+    which /etc/passwd supplies. The helper's own comment at :5506-5513 records
+    that read being verified on a live server before the terminal was fixed.
+
+    Cron also has no terminal_enabled gate - the flag is read only in
+    api/terminal.py - so this path is open to exactly the accounts an operator
+    denied a shell.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "php8.1").write_text("", encoding="utf-8")
+    monkeypatch.setattr(cron, "PHP_BIN_DIR", bin_dir)
+
+    line = cron.add_cron(_website(site), "*/5 * * * *", "php -q queue.php")
+
+    assert "-d open_basedir=" in line
+    # The tenant's whole home, not one site root: a customer with several sites
+    # still has to work across their own. Matches terminal_open_basedir.
+    assert "/home/siteuser:" in line
+    assert "/var/lib/php/sessions/siteuser:" in line
+    assert "/var/lib/php/uploads/siteuser:" in line
+    assert "/tmp:/usr/share/php" in line
+
+
+def test_cron_wp_cli_runs_under_open_basedir(site, monkeypatch, captured_crontab, tmp_path):
+    """WP-CLI bootstraps the tenant's own wp-config.php and plugins."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "php8.1").write_text("", encoding="utf-8")
+    wp = tmp_path / "wp"
+    wp.write_text("", encoding="utf-8")
+    monkeypatch.setattr(cron, "PHP_BIN_DIR", bin_dir)
+    monkeypatch.setattr(cron, "WP_CLI_PATH", wp)
+
+    line = cron.add_cron(_website(site), "*/5 * * * *", "wp cron event run --due-now")
+
+    # Not "-d open_basedir=" literally: the WP-CLI form appends the phar's own
+    # directory, and on a Windows dev box that is a backslashed path, so
+    # shlex.quote wraps the whole value. On the Linux target it is
+    # /usr/local/bin and nothing is quoted. Assert the parts, not the spacing.
+    assert "-d " in line
+    assert "open_basedir=" in line
+    assert "/home/siteuser:" in line
+    # The phar itself has to be readable, so its directory is appended - the
+    # terminal's wp branch does the same (bpanel-helper.sh:5545).
+    assert str(wp.parent) in line
+
+
+def test_the_confinement_flag_is_not_echoed_back_to_the_customer(site, monkeypatch, captured_crontab, tmp_path):
+    """The flag is ours to add, so it is ours to hide on read-back.
+
+    ALLOWED_PHP_OPTIONS is {"-q"}, so if -d came back through the UI and were
+    re-submitted, _validate_php_command would reject it and editing an existing
+    cron entry would break.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "php8.1").write_text("", encoding="utf-8")
+    monkeypatch.setattr(cron, "PHP_BIN_DIR", bin_dir)
+
+    line = cron.add_cron(_website(site), "*/5 * * * *", "php -q queue.php")
+    parsed = cron._parse_cron_line(0, line)
+
+    assert "open_basedir" not in parsed["command"]
+    # and the round trip still renders, rather than raising
+    again = cron.add_cron(_website(site), "*/5 * * * *", parsed["command"])
+    assert "-d open_basedir=" in again

@@ -1021,7 +1021,19 @@ MYCNF
 
 ensure_panel_runtime_ownership() {
   id -u bpanel >/dev/null 2>&1 || return 0
-  [[ -d "$APP_DIR/backend" ]] && chown -R bpanel:bpanel "$APP_DIR/backend" 2>/dev/null || true
+  # Everything under backend/ goes to bpanel EXCEPT .venv. This script runs as
+  # root and does `source .venv/bin/activate`, `.venv/bin/pip install` and
+  # `.venv/bin/python -m py_compile` with the cwd set to backend/ - so a
+  # bpanel-owned venv (or a bpanel-writable backend/ that `python -m` picks up
+  # via sys.path) is a file the confined account writes and root executes. That
+  # bypasses every argv check in bpanel-helper, which is the whole point of the
+  # sudo trampoline. Root keeps the venv; the service only reads and executes it.
+  if [[ -d "$APP_DIR/backend" ]]; then
+    find "$APP_DIR/backend" -path "$APP_DIR/backend/.venv" -prune \
+      -o -exec chown bpanel:bpanel {} + 2>/dev/null || true
+    # Reclaim it on an upgrade from a build that handed it to bpanel.
+    [[ -d "$APP_DIR/backend/.venv" ]] && chown -R root:root "$APP_DIR/backend/.venv" 2>/dev/null || true
+  fi
   [[ -d "$APP_DIR/frontend" ]] && chown -R bpanel:bpanel "$APP_DIR/frontend" 2>/dev/null || true
   [[ -f "$APP_DIR/.my.cnf" ]] && chown bpanel:bpanel "$APP_DIR/.my.cnf" 2>/dev/null || true
   [[ -f "$APP_DIR/.my.cnf" ]] && chmod 0600 "$APP_DIR/.my.cnf" 2>/dev/null || true

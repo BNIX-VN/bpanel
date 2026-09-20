@@ -678,6 +678,18 @@ validate_privileged_helper() {
   sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper wp --info >/dev/null
 }
 
+# Hand the backend tree to bpanel but keep the virtualenv root-owned. See the
+# call site for why: root sources and executes files from .venv, so bpanel must
+# not be able to write them.
+chown_backend_except_venv() {
+  local dir="$1"
+  [[ -d "$dir" ]] || return 0
+  find "$dir" -path "$dir/.venv" -prune -o -exec chown bpanel:bpanel {} + 2>/dev/null || true
+  # Reclaim the venv on an upgrade from a build that gave it away.
+  [[ -d "$dir/.venv" ]] && chown -R root:root "$dir/.venv" 2>/dev/null || true
+  return 0
+}
+
 setup_backend() {
   cd "${APP_DIR}/backend"
   python3 -m venv .venv
@@ -709,7 +721,14 @@ ENV
   chmod 0640 "${APP_DIR}/backend/.env"
 
   # Make panel files writable before seed creates the SQLite DB and admin Linux user.
-  chown -R bpanel:bpanel "${APP_DIR}/backend"
+  #
+  # The virtualenv is deliberately NOT handed to bpanel. update.sh runs as root
+  # and does `source .venv/bin/activate`, `.venv/bin/pip` and `.venv/bin/python
+  # -m py_compile` - so a bpanel-owned venv is a file the confined account can
+  # write and root then executes, which walks straight past every argv check in
+  # bpanel-helper. Root keeps it; the service only needs read+execute, and
+  # root-owned 0755 gives that.
+  chown_backend_except_venv "${APP_DIR}/backend"
   chown -R bpanel:bpanel "${APP_DIR}/frontend" 2>/dev/null || true
 
   sudo -u bpanel env HOME="$APP_DIR" BPANEL_USE_HELPER=true BPANEL_ADMIN_PASSWORD="$ADMIN_PASSWORD" \

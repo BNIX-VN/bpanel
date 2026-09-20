@@ -18,7 +18,7 @@ from paramiko.ssh_exception import SSHException
 from app.core.config import settings
 from app.core.secrets import decrypt, encrypt
 from app.core.security import hash_password
-from app.core.permissions import normalize_role
+from app.core.permissions import Role
 from app.models.entities import DatabaseAccount, SiteApp, User, Website, WebsiteAlias
 from app.services import mariadb, nginx, site_users, waf, wordpress
 from app.services.shell import shell
@@ -412,22 +412,30 @@ def restore_user_backup(backup_file: str, db) -> dict:
 
     user = db.query(User).filter(User.username == username).first()
     created_user = False
+    generated_password = ""
     if user is None:
         email = user_info.get("email") or f"{username}@users.bpanel.invalid"
         if email.endswith(_PLACEHOLDER_EMAIL_SUFFIXES):
             email = f"{username}@users.bpanel.invalid"
         if db.query(User).filter(User.email == email).first():
             email = f"{username}-{secrets.token_hex(4)}@users.bpanel.invalid"
-        backup_role = user_info.get("role") or "end_user"
-        try:
-            role = normalize_role(backup_role).value
-        except Exception:
-            role = "end_user"
+        # An archive is untrusted input: the manifest is written by whoever
+        # produced the .tar.gz, and RESTORABLE_BACKUP_KINDS deliberately accepts
+        # archives from another panel. Taking the role from it let a file mint a
+        # panel admin, and taking hashed_password let it choose that admin's
+        # password. The panel admin is the principal the root sudo helper obeys,
+        # so that was a file deciding who gets the server.
+        #
+        # Restore always creates an end_user with a credential generated here.
+        # An operator who genuinely wants to promote the account does it through
+        # PATCH /api/users/{id}, which is audited and bumps token_version.
+        # da_import._ensure_panel_user_record has always done it this way.
+        generated_password = secrets.token_urlsafe(18)
         user = User(
             username=username,
             email=email,
-            hashed_password=user_info.get("hashed_password") or hash_password(secrets.token_urlsafe(18)),
-            role=role,
+            hashed_password=hash_password(generated_password),
+            role=Role.end_user.value,
             is_active=bool(user_info.get("is_active", True)),
             website_limit=int(user_info.get("website_limit") or 5),
             storage_limit_mb=int(user_info.get("storage_limit_mb") or 1024),
@@ -501,7 +509,13 @@ def restore_user_backup(backup_file: str, db) -> dict:
                 db.flush()
                 created_site = True
             else:
-                website.owner_id = user.id
+                # The alias loop below already refuses a domain that belongs to
+                # someone else (_hostname_conflicts, a few lines down), but the
+                # primary domain never got the same check: restoring an archive
+                # that names a live domain silently moved that Website row to the
+                # archive's user and rewrote the vhost to serve their files.
+                if website.owner_id != user.id:
+                    raise ValueError(f"Domain already belongs to another user: {domain}")
                 website.root_path = root_path
                 website.document_root = document_root
                 website.linux_user = linux_user
@@ -599,6 +613,10 @@ def restore_user_backup(backup_file: str, db) -> dict:
     return {
         "created_user": created_user,
         "username": username,
+        # Only set when restore created the account. The archive no longer
+        # chooses the password, so the operator needs this to hand it over.
+        "generated_password": generated_password,
+        "role": user.role,
         "websites": restored_websites,
         "applications": restored_apps,
     }

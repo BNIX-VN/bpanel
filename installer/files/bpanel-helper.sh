@@ -3436,6 +3436,24 @@ require_terminal_cwd() {
   echo "$resolved"
 }
 
+# The open_basedir a PHP interpreter started for a site user must carry.
+#
+# One definition, three callers: terminal-exec, the wp-site verb, and (mirrored
+# in Python, because it renders a crontab line) services/cron.py. It used to
+# live inline in terminal-exec only, which is how wp-site and cron came to
+# start unconfined interpreters while the terminal was confined.
+#
+# The boundary is the tenant's own home, not one site root: a customer with
+# several sites still has to work across them, and the leak being closed is
+# between customers. /var/lib/php/{sessions,uploads}/<user> match the FPM pool.
+# /tmp and /usr/share/php are what composer and PEAR-era libraries expect. A
+# caller that runs a phar appends that tool's directory itself.
+site_open_basedir() {
+  local user="$1"
+  require_linux_user "$user"
+  printf '%s' "$HOME_ROOT/$user:/var/lib/php/sessions/$user:/var/lib/php/uploads/$user:/tmp:/usr/share/php"
+}
+
 require_terminal_path_args() {
   local user="$1" cwd="$2" arg resolved
   shift 2
@@ -5410,11 +5428,31 @@ PY
 
   # ---- WP-CLI as www-data ----------------------------------------------
   wp)
-    [[ $# -ge 1 ]] || deny "usage: wp <args...>"
-    exec runuser -u www-data -- env HOME=/var/www WP_CLI_PHP_ARGS='-d pcre.jit=0' php -d pcre.jit=0 /usr/local/bin/wp "$@"
+    # Narrowed to `--info`, which is all this verb is still for: the installer
+    # and the updater call it to prove the sudo trampoline works end to end
+    # (install.sh:678, update.sh:1252).
+    #
+    # It used to take arbitrary WP-CLI argv and run it as www-data. That is the
+    # widest identity on the box - usermod -aG puts www-data in EVERY site's
+    # group (:3596) plus bpanel-sites (:3513), and site secrets are 0640
+    # group-readable, so one `wp eval` there read every tenant's wp-config.php.
+    # It was reached whenever a Website row had no linux_user; services/
+    # wordpress.py now derives one instead of falling back here.
+    #
+    # If a real need for WP-CLI as www-data ever returns, it needs its own verb
+    # with a validated subcommand allowlist - not this one.
+    [[ $# -eq 1 && "${1:-}" == "--info" ]] || deny "usage: wp --info (use wp-site <user> ... to act on a website)"
+    exec runuser -u www-data -- env HOME=/var/www WP_CLI_PHP_ARGS='-d pcre.jit=0' php -d pcre.jit=0 /usr/local/bin/wp --info
     ;;
 
   wp-site)
+    # WP-CLI bootstraps the target install's own wp-config.php and active
+    # plugins, so this is tenant-authored PHP. It needs the same confinement
+    # the terminal's wp branch applies (:5545) - without it this verb was the
+    # third place the panel started an unconfined interpreter as a site user,
+    # after the terminal (fixed) and cron (fixed in services/cron.py). The
+    # value is built by site_open_basedir so the two branches cannot drift.
+    #
     # WP-CLI has to run under the same PHP the site runs, not whatever the
     # `php` alternative happens to point at. On a server with several PHP
     # versions installed those differ, and the difference is not cosmetic: a
@@ -5433,7 +5471,17 @@ PY
       shift
     fi
     [[ $# -ge 1 ]] || deny "usage: wp-site <site-user> [--php-version=<version>] <args...>"
-    exec runuser -u "$user" -- env HOME="$HOME_ROOT/$user" WP_CLI_PHP_ARGS='-d pcre.jit=0' "$wp_php" -d pcre.jit=0 /usr/local/bin/wp "$@"
+    wp_site_basedir="$(site_open_basedir "$user"):/usr/local/bin"
+    # Move into the tenant's home first. WP-CLI probes its working directory
+    # during bootstrap even when --path is given, and the API unit's cwd is
+    # /opt/bpanel/backend - outside the basedir - so every call printed a row
+    # of open_basedir warnings to stderr, which the panel shows the customer.
+    # terminal-exec has always done this (cd "$target"); wp-site never did,
+    # and it did not matter until the confinement above made the cwd visible.
+    cd "$HOME_ROOT/$user" 2>/dev/null || deny "no home for $user"
+    exec runuser -u "$user" -- env HOME="$HOME_ROOT/$user" \
+      WP_CLI_PHP_ARGS="-d pcre.jit=0 -d open_basedir=$wp_site_basedir" \
+      "$wp_php" -d pcre.jit=0 -d open_basedir="$wp_site_basedir" /usr/local/bin/wp "$@"
     ;;
 
   # ---- crontab managed for www-data ------------------------------------
@@ -5519,12 +5567,54 @@ PY
     # /usr/share/php are what composer and PEAR-era libraries expect. The
     # interpreter must also be able to read the phar it is being asked to run,
     # so the directory of each tool is appended at the call site.
-    terminal_open_basedir="$HOME_ROOT/$user:/var/lib/php/sessions/$user:/var/lib/php/uploads/$user:/tmp:/usr/share/php"
+    terminal_open_basedir="$(site_open_basedir "$user")"
+
+    # open_basedir above confines PHP. It does nothing for node, npm, npx,
+    # yarn or git, and nothing for `find . -maxdepth 0 -exec sh -c '<cmd>' \;`
+    # either - require_terminal_path_args skips every argument matching -*, so
+    # -exec walks straight through it and hands the tenant an arbitrary shell.
+    # Filtering arguments cannot fix that: the tenant already runs their own
+    # code as their own uid through npm lifecycle scripts and git hooks, and no
+    # scanner models program text.
+    #
+    # So confine the filesystem instead of the arguments. In a private mount
+    # namespace, /home is replaced by a tmpfs holding exactly one directory -
+    # this tenant's own - so every other customer's files are simply not there
+    # to read, whatever the tool. Site trees are 0644 and homes 0751 by design
+    # (see the header at the top of this file), which is what made the read
+    # possible; this removes the path rather than the permission.
+    #
+    # Outside the namespace /home is untouched, and the namespace dies with the
+    # command. /etc/passwd stays readable: it is world-readable system data and
+    # tools need it, and it no longer leads anywhere now the homes are gone.
+    terminal_jail='
+      set -e
+      jail_user="$1"
+      jail_root="$2"
+      jail_cwd="$3"
+      shift 3
+      jail_home="$jail_root/$jail_user"
+      hold="$(mktemp -d)"
+      mount --bind "$jail_home" "$hold"
+      mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs "$jail_root"
+      mkdir -p "$jail_home"
+      mount --move "$hold" "$jail_home"
+      rmdir "$hold" 2>/dev/null || true
+      # The parent cd-ed here before unshare, and the tmpfs briefly made that
+      # directory unreachable by path. Re-enter it so the command starts where
+      # the caller asked and pwd agrees with it.
+      cd "$jail_cwd"
+      exec "$@"
+    '
 
     # Kill the whole process group when the budget runs out. Composer, npm and
     # WP-CLI can wedge on a slow network, and without this the API worker would
     # block on the pipe until the client gives up.
-    terminal_runner=(runuser -u "$user" --)
+    terminal_runner=(
+      unshare --mount --propagation private --
+      bash -c "$terminal_jail" bpanel-terminal-jail "$user" "$HOME_ROOT" "$target"
+      runuser -u "$user" --
+    )
     if [[ -n "$terminal_timeout" ]] && command -v timeout >/dev/null 2>&1; then
       terminal_runner=(timeout --signal=TERM --kill-after=10 "${terminal_timeout}" runuser -u "$user" --)
     fi
