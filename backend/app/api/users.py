@@ -19,7 +19,7 @@ from app.schemas.schemas import (
     UserUpdate,
 )
 from app.services.audit import log_action
-from app.services import mariadb, nginx, site_users, ssl, storage_quota, waf, wordpress
+from app.services import mariadb, nginx, site_users, ssl, storage_quota, teardown, waf, wordpress
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -197,14 +197,31 @@ def delete_user(user_id: int, request: Request, db: Session = Depends(get_db), c
             _delete_owned_website(db, website)
             deleted_domains.append(website.domain)
         _remove_user_from_backup_schedules(db, user.id)
+        # Databases and applications are keyed on owner_id, not website_id, so
+        # the website loop above cannot reach a database that belongs to no
+        # website - which is the only kind POST /api/databases creates - nor any
+        # application at all. Migrations 0014/0015 and 0025 re-parented both
+        # tables onto users; nothing here followed, and the panel database does
+        # not enforce the cleanup it declares (see services/teardown.py).
+        purged = teardown.purge_owned_resources(db, user.id)
         site_users.delete_panel_user(user.username)
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     username = user.username
     db.delete(user)
     db.commit()
-    log_action(db, current_user.id, "delete_user", username, ",".join(deleted_domains), request=request)
-    return {"ok": True, "deleted_websites": deleted_domains}
+    detail = ",".join(deleted_domains)
+    if purged["databases"] or purged["applications"]:
+        # Worth recording separately: these are resources the website loop never
+        # touched, so before this sweep existed they simply stayed behind.
+        detail = f"{detail} +db:{len(purged['databases'])} +app:{len(purged['applications'])}"
+    log_action(db, current_user.id, "delete_user", username, detail, request=request)
+    return {
+        "ok": True,
+        "deleted_websites": deleted_domains,
+        "deleted_databases": purged["databases"],
+        "deleted_applications": purged["applications"],
+    }
 
 
 @router.post("/{user_id}/password")

@@ -31,7 +31,7 @@ from app.core.config import settings
 from app.core.database import SessionLocal
 from app.core.security import hash_password
 from app.models.entities import DatabaseAccount, User, Website, WebsiteAlias
-from app.services import mariadb, nginx, site_users, waf
+from app.services import mariadb, nginx, site_users, teardown, waf
 from app.services.shell import shell
 
 logger = logging.getLogger("bpanel.da_import")
@@ -1065,11 +1065,10 @@ def _unique_email(db, username: str, preferred: str, domains: list[str]) -> str:
 
 
 def _delete_database_record(db, db_item) -> None:
-    try:
-        mariadb.drop_database(db_item.db_name, db_item.db_user)
-    finally:
-        db.delete(db_item)
-        db.flush()
+    # One implementation, shared with api/users.py delete_user and
+    # provisioning.terminate_account. This path had it right all along; the
+    # other two swept by website_id and missed every standalone database.
+    teardown.drop_database_record(db, db_item)
 
 
 def _delete_website_record(db, website) -> None:

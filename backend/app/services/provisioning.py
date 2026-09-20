@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.core.security import hash_password
 from app.models.entities import ApiToken, DatabaseAccount, ProvisioningAccount, User, Website
-from app.services import backup as backup_service
+from app.services import backup as backup_service, teardown
 from app.services import mariadb, nginx, site_users, ssl, storage_quota, waf, wordpress
 
 
@@ -194,6 +194,15 @@ def terminate_account(db: Session, account: ProvisioningAccount, backup: bool = 
             wordpress.delete_wordpress(website.root_path)
             deleted_domains.append(website.domain)
             db.delete(website)
+
+        # The loop above finds databases by website_id, so it cannot reach one
+        # that belongs to no website - which is the only kind the panel's own
+        # database page creates - and it never looks at applications at all.
+        # Both tables are keyed on owner_id (migrations 0014/0015 and 0025) and
+        # the panel database does not enforce the cleanup it declares, so
+        # without this sweep a terminated account left its databases running in
+        # MariaDB and its applications wedged the delete with an IntegrityError.
+        teardown.purge_owned_resources(db, user.id)
 
         site_users.delete_panel_user(user.username)
         db.delete(user)
