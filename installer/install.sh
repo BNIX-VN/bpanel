@@ -690,6 +690,24 @@ chown_backend_except_venv() {
   return 0
 }
 
+# The same rule one directory over. build_frontend runs `npm run build` as root
+# with the cwd set here, and frontend/package.json's "build" script is
+# `vite build`, which npm resolves to node_modules/.bin/vite - so Node loads the
+# whole vite/rolldown/lightningcss graph, two compiled .node addons included,
+# into a uid-0 process. A bpanel-owned node_modules is therefore the same thing
+# a bpanel-owned .venv was: a file the confined account writes and root
+# executes, which walks past every argv check in bpanel-helper. Nothing running
+# as bpanel ever writes node_modules - only this script does - so root keeps it
+# and the service reads it, which root-owned 0755 already allows.
+chown_frontend_except_node_modules() {
+  local dir="$1"
+  [[ -d "$dir" ]] || return 0
+  find "$dir" -path "$dir/node_modules" -prune -o -exec chown bpanel:bpanel {} + 2>/dev/null || true
+  # Reclaim it on an upgrade from a build that handed it to bpanel.
+  [[ -d "$dir/node_modules" ]] && chown -R root:root "$dir/node_modules" 2>/dev/null || true
+  return 0
+}
+
 setup_backend() {
   cd "${APP_DIR}/backend"
   python3 -m venv .venv
@@ -729,7 +747,7 @@ ENV
   # bpanel-helper. Root keeps it; the service only needs read+execute, and
   # root-owned 0755 gives that.
   chown_backend_except_venv "${APP_DIR}/backend"
-  chown -R bpanel:bpanel "${APP_DIR}/frontend" 2>/dev/null || true
+  chown_frontend_except_node_modules "${APP_DIR}/frontend"
 
   sudo -u bpanel env HOME="$APP_DIR" BPANEL_USE_HELPER=true BPANEL_ADMIN_PASSWORD="$ADMIN_PASSWORD" \
     "${APP_DIR}/backend/.venv/bin/python" -m app.seed
