@@ -78,3 +78,72 @@ def test_the_update_verb_that_fires_root_execution_is_still_argument_free():
         encoding="utf-8"
     )
     assert "updates-panel-run)" in helper
+
+
+# --- the same rule, one directory over -------------------------------------
+#
+# frontend/ was left out of the venv fix. Both installers chowned it whole to
+# bpanel, and then root ran `npm run build` in it: package.json's "build" is
+# `vite build`, npm resolves that to node_modules/.bin/vite, and Node loads the
+# vite/rolldown/lightningcss graph - two compiled .node addons among it - into
+# the uid-0 process. Measured on a live v1.0.141 server:
+#
+#   bpanel:bpanel  frontend/node_modules/vite/bin/vite.js   (test -w: writable)
+#   root:root      backend/.venv/bin/python                 (test -w: refused)
+#
+# The exploitable sink is update.sh, not install.sh: install.sh builds at :560
+# before the chown at :732, so that tree is root-owned throughout. update.sh
+# calls ensure_panel_runtime_ownership at :1214 and :1364, both before the
+# build, so root executes a tree it has already given away - and rsync's
+# protect filter keeps node_modules across updates.
+
+# `chown -R bpanel:bpanel <...>/frontend` anywhere, in any trailing form.
+BARE_FRONTEND_CHOWN = re.compile(
+    r"""chown\s+-R\s+bpanel:bpanel\s+["']?\$\{?APP_DIR\}?/frontend["']?""",
+)
+
+
+def test_no_installer_hands_node_modules_to_the_panel_account():
+    for name, src in _scripts():
+        hit = BARE_FRONTEND_CHOWN.search(src)
+        assert hit is None, (
+            f"{name} recursively chowns frontend/ to bpanel without excluding "
+            f"node_modules: {hit.group(0).strip() if hit else ''!r}. Root runs "
+            "`npm run build` there, which executes node_modules/.bin/vite."
+        )
+
+
+def test_both_installers_prune_node_modules_from_the_frontend_chown():
+    for name, src in _scripts():
+        assert '-path "$APP_DIR/frontend/node_modules" -prune' in src or (
+            '-path "$dir/node_modules" -prune' in src
+        ), f"{name} must prune node_modules when chowning frontend/"
+
+
+def test_both_installers_reclaim_node_modules_an_older_build_gave_away():
+    """Every server already deployed has a bpanel-owned node_modules.
+
+    Pruning alone only protects fresh installs. Without the reclaim, v1.0.141
+    and everything before it keeps the weakness for good, because the rsync
+    protect filter means node_modules is never re-created either.
+    """
+    for name, src in _scripts():
+        assert re.search(r"chown -R root:root .*node_modules", src), (
+            f"{name} must chown node_modules back to root, or upgraded servers "
+            "keep the weakness forever"
+        )
+
+
+def test_the_frontend_build_still_runs_as_root():
+    """A tripwire, not a guard.
+
+    The fix above is the right one *because* the build stays root: downgrading
+    it with runuser would leave dist/ owned by bpanel, moving the problem to the
+    bundle nginx serves to an authenticated admin. If someone changes that, the
+    reasoning here has to be revisited rather than silently inverted.
+    """
+    src = UPDATE_SCRIPT.read_text(encoding="utf-8")
+    assert re.search(r"^\s*VITE_API_URL=/api npm run build", src, re.MULTILINE), (
+        "the frontend build is no longer a bare root `npm run build`; re-check "
+        "whether node_modules still needs to be root-owned"
+    )

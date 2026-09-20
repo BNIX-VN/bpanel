@@ -1034,7 +1034,20 @@ ensure_panel_runtime_ownership() {
     # Reclaim it on an upgrade from a build that handed it to bpanel.
     [[ -d "$APP_DIR/backend/.venv" ]] && chown -R root:root "$APP_DIR/backend/.venv" 2>/dev/null || true
   fi
-  [[ -d "$APP_DIR/frontend" ]] && chown -R bpanel:bpanel "$APP_DIR/frontend" 2>/dev/null || true
+  # Same rule for the frontend, and this is the call site that matters: this
+  # function runs before build_frontend, so the `npm run build` below executes a
+  # tree this line has already handed over. package.json's "build" is
+  # `vite build`, which npm resolves to node_modules/.bin/vite, so root loads
+  # the whole vite/rolldown/lightningcss graph - two compiled .node addons
+  # included - out of node_modules. The rsync keeps node_modules across updates
+  # (protect filter below), so anything written there stays written. Only this
+  # script ever creates node_modules; bpanel just needs to read it.
+  if [[ -d "$APP_DIR/frontend" ]]; then
+    find "$APP_DIR/frontend" -path "$APP_DIR/frontend/node_modules" -prune \
+      -o -exec chown bpanel:bpanel {} + 2>/dev/null || true
+    # Reclaim it on an upgrade from a build that handed it to bpanel.
+    [[ -d "$APP_DIR/frontend/node_modules" ]] && chown -R root:root "$APP_DIR/frontend/node_modules" 2>/dev/null || true
+  fi
   [[ -f "$APP_DIR/.my.cnf" ]] && chown bpanel:bpanel "$APP_DIR/.my.cnf" 2>/dev/null || true
   [[ -f "$APP_DIR/.my.cnf" ]] && chmod 0600 "$APP_DIR/.my.cnf" 2>/dev/null || true
   [[ -d /var/lib/bpanel ]] && chown bpanel:bpanel /var/lib/bpanel 2>/dev/null || true
