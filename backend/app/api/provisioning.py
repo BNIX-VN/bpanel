@@ -138,8 +138,10 @@ def create_account(payload: ProvisioningAccountCreate, request: Request, db: Ses
     db.add(account)
     db.flush()
 
+    # Its own secret from the start: the panel password is not an SFTP password.
+    sftp_password = site_users.generate_login_password()
     try:
-        linux_user = site_users.ensure_panel_user(payload.username, payload.password)
+        linux_user = site_users.ensure_panel_user(payload.username, sftp_password)
     except (ValueError, RuntimeError) as exc:
         account.status = "failed"
         account.last_message = str(exc)
@@ -154,6 +156,7 @@ def create_account(payload: ProvisioningAccountCreate, request: Request, db: Ses
         package_id=package.id,
         website_limit=package.website_limit,
         storage_limit_mb=package.storage_limit_mb,
+        sftp_password_set_at=datetime.utcnow(),
     )
     db.add(user)
     db.flush()
@@ -330,11 +333,25 @@ def change_password(external_id: str, payload: ProvisioningPasswordChange, reque
         raise HTTPException(status_code=400, detail="Account has no user")
     account.user.hashed_password = hash_password(payload.password)
     account.user.token_version = (account.user.token_version or 0) + 1
-    site_users.set_panel_user_password(account.user.username, payload.password)
+    # The panel password stops here. It used to be written to the Linux account
+    # as well, which put it on port 22 behind sshd's password authentication.
+    minted = site_users.retire_shared_login_password(
+        account.user.username,
+        already_separate=account.user.sftp_password_set_at is not None,
+    )
+    if minted is not None:
+        account.user.sftp_password_set_at = datetime.utcnow()
     account.last_action = "change_password"
     db.commit()
     log_action(db, None, "provisioning_change_password", external_id, request=request)
-    return {"ok": True}
+    body = {"ok": True}
+    if minted is not None:
+        # This account's SFTP login was the panel password. It has been replaced
+        # so the old value stops working; this is the only time it is readable,
+        # and the billing system is the only thing that can pass it on.
+        body["sftp_password"] = minted
+        body["sftp_password_rotated"] = True
+    return body
 
 
 @router.patch("/accounts/{external_id}/package")

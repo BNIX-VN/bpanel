@@ -439,11 +439,18 @@ def restore_user_backup(backup_file: str, db) -> dict:
             is_active=bool(user_info.get("is_active", True)),
             website_limit=int(user_info.get("website_limit") or 5),
             storage_limit_mb=int(user_info.get("storage_limit_mb") or 1024),
+            # Its own SFTP secret, like every other creation path. Leaving this
+            # NULL would claim the Linux password is the panel password, which
+            # is not true here - and NULL is what tells the panel an account is
+            # still sharing one secret.
+            sftp_password_set_at=datetime.utcnow(),
         )
         db.add(user)
         db.flush()
         created_user = True
-    site_users.ensure_panel_user(user.username)
+        site_users.ensure_panel_user(user.username, site_users.generate_login_password())
+    else:
+        site_users.ensure_panel_user(user.username)
 
     restored_websites = []
     # Stage under the panel-owned import area: the helper only copies site files

@@ -3654,8 +3654,22 @@ delete_panel_user_runtime() {
     done
   done
   crontab -r -u "$user" 2>/dev/null || true
+  # Ask, then insist. An SFTP session or a PHP worker still winding down is
+  # enough to make the userdel below refuse.
   pkill -u "$user" 2>/dev/null || true
-  userdel "$user" 2>/dev/null || true
+  pkill -KILL -u "$user" 2>/dev/null || true
+  # -f is not belt and braces. userdel decides whether an account is "in use"
+  # by scanning for processes owned by its uid, and that scan races with the
+  # kill above - measured on a live server, deleting an account that had just
+  # held an SFTP session left the passwd entry behind while `|| true` reported
+  # success. Never add -r: the home is removed explicitly below, and -r would
+  # take a directory this function has not checked.
+  userdel -f "$user" 2>/dev/null || true
+  # ensure_panel_user_home puts www-data in this group so the web server can
+  # read the site. groupdel then refuses it as "has other members", which left
+  # one orphan group behind per deleted account, silently, for as long as this
+  # function has existed.
+  gpasswd -d www-data "$user" >/dev/null 2>&1 || true
   groupdel "$user" 2>/dev/null || true
   rm -rf "$HOME_ROOT/$user" 2>/dev/null || true
   rm -rf "/var/lib/php/sessions/$user" 2>/dev/null || true

@@ -633,6 +633,8 @@ function App() {
   // echoed back by the API, so this only ever holds a generated one.
   const [createdSftpInfo, setCreatedSftpInfo] = useState(null);
   const [sftpLimits, setSftpLimits] = useState({ limit: 0, used: 0, unlimited: false });
+  // The main account's own SFTP password, shown once after it is set.
+  const [ownSftpPassword, setOwnSftpPassword] = useState(null);
   const [siteApps, setSiteApps] = useState({ items: [], limit: 0, used: 0, memory_ceiling_mb: 512, port_range: [21000, 21999] });
   // Optional features. Until this has loaded nothing addon-owned is offered, so
   // a slow first request cannot flash a section that turns out not to be there.
@@ -2501,6 +2503,25 @@ function App() {
     if (Array.isArray(data)) setSftpAccounts(data);
     const limits = await request('/sftp-accounts/limits', {}, null);
     if (limits) setSftpLimits(limits);
+  }
+
+  async function changeOwnSftpPassword() {
+    const typed = prompt(
+      'New SFTP password for your own account (leave empty to generate a strong one):',
+      ''
+    );
+    if (typed === null) return;
+    const data = await request(`/users/${currentUser.id}/sftp-password`, {
+      method: 'POST',
+      body: JSON.stringify({ password: typed ? typed : null }),
+    }, 'Setting SFTP password...');
+    if (data) {
+      if (data.password) setOwnSftpPassword(data.password);
+      // The session carries sftp_password_set_at, so refresh it to clear the
+      // "same as your panel password" warning.
+      await loadCurrentUser();
+      await loadSftpAccounts();
+    }
   }
 
   async function createSftpAccount() {
@@ -5055,6 +5076,31 @@ function App() {
       <div className="section-title">
         <div><h2>SFTP accounts</h2></div>
         <button disabled={!selectedWebsiteId || !!loading} onClick={loadSftpAccounts}><RefreshCw size={14}/> Refresh</button>
+      </div>
+
+      <div className="info-box">
+        <div className="db-created-head">
+          <strong>Your own SFTP login</strong>
+          <button className="mini" onClick={changeOwnSftpPassword}><KeyRound size={13}/> Set password</button>
+        </div>
+        <div className="db-created-grid">
+          <label>Username</label><span>{currentUser?.sftp_username || currentUser?.username}</span>
+          <label>Port</label><span>22 (SFTP)</span>
+          <label>Reaches</label><span>every website on this account</span>
+        </div>
+        {!currentUser?.sftp_password_set_at && <p className="hint" style={{color:'var(--red)'}}>
+          This login still uses your panel password. Anyone who guesses it over SFTP
+          is also in the panel. Set a separate password — your panel password will
+          stop working for SFTP the moment you do.
+        </p>}
+        {currentUser?.sftp_password_set_at && <p className="hint">
+          Separate from your panel password. Changing one does not change the other.
+        </p>}
+        {ownSftpPassword && <div className="db-created-grid" style={{marginTop:'0.5rem'}}>
+          <label>New password</label>
+          <span><code>{ownSftpPassword}</code> <button className="mini secondary-light" onClick={() => { copySftp(ownSftpPassword, 'own_sftp'); }}>{copiedField === 'own_sftp' ? <Check size={12} style={{color:'var(--green)'}}/> : <Copy size={12}/>}</button></span>
+        </div>}
+        {ownSftpPassword && <p className="hint">Shown once. It is not stored anywhere the panel can read back.</p>}
       </div>
       <div className="cron-form">
         <WebsiteSelect />

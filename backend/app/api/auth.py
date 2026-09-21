@@ -599,6 +599,15 @@ def session_status(
         "website_limit": current_user.website_limit,
         "storage_limit_mb": current_user.storage_limit_mb,
         "totp_enabled": current_user.totp_enabled,
+        # NULL means this account's SFTP password is still whatever the panel
+        # password was. The panel says so, and offers to separate them.
+        "sftp_password_set_at": (
+            current_user.sftp_password_set_at.isoformat()
+            if current_user.sftp_password_set_at else None
+        ),
+        # What they type into an SFTP client. The Linux user is the panel
+        # username; only its password is different now.
+        "sftp_username": current_user.username,
     }
     user_data.update(storage_quota.storage_usage_summary(db, current_user))
     return {"authenticated": True, "user": user_data}
