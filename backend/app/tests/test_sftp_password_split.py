@@ -214,3 +214,50 @@ def test_every_creation_path_records_that_the_secrets_are_separate():
             f"{path.name} creates an account without saying whether its SFTP "
             "password is its own"
         )
+
+
+# --- deleting a panel account actually deletes it ---------------------------
+#
+# Found while cleaning up after the end-to-end test above: the probe account's
+# home was gone but its passwd entry and its group were still there, and the
+# helper had reported success. Both leaks predate this change; SFTP just made
+# them easy to hit, because an SFTP session is a process owned by that uid.
+
+HELPER = PROJECT_ROOT / "installer" / "files" / "bpanel-helper.sh"
+
+
+def _delete_panel_user_body() -> str:
+    src = HELPER.read_text(encoding="utf-8")
+    return src.split("delete_panel_user_runtime() {", 1)[1].split("\n}", 1)[0]
+
+
+def test_deleting_a_panel_user_forces_it_through():
+    """userdel races with the pkill on the line above it.
+
+    It decides "in use" by scanning for processes owned by the uid, so anything
+    still winding down - an SFTP session, a PHP worker - makes it exit 8, which
+    `|| true` then reports as success. Measured on a live server.
+    """
+    body = _delete_panel_user_body()
+    assert 'userdel -f "$user"' in body, (
+        "without -f, deleting an account that had an SFTP session open leaves "
+        "the passwd entry behind and says it succeeded"
+    )
+    assert "userdel -r" not in body, (
+        "the home is removed explicitly below; -r would delete a path this "
+        "function never checked"
+    )
+
+
+def test_the_group_is_emptied_before_it_is_deleted():
+    """groupdel refuses a group that still has members.
+
+    ensure_panel_user_home adds www-data to it so nginx can read the site, so
+    groupdel has always refused, silently, leaving one orphan group per deleted
+    account.
+    """
+    body = _delete_panel_user_body()
+    assert "gpasswd -d www-data" in body, (
+        "www-data has to leave the group before groupdel can remove it"
+    )
+    assert body.index("gpasswd -d www-data") < body.index('groupdel "$user"')
