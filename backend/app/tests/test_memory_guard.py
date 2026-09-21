@@ -214,3 +214,30 @@ def test_the_oom_preference_is_applied_to_processes_already_running():
     assert "/proc/$pid/oom_score_adj" in src
     assert "apply_oom_now nginx -500 nginx" in src
     assert "apply_oom_now clamd 500 clamd" in src
+
+
+def test_the_guard_is_run_only_after_it_has_been_installed():
+    """install.sh ships the guard inside install_privileged_helper.
+
+    The first version called it from setup_sftp_access, which main() runs six
+    steps earlier - so on every fresh install the shell said "No such file or
+    directory" and the `|| true` swallowed it. CI stayed green and the guard
+    had never run. Caught by reading the smoke test's log, not by a test, which
+    is why there is one now.
+    """
+    src = INSTALL_SCRIPT.read_text(encoding="utf-8")
+    body = src.split("\nmain() {", 1)[1].split("\n}", 1)[0]
+
+    installs_at = body.index("install_privileged_helper")
+    runs_at = body.index("/usr/local/sbin/bpanel-memory-guard")
+    assert installs_at < runs_at, (
+        "main() invokes bpanel-memory-guard before install_privileged_helper has "
+        "put it on disk; the `|| true` will hide that the guard never ran"
+    )
+
+
+def test_the_update_path_installs_the_guard_before_running_it():
+    src = UPDATE_SCRIPT.read_text(encoding="utf-8")
+    installs_at = src.index('install -m 0755 -o root -g root "$SOURCE_DIR/installer/files/bpanel-memory-guard"')
+    runs_at = src.index("/usr/local/sbin/bpanel-memory-guard || true")
+    assert installs_at < runs_at

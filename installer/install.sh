@@ -1484,9 +1484,6 @@ main() {
 
   log "Configuring SFTP access for panel users"
   setup_sftp_access
-  # Swap, a ceiling on clamd and an OOM preference for nginx. Skips anything
-  # this host cannot do rather than failing the install.
-  /usr/local/sbin/bpanel-memory-guard || true
 
   log "Installing privileged helper and sudoers rule"
   install_privileged_helper
@@ -1514,6 +1511,12 @@ main() {
 
   log "Capping log growth (journald + btmp)"
   configure_log_limits
+
+  # Swap, a ceiling on clamd and an OOM preference for nginx. Must come after
+  # install_privileged_helper, which is what puts bpanel-memory-guard on disk -
+  # calling it earlier silently did nothing, hidden by the `|| true`.
+  log "Configuring memory limits (swap, clamd ceiling, OOM preference)"
+  /usr/local/sbin/bpanel-memory-guard || true
 
   log "Configuring SSL"
   setup_ssl
