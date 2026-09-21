@@ -157,8 +157,16 @@ def test_teardown_never_kills_by_uid_or_removes_the_shared_home():
     helper = HELPER_SCRIPT.read_text(encoding="utf-8")
     body = helper.split("delete_sftp_account() {", 1)[1].split("\nsite_php_pool_glob", 1)[0]
     assert "pkill -u" not in body, "pkill -u would kill the site owner's processes"
-    assert "userdel -r" not in body, "userdel -r would delete the shared home"
-    assert 'userdel "$sub"' in body
+    assert "userdel -r" not in body, (
+        "userdel -r would aim a recursive delete at the recorded home, which is "
+        "'/' - the chroot root"
+    )
+    assert 'userdel -f "$sub"' in body, (
+        "userdel decides 'in use' by scanning processes owned by the UID, and this "
+        "account shares the site owner's UID. Without -f it exits 8 and leaves the "
+        "passwd entry behind for any customer who has a PHP worker running - which "
+        "is all of them. Found by deleting a real account on a live server."
+    )
 
 
 def test_sessions_are_matched_by_login_name_not_uid():

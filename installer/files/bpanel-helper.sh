@@ -3809,9 +3809,17 @@ delete_sftp_account() {
     rmdir "$chroot" 2>/dev/null || true
   fi
 
-  # No -r: the home is "/" inside a chroot that is already gone, and the uid is
-  # shared with the site owner, whose files must survive.
-  userdel "$sub" 2>/dev/null || true
+  # -f is required, not defensive. userdel decides whether an account is "in
+  # use" by scanning for processes owned by its UID, and this account shares
+  # the site owner's UID - so a customer with any PHP-FPM worker or cron job
+  # running makes a plain userdel exit 8 and leave the passwd entry behind.
+  # Measured on a live server: plain userdel refused, -f removed it and left
+  # the owner, their home and their files untouched.
+  #
+  # Never add -r. The home recorded for this account is "/" - it is the chroot
+  # root, which is what sshd chdirs to - and -r would aim a recursive delete at
+  # it. -f alone does not touch the home directory.
+  userdel -f "$sub" 2>/dev/null || true
 }
 
 site_php_pool_glob() {
