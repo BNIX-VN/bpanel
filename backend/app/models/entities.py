@@ -25,6 +25,10 @@ class UserPackage(Base):
     # it, the same way terminal_enabled gates the terminal.
     node_apps_limit: Mapped[int] = mapped_column(Integer, default=0)
     node_app_memory_mb: Mapped[int] = mapped_column(Integer, default=512)
+    # Extra SFTP logins a user may create, each pinned to one website. 0 keeps
+    # the feature off for every existing package until an admin raises it, the
+    # same way node_apps_limit gates app hosting.
+    sftp_accounts_limit: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     users: Mapped[List["User"]] = relationship(back_populates="package")
@@ -51,6 +55,11 @@ class User(Base):
     # nothing. New accounts default to off: a shell on the server is not
     # something to hand out implicitly.
     terminal_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Copied from the package like the limits above. Off by default: a second
+    # credential into a customer's files is not something to hand out
+    # implicitly, and unlike terminal_enabled there is no existing behaviour to
+    # preserve, because nobody holds one of these accounts yet.
+    sftp_accounts_limit: Mapped[int] = mapped_column(Integer, default=0)
     # Bumped to invalidate previously-issued JWTs (logout-everywhere, role
     # change, password reset by admin, account disable, etc).
     token_version: Mapped[int] = mapped_column(Integer, default=0)
@@ -291,3 +300,38 @@ class ProvisioningAccount(Base):
     user: Mapped[Optional[User]] = relationship()
     primary_website: Mapped[Optional[Website]] = relationship(foreign_keys=[primary_website_id])
     package: Mapped[Optional[UserPackage]] = relationship()
+
+
+class SftpAccount(Base):
+    """An extra SFTP login, pinned to exactly one website.
+
+    A panel user's own Linux account already reaches every site they own. This
+    is the credential you hand to someone who should reach one of them: a
+    freelancer, a deploy script, an agency.
+
+    It is a real Linux user, because OpenSSH has no virtual ones, and it shares
+    the site owner's uid on purpose (`useradd -o -u`). Files it uploads then
+    land with exactly the ownership the owner's own upload would produce, so
+    PHP-FPM keeps write access and WordPress can still update itself. The
+    isolation is the chroot, not the uid - which is why chroot_path is
+    root-owned and outside anything the panel account can write.
+    """
+
+    __tablename__ = "sftp_accounts"
+    __table_args__ = (
+        UniqueConstraint("owner_id", "website_id", "label", name="ix_sftp_accounts_owner_label"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    # Denormalised from the website so the teardown sweep has one column to
+    # filter on. Written together with website_id, never inferred from it: a
+    # transferred site takes its sub-accounts to the new owner.
+    owner_id: Mapped[int] = mapped_column(Integer, index=True)
+    website_id: Mapped[int] = mapped_column(Integer, index=True)
+    # What the user typed. The login name is linux_user, which is generated.
+    label: Mapped[str] = mapped_column(String(32))
+    linux_user: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    chroot_path: Mapped[str] = mapped_column(String(255))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    password_set_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)

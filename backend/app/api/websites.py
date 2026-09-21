@@ -31,7 +31,7 @@ from app.schemas.schemas import (
     WebsiteWordPressInstall,
     WildcardSslRequest,
 )
-from app.services import addons, cloudflare, cron, file_manager, mariadb, nginx, site_apps, site_users, ssl, storage_quota, waf, wordpress
+from app.services import addons, cloudflare, cron, file_manager, mariadb, nginx, site_apps, site_users, ssl, storage_quota, teardown, waf, wordpress
 from app.services.audit import log_action
 
 _PLACEHOLDER_TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates" / "nginx"
@@ -1030,6 +1030,10 @@ def delete_website(website_id: int, request: Request, delete_files: bool = True,
             wordpress.delete_wordpress(website.root_path)
     if db_item:
         db.delete(db_item)
+    # Real Linux logins scoped to this site. Leaving one behind would leave a
+    # working credential pointing at a chroot whose bind mount source is about
+    # to be deleted or handed to another customer.
+    teardown.purge_website_sftp_accounts(db, website.id)
     had_http_flood = bool(website.http_flood_enabled)
     owner_id = website.owner_id
     db.delete(website)
