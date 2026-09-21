@@ -760,6 +760,12 @@ install_panel_runtime() {
   install -d -o bpanel -g bpanel -m 0750 /home/admin/bpanel_backups/da
   install -d -o bpanel -g bpanel -m 0750 /var/lib/bpanel/da-import
   install -d -o bpanel -g bpanel -m 0750 /var/lib/bpanel/import-stage
+  if [[ -f "$SOURCE_DIR/installer/files/bpanel-memory-guard" ]]; then
+    install -m 0755 -o root -g root "$SOURCE_DIR/installer/files/bpanel-memory-guard" /usr/local/sbin/bpanel-memory-guard
+    # Re-run every update: the servers that need this most are the ones
+    # already deployed, and it is idempotent.
+    /usr/local/sbin/bpanel-memory-guard || true
+  fi
   if command -v sshd >/dev/null 2>&1; then
     sshd_config="/etc/ssh/sshd_config"
     sshd_backup="${sshd_config}.bpanel.bak"
