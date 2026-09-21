@@ -36,8 +36,8 @@ from __future__ import annotations
 
 import logging
 
-from app.models.entities import DatabaseAccount, SiteApp
-from app.services import mariadb, site_apps
+from app.models.entities import DatabaseAccount, SftpAccount, SiteApp
+from app.services import mariadb, sftp_accounts, site_apps
 
 logger = logging.getLogger("bpanel.teardown")
 
@@ -88,6 +88,74 @@ def purge_owner_apps(db, owner_id: int) -> list[str]:
     return removed
 
 
+def purge_owner_sftp_accounts(db, owner_id: int) -> list[str]:
+    """Remove every SFTP sub-account this user owns.
+
+    These are real Linux users with a real password. Leaving one behind after
+    the panel account is gone leaves a working credential into a home directory
+    that is about to be handed to somebody else - the exact failure the
+    database sweep above exists to prevent, with a login attached.
+
+    Removal failing must not strand the deletion: the chroot may already be
+    unmounted or the Linux user already gone. The row goes either way, and the
+    failure is logged.
+    """
+    removed: list[str] = []
+    rows = db.query(SftpAccount).filter(SftpAccount.owner_id == owner_id).all()
+    for account in rows:
+        try:
+            sftp_accounts.delete_account(account.linux_user)
+        except Exception as exc:  # noqa: BLE001 - see docstring
+            logger.warning(
+                "could not remove SFTP account %s: %s", account.linux_user, exc
+            )
+        db.delete(account)
+        db.flush()
+        removed.append(account.linux_user)
+    return removed
+
+
+def purge_website_sftp_accounts(db, website_id: int) -> list[str]:
+    """The same sweep, for one website going away rather than a whole account."""
+    removed: list[str] = []
+    rows = db.query(SftpAccount).filter(SftpAccount.website_id == website_id).all()
+    for account in rows:
+        try:
+            sftp_accounts.delete_account(account.linux_user)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "could not remove SFTP account %s: %s", account.linux_user, exc
+            )
+        db.delete(account)
+        db.flush()
+        removed.append(account.linux_user)
+    return removed
+
+
+def set_owner_sftp_accounts_locked(db, owner_id: int, locked: bool) -> list[str]:
+    """Suspending a panel account has to reach its file credentials too.
+
+    A suspended customer whose SFTP sub-account still works keeps write access
+    to the very sites the suspension disabled.
+    """
+    touched: list[str] = []
+    rows = db.query(SftpAccount).filter(SftpAccount.owner_id == owner_id).all()
+    for account in rows:
+        try:
+            sftp_accounts.set_locked(account.linux_user, locked)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "could not %s SFTP account %s: %s",
+                "lock" if locked else "unlock",
+                account.linux_user,
+                exc,
+            )
+        account.is_active = not locked
+        touched.append(account.linux_user)
+    db.flush()
+    return touched
+
+
 def purge_owned_resources(db, owner_id: int) -> dict[str, list[str]]:
     """Everything keyed on owner_id that a user deletion has to take with it.
 
@@ -98,4 +166,5 @@ def purge_owned_resources(db, owner_id: int) -> dict[str, list[str]]:
     return {
         "databases": purge_owner_databases(db, owner_id),
         "applications": purge_owner_apps(db, owner_id),
+        "sftp_accounts": purge_owner_sftp_accounts(db, owner_id),
     }

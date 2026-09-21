@@ -66,6 +66,7 @@ const PAGE_ROUTES = {
   applications: '/applications',
   ssl: '/ssl',
   databases: '/database',
+  sftp: '/sftp',
   cron: '/cron',
   files: '/filemanager',
   backups: '/backups',
@@ -187,6 +188,7 @@ const ROUTE_PAGES = new Map([
   ['/dashboard', 'dashboard'],
   ['/websites', 'websites'],
   ['/databases', 'databases'],
+  ['/sftp-accounts', 'sftp'],
   ['/files', 'files'],
   ['/file-manager', 'files'],
   ['/website', 'websites'],
@@ -625,6 +627,12 @@ function App() {
   const [cronItems, setCronItems] = useState([]);
   const [cronUser, setCronUser] = useState('');
   const [cronPhpInfo, setCronPhpInfo] = useState({ php_binary: '', php_version: '' });
+  const [sftpAccounts, setSftpAccounts] = useState([]);
+  const [newSftpAccount, setNewSftpAccount] = useState({ label: '', password: '' });
+  // Shown once, right after creation. A password the user typed is never
+  // echoed back by the API, so this only ever holds a generated one.
+  const [createdSftpInfo, setCreatedSftpInfo] = useState(null);
+  const [sftpLimits, setSftpLimits] = useState({ limit: 0, used: 0, unlimited: false });
   const [siteApps, setSiteApps] = useState({ items: [], limit: 0, used: 0, memory_ceiling_mb: 512, port_range: [21000, 21999] });
   // Optional features. Until this has loaded nothing addon-owned is offered, so
   // a slow first request cannot flash a section that turns out not to be there.
@@ -2487,6 +2495,49 @@ function App() {
     if (data?.php_binary) setCronPhpInfo({ php_binary: data.php_binary, php_version: data.php_version || '' });
   }
 
+  async function loadSftpAccounts() {
+    if (!selectedWebsiteId) { setSftpAccounts([]); return; }
+    const data = await request(`/sftp-accounts?website_id=${Number(selectedWebsiteId)}`, {}, 'Loading SFTP accounts...');
+    if (Array.isArray(data)) setSftpAccounts(data);
+    const limits = await request('/sftp-accounts/limits', {}, null);
+    if (limits) setSftpLimits(limits);
+  }
+
+  async function createSftpAccount() {
+    if (!selectedWebsiteId || !newSftpAccount.label.trim()) return;
+    const body = {
+      website_id: Number(selectedWebsiteId),
+      label: newSftpAccount.label.trim(),
+      password: newSftpAccount.password ? newSftpAccount.password : null,
+    };
+    const data = await request('/sftp-accounts', { method: 'POST', body: JSON.stringify(body) }, 'Creating SFTP account...');
+    if (data?.id) {
+      setCreatedSftpInfo(data);
+      setNewSftpAccount({ label: '', password: '' });
+      await loadSftpAccounts();
+    }
+  }
+
+  async function resetSftpPassword(account) {
+    const typed = prompt(`New password for ${account.username} (leave empty to generate one):`, '');
+    if (typed === null) return;
+    const data = await request(`/sftp-accounts/${account.id}/password`, {
+      method: 'POST',
+      body: JSON.stringify({ password: typed ? typed : null }),
+    }, 'Updating SFTP password...');
+    if (data) {
+      if (data.password) setCreatedSftpInfo({ ...account, password: data.password });
+      await loadSftpAccounts();
+    }
+  }
+
+  async function deleteSftpAccount(account) {
+    if (!confirm(`Delete SFTP account ${account.username}? The login stops working immediately. Site files are not touched.`)) return;
+    await request(`/sftp-accounts/${account.id}`, { method: 'DELETE' }, 'Removing SFTP account...');
+    if (createdSftpInfo?.id === account.id) setCreatedSftpInfo(null);
+    await loadSftpAccounts();
+  }
+
   async function deleteCron(index) {
     if (!confirm(`Delete cron #${index}?`)) return;
     index = Number(index);
@@ -3735,6 +3786,12 @@ function App() {
   }, [isAuthenticated, page, dbSearch]);
 
   useEffect(() => {
+    if (!isAuthenticated || page !== 'sftp') return;
+    setCreatedSftpInfo(null);
+    loadSftpAccounts();
+  }, [isAuthenticated, page, selectedWebsiteId]);
+
+  useEffect(() => {
     if (!currentSite) return;
     const modeMap = { manual: 'manual', cloudflare: 'wildcard', shared: 'shared' };
     setSslMode(modeMap[currentSite.ssl_mode] || 'letsencrypt');
@@ -3857,6 +3914,7 @@ function App() {
     ['databases', 'Database', Database],
     ['cron', 'Cron', Clock],
     ['files', 'File manager', FolderOpen],
+    ['sftp', 'SFTP accounts', Upload],
     ['backups', 'Backups', Archive],
     ...(isAdmin ? [['users', 'Panel users', Users]] : []),
   ];
@@ -4072,6 +4130,7 @@ function App() {
         tiles: [
           ['files', 'File manager', MsFiles, 'Browse, edit and upload site files'],
           ['databases', 'Database', MsDatabaseIcon, 'MariaDB users and phpMyAdmin'],
+          ['sftp', 'SFTP accounts', MsFiles, 'One login per website, separate from the panel password'],
           ['backups', 'Backups', MsBackups, 'Schedules, downloads and restores'],
         ],
       },
@@ -4979,6 +5038,77 @@ function App() {
         </div>})}
       </div>
       <p className="hint">Click phpMyAdmin to sign in directly. Token expires after 60s.</p>
+    </section>;
+  }
+
+  function renderSftp() {
+    function copySftp(text, field) {
+      const doCopy = navigator.clipboard ? navigator.clipboard.writeText(text) : new Promise((resolve, reject) => {
+        try { const ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); resolve(); } catch(e) { reject(e); }
+      });
+      doCopy.then(() => { setCopiedField(field); setTimeout(() => setCopiedField(null), 2000); }).catch(() => setError('Copy failed.'));
+    }
+    const atLimit = !sftpLimits.unlimited && Number(sftpLimits.limit || 0) > 0
+      && Number(sftpLimits.used || 0) >= Number(sftpLimits.limit || 0);
+    const noAllowance = !sftpLimits.unlimited && Number(sftpLimits.limit || 0) <= 0;
+    return <section className="section">
+      <div className="section-title">
+        <div><h2>SFTP accounts</h2></div>
+        <button disabled={!selectedWebsiteId || !!loading} onClick={loadSftpAccounts}><RefreshCw size={14}/> Refresh</button>
+      </div>
+      <div className="cron-form">
+        <WebsiteSelect />
+        <input
+          value={newSftpAccount.label}
+          onChange={e => setNewSftpAccount(prev => ({ ...prev, label: e.target.value }))}
+          placeholder="Name, e.g. designer"
+          aria-label="SFTP account name"
+        />
+        <input
+          value={newSftpAccount.password}
+          onChange={e => setNewSftpAccount(prev => ({ ...prev, password: e.target.value }))}
+          placeholder="password (empty = generate)"
+          aria-label="SFTP password"
+        />
+        <button className="mini secondary-light" title="Generate random password" onClick={() => setNewSftpAccount(prev => ({ ...prev, password: generateRandomPassword() }))}><Dices size={13}/></button>
+        <button disabled={!selectedWebsiteId || !!loading || !newSftpAccount.label.trim() || atLimit || noAllowance} onClick={createSftpAccount}><Plus size={14}/> Create account</button>
+      </div>
+
+      {noAllowance && <p className="hint">Your hosting package does not include SFTP accounts.</p>}
+      {atLimit && <p className="hint">You have used all {sftpLimits.limit} SFTP accounts in your package.</p>}
+      {!noAllowance && !sftpLimits.unlimited && !atLimit &&
+        <p className="hint">{sftpLimits.used} of {sftpLimits.limit} SFTP accounts used.</p>}
+
+      {createdSftpInfo && <div className="info-box db-created-box">
+        <div className="db-created-head"><strong>SFTP account ready</strong><button className="mini secondary-light" onClick={() => setCreatedSftpInfo(null)}><X size={13}/></button></div>
+        <div className="db-created-grid">
+          <label>Host</label><span>{createdSftpInfo.host} <button className="mini secondary-light" title={copiedField === 'sftp_host' ? 'Copied!' : 'Copy'} onClick={() => copySftp(createdSftpInfo.host, 'sftp_host')}>{copiedField === 'sftp_host' ? <Check size={12} style={{color:'var(--green)'}}/> : <Copy size={12}/>}</button></span>
+          <label>Port</label><span>{createdSftpInfo.port} (SFTP)</span>
+          <label>Username</label><span>{createdSftpInfo.username} <button className="mini secondary-light" title={copiedField === 'sftp_user' ? 'Copied!' : 'Copy'} onClick={() => copySftp(createdSftpInfo.username, 'sftp_user')}>{copiedField === 'sftp_user' ? <Check size={12} style={{color:'var(--green)'}}/> : <Copy size={12}/>}</button></span>
+          {createdSftpInfo.password && <><label>Password</label><span><code>{createdSftpInfo.password}</code> <button className="mini secondary-light" title={copiedField === 'sftp_pass' ? 'Copied!' : 'Copy'} onClick={() => copySftp(createdSftpInfo.password, 'sftp_pass')}>{copiedField === 'sftp_pass' ? <Check size={12} style={{color:'var(--green)'}}/> : <Copy size={12}/>}</button></span></>}
+          <label>Folder</label><span><code>{createdSftpInfo.path}</code></span>
+        </div>
+        {createdSftpInfo.password && <p className="hint">This password is shown once. It is not stored anywhere the panel can read it back.</p>}
+      </div>}
+
+      {selectedWebsiteId && sftpAccounts.length === 0 && !createdSftpInfo &&
+        <EmptyState icon={Upload} message="No SFTP accounts for this website yet." />}
+
+      <div className="table">
+        {sftpAccounts.map(account => <div className="row db-row" key={account.id}>
+          <span><strong>{account.label}</strong></span>
+          <span style={{color:'var(--text-muted)'}}>{account.username}</span>
+          <span style={{color:'var(--text-muted)'}}><code>{account.path}</code></span>
+          {!account.is_active && <span style={{color:'var(--red)'}}>suspended</span>}
+          <button disabled={!!loading} onClick={() => resetSftpPassword(account)}><KeyRound size={14}/> Password</button>
+          <button className="danger" disabled={!!loading} onClick={() => deleteSftpAccount(account)}><Trash2 size={14}/></button>
+        </div>)}
+      </div>
+
+      <p className="hint">
+        Each account reaches one website and nothing else — not your other sites, and not the server.
+        It signs in over SFTP on port 22 with its own password, which is separate from your panel password.
+      </p>
     </section>;
   }
 
@@ -6739,6 +6869,7 @@ function App() {
     if (page === 'applications') return appsFeatureEnabled ? renderApplications() : renderAddonMissing();
     if (page === 'ssl') return renderSsl();
     if (page === 'databases') return renderDatabases();
+    if (page === 'sftp') return renderSftp();
     if (page === 'cron') return renderCron();
     if (page === 'files') return renderFiles();
     if (page === 'backups') return renderBackups();

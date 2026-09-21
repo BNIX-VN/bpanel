@@ -15,8 +15,14 @@ PUBLIC_DIR = "public_html"
 RESERVED_LINUX_USERS = {
     "root", "daemon", "bin", "sys", "sync", "games", "man", "lp", "mail",
     "news", "uucp", "proxy", "www-data", "backup", "list", "irc", "_apt",
-    "nobody", "bpanel", "bpanel-sites", "bpanel-sftp", "mysql", "redis", "nginx",
+    "nobody", "bpanel", "bpanel-sites", "bpanel-sftp", "bpanel-sftp-site",
+    "mysql", "redis", "nginx",
 }
+# Per-website SFTP sub-accounts own this prefix. A panel user may not take a
+# name inside it: the helper proves a sub-account verb can never be aimed at a
+# panel user by requiring the prefix, and that proof only holds while the two
+# namespaces stay disjoint.
+SFTP_SUB_ACCOUNT_PREFIX = "sftp_"
 
 
 def linux_user_for_domain(domain: str) -> str:
@@ -30,6 +36,8 @@ def linux_user_for_domain(domain: str) -> str:
 
 def validate_linux_user(username: str) -> str:
     if not LINUX_USER_RE.fullmatch(username or "") or username in RESERVED_LINUX_USERS:
+        raise ValueError("Invalid panel Linux user")
+    if (username or "").startswith(SFTP_SUB_ACCOUNT_PREFIX):
         raise ValueError("Invalid panel Linux user")
     return username
 

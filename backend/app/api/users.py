@@ -295,6 +295,11 @@ def suspend_user(user_id: int, request: Request, db: Session = Depends(get_db), 
             except Exception:
                 pass
 
+    # Sub-accounts share the site user's uid but not its name, so locking the
+    # site user above does not touch them. A suspended customer with a working
+    # SFTP sub-account still has write access to the sites just disabled.
+    teardown.set_owner_sftp_accounts_locked(db, user.id, True)
+
     db.commit()
     log_action(db, current_user.id, "suspend_user", user.username, request=request)
     return {"message": f"Suspended user {user.username}", "affected_websites": len(websites)}
@@ -334,6 +339,8 @@ def unsuspend_user(user_id: int, request: Request, db: Session = Depends(get_db)
                 site_users.unlock_linux_user(website.linux_user)
             except Exception:
                 pass
+
+    teardown.set_owner_sftp_accounts_locked(db, user.id, False)
 
     db.commit()
     log_action(db, current_user.id, "unsuspend_user", user.username, request=request)

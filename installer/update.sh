@@ -763,6 +763,10 @@ install_panel_runtime() {
   if command -v sshd >/dev/null 2>&1; then
     sshd_config="/etc/ssh/sshd_config"
     sshd_backup="${sshd_config}.bpanel.bak"
+    getent group bpanel-sftp-site >/dev/null || groupadd --system bpanel-sftp-site
+    # Root owns the chroot roots and everything above them. Deliberately not
+    # under /var/lib/bpanel, which belongs to the panel account.
+    install -d -o root -g root -m 0755 /var/lib/bpanel-sftp
     install -d -o root -g root -m 0755 /run/sshd
     rm -f /etc/ssh/sshd_config.d/99-bpanel-sftp.conf 2>/dev/null || true
     touch "$sshd_config"
@@ -775,6 +779,23 @@ install_panel_runtime() {
 Match Group bpanel-sftp
     PasswordAuthentication yes
     ChrootDirectory /home/%u
+    ForceCommand internal-sftp -d /
+    PermitTTY no
+    X11Forwarding no
+    AllowTcpForwarding no
+    PermitTunnel no
+
+# Per-website sub-accounts. Same lockdown, a narrower chroot: one root-owned
+# directory holding a bind mount of exactly one site. The chroot root is NOT
+# under /var/lib/bpanel - that directory belongs to the panel account, and a
+# chroot root the confined account can write is not a boundary at all.
+#
+# This block must stay AFTER the one above. sshd applies every matching block
+# in order and lets later ones win; a sub-account is not a member of
+# bpanel-sftp, so in practice only one of the two ever applies.
+Match Group bpanel-sftp-site
+    PasswordAuthentication yes
+    ChrootDirectory /var/lib/bpanel-sftp/%u
     ForceCommand internal-sftp -d /
     PermitTTY no
     X11Forwarding no
