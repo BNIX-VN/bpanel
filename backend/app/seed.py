@@ -1,6 +1,7 @@
 import os
 import secrets
 import string
+from datetime import datetime
 
 from app.core.database import SessionLocal, run_migrations
 from app.core.security import hash_password
@@ -27,20 +28,30 @@ def seed_admin():
         created = False
         if not db.query(User).filter(User.username == "admin").first():
             password = _admin_password()
-            db.add(User(
+            admin = User(
                 username="admin",
                 email="admin@example.com",
                 hashed_password=hash_password(password),
                 role="admin",
                 website_limit=999,
                 storage_limit_mb=102400,
-            ))
+                # Its own SFTP secret from the first boot, set below.
+                sftp_password_set_at=datetime.utcnow(),
+            )
+            db.add(admin)
             db.commit()
             created = True
             print(f"Created admin user: admin / {password}")
         else:
             print("Admin user already exists")
-        site_users.ensure_panel_user("admin", password if created else None)
+        # The admin's SFTP login gets its own secret rather than the panel
+        # password: sshd offers password authentication on port 22, and that is
+        # not somewhere the panel password belongs. The installer prints it
+        # alongside the panel credentials.
+        sftp_password = site_users.generate_login_password() if created else None
+        site_users.ensure_panel_user("admin", sftp_password)
+        if created:
+            print(f"Admin SFTP password: {sftp_password}")
     finally:
         db.close()
 

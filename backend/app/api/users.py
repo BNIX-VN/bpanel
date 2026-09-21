@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
@@ -15,6 +16,7 @@ from app.schemas.schemas import (
     AuditLogOut,
     UserCreate,
     UserOut,
+    SftpPasswordUpdate,
     UserPasswordUpdate,
     UserUpdate,
 )
@@ -100,8 +102,11 @@ def create_user(payload: UserCreate, request: Request, db: Session = Depends(get
     if db.query(User.id).filter(User.username == payload.username).first():
         raise HTTPException(status_code=409, detail="Username already exists")
     package = _package_for_payload(db, payload.package_id)
+    # The Linux account gets its own secret from the start. It used to be given
+    # the panel password, which put that password on port 22 behind sshd.
+    sftp_password = site_users.generate_login_password()
     try:
-        site_users.ensure_panel_user(payload.username, payload.password)
+        site_users.ensure_panel_user(payload.username, sftp_password)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -114,13 +119,17 @@ def create_user(payload: UserCreate, request: Request, db: Session = Depends(get
         package_id=package.id if package else None,
         website_limit=payload.website_limit,
         storage_limit_mb=payload.storage_limit_mb,
+        sftp_password_set_at=datetime.utcnow(),
     )
     _apply_package_limits(user, package)
     db.add(user)
     db.commit()
     db.refresh(user)
     log_action(db, current_user.id, "create_user", user.username, request=request)
-    return _user_out(user, db)
+    body = _user_out(user, db)
+    # Returned once, to whoever created the account. Nothing stores it.
+    body["sftp_password"] = sftp_password
+    return body
 
 
 @router.get("", response_model=List[UserOut])
@@ -233,18 +242,88 @@ def update_user_password(user_id: int, payload: UserPasswordUpdate, request: Req
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    # The panel password no longer reaches the Linux account. It used to, which
+    # meant sshd offered the panel password to the internet on port 22.
     try:
-        site_users.set_panel_user_password(user.username, payload.password)
+        minted = site_users.retire_shared_login_password(
+            user.username, already_separate=user.sftp_password_set_at is not None
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    if minted is not None:
+        user.sftp_password_set_at = datetime.utcnow()
     user.hashed_password = hash_password(payload.password)
     # Force re-login on all other sessions of this user.
     user.token_version = (user.token_version or 0) + 1
     db.commit()
     log_action(db, current_user.id, "update_user_password", user.username, request=request)
-    return {"message": f"Changed password for user {user.username}"}
+    body = {"message": f"Changed password for user {user.username}"}
+    if minted is not None:
+        # This account's SFTP login was the panel password until a moment ago.
+        # It has been replaced so the old value stops working, and this is the
+        # only time the new one is readable.
+        body["sftp_password"] = minted
+        body["sftp_password_rotated"] = True
+        body["message"] += (
+            ". Its SFTP password was the same secret and has been replaced - "
+            "copy the new one now, it is not shown again."
+        )
+    return body
+
+
+@router.post("/{user_id}/sftp-password")
+def set_sftp_password(
+    user_id: int,
+    payload: SftpPasswordUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Set this account's SFTP password, independently of the panel password.
+
+    Before 0033 there was no such thing: the Linux account carried whatever the
+    panel password was, so sshd offered the panel password to anyone on port 22,
+    and an SFTP brute force was a panel compromise - which through the sudo
+    helper is root.
+
+    Sending no password means "generate one", which is the better default: it
+    is the one case where the value is guaranteed not to be a password the user
+    has used somewhere else.
+    """
+    if user_id != current_user.id:
+        ensure_role(current_user.role, Role.admin)
+    else:
+        require_sensitive_action_step_up(current_user, payload.current_password, payload.code)
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Named for what it is. This is the one endpoint where a value the user
+    # typed may legitimately reach chpasswd, and calling it `password` would
+    # make it indistinguishable from a panel password at a glance.
+    sftp_password = payload.password or site_users.generate_login_password()
+    generated = payload.password is None
+    try:
+        site_users.set_panel_user_password(user.username, sftp_password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    was_shared = user.sftp_password_set_at is None
+    user.sftp_password_set_at = datetime.utcnow()
+    db.commit()
+    log_action(db, current_user.id, "set_sftp_password", user.username, request=request)
+    return {
+        "message": "SFTP password updated",
+        # Returned once, and only when the panel invented it. A password the
+        # user chose is never echoed back.
+        "password": sftp_password if generated else None,
+        # True when this call is what finally separated the two secrets.
+        "separated_from_panel_password": was_shared,
+    }
 
 
 @router.post("/{user_id}/2fa/reset")

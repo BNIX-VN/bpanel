@@ -60,6 +60,15 @@ class User(Base):
     # implicitly, and unlike terminal_enabled there is no existing behaviour to
     # preserve, because nobody holds one of these accounts yet.
     sftp_accounts_limit: Mapped[int] = mapped_column(Integer, default=0)
+    # When this account's Linux/SFTP password was last set on its own.
+    #
+    # NULL is load-bearing: it means the Linux password has never been set
+    # independently and is still whatever the panel password was. That was the
+    # only possible state before 0033, and it made the panel password reachable
+    # by brute force against sshd on port 22. Accounts created since get their
+    # own secret; legacy ones are retired from the coupling the first time
+    # either password is set.
+    sftp_password_set_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     # Bumped to invalidate previously-issued JWTs (logout-everywhere, role
     # change, password reset by admin, account disable, etc).
     token_version: Mapped[int] = mapped_column(Integer, default=0)

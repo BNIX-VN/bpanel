@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from sqlalchemy.orm import Session
 
@@ -81,11 +83,16 @@ def update_admin_account(
             raise HTTPException(status_code=409, detail="Email already in use")
     if password_changed:
         try:
-            site_users.set_panel_user_password(current_user.username, payload.password or "")
+            minted = site_users.retire_shared_login_password(
+                current_user.username,
+                already_separate=current_user.sftp_password_set_at is not None,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+        if minted is not None:
+            current_user.sftp_password_set_at = datetime.utcnow()
         current_user.hashed_password = hash_password(payload.password or "")
         current_user.token_version = (current_user.token_version or 0) + 1
     if next_email is not None and next_email != current_user.email:

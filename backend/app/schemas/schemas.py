@@ -22,8 +22,17 @@ RESERVED_LINUX_USERNAMES = {
 
 
 def _validate_linux_login_password(value: str) -> str:
+    """For passwords that really do reach a Linux account.
+
+    chpasswd reads `user:password` one line at a time, so a ':' or a newline in
+    the value would let a password describe a second account.
+
+    Since 0033 this applies to the SFTP password alone. The panel password is
+    no longer written to any Linux account, so it carries no such restriction -
+    and saying otherwise in an error message would now be false.
+    """
     if any(char in value for char in (":", "\r", "\n", "\x00")):
-        raise ValueError("password cannot contain ':', newlines, or NUL characters because it is synced to the Linux/SFTP account")
+        raise ValueError("SFTP password cannot contain ':', newlines, or NUL characters")
     return value
 
 
@@ -225,11 +234,6 @@ class UserCreate(BaseModel):
             raise ValueError("username is reserved by the system")
         return value
 
-    @field_validator("password")
-    @classmethod
-    def validate_sftp_password(cls, value: str) -> str:
-        return _validate_linux_login_password(value)
-
 
 class UserUpdate(BaseModel):
     email: Optional[EmailStr] = None
@@ -241,14 +245,28 @@ class UserUpdate(BaseModel):
 
 
 class UserPasswordUpdate(BaseModel):
+    """The panel password. Since 0033 it reaches no Linux account."""
+
     password: str = Field(min_length=12, max_length=72)
+    current_password: Optional[str] = Field(default=None, min_length=1, max_length=72)
+    code: Optional[str] = Field(default=None, min_length=6, max_length=12)
+
+
+class SftpPasswordUpdate(BaseModel):
+    """The SFTP password, which does reach a Linux account.
+
+    Absent means "generate one and show it to me once" - the same shape the
+    database and per-website sub-account flows already use.
+    """
+
+    password: Optional[str] = Field(default=None, min_length=12, max_length=72)
     current_password: Optional[str] = Field(default=None, min_length=1, max_length=72)
     code: Optional[str] = Field(default=None, min_length=6, max_length=12)
 
     @field_validator("password")
     @classmethod
-    def validate_sftp_password(cls, value: str) -> str:
-        return _validate_linux_login_password(value)
+    def validate_sftp_password(cls, value: Optional[str]) -> Optional[str]:
+        return value if value is None else _validate_linux_login_password(value)
 
 
 class UserOut(BaseModel):
@@ -265,6 +283,11 @@ class UserOut(BaseModel):
     storage_limit_bytes: Optional[int] = None
     storage_percent: float = 0.0
     totp_enabled: bool = False
+    # NULL means this account's SFTP password has never been set on its own and
+    # is still whatever the panel password was. The UI says so.
+    sftp_password_set_at: Optional[datetime] = None
+    # Only ever populated on create, and only in that one response.
+    sftp_password: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -908,12 +931,8 @@ class AdminAccountUpdate(BaseModel):
     current_password: Optional[str] = Field(default=None, min_length=1, max_length=72)
     code: Optional[str] = Field(default=None, min_length=6, max_length=12)
 
-    @field_validator("password")
-    @classmethod
-    def validate_password(cls, value: Optional[str]) -> Optional[str]:
-        if value is None:
-            return value
-        return _validate_linux_login_password(value)
+    # No Linux password rule here either: since 0033 the admin's panel password
+    # is not written to their Linux account.
 
 class PanelIpv6Toggle(BaseModel):
     enabled: bool

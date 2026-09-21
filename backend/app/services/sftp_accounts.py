@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import hashlib
 import re
-import secrets
 from pathlib import PurePosixPath
 from typing import Optional
 
@@ -114,9 +113,12 @@ def validate_password(password: str) -> str:
 
 
 def generate_password() -> str:
-    """A password the panel invents when the customer does not supply one."""
-    # token_urlsafe can emit '-' and '_' only, so it never trips the ':' rule.
-    return secrets.token_urlsafe(18)
+    """A password the panel invents when the customer does not supply one.
+
+    Delegates so that the main account and its sub-accounts cannot drift apart
+    on strength or on which characters are safe for chpasswd.
+    """
+    return site_users.generate_login_password()
 
 
 def ensure_account(owner_linux_user: str, linux_user: str, site_root: str) -> str:

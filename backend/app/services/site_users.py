@@ -1,6 +1,7 @@
 import hashlib
 import os
 import re
+import secrets
 from pathlib import Path, PurePosixPath
 from typing import Optional
 
@@ -162,6 +163,55 @@ def set_panel_user_password(username: str, password: str) -> None:
         sensitive=True,
         fallback=["true"],
     )
+
+
+def generate_login_password() -> str:
+    """A password for a Linux login the panel invents rather than accepts.
+
+    token_urlsafe emits only letters, digits, '-' and '_', so it can never trip
+    the ':' rule that chpasswd cares about - it reads `user:password` one line
+    at a time, and a ':' in the value would let a password describe a second
+    account.
+
+    One implementation, shared with per-website sub-accounts, so the two cannot
+    drift apart on strength or on the character set.
+    """
+    return secrets.token_urlsafe(18)
+
+
+def rotate_panel_user_password(username: str) -> str:
+    """Give this account's Linux login a fresh secret nobody has seen.
+
+    Used when a panel password that was also the SFTP password is changed: the
+    old value has to stop working, or a rotation the user believes killed the
+    old secret quietly did not.
+    """
+    password = generate_login_password()
+    set_panel_user_password(username, password)
+    return password
+
+
+def retire_shared_login_password(username: str, already_separate: bool) -> Optional[str]:
+    """What has to happen to the SFTP password when the panel password changes.
+
+    One implementation because three call sites change a panel password -
+    api/users.py, api/panel_settings.py and api/provisioning.py - and the
+    account-teardown bug in this codebase came from exactly that shape drifting
+    apart.
+
+    If the account already has its own SFTP password, a panel password change
+    is none of its business: return None and leave it alone.
+
+    If it does not, the Linux account is still carrying the *old* panel
+    password. Leaving it there would mean a user who rotates a compromised
+    password still has the compromised value opening SFTP on port 22 - the
+    rotation would look complete and not be. So the Linux password is replaced
+    with a fresh secret, which the caller must hand to the user: it is the only
+    time anyone will see it.
+    """
+    if already_separate:
+        return None
+    return rotate_panel_user_password(username)
 
 
 def delete_panel_user(username: str) -> None:

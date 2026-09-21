@@ -1113,7 +1113,11 @@ def _delete_existing_user(db, username: str) -> bool:
 
 def _ensure_panel_user_record(db, username: str, email: str, domains: list[str], credentials: list[str]):
     password = secrets.token_urlsafe(18)
-    site_users.ensure_panel_user(username, password)
+    # Two separate secrets from the start. The panel password never reaches the
+    # Linux account, because sshd offers password authentication to it on port
+    # 22 and a panel password is root through the sudo helper.
+    sftp_password = site_users.generate_login_password()
+    site_users.ensure_panel_user(username, sftp_password)
     user = User(
         username=username,
         email=_unique_email(db, username, email, domains),
@@ -1122,11 +1126,14 @@ def _ensure_panel_user_record(db, username: str, email: str, domains: list[str],
         website_limit=max(5, len(domains) + 5),
         storage_limit_mb=DEFAULT_STORAGE_MB,
         is_active=True,
+        sftp_password_set_at=_dt.datetime.utcnow(),
     )
     db.add(user)
     db.commit()
     db.refresh(user)
     credentials.append(f"panel_user username={username} password={password}")
+    # The operator running the import is the only one who can hand this on.
+    credentials.append(f"sftp_user username={username} password={sftp_password}")
     return user, True
 
 
