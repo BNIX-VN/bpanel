@@ -683,6 +683,7 @@ install_privileged_helper() {
   install -m 0440 -o root -g root "${SCRIPT_DIR}/files/bpanel-sudoers" /etc/sudoers.d/bpanel
   visudo -c -f /etc/sudoers.d/bpanel >/dev/null
   install -m 0755 -o root -g root "${SCRIPT_DIR}/rescue-firewall.sh" /usr/local/sbin/bpanel-rescue-firewall
+  install -m 0755 -o root -g root "${SCRIPT_DIR}/files/bpanel-memory-guard" /usr/local/sbin/bpanel-memory-guard
   ln -sfn /usr/local/sbin/bpanel-rescue-firewall /usr/local/sbin/bpanel-rescue-ufw-blocklist
   if [[ -f "${PROJECT_ROOT}/change_IP.sh" ]]; then
     install -m 0755 -o root -g root "${PROJECT_ROOT}/change_IP.sh" /usr/local/sbin/bpanel-change-ip
@@ -1510,6 +1511,12 @@ main() {
 
   log "Capping log growth (journald + btmp)"
   configure_log_limits
+
+  # Swap, a ceiling on clamd and an OOM preference for nginx. Must come after
+  # install_privileged_helper, which is what puts bpanel-memory-guard on disk -
+  # calling it earlier silently did nothing, hidden by the `|| true`.
+  log "Configuring memory limits (swap, clamd ceiling, OOM preference)"
+  /usr/local/sbin/bpanel-memory-guard || true
 
   log "Configuring SSL"
   setup_ssl
