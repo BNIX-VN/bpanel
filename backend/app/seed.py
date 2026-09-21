@@ -46,12 +46,18 @@ def seed_admin():
             print("Admin user already exists")
         # The admin's SFTP login gets its own secret rather than the panel
         # password: sshd offers password authentication on port 22, and that is
-        # not somewhere the panel password belongs. The installer prints it
-        # alongside the panel credentials.
+        # not somewhere the panel password belongs.
+        #
+        # The value is deliberately never printed. This runs inside install.sh,
+        # whose output lands in terminal scrollback, CI logs and support
+        # tickets - CodeQL flags it as clear-text logging of a credential and
+        # is right to. The admin sets one they can see from the panel, which is
+        # a click away and is the only place it is ever readable.
         sftp_password = site_users.generate_login_password() if created else None
         site_users.ensure_panel_user("admin", sftp_password)
         if created:
-            print(f"Admin SFTP password: {sftp_password}")
+            print("Admin SFTP login: admin (set its password in the panel, "
+                  "under SFTP accounts - it is not the panel password)")
     finally:
         db.close()
 

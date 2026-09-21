@@ -261,3 +261,25 @@ def test_the_group_is_emptied_before_it_is_deleted():
         "www-data has to leave the group before groupdel can remove it"
     )
     assert body.index("gpasswd -d www-data") < body.index('groupdel "$user"')
+
+
+def test_the_installer_never_prints_the_sftp_password():
+    """seed.py runs inside install.sh.
+
+    Its stdout lands in terminal scrollback, CI logs and support tickets.
+    CodeQL flagged the first version of this as clear-text logging of a
+    credential (backend/app/seed.py, high severity) and was right to: the admin
+    sets a password they can see from the panel instead, which is the only
+    place it is ever readable.
+    """
+    src = (PROJECT_ROOT / "backend" / "app" / "seed.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if getattr(node.func, "id", None) != "print":
+            continue
+        printed = " ".join(ast.unparse(a) for a in node.args)
+        assert "sftp_password" not in printed, (
+            f"seed.py line {node.lineno} prints the SFTP password: {printed}"
+        )
