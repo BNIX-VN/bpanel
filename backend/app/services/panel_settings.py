@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import re
+import stat
 import time
 import uuid
 from pathlib import Path
@@ -30,21 +31,87 @@ DOMAIN_RE = re.compile(r"^(?!-)([a-z0-9-]{1,63}\.)+[a-z]{2,}$")
 IPV4_RE = re.compile(r"^(\d{1,3}\.){3}\d{1,3}$")
 
 
+class SettingsUnreadable(RuntimeError):
+    """The settings file is there but could not be read or parsed.
+
+    Distinct from "there are no settings yet", which is an empty dict. The
+    difference matters because almost every writer here reads the file, adds a
+    key and writes the whole thing back: if a failed read looks like an empty
+    file, that sequence silently erases every setting the panel had.
+
+    It happened. A settings write performed as root left the file owned by
+    root; the panel account's next read was denied, the error was swallowed
+    into `{}`, and the following write cut the file from six keys to one,
+    taking the malware schedule and the panel name with it.
+    """
+
+
 def _read_raw() -> dict:
+    """Settings as stored. Empty only when the file genuinely is not there."""
     try:
-        if SETTINGS_FILE.exists():
-            return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        text = SETTINGS_FILE.read_text(encoding="utf-8")
+    except FileNotFoundError:
         return {}
-    return {}
+    except OSError as exc:
+        raise SettingsUnreadable(f"cannot read {SETTINGS_FILE}: {exc}") from exc
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise SettingsUnreadable(f"{SETTINGS_FILE} is not valid JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise SettingsUnreadable(f"{SETTINGS_FILE} does not hold an object")
+    return data
+
+
+def _read_raw_lenient() -> dict:
+    """For lookups that must not fail a request when the file is unreadable.
+
+    These callers read one value and can live with a default. Nothing that
+    writes may use this - see SettingsUnreadable.
+    """
+    try:
+        return _read_raw()
+    except SettingsUnreadable as exc:
+        logging.getLogger("bpanel.panel_settings").warning("%s", exc)
+        return {}
 
 
 def _write_raw(data: dict) -> None:
+    """Replace the settings file, keeping whose it is.
+
+    NamedTemporaryFile creates the replacement owned by whoever is running,
+    mode 0600. Written by root - an admin running a maintenance script, say -
+    that hands the panel account a file it can no longer read. Carry the
+    existing owner and mode across, so a write by root leaves the file exactly
+    as the panel account had it.
+    """
     SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        previous = SETTINGS_FILE.stat()
+    except FileNotFoundError:
+        previous = None
+
     with NamedTemporaryFile("w", encoding="utf-8", dir=str(SETTINGS_DIR), delete=False) as tmp:
         json.dump(data, tmp, ensure_ascii=True, indent=2, sort_keys=True)
         tmp.write("\n")
         tmp_path = Path(tmp.name)
+
+    try:
+        if previous is not None:
+            os.chmod(tmp_path, stat.S_IMODE(previous.st_mode))
+            if hasattr(os, "chown"):
+                os.chown(tmp_path, previous.st_uid, previous.st_gid)
+        else:
+            os.chmod(tmp_path, 0o600)
+            if hasattr(os, "chown"):
+                # No file yet: the directory says who the panel runs as.
+                owner = SETTINGS_DIR.stat()
+                os.chown(tmp_path, owner.st_uid, owner.st_gid)
+    except OSError:
+        # Not permitted to chown (already the owner, or a filesystem that will
+        # not). The replace below is still correct.
+        pass
+
     tmp_path.replace(SETTINGS_FILE)
 
 
@@ -54,7 +121,7 @@ def configured_panel_url() -> str:
     Link builders need this on every request; refreshing the malware scan
     status to read one string would be a poor trade.
     """
-    return (_read_raw().get("panel_url") or settings.panel_url or "").strip()
+    return (_read_raw_lenient().get("panel_url") or settings.panel_url or "").strip()
 
 
 def global_blocked_bots() -> list[str]:
@@ -66,7 +133,7 @@ def global_blocked_bots() -> list[str]:
     """
     from app.services import nginx
 
-    return nginx.normalize_blocked_bots(_read_raw().get("global_blocked_bots") or "")
+    return nginx.normalize_blocked_bots(_read_raw_lenient().get("global_blocked_bots") or "")
 
 
 def crs_mode() -> str:
@@ -75,7 +142,7 @@ def crs_mode() -> str:
     Read through _read_raw for the same reason global_blocked_bots does: this is
     consulted on every vhost and site-rule render.
     """
-    return (_read_raw().get("crs_mode") or "off").strip().lower()
+    return (_read_raw_lenient().get("crs_mode") or "off").strip().lower()
 
 
 def save_crs_mode(mode: str) -> str:
@@ -106,8 +173,8 @@ def _asset_url(filename: str | None) -> str:
     path = ASSETS_DIR / filename
     if not path.exists():
         return ""
-    stat = path.stat()
-    version = f"{stat.st_mtime_ns}-{stat.st_size}"
+    info = path.stat()
+    version = f"{info.st_mtime_ns}-{info.st_size}"
     return f"/brand-assets/{filename}?v={version}"
 
 
@@ -249,7 +316,7 @@ def use_domain_certificate(domain: str, panel_port: int | None = None) -> dict:
 
 def regenerate_self_signed(panel_port: int | None = None) -> dict:
     """Go back to a certificate the panel signs for itself."""
-    data = _read_raw()
+    data = _read_raw_lenient()
     host = ""
     if data.get("panel_url") or settings.panel_url:
         try:
@@ -282,7 +349,7 @@ def has_panel_certificate() -> bool:
 
 
 def current_settings() -> dict:
-    data = _read_raw()
+    data = _read_raw_lenient()
     app_name = (data.get("app_name") or settings.app_name or "BPanel").strip() or "BPanel"
     panel_url = data.get("panel_url") or settings.panel_url or ""
     panel_hostname = ""
