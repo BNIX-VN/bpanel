@@ -305,3 +305,29 @@ def test_a_working_install_carries_no_warning_at_all(monkeypatch):
     info = fail2ban.status()
     assert "warning" not in info
     assert info["total_failed"] == 1144
+
+
+# --- the window has to match how the attacks actually arrive ----------------
+
+def test_the_window_is_wide_enough_for_a_paced_scan():
+    """Ten minutes is sized for a fast brute force, not what really turns up.
+
+    Measured on a live panel: two hosts each reached exactly five attempts,
+    spaced eight to fifteen minutes apart, and neither ever filled a
+    ten-minute window. An hour catches both.
+    """
+    body = _function("write_fail2ban_jail")
+    assert "findtime = 1h" in body
+    assert "findtime = 10m" not in body
+
+
+def test_the_thresholds_are_stated_once():
+    """Two maxretry lines is a question about which one wins."""
+    body = _function("write_fail2ban_jail")
+    assert body.count("maxretry = ") == 1
+
+
+def test_a_ban_still_lengthens_for_a_repeat_offender():
+    body = _function("write_fail2ban_jail")
+    assert "bantime.increment = true" in body
+    assert "bantime.maxtime = 1w" in body
