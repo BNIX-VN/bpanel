@@ -324,8 +324,13 @@ def _sync_live_ssl_flags(db: Session, websites: list[Website]) -> list[Website]:
         db.commit()
         for website in websites:
             db.refresh(website)
+    # Read the server-wide switch once rather than per site: it is a file read.
+    crs_live = waf.active_crs_mode() != "off"
     for website in websites:
         website.wordpress_installed = _has_wordpress_install(website)
+        # Transient, like wordpress_installed above - WebsiteOut reads it and
+        # nothing persists it. crs_enabled is a real column and needs no help.
+        website.crs_active = bool(getattr(website, "crs_enabled", False)) and crs_live
     return websites
 
 

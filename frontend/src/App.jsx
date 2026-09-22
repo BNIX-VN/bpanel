@@ -5970,9 +5970,14 @@ function App() {
         <div className="table waf-overview-list">
           {websites.map(site => {
             const bots = botCountFor(site.id);
+            // The site row carries its own CRS state, so an end user sees the
+            // truth. This used to read only from /waf/crs, which is admin-only:
+            // the refusal was swallowed and every site rendered "CRS off".
+            // The admin-only payload is still used, but only to name the mode.
             const crsRow = (crs?.websites || []).find(w => w.website_id === site.id);
-            const crsOn = !!crsRow?.crs_enabled;
-            const crsLive = crsOn && site.waf_enabled && crs?.mode && crs.mode !== 'off';
+            const crsOn = site.crs_enabled ?? !!crsRow?.crs_enabled;
+            const crsLive = crsOn && site.waf_enabled
+              && (site.crs_active ?? !!(crs?.mode && crs.mode !== 'off'));
             return <div className="waf-overview-row" key={site.id}>
               <span className="waf-overview-domain"><strong>{site.domain}</strong></span>
               <div className="waf-overview-badges">
@@ -5980,7 +5985,7 @@ function App() {
                 <span
                   className={crsLive ? 'badge ok' : 'badge'}
                   title={crsOn && !crsLive ? 'Opted in, but CRS is off server-wide' : ''}
-                >{crsOn ? (crsLive ? `CRS ${crs.mode}` : 'CRS pending') : 'CRS off'}</span>
+                >{crsOn ? (crsLive ? (crs?.mode ? `CRS ${crs.mode}` : 'CRS on') : 'CRS pending') : 'CRS off'}</span>
                 <span className={site.http_flood_enabled ? 'badge ok' : 'badge'}>{site.http_flood_enabled ? 'Flood on' : 'Flood off'}</span>
                 <span
                   className={bots > 0 ? 'badge ok' : 'badge'}
