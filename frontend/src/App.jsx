@@ -727,6 +727,7 @@ function App() {
   // Optional features. Until this has loaded nothing addon-owned is offered, so
   // a slow first request cannot flash a section that turns out not to be there.
   const [addons, setAddons] = useState({ items: [], can_manage: false, loaded: false });
+  const [f2b, setF2b] = useState(null);
   const [siteAppDraft, setSiteAppDraft] = useState(EMPTY_SITE_APP_DRAFT);
   const [createSiteAppId, setCreateSiteAppId] = useState('');
   // File manager target: empty means the selected website, otherwise an app.
@@ -3565,6 +3566,18 @@ function App() {
     if (data) setFirewallStatus(data);
   }
 
+  async function loadFail2ban() {
+    // 409 when the addon is not installed, which is an answer, not an error.
+    const data = await request('/fail2ban/status', { silent: true });
+    setF2b(data || null);
+  }
+
+  async function unbanAddress(ip) {
+    const data = await request('/fail2ban/unban', { method: 'POST', body: JSON.stringify({ ip }) },
+      `Đang gỡ khoá ${ip}...`);
+    if (data) { setF2b(prev => ({ ...(prev || {}), banned_ips: data.banned_ips })); setNotice(`Đã gỡ khoá ${ip}.`); }
+  }
+
   async function runFirewallAction(path, options = {}, label = 'Updating firewall...') {
     const data = await request(path, options, label);
     if (data) { setNotice((data.stdout || data.stderr || 'Firewall updated.').trim()); await loadFirewall(); }
@@ -4049,7 +4062,7 @@ function App() {
   useEffect(() => {
     if (isAuthenticated && page === 'users') { loadUsers(); loadPackages(); }
     if (isAuthenticated && page === 'php') { loadPhpConfig(); loadPhpTune(phpConfig.php_version); }
-    if (isAuthenticated && page === 'firewall') { loadFirewall(); loadFirewallBlocklists(); }
+    if (isAuthenticated && page === 'firewall') { loadFirewall(); loadFirewallBlocklists(); loadFail2ban(); }
     if (isAuthenticated && ['waf', 'waf-site'].includes(page)) {
       loadBotBlocks();
       // /waf/rules and /waf/crs describe the whole server and stay admin-only.
@@ -5990,7 +6003,43 @@ function App() {
     const allRules = firewallStatus?.rules || [];
     const userRules = allRules.filter(rule => !rule.protected);
     const panelRules = allRules.filter(rule => rule.protected);
+    const f2bInstalled = addons.items.find(item => item.slug === 'fail2ban')?.installed;
     return <>
+      {f2bInstalled && <section className="section">
+        <div className="section-title">
+          <div>
+            <h2>Fail2ban — chặn dò mật khẩu SSH</h2>
+            <p className="hint">
+              IP thử sai 5 lần trong 10 phút bị khoá 1 giờ, khoá lâu dần nếu quay lại (tối đa 1 tuần).
+              Địa chỉ của chính máy chủ không bao giờ bị khoá.
+            </p>
+          </div>
+          <button disabled={!!loading} onClick={loadFail2ban}><RefreshCw size={14}/> Refresh</button>
+        </div>
+        {!f2b && <p className="hint">Chưa tải được trạng thái. Bấm Refresh.</p>}
+        {f2b && <>
+          {f2b.warning && <p className="hint" style={{marginBottom: 10, fontWeight: 600}}>{f2b.warning}</p>}
+          <div style={{display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center'}}>
+            <span className={f2b.running ? 'badge ok' : 'badge warn'}>
+              {f2b.running ? 'Đang chạy' : 'Không chạy'}
+            </span>
+            <span className={f2b.bans_reach_kernel ? 'badge ok' : 'badge warn'}>
+              {f2b.bans_reach_kernel ? 'Lệnh ban có hiệu lực' : 'Ban KHÔNG tới iptables'}
+            </span>
+            <span className="hint">banaction: {f2b.banaction || '—'}</span>
+            <span className="hint">đang khoá: {f2b.banned ?? 0} IP</span>
+          </div>
+          {(f2b.banned_ips || []).length > 0 ? <table className="table" style={{marginTop: 10}}>
+            <thead><tr><th>IP đang bị khoá</th><th style={{width: 120}}></th></tr></thead>
+            <tbody>
+              {(f2b.banned_ips || []).map(ip => <tr key={ip}>
+                <td><code>{ip}</code></td>
+                <td><button className="danger" disabled={!!loading} onClick={() => unbanAddress(ip)}>Gỡ khoá</button></td>
+              </tr>)}
+            </tbody>
+          </table> : <p className="hint" style={{marginTop: 10}}>Hiện không có IP nào bị khoá.</p>}
+        </>}
+      </section>}
       <section className="section">
         <div className="section-title">
           <div><h2>Firewall (iptables + ipset)</h2><p className="hint">SSH, the panel port and 80/443/465/587 are always kept open.</p></div>

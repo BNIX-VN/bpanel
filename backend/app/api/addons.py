@@ -12,7 +12,7 @@ from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.permissions import Role, ensure_role, is_admin_role
 from app.models.entities import SiteApp, User
-from app.services import addons, site_apps
+from app.services import addons, fail2ban, site_apps
 from app.services.audit import log_action
 
 router = APIRouter(prefix="/addons", tags=["addons"])
@@ -39,6 +39,12 @@ def list_addons(current_user: User = Depends(get_current_user)):
 def install_addon(slug: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.admin)
     entry = addons.known(slug)
+    if slug == addons.FAIL2BAN:
+        # Unlike Application, there is nothing to configure afterwards: this
+        # either protects the machine or it does not. The helper proves a ban
+        # reaches iptables and raises if it does not, so a failure here means
+        # the addon is not recorded as installed - which is the truth.
+        fail2ban.install()
     record = addons.install(slug)
     log_action(db, current_user.id, "install_addon", slug, record.get("version", ""))
     return {
@@ -50,7 +56,10 @@ def install_addon(slug: str, db: Session = Depends(get_db), current_user: User =
         # page itself, which can report progress; saying so here saves someone
         # wondering why Docker did not appear.
         "next_step": "Vào mục Application để cài Docker hoặc bản Node.js cần dùng."
-        if slug == addons.APPLICATION else "",
+        if slug == addons.APPLICATION else (
+            "Đang bảo vệ SSH. Xem IP bị khoá ở mục Bảo mật."
+            if slug == addons.FAIL2BAN else ""
+        ),
     }
 
 
@@ -75,6 +84,12 @@ def uninstall_addon(slug: str, db: Session = Depends(get_db), current_user: User
             except (RuntimeError, ValueError):
                 # Already gone, or never deployed. Not a reason to refuse.
                 failed.append(app.name)
+    if slug == addons.FAIL2BAN:
+        try:
+            fail2ban.stop()
+            stopped.append("fail2ban")
+        except RuntimeError:
+            failed.append("fail2ban")
     addons.uninstall(slug)
     log_action(db, current_user.id, "uninstall_addon", slug, f"stopped {len(stopped)}")
     return {
@@ -83,5 +98,7 @@ def uninstall_addon(slug: str, db: Session = Depends(get_db), current_user: User
         "installed": False,
         "stopped": stopped,
         "could_not_stop": failed,
-        "kept": "Thư mục ứng dụng, volume và dữ liệu trong panel được giữ nguyên.",
+        "kept": "Gói, cấu hình jail và lịch sử ban được giữ nguyên."
+        if slug == addons.FAIL2BAN
+        else "Thư mục ứng dụng, volume và dữ liệu trong panel được giữ nguyên.",
     }

@@ -21,10 +21,27 @@ ADDONS_DIR = Path(os.environ.get("BPANEL_DATA_DIR", "/var/lib/bpanel"))
 ADDONS_FILE = ADDONS_DIR / "addons.json"
 
 APPLICATION = "application"
+FAIL2BAN = "fail2ban"
 
 # What an administrator sees in the Addons page. The version is the addon's own:
 # it moves when the addon changes, independently of the panel's version.
 CATALOGUE: dict[str, dict] = {
+    FAIL2BAN: {
+        "name": "Fail2ban",
+        "version": "1.0.0",
+        "summary": "Chặn dò mật khẩu SSH: khoá tạm IP thử sai nhiều lần.",
+        "details": [
+            "sshd trên địa chỉ công khai nhận hàng trăm lượt thử mật khẩu mỗi ngày mà không ai để ý; một máy khách thật ghi nhận 679 lượt thất bại trong 24 giờ.",
+            "IP thử sai 5 lần trong 10 phút bị khoá 1 giờ, và khoá lâu dần nếu quay lại, tối đa 1 tuần.",
+            "Không bao giờ khoá chính máy chủ: loopback và mọi địa chỉ của máy đều nằm trong danh sách bỏ qua.",
+        ],
+        "notes": [
+            "Lệnh ban được ghim vào iptables-multiport thay vì để fail2ban tự dò. Máy từng cài ufw còn để lại chain ufw, đủ để fail2ban chọn nhầm và mọi lệnh ban rơi vào một tường lửa không chạy.",
+            "Khi cài, panel ban thử một địa chỉ không định tuyến rồi kiểm tra nó có thật trong iptables không. Không thấy thì báo lỗi thay vì để lại một dịch vụ trông khoẻ mà không bảo vệ gì.",
+            "Tắt addon chỉ dừng dịch vụ: gói, file cấu hình và lịch sử ban đều giữ nguyên.",
+        ],
+        "keeps_data_on_uninstall": True,
+    },
     APPLICATION: {
         "name": "Application",
         "version": "1.0.0",
