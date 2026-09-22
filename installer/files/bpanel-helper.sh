@@ -1076,6 +1076,209 @@ remove_clamav_daemon() {
   echo "clamav-daemon removed. The engine (clamscan + signatures) is untouched."
 }
 
+# --- fail2ban ---------------------------------------------------------------
+#
+# Optional. SSH on a public address collects a few hundred password attempts a
+# day without anyone noticing: a live customer server showed 679 failed root
+# logins in 24 hours, from six sources, with nothing in the way.
+#
+# Two things decide whether this works at all.
+#
+# **The ban action is pinned.** Debian's fail2ban picks one by probing the
+# machine, and a server that once had ufw keeps 18 ufw-* chains in iptables
+# long after the package is gone. Picked on that evidence, every ban would be
+# handed to a firewall that is not running: the log says "Ban 1.2.3.4" and the
+# address carries on connecting. iptables-multiport is named here so nothing
+# is inferred.
+#
+# **The install proves a ban lands.** Writing config and starting a service
+# says nothing about whether bans reach the kernel. install_fail2ban bans a
+# documentation address, looks for it in iptables, and unbans it. If it is not
+# there the install fails loudly rather than leaving a service that looks
+# healthy and protects nothing.
+#
+# BPanel's own chain returns rather than accepts, so packets it allows fall
+# through to fail2ban's chain further down INPUT. The two do not fight.
+FAIL2BAN_JAIL_LOCAL=/etc/fail2ban/jail.local
+# TEST-NET-1 (RFC 5737). Never routed, so banning it can inconvenience nobody.
+FAIL2BAN_PROBE_IP=192.0.2.1
+
+fail2ban_ssh_unit() {
+  # Debian and Ubuntu call it ssh.service; the fail2ban default filter matches
+  # _SYSTEMD_UNIT=sshd.service and therefore sees nothing on either. Both names
+  # resolve - sshd.service is an alias - so ask systemd for the canonical Id,
+  # which is what the journal records.
+  local name
+  for name in ssh sshd; do
+    if [[ "$(systemctl show -p LoadState --value "$name" 2>/dev/null)" == "loaded" ]]; then
+      systemctl show -p Id --value "$name" 2>/dev/null
+      return 0
+    fi
+  done
+  echo "sshd.service"
+}
+
+fail2ban_local_addresses() {
+  # Never ban the machine itself. Loopback plus every global address it holds.
+  {
+    echo "127.0.0.1/8"
+    echo "::1"
+    ip -o addr show scope global 2>/dev/null | awk '{print $4}'
+  } | sort -u | tr '\n' ' '
+}
+
+write_fail2ban_jail() {
+  local ignore unit
+  ignore="$(fail2ban_local_addresses)"
+  unit="$(fail2ban_ssh_unit)"
+  install -d -m 0755 /etc/fail2ban
+  cat >"$FAIL2BAN_JAIL_LOCAL" <<EOF
+# Managed by BPanel. Edits here are replaced when the addon is reinstalled.
+[DEFAULT]
+# Pinned, not detected. See the note in bpanel-helper about ufw leftovers.
+banaction = iptables-multiport
+banaction_allports = iptables-allports
+backend = systemd
+ignoreip = ${ignore}
+bantime = 1h
+findtime = 10m
+maxretry = 5
+
+[sshd]
+enabled = true
+port = ssh
+# Named, not defaulted. The stock filter looks for sshd.service and Debian
+# calls the unit ssh.service, so the jail runs, bans work, and it never sees
+# a single failed login.
+journalmatch = _SYSTEMD_UNIT=${unit} + _COMM=sshd
+maxretry = 5
+# A host that keeps coming back stays out for longer each time, up to a week.
+bantime.increment = true
+bantime.maxtime = 1w
+EOF
+  chmod 0644 "$FAIL2BAN_JAIL_LOCAL"
+}
+
+fail2ban_ban_reaches_the_kernel() {
+  # Ban an unroutable address, look for it, unban it. The point is not whether
+  # fail2ban says it banned something - it always does - but whether the rule
+  # is in iptables afterwards.
+  local found=1 saved
+  fail2ban-client set sshd banip "$FAIL2BAN_PROBE_IP" >/dev/null 2>&1 || true
+  sleep 1
+  # Captured, not piped into grep -q: that exits on the first match, the
+  # producer takes SIGPIPE, and under `set -o pipefail` the pipeline reports
+  # 141 - a match read as a miss. Which here would fail an install that
+  # actually worked.
+  saved="$(iptables-save 2>/dev/null || true)"
+  if [[ "$saved" == *"$FAIL2BAN_PROBE_IP"* ]]; then
+    found=0
+  fi
+  fail2ban-client set sshd unbanip "$FAIL2BAN_PROBE_IP" >/dev/null 2>&1 || true
+  return "$found"
+}
+
+fail2ban_filter_sees_the_journal() {
+  # The other half of "is this actually protecting anything": a jail can ban on
+  # command and still never notice an attack, if its journalmatch selects
+  # nothing.
+  #
+  # The match has to be evaluated the way fail2ban evaluates it, and that is
+  # not how journalctl reads the same string. In fail2ban a `+` between match
+  # groups is a DISJUNCTION - "unit is this OR the process is called sshd" -
+  # while `journalctl A B` ANDs them. Checking with journalctl's meaning
+  # reports a blind filter on a machine whose filter sees everything, which is
+  # how this function first got written and how it was wrong.
+  #
+  # So: either branch producing entries is enough. sshd on a live machine logs
+  # constantly - accepted logins, disconnects, refusals - so both branches
+  # silent means the match is wrong, not that the server is quiet.
+  local unit
+  unit="$(fail2ban_ssh_unit)"
+  [[ -n "$(journalctl _SYSTEMD_UNIT="$unit" --since '24 hours ago' -q --no-pager 2>/dev/null | head -c 1)" ]] && return 0
+  [[ -n "$(journalctl _COMM=sshd --since '24 hours ago' -q --no-pager 2>/dev/null | head -c 1)" ]] && return 0
+  return 1
+}
+
+install_fail2ban() {
+  export DEBIAN_FRONTEND=noninteractive
+  if ! pkg_installed fail2ban; then
+    apt-get update --allow-releaseinfo-change
+    apt-get install -y fail2ban || deny "could not install fail2ban"
+  fi
+  write_fail2ban_jail
+  systemctl enable fail2ban >/dev/null 2>&1 || true
+  systemctl restart fail2ban || deny "fail2ban did not start"
+
+  # Give it a moment to read the jail and open its socket.
+  local waited=0
+  while [[ $waited -lt 30 ]]; do
+    fail2ban-client ping >/dev/null 2>&1 && break
+    sleep 1
+    waited=$((waited + 1))
+  done
+  fail2ban-client ping >/dev/null 2>&1 || deny "fail2ban is running but not answering its socket"
+
+  fail2ban_ban_reaches_the_kernel     || deny "fail2ban is running but a test ban never reached iptables - check banaction in $FAIL2BAN_JAIL_LOCAL"
+
+  fail2ban_filter_sees_the_journal     || deny "fail2ban is running but its sshd jail matches a journal unit with no entries ($(fail2ban_ssh_unit)) - it would never see a failed login"
+
+  echo "fail2ban installed: sshd jail active, a test ban reached iptables, and the filter is reading $(fail2ban_ssh_unit)."
+}
+
+remove_fail2ban() {
+  # Stop protecting, keep everything: the jail config, the ban database and
+  # the package all stay, so turning the addon back on is instant and no
+  # history is lost.
+  if ! pkg_installed fail2ban; then
+    echo "fail2ban is not installed; nothing to stop."
+    return 0
+  fi
+  systemctl disable --now fail2ban >/dev/null 2>&1 || true
+  echo "fail2ban stopped and disabled. Config and ban history kept."
+}
+
+fail2ban_status() {
+  if ! pkg_installed fail2ban; then
+    echo "installed=no"; echo "running=no"; echo "jails="; echo "banned=0"; echo "banaction="
+    return 0
+  fi
+  echo "installed=yes"
+  if systemctl is-active --quiet fail2ban; then echo "running=yes"; else echo "running=no"; fi
+  echo "banaction=$(awk -F= '/^banaction[[:space:]]*=/ {gsub(/ /,"",$2); print $2; exit}' "$FAIL2BAN_JAIL_LOCAL" 2>/dev/null)"
+
+  local jails banned=0 jail count
+  jails="$(fail2ban-client status 2>/dev/null | awk -F: '/Jail list/ {gsub(/[ \t]/,"",$2); print $2}')"
+  echo "jails=${jails}"
+  for jail in ${jails//,/ }; do
+    count="$(fail2ban-client status "$jail" 2>/dev/null | awk -F: '/Currently banned/ {gsub(/[ \t]/,"",$2); print $2}')"
+    [[ "$count" =~ ^[0-9]+$ ]] && banned=$((banned + count))
+  done
+  echo "banned=${banned}"
+  # Whether bans are actually landing, not merely being logged.
+  if systemctl is-active --quiet fail2ban && fail2ban_ban_reaches_the_kernel; then
+    echo "bans_reach_kernel=yes"
+  else
+    echo "bans_reach_kernel=no"
+  fi
+  echo "ssh_unit=$(fail2ban_ssh_unit)"
+  if fail2ban_filter_sees_the_journal; then
+    echo "filter_sees_journal=yes"
+  else
+    echo "filter_sees_journal=no"
+  fi
+  echo "total_failed=$(fail2ban-client status sshd 2>/dev/null | awk -F: '/Total failed/ {gsub(/[ 	]/,"",$2); print $2}')"
+}
+
+fail2ban_banned_list() {
+  local jail
+  for jail in ${1//,/ }; do
+    fail2ban-client status "$jail" 2>/dev/null \
+      | awk -F: '/Banned IP list/ {gsub(/^[ \t]+/,"",$2); print $2}' \
+      | tr ' ' '\n' | grep -E '^[0-9a-fA-F:.]+$' || true
+  done
+}
+
 # --- Linux Malware Detect (LMD / maldet) ------------------------------------
 MALDET_BIN="/usr/local/sbin/maldet"
 MALDET_HOME="/usr/local/maldetect"
@@ -4659,6 +4862,32 @@ case "$cmd" in
     ;;
 
   # ---- ClamAV malware scanning (optional) -------------------------------
+  fail2ban-install)
+    [[ $# -eq 0 ]] || deny "usage: fail2ban-install"
+    install_fail2ban
+    ;;
+
+  fail2ban-remove)
+    [[ $# -eq 0 ]] || deny "usage: fail2ban-remove"
+    remove_fail2ban
+    ;;
+
+  fail2ban-status)
+    [[ $# -eq 0 ]] || deny "usage: fail2ban-status"
+    fail2ban_status
+    ;;
+
+  fail2ban-banned)
+    [[ $# -le 1 ]] || deny "usage: fail2ban-banned [jail]"
+    fail2ban_banned_list "${1:-sshd}"
+    ;;
+
+  fail2ban-unban)
+    [[ $# -eq 1 ]] || deny "usage: fail2ban-unban <ip>"
+    [[ "$1" =~ ^[0-9a-fA-F:.]+$ ]] || deny "not an address: $1"
+    fail2ban-client set sshd unbanip "$1" || deny "could not unban $1"
+    ;;
+
   clamav-tune)
     [[ $# -eq 0 ]] || deny "usage: clamav-tune"
     tune_clamd_limits
