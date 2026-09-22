@@ -104,6 +104,12 @@ APP_DIR="${APP_DIR:-/opt/bpanel}"
 BACKUP_ROOT="${BACKUP_ROOT:-/var/backups/bpanel}"
 ADMIN_PASSWORD=""
 
+# `dpkg -s` exits 0 for a package that was removed but kept its config files
+# ("deinstall ok config-files"), whose binaries are gone. Ask for the state.
+pkg_installed() {
+  [[ "$(dpkg-query -W -f='${Status}' "$1" 2>/dev/null)" == "install ok installed" ]]
+}
+
 log() {
   echo ""
   echo "==> $1"
@@ -514,7 +520,7 @@ RULES
 
 install_waf_engine() {
   export DEBIAN_FRONTEND=noninteractive
-  if ! dpkg -s libnginx-mod-http-modsecurity >/dev/null 2>&1; then
+  if ! pkg_installed libnginx-mod-http-modsecurity; then
     apt_get update --allow-releaseinfo-change
     apt_get install -y libnginx-mod-http-modsecurity modsecurity-crs libmodsecurity3 || \
       apt_get install -y libnginx-mod-http-modsecurity libmodsecurity3
