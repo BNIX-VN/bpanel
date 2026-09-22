@@ -148,8 +148,34 @@ def allow_ip(network: str, port: Optional[str | int] = None, protocol: str = "tc
     )
 
 
-def block_ip(network: str, port: Optional[str | int] = None, protocol: str = "tcp") -> CommandResult:
+def covers_address(network: str, address: Optional[str]) -> bool:
+    """Would this rule cover the address the request is coming from?
+
+    Deny rules are now evaluated before the ESTABLISHED return, and applying
+    them closes matching sockets, so blocking your own address takes your panel
+    session and your SSH with it - immediately, with nothing left to undo it
+    from. Refusing is the whole safety net.
+    """
+    if not address:
+        return False
+    try:
+        return ipaddress.ip_address(address.strip()) in ipaddress.ip_network(network, strict=False)
+    except ValueError:
+        return False
+
+
+def block_ip(
+    network: str,
+    port: Optional[str | int] = None,
+    protocol: str = "tcp",
+    requester: Optional[str] = None,
+) -> CommandResult:
     clean_network = _validate_network(network)
+    if covers_address(clean_network, requester):
+        raise ValueError(
+            f"{clean_network} covers your own address ({requester}). Blocking it would close "
+            "this session and lock you out of the panel and SSH straight away."
+        )
     if not port:
         return shell.privileged(
             "firewall-deny-ip",

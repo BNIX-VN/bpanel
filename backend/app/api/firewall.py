@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.api.deps import get_current_user
 from app.core.permissions import Role, ensure_role
@@ -68,10 +68,15 @@ def allow_ip(payload: FirewallIpRule, current_user: User = Depends(get_current_u
 
 
 @router.post("/block-ip")
-def block_ip(payload: FirewallIpRule, current_user: User = Depends(get_current_user)):
+def block_ip(payload: FirewallIpRule, request: Request, current_user: User = Depends(get_current_user)):
     _require_admin(current_user)
     try:
-        result = firewall.block_ip(payload.ip, payload.port, payload.protocol)
+        result = firewall.block_ip(
+            payload.ip,
+            payload.port,
+            payload.protocol,
+            requester=request.client.host if request.client else None,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return _result(result)

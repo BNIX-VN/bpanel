@@ -1410,10 +1410,11 @@ audit_log() {
 # always be recreated from disk (including after a reboot).
 #
 # Chain layout (jumped to from INPUT position 1):
-#   lo / ESTABLISHED,RELATED        -> RETURN   (fall through to other tools)
+#   lo                              -> RETURN   (fall through to other tools)
 #   allow sets (ip, ip+port)        -> RETURN
 #   deny sets (ip, ip+port)         -> DROP
 #   URL blocklist set               -> DROP
+#   ESTABLISHED,RELATED             -> RETURN
 #   protected + user open ports     -> RETURN
 #   ICMP / ICMPv6                   -> RETURN
 #   [when enabled] everything else  -> DROP
@@ -1661,7 +1662,6 @@ firewall_apply_family() {
   "$ipt" -F "$FIREWALL_CHAIN"
 
   "$ipt" -A "$FIREWALL_CHAIN" -i lo -j RETURN
-  "$ipt" -A "$FIREWALL_CHAIN" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
   "$ipt" -A "$FIREWALL_CHAIN" -m conntrack --ctstate INVALID -j DROP
 
   "$ipt" -A "$FIREWALL_CHAIN" -m set --match-set "$sa" src -j RETURN
@@ -1672,6 +1672,19 @@ firewall_apply_family() {
   "$ipt" -A "$FIREWALL_CHAIN" -p tcp -m set --match-set "$sdp" src,dst -j DROP
   "$ipt" -A "$FIREWALL_CHAIN" -p udp -m set --match-set "$sdp" src,dst -j DROP
   "$ipt" -A "$FIREWALL_CHAIN" -m set --match-set "$sb" src -j DROP
+
+  # Below the deny sets, not above them. With this RETURN first, a blocked
+  # address kept using any connection it had already opened: the packets were
+  # ESTABLISHED, so they left the chain before reaching the DROP. An attacker
+  # holding an HTTP keep-alive carried on for as long as it liked, and the
+  # operator watched an address they had just blocked go on hitting the access
+  # log. Seen in the field: 140.245.105.90 kept POSTing /wp-login.php down two
+  # open connections for half an hour after the /19 containing it was denied.
+  #
+  # The cost is a few ipset lookups per packet on established connections.
+  # ipset hashes are O(1), so that is not a throughput question - it is the
+  # price of "blocked" meaning blocked.
+  "$ipt" -A "$FIREWALL_CHAIN" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
 
   # ICMPv6 carries neighbour discovery; dropping it breaks IPv6 entirely.
   "$ipt" -A "$FIREWALL_CHAIN" -p "$icmp" -j RETURN
@@ -1699,6 +1712,49 @@ firewall_apply_family() {
   fi
 }
 
+firewall_kill_blocked_connections() {
+  # A DROP rule stops packets; it does not close a socket. Without this, an
+  # address that has just been blocked keeps an established connection sitting
+  # there until some timeout notices - the attacker's requests stop arriving,
+  # but nginx still holds the worker, and nothing tells the operator the block
+  # took effect. Blocking is meant to be the answer to an attack in progress,
+  # so the connection has to go now.
+  #
+  # Walk the open sockets rather than the sets: the URL blocklist holds six
+  # figures of addresses and a server holds hundreds of connections, so testing
+  # each peer against the sets is the cheap direction. `ipset test` is O(1).
+  command -v ss >/dev/null 2>&1 || return 0
+  command -v ipset >/dev/null 2>&1 || return 0
+
+  local peer ip set killed=0
+  local -a sets=(bpanel-deny4 bpanel-denyp4 bpanel-block4)
+  if firewall_has_ipv6; then
+    sets+=(bpanel-deny6 bpanel-denyp6 bpanel-block6)
+  fi
+
+  while read -r peer; do
+    [[ -n "$peer" ]] || continue
+    # peer is addr:port, and an IPv6 address arrives as [::1]:443.
+    ip="${peer%:*}"
+    ip="${ip#[}"
+    ip="${ip%]}"
+    [[ -n "$ip" ]] || continue
+    for set in "${sets[@]}"; do
+      # denyp/blockp are ip,port sets; `ipset test` on those needs the port, so
+      # an address-only test against them simply fails and we move on.
+      if ipset test "$set" "$ip" >/dev/null 2>&1; then
+        # Best effort: -K needs CONFIG_INET_DIAG_DESTROY, which not every
+        # kernel has. A failure here leaves the DROP rule doing its job.
+        ss -K dst "$ip" >/dev/null 2>&1 && killed=$((killed + 1))
+        break
+      fi
+    done
+  done < <(ss -tnH state established 2>/dev/null | awk '{print $NF}' | sort -u)
+
+  [[ "$killed" -gt 0 ]] && echo "Closed ${killed} connection(s) from blocked addresses"
+  return 0
+}
+
 firewall_apply() {
   local state
   firewall_require_tools
@@ -1712,6 +1768,9 @@ firewall_apply() {
   firewall_write_boot_unit
   # Never let a Docker guard failure abort the main firewall apply.
   install_docker_firewall_guard || echo "WARNING: could not apply the Docker inbound guard" >&2
+  if [[ "$state" == "enabled" ]]; then
+    firewall_kill_blocked_connections || true
+  fi
   echo "Firewall applied (${state})"
 }
 
