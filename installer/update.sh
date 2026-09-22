@@ -1660,6 +1660,17 @@ RestrictSUIDSGID=false
 CapabilityBoundingSet=~
 SystemCallFilter=
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+# The terminal jail runs `unshare --mount` to give a tenant a /home containing
+# only their own directory. A sudo'd child inherits this process's namespace
+# restriction, so with the unit's RestrictNamespaces=true the unshare failed
+# with EPERM and every helper call that goes through terminal-exec returned
+# 500 - the file manager could list a directory but could not read or save a
+# single file. `mnt` permits that one namespace and leaves the other seven
+# denied.
+#
+# This file is the list of what the helper needs from the sandbox. The jail was
+# added without adding its requirement here, which is how it shipped broken.
+RestrictNamespaces=mnt
 SERVICE
 systemctl daemon-reload
 systemctl restart bpanel-api

@@ -837,7 +837,23 @@ ProtectControlGroups=true
 ProtectClock=true
 ProtectHostname=true
 ProtectProc=invisible
-RestrictNamespaces=true
+# Mount namespaces only, and only because the panel cannot work without them.
+#
+# This used to be `true`, which denies every namespace type to this process and
+# to everything it starts. bpanel-helper's terminal jail runs
+# `unshare --mount` to give a tenant a /home containing only their own
+# directory - the confinement the terminal escape was fixed with - and a
+# sudo'd child inherits this restriction, so the unshare failed with EPERM.
+#
+# Everything the panel routes through terminal-exec broke with it: the file
+# manager could list a directory (that is a plain filesystem read) but every
+# read and every save returned 500. Found from a customer report, not from the
+# test suite, because the jail had only ever been exercised from a root shell -
+# the one context where this restriction does not apply.
+#
+# `mnt` permits exactly the namespace the jail needs and keeps the other seven
+# denied.
+RestrictNamespaces=mnt
 RestrictRealtime=true
 RestrictSUIDSGID=false
 LockPersonality=true
