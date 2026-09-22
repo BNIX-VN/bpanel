@@ -24,9 +24,12 @@ from app.core.permissions import Role, ensure_role
 from app.core.security import create_access_token, hash_password, needs_rehash, verify_password
 from app.core.secrets import decrypt, encrypt
 from app.core.step_up import require_sensitive_action_step_up, verify_totp
-from app.models.entities import RevokedToken, User
+from app.services import passkeys
+from app.models.entities import RevokedToken, User, WebauthnCredential
 from app.schemas.schemas import (
     LoginResponse,
+    PasskeyRegisterFinish,
+    PasskeyRegisterStart,
     TwoFactorDisableRequest,
     TwoFactorEnableRequest,
     TwoFactorSetup,
@@ -470,6 +473,7 @@ def login(
     response: Response,
     form: OAuth2PasswordRequestForm = Depends(),
     otp: str = Form(default=""),
+    passkey: str = Form(default=""),
     remember: str = Form(default=""),
     db: Session = Depends(get_db),
 ):
@@ -511,7 +515,63 @@ def login(
             detail="User is suspended",
         )
 
-    if user.totp_enabled:
+    # Second factor. Passkey first when this account has one for the hostname
+    # in the address bar, TOTP otherwise or when the customer asks for it.
+    #
+    # Both stay available on purpose. A passkey is bound to one hostname and is
+    # not offered at any other, so making it the only way in would strand
+    # anyone who reaches the panel by a second name - which serve.py allows by
+    # design. The fallback is what makes the binding safe to have.
+    host = _request_host(request)
+    rp_id = passkeys.rp_id_for_host(host)
+    site_passkeys = (
+        db.query(WebauthnCredential)
+        .filter(WebauthnCredential.user_id == user.id, WebauthnCredential.rp_id == rp_id)
+        .all()
+        if rp_id
+        else []
+    )
+
+    if passkey and site_passkeys:
+        stored_id = passkeys.credential_id_from(passkey)
+        stored = next((c for c in site_passkeys if c.credential_id == stored_id), None)
+        challenge = _challenge_take(passkeys.challenge_key("auth", str(user.id), rp_id))
+        if not stored or not challenge:
+            _record_failure(ip_key, apply_lockout=True)
+            _record_failure(user_key, apply_lockout=False)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Passkey sign-in expired, please try again",
+            )
+        try:
+            new_count = passkeys.verify_authentication(
+                credential_json=passkey,
+                challenge=challenge,
+                stored=stored,
+                scheme=_request_scheme(request),
+                host=host,
+            )
+        except Exception as exc:  # noqa: BLE001 - the library raises several types
+            _record_failure(ip_key, apply_lockout=True)
+            _record_failure(user_key, apply_lockout=False)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Passkey was not accepted",
+            ) from exc
+        passkeys.touch(stored, new_count)
+        db.commit()
+    elif site_passkeys and not otp:
+        # Offer the passkey. The challenge is stored against this account, and
+        # only reachable now because the password already checked out.
+        options_json, challenge = passkeys.authentication_options(site_passkeys, host)
+        _challenge_store(passkeys.challenge_key("auth", str(user.id), rp_id), challenge)
+        return LoginResponse(
+            requires_passkey=True,
+            passkey_options=options_json,
+            # So the page can offer "use my authenticator app instead".
+            requires_2fa=bool(user.totp_enabled),
+        )
+    elif user.totp_enabled:
         if not otp:
             return LoginResponse(requires_2fa=True)
         if not _verify_totp(user, otp):
@@ -521,6 +581,13 @@ def login(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid authentication code",
             )
+    elif otp or passkey:
+        # Nothing to check it against. Refuse rather than quietly ignoring a
+        # second factor the caller believed was being verified.
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="This account has no second factor configured",
+        )
 
     # The source key keeps its failure history and lockout; only this account's
     # own counters are fully cleared.
@@ -753,3 +820,194 @@ def disable_two_factor(
     db.refresh(current_user)
     _issue_login_session(response, request, current_user)
     return TwoFactorStatus(enabled=False)
+
+
+# --- passkeys ---------------------------------------------------------------
+#
+# A passkey belongs to a hostname. WebAuthn's Relying Party ID is a domain and
+# a browser will not reveal that a credential exists to any other name, so the
+# RP ID is derived from the request and stored on the credential. serve.py
+# answers on every hostname on the machine that has a certificate, so one
+# account can hold a passkey per name it signs in through.
+#
+# TOTP stays live beside it, deliberately. A passkey registered for one name is
+# not offered at another, and with nothing to fall through to that would strand
+# a customer rather than protect them.
+
+_PASSKEY_CHALLENGES: Dict[str, tuple[bytes, float]] = {}
+_PASSKEY_LOCK = Lock()
+
+
+def _challenge_store(key: str, challenge: bytes) -> None:
+    """Single use, short lived, and gone once spent.
+
+    Redis when it is there so a challenge issued by one worker can be spent by
+    another; memory otherwise, which is correct for the single-worker default.
+    """
+    if _rate_limit_backend() == "redis":
+        try:
+            _redis().setex(key, passkeys.CHALLENGE_TTL_SECONDS, passkeys.b64(challenge))
+            return
+        except RedisError as exc:
+            _log_redis_fallback(str(exc))
+    with _PASSKEY_LOCK:
+        _PASSKEY_CHALLENGES[key] = (challenge, time.time() + passkeys.CHALLENGE_TTL_SECONDS)
+
+
+def _challenge_take(key: str) -> Optional[bytes]:
+    """Read and delete. A challenge that could be spent twice is not a nonce."""
+    if _rate_limit_backend() == "redis":
+        try:
+            client = _redis()
+            value = client.get(key)
+            client.delete(key)
+            if value:
+                return passkeys.unb64(value)
+            return None
+        except RedisError as exc:
+            _log_redis_fallback(str(exc))
+    now = time.time()
+    with _PASSKEY_LOCK:
+        for stale, (_, expires) in list(_PASSKEY_CHALLENGES.items()):
+            if expires < now:
+                _PASSKEY_CHALLENGES.pop(stale, None)
+        entry = _PASSKEY_CHALLENGES.pop(key, None)
+    if not entry:
+        return None
+    challenge, expires = entry
+    return challenge if expires >= now else None
+
+
+def _request_host(request: Request) -> str:
+    return request.headers.get("host") or (request.url.netloc or "")
+
+
+def _request_scheme(request: Request) -> str:
+    return request.url.scheme or "https"
+
+
+def _user_passkeys(db: Session, user_id: int) -> list[WebauthnCredential]:
+    return (
+        db.query(WebauthnCredential)
+        .filter(WebauthnCredential.user_id == user_id)
+        .order_by(WebauthnCredential.id)
+        .all()
+    )
+
+
+@router.get("/passkey/status")
+def passkey_status(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    host = _request_host(request)
+    rp_id = passkeys.rp_id_for_host(host)
+    rows = _user_passkeys(db, current_user.id)
+    return {
+        # False when the panel is being reached by IP: a browser will not make
+        # a passkey for an address, and saying so is better than a failure the
+        # customer cannot interpret.
+        "supported": bool(rp_id),
+        "rp_id": rp_id,
+        "hostname": host.split(":")[0],
+        "credentials": [
+            {
+                "id": c.id,
+                "name": c.name or "Passkey",
+                "rp_id": c.rp_id,
+                # Whether this one works at the name currently in the address bar.
+                "usable_here": c.rp_id == rp_id,
+                "created_at": c.created_at,
+                "last_used_at": c.last_used_at,
+            }
+            for c in rows
+        ],
+        "totp_enabled": bool(current_user.totp_enabled),
+    }
+
+
+@router.post("/passkey/register/options")
+def passkey_register_options(
+    payload: PasskeyRegisterStart,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    # Same step-up as setting up TOTP: adding a way in is a sensitive action.
+    require_sensitive_action_step_up(current_user, payload.current_password, payload.code)
+    host = _request_host(request)
+    try:
+        options_json, challenge = passkeys.registration_options(
+            current_user, host, _user_passkeys(db, current_user.id)
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _challenge_store(
+        passkeys.challenge_key("reg", str(current_user.id), passkeys.rp_id_for_host(host)),
+        challenge,
+    )
+    return {"options": options_json}
+
+
+@router.post("/passkey/register/verify")
+def passkey_register_verify(
+    payload: PasskeyRegisterFinish,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    host = _request_host(request)
+    rp_id = passkeys.rp_id_for_host(host)
+    challenge = _challenge_take(passkeys.challenge_key("reg", str(current_user.id), rp_id))
+    if not challenge:
+        raise HTTPException(status_code=400, detail="Registration expired, please try again")
+    try:
+        record = passkeys.verify_registration(
+            credential_json=payload.credential,
+            challenge=challenge,
+            scheme=_request_scheme(request),
+            host=host,
+        )
+    except Exception as exc:  # noqa: BLE001 - the library raises several types
+        raise HTTPException(status_code=400, detail=f"Passkey could not be verified: {exc}") from exc
+
+    if db.query(WebauthnCredential).filter(
+        WebauthnCredential.credential_id == record["credential_id"]
+    ).first():
+        raise HTTPException(status_code=409, detail="That passkey is already registered")
+
+    credential = WebauthnCredential(
+        user_id=current_user.id,
+        name=(payload.name or "").strip()[:64] or "Passkey",
+        **record,
+    )
+    db.add(credential)
+    db.commit()
+    db.refresh(credential)
+    log_action(db, current_user.id, "add_passkey", f"{credential.name} ({credential.rp_id})", request=request)
+    return {"id": credential.id, "name": credential.name, "rp_id": credential.rp_id}
+
+
+@router.delete("/passkey/credentials/{credential_id}")
+def passkey_delete(
+    credential_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    credential = (
+        db.query(WebauthnCredential)
+        .filter(
+            WebauthnCredential.id == credential_id,
+            WebauthnCredential.user_id == current_user.id,
+        )
+        .first()
+    )
+    if not credential:
+        raise HTTPException(status_code=404, detail="Passkey not found")
+    name, rp_id = credential.name, credential.rp_id
+    db.delete(credential)
+    db.commit()
+    log_action(db, current_user.id, "remove_passkey", f"{name} ({rp_id})", request=request)
+    return {"message": "Passkey removed"}

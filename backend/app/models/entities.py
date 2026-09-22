@@ -348,3 +348,35 @@ class SftpAccount(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     password_set_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class WebauthnCredential(Base):
+    """A passkey, belonging to one account and one hostname.
+
+    WebAuthn binds a credential to a Relying Party ID, which is a hostname, and
+    a browser will not even reveal that a credential exists to any other name.
+    app/serve.py answers on every hostname on the machine that has a
+    certificate, so an account can hold one of these per name it signs in
+    through - hence rp_id as a column rather than a panel setting.
+
+    That is also why TOTP stays available beside it: a passkey registered for
+    one name is simply not offered at another, and with no second factor to
+    fall through to, that would be a lockout rather than a security feature.
+    """
+
+    __tablename__ = "webauthn_credentials"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    # base64url of the raw credential id, as the browser reports it.
+    credential_id: Mapped[str] = mapped_column(String(512), unique=True, index=True)
+    public_key: Mapped[str] = mapped_column(Text)
+    # Replay defence: an authenticator that counts must never go backwards. One
+    # that does not count reports 0 forever, which the spec allows.
+    sign_count: Mapped[int] = mapped_column(Integer, default=0)
+    rp_id: Mapped[str] = mapped_column(String(253), index=True)
+    transports: Mapped[str] = mapped_column(String(128), default="")
+    # What the customer called it, so a lost device can be identified.
+    name: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
