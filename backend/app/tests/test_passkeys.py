@@ -460,7 +460,10 @@ def test_another_hostname_with_no_app_is_refused_not_waved_through(login_db):
     with pytest.raises(HTTPException) as exc:
         _attempt(login_db, "other.example.com:2222")
     assert exc.value.status_code == 401
-    assert "panel.example.com" in str(exc.value.detail), (
+    # Whole token, not substring: a message naming "notpanel.example.com"
+    # would be telling them the wrong place, and must not pass this.
+    named = [word.strip(" ,.") for word in str(exc.value.detail).split()]
+    assert "panel.example.com" in named, (
         "tell them where their passkey does work"
     )
 
