@@ -1533,6 +1533,15 @@ main() {
   # calling it earlier silently did nothing, hidden by the `|| true`.
   log "Configuring memory limits (swap, clamd ceiling, OOM preference)"
   /usr/local/sbin/bpanel-memory-guard || true
+  # clamd's stock limits let a padded upload past the scanner: anything over
+  # MaxFileSize comes back OK without being read. Same lesson as the line
+  # above, one mechanism further on: root cannot call the helper directly -
+  # it refuses anything that is not sudo from 'bpanel' - and `|| true` would
+  # have swallowed the refusal without a word. On a fresh machine ClamAV is
+  # usually not installed yet and install_clamav_engine tunes it when it is.
+  if [[ -f /etc/clamav/clamd.conf ]]; then
+    sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper clamav-tune >/dev/null ||       log "  (warning: could not raise clamd's scan limits; large uploads stay unscanned)"
+  fi
 
   log "Configuring SSL"
   setup_ssl
