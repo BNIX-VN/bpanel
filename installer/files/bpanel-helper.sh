@@ -5280,9 +5280,27 @@ PY
     base=$(basename -- "$target")
     tmp="$parent/.${base}.bpanel-install-$$"
     rm -f -- "$tmp"
-    install -o "$user" -g "$BPANEL_SITES_GROUP" -m 0644 -- "$staged" "$tmp"
+    # Move, do not copy. The staging area and the site tree are on the same
+    # filesystem, so this is a rename - the bytes never move. `install` copied
+    # them, which meant a 100 MB upload wrote 100 MB here on top of the 100 MB
+    # already written to staging, for no gain. If the two ever do land on
+    # different filesystems, mv falls back to a copy and this is merely as slow
+    # as it used to be.
+    mv -f -- "$staged" "$tmp"
+    chown "$user":"$BPANEL_SITES_GROUP" -- "$tmp"
+    chmod 0644 -- "$tmp"
     mv -f -- "$tmp" "$target"
-    rm -f -- "$staged"
+    # What site-path-fix would have done, without a second sudo and a second
+    # helper start-up. Those cost about a fifth of a second each on a busy VPS,
+    # which is most of the time a small upload takes.
+    fix_site_tree "$target" "$user"
+    # And what fastcgi-cache-clear would have done, for the same reason.
+    #
+    # Worth knowing: this empties the cache for every site on the machine, not
+    # just the one that received the file. That is how it has always behaved;
+    # folding it in here does not make it worse, but it is not free either.
+    install -d -o www-data -g www-data -m 0755 /var/cache/nginx/bpanel-fastcgi
+    find /var/cache/nginx/bpanel-fastcgi -mindepth 1 -delete
     ;;
 
   site-populate)

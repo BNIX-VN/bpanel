@@ -43,12 +43,14 @@ def test_upload_file_with_linux_user_uses_install_helper_and_normalizes(tmp_path
     assert target == str(public / "index.php")
     assert calls[0][0] == "site-file-install"
     assert calls[0][1][:3] == ["siteuser", str(root.resolve()), "public_html/index.php"]
-    assert calls[1] == (
-        "site-path-fix",
-        [str(public / "index.php"), "siteuser"],
-        {"check": True, "fallback": ["chown", "-R", "siteuser:siteuser", str(public / "index.php")]},
-    )
     assert not Path(calls[0][1][3]).exists()
+
+    # One privileged call, not three. site-file-install renames the staged file
+    # into place, fixes ownership and clears the FastCGI cache itself; it used
+    # to be followed by site-path-fix and fastcgi-cache-clear, each paying for
+    # its own sudo and helper start-up - about 0.2s apiece on a loaded VPS,
+    # which was most of what a small upload cost.
+    assert len(calls) == 1, f"expected one privileged call, got {[c[0] for c in calls]}"
 
 
 def test_copy_entries_with_linux_user_runs_as_site_user_then_normalizes(tmp_path, monkeypatch):
