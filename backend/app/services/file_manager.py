@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional
 
 from app.models.entities import Website
+from app.services import malware_queue
 from app.services import site_users
 from app.services import storage_quota
 from app.services.shell import shell
@@ -525,8 +526,13 @@ def upload_file(
                 staged_path = Path(output.name)
                 shutil.copyfileobj(source_file, output, length=1024 * 1024)
                 output.flush()
-                os.fsync(output.fileno())
-            _scan_before_install(staged_path, filename)
+                # No fsync. This file is renamed into the site a moment later
+                # and never read again, so forcing it to disk bought nothing
+                # and cost a write barrier on every upload.
+            # One privileged call. It renames the staged file into place, fixes
+            # ownership and clears the FastCGI cache; it used to be three, and
+            # each sudo + helper start-up costs about 0.2s on a loaded VPS -
+            # most of what a small upload took.
             shell.privileged(
                 "site-file-install",
                 helper_args=[
@@ -548,13 +554,22 @@ def upload_file(
                 shutil.copyfileobj(source_file, output, length=1024 * 1024)
                 output.flush()
                 os.fsync(output.fileno())
-            _scan_before_install(temp_path, filename)
             temp_path.replace(target)
         except Exception:
             temp_path.unlink(missing_ok=True)
             raise
-    site_users.fix_site_path(str(target), website.linux_user, check=True)
-    _clear_fastcgi_cache()
+        # Only this branch still needs them; site-file-install does both itself.
+        site_users.fix_site_path(str(target), website.linux_user, check=True)
+        _clear_fastcgi_cache()
+    # Upload is upload. The file is in place and the request is finished; the
+    # virus scan runs next, out of the caller's way, and quarantines the file
+    # if it finds something.
+    #
+    # Scanning inline made a 20 MB upload take three and a half seconds - and,
+    # because clamd refuses a stream over 25 MB, did nothing at all for
+    # anything larger while still reporting success. Slow where it worked,
+    # silent where it did not.
+    malware_queue.enqueue(website.id, str(target), filename)
     return str(target)
 
 
