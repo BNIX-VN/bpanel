@@ -524,13 +524,13 @@ def login(
     # design. The fallback is what makes the binding safe to have.
     host = _request_host(request)
     rp_id = passkeys.rp_id_for_host(host)
-    site_passkeys = (
-        db.query(WebauthnCredential)
-        .filter(WebauthnCredential.user_id == user.id, WebauthnCredential.rp_id == rp_id)
-        .all()
-        if rp_id
-        else []
+    # Every passkey this account holds, and the subset usable at the name in
+    # the address bar. Both are needed: the second decides what to offer, the
+    # first decides whether a second factor is owed at all.
+    all_passkeys = (
+        db.query(WebauthnCredential).filter(WebauthnCredential.user_id == user.id).all()
     )
+    site_passkeys = [c for c in all_passkeys if rp_id and c.rp_id == rp_id]
 
     if passkey and site_passkeys:
         stored_id = passkeys.credential_id_from(passkey)
@@ -587,6 +587,25 @@ def login(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="This account has no second factor configured",
+        )
+    elif all_passkeys:
+        # The account HAS a second factor - it just is not usable at this
+        # hostname, and there is no authenticator app to fall back to.
+        #
+        # Falling through here would have been a 2FA bypass: a customer who
+        # registered a passkey for one name, and nothing else, would have been
+        # let in by password alone at every other name this panel answers on.
+        # Reaching a second name is not an exception - serve.py answers on all
+        # of them by design.
+        names = sorted({c.rp_id for c in all_passkeys})
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=(
+                "Your passkey does not work on this address. Sign in at "
+                + ", ".join(names)
+                + " instead, or ask an administrator to reset your two-factor "
+                "setup."
+            ),
         )
 
     # The source key keeps its failure history and lockout; only this account's
