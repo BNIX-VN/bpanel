@@ -1179,17 +1179,25 @@ fail2ban_ban_reaches_the_kernel() {
 }
 
 fail2ban_filter_sees_the_journal() {
-  # The other half of "is this actually protecting anything". A jail whose
-  # journalmatch names a unit that does not exist runs perfectly, bans
-  # perfectly when told to, and never once notices a failed login.
+  # The other half of "is this actually protecting anything": a jail can ban on
+  # command and still never notice an attack, if its journalmatch selects
+  # nothing.
   #
-  # sshd on a live machine logs constantly - accepted logins, disconnects,
-  # refusals - so zero entries for the configured match means the match is
-  # wrong, not that the server is quiet.
-  local unit lines
+  # The match has to be evaluated the way fail2ban evaluates it, and that is
+  # not how journalctl reads the same string. In fail2ban a `+` between match
+  # groups is a DISJUNCTION - "unit is this OR the process is called sshd" -
+  # while `journalctl A B` ANDs them. Checking with journalctl's meaning
+  # reports a blind filter on a machine whose filter sees everything, which is
+  # how this function first got written and how it was wrong.
+  #
+  # So: either branch producing entries is enough. sshd on a live machine logs
+  # constantly - accepted logins, disconnects, refusals - so both branches
+  # silent means the match is wrong, not that the server is quiet.
+  local unit
   unit="$(fail2ban_ssh_unit)"
-  lines="$(journalctl _SYSTEMD_UNIT="$unit" _COMM=sshd --since '24 hours ago' -q --no-pager 2>/dev/null | head -c 1)"
-  [[ -n "$lines" ]]
+  [[ -n "$(journalctl _SYSTEMD_UNIT="$unit" --since '24 hours ago' -q --no-pager 2>/dev/null | head -c 1)" ]] && return 0
+  [[ -n "$(journalctl _COMM=sshd --since '24 hours ago' -q --no-pager 2>/dev/null | head -c 1)" ]] && return 0
+  return 1
 }
 
 install_fail2ban() {

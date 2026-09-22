@@ -241,10 +241,29 @@ def test_the_two_checks_are_independent():
     assert body.index("fail2ban_ban_reaches_the_kernel") < body.index("fail2ban_filter_sees_the_journal")
 
 
-def test_the_journal_check_treats_silence_as_a_wrong_match():
+def test_the_journal_check_reads_the_match_the_way_fail2ban_does():
+    """`+` is a disjunction in fail2ban and an AND in journalctl.
+
+    The first version of this check used journalctl's meaning and therefore
+    called a perfectly sighted filter blind: on .88, `journalctl
+    _SYSTEMD_UNIT=sshd.service _COMM=sshd` returns nothing while fail2ban was
+    happily matching 153 entries an hour through the _COMM branch.
+    """
     body = _function("fail2ban_filter_sees_the_journal")
     assert "--since '24 hours ago'" in body
-    assert "_COMM=sshd" in body, "the check has to use the same match the jail does"
+    calls = [line for line in body.splitlines()
+             if "journalctl" in line and not line.strip().startswith("#")]
+    assert len(calls) == 2, f"each branch of the disjunction, separately: {calls}"
+    assert "journalctl _COMM=sshd --since" in body, "the _COMM branch on its own"
+    assert 'journalctl _SYSTEMD_UNIT="$unit" --since' in body, "and the unit branch on its own"
+
+
+def test_the_jails_match_is_a_disjunction_not_a_narrowing():
+    """Naming the unit must not make the filter see less than it did."""
+    body = _function("write_fail2ban_jail")
+    assert "journalmatch = _SYSTEMD_UNIT=${unit} + _COMM=sshd" in body, (
+        "keep the _COMM branch: it is what works when the unit name is wrong"
+    )
 
 
 def test_status_reports_the_unit_and_whether_the_filter_sees_it():
