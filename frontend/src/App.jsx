@@ -6026,7 +6026,12 @@ function App() {
             <span className={f2b.bans_reach_kernel ? 'badge ok' : 'badge warn'}>
               {f2b.bans_reach_kernel ? 'Lệnh ban có hiệu lực' : 'Ban KHÔNG tới iptables'}
             </span>
+            <span className={f2b.filter_sees_journal ? 'badge ok' : 'badge warn'}>
+              {f2b.filter_sees_journal ? 'Bộ lọc đọc được log' : 'Bộ lọc KHÔNG thấy log'}
+            </span>
+            <span className="hint">unit: {f2b.ssh_unit || '—'}</span>
             <span className="hint">banaction: {f2b.banaction || '—'}</span>
+            <span className="hint">đã thấy {f2b.total_failed ?? 0} lần sai</span>
             <span className="hint">đang khoá: {f2b.banned ?? 0} IP</span>
           </div>
           {(f2b.banned_ips || []).length > 0 ? <table className="table" style={{marginTop: 10}}>

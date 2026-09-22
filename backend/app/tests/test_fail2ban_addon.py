@@ -99,10 +99,13 @@ def test_status_reads_the_helpers_key_value_output():
     parsed = fail2ban._parse(
         "installed=yes\nrunning=yes\njails=sshd\nbanned=7\n"
         "banaction=iptables-multiport\nbans_reach_kernel=yes\n"
+        "ssh_unit=ssh.service\nfilter_sees_journal=yes\ntotal_failed=1144\n"
     )
     assert parsed == {
         "installed": True, "running": True, "jails": ["sshd"], "banned": 7,
         "banaction": "iptables-multiport", "bans_reach_kernel": True,
+        "filter_sees_journal": True, "ssh_unit": "ssh.service",
+        "total_failed": 1144,
     }
 
 
@@ -120,13 +123,19 @@ def test_a_running_service_whose_bans_do_not_land_is_called_out(monkeypatch):
     assert fail2ban.JAIL_FILE in info["warning"]
 
 
-def test_a_healthy_service_carries_no_warning(monkeypatch):
+def test_a_helper_too_old_to_answer_is_treated_as_suspect(monkeypatch):
+    """Silence about detection is not a clean bill of health.
+
+    An older helper does not emit filter_sees_journal, and the safe reading of
+    "I cannot tell you" is a warning rather than a green badge. A brief version
+    skew during an update is cheaper than a false all-clear.
+    """
     class _Result:
         stdout = ("installed=yes\nrunning=yes\njails=sshd\nbanned=3\n"
                   "banaction=iptables-multiport\nbans_reach_kernel=yes\n")
 
     monkeypatch.setattr(fail2ban.shell, "privileged", lambda *a, **k: _Result())
-    assert "warning" not in fail2ban.status()
+    assert "warning" in fail2ban.status()
 
 
 @pytest.mark.parametrize("bad", ["", "   ", "1.2.3.4; rm -rf /", "example.com", "a" * 60])
@@ -188,3 +197,92 @@ def test_removing_the_addon_stops_the_service():
     source = (PROJECT_ROOT / "backend" / "app" / "api" / "addons.py").read_text(encoding="utf-8")
     body = source[source.index("def uninstall_addon"):]
     assert "fail2ban.stop()" in body
+
+
+# --- the half the first version missed --------------------------------------
+#
+# The install proved a ban reaches iptables and stopped there. On a live server
+# that passed while the jail sat matching _SYSTEMD_UNIT=sshd.service - the name
+# Debian does not use. The unit is ssh.service, so:
+#
+#     _SYSTEMD_UNIT=sshd.service :    0 journal lines
+#     _SYSTEMD_UNIT=ssh.service  : 1144 lines with "Failed password"
+#     jail Total failed          :    0
+#
+# Running, banning on command, and blind. Exactly the shape this addon exists
+# to catch, in the addon itself.
+
+def test_the_jail_names_the_unit_instead_of_taking_the_default():
+    body = _function("write_fail2ban_jail")
+    assert "journalmatch = _SYSTEMD_UNIT=${unit}" in body, (
+        "the stock filter matches sshd.service, which Debian does not use"
+    )
+
+
+def test_the_unit_is_resolved_through_systemd_not_guessed():
+    body = _function("fail2ban_ssh_unit")
+    assert "systemctl show -p Id --value" in body, (
+        "sshd.service is an alias for ssh.service; only the canonical Id is "
+        "what the journal records"
+    )
+    assert "LoadState" in body, "a name that does not load is not the answer"
+
+
+def test_install_checks_the_filter_can_see_the_journal():
+    body = _function("install_fail2ban")
+    assert "fail2ban_filter_sees_the_journal" in body
+    assert "never see a failed login" in body, "say what is actually wrong"
+
+
+def test_the_two_checks_are_independent():
+    """Bans landing and the filter seeing are different failures."""
+    body = _function("install_fail2ban")
+    assert "fail2ban_ban_reaches_the_kernel" in body
+    assert body.index("fail2ban_ban_reaches_the_kernel") < body.index("fail2ban_filter_sees_the_journal")
+
+
+def test_the_journal_check_treats_silence_as_a_wrong_match():
+    body = _function("fail2ban_filter_sees_the_journal")
+    assert "--since '24 hours ago'" in body
+    assert "_COMM=sshd" in body, "the check has to use the same match the jail does"
+
+
+def test_status_reports_the_unit_and_whether_the_filter_sees_it():
+    body = _function("fail2ban_status")
+    for key in ("ssh_unit=", "filter_sees_journal=", "total_failed="):
+        assert key in body
+
+
+def test_a_blind_filter_is_called_out_even_when_bans_work(monkeypatch):
+    class _Result:
+        stdout = ("installed=yes\nrunning=yes\njails=sshd\nbanned=0\n"
+                  "banaction=iptables-multiport\nbans_reach_kernel=yes\n"
+                  "ssh_unit=sshd.service\nfilter_sees_journal=no\ntotal_failed=0\n")
+
+    monkeypatch.setattr(fail2ban.shell, "privileged", lambda *a, **k: _Result())
+    info = fail2ban.status()
+    assert "warning" in info
+    assert "sshd.service" in info["warning"], "name the unit it is uselessly watching"
+
+
+def test_a_broken_banaction_is_reported_ahead_of_a_blind_filter(monkeypatch):
+    """Both wrong: say the one that makes every ban pointless."""
+    class _Result:
+        stdout = ("installed=yes\nrunning=yes\njails=sshd\nbanned=0\n"
+                  "banaction=ufw\nbans_reach_kernel=no\n"
+                  "ssh_unit=sshd.service\nfilter_sees_journal=no\ntotal_failed=0\n")
+
+    monkeypatch.setattr(fail2ban.shell, "privileged", lambda *a, **k: _Result())
+    assert "iptables" in fail2ban.status()["warning"]
+
+
+def test_a_working_install_carries_no_warning_at_all(monkeypatch):
+    class _Result:
+        stdout = ("installed=yes\nrunning=yes\njails=sshd\nbanned=2\n"
+                  "banaction=iptables-multiport\nbans_reach_kernel=yes\n"
+                  "ssh_unit=ssh.service\nfilter_sees_journal=yes\ntotal_failed=1144\n")
+
+    monkeypatch.setattr(fail2ban.shell, "privileged", lambda *a, **k: _Result())
+    info = fail2ban.status()
+    assert "warning" not in info
+    assert info["total_failed"] == 1144

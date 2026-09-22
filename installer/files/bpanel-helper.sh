@@ -1103,6 +1103,21 @@ FAIL2BAN_JAIL_LOCAL=/etc/fail2ban/jail.local
 # TEST-NET-1 (RFC 5737). Never routed, so banning it can inconvenience nobody.
 FAIL2BAN_PROBE_IP=192.0.2.1
 
+fail2ban_ssh_unit() {
+  # Debian and Ubuntu call it ssh.service; the fail2ban default filter matches
+  # _SYSTEMD_UNIT=sshd.service and therefore sees nothing on either. Both names
+  # resolve - sshd.service is an alias - so ask systemd for the canonical Id,
+  # which is what the journal records.
+  local name
+  for name in ssh sshd; do
+    if [[ "$(systemctl show -p LoadState --value "$name" 2>/dev/null)" == "loaded" ]]; then
+      systemctl show -p Id --value "$name" 2>/dev/null
+      return 0
+    fi
+  done
+  echo "sshd.service"
+}
+
 fail2ban_local_addresses() {
   # Never ban the machine itself. Loopback plus every global address it holds.
   {
@@ -1113,8 +1128,9 @@ fail2ban_local_addresses() {
 }
 
 write_fail2ban_jail() {
-  local ignore
+  local ignore unit
   ignore="$(fail2ban_local_addresses)"
+  unit="$(fail2ban_ssh_unit)"
   install -d -m 0755 /etc/fail2ban
   cat >"$FAIL2BAN_JAIL_LOCAL" <<EOF
 # Managed by BPanel. Edits here are replaced when the addon is reinstalled.
@@ -1131,6 +1147,10 @@ maxretry = 5
 [sshd]
 enabled = true
 port = ssh
+# Named, not defaulted. The stock filter looks for sshd.service and Debian
+# calls the unit ssh.service, so the jail runs, bans work, and it never sees
+# a single failed login.
+journalmatch = _SYSTEMD_UNIT=${unit} + _COMM=sshd
 maxretry = 5
 # A host that keeps coming back stays out for longer each time, up to a week.
 bantime.increment = true
@@ -1158,6 +1178,20 @@ fail2ban_ban_reaches_the_kernel() {
   return "$found"
 }
 
+fail2ban_filter_sees_the_journal() {
+  # The other half of "is this actually protecting anything". A jail whose
+  # journalmatch names a unit that does not exist runs perfectly, bans
+  # perfectly when told to, and never once notices a failed login.
+  #
+  # sshd on a live machine logs constantly - accepted logins, disconnects,
+  # refusals - so zero entries for the configured match means the match is
+  # wrong, not that the server is quiet.
+  local unit lines
+  unit="$(fail2ban_ssh_unit)"
+  lines="$(journalctl _SYSTEMD_UNIT="$unit" _COMM=sshd --since '24 hours ago' -q --no-pager 2>/dev/null | head -c 1)"
+  [[ -n "$lines" ]]
+}
+
 install_fail2ban() {
   export DEBIAN_FRONTEND=noninteractive
   if ! pkg_installed fail2ban; then
@@ -1177,11 +1211,11 @@ install_fail2ban() {
   done
   fail2ban-client ping >/dev/null 2>&1 || deny "fail2ban is running but not answering its socket"
 
-  if fail2ban_ban_reaches_the_kernel; then
-    echo "fail2ban installed; sshd jail active and a test ban reached iptables."
-  else
-    deny "fail2ban is running but a test ban never reached iptables - check banaction in $FAIL2BAN_JAIL_LOCAL"
-  fi
+  fail2ban_ban_reaches_the_kernel     || deny "fail2ban is running but a test ban never reached iptables - check banaction in $FAIL2BAN_JAIL_LOCAL"
+
+  fail2ban_filter_sees_the_journal     || deny "fail2ban is running but its sshd jail matches a journal unit with no entries ($(fail2ban_ssh_unit)) - it would never see a failed login"
+
+  echo "fail2ban installed: sshd jail active, a test ban reached iptables, and the filter is reading $(fail2ban_ssh_unit)."
 }
 
 remove_fail2ban() {
@@ -1219,6 +1253,13 @@ fail2ban_status() {
   else
     echo "bans_reach_kernel=no"
   fi
+  echo "ssh_unit=$(fail2ban_ssh_unit)"
+  if fail2ban_filter_sees_the_journal; then
+    echo "filter_sees_journal=yes"
+  else
+    echo "filter_sees_journal=no"
+  fi
+  echo "total_failed=$(fail2ban-client status sshd 2>/dev/null | awk -F: '/Total failed/ {gsub(/[ 	]/,"",$2); print $2}')"
 }
 
 fail2ban_banned_list() {

@@ -43,14 +43,19 @@ def _parse(stdout: str) -> dict:
         "banned": 0,
         "banaction": "",
         "bans_reach_kernel": False,
+        "filter_sees_journal": False,
+        "ssh_unit": "",
+        "total_failed": 0,
     }
     for line in (stdout or "").splitlines():
         key, _, value = line.partition("=")
         key, value = key.strip(), value.strip()
-        if key in {"installed", "running", "bans_reach_kernel"}:
+        if key in {"installed", "running", "bans_reach_kernel", "filter_sees_journal"}:
             info[key] = value == "yes"
-        elif key == "banned":
-            info["banned"] = int(value) if value.isdigit() else 0
+        elif key in {"banned", "total_failed"}:
+            info[key] = int(value) if value.isdigit() else 0
+        elif key == "ssh_unit":
+            info["ssh_unit"] = value
         elif key == "jails":
             info["jails"] = [part for part in (value or "").split(",") if part]
         elif key == "banaction":
@@ -67,13 +72,20 @@ def status() -> dict:
     )
     info = _parse(result.stdout or "")
     info["jail_file"] = JAIL_FILE
-    if info["installed"] and info["running"] and not info["bans_reach_kernel"]:
-        # The failure mode the pinned banaction exists to prevent, surfaced
-        # rather than left for someone to discover during an attack.
-        info["warning"] = (
-            "fail2ban đang chạy nhưng lệnh ban không tới được iptables. "
-            f"Kiểm tra banaction trong {JAIL_FILE}."
-        )
+    # Two ways to run and protect nothing, and they are independent. Either
+    # one alone is enough to make the service useless while looking healthy.
+    if info["installed"] and info["running"]:
+        if not info["bans_reach_kernel"]:
+            info["warning"] = (
+                "fail2ban đang chạy nhưng lệnh ban không tới được iptables. "
+                f"Kiểm tra banaction trong {JAIL_FILE}."
+            )
+        elif not info["filter_sees_journal"]:
+            info["warning"] = (
+                "fail2ban đang chạy và ban được, nhưng bộ lọc đang đọc một "
+                f"unit systemd không có log ({info['ssh_unit'] or 'không rõ'}). "
+                "Nó sẽ không bao giờ thấy một lần đăng nhập sai nào."
+            )
     return info
 
 
