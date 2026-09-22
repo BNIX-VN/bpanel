@@ -145,6 +145,19 @@ def crs_mode() -> str:
     return (_read_raw_lenient().get("crs_mode") or "off").strip().lower()
 
 
+def stored_crs_mode() -> str | None:
+    """The CRS mode an admin chose, or None when none was ever recorded.
+
+    crs_mode() cannot tell those apart - both read as "off" - and the
+    difference is the whole point: a missing key means the panel has lost
+    track of the mode, not that somebody turned CRS off.
+    """
+    value = _read_raw_lenient().get("crs_mode")
+    if isinstance(value, str) and value.strip():
+        return value.strip().lower()
+    return None
+
+
 def save_crs_mode(mode: str) -> str:
     """Store the CRS mode. Callers re-render the site rule files - see
     waf.set_crs_mode(), which is the only thing that should call this."""
