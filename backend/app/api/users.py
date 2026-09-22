@@ -50,6 +50,7 @@ def _apply_package_limits(user: User, package: UserPackage | None) -> None:
         # Assigning a package is what makes its terminal_enabled mean anything;
         # before this the flag was settable and displayed but never read.
         user.terminal_enabled = package.terminal_enabled
+        user.sftp_accounts_limit = package.sftp_accounts_limit
 
 
 def _decode_schedule_user_ids(raw: str | None) -> list[int]:
@@ -119,8 +120,10 @@ def create_user(payload: UserCreate, request: Request, db: Session = Depends(get
         package_id=package.id if package else None,
         website_limit=payload.website_limit,
         storage_limit_mb=payload.storage_limit_mb,
+        sftp_accounts_limit=payload.sftp_accounts_limit,
         sftp_password_set_at=datetime.utcnow(),
     )
+    # After the explicit value, so a package still wins when one is assigned.
     _apply_package_limits(user, package)
     db.add(user)
     db.commit()
@@ -174,6 +177,8 @@ def update_user(user_id: int, payload: UserUpdate, request: Request, db: Session
         user.website_limit = payload.website_limit
     if payload.storage_limit_mb is not None:
         user.storage_limit_mb = payload.storage_limit_mb
+    if payload.sftp_accounts_limit is not None:
+        user.sftp_accounts_limit = payload.sftp_accounts_limit
     if package:
         _apply_package_limits(user, package)
 

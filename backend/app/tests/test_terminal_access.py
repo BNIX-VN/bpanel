@@ -75,12 +75,16 @@ def test_assigning_a_package_copies_its_terminal_flag():
         website_limit = 10
         storage_limit_mb = 2048
         terminal_enabled = True
+        # Every limit _apply_package_limits copies has to exist on the stub, or
+        # this test fails for a reason that has nothing to do with terminals.
+        sftp_accounts_limit = 3
 
     class _Target:
         package_id = None
         website_limit = 5
         storage_limit_mb = 1024
         terminal_enabled = False
+        sftp_accounts_limit = 0
 
     user = _Target()
     _apply_package_limits(user, _Package())

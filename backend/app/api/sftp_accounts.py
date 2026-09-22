@@ -154,9 +154,17 @@ def create_account(
     if not is_admin_role(current_user.role):
         limit = _limit_for(current_user)
         if limit <= 0:
+            # Name the control. This message used to say only that the package
+            # did not include the feature, which was true and useless: the
+            # limit defaults to 0 everywhere, so every account saw it and no
+            # message said where to change it.
             raise HTTPException(
                 status_code=403,
-                detail="Your hosting package does not include SFTP accounts",
+                detail=(
+                    "Your hosting package does not include SFTP accounts. An "
+                    "administrator can grant them under Panel users, or raise "
+                    "'SFTP accounts' on the hosting package."
+                ),
             )
         used = db.query(SftpAccount).filter(SftpAccount.owner_id == owner_id).count()
         if used >= limit:
