@@ -735,6 +735,16 @@ class WebsiteOut(BaseModel):
     http_flood_enabled: bool = False
     http_flood_config: str = ""
     blocked_bots: str = ""
+    # Whether this site opted into the OWASP Core Rule Set, and whether that
+    # opt-in is actually being enforced (it is not, if CRS is off server-wide).
+    #
+    # The WAF page used to read both from GET /waf/crs, which is admin-only. An
+    # end user's request for it was refused, the refusal was swallowed, and
+    # every site rendered "CRS off" - on a server where twenty of twenty-two
+    # had it on. Reported from real use. A site's own CRS state belongs on the
+    # site, where its owner can see it.
+    crs_enabled: bool = False
+    crs_active: bool = False
     wordpress_installed: bool = False
     app_id: Optional[int] = None
     aliases: list[WebsiteAliasOut] = Field(default_factory=list)
