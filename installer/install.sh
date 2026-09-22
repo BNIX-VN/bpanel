@@ -844,10 +844,12 @@ ProtectClock=true
 ProtectHostname=true
 ProtectProc=invisible
 # Mount namespaces only, and only because the panel cannot work without them.
+# (No backticks anywhere in this block: the heredoc below is unquoted so it
+# can carry ${APP_DIR}, which means backticks in prose would run as root.)
 #
-# This used to be `true`, which denies every namespace type to this process and
+# This used to be true, which denies every namespace type to this process and
 # to everything it starts. bpanel-helper's terminal jail runs
-# `unshare --mount` to give a tenant a /home containing only their own
+# unshare --mount to give a tenant a /home containing only their own
 # directory - the confinement the terminal escape was fixed with - and a
 # sudo'd child inherits this restriction, so the unshare failed with EPERM.
 #
@@ -857,7 +859,7 @@ ProtectProc=invisible
 # test suite, because the jail had only ever been exercised from a root shell -
 # the one context where this restriction does not apply.
 #
-# `mnt` permits exactly the namespace the jail needs and keeps the other seven
+# mnt permits exactly the namespace the jail needs and keeps the other seven
 # denied.
 RestrictNamespaces=mnt
 RestrictRealtime=true

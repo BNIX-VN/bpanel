@@ -1160,8 +1160,9 @@ maxretry = 5
 enabled = true
 port = ssh
 # Named, not defaulted. The stock filter looks for sshd.service and Debian
-# calls the unit ssh.service. The `+` is a disjunction in fail2ban, so the
-# _COMM branch keeps the filter sighted even where the unit name is wrong.
+# calls the unit ssh.service. The plus sign is a disjunction in fail2ban,
+# so the _COMM branch keeps the filter sighted even where the unit name is
+# wrong. No backticks in here: this heredoc is unquoted, so prose in it runs.
 journalmatch = _SYSTEMD_UNIT=${unit} + _COMM=sshd
 # A host that keeps coming back stays out for longer each time, up to a week.
 bantime.increment = true
