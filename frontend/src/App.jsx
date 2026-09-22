@@ -1876,6 +1876,16 @@ function App() {
     if (data) { setMalwareScanStatus(data); setNotice(enabled ? 'Đã bật bảo vệ thời gian thực (cấp 2).' : 'Đã tắt bảo vệ thời gian thực.'); }
   }
 
+  async function toggleMalwareScanOnUpload(enabled) {
+    if (enabled && !mw.clamd_running && !confirm(
+      'Máy này không chạy clamd thường trú, nên mỗi tệp tải lên sẽ phải nạp lại toàn bộ cơ sở dữ liệu chữ ký: '
+      + 'đo thực tế 28 giây và hơn 1 GB RAM cho một tệp 20 MB. Quét vẫn chạy nền nên không làm người dùng phải chờ, '
+      + 'nhưng máy sẽ tốn chừng đó cho mỗi tệp. Vẫn bật?')) return;
+    const data = await request('/malware/scan-on-upload', { method: 'POST', body: JSON.stringify({ enabled }) },
+      enabled ? 'Đang bật quét khi tải lên...' : 'Đang tắt...');
+    if (data) { setMalwareScanStatus(data); setNotice(enabled ? 'Đã bật quét tệp khi tải lên.' : 'Đã tắt quét tệp khi tải lên.'); }
+  }
+
   async function installLmd() {
     const data = await request('/malware/lmd/install', { method: 'POST' }, 'Đang cài đặt...');
     if (data) { setMalwareScanStatus(data); setNotice('Đang cài đặt trình quét trong nền (1-3 phút). Bấm Refresh để cập nhật.'); }
@@ -6804,6 +6814,26 @@ function App() {
                 <input type="checkbox" checked={!!mw.realtime_enabled} disabled={!!loading}
                   onChange={e => toggleMalwareRealtime(e.target.checked)} />
                 <span>{mw.realtime_enabled ? 'Đang bật' : 'Đang tắt'}</span>
+              </label>
+            </div>
+          </div>
+          <div className="malware-realtime">
+            <div className="malware-scan-head">
+              <div>
+                <strong>Quét tệp khi tải lên</strong>
+                <p className="hint">
+                  Quét từng tệp vừa tải lên qua File manager, chạy nền sau khi tải xong nên không bắt người dùng chờ.
+                  Mặc định tắt: nếu máy không chạy clamd thường trú thì mỗi tệp phải nạp lại toàn bộ cơ sở dữ liệu chữ ký
+                  (đo thực tế 28 giây, hơn 1 GB RAM cho một tệp 20 MB). Quét theo lịch ở Cấp 1 vẫn phủ các tệp này.
+                </p>
+                {!mw.scan_on_upload_is_cheap && <p className="hint">
+                  Máy này chưa chạy clamd thường trú — bật clamd trước thì mỗi lần quét chỉ còn vài mili-giây.
+                </p>}
+              </div>
+              <label className="switch-line">
+                <input type="checkbox" checked={!!mw.scan_on_upload} disabled={!!loading}
+                  onChange={e => toggleMalwareScanOnUpload(e.target.checked)} />
+                <span>{mw.scan_on_upload ? 'Đang bật' : 'Đang tắt'}</span>
               </label>
             </div>
           </div>
