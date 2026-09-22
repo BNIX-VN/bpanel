@@ -17,7 +17,6 @@ can only be spent once, and a counter that goes backwards is a cloned key.
 """
 
 import ast
-import time
 from pathlib import Path
 
 import pytest
@@ -119,12 +118,9 @@ def test_a_challenge_is_spent_when_it_is_read():
     assert auth_api._challenge_take(key) is None, "a challenge was accepted twice"
 
 
-def test_a_challenge_expires():
-    from app.api import auth as auth_api
-
-    key = passkeys.challenge_key("reg", "expiring", "panel.example.com")
-    monkey_ttl = passkeys.CHALLENGE_TTL_SECONDS
-    assert monkey_ttl <= 600, "a challenge that lives for ten minutes is a replay window"
+def test_a_challenge_does_not_live_long():
+    """Long enough to pick a key up off the desk, short enough to be worthless."""
+    assert 30 <= passkeys.CHALLENGE_TTL_SECONDS <= 600
 
 
 # --- the counter ------------------------------------------------------------
@@ -186,3 +182,121 @@ def test_registering_a_passkey_needs_the_same_step_up_as_setting_up_totp():
     src = AUTH_API.read_text(encoding="utf-8")
     body = src.split("def passkey_register_options(", 1)[1].split("\n@router", 1)[0]
     assert "require_sensitive_action_step_up" in body
+
+
+# --- the ceremonies, driven for real ----------------------------------------
+#
+# Everything above reads the source. These build the bytes a security key would
+# actually produce - clientDataJSON, authenticator data, a COSE public key and
+# an ECDSA signature - and put them through the panel's own verification path.
+#
+# The registration and authentication cases prove it works. The five after them
+# are the ones worth having: they prove it refuses.
+
+from app.tests._soft_authenticator import SoftAuthenticator  # noqa: E402
+
+HOST = "panel.example.com:2222"
+ORIGIN = "https://panel.example.com:2222"
+RP = "panel.example.com"
+
+
+class _User:
+    id = 42
+    username = "probe"
+
+
+class _Stored:
+    def __init__(self, record):
+        self.credential_id = record["credential_id"]
+        self.public_key = record["public_key"]
+        self.sign_count = record["sign_count"]
+        self.rp_id = record["rp_id"]
+
+
+def _register(authenticator):
+    _options, challenge = passkeys.registration_options(_User(), HOST, [])
+    attestation = authenticator.register(rp_id=RP, challenge=challenge, origin=ORIGIN)
+    return passkeys.verify_registration(
+        credential_json=attestation, challenge=challenge, scheme="https", host=HOST
+    )
+
+
+def test_a_real_attestation_verifies_and_binds_to_the_hostname():
+    record = _register(SoftAuthenticator())
+    assert record["public_key"]
+    assert record["rp_id"] == RP
+    assert record["transports"] == "internal"
+
+
+def test_a_real_assertion_verifies_and_advances_the_counter():
+    authenticator = SoftAuthenticator()
+    stored = _Stored(_register(authenticator))
+    _options, challenge = passkeys.authentication_options([stored], HOST)
+    assertion = authenticator.assert_(rp_id=RP, challenge=challenge, origin=ORIGIN)
+    assert passkeys.verify_authentication(
+        credential_json=assertion, challenge=challenge, stored=stored, scheme="https", host=HOST
+    ) == 1
+    assert passkeys.credential_id_from(assertion) == stored.credential_id
+
+
+def test_a_captured_assertion_cannot_be_replayed():
+    """The signature is valid; the challenge is not the one we just issued."""
+    authenticator = SoftAuthenticator()
+    stored = _Stored(_register(authenticator))
+    _o, first = passkeys.authentication_options([stored], HOST)
+    assertion = authenticator.assert_(rp_id=RP, challenge=first, origin=ORIGIN)
+    _o, second = passkeys.authentication_options([stored], HOST)
+    with pytest.raises(Exception):
+        passkeys.verify_authentication(
+            credential_json=assertion, challenge=second, stored=stored, scheme="https", host=HOST
+        )
+
+
+def test_an_assertion_signed_for_another_site_is_refused():
+    """The origin is in what gets signed, and the server derives its own."""
+    authenticator = SoftAuthenticator()
+    stored = _Stored(_register(authenticator))
+    _o, challenge = passkeys.authentication_options([stored], HOST)
+    elsewhere = authenticator.assert_(rp_id=RP, challenge=challenge, origin="https://evil.example.com")
+    with pytest.raises(Exception):
+        passkeys.verify_authentication(
+            credential_json=elsewhere, challenge=challenge, stored=stored, scheme="https", host=HOST
+        )
+
+
+def test_an_assertion_signed_for_another_hostname_is_refused():
+    authenticator = SoftAuthenticator()
+    stored = _Stored(_register(authenticator))
+    _o, challenge = passkeys.authentication_options([stored], HOST)
+    elsewhere = authenticator.assert_(rp_id="other.example.com", challenge=challenge, origin=ORIGIN)
+    with pytest.raises(Exception):
+        passkeys.verify_authentication(
+            credential_json=elsewhere, challenge=challenge, stored=stored, scheme="https", host=HOST
+        )
+
+
+def test_a_cloned_key_is_caught_by_the_counter():
+    """Same private key, same credential id, a counter that went backwards."""
+    authenticator = SoftAuthenticator()
+    stored = _Stored(_register(authenticator))
+    clone = SoftAuthenticator()
+    clone.key = authenticator.key
+    clone.credential_id = authenticator.credential_id
+    stored.sign_count = 50
+    _o, challenge = passkeys.authentication_options([stored], HOST)
+    with pytest.raises(Exception):
+        passkeys.verify_authentication(
+            credential_json=clone.assert_(rp_id=RP, challenge=challenge, origin=ORIGIN),
+            challenge=challenge, stored=stored, scheme="https", host=HOST,
+        )
+
+
+def test_an_authenticator_that_never_counts_still_works():
+    """Reporting 0 forever is legal, and must not look like a clone."""
+    flat = SoftAuthenticator(counts=False)
+    stored = _Stored(_register(flat))
+    _o, challenge = passkeys.authentication_options([stored], HOST)
+    assert passkeys.verify_authentication(
+        credential_json=flat.assert_(rp_id=RP, challenge=challenge, origin=ORIGIN),
+        challenge=challenge, stored=stored, scheme="https", host=HOST,
+    ) == 0
