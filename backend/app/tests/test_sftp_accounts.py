@@ -399,3 +399,40 @@ def test_the_refusal_says_where_to_change_it():
     src = (PROJECT_ROOT / "backend" / "app" / "api" / "sftp_accounts.py").read_text(encoding="utf-8")
     block = src.split("does not include SFTP accounts", 1)[1].split(")", 1)[0]
     assert "administrator" in block.lower()
+
+
+def test_the_feature_is_not_dead_on_arrival():
+    """A limit of 0 everywhere is not caution, it is a feature that refuses.
+
+    0032 shipped sftp_accounts_limit defaulting to 0 on every package and every
+    user. Nothing could raise it either, so every customer got
+    "your hosting package does not include SFTP accounts" and there was no
+    control anywhere that changed that. Reported twice from real use.
+
+    A sub-account grants no access the customer does not already have - it
+    reaches one site as the uid that owns it, and the file manager reaches all
+    of them. What it gates is the ability to delegate a narrower credential
+    than the account password. That is not something to default off.
+    """
+    from app.models.entities import User, UserPackage
+    for model in (User, UserPackage):
+        default = model.__table__.columns["sftp_accounts_limit"].default
+        value = default.arg if default is not None else None
+        assert value and value > 0, (
+            f"{model.__name__}.sftp_accounts_limit defaults to {value!r}; new "
+            "accounts would be unable to use the feature at all"
+        )
+
+
+def test_existing_accounts_are_backfilled_rather_than_left_refusing():
+    """Every account that exists today carries the shipped 0."""
+    migration = (PROJECT_ROOT / "backend" / "alembic" / "versions"
+                 / "0034_sftp_accounts_default_limit.py").read_text(encoding="utf-8")
+    body = migration.split("def upgrade()", 1)[1].split("def downgrade", 1)[0]
+    assert "UPDATE users SET sftp_accounts_limit" in body
+    assert "UPDATE user_packages SET sftp_accounts_limit" in body
+    # Only rows still at the shipped default, so an admin's deliberate 0 - and a
+    # second run of the migration - are both left alone.
+    assert body.count("WHERE sftp_accounts_limit = 0") == 2, (
+        "the backfill must not overwrite a limit somebody chose"
+    )
