@@ -1533,6 +1533,12 @@ main() {
   # calling it earlier silently did nothing, hidden by the `|| true`.
   log "Configuring memory limits (swap, clamd ceiling, OOM preference)"
   /usr/local/sbin/bpanel-memory-guard || true
+  # clamd's stock limits let a padded upload past the scanner: anything over
+  # MaxFileSize comes back OK without being read. Re-applied every update,
+  # because the servers that need it are the ones already running.
+  if [[ -f /etc/clamav/clamd.conf && -x /usr/local/sbin/bpanel-helper ]]; then
+    /usr/local/sbin/bpanel-helper clamav-tune || true
+  fi
 
   log "Configuring SSL"
   setup_ssl

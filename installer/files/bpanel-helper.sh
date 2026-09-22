@@ -927,6 +927,57 @@ install_waf_engine() {
   echo "WAF engine installed with BPanel lightweight WordPress/Laravel/PHP rules."
 }
 
+# clamd ships limits sized for mail attachments, not for a hosting panel's
+# file manager. Two of them decide whether an upload is really examined:
+#
+#   StreamMaxLength - a hard refusal. An INSTREAM body over this is rejected
+#                     mid-send, which the panel sees as a broken pipe.
+#   MaxFileSize     - not a refusal at all. clamd answers OK on a larger file
+#                     without reading it, so "clean" and "never looked" are
+#                     indistinguishable from the outside. Padding a payload
+#                     past the default 25 MB walked it straight through.
+#   MaxScanSize     - total bytes examined per file, archives expanded. Left
+#                     at twice MaxFileSize so a large archive is not silently
+#                     truncated halfway.
+#
+# 256 MB covers the uploads a hosting customer actually makes - plugin bundles,
+# theme archives, site backups - while staying well inside the clamd memory
+# ceiling the memory guard sets (2048 MB floor).
+CLAMD_CONF="/etc/clamav/clamd.conf"
+CLAMD_MAX_FILE_SIZE="256M"
+CLAMD_MAX_SCAN_SIZE="512M"
+
+tune_clamd_limits() {
+  [[ -f "$CLAMD_CONF" ]] || { echo "clamd.conf is not present; nothing to tune"; return 0; }
+
+  local changed=0 key value
+  for pair in "MaxFileSize ${CLAMD_MAX_FILE_SIZE}"               "MaxScanSize ${CLAMD_MAX_SCAN_SIZE}"               "StreamMaxLength ${CLAMD_MAX_FILE_SIZE}"; do
+    key="${pair%% *}"
+    value="${pair##* }"
+    if grep -qE "^[[:space:]]*${key}[[:space:]]" "$CLAMD_CONF"; then
+      # Already the value we want? Leave the file alone so an update does not
+      # restart clamd for nothing.
+      if grep -qE "^[[:space:]]*${key}[[:space:]]+${value}[[:space:]]*$" "$CLAMD_CONF"; then
+        continue
+      fi
+      sed -i -E "s|^[[:space:]]*${key}[[:space:]].*$|${key} ${value}|" "$CLAMD_CONF"
+    else
+      printf '%s %s
+' "$key" "$value" >>"$CLAMD_CONF"
+    fi
+    changed=1
+  done
+
+  if [[ "$changed" -eq 1 ]]; then
+    if systemctl is-active --quiet clamav-daemon 2>/dev/null; then
+      systemctl restart clamav-daemon || echo "WARNING: clamav-daemon did not restart" >&2
+    fi
+    echo "clamd limits set to MaxFileSize ${CLAMD_MAX_FILE_SIZE}, MaxScanSize ${CLAMD_MAX_SCAN_SIZE}, StreamMaxLength ${CLAMD_MAX_FILE_SIZE}"
+  else
+    echo "clamd limits already set"
+  fi
+}
+
 install_clamav_engine() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update --allow-releaseinfo-change
@@ -936,6 +987,7 @@ install_clamav_engine() {
   # Ensure the daemon socket directory exists and the service is enabled.
   install -d -o clamav -g clamav -m 0755 /run/clamav 2>/dev/null || true
   systemctl enable --now clamav-daemon
+  tune_clamd_limits
   # Triggers an initial signature database refresh in the background.
   freshclam >/dev/null 2>&1 || true
   echo "ClamAV installed and clamav-daemon enabled."
@@ -4522,6 +4574,11 @@ case "$cmd" in
     ;;
 
   # ---- ClamAV malware scanning (optional) -------------------------------
+  clamav-tune)
+    [[ $# -eq 0 ]] || deny "usage: clamav-tune"
+    tune_clamd_limits
+    ;;
+
   clamav-install)
     install_clamav_engine
     ;;

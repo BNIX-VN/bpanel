@@ -766,6 +766,12 @@ install_panel_runtime() {
     # already deployed, and it is idempotent.
     /usr/local/sbin/bpanel-memory-guard || true
   fi
+  # clamd's stock limits let a padded upload past the scanner: anything over
+  # MaxFileSize comes back OK without being read. Re-applied every update,
+  # because the servers that need it are the ones already running.
+  if [[ -f /etc/clamav/clamd.conf && -x /usr/local/sbin/bpanel-helper ]]; then
+    /usr/local/sbin/bpanel-helper clamav-tune || true
+  fi
   if command -v sshd >/dev/null 2>&1; then
     sshd_config="/etc/ssh/sshd_config"
     sshd_backup="${sshd_config}.bpanel.bak"
