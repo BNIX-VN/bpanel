@@ -1141,17 +1141,28 @@ banaction_allports = iptables-allports
 backend = systemd
 ignoreip = ${ignore}
 bantime = 1h
-findtime = 10m
+# An hour, not fail2ban's usual ten minutes. The stock window is sized for a
+# fast brute force - fifty passwords a minute - and what actually knocks on a
+# hosting server paces itself under that. Measured on a live panel: two hosts
+# each reached exactly five attempts, spaced eight to fifteen minutes apart,
+# and neither ever filled a ten-minute window:
+#
+#   36.140.150.164   01:54  02:02  02:12  02:22  02:33
+#   185.240.215.110  01:54  02:01  02:16  02:32  02:32
+#
+# At an hour both are caught. The cost is that an admin who fumbles a password
+# five times in an hour is locked out for one - and the jail only blocks port
+# 22, so the panel is still there to release them.
+findtime = 1h
 maxretry = 5
 
 [sshd]
 enabled = true
 port = ssh
 # Named, not defaulted. The stock filter looks for sshd.service and Debian
-# calls the unit ssh.service, so the jail runs, bans work, and it never sees
-# a single failed login.
+# calls the unit ssh.service. The `+` is a disjunction in fail2ban, so the
+# _COMM branch keeps the filter sighted even where the unit name is wrong.
 journalmatch = _SYSTEMD_UNIT=${unit} + _COMM=sshd
-maxretry = 5
 # A host that keeps coming back stays out for longer each time, up to a week.
 bantime.increment = true
 bantime.maxtime = 1w
