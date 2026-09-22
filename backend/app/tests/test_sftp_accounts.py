@@ -329,3 +329,110 @@ def test_a_sub_account_is_scoped_to_a_website_root_not_a_subdirectory():
 def test_labels_that_are_not_labels_are_refused(bad):
     with pytest.raises(ValueError):
         sftp_accounts.validate_label(bad)
+
+
+# --- a gate needs a key -----------------------------------------------------
+#
+# sftp_accounts_limit shipped as a column on user_packages and users, read by
+# the API to refuse requests, and settable by nothing at all: it was missing
+# from UserPackageCreate, UserPackageUpdate, UserUpdate, the packages endpoints
+# and _apply_package_limits. It defaults to 0, so every account was refused and
+# no administrator could change that. Reported from real use: "log in as a user
+# and you cannot create an account".
+#
+# These tests are written against every limit rather than just this one,
+# because the bug is the shape, not the column.
+
+SCHEMAS_PY = PROJECT_ROOT / "backend" / "app" / "schemas" / "schemas.py"
+PACKAGES_PY = PROJECT_ROOT / "backend" / "app" / "api" / "packages.py"
+USERS_PY = PROJECT_ROOT / "backend" / "app" / "api" / "users.py"
+
+
+def _package_limit_columns() -> list[str]:
+    from app.models.entities import UserPackage
+    skip = {"id", "name", "slug", "created_at", "users"}
+    return [c.name for c in UserPackage.__table__.columns if c.name not in skip]
+
+
+def test_every_package_limit_can_be_set_through_the_api():
+    """A column the API reads but nothing can write is a gate with no key."""
+    schemas = SCHEMAS_PY.read_text(encoding="utf-8")
+    create = schemas.split("class UserPackageCreate(BaseModel):", 1)[1].split("\nclass ", 1)[0]
+    update = schemas.split("class UserPackageUpdate(BaseModel):", 1)[1].split("\nclass ", 1)[0]
+    missing = [c for c in _package_limit_columns()
+               if f"{c}:" not in create or f"{c}:" not in update]
+    assert not missing, (
+        "these package limits cannot be set by any caller: " + ", ".join(missing)
+    )
+
+
+def test_every_package_limit_is_handled_by_the_packages_endpoints():
+    src = PACKAGES_PY.read_text(encoding="utf-8")
+    missing = [c for c in _package_limit_columns() if c not in src]
+    assert not missing, (
+        "the packages API never reads these fields off the payload: " + ", ".join(missing)
+    )
+
+
+def test_assigning_a_package_carries_its_sftp_limit_to_the_user():
+    """_apply_package_limits is what makes a package mean anything.
+
+    terminal_enabled sat unread on UserPackage for months for want of this
+    line; sftp_accounts_limit was heading the same way.
+    """
+    src = USERS_PY.read_text(encoding="utf-8")
+    body = src.split("def _apply_package_limits(", 1)[1].split("\ndef ", 1)[0]
+    assert "user.sftp_accounts_limit = package.sftp_accounts_limit" in body
+
+
+def test_an_admin_can_grant_the_limit_to_one_user():
+    """Per user as well as per package, like website_limit and storage_limit_mb."""
+    schemas = SCHEMAS_PY.read_text(encoding="utf-8")
+    block = schemas.split("class UserUpdate(BaseModel):", 1)[1].split("\nclass ", 1)[0]
+    assert "sftp_accounts_limit:" in block
+    users = USERS_PY.read_text(encoding="utf-8")
+    assert "user.sftp_accounts_limit = payload.sftp_accounts_limit" in users
+
+
+def test_the_refusal_says_where_to_change_it():
+    """"Not included in your package" is true and useless on its own."""
+    src = (PROJECT_ROOT / "backend" / "app" / "api" / "sftp_accounts.py").read_text(encoding="utf-8")
+    block = src.split("does not include SFTP accounts", 1)[1].split(")", 1)[0]
+    assert "administrator" in block.lower()
+
+
+def test_the_feature_is_not_dead_on_arrival():
+    """A limit of 0 everywhere is not caution, it is a feature that refuses.
+
+    0032 shipped sftp_accounts_limit defaulting to 0 on every package and every
+    user. Nothing could raise it either, so every customer got
+    "your hosting package does not include SFTP accounts" and there was no
+    control anywhere that changed that. Reported twice from real use.
+
+    A sub-account grants no access the customer does not already have - it
+    reaches one site as the uid that owns it, and the file manager reaches all
+    of them. What it gates is the ability to delegate a narrower credential
+    than the account password. That is not something to default off.
+    """
+    from app.models.entities import User, UserPackage
+    for model in (User, UserPackage):
+        default = model.__table__.columns["sftp_accounts_limit"].default
+        value = default.arg if default is not None else None
+        assert value and value > 0, (
+            f"{model.__name__}.sftp_accounts_limit defaults to {value!r}; new "
+            "accounts would be unable to use the feature at all"
+        )
+
+
+def test_existing_accounts_are_backfilled_rather_than_left_refusing():
+    """Every account that exists today carries the shipped 0."""
+    migration = (PROJECT_ROOT / "backend" / "alembic" / "versions"
+                 / "0034_sftp_accounts_default_limit.py").read_text(encoding="utf-8")
+    body = migration.split("def upgrade()", 1)[1].split("def downgrade", 1)[0]
+    assert "UPDATE users SET sftp_accounts_limit" in body
+    assert "UPDATE user_packages SET sftp_accounts_limit" in body
+    # Only rows still at the shipped default, so an admin's deliberate 0 - and a
+    # second run of the migration - are both left alone.
+    assert body.count("WHERE sftp_accounts_limit = 0") == 2, (
+        "the backfill must not overwrite a limit somebody chose"
+    )

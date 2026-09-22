@@ -25,10 +25,15 @@ class UserPackage(Base):
     # it, the same way terminal_enabled gates the terminal.
     node_apps_limit: Mapped[int] = mapped_column(Integer, default=0)
     node_app_memory_mb: Mapped[int] = mapped_column(Integer, default=512)
-    # Extra SFTP logins a user may create, each pinned to one website. 0 keeps
-    # the feature off for every existing package until an admin raises it, the
-    # same way node_apps_limit gates app hosting.
-    sftp_accounts_limit: Mapped[int] = mapped_column(Integer, default=0)
+    # Extra SFTP logins a user may create, each pinned to one website.
+    #
+    # Unlike node_apps_limit next door, this grants no access the customer does
+    # not already have: a sub-account reaches one site as the uid that owns it,
+    # and the customer reaches all of them through the file manager anyway. It
+    # exists so they can delegate a narrower credential than the account
+    # password. Defaulting it to 0 did not make anyone safer, it made the
+    # feature refuse everybody (0034).
+    sftp_accounts_limit: Mapped[int] = mapped_column(Integer, default=3)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     users: Mapped[List["User"]] = relationship(back_populates="package")
@@ -55,11 +60,10 @@ class User(Base):
     # nothing. New accounts default to off: a shell on the server is not
     # something to hand out implicitly.
     terminal_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
-    # Copied from the package like the limits above. Off by default: a second
-    # credential into a customer's files is not something to hand out
-    # implicitly, and unlike terminal_enabled there is no existing behaviour to
-    # preserve, because nobody holds one of these accounts yet.
-    sftp_accounts_limit: Mapped[int] = mapped_column(Integer, default=0)
+    # Copied from the package like the limits above. See UserPackage for why
+    # this is not 0: it delegates access the customer already has rather than
+    # granting new access, so an admin narrows it rather than opening it.
+    sftp_accounts_limit: Mapped[int] = mapped_column(Integer, default=3)
     # When this account's Linux/SFTP password was last set on its own.
     #
     # NULL is load-bearing: it means the Linux password has never been set

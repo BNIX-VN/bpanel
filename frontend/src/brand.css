@@ -96,6 +96,10 @@ h1,h2{color:var(--brand-navy)}
 .panel-ssl-grid{grid-template-columns:minmax(220px,.8fr) max-content}
 
 .cron-form{display:grid;grid-template-columns:minmax(220px,1fr) 150px minmax(260px,1.4fr) max-content;gap:10px;align-items:end}
+/* Same shape as .cron-form but five columns: website, name, password, the
+   generate button, and the create button. Using .cron-form here put the
+   last one on a row of its own. */
+.sftp-form{display:grid;grid-template-columns:minmax(190px,1fr) minmax(130px,0.7fr) minmax(200px,1fr) max-content max-content;gap:10px;align-items:end}
 .cron-list,.backup-job-list,.firewall-rule-list{display:grid;gap:8px;margin-top:4px}
 .cron-item,.backup-job,.firewall-rule{display:grid;grid-template-columns:auto minmax(0,1fr) max-content;gap:10px;align-items:center;padding:10px 12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);min-width:0}
 .cron-item span:not(.badge),.backup-job span:not(.badge),.firewall-rule span:not(.badge){min-width:0;font-size:13px;line-height:1.35;font-weight:700;color:var(--text)}
@@ -223,6 +227,11 @@ button:disabled,.upload-button.disabled{background:var(--disabled-bg);color:var(
   .resource-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
   .sftp-target-form{grid-template-columns:repeat(3,minmax(0,1fr)) max-content}
   .cron-form{grid-template-columns:1fr 150px}
+  /* Narrow: website on its own row, then name + password, then the two
+     buttons side by side rather than stacked. */
+  .sftp-form{grid-template-columns:1fr 1fr max-content}
+  .sftp-form > :first-child{grid-column:1 / -1}
+  .sftp-form > :nth-child(3){grid-column:1 / 3}
   .cron-form input:nth-of-type(2){grid-column:1 / -1}
   .panel-settings-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
   .panel-settings-grid button{width:100%}

@@ -659,12 +659,12 @@ function App() {
   const [selectedFilePaths, setSelectedFilePaths] = useState([]);
   const [archiveFormat, setArchiveFormat] = useState('zip');
   const [editorCursor, setEditorCursor] = useState({ line: 1, column: 1 });
-  const [newUser, setNewUser] = useState({ username: '', email: '', password: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024 });
+  const [newUser, setNewUser] = useState({ username: '', email: '', password: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024, sftp_accounts_limit: 0 });
   const [editingUser, setEditingUser] = useState(null);
-  const [editingUserForm, setEditingUserForm] = useState({ email: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024, new_password: '', confirm_password: '' });
-  const [newPackage, setNewPackage] = useState({ name: '', website_limit: 5, storage_limit_mb: 1024 });
+  const [editingUserForm, setEditingUserForm] = useState({ email: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024, sftp_accounts_limit: 0, new_password: '', confirm_password: '' });
+  const [newPackage, setNewPackage] = useState({ name: '', website_limit: 5, storage_limit_mb: 1024, sftp_accounts_limit: 0 });
   const [editingPackageId, setEditingPackageId] = useState('');
-  const [editingPackageForm, setEditingPackageForm] = useState({ name: '', website_limit: 5, storage_limit_mb: 1024 });
+  const [editingPackageForm, setEditingPackageForm] = useState({ name: '', website_limit: 5, storage_limit_mb: 1024, sftp_accounts_limit: 0 });
   const [phpConfig, setPhpConfig] = useState({ php_version: '8.4', display_errors: 'Off', max_execution_time: 300, max_input_time: 600, max_input_vars: 10000, memory_limit: '1024M', post_max_size: '1024M', upload_max_filesize: '1024M' });
   const [phpVersions, setPhpVersions] = useState({ installed: ['8.4'], supported: ['5.6', '7.4', '8.0', '8.1', '8.2', '8.3', '8.4', '8.5'] });
   const [firewallStatus, setFirewallStatus] = useState(null);
@@ -1307,11 +1307,12 @@ function App() {
       package_id: newUser.package_id ? Number(newUser.package_id) : null,
       website_limit: Number(newUser.website_limit),
       storage_limit_mb: Number(newUser.storage_limit_mb),
+      sftp_accounts_limit: Number(newUser.sftp_accounts_limit || 0),
     };
     const data = await request('/users', { method: 'POST', body: JSON.stringify(payload) }, 'Creating user...');
     if (data) {
       setNotice(`Created user ${data.username}`);
-      setNewUser({ username: '', email: '', password: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024 });
+      setNewUser({ username: '', email: '', password: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024, sftp_accounts_limit: 0 });
       await loadUsers();
       setUserTab('list');
     }
@@ -1324,6 +1325,7 @@ function App() {
       package_id: packageId,
       website_limit: selected ? selected.website_limit : 5,
       storage_limit_mb: selected ? selected.storage_limit_mb : 1024,
+      sftp_accounts_limit: selected ? (selected.sftp_accounts_limit || 0) : 0,
     }));
   }
 
@@ -1334,6 +1336,7 @@ function App() {
       package_id: packageId,
       website_limit: selected ? selected.website_limit : 5,
       storage_limit_mb: selected ? selected.storage_limit_mb : 1024,
+      sftp_accounts_limit: selected ? (selected.sftp_accounts_limit || 0) : 0,
     }));
   }
 
@@ -1345,6 +1348,7 @@ function App() {
       package_id: user.package_id ? String(user.package_id) : '',
       website_limit: user.website_limit ?? 5,
       storage_limit_mb: user.storage_limit_mb ?? 1024,
+      sftp_accounts_limit: user.sftp_accounts_limit ?? 0,
       new_password: '',
       confirm_password: '',
     });
@@ -1355,7 +1359,7 @@ function App() {
     setEditingUserForm({ email: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024, new_password: '', confirm_password: '' });
     setNewPackage({ name: '', website_limit: 5, storage_limit_mb: 1024 });
     setEditingPackageId('');
-    setEditingPackageForm({ name: '', website_limit: 5, storage_limit_mb: 1024 });
+    setEditingPackageForm({ name: '', website_limit: 5, storage_limit_mb: 1024, sftp_accounts_limit: 0 });
   }
 
   async function updatePanelUser() {
@@ -1376,6 +1380,7 @@ function App() {
       package_id: editingUserForm.package_id ? Number(editingUserForm.package_id) : null,
       website_limit: websiteLimit,
       storage_limit_mb: storageLimitMb,
+      sftp_accounts_limit: Number(editingUserForm.sftp_accounts_limit || 0),
     };
     if (editingUser.id !== currentUser?.id) payload.role = editingUserForm.role;
     const data = await request(`/users/${editingUser.id}`, {
@@ -1427,7 +1432,7 @@ function App() {
     }
     const data = await request('/packages', {
       method: 'POST',
-      body: JSON.stringify({ name: newPackage.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb }),
+      body: JSON.stringify({ name: newPackage.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, sftp_accounts_limit: Number(newPackage.sftp_accounts_limit || 0) }),
     }, 'Creating package...');
     if (data) {
       setNotice(`Created package ${data.name}.`);
@@ -1442,12 +1447,13 @@ function App() {
       name: item.name || '',
       website_limit: item.website_limit ?? 5,
       storage_limit_mb: item.storage_limit_mb ?? 1024,
+      sftp_accounts_limit: item.sftp_accounts_limit ?? 0,
     });
   }
 
   function cancelEditingPackage() {
     setEditingPackageId('');
-    setEditingPackageForm({ name: '', website_limit: 5, storage_limit_mb: 1024 });
+    setEditingPackageForm({ name: '', website_limit: 5, storage_limit_mb: 1024, sftp_accounts_limit: 0 });
   }
 
   async function updatePackage(packageId) {
@@ -1464,7 +1470,7 @@ function App() {
     }
     const data = await request(`/packages/${packageId}`, {
       method: 'PATCH',
-      body: JSON.stringify({ name: editingPackageForm.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb }),
+      body: JSON.stringify({ name: editingPackageForm.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, sftp_accounts_limit: Number(editingPackageForm.sftp_accounts_limit || 0) }),
     }, 'Updating package...');
     if (data) {
       setNotice(`Updated package ${data.name}.`);
@@ -5102,7 +5108,7 @@ function App() {
         </div>}
         {ownSftpPassword && <p className="hint">Shown once. It is not stored anywhere the panel can read back.</p>}
       </div>
-      <div className="cron-form">
+      <div className="sftp-form">
         <WebsiteSelect />
         <input
           value={newSftpAccount.label}
@@ -6780,6 +6786,7 @@ function App() {
                 </select></label>
                 <label><span>Website limit</span><input type="number" min="0" max="1000" disabled={!!editingUserForm.package_id} value={editingUserForm.website_limit} onChange={e => setEditingUserForm(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
                 <label><span>Storage limit (MB)</span><input type="number" min="0" max="1048576" disabled={!!editingUserForm.package_id} value={editingUserForm.storage_limit_mb} onChange={e => setEditingUserForm(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
+                <label><span>SFTP accounts</span><input type="number" min="0" max="100" disabled={!!editingUserForm.package_id} value={editingUserForm.sftp_accounts_limit} onChange={e => setEditingUserForm(prev => ({ ...prev, sftp_accounts_limit: e.target.value }))} /></label>
               </div>
               <div className="user-edit-section">
                 <div className="user-edit-heading"><div><strong>Change password</strong><small>Minimum 12 characters. {user.id === currentUser?.id ? 'Requires current password + 2FA.' : 'Admin can set directly.'}</small></div></div>
@@ -6823,6 +6830,7 @@ function App() {
           <label><span>Package name</span><input value={newPackage.name} onChange={e => setNewPackage(prev => ({ ...prev, name: e.target.value }))} placeholder="Starter" /></label>
           <label><span>Site limit</span><input type="number" min="0" max="1000" value={newPackage.website_limit} onChange={e => setNewPackage(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
           <label><span>Storage MB</span><input type="number" min="0" max="1048576" value={newPackage.storage_limit_mb} onChange={e => setNewPackage(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
+          <label><span>SFTP accounts</span><input type="number" min="0" max="100" value={newPackage.sftp_accounts_limit} onChange={e => setNewPackage(prev => ({ ...prev, sftp_accounts_limit: e.target.value }))} /></label>
           <button disabled={!!loading || !newPackage.name.trim()} onClick={createPackage}><Plus size={14}/> Create package</button>
         </div>
         <div className="package-list">
@@ -6832,6 +6840,7 @@ function App() {
               <label><span>Name</span><input value={editingPackageForm.name} onChange={e => setEditingPackageForm(prev => ({ ...prev, name: e.target.value }))} /></label>
               <label><span>Site limit</span><input type="number" min="0" max="1000" value={editingPackageForm.website_limit} onChange={e => setEditingPackageForm(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
               <label><span>Storage MB</span><input type="number" min="0" max="1048576" value={editingPackageForm.storage_limit_mb} onChange={e => setEditingPackageForm(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
+              <label><span>SFTP accounts</span><input type="number" min="0" max="100" value={editingPackageForm.sftp_accounts_limit} onChange={e => setEditingPackageForm(prev => ({ ...prev, sftp_accounts_limit: e.target.value }))} /></label>
               <div className="row-actions">
                 <button className="mini secondary-light" onClick={cancelEditingPackage}>Cancel</button>
                 <button className="mini" disabled={!!loading || !editingPackageForm.name.trim()} onClick={() => updatePackage(item.id)}><Save size={14}/> Save</button>
@@ -6866,6 +6875,7 @@ function App() {
           </select></label>
           <label><span>Site limit</span><input type="number" disabled={!!newUser.package_id} value={newUser.website_limit} onChange={e => setNewUser(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
           <label><span>Storage MB</span><input type="number" disabled={!!newUser.package_id} value={newUser.storage_limit_mb} onChange={e => setNewUser(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
+          <label><span>SFTP accounts</span><input type="number" min="0" max="100" disabled={!!newUser.package_id} value={newUser.sftp_accounts_limit} onChange={e => setNewUser(prev => ({ ...prev, sftp_accounts_limit: e.target.value }))} /></label>
           <button disabled={!!loading || !newUser.username || !newUser.password} onClick={createUser}><Plus size={14}/> Create user</button>
         </div>
       </div>}

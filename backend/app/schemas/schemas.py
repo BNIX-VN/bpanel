@@ -163,6 +163,7 @@ class UserPackageCreate(BaseModel):
     wordpress_enabled: bool = True
     node_apps_limit: int = Field(default=0, ge=0, le=100)
     node_app_memory_mb: int = Field(default=512, ge=64, le=16384)
+    sftp_accounts_limit: int = Field(default=3, ge=0, le=100)
 
     @field_validator("name")
     @classmethod
@@ -186,6 +187,7 @@ class UserPackageUpdate(BaseModel):
     wordpress_enabled: Optional[bool] = None
     node_apps_limit: Optional[int] = Field(default=None, ge=0, le=100)
     node_app_memory_mb: Optional[int] = Field(default=None, ge=64, le=16384)
+    sftp_accounts_limit: Optional[int] = Field(default=None, ge=0, le=100)
 
     @field_validator("name")
     @classmethod
@@ -211,6 +213,7 @@ class UserPackageOut(BaseModel):
     waf_enabled: bool = True
     wordpress_enabled: bool = True
     node_apps_limit: int = 0
+    sftp_accounts_limit: int = 3
     node_app_memory_mb: int = 512
     created_at: Optional[datetime] = None
 
@@ -226,6 +229,7 @@ class UserCreate(BaseModel):
     package_id: Optional[int] = Field(default=None, ge=1)
     website_limit: int = Field(default=5, ge=0, le=1000)
     storage_limit_mb: int = Field(default=1024, ge=0, le=1024 * 1024)
+    sftp_accounts_limit: int = Field(default=3, ge=0, le=100)
 
     @field_validator("username")
     @classmethod
@@ -242,6 +246,10 @@ class UserUpdate(BaseModel):
     package_id: Optional[int] = Field(default=None, ge=1)
     website_limit: Optional[int] = Field(default=None, ge=0, le=1000)
     storage_limit_mb: Optional[int] = Field(default=None, ge=0, le=1024 * 1024)
+    # Grantable per user as well as per package, like the two above. Without
+    # this the column existed, the API read it to refuse requests, and nothing
+    # anywhere could raise it above zero.
+    sftp_accounts_limit: Optional[int] = Field(default=None, ge=0, le=100)
 
 
 class UserPasswordUpdate(BaseModel):
@@ -283,6 +291,7 @@ class UserOut(BaseModel):
     storage_limit_bytes: Optional[int] = None
     storage_percent: float = 0.0
     totp_enabled: bool = False
+    sftp_accounts_limit: int = 3
     # NULL means this account's SFTP password has never been set on its own and
     # is still whatever the panel password was. The UI says so.
     sftp_password_set_at: Optional[datetime] = None
