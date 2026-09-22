@@ -862,6 +862,10 @@ class MalwareRealtimeToggle(BaseModel):
     enabled: bool = False
 
 
+class MalwareScanOnUploadToggle(BaseModel):
+    enabled: bool = False
+
+
 class MalwareScanRun(BaseModel):
     website_id: Optional[int] = None
     all: bool = False
@@ -926,6 +930,8 @@ class MalwareScanStatus(BaseModel):
     lmd_sig_version: str = ""
     lmd_updated_at: str = ""
     realtime_enabled: bool = False
+    scan_on_upload: bool = False
+    scan_on_upload_is_cheap: bool = False
     monitor_running: bool = False
     socket: str = "/run/clamav/clamd.sock"
     detail: Optional[str] = None

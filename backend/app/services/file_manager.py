@@ -16,41 +16,6 @@ from app.services import storage_quota
 from app.services.shell import shell
 
 
-def _scan_before_install(path: Path, filename: str = "") -> None:
-    """Optionally scan a staged file with ClamAV before it is installed.
-
-    When malware scanning is enabled and clamd is running, the file at *path*
-    is scanned.  If a threat is found the file is deleted and a ValueError is
-    raised so the upload is rejected.  When scanning is disabled or clamd is
-    not available the function is a silent no-op.
-    """
-    try:
-        from app.services import malware_scan
-
-        if not malware_scan.is_available():
-            return
-        content = path.read_bytes()
-        result, detail = malware_scan.scan_stream(content)
-        if result == "infected":
-            try:
-                path.unlink()
-            except OSError:
-                pass
-            raise ValueError(f"Malware detected ({detail}). File rejected.")
-        if result == "error":
-            import logging
-            logging.getLogger(__name__).warning(
-                "Malware scan error for %s: %s", filename or path.name, detail
-            )
-    except ValueError:
-        raise
-    except Exception:
-        import logging
-        logging.getLogger(__name__).debug(
-            "Malware scan skipped for %s (unexpected error)", filename or path.name, exc_info=True,
-        )
-
-
 def _env_int(name: str, default: int) -> Optional[int]:
     """Parse an integer environment variable.
 
@@ -569,7 +534,8 @@ def upload_file(
     # because clamd refuses a stream over 25 MB, did nothing at all for
     # anything larger while still reporting success. Slow where it worked,
     # silent where it did not.
-    malware_queue.enqueue(website.id, str(target), filename)
+    if malware_queue.scan_on_upload_enabled():
+        malware_queue.enqueue(website.id, str(target), filename)
     return str(target)
 
 

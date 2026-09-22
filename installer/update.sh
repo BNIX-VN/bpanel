@@ -1304,6 +1304,20 @@ if [[ -f "$SOURCE_DIR/installer/files/bpanel-helper.sh" ]]; then
       echo "  (PHP-FPM and MariaDB tuning unchanged for this release; skipping the retune)"
     fi
     systemctl enable bpanel-autotune.service >/dev/null 2>&1 || true
+    # clamd is only wanted by scan-on-upload, and that is off unless someone
+    # turned it on. maldet - which runs every scheduled, on-demand and
+    # real-time scan - calls `clamscan` and never opens clamd's socket, so an
+    # idle daemon is a second resident copy of the same ~1 GB of signatures.
+    # A live 8 GB server collected 16 OOM kills in 7 days with both loaded,
+    # clamd in 9 of them and nginx taken down twice as collateral.
+    #
+    # The helper refuses to remove it when maldet is absent (scans would fall
+    # back to clamdscan and need the daemon) or when apt would take the engine
+    # with it, so this is safe to run unconditionally.
+    if dpkg -s clamav-daemon >/dev/null 2>&1        && ! grep -q '"malware_scan_on_upload": *true' /var/lib/bpanel/panel-settings.json 2>/dev/null; then
+      log "Removing clamav-daemon (nothing uses it; the scan engine stays)"
+      sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper clamav-daemon-remove >/dev/null ||         echo "  (warning: could not remove clamav-daemon; it is still holding memory)"
+    fi
     # clamd ships limits sized for mail attachments: anything over MaxFileSize
     # comes back OK without being read, so a padded upload was waved through.
     # Re-applied every update - the servers still on the stock 25 MB are the

@@ -68,10 +68,21 @@ def test_an_existing_setting_is_replaced_not_duplicated(tuning_body):
     assert "grep -qE" in tuning_body
 
 
-def test_installing_clamav_tunes_it(helper_source):
-    start = helper_source.index("install_clamav_engine() {")
+def test_installing_the_daemon_tunes_it(helper_source):
+    """The limits live in clamd.conf, so they matter when clamd does.
+
+    Installing the engine alone no longer touches them: maldet passes its own
+    --max-filesize on the clamscan command line and never reads clamd.conf.
+    """
+    start = helper_source.index("install_clamav_daemon() {")
     body = helper_source[start:helper_source.index("\n}\n", start)]
     assert "tune_clamd_limits" in body
+
+
+def test_the_engine_install_does_not_tune_a_daemon_it_did_not_install(helper_source):
+    start = helper_source.index("install_clamav_engine() {")
+    body = helper_source[start:helper_source.index("\n}\n", start)]
+    assert "tune_clamd_limits" not in body
 
 
 def test_the_tuning_verb_exists_and_takes_no_arguments(helper_source):

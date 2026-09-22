@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 import time
@@ -457,6 +458,38 @@ def _persist_malware_enabled(enabled: bool) -> None:
     data = _read_raw()
     data["malware_scan_enabled"] = bool(enabled)
     _write_raw(data)
+
+
+def set_malware_scan_on_upload(enabled: bool) -> dict:
+    """Scan each uploaded file after the request returns, or do not.
+
+    Off by default. With a resident clamd this costs a socket round trip; with
+    the one-shot clamscan the panel installs by default it costs a full
+    signature load per file - 28.2 s and 1.05 GB for a 20 MB upload, measured.
+    The scheduled maldet scan covers the files either way.
+    """
+    from app.services import malware_queue
+    from app.services.shell import shell
+
+    enabled = bool(enabled)
+    data = _read_raw()
+    data[malware_queue.SETTING_KEY] = enabled
+    _write_raw(data)
+
+    # The daemon exists for this feature and nothing else: maldet runs
+    # `clamscan` and never opens clamd's socket. Leaving it installed while the
+    # feature is off is a second resident copy of the same ~1 GB of signatures,
+    # which is how a live 8 GB server collected 16 OOM kills in 7 days.
+    verb = "clamav-daemon-install" if enabled else "clamav-daemon-remove"
+    try:
+        shell.privileged(verb, fallback=["true"])
+    except Exception:  # noqa: BLE001 - the setting is saved either way
+        logging.getLogger("bpanel.panel_settings").exception(
+            "could not %s while turning scan-on-upload %s",
+            verb, "on" if enabled else "off",
+        )
+
+    return malware_scan_status()
 
 
 def _persist_malware_realtime(enabled: bool) -> None:

@@ -978,19 +978,87 @@ tune_clamd_limits() {
   fi
 }
 
+# The engine is `clamscan` plus the signature database. The resident daemon is
+# a separate decision, below.
+#
+# maldet - which is what every scheduled, on-demand and real-time scan actually
+# runs - calls `clamscan` with both signature sets on the command line. It
+# never opens clamd's socket. Installing the daemon alongside it therefore buys
+# nothing and costs a second resident copy of the same ~1 GB of signatures.
+#
+# That cost was not theoretical. On a live 8 GB server, 16 OOM kills in 7 days:
+#
+#   Sep 18 22:13  clamd     1.56 GB       Sep 21 01:40  clamd     1.14 GB
+#   Sep 18 22:18  clamscan  0.87 GB       Sep 21 01:40  clamscan  1.05 GB
+#   Sep 18 22:18  nginx     0.69 GB       Sep 21 15:50  clamd     2.17 GB
+#                                         Sep 21 15:50  nginx     0.71 GB
+#
+# clamd in 9 of the 16, twice taking nginx down with it. clamscan stayed at
+# ~1 GB throughout - the size of the signature set, and unavoidable.
 install_clamav_engine() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update --allow-releaseinfo-change
-  if ! dpkg -s clamav clamav-daemon >/dev/null 2>&1; then
-    apt-get install -y clamav clamav-daemon
+  if ! dpkg -s clamav >/dev/null 2>&1; then
+    apt-get install -y clamav
   fi
-  # Ensure the daemon socket directory exists and the service is enabled.
+  # Triggers an initial signature database refresh in the background.
+  freshclam >/dev/null 2>&1 || true
+  echo "ClamAV engine installed (clamscan + signatures; no resident daemon)."
+}
+
+# The resident daemon, installed only when something scans one file at a time.
+#
+# Loading the signature set costs ~23 s and ~1 GB per invocation, measured. A
+# batch scan pays that once for thousands of files and does not care. Scanning
+# each upload pays it per file, which is why that feature - and only that
+# feature - wants clamd.
+install_clamav_daemon() {
+  export DEBIAN_FRONTEND=noninteractive
+  if ! dpkg -s clamav >/dev/null 2>&1; then
+    install_clamav_engine
+  fi
+  if ! dpkg -s clamav-daemon >/dev/null 2>&1; then
+    apt-get update --allow-releaseinfo-change
+    apt-get install -y clamav-daemon || deny "could not install clamav-daemon"
+  fi
   install -d -o clamav -g clamav -m 0755 /run/clamav 2>/dev/null || true
   systemctl enable --now clamav-daemon
   tune_clamd_limits
-  # Triggers an initial signature database refresh in the background.
-  freshclam >/dev/null 2>&1 || true
-  echo "ClamAV installed and clamav-daemon enabled."
+  # Give the new daemon the same ceiling the guard sets for an existing one,
+  # so it cannot grow to the 2.17 GB that took nginx down twice.
+  [[ -x /usr/local/sbin/bpanel-memory-guard ]] && /usr/local/sbin/bpanel-memory-guard >/dev/null 2>&1
+  echo "clamav-daemon installed and running."
+}
+
+remove_clamav_daemon() {
+  # Removing the daemon must never take the engine with it: maldet needs
+  # `clamscan` and /var/lib/clamav, and a machine without maldet falls back to
+  # `clamdscan`, which needs the daemon. Both are checked before anything is
+  # removed.
+  if ! dpkg -s clamav-daemon >/dev/null 2>&1; then
+    echo "clamav-daemon is not installed; nothing to remove."
+    return 0
+  fi
+  if [[ ! -x "$MALDET_BIN" ]]; then
+    deny "maldet is not installed, so scans would fall back to clamdscan and need this daemon"
+  fi
+
+  export DEBIAN_FRONTEND=noninteractive
+  # Ask apt what it would do first. If the answer includes the engine, stop.
+  local plan
+  plan="$(apt-get -s remove clamav-daemon 2>/dev/null | grep -E '^Remv ' || true)"
+  if grep -qE '^Remv (clamav|clamav-base|clamav-freshclam) ' <<<"$plan"; then
+    deny "removing clamav-daemon here would also remove the scan engine; left alone"
+  fi
+
+  systemctl disable --now clamav-daemon 2>/dev/null || true
+  systemctl disable --now clamav-daemon.socket 2>/dev/null || true
+  apt-get remove -y clamav-daemon || deny "could not remove clamav-daemon"
+
+  # Deliberately no autoremove: it decides for itself what else is unused and
+  # has no way of knowing maldet calls clamscan.
+  command -v clamscan >/dev/null 2>&1 || echo "WARNING: clamscan is gone; scanning will not work" >&2
+  echo "clamav-daemon removed. The engine (clamscan + signatures) is untouched."
 }
 
 # --- Linux Malware Detect (LMD / maldet) ------------------------------------
@@ -4579,6 +4647,16 @@ case "$cmd" in
   clamav-tune)
     [[ $# -eq 0 ]] || deny "usage: clamav-tune"
     tune_clamd_limits
+    ;;
+
+  clamav-daemon-install)
+    [[ $# -eq 0 ]] || deny "usage: clamav-daemon-install"
+    install_clamav_daemon
+    ;;
+
+  clamav-daemon-remove)
+    [[ $# -eq 0 ]] || deny "usage: clamav-daemon-remove"
+    remove_clamav_daemon
     ;;
 
   clamav-install)
