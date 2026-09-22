@@ -3,6 +3,7 @@ import gzip
 import hashlib
 import ipaddress
 import json
+import logging
 import re
 import socket
 import threading
@@ -22,6 +23,8 @@ try:
     import maxminddb
 except ImportError:  # pragma: no cover - optional GeoIP support
     maxminddb = None
+
+logger = logging.getLogger("bpanel.waf")
 
 
 DOMAIN_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$")
@@ -268,11 +271,66 @@ def normalize_crs_mode(value) -> str:
     return mode if mode in CRS_MODES else "off"
 
 
+CRS_MODE_FILE = Path("/etc/nginx/modsec/bpanel-crs-mode")
+
+
+def deployed_crs_mode() -> str | None:
+    """The mode the machine is actually running, as the helper last wrote it.
+
+    Written by the `waf-crs-mode` verb and world-readable, so this needs no
+    privilege. It is the record of what was deployed, as against what the
+    panel thinks it chose.
+    """
+    try:
+        text = CRS_MODE_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return normalize_crs_mode(text) if text else None
+
+
 def active_crs_mode() -> str:
-    """The server-wide OWASP CRS mode: off, detect, or block."""
+    """The server-wide OWASP CRS mode: off, detect, or block.
+
+    Two records of the same fact, and they can disagree. The panel settings
+    hold what an admin chose; /etc/nginx/modsec/bpanel-crs-mode holds what was
+    last deployed. Every re-render of a site's rules asks this function, so
+    when the settings lose the key - and they can, a settings file is one
+    unreadable moment away from being rewritten without it - the next render
+    quietly drops CRS from every site.
+
+    That happened: 20 customer sites lost CRS for seventeen minutes during an
+    update, with nothing logged, because the key was gone and a missing key
+    reads as "off".
+
+    So a missing key defers to what is deployed rather than silently
+    downgrading, and says so loudly. An explicit "off" is still obeyed: that is
+    somebody's decision, not a gap.
+    """
     from app.services import panel_settings
 
-    return normalize_crs_mode(panel_settings.crs_mode())
+    chosen = panel_settings.stored_crs_mode()
+    deployed = deployed_crs_mode()
+
+    if chosen is None:
+        if deployed and deployed != "off":
+            logger.error(
+                "CRS mode is missing from the panel settings while %s has %r. "
+                "Using the deployed mode: re-rendering site rules as 'off' here "
+                "would take CRS off every site. Set the mode in the panel to "
+                "record it again.",
+                CRS_MODE_FILE, deployed,
+            )
+            return deployed
+        return "off"
+
+    normalized = normalize_crs_mode(chosen)
+    if deployed and deployed != normalized:
+        logger.warning(
+            "CRS mode disagrees: panel settings say %r, %s says %r. The panel "
+            "setting wins; the next render will bring the machine into line.",
+            normalized, CRS_MODE_FILE, deployed,
+        )
+    return normalized
 
 
 def crs_status() -> dict:
@@ -296,6 +354,13 @@ def crs_status() -> dict:
         elif key == "mode":
             info["mode"] = normalize_crs_mode(value)
     info["panel_mode"] = active_crs_mode()
+    # What the panel recorded, separately from what it is falling back to, so
+    # the page can say "the settings lost this" rather than showing agreement
+    # that is only there because active_crs_mode() papered over the gap.
+    from app.services import panel_settings
+
+    info["recorded_mode"] = panel_settings.stored_crs_mode()
+    info["mode_unrecorded"] = info["recorded_mode"] is None and info["panel_mode"] != "off"
     return info
 
 
