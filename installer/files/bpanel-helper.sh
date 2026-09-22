@@ -1778,10 +1778,14 @@ firewall_kill_blocked_connections() {
   command -v ss >/dev/null 2>&1 || return 0
   command -v ipset >/dev/null 2>&1 || return 0
 
+  # Address-only sets. The denyp/blockp sets are keyed on ip,port, so testing
+  # them with an address alone always misses - it would be one wasted process
+  # per connection per set. A connection blocked by an ip,port rule still
+  # stops carrying traffic; it just is not closed early.
   local peer ip set killed=0
-  local -a sets=(bpanel-deny4 bpanel-denyp4 bpanel-block4)
+  local -a sets=(bpanel-deny4 bpanel-block4)
   if firewall_has_ipv6; then
-    sets+=(bpanel-deny6 bpanel-denyp6 bpanel-block6)
+    sets+=(bpanel-deny6 bpanel-block6)
   fi
 
   while read -r peer; do
@@ -1792,8 +1796,6 @@ firewall_kill_blocked_connections() {
     ip="${ip%]}"
     [[ -n "$ip" ]] || continue
     for set in "${sets[@]}"; do
-      # denyp/blockp are ip,port sets; `ipset test` on those needs the port, so
-      # an address-only test against them simply fails and we move on.
       if ipset test "$set" "$ip" >/dev/null 2>&1; then
         # Best effort: -K needs CONFIG_INET_DIAG_DESTROY, which not every
         # kernel has. A failure here leaves the DROP rule doing its job.
