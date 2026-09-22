@@ -19,7 +19,14 @@ FRONTEND = PROJECT_ROOT / "frontend" / "src" / "App.jsx"
 
 
 def _panel_settings(monkeypatch, raw):
-    """Stand a settings module in for the one the queue imports at call time."""
+    """Stand a settings module in for the one the queue imports at call time.
+
+    Both readers are provided. The queue reads leniently - an unreadable
+    settings file must not decide that scanning is on - and a stand-in missing
+    that name would send every case down the queue's own except branch, where
+    they would all answer False and the True cases would be the only ones that
+    noticed.
+    """
     import sys
     import types
 
@@ -27,6 +34,7 @@ def _panel_settings(monkeypatch, raw):
 
     module = types.ModuleType("app.services.panel_settings")
     module._read_raw = raw
+    module._read_raw_lenient = raw
     monkeypatch.setitem(sys.modules, "app.services.panel_settings", module)
     monkeypatch.setattr(services, "panel_settings", module, raising=False)
 
