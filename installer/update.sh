@@ -22,6 +22,12 @@ fail() { echo "ERROR: $1" >&2; exit 1; }
 # it survives everything except a fresh install.
 BPANEL_UPDATE_STATE_DIR=/var/lib/bpanel/update-state
 
+# `dpkg -s` exits 0 for a package that was removed but kept its config files
+# ("deinstall ok config-files"), whose binaries are gone. Ask for the state.
+pkg_installed() {
+  [[ "$(dpkg-query -W -f='${Status}' "$1" 2>/dev/null)" == "install ok installed" ]]
+}
+
 fingerprint() {
   # fingerprint <path> [path ...] -> one sha256 over the contents of every
   # file under those paths (paths are stable, so hashing them too is fine).
@@ -1314,7 +1320,7 @@ if [[ -f "$SOURCE_DIR/installer/files/bpanel-helper.sh" ]]; then
     # The helper refuses to remove it when maldet is absent (scans would fall
     # back to clamdscan and need the daemon) or when apt would take the engine
     # with it, so this is safe to run unconditionally.
-    if dpkg -s clamav-daemon >/dev/null 2>&1        && ! grep -q '"malware_scan_on_upload": *true' /var/lib/bpanel/panel-settings.json 2>/dev/null; then
+    if pkg_installed clamav-daemon && ! grep -q '"malware_scan_on_upload": *true' /var/lib/bpanel/panel-settings.json 2>/dev/null; then
       log "Removing clamav-daemon (nothing uses it; the scan engine stays)"
       sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper clamav-daemon-remove >/dev/null ||         echo "  (warning: could not remove clamav-daemon; it is still holding memory)"
     fi

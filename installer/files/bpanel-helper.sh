@@ -88,6 +88,21 @@ MARIADB_TUNING_CONF="/etc/mysql/mariadb.conf.d/90-bpanel-tuning.cnf"
 
 deny() { echo "bpanel-helper: $*" >&2; exit 1; }
 
+# `dpkg -s <pkg>` exits 0 for a package that has been REMOVED but still has
+# its config files on disk ("deinstall ok config-files"). Every caller here
+# means "is this usable", and for a removed package the answer is no - the
+# binaries are gone.
+#
+# This bit on a live server: after clamav-daemon was removed, turning
+# scan-on-upload back on would have skipped `apt-get install` (dpkg -s said
+# yes) and then failed on `systemctl enable --now clamav-daemon`, because
+# /usr/sbin/clamd no longer existed. The feature would have been broken on
+# exactly the machines that had removed the daemon.
+pkg_installed() {
+  [[ "$(dpkg-query -W -f='${Status}' "$1" 2>/dev/null)" == "install ok installed" ]]
+}
+
+
 ensure_bpanel_data_dir() {
   install -d -o bpanel -g bpanel -m 0750 "$BPANEL_DATA_DIR"
 }
@@ -902,7 +917,7 @@ save_waf_site_rules() {
 
 install_waf_engine() {
   export DEBIAN_FRONTEND=noninteractive
-  if ! dpkg -s libnginx-mod-http-modsecurity >/dev/null 2>&1; then
+  if ! pkg_installed libnginx-mod-http-modsecurity; then
     apt-get update --allow-releaseinfo-change
     apt-get install -y libnginx-mod-http-modsecurity modsecurity-crs libmodsecurity3 || \
       apt-get install -y libnginx-mod-http-modsecurity libmodsecurity3
@@ -998,7 +1013,7 @@ tune_clamd_limits() {
 install_clamav_engine() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update --allow-releaseinfo-change
-  if ! dpkg -s clamav >/dev/null 2>&1; then
+  if ! pkg_installed clamav; then
     apt-get install -y clamav
   fi
   # Triggers an initial signature database refresh in the background.
@@ -1014,10 +1029,10 @@ install_clamav_engine() {
 # feature - wants clamd.
 install_clamav_daemon() {
   export DEBIAN_FRONTEND=noninteractive
-  if ! dpkg -s clamav >/dev/null 2>&1; then
+  if ! pkg_installed clamav; then
     install_clamav_engine
   fi
-  if ! dpkg -s clamav-daemon >/dev/null 2>&1; then
+  if ! pkg_installed clamav-daemon; then
     apt-get update --allow-releaseinfo-change
     apt-get install -y clamav-daemon || deny "could not install clamav-daemon"
   fi
@@ -1035,7 +1050,7 @@ remove_clamav_daemon() {
   # `clamscan` and /var/lib/clamav, and a machine without maldet falls back to
   # `clamdscan`, which needs the daemon. Both are checked before anything is
   # removed.
-  if ! dpkg -s clamav-daemon >/dev/null 2>&1; then
+  if ! pkg_installed clamav-daemon; then
     echo "clamav-daemon is not installed; nothing to remove."
     return 0
   fi
@@ -2495,7 +2510,7 @@ remove_manual_ssl() {
 
 install_certbot_dns_cloudflare() {
   export DEBIAN_FRONTEND=noninteractive
-  if dpkg -s python3-certbot-dns-cloudflare >/dev/null 2>&1; then
+  if pkg_installed python3-certbot-dns-cloudflare; then
     echo "certbot dns-cloudflare plugin already installed"
     return 0
   fi
@@ -2512,7 +2527,7 @@ cloudflare_ssl_issue() {
   require_domain "$zone"
   [[ -n "$email" ]] && require_email "$email"
   command -v certbot >/dev/null 2>&1 || deny "certbot is not installed"
-  dpkg -s python3-certbot-dns-cloudflare >/dev/null 2>&1 \
+  pkg_installed python3-certbot-dns-cloudflare \
     || deny "certbot dns-cloudflare plugin is not installed (run certbot-dns-cloudflare-install)"
   token="$(cat)"
   [[ "$token" =~ ^[A-Za-z0-9_.~-]{20,200}$ ]] || deny "cloudflare API token is missing or malformed"
