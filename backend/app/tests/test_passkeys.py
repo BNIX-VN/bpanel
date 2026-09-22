@@ -300,3 +300,16 @@ def test_an_authenticator_that_never_counts_still_works():
         credential_json=flat.assert_(rp_id=RP, challenge=challenge, origin=ORIGIN),
         challenge=challenge, stored=stored, scheme="https", host=HOST,
     ) == 0
+
+
+def test_the_step_up_password_is_not_asked_for_with_a_prompt():
+    """prompt() renders a password in clear text in a browser dialog.
+
+    It is also a modal that blocks everything else on the page. The passkey
+    flow asks for the current password in a masked field instead, the way the
+    admin account form already does.
+    """
+    src = (PROJECT_ROOT / "frontend" / "src" / "App.jsx").read_text(encoding="utf-8")
+    body = src.split("async function addPasskey()", 1)[1].split("\n  async function ", 1)[0]
+    assert "prompt(" not in body, "the passkey step-up still uses a browser prompt"
+    assert "passkeyPassword" in body

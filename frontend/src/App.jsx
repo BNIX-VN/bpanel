@@ -644,6 +644,10 @@ function App() {
   // whether the customer has asked for the authenticator app instead.
   const [passkeyPrompt, setPasskeyPrompt] = useState(null);
   const [passkeyStatus, setPasskeyStatus] = useState(null);
+  // The step-up for adding a passkey. A masked field rather than prompt(),
+  // which shows a password in clear text in a browser dialog.
+  const [passkeyPassword, setPasskeyPassword] = useState('');
+  const [passkeyName, setPasskeyName] = useState('');
   const [needsTwoFactor, setNeedsTwoFactor] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
   const [page, setPage] = useState(() => pageFromPathname(window.location.pathname));
@@ -1096,11 +1100,9 @@ function App() {
       setError('Trình duyệt này không hỗ trợ passkey.');
       return;
     }
-    const currentPassword = prompt('Nhập mật khẩu hiện tại để thêm passkey:', '');
-    if (currentPassword === null) return;
     const started = await request('/auth/passkey/register/options', {
       method: 'POST',
-      body: JSON.stringify({ current_password: currentPassword || null }),
+      body: JSON.stringify({ current_password: passkeyPassword || null }),
     }, 'Đang chuẩn bị passkey...');
     if (!started?.options) return;
     try {
@@ -1109,13 +1111,14 @@ function App() {
         publicKey: decodeCreationOptions(parsed),
       });
       if (!credential) return;
-      const name = prompt('Đặt tên cho passkey này (ví dụ: MacBook, iPhone):', '') || '';
       const done = await request('/auth/passkey/register/verify', {
         method: 'POST',
-        body: JSON.stringify({ credential: encodeRegistration(credential), name }),
+        body: JSON.stringify({ credential: encodeRegistration(credential), name: passkeyName }),
       }, 'Đang lưu passkey...');
       if (done?.id) {
         setNotice(`Đã thêm passkey ${done.name}.`);
+        setPasskeyPassword('');
+        setPasskeyName('');
         await loadPasskeyStatus();
       }
     } catch (err) {
@@ -6563,9 +6566,26 @@ function App() {
             Passkey gắn với tên miền <strong>{pk.rp_id}</strong>. Vào panel bằng tên khác
             thì passkey này không hiện ra — lúc đó dùng Google Authenticator bên dưới.
           </p>
-          <div className="site-app-form-actions">
-            <button disabled={!!loading} onClick={addPasskey}><KeyRound size={14}/> Thêm passkey</button>
+          <div className="cron-form">
+            <input
+              value={passkeyName}
+              onChange={e => setPasskeyName(e.target.value)}
+              placeholder="Tên thiết bị, ví dụ MacBook"
+              aria-label="Tên passkey"
+            />
+            <input
+              type="password"
+              value={passkeyPassword}
+              onChange={e => setPasskeyPassword(e.target.value)}
+              placeholder="Mật khẩu hiện tại"
+              autoComplete="current-password"
+              aria-label="Mật khẩu hiện tại"
+            />
+            <button disabled={!!loading || !passkeyPassword} onClick={addPasskey}>
+              <KeyRound size={14}/> Thêm passkey
+            </button>
           </div>
+          <p className="hint">Mật khẩu hiện tại là bước xác nhận, giống khi bật Google Authenticator.</p>
         </>}
 
         {pk?.credentials?.length > 0 && <div className="table">
