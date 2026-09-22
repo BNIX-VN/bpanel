@@ -88,3 +88,51 @@ def test_both_installers_apply_the_tuning(script):
     assert "bpanel-helper clamav-tune" in text, (
         f"{script.name} never raises clamd's limits on an existing install"
     )
+
+
+# --- the mistake this nearly shipped with ----------------------------------
+
+@pytest.mark.parametrize("script", [INSTALL_SCRIPT, UPDATE_SCRIPT], ids=["install", "update"])
+def test_the_installers_never_call_the_helper_as_root(script):
+    """The helper refuses anything that is not sudo from 'bpanel'.
+
+    The first version of the clamd tuning called it directly from the
+    installer, which runs as root. The helper printed its refusal, `|| true`
+    swallowed it, and the update reported success with clamd untouched - the
+    same silent failure the memory guard had, one mechanism further on.
+
+    A systemd unit is the one legitimate exception: those set
+    Environment=SUDO_USER=bpanel, so the guard is satisfied.
+    """
+    offenders = []
+    for number, line in enumerate(script.read_text(encoding="utf-8").splitlines(), 1):
+        stripped = line.strip()
+        if "bpanel-helper" not in stripped:
+            continue
+        if stripped.startswith("#") or stripped.startswith("ExecStart="):
+            continue
+        # A line that only talks about the helper. "…/bpanel-helper and
+        # /etc/sudoers.d/bpanel" otherwise reads as the verb "and".
+        if stripped.split(" ", 1)[0] in {"log", "echo", "printf"}:
+            continue
+        # Installing, chmod-ing or sed-ing the file is not invoking it.
+        if re.search(r"/usr/local/sbin/bpanel-helper\s+[a-z][a-z0-9-]*", stripped) is None:
+            continue
+        if "sudo -u bpanel" in stripped:
+            continue
+        offenders.append(f"{script.name}:{number}: {stripped}")
+
+    assert not offenders, (
+        "the helper refuses a direct root call; these would fail silently:\n"
+        + "\n".join(offenders)
+    )
+
+
+@pytest.mark.parametrize("script", [INSTALL_SCRIPT, UPDATE_SCRIPT], ids=["install", "update"])
+def test_a_failed_tuning_says_so_instead_of_disappearing(script):
+    """`|| true` is how both of these bugs stayed invisible."""
+    text = script.read_text(encoding="utf-8")
+    index = text.index("bpanel-helper clamav-tune")
+    tail = text[index:index + 300]
+    assert "warning" in tail, "a refusal has to reach the operator"
+    assert "clamav-tune >/dev/null || true" not in tail

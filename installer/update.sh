@@ -766,12 +766,6 @@ install_panel_runtime() {
     # already deployed, and it is idempotent.
     /usr/local/sbin/bpanel-memory-guard || true
   fi
-  # clamd's stock limits let a padded upload past the scanner: anything over
-  # MaxFileSize comes back OK without being read. Re-applied every update,
-  # because the servers that need it are the ones already running.
-  if [[ -f /etc/clamav/clamd.conf && -x /usr/local/sbin/bpanel-helper ]]; then
-    /usr/local/sbin/bpanel-helper clamav-tune || true
-  fi
   if command -v sshd >/dev/null 2>&1; then
     sshd_config="/etc/ssh/sshd_config"
     sshd_backup="${sshd_config}.bpanel.bak"
@@ -1310,6 +1304,15 @@ if [[ -f "$SOURCE_DIR/installer/files/bpanel-helper.sh" ]]; then
       echo "  (PHP-FPM and MariaDB tuning unchanged for this release; skipping the retune)"
     fi
     systemctl enable bpanel-autotune.service >/dev/null 2>&1 || true
+    # clamd ships limits sized for mail attachments: anything over MaxFileSize
+    # comes back OK without being read, so a padded upload was waved through.
+    # Re-applied every update - the servers still on the stock 25 MB are the
+    # ones already deployed. Root cannot call the helper directly (it refuses
+    # anything but sudo from 'bpanel'), and a bare `|| true` here would hide
+    # that refusal exactly the way it hid the memory guard's.
+    if [[ -f /etc/clamav/clamd.conf ]]; then
+      sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper clamav-tune >/dev/null ||         echo "  (warning: could not raise clamd's scan limits; large uploads stay unscanned)"
+    fi
     # The helper is fresh now, so the clock unit can run without flashing
     # up as a failed unit first.
     systemctl reset-failed bpanel-timesync.service >/dev/null 2>&1 || true
