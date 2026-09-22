@@ -311,6 +311,86 @@ function csvCell(value) {
   return `"${text.replace(/"/g, '""')}"`;
 }
 
+/* ---------------------------------------------------------------
+   Passkeys (WebAuthn)
+
+   The browser speaks ArrayBuffers and the API speaks base64url, so every
+   ceremony is a translation either side of navigator.credentials. Nothing here
+   decides anything: the server issues the challenge and checks the signature
+   against an origin and a Relying Party ID it derives itself.
+   --------------------------------------------------------------- */
+
+const passkeySupported = () =>
+  typeof window !== 'undefined'
+  && !!window.PublicKeyCredential
+  && !!navigator.credentials;
+
+function b64urlToBytes(value) {
+  const padded = value.replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(padded + '='.repeat((4 - (padded.length % 4)) % 4));
+  return Uint8Array.from(raw, ch => ch.charCodeAt(0));
+}
+
+function bytesToB64url(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let raw = '';
+  for (const byte of bytes) raw += String.fromCharCode(byte);
+  return btoa(raw).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+/* The server sends the options as the spec writes them, with the binary fields
+   base64url encoded. These two put them back. */
+function decodeCreationOptions(options) {
+  return {
+    ...options,
+    challenge: b64urlToBytes(options.challenge),
+    user: { ...options.user, id: b64urlToBytes(options.user.id) },
+    excludeCredentials: (options.excludeCredentials || []).map(c => ({
+      ...c, id: b64urlToBytes(c.id),
+    })),
+  };
+}
+
+function decodeRequestOptions(options) {
+  return {
+    ...options,
+    challenge: b64urlToBytes(options.challenge),
+    allowCredentials: (options.allowCredentials || []).map(c => ({
+      ...c, id: b64urlToBytes(c.id),
+    })),
+  };
+}
+
+/* What goes back to the server, in the shape py_webauthn parses. */
+function encodeRegistration(credential) {
+  return JSON.stringify({
+    id: credential.id,
+    rawId: bytesToB64url(credential.rawId),
+    type: credential.type,
+    response: {
+      clientDataJSON: bytesToB64url(credential.response.clientDataJSON),
+      attestationObject: bytesToB64url(credential.response.attestationObject),
+      transports: credential.response.getTransports ? credential.response.getTransports() : [],
+    },
+    clientExtensionResults: credential.getClientExtensionResults ? credential.getClientExtensionResults() : {},
+  });
+}
+
+function encodeAssertion(credential) {
+  return JSON.stringify({
+    id: credential.id,
+    rawId: bytesToB64url(credential.rawId),
+    type: credential.type,
+    response: {
+      clientDataJSON: bytesToB64url(credential.response.clientDataJSON),
+      authenticatorData: bytesToB64url(credential.response.authenticatorData),
+      signature: bytesToB64url(credential.response.signature),
+      userHandle: credential.response.userHandle ? bytesToB64url(credential.response.userHandle) : null,
+    },
+    clientExtensionResults: credential.getClientExtensionResults ? credential.getClientExtensionResults() : {},
+  });
+}
+
 function editorParamsFromLocation() {
   const params = new URLSearchParams(window.location.search);
   if (params.get('view') !== 'editor') return null;
@@ -560,6 +640,14 @@ function App() {
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('');
   const [otpCode, setOtpCode] = useState('');
+  // The passkey challenge the server handed back with the password check, and
+  // whether the customer has asked for the authenticator app instead.
+  const [passkeyPrompt, setPasskeyPrompt] = useState(null);
+  const [passkeyStatus, setPasskeyStatus] = useState(null);
+  // The step-up for adding a passkey. A masked field rather than prompt(),
+  // which shows a password in clear text in a browser dialog.
+  const [passkeyPassword, setPasskeyPassword] = useState('');
+  const [passkeyName, setPasskeyName] = useState('');
   const [needsTwoFactor, setNeedsTwoFactor] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
   const [page, setPage] = useState(() => pageFromPathname(window.location.pathname));
@@ -922,12 +1010,15 @@ function App() {
     }
   }
 
-  async function login() {
+  async function login(passkeyAssertion = '') {
     try {
       setError('');
       setLoading('Logging in...');
       const body = new URLSearchParams({ username, password });
-      if (needsTwoFactor || otpCode) body.set('otp', otpCode);
+      // An otp and a passkey are never sent together: the customer either used
+      // the key or chose the app.
+      if (otpCode) body.set('otp', otpCode);
+      else if (passkeyAssertion) body.set('passkey', passkeyAssertion);
       if (rememberMe) body.set('remember', 'true');
       const res = await fetch(`${API}/auth/login`, {
         method: 'POST',
@@ -935,14 +1026,23 @@ function App() {
         credentials: 'include',
       });
       const data = await res.json().catch(() => ({}));
-      if (res.ok && data.requires_2fa) {
+      if (res.ok && data.requires_passkey) {
+        // The account has a passkey for this hostname. Offer it, and remember
+        // whether an authenticator app is available as the way out - a passkey
+        // is bound to one hostname, so there has to be one.
+        setPasskeyPrompt({ options: data.passkey_options, canUseOtp: !!data.requires_2fa });
+        setNotice('Xác thực bằng passkey.');
+        await usePasskey(data.passkey_options);
+      } else if (res.ok && data.requires_2fa) {
         setNeedsTwoFactor(true);
+        setPasskeyPrompt(null);
         setNotice('Enter your authentication code.');
       } else if (res.ok && data.access_token) {
         // Don't keep the token anywhere: the HttpOnly cookie just got set by
         // the response. JS code MUST NOT touch the JWT.
         setIsAuthenticated(true);
         setNeedsTwoFactor(false);
+        setPasskeyPrompt(null);
         setOtpCode('');
         setNotice('Login successful.');
         await loadCurrentUser();
@@ -969,6 +1069,67 @@ function App() {
       });
     } catch {}
     clearSession('Logged out.');
+  }
+
+  async function usePasskey(optionsJson) {
+    if (!passkeySupported()) {
+      setError('Trình duyệt này không hỗ trợ passkey. Dùng mã từ ứng dụng xác thực.');
+      return;
+    }
+    try {
+      const parsed = JSON.parse(optionsJson);
+      const credential = await navigator.credentials.get({
+        publicKey: decodeRequestOptions(parsed),
+      });
+      if (!credential) return;
+      await login(encodeAssertion(credential));
+    } catch (err) {
+      // A cancel and a hardware failure look the same here, and neither is
+      // worth an alarming message: the authenticator app is still available.
+      setError('Không dùng được passkey. Thử lại hoặc dùng mã từ ứng dụng xác thực.');
+    }
+  }
+
+  async function loadPasskeyStatus() {
+    const data = await request('/auth/passkey/status', { silent: true });
+    if (data) setPasskeyStatus(data);
+  }
+
+  async function addPasskey() {
+    if (!passkeySupported()) {
+      setError('Trình duyệt này không hỗ trợ passkey.');
+      return;
+    }
+    const started = await request('/auth/passkey/register/options', {
+      method: 'POST',
+      body: JSON.stringify({ current_password: passkeyPassword || null }),
+    }, 'Đang chuẩn bị passkey...');
+    if (!started?.options) return;
+    try {
+      const parsed = JSON.parse(started.options);
+      const credential = await navigator.credentials.create({
+        publicKey: decodeCreationOptions(parsed),
+      });
+      if (!credential) return;
+      const done = await request('/auth/passkey/register/verify', {
+        method: 'POST',
+        body: JSON.stringify({ credential: encodeRegistration(credential), name: passkeyName }),
+      }, 'Đang lưu passkey...');
+      if (done?.id) {
+        setNotice(`Đã thêm passkey ${done.name}.`);
+        setPasskeyPassword('');
+        setPasskeyName('');
+        await loadPasskeyStatus();
+      }
+    } catch (err) {
+      setError('Không tạo được passkey. Thiết bị có thể đã từ chối hoặc bạn đã huỷ.');
+    }
+  }
+
+  async function removePasskey(credential) {
+    if (!confirm(`Xoá passkey ${credential.name}? Thiết bị đó sẽ không đăng nhập được nữa.`)) return;
+    await request(`/auth/passkey/credentials/${credential.id}`, { method: 'DELETE' }, 'Đang xoá passkey...');
+    await loadPasskeyStatus();
   }
 
   async function loadCurrentUser({ clearOnUnauthorized = true } = {}) {
@@ -3790,11 +3951,11 @@ function App() {
   }, [isAuthenticated, page, isAdmin]);
 
   useEffect(() => {
-    if (!isAuthenticated || page !== 'services') return undefined;
+    if (!isAuthenticated || page !== 'services' || !isAdmin) return undefined;
     checkAllServices();
     const timer = setInterval(checkAllServices, 10000);
     return () => clearInterval(timer);
-  }, [isAuthenticated, page]);
+  }, [isAuthenticated, page, isAdmin]);
 
   useEffect(() => {
     if (!isAuthenticated || page !== 'websites') return undefined;
@@ -3811,6 +3972,11 @@ function App() {
     }, 300);
     return () => window.clearTimeout(timer);
   }, [isAuthenticated, page, dbSearch]);
+
+  useEffect(() => {
+    if (!isAuthenticated || page !== 'security') return;
+    loadPasskeyStatus();
+  }, [isAuthenticated, page]);
 
   useEffect(() => {
     if (!isAuthenticated || page !== 'sftp') return;
@@ -3957,7 +4123,7 @@ function App() {
     ...(isAdmin ? [['access-logs', 'Access Logs', FileText]] : []),
     ...(isAdmin ? [['updates', 'Updates', RefreshCw]] : []),
     ...(isAdmin ? [['addons', 'Addons', Boxes]] : []),
-    ['services', 'Services Status', Server],
+    ...(isAdmin ? [['services', 'Services Status', Server]] : []),
   ];
 
   const navItems = [...mainNavItems, ...settingsNavItems];
@@ -4176,7 +4342,7 @@ function App() {
         title: 'Server',
         hint: 'The machine everything runs on',
         tiles: [
-          ['services', 'Services Status', MsServices, 'nginx, PHP, MariaDB, Redis'],
+          isAdmin ? ['services', 'Services Status', MsServices, 'nginx, PHP, MariaDB, Redis'] : null,
           isAdmin ? ['php', 'PHP config', MsPhpConfig, 'Versions, limits and extensions'] : null,
           isAdmin ? ['updates', 'Updates', MsUpdates, 'Panel and system packages'] : null,
           isAdmin ? ['addons', 'Addons', MsAddons, 'Optional features, off by default'] : null,
@@ -4236,6 +4402,19 @@ function App() {
         </section>)}
       </div>
     </>;
+  }
+
+  function renderAdminOnly() {
+    // For pages that describe the machine rather than a customer's slice of it.
+    // They stay reachable by URL, so they say so plainly instead of rendering
+    // and firing a page full of requests the server will refuse.
+    return <section className="section">
+      <div className="section-title"><div><h2>Chỉ dành cho quản trị</h2></div></div>
+      <EmptyState
+        icon={Server}
+        message="Trang này hiển thị trạng thái của máy chủ, nên chỉ quản trị viên xem được."
+      />
+    </section>;
   }
 
   function renderAddonMissing() {
@@ -6362,7 +6541,73 @@ function App() {
 
   function renderSecurity() {
     const enabled = Boolean(twoFactorStatus?.enabled || currentUser?.totp_enabled);
+    const pk = passkeyStatus;
     return <>
+      <section className="section">
+        <div className="section-title">
+          <div>
+            <h2>Passkey</h2>
+            <p className="hint">
+              Đăng nhập bằng vân tay, Face ID hoặc khoá bảo mật, thay cho việc gõ mã.
+            </p>
+          </div>
+          <button disabled={!!loading} onClick={loadPasskeyStatus}><RefreshCw size={14}/> Refresh</button>
+        </div>
+
+        {pk && !pk.supported && <div className="info-box">
+          <p className="hint" style={{color:'var(--red)'}}>
+            Bạn đang vào panel bằng địa chỉ IP ({pk.hostname}). Trình duyệt chỉ tạo
+            passkey cho tên miền, nên hãy vào bằng tên miền của panel rồi thêm lại.
+          </p>
+        </div>}
+
+        {pk?.supported && <>
+          <p className="hint">
+            Passkey gắn với tên miền <strong>{pk.rp_id}</strong>. Vào panel bằng tên khác
+            thì passkey này không hiện ra — lúc đó dùng Google Authenticator bên dưới.
+          </p>
+          <div className="cron-form">
+            <input
+              value={passkeyName}
+              onChange={e => setPasskeyName(e.target.value)}
+              placeholder="Tên thiết bị, ví dụ MacBook"
+              aria-label="Tên passkey"
+            />
+            <input
+              type="password"
+              value={passkeyPassword}
+              onChange={e => setPasskeyPassword(e.target.value)}
+              placeholder="Mật khẩu hiện tại"
+              autoComplete="current-password"
+              aria-label="Mật khẩu hiện tại"
+            />
+            <button disabled={!!loading || !passkeyPassword} onClick={addPasskey}>
+              <KeyRound size={14}/> Thêm passkey
+            </button>
+          </div>
+          <p className="hint">Mật khẩu hiện tại là bước xác nhận, giống khi bật Google Authenticator.</p>
+        </>}
+
+        {pk?.credentials?.length > 0 && <div className="table">
+          {pk.credentials.map(c => <div className="row db-row" key={c.id}>
+            <span><strong>{c.name}</strong></span>
+            <span style={{color:'var(--text-muted)'}}>{c.rp_id}</span>
+            <span className={c.usable_here ? 'badge ok' : 'badge'}>
+              {c.usable_here ? 'Dùng được ở đây' : 'Tên miền khác'}
+            </span>
+            <button className="danger" disabled={!!loading} onClick={() => removePasskey(c)}><Trash2 size={14}/></button>
+          </div>)}
+        </div>}
+
+        {pk?.supported && (pk?.credentials?.length || 0) === 0 &&
+          <EmptyState icon={KeyRound} message="Chưa có passkey nào." />}
+
+        {(pk?.credentials?.length || 0) > 0 && !enabled && <p className="hint" style={{color:'var(--red)'}}>
+          Bạn chỉ có passkey. Nếu vào panel bằng tên miền khác, sẽ không có cách xác
+          thực thứ hai nào — nên bật thêm Google Authenticator bên dưới.
+        </p>}
+      </section>
+
       <section className="section">
         <div className="section-title">
           <div><h2>Google Authenticator 2FA</h2><p className="hint">Current status: <strong>{enabled ? 'Enabled' : 'Disabled'}</strong></p></div>
@@ -6942,7 +7187,9 @@ function App() {
     if (page === 'malware') return renderMalware();
     if (page === 'access-logs') return renderWafAccessLogs();
     if (page === 'updates') return renderUpdates();
-    if (page === 'services') return renderServices();
+    // Reachable by URL, so it answers for itself rather than firing a
+    // page full of requests that will every one be refused.
+    if (page === 'services') return isAdmin ? renderServices() : renderAdminOnly();
     if (page === 'settings') return renderPanelSettings();
     if (page === 'api-tokens') return renderApiTokens();
     if (page === 'users') return renderUsers();
@@ -6975,6 +7222,15 @@ function App() {
         <div className="login-form">
           <input value={username} onChange={e => setUsername(e.target.value)} placeholder="Username" autoComplete="username" />
           <input value={password} onChange={e => setPassword(e.target.value)} placeholder="Password" type="password" autoComplete="current-password" onKeyDown={e => { if (e.key === 'Enter') login(); }} />
+          {passkeyPrompt && !needsTwoFactor && <div className="info-box">
+            <p className="hint">Chạm vào passkey của bạn để đăng nhập.</p>
+            <div className="site-app-form-actions">
+              <button disabled={!!loading} onClick={() => usePasskey(passkeyPrompt.options)}><KeyRound size={14}/> Thử lại passkey</button>
+              {/* A passkey belongs to one hostname. Reaching the panel by
+                  another name offers nothing, so the app has to stay in reach. */}
+              {passkeyPrompt.canUseOtp && <button className="secondary-light" disabled={!!loading} onClick={() => { setNeedsTwoFactor(true); setPasskeyPrompt(null); setNotice('Nhập mã từ ứng dụng xác thực.'); }}>Dùng mã xác thực</button>}
+            </div>
+          </div>}
           {needsTwoFactor && <input value={otpCode} onChange={e => setOtpCode(e.target.value)} placeholder="Authentication code" inputMode="numeric" autoComplete="one-time-code" onKeyDown={e => { if (e.key === 'Enter') login(); }} />}
           <label className="login-remember">
             <input type="checkbox" checked={rememberMe} onChange={e => setRememberMe(e.target.checked)} />

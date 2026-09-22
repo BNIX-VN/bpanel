@@ -120,6 +120,13 @@ class LoginResponse(BaseModel):
     access_token: Optional[str] = None
     token_type: str = "bearer"
     requires_2fa: bool = False
+    # Set when this account has a passkey for the hostname being used. The
+    # options are the browser's navigator.credentials.get() argument, already
+    # serialised. requires_2fa may be set at the same time: it means "and an
+    # authenticator app is available if the passkey cannot be used", which is
+    # the whole reason both are kept.
+    requires_passkey: bool = False
+    passkey_options: Optional[str] = None
 
 
 class TwoFactorStatus(BaseModel):
@@ -143,6 +150,21 @@ class TwoFactorSetupRequest(BaseModel):
 
 class TwoFactorEnableRequest(BaseModel):
     code: str = Field(min_length=6, max_length=12)
+
+
+class PasskeyRegisterStart(BaseModel):
+    """Adding a way into the account is a sensitive action, like TOTP setup."""
+
+    current_password: Optional[str] = Field(default=None, min_length=1, max_length=72)
+    code: Optional[str] = Field(default=None, min_length=6, max_length=12)
+
+
+class PasskeyRegisterFinish(BaseModel):
+    # The browser's attestation response, verbatim. Nothing in it is trusted:
+    # it is checked against a challenge the server issued, and against an RP ID
+    # and origin the server derives from the request rather than from this.
+    credential: str = Field(min_length=2, max_length=8192)
+    name: Optional[str] = Field(default=None, max_length=64)
 
 
 class TwoFactorDisableRequest(BaseModel):

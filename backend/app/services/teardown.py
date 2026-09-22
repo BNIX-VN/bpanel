@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import logging
 
-from app.models.entities import DatabaseAccount, SftpAccount, SiteApp
+from app.models.entities import DatabaseAccount, SftpAccount, SiteApp, WebauthnCredential
 from app.services import mariadb, sftp_accounts, site_apps
 
 logger = logging.getLogger("bpanel.teardown")
@@ -156,6 +156,22 @@ def set_owner_sftp_accounts_locked(db, owner_id: int, locked: bool) -> list[str]
     return touched
 
 
+def purge_owner_passkeys(db, owner_id: int) -> list[str]:
+    """Passkeys are rows and nothing else - no Linux user, no files.
+
+    They still have to go with the account. A credential left behind keeps a
+    unique index entry pointing at a user id that no longer exists, and the
+    next person to hold that id would inherit a way in.
+    """
+    removed: list[str] = []
+    rows = db.query(WebauthnCredential).filter(WebauthnCredential.user_id == owner_id).all()
+    for credential in rows:
+        removed.append(f"{credential.name or 'Passkey'} ({credential.rp_id})")
+        db.delete(credential)
+    db.flush()
+    return removed
+
+
 def purge_owned_resources(db, owner_id: int) -> dict[str, list[str]]:
     """Everything keyed on owner_id that a user deletion has to take with it.
 
@@ -167,4 +183,5 @@ def purge_owned_resources(db, owner_id: int) -> dict[str, list[str]]:
         "databases": purge_owner_databases(db, owner_id),
         "applications": purge_owner_apps(db, owner_id),
         "sftp_accounts": purge_owner_sftp_accounts(db, owner_id),
+        "passkeys": purge_owner_passkeys(db, owner_id),
     }
