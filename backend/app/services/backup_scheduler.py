@@ -4,7 +4,7 @@ import json
 from app.core.database import SessionLocal
 from app.core.secrets import decrypt
 from app.models.entities import BackupSchedule, SftpBackupTarget, User
-from app.services import backup
+from app.services import backup, backup_s3
 
 
 def _field_matches(field: str, value: int) -> bool:
@@ -41,11 +41,26 @@ def _cron_due(schedule: str, now: datetime) -> bool:
 
 
 def _upload_if_configured(db, schedule: BackupSchedule, archive: str) -> str:
+    """Send the archive wherever the schedule points, under whatever name.
+
+    The name is not cosmetic. A schedule set to `none` overwrites one file per
+    account; `day_of_week` rotates through seven; `week_of_month` through five.
+    Those three bound what accumulates in the bucket without anything having to
+    delete, which is the guarantee you want when the machine that would do the
+    deleting is the one that might be compromised.
+    """
     if not schedule.target_id:
         return archive
     target = db.query(SftpBackupTarget).filter(SftpBackupTarget.id == schedule.target_id, SftpBackupTarget.is_active == True).first()  # noqa: E712
     if not target:
-        raise ValueError("SFTP target not found")
+        raise ValueError("Backup target not found")
+
+    remote_name = backup_s3.stored_name(archive, getattr(schedule, "name_suffix", None))
+
+    if (target.kind or "sftp") == "s3":
+        result = backup_s3.upload(target, archive, remote_name=remote_name)
+        return f"{target.name}:{result['remote_file']}"
+
     try:
         password = decrypt(target.password) if target.password else None
     except RuntimeError:
@@ -60,6 +75,7 @@ def _upload_if_configured(db, schedule: BackupSchedule, archive: str) -> str:
         )
     result = backup.upload_to_sftp(
         archive,
+        remote_name=remote_name,
         host=target.host,
         port=target.port,
         username=target.username,

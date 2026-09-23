@@ -229,10 +229,34 @@ class RevokedToken(Base):
 
 
 class SftpBackupTarget(Base):
+    """Somewhere off this machine to put a backup.
+
+    The table keeps its original name because renaming it would move every
+    foreign key for no gain; `kind` is what says whether a row is an SSH
+    server or an S3 bucket. The SFTP columns are null on an S3 row and the S3
+    columns are null on an SFTP row, which is the price of one table and one
+    foreign key from backup_schedules instead of two of each.
+    """
+
     __tablename__ = "sftp_backup_targets"
+
+    KIND_SFTP = "sftp"
+    KIND_S3 = "s3"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    kind: Mapped[str] = mapped_column(String(8), default=KIND_SFTP)
+
+    # --- S3 and anything that speaks its API (Wasabi, B2, Spaces, R2, MinIO)
+    endpoint: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    region: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    bucket: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    access_key: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    secret_key: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    prefix: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    secure: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # --- SFTP
     host: Mapped[str] = mapped_column(String(255))
     port: Mapped[int] = mapped_column(Integer, default=22)
     username: Mapped[str] = mapped_column(String(128))
@@ -257,6 +281,11 @@ class BackupSchedule(Base):
     all_users: Mapped[bool] = mapped_column(Boolean, default=False)
     target_id: Mapped[Optional[int]] = mapped_column(ForeignKey("sftp_backup_targets.id"), nullable=True)
     schedule: Mapped[str] = mapped_column(String(100), default="0 2 * * *")
+    # What gets appended to the stored file name, which decides how many files
+    # a schedule keeps at the far end. "none" overwrites one file per account;
+    # "day_of_week" rotates through seven; "week_of_month" through five;
+    # "full_date" keeps one per day and grows until retention prunes it.
+    name_suffix: Mapped[str] = mapped_column(String(16), default="full_date")
     retention: Mapped[int] = mapped_column(Integer, default=7)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     last_run_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
