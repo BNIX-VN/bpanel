@@ -987,3 +987,61 @@ button:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
 .error-list{margin:8px 0;padding:8px;background:var(--danger-bg);border-radius:4px}
 .error-text{color:var(--color-danger);font-size:13px;margin:4px 0}
 .da-credentials{background:var(--surface);padding:12px;border-radius:6px;font-size:12px;white-space:pre-wrap;word-break:break-all;max-height:300px;overflow-y:auto;margin-top:8px}
+
+/* --- Firewall page, compact ------------------------------------------------
+   The lists here grow without limit: rules, blocklist URLs, and on a server
+   under scanning, hundreds of banned addresses. None of them is rendered until
+   asked for, and the panel that holds them is bounded and scrolls, so the page
+   stays one screen tall whatever the counts are. */
+.chip-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:10px 0 0}
+.detail-tabs{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 0}
+.chip{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:5px 11px;border:1px solid var(--border);background:var(--surface);
+  color:var(--text);border-radius:999px;font-size:13px;cursor:pointer
+}
+.chip:hover:not(:disabled){border-color:var(--border-hover)}
+.chip b{font-variant-numeric:tabular-nums;font-weight:600}
+.chip.on{border-color:var(--border-hover);background:var(--primary-light);color:var(--primary-text);border-color:var(--primary-border)}
+.chip:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+
+.detail-panel{
+  margin-top:12px;border:1px solid var(--border);border-radius:var(--radius-md);
+  background:var(--surface);overflow:hidden
+}
+.detail-head{
+  display:flex;gap:8px;align-items:center;justify-content:space-between;
+  padding:10px 12px;border-bottom:1px solid var(--border);flex-wrap:wrap
+}
+.detail-head input{flex:1 1 200px;min-width:0}
+/* A floor as well as a ceiling: with one or two rows the panel used to be a
+   sliver that jumped in height as the filter matched fewer items. */
+.detail-body{min-height:160px;max-height:340px;overflow-y:auto;padding:10px 12px;display:flex;flex-direction:column;gap:8px}
+.detail-body pre{
+  margin:0;max-height:200px;overflow:auto;font-size:12px;line-height:1.5;
+  background:var(--code-bg);color:var(--code-fg);padding:10px;border-radius:var(--radius-sm)
+}
+.detail-foot{
+  display:flex;gap:10px;align-items:center;justify-content:center;
+  padding:9px 12px;border-top:1px solid var(--border)
+}
+.wrap-any{word-break:break-all}
+.hint.alarm{font-weight:600;color:var(--danger-text)}
+/* The add-rule form is five controls on one line, and only one of them wants
+   the room: an address is up to 43 characters, a protocol is three. The old
+   `1fr 170px auto` grid was written for a three-field form and stretched the
+   selects while squeezing the address. Size each column to what it holds. */
+.rule-form{
+  margin-top:14px;
+  grid-template-columns:minmax(120px,auto) minmax(180px,1fr) 108px 104px auto;
+  align-items:end;
+}
+@media (max-width:760px){
+  .rule-form{grid-template-columns:1fr}
+  .rule-form button{width:100%}
+}
+
+@media (max-width:560px){
+  .detail-body{min-height:130px;max-height:260px}
+  .detail-head{flex-direction:column;align-items:stretch}
+}

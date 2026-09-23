@@ -167,7 +167,38 @@ def test_banned_keeps_only_things_that_look_like_addresses(monkeypatch):
         stdout = "1.2.3.4\n\n2001:db8::1\nStatus for the jail:\n5.6.7.8\n"
 
     monkeypatch.setattr(fail2ban.shell, "privileged", lambda *a, **k: _Result())
-    assert fail2ban.banned() == ["1.2.3.4", "2001:db8::1", "5.6.7.8"]
+    page = fail2ban.banned()
+    assert page["items"] == ["1.2.3.4", "2001:db8::1", "5.6.7.8"]
+    assert page["total"] == 3
+
+
+def test_banned_returns_a_page_and_the_full_count(monkeypatch):
+    """The page that shows this must not grow with the list."""
+    class _Result:
+        stdout = "\n".join("10.0.0.%d" % n for n in range(1, 21)) + "\n"
+
+    monkeypatch.setattr(fail2ban.shell, "privileged", lambda *a, **k: _Result())
+    page = fail2ban.banned(limit=5, offset=5)
+    assert page["items"] == ["10.0.0.6", "10.0.0.7", "10.0.0.8", "10.0.0.9", "10.0.0.10"]
+    assert page["total"] == 20 and page["offset"] == 5 and page["limit"] == 5
+
+
+@pytest.mark.parametrize("limit,expected", [(0, 1), (-5, 1), (10000, 500), (50, 50)])
+def test_the_page_size_is_clamped(monkeypatch, limit, expected):
+    """A caller asking for everything still gets a bounded response."""
+    class _Result:
+        stdout = "\n".join("10.0.0.%d" % n for n in range(1, 10)) + "\n"
+
+    monkeypatch.setattr(fail2ban.shell, "privileged", lambda *a, **k: _Result())
+    assert fail2ban.banned(limit=limit)["limit"] == expected
+
+
+def test_a_negative_offset_is_not_a_slice_from_the_end(monkeypatch):
+    class _Result:
+        stdout = "1.1.1.1\n2.2.2.2\n3.3.3.3\n"
+
+    monkeypatch.setattr(fail2ban.shell, "privileged", lambda *a, **k: _Result())
+    assert fail2ban.banned(offset=-2)["items"][0] == "1.1.1.1"
 
 
 # --- the addon itself -------------------------------------------------------

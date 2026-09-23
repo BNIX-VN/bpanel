@@ -69,7 +69,7 @@ def test_enabling_is_refused_when_the_server_has_no_ipv6(helper):
         panel_ipv6.set_enabled(True)
 
     assert raised.value.status_code == 400
-    assert "không có địa chỉ IPv6" in raised.value.detail
+    assert "no IPv6 address" in raised.value.detail
     # Refused before the helper was ever asked to change anything.
     assert "ipv6-enable" not in calls
 

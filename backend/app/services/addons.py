@@ -29,31 +29,31 @@ CATALOGUE: dict[str, dict] = {
     FAIL2BAN: {
         "name": "Fail2ban",
         "version": "1.0.0",
-        "summary": "Chặn dò mật khẩu SSH: khoá tạm IP thử sai nhiều lần.",
+        "summary": "Stops SSH password guessing by banning an address that keeps getting it wrong.",
         "details": [
-            "sshd trên địa chỉ công khai nhận hàng trăm lượt thử mật khẩu mỗi ngày mà không ai để ý; một máy khách thật ghi nhận 679 lượt thất bại trong 24 giờ.",
-            "IP thử sai 5 lần trong 10 phút bị khoá 1 giờ, và khoá lâu dần nếu quay lại, tối đa 1 tuần.",
-            "Không bao giờ khoá chính máy chủ: loopback và mọi địa chỉ của máy đều nằm trong danh sách bỏ qua.",
+            "sshd on a public address collects hundreds of password attempts a day with nobody watching; one live customer server logged 679 failures in 24 hours.",
+            "Five failures within an hour bans an address for an hour, and longer each time it comes back, up to a week.",
+            "Never bans the server itself: loopback and every address the machine holds are on the ignore list.",
         ],
         "notes": [
-            "Lệnh ban được ghim vào iptables-multiport thay vì để fail2ban tự dò. Máy từng cài ufw còn để lại chain ufw, đủ để fail2ban chọn nhầm và mọi lệnh ban rơi vào một tường lửa không chạy.",
-            "Khi cài, panel ban thử một địa chỉ không định tuyến rồi kiểm tra nó có thật trong iptables không. Không thấy thì báo lỗi thay vì để lại một dịch vụ trông khoẻ mà không bảo vệ gì.",
-            "Tắt addon chỉ dừng dịch vụ: gói, file cấu hình và lịch sử ban đều giữ nguyên.",
+            "The ban action is pinned to iptables-multiport rather than left for fail2ban to detect. A machine that once had ufw keeps its ufw chains, which is enough for fail2ban to pick wrong and hand every ban to a firewall that is not running.",
+            "On install the panel bans an address that is never routed, then checks it really is in iptables. If it is not, the install fails rather than leaving a service that looks healthy and protects nothing.",
+            "Turning the addon off only stops the service: the package, the jail file and the ban history all stay.",
         ],
         "keeps_data_on_uninstall": True,
     },
     APPLICATION: {
         "name": "Application",
         "version": "1.0.0",
-        "summary": "Chạy ứng dụng Node.js, container và Docker Compose, đưa ra domain qua Nginx.",
+        "summary": "Runs Node.js apps, containers and Docker Compose, and puts them behind a domain with Nginx.",
         "details": [
-            "Cài Docker và các bản Node.js khi cần, không nằm trong bản cài mặc định.",
-            "Mỗi ứng dụng có cổng nội bộ riêng, giới hạn RAM/CPU và chạy dưới user của khách.",
-            "Website chọn mode Application để Nginx trỏ vào ứng dụng đã cài.",
+            "Installs Docker and the Node.js versions you need; none of it is in a default install.",
+            "Each app gets its own internal port, its own memory and CPU limits, and runs as the customer's user.",
+            "Set a website to Application mode and Nginx points at the app you installed.",
         ],
         "notes": [
-            "Backup hiện chưa bao gồm dữ liệu ứng dụng (thư mục apps và named volume).",
-            "Dung lượng image và volume Docker chưa được tính vào quota đĩa của khách.",
+            "Backups do not yet include application data (the apps directory and named volumes).",
+            "Docker image and volume size is not counted against a customer's disk quota.",
         ],
         # Nothing is deleted when this goes away, so turning it off is safe to
         # try; see uninstall() for what actually happens.
@@ -168,7 +168,7 @@ def require(slug: str) -> None:
     if not is_installed(slug):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Addon {entry['name']} chưa được cài. Vào Addons để cài trước.",
+            detail=f"The {entry['name']} addon is not installed. Install it from the Addons page first.",
         )
 
 

@@ -304,7 +304,7 @@ def use_domain_certificate(domain: str, panel_port: int | None = None) -> dict:
     if host not in domains_with_certificate():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"{host} chưa có chứng chỉ trên máy này. Cài SSL cho website đó trước.",
+            detail=f"{host} has no certificate on this machine. Install SSL for that website first.",
         )
     result = shell.privileged(
         "panel-ssl-use-domain",
@@ -320,8 +320,8 @@ def use_domain_certificate(domain: str, panel_port: int | None = None) -> dict:
         )
     return {
         "message": (
-            f"Panel dùng chứng chỉ của {host} làm mặc định. "
-            "Các domain khác có SSL trên máy vẫn mở panel được bằng chứng chỉ riêng."
+            f"The panel uses {host}'s certificate by default. "
+            "Other domains with SSL on this machine still reach the panel with their own certificate."
         ),
         "panel_url": f"https://{host}:{port}",
     }
@@ -350,7 +350,7 @@ def regenerate_self_signed(panel_port: int | None = None) -> dict:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(result.stderr or result.stdout or "Could not generate a certificate").strip()[-500:],
         )
-    return {"message": "Panel dùng chứng chỉ tự ký.", "panel_url": f"https://{host}:{port}"}
+    return {"message": "The panel is using a self-signed certificate.", "panel_url": f"https://{host}:{port}"}
 
 
 def has_panel_certificate() -> bool:
@@ -592,7 +592,7 @@ def set_malware_realtime(enabled: bool) -> dict:
         _persist_malware_realtime(True)
         threading.Thread(target=_install_realtime_flow, daemon=True).start()
         current = malware_scan_status()
-        current["detail"] = "Đang cài LMD; bảo vệ thời gian thực sẽ bật khi cài xong."
+        current["detail"] = "Installing LMD; real-time protection starts once it is in place."
         return current
     _persist_malware_realtime(enabled)
     try:
@@ -634,14 +634,14 @@ def set_malware_scan(enabled: bool) -> dict:
         threading.Thread(target=_install_and_enable_flow, daemon=True).start()
         current = current_settings()
         current["message"] = (
-            "LMD + ClamAV đang được cài trong nền. Quét sẽ sẵn sàng khi cài xong "
-            "(1-3 phút)."
+            "LMD and ClamAV are installing in the background. Scanning is ready once they finish "
+            "(1-3 minutes)."
         )
         return current
     _persist_malware_enabled(enabled)
     current = current_settings()
     if enabled:
-        current["message"] = "Đã bật trình quét malware"
+        current["message"] = "Malware scanner turned on"
     else:
         _persist_malware_realtime(False)
         try:
@@ -650,7 +650,7 @@ def set_malware_scan(enabled: bool) -> dict:
             pass
         _malware_scan.stop_clamd()
         current = current_settings()
-        current["message"] = "Đã tắt trình quét malware"
+        current["message"] = "Malware scanner turned off"
     return current
 
 
@@ -947,7 +947,7 @@ def start_server_scan_job() -> dict:
     from app.services import maldet
 
     if not (maldet.installed() or _malware_scan.engine_available()):
-        raise RuntimeError("Trình quét malware chưa được cài. Bật nó trước.")
+        raise RuntimeError("The malware scanner is not installed. Turn it on first.")
     job = _new_malware_job(scope="server", message="Queued")
     if maldet.installed():
         job["engine"] = "lmd"
@@ -1042,10 +1042,10 @@ def _domain_from_path(path: str) -> str:
 def _run_maldet_job(job_id: str, target: str, *, recent_days: int | None = None) -> None:
     from app.services import maldet
 
-    kind = f"tăng dần {recent_days} ngày" if recent_days else "toàn bộ"
+    kind = f"incremental, {recent_days} days" if recent_days else "full"
     _update_malware_job(
         job_id, status="running", started_at=_now_iso(), engine="lmd",
-        message=f"Đang quét ({kind}) bằng LMD: {target}",
+        message=f"Scanning ({kind}) with LMD: {target}",
     )
     _append_malware_log(job_id, f"maldet scan of {target} started")
     try:
@@ -1062,7 +1062,7 @@ def _run_maldet_job(job_id: str, target: str, *, recent_days: int | None = None)
             job_id, status=status, progress_percent=100,
             total_files=total, scanned=total, infected=len(threats),
             threats=threats, scanid=result["scanid"],
-            message=f"Quét xong: {total} tệp, {len(threats)} mối đe doạ",
+            message=f"Scan finished: {total} files, {len(threats)} threats",
             finished_at=_now_iso(),
         )
         _append_malware_log(job_id, "maldet scan finished")
@@ -1103,7 +1103,7 @@ def start_incremental_scan_job(days: int = 2) -> dict:
     from app.services import maldet
 
     if not maldet.installed():
-        raise RuntimeError("LMD chưa được cài. Bật trình quét malware để cài.")
+        raise RuntimeError("LMD is not installed. Turn on the malware scanner to install it.")
     days = max(1, min(int(days or 2), 30))
     job = _new_malware_job(scope="incremental", engine="lmd", message=f"Queued (recent {days}d)")
     return _spawn_malware_job(
