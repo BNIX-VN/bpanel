@@ -166,6 +166,21 @@ def user_storage_used_bytes(db: Session, user: User, *, use_cache: bool = False)
     return total
 
 
+def cached_storage_used_bytes(user_id: int) -> int | None:
+    """What the cache holds for this user, or None. Never walks the disk.
+
+    The user list needs to answer "who are the accounts" without waiting on a
+    figure that takes a filesystem walk per account. On a cold cache that was
+    3.8 seconds for fifteen users before a single row appeared.
+    """
+    with _user_usage_lock:
+        entry = _user_usage_cache.get(int(user_id))
+    if not entry:
+        return None
+    when, value = entry
+    return value if time.time() - when < USER_USAGE_TTL_SECONDS else None
+
+
 def storage_usage_summary(db: Session, user: User, *, use_cache: bool = False) -> dict:
     used_bytes = user_storage_used_bytes(db, user, use_cache=use_cache)
     limit_bytes = user_storage_limit_bytes(user)
