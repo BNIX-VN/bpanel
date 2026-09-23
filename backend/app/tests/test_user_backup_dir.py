@@ -99,13 +99,22 @@ def test_only_a_name_crosses_the_sudo_boundary():
 def test_every_writer_under_users_goes_through_it():
     """One missed call site is one more schedule that fails at 2am.
 
-    Four places create something under <backup_root>/users: the nightly
-    archive, the staging directory a remote backup is downloaded into, the
-    one an application payload is unpacked into during a restore, and the
-    upload endpoint. Each is a separate way to hit the same errno.
+    Four places create something under <backup_root>/users on this branch: the
+    nightly archive, the directory an application payload is unpacked into
+    during a restore, the upload endpoint, and the staging directory a remote
+    backup is downloaded into. Each is a separate way to hit the same errno,
+    so each is named here rather than counted - a count passes the day someone
+    adds a writer and forgets.
     """
     source = (PROJECT_ROOT / "backend" / "app" / "services" / "backup.py").read_text(encoding="utf-8")
-    assert source.count("_ensure_user_dir(") >= 5, "one definition and four callers"
+    assert "def _ensure_user_dir(" in source
+    for writer in ("_ensure_user_dir(_user_backup_dir(user.username))",
+                   "_ensure_user_dir(staging_dir)",
+                   "_ensure_user_dir(_user_restore_dir())"):
+        assert writer in source, f"{writer} is not going through the helper"
+    # The restore directory has two writers here: the upload endpoint and
+    # stage_remote_backup. On main there is only the first.
+    assert source.count("_ensure_user_dir(_user_restore_dir())") == 2
 
     # Nothing under users/ may still mkdir on its own. The per-domain and
     # per-site directories elsewhere in this file are a different matter: the
