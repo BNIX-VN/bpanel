@@ -3233,7 +3233,13 @@ require_backup_path() {
     "${BACKUP_ROOT}"/*) : ;;
     *) deny "backup path must be under ${BACKUP_ROOT}" ;;
   esac
-  install -d -m 0750 -o root -g bpanel "$BACKUP_ROOT"
+  # -o bpanel, not -o root. `install -d` rewrites the owner of a directory
+  # that already exists, so the root:bpanel this used to set would take
+  # ${BACKUP_ROOT} away from the panel the first time an operator exported an
+  # application - 0750 with the group gives read and traverse, not write, and
+  # from then on every website backup fails to create its own directory. The
+  # installer and bpanelctl both make this bpanel:bpanel; this now agrees.
+  install -d -m 0750 -o bpanel -g bpanel "$BACKUP_ROOT"
   parent="$(dirname "$target")"
   [[ -d "$parent" ]] || deny "backup directory does not exist: $parent"
   real_parent="$(readlink -f "$parent")" || deny "cannot resolve $parent"

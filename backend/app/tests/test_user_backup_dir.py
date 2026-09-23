@@ -149,3 +149,22 @@ def test_existing_installs_are_repaired_on_update():
     calls = [line.strip() for line in update.splitlines()
              if line.strip() == "migrate_user_backup_dir_owner"]
     assert len(calls) == 1, "the migration is defined but never invoked"
+
+
+def test_the_backup_root_is_never_taken_away_from_the_panel():
+    """`install -d` rewrites the owner of a directory that already exists.
+
+    require_backup_path guarded the app export and import paths by making sure
+    the backup root was there - with -o root -g bpanel. 0750 with the group
+    gives the panel read and traverse, not write, so the first application
+    export would have taken the backup root away from the panel and every
+    website backup after it would have failed to create its own directory.
+    """
+    helper = HELPER_SCRIPT.read_text(encoding="utf-8")
+    body = helper.split("require_backup_path() {")[1].split("\n}\n")[0]
+    assert '-o root -g bpanel "$BACKUP_ROOT"' not in body
+    assert '-o bpanel -g bpanel "$BACKUP_ROOT"' in body
+
+    # And the installer has to agree, or an update undoes whichever ran last.
+    install = INSTALL_SCRIPT.read_text(encoding="utf-8")
+    assert 'install -d -o bpanel -g bpanel -m 0750 "$BACKUP_ROOT"' in install
