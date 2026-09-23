@@ -603,6 +603,12 @@ setup_panel_user() {
   # Make the panel data dirs writable by bpanel.
   install -d -o bpanel -g bpanel -m 0750 "$APP_DIR"
   install -d -o bpanel -g bpanel -m 0750 "$BACKUP_ROOT"
+  # Account backups live one level down. Create it here rather than leaving it
+  # to whatever runs first: on a server where a root process got there ahead of
+  # the panel it came out root-owned, and every scheduled backup after that
+  # died on Permission denied.
+  install -d -o bpanel -g bpanel -m 0750 "$BACKUP_ROOT/users"
+  install -d -o bpanel -g bpanel -m 0750 "$BACKUP_ROOT/users/restore"
   # DirectAdmin import staging dirs
   install -d -o bpanel -g bpanel -m 0750 /home/admin/bpanel_backups/da
   install -d -o bpanel -g bpanel -m 0750 /var/lib/bpanel/da-import

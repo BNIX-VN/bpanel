@@ -3233,7 +3233,13 @@ require_backup_path() {
     "${BACKUP_ROOT}"/*) : ;;
     *) deny "backup path must be under ${BACKUP_ROOT}" ;;
   esac
-  install -d -m 0750 -o root -g bpanel "$BACKUP_ROOT"
+  # -o bpanel, not -o root. `install -d` rewrites the owner of a directory
+  # that already exists, so the root:bpanel this used to set would take
+  # ${BACKUP_ROOT} away from the panel the first time an operator exported an
+  # application - 0750 with the group gives read and traverse, not write, and
+  # from then on every website backup fails to create its own directory. The
+  # installer and bpanelctl both make this bpanel:bpanel; this now agrees.
+  install -d -m 0750 -o bpanel -g bpanel "$BACKUP_ROOT"
   parent="$(dirname "$target")"
   [[ -d "$parent" ]] || deny "backup directory does not exist: $parent"
   real_parent="$(readlink -f "$parent")" || deny "cannot resolve $parent"
@@ -3241,6 +3247,32 @@ require_backup_path() {
     "${BACKUP_ROOT}"|"${BACKUP_ROOT}"/*) : ;;
     *) deny "backup directory escapes ${BACKUP_ROOT}" ;;
   esac
+}
+
+ensure_user_backup_dir() {
+  # ${BACKUP_ROOT}/users was never created by the installer, so it belonged to
+  # whichever process reached it first. On a server where that was a root one
+  # it came out root:root, and from then on every scheduled account backup
+  # failed with "[Errno 13] Permission denied" on the account directory one
+  # level below - the panel owns ${BACKUP_ROOT} but cannot write inside a
+  # root-owned child of it.
+  #
+  # The caller passes a single name, never a path, and this builds the path
+  # itself: nothing a compromised API process sends can point this chown
+  # somewhere else.
+  local name="$1" users_dir
+  [[ "$name" =~ ^[A-Za-z0-9._-]{3,64}$ ]] || deny "invalid backup directory name: $name"
+  [[ "$name" != *".."* ]] || deny "invalid backup directory name: $name"
+
+  users_dir="${BACKUP_ROOT}/users"
+  install -d -m 0750 -o bpanel -g bpanel "$BACKUP_ROOT"
+  install -d -m 0750 -o bpanel -g bpanel "$users_dir"
+  # Not the whole tree: only the container. Archives already sitting in an
+  # account's directory are handed over with it, because the panel is what
+  # prunes them, but the sweep stops at ${BACKUP_ROOT}/users.
+  install -d -m 0750 -o bpanel -g bpanel "${users_dir}/${name}"
+  chown -R bpanel:bpanel "${users_dir}/${name}"
+  printf '%s' "${users_dir}/${name}"
 }
 
 ensure_app_directory() {
@@ -5070,6 +5102,10 @@ case "$cmd" in
   da-backup-dir-ensure)
     [[ $# -eq 0 ]] || deny "usage: da-backup-dir-ensure"
     ensure_da_backup_dir
+    ;;
+  user-backup-dir-ensure)
+    [[ $# -eq 1 ]] || deny "usage: user-backup-dir-ensure <name>"
+    ensure_user_backup_dir "$1"
     ;;
   da-import-start)
     [[ $# -eq 2 ]] || deny "usage: da-import-start <archive> <force|noforce>"
