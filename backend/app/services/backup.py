@@ -95,10 +95,40 @@ def user_restore_dir() -> str:
     return str(_user_restore_dir())
 
 
+def _ensure_user_dir(path: Path) -> Path:
+    """Create a directory under <backup_root>/users, past a root-owned parent.
+
+    The panel runs as bpanel and owns <backup_root>, but nothing ever created
+    <backup_root>/users, so whichever process reached it first became its
+    owner. Where that was a root one, every scheduled backup since has died on
+
+        [Errno 13] Permission denied: '/var/backups/bpanel/users/<account>'
+
+    reported as a failed job with no hint that a directory mode was the whole
+    of it. The helper repairs the parent and creates the leaf as bpanel, which
+    is the one thing the panel cannot do for itself.
+
+    The retry is outside the except block on purpose: if the helper could not
+    fix it either, the caller should see the same PermissionError it would
+    have seen anyway, not a second error about the helper.
+    """
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+    except PermissionError:
+        shell.privileged(
+            "user-backup-dir-ensure",
+            helper_args=[path.name],
+            check=False,
+            fallback=["install", "-d", "-m", "0750", str(path)],
+        )
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def create_user_backup(user: User, db) -> str:
     stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
-    backup_dir = _user_backup_dir(user.username)
-    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup_dir = _ensure_user_dir(_user_backup_dir(user.username))
     archive = backup_dir / f"user-{user.username}-{stamp}.tar.gz"
     websites = db.query(Website).filter(Website.owner_id == user.id).order_by(Website.id.asc()).all()
 
@@ -691,7 +721,7 @@ def _restore_applications(manifest: dict, user: User, db, archive: Path, tmp_dir
                 staging_dir = _user_backup_dir(user.username)
                 staged = staging_dir / f".restore-{name}.tar"
                 try:
-                    staging_dir.mkdir(parents=True, exist_ok=True)
+                    _ensure_user_dir(staging_dir)
                     staged.write_bytes(payload.read_bytes())
                     site_apps.import_payload(app, str(staged))
                     record["data_restored"] = True
@@ -727,8 +757,7 @@ def save_uploaded_backup(domain: str, filename: str, source_file) -> str:
 
 
 def save_uploaded_user_backup(filename: str, source_file) -> str:
-    backup_dir = _user_restore_dir().resolve()
-    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup_dir = _ensure_user_dir(_user_restore_dir()).resolve()
     safe_name = Path(filename).name
     if not safe_name.endswith(".tar.gz"):
         raise ValueError("Only .tar.gz backup files are supported")
