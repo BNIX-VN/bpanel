@@ -573,6 +573,33 @@ for root in roots:
 PY
 }
 
+migrate_user_backup_dir_owner() {
+  # The users/ directory under the backup root has never been created by the
+  # installer, so on every panel out there it belongs to whichever process
+  # happened to reach it first. Where that was a root one it is root:root, the
+  # panel cannot make an account directory inside it, and every scheduled
+  # backup fails with "[Errno 13] Permission denied" naming a path the
+  # operator has no reason to read as a permissions problem.
+  local root_dir="${BACKUP_ROOT:-/var/backups/bpanel}"
+  local users_dir="${root_dir}/users"
+  [[ -d "$root_dir" ]] || return 0
+  id -u bpanel >/dev/null 2>&1 || return 0
+
+  local owner=""
+  if [[ -d "$users_dir" ]]; then
+    owner="$(stat -c '%U:%G' "$users_dir" 2>/dev/null || true)"
+  fi
+  install -d -m 0750 -o bpanel -g bpanel "$users_dir"
+  install -d -m 0750 -o bpanel -g bpanel "${users_dir}/restore"
+  if [[ -n "$owner" && "$owner" != "bpanel:bpanel" ]]; then
+    # Hand over what is already in there too. These are the panel's own
+    # archives; leaving them root-owned would mean backups run but retention
+    # never prunes, which fills the disk quietly instead of loudly.
+    chown -R bpanel:bpanel "$users_dir"
+    echo "    backups: ${users_dir} was ${owner}, now owned by the panel"
+  fi
+}
+
 # Cron lines written before the PHP pinning fix call a bare `php`, which
 # resolves through /etc/alternatives to the newest installed version instead of
 # the version the website runs on, and carry shell-quoted redirections such as
@@ -1756,6 +1783,7 @@ fi
 log "Reloading nginx"
 update_progress 92 "restarting" "Restarting services and reloading nginx"
 migrate_nginx_wordpress_csp_worker_src
+migrate_user_backup_dir_owner
 migrate_site_cron_php_binary
 nginx -t
 systemctl reload nginx
