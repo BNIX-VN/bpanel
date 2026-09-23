@@ -283,11 +283,17 @@ APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
 APT::Periodic::AutocleanInterval "7";
 APT
+  # Remove-Unused-Dependencies stays false. It is not a tidiness setting on
+  # a web server: PHP extensions, and anything else nothing depends on, are
+  # "unused" by apt's definition. On 2026-09-23 it removed php8.3-mysql
+  # overnight and every WordPress site on that interpreter answered
+  # "missing the MySQL extension" until someone noticed. Ubuntu's own default
+  # is false; we had it true.
   cat >/etc/apt/apt.conf.d/51bpanel-unattended-upgrades <<APT
 Unattended-Upgrade::Allowed-Origins {
 ${origins}
 };
-Unattended-Upgrade::Remove-Unused-Dependencies "true";
+Unattended-Upgrade::Remove-Unused-Dependencies "false";
 Unattended-Upgrade::Automatic-Reboot "$([[ "$reboot" == "on" ]] && echo true || echo false)";
 Unattended-Upgrade::Automatic-Reboot-Time "03:00";
 APT

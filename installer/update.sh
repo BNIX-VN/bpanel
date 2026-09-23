@@ -577,6 +577,32 @@ PY
 # resolves through /etc/alternatives to the newest installed version instead of
 # the version the website runs on, and carry shell-quoted redirections such as
 # '>/dev/null' that never redirect anything. Repair both in place.
+migrate_protect_php_from_autoremove() {
+  # Repairs what we shipped. Every panel installed before this release told
+  # unattended-upgrades to remove unused dependencies, and every PHP
+  # extension qualifies: nothing depends on them. One customer lost
+  # php8.3-mysql overnight and three WordPress sites with it.
+  #
+  # Both halves matter. Clearing the setting stops the next removal; marking
+  # the packages manual protects them from a plain `apt autoremove` typed by
+  # hand, and from the setting being turned back on.
+  local conf=/etc/apt/apt.conf.d/51bpanel-unattended-upgrades
+  if [[ -f "$conf" ]] && grep -q 'Remove-Unused-Dependencies "true"' "$conf"; then
+    sed -i 's|Unattended-Upgrade::Remove-Unused-Dependencies "true";|Unattended-Upgrade::Remove-Unused-Dependencies "false";|' "$conf"
+    echo "    apt: stopped unattended-upgrades removing \"unused\" packages"
+  fi
+
+  local php_packages=()
+  mapfile -t php_packages < <(
+    dpkg-query -W -f='${Package} ${Status}\n' 'php8.*' 2>/dev/null \
+      | awk '$2 == "install" && $3 == "ok" && $4 == "installed" { print $1 }'
+  )
+  if [[ ${#php_packages[@]} -gt 0 ]]; then
+    apt-mark manual "${php_packages[@]}" >/dev/null 2>&1 || true
+    echo "    apt: ${#php_packages[@]} PHP package(s) held back from autoremove"
+  fi
+}
+
 migrate_site_cron_php_binary() {
   local db_path="$APP_DIR/backend/bpanel.db"
   [[ -f "$db_path" ]] || return 0
@@ -1756,6 +1782,7 @@ fi
 log "Reloading nginx"
 update_progress 92 "restarting" "Restarting services and reloading nginx"
 migrate_nginx_wordpress_csp_worker_src
+migrate_protect_php_from_autoremove
 migrate_site_cron_php_binary
 nginx -t
 systemctl reload nginx
