@@ -22,6 +22,31 @@ fail() { echo "ERROR: $1" >&2; exit 1; }
 # it survives everything except a fresh install.
 BPANEL_UPDATE_STATE_DIR=/var/lib/bpanel/update-state
 
+# The one apt wrapper this script uses. It was called and never defined: the
+# PHP MySQL repair below ran `apt_get install -y php<v>-mysql`, bash answered
+# "apt_get: command not found", and the `|| log WARNING` around it turned that
+# into a line nobody reads. So the repair for a server that lost its MySQL
+# extension has never once worked - on the very machine where it mattered it
+# printed a warning and moved on.
+#
+# Same body as install.sh's: an update runs on a live server, where
+# unattended-upgrades may be holding the dpkg lock, and failing on that would
+# abandon the update halfway.
+apt_get() {
+  local waited=0
+  while fuser /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/lib/apt/lists/lock >/dev/null 2>&1; do
+    if (( waited == 0 )); then
+      echo "Waiting for another package manager to finish..."
+    fi
+    if (( waited >= 300 )); then
+      fail "Timed out after 5 minutes waiting for the dpkg lock."
+    fi
+    sleep 5
+    waited=$(( waited + 5 ))
+  done
+  DEBIAN_FRONTEND=noninteractive apt-get "$@"
+}
+
 # `dpkg -s` exits 0 for a package that was removed but kept its config files
 # ("deinstall ok config-files"), whose binaries are gone. Ask for the state.
 pkg_installed() {
@@ -1657,8 +1682,14 @@ for php_ini_dir in /etc/php/*/; do
   php_ext_dir="$("php${php_ver}" -i 2>/dev/null | sed -n 's/^extension_dir => \([^ ]*\).*/\1/p' | head -1)"
   if [[ -n "$php_ext_dir" && ! -f "${php_ext_dir}/mysqli.so" ]]; then
     log "PHP ${php_ver} is missing the MySQL extension; installing php${php_ver}-mysql"
-    apt_get install -y "php${php_ver}-mysql" >/dev/null 2>&1 || \
+    # Keep the reason. Sending it all to /dev/null is how "apt_get: command
+    # not found" stayed invisible for as long as it did; an operator reading
+    # "could not install" has no idea whether the package is unavailable, the
+    # lock is held, or the script is broken.
+    if ! php_mysql_log="$(apt_get install -y "php${php_ver}-mysql" 2>&1)"; then
       log "WARNING: could not install php${php_ver}-mysql; WordPress on PHP ${php_ver} will not reach its database"
+      echo "$php_mysql_log" | tail -5 | sed 's/^/    /'
+    fi
   fi
 
   # Only enable what is actually present, so a failed install cannot leave
