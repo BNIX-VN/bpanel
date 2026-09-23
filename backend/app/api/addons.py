@@ -55,9 +55,9 @@ def install_addon(slug: str, db: Session = Depends(get_db), current_user: User =
         # The runtimes an application needs are installed from the Application
         # page itself, which can report progress; saying so here saves someone
         # wondering why Docker did not appear.
-        "next_step": "Vào mục Application để cài Docker hoặc bản Node.js cần dùng."
+        "next_step": "Open the Application page to install Docker or the Node.js versions you need."
         if slug == addons.APPLICATION else (
-            "Đang bảo vệ SSH. Xem IP bị khoá ở mục Bảo mật."
+            "SSH is protected now. Banned addresses are listed on the Firewall page."
             if slug == addons.FAIL2BAN else ""
         ),
     }
@@ -98,7 +98,7 @@ def uninstall_addon(slug: str, db: Session = Depends(get_db), current_user: User
         "installed": False,
         "stopped": stopped,
         "could_not_stop": failed,
-        "kept": "Gói, cấu hình jail và lịch sử ban được giữ nguyên."
+        "kept": "The package, the jail configuration and the ban history are all kept."
         if slug == addons.FAIL2BAN
-        else "Thư mục ứng dụng, volume và dữ liệu trong panel được giữ nguyên.",
+        else "Application directories, volumes and panel data are all kept.",
     }

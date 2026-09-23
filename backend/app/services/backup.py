@@ -644,7 +644,7 @@ def _restore_applications(manifest: dict, user: User, db, archive: Path, tmp_dir
     if not addons.is_installed(addons.APPLICATION):
         # Recorded rather than dropped, so the operator knows what this backup
         # holds and can install the addon and restore again.
-        return [{"name": entry.get("name"), "skipped": "Addon Application chưa được cài"} for entry in entries]
+        return [{"name": entry.get("name"), "skipped": "The Application addon is not installed"} for entry in entries]
 
     results: list[dict] = []
     for entry in entries:
@@ -701,7 +701,7 @@ def _restore_applications(manifest: dict, user: User, db, archive: Path, tmp_dir
                 finally:
                     staged.unlink(missing_ok=True)
         elif entry.get("payload_error"):
-            record["error"] = f"Backup này không có dữ liệu: {entry['payload_error']}"
+            record["error"] = f"This backup carries no data: {entry['payload_error']}"
         results.append(record)
     return results
 

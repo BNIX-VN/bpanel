@@ -503,7 +503,7 @@ def runtime_prune_docker(db: Session = Depends(get_db), current_user: User = Dep
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     log_action(db, current_user.id, "prune_docker", "docker", "")
-    return {"message": "Đã dọn layer và build cache không dùng.", "output": output,
+    return {"message": "Unused layers and build cache pruned.", "output": output,
             "docker": site_apps.docker_status()}
 
 

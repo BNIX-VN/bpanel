@@ -1014,7 +1014,9 @@ button:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
   padding:10px 12px;border-bottom:1px solid var(--border);flex-wrap:wrap
 }
 .detail-head input{flex:1 1 200px;min-width:0}
-.detail-body{max-height:340px;overflow-y:auto;padding:10px 12px;display:flex;flex-direction:column;gap:8px}
+/* A floor as well as a ceiling: with one or two rows the panel used to be a
+   sliver that jumped in height as the filter matched fewer items. */
+.detail-body{min-height:160px;max-height:340px;overflow-y:auto;padding:10px 12px;display:flex;flex-direction:column;gap:8px}
 .detail-body pre{
   margin:0;max-height:200px;overflow:auto;font-size:12px;line-height:1.5;
   background:var(--code-bg);color:var(--code-fg);padding:10px;border-radius:var(--radius-sm)
@@ -1040,6 +1042,6 @@ button:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
 }
 
 @media (max-width:560px){
-  .detail-body{max-height:260px}
+  .detail-body{min-height:130px;max-height:260px}
   .detail-head{flex-direction:column;align-items:stretch}
 }

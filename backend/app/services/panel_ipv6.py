@@ -29,8 +29,8 @@ logger = logging.getLogger("bpanel")
 MARKER = Path(os.environ.get("BPANEL_IPV6_MARKER", "/etc/bpanel/ipv6-enabled"))
 
 NO_IPV6_MESSAGE = (
-    "VPS của bạn không có địa chỉ IPv6 nên không thể dùng tính năng này. "
-    "Liên hệ nhà cung cấp để được cấp IPv6, sau đó bật lại."
+    "This server has no IPv6 address, so this feature cannot be used. "
+    "Ask your provider for one, then turn this on again."
 )
 
 
@@ -76,15 +76,15 @@ def status() -> dict:
             "enabled": is_enabled(),
             "addresses": [],
             "detail": (result.stderr or result.stdout or "").strip()[-300:]
-            or "Không đọc được trạng thái IPv6 của máy chủ.",
+            or "Could not read the server's IPv6 state.",
         }
     state = _parse_status(result.stdout)
     if not state["available"]:
         state["detail"] = NO_IPV6_MESSAGE
     elif state["enabled"]:
-        state["detail"] = "Website và panel đang nhận kết nối qua cả IPv4 và IPv6."
+        state["detail"] = "Websites and the panel accept both IPv4 and IPv6."
     else:
-        state["detail"] = "VPS có IPv6. Bật để website và panel nhận thêm kết nối IPv6."
+        state["detail"] = "This server has IPv6. Turn it on so websites and the panel accept it too."
     return state
 
 
@@ -99,12 +99,12 @@ def set_enabled(enabled: bool) -> dict:
             detail = NO_IPV6_MESSAGE
         raise HTTPException(
             status_code=HTTP_400_BAD_REQUEST,
-            detail=detail or "Không thay đổi được cấu hình IPv6.",
+            detail=detail or "Could not change the IPv6 configuration.",
         )
     state = status()
     state["message"] = (
-        "Đã bật IPv6 cho toàn bộ website và panel."
+        "IPv6 enabled for every website and the panel."
         if enabled
-        else "Đã tắt IPv6. Website và panel chỉ nhận kết nối IPv4."
+        else "IPv6 disabled. Websites and the panel accept IPv4 only."
     )
     return state
