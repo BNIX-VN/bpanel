@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BPANEL_INSTALLER_VERSION="${BPANEL_INSTALLER_VERSION:-v1.0.153}"
+BPANEL_INSTALLER_VERSION="${BPANEL_INSTALLER_VERSION:-v1.0.155}"
 
 if [[ $EUID -ne 0 ]]; then
   echo "Please run this installer as root"
@@ -408,6 +408,12 @@ install_php() {
     fi
 
     apt_get install -y "${available_packages[@]}"
+
+    # Hold them out of autoremove's reach. Extensions are leaf packages -
+    # nothing depends on php<v>-mysql - so apt is free to decide they are
+    # unused and take them, which is exactly what happened to a customer.
+    # Marking them manual states the truth: an operator asked for these.
+    apt-mark manual "${available_packages[@]}" >/dev/null 2>&1 || true
 
     # Installing php<v>-mysql is not the same as enabling it, and enabling a
     # module whose .so is absent is worse than leaving it alone: phpenmod
