@@ -691,10 +691,15 @@ function App() {
   const [restoreBackupDir, setRestoreBackupDir] = useState('');
   const [selectedBackupUserId, setSelectedBackupUserId] = useState('');
   const [backupSchedules, setBackupSchedules] = useState([]);
-  const [newBackupSchedule, setNewBackupSchedule] = useState({ user_ids: [], all_users: false, schedule: '0 2 * * *', target_id: '', retention: 7 });
+  const [newBackupSchedule, setNewBackupSchedule] = useState({ user_ids: [], all_users: false, schedule: '0 2 * * *', target_id: '', name_suffix: 'full_date', retention: 7 });
   const [sftpTargets, setSftpTargets] = useState([]);
   const [selectedSftpTargetId, setSelectedSftpTargetId] = useState('');
-  const [newSftpTarget, setNewSftpTarget] = useState({ name: '', host: '', port: 22, username: '', password: '', private_key: '', remote_path: '/backups/bpanel' });
+  const [newSftpTarget, setNewSftpTarget] = useState({ name: '', kind: 'sftp', host: '', port: 22, username: '', password: '', private_key: '', remote_path: '/backups/bpanel', endpoint: '', region: '', bucket: '', access_key: '', secret_key: '', prefix: '', secure: true });
+  // The restore catalogue: local archives and whatever is in each S3 bucket,
+  // in one list, because "what can I restore" is not answered by this disk alone.
+  const [restoreCatalogue, setRestoreCatalogue] = useState({ items: [], errors: [], loaded: false });
+  const [restorePicks, setRestorePicks] = useState([]);
+  const [restoreFilter, setRestoreFilter] = useState('');
   const [daBackups, setDaBackups] = useState([]);
   const [daReplaceExisting, setDaReplaceExisting] = useState(false);
   const [daScanResult, setDaScanResult] = useState(null);
@@ -3144,6 +3149,7 @@ function App() {
       all_users: !!newBackupSchedule.all_users,
       schedule: newBackupSchedule.schedule,
       target_id: newBackupSchedule.target_id ? Number(newBackupSchedule.target_id) : null,
+      name_suffix: newBackupSchedule.name_suffix || 'full_date',
       retention: Number(newBackupSchedule.retention || 7),
       is_active: true,
     };
@@ -3152,6 +3158,43 @@ function App() {
       setNotice('Backup schedule saved.');
       await loadBackupSchedules();
     }
+  }
+
+  // Component level on purpose: renderBackups draws with these and
+  // runBackupScheduleNow names the schedule in its confirmation with them.
+  const userNameById = id => users.find(user => String(user.id) === String(id))?.username || `User #${id}`;
+  const scheduleUserLabel = item => {
+    if (item.all_users) return 'All users';
+    const ids = (item.user_ids && item.user_ids.length > 0) ? item.user_ids : (item.user_id ? [item.user_id] : []);
+    return ids.length ? ids.map(userNameById).join(', ') : 'No users';
+  };
+
+  async function runBackupScheduleNow(item) {
+    const who = scheduleUserLabel(item);
+    if (!confirm(`Run this schedule now?\n\n${who} - ${item.schedule}\n\nThis is the real thing: the same accounts, the same destination and the same stored name. Only the timing is skipped.`)) return;
+    const data = await request(`/maintenance/backup-schedules/${item.id}/run`, { method: 'POST' }, 'Starting...');
+    if (data) {
+      setNotice(data.detail || 'Running now.');
+      await loadBackupSchedules();
+      pollBackupSchedule(item.id);
+    }
+  }
+
+  function pollBackupSchedule(scheduleId, attempts = 60) {
+    // A schedule covering every account takes minutes, and the work runs in a
+    // thread the request already let go of. Without this the row sits on
+    // "running" until the operator reloads the page and guesses.
+    if (attempts <= 0) return;
+    window.setTimeout(async () => {
+      const rows = await request('/maintenance/backup-schedules', { silent: true });
+      if (!rows) return;
+      setBackupSchedules(rows);
+      const row = rows.find(entry => entry.id === scheduleId);
+      if (!row) return;
+      if (row.last_status === 'running') return pollBackupSchedule(scheduleId, attempts - 1);
+      if (row.last_status === 'error') setError(`Schedule failed - ${row.last_message || 'no detail'}`);
+      else setNotice(`Schedule finished - ${row.last_message || 'ok'}`);
+    }, 5000);
   }
 
   async function deleteBackupSchedule(id) {
@@ -3169,17 +3212,64 @@ function App() {
   }
 
   async function createSftpTarget() {
+    const isS3 = newSftpTarget.kind === 's3';
     const body = {
       ...newSftpTarget,
       port: Number(newSftpTarget.port || 22),
       password: newSftpTarget.password || null,
       private_key: newSftpTarget.private_key || null,
+      secret_key: newSftpTarget.secret_key || null,
+      endpoint: newSftpTarget.endpoint || null,
+      region: newSftpTarget.region || null,
+      bucket: newSftpTarget.bucket || null,
+      access_key: newSftpTarget.access_key || null,
+      prefix: newSftpTarget.prefix || null,
     };
-    const data = await request('/maintenance/sftp-targets', { method: 'POST', body: JSON.stringify(body) }, 'Saving SFTP target...');
+    // An S3 target is checked against the bucket before it is saved, so this
+    // can take a moment and can come back refused. That is the point.
+    const data = await request('/maintenance/sftp-targets', { method: 'POST', body: JSON.stringify(body) },
+      isS3 ? 'Checking the bucket...' : 'Saving SFTP target...');
     if (data) {
-      setNotice(`Saved SFTP target ${data.name}`);
-      setNewSftpTarget({ name: '', host: '', port: 22, username: '', password: '', private_key: '', remote_path: '/backups/bpanel' });
+      setNotice(`Saved ${isS3 ? 'S3' : 'SFTP'} target ${data.name}`);
+      setNewSftpTarget({ name: '', kind: newSftpTarget.kind, host: '', port: 22, username: '', password: '', private_key: '', remote_path: '/backups/bpanel', endpoint: '', region: '', bucket: '', access_key: '', secret_key: '', prefix: '', secure: true });
       await loadSftpTargets();
+    }
+  }
+
+  async function loadRestoreCatalogue() {
+    const data = await request('/maintenance/restore-catalogue', {}, 'Looking for backups...');
+    if (data) {
+      setRestoreCatalogue({ items: data.items || [], errors: data.errors || [], loaded: true });
+      setRestorePicks([]);
+    }
+  }
+
+  function toggleRestorePick(item) {
+    const id = `${item.source}:${item.target_id || 0}:${item.key}`;
+    setRestorePicks(prev => prev.includes(id) ? prev.filter(entry => entry !== id) : [...prev, id]);
+  }
+
+  async function restorePicked() {
+    const chosen = (restoreCatalogue.items || []).filter(item =>
+      restorePicks.includes(`${item.source}:${item.target_id || 0}:${item.key}`));
+    if (chosen.length === 0) return;
+    const names = chosen.map(item => item.username || item.name).join(', ');
+    if (!confirm(`Restore ${chosen.length} backup(s)?
+
+${names}
+
+Each account is overwritten with what is in its archive.`)) return;
+    const data = await request('/maintenance/restore-bulk', {
+      method: 'POST',
+      body: JSON.stringify({ items: chosen.map(item => ({ source: item.source, name: item.name, key: item.key, target_id: item.target_id })) }),
+    }, `Restoring ${chosen.length} backup(s)...`);
+    if (data) {
+      const failed = (data.results || []).filter(row => row.status === 'failed');
+      if (failed.length === 0) setNotice(`Restored ${data.restored} of ${data.total}.`);
+      else setError(`Restored ${data.restored} of ${data.total}. Failed: ` +
+        failed.map(row => `${row.name} (${row.detail})`).join('; '));
+      setRestorePicks([]);
+      await loadRestoreCatalogue();
     }
   }
 
@@ -4072,6 +4162,9 @@ function App() {
   // machine and the page read "No DirectAdmin backups uploaded" however many
   // archives were sitting in the directory.
   useEffect(() => { if (page === 'backups' && backupTab === 'da-import') { listDaBackups(); setSelectedDaBackups([]); setDaBulkImportJob(null); } }, [backupTab, page]);
+  // The catalogue reaches out to every S3 bucket, so it is fetched when the
+  // tab is opened rather than on every visit to the Backups page.
+  useEffect(() => { if (page === 'backups' && backupTab === 'restore' && isAdmin) loadRestoreCatalogue(); }, [backupTab, page]);
 
   useEffect(() => { if (selectedWebsiteId && page === 'cron') listCron(); }, [selectedWebsiteId, page]);
   // Which optional features exist decides what the nav shows, so this is asked
@@ -5633,12 +5726,6 @@ function App() {
 
   function renderBackups() {
     const selectedBackupUser = users.find(user => String(user.id) === String(selectedBackupUserId));
-    const userNameById = id => users.find(user => String(user.id) === String(id))?.username || `User #${id}`;
-    const scheduleUserLabel = item => {
-      if (item.all_users) return 'All users';
-      const ids = (item.user_ids && item.user_ids.length > 0) ? item.user_ids : (item.user_id ? [item.user_id] : []);
-      return ids.length ? ids.map(userNameById).join(', ') : 'No users';
-    };
     const jobTitle = job => ({ site_backup: 'Website backup', user_backup: 'Full user backup', sftp_backup: 'SFTP backup' }[job.kind] || 'Backup task');
     const jobDetail = job => job.error || job.remote_file || job.backup_file || job.message || job.status;
     const backupTabs = isAdmin
@@ -5646,6 +5733,7 @@ function App() {
         ['website', 'Backup website', Globe],
         ['user', 'Backup user', Users],
         ['schedule', 'Scheduled backups', Clock],
+        ['restore', 'Restore', RotateCcw],
         ['destination', 'Backup Destination', Network],
         ['da-import', 'DA Import', ArchiveRestore],
       ]
@@ -5770,40 +5858,146 @@ function App() {
           <input value={newBackupSchedule.schedule} onChange={e => setNewBackupSchedule(prev => ({ ...prev, schedule: e.target.value }))} placeholder="0 2 * * *" />
           <select value={newBackupSchedule.target_id} onChange={e => setNewBackupSchedule(prev => ({ ...prev, target_id: e.target.value }))}>
             <option value="">Local only</option>
-            {sftpTargets.map(target => <option key={target.id} value={target.id}>{target.name}</option>)}
+            {sftpTargets.map(target => <option key={target.id} value={target.id}>{target.name} ({target.kind === 's3' ? 'S3' : 'SFTP'})</option>)}
+          </select>
+          <select value={newBackupSchedule.name_suffix} aria-label="Stored file name"
+            onChange={e => setNewBackupSchedule(prev => ({ ...prev, name_suffix: e.target.value }))}>
+            <option value="none">Append: nothing</option>
+            <option value="day_of_week">Append: day of week</option>
+            <option value="week_of_month">Append: week of month</option>
+            <option value="full_date">Append: full date</option>
           </select>
           <button disabled={(!newBackupSchedule.all_users && (!newBackupSchedule.user_ids || newBackupSchedule.user_ids.length === 0)) || !!loading} onClick={createBackupSchedule}><Clock size={14}/> Schedule</button>
         </div>
+        <p className="hint">
+          What gets appended decides how many copies pile up at the far end:
+          <strong> nothing</strong> keeps one file per account and overwrites it,
+          <strong> day of week</strong> rotates through seven,
+          <strong> week of month</strong> through five, and
+          <strong> full date</strong> keeps one a day until retention prunes it.
+          The first three bound storage without anything having to delete.
+        </p>
         <div className="backup-list">
           {backupSchedules.map(item => {
             const scheduleTarget = sftpTargets.find(target => target.id === item.target_id);
             return <div className="backup-item" key={item.id}>
-              <span>{scheduleUserLabel(item)} - {item.schedule}{scheduleTarget ? ` - ${scheduleTarget.name}` : ''}<small>{item.last_status}: {item.last_message || 'not run yet'}</small></span>
-              <button className="danger" disabled={!!loading} onClick={() => deleteBackupSchedule(item.id)}><Trash2 size={14}/></button>
+              <span>
+                {scheduleUserLabel(item)} - {item.schedule}{scheduleTarget ? ` - ${scheduleTarget.name}` : ''}{item.name_suffix && item.name_suffix !== 'full_date' ? ` - ${item.name_suffix.replace(/_/g, ' ')}` : ''}
+                {item.last_status === 'running' && <span className="badge"> running</span>}
+                <small>{item.last_status}: {item.last_message || 'not run yet'}</small>
+              </span>
+              <div className="actions schedule-actions">
+                <button className="mini secondary-light" disabled={!!loading || item.last_status === 'running'} onClick={() => runBackupScheduleNow(item)}><Play size={14}/> Run now</button>
+                <button className="mini danger" disabled={!!loading} onClick={() => deleteBackupSchedule(item.id)}><Trash2 size={14}/> Delete</button>
+              </div>
             </div>;
           })}
         </div>
       </div>}
 
+      {isAdmin && activeBackupTab === 'restore' && <div className="backup-tab-panel">
+        <div className="backup-panel-title">
+          <div>
+            <h3>Restore</h3>
+            <p className="hint">Everything that could be restored, wherever it is. Tick what you want back and restore it in one go.</p>
+          </div>
+          <button disabled={!!loading} onClick={loadRestoreCatalogue}><RefreshCw size={14}/> Refresh</button>
+        </div>
+
+        {!restoreCatalogue.loaded && <p className="hint">Press Refresh to look on this server and in every S3 destination.</p>}
+
+        {(restoreCatalogue.errors || []).map(row => <p className="hint alarm" key={row.target_id}>
+          {row.target_name}: {row.error}
+        </p>)}
+
+        {restoreCatalogue.loaded && <>
+          <div className="detail-head">
+            <input id="restore-filter" value={restoreFilter} onChange={e => setRestoreFilter(e.target.value)}
+              placeholder="Filter by account or file name..." aria-label="Filter backups" />
+            <span className="hint">{restorePicks.length} selected</span>
+            <button className="danger" disabled={!!loading || restorePicks.length === 0} onClick={restorePicked}>
+              <RotateCcw size={14}/> Restore selected
+            </button>
+          </div>
+
+          {restoreCatalogue.items.length === 0 && <EmptyState icon={ArchiveRestore} message="No backups found, here or in any destination." />}
+
+          <div className="detail-body restore-list">
+            {restoreCatalogue.items
+              .filter(item => {
+                const needle = restoreFilter.trim().toLowerCase();
+                if (!needle) return true;
+                return `${item.username} ${item.name} ${item.target_name}`.toLowerCase().includes(needle);
+              })
+              .map(item => {
+                const id = `${item.source}:${item.target_id || 0}:${item.key}`;
+                return <label className="restore-row" key={id}>
+                  <input type="checkbox" checked={restorePicks.includes(id)} disabled={!!loading}
+                    onChange={() => toggleRestorePick(item)} />
+                  <span className="restore-main">
+                    <strong>{item.username || item.name}</strong>
+                    <small>{item.name}</small>
+                  </span>
+                  <span className={item.source === 's3' ? 'badge' : 'badge ok'}>{item.source === 's3' ? item.target_name : 'This server'}</span>
+                  <span className="hint">{formatBytes(item.size)}</span>
+                  <span className="hint">{item.modified ? String(item.modified).slice(0, 19).replace('T', ' ') : '--'}</span>
+                  {item.valid === false && <span className="badge bad">{item.error || 'not a usable backup'}</span>}
+                </label>;
+              })}
+          </div>
+          <p className="hint">
+            A file in a bucket is downloaded here first, then restored the same way an uploaded one is.
+            Restoring overwrites the account in the archive. One failure does not stop the rest -
+            each is reported on its own.
+          </p>
+        </>}
+      </div>}
+
       {isAdmin && activeBackupTab === 'destination' && <div className="backup-tab-panel">
         <div className="backup-panel-title">
-          <div><h3>Backup Destination</h3><p className="hint">Manage SFTP destinations used for off-server backup copies.</p></div>
+          <div><h3>Backup Destination</h3><p className="hint">Somewhere off this machine to keep a copy. A backup that lives on the server it backs up is not a backup.</p></div>
           <button disabled={!!loading} onClick={loadSftpTargets}><RefreshCw size={14}/> Refresh</button>
         </div>
-        <div className="sftp-form sftp-target-form">
-          <input value={newSftpTarget.name} onChange={e => setNewSftpTarget(prev => ({ ...prev, name: e.target.value }))} placeholder="Target name" />
-          <input value={newSftpTarget.host} onChange={e => setNewSftpTarget(prev => ({ ...prev, host: e.target.value }))} placeholder="Host" />
-          <input value={newSftpTarget.port} onChange={e => setNewSftpTarget(prev => ({ ...prev, port: e.target.value }))} placeholder="22" inputMode="numeric" />
-          <input value={newSftpTarget.username} onChange={e => setNewSftpTarget(prev => ({ ...prev, username: e.target.value }))} placeholder="Username" />
-          <input value={newSftpTarget.password} onChange={e => setNewSftpTarget(prev => ({ ...prev, password: e.target.value }))} placeholder="Password" type="password" />
-          <input value={newSftpTarget.remote_path} onChange={e => setNewSftpTarget(prev => ({ ...prev, remote_path: e.target.value }))} placeholder="/backups/bpanel" />
-          <textarea value={newSftpTarget.private_key} onChange={e => setNewSftpTarget(prev => ({ ...prev, private_key: e.target.value }))} placeholder="Private key (optional)" rows={4} />
-          <button disabled={!!loading || !newSftpTarget.name || !newSftpTarget.host || !newSftpTarget.username || (!newSftpTarget.password && !newSftpTarget.private_key)} onClick={createSftpTarget}><Plus size={14}/> Save target</button>
+        <div className="segmented" role="tablist" aria-label="Destination type">
+          <button className={newSftpTarget.kind === 'sftp' ? 'active' : ''} disabled={!!loading}
+            onClick={() => setNewSftpTarget(prev => ({ ...prev, kind: 'sftp' }))}>SFTP server</button>
+          <button className={newSftpTarget.kind === 's3' ? 'active' : ''} disabled={!!loading}
+            onClick={() => setNewSftpTarget(prev => ({ ...prev, kind: 's3' }))}>S3 storage</button>
         </div>
+        {newSftpTarget.kind === 's3'
+          ? <>
+              <p className="hint">Works with S3 and anything that speaks its API: Wasabi, Backblaze B2, DigitalOcean Spaces, Cloudflare R2, MinIO. The bucket is checked before the target is saved, so a destination that cannot be reached never gets attached to a schedule.</p>
+              <div className="sftp-form sftp-target-form">
+                <input id="s3-name" value={newSftpTarget.name} onChange={e => setNewSftpTarget(prev => ({ ...prev, name: e.target.value }))} placeholder="Target name" />
+                <input id="s3-endpoint" value={newSftpTarget.endpoint} onChange={e => setNewSftpTarget(prev => ({ ...prev, endpoint: e.target.value }))} placeholder="s3.wasabisys.com" />
+                <input id="s3-bucket" value={newSftpTarget.bucket} onChange={e => setNewSftpTarget(prev => ({ ...prev, bucket: e.target.value }))} placeholder="Bucket" />
+                <input id="s3-region" value={newSftpTarget.region} onChange={e => setNewSftpTarget(prev => ({ ...prev, region: e.target.value }))} placeholder="Region (optional)" />
+                <input id="s3-access" value={newSftpTarget.access_key} onChange={e => setNewSftpTarget(prev => ({ ...prev, access_key: e.target.value }))} placeholder="Access key" />
+                <input id="s3-secret" value={newSftpTarget.secret_key} onChange={e => setNewSftpTarget(prev => ({ ...prev, secret_key: e.target.value }))} placeholder="Secret key" type="password" />
+                <input id="s3-prefix" value={newSftpTarget.prefix} onChange={e => setNewSftpTarget(prev => ({ ...prev, prefix: e.target.value }))} placeholder="Prefix, e.g. bpanel/nightly (optional)" />
+                <label className="check-line"><input id="s3-secure" type="checkbox" checked={!!newSftpTarget.secure} onChange={e => setNewSftpTarget(prev => ({ ...prev, secure: e.target.checked }))} /><span>Use HTTPS</span></label>
+                <button disabled={!!loading || !newSftpTarget.name || !newSftpTarget.endpoint || !newSftpTarget.bucket || !newSftpTarget.access_key || !newSftpTarget.secret_key} onClick={createSftpTarget}><Plus size={14}/> Check and save</button>
+              </div>
+            </>
+          : <div className="sftp-form sftp-target-form">
+              <input value={newSftpTarget.name} onChange={e => setNewSftpTarget(prev => ({ ...prev, name: e.target.value }))} placeholder="Target name" />
+              <input value={newSftpTarget.host} onChange={e => setNewSftpTarget(prev => ({ ...prev, host: e.target.value }))} placeholder="Host" />
+              <input value={newSftpTarget.port} onChange={e => setNewSftpTarget(prev => ({ ...prev, port: e.target.value }))} placeholder="22" inputMode="numeric" />
+              <input value={newSftpTarget.username} onChange={e => setNewSftpTarget(prev => ({ ...prev, username: e.target.value }))} placeholder="Username" />
+              <input value={newSftpTarget.password} onChange={e => setNewSftpTarget(prev => ({ ...prev, password: e.target.value }))} placeholder="Password" type="password" />
+              <input value={newSftpTarget.remote_path} onChange={e => setNewSftpTarget(prev => ({ ...prev, remote_path: e.target.value }))} placeholder="/backups/bpanel" />
+              <textarea value={newSftpTarget.private_key} onChange={e => setNewSftpTarget(prev => ({ ...prev, private_key: e.target.value }))} placeholder="Private key (optional)" rows={4} />
+              <button disabled={!!loading || !newSftpTarget.name || !newSftpTarget.host || !newSftpTarget.username || (!newSftpTarget.password && !newSftpTarget.private_key)} onClick={createSftpTarget}><Plus size={14}/> Save target</button>
+            </div>}
         {sftpTargets.length === 0 && <EmptyState icon={Network} message="No backup destinations found." />}
         <div className="backup-list">
           {sftpTargets.map(target => <div className="backup-item" key={target.id}>
-            <span>{target.name} - {target.username}@{target.host}:{target.remote_path}</span>
+            <span>
+              <span className="badge">{target.kind === 's3' ? 'S3' : 'SFTP'}</span> {target.name}
+              <small>{target.kind === 's3'
+                ? `${target.endpoint}/${target.bucket}${target.prefix ? '/' + target.prefix : ''}`
+                : `${target.username}@${target.host}:${target.remote_path}`}</small>
+            </span>
             <button className="danger" disabled={!!loading} onClick={() => deleteSftpTarget(target.id)}><Trash2 size={14}/></button>
           </div>)}
         </div>

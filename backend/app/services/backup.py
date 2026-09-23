@@ -330,6 +330,57 @@ def describe_user_backup(backup_file: str) -> dict:
     return item
 
 
+def username_from_archive_name(name: str) -> str:
+    """Best-effort account name from a file name, for a listing only.
+
+    Archives are named user-<account>-<something>.tar.gz, where <something> is
+    a timestamp or one of the rotating suffixes. This guesses the account so a
+    remote listing can be grouped without downloading every file to read its
+    manifest; the restore itself still reads the manifest and trusts that.
+    """
+    base = Path(name or "").name
+    if not base.startswith("user-") or not base.endswith(".tar.gz"):
+        return ""
+    stem = base[len("user-"):-len(".tar.gz")]
+    # Strip a trailing timestamp, weekday, week number or date if present.
+    stem = re.sub(r"-(\d{14}|Mon|Tue|Wed|Thu|Fri|Sat|Sun|W[1-5]|\d{4}-\d{2}-\d{2})$", "", stem)
+    return stem
+
+
+def stage_remote_backup(fetch, name: str) -> str:
+    """Put a remote archive where restore can find it, and return its name.
+
+    `fetch` is handed a destination path and is responsible for filling it.
+    The file lands in the same directory an uploaded backup would, under a
+    name derived from the remote one, so everything downstream - validation,
+    manifest reading, restore - is the path already in use rather than a
+    second one written for remote files.
+    """
+    # Reject a name that carries a path, rather than quietly reducing it to
+    # its basename. Path(...).name was applied FIRST here, which stripped the
+    # traversal before the checks looked for it: "/" in safe and ".." in safe
+    # could never be true, and "../escape.tar.gz" sailed through as
+    # "escape.tar.gz". The caller passes the file name from a bucket listing
+    # and the object key separately, so a name with a separator in it means
+    # something is wrong upstream and should say so, not be rewritten.
+    safe = (name or "").strip()
+    if (not safe.endswith(".tar.gz")
+            or "/" in safe or "\\" in safe
+            or ".." in safe
+            or safe != Path(safe).name):
+        raise ValueError("Not a backup file name")
+
+    destination = _ensure_user_dir(_user_restore_dir())
+    stem = safe[: -len(".tar.gz")]
+    # Never overwrite something already staged: two targets can hold a file of
+    # the same name, and a half-finished download must not clobber a good one.
+    local = destination / f"{stem}-{secrets.token_hex(3)}.tar.gz"
+    fetch(str(local))
+    if not local.is_file() or local.stat().st_size == 0:
+        raise ValueError("The download produced no file")
+    return local.name
+
+
 def list_user_restore_backups() -> list[dict]:
     backup_dir = _user_restore_dir()
     if settings.command_dry_run or not backup_dir.exists():
@@ -951,6 +1002,7 @@ def upload_to_sftp(
     port: int,
     username: str,
     remote_path: str,
+    remote_name: Optional[str] = None,
     password: Optional[str] = None,
     private_key: Optional[str] = None,
     expected_host_key_type: Optional[str] = None,
@@ -976,7 +1028,9 @@ def upload_to_sftp(
 
     pkey = _load_private_key(private_key, password=password) if private_key else None
     remote_dir = posixpath.normpath(remote_path.strip() or ".")
-    remote_file = posixpath.join(remote_dir, local_path.name)
+    # The caller may want it stored under a rotating name - see
+    # backup_s3.stored_name, which both destinations share.
+    remote_file = posixpath.join(remote_dir, remote_name or local_path.name)
 
     captured_type: Optional[str] = expected_host_key_type
     captured_fp: Optional[str] = expected_host_key_fingerprint

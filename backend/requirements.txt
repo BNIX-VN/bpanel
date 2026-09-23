@@ -19,3 +19,7 @@ webauthn==2.5.2
 qrcode[pil]==7.4.2
 paramiko==3.4.0
 maxminddb==3.2.0
+# S3 and anything that speaks its API: Wasabi, B2, Spaces, R2, MinIO.
+# Chosen over boto3, which pulls botocore and roughly 100 MB of AWS service
+# definitions onto every customer machine for one feature.
+minio==7.2.10

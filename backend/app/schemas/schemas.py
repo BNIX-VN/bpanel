@@ -1061,6 +1061,9 @@ class BackupScheduleCreate(BaseModel):
     all_users: bool = False
     schedule: str = "0 2 * * *"
     target_id: Optional[int] = None
+    # What the stored file is called, and so how many of them pile up at the
+    # far end. See backup_s3.stored_name.
+    name_suffix: str = Field(default="full_date", pattern=r"^(none|day_of_week|week_of_month|full_date)$")
     retention: int = Field(default=7, ge=1, le=365)
     is_active: bool = True
 
@@ -1091,6 +1094,10 @@ class BackupScheduleOut(BaseModel):
     all_users: bool = False
     target_id: Optional[int] = None
     schedule: str
+    # The list shows what each schedule appends, so it has to come back out.
+    # Without it item.name_suffix was undefined in the panel and every
+    # schedule read as the default whatever it really was.
+    name_suffix: str = "full_date"
     retention: int
     is_active: bool
     last_run_at: Optional[datetime] = None
@@ -1115,11 +1122,63 @@ class BackupScheduleOut(BaseModel):
         from_attributes = True
 
 
+class BulkRestoreItem(BaseModel):
+    """One archive to restore, wherever it currently lives."""
+
+    source: str = Field(default="local", pattern=r"^(local|s3)$")
+    name: str = Field(min_length=1, max_length=255)
+    key: str = Field(default="", max_length=1024)
+    target_id: Optional[int] = None
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        text = value.strip()
+        # A name is a file name, never a path: the caller does not get to pick
+        # where on this disk the restore reads from.
+        if "/" in text or "\\" in text or ".." in text or not text.endswith(".tar.gz"):
+            raise ValueError("Not a backup file name")
+        return text
+
+    @field_validator("key")
+    @classmethod
+    def validate_key(cls, value: str) -> str:
+        text = (value or "").strip()
+        if text.startswith("/") or ".." in text.split("/"):
+            raise ValueError("Not a valid object key")
+        return text
+
+    @model_validator(mode="after")
+    def check_source(self):
+        if self.source == "s3" and (not self.key or not self.target_id):
+            raise ValueError("An S3 item needs a target and a key")
+        return self
+
+
+class BulkRestoreRequest(BaseModel):
+    # Bounded so one request cannot queue an afternoon of restores.
+    items: list[BulkRestoreItem] = Field(min_length=1, max_length=50)
+
+
 class SftpBackupTargetCreate(BaseModel):
+    """An SSH server or an object store. `kind` decides which fields matter."""
+
     name: str = Field(min_length=2, max_length=100, pattern=r"^[A-Za-z0-9._ -]+$")
-    host: str = Field(min_length=2, max_length=255)
+    kind: str = Field(default="sftp", pattern=r"^(sftp|s3)$")
+
+    # S3 and anything that speaks its API
+    endpoint: Optional[str] = Field(default=None, max_length=255)
+    region: Optional[str] = Field(default=None, max_length=64)
+    bucket: Optional[str] = Field(default=None, max_length=255)
+    access_key: Optional[str] = Field(default=None, max_length=255)
+    secret_key: Optional[str] = Field(default=None, max_length=4096)
+    prefix: Optional[str] = Field(default=None, max_length=255)
+    secure: bool = True
+
+    # SFTP. Defaulted so an S3 payload need not carry them at all.
+    host: str = Field(default="", max_length=255)
     port: int = Field(default=22, ge=1, le=65535)
-    username: str = Field(min_length=1, max_length=128)
+    username: str = Field(default="", max_length=128)
     password: Optional[str] = Field(default=None, max_length=4096)
     private_key: Optional[str] = Field(default=None, max_length=20000)
     remote_path: str = Field(default="/backups/bpanel", min_length=1, max_length=500)
@@ -1127,10 +1186,57 @@ class SftpBackupTargetCreate(BaseModel):
     @field_validator("host")
     @classmethod
     def validate_host(cls, value: str) -> str:
-        value = value.strip()
+        value = (value or "").strip()
+        if not value:
+            return value          # an S3 target has no host; kind is checked below
         if not re.fullmatch(r"[A-Za-z0-9._:-]+", value):
             raise ValueError("Invalid SFTP host")
         return value
+
+    @field_validator("endpoint")
+    @classmethod
+    def validate_endpoint(cls, value):
+        if value in (None, ""):
+            return value
+        text = re.sub(r"^https?://", "", value.strip()).rstrip("/")
+        if not re.fullmatch(r"[A-Za-z0-9._:-]+", text):
+            raise ValueError("Invalid S3 endpoint")
+        return text
+
+    @field_validator("bucket")
+    @classmethod
+    def validate_bucket(cls, value):
+        if value in (None, ""):
+            return value
+        text = value.strip()
+        # S3 bucket naming, the part everyone actually hits.
+        if not re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", text):
+            raise ValueError("Invalid bucket name")
+        return text
+
+    @field_validator("prefix")
+    @classmethod
+    def validate_prefix(cls, value):
+        if value in (None, ""):
+            return value
+        text = value.strip().strip("/")
+        if ".." in text.split("/"):
+            raise ValueError("Invalid prefix")
+        return text
+
+    @model_validator(mode="after")
+    def check_kind(self):
+        if self.kind == "s3":
+            missing = [name for name in ("endpoint", "bucket", "access_key", "secret_key")
+                       if not getattr(self, name)]
+            if missing:
+                raise ValueError("An S3 target needs " + ", ".join(missing))
+        else:
+            if not self.host or not self.username:
+                raise ValueError("An SFTP target needs a host and a username")
+            if not self.password and not self.private_key:
+                raise ValueError("An SFTP target needs a password or a private key")
+        return self
 
     @field_validator("remote_path")
     @classmethod
@@ -1144,10 +1250,17 @@ class SftpBackupTargetCreate(BaseModel):
 class SftpBackupTargetOut(BaseModel):
     id: int
     name: str
-    host: str
-    port: int
-    username: str
-    remote_path: str
+    kind: str = "sftp"
+    endpoint: Optional[str] = None
+    region: Optional[str] = None
+    bucket: Optional[str] = None
+    access_key: Optional[str] = None
+    prefix: Optional[str] = None
+    secure: bool = True
+    host: str = ""
+    port: int = 22
+    username: str = ""
+    remote_path: str = ""
     is_active: bool
     host_key_type: Optional[str] = None
     host_key_fingerprint: Optional[str] = None

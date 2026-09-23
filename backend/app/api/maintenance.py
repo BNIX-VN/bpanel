@@ -21,6 +21,7 @@ from app.core.permissions import Role, ensure_role, is_admin_role
 from app.core.secrets import decrypt, encrypt
 from app.models.entities import BackupSchedule, DatabaseAccount, SftpBackupTarget, SiteApp, User, Website
 from app.schemas.schemas import (
+    BulkRestoreRequest,
     BackupScheduleCreate,
     BackupScheduleOut,
     BackupCreate,
@@ -38,7 +39,7 @@ from app.schemas.schemas import (
     UserRestoreBackup,
     WpAction,
 )
-from app.services import addons, backup, cron, file_manager, php, site_apps, site_users, storage_quota, wordpress
+from app.services import addons, backup, backup_s3, cron, file_manager, php, site_apps, site_users, storage_quota, wordpress
 from app.services.audit import log_action
 
 router = APIRouter(prefix="/maintenance", tags=["maintenance"])
@@ -811,6 +812,11 @@ def create_backup_schedule(payload: BackupScheduleCreate, request: Request, db: 
         all_users=payload.all_users,
         target_id=payload.target_id,
         schedule=payload.schedule,
+        # Was missing, so the column kept its "full_date" default whatever the
+        # operator picked: choosing "day of week" still produced
+        # user-<account>-2026-09-23.tar.gz. The schema validated the value and
+        # then nothing carried it to the row.
+        name_suffix=payload.name_suffix,
         retention=payload.retention,
         is_active=payload.is_active,
         last_status="pending",
@@ -821,6 +827,60 @@ def create_backup_schedule(payload: BackupScheduleCreate, request: Request, db: 
     target = "all_users" if payload.all_users else ",".join(user.username for user in users)
     log_action(db, current_user.id, "create_backup_schedule", target, payload.schedule, request=request)
     return item
+
+
+@router.post("/backup-schedules/{schedule_id}/run")
+def run_backup_schedule_now(
+    schedule_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Run a schedule this minute, without waiting for its cron expression.
+
+    Everything else is the real thing: the same users, the same destination,
+    the same stored name, the same retention prune, and the result written to
+    the same last_status the timer writes. A test that took a shortcut would
+    tell you nothing about the run you actually depend on.
+
+    It goes through the backup job executor because a schedule covering every
+    account can take minutes, and an HTTP request should not be holding that.
+    """
+    ensure_role(current_user.role, Role.admin)
+    schedule = db.query(BackupSchedule).filter(BackupSchedule.id == schedule_id).first()
+    if not schedule:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+
+    schedule.last_status = "running"
+    schedule.last_message = f"Started by {current_user.username}"
+    db.commit()
+
+    _backup_job_executor.submit(_run_schedule_now_job, schedule_id)
+    log_action(db, current_user.id, "run_backup_schedule", str(schedule_id), request=request)
+    return {"ok": True, "schedule_id": schedule_id,
+            "detail": "Running now. Refresh to see the result on this schedule."}
+
+
+def _run_schedule_now_job(schedule_id: int) -> None:
+    """The worker side. Owns its own session: the request's is long gone."""
+    from app.services import backup_scheduler
+
+    db = SessionLocal()
+    try:
+        schedule = db.query(BackupSchedule).filter(BackupSchedule.id == schedule_id).first()
+        if schedule:
+            backup_scheduler.run_one(db, schedule)
+    except Exception as exc:  # noqa: BLE001 - the outcome belongs on the row
+        try:
+            schedule = db.query(BackupSchedule).filter(BackupSchedule.id == schedule_id).first()
+            if schedule:
+                schedule.last_status = "error"
+                schedule.last_message = str(exc)[:4000]
+                db.commit()
+        except Exception:  # pragma: no cover
+            pass
+    finally:
+        db.close()
 
 
 @router.delete("/backup-schedules/{schedule_id}")
@@ -850,24 +910,153 @@ def create_sftp_target(
 ):
     ensure_role(current_user.role, Role.admin)
     if db.query(SftpBackupTarget).filter(SftpBackupTarget.name == payload.name).first():
-        raise HTTPException(status_code=409, detail="SFTP target name already exists")
-    if not payload.password and not payload.private_key:
-        raise HTTPException(status_code=400, detail="SFTP password or private key is required")
+        raise HTTPException(status_code=409, detail="A target with that name already exists")
+
     target = SftpBackupTarget(
         name=payload.name,
-        host=payload.host,
+        kind=payload.kind,
+        is_active=True,
+        # SFTP columns are written either way so the row is never half-null in
+        # a confusing manner; an S3 row simply carries empty strings here.
+        host=payload.host or "",
         port=payload.port,
-        username=payload.username,
+        username=payload.username or "",
         password=encrypt(payload.password) if payload.password else None,
         private_key=encrypt(payload.private_key) if payload.private_key else None,
         remote_path=payload.remote_path,
-        is_active=True,
+        endpoint=payload.endpoint,
+        region=payload.region,
+        bucket=payload.bucket,
+        access_key=payload.access_key,
+        secret_key=encrypt(payload.secret_key) if payload.secret_key else None,
+        prefix=payload.prefix,
+        secure=payload.secure,
     )
+
+    if payload.kind == "s3":
+        # Prove the credentials before a schedule starts depending on them. A
+        # target that cannot be reached is worse than no target: the schedule
+        # reports success on the local archive and nothing leaves the machine.
+        try:
+            backup_s3.check(target)
+        except backup_s3.S3Error as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     db.add(target)
     db.commit()
     db.refresh(target)
-    log_action(db, current_user.id, "create_sftp_target", target.name, request=request)
+    log_action(db, current_user.id, "create_backup_target", f"{target.kind}:{target.name}", request=request)
     return target
+
+
+@router.get("/restore-catalogue")
+def restore_catalogue(
+    target_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Every backup that could be restored, local and remote in one list.
+
+    The page that offers a bulk restore has to show what there is to pick
+    from, and "what there is" is not only what happens to be on this disk -
+    the whole point of a remote target is that the copy which survives the
+    machine is the one over there.
+
+    A remote target that cannot be reached is reported as an error on that
+    target rather than failing the whole listing: one unreachable bucket must
+    not hide the backups sitting locally.
+    """
+    ensure_role(current_user.role, Role.admin)
+    items = []
+
+    for entry in backup.list_user_restore_backups():
+        items.append({
+            "source": "local",
+            "target_id": None,
+            "target_name": "This server",
+            "name": entry.get("filename") or "",
+            "key": entry.get("filename") or "",
+            "size": entry.get("size") or 0,
+            "modified": entry.get("generated_at") or "",
+            "username": entry.get("username") or "",
+            "valid": bool(entry.get("valid")),
+            "error": entry.get("error") or "",
+        })
+
+    errors = []
+    query = db.query(SftpBackupTarget).filter(SftpBackupTarget.is_active == True)  # noqa: E712
+    if target_id:
+        query = query.filter(SftpBackupTarget.id == target_id)
+    for target in query.order_by(SftpBackupTarget.id.asc()).all():
+        if (target.kind or "sftp") != "s3":
+            # Listing an SFTP directory is a second SSH round trip per target
+            # and the panel has no cache for it; remote listing is S3 only for
+            # now, and the UI says so.
+            continue
+        try:
+            for row in backup_s3.listing(target):
+                items.append({
+                    "source": "s3",
+                    "target_id": target.id,
+                    "target_name": target.name,
+                    "name": row["name"],
+                    "key": row["key"],
+                    "size": row["size"],
+                    "modified": row["modified"],
+                    "username": backup.username_from_archive_name(row["name"]),
+                    # Only reading the manifest can say for sure, and that
+                    # means downloading it. The listing does not pretend.
+                    "valid": None,
+                    "error": "",
+                })
+        except backup_s3.S3Error as exc:
+            errors.append({"target_id": target.id, "target_name": target.name, "error": str(exc)})
+
+    items.sort(key=lambda row: (row["modified"] or ""), reverse=True)
+    return {"items": items, "errors": errors}
+
+
+@router.post("/restore-bulk")
+def restore_bulk(
+    payload: BulkRestoreRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Restore several backups in one go, reporting each on its own.
+
+    One failure does not abandon the rest: restoring six accounts and having
+    the third refuse should still restore the other five, and say which one
+    did not.
+    """
+    ensure_role(current_user.role, Role.admin)
+    results = []
+    for item in payload.items:
+        record = {"name": item.name, "source": item.source, "status": "done", "detail": ""}
+        try:
+            local_file = item.name
+            if item.source == "s3":
+                target = db.query(SftpBackupTarget).filter(
+                    SftpBackupTarget.id == item.target_id,
+                    SftpBackupTarget.is_active == True,  # noqa: E712
+                ).first()
+                if not target:
+                    raise ValueError("That backup target no longer exists")
+                local_file = backup.stage_remote_backup(
+                    lambda destination: backup_s3.download(target, item.key, destination),
+                    item.name,
+                )
+            outcome = backup.restore_user_backup(local_file, db)
+            record["detail"] = outcome.get("message", "") if isinstance(outcome, dict) else ""
+        except Exception as exc:  # noqa: BLE001 - one bad archive must not stop the rest
+            record["status"] = "failed"
+            record["detail"] = str(exc)
+        results.append(record)
+
+    done = sum(1 for row in results if row["status"] == "done")
+    log_action(db, current_user.id, "restore_bulk",
+               f"{done}/{len(results)}", request=request)
+    return {"results": results, "restored": done, "total": len(results)}
 
 
 @router.delete("/sftp-targets/{target_id}")
