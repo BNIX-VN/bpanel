@@ -3160,6 +3160,15 @@ function App() {
     }
   }
 
+  // Component level on purpose: renderBackups draws with these and
+  // runBackupScheduleNow names the schedule in its confirmation with them.
+  const userNameById = id => users.find(user => String(user.id) === String(id))?.username || `User #${id}`;
+  const scheduleUserLabel = item => {
+    if (item.all_users) return 'All users';
+    const ids = (item.user_ids && item.user_ids.length > 0) ? item.user_ids : (item.user_id ? [item.user_id] : []);
+    return ids.length ? ids.map(userNameById).join(', ') : 'No users';
+  };
+
   async function runBackupScheduleNow(item) {
     const who = scheduleUserLabel(item);
     if (!confirm(`Run this schedule now?\n\n${who} - ${item.schedule}\n\nThis is the real thing: the same accounts, the same destination and the same stored name. Only the timing is skipped.`)) return;
@@ -3167,7 +3176,25 @@ function App() {
     if (data) {
       setNotice(data.detail || 'Running now.');
       await loadBackupSchedules();
+      pollBackupSchedule(item.id);
     }
+  }
+
+  function pollBackupSchedule(scheduleId, attempts = 60) {
+    // A schedule covering every account takes minutes, and the work runs in a
+    // thread the request already let go of. Without this the row sits on
+    // "running" until the operator reloads the page and guesses.
+    if (attempts <= 0) return;
+    window.setTimeout(async () => {
+      const rows = await request('/maintenance/backup-schedules', { silent: true });
+      if (!rows) return;
+      setBackupSchedules(rows);
+      const row = rows.find(entry => entry.id === scheduleId);
+      if (!row) return;
+      if (row.last_status === 'running') return pollBackupSchedule(scheduleId, attempts - 1);
+      if (row.last_status === 'error') setError(`Schedule failed - ${row.last_message || 'no detail'}`);
+      else setNotice(`Schedule finished - ${row.last_message || 'ok'}`);
+    }, 5000);
   }
 
   async function deleteBackupSchedule(id) {
@@ -5699,12 +5726,6 @@ Each account is overwritten with what is in its archive.`)) return;
 
   function renderBackups() {
     const selectedBackupUser = users.find(user => String(user.id) === String(selectedBackupUserId));
-    const userNameById = id => users.find(user => String(user.id) === String(id))?.username || `User #${id}`;
-    const scheduleUserLabel = item => {
-      if (item.all_users) return 'All users';
-      const ids = (item.user_ids && item.user_ids.length > 0) ? item.user_ids : (item.user_id ? [item.user_id] : []);
-      return ids.length ? ids.map(userNameById).join(', ') : 'No users';
-    };
     const jobTitle = job => ({ site_backup: 'Website backup', user_backup: 'Full user backup', sftp_backup: 'SFTP backup' }[job.kind] || 'Backup task');
     const jobDetail = job => job.error || job.remote_file || job.backup_file || job.message || job.status;
     const backupTabs = isAdmin
@@ -5865,8 +5886,10 @@ Each account is overwritten with what is in its archive.`)) return;
                 {item.last_status === 'running' && <span className="badge"> running</span>}
                 <small>{item.last_status}: {item.last_message || 'not run yet'}</small>
               </span>
-              <button className="mini secondary-light" disabled={!!loading || item.last_status === 'running'} onClick={() => runBackupScheduleNow(item)}><Play size={14}/> Run now</button>
-              <button className="danger" disabled={!!loading} onClick={() => deleteBackupSchedule(item.id)}><Trash2 size={14}/></button>
+              <div className="actions schedule-actions">
+                <button className="mini secondary-light" disabled={!!loading || item.last_status === 'running'} onClick={() => runBackupScheduleNow(item)}><Play size={14}/> Run now</button>
+                <button className="mini danger" disabled={!!loading} onClick={() => deleteBackupSchedule(item.id)}><Trash2 size={14}/> Delete</button>
+              </div>
             </div>;
           })}
         </div>

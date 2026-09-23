@@ -291,3 +291,41 @@ def test_the_button_is_not_offered_while_a_run_is_in_flight():
     line = next(l for l in page.splitlines()
                 if "runBackupScheduleNow(item)" in l and "onClick" in l)
     assert "item.last_status === 'running'" in line
+
+
+def test_the_handler_only_calls_helpers_it_can_actually_see():
+    """Run now did nothing at all, and said nothing about why.
+
+    The handler sits at component level; the label helper it called was a
+    `const` inside renderBackups(). Clicking threw a ReferenceError on the
+    first line - before the confirm dialog, before the request - so the button
+    was inert and the console was the only place that knew. Both helpers are
+    hoisted now; this pins them there.
+    """
+    page = (PROJECT_ROOT / "frontend" / "src" / "App.jsx").read_text(encoding="utf-8")
+    for helper in ("const scheduleUserLabel =", "const userNameById ="):
+        declarations = [line for line in page.splitlines() if helper in line]
+        assert len(declarations) == 1, f"{helper} declared more than once"
+        assert declarations[0].startswith("  const"), (
+            f"{helper} is nested inside a render function; "
+            "runBackupScheduleNow cannot reach it from there"
+        )
+
+
+def test_the_row_is_polled_until_the_run_stops():
+    """Nothing pushes the result: the work outlives the request that queued it."""
+    page = (PROJECT_ROOT / "frontend" / "src" / "App.jsx").read_text(encoding="utf-8")
+    handler = page[page.index("async function runBackupScheduleNow"):]
+    handler = handler[:handler.index("\n  async function deleteBackupSchedule")]
+    assert "pollBackupSchedule(item.id)" in handler
+    assert "last_status === 'running'" in handler, "it has to know when to stop"
+
+
+def test_run_now_and_delete_share_one_row():
+    """The row is a two-column grid; a third child wraps to a second line."""
+    page = (PROJECT_ROOT / "frontend" / "src" / "App.jsx").read_text(encoding="utf-8")
+    block = page[page.index("runBackupScheduleNow(item)}"):]
+    block = block[:block.index("</div>")]
+    assert "deleteBackupSchedule(item.id)" in block, (
+        "both buttons must sit inside the same actions container"
+    )
