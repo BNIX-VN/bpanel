@@ -111,9 +111,14 @@ def _ensure_user_dir(path: Path) -> Path:
     The retry is outside the except block on purpose: if the helper could not
     fix it either, the caller should see the same PermissionError it would
     have seen anyway, not a second error about the helper.
+
+    0750 explicitly, so a directory the panel makes matches one the helper
+    makes. Default umask gave 0755 and left account archives world-readable
+    to anyone who could reach them - nothing can today, because the backup
+    root above is 0750, but that is one chmod away from not being true.
     """
     try:
-        path.mkdir(parents=True, exist_ok=True)
+        path.mkdir(mode=0o750, parents=True, exist_ok=True)
         return path
     except PermissionError:
         shell.privileged(
@@ -122,7 +127,7 @@ def _ensure_user_dir(path: Path) -> Path:
             check=False,
             fallback=["install", "-d", "-m", "0750", str(path)],
         )
-    path.mkdir(parents=True, exist_ok=True)
+    path.mkdir(mode=0o750, parents=True, exist_ok=True)
     return path
 
 
