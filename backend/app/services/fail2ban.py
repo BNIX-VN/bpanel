@@ -101,14 +101,25 @@ def stop() -> dict:
     return status()
 
 
-def banned(jail: str = "sshd") -> list[str]:
+def banned(jail: str = "sshd", limit: int = 50, offset: int = 0) -> dict:
+    """A page of the ban list, plus how many there are.
+
+    Paged because the page that shows this should not grow with the list. A
+    server under sustained scanning holds hundreds of addresses, and sending
+    all of them on every status poll costs the panel more than the operator
+    gets from seeing them.
+    """
     if not re.fullmatch(r"[a-z0-9_-]{1,32}", jail or ""):
         raise ValueError("Invalid jail name")
+    limit = max(1, min(int(limit), 500))
+    offset = max(0, int(offset))
     result = shell.privileged(
         "fail2ban-banned", helper_args=[jail], check=False, fallback=["true"],
     )
-    return [line.strip() for line in (result.stdout or "").splitlines()
-            if IP_RE.fullmatch(line.strip())]
+    every = [line.strip() for line in (result.stdout or "").splitlines()
+             if IP_RE.fullmatch(line.strip())]
+    return {"items": every[offset:offset + limit], "total": len(every),
+            "offset": offset, "limit": limit}
 
 
 def unban(address: str) -> None:

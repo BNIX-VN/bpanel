@@ -728,6 +728,12 @@ function App() {
   // a slow first request cannot flash a section that turns out not to be there.
   const [addons, setAddons] = useState({ items: [], can_manage: false, loaded: false });
   const [f2b, setF2b] = useState(null);
+  // Which list the operator asked to see. Null keeps the page one screen tall
+  // however many rules, banned addresses or blocklist URLs there are.
+  const [fwDetail, setFwDetail] = useState(null);
+  const [fwFilter, setFwFilter] = useState('');
+  const [f2bBanned, setF2bBanned] = useState({ items: [], total: 0, offset: 0, limit: 50 });
+  const [fwAction, setFwAction] = useState('block');
   const [siteAppDraft, setSiteAppDraft] = useState(EMPTY_SITE_APP_DRAFT);
   const [createSiteAppId, setCreateSiteAppId] = useState('');
   // File manager target: empty means the selected website, otherwise an app.
@@ -3572,10 +3578,32 @@ function App() {
     setF2b(data || null);
   }
 
+  async function loadBannedPage(offset = 0) {
+    const data = await request(`/fail2ban/banned?limit=50&offset=${offset}`, { silent: true });
+    if (data) setF2bBanned(data);
+  }
+
   async function unbanAddress(ip) {
     const data = await request('/fail2ban/unban', { method: 'POST', body: JSON.stringify({ ip }) },
       `Đang gỡ khoá ${ip}...`);
-    if (data) { setF2b(prev => ({ ...(prev || {}), banned_ips: data.banned_ips })); setNotice(`Đã gỡ khoá ${ip}.`); }
+    if (data) {
+      setF2bBanned({ items: data.items, total: data.total, offset: data.offset, limit: data.limit });
+      setF2b(prev => (prev ? { ...prev, banned: data.total } : prev));
+      setNotice(`Đã gỡ khoá ${ip}.`);
+    }
+  }
+
+  function openFwDetail(which) {
+    const next = fwDetail === which ? null : which;
+    setFwDetail(next);
+    setFwFilter('');
+    if (next === 'banned') loadBannedPage(0);
+  }
+
+  async function submitFirewallRule() {
+    if (fwAction === 'port') return openFirewallPort();
+    if (fwAction === 'allow') return allowFirewallIp();
+    return blockFirewallIp();
   }
 
   async function runFirewallAction(path, options = {}, label = 'Updating firewall...') {
@@ -5997,131 +6025,180 @@ function App() {
 
   function renderFirewall() {
     if (!isAdmin) return <section className="section"><h2>Firewall</h2><p className="hint">No permission.</p></section>;
-    const firewallText = firewallStatus?.stdout || firewallStatus?.stderr || 'Click Refresh to load status.';
-    const blocklistText = firewallBlocklists?.stdout || firewallBlocklists?.stderr || 'No blocklist status loaded.';
+    const firewallText = firewallStatus?.stdout || firewallStatus?.stderr || 'Bấm Refresh để tải trạng thái.';
+    const blocklistText = firewallBlocklists?.stdout || firewallBlocklists?.stderr || 'Chưa tải trạng thái blocklist.';
     const blocklistUrls = parseFirewallBlocklistUrls(blocklistText);
     const allRules = firewallStatus?.rules || [];
     const userRules = allRules.filter(rule => !rule.protected);
     const panelRules = allRules.filter(rule => rule.protected);
     const f2bInstalled = addons.items.find(item => item.slug === 'fail2ban')?.installed;
+    const enabled = /enabled|active/i.test(firewallText) && !/disabled|inactive/i.test(firewallText.split('\n')[0] || '');
+    const keep = value => !fwFilter.trim() || String(value).toLowerCase().includes(fwFilter.trim().toLowerCase());
+    const shownRules = userRules.filter(rule => keep(`${rule.id} ${rule.action} ${rule.to} ${rule.from}`));
+    const shownUrls = blocklistUrls.filter(keep);
+    const shownBanned = (f2bBanned.items || []).filter(keep);
+
     return <>
+      <section className="section">
+        <div className="section-title">
+          <div>
+            <h2>Firewall</h2>
+            <p className="hint">iptables + ipset. Cổng SSH, cổng panel và 80/443/465/587 luôn được giữ mở.</p>
+          </div>
+          <div className="actions">
+            <button disabled={!!loading} onClick={loadFirewall}><RefreshCw size={14}/> Refresh</button>
+            <button disabled={!!loading} onClick={enableFirewall}><Shield size={14}/> Bật</button>
+            <button disabled={!!loading} onClick={disableFirewall}>Tắt</button>
+            <button disabled={!!loading} onClick={reloadFirewall}>Nạp lại</button>
+          </div>
+        </div>
+
+        <div className="chip-row">
+          <span className={enabled ? 'badge ok' : 'badge warn'}>{enabled ? 'Đang bật' : 'Đang tắt'}</span>
+          {panelRules.length > 0 && <span className="hint">cổng bảo vệ: {panelRules.map(rule => rule.to).join(', ')}</span>}
+        </div>
+
+        <div className="detail-tabs">
+          <button className={fwDetail === 'rules' ? 'chip on' : 'chip'} disabled={!!loading}
+            onClick={() => openFwDetail('rules')}>Rule tự đặt <b>{userRules.length}</b></button>
+          <button className={fwDetail === 'urls' ? 'chip on' : 'chip'} disabled={!!loading}
+            onClick={() => openFwDetail('urls')}>Blocklist URL <b>{blocklistUrls.length}</b></button>
+          <button className={fwDetail === 'raw' ? 'chip on' : 'chip'} disabled={!!loading}
+            onClick={() => openFwDetail('raw')}>Trạng thái thô</button>
+        </div>
+
+        {fwDetail && <div className="detail-panel">
+          {fwDetail !== 'raw' && <div className="detail-head">
+            <input id="fw-filter" value={fwFilter} onChange={e => setFwFilter(e.target.value)}
+              placeholder="Lọc trong danh sách..." aria-label="Lọc danh sách" />
+            <button className="secondary-light" onClick={() => setFwDetail(null)}><X size={14}/> Đóng</button>
+          </div>}
+
+          {fwDetail === 'rules' && <div className="detail-body">
+            {shownRules.length === 0 && <p className="hint">{userRules.length === 0
+              ? 'Chưa có rule nào. Chỉ các cổng bảo vệ đang mở.'
+              : 'Không có rule nào khớp bộ lọc.'}</p>}
+            {shownRules.map(rule => <div className="firewall-rule" key={rule.id}>
+              <span>
+                <strong>#{rule.id}</strong>{' '}
+                <span className={rule.action === 'DENY' ? 'badge danger' : 'badge ok'}>{rule.action}</span>{' '}
+                {rule.to} từ {rule.from}
+              </span>
+              <div className="firewall-rule-actions">
+                <button className="danger" disabled={!!loading} onClick={() => deleteFirewallRule(rule.id)}><Trash2 size={14}/> Xoá</button>
+              </div>
+            </div>)}
+          </div>}
+
+          {fwDetail === 'urls' && <div className="detail-body">
+            <div className="firewall-form firewall-blocklist-form">
+              <label><span>TXT URL</span><input id="fw-blocklist-url" value={firewallBlocklistUrl}
+                onChange={e => setFirewallBlocklistUrl(e.target.value)} placeholder="https://example.com/blocklist.txt" /></label>
+              <button disabled={!!loading || !firewallBlocklistUrl.trim()} onClick={addFirewallBlocklistUrl}><Plus size={14}/> Thêm</button>
+              <button className="secondary-light" disabled={!!loading} onClick={updateFirewallBlocklistsNow}><RefreshCw size={14}/> Cập nhật ngay</button>
+            </div>
+            <p className="hint">Tải về mỗi ngày lúc 01:00 vào một ipset, nên danh sách triệu dòng vẫn chỉ tốn một lượt tra cứu mỗi gói tin.</p>
+            {shownUrls.length === 0 && <p className="hint">Chưa có URL nào.</p>}
+            {shownUrls.map(url => <div className="firewall-rule" key={url}>
+              <span className="wrap-any">{url}</span>
+              <div className="firewall-rule-actions"><button className="danger" disabled={!!loading} onClick={() => deleteFirewallBlocklistUrl(url)}><Trash2 size={14}/> Xoá</button></div>
+            </div>)}
+          </div>}
+
+          {fwDetail === 'raw' && <div className="detail-body">
+            <div className="detail-head">
+              <strong>Trạng thái firewall</strong>
+              <button className="secondary-light" onClick={() => setFwDetail(null)}><X size={14}/> Đóng</button>
+            </div>
+            <pre>{firewallText}</pre>
+            <strong>Trạng thái blocklist</strong>
+            <pre>{blocklistText}</pre>
+            <div className="firewall-delete-inline">
+              <label><span>Xoá rule số</span><input id="fw-delete-number" value={firewallDeleteNumber}
+                onChange={e => setFirewallDeleteNumber(e.target.value)} placeholder="12" inputMode="numeric" /></label>
+              <button className="danger" disabled={!!loading || !firewallDeleteNumber} onClick={() => deleteFirewallRule()}>Xoá</button>
+            </div>
+          </div>}
+        </div>}
+
+        <div className="firewall-form rule-form">
+          <label><span>Hành động</span>
+            <select id="fw-action" value={fwAction} onChange={e => setFwAction(e.target.value)}>
+              <option value="block">Chặn IP</option>
+              <option value="allow">Cho phép IP</option>
+              <option value="port">Mở cổng</option>
+            </select>
+          </label>
+          {fwAction === 'block' && <label><span>IP / CIDR</span><input id="fw-block-ip" value={firewallBlockIp}
+            onChange={e => setFirewallBlockIp(e.target.value)} placeholder="5.6.7.8" /></label>}
+          {fwAction === 'allow' && <label><span>IP / CIDR</span><input id="fw-allow-ip" value={firewallAllowIp}
+            onChange={e => setFirewallAllowIp(e.target.value)} placeholder="1.2.3.4" /></label>}
+          <label><span>Cổng{fwAction === 'port' ? '' : ' (tuỳ chọn)'}</span>
+            {fwAction === 'block' && <input id="fw-block-port" value={firewallBlockPort} onChange={e => setFirewallBlockPort(e.target.value)} placeholder="Mọi cổng" inputMode="numeric" />}
+            {fwAction === 'allow' && <input id="fw-allow-port" value={firewallAllowPort} onChange={e => setFirewallAllowPort(e.target.value)} placeholder="22" inputMode="numeric" />}
+            {fwAction === 'port' && <input id="fw-port" value={firewallPort} onChange={e => setFirewallPort(e.target.value)} placeholder="80" inputMode="numeric" />}
+          </label>
+          <label><span>Giao thức</span>
+            {fwAction === 'block' && <select id="fw-block-proto" value={firewallBlockProtocol} onChange={e => setFirewallBlockProtocol(e.target.value)}><option value="tcp">TCP</option><option value="udp">UDP</option></select>}
+            {fwAction === 'allow' && <select id="fw-allow-proto" value={firewallAllowProtocol} onChange={e => setFirewallAllowProtocol(e.target.value)}><option value="tcp">TCP</option><option value="udp">UDP</option></select>}
+            {fwAction === 'port' && <select id="fw-proto" value={firewallProtocol} onChange={e => setFirewallProtocol(e.target.value)}><option value="tcp">TCP</option><option value="udp">UDP</option></select>}
+          </label>
+          <button className={fwAction === 'block' ? 'danger' : ''} disabled={!!loading
+            || (fwAction === 'block' && !firewallBlockIp)
+            || (fwAction === 'allow' && !firewallAllowIp)
+            || (fwAction === 'port' && !firewallPort)} onClick={submitFirewallRule}>
+            {fwAction === 'block' ? 'Chặn' : fwAction === 'allow' ? 'Cho phép' : 'Mở cổng'}
+          </button>
+        </div>
+      </section>
+
       {f2bInstalled && <section className="section">
         <div className="section-title">
           <div>
-            <h2>Fail2ban — chặn dò mật khẩu SSH</h2>
-            <p className="hint">
-              IP thử sai 5 lần trong 10 phút bị khoá 1 giờ, khoá lâu dần nếu quay lại (tối đa 1 tuần).
-              Địa chỉ của chính máy chủ không bao giờ bị khoá.
-            </p>
+            <h2>Fail2ban</h2>
+            <p className="hint">IP thử sai 5 lần trong 1 giờ bị khoá 1 giờ, khoá lâu dần nếu quay lại (tối đa 1 tuần). Địa chỉ của chính máy chủ không bao giờ bị khoá.</p>
           </div>
           <button disabled={!!loading} onClick={loadFail2ban}><RefreshCw size={14}/> Refresh</button>
         </div>
         {!f2b && <p className="hint">Chưa tải được trạng thái. Bấm Refresh.</p>}
         {f2b && <>
-          {f2b.warning && <p className="hint" style={{marginBottom: 10, fontWeight: 600}}>{f2b.warning}</p>}
-          <div style={{display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center'}}>
-            <span className={f2b.running ? 'badge ok' : 'badge warn'}>
-              {f2b.running ? 'Đang chạy' : 'Không chạy'}
-            </span>
-            <span className={f2b.bans_reach_kernel ? 'badge ok' : 'badge warn'}>
-              {f2b.bans_reach_kernel ? 'Lệnh ban có hiệu lực' : 'Ban KHÔNG tới iptables'}
-            </span>
-            <span className={f2b.filter_sees_journal ? 'badge ok' : 'badge warn'}>
-              {f2b.filter_sees_journal ? 'Bộ lọc đọc được log' : 'Bộ lọc KHÔNG thấy log'}
-            </span>
-            <span className="hint">unit: {f2b.ssh_unit || '—'}</span>
-            <span className="hint">banaction: {f2b.banaction || '—'}</span>
-            <span className="hint">đã thấy {f2b.total_failed ?? 0} lần sai</span>
-            <span className="hint">đang khoá: {f2b.banned ?? 0} IP</span>
+          {f2b.warning && <p className="hint alarm">{f2b.warning}</p>}
+          <div className="chip-row">
+            <span className={f2b.running ? 'badge ok' : 'badge warn'}>{f2b.running ? 'Đang chạy' : 'Không chạy'}</span>
+            <span className={f2b.bans_reach_kernel ? 'badge ok' : 'badge warn'}>{f2b.bans_reach_kernel ? 'Ban có hiệu lực' : 'Ban KHÔNG tới iptables'}</span>
+            <span className={f2b.filter_sees_journal ? 'badge ok' : 'badge warn'}>{f2b.filter_sees_journal ? 'Đọc được log' : 'KHÔNG thấy log'}</span>
+            <span className="hint">{f2b.ssh_unit || '—'} · {f2b.banaction || '—'} · đã thấy {f2b.total_failed ?? 0} lần sai</span>
           </div>
-          {(f2b.banned_ips || []).length > 0 ? <table className="table" style={{marginTop: 10}}>
-            <thead><tr><th>IP đang bị khoá</th><th style={{width: 120}}></th></tr></thead>
-            <tbody>
-              {(f2b.banned_ips || []).map(ip => <tr key={ip}>
-                <td><code>{ip}</code></td>
-                <td><button className="danger" disabled={!!loading} onClick={() => unbanAddress(ip)}>Gỡ khoá</button></td>
-              </tr>)}
-            </tbody>
-          </table> : <p className="hint" style={{marginTop: 10}}>Hiện không có IP nào bị khoá.</p>}
+          <div className="detail-tabs">
+            <button className={fwDetail === 'banned' ? 'chip on' : 'chip'} disabled={!!loading}
+              onClick={() => openFwDetail('banned')}>IP đang bị khoá <b>{f2b.banned ?? 0}</b></button>
+          </div>
+          {fwDetail === 'banned' && <div className="detail-panel">
+            <div className="detail-head">
+              <input id="f2b-filter" value={fwFilter} onChange={e => setFwFilter(e.target.value)}
+                placeholder="Lọc theo IP..." aria-label="Lọc IP bị khoá" />
+              <button className="secondary-light" onClick={() => setFwDetail(null)}><X size={14}/> Đóng</button>
+            </div>
+            <div className="detail-body">
+              {shownBanned.length === 0 && <p className="hint">{f2bBanned.total === 0
+                ? 'Hiện không có IP nào bị khoá.' : 'Không có IP nào khớp bộ lọc.'}</p>}
+              {shownBanned.map(ip => <div className="firewall-rule" key={ip}>
+                <span><code>{ip}</code></span>
+                <div className="firewall-rule-actions">
+                  <button className="danger" disabled={!!loading} onClick={() => unbanAddress(ip)}>Gỡ khoá</button>
+                </div>
+              </div>)}
+            </div>
+            {f2bBanned.total > f2bBanned.limit && <div className="detail-foot">
+              <button className="secondary-light" disabled={!!loading || f2bBanned.offset === 0}
+                onClick={() => loadBannedPage(Math.max(0, f2bBanned.offset - f2bBanned.limit))}>Trước</button>
+              <span className="hint">{f2bBanned.offset + 1}–{Math.min(f2bBanned.offset + f2bBanned.limit, f2bBanned.total)} trong {f2bBanned.total}</span>
+              <button className="secondary-light" disabled={!!loading || f2bBanned.offset + f2bBanned.limit >= f2bBanned.total}
+                onClick={() => loadBannedPage(f2bBanned.offset + f2bBanned.limit)}>Sau</button>
+            </div>}
+          </div>}
         </>}
       </section>}
-      <section className="section">
-        <div className="section-title">
-          <div><h2>Firewall (iptables + ipset)</h2><p className="hint">SSH, the panel port and 80/443/465/587 are always kept open.</p></div>
-        </div>
-        <div className="actions">
-          <button disabled={!!loading} onClick={loadFirewall}><RefreshCw size={14}/> Refresh</button>
-          <button disabled={!!loading} onClick={enableFirewall}><Shield size={14}/> Enable</button>
-          <button disabled={!!loading} onClick={disableFirewall}>Disable</button>
-          <button disabled={!!loading} onClick={reloadFirewall}>Reload</button>
-        </div>
-        {panelRules.length > 0 && <p className="hint">Protected ports: {panelRules.map(rule => rule.to).join(', ')}</p>}
-        {userRules.length > 0 && <div className="table firewall-rule-table">
-          {userRules.map(rule => <div className="firewall-rule" key={rule.id}>
-            <span>
-              <strong>#{rule.id}</strong>{' '}
-              <span className={rule.action === 'DENY' ? 'badge danger' : 'badge ok'}>{rule.action}</span>{' '}
-              {rule.to} from {rule.from}
-            </span>
-            <div className="firewall-rule-actions">
-              <button className="danger" disabled={!!loading} onClick={() => deleteFirewallRule(rule.id)}><Trash2 size={14}/> Delete</button>
-            </div>
-          </div>)}
-        </div>}
-        {userRules.length === 0 && <p className="hint">No custom rules yet. Only the protected ports are open.</p>}
-        <div className="info-box firewall-status">
-          <strong>Firewall status</strong>
-          <pre>{firewallText}</pre>
-          <div className="firewall-delete-inline">
-            <label><span>Delete rule #</span><input value={firewallDeleteNumber} onChange={e => setFirewallDeleteNumber(e.target.value)} placeholder="12" inputMode="numeric" /></label>
-            <button className="danger" disabled={!!loading || !firewallDeleteNumber} onClick={() => deleteFirewallRule()}>Delete</button>
-          </div>
-        </div>
-      </section>
-      <section className="section">
-        <h2>Open port</h2>
-        <div className="firewall-form">
-          <label><span>Port</span><input value={firewallPort} onChange={e => setFirewallPort(e.target.value)} placeholder="80" inputMode="numeric" /></label>
-          <label><span>Protocol</span><select value={firewallProtocol} onChange={e => setFirewallProtocol(e.target.value)}><option value="tcp">TCP</option><option value="udp">UDP</option></select></label>
-          <button disabled={!!loading || !firewallPort} onClick={openFirewallPort}>Open port</button>
-        </div>
-      </section>
-      <section className="section">
-        <h2>Allow IP</h2>
-        <div className="firewall-form">
-          <label><span>IP / CIDR</span><input value={firewallAllowIp} onChange={e => setFirewallAllowIp(e.target.value)} placeholder="1.2.3.4" /></label>
-          <label><span>Port (optional)</span><input value={firewallAllowPort} onChange={e => setFirewallAllowPort(e.target.value)} placeholder="22" inputMode="numeric" /></label>
-          <label><span>Protocol</span><select value={firewallAllowProtocol} onChange={e => setFirewallAllowProtocol(e.target.value)}><option value="tcp">TCP</option><option value="udp">UDP</option></select></label>
-          <button disabled={!!loading || !firewallAllowIp} onClick={allowFirewallIp}>Allow</button>
-        </div>
-      </section>
-      <section className="section">
-        <h2>Block IP</h2>
-        <div className="firewall-form">
-          <label><span>IP / CIDR</span><input value={firewallBlockIp} onChange={e => setFirewallBlockIp(e.target.value)} placeholder="5.6.7.8" /></label>
-          <label><span>Port (optional)</span><input value={firewallBlockPort} onChange={e => setFirewallBlockPort(e.target.value)} placeholder="All ports" inputMode="numeric" /></label>
-          <label><span>Protocol</span><select value={firewallBlockProtocol} onChange={e => setFirewallBlockProtocol(e.target.value)}><option value="tcp">TCP</option><option value="udp">UDP</option></select></label>
-          <button className="danger" disabled={!!loading || !firewallBlockIp} onClick={blockFirewallIp}>Block</button>
-        </div>
-      </section>
-      <section className="section">
-        <div className="section-title">
-          <div><h2>IP blocklist URLs</h2><p className="hint">TXT files are fetched daily at 01:00 into an ipset, so even million-entry lists cost one kernel lookup per packet.</p></div>
-          <button disabled={!!loading} onClick={loadFirewallBlocklists}><RefreshCw size={14}/> Refresh</button>
-        </div>
-        <div className="firewall-form firewall-blocklist-form">
-          <label><span>TXT URL</span><input value={firewallBlocklistUrl} onChange={e => setFirewallBlocklistUrl(e.target.value)} placeholder="https://example.com/blocklist.txt" /></label>
-          <button disabled={!!loading || !firewallBlocklistUrl.trim()} onClick={addFirewallBlocklistUrl}><Plus size={14}/> Add URL</button>
-          <button className="secondary-light" disabled={!!loading} onClick={updateFirewallBlocklistsNow}><RefreshCw size={14}/> Update now</button>
-        </div>
-        {blocklistUrls.length > 0 && <div className="table firewall-blocklist-table">
-          {blocklistUrls.map(url => <div className="firewall-rule" key={url}>
-            <span>{url}</span>
-            <div className="firewall-rule-actions"><button className="danger" disabled={!!loading} onClick={() => deleteFirewallBlocklistUrl(url)}><Trash2 size={14}/> Delete</button></div>
-          </div>)}
-        </div>}
-        <div className="info-box firewall-status"><strong>IP blocklist status</strong><pre>{blocklistText}</pre></div>
-      </section>
     </>;
   }
 
