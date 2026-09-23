@@ -1094,6 +1094,10 @@ class BackupScheduleOut(BaseModel):
     all_users: bool = False
     target_id: Optional[int] = None
     schedule: str
+    # The list shows what each schedule appends, so it has to come back out.
+    # Without it item.name_suffix was undefined in the panel and every
+    # schedule read as the default whatever it really was.
+    name_suffix: str = "full_date"
     retention: int
     is_active: bool
     last_run_at: Optional[datetime] = None

@@ -812,6 +812,11 @@ def create_backup_schedule(payload: BackupScheduleCreate, request: Request, db: 
         all_users=payload.all_users,
         target_id=payload.target_id,
         schedule=payload.schedule,
+        # Was missing, so the column kept its "full_date" default whatever the
+        # operator picked: choosing "day of week" still produced
+        # user-<account>-2026-09-23.tar.gz. The schema validated the value and
+        # then nothing carried it to the row.
+        name_suffix=payload.name_suffix,
         retention=payload.retention,
         is_active=payload.is_active,
         last_status="pending",
