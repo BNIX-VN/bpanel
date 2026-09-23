@@ -25,11 +25,28 @@ class UnbanRequest(BaseModel):
 
 @router.get("/status")
 def status(current_user: User = Depends(get_current_user)):
+    """Counts and health. Deliberately not the ban list.
+
+    The list is a separate call so the page can show a number and fetch the
+    addresses only when somebody asks to see them.
+    """
     ensure_role(current_user.role, Role.admin)
     addons.require(addons.FAIL2BAN)
-    info = fail2ban.status()
-    info["banned_ips"] = fail2ban.banned() if info.get("running") else []
-    return info
+    return fail2ban.status()
+
+
+@router.get("/banned")
+def banned(
+    limit: int = 50,
+    offset: int = 0,
+    current_user: User = Depends(get_current_user),
+):
+    ensure_role(current_user.role, Role.admin)
+    addons.require(addons.FAIL2BAN)
+    try:
+        return fail2ban.banned(limit=limit, offset=offset)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/unban")
@@ -50,4 +67,4 @@ def unban(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     log_action(db, current_user.id, "fail2ban_unban", payload.ip)
-    return {"unbanned": payload.ip, "banned_ips": fail2ban.banned()}
+    return {"unbanned": payload.ip, **fail2ban.banned()}
