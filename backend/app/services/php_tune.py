@@ -262,36 +262,36 @@ def recommendations(facts: dict | None = None, php_version: str = "8.4",
                 "key": "opcache.jit",
                 "value": "tracing",
                 "reason": (
-                    "Biên dịch sang mã máy các đoạn chạy nhiều lần. Có lợi rõ với tính toán nặng; "
-                    "với WordPress phần lớn thời gian là chờ database nên lợi ít."
+                    "Compiles hot code paths to machine code. A clear win for heavy computation; "
+                    "with WordPress most of the time goes on waiting for the database, so it gains little."
                 ),
             },
             {
                 "key": "opcache.jit_buffer_size",
                 "value": f"{tier['jit_buffer_mb']}M",
                 "reason": (
-                    f"Vùng nhớ riêng cho mã JIT sinh ra, ngoài {tier['opcache_mb']} MB của opcache. "
-                    "Đặt 0 là tắt JIT."
+                    f"Memory for the code JIT generates, on top of opcache's {tier['opcache_mb']} MB. "
+                    "Set to 0 to turn JIT off."
                 ),
             },
         ]
     elif jit.get("supported"):
-        blocker = jit.get("blocked_by") or "một extension khác"
+        blocker = jit.get("blocked_by") or "another extension"
         jit_rows = [
             {
                 "key": "opcache.jit",
                 "value": "disable",
                 "reason": (
-                    f"{blocker} chiếm opcode handler nên PHP không chạy JIT được. "
-                    "Tắt hẳn để khỏi cảnh báo mỗi lần PHP-FPM khởi động."
+                    f"{blocker} holds the opcode handler, so PHP cannot run JIT. "
+                    "Turn it off outright to stop the warning on every PHP-FPM start."
                 ),
             },
             {
                 "key": "opcache.jit_buffer_size",
                 "value": "0",
                 "reason": (
-                    "PHP 8.4 mặc định giữ 64 MB cho JIT dù JIT không chạy được — "
-                    "trả lại chỗ đó cho máy."
+                    "PHP 8.4 reserves 64 MB for JIT by default even when JIT cannot run - "
+                    "give that back to the machine."
                 ),
             },
         ]
@@ -301,70 +301,70 @@ def recommendations(facts: dict | None = None, php_version: str = "8.4",
             "key": "memory_limit",
             "value": f"{tier['memory_limit']}M",
             "reason": (
-                f"Trần cho mỗi request. {total} MB RAM; số request chạy cùng lúc do "
-                f"pm.max_children chặn (~{workers}), không phải do trần này. "
-                f"Ước tính {facts['reserved_memory_mb']} MB sẽ về MariaDB/nginx/panel."
+                f"The ceiling per request. {total} MB of RAM; how many run at once is capped by "
+                f"pm.max_children (~{workers}), not by this. "
+                f"About {facts['reserved_memory_mb']} MB is expected to go to MariaDB, nginx and the panel."
             ),
         },
         {
             "key": "opcache.enable",
             "value": "1",
-            "reason": "Không có opcache thì mỗi request biên dịch lại toàn bộ mã nguồn.",
+            "reason": "Without opcache every request recompiles the whole source.",
         },
         {
             "key": "opcache.memory_consumption",
             "value": str(tier["opcache_mb"]),
-            "reason": f"Đủ chứa mã đã biên dịch của một WordPress đầy plugin ({tier['opcache_mb']} MB).",
+            "reason": f"Enough for the compiled code of a plugin-heavy WordPress ({tier['opcache_mb']} MB).",
         },
         {
             "key": "opcache.interned_strings_buffer",
             "value": str(tier["interned"]),
-            "reason": "Chuỗi lặp lại được dùng chung giữa các worker thay vì nhân bản.",
+            "reason": "Repeated strings are shared between workers instead of duplicated.",
         },
         {
             "key": "opcache.max_accelerated_files",
             "value": str(tier["files"]),
-            "reason": "WordPress cùng plugin thường vượt 10.000 file; hết chỗ là opcache bắt đầu đuổi file.",
+            "reason": "WordPress with plugins usually passes 10,000 files; once full, opcache starts evicting.",
         },
         {
             "key": "opcache.validate_timestamps",
             "value": "1",
-            "reason": "Vẫn kiểm tra file đổi. Tắt thì nhanh hơn chút nhưng khách sửa code sẽ không thấy gì thay đổi.",
+            "reason": "Keeps checking for changed files. Off is slightly faster, but a customer editing code would see nothing change.",
         },
         {
             "key": "opcache.revalidate_freq",
             "value": "60",
-            "reason": "Kiểm tra file mỗi 60s thay vì mỗi request.",
+            "reason": "Checks files every 60s instead of on every request.",
         },
         {
             "key": "opcache.save_comments",
             "value": "1",
-            "reason": "Bắt buộc giữ: nhiều thư viện PHP đọc annotation trong comment.",
+            "reason": "Must stay: plenty of PHP libraries read annotations out of comments.",
         },
         {
             "key": "opcache.enable_cli",
             "value": "0",
-            "reason": "WP-CLI và cron chạy một lần rồi thoát, cache không kịp dùng.",
+            "reason": "WP-CLI and cron run once and exit, so the cache never pays off.",
         },
         {
             "key": "realpath_cache_size",
             "value": "4096k",
-            "reason": "Mặc định 256k là quá nhỏ cho cây thư mục WordPress; giảm số lần stat().",
+            "reason": "The 256k default is too small for a WordPress tree; this cuts the number of stat() calls.",
         },
         {
             "key": "realpath_cache_ttl",
             "value": "600",
-            "reason": "Giữ đường dẫn đã phân giải 10 phút.",
+            "reason": "Keeps resolved paths for ten minutes.",
         },
         {
             "key": "expose_php",
             "value": "Off",
-            "reason": "Không quảng cáo phiên bản PHP trong header trả về.",
+            "reason": "Stops advertising the PHP version in response headers.",
         },
         {
             "key": "zlib.output_compression",
             "value": "Off",
-            "reason": "Nginx đã nén rồi; nén hai lần chỉ tốn CPU.",
+            "reason": "Nginx already compresses; doing it twice only costs CPU.",
         },
     ]
 
@@ -482,7 +482,7 @@ def set_opcache(php_version: str, enabled: bool) -> dict:
     return {
         "php_version": php_version,
         "enabled": enabled,
-        "message": f"OPcache PHP {php_version}: {'bật' if enabled else 'tắt'}.",
+        "message": f"OPcache for PHP {php_version}: {'on' if enabled else 'off'}.",
     }
 
 
@@ -607,7 +607,7 @@ def apply(php_version: str) -> dict:
     )
     if result.returncode != 0:
         raise RuntimeError((result.stderr or result.stdout or "Could not write the PHP tuning file").strip()[-2000:])
-    return {"message": (result.stdout or "").strip() or f"PHP {php_version} đã tune.", "plan": plan(php_version)}
+    return {"message": (result.stdout or "").strip() or f"PHP {php_version} tuned.", "plan": plan(php_version)}
 
 
 def retune_pools() -> dict:
@@ -627,4 +627,4 @@ def retune_pools() -> dict:
     )
     if result.returncode != 0:
         raise RuntimeError((result.stderr or result.stdout or "Could not retune the pools").strip()[-2000:])
-    return {"message": "Đã tính lại các pool PHP-FPM.", "output": (result.stdout or "").strip()[-4000:]}
+    return {"message": "PHP-FPM pools recalculated.", "output": (result.stdout or "").strip()[-4000:]}

@@ -31,23 +31,23 @@ ALLOWED_SERVICE_KEYS = {
 # Refused with a specific explanation rather than the generic message, because
 # these are the ones people actually reach for.
 EXPLAINED_SERVICE_KEYS = {
-    "privileged": "chạy container ở chế độ privileged",
-    "network_mode": "đặt network_mode (host network bỏ qua chốt firewall)",
-    "cap_add": "thêm capability",
-    "devices": "gắn thiết bị của máy chủ",
-    "pid": "dùng chung PID namespace với máy chủ",
-    "ipc": "dùng chung IPC namespace",
-    "userns_mode": "đổi user namespace",
-    "security_opt": "đổi tuỳ chọn bảo mật",
-    "sysctls": "đặt sysctl",
-    "build": "build image tại chỗ; panel chỉ chạy image có sẵn",
-    "extra_hosts": "ghi đè phân giải tên máy",
-    "volumes_from": "mượn volume của container khác",
-    "cgroup_parent": "đổi cgroup cha",
-    "group_add": "thêm group phụ",
-    "env_file": "đọc biến môi trường từ file; dán thẳng vào phần Environment",
-    "networks": "tự khai network; panel tạo network riêng cho ứng dụng",
-    "deploy": "khai báo deploy của swarm",
+    "privileged": "runs the container privileged",
+    "network_mode": "sets network_mode (host networking skips the firewall guard)",
+    "cap_add": "adds a capability",
+    "devices": "attaches a host device",
+    "pid": "shares the host PID namespace",
+    "ipc": "shares the IPC namespace",
+    "userns_mode": "changes the user namespace",
+    "security_opt": "changes security options",
+    "sysctls": "sets sysctls",
+    "build": "builds an image here; the panel only runs prebuilt images",
+    "extra_hosts": "overrides host name resolution",
+    "volumes_from": "borrows another container's volumes",
+    "cgroup_parent": "changes the parent cgroup",
+    "group_add": "adds supplementary groups",
+    "env_file": "reads variables from a file; paste them into Environment instead",
+    "networks": "declares its own networks; the panel creates one per app",
+    "deploy": "declares swarm deploy settings",
 }
 SERVICE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,30}$")
 # An application behind the panel's proxy never sees its own public address:
@@ -159,22 +159,22 @@ def _parse_environment(raw: Any, service: str, issues: list[Issue]) -> dict[str,
             if "=" not in text:
                 # `- FOO` inherits from the host environment, which for us is the
                 # panel's own process. Never pass that through.
-                issues.append(Issue(service, f"biến môi trường {text[:40]} không có giá trị"))
+                issues.append(Issue(service, f"environment variable {text[:40]} has no value"))
                 continue
             key, value = text.split("=", 1)
             items.append((key, value))
     else:
-        issues.append(Issue(service, "environment phải là danh sách hoặc mapping"))
+        issues.append(Issue(service, "environment must be a list or a mapping"))
         return entries
 
     for key, value in items:
         name = str(key).strip()
         if not ENV_KEY_RE.fullmatch(name):
-            issues.append(Issue(service, f"tên biến môi trường không hợp lệ: {name[:40]}"))
+            issues.append(Issue(service, f"not a valid environment variable name: {name[:40]}"))
             continue
         text = "" if value is None else str(value)
         if any(char in text for char in "\r\n\x00"):
-            issues.append(Issue(service, f"giá trị của {name} chứa xuống dòng"))
+            issues.append(Issue(service, f"the value of {name} contains a newline"))
             continue
         entries[name] = text
     return entries
@@ -195,10 +195,10 @@ def _parse_port(raw: Any, service: str, issues: list[Issue]) -> int | None:
     try:
         port = int(str(target))
     except (TypeError, ValueError):
-        issues.append(Issue(service, f"cổng không đọc được: {str(raw)[:40]}"))
+        issues.append(Issue(service, f"could not read the port: {str(raw)[:40]}"))
         return None
     if not 1 <= port <= 65535:
-        issues.append(Issue(service, f"cổng ngoài phạm vi: {port}"))
+        issues.append(Issue(service, f"port out of range: {port}"))
         return None
     return port
 
@@ -211,45 +211,45 @@ def _parse_volume(raw: Any, service: str, declared: set[str], issues: list[Issue
         target = str(raw.get("target", ""))
         read_only = bool(raw.get("read_only"))
         if not source or not target:
-            issues.append(Issue(service, "volume thiếu source hoặc target"))
+            issues.append(Issue(service, "volume is missing its source or target"))
             return None
         spec = f"{source}:{target}" + (":ro" if read_only else "")
         if kind == "bind":
             return _parse_volume(spec, service, declared, issues)
         if kind != "volume":
-            issues.append(Issue(service, f"loại volume không hỗ trợ: {kind}"))
+            issues.append(Issue(service, f"unsupported volume type: {kind}"))
             return None
         return _parse_volume(spec, service, declared, issues)
 
     text = str(raw)
     parts = text.split(":")
     if len(parts) < 2:
-        issues.append(Issue(service, f"volume phải có dạng nguồn:đích — {text[:50]}"))
+        issues.append(Issue(service, f"a volume must read source:target - {text[:50]}"))
         return None
     source, target = parts[0], parts[1]
     suffix = f":{parts[2]}" if len(parts) > 2 and parts[2] in {"ro", "rw"} else ""
     if not target.startswith("/"):
-        issues.append(Issue(service, f"đích của volume phải là đường dẫn tuyệt đối — {text[:50]}"))
+        issues.append(Issue(service, f"a volume target must be an absolute path - {text[:50]}"))
         return None
 
     if source.startswith("/"):
         issues.append(Issue(
             service,
-            f"mount đường dẫn máy chủ không được phép — {text[:50]}; "
-            "hãy dùng đường dẫn trong thư mục ứng dụng (./data) hoặc volume có tên",
+            f"mounting a host path is not allowed - {text[:50]}; "
+            "use a path inside the app directory (./data) or a named volume",
         ))
         return None
     if source.startswith(".") or "/" in source:
         # A path relative to the project, which is the application directory.
         relative = PurePosixPath(source)
         if any(part == ".." for part in relative.parts):
-            issues.append(Issue(service, f"volume trỏ ra ngoài thư mục ứng dụng — {text[:50]}"))
+            issues.append(Issue(service, f"this volume points outside the app directory - {text[:50]}"))
             return None
         cleaned = "/".join(part for part in relative.parts if part not in (".", ""))
         return "bind", f"./{cleaned}:{target}{suffix}" if cleaned else f".:{target}{suffix}"
 
     if not VOLUME_NAME_RE.fullmatch(source):
-        issues.append(Issue(service, f"tên volume không hợp lệ: {source[:40]}"))
+        issues.append(Issue(service, f"not a valid volume name: {source[:40]}"))
         return None
     declared.add(source)
     return "named", f"{source}:{target}{suffix}"
@@ -294,10 +294,10 @@ def parse_memory(value: Any) -> int | None:
 def _parse_service(name: str, raw: Any, declared_volumes: set[str], issues: list[Issue],
                    enforce_registry: bool = True) -> Service | None:
     if not SERVICE_NAME_RE.fullmatch(name):
-        issues.append(Issue(name, "tên service chỉ được dùng chữ thường, số, gạch ngang và gạch dưới"))
+        issues.append(Issue(name, "a service name may only use lower-case letters, digits, hyphens and underscores"))
         return None
     if not isinstance(raw, dict):
-        issues.append(Issue(name, "service phải là một mapping"))
+        issues.append(Issue(name, "a service must be a mapping"))
         return None
 
     for key in raw:
@@ -307,11 +307,11 @@ def _parse_service(name: str, raw: Any, declared_volumes: set[str], issues: list
         if reason:
             issues.append(Issue(name, f"{key}: {reason}"))
         else:
-            issues.append(Issue(name, f"khoá không được hỗ trợ: {key}"))
+            issues.append(Issue(name, f"unsupported key: {key}"))
 
     image = str(raw.get("image", "") or "").strip()
     if not image:
-        issues.append(Issue(name, "thiếu image"))
+        issues.append(Issue(name, "image is missing"))
         return None
     try:
         image = site_apps.validate_image(image, enforce_registry=enforce_registry)
@@ -354,9 +354,9 @@ def _parse_service(name: str, raw: Any, declared_volumes: set[str], issues: list
     if user is not None:
         text = str(user).strip()
         if text in {"root", "0", "0:0"} or text.startswith("0:"):
-            issues.append(Issue(name, "không cho phép chạy service bằng root"))
+            issues.append(Issue(name, "a service may not run as root"))
         elif not re.fullmatch(r"[A-Za-z0-9_.:-]{1,64}", text):
-            issues.append(Issue(name, f"giá trị user không hợp lệ: {text[:30]}"))
+            issues.append(Issue(name, f"not a valid user value: {text[:30]}"))
         else:
             service.user = text
     return service
@@ -367,18 +367,18 @@ def analyse(source: str, web_service: str = "", enforce_registry: bool = True,
     """Read a customer's compose file and report what the panel can run."""
     plan = Plan()
     if not (source or "").strip():
-        plan.issues.append(Issue("", "chưa có nội dung docker-compose"))
+        plan.issues.append(Issue("", "no docker-compose content yet"))
         return plan
     if len(source.encode("utf-8")) > MAX_SOURCE_BYTES:
-        plan.issues.append(Issue("", "file compose quá lớn"))
+        plan.issues.append(Issue("", "the compose file is too large"))
         return plan
     try:
         document = yaml.safe_load(source)
     except yaml.YAMLError as exc:
-        plan.issues.append(Issue("", f"YAML không hợp lệ: {str(exc).splitlines()[0][:120]}"))
+        plan.issues.append(Issue("", f"invalid YAML: {str(exc).splitlines()[0][:120]}"))
         return plan
     if not isinstance(document, dict):
-        plan.issues.append(Issue("", "nội dung phải là một mapping YAML"))
+        plan.issues.append(Issue("", "the content must be a YAML mapping"))
         return plan
 
     missing: dict[str, str] = {}
@@ -387,13 +387,13 @@ def analyse(source: str, web_service: str = "", enforce_registry: bool = True,
         if name in PLACEHOLDERS:
             plan.issues.append(Issue(
                 "",
-                f"${{{name}}} chỉ có khi ứng dụng đã gắn với một website; "
-                "hãy trỏ một website vào ứng dụng này trước",
+                f"${{{name}}} only exists once the app is attached to a website; "
+                "point a website at this app first",
             ))
         else:
             plan.issues.append(Issue(
                 "",
-                f"thiếu biến {name} — hãy khai {name}=... trong ô .env" + (f" ({note})" if note else ""),
+                f"{name} is not set - add {name}=... in the .env box" + (f" ({note})" if note else ""),
             ))
     if missing:
         return plan
@@ -403,14 +403,14 @@ def analyse(source: str, web_service: str = "", enforce_registry: bool = True,
         if name in ALLOWED_TOP_LEVEL or name.startswith("x-"):
             continue
         reason = EXPLAINED_SERVICE_KEYS.get(name)
-        plan.issues.append(Issue("", f"{name}: {reason}" if reason else f"khoá không được hỗ trợ: {name}"))
+        plan.issues.append(Issue("", f"{name}: {reason}" if reason else f"unsupported key: {name}"))
 
     raw_services = document.get("services")
     if not isinstance(raw_services, dict) or not raw_services:
-        plan.issues.append(Issue("", "không tìm thấy service nào"))
+        plan.issues.append(Issue("", "no services found"))
         return plan
     if len(raw_services) > MAX_SERVICES:
-        plan.issues.append(Issue("", f"tối đa {MAX_SERVICES} service cho một ứng dụng"))
+        plan.issues.append(Issue("", f"at most {MAX_SERVICES} services per app"))
         return plan
 
     declared: set[str] = set()
@@ -423,11 +423,11 @@ def analyse(source: str, web_service: str = "", enforce_registry: bool = True,
     if isinstance(declared_top, dict):
         for name, options in declared_top.items():
             if not VOLUME_NAME_RE.fullmatch(str(name)):
-                plan.issues.append(Issue("", f"tên volume không hợp lệ: {str(name)[:40]}"))
+                plan.issues.append(Issue("", f"not a valid volume name: {str(name)[:40]}"))
                 continue
             if isinstance(options, dict) and options.get("driver_opts"):
                 # driver_opts with o=bind is a host mount wearing a disguise.
-                plan.issues.append(Issue("", f"volume {name}: driver_opts không được phép"))
+                plan.issues.append(Issue("", f"volume {name}: driver_opts is not allowed"))
                 continue
             declared.add(str(name))
     plan.volumes = sorted(declared)
@@ -451,7 +451,7 @@ def _pick_web_port(plan: Plan, requested: int | None) -> None:
         if requested not in service.container_ports:
             plan.issues.append(Issue(
                 service.name,
-                f"service này không khai cổng {requested}; đang khai: "
+                f"this service does not expose port {requested}; it exposes: "
                 + ", ".join(str(port) for port in service.container_ports),
             ))
             return
@@ -459,15 +459,15 @@ def _pick_web_port(plan: Plan, requested: int | None) -> None:
     others = [port for port in service.container_ports if port != service.container_port]
     if others:
         plan.notes.append(
-            f"{service.name} khai {len(service.container_ports)} cổng; domain vào cổng "
-            f"{service.container_port}, còn {', '.join(str(port) for port in others)} chỉ "
-            "dùng nội bộ giữa các container."
+            f"{service.name} exposes {len(service.container_ports)} ports; the domain goes to port "
+            f"{service.container_port}, and {', '.join(str(port) for port in others)} are "
+            "only used between containers."
         )
     for other in plan.services:
         if other.name != plan.web_service and other.container_ports:
             plan.notes.append(
-                f"{other.name} khai cổng {', '.join(str(port) for port in other.container_ports)}"
-                " — chỉ dùng nội bộ, không ra ngoài."
+                f"{other.name} exposes port {', '.join(str(port) for port in other.container_ports)}"
+                " - internal only, never published."
             )
 
 
@@ -475,7 +475,7 @@ def _pick_web_service(plan: Plan, requested: str) -> str:
     names = [service.name for service in plan.services]
     if requested:
         if requested not in names:
-            plan.issues.append(Issue("", f"không có service tên {requested}"))
+            plan.issues.append(Issue("", f"no service called {requested}"))
             return ""
         chosen = requested
     else:
@@ -483,16 +483,16 @@ def _pick_web_service(plan: Plan, requested: str) -> str:
         if len(with_ports) == 1:
             chosen = with_ports[0].name
         elif with_ports:
-            plan.issues.append(Issue("", "nhiều service khai cổng; hãy chọn service nào phục vụ domain"))
+            plan.issues.append(Issue("", "several services expose ports; choose which one serves the domain"))
             return ""
         elif plan.services:
-            plan.issues.append(Issue("", "không service nào khai cổng; hãy chọn service phục vụ domain và cổng của nó"))
+            plan.issues.append(Issue("", "no service exposes a port; choose the service that serves the domain and its port"))
             return ""
         else:
             return ""
     service = next(item for item in plan.services if item.name == chosen)
     if not service.container_port:
-        plan.issues.append(Issue(chosen, "service này chưa khai cổng lắng nghe"))
+        plan.issues.append(Issue(chosen, "this service exposes no listening port"))
         return ""
     return chosen
 
@@ -581,7 +581,7 @@ def render(
 ) -> str:
     """Build the compose file the server actually runs."""
     if not plan.ok:
-        raise ValueError("Không thể dựng compose khi còn lỗi chưa xử lý")
+        raise ValueError("Cannot build the compose file while issues remain")
 
     services: dict[str, Any] = {}
     for service in plan.services:

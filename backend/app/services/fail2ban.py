@@ -77,14 +77,14 @@ def status() -> dict:
     if info["installed"] and info["running"]:
         if not info["bans_reach_kernel"]:
             info["warning"] = (
-                "fail2ban đang chạy nhưng lệnh ban không tới được iptables. "
-                f"Kiểm tra banaction trong {JAIL_FILE}."
+                "fail2ban is running but its bans are not reaching iptables. "
+                f"Check banaction in {JAIL_FILE}."
             )
         elif not info["filter_sees_journal"]:
             info["warning"] = (
-                "fail2ban đang chạy và ban được, nhưng bộ lọc đang đọc một "
-                f"unit systemd không có log ({info['ssh_unit'] or 'không rõ'}). "
-                "Nó sẽ không bao giờ thấy một lần đăng nhập sai nào."
+                "fail2ban is running and can ban, but its filter is reading a "
+                f"systemd unit with no entries ({info['ssh_unit'] or 'unknown'}). "
+                "It will never see a single failed login."
             )
     return info
 
@@ -125,5 +125,5 @@ def banned(jail: str = "sshd", limit: int = 50, offset: int = 0) -> dict:
 def unban(address: str) -> None:
     value = (address or "").strip()
     if not IP_RE.fullmatch(value):
-        raise ValueError("IP không hợp lệ")
+        raise ValueError("Not a valid IP address")
     shell.privileged("fail2ban-unban", helper_args=[value], fallback=["true"])

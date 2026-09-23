@@ -417,18 +417,18 @@ function aceModeName(mode) {
 // like when a folder carries a special bit), so the dialog works on the same
 // representation.
 // Monday first, matching datetime.weekday() on the server.
-const WEEKDAY_LABELS = ['Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6', 'Thứ 7', 'Chủ nhật'];
+const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const MALWARE_SCHEDULES_DEFAULT = {
   websites: { enabled: false, weekday: 6, hour: 3, weekday_label: '', next_run_at: '', last_run_at: '', last_status: '' },
   server: { enabled: false, weekday: 6, hour: 4, weekday_label: '', next_run_at: '', last_run_at: '', last_status: '' },
 };
 const MALWARE_SCHEDULE_LABELS = {
-  websites: 'Toàn bộ website',
-  server: 'Toàn bộ VPS',
+  websites: 'All websites',
+  server: 'Whole server',
 };
 // The malware scan schedule is stored and sent to the API as UTC weekday/hour
 // (matching datetime.weekday() on the server) - nobody running a Vietnamese
-// host should have to do +7 math to pick "giờ ít khách". These convert only
+// host should have to do +7 math to pick a quiet hour. These convert only
 // for display/input; malwareSchedulesForm itself always stays in UTC.
 const VN_UTC_OFFSET_HOURS = 7;
 function utcScheduleToVn(weekday, hour) {
@@ -1038,7 +1038,7 @@ function App() {
         // whether an authenticator app is available as the way out - a passkey
         // is bound to one hostname, so there has to be one.
         setPasskeyPrompt({ options: data.passkey_options, canUseOtp: !!data.requires_2fa });
-        setNotice('Xác thực bằng passkey.');
+        setNotice('Signed in with a passkey.');
         await usePasskey(data.passkey_options);
       } else if (res.ok && data.requires_2fa) {
         setNeedsTwoFactor(true);
@@ -1080,7 +1080,7 @@ function App() {
 
   async function usePasskey(optionsJson) {
     if (!passkeySupported()) {
-      setError('Trình duyệt này không hỗ trợ passkey. Dùng mã từ ứng dụng xác thực.');
+      setError('This browser does not support passkeys. Use the code from your authenticator app.');
       return;
     }
     try {
@@ -1093,7 +1093,7 @@ function App() {
     } catch (err) {
       // A cancel and a hardware failure look the same here, and neither is
       // worth an alarming message: the authenticator app is still available.
-      setError('Không dùng được passkey. Thử lại hoặc dùng mã từ ứng dụng xác thực.');
+      setError('That passkey did not work. Try again, or use the code from your authenticator app.');
     }
   }
 
@@ -1104,13 +1104,13 @@ function App() {
 
   async function addPasskey() {
     if (!passkeySupported()) {
-      setError('Trình duyệt này không hỗ trợ passkey.');
+      setError('This browser does not support passkeys.');
       return;
     }
     const started = await request('/auth/passkey/register/options', {
       method: 'POST',
       body: JSON.stringify({ current_password: passkeyPassword || null }),
-    }, 'Đang chuẩn bị passkey...');
+    }, 'Preparing passkey...');
     if (!started?.options) return;
     try {
       const parsed = JSON.parse(started.options);
@@ -1121,21 +1121,21 @@ function App() {
       const done = await request('/auth/passkey/register/verify', {
         method: 'POST',
         body: JSON.stringify({ credential: encodeRegistration(credential), name: passkeyName }),
-      }, 'Đang lưu passkey...');
+      }, 'Saving passkey...');
       if (done?.id) {
-        setNotice(`Đã thêm passkey ${done.name}.`);
+        setNotice(`Added passkey ${done.name}.`);
         setPasskeyPassword('');
         setPasskeyName('');
         await loadPasskeyStatus();
       }
     } catch (err) {
-      setError('Không tạo được passkey. Thiết bị có thể đã từ chối hoặc bạn đã huỷ.');
+      setError('Could not create the passkey. The device may have refused it, or you cancelled.');
     }
   }
 
   async function removePasskey(credential) {
-    if (!confirm(`Xoá passkey ${credential.name}? Thiết bị đó sẽ không đăng nhập được nữa.`)) return;
-    await request(`/auth/passkey/credentials/${credential.id}`, { method: 'DELETE' }, 'Đang xoá passkey...');
+    if (!confirm(`Delete passkey ${credential.name}? That device will no longer be able to sign in.`)) return;
+    await request(`/auth/passkey/credentials/${credential.id}`, { method: 'DELETE' }, 'Deleting passkey...');
     await loadPasskeyStatus();
   }
 
@@ -1328,7 +1328,7 @@ function App() {
         const urlError = new URLSearchParams(window.location.search).get('error');
         if (urlError) {
           const messages = {
-            account_suspended: 'Tài khoản đã bị khóa (suspended). Liên hệ quản trị viên.',
+            account_suspended: 'This account is suspended. Contact an administrator.',
           };
           setError(messages[urlError] || urlError);
           window.history.replaceState({}, '', window.location.pathname);
@@ -1824,40 +1824,40 @@ function App() {
   }
 
   async function loadMalwareScanStatus() {
-    const data = await request('/malware/status', {}, 'Đang tải trạng thái quét...');
+    const data = await request('/malware/status', {}, 'Loading scanner status...');
     if (data) setMalwareScanStatus(data);
   }
 
   async function toggleIpv6(enable) {
     const ipv6 = panelSettings.ipv6 || {};
     if (enable && !ipv6.available) {
-      setError(ipv6.detail || 'VPS của bạn không có IPv6 nên không thể dùng tính năng này.');
+      setError(ipv6.detail || 'This server has no IPv6 address, so this feature cannot be used.');
       return;
     }
     if (!confirm(enable
-      ? 'Bật IPv6 cho toàn bộ website và panel?\n\nBPanel sẽ thêm listen [::] vào cấu hình nginx của mọi website, kiểm tra bằng nginx -t và tự hoàn tác nếu có lỗi. Panel sẽ khởi động lại.'
-      : 'Tắt IPv6?\n\nWebsite và panel sẽ chỉ còn nhận kết nối IPv4. Nếu domain đang có bản ghi AAAA, khách đi bằng IPv6 sẽ không vào được.')) return;
+      ? 'Enable IPv6 for every website and the panel?\n\nBPanel adds listen [::] to every website\'s nginx config, checks it with nginx -t, and rolls back on any error. The panel restarts.'
+      : 'Disable IPv6?\n\nWebsites and the panel will accept IPv4 only. If a domain still has an AAAA record, visitors arriving over IPv6 will not get through.')) return;
     const data = await request('/panel-settings/ipv6', {
       method: 'POST',
       body: JSON.stringify({ enabled: enable }),
-    }, enable ? 'Đang bật IPv6...' : 'Đang tắt IPv6...');
+    }, enable ? 'Enabling IPv6...' : 'Disabling IPv6...');
     if (data) {
       setPanelSettings(data);
-      setNotice(data.message || (enable ? 'Đã bật IPv6.' : 'Đã tắt IPv6.'));
+      setNotice(data.message || (enable ? 'IPv6 enabled.' : 'IPv6 disabled.'));
     }
   }
 
   async function toggleMalwareScan(enable) {
     if (enable && !malwareScanStatus?.installed) {
-      if (!confirm('Trình quét chưa được cài trên máy chủ này. Panel sẽ cài đặt ngay bây giờ (mất khoảng 1-2 phút). Tiếp tục?')) return;
+      if (!confirm('The scanner is not installed on this server yet. The panel will install it now (1-2 minutes). Continue?')) return;
     }
     const data = await request('/malware/toggle', {
       method: 'POST',
       body: JSON.stringify({ enabled: enable }),
-    }, enable ? 'Đang bật trình quét...' : 'Đang tắt trình quét...');
+    }, enable ? 'Enabling the scanner...' : 'Disabling the scanner...');
     if (data) {
       setPanelSettings(data);
-      setNotice(data.message || `Đã ${enable ? 'bật' : 'tắt'} trình quét.`);
+      setNotice(data.message || `Scanner ${enable ? 'enabled' : 'disabled'}.`);
       await loadMalwareScanStatus();
     }
   }
@@ -1873,53 +1873,53 @@ function App() {
   async function saveMalwareSchedule() {
     const f = malwareSchedulesForm;
     if (f.server?.enabled && malwareScanStatus?.memory_warning) {
-      if (!confirm(`${malwareScanStatus.memory_warning}\n\nVẫn đặt lịch quét toàn bộ VPS?`)) return;
+      if (!confirm(`${malwareScanStatus.memory_warning}\n\nSchedule the whole-server scan anyway?`)) return;
     }
     const body = {};
     for (const name of ['websites', 'server']) {
       const e = f[name] || {};
       body[name] = { enabled: !!e.enabled, weekday: Number(e.weekday ?? 6), hour: Number(e.hour ?? 3) };
     }
-    const data = await request('/malware/schedule', { method: 'PUT', body: JSON.stringify(body) }, 'Đang lưu lịch quét...');
+    const data = await request('/malware/schedule', { method: 'PUT', body: JSON.stringify(body) }, 'Saving scan schedule...');
     if (data) {
       setMalwareSchedules(data);
       setMalwareSchedulesForm(data);
       const on = ['websites', 'server'].filter(n => data[n]?.enabled).map(n => MALWARE_SCHEDULE_LABELS[n]);
-      setNotice(on.length ? `Đã lưu lịch: ${on.join(', ')}.` : 'Đã tắt tất cả lịch quét.');
+      setNotice(on.length ? `Schedule saved: ${on.join(', ')}.` : 'All scan schedules turned off.');
     }
   }
 
   async function toggleMalwareRealtime(enabled) {
-    if (enabled && !confirm('Bật bảo vệ thời gian thực? Panel sẽ theo dõi và quét ngay tệp mới trong thư mục website. Nếu chưa cài, panel sẽ cài thêm (1-3 phút).')) return;
+    if (enabled && !confirm('Turn on real-time protection? The panel watches website directories and scans new files as they appear. If it is not installed yet, the panel installs it (1-3 minutes).')) return;
     const data = await request('/malware/realtime', { method: 'POST', body: JSON.stringify({ enabled }) },
-      enabled ? 'Đang bật bảo vệ thời gian thực...' : 'Đang tắt...');
-    if (data) { setMalwareScanStatus(data); setNotice(enabled ? 'Đã bật bảo vệ thời gian thực (cấp 2).' : 'Đã tắt bảo vệ thời gian thực.'); }
+      enabled ? 'Turning on real-time protection...' : 'Turning off...');
+    if (data) { setMalwareScanStatus(data); setNotice(enabled ? 'Real-time protection is on (level 2).' : 'Real-time protection is off.'); }
   }
 
   async function toggleMalwareScanOnUpload(enabled) {
     if (enabled && !mw.clamd_running && !confirm(
-      'Máy này không chạy clamd thường trú, nên mỗi tệp tải lên sẽ phải nạp lại toàn bộ cơ sở dữ liệu chữ ký: '
-      + 'đo thực tế 28 giây và hơn 1 GB RAM cho một tệp 20 MB. Quét vẫn chạy nền nên không làm người dùng phải chờ, '
-      + 'nhưng máy sẽ tốn chừng đó cho mỗi tệp. Vẫn bật?')) return;
+      'This server has no resident clamd, so every uploaded file reloads the whole signature database: '
+      + 'measured at 28 seconds and over 1 GB of RAM for a 20 MB file. The scan runs in the background so nobody waits on it, '
+      + 'but the server pays that for every file. Turn it on anyway?')) return;
     const data = await request('/malware/scan-on-upload', { method: 'POST', body: JSON.stringify({ enabled }) },
-      enabled ? 'Đang bật quét khi tải lên...' : 'Đang tắt...');
-    if (data) { setMalwareScanStatus(data); setNotice(enabled ? 'Đã bật quét tệp khi tải lên.' : 'Đã tắt quét tệp khi tải lên.'); }
+      enabled ? 'Turning on scan-on-upload...' : 'Turning off...');
+    if (data) { setMalwareScanStatus(data); setNotice(enabled ? 'Uploaded files are scanned.' : 'Uploaded files are no longer scanned.'); }
   }
 
   async function installLmd() {
-    const data = await request('/malware/lmd/install', { method: 'POST' }, 'Đang cài đặt...');
-    if (data) { setMalwareScanStatus(data); setNotice('Đang cài đặt trình quét trong nền (1-3 phút). Bấm Refresh để cập nhật.'); }
+    const data = await request('/malware/lmd/install', { method: 'POST' }, 'Installing...');
+    if (data) { setMalwareScanStatus(data); setNotice('Installing the scanner in the background (1-3 minutes). Press Refresh for an update.'); }
   }
 
   async function updateMalwareSignatures() {
-    const data = await request('/malware/lmd/update-sigs', { method: 'POST' }, 'Đang cập nhật chữ ký...');
-    if (data) { setMalwareScanStatus(data); setNotice(data.message || 'Đã cập nhật chữ ký.'); }
+    const data = await request('/malware/lmd/update-sigs', { method: 'POST' }, 'Updating signatures...');
+    if (data) { setMalwareScanStatus(data); setNotice(data.message || 'Signatures updated.'); }
   }
 
   async function runMalwareScan() {
     if (!scanTargetWebsiteId) return;
     if (scanTargetWebsiteId === 'server' && malwareScanStatus?.memory_warning) {
-      if (!confirm(`${malwareScanStatus.memory_warning}\n\nVẫn quét toàn bộ VPS?`)) return;
+      if (!confirm(`${malwareScanStatus.memory_warning}\n\nScan the whole server anyway?`)) return;
     }
     setScanResults(null);
     setScanJob(null);
@@ -1935,11 +1935,11 @@ function App() {
       const data = await request('/malware/run', {
         method: 'POST',
         body: JSON.stringify(body),
-      }, 'Đang bắt đầu quét...');
+      }, 'Starting scan...');
       if (data) {
         setScanJob(data);
         await loadMalwareScanJobs();
-        setNotice('Đã bắt đầu quét.');
+        setNotice('Scan started.');
       }
     } finally {
       setScanLoading(false);
@@ -1954,11 +1954,11 @@ function App() {
       setScanJob(null);
       setScanResults(null);
       if (data.status === 'infected' || data.infected > 0) {
-        setNotice(`Phát hiện ${data.infected} mối đe doạ.`);
+        setNotice(`${data.infected} threats found.`);
       } else if (['error', 'interrupted'].includes(data.status)) {
-        setError(data.error || data.message || 'Quét thất bại.');
+        setError(data.error || data.message || 'Scan failed.');
       } else {
-        setNotice(`Quét xong: đã kiểm tra ${data.scanned || 0} tệp, không phát hiện mối đe doạ.`);
+        setNotice(`Scan finished: ${data.scanned || 0} files checked, nothing found.`);
       }
       await loadMalwareScanJobs();
     } else {
@@ -2116,8 +2116,8 @@ function App() {
       // SSL page (Install / Renew SSL there already asks for every alias and
       // redirect), so nothing SSL-related is attempted or claimed here.
       setNotice(site.ssl_mode === 'letsencrypt' && !data.ssl_enabled
-        ? `Đã thêm ${label} ${cleanAlias}. Vào trang SSL, bấm "Install / Renew SSL" để cấp chứng chỉ cho domain này.`
-        : `Đã thêm ${label} ${cleanAlias}.`);
+        ? `Added ${label} ${cleanAlias}. Go to the SSL page and press "Install / Renew SSL" to issue a certificate for it.`
+        : `Added ${label} ${cleanAlias}.`);
       setAliasDrafts(prev => ({ ...prev, [site.id]: '' }));
       setNginxCustomEditing(prev => {
         if (!prev || prev.id !== site.id) return prev;
@@ -2232,13 +2232,13 @@ function App() {
   async function setAddonInstalled(slug, install) {
     const addon = addons.items.find(item => item.slug === slug);
     const label = addon?.name || slug;
-    if (!install && !confirm(`Gỡ addon ${label}?\n\nCác ứng dụng đang chạy sẽ được dừng. Thư mục, volume và dữ liệu trong panel giữ nguyên, cài lại là chạy tiếp.`)) return;
+    if (!install && !confirm(`Remove the ${label} addon?\n\nAnything running is stopped. Directories, volumes and panel data stay exactly where they are, and installing again picks up from there.`)) return;
     const data = await request(`/addons/${slug}/${install ? 'install' : 'uninstall'}`, { method: 'POST' },
-      install ? `Đang cài ${label}...` : `Đang gỡ ${label}...`);
+      install ? `Installing ${label}...` : `Removing ${label}...`);
     if (data) {
       setNotice(install
-        ? `Đã cài ${label}. ${data.next_step || ''}`.trim()
-        : `Đã gỡ ${label}.${data.stopped?.length ? ` Đã dừng ${data.stopped.length} ứng dụng.` : ''}`);
+        ? `${label} installed. ${data.next_step || ''}`.trim()
+        : `${label} removed.${data.stopped?.length ? ` Stopped ${data.stopped.length} app(s).` : ''}`);
       await loadAddons();
       // The nav and the website mode picker both hang off this.
       if (install) await loadSiteApps();
@@ -2346,9 +2346,9 @@ function App() {
   }
 
   async function pruneDocker() {
-    const data = await request('/site-runtimes/docker-prune', { method: 'POST' }, 'Đang dọn layer Docker không dùng...');
+    const data = await request('/site-runtimes/docker-prune', { method: 'POST' }, 'Pruning unused Docker layers...');
     if (data) {
-      setNotice(data.message || 'Đã dọn.');
+      setNotice(data.message || 'Pruned.');
       if (data.output) setSiteAppLog({ name: 'docker prune', log: data.output });
       await loadSiteRuntimes();
     }
@@ -3521,9 +3521,9 @@ function App() {
     const data = await request('/maintenance/php-opcache', {
       method: 'POST',
       body: JSON.stringify({ php_version: version, enabled: next }),
-    }, next ? `Đang bật OPcache cho PHP ${version}...` : `Đang tắt OPcache cho PHP ${version}...`);
+    }, next ? `Enabling OPcache for PHP ${version}...` : `Disabling OPcache for PHP ${version}...`);
     if (data) {
-      setNotice(data.message || 'Đã đổi OPcache.');
+      setNotice(data.message || 'OPcache setting changed.');
       await loadPhpTune(version);
     }
   }
@@ -3533,7 +3533,7 @@ function App() {
     const data = await request('/maintenance/php-tune', {
       method: 'POST',
       body: JSON.stringify({ php_version: version }),
-    }, 'Đang tối ưu PHP theo cấu hình máy...');
+    }, 'Tuning PHP for this machine...');
     if (data) {
       if (data.plan) setPhpTune(data.plan);
       setPhpTuneApplied(true);
@@ -3598,11 +3598,11 @@ function App() {
 
   async function unbanAddress(ip) {
     const data = await request('/fail2ban/unban', { method: 'POST', body: JSON.stringify({ ip }) },
-      `Đang gỡ khoá ${ip}...`);
+      `Unbanning ${ip}...`);
     if (data) {
       setF2bBanned({ items: data.items, total: data.total, offset: data.offset, limit: data.limit });
       setF2b(prev => (prev ? { ...prev, banned: data.total } : prev));
-      setNotice(`Đã gỡ khoá ${ip}.`);
+      setNotice(`${ip} unbanned.`);
     }
   }
 
@@ -4339,7 +4339,7 @@ function App() {
   function storageUsageText(user) {
     // -1 means the panel has not measured this account yet and did not hold
     // the list up to do it. Saying so beats drawing a zero that reads as fact.
-    if (Number(user?.storage_used_bytes) < 0) return 'đang tính...';
+    if (Number(user?.storage_used_bytes) < 0) return 'measuring...';
     const used = Number(user?.storage_used_bytes || 0);
     const limit = storageLimitBytes(user);
     if (limit === null) return formatBytes(used);
@@ -4427,7 +4427,7 @@ function App() {
 
     return <>
       {isAdmin && <section className="resource-grid">
-        <ResourceCard icon={Cpu} label="CPU" value={formatPercent(cpu.percent)} percent={cpu.percent} detail={cpu.load?.length ? `Load ${cpu.load.join(' / ')}` : `${cpu.cores || '--'} cores`} />
+        <ResourceCard icon={Cpu} label="CPU" value={formatPercent(cpu.percent)} percent={cpu.percent} detail={[cpu.cores ? `${cpu.cores} cores` : null, cpu.load?.length ? `load ${cpu.load.join(' / ')}` : null].filter(Boolean).join(' · ') || '--'} />
         <ResourceCard icon={MemoryStick} label="RAM" value={formatPercent(memory.percent)} percent={memory.percent} detail={`${formatBytes(memory.used)} / ${formatBytes(memory.total)}`} />
         <ResourceCard icon={HardDrive} label="Disk" value={formatPercent(disk.percent)} percent={disk.percent} detail={`${formatBytes(disk.used)} / ${formatBytes(disk.total)}`} />
         <ResourceCard icon={Network} label="Network" value={`${formatBytes(networkTotal)}/s`} detail={`Down ${formatBytes(network.rx_per_sec)}/s / Up ${formatBytes(network.tx_per_sec)}/s`} />
@@ -4473,10 +4473,10 @@ function App() {
     // They stay reachable by URL, so they say so plainly instead of rendering
     // and firing a page full of requests the server will refuse.
     return <section className="section">
-      <div className="section-title"><div><h2>Chỉ dành cho quản trị</h2></div></div>
+      <div className="section-title"><div><h2>Administrators only</h2></div></div>
       <EmptyState
         icon={Server}
-        message="Trang này hiển thị trạng thái của máy chủ, nên chỉ quản trị viên xem được."
+        message="This page reports on the server itself, so only administrators can see it."
       />
     </section>;
   }
@@ -4487,11 +4487,11 @@ function App() {
       <EmptyState
         icon={Boxes}
         message={applicationAddonInstalled
-          ? 'Gói của bạn chưa có tính năng Application. Liên hệ quản trị để nâng cấp.'
-          : 'Addon Application chưa được cài trên server này.'}
+          ? 'Your package does not include Applications. Contact an administrator to upgrade.'
+          : 'The Applications addon is not installed on this server.'}
       />
       {isAdmin && !applicationAddonInstalled && <div className="site-app-form-actions">
-        <button disabled={!!loading} onClick={() => navigateToPage('addons')}><Boxes size={14}/> Đi tới Addons</button>
+        <button disabled={!!loading} onClick={() => navigateToPage('addons')}><Boxes size={14}/> Go to Addons</button>
       </div>}
     </section>;
   }
@@ -4502,8 +4502,8 @@ function App() {
         <div>
           <h2>Addons</h2>
           <p className="hint">
-            Những phần không nằm trong bản cài mặc định. Cài khi cần, gỡ lúc không dùng —
-            gỡ chỉ tắt tính năng, không xoá dữ liệu đã tạo.
+            The parts that are not in a default install. Add what you need, remove what you do not —
+            removing turns the feature off and deletes nothing it created.
           </p>
         </div>
         <button className="secondary-light" disabled={!!loading} onClick={loadAddons}><RefreshCw size={14}/> Refresh</button>
@@ -4513,28 +4513,28 @@ function App() {
           <div className="addon-head">
             <strong>{addon.name}</strong>
             <code>v{addon.installed ? (addon.installed_version || addon.version) : addon.version}</code>
-            <span className={`badge ${addon.installed ? 'ok' : ''}`}>{addon.installed ? 'Đã cài' : 'Chưa cài'}</span>
+            <span className={`badge ${addon.installed ? 'ok' : ''}`}>{addon.installed ? 'Installed' : 'Not installed'}</span>
             {addon.installed && addon.installed_version && addon.installed_version !== addon.version
-              && <span className="badge">Có bản v{addon.version}</span>}
+              && <span className="badge">v{addon.version} available</span>}
           </div>
           <p className="addon-summary">{addon.summary}</p>
           {addon.details?.length > 0 && <ul className="addon-details">
             {addon.details.map((line, index) => <li key={index}>{line}</li>)}
           </ul>}
           {addon.notes?.length > 0 && <div className="addon-notes">
-            <strong><AlertCircle size={13}/> Cần biết trước khi bật</strong>
+            <strong><AlertCircle size={13}/> Worth knowing first</strong>
             <ul>{addon.notes.map((line, index) => <li key={index}>{line}</li>)}</ul>
           </div>}
           {addons.can_manage && <div className="addon-actions">
             {addon.installed
               ? <>
-                  {addon.slug === 'application' && <button className="secondary-light" disabled={!!loading} onClick={() => navigateToPage('applications')}>Mở {addon.name}</button>}
-                  <button className="danger" disabled={!!loading} onClick={() => setAddonInstalled(addon.slug, false)}><Trash2 size={14}/> Gỡ</button>
+                  {addon.slug === 'application' && <button className="secondary-light" disabled={!!loading} onClick={() => navigateToPage('applications')}>Open {addon.name}</button>}
+                  <button className="danger" disabled={!!loading} onClick={() => setAddonInstalled(addon.slug, false)}><Trash2 size={14}/> Remove</button>
                 </>
-              : <button disabled={!!loading} onClick={() => setAddonInstalled(addon.slug, true)}><Download size={14}/> Cài</button>}
+              : <button disabled={!!loading} onClick={() => setAddonInstalled(addon.slug, true)}><Download size={14}/> Install</button>}
           </div>}
         </div>)}
-        {addons.loaded && addons.items.length === 0 && <EmptyState icon={Boxes} message="Chưa có addon nào." />}
+        {addons.loaded && addons.items.length === 0 && <EmptyState icon={Boxes} message="No addons yet." />}
       </div>
     </section>;
   }
@@ -4564,11 +4564,11 @@ function App() {
           {isAdmin && <button className="mini secondary-light" disabled={!!loading} onClick={() => { const major = prompt('Install which Node major version?', '22'); if (major) installNodeMajor(major.trim()); }}>Add Node version</button>}
         </div>
         {isAdmin && dockerReady && siteRuntimes.docker?.disk?.length > 0 && <div className="site-runtime-strip">
-          <span>Đĩa Docker (toàn server, không tính vào quota khách):</span>
+          <span>Docker disk (whole server, not counted against customer quotas):</span>
           {siteRuntimes.docker.disk.map(row => <span key={row.type}>
-            {row.type}: <strong>{row.size}</strong>{row.reclaimable && !row.reclaimable.startsWith('0B') ? <> · dọn được {row.reclaimable}</> : null}
+            {row.type}: <strong>{row.size}</strong>{row.reclaimable && !row.reclaimable.startsWith('0B') ? <> · {row.reclaimable} reclaimable</> : null}
           </span>)}
-          <button className="mini secondary-light" disabled={!!loading} onClick={pruneDocker}>Dọn layer không dùng</button>
+          <button className="mini secondary-light" disabled={!!loading} onClick={pruneDocker}>Prune unused layers</button>
         </div>}
         {!atLimit && <div className="site-app-form">
           <label><span>Name</span>
@@ -4630,24 +4630,24 @@ function App() {
                 placeholder={'services:\n  app:\n    image: myorg/app:1.0\n    ports: ["3000:3000"]\n  db:\n    image: postgres:16\n    volumes: ["pgdata:/var/lib/postgresql/data"]\nvolumes:\n  pgdata:'}
               />
             </label>
-            {composePlan?.services?.length > 0 && <label><span>Service phục vụ domain</span>
+            {composePlan?.services?.length > 0 && <label><span>Service behind the domain</span>
               <select value={siteAppDraft.web_service} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, web_service: e.target.value }))}>
-                <option value="">Tự chọn</option>
+                <option value="">Choose for me</option>
                 {composePlan.services.map(service => <option key={service.name} value={service.name}>{service.name}{service.container_port ? ` · :${service.container_port}` : ''}</option>)}
               </select>
             </label>}
-            {composeWebPorts(composePlan, siteAppDraft.web_service).length > 1 && <label><span>Cổng phục vụ domain</span>
+            {composeWebPorts(composePlan, siteAppDraft.web_service).length > 1 && <label><span>Port behind the domain</span>
               <select value={siteAppDraft.container_port} disabled={!!loading} onChange={e => { setSiteAppDraft(prev => ({ ...prev, container_port: e.target.value })); setComposePlan(null); }}>
                 {composeWebPorts(composePlan, siteAppDraft.web_service).map(port => <option key={port} value={port}>{port}</option>)}
               </select>
             </label>}
-            <label><span>CPU mỗi service</span>
+            <label><span>CPU per service</span>
               <input value={siteAppDraft.cpu_limit} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, cpu_limit: e.target.value }))} placeholder="1" />
             </label>
-            <p className="compose-hint">File tham chiếu <code>{'${BIẾN}'}</code> thì khai giá trị ở ô <strong>.env</strong> bên dưới,
-              đúng như file <code>.env</code> nằm cạnh <code>docker-compose.yml</code>. Riêng địa chỉ công khai
-              (callback OAuth, webhook) dùng <code>{'${BPANEL_URL}'}</code> / <code>{'${BPANEL_DOMAIN}'}</code>:
-              ứng dụng chỉ thấy cổng nội bộ, panel sẽ điền domain của website trỏ vào nó.</p>
+            <p className="compose-hint">Where the file refers to <code>{'${VAR}'}</code>, set the value in the <strong>.env</strong> box below,
+              exactly as an <code>.env</code> file beside <code>docker-compose.yml</code> would. For a public address
+              (an OAuth callback, a webhook) use <code>{'${BPANEL_URL}'}</code> / <code>{'${BPANEL_DOMAIN}'}</code>:
+              the app only ever sees its internal port, and the panel fills in the domain of the website pointing at it.</p>
           </>}
           {siteAppDraft.kind === 'docker' && <>
             <label><span>Image</span>
@@ -4677,8 +4677,8 @@ function App() {
           </div>
           {composePlan && <div className={`compose-report ${composePlan.ok ? 'ok' : 'bad'}`}>
             {composePlan.ok
-              ? <p><Check size={14}/> Chạy được {composePlan.services.length} service. <strong>{composePlan.web_service}</strong> phục vụ domain.</p>
-              : <p><AlertCircle size={14}/> Còn {composePlan.issues.length} chỗ phải sửa trước khi import:</p>}
+              ? <p><Check size={14}/> {composePlan.services.length} service(s) will run. <strong>{composePlan.web_service}</strong> serves the domain.</p>
+              : <p><AlertCircle size={14}/> {composePlan.issues.length} thing(s) to fix before importing:</p>}
             {composePlan.issues.length > 0 && <ul>
               {composePlan.issues.map((issue, index) => <li key={index}>
                 {issue.service && <code>{issue.service}</code>} {issue.message}
@@ -4690,8 +4690,8 @@ function App() {
             {composePlan.ok && <ul className="compose-services">
               {composePlan.services.map(service => <li key={service.name}>
                 <code>{service.name}</code> {service.image}
-                {service.web ? ' · phục vụ domain' : ' · chỉ nội bộ'}
-                {service.container_port ? ` · cổng ${service.container_port}` : ''}
+                {service.web ? ' · serves the domain' : ' · internal only'}
+                {service.container_port ? ` · port ${service.container_port}` : ''}
               </li>)}
             </ul>}
           </div>}
@@ -4789,9 +4789,9 @@ function App() {
                     onChange={e => { setSiteAppEdit(prev => ({ ...prev, compose_source: e.target.value })); setSiteAppEditPlan(null); }}
                   />
                 </label>
-                <p className="compose-hint">Panel đọc lại file này rồi tự sinh file chạy thật. Biến <code>{'${BIẾN}'}</code> lấy
-                  từ ô .env; địa chỉ công khai dùng <code>{'${BPANEL_URL}'}</code> / <code>{'${BPANEL_DOMAIN}'}</code>
-                  {app.websites?.length > 0 ? ` (hiện là ${app.websites[0]})` : ' (cần trỏ một website vào ứng dụng trước)'}.</p>
+                <p className="compose-hint">The panel reads this file and generates the one it actually runs. <code>{'${VAR}'}</code> comes
+                  from the .env box; for a public address use <code>{'${BPANEL_URL}'}</code> / <code>{'${BPANEL_DOMAIN}'}</code>
+                  {app.websites?.length > 0 ? ` (currently ${app.websites[0]})` : ' (point a website at this app first)'}.</p>
                 <label className="site-app-env"><span>.env (KEY=value, one per line)</span>
                   <textarea
                     className="code-editor"
@@ -4801,13 +4801,13 @@ function App() {
                     onChange={e => { setSiteAppEdit(prev => ({ ...prev, env: e.target.value })); setSiteAppEditPlan(null); }}
                   />
                 </label>
-                {siteAppEditPlan?.services?.length > 0 && <label><span>Service phục vụ domain</span>
+                {siteAppEditPlan?.services?.length > 0 && <label><span>Service behind the domain</span>
                   <select value={siteAppEdit.web_service} disabled={!!loading} onChange={e => setSiteAppEdit(prev => ({ ...prev, web_service: e.target.value }))}>
-                    <option value="">Tự chọn</option>
+                    <option value="">Choose for me</option>
                     {siteAppEditPlan.services.map(service => <option key={service.name} value={service.name}>{service.name}{service.container_port ? ` · :${service.container_port}` : ''}</option>)}
                   </select>
                 </label>}
-                {composeWebPorts(siteAppEditPlan, siteAppEdit.web_service).length > 1 && <label><span>Cổng phục vụ domain</span>
+                {composeWebPorts(siteAppEditPlan, siteAppEdit.web_service).length > 1 && <label><span>Port behind the domain</span>
                   <select value={siteAppEdit.container_port} disabled={!!loading} onChange={e => { setSiteAppEdit(prev => ({ ...prev, container_port: e.target.value })); setSiteAppEditPlan(null); }}>
                     {composeWebPorts(siteAppEditPlan, siteAppEdit.web_service).map(port => <option key={port} value={port}>{port}</option>)}
                   </select>
@@ -4828,8 +4828,8 @@ function App() {
               </div>
               {siteAppEditPlan && <div className={`compose-report ${siteAppEditPlan.ok ? 'ok' : 'bad'}`}>
                 {siteAppEditPlan.ok
-                  ? <p><Check size={14}/> Chạy được {siteAppEditPlan.services.length} service. <strong>{siteAppEditPlan.web_service}</strong> phục vụ domain.</p>
-                  : <p><AlertCircle size={14}/> Còn {siteAppEditPlan.issues.length} chỗ phải sửa:</p>}
+                  ? <p><Check size={14}/> {siteAppEditPlan.services.length} service(s) will run. <strong>{siteAppEditPlan.web_service}</strong> serves the domain.</p>
+                  : <p><AlertCircle size={14}/> {siteAppEditPlan.issues.length} thing(s) to fix:</p>}
                 {siteAppEditPlan.issues.length > 0 && <ul>
                   {siteAppEditPlan.issues.map((issue, index) => <li key={index}>
                     {issue.service && <code>{issue.service}</code>} {issue.message}
@@ -5995,12 +5995,12 @@ function App() {
         <button className="secondary-light" disabled={!!loading} onClick={restorePhpDefaults}><RotateCcw size={14}/> Restore defaults</button>
         <button disabled={!!loading} onClick={updatePhpConfig}>Save</button>
         {phpTune && tuneChanges.length > 0 && <div className="php-tune-diff">
-          <strong><AlertCircle size={14}/> Auto tune PHP {phpTune.php_version} sẽ đổi {tuneChanges.length} thông số</strong>
-          <span>{tuneChanges.map(row => `${row.key} ${row.current || 'chưa đặt'} → ${row.value}`).join(', ')}.</span>
+          <strong><AlertCircle size={14}/> Auto tune will change {tuneChanges.length} setting(s) for PHP {phpTune.php_version}</strong>
+          <span>{tuneChanges.map(row => `${row.key} ${row.current || 'unset'} → ${row.value}`).join(', ')}.</span>
           <button className="mini" disabled={!!loading} onClick={applyPhpTune}>Auto tune PHP</button>
         </div>}
         {phpTune && tuneChanges.length === 0 && <div className="notice php-tune-diff">
-          <Check size={14}/> PHP {phpTune.php_version} đã khớp khuyến nghị auto tune cho máy này ({phpTune.facts.cpu_count} CPU, {phpTune.facts.total_memory_mb} MB RAM).
+          <Check size={14}/> PHP {phpTune.php_version} already matches what auto tune recommends for this machine ({phpTune.facts.cpu_count} CPU, {phpTune.facts.total_memory_mb} MB RAM).
         </div>}
       </div>
       {phpTune && <div className="php-tune" style={{ marginTop: 16 }}>
@@ -6008,22 +6008,22 @@ function App() {
           <button disabled={!!loading} onClick={applyPhpTune}><Cpu size={14}/> Auto tune PHP</button>
           <button className="secondary-light" disabled={!!loading} onClick={toggleOpcache}>
             {phpTune.opcache_enabled
-              ? <><Ban size={14}/> Tắt OPcache (PHP {phpTune.php_version})</>
-              : <><Play size={14}/> Bật OPcache (PHP {phpTune.php_version})</>}
+              ? <><Ban size={14}/> Disable OPcache (PHP {phpTune.php_version})</>
+              : <><Play size={14}/> Enable OPcache (PHP {phpTune.php_version})</>}
           </button>
         </div>
         {phpTuneApplied && <div className="notice php-tune-result">
-          <strong><Check size={14}/> Đã tối ưu PHP {phpTune.php_version} xong.</strong>
+          <strong><Check size={14}/> PHP {phpTune.php_version} tuned.</strong>
         </div>}
         {commonPools && <p className="hint">
-          Pool PHP-FPM: {commonPools.length}/{phpTune.pools.length} pool đang chạy pm.max_children={commonPools[0].max_children || '—'},
-          idle {commonPools[0].idle_timeout || '—'}, tối đa {commonPools[0].max_requests || '—'} request/tiến trình.
-          {poolOutliers.length > 0 && ` ${poolOutliers.length} pool khác đang chạy thông số khác:`}
+          PHP-FPM pools: {commonPools.length}/{phpTune.pools.length} running pm.max_children={commonPools[0].max_children || '—'},
+          idle {commonPools[0].idle_timeout || '—'}, up to {commonPools[0].max_requests || '—'} requests per process.
+          {poolOutliers.length > 0 && ` ${poolOutliers.length} other pool(s) run different settings:`}
         </p>}
         {poolOutliers.length > 0 && <ul className="php-tune-pool-outliers">
           {poolOutliers.map(p => <li key={p.pool}>
             <code>{p.pool}</code>
-            <span>pm.max_children={p.max_children || '—'}, idle {p.idle_timeout || '—'}, tối đa {p.max_requests || '—'} request</span>
+            <span>pm.max_children={p.max_children || '—'}, idle {p.idle_timeout || '—'}, up to {p.max_requests || '—'} requests</span>
           </li>)}
         </ul>}
       </div>}
@@ -6038,8 +6038,8 @@ function App() {
 
   function renderFirewall() {
     if (!isAdmin) return <section className="section"><h2>Firewall</h2><p className="hint">No permission.</p></section>;
-    const firewallText = firewallStatus?.stdout || firewallStatus?.stderr || 'Bấm Refresh để tải trạng thái.';
-    const blocklistText = firewallBlocklists?.stdout || firewallBlocklists?.stderr || 'Chưa tải trạng thái blocklist.';
+    const firewallText = firewallStatus?.stdout || firewallStatus?.stderr || 'Press Refresh to load the status.';
+    const blocklistText = firewallBlocklists?.stdout || firewallBlocklists?.stderr || 'Blocklist status not loaded yet.';
     const blocklistUrls = parseFirewallBlocklistUrls(blocklistText);
     const allRules = firewallStatus?.rules || [];
     const userRules = allRules.filter(rule => !rule.protected);
@@ -6061,51 +6061,51 @@ function App() {
         <div className="section-title">
           <div>
             <h2>Firewall</h2>
-            <p className="hint">iptables + ipset. Cổng SSH, cổng panel và 80/443/465/587 luôn được giữ mở.</p>
+            <p className="hint">iptables + ipset. SSH, the panel port and 80/443/465/587 are always kept open.</p>
           </div>
           <div className="actions">
             <button disabled={!!loading} onClick={loadFirewall}><RefreshCw size={14}/> Refresh</button>
             {/* One of these, never both: the other is not an action available now. */}
             {stateKnown && (enabled
-              ? <button className="danger" disabled={!!loading} onClick={disableFirewall}>Tắt firewall</button>
-              : <button disabled={!!loading} onClick={enableFirewall}><Shield size={14}/> Bật firewall</button>)}
-            {enabled && <button disabled={!!loading} onClick={reloadFirewall}>Nạp lại</button>}
+              ? <button className="danger" disabled={!!loading} onClick={disableFirewall}>Turn off</button>
+              : <button disabled={!!loading} onClick={enableFirewall}><Shield size={14}/> Turn on</button>)}
+            {enabled && <button disabled={!!loading} onClick={reloadFirewall}>Reload</button>}
           </div>
         </div>
 
         <div className="chip-row">
-          <span className={enabled ? 'badge ok' : 'badge warn'}>{enabled ? 'Đang bật' : 'Đang tắt'}</span>
-          {panelRules.length > 0 && <span className="hint">cổng bảo vệ: {panelRules.map(rule => rule.to).join(', ')}</span>}
+          <span className={enabled ? 'badge ok' : 'badge warn'}>{enabled ? 'On' : 'Off'}</span>
+          {panelRules.length > 0 && <span className="hint">protected ports: {panelRules.map(rule => rule.to).join(', ')}</span>}
         </div>
 
         <div className="detail-tabs">
           <button className={fwDetail === 'rules' ? 'chip on' : 'chip'} disabled={!!loading}
-            onClick={() => openFwDetail('rules')}>Rule tự đặt <b>{userRules.length}</b></button>
+            onClick={() => openFwDetail('rules')}>Your rules <b>{userRules.length}</b></button>
           <button className={fwDetail === 'urls' ? 'chip on' : 'chip'} disabled={!!loading}
             onClick={() => openFwDetail('urls')}>Blocklist URL <b>{blocklistUrls.length}</b></button>
           <button className={fwDetail === 'raw' ? 'chip on' : 'chip'} disabled={!!loading}
-            onClick={() => openFwDetail('raw')}>Trạng thái thô</button>
+            onClick={() => openFwDetail('raw')}>Raw status</button>
         </div>
 
         {fwDetail && <div className="detail-panel">
           {fwDetail !== 'raw' && <div className="detail-head">
             <input id="fw-filter" value={fwFilter} onChange={e => setFwFilter(e.target.value)}
-              placeholder="Lọc trong danh sách..." aria-label="Lọc danh sách" />
-            <button className="secondary-light" onClick={() => setFwDetail(null)}><X size={14}/> Đóng</button>
+              placeholder="Filter this list..." aria-label="Filter list" />
+            <button className="secondary-light" onClick={() => setFwDetail(null)}><X size={14}/> Close</button>
           </div>}
 
           {fwDetail === 'rules' && <div className="detail-body">
             {shownRules.length === 0 && <p className="hint">{userRules.length === 0
-              ? 'Chưa có rule nào. Chỉ các cổng bảo vệ đang mở.'
-              : 'Không có rule nào khớp bộ lọc.'}</p>}
+              ? 'No rules yet. Only the protected ports are open.'
+              : 'No rules match that filter.'}</p>}
             {shownRules.map(rule => <div className="firewall-rule" key={rule.id}>
               <span>
                 <strong>#{rule.id}</strong>{' '}
                 <span className={rule.action === 'DENY' ? 'badge danger' : 'badge ok'}>{rule.action}</span>{' '}
-                {rule.to} từ {rule.from}
+                {rule.to} from {rule.from}
               </span>
               <div className="firewall-rule-actions">
-                <button className="danger" disabled={!!loading} onClick={() => deleteFirewallRule(rule.id)}><Trash2 size={14}/> Xoá</button>
+                <button className="danger" disabled={!!loading} onClick={() => deleteFirewallRule(rule.id)}><Trash2 size={14}/> Delete</button>
               </div>
             </div>)}
           </div>}
@@ -6114,51 +6114,51 @@ function App() {
             <div className="firewall-form firewall-blocklist-form">
               <label><span>TXT URL</span><input id="fw-blocklist-url" value={firewallBlocklistUrl}
                 onChange={e => setFirewallBlocklistUrl(e.target.value)} placeholder="https://example.com/blocklist.txt" /></label>
-              <button disabled={!!loading || !firewallBlocklistUrl.trim()} onClick={addFirewallBlocklistUrl}><Plus size={14}/> Thêm</button>
-              <button className="secondary-light" disabled={!!loading} onClick={updateFirewallBlocklistsNow}><RefreshCw size={14}/> Cập nhật ngay</button>
+              <button disabled={!!loading || !firewallBlocklistUrl.trim()} onClick={addFirewallBlocklistUrl}><Plus size={14}/> Add</button>
+              <button className="secondary-light" disabled={!!loading} onClick={updateFirewallBlocklistsNow}><RefreshCw size={14}/> Update now</button>
             </div>
-            <p className="hint">Tải về mỗi ngày lúc 01:00 vào một ipset, nên danh sách triệu dòng vẫn chỉ tốn một lượt tra cứu mỗi gói tin.</p>
-            {shownUrls.length === 0 && <p className="hint">Chưa có URL nào.</p>}
+            <p className="hint">Fetched daily at 01:00 into an ipset, so even a million-entry list costs one kernel lookup per packet.</p>
+            {shownUrls.length === 0 && <p className="hint">No URLs yet.</p>}
             {shownUrls.map(url => <div className="firewall-rule" key={url}>
               <span className="wrap-any">{url}</span>
-              <div className="firewall-rule-actions"><button className="danger" disabled={!!loading} onClick={() => deleteFirewallBlocklistUrl(url)}><Trash2 size={14}/> Xoá</button></div>
+              <div className="firewall-rule-actions"><button className="danger" disabled={!!loading} onClick={() => deleteFirewallBlocklistUrl(url)}><Trash2 size={14}/> Delete</button></div>
             </div>)}
           </div>}
 
           {fwDetail === 'raw' && <div className="detail-body">
             <div className="detail-head">
-              <strong>Trạng thái firewall</strong>
-              <button className="secondary-light" onClick={() => setFwDetail(null)}><X size={14}/> Đóng</button>
+              <strong>Firewall status</strong>
+              <button className="secondary-light" onClick={() => setFwDetail(null)}><X size={14}/> Close</button>
             </div>
             <pre>{firewallText}</pre>
-            <strong>Trạng thái blocklist</strong>
+            <strong>Blocklist status</strong>
             <pre>{blocklistText}</pre>
             <div className="firewall-delete-inline">
-              <label><span>Xoá rule số</span><input id="fw-delete-number" value={firewallDeleteNumber}
+              <label><span>Delete rule #</span><input id="fw-delete-number" value={firewallDeleteNumber}
                 onChange={e => setFirewallDeleteNumber(e.target.value)} placeholder="12" inputMode="numeric" /></label>
-              <button className="danger" disabled={!!loading || !firewallDeleteNumber} onClick={() => deleteFirewallRule()}>Xoá</button>
+              <button className="danger" disabled={!!loading || !firewallDeleteNumber} onClick={() => deleteFirewallRule()}>Delete</button>
             </div>
           </div>}
         </div>}
 
         <div className="firewall-form rule-form">
-          <label><span>Hành động</span>
+          <label><span>Action</span>
             <select id="fw-action" value={fwAction} onChange={e => setFwAction(e.target.value)}>
-              <option value="block">Chặn IP</option>
-              <option value="allow">Cho phép IP</option>
-              <option value="port">Mở cổng</option>
+              <option value="block">Block IP</option>
+              <option value="allow">Allow IP</option>
+              <option value="port">Open port</option>
             </select>
           </label>
           {fwAction === 'block' && <label><span>IP / CIDR</span><input id="fw-block-ip" value={firewallBlockIp}
             onChange={e => setFirewallBlockIp(e.target.value)} placeholder="5.6.7.8" /></label>}
           {fwAction === 'allow' && <label><span>IP / CIDR</span><input id="fw-allow-ip" value={firewallAllowIp}
             onChange={e => setFirewallAllowIp(e.target.value)} placeholder="1.2.3.4" /></label>}
-          <label><span>Cổng{fwAction === 'port' ? '' : ' (tuỳ chọn)'}</span>
-            {fwAction === 'block' && <input id="fw-block-port" value={firewallBlockPort} onChange={e => setFirewallBlockPort(e.target.value)} placeholder="Mọi cổng" inputMode="numeric" />}
+          <label><span>Port{fwAction === 'port' ? '' : ' (optional)'}</span>
+            {fwAction === 'block' && <input id="fw-block-port" value={firewallBlockPort} onChange={e => setFirewallBlockPort(e.target.value)} placeholder="All ports" inputMode="numeric" />}
             {fwAction === 'allow' && <input id="fw-allow-port" value={firewallAllowPort} onChange={e => setFirewallAllowPort(e.target.value)} placeholder="22" inputMode="numeric" />}
             {fwAction === 'port' && <input id="fw-port" value={firewallPort} onChange={e => setFirewallPort(e.target.value)} placeholder="80" inputMode="numeric" />}
           </label>
-          <label><span>Giao thức</span>
+          <label><span>Protocol</span>
             {fwAction === 'block' && <select id="fw-block-proto" value={firewallBlockProtocol} onChange={e => setFirewallBlockProtocol(e.target.value)}><option value="tcp">TCP</option><option value="udp">UDP</option></select>}
             {fwAction === 'allow' && <select id="fw-allow-proto" value={firewallAllowProtocol} onChange={e => setFirewallAllowProtocol(e.target.value)}><option value="tcp">TCP</option><option value="udp">UDP</option></select>}
             {fwAction === 'port' && <select id="fw-proto" value={firewallProtocol} onChange={e => setFirewallProtocol(e.target.value)}><option value="tcp">TCP</option><option value="udp">UDP</option></select>}
@@ -6167,7 +6167,7 @@ function App() {
             || (fwAction === 'block' && !firewallBlockIp)
             || (fwAction === 'allow' && !firewallAllowIp)
             || (fwAction === 'port' && !firewallPort)} onClick={submitFirewallRule}>
-            {fwAction === 'block' ? 'Chặn' : fwAction === 'allow' ? 'Cho phép' : 'Mở cổng'}
+            {fwAction === 'block' ? 'Block' : fwAction === 'allow' ? 'Allow' : 'Open port'}
           </button>
         </div>
       </section>
@@ -6176,42 +6176,42 @@ function App() {
         <div className="section-title">
           <div>
             <h2>Fail2ban</h2>
-            <p className="hint">IP thử sai 5 lần trong 1 giờ bị khoá 1 giờ, khoá lâu dần nếu quay lại (tối đa 1 tuần). Địa chỉ của chính máy chủ không bao giờ bị khoá.</p>
+            <p className="hint">Five failed attempts within an hour bans an address for an hour, and longer each time it comes back, up to a week. The server never bans its own addresses.</p>
           </div>
           <button disabled={!!loading} onClick={loadFail2ban}><RefreshCw size={14}/> Refresh</button>
         </div>
-        {!f2b && <p className="hint">Chưa tải được trạng thái. Bấm Refresh.</p>}
+        {!f2b && <p className="hint">Status not loaded. Press Refresh.</p>}
         {f2b && <>
           {f2b.warning && <p className="hint alarm">{f2b.warning}</p>}
           <div className="chip-row">
-            <span className={f2b.running ? 'badge ok' : 'badge warn'}>{f2b.running ? 'Đang chạy' : 'Không chạy'}</span>
-            <span className={f2b.bans_reach_kernel ? 'badge ok' : 'badge warn'}>{f2b.bans_reach_kernel ? 'Ban có hiệu lực' : 'Ban KHÔNG tới iptables'}</span>
-            <span className={f2b.filter_sees_journal ? 'badge ok' : 'badge warn'}>{f2b.filter_sees_journal ? 'Đọc được log' : 'KHÔNG thấy log'}</span>
-            <span className="hint">{f2b.ssh_unit || '—'} · {f2b.banaction || '—'} · đã thấy {f2b.total_failed ?? 0} lần sai</span>
+            <span className={f2b.running ? 'badge ok' : 'badge warn'}>{f2b.running ? 'Running' : 'Not running'}</span>
+            <span className={f2b.bans_reach_kernel ? 'badge ok' : 'badge warn'}>{f2b.bans_reach_kernel ? 'Bans take effect' : 'Bans NOT reaching iptables'}</span>
+            <span className={f2b.filter_sees_journal ? 'badge ok' : 'badge warn'}>{f2b.filter_sees_journal ? 'Reading the log' : 'Seeing NO log'}</span>
+            <span className="hint">{f2b.ssh_unit || '—'} · {f2b.banaction || '—'} · {f2b.total_failed ?? 0} failures seen</span>
           </div>
           <div className="detail-tabs">
             <button className={fwDetail === 'banned' ? 'chip on' : 'chip'} disabled={!!loading}
-              onClick={() => openFwDetail('banned')}>IP đang bị khoá <b>{f2b.banned ?? 0}</b></button>
+              onClick={() => openFwDetail('banned')}>Banned addresses <b>{f2b.banned ?? 0}</b></button>
           </div>
           {fwDetail === 'banned' && <div className="detail-panel">
             <div className="detail-head">
               <input id="f2b-filter" value={fwFilter} onChange={e => setFwFilter(e.target.value)}
-                placeholder="Lọc theo IP..." aria-label="Lọc IP bị khoá" />
-              <button className="secondary-light" onClick={() => setFwDetail(null)}><X size={14}/> Đóng</button>
+                placeholder="Filter by address..." aria-label="Filter banned addresses" />
+              <button className="secondary-light" onClick={() => setFwDetail(null)}><X size={14}/> Close</button>
             </div>
             <div className="detail-body">
               {shownBanned.length === 0 && <p className="hint">{f2bBanned.total === 0
-                ? 'Hiện không có IP nào bị khoá.' : 'Không có IP nào khớp bộ lọc.'}</p>}
+                ? 'No addresses are banned right now.' : 'No addresses match that filter.'}</p>}
               {shownBanned.map(ip => <div className="firewall-rule" key={ip}>
                 <span><code>{ip}</code></span>
                 <div className="firewall-rule-actions">
-                  <button className="danger" disabled={!!loading} onClick={() => unbanAddress(ip)}>Gỡ khoá</button>
+                  <button className="danger" disabled={!!loading} onClick={() => unbanAddress(ip)}>Unban</button>
                 </div>
               </div>)}
             </div>
             {f2bBanned.total > f2bBanned.limit && <div className="detail-foot">
               <button className="secondary-light" disabled={!!loading || f2bBanned.offset === 0}
-                onClick={() => loadBannedPage(Math.max(0, f2bBanned.offset - f2bBanned.limit))}>Trước</button>
+                onClick={() => loadBannedPage(Math.max(0, f2bBanned.offset - f2bBanned.limit))}>Previous</button>
               <span className="hint">{f2bBanned.offset + 1}–{Math.min(f2bBanned.offset + f2bBanned.limit, f2bBanned.total)} trong {f2bBanned.total}</span>
               <button className="secondary-light" disabled={!!loading || f2bBanned.offset + f2bBanned.limit >= f2bBanned.total}
                 onClick={() => loadBannedPage(f2bBanned.offset + f2bBanned.limit)}>Sau</button>
@@ -6709,7 +6709,7 @@ function App() {
           <div>
             <h2>Passkey</h2>
             <p className="hint">
-              Đăng nhập bằng vân tay, Face ID hoặc khoá bảo mật, thay cho việc gõ mã.
+              Sign in with a fingerprint, Face ID or a security key instead of typing a code.
             </p>
           </div>
           <button disabled={!!loading} onClick={loadPasskeyStatus}><RefreshCw size={14}/> Refresh</button>
@@ -6717,36 +6717,36 @@ function App() {
 
         {pk && !pk.supported && <div className="info-box">
           <p className="hint" style={{color:'var(--red)'}}>
-            Bạn đang vào panel bằng địa chỉ IP ({pk.hostname}). Trình duyệt chỉ tạo
-            passkey cho tên miền, nên hãy vào bằng tên miền của panel rồi thêm lại.
+            You are reaching the panel by IP address ({pk.hostname}). Browsers only create
+            passkeys for domain names, so open the panel by its domain and add one there.
           </p>
         </div>}
 
         {pk?.supported && <>
           <p className="hint">
-            Passkey gắn với tên miền <strong>{pk.rp_id}</strong>. Vào panel bằng tên khác
-            thì passkey này không hiện ra — lúc đó dùng Google Authenticator bên dưới.
+            A passkey is tied to the domain <strong>{pk.rp_id}</strong>. Reach the panel by any
+            other name and it will not be offered — use Google Authenticator below for that.
           </p>
           <div className="cron-form">
             <input
               value={passkeyName}
               onChange={e => setPasskeyName(e.target.value)}
-              placeholder="Tên thiết bị, ví dụ MacBook"
-              aria-label="Tên passkey"
+              placeholder="Device name, e.g. MacBook"
+              aria-label="Passkey name"
             />
             <input
               type="password"
               value={passkeyPassword}
               onChange={e => setPasskeyPassword(e.target.value)}
-              placeholder="Mật khẩu hiện tại"
+              placeholder="Current password"
               autoComplete="current-password"
-              aria-label="Mật khẩu hiện tại"
+              aria-label="Current password"
             />
             <button disabled={!!loading || !passkeyPassword} onClick={addPasskey}>
-              <KeyRound size={14}/> Thêm passkey
+              <KeyRound size={14}/> Add passkey
             </button>
           </div>
-          <p className="hint">Mật khẩu hiện tại là bước xác nhận, giống khi bật Google Authenticator.</p>
+          <p className="hint">Your current password confirms it is you, the same as when turning on Google Authenticator.</p>
         </>}
 
         {pk?.credentials?.length > 0 && <div className="table">
@@ -6754,18 +6754,18 @@ function App() {
             <span><strong>{c.name}</strong></span>
             <span style={{color:'var(--text-muted)'}}>{c.rp_id}</span>
             <span className={c.usable_here ? 'badge ok' : 'badge'}>
-              {c.usable_here ? 'Dùng được ở đây' : 'Tên miền khác'}
+              {c.usable_here ? 'Works here' : 'Another domain'}
             </span>
             <button className="danger" disabled={!!loading} onClick={() => removePasskey(c)}><Trash2 size={14}/></button>
           </div>)}
         </div>}
 
         {pk?.supported && (pk?.credentials?.length || 0) === 0 &&
-          <EmptyState icon={KeyRound} message="Chưa có passkey nào." />}
+          <EmptyState icon={KeyRound} message="No passkeys yet." />}
 
         {(pk?.credentials?.length || 0) > 0 && !enabled && <p className="hint" style={{color:'var(--red)'}}>
-          Bạn chỉ có passkey. Nếu vào panel bằng tên miền khác, sẽ không có cách xác
-          thực thứ hai nào — nên bật thêm Google Authenticator bên dưới.
+          A passkey is your only second factor. Reach the panel by a different domain and
+          there is no second factor at all — turn on Google Authenticator below as well.
         </p>}
       </section>
 
@@ -6810,13 +6810,13 @@ function App() {
     const activeScanJob = scanJob || scanResults || {};
     const scanRunning = ['queued', 'running'].includes(scanJob?.status);
     const scanJobTitle = job => job.scope === 'server'
-      ? 'Toàn bộ VPS'
+      ? 'Whole server'
       : (job.domains && job.domains.length > 0)
         ? (job.domains.length === 1 ? job.domains[0] : `${job.domains.length} website`)
-        : (job.scope === 'all' ? 'Tất cả website' : 'Lượt quét');
+        : (job.scope === 'all' ? 'All websites' : 'Scan');
     const scanJobStamp = job => {
       const stamp = job.finished_at || job.updated_at || job.started_at || job.created_at || '';
-      if (!stamp) return 'Chưa có thời gian';
+      if (!stamp) return 'No time recorded';
       const date = new Date(stamp);
       return Number.isNaN(date.getTime()) ? stamp : new Intl.DateTimeFormat('en-GB', {
         timeZone: 'Asia/Ho_Chi_Minh',
@@ -6829,7 +6829,7 @@ function App() {
         year: 'numeric',
       }).format(date).replace(',', '');
     };
-    const scanJobDetail = job => `${job.scanned || 0}/${job.total_files || job.scanned || 0} tệp, ${job.infected || 0} mối đe doạ, ${job.errors || 0} lỗi`;
+    const scanJobDetail = job => `${job.scanned || 0}/${job.total_files || job.scanned || 0} files, ${job.infected || 0} threats, ${job.errors || 0} errors`;
     const scanJobMeta = job => `${scanJobStamp(job)} / ${scanJobDetail(job)}`;
     const scanJobBadgeClass = job => {
       if (job.status === 'done') return 'badge ok';
@@ -6838,8 +6838,8 @@ function App() {
       return 'badge warn';
     };
     const scanStatusLabel = status => ({
-      queued: 'Đang chờ', running: 'Đang chạy', done: 'Hoàn tất',
-      infected: 'Phát hiện đe doạ', error: 'Lỗi', interrupted: 'Bị gián đoạn',
+      queued: 'Queued', running: 'Running', done: 'Finished',
+      infected: 'Threats found', error: 'Error', interrupted: 'Interrupted',
     }[status] || status || '—');
     const fmtStamp = s => {
       if (!s) return '';
@@ -6868,17 +6868,17 @@ function App() {
           <span>{MALWARE_SCHEDULE_LABELS[name]}</span>
         </label>
         <div className="malware-sched-when">
-          <select value={vn.weekday} disabled={!form.enabled} aria-label="Thứ"
+          <select value={vn.weekday} disabled={!form.enabled} aria-label="Day"
             onChange={e => setSchedVn({ weekday: Number(e.target.value) })}>
             {WEEKDAY_LABELS.map((l, i) => <option key={i} value={i}>{l}</option>)}
           </select>
-          <select value={vn.hour} disabled={!form.enabled} aria-label="Giờ"
+          <select value={vn.hour} disabled={!form.enabled} aria-label="Hour"
             onChange={e => setSchedVn({ hour: Number(e.target.value) })}>
             {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>)}
           </select>
         </div>
         <div className="malware-sched-meta">
-          {saved.enabled && saved.next_run_at && <span>Kế tiếp: <strong>{fmtStamp(saved.next_run_at)}</strong></span>}
+          {saved.enabled && saved.next_run_at && <span>Next: <strong>{fmtStamp(saved.next_run_at)}</strong></span>}
           {saved.last_run_at && <span className={`badge ${saved.last_status === 'done' ? 'ok' : saved.last_status === 'infected' ? 'danger' : 'warn'}`}>
             {fmtStamp(saved.last_run_at)} · {scanStatusLabel(saved.last_status)}
           </span>}
@@ -6892,32 +6892,32 @@ function App() {
           <div>
             <h2>Malware Scanner</h2>
             <p className="hint">
-              {mwActive ? <span className="badge ok">Đang bật</span>
-                : mwEnabled && !mwInstalled ? <span className="badge warn">Đang cài đặt...</span>
-                : mwInstalled && !mwEnabled ? <span className="badge">Đã cài · đang tắt</span>
-                : <span className="badge">Chưa cài</span>}
+              {mwActive ? <span className="badge ok">On</span>
+                : mwEnabled && !mwInstalled ? <span className="badge warn">Installing...</span>
+                : mwInstalled && !mwEnabled ? <span className="badge">Installed · off</span>
+                : <span className="badge">Not installed</span>}
               {mw.realtime_enabled && <span className={mw.monitor_running ? 'badge ok' : 'badge warn'} style={{marginLeft:6}}>
-                Cấp 2 {mw.monitor_running ? 'đang chạy' : 'chưa chạy'}
+                Level 2 {mw.monitor_running ? 'running' : 'not running'}
               </span>}
             </p>
           </div>
           <button disabled={!!loading} onClick={loadMalwareScanStatus}><RefreshCw size={14}/> Refresh</button>
         </div>
         {mw.memory_warning && <div className="info-box malware-ram-warning">
-          <strong><AlertCircle size={15}/> Cảnh báo RAM</strong>
+          <strong><AlertCircle size={15}/> Memory warning</strong>
           <p className="hint">{mw.memory_warning}</p>
         </div>}
         <div className="info-box">
-          <p className="hint">{mw.detail || 'Đang kiểm tra...'}</p>
-          {mw.memory_total_mb > 0 && <p className="hint">RAM máy chủ: <strong>{mw.memory_total_mb} MB</strong> (còn trống {mw.memory_available_mb} MB)</p>}
-          {mw.lmd_installed && <p className="hint">Dữ liệu nhận diện mã độc: <strong>{mw.lmd_sig_version || '—'}</strong>{mw.lmd_updated_at ? ` (cập nhật ${mw.lmd_updated_at})` : ''}</p>}
-          {!mwInstalled && <p className="hint" style={{marginTop:8}}>Khi bật, panel tự cài trình quét. Trình quét chỉ chạy trong lúc quét (RAM ~1.3GB), quét xong tự giải phóng — không chạy nền liên tục nên không tốn RAM lúc bình thường.</p>}
+          <p className="hint">{mw.detail || 'Checking...'}</p>
+          {mw.memory_total_mb > 0 && <p className="hint">Server memory: <strong>{mw.memory_total_mb} MB</strong> ({mw.memory_available_mb} MB free)</p>}
+          {mw.lmd_installed && <p className="hint">Malware signatures: <strong>{mw.lmd_sig_version || '—'}</strong>{mw.lmd_updated_at ? ` (updated ${mw.lmd_updated_at})` : ''}</p>}
+          {!mwInstalled && <p className="hint" style={{marginTop:8}}>Turning this on installs the scanner. It only runs during a scan (~1.3 GB of RAM) and releases that afterwards — nothing runs in the background, so it costs no memory at rest.</p>}
           <div className="actions" style={{marginTop:12}}>
             {!mwEnabled
-              ? <button disabled={!!loading} onClick={() => toggleMalwareScan(true)}><Shield size={14}/> Bật trình quét</button>
-              : <button className="danger" disabled={!!loading} onClick={() => toggleMalwareScan(false)}>Tắt trình quét</button>}
-            {mwEnabled && !mw.lmd_installed && <button disabled={!!loading} onClick={installLmd}>Cài đặt trình quét</button>}
-            {mw.lmd_installed && <button className="secondary" disabled={!!loading} onClick={updateMalwareSignatures}><RefreshCw size={13}/> Cập nhật chữ ký</button>}
+              ? <button disabled={!!loading} onClick={() => toggleMalwareScan(true)}><Shield size={14}/> Turn on scanner</button>
+              : <button className="danger" disabled={!!loading} onClick={() => toggleMalwareScan(false)}>Turn off scanner</button>}
+            {mwEnabled && !mw.lmd_installed && <button disabled={!!loading} onClick={installLmd}>Install the scanner</button>}
+            {mw.lmd_installed && <button className="secondary" disabled={!!loading} onClick={updateMalwareSignatures}><RefreshCw size={13}/> Update signatures</button>}
           </div>
         </div>
 
@@ -6925,31 +6925,31 @@ function App() {
           <div className="malware-scan-runner">
             <div className="malware-scan-head">
               <div>
-                <strong>Cấp 1 — Quét theo lịch</strong>
-                <p className="hint">Quét thư mục website (nhanh), quét toàn bộ VPS, hoặc quét tăng dần (chỉ những tệp mới sửa gần đây — chạy thủ công khi cần, không nằm trong lịch tự động).</p>
+                <strong>Level 1 — Scheduled scans</strong>
+                <p className="hint">Scan the website directories (fast), the whole server, or incrementally (only recently changed files — run by hand when you want it, never on the schedule).</p>
               </div>
-              <button className="secondary" disabled={!!loading} onClick={loadMalwareScanJobs}><RefreshCw size={14}/> Lịch sử</button>
+              <button className="secondary" disabled={!!loading} onClick={loadMalwareScanJobs}><RefreshCw size={14}/> History</button>
             </div>
             <div className="malware-scan-controls">
               <select value={scanTargetWebsiteId} onChange={e => { setScanTargetWebsiteId(e.target.value); setScanResults(null); setScanJob(null); }}>
-                <option value="">-- Quét ngay: chọn mục tiêu --</option>
-                <option value="all">Toàn bộ website</option>
-                <option value="incremental">Quét tăng dần</option>
-                <option value="server">Toàn bộ VPS</option>
+                <option value="">-- Scan now: pick a target --</option>
+                <option value="all">All websites</option>
+                <option value="incremental">Incremental scan</option>
+                <option value="server">Whole server</option>
                 {websites.map(w => <option key={w.id} value={w.id}>{w.domain}</option>)}
               </select>
               {scanTargetWebsiteId === 'incremental' && <select value={incrementalDays} onChange={e => setIncrementalDays(Number(e.target.value))}>
-                {[1, 2, 3, 7, 14].map(d => <option key={d} value={d}>{d} ngày</option>)}
+                {[1, 2, 3, 7, 14].map(d => <option key={d} value={d}>{d} days</option>)}
               </select>}
               <button disabled={!!loading || scanRunning || !scanTargetWebsiteId} onClick={runMalwareScan}>
-                {scanRunning || scanLoading ? <><RefreshCw size={14} className="spin"/> Đang quét...</> : <><Search size={14}/> Quét ngay</>}
+                {scanRunning || scanLoading ? <><RefreshCw size={14} className="spin"/> Scanning...</> : <><Search size={14}/> Scan now</>}
               </button>
             </div>
           </div>
           <div className="malware-schedule">
             <div className="malware-scan-head">
-              <div><strong>Lịch tự động</strong><p className="hint">Panel tự quét theo lịch, không cần ai bấm. Nên đặt vào giờ ít khách truy cập.</p></div>
-              <button disabled={!!loading || !scheduleDirty} onClick={saveMalwareSchedule}><Clock size={14}/> Lưu lịch</button>
+              <div><strong>Automatic schedule</strong><p className="hint">The panel scans on its own, with nobody pressing anything. Pick an hour when few visitors are around.</p></div>
+              <button disabled={!!loading || !scheduleDirty} onClick={saveMalwareSchedule}><Clock size={14}/> Save schedule</button>
             </div>
             <div className="malware-sched-list">
               {['websites', 'server'].map(renderScheduleRow)}
@@ -6958,40 +6958,40 @@ function App() {
           <div className="malware-realtime">
             <div className="malware-scan-head">
               <div>
-                <strong>Cấp 2 — Bảo vệ thời gian thực</strong>
-                <p className="hint">Theo dõi thư mục website liên tục, kiểm tra tệp mới theo từng đợt ngắn (~15 giây). Bắt được ngay tệp lạ upload qua SFTP/plugin, không phải chờ tới lần quét theo lịch kế tiếp như Cấp 1.</p>
+                <strong>Level 2 — Real-time protection</strong>
+                <p className="hint">Watches the website directories continuously and checks new files in short batches (~15 seconds). Catches something arriving over SFTP or through a plugin at once, instead of waiting for the next Level 1 scheduled scan.</p>
               </div>
               <label className="switch-line">
                 <input type="checkbox" checked={!!mw.realtime_enabled} disabled={!!loading}
                   onChange={e => toggleMalwareRealtime(e.target.checked)} />
-                <span>{mw.realtime_enabled ? 'Đang bật' : 'Đang tắt'}</span>
+                <span>{mw.realtime_enabled ? 'On' : 'Off'}</span>
               </label>
             </div>
           </div>
           <div className="malware-realtime">
             <div className="malware-scan-head">
               <div>
-                <strong>Quét tệp khi tải lên</strong>
+                <strong>Scan uploaded files</strong>
                 <p className="hint">
-                  Quét từng tệp vừa tải lên qua File manager, chạy nền sau khi tải xong nên không bắt người dùng chờ.
-                  Mặc định tắt: nếu máy không chạy clamd thường trú thì mỗi tệp phải nạp lại toàn bộ cơ sở dữ liệu chữ ký
-                  (đo thực tế 28 giây, hơn 1 GB RAM cho một tệp 20 MB). Quét theo lịch ở Cấp 1 vẫn phủ các tệp này.
+                  Scans each file uploaded through the file manager, in the background after the upload finishes, so nobody waits on it.
+                  Off by default: without a resident clamd, every file reloads the whole signature database
+                  (measured at 28 seconds and over 1 GB of RAM for a 20 MB file). The Level 1 scheduled scan covers these files either way.
                 </p>
                 {!mw.scan_on_upload_is_cheap && <p className="hint">
-                  Máy này chưa chạy clamd thường trú — bật clamd trước thì mỗi lần quét chỉ còn vài mili-giây.
+                  This server has no resident clamd — start one first and each scan drops to milliseconds.
                 </p>}
               </div>
               <label className="switch-line">
                 <input type="checkbox" checked={!!mw.scan_on_upload} disabled={!!loading}
                   onChange={e => toggleMalwareScanOnUpload(e.target.checked)} />
-                <span>{mw.scan_on_upload ? 'Đang bật' : 'Đang tắt'}</span>
+                <span>{mw.scan_on_upload ? 'On' : 'Off'}</span>
               </label>
             </div>
           </div>
           {scanJobs.length > 0 && <div className="scan-history-wrap">
             <div className="scan-history-head">
-              <strong>Lịch sử quét</strong>
-              <span>{scanJobs.length} lượt</span>
+              <strong>Scan history</strong>
+              <span>{scanJobs.length} runs</span>
             </div>
             <div className="scan-history-list">
               {scanJobs.slice(0, 8).map(job => <button
@@ -7015,17 +7015,17 @@ function App() {
               <div className="progress-bar-fill" style={{width: `${Number(activeScanJob.progress_percent) || 0}%`}} />
             </div>
             <div className="scan-status-summary">
-              <span><strong>Tiến độ</strong>{Number(activeScanJob.progress_percent) || 0}%</span>
-              <span><strong>Tệp đã quét</strong>{activeScanJob.scanned || 0}/{activeScanJob.total_files || activeScanJob.scanned || 0}</span>
-              <span><strong>Mối đe doạ</strong>{activeScanJob.infected > 0
+              <span><strong>Progress</strong>{Number(activeScanJob.progress_percent) || 0}%</span>
+              <span><strong>Files scanned</strong>{activeScanJob.scanned || 0}/{activeScanJob.total_files || activeScanJob.scanned || 0}</span>
+              <span><strong>Threats</strong>{activeScanJob.infected > 0
                 ? <span className="badge danger">{activeScanJob.infected}</span>
                 : <span className="badge ok">0</span>}
               </span>
-              <span><strong>Lỗi</strong>{activeScanJob.errors || 0}</span>
+              <span><strong>Errors</strong>{activeScanJob.errors || 0}</span>
             </div>
             {activeScanJob.message && <p className="hint">{activeScanJob.message}</p>}
             {activeScanJob.threats && activeScanJob.threats.length > 0 && <div className="scan-threat-list">
-              <p className="hint">Tên hiển thị là họ mã độc do trình quét tự đặt (ví dụ php.base64...), không phải tên virus thông thường — không cần tra cứu tên này ở đâu khác.</p>
+              <p className="hint">These are the scanner's own family names (php.base64..., for instance), not common virus names — there is nowhere else to look them up.</p>
               {activeScanJob.threats.map((t, i) => <div key={i} className="scan-threat-item">
                 <strong>{t.signature}</strong>
                 <span>{t.domain ? `${t.domain}: ` : ''}{t.path}</span>
@@ -7058,7 +7058,7 @@ function App() {
             <div className="panel-net-value">
               {panelSettings.server_ipv4?.length > 0
                 ? panelSettings.server_ipv4.map(address => <span key={address} className="badge">{address}</span>)
-                : <span className="hint">Không đọc được địa chỉ IPv4 của máy chủ.</span>}
+                : <span className="hint">Could not read the server's IPv4 address.</span>}
             </div>
           </div>
           <div className="panel-net-row">
@@ -7066,14 +7066,14 @@ function App() {
             <div className="panel-net-value">
               {panelSettings.ipv6?.addresses?.length > 0
                 ? panelSettings.ipv6.addresses.map(address => <span key={address} className="badge">{address}</span>)
-                : <span className="badge">Chưa có</span>}
+                : <span className="badge">None</span>}
               <span className={`badge ${panelSettings.ipv6?.enabled ? 'ok' : ''}`}>
-                {panelSettings.ipv6?.enabled ? 'Đang bật' : 'Đang tắt'}
+                {panelSettings.ipv6?.enabled ? 'On' : 'Off'}
               </span>
             </div>
             {panelSettings.ipv6?.enabled
-              ? <button className="secondary-light" disabled={!!loading} onClick={() => toggleIpv6(false)}>Tắt IPv6</button>
-              : <button className="secondary-light" disabled={!!loading || !panelSettings.ipv6?.available} onClick={() => toggleIpv6(true)}>Bật IPv6</button>}
+              ? <button className="secondary-light" disabled={!!loading} onClick={() => toggleIpv6(false)}>Disable IPv6</button>
+              : <button className="secondary-light" disabled={!!loading || !panelSettings.ipv6?.available} onClick={() => toggleIpv6(true)}>Enable IPv6</button>}
           </div>
           <span className="hint">{panelSettings.ipv6?.detail}</span>
         </div>
@@ -7406,12 +7406,12 @@ function App() {
           <input value={username} onChange={e => setUsername(e.target.value)} placeholder="Username" autoComplete="username" />
           <input value={password} onChange={e => setPassword(e.target.value)} placeholder="Password" type="password" autoComplete="current-password" onKeyDown={e => { if (e.key === 'Enter') login(); }} />
           {passkeyPrompt && !needsTwoFactor && <div className="info-box">
-            <p className="hint">Chạm vào passkey của bạn để đăng nhập.</p>
+            <p className="hint">Touch your passkey to sign in.</p>
             <div className="site-app-form-actions">
-              <button disabled={!!loading} onClick={() => usePasskey(passkeyPrompt.options)}><KeyRound size={14}/> Thử lại passkey</button>
+              <button disabled={!!loading} onClick={() => usePasskey(passkeyPrompt.options)}><KeyRound size={14}/> Try the passkey again</button>
               {/* A passkey belongs to one hostname. Reaching the panel by
                   another name offers nothing, so the app has to stay in reach. */}
-              {passkeyPrompt.canUseOtp && <button className="secondary-light" disabled={!!loading} onClick={() => { setNeedsTwoFactor(true); setPasskeyPrompt(null); setNotice('Nhập mã từ ứng dụng xác thực.'); }}>Dùng mã xác thực</button>}
+              {passkeyPrompt.canUseOtp && <button className="secondary-light" disabled={!!loading} onClick={() => { setNeedsTwoFactor(true); setPasskeyPrompt(null); setNotice('Enter the code from your authenticator app.'); }}>Use a code instead</button>}
             </div>
           </div>}
           {needsTwoFactor && <input value={otpCode} onChange={e => setOtpCode(e.target.value)} placeholder="Authentication code" inputMode="numeric" autoComplete="one-time-code" onKeyDown={e => { if (e.key === 'Enter') login(); }} />}
