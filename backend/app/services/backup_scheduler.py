@@ -122,6 +122,44 @@ def _short_message(parts: list[str]) -> str:
     return message[:4000]
 
 
+def run_one(db, schedule: BackupSchedule, now: datetime | None = None) -> bool:
+    """Run one schedule, exactly as the timer would. Returns whether it worked.
+
+    Extracted so "Run now" is not a second implementation. A test run that
+    took a different path would prove nothing about the real one - the cron
+    expression is the only thing it is allowed to skip.
+    """
+    now = (now or datetime.now()).replace(second=0, microsecond=0)
+
+    users = _schedule_users(db, schedule)
+    if not users:
+        schedule.last_run_at = now
+        schedule.last_status = "error"
+        schedule.last_message = "No users selected"
+        db.commit()
+        return False
+
+    messages = []
+    errors = []
+    for user in users:
+        try:
+            archive = backup.create_user_backup(user, db)
+            target = _upload_if_configured(db, schedule, archive)
+            backup.prune_user_backups(user.username, schedule.retention)
+            messages.append(f"{user.username}: {target}")
+        except Exception as exc:  # pragma: no cover - operational path
+            errors.append(f"{user.username}: {exc}")
+
+    ok = not errors
+    schedule.last_status = "ok" if ok else "error"
+    schedule.last_message = _short_message(
+        [f"ok {len(messages)} user(s)"] + (messages if ok else errors)
+    )
+    schedule.last_run_at = now
+    db.commit()
+    return ok
+
+
 def run_due_schedules(now: datetime | None = None) -> int:
     now = (now or datetime.now()).replace(second=0, microsecond=0)
     db = SessionLocal()
@@ -133,32 +171,8 @@ def run_due_schedules(now: datetime | None = None) -> int:
                 continue
             if schedule.last_run_at and schedule.last_run_at.replace(second=0, microsecond=0) == now:
                 continue
-            users = _schedule_users(db, schedule)
-            if not users:
-                schedule.last_run_at = now
-                schedule.last_status = "error"
-                schedule.last_message = "No users selected"
-                db.commit()
-                continue
-            messages = []
-            errors = []
-            for user in users:
-                try:
-                    archive = backup.create_user_backup(user, db)
-                    target = _upload_if_configured(db, schedule, archive)
-                    backup.prune_user_backups(user.username, schedule.retention)
-                    messages.append(f"{user.username}: {target}")
-                except Exception as exc:  # pragma: no cover - operational path
-                    errors.append(f"{user.username}: {exc}")
-            if errors:
-                schedule.last_status = "error"
-                schedule.last_message = _short_message([f"ok {len(messages)} user(s)"] + errors)
-            else:
-                schedule.last_status = "ok"
-                schedule.last_message = _short_message([f"ok {len(messages)} user(s)"] + messages)
+            if run_one(db, schedule, now):
                 ran += 1
-            schedule.last_run_at = now
-            db.commit()
     finally:
         db.close()
     return ran

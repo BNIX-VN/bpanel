@@ -3160,6 +3160,16 @@ function App() {
     }
   }
 
+  async function runBackupScheduleNow(item) {
+    const who = scheduleUserLabel(item);
+    if (!confirm(`Run this schedule now?\n\n${who} - ${item.schedule}\n\nThis is the real thing: the same accounts, the same destination and the same stored name. Only the timing is skipped.`)) return;
+    const data = await request(`/maintenance/backup-schedules/${item.id}/run`, { method: 'POST' }, 'Starting...');
+    if (data) {
+      setNotice(data.detail || 'Running now.');
+      await loadBackupSchedules();
+    }
+  }
+
   async function deleteBackupSchedule(id) {
     if (!confirm('Delete this backup schedule?')) return;
     const data = await request(`/maintenance/backup-schedules/${id}`, { method: 'DELETE' }, 'Deleting backup schedule...');
@@ -5850,7 +5860,12 @@ Each account is overwritten with what is in its archive.`)) return;
           {backupSchedules.map(item => {
             const scheduleTarget = sftpTargets.find(target => target.id === item.target_id);
             return <div className="backup-item" key={item.id}>
-              <span>{scheduleUserLabel(item)} - {item.schedule}{scheduleTarget ? ` - ${scheduleTarget.name}` : ''}{item.name_suffix && item.name_suffix !== 'full_date' ? ` - ${item.name_suffix.replace(/_/g, ' ')}` : ''}<small>{item.last_status}: {item.last_message || 'not run yet'}</small></span>
+              <span>
+                {scheduleUserLabel(item)} - {item.schedule}{scheduleTarget ? ` - ${scheduleTarget.name}` : ''}{item.name_suffix && item.name_suffix !== 'full_date' ? ` - ${item.name_suffix.replace(/_/g, ' ')}` : ''}
+                {item.last_status === 'running' && <span className="badge"> running</span>}
+                <small>{item.last_status}: {item.last_message || 'not run yet'}</small>
+              </span>
+              <button className="mini secondary-light" disabled={!!loading || item.last_status === 'running'} onClick={() => runBackupScheduleNow(item)}><Play size={14}/> Run now</button>
               <button className="danger" disabled={!!loading} onClick={() => deleteBackupSchedule(item.id)}><Trash2 size={14}/></button>
             </div>;
           })}

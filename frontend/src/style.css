@@ -1063,3 +1063,8 @@ button:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
   .restore-row{grid-template-columns:20px minmax(0,1fr);row-gap:4px}
   .restore-row>span:not(.restore-main){grid-column:2}
 }
+
+/* A schedule row carries two buttons now. Let the text take the slack so they
+   sit together at the end instead of space-between pushing them apart. */
+.backup-item>span:first-child{flex:1 1 auto;min-width:0}
+.backup-item>button{flex:0 0 auto}

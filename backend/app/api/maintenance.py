@@ -824,6 +824,60 @@ def create_backup_schedule(payload: BackupScheduleCreate, request: Request, db: 
     return item
 
 
+@router.post("/backup-schedules/{schedule_id}/run")
+def run_backup_schedule_now(
+    schedule_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Run a schedule this minute, without waiting for its cron expression.
+
+    Everything else is the real thing: the same users, the same destination,
+    the same stored name, the same retention prune, and the result written to
+    the same last_status the timer writes. A test that took a shortcut would
+    tell you nothing about the run you actually depend on.
+
+    It goes through the backup job executor because a schedule covering every
+    account can take minutes, and an HTTP request should not be holding that.
+    """
+    ensure_role(current_user.role, Role.admin)
+    schedule = db.query(BackupSchedule).filter(BackupSchedule.id == schedule_id).first()
+    if not schedule:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+
+    schedule.last_status = "running"
+    schedule.last_message = f"Started by {current_user.username}"
+    db.commit()
+
+    _backup_job_executor.submit(_run_schedule_now_job, schedule_id)
+    log_action(db, current_user.id, "run_backup_schedule", str(schedule_id), request=request)
+    return {"ok": True, "schedule_id": schedule_id,
+            "detail": "Running now. Refresh to see the result on this schedule."}
+
+
+def _run_schedule_now_job(schedule_id: int) -> None:
+    """The worker side. Owns its own session: the request's is long gone."""
+    from app.services import backup_scheduler
+
+    db = SessionLocal()
+    try:
+        schedule = db.query(BackupSchedule).filter(BackupSchedule.id == schedule_id).first()
+        if schedule:
+            backup_scheduler.run_one(db, schedule)
+    except Exception as exc:  # noqa: BLE001 - the outcome belongs on the row
+        try:
+            schedule = db.query(BackupSchedule).filter(BackupSchedule.id == schedule_id).first()
+            if schedule:
+                schedule.last_status = "error"
+                schedule.last_message = str(exc)[:4000]
+                db.commit()
+        except Exception:  # pragma: no cover
+            pass
+    finally:
+        db.close()
+
+
 @router.delete("/backup-schedules/{schedule_id}")
 def delete_backup_schedule(schedule_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.admin)

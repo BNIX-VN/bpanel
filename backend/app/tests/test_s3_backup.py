@@ -210,3 +210,84 @@ def test_both_kinds_of_target_go_through_the_same_naming():
     body = source[source.index("def _upload_if_configured"):]
     body = body[:body.index("\ndef _decode_user_ids")]
     assert body.count("remote_name") >= 2
+
+
+# --- Run now ---------------------------------------------------------------
+#
+# A test run that took a different path would prove nothing about the run you
+# actually depend on. The only thing Run now is allowed to skip is the cron
+# expression.
+
+def _scheduler_source():
+    return (PROJECT_ROOT / "backend" / "app" / "services" / "backup_scheduler.py").read_text(encoding="utf-8")
+
+
+def _maintenance_source():
+    return (PROJECT_ROOT / "backend" / "app" / "api" / "maintenance.py").read_text(encoding="utf-8")
+
+
+def test_the_timer_and_run_now_share_one_implementation():
+    source = _scheduler_source()
+    assert "def run_one(" in source
+    loop = source[source.index("def run_due_schedules"):]
+    assert "run_one(db, schedule, now)" in loop, (
+        "the timer has to call the same function Run now does"
+    )
+    assert "backup.create_user_backup" not in loop, (
+        "the work belongs in run_one, or the two paths drift apart"
+    )
+
+
+def test_run_now_skips_the_cron_and_nothing_else():
+    source = _scheduler_source()
+    body = source[source.index("def run_one("):source.index("def run_due_schedules")]
+    assert "_cron_due" not in body, "the schedule expression is the one thing it ignores"
+    for expected in ("_schedule_users", "backup.create_user_backup",
+                     "_upload_if_configured", "backup.prune_user_backups"):
+        assert expected in body, f"{expected} has to happen on a manual run too"
+
+
+def test_the_result_lands_on_the_same_row_the_timer_writes():
+    body = _scheduler_source()
+    body = body[body.index("def run_one("):body.index("def run_due_schedules")]
+    for field in ("last_status", "last_message", "last_run_at"):
+        assert field in body
+
+
+def test_run_now_does_not_hold_the_request_open():
+    """A schedule covering every account takes minutes."""
+    source = _maintenance_source()
+    body = source[source.index("def run_backup_schedule_now"):source.index("def _run_schedule_now_job")]
+    assert "_backup_job_executor.submit" in body
+    assert "run_one" not in body, "the request thread must not do the work itself"
+
+
+def test_the_row_says_running_before_the_work_starts():
+    source = _maintenance_source()
+    body = source[source.index("def run_backup_schedule_now"):source.index("def _run_schedule_now_job")]
+    assert 'last_status = "running"' in body
+    assert body.index('last_status = "running"') < body.index("_backup_job_executor.submit")
+
+
+def test_the_worker_owns_its_own_session():
+    """The request's session is closed by the time the job runs."""
+    source = _maintenance_source()
+    body = source[source.index("def _run_schedule_now_job"):]
+    body = body[:body.index('@router.delete("/backup-schedules/{schedule_id}")')]
+    assert "SessionLocal()" in body and "db.close()" in body
+
+
+def test_a_failure_is_written_to_the_schedule_not_swallowed():
+    source = _maintenance_source()
+    body = source[source.index("def _run_schedule_now_job"):]
+    body = body[:body.index('@router.delete("/backup-schedules/{schedule_id}")')]
+    assert 'last_status = "error"' in body, "a crash must be visible on the row"
+
+
+def test_the_button_is_not_offered_while_a_run_is_in_flight():
+    page = (PROJECT_ROOT / "frontend" / "src" / "App.jsx").read_text(encoding="utf-8")
+    # The handler is declared on a line carrying the same name; the button is
+    # the one that also has an onClick.
+    line = next(l for l in page.splitlines()
+                if "runBackupScheduleNow(item)" in l and "onClick" in l)
+    assert "item.last_status === 'running'" in line
