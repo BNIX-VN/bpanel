@@ -137,11 +137,49 @@ def create_user(payload: UserCreate, request: Request, db: Session = Depends(get
 
 @router.get("", response_model=List[UserOut])
 def list_users(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Who the accounts are. Disk usage only if it is already known.
+
+    Measuring an account's disk usage means walking its home directory, and on
+    a cold cache that is the whole list waiting on the slowest account: 3.8
+    seconds for fifteen users before a single row could be drawn. The list is
+    what the page is for, so it no longer waits. Rows whose figure is not
+    cached report -1, and the page asks for those separately - see
+    /users/storage-usage.
+    """
     ensure_role(current_user.role, Role.admin)
-    return [
-        _user_out(user, db, cached_usage=True)
-        for user in db.query(User).options(selectinload(User.package)).order_by(User.id.desc()).all()
-    ]
+    rows = []
+    for user in db.query(User).options(selectinload(User.package)).order_by(User.id.desc()).all():
+        data = UserOut.model_validate(user).model_dump()
+        data["package_name"] = user.package.name if user.package else None
+        known = storage_quota.cached_storage_used_bytes(user.id)
+        limit_bytes = storage_quota.user_storage_limit_bytes(user)
+        data["storage_limit_bytes"] = limit_bytes
+        if known is None:
+            # -1, not 0: nobody has "used nothing", and a zero would draw an
+            # empty bar that looks like an answer.
+            data["storage_used_bytes"] = -1
+            data["storage_percent"] = 0.0
+        else:
+            data["storage_used_bytes"] = known
+            data["storage_percent"] = (
+                min(999.0, round((known / limit_bytes) * 100, 2)) if limit_bytes else 0.0
+            )
+        rows.append(data)
+    return rows
+
+
+@router.get("/storage-usage")
+def storage_usage(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """The figures the list deliberately did not wait for.
+
+    Walks what it has to and fills the cache, so the next list is instant. The
+    page calls this once after the rows are on screen.
+    """
+    ensure_role(current_user.role, Role.admin)
+    return {
+        str(user.id): storage_quota.storage_usage_summary(db, user)
+        for user in db.query(User).all()
+    }
 
 
 @router.get("/me", response_model=UserOut)

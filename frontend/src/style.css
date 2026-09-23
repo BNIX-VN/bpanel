@@ -1025,7 +1025,19 @@ button:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
 }
 .wrap-any{word-break:break-all}
 .hint.alarm{font-weight:600;color:var(--danger-text)}
-.rule-form{margin-top:14px}
+/* The add-rule form is five controls on one line, and only one of them wants
+   the room: an address is up to 43 characters, a protocol is three. The old
+   `1fr 170px auto` grid was written for a three-field form and stretched the
+   selects while squeezing the address. Size each column to what it holds. */
+.rule-form{
+  margin-top:14px;
+  grid-template-columns:minmax(120px,auto) minmax(180px,1fr) 108px 104px auto;
+  align-items:end;
+}
+@media (max-width:760px){
+  .rule-form{grid-template-columns:1fr}
+  .rule-form button{width:100%}
+}
 
 @media (max-width:560px){
   .detail-body{max-height:260px}

@@ -20,7 +20,7 @@ import { Archive, ArchiveRestore, ArrowLeft, Ban, Boxes, Check, ChevronDown, Clo
 import {
   MsWebsites, MsApplications, MsSsl, MsCron, MsFiles, MsDatabaseIcon, MsBackups,
   MsWaf, MsFirewall, MsMalware, MsAccessLogs, MsLoginSecurity, MsServices,
-  MsPhpConfig, MsUpdates, MsAddons, MsPanelUsers, MsApiTokens, MsPanelSettings,
+  MsPhpConfig, MsUpdates, MsAddons, MsPanelUsers, MsPanelSettings,
 } from './MaterialSymbols.jsx';
 import { Terminal } from './components/Terminal';
 import './style.css';
@@ -59,7 +59,7 @@ const NAV_PARENT_PAGE = { 'waf-site': 'waf' };
 
 // 'waf-site' is reached from the WAF overview rather than the sidebar, but it
 // still belongs to Settings so the menu stays open and WAF stays highlighted.
-const SETTINGS_PAGE_KEYS = ['settings', 'api-tokens', 'security', 'php', 'firewall', 'waf', 'waf-site', 'malware', 'access-logs', 'updates', 'addons', 'services'];
+const SETTINGS_PAGE_KEYS = ['settings', 'security', 'php', 'firewall', 'waf', 'waf-site', 'malware', 'access-logs', 'updates', 'addons', 'services'];
 const PAGE_ROUTES = {
   dashboard: '/',
   websites: '/website',
@@ -72,7 +72,6 @@ const PAGE_ROUTES = {
   backups: '/backups',
   users: '/users',
   settings: '/settings',
-  'api-tokens': '/api-tokens',
   security: '/security',
   php: '/php',
   firewall: '/firewall',
@@ -192,8 +191,9 @@ const ROUTE_PAGES = new Map([
   ['/files', 'files'],
   ['/file-manager', 'files'],
   ['/website', 'websites'],
-  ['/api-token', 'api-tokens'],
-  ['/api-tokens', 'api-tokens'],
+  // API tokens moved into Panel settings. Old links still land somewhere real.
+  ['/api-token', 'settings'],
+  ['/api-tokens', 'settings'],
 ]);
 
 function pageFromPathname(pathname) {
@@ -1455,10 +1455,23 @@ function App() {
     }
   }
 
+  // Disk usage costs a filesystem walk per account, so the list arrives first
+  // and the figures follow. Rows come back with storage_used_bytes = -1 when
+  // the panel has not measured them recently; this fills those in.
+  async function loadUserStorageUsage() {
+    const usage = await request('/users/storage-usage', { silent: true });
+    if (!usage) return;
+    setUsers(prev => prev.map(user => {
+      const found = usage[String(user.id)];
+      return found ? { ...user, ...found } : user;
+    }));
+  }
+
   async function loadUsers() {
     const data = await request('/users');
     if (data) {
       setUsers(data);
+      if (data.some(user => Number(user.storage_used_bytes) < 0)) loadUserStorageUsage();
       if (!selectedBackupUserId && data[0]) setSelectedBackupUserId(String(data[0].id));
       setNewBackupSchedule(prev => (!prev.all_users && (!prev.user_ids || prev.user_ids.length === 0) && data[0]) ? ({ ...prev, user_ids: [String(data[0].id)] }) : prev);
     }
@@ -4112,8 +4125,7 @@ function App() {
       if (isAdmin) { loadMalwareScanStatus(); loadMalwareScanJobs(); loadLatestMalwareScanJob(); }
       if (!websites.length) refreshAll();
     }
-    if (isAuthenticated && page === 'api-tokens' && currentUser?.role === 'admin') loadApiTokens();
-    if (isAuthenticated && page === 'settings') loadPanelSettings();
+    if (isAuthenticated && page === 'settings') { loadPanelSettings(); if (isAdmin) loadApiTokens(); }
     if (isAuthenticated && page === 'backups' && currentUser?.role === 'admin') { loadUsers(); loadSftpTargets(); loadBackupSchedules(); loadRestoreBackups(); }
   }, [isAuthenticated, page, currentUser?.role]);
 
@@ -4165,7 +4177,6 @@ function App() {
 
   const settingsNavItems = [
     ...(isAdmin ? [['settings', 'Panel settings', SettingsIcon]] : []),
-    ...(isAdmin ? [['api-tokens', 'API Tokens', KeyRound]] : []),
     ['security', 'Security', Shield],
     ...(isAdmin ? [['php', 'PHP config', Code2]] : []),
     ...(isAdmin ? [['firewall', 'Firewall', Shield]] : []),
@@ -4326,6 +4337,9 @@ function App() {
   }
 
   function storageUsageText(user) {
+    // -1 means the panel has not measured this account yet and did not hold
+    // the list up to do it. Saying so beats drawing a zero that reads as fact.
+    if (Number(user?.storage_used_bytes) < 0) return 'đang tính...';
     const used = Number(user?.storage_used_bytes || 0);
     const limit = storageLimitBytes(user);
     if (limit === null) return formatBytes(used);
@@ -4404,7 +4418,6 @@ function App() {
         hint: 'Who can sign in, and with what',
         tiles: [
           isAdmin ? ['users', 'Panel users', MsPanelUsers, 'Customers, packages and quotas'] : null,
-          isAdmin ? ['api-tokens', 'API Tokens', MsApiTokens, 'Access for billing and automation'] : null,
           isAdmin ? ['settings', 'Panel settings', MsPanelSettings, 'Panel name, URL, branding'] : null,
         ],
       },
@@ -6032,7 +6045,12 @@ function App() {
     const userRules = allRules.filter(rule => !rule.protected);
     const panelRules = allRules.filter(rule => rule.protected);
     const f2bInstalled = addons.items.find(item => item.slug === 'fail2ban')?.installed;
-    const enabled = /enabled|active/i.test(firewallText) && !/disabled|inactive/i.test(firewallText.split('\n')[0] || '');
+    // The helper prints `Status: enabled|disabled` as its first line. Read that
+    // rather than pattern-matching the whole dump, which carries the word
+    // "disabled" in other contexts too.
+    const statusLine = (firewallText.split('\n').find(line => line.startsWith('Status:')) || '').toLowerCase();
+    const enabled = statusLine.includes('enabled');
+    const stateKnown = statusLine !== '';
     const keep = value => !fwFilter.trim() || String(value).toLowerCase().includes(fwFilter.trim().toLowerCase());
     const shownRules = userRules.filter(rule => keep(`${rule.id} ${rule.action} ${rule.to} ${rule.from}`));
     const shownUrls = blocklistUrls.filter(keep);
@@ -6047,9 +6065,11 @@ function App() {
           </div>
           <div className="actions">
             <button disabled={!!loading} onClick={loadFirewall}><RefreshCw size={14}/> Refresh</button>
-            <button disabled={!!loading} onClick={enableFirewall}><Shield size={14}/> Bật</button>
-            <button disabled={!!loading} onClick={disableFirewall}>Tắt</button>
-            <button disabled={!!loading} onClick={reloadFirewall}>Nạp lại</button>
+            {/* One of these, never both: the other is not an action available now. */}
+            {stateKnown && (enabled
+              ? <button className="danger" disabled={!!loading} onClick={disableFirewall}>Tắt firewall</button>
+              : <button disabled={!!loading} onClick={enableFirewall}><Shield size={14}/> Bật firewall</button>)}
+            {enabled && <button disabled={!!loading} onClick={reloadFirewall}>Nạp lại</button>}
           </div>
         </div>
 
@@ -7088,11 +7108,14 @@ function App() {
           </div>
         </div>
       </section>
+      {renderApiTokenSections()}
     </>;
   }
 
-  function renderApiTokens() {
-    if (!isAdmin) return <section className="section"><h2>API Tokens</h2><p className="hint">No permission.</p></section>;
+  // Its own function, not its own page: tokens are a panel-wide setting, and a
+  // nav entry of their own made people hunt for them.
+  function renderApiTokenSections() {
+    if (!isAdmin) return null;
     return <>
       <section className="section">
         <div className="section-title">
@@ -7352,7 +7375,6 @@ function App() {
     // page full of requests that will every one be refused.
     if (page === 'services') return isAdmin ? renderServices() : renderAdminOnly();
     if (page === 'settings') return renderPanelSettings();
-    if (page === 'api-tokens') return renderApiTokens();
     if (page === 'users') return renderUsers();
     return renderDashboard();
   }
