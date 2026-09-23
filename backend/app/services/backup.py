@@ -356,8 +356,18 @@ def stage_remote_backup(fetch, name: str) -> str:
     manifest reading, restore - is the path already in use rather than a
     second one written for remote files.
     """
-    safe = Path(name or "").name
-    if not safe.endswith(".tar.gz") or "/" in safe or ".." in safe:
+    # Reject a name that carries a path, rather than quietly reducing it to
+    # its basename. Path(...).name was applied FIRST here, which stripped the
+    # traversal before the checks looked for it: "/" in safe and ".." in safe
+    # could never be true, and "../escape.tar.gz" sailed through as
+    # "escape.tar.gz". The caller passes the file name from a bucket listing
+    # and the object key separately, so a name with a separator in it means
+    # something is wrong upstream and should say so, not be rewritten.
+    safe = (name or "").strip()
+    if (not safe.endswith(".tar.gz")
+            or "/" in safe or "\\" in safe
+            or ".." in safe
+            or safe != Path(safe).name):
         raise ValueError("Not a backup file name")
 
     destination = _ensure_user_dir(_user_restore_dir())

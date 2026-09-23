@@ -329,3 +329,39 @@ def test_run_now_and_delete_share_one_row():
     assert "deleteBackupSchedule(item.id)" in block, (
         "both buttons must sit inside the same actions container"
     )
+
+
+def test_a_bad_name_is_refused_before_anything_touches_the_disk():
+    """The order is the bug, not the checks.
+
+    `safe = Path(name).name` ran first, so it stripped the traversal before
+    the checks went looking for it - "/" in safe and ".." in safe could never
+    be true. "../escape.tar.gz" passed validation as "escape.tar.gz" and the
+    function carried on to create the staging directory. On Linux that raised
+
+        PermissionError: [Errno 13] Permission denied: '/var/backups/bpanel'
+
+    which is only why it was ever noticed: on Windows the same call cheerfully
+    creates C:\var\backups\bpanel and the test passed. CI on Linux caught it
+    the first time this branch was ever put through it.
+
+    `fetch` raises here, so if validation ever lets one of these through the
+    test fails with that instead of quietly passing.
+    """
+    def must_not_run(destination):
+        raise AssertionError(f"validation let it through and staged {destination}")
+
+    for bad in ("../escape.tar.gz", "sub/dir.tar.gz", "..\escape.tar.gz",
+                "/abs/path.tar.gz", "notanarchive.txt", ""):
+        with pytest.raises(ValueError):
+            backup.stage_remote_backup(must_not_run, bad)
+
+
+def test_the_name_the_listing_gives_is_still_accepted(tmp_path, monkeypatch):
+    """Rejecting paths must not reject the names the feature actually uses."""
+    monkeypatch.setattr(backup, "_user_restore_dir", lambda: tmp_path)
+    staged = backup.stage_remote_backup(
+        lambda destination: Path(destination).write_bytes(b"x"),
+        "user-alice-Mon.tar.gz",
+    )
+    assert staged.startswith("user-alice-Mon-") and staged.endswith(".tar.gz")
