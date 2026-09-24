@@ -1103,6 +1103,123 @@ def access_logs(
     return payload
 
 
+# --- rules an assistant is allowed to add -----------------------------------
+
+# An assistant never writes ModSecurity. It picks what to match on and supplies
+# one value; the rule itself is built here from a fixed template. The whole
+# point is that no string an AI produces is ever interpreted as rule syntax:
+# a model that has been talked into emitting `" "id:1,phase:1,exec:/bin/sh` by
+# something it read in an access log gets that rejected as a value, not
+# executed as a directive.
+MCP_RULE_TARGETS = {
+    "ip": ("REMOTE_ADDR", "@ipMatch", "requests from {value}"),
+    "path": ("REQUEST_URI", "@contains", "requests for {value}"),
+    "user_agent": ("REQUEST_HEADERS:User-Agent", "@contains", "requests claiming to be {value}"),
+    "query": ("QUERY_STRING", "@contains", "requests whose query contains {value}"),
+}
+
+# Deliberately narrow, and narrower than "what a URL can hold". Every character
+# that could end the quoted operand, start a macro, or continue a directive is
+# absent: no quote of either kind, no backslash, no percent, no brace, no
+# newline. What is left cannot leave the string it is placed in.
+MCP_RULE_VALUE_RE = re.compile(r"^[A-Za-z0-9._:/@=,+~?&|-]{1,200}$")
+
+# Reserved for rules added this way, and outside the range the panel's own
+# rules use, so a human reading the file can tell at a glance where a rule
+# came from - and deleting the whole range never takes a panel rule with it.
+MCP_RULE_ID_FIRST = 1090000
+MCP_RULE_ID_LAST = 1099999
+
+_MCP_RULE_ID_RE = re.compile(r"\bid:(\d{6,7})\b")
+
+
+def mcp_rule_value(value: str) -> str:
+    """The one string an assistant supplies, or a refusal naming the problem."""
+    candidate = (value or "").strip()
+    if not candidate:
+        raise ValueError("A value to match on is required")
+    if not MCP_RULE_VALUE_RE.fullmatch(candidate):
+        raise ValueError(
+            "That value contains characters a rule may not carry. Letters, "
+            "digits and . _ : / @ = , + ~ ? & | - are allowed, up to 200 "
+            "characters."
+        )
+    return candidate
+
+
+def next_mcp_rule_id(existing: str) -> int:
+    """The lowest id in the reserved range that the file is not already using.
+
+    Reusing an id ModSecurity has already seen makes it refuse to load the
+    whole configuration, which takes every site on the box down at the next
+    nginx reload. Cheaper to scan the file.
+    """
+    used = {int(found) for found in _MCP_RULE_ID_RE.findall(existing or "")}
+    for candidate in range(MCP_RULE_ID_FIRST, MCP_RULE_ID_LAST + 1):
+        if candidate not in used:
+            return candidate
+    raise ValueError(
+        "All 10000 rule ids reserved for assistant-added rules are in use. "
+        "Remove some on the WAF page first."
+    )
+
+
+def render_mcp_rule(match: str, value: str, *, rule_id: int, who: str, when: str,
+                    reason: str = "") -> str:
+    """One ModSecurity rule, built from a template around a checked value.
+
+    phase:1 always. These are blocks - an address, a path, a user agent - and
+    deciding them before the request body is read is both cheaper and the only
+    phase where the decision is certain to be reached.
+    """
+    if match not in MCP_RULE_TARGETS:
+        raise ValueError(
+            "match must be one of: " + ", ".join(sorted(MCP_RULE_TARGETS))
+        )
+    safe_value = mcp_rule_value(value)
+    if not MCP_RULE_ID_FIRST <= int(rule_id) <= MCP_RULE_ID_LAST:
+        raise ValueError("Rule id is outside the range reserved for this")
+
+    variable, operator, description = MCP_RULE_TARGETS[match]
+    message = description.format(value=safe_value)
+
+    # The provenance line answers the question a rule nobody recognises always
+    # raises six months later: who added this, when, and what for.
+    note = mcp_rule_value(who) if who else "unknown"
+    stamp = mcp_rule_value(when) if when else ""
+    why = re.sub(r"[^A-Za-z0-9 ._:/-]", "", (reason or "").strip())[:120]
+
+    header = "# bpanel-mcp: added by " + note
+    if stamp:
+        header += " on " + stamp
+    if why:
+        header += " - " + why
+
+    directive = (
+        'SecRule ' + variable + ' "' + operator + ' ' + safe_value + '" '
+        + '"id:' + str(int(rule_id)) + ',phase:1,deny,status:403,log,'
+        + "msg:'BPanel MCP: blocked " + message + "'\""
+    )
+    return header + "\n" + directive
+
+
+def append_mcp_rule(existing: str, match: str, value: str, *, who: str, when: str,
+                    reason: str = "") -> tuple[str, int]:
+    """The new file contents, and the id that was allocated.
+
+    Read-modify-write against one file, which is what the panel's own WAF page
+    does too. Two people saving at the same moment is a lost update here as it
+    is there; the provenance comment is what makes an assistant's rule
+    identifiable afterwards either way.
+    """
+    current = _validate_custom_rules(existing or "")
+    rule_id = next_mcp_rule_id(current)
+    rule = render_mcp_rule(match, value, rule_id=rule_id, who=who, when=when,
+                           reason=reason)
+    combined = (current + "\n\n" + rule) if current else rule
+    return _validate_custom_rules(combined), rule_id
+
+
 def access_summary(
     websites: Iterable[Website],
     *,

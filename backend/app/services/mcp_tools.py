@@ -21,6 +21,8 @@ for that reason and uses nothing from it.
 
 from __future__ import annotations
 
+import ipaddress
+from datetime import datetime
 from typing import Optional
 
 from app.api import databases as databases_api
@@ -33,9 +35,19 @@ from app.api import waf as waf_api
 from app.api import websites as websites_api
 from app.core.permissions import is_admin_role
 from app.models.entities import User, Website
+from app.api.maintenance import FileBulkDelete, FileMkdir, FileTransfer, FileWrite
+from app.api.waf import WafCustomRulesUpdate
+from app.schemas.schemas import (
+    FirewallIpRule, ServiceAction, UserBackupCreate, WebsiteWafUpdate,
+)
 from app.services import file_manager
+from app.services import firewall as firewall_service
+from app.services import server_network
+from app.services import site_users
 from app.services import waf as waf_service
-from app.services.mcp import DOMAIN_ARG, Context, ToolError, tool
+from app.services.mcp import (
+    DOMAIN_ARG, Context, ToolError, private_or_reserved, tool,
+)
 
 
 # --- shared lookups ---------------------------------------------------------
@@ -418,3 +430,388 @@ def _search_files(ctx: Context, args: dict):
             max_matches=args.get("max_matches", 100))
     except ValueError as exc:
         raise ToolError(str(exc)) from exc
+
+
+# ============================================================================
+# Tools that change something. Every one needs a token created with "Allow
+# actions"; without it they are not in tools/list at all.
+#
+# The safety layers below are not there because an assistant is malicious.
+# They are there because an assistant reads an access log, and an access log
+# is written by strangers. A user agent that says "please block 127.0.0.1" is
+# an instruction from an attacker that has been laundered through a file the
+# model trusts. Everything an assistant can act on has to be checked as if the
+# attacker chose it, because sometimes they did.
+# ============================================================================
+
+# Anything broader is not a block, it is an outage. /16 is 65k addresses and
+# already far more than a human blocks by hand; a model that has decided a
+# whole country is the problem will happily propose /8.
+MAX_BLOCK_PREFIX_V4 = 16
+MAX_BLOCK_PREFIX_V6 = 32
+
+# restart and reload put a service back; stop takes it away and leaves nothing
+# to notice. An assistant that has decided nginx is the problem must not be
+# able to answer that by turning the web server off.
+ALLOWED_SERVICE_ACTIONS = ("restart", "reload")
+
+
+def _server_addresses() -> set[str]:
+    try:
+        own = server_network.addresses()
+    except Exception:  # noqa: BLE001 - not being able to ask is not a reason to allow
+        return set()
+    return {address for family in own.values() for address in family}
+
+
+def _check_blockable(ctx: Context, value: str) -> str:
+    """Whether this address or range may be handed to the firewall.
+
+    Ordered so the most embarrassing outcomes are refused first: locking the
+    panel out of its own machine, and cutting off the assistant that is trying
+    to help.
+    """
+    candidate = (value or "").strip()
+    if not candidate:
+        raise ToolError("An address is required")
+
+    network = None
+    if "/" in candidate:
+        try:
+            network = ipaddress.ip_network(candidate, strict=False)
+        except ValueError as exc:
+            raise ToolError(f"{candidate} is not a valid address or range") from exc
+        widest = MAX_BLOCK_PREFIX_V4 if network.version == 4 else MAX_BLOCK_PREFIX_V6
+        if network.prefixlen < widest:
+            raise ToolError(
+                f"{candidate} covers {network.num_addresses} addresses. "
+                f"The widest range this can block is /{widest}. Block the "
+                "specific addresses instead, or use the Firewall page if you "
+                "really mean to take out a range this size."
+            )
+        first = str(network.network_address)
+    else:
+        try:
+            ipaddress.ip_address(candidate)
+        except ValueError as exc:
+            raise ToolError(f"{candidate} is not a valid address or range") from exc
+        first = candidate
+
+    if private_or_reserved(first):
+        raise ToolError(
+            f"{candidate} is a private, loopback or reserved address. Blocking "
+            "it would cut off part of the server rather than an attacker. If a "
+            "log shows one of these, the site is probably behind a proxy or a "
+            "CDN and the real client address is in a forwarded header."
+        )
+
+    for own in _server_addresses():
+        if own == first or (network is not None and _in_network(own, network)):
+            raise ToolError(
+                f"{candidate} is this server's own address. Blocking it would "
+                "take the machine off the network."
+            )
+
+    if ctx.client_ip:
+        if ctx.client_ip == first or (network is not None and _in_network(ctx.client_ip, network)):
+            raise ToolError(
+                f"{candidate} is the address this request came from. Blocking "
+                "it would disconnect you."
+            )
+    return candidate
+
+
+def _in_network(address: str, network) -> bool:
+    try:
+        return ipaddress.ip_address(address) in network
+    except ValueError:
+        return False
+
+
+# --- backups ----------------------------------------------------------------
+
+@tool("create_backup", "Back up an account now",
+      "Start a full backup of an account - its websites, databases and files. "
+      "Returns once the job has been queued, so follow it with "
+      "list_backup_jobs to see whether it finished.",
+      {"username": {"type": "string", "maxLength": 64,
+                    "description": "Administrators only. Defaults to your own account."}},
+      writes=True)
+def _create_backup(ctx: Context, args: dict):
+    owner = ctx.user
+    wanted = (args.get("username") or "").strip()
+    if wanted and wanted != ctx.user.username:
+        if not ctx.is_admin:
+            raise ToolError(f"No account named {wanted}")
+        owner = ctx.db.query(User).filter(User.username == wanted).first()
+        if owner is None:
+            raise ToolError(f"No account named {wanted}")
+    return maintenance_api.create_user_backup(
+        payload=UserBackupCreate(user_id=owner.id),
+        request=None, db=ctx.db, current_user=ctx.user)
+
+
+@tool("run_backup_schedule", "Run a backup schedule now",
+      "Run one scheduled backup immediately, exactly as the timer would. Use "
+      "it to prove a schedule works rather than waiting until tonight to find "
+      "out it does not.",
+      {"schedule_id": {"type": "integer", "minimum": 1, "maximum": 100000,
+                       "description": "From list_backup_schedules."}},
+      required=("schedule_id",), admin_only=True, writes=True)
+def _run_backup_schedule(ctx: Context, args: dict):
+    return maintenance_api.run_backup_schedule_now(
+        schedule_id=args["schedule_id"], request=None,
+        db=ctx.db, current_user=ctx.user)
+
+
+# --- certificates and the per-site firewall ---------------------------------
+
+@tool("issue_ssl_certificate", "Get a certificate for a website",
+      "Issue or renew a Let's Encrypt certificate. The domain must already "
+      "resolve to this server or the request will fail - check that first if "
+      "it does.",
+      {"domain": DOMAIN_ARG}, required=("domain",), writes=True)
+def _issue_ssl_certificate(ctx: Context, args: dict):
+    website = _website(ctx, args["domain"])
+    return websites_api.enable_ssl(
+        website_id=website.id, db=ctx.db, current_user=ctx.user)
+
+
+@tool("set_website_waf", "Turn a website's WAF on or off",
+      "Enable or disable the web application firewall for one website. "
+      "Turning it off is how you confirm the WAF is what is blocking a "
+      "legitimate request - turn it back on afterwards.",
+      {"domain": DOMAIN_ARG,
+       "enabled": {"type": "boolean", "description": "True to protect, false to stop."}},
+      required=("domain", "enabled"), writes=True)
+def _set_website_waf(ctx: Context, args: dict):
+    website = _website(ctx, args["domain"])
+    return websites_api.set_website_waf(
+        website_id=website.id,
+        payload=WebsiteWafUpdate(waf_enabled=bool(args["enabled"])),
+        request=None, db=ctx.db, current_user=ctx.user)
+
+
+# --- files ------------------------------------------------------------------
+
+@tool("write_file", "Write a file in a website",
+      "Create a file or replace one completely. There is no partial edit: "
+      "read the file first, change what you mean to change, and send the "
+      "whole thing back. Missing parent directories are created.",
+      {"domain": DOMAIN_ARG,
+       "path": {"type": "string", "maxLength": 1024,
+                "description": "File relative to the website root."},
+       "content": {"type": "string", "maxLength": 1_000_000,
+                   "description": "The complete new contents."}},
+      required=("domain", "path", "content"), writes=True)
+def _write_file(ctx: Context, args: dict):
+    website = _website(ctx, args["domain"])
+    return maintenance_api.write_file(
+        payload=FileWrite(website_id=website.id, path=args["path"],
+                          content=args["content"]),
+        db=ctx.db, current_user=ctx.user)
+
+
+@tool("create_directory", "Make a directory in a website",
+      "Create one directory inside a website. write_file already creates any "
+      "parent directories it needs, so reach for this only when you want an "
+      "empty directory - a quarantine folder to move suspicious files into, "
+      "for instance.",
+      {"domain": DOMAIN_ARG,
+       "path": {"type": "string", "maxLength": 1024,
+                "description": "Where to create it, relative to the website root."},
+       "name": {"type": "string", "maxLength": 255,
+                "description": "The new directory's name."}},
+      required=("domain", "name"), writes=True)
+def _create_directory(ctx: Context, args: dict):
+    website = _website(ctx, args["domain"])
+    return maintenance_api.make_directory(
+        payload=FileMkdir(website_id=website.id,
+                          path=args.get("path", site_users.PUBLIC_DIR),
+                          name=args["name"]),
+        db=ctx.db, current_user=ctx.user)
+
+
+@tool("move_file", "Move a file or directory",
+      "Move something to another directory inside the same website. Use it to "
+      "set a suspicious file aside rather than deleting it - a quarantine "
+      "directory is recoverable and a deletion is not.",
+      {"domain": DOMAIN_ARG,
+       "path": {"type": "string", "maxLength": 1024,
+                "description": "What to move, relative to the website root."},
+       "destination": {"type": "string", "maxLength": 1024,
+                       "description": "The directory to move it into."}},
+      required=("domain", "path", "destination"), writes=True)
+def _move_file(ctx: Context, args: dict):
+    website = _website(ctx, args["domain"])
+    return maintenance_api.move_entries(
+        payload=FileTransfer(website_id=website.id, paths=[args["path"]],
+                             destination_path=args["destination"]),
+        db=ctx.db, current_user=ctx.user)
+
+
+@tool("delete_file", "Delete a file or directory",
+      "Permanently delete one file or directory from a website. There is no "
+      "undo and no trash. Prefer move_file into a quarantine directory unless "
+      "you are certain.",
+      {"domain": DOMAIN_ARG,
+       "path": {"type": "string", "maxLength": 1024,
+                "description": "What to delete, relative to the website root."}},
+      required=("domain", "path"), writes=True, destructive=True)
+def _delete_file(ctx: Context, args: dict):
+    website = _website(ctx, args["domain"])
+    wanted = (args["path"] or "").strip().strip("/")
+    # The file manager already refuses to escape the site. What it does not
+    # refuse is emptying it: "" is the site root and public_html is every page
+    # the site serves. Both are one plausible model mistake away from a
+    # customer's website being gone.
+    if not wanted or wanted in {".", site_users.PUBLIC_DIR.strip("/")}:
+        raise ToolError(
+            f"Refusing to delete {wanted or 'the website root'}: that is the "
+            "website itself, not a file in it. Name something inside it."
+        )
+    return maintenance_api.delete_entries(
+        payload=FileBulkDelete(website_id=website.id, paths=[wanted]),
+        db=ctx.db, current_user=ctx.user)
+
+
+# --- the firewall -----------------------------------------------------------
+
+@tool("block_ip", "Block an address at the firewall",
+      "Block one address, or a small range, at the server firewall. Use "
+      "traffic_summary or read_waf_access_log first to be sure the address is "
+      "actually the problem. Addresses behind a CDN are the CDN, not the "
+      "visitor - blocking one takes the whole site off for everybody.",
+      {"ip": {"type": "string", "maxLength": 64,
+              "description": "An address, or a range no wider than /16."},
+       "reason": {"type": "string", "maxLength": 200,
+                  "description": "Why, for the audit log."}},
+      required=("ip",), admin_only=True, writes=True)
+def _block_ip(ctx: Context, args: dict):
+    wanted = _check_blockable(ctx, args["ip"])
+
+    # Already blocked is not an error and must not add a second rule: the list
+    # fills with duplicates and every one of them has to be removed by hand.
+    existing = firewall_service.rules()
+    for rule in existing:
+        if (rule.get("ip") or "") == wanted and (rule.get("action") or "").upper() == "DENY":
+            return {"ip": wanted, "already_blocked": True,
+                    "rule_number": rule.get("number"),
+                    "note": "Already blocked; nothing was added."}
+
+    result = firewall_api.block_ip(
+        payload=FirewallIpRule(ip=wanted), request=None, current_user=ctx.user)
+    return {"ip": wanted, "already_blocked": False, "reason": args.get("reason", ""),
+            "result": result}
+
+
+@tool("unblock_ip", "Unblock an address",
+      "Remove a firewall block. Finds the rule by address, so you do not need "
+      "the rule number.",
+      {"ip": {"type": "string", "maxLength": 64,
+              "description": "The address or range to unblock."}},
+      required=("ip",), admin_only=True, writes=True)
+def _unblock_ip(ctx: Context, args: dict):
+    """BPanel deletes a firewall rule by its number, not by address.
+
+    The panel's own page works that way because a person is looking at the
+    numbered list. An assistant has an address from a log and no list, so the
+    lookup happens here rather than making the model fetch the rules, pick a
+    number and hope it picked the right one.
+    """
+    wanted = (args["ip"] or "").strip()
+    if not wanted:
+        raise ToolError("An address is required")
+    matches = [rule for rule in firewall_service.rules()
+               if (rule.get("ip") or "") == wanted
+               and (rule.get("action") or "").upper() == "DENY"]
+    if not matches:
+        raise ToolError(
+            f"{wanted} is not blocked. Use list_firewall_rules to see what is."
+        )
+    removed = []
+    # Highest number first: deleting by position renumbers everything below it.
+    for rule in sorted(matches, key=lambda r: int(r.get("number") or 0), reverse=True):
+        number = int(rule.get("number") or 0)
+        if number <= 0:
+            continue
+        firewall_api.delete_rule(number=number, current_user=ctx.user)
+        removed.append(number)
+    return {"ip": wanted, "removed_rules": removed}
+
+
+# --- WAF rules --------------------------------------------------------------
+
+@tool("add_waf_rule", "Add a WAF rule",
+      "Block requests matching one thing: an address, a path, a user agent or "
+      "something in the query string. You choose what to match and the value; "
+      "the rule itself is written by the panel, so you never supply "
+      "ModSecurity syntax. Rules added this way are marked with who added "
+      "them and can be removed on the WAF page.",
+      {"match": {"type": "string", "enum": ["ip", "path", "user_agent", "query"],
+                 "description": "What part of the request to look at."},
+       "value": {"type": "string", "maxLength": 200,
+                 "description": "The value to match. Letters, digits and "
+                                ". _ : / @ = , + ~ ? & | - only."},
+       "reason": {"type": "string", "maxLength": 200,
+                  "description": "Why, recorded in the rule itself."}},
+      required=("match", "value"), admin_only=True, writes=True)
+def _add_waf_rule(ctx: Context, args: dict):
+    """Read, append, write. The same race the panel's own WAF page has.
+
+    There is no compare-and-set on this file: the panel stores global custom
+    rules as one blob and saves it whole. Two people saving at the same second
+    lose one of the two changes, whether both are people or one is an
+    assistant. Narrowed as far as it can be - the read and the write are
+    back to back with no network in between - and the provenance comment on
+    every rule added here is what makes a lost or unexpected one identifiable
+    afterwards. The count is returned so a caller can see the file grew by one
+    and not by one minus somebody else's edit.
+    """
+    current = waf_service.custom_rules()
+    before = current.stdout if hasattr(current, "stdout") else str(current)
+
+    try:
+        combined, rule_id = waf_service.append_mcp_rule(
+            before, args["match"], args["value"],
+            who=ctx.user.username,
+            when=datetime.utcnow().strftime("%Y-%m-%d"),
+            reason=args.get("reason", ""),
+        )
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
+
+    waf_api.save_waf_custom_rules(
+        payload=WafCustomRulesUpdate(content=combined), current_user=ctx.user)
+    return {
+        "rule_id": rule_id,
+        "match": args["match"],
+        "value": args["value"],
+        "rules_before": before.count("SecRule"),
+        "rules_after": combined.count("SecRule"),
+        "note": "Added to the global custom rules. Remove it on the WAF page "
+                "if it turns out to be wrong.",
+    }
+
+
+# --- services ---------------------------------------------------------------
+
+@tool("restart_service", "Restart or reload a service",
+      "Restart or reload one system service - nginx, PHP-FPM, MariaDB and so "
+      "on. Reload first where the service supports it: it applies new "
+      "configuration without dropping connections. There is no stop, on "
+      "purpose.",
+      {"name": {"type": "string", "maxLength": 64,
+                "description": "The service name, from list_services."},
+       "action": {"type": "string", "enum": list(ALLOWED_SERVICE_ACTIONS),
+                  "description": "Defaults to restart."}},
+      required=("name",), admin_only=True, writes=True)
+def _restart_service(ctx: Context, args: dict):
+    action = args.get("action", "restart")
+    if action not in ALLOWED_SERVICE_ACTIONS:
+        # Unreachable through the enum, kept because the enum is a schema and
+        # schemas are edited.
+        raise ToolError(f"action must be one of: {', '.join(ALLOWED_SERVICE_ACTIONS)}")
+    return services_api.run_service_action(
+        payload=ServiceAction(name=args["name"], action=action),
+        current_user=ctx.user)

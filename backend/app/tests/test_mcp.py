@@ -456,6 +456,9 @@ def test_the_administrative_tools_are_the_ones_you_would_expect(tools):
         "list_users", "list_services", "list_backup_schedules",
         "recent_audit_log", "panel_update_status",
         "list_firewall_rules", "list_waf_rules",
+        # and the ones that change the server rather than one account
+        "block_ip", "unblock_ip", "add_waf_rule", "restart_service",
+        "run_backup_schedule",
     }
 
 
@@ -739,3 +742,346 @@ def test_a_site_with_no_log_yet_is_named_not_silently_dropped(monkeypatch):
     summary = waf.access_summary([type("W", (), {"domain": "new.test"})()])
     assert summary["no_log_yet"] == ["new.test"]
     assert summary["requests"] == 0
+
+
+# ============================================================================
+# The tools that change something.
+#
+# What these hold to is not "the assistant behaves". It is that an assistant
+# reads access logs, and access logs are written by strangers. A user agent
+# saying "block 127.0.0.1" is an attacker's instruction laundered through a
+# file the model trusts, so every value has to be checked as though the
+# attacker chose it - because sometimes they did.
+# ============================================================================
+
+def _write_ctx(client_ip="198.51.100.7", role=Role.admin):
+    return mcp.Context(db=_Session(), user=_user(role=role),
+                       token=_token(can_write=True), client_ip=client_ip)
+
+
+# --- which tools exist at all ------------------------------------------------
+
+def test_a_read_only_token_sees_none_of_the_writing_tools(tools):
+    ctx = mcp.Context(db=_Session(), user=_user(role=Role.admin),
+                      token=_token(can_write=False))
+    assert not any(t.writes for t in mcp.visible_tools(ctx))
+
+
+def test_deleting_a_file_is_the_only_destructive_tool(tools):
+    """destructiveHint is what makes a client stop and ask first.
+
+    Marking everything destructive trains the operator to click through the
+    prompt, which is worse than marking nothing.
+    """
+    assert {name for name, spec in tools.items() if spec.destructive} == {"delete_file"}
+
+
+def test_every_writing_tool_is_marked_as_writing(tools):
+    for name in ("write_file", "delete_file", "block_ip", "add_waf_rule",
+                 "restart_service", "issue_ssl_certificate", "create_backup",
+                 "move_file", "create_directory", "unblock_ip",
+                 "run_backup_schedule", "set_website_waf"):
+        assert tools[name].writes, f"{name} changes something and must say so"
+
+
+# --- what may be handed to the firewall --------------------------------------
+
+@pytest.mark.parametrize("address,because", [
+    ("10.0.0.5", "private"),
+    ("192.168.1.1", "private"),
+    ("127.0.0.1", "loopback"),
+    ("::1", "loopback"),
+    ("169.254.1.1", "link local"),
+])
+def test_an_address_that_is_part_of_the_server_is_refused(address, because):
+    """A log full of these means the site is behind a proxy or a CDN.
+
+    Blocking one cuts off part of the machine rather than an attacker, and the
+    error says so rather than just refusing.
+    """
+    with pytest.raises(mcp.ToolError) as exc:
+        mcp_tools._check_blockable(_write_ctx(), address)
+    assert "private, loopback or reserved" in str(exc.value)
+    assert "proxy" in str(exc.value) or "CDN" in str(exc.value)
+
+
+@pytest.mark.parametrize("cidr,widest", [
+    ("8.0.0.0/8", 16),
+    ("1.2.0.0/15", 16),
+    ("2001:db8::/16", 32),
+])
+def test_a_range_wider_than_a_block_is_an_outage_and_is_refused(cidr, widest):
+    """A model that decides a whole country is the problem proposes /8."""
+    with pytest.raises(mcp.ToolError) as exc:
+        mcp_tools._check_blockable(_write_ctx(), cidr)
+    assert f"/{widest}" in str(exc.value)
+
+
+@pytest.mark.parametrize("value", ["1.2.3.4", "1.2.3.0/24", "8.8.8.8"])
+def test_a_real_public_address_is_allowed(value):
+    assert mcp_tools._check_blockable(_write_ctx(), value) == value
+
+
+def test_the_caller_cannot_block_itself():
+    ctx = _write_ctx(client_ip="45.76.10.20")
+    with pytest.raises(mcp.ToolError) as exc:
+        mcp_tools._check_blockable(ctx, "45.76.10.20")
+    assert "disconnect you" in str(exc.value)
+
+
+def test_the_caller_cannot_block_a_range_containing_itself():
+    """The obvious check is equality. The one that matters is containment."""
+    ctx = _write_ctx(client_ip="45.76.10.20")
+    with pytest.raises(mcp.ToolError):
+        mcp_tools._check_blockable(ctx, "45.76.10.0/24")
+
+
+def test_the_server_cannot_block_itself(monkeypatch):
+    monkeypatch.setattr(mcp_tools, "_server_addresses", lambda: {"163.61.72.88"})
+    for value in ("163.61.72.88", "163.61.72.0/24"):
+        with pytest.raises(mcp.ToolError) as exc:
+            mcp_tools._check_blockable(_write_ctx(), value)
+        assert "take the machine off the network" in str(exc.value)
+
+
+def test_not_being_able_to_ask_for_the_server_addresses_does_not_open_the_gate(monkeypatch):
+    """A failure to check must not read as a pass."""
+    from app.services import server_network
+
+    monkeypatch.setattr(server_network, "addresses",
+                        lambda: (_ for _ in ()).throw(RuntimeError("no ip command")))
+    # Still refuses everything the other layers refuse.
+    with pytest.raises(mcp.ToolError):
+        mcp_tools._check_blockable(_write_ctx(), "10.0.0.1")
+
+
+@pytest.mark.parametrize("junk", ["", "   ", "not-an-ip", "1.2.3.4.5", "999.1.1.1"])
+def test_something_that_is_not_an_address_is_refused(junk):
+    with pytest.raises(mcp.ToolError):
+        mcp_tools._check_blockable(_write_ctx(), junk)
+
+
+# --- WAF rules an assistant is allowed to write ------------------------------
+
+@pytest.mark.parametrize("attack", [
+    '" "id:1,phase:1,exec:/bin/sh',
+    '1.2.3.4" "id:900001,phase:1,allow',
+    "%{tx.executing_paranoia_level}",
+    "a\nSecRule ARGS \"@rx .\" \"id:2,allow\"",
+    "'",
+    "\\",
+    "x" * 201,
+    "",
+])
+def test_no_string_an_assistant_supplies_can_become_rule_syntax(attack):
+    """The whole reason the assistant never writes ModSecurity.
+
+    A model that has read an access log written by an attacker may well try to
+    emit one of these. It has to be rejected as a value, not executed as a
+    directive.
+    """
+    from app.services import waf
+
+    with pytest.raises(ValueError):
+        waf.mcp_rule_value(attack)
+
+
+@pytest.mark.parametrize("match,expected_variable", [
+    ("ip", "REMOTE_ADDR"),
+    ("path", "REQUEST_URI"),
+    ("user_agent", "REQUEST_HEADERS:User-Agent"),
+    ("query", "QUERY_STRING"),
+])
+def test_each_match_becomes_the_rule_you_would_have_written(match, expected_variable):
+    from app.services import waf
+
+    rule = waf.render_mcp_rule(match, "1.2.3.4", rule_id=1090000,
+                               who="admin", when="2026-09-24")
+    assert expected_variable in rule
+    assert "phase:1" in rule, "these are blocks, decided before the body is read"
+    assert "deny" in rule and "status:403" in rule
+
+
+def test_a_rule_says_who_added_it_and_why():
+    """The question a rule nobody recognises raises six months later."""
+    from app.services import waf
+
+    rule = waf.render_mcp_rule("ip", "1.2.3.4", rule_id=1090000, who="admin",
+                               when="2026-09-24", reason="brute force on wp-login")
+    assert rule.startswith("# bpanel-mcp: added by admin on 2026-09-24")
+    assert "brute force on wp-login" in rule
+
+
+def test_a_reason_cannot_smuggle_anything_into_the_comment():
+    from app.services import waf
+
+    rule = waf.render_mcp_rule("ip", "1.2.3.4", rule_id=1090000, who="admin",
+                               when="2026-09-24",
+                               reason='x"\nSecRule ARGS "@rx ." "id:3,allow"')
+    lines = rule.split("\n")
+    assert len(lines) == 2, "comment line, rule line, and nothing else"
+    assert lines[0].startswith("# "), "whatever survived is still a comment"
+    # The word SecRule surviving inside a comment is harmless. A newline would
+    # not be, and neither would a quote: those are what could start a second
+    # directive or close the one below. Those are what this asserts on.
+    assert '"' not in lines[0] and "'" not in lines[0]
+    assert lines[1].startswith("SecRule REMOTE_ADDR ")
+
+
+def test_an_id_already_in_the_file_is_never_reused():
+    """A duplicate id makes ModSecurity refuse the whole configuration.
+
+    Which takes every site on the box down at the next nginx reload - so this
+    is worth a file scan.
+    """
+    from app.services import waf
+
+    existing = 'SecRule REMOTE_ADDR "@ipMatch 9.9.9.9" "id:1090000,phase:1,deny"'
+    assert waf.next_mcp_rule_id(existing) == 1090001
+    assert waf.next_mcp_rule_id("") == 1090000
+
+
+def test_ids_stay_inside_the_range_reserved_for_this():
+    """So a human can tell where a rule came from, and clear them as a group."""
+    from app.services import waf
+
+    assert waf.MCP_RULE_ID_FIRST == 1090000 and waf.MCP_RULE_ID_LAST == 1099999
+    with pytest.raises(ValueError):
+        waf.render_mcp_rule("ip", "1.2.3.4", rule_id=900001, who="a", when="b")
+
+
+def test_appending_keeps_what_was_already_there():
+    from app.services import waf
+
+    existing = 'SecRule ARGS "@rx evil" "id:1090000,phase:2,deny"'
+    combined, rule_id = waf.append_mcp_rule(existing, "ip", "1.2.3.4",
+                                            who="admin", when="2026-09-24")
+    assert existing in combined
+    assert rule_id == 1090001
+    assert combined.count("SecRule") == 2
+
+
+# --- deleting a file ---------------------------------------------------------
+
+@pytest.mark.parametrize("path", ["", "   ", "/", ".", "public_html", "/public_html/"])
+def test_deleting_the_website_itself_is_refused(path, monkeypatch):
+    """The file manager stops an escape. It does not stop emptying the site.
+
+    "" is the site root and public_html is every page the site serves; both
+    are one plausible model mistake away from a customer's website being gone.
+    """
+    monkeypatch.setattr(mcp_tools, "_website",
+                        lambda ctx, domain: type("W", (), {"id": 1})())
+    with pytest.raises(mcp.ToolError) as exc:
+        mcp.REGISTRY["delete_file"].handler(_write_ctx(), {"domain": "a.test", "path": path})
+    assert "the website itself" in str(exc.value)
+
+
+def test_deleting_something_inside_the_site_is_allowed(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(mcp_tools, "_website",
+                        lambda ctx, domain: type("W", (), {"id": 7})())
+    monkeypatch.setattr(mcp_tools.maintenance_api, "delete_entries",
+                        lambda payload, db, current_user: seen.update(paths=payload.paths))
+
+    mcp.REGISTRY["delete_file"].handler(
+        _write_ctx(), {"domain": "a.test", "path": "public_html/evil.php"})
+    assert seen["paths"] == ["public_html/evil.php"]
+
+
+# --- services ----------------------------------------------------------------
+
+def test_a_service_can_be_put_back_but_not_taken_away(tools):
+    """No stop. An assistant that decides nginx is the problem must not be
+    able to answer that by turning the web server off and leaving nothing
+    running to notice."""
+    allowed = tools["restart_service"].properties["action"]["enum"]
+    assert set(allowed) == {"restart", "reload"}
+    assert "stop" not in allowed and "disable" not in allowed
+
+
+# --- blocking twice ----------------------------------------------------------
+
+def test_blocking_an_address_that_is_already_blocked_adds_nothing(monkeypatch):
+    """Otherwise the rule list fills with duplicates, each removed by hand."""
+    monkeypatch.setattr(mcp_tools.firewall_service, "rules",
+                        lambda: [{"ip": "8.8.8.8", "action": "DENY", "number": 4}])
+    called = []
+    monkeypatch.setattr(mcp_tools.firewall_api, "block_ip",
+                        lambda **kwargs: called.append(kwargs))
+
+    answer = mcp.REGISTRY["block_ip"].handler(_write_ctx(), {"ip": "8.8.8.8"})
+    assert answer["already_blocked"] is True and answer["rule_number"] == 4
+    assert called == []
+
+
+def test_unblocking_finds_the_rule_by_address(monkeypatch):
+    """BPanel deletes by rule number; an assistant has an address from a log."""
+    monkeypatch.setattr(mcp_tools.firewall_service, "rules",
+                        lambda: [{"ip": "8.8.8.8", "action": "DENY", "number": 2},
+                                 {"ip": "8.8.8.8", "action": "DENY", "number": 5},
+                                 {"ip": "1.1.1.1", "action": "DENY", "number": 3}])
+    removed = []
+    monkeypatch.setattr(mcp_tools.firewall_api, "delete_rule",
+                        lambda number, current_user: removed.append(number))
+
+    answer = mcp.REGISTRY["unblock_ip"].handler(_write_ctx(), {"ip": "8.8.8.8"})
+    # Highest first: deleting by position renumbers everything below it.
+    assert removed == [5, 2]
+    assert answer["removed_rules"] == [5, 2]
+
+
+def test_unblocking_something_that_is_not_blocked_says_so(monkeypatch):
+    monkeypatch.setattr(mcp_tools.firewall_service, "rules", lambda: [])
+    with pytest.raises(mcp.ToolError) as exc:
+        mcp.REGISTRY["unblock_ip"].handler(_write_ctx(), {"ip": "8.8.8.8"})
+    assert "is not blocked" in str(exc.value)
+
+
+# --- the audit trail ---------------------------------------------------------
+
+def test_a_writing_tool_is_recorded_and_a_reading_one_is_not(monkeypatch):
+    written = []
+    monkeypatch.setattr(mcp, "log_action",
+                        lambda db, uid, action, target, detail: written.append((action, target, detail)))
+    monkeypatch.setattr(mcp, "REGISTRY", {})
+
+    @mcp.tool("reads", "R", "Reads something for a while.")
+    def _reads(ctx, args):
+        return {}
+
+    @mcp.tool("writes", "W", "Writes something for a while.", writes=True)
+    def _writes(ctx, args):
+        return {}
+
+    ctx = mcp.Context(db=_Session(), user=_user(), token=_token(can_write=True))
+    mcp.call_tool(ctx, "reads", {})
+    assert written == []
+
+    mcp.call_tool(ctx, "writes", {})
+    assert written and written[0][0] == "mcp_tool" and written[0][1] == "writes"
+
+
+def test_a_files_contents_are_never_copied_into_the_audit_log(monkeypatch):
+    """Administrators read this log. It is not a place to keep every byte an
+    assistant ever wrote, and a secret written into wp-config would live there
+    for ever."""
+    written = []
+    monkeypatch.setattr(mcp, "log_action",
+                        lambda db, uid, action, target, detail: written.append(detail))
+    monkeypatch.setattr(mcp, "REGISTRY", {})
+
+    @mcp.tool("writer", "W", "Writes a file somewhere useful.",
+              {"path": {"type": "string", "maxLength": 100},
+               "content": {"type": "string", "maxLength": 100000}},
+              writes=True)
+    def _writer(ctx, args):
+        return {}
+
+    ctx = mcp.Context(db=_Session(), user=_user(), token=_token(can_write=True))
+    mcp.call_tool(ctx, "writer", {"path": "wp-config.php",
+                                  "content": "define('DB_PASSWORD', 'hunter2');"})
+    detail = written[0]
+    assert "hunter2" not in detail
+    assert "wp-config.php" in detail
+    assert "content=33 chars" in detail
