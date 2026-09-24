@@ -2099,6 +2099,19 @@ firewall_kill_blocked_connections() {
     ip="${ip#[}"
     ip="${ip%]}"
     [[ -n "$ip" ]] || continue
+    # Never a loopback peer. The filter chain RETURNs for -i lo before any deny
+    # set is consulted, so a loopback connection is by definition not one the
+    # firewall is blocking - killing it can only be collateral damage.
+    #
+    # It was. Public blocklists carry reserved ranges, and bpanel-block4 on a
+    # live server holds 127.0.0.1 among its 186k entries. So every block ran
+    # `ss -K dst 127.0.0.1` and closed every local connection on the machine:
+    # MariaDB over TCP, Redis, phpMyAdmin, and - how it was found - the panel's
+    # own reply to whoever had just asked for the block, which reached them as
+    # "Connection reset by peer" after the rule had already been added.
+    case "$ip" in
+      127.*|::1) continue ;;
+    esac
     for set in "${sets[@]}"; do
       if ipset test "$set" "$ip" >/dev/null 2>&1; then
         # Best effort: -K needs CONFIG_INET_DIAG_DESTROY, which not every

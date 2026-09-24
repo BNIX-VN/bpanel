@@ -90,15 +90,26 @@ def uninstall_addon(slug: str, db: Session = Depends(get_db), current_user: User
             stopped.append("fail2ban")
         except RuntimeError:
             failed.append("fail2ban")
+    revoked = 0
+    if slug == addons.MCP:
+        # The one addon whose removal destroys something, and the reason its
+        # catalogue entry says keeps_data_on_uninstall is false. A token is a
+        # way into this server; leaving them valid against an endpoint that
+        # answers again the moment someone reinstalls is not "keeping data".
+        from app.api import mcp as mcp_api
+        revoked = mcp_api.revoke_all(db)
     addons.uninstall(slug)
-    log_action(db, current_user.id, "uninstall_addon", slug, f"stopped {len(stopped)}")
+    log_action(db, current_user.id, "uninstall_addon", slug, f"stopped {len(stopped)} revoked {revoked}")
     return {
         "slug": slug,
         "name": entry["name"],
         "installed": False,
         "stopped": stopped,
         "could_not_stop": failed,
+        "revoked_tokens": revoked,
         "kept": "The package, the jail configuration and the ban history are all kept."
         if slug == addons.FAIL2BAN
-        else "Application directories, volumes and panel data are all kept.",
+        else (f"{revoked} MCP token(s) were revoked. Assistants using them can no longer reach the panel."
+              if slug == addons.MCP
+              else "Application directories, volumes and panel data are all kept."),
     }

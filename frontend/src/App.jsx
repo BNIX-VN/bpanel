@@ -13,7 +13,7 @@ import 'ace-builds/src-noconflict/mode-text';
 import 'ace-builds/src-noconflict/mode-yaml';
 import 'ace-builds/src-noconflict/theme-textmate';
 import 'ace-builds/src-noconflict/theme-tomorrow_night';
-import { Archive, ArchiveRestore, ArrowLeft, Ban, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
 // Google's Material Symbols for the dashboard tiles, inlined locally.
 // Filled and rounded: an outline set at tile size reads thin, and these are
 // the icons the rest of the web has taught people to recognise.
@@ -21,6 +21,7 @@ import {
   MsWebsites, MsApplications, MsSsl, MsCron, MsFiles, MsDatabaseIcon, MsBackups,
   MsWaf, MsFirewall, MsMalware, MsAccessLogs, MsLoginSecurity, MsServices,
   MsPhpConfig, MsUpdates, MsAddons, MsPanelUsers, MsPanelSettings,
+  MsAiAssistants, MsFail2ban,
 } from './MaterialSymbols.jsx';
 import { Terminal } from './components/Terminal';
 import './style.css';
@@ -59,7 +60,7 @@ const NAV_PARENT_PAGE = { 'waf-site': 'waf' };
 
 // 'waf-site' is reached from the WAF overview rather than the sidebar, but it
 // still belongs to Settings so the menu stays open and WAF stays highlighted.
-const SETTINGS_PAGE_KEYS = ['settings', 'security', 'php', 'firewall', 'waf', 'waf-site', 'malware', 'access-logs', 'updates', 'addons', 'services'];
+const SETTINGS_PAGE_KEYS = ['settings', 'security', 'php', 'firewall', 'waf', 'waf-site', 'malware', 'access-logs', 'updates', 'addons', 'services', 'mcp'];
 const PAGE_ROUTES = {
   dashboard: '/',
   websites: '/website',
@@ -82,6 +83,7 @@ const PAGE_ROUTES = {
   updates: '/updates',
   services: '/services',
   addons: '/addons',
+  mcp: '/ai-assistants',
 };
 
 /* ---------------------------------------------------------------
@@ -840,6 +842,13 @@ function App() {
   const [osAutoUpdate, setOsAutoUpdate] = useState({ enabled: true, mode: 'security', auto_reboot: false });
   const noticeTimer = useRef(null);
   const isAdmin = currentUser?.role === 'admin';
+  const mcpAddonInstalled = !!addons.items.find(item => item.slug === 'mcp')?.installed;
+  const fail2banAddonInstalled = !!addons.items.find(item => item.slug === 'fail2ban')?.installed;
+  const [mcpTokens, setMcpTokens] = useState([]);
+  const [mcpDraft, setMcpDraft] = useState({ name: '', expires_in_days: 90, can_write: false });
+  // Held until dismissed rather than cleared on the next render: the server
+  // keeps only a hash, so a token that scrolls away is gone for good.
+  const [mcpNewToken, setMcpNewToken] = useState('');
   const applicationAddon = addons.items.find(item => item.slug === 'application');
   const applicationAddonInstalled = !!applicationAddon?.installed;
   // Two locks, and both have to be open: the server has to have the addon
@@ -4219,6 +4228,7 @@ Each account is overwritten with what is in its archive.`)) return;
       if (!websites.length) refreshAll();
     }
     if (isAuthenticated && page === 'settings') { loadPanelSettings(); if (isAdmin) loadApiTokens(); }
+    if (isAuthenticated && page === 'mcp' && mcpAddonInstalled) loadMcpTokens();
     if (isAuthenticated && page === 'backups' && currentUser?.role === 'admin') { loadUsers(); loadSftpTargets(); loadBackupSchedules(); loadRestoreBackups(); }
   }, [isAuthenticated, page, currentUser?.role]);
 
@@ -4279,6 +4289,10 @@ Each account is overwritten with what is in its archive.`)) return;
     ...(isAdmin ? [['updates', 'Updates', RefreshCw]] : []),
     ...(isAdmin ? [['addons', 'Addons', Boxes]] : []),
     ...(isAdmin ? [['services', 'Services Status', Server]] : []),
+    // A customer sees this only once an administrator has turned the addon
+    // on. An admin always sees it, so there is somewhere to go and read why
+    // it is off.
+    ...(mcpAddonInstalled || isAdmin ? [['mcp', 'AI assistants', Bot]] : []),
   ];
 
   const navItems = [...mainNavItems, ...settingsNavItems];
@@ -4491,6 +4505,12 @@ Each account is overwritten with what is in its archive.`)) return;
         tiles: [
           ['waf', 'WAF', MsWaf, 'Rules, bad bots and payload inspection'],
           isAdmin ? ['firewall', 'Firewall', MsFirewall, 'Allowed and blocked addresses'] : null,
+          // Every addon that is on gets a way in from the map. fail2ban has no
+          // page of its own - its ban list is a section of the Firewall page -
+          // so this lands there rather than inventing a route that would only
+          // be an alias.
+          (fail2banAddonInstalled && isAdmin)
+            ? ['firewall', 'Fail2ban', MsFail2ban, 'SSH ban list, and how long each ban lasts'] : null,
           isAdmin ? ['malware', 'Malware Scanner', MsMalware, 'Scan schedules and findings'] : null,
           isAdmin ? ['access-logs', 'Access Logs', MsAccessLogs, 'Who reached which site, and the verdict'] : null,
           ['security', 'Login security', MsLoginSecurity, 'Two-factor and session settings'],
@@ -4511,6 +4531,12 @@ Each account is overwritten with what is in its archive.`)) return;
         hint: 'Who can sign in, and with what',
         tiles: [
           isAdmin ? ['users', 'Panel users', MsPanelUsers, 'Customers, packages and quotas'] : null,
+          // A token for an assistant is another way something signs in, which
+          // is exactly what this group is. It is also the only tile a customer
+          // sees here, and that is fine - an empty group is dropped anyway.
+          (mcpAddonInstalled || isAdmin)
+            ? ['mcp', 'AI assistants', MsAiAssistants, 'Tokens for Claude Code, Cursor and VS Code']
+            : null,
           isAdmin ? ['settings', 'Panel settings', MsPanelSettings, 'Panel name, URL, branding'] : null,
         ],
       },
@@ -7545,6 +7571,242 @@ Each account is overwritten with what is in its archive.`)) return;
     </main>;
   }
 
+  // --- AI assistants (MCP) --------------------------------------------------
+
+  async function copyText(text, message) {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const holder = document.createElement('textarea');
+        holder.value = text;
+        holder.style.position = 'fixed';
+        holder.style.opacity = '0';
+        document.body.appendChild(holder);
+        holder.select();
+        document.execCommand('copy');
+        document.body.removeChild(holder);
+      }
+      setNotice(message || 'Copied.');
+    } catch {
+      setError('Copy failed. Select the text and press Ctrl+C.');
+    }
+  }
+
+
+  async function loadMcpTokens() {
+    const data = await request('/mcp/tokens');
+    if (data) setMcpTokens(Array.isArray(data) ? data : []);
+  }
+
+  async function createMcpToken() {
+    const name = (mcpDraft.name || '').trim();
+    if (!name) return;
+    const data = await request('/mcp/tokens', {
+      method: 'POST',
+      body: JSON.stringify({
+        name,
+        expires_in_days: Number(mcpDraft.expires_in_days || 90),
+        can_write: !!mcpDraft.can_write,
+      }),
+    }, 'Creating token...');
+    if (data) {
+      // Shown once and never again: the server keeps only a hash. It stays on
+      // screen until the person dismisses it rather than disappearing on the
+      // next render, because there is no way to get it back.
+      setMcpNewToken(data.token);
+      setMcpDraft({ name: '', expires_in_days: 90, can_write: false });
+      setNotice('Token created. Copy it now - it is not shown again.');
+      await loadMcpTokens();
+    }
+  }
+
+  async function revokeMcpToken(token) {
+    if (!window.confirm(`Revoke "${token.name}"? Any assistant using it stops working immediately.`)) return;
+    const data = await request(`/mcp/tokens/${token.id}`, { method: 'DELETE' }, 'Revoking...');
+    if (data) {
+      setNotice('Token revoked.');
+      await loadMcpTokens();
+    }
+  }
+
+  function renderMcp() {
+    const endpoint = `${window.location.origin}/api/mcp`;
+    const mine = mcpTokens.filter(token => token.user_id === currentUser?.id);
+    const others = mcpTokens.filter(token => token.user_id !== currentUser?.id);
+    const selfSigned = !window.location.protocol.startsWith('https');
+
+    // The real token while it is still on screen, the placeholder once it has
+    // been dismissed. Somebody who has just made a token wants to paste a
+    // finished command, not paste one and then go hunting for the value to
+    // substitute - and since the panel can never show the token again, the
+    // window in which this can help is exactly the window in which it is up.
+    const bearer = mcpNewToken || 'YOUR_TOKEN';
+    const claudeCode = `claude mcp add --transport http bpanel ${endpoint} \\\n  --header "Authorization: Bearer ${bearer}"`;
+    const cursor = JSON.stringify({
+      mcpServers: {
+        bpanel: { url: endpoint, headers: { Authorization: `Bearer ${bearer}` } },
+      },
+    }, null, 2);
+    const vscode = JSON.stringify({
+      servers: {
+        bpanel: { type: 'http', url: endpoint, headers: { Authorization: `Bearer ${bearer}` } },
+      },
+    }, null, 2);
+
+    return <>
+      <section className="section">
+        <div className="section-title">
+          <div>
+            <h2>AI assistants (MCP)</h2>
+            <p className="hint">
+              Give Claude Code, Cursor or VS Code a token and it can read and operate the panel
+              with exactly your own permissions - nothing more.
+            </p>
+          </div>
+          <button className="secondary-light" disabled={!!loading} onClick={loadMcpTokens}>
+            <RefreshCw size={14}/> Refresh
+          </button>
+        </div>
+
+        {!mcpAddonInstalled && <div className="addon-notes">
+          <strong><AlertCircle size={13}/> The addon is off</strong>
+          <ul><li>Nothing answers on this address until an administrator installs
+            <strong> AI assistants (MCP)</strong> on the Addons page. Existing tokens are kept
+            while it is off.</li></ul>
+        </div>}
+
+        {selfSigned && <div className="addon-notes">
+          <strong><AlertCircle size={13}/> This panel needs a real certificate</strong>
+          <ul><li>MCP clients refuse a self-signed certificate, so no assistant will connect
+            until the panel has one. Install it under Panel settings → SSL.</li></ul>
+        </div>}
+
+        <div className="mcp-endpoint">
+          <span>Endpoint</span>
+          <code>{endpoint}</code>
+          <button className="mini secondary-light" onClick={() => copyText(endpoint, 'Endpoint copied.')}>
+            <Copy size={13}/> Copy
+          </button>
+        </div>
+      </section>
+
+      <section className="section">
+        <div className="section-title"><div><h2>New token</h2><p className="hint">
+          A token acts as you. It is shown once, when you create it.
+        </p></div></div>
+        <div className="form-row">
+          <input
+            placeholder="What is it for - laptop, work desktop"
+            value={mcpDraft.name}
+            maxLength={100}
+            onChange={event => setMcpDraft(prev => ({ ...prev, name: event.target.value }))}
+          />
+          <select
+            value={mcpDraft.expires_in_days}
+            aria-label="Expires in"
+            onChange={event => setMcpDraft(prev => ({ ...prev, expires_in_days: event.target.value }))}>
+            <option value="7">Expires in 7 days</option>
+            <option value="30">Expires in 30 days</option>
+            <option value="90">Expires in 90 days</option>
+            <option value="365">Expires in a year</option>
+          </select>
+          <label className="check-line">
+            <input
+              type="checkbox"
+              checked={!!mcpDraft.can_write}
+              onChange={event => setMcpDraft(prev => ({ ...prev, can_write: event.target.checked }))}
+            />
+            <span>Allow actions</span>
+          </label>
+          <button disabled={!mcpDraft.name.trim() || !!loading} onClick={createMcpToken}>
+            <KeyRound size={14}/> Create
+          </button>
+        </div>
+        <p className="hint">
+          Without <strong>Allow actions</strong> the token can only read, and the assistant is not
+          even shown the tools that change anything. Leave it off unless you want the assistant to
+          act.
+        </p>
+
+        {mcpNewToken && <div className="mcp-secret">
+          <div>
+            <strong>Copy this now. It is not shown again.</strong>
+            <code>{mcpNewToken}</code>
+          </div>
+          <div className="actions">
+            <button className="mini" onClick={() => copyText(mcpNewToken, 'Token copied. It is not shown again.')}><Copy size={13}/> Copy</button>
+            <button className="mini secondary-light" onClick={() => setMcpNewToken('')}>Done</button>
+          </div>
+        </div>}
+      </section>
+
+      <section className="section">
+        <div className="section-title"><div><h2>Your tokens</h2></div></div>
+        {mine.length === 0
+          ? <EmptyState icon={KeyRound} message="No tokens yet." />
+          : <div className="backup-list">{mine.map(token => renderMcpTokenRow(token))}</div>}
+      </section>
+
+      {isAdmin && others.length > 0 && <section className="section">
+        <div className="section-title"><div><h2>Everyone else's tokens</h2><p className="hint">
+          Every key to this server, and who holds it. You can revoke any of them.
+        </p></div></div>
+        <div className="backup-list">{others.map(token => renderMcpTokenRow(token, true))}</div>
+      </section>}
+
+      <section className="section">
+        <div className="section-title"><div><h2>Connecting a client</h2><p className="hint">
+          {mcpNewToken
+            ? <>Your new token is already filled in below - copy one and paste it straight in.
+                Once you dismiss the token above these go back to saying YOUR_TOKEN, because the
+                panel cannot show it to you a second time.</>
+            : <>Create a token above and it appears in these ready to copy. Otherwise replace
+                YOUR_TOKEN yourself.</>}
+        </p></div></div>
+        {[['Claude Code', claudeCode], ['Cursor - .cursor/mcp.json', cursor],
+          ['VS Code - .vscode/mcp.json', vscode]].map(([label, snippet]) => (
+          <div className="mcp-snippet" key={label}>
+            <div className="mcp-snippet-head">
+              <strong>{label}</strong>
+              <button className="mini secondary-light" onClick={() => copyText(snippet, 'Configuration copied.')}>
+                <Copy size={13}/> Copy
+              </button>
+            </div>
+            <pre>{snippet}</pre>
+          </div>
+        ))}
+      </section>
+    </>;
+  }
+
+  function renderMcpTokenRow(token, showOwner = false) {
+    const revoked = !!token.revoked_at;
+    const dead = revoked || token.expired;
+    return <div className="backup-item" key={token.id}>
+      <span>
+        {token.name}
+        {showOwner && <> - <strong>{token.username}</strong></>}
+        <span className={`badge ${token.can_write ? '' : 'ok'}`}>
+          {token.can_write ? 'can act' : 'read only'}
+        </span>
+        {revoked && <span className="badge">revoked</span>}
+        {!revoked && token.expired && <span className="badge">expired</span>}
+        <small>
+          <code>{token.prefix}…</code>
+          {dead ? '' : ` · expires ${new Date(token.expires_at).toLocaleDateString()}`}
+          {token.last_used_at
+            ? ` · last used ${new Date(token.last_used_at).toLocaleString()}`
+            : ' · never used'}
+        </small>
+      </span>
+      <div className="actions">
+        {!revoked && <button className="mini danger" disabled={!!loading}
+          onClick={() => revokeMcpToken(token)}><Trash2 size={14}/> Revoke</button>}
+      </div>
+    </div>;
+  }
+
   function renderPage() {
     if (page === 'websites') return renderWebsites();
     if (page === 'addons') return renderAddons();
@@ -7568,6 +7830,7 @@ Each account is overwritten with what is in its archive.`)) return;
     // Reachable by URL, so it answers for itself rather than firing a
     // page full of requests that will every one be refused.
     if (page === 'services') return isAdmin ? renderServices() : renderAdminOnly();
+    if (page === 'mcp') return (mcpAddonInstalled || isAdmin) ? renderMcp() : renderAddonMissing();
     if (page === 'settings') return renderPanelSettings();
     if (page === 'users') return renderUsers();
     return renderDashboard();

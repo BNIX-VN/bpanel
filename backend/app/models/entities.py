@@ -308,6 +308,40 @@ class ApiToken(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class McpToken(Base):
+    """A personal token an AI assistant uses to reach the panel over MCP.
+
+    Deliberately not a row in `api_tokens`. That table serves provisioning:
+    it is owned by nobody in particular, carries scopes and an IP allowlist,
+    and never expires. An MCP token is the opposite on every count - it acts
+    as one named user, it is created by that user, it expires, and its whole
+    permission model is "can this write". Sharing one table would mean every
+    check on either side having to ask which kind it was looking at.
+
+    The token itself is never stored. `token_hash` is SHA-256 of it, and
+    `prefix` keeps the first twelve characters so a person with four tokens
+    can tell which one they are revoking.
+    """
+
+    __tablename__ = "mcp_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(100))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    prefix: Mapped[str] = mapped_column(String(16))
+    # Read-only unless the person ticked "Allow actions". A token that cannot
+    # write is not shown the tools that write, so an assistant holding one
+    # cannot even discover that they exist.
+    can_write: Mapped[bool] = mapped_column(Boolean, default=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    # Written at most once a minute: every tool call would otherwise be a
+    # database write, and the value is only ever read by a human.
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class CloudflareCredential(Base):
     """A Cloudflare API token (Zone.DNS Edit), one per zone, stored encrypted.
 

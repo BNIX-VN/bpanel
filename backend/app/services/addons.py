@@ -22,6 +22,7 @@ ADDONS_FILE = ADDONS_DIR / "addons.json"
 
 APPLICATION = "application"
 FAIL2BAN = "fail2ban"
+MCP = "mcp"
 
 # What an administrator sees in the Addons page. The version is the addon's own:
 # it moves when the addon changes, independently of the panel's version.
@@ -41,6 +42,24 @@ CATALOGUE: dict[str, dict] = {
             "Turning the addon off only stops the service: the package, the jail file and the ban history all stay.",
         ],
         "keeps_data_on_uninstall": True,
+    },
+    MCP: {
+        "name": "AI assistants (MCP)",
+        "version": "1.0.0",
+        "summary": "Lets Claude Code, Cursor or VS Code read and operate the panel with a personal token.",
+        "details": [
+            "Each person creates their own token, and it acts with exactly their own permissions: an administrator's reaches the whole server, a customer's reaches only their own websites, databases, backups and files.",
+            "A token is read-only unless the person ticks Allow actions when creating it. A read-only token is not even shown the tools that write.",
+            "Nothing new listens on the network. The assistant talks to the panel's own address, over the panel's own certificate.",
+        ],
+        "notes": [
+            "Needs a real certificate. MCP clients refuse a self-signed one, so on a panel still using the self-signed certificate this addon cannot be reached at all.",
+            "Works with clients that send a Bearer token - Claude Code, Cursor, VS Code. The claude.ai and ChatGPT web connectors need OAuth, which this does not have.",
+            "Turning the addon off closes the endpoint and leaves the tokens alone. Removing it revokes every token on the server.",
+        ],
+        # Stop is reversible and keeps the tokens; uninstall is the one that
+        # revokes them, and the Addons page says so before it happens.
+        "keeps_data_on_uninstall": False,
     },
     APPLICATION: {
         "name": "Application",

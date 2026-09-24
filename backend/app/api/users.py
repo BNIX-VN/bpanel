@@ -11,7 +11,7 @@ from app.core.database import get_db
 from app.core.permissions import Role, ensure_role
 from app.core.security import hash_password
 from app.core.step_up import require_sensitive_action_step_up
-from app.models.entities import AuditLog, BackupSchedule, DatabaseAccount, User, UserPackage, Website
+from app.models.entities import AuditLog, BackupSchedule, DatabaseAccount, McpToken, User, UserPackage, Website
 from app.schemas.schemas import (
     AuditLogOut,
     UserCreate,
@@ -256,6 +256,13 @@ def delete_user(user_id: int, request: Request, db: Session = Depends(get_db), c
         # tables onto users; nothing here followed, and the panel database does
         # not enforce the cleanup it declares (see services/teardown.py).
         purged = teardown.purge_owned_resources(db, user.id)
+        # The FK declares ON DELETE CASCADE, but SQLite only honours that with
+        # PRAGMA foreign_keys on, and this database does not enforce the
+        # cleanup it declares - the same reason purge_owned_resources exists.
+        # A leftover token row would be an orphan, not a way in (authenticate
+        # refuses a token whose owner is gone), but it would still be a row
+        # nobody can see or revoke.
+        db.query(McpToken).filter(McpToken.user_id == user.id).delete(synchronize_session=False)
         site_users.delete_panel_user(user.username)
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

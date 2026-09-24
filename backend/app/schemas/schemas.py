@@ -1433,3 +1433,44 @@ class ProvisioningUsageOut(BaseModel):
     storage_percent: float
     website_count: int
     database_count: int
+
+
+class McpTokenCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    # An hour is not long enough to be useful and forever is not a token, it
+    # is a password. A year is the outer bound.
+    expires_in_days: int = Field(default=90, ge=1, le=365)
+    # Off unless asked for. A token that cannot write is not even shown the
+    # tools that write, so this is the whole permission model.
+    can_write: bool = False
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        value = re.sub(r"\s+", " ", value.strip())
+        if not value:
+            raise ValueError("name is required")
+        return value
+
+
+class McpTokenOut(BaseModel):
+    id: int
+    user_id: int
+    username: str = ""
+    name: str
+    prefix: str
+    can_write: bool
+    expires_at: datetime
+    last_used_at: Optional[datetime] = None
+    revoked_at: Optional[datetime] = None
+    created_at: datetime
+    expired: bool = False
+
+    class Config:
+        from_attributes = True
+
+
+class McpTokenCreated(McpTokenOut):
+    """The one and only time the token itself is returned."""
+
+    token: str
