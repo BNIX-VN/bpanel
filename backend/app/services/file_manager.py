@@ -6,17 +6,15 @@ import tarfile
 import tempfile
 import time
 import zipfile
+from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Optional
 
 from app.models.entities import Website
-from app.services import malware_queue
-from app.services import site_users
-from app.services import storage_quota
+from app.services import malware_queue, site_users, storage_quota
 from app.services.shell import shell
 
 
-def _env_int(name: str, default: int) -> Optional[int]:
+def _env_int(name: str, default: int) -> int | None:
     """Parse an integer environment variable.
 
     Returns None if the variable is not set or set to empty string,
@@ -208,7 +206,7 @@ def _relative_to_root(website: Website, path: Path) -> str:
     return str(path.relative_to(Path(website.root_path).resolve())).replace("\\", "/")
 
 
-def _entry_info(website: Website, item: Path) -> Dict:
+def _entry_info(website: Website, item: Path) -> dict:
     item_stat = item.stat()
     return {
         "name": item.name,
@@ -220,7 +218,7 @@ def _entry_info(website: Website, item: Path) -> Dict:
     }
 
 
-def list_files(website: Website, relative_path: str = "") -> List[Dict]:
+def list_files(website: Website, relative_path: str = "") -> list[dict]:
     target = _safe_path(website, relative_path)
     if not target.exists() or not target.is_dir():
         return []
@@ -262,7 +260,7 @@ def search_text(
     *,
     relative_path: str = "",
     max_matches: int = SEARCH_MAX_MATCHES,
-) -> Dict:
+) -> dict:
     """Find a string in a website's files, and stop before it becomes a scan.
 
     Written for an assistant looking for where something is configured or
@@ -285,7 +283,7 @@ def search_text(
         raise ValueError("Not a directory")
 
     wanted = max(1, min(int(max_matches or SEARCH_MAX_MATCHES), SEARCH_MAX_MATCHES))
-    matches: List[Dict] = []
+    matches: list[dict] = []
     files_read = 0
     bytes_read = 0
     skipped_binary = 0
@@ -502,8 +500,8 @@ def _run_as_site_user(
     website: Website,
     cwd: Path,
     command: str,
-    args: List[str],
-    fallback: Optional[List[str]] = None,
+    args: list[str],
+    fallback: list[str] | None = None,
 ) -> None:
     if not website.linux_user:
         raise ValueError("Website has no runtime user configured")
@@ -516,7 +514,7 @@ def _run_as_site_user(
 
 def _staging_directory() -> Path:
     if os.name != "nt":
-        return Path("/tmp")
+        return Path("/tmp")  # noqa: S108 - bpanel-api runs with PrivateTmp=true
     return Path(tempfile.gettempdir())
 
 
@@ -538,7 +536,7 @@ def create_text_file(
     parent_path: str,
     name: str,
     allow_executable: bool = False,
-    quota_check: Optional[QuotaCheck] = None,
+    quota_check: QuotaCheck | None = None,
 ) -> str:
     parent = _safe_path(website, parent_path or "")
     if parent.exists() and not parent.is_dir():
@@ -566,7 +564,7 @@ def write_text_file(
     relative_path: str,
     content: str,
     allow_executable: bool = False,
-    quota_check: Optional[QuotaCheck] = None,
+    quota_check: QuotaCheck | None = None,
 ) -> str:
     target = _safe_path(website, relative_path)
     _assert_write_allowed(target, "Writing", allow_executable)
@@ -589,7 +587,7 @@ def upload_file(
     filename: str,
     source_file,
     allow_executable: bool = False,
-    quota_check: Optional[QuotaCheck] = None,
+    quota_check: QuotaCheck | None = None,
 ) -> str:
     target_dir = _safe_path(website, directory_path or "")
     if target_dir.exists() and not target_dir.is_dir():
@@ -606,7 +604,7 @@ def upload_file(
         quota_check(upload_size or 0, _existing_file_size(target))
     if website.linux_user:
         root = Path(website.root_path).resolve()
-        staged_path: Optional[Path] = None
+        staged_path: Path | None = None
         try:
             with tempfile.NamedTemporaryFile(
                 mode="w+b",
@@ -683,7 +681,7 @@ def delete_file(website: Website, relative_path: str, allow_executable: bool = F
     return str(target)
 
 
-def delete_entries(website: Website, paths: Iterable[str], allow_executable: bool = False) -> List[str]:
+def delete_entries(website: Website, paths: Iterable[str], allow_executable: bool = False) -> list[str]:
     deleted = []
     root = Path(website.root_path).resolve()
     targets = []
@@ -774,19 +772,19 @@ def copy_entries(
     destination_path: str,
     allow_executable: bool = False,
     allow_sensitive: bool = False,
-    quota_check: Optional[QuotaCheck] = None,
-) -> List[str]:
+    quota_check: QuotaCheck | None = None,
+) -> list[str]:
     sources = _transfer_sources(website, paths, "Copying", allow_executable, allow_sensitive)
     destination = _transfer_destination(website, destination_path)
     targets = [destination / source.name for source in sources]
-    for source, target in zip(sources, targets):
+    for source, target in zip(sources, targets, strict=True):
         _assert_transfer_target(source, destination, target, "copy")
         _assert_write_allowed(target, "Copying", allow_executable)
     if quota_check:
         quota_check(_total_size(sources), 0)
 
     copied = []
-    for source, target in zip(sources, targets):
+    for source, target in zip(sources, targets, strict=True):
         if website.linux_user:
             root = Path(website.root_path).resolve()
             _run_as_site_user(
@@ -817,16 +815,16 @@ def move_entries(
     destination_path: str,
     allow_executable: bool = False,
     allow_sensitive: bool = False,
-) -> List[str]:
+) -> list[str]:
     sources = _transfer_sources(website, paths, "Moving", allow_executable, allow_sensitive)
     destination = _transfer_destination(website, destination_path)
     targets = [destination / source.name for source in sources]
-    for source, target in zip(sources, targets):
+    for source, target in zip(sources, targets, strict=True):
         _assert_transfer_target(source, destination, target, "move")
         _assert_write_allowed(target, "Moving", allow_executable)
 
     moved = []
-    for source, target in zip(sources, targets):
+    for source, target in zip(sources, targets, strict=True):
         if website.linux_user:
             root = Path(website.root_path).resolve()
             _run_as_site_user(
@@ -885,7 +883,7 @@ def archive_entries(
     output_name: str,
     archive_format: str = "zip",
     allow_sensitive: bool = False,
-    quota_check: Optional[QuotaCheck] = None,
+    quota_check: QuotaCheck | None = None,
 ) -> str:
     base = _safe_path(website, base_path or "")
     if not base.exists() or not base.is_dir():
@@ -977,7 +975,7 @@ def _get_implied_dirs(archive: zipfile.ZipFile) -> set[str]:
     return implied
 
 
-def _zip_info_is_dir(info: zipfile.ZipInfo, implied_dirs: Optional[set[str]] = None) -> bool:
+def _zip_info_is_dir(info: zipfile.ZipInfo, implied_dirs: set[str] | None = None) -> bool:
     """Return True if the ZIP entry is a directory.
 
     Some archivers (e.g. zip on Linux) write directory entries *without* a
@@ -999,7 +997,7 @@ def _zip_uncompressed_size(
     archive: zipfile.ZipFile,
     destination: Path,
     archive_file: Path,
-    implied_dirs: Optional[set[str]] = None,
+    implied_dirs: set[str] | None = None,
     allow_executable: bool = False,
 ) -> int:
     total = 0
@@ -1022,7 +1020,7 @@ def _zip_uncompressed_size(
                     else:
                         raise ValueError("Archive directory conflicts with an existing file")
                 except OSError:
-                    raise ValueError("Archive directory conflicts with an existing file")
+                    raise ValueError("Archive directory conflicts with an existing file") from None
             continue
         if target.exists() and target.is_dir():
             raise ValueError("Archive file conflicts with an existing directory")
@@ -1065,7 +1063,7 @@ def _tar_uncompressed_size(
     return total
 
 
-def _extract_zip_archive(archive: zipfile.ZipFile, destination: Path, archive_file: Path, implied_dirs: Optional[set[str]] = None) -> None:
+def _extract_zip_archive(archive: zipfile.ZipFile, destination: Path, archive_file: Path, implied_dirs: set[str] | None = None) -> None:
     for info in archive.infolist():
         target = _validate_archive_destination(destination, info.filename)
         if _is_source_archive_target(target, archive_file):
@@ -1121,7 +1119,7 @@ def extract_archive(
     archive_path: str,
     destination_path: str = "",
     allow_executable: bool = False,
-    quota_check: Optional[QuotaCheck] = None,
+    quota_check: QuotaCheck | None = None,
 ) -> str:
     archive_file = _safe_path(website, archive_path)
     if not archive_file.exists() or not archive_file.is_file():

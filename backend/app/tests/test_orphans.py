@@ -5,6 +5,8 @@ every server that updates, without anyone watching. These tests pin down the
 cases where it must refuse.
 """
 
+from pathlib import Path
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -13,8 +15,6 @@ from app.core.database import Base
 from app.models.entities import User, Website, WebsiteAlias
 from app.services import orphans
 from app.services.shell import CommandResult
-
-from pathlib import Path
 
 HELPER_SCRIPT = Path(__file__).resolve().parents[3] / "installer" / "files" / "bpanel-helper.sh"
 

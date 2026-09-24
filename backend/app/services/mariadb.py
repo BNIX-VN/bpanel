@@ -1,14 +1,12 @@
-from datetime import datetime
-from pathlib import Path
 import re
 import secrets
 import string
 import subprocess
-from typing import Dict
+from datetime import datetime
+from pathlib import Path
 
 from app.core.config import settings
 from app.services.shell import shell
-
 
 IDENTIFIER_CHARS = set(string.ascii_lowercase + string.digits + "_")
 
@@ -54,7 +52,7 @@ def user_exists(db_user: str) -> bool:
     """
     safe = _validate_identifier(db_user)
     result = _run_sql(
-        f"SELECT 1 FROM mysql.user WHERE user = {_quote_sql_string(safe)} LIMIT 1;\n",
+        f"SELECT 1 FROM mysql.user WHERE user = {_quote_sql_string(safe)} LIMIT 1;\n",  # noqa: S608 - validated, then quoted
         check=False,
     )
     return "1" in (result.stdout or "")
@@ -101,7 +99,7 @@ def _run_sql(sql: str, *, check: bool = True):
     return shell.run(_mysql_args(), check=check, input=sql, sensitive=True)
 
 
-def create_database(seed: str, prefix: str = "wp", db_name: str | None = None, if_not_exists: bool = True) -> Dict[str, str]:
+def create_database(seed: str, prefix: str = "wp", db_name: str | None = None, if_not_exists: bool = True) -> dict[str, str]:
     db_name = _validate_identifier(db_name or safe_db_identifier(seed, prefix))
     db_user = _validate_identifier(safe_db_identifier(db_name, "u"))
     _reject_reserved_user(db_user)
@@ -121,7 +119,7 @@ def create_database(seed: str, prefix: str = "wp", db_name: str | None = None, i
 def create_database_credentials(
     db_name: str, db_user: str, db_password: str, *, password_hash: str | None = None,
     allow_existing_user: bool = False,
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """Create a database and the account that owns it.
 
     `CREATE USER IF NOT EXISTS` followed by an unconditional `ALTER USER` used

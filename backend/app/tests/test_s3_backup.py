@@ -288,8 +288,8 @@ def test_the_button_is_not_offered_while_a_run_is_in_flight():
     page = (PROJECT_ROOT / "frontend" / "src" / "App.jsx").read_text(encoding="utf-8")
     # The handler is declared on a line carrying the same name; the button is
     # the one that also has an onClick.
-    line = next(l for l in page.splitlines()
-                if "runBackupScheduleNow(item)" in l and "onClick" in l)
+    line = next(ln for ln in page.splitlines()
+                if "runBackupScheduleNow(item)" in ln and "onClick" in ln)
     assert "item.last_status === 'running'" in line
 
 
@@ -351,7 +351,7 @@ def test_a_bad_name_is_refused_before_anything_touches_the_disk():
     def must_not_run(destination):
         raise AssertionError(f"validation let it through and staged {destination}")
 
-    for bad in ("../escape.tar.gz", "sub/dir.tar.gz", "..\escape.tar.gz",
+    for bad in ("../escape.tar.gz", "sub/dir.tar.gz", r"..\escape.tar.gz",
                 "/abs/path.tar.gz", "notanarchive.txt", ""):
         with pytest.raises(ValueError):
             backup.stage_remote_backup(must_not_run, bad)

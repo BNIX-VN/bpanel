@@ -1,18 +1,17 @@
 import secrets
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 try:
     import crypt as unix_crypt
 except ImportError:  # pragma: no cover - crypt is Unix-only and removed in Python 3.13
     unix_crypt = None
 
-from passlib.exc import UnknownHashError
 from jose import jwt
 from passlib.context import CryptContext
+from passlib.exc import UnknownHashError
 
 from app.core.config import settings
-
 
 # Plain bcrypt. To prevent the 72-byte silent truncation problem (see
 # security audit #8) we:
@@ -76,17 +75,17 @@ def needs_rehash(hashed_password: str) -> bool:
 
 def create_access_token(
     subject: str,
-    extra: Optional[Dict[str, Any]] = None,
-    expires_minutes: Optional[int] = None,
+    extra: dict[str, Any] | None = None,
+    expires_minutes: int | None = None,
 ) -> str:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     lifetime = (
         expires_minutes
         if expires_minutes is not None
         else settings.access_token_expire_minutes
     )
     expire = now + timedelta(minutes=lifetime)
-    payload: Dict[str, Any] = {"sub": subject, "exp": expire, "iat": now, "jti": secrets.token_urlsafe(32)}
+    payload: dict[str, Any] = {"sub": subject, "exp": expire, "iat": now, "jti": secrets.token_urlsafe(32)}
     if extra:
         payload.update(extra)
     return jwt.encode(payload, settings.secret_key, algorithm=ALGORITHM)

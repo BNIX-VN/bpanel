@@ -1,4 +1,3 @@
-from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
@@ -28,7 +27,7 @@ def _ensure_unique_name(db: Session, name: str, package_id: int | None = None) -
         raise HTTPException(status_code=409, detail="Package name already exists")
 
 
-@router.get("", response_model=List[UserPackageOut])
+@router.get("", response_model=list[UserPackageOut])
 def list_packages(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.admin)
     return db.query(UserPackage).order_by(UserPackage.id.asc()).all()

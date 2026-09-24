@@ -1,10 +1,9 @@
 import json
+import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy.orm import Session
-from sqlalchemy.orm import selectinload
-from typing import List, Optional
+from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
@@ -14,16 +13,17 @@ from app.core.step_up import require_sensitive_action_step_up
 from app.models.entities import AuditLog, BackupSchedule, DatabaseAccount, McpToken, User, UserPackage, Website
 from app.schemas.schemas import (
     AuditLogOut,
+    SftpPasswordUpdate,
     UserCreate,
     UserOut,
-    SftpPasswordUpdate,
     UserPasswordUpdate,
     UserUpdate,
 )
-from app.services.audit import log_action
 from app.services import mariadb, nginx, site_users, ssl, storage_quota, teardown, waf, wordpress
+from app.services.audit import log_action
 
 router = APIRouter(prefix="/users", tags=["users"])
+logger = logging.getLogger("bpanel")
 
 
 def _user_out(user: User, db: Session, *, cached_usage: bool = False) -> dict:
@@ -135,7 +135,7 @@ def create_user(payload: UserCreate, request: Request, db: Session = Depends(get
     return body
 
 
-@router.get("", response_model=List[UserOut])
+@router.get("", response_model=list[UserOut])
 def list_users(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Who the accounts are. Disk usage only if it is already known.
 
@@ -422,7 +422,8 @@ def suspend_user(user_id: int, request: Request, db: Session = Depends(get_db), 
             try:
                 site_users.lock_linux_user(website.linux_user)
             except Exception:
-                pass
+                logger.warning("Could not lock Linux user %s; it may still log in over SSH/SFTP",
+                               website.linux_user, exc_info=True)
 
     # Sub-accounts share the site user's uid but not its name, so locking the
     # site user above does not touch them. A suspended customer with a working
@@ -467,7 +468,7 @@ def unsuspend_user(user_id: int, request: Request, db: Session = Depends(get_db)
             try:
                 site_users.unlock_linux_user(website.linux_user)
             except Exception:
-                pass
+                logger.warning("Could not unlock Linux user %s", website.linux_user, exc_info=True)
 
     teardown.set_owner_sftp_accounts_locked(db, user.id, False)
 
@@ -476,10 +477,10 @@ def unsuspend_user(user_id: int, request: Request, db: Session = Depends(get_db)
     return {"message": f"Unsuspended user {user.username}", "affected_websites": len(websites)}
 
 
-@router.get("/audit/log", response_model=List[AuditLogOut])
+@router.get("/audit/log", response_model=list[AuditLogOut])
 def list_audit(
-    user_id: Optional[int] = Query(default=None),
-    action: Optional[str] = Query(default=None, max_length=64),
+    user_id: int | None = Query(default=None),
+    action: str | None = Query(default=None, max_length=64),
     limit: int = Query(default=100, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),

@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import stat
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -12,9 +13,9 @@ from urllib.parse import urlparse
 from fastapi import HTTPException, UploadFile, status
 
 from app.core.config import settings
+from app.services import malware_scan as _malware_scan
 from app.services import panel_ipv6, server_network
 from app.services.shell import shell
-
 
 SETTINGS_DIR = Path(os.environ.get("BPANEL_DATA_DIR", "/var/lib/bpanel"))
 SETTINGS_FILE = SETTINGS_DIR / "panel-settings.json"
@@ -520,10 +521,6 @@ def install_panel_ssl(email: str | None = None, panel_hostname: str | None = Non
 # --------------------------------------------------------------------------
 # Optional ClamAV malware scanning
 # --------------------------------------------------------------------------
-import threading
-
-from app.services import malware_scan as _malware_scan
-
 MALWARE_JOBS: dict[str, dict] = {}
 MALWARE_JOB_THREADS: dict[str, threading.Thread] = {}
 MALWARE_JOBS_LOCK = threading.RLock()
@@ -646,7 +643,7 @@ def set_malware_scan(enabled: bool) -> dict:
         _persist_malware_realtime(False)
         try:
             maldet.monitor_stop()
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, S110
             pass
         _malware_scan.stop_clamd()
         current = current_settings()
@@ -670,7 +667,7 @@ def _install_and_enable_flow() -> None:
     except Exception as exc:  # noqa: BLE001 - record failure, do not crash thread
         try:
             _malware_scan.install_clamav()  # last resort: at least get clamscan
-        except Exception:
+        except Exception:  # noqa: S110 - the LMD failure below is the one reported
             pass
         _malware_scan._write_status(
             {**_malware_scan.refresh_status(), "detail": f"LMD install failed: {exc}"}

@@ -1,13 +1,15 @@
 import hashlib
+import logging
 import secrets
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
-from app.core.security import hash_password
-from app.models.entities import ApiToken, DatabaseAccount, ProvisioningAccount, User, Website
-from app.services import backup as backup_service, teardown
-from app.services import mariadb, nginx, site_users, ssl, storage_quota, waf, wordpress
+from app.models.entities import ApiToken, DatabaseAccount, ProvisioningAccount, Website
+from app.services import backup as backup_service
+from app.services import mariadb, nginx, site_users, ssl, teardown, waf, wordpress
+
+logger = logging.getLogger("bpanel")
 
 
 def hash_token(raw: str) -> str:
@@ -37,11 +39,11 @@ def authenticate_token(db: Session, raw: str) -> ApiToken | None:
     token_hash = hash_token(raw)
     token = db.query(ApiToken).filter(
         ApiToken.token_hash == token_hash,
-        ApiToken.is_active == True,
-        ApiToken.revoked_at == None,
+        ApiToken.is_active == True,  # noqa: E712 - SQLAlchemy column expression
+        ApiToken.revoked_at.is_(None),
     ).first()
     if token:
-        token.last_used_at = datetime.now(timezone.utc)
+        token.last_used_at = datetime.now(UTC)
         db.commit()
     return token
 
@@ -118,7 +120,8 @@ def suspend_account(db: Session, account: ProvisioningAccount, reason: str = "")
             try:
                 site_users.lock_linux_user(website.linux_user)
             except Exception:
-                pass
+                logger.warning("Could not lock Linux user %s; it may still log in over SSH/SFTP",
+                               website.linux_user, exc_info=True)
 
     account.status = "suspended"
     account.last_action = "suspend"
@@ -157,7 +160,7 @@ def unsuspend_account(db: Session, account: ProvisioningAccount) -> None:
             try:
                 site_users.unlock_linux_user(website.linux_user)
             except Exception:
-                pass
+                logger.warning("Could not unlock Linux user %s", website.linux_user, exc_info=True)
 
     account.status = "active"
     account.last_action = "unsuspend"

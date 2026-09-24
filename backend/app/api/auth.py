@@ -6,7 +6,6 @@ from collections import defaultdict, deque
 from datetime import datetime
 from io import BytesIO
 from threading import Lock
-from typing import Deque, Dict, Optional
 
 import pyotp
 import qrcode
@@ -21,10 +20,9 @@ from app.api.deps import get_current_user, get_current_user_optional
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.permissions import Role, ensure_role
-from app.core.security import create_access_token, hash_password, needs_rehash, verify_password
 from app.core.secrets import decrypt, encrypt
+from app.core.security import create_access_token, hash_password, needs_rehash, verify_password
 from app.core.step_up import require_sensitive_action_step_up, verify_totp
-from app.services import passkeys
 from app.models.entities import RevokedToken, User, WebauthnCredential
 from app.schemas.schemas import (
     LoginResponse,
@@ -36,7 +34,7 @@ from app.schemas.schemas import (
     TwoFactorSetupRequest,
     TwoFactorStatus,
 )
-from app.services import storage_quota
+from app.services import passkeys, storage_quota
 from app.services.audit import log_action
 from app.services.sso_tokens import consume_panel_login_token
 
@@ -63,9 +61,9 @@ _LOGIN_WINDOW_SECONDS = 60
 _LOGIN_MAX_ATTEMPTS = 8
 _LOGIN_LOCKOUT_SECONDS = 15 * 60
 _LOGIN_LOCKOUT_THRESHOLD = 20
-_login_attempts: Dict[str, Deque[float]] = defaultdict(deque)
-_login_failures: Dict[str, Deque[float]] = defaultdict(deque)
-_login_lockouts: Dict[str, float] = {}
+_login_attempts: dict[str, deque[float]] = defaultdict(deque)
+_login_failures: dict[str, deque[float]] = defaultdict(deque)
+_login_lockouts: dict[str, float] = {}
 _login_lock = Lock()
 _redis_client = None
 
@@ -101,8 +99,8 @@ def _set_session_cookies(
     response: Response,
     request: Request,
     token: str,
-    max_age_seconds: Optional[int] = None,
-    csrf_token: Optional[str] = None,
+    max_age_seconds: int | None = None,
+    csrf_token: str | None = None,
 ) -> str:
     # A slide-renewed session keeps its CSRF value so a POST already in flight
     # with the old header still matches; a fresh login mints a new one.
@@ -368,8 +366,8 @@ def _issue_login_session(
     response: Response,
     request: Request,
     user: User,
-    extra_claims: Optional[dict] = None,
-    lifetime_minutes: Optional[int] = None,
+    extra_claims: dict | None = None,
+    lifetime_minutes: int | None = None,
 ) -> str:
     token_extra = {"role": user.role, "tv": user.token_version or 0}
     if extra_claims:
@@ -670,7 +668,7 @@ def logout(
 def session_status(
     response: Response,
     db: Session = Depends(get_db),
-    current_user: Optional[User] = Depends(get_current_user_optional),
+    current_user: User | None = Depends(get_current_user_optional),
 ):
     if current_user is None:
         _clear_session_cookies(response)
@@ -853,7 +851,7 @@ def disable_two_factor(
 # not offered at another, and with nothing to fall through to that would strand
 # a customer rather than protect them.
 
-_PASSKEY_CHALLENGES: Dict[str, tuple[bytes, float]] = {}
+_PASSKEY_CHALLENGES: dict[str, tuple[bytes, float]] = {}
 _PASSKEY_LOCK = Lock()
 
 
@@ -873,7 +871,7 @@ def _challenge_store(key: str, challenge: bytes) -> None:
         _PASSKEY_CHALLENGES[key] = (challenge, time.time() + passkeys.CHALLENGE_TTL_SECONDS)
 
 
-def _challenge_take(key: str) -> Optional[bytes]:
+def _challenge_take(key: str) -> bytes | None:
     """Read and delete. A challenge that could be spent twice is not a nonce."""
     if _rate_limit_backend() == "redis":
         try:

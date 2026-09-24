@@ -20,7 +20,6 @@ from app.schemas.schemas import (
 from app.services import panel_ipv6, panel_settings, site_users
 from app.services.audit import log_action
 
-
 router = APIRouter(prefix="/panel-settings", tags=["panel-settings"])
 
 

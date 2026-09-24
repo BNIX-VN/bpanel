@@ -1,7 +1,13 @@
 import pytest
 from pydantic import ValidationError
 
-from app.schemas.schemas import PhpConfigUpdate, ProvisioningAccountCreate, UserPackageCreate, WebsiteCreate, WebsiteAliasCreate
+from app.schemas.schemas import (
+    PhpConfigUpdate,
+    ProvisioningAccountCreate,
+    UserPackageCreate,
+    WebsiteAliasCreate,
+    WebsiteCreate,
+)
 
 
 def test_website_alias_create_accepts_redirect_mode():

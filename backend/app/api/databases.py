@@ -1,20 +1,20 @@
+import ipaddress
+import logging
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
-from starlette.background import BackgroundTask
 from sqlalchemy import or_
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
-from typing import List
-import ipaddress
-import logging
+from starlette.background import BackgroundTask
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.permissions import Role, ensure_role, is_admin_role
 from app.core.secrets import decrypt, encrypt
-from app.models.entities import DatabaseAccount, User, Website
+from app.models.entities import DatabaseAccount, User
 from app.schemas.schemas import DatabaseCreate, DatabaseCreatedOut, DatabaseOut, DatabasePasswordUpdate
 from app.services import mariadb, panel_urls
 from app.services.audit import log_action
@@ -49,7 +49,7 @@ def get_accessible_database(database_id: int, db: Session, current_user: User) -
     return item
 
 
-@router.get("", response_model=List[DatabaseOut])
+@router.get("", response_model=list[DatabaseOut])
 def list_databases(
     q: str = Query(default="", max_length=255),
     db: Session = Depends(get_db),
@@ -171,11 +171,11 @@ def create_phpmyadmin_sso(database_id: int, request: Request, db: Session = Depe
     item = get_accessible_database(database_id, db, current_user)
     try:
         db_password = decrypt(item.db_password)
-    except RuntimeError:
+    except RuntimeError as exc:
         raise HTTPException(
             status_code=500,
             detail="Failed to access stored database password; please re-save the password in panel settings",
-        )
+        ) from exc
     token = create_phpmyadmin_token(item.db_user, db_password, item.db_name)
     log_action(
         db,

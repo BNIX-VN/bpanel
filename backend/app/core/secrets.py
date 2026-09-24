@@ -14,12 +14,10 @@ not world-readable.
 import base64
 import hashlib
 import logging
-from typing import Optional
 
 from cryptography.fernet import Fernet, InvalidToken
 
 from app.core.config import settings
-
 
 logger = logging.getLogger("bpanel.secrets")
 
@@ -41,7 +39,7 @@ def encrypt(plaintext: str) -> str:
     return _ENCRYPTED_PREFIX + token
 
 
-def decrypt(stored: Optional[str]) -> str:
+def decrypt(stored: str | None) -> str:
     """Decrypt a stored value.
 
     Behaviour:
@@ -75,7 +73,7 @@ def decrypt(stored: Optional[str]) -> str:
         raise RuntimeError("Cannot decrypt stored secret; SECRET_KEY may have been rotated") from exc
 
 
-def is_encrypted(stored: Optional[str]) -> bool:
+def is_encrypted(stored: str | None) -> bool:
     """Return True if the stored value is a Fernet ciphertext written by us."""
     return bool(stored) and stored.startswith(_ENCRYPTED_PREFIX)
 

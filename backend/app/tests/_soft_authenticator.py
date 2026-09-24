@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """A software authenticator, to drive both WebAuthn ceremonies for real.
 
 This builds the bytes a real security key would produce - clientDataJSON, the

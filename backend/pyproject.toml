@@ -22,5 +22,17 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"backend/app/services/shell.py" = ["S602"]  # we never invoke a shell
-"backend/tests/*" = ["S105", "S106"]
+# Globs resolve relative to *this* file, which sits in backend/. They used to
+# say "backend/tests/*", which ruff read as backend/backend/tests/* - a path
+# that does not exist - so neither entry ever applied.
+#
+# Tests are full of fixture data that only looks like secrets and temp files:
+# fake passwords, "/tmp/x" paths handed to mocks, a "0.0.0.0" in a config.
+"app/tests/*" = ["S104", "S105", "S106", "S107", "S108"]
+"tests/*" = ["S104", "S105", "S106", "S107", "S108"]
+# SHA-1 here only shortens a name into a collision-resistant suffix for an
+# imported user or database. The digest is part of the name, so changing the
+# hash would rename what a re-import of the same backup expects to replace.
+# The lines are left exactly as they were, so code scanning keeps matching
+# them to its existing alerts rather than reporting them as new.
+"app/services/da_import.py" = ["S324"]

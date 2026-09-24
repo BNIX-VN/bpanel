@@ -5,13 +5,11 @@ import re
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional
 
 from jinja2 import Environment, FileSystemLoader
 
 from app.core.config import settings
-from app.services import panel_ipv6
-from app.services import site_users
+from app.services import panel_ipv6, site_users
 from app.services.shell import shell
 
 TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates" / "nginx"
@@ -91,7 +89,7 @@ def http_flood_config_for_website(website) -> dict:
 
 def http_flood_zone_name(domain: str) -> str:
     safe_domain = _safe_domain(domain)
-    digest = hashlib.sha1(safe_domain.encode("utf-8")).hexdigest()[:12]
+    digest = hashlib.sha1(safe_domain.encode("utf-8"), usedforsecurity=False).hexdigest()[:12]
     return f"bpanel_hf_{digest}"
 
 
@@ -757,7 +755,7 @@ def _log_path(domain: str, kind: str) -> Path:
     return Path("/var/log/nginx") / f"{safe_domain}.{safe_kind}.log"
 
 
-def validate_custom_nginx(content: Optional[str]) -> str:
+def validate_custom_nginx(content: str | None) -> str:
     """Sanitize and validate a custom nginx block before rendering it inside a server { } scope."""
     if not content:
         return ""
@@ -838,7 +836,7 @@ def validate_custom_nginx(content: Optional[str]) -> str:
     return text
 
 
-def validate_full_nginx_config(content: Optional[str]) -> str:
+def validate_full_nginx_config(content: str | None) -> str:
     if content is None:
         raise ValueError("Nginx config is required")
     text = content.replace("\r\n", "\n").strip() + "\n"
@@ -1193,9 +1191,9 @@ def _replace_fastcgi_cache_blocks(content: str, enabled: bool = True) -> str:
 
 def _undo_write(
     target: Path,
-    old_content: Optional[str],
-    custom_domain: Optional[str],
-    custom_snapshot: Optional[tuple[bool, str]],
+    old_content: str | None,
+    custom_domain: str | None,
+    custom_snapshot: tuple[bool, str] | None,
 ) -> None:
     if old_content is not None:
         target.write_text(old_content, encoding="utf-8")
@@ -1206,7 +1204,7 @@ def _undo_write(
 
 
 # Set by deferred_reload(). None means every write tests and reloads on its own.
-_DEFERRED_WRITES: Optional[list] = None
+_DEFERRED_WRITES: list | None = None
 
 
 @contextmanager
@@ -1249,9 +1247,9 @@ def deferred_reload():
 
 def _test_and_reload(
     target: Path,
-    old_content: Optional[str],
-    custom_domain: Optional[str] = None,
-    custom_snapshot: Optional[tuple[bool, str]] = None,
+    old_content: str | None,
+    custom_domain: str | None = None,
+    custom_snapshot: tuple[bool, str] | None = None,
 ) -> None:
     if _DEFERRED_WRITES is not None:
         _DEFERRED_WRITES.append((target, old_content, custom_domain, custom_snapshot))
@@ -1267,9 +1265,9 @@ def render_vhost(
     domain: str,
     root_path: str,
     app_type: str = "wordpress",
-    php_version: Optional[str] = None,
+    php_version: str | None = None,
     custom_directives: str = "",
-    php_fpm_socket_override: Optional[str] = None,
+    php_fpm_socket_override: str | None = None,
     waf_enabled: bool = True,
     http_flood_enabled: bool = False,
     http_flood_config: dict | str | None = None,
@@ -1297,7 +1295,7 @@ def render_vhost(
     resolved_document_root = site_users.document_root(resolved_root, effective_document_root)
     include_path = custom_include_path(safe_domain)
 
-    env = Environment(loader=FileSystemLoader(TEMPLATE_DIR), autoescape=False)
+    env = Environment(loader=FileSystemLoader(TEMPLATE_DIR), autoescape=False)  # noqa: S701 - renders nginx config, not HTML
     template_name = {
         "wordpress": "wordpress.conf.j2",
         "php": "php.conf.j2",
@@ -1339,7 +1337,7 @@ def render_vhost(
 
 
 # Back-compat shim for older imports.
-def render_wordpress_vhost(domain: str, root_path: str, php_version: Optional[str] = None) -> str:
+def render_wordpress_vhost(domain: str, root_path: str, php_version: str | None = None) -> str:
     return render_vhost(domain, root_path, app_type="wordpress", php_version=php_version)
 
 
@@ -1347,9 +1345,9 @@ def write_vhost(
     domain: str,
     root_path: str,
     app_type: str = "wordpress",
-    php_version: Optional[str] = None,
+    php_version: str | None = None,
     custom_directives: str = "",
-    php_fpm_socket_override: Optional[str] = None,
+    php_fpm_socket_override: str | None = None,
     waf_enabled: bool = True,
     http_flood_enabled: bool = False,
     http_flood_config: dict | str | None = None,
@@ -1386,7 +1384,7 @@ def write_vhost(
     )
 
 
-def write_wordpress_vhost(domain: str, root_path: str, php_version: Optional[str] = None) -> str:
+def write_wordpress_vhost(domain: str, root_path: str, php_version: str | None = None) -> str:
     return write_vhost(domain, root_path, app_type="wordpress", php_version=php_version)
 
 
@@ -1394,9 +1392,9 @@ def rewrite_vhost(
     domain: str,
     root_path: str,
     app_type: str,
-    php_version: Optional[str],
+    php_version: str | None,
     custom_directives: str = "",
-    php_fpm_socket_override: Optional[str] = None,
+    php_fpm_socket_override: str | None = None,
     waf_enabled: bool = True,
     http_flood_enabled: bool = False,
     http_flood_config: dict | str | None = None,
@@ -1487,7 +1485,7 @@ def update_custom_block(domain: str, custom_directives: str) -> str:
 def set_php_version(
     domain: str,
     php_version: str,
-    php_fpm_socket_override: Optional[str] = None,
+    php_fpm_socket_override: str | None = None,
 ) -> str:
     target = _vhost_path(domain)
     socket_path = php_fpm_socket_override or _php_fpm_socket(php_version)
@@ -1517,7 +1515,7 @@ def harden_existing_wordpress_vhost(
     root_path: str,
     php_version: str | None = None,
     custom_directives: str = "",
-    php_fpm_socket_override: Optional[str] = None,
+    php_fpm_socket_override: str | None = None,
     waf_enabled: bool = True,
     http_flood_enabled: bool = False,
     http_flood_config: dict | str | None = None,

@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import ipaddress
 from datetime import datetime
-from typing import Optional
 
 from app.api import databases as databases_api
 from app.api import firewall as firewall_api
@@ -33,22 +32,26 @@ from app.api import updates as updates_api
 from app.api import users as users_api
 from app.api import waf as waf_api
 from app.api import websites as websites_api
-from app.core.permissions import is_admin_role
-from app.models.entities import User, Website
 from app.api.maintenance import FileBulkDelete, FileMkdir, FileTransfer, FileWrite
 from app.api.waf import WafCustomRulesUpdate
+from app.core.permissions import is_admin_role
+from app.models.entities import User, Website
 from app.schemas.schemas import (
-    FirewallIpRule, ServiceAction, UserBackupCreate, WebsiteWafUpdate,
+    FirewallIpRule,
+    ServiceAction,
+    UserBackupCreate,
+    WebsiteWafUpdate,
 )
-from app.services import file_manager
+from app.services import file_manager, server_network, site_users
 from app.services import firewall as firewall_service
-from app.services import server_network
-from app.services import site_users
 from app.services import waf as waf_service
 from app.services.mcp import (
-    DOMAIN_ARG, Context, ToolError, private_or_reserved, tool,
+    DOMAIN_ARG,
+    Context,
+    ToolError,
+    private_or_reserved,
+    tool,
 )
-
 
 # --- shared lookups ---------------------------------------------------------
 
@@ -319,7 +322,7 @@ def _list_waf_rules(ctx: Context, args: dict):
        "limit": {"type": "integer", "minimum": 1, "maximum": 500,
                  "description": "How many entries. Defaults to 50."}})
 def _read_waf_access_log(ctx: Context, args: dict):
-    website_id: Optional[int] = None
+    website_id: int | None = None
     if args.get("domain"):
         website_id = _website(ctx, args["domain"]).id
     return waf_api.get_waf_access_logs(
@@ -409,7 +412,7 @@ def _get_website(ctx: Context, args: dict):
     try:
         detail["ssl"] = websites_api.ssl_sources(
             website_id=website.id, db=ctx.db, current_user=ctx.user)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001, S110
         pass
     return detail
 

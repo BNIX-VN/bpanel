@@ -25,9 +25,7 @@ import tarfile
 import tempfile
 import urllib.parse
 from pathlib import Path
-from typing import Optional
 
-from app.core.config import settings
 from app.core.database import SessionLocal
 from app.core.security import hash_password
 from app.models.entities import DatabaseAccount, User, Website, WebsiteAlias
@@ -175,7 +173,7 @@ def _log(msg: str) -> None:
 
 
 def _utc_stamp() -> str:
-    return _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%d-%H%M%S")
+    return _dt.datetime.now(_dt.UTC).strftime("%Y%m%d-%H%M%S")
 
 
 def _is_archive(path: Path) -> bool:
@@ -253,7 +251,7 @@ def _normalize_username(raw: str, archive_name: str = "") -> str:
     return value
 
 
-def _normalize_domain(value: str) -> Optional[str]:
+def _normalize_domain(value: str) -> str | None:
     domain = (value or "").strip().lower().rstrip(".")
     return domain if DOMAIN_RE.fullmatch(domain) else None
 
@@ -495,7 +493,7 @@ def _extract_nested_domain_archives(root: Path) -> None:
             shutil.rmtree(target_dir, ignore_errors=True)
 
 
-def _source_for_domain(root: Path, domain: str) -> Optional[Path]:
+def _source_for_domain(root: Path, domain: str) -> Path | None:
     candidates = [
         root / "domains" / domain / "public_html",
         root / "domains" / domain / "private_html",
@@ -541,7 +539,7 @@ def _discover_subdomains(root: Path, parent_domain: str) -> list[str]:
     return labels
 
 
-def _relocate_da_subdomain_sources(root: Path, parent_domains: list[str]) -> "dict[str, Optional[Path]]":
+def _relocate_da_subdomain_sources(root: Path, parent_domains: list[str]) -> dict[str, Path | None]:
     """Move DirectAdmin subdomain docroots out of their parent's public_html.
 
     DA nests ``sub.example.com`` inside ``example.com``'s public_html
@@ -556,7 +554,7 @@ def _relocate_da_subdomain_sources(root: Path, parent_domains: list[str]) -> "di
     declared but ships no files).
     """
     holding = root / "_bpanel_subdomains"
-    sources: "dict[str, Optional[Path]]" = {}
+    sources: dict[str, Path | None] = {}
     for parent in parent_domains:
         labels = _discover_subdomains(root, parent)
         if not labels:
@@ -626,7 +624,7 @@ def _candidate_config_dirs(path: Path) -> list[Path]:
     return found
 
 
-def _detect_app_type(source: Optional[Path]) -> str:
+def _detect_app_type(source: Path | None) -> str:
     if not source:
         return "php"
     for directory in _candidate_config_dirs(source):
@@ -759,7 +757,7 @@ def _parse_php_variable_config(path: Path) -> dict[str, str]:
     return result
 
 
-def _locate_app_db_config(path: Path) -> tuple[dict[str, str], Optional[Path]]:
+def _locate_app_db_config(path: Path) -> tuple[dict[str, str], Path | None]:
     """(parsed DB settings, the directory they were found in), closest first."""
     for directory in _candidate_config_dirs(path):
         for parser in (_parse_wp_config, _parse_dotenv_config, _parse_php_variable_config):
@@ -847,7 +845,7 @@ def _update_config_dir(public: Path, db_name: str, db_user: str, db_password: st
 # File operations
 # ---------------------------------------------------------------------------
 
-def _copy_site_files(source: Optional[Path], public: Path) -> None:
+def _copy_site_files(source: Path | None, public: Path) -> None:
     public.mkdir(parents=True, exist_ok=True)
     if not source or not source.exists():
         return
@@ -889,7 +887,7 @@ def _checked_members(tar: tarfile.TarFile, destination: Path, archive_name: str)
         try:
             member_path.relative_to(base_resolved)
         except ValueError:
-            raise RuntimeError(f"Unsafe path in {archive_name}: {member.name}")
+            raise RuntimeError(f"Unsafe path in {archive_name}: {member.name}") from None
         if member.issym() or member.islnk():
             # DirectAdmin backups contain no links we need; skipping keeps the
             # extracted tree free of anything pointing outside the stage dir.
@@ -1040,7 +1038,7 @@ def _matched_sql_for_config(
     app_config: dict[str, str],
     sql_files: dict[str, Path],
     single_site: bool,
-) -> tuple[str, Optional[Path]]:
+) -> tuple[str, Path | None]:
     if app_config.get("DB_NAME"):
         key = app_config["DB_NAME"].lower()
         if key in sql_files:
@@ -1080,7 +1078,7 @@ def _delete_website_record(db, website) -> None:
         try:
             from app.services import wordpress
             wordpress.delete_wordpress(website.root_path)
-        except Exception:
+        except Exception:  # noqa: S110 - best-effort cleanup
             pass
         db.delete(website)
         db.flush()
@@ -1138,9 +1136,9 @@ def _ensure_panel_user_record(db, username: str, email: str, domains: list[str],
 
 
 def _create_panel_database(
-    db, owner, website, old_db: str, old_user: Optional[str],
-    sql_file: Optional[Path], credentials: list[str],
-    *, app_config: Optional[dict[str, str]] = None, da_credentials: Optional[dict[str, str]] = None,
+    db, owner, website, old_db: str, old_user: str | None,
+    sql_file: Path | None, credentials: list[str],
+    *, app_config: dict[str, str] | None = None, da_credentials: dict[str, str] | None = None,
 ) -> tuple[str, str, str, bool]:
     used_names, used_users = _existing_identifiers(db)
     fallback = mariadb.safe_db_identifier(
@@ -1165,7 +1163,7 @@ def _create_panel_database(
         db_name, db_user, db_password, password_hash=db_password_hash or None,
         allow_existing_user=True,
     )
-    temp_sql: Optional[Path] = None
+    temp_sql: Path | None = None
     try:
         if sql_file is not None:
             temp_sql = _temporary_sql_file(sql_file)
@@ -1246,7 +1244,7 @@ def _import_da_certificate(db, website, root: Path, item_summary: dict) -> bool:
     website.ssl_cert_path = written["cert"]
     website.ssl_key_path = written["key"]
     website.ssl_ca_path = written["ca"]
-    website.ssl_updated_at = _dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None)
+    website.ssl_updated_at = _dt.datetime.now(_dt.UTC).replace(tzinfo=None)
     db.commit()
     # Writing the files is not enough: nginx keeps serving whatever the vhost
     # names, so the vhost has to be rewritten to point at them.
@@ -1384,7 +1382,7 @@ def scan_da_backup(archive_path: str) -> dict:
 
         # DirectAdmin subdomains (sub.example.com nested under example.com) come
         # in as their own websites; list them alongside the parent domains.
-        subdomains: list[tuple[str, Optional[Path]]] = []
+        subdomains: list[tuple[str, Path | None]] = []
         for parent in list(domains):
             parent_public = _source_for_domain(root, parent)
             for label in _discover_subdomains(root, parent):

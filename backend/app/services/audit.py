@@ -1,22 +1,20 @@
 import logging
-from typing import Optional
 
 from fastapi import Request
 from sqlalchemy.orm import Session
 
 from app.models.entities import AuditLog
 
-
 logger = logging.getLogger("bpanel.audit")
 
 
 def log_action(
     db: Session,
-    user_id: Optional[int],
+    user_id: int | None,
     action: str,
     target: str,
     detail: str = "",
-    request: Optional[Request] = None,
+    request: Request | None = None,
 ) -> None:
     extras = []
     if request is not None:

@@ -125,7 +125,7 @@ def _log_config() -> dict:
 def build_config() -> uvicorn.Config:
     pair = _certificate_pair()
     options: dict = {
-        "host": "0.0.0.0",
+        "host": "0.0.0.0",  # noqa: S104 - the panel port is meant to be reached from outside
         "port": _port(),
         "proxy_headers": False,
         "forwarded_allow_ips": TRUSTED_FORWARDERS,

@@ -1,28 +1,26 @@
-from datetime import datetime
-from io import StringIO
 import hashlib
 import json
 import logging
-from pathlib import Path
 import posixpath
 import re
 import secrets
 import tarfile
 import tempfile
-from typing import List, Optional
+from datetime import datetime
+from io import StringIO
+from pathlib import Path
 
 import paramiko
 from paramiko.pkey import PKey
 from paramiko.ssh_exception import SSHException
 
 from app.core.config import settings
+from app.core.permissions import Role
 from app.core.secrets import decrypt, encrypt
 from app.core.security import hash_password
-from app.core.permissions import Role
 from app.models.entities import DatabaseAccount, SiteApp, User, Website, WebsiteAlias
 from app.services import mariadb, nginx, site_users, waf, wordpress
 from app.services.shell import shell
-
 
 logger = logging.getLogger("bpanel.backup")
 
@@ -63,7 +61,7 @@ def _hostname_conflicts(db, domain: str, exclude_website_id: int | None = None) 
     return safe in reserved or f"www.{safe}" in reserved
 
 
-def create_backup(website: Website, db_name: Optional[str] = None) -> str:
+def create_backup(website: Website, db_name: str | None = None) -> str:
     stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
     backup_dir = Path(settings.backup_root) / website.domain
     archive = backup_dir / f"{website.domain}-{stamp}.tar.gz"
@@ -221,7 +219,7 @@ def create_user_backup(user: User, db) -> str:
     return str(archive)
 
 
-def _collect_applications(user: User, db, tmp_dir: Path) -> list[tuple[dict, Optional[Path]]]:
+def _collect_applications(user: User, db, tmp_dir: Path) -> list[tuple[dict, Path | None]]:
     """Each of a user's applications: what it is, and a tar of what it holds.
 
     An application whose data cannot be read is still recorded — coming back with
@@ -234,7 +232,7 @@ def _collect_applications(user: User, db, tmp_dir: Path) -> list[tuple[dict, Opt
     if not addons.is_installed(addons.APPLICATION):
         return []
     apps = db.query(SiteApp).filter(SiteApp.owner_id == user.id).order_by(SiteApp.id.asc()).all()
-    collected: list[tuple[dict, Optional[Path]]] = []
+    collected: list[tuple[dict, Path | None]] = []
     for app in apps:
         entry = {
             "name": app.name,
@@ -255,7 +253,7 @@ def _collect_applications(user: User, db, tmp_dir: Path) -> list[tuple[dict, Opt
             "payload_member": None,
             "payload_error": "",
         }
-        payload: Optional[Path] = None
+        payload: Path | None = None
         try:
             target = tmp_dir / f"app-{app.name}.tar"
             site_apps.export_payload(app, str(target))
@@ -269,14 +267,14 @@ def _collect_applications(user: User, db, tmp_dir: Path) -> list[tuple[dict, Opt
     return collected
 
 
-def list_user_backups(username: str) -> List[str]:
+def list_user_backups(username: str) -> list[str]:
     backup_dir = _user_backup_dir(username)
     if settings.command_dry_run or not backup_dir.exists():
         return []
     return [str(path) for path in sorted(backup_dir.glob("*.tar.gz"), reverse=True)]
 
 
-def list_uploaded_user_backups(username: Optional[str] = None) -> List[str]:
+def list_uploaded_user_backups(username: str | None = None) -> list[str]:
     backup_dirs = [_user_restore_dir(), Path(settings.backup_root) / "users" / "uploads"]
     if settings.command_dry_run:
         return []
@@ -291,7 +289,7 @@ def list_uploaded_user_backups(username: Optional[str] = None) -> List[str]:
             if username:
                 try:
                     manifest = read_backup_manifest(str(path))
-                except Exception:
+                except Exception:  # noqa: S112 - an unreadable archive is not this user's
                     continue
                 if (manifest.get("user") or {}).get("username") != username:
                     continue
@@ -459,15 +457,15 @@ def _safe_extract_prefix(archive: Path, prefix: str, destination: Path) -> None:
             except TypeError:
                 member_path = (destination / original.name).resolve()
                 if destination != member_path and destination not in member_path.parents:
-                    raise ValueError("Backup archive contains unsafe paths")
+                    raise ValueError("Backup archive contains unsafe paths") from None
                 if original.issym():
                     link_path = (member_path.parent / original.linkname).resolve()
                     if destination != link_path and destination not in link_path.parents:
-                        raise ValueError("Backup archive contains unsafe links")
+                        raise ValueError("Backup archive contains unsafe links") from None
                 tar.extract(original, str(destination))
 
 
-def _extract_member_to_file(archive: Path, member_name: str, output_dir: Path) -> Optional[Path]:
+def _extract_member_to_file(archive: Path, member_name: str, output_dir: Path) -> Path | None:
     with tarfile.open(archive, "r:gz") as tar:
         try:
             member = tar.getmember(member_name)
@@ -861,7 +859,7 @@ def restore_backup(website: Website, backup_file: str) -> str:
             return tarfile.data_filter(member, dest_path)
 
         try:
-            tar.extractall(path=str(destination), filter=safe_filter)
+            tar.extractall(path=str(destination), filter=safe_filter)  # noqa: S202 - safe_filter ends in tarfile.data_filter
         except TypeError:
             # Older Python (<3.12) without the filter parameter — fall back to
             # manual extraction with the existing safety check.
@@ -905,7 +903,7 @@ def delete_backup(domain: str, backup_file: str) -> str:
     return str(path)
 
 
-def list_backups(domain: str) -> List[str]:
+def list_backups(domain: str) -> list[str]:
     backup_dir = Path(settings.backup_root) / domain
     if settings.command_dry_run:
         return []
@@ -914,7 +912,7 @@ def list_backups(domain: str) -> List[str]:
     return [str(path) for path in sorted(backup_dir.glob("*.tar.gz"), reverse=True)]
 
 
-def _load_private_key(private_key: str, password: Optional[str] = None):
+def _load_private_key(private_key: str, password: str | None = None):
     key_stream = StringIO(private_key)
     key_classes = (
         paramiko.RSAKey,
@@ -968,11 +966,11 @@ class _PinnedHostKeyPolicy(paramiko.MissingHostKeyPolicy):
     safety net to surface a clear error if logic upstream changes.
     """
 
-    def __init__(self, expected_type: Optional[str], expected_fingerprint: Optional[str]):
+    def __init__(self, expected_type: str | None, expected_fingerprint: str | None):
         self.expected_type = expected_type
         self.expected_fingerprint = expected_fingerprint
-        self.captured_type: Optional[str] = None
-        self.captured_fingerprint: Optional[str] = None
+        self.captured_type: str | None = None
+        self.captured_fingerprint: str | None = None
 
     def missing_host_key(self, client, hostname, key):  # type: ignore[override]
         captured = _fingerprint(key)
@@ -1002,11 +1000,11 @@ def upload_to_sftp(
     port: int,
     username: str,
     remote_path: str,
-    remote_name: Optional[str] = None,
-    password: Optional[str] = None,
-    private_key: Optional[str] = None,
-    expected_host_key_type: Optional[str] = None,
-    expected_host_key_fingerprint: Optional[str] = None,
+    remote_name: str | None = None,
+    password: str | None = None,
+    private_key: str | None = None,
+    expected_host_key_type: str | None = None,
+    expected_host_key_fingerprint: str | None = None,
 ) -> dict:
     """Upload ``local_file`` to ``host:port`` via SFTP.
 
@@ -1032,8 +1030,8 @@ def upload_to_sftp(
     # backup_s3.stored_name, which both destinations share.
     remote_file = posixpath.join(remote_dir, remote_name or local_path.name)
 
-    captured_type: Optional[str] = expected_host_key_type
-    captured_fp: Optional[str] = expected_host_key_fingerprint
+    captured_type: str | None = expected_host_key_type
+    captured_fp: str | None = expected_host_key_fingerprint
 
     client = paramiko.SSHClient()
     # Note: we deliberately do NOT call load_system_host_keys() because the
@@ -1049,7 +1047,7 @@ def upload_to_sftp(
             )
             if host_key_obj is not None:
                 host_keys.add(host, expected_host_key_type or host_key_obj.get_name(), host_key_obj)
-        except Exception:  # pragma: no cover - decoding fallback
+        except Exception:  # noqa: S110  # pragma: no cover - decoding fallback
             pass
         # Even if we could not pre-load the key (e.g. only fingerprint stored),
         # the missing_host_key policy below performs the comparison itself.
@@ -1109,7 +1107,7 @@ def upload_to_sftp(
     }
 
 
-def _decode_pinned_key(key_type: str, fingerprint: str) -> Optional[PKey]:
+def _decode_pinned_key(key_type: str, fingerprint: str) -> PKey | None:
     """We store only the fingerprint, so reconstructing a PKey is not always
     possible. Returns ``None`` to indicate the caller should rely on the
     in-policy fingerprint comparison instead."""

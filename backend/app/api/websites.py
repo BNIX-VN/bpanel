@@ -6,7 +6,6 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Reques
 from jinja2 import Environment, FileSystemLoader
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
-from typing import List
 
 from app.api.deps import get_current_user
 from app.core.config import settings
@@ -31,7 +30,21 @@ from app.schemas.schemas import (
     WebsiteWordPressInstall,
     WildcardSslRequest,
 )
-from app.services import addons, cloudflare, cron, file_manager, mariadb, nginx, site_apps, site_users, ssl, storage_quota, teardown, waf, wordpress
+from app.services import (
+    addons,
+    cloudflare,
+    cron,
+    file_manager,
+    mariadb,
+    nginx,
+    site_apps,
+    site_users,
+    ssl,
+    storage_quota,
+    teardown,
+    waf,
+    wordpress,
+)
 from app.services.audit import log_action
 
 _PLACEHOLDER_TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates" / "nginx"
@@ -50,7 +63,7 @@ def _cleanup_failed_site(root_path: str, linux_user: str | None, delete_files: b
                 site_users.delete_site_runtime(root_path, linux_user)
             else:
                 wordpress.delete_wordpress(root_path)
-        except Exception:
+        except Exception:  # noqa: S110 - cleanup after a failed create; that error is the one reported
             pass
 
 
@@ -574,7 +587,7 @@ def install_wordpress_on_website(
     return website
 
 
-@router.get("", response_model=List[WebsiteOut])
+@router.get("", response_model=list[WebsiteOut])
 def list_websites(q: str = Query(default="", max_length=255), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     search = (q or "").strip().lower()
     if is_admin_role(current_user.role):
@@ -593,7 +606,7 @@ def list_websites(q: str = Query(default="", max_length=255), db: Session = Depe
     return _sync_live_ssl_flags(db, websites)
 
 
-@router.get("/{website_id}/aliases", response_model=List[WebsiteAliasOut])
+@router.get("/{website_id}/aliases", response_model=list[WebsiteAliasOut])
 def list_website_aliases(website_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     website = _get_authorized_website(db, website_id, current_user)
     return sorted(website.aliases or [], key=lambda alias: alias.domain)
@@ -1307,7 +1320,7 @@ def install_wildcard_ssl(
     return website
 
 
-@router.get("/{website_id}/ssl/sources", response_model=List[SslSourceOut])
+@router.get("/{website_id}/ssl/sources", response_model=list[SslSourceOut])
 def ssl_sources(website_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     website = _get_authorized_website(db, website_id, current_user)
     candidates = db.query(Website).filter(Website.id != website.id, Website.ssl_enabled.is_(True)).all()

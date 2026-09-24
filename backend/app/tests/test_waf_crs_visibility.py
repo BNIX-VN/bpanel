@@ -14,7 +14,6 @@ site that loads it - so "which of my sites carry it" is a question the owner has
 a real reason to ask.
 """
 
-import ast
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]

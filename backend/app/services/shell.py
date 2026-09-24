@@ -15,10 +15,8 @@ import os
 import shlex
 import subprocess
 from dataclasses import dataclass
-from typing import List, Optional
 
 from app.core.config import settings
-
 
 HELPER_PATH = "/usr/local/sbin/bpanel-helper"
 
@@ -59,11 +57,11 @@ def _decode_stream(value) -> str:
 class ShellRunner:
     def run(
         self,
-        args: List[str],
+        args: list[str],
         check: bool = True,
-        input: Optional[str] = None,
+        input: str | None = None,
         sensitive: bool = False,
-        timeout: Optional[float] = None,
+        timeout: float | None = None,
     ) -> CommandResult:
         """Run a subprocess as the current API user (non-root in production)."""
         return self._exec(list(args), check=check, input=input, sensitive=sensitive, timeout=timeout)
@@ -71,12 +69,12 @@ class ShellRunner:
     def privileged(
         self,
         helper_command: str,
-        helper_args: Optional[List[str]] = None,
+        helper_args: list[str] | None = None,
         check: bool = True,
-        input: Optional[str] = None,
+        input: str | None = None,
         sensitive: bool = False,
-        fallback: Optional[List[str]] = None,
-        timeout: Optional[float] = None,
+        fallback: list[str] | None = None,
+        timeout: float | None = None,
     ) -> CommandResult:
         """Run a privileged operation through the bpanel-helper sudo trampoline.
 
@@ -104,12 +102,12 @@ class ShellRunner:
 
     def _exec(
         self,
-        argv: List[str],
+        argv: list[str],
         *,
         check: bool,
-        input: Optional[str],
+        input: str | None,
         sensitive: bool,
-        timeout: Optional[float] = None,
+        timeout: float | None = None,
     ) -> CommandResult:
         quoted = " ".join(shlex.quote(arg) for arg in argv)
         log_command = "[redacted]" if sensitive else quoted

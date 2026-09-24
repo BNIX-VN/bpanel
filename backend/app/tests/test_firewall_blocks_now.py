@@ -12,7 +12,6 @@ before the conntrack return, and applying the firewall closes sockets that the
 sets now cover.
 """
 
-import re
 from pathlib import Path
 
 import pytest

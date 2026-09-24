@@ -28,7 +28,7 @@ class CloudflareError(RuntimeError):
 
 
 def _get(path: str, token: str) -> dict:
-    request = urllib.request.Request(
+    request = urllib.request.Request(  # noqa: S310 - API_ROOT is a fixed https:// URL
         f"{API_ROOT}{path}",
         headers={
             "Authorization": f"Bearer {token.strip()}",
@@ -37,7 +37,7 @@ def _get(path: str, token: str) -> dict:
         },
     )
     try:
-        with urllib.request.urlopen(request, timeout=_TIMEOUT) as response:
+        with urllib.request.urlopen(request, timeout=_TIMEOUT) as response:  # noqa: S310
             payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         raise CloudflareError(f"Cloudflare API returned HTTP {exc.code}") from exc

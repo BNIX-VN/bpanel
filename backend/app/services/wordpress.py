@@ -1,12 +1,10 @@
 import re
 import secrets as _secrets
 from pathlib import Path
-from typing import Dict
 
 from app.core.config import settings
 from app.services import site_users
 from app.services.shell import shell
-
 
 # Strict whitelists for values fed to WP-CLI to prevent flag injection.
 WP_USER_RE = re.compile(r"^[A-Za-z0-9._@-]{3,60}$")
@@ -70,7 +68,7 @@ def site_root(domain: str) -> str:
 
 def install_wordpress(
     domain: str,
-    db: Dict[str, str],
+    db: dict[str, str],
     title: str,
     admin_user: str,
     admin_password: str,

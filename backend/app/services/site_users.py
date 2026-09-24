@@ -3,10 +3,8 @@ import os
 import re
 import secrets
 from pathlib import Path, PurePosixPath
-from typing import Optional
 
 from app.services.shell import shell
-
 
 LINUX_USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{2,31}$")
 DOMAIN_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$")
@@ -64,10 +62,10 @@ def php_fpm_pool_name(username: str, php_version: str, root_path: str | Path | N
 
 
 def php_fpm_socket(
-    username: Optional[str],
-    php_version: Optional[str] = None,
+    username: str | None,
+    php_version: str | None = None,
     root_path: str | Path | None = None,
-) -> Optional[str]:
+) -> str | None:
     if not username:
         return None
     if php_version:
@@ -76,7 +74,7 @@ def php_fpm_socket(
     return f"/run/php/bpanel-{safe_user}.sock"
 
 
-def site_php_fpm_socket(username: Optional[str], root_path: str | Path, php_version: Optional[str]) -> Optional[str]:
+def site_php_fpm_socket(username: str | None, root_path: str | Path, php_version: str | None) -> str | None:
     return php_fpm_socket(username, php_version, root_path) if php_version else None
 
 
@@ -142,7 +140,7 @@ def is_site_root_for_domain(path: str | Path, domain: str) -> bool:
     )
 
 
-def ensure_panel_user(username: str, password: Optional[str] = None) -> str:
+def ensure_panel_user(username: str, password: str | None = None) -> str:
     linux_user = linux_user_for_panel_username(username)
     shell.privileged(
         "panel-user-ensure",
@@ -191,7 +189,7 @@ def rotate_panel_user_password(username: str) -> str:
     return password
 
 
-def retire_shared_login_password(username: str, already_separate: bool) -> Optional[str]:
+def retire_shared_login_password(username: str, already_separate: bool) -> str | None:
     """What has to happen to the SFTP password when the panel password changes.
 
     One implementation because three call sites change a panel password -
@@ -224,7 +222,7 @@ def delete_panel_user(username: str) -> None:
     )
 
 
-def ensure_site_runtime(domain: str, root_path: str, php_version: Optional[str] = None, linux_user: Optional[str] = None) -> str:
+def ensure_site_runtime(domain: str, root_path: str, php_version: str | None = None, linux_user: str | None = None) -> str:
     username = validate_linux_user(linux_user) if linux_user else linux_user_for_domain(domain)
     helper_args = [username, root_path, php_version or "none"]
     shell.privileged(
@@ -235,7 +233,7 @@ def ensure_site_runtime(domain: str, root_path: str, php_version: Optional[str] 
     return username
 
 
-def ensure_document_root(root_path: str, relative_path: str, linux_user: Optional[str]) -> Path:
+def ensure_document_root(root_path: str, relative_path: str, linux_user: str | None) -> Path:
     target = document_root(root_path, relative_path)
     if not linux_user:
         target.mkdir(parents=True, exist_ok=True)
@@ -249,7 +247,7 @@ def ensure_document_root(root_path: str, relative_path: str, linux_user: Optiona
     return target
 
 
-def move_site_runtime(old_root_path: str, new_root_path: str, linux_user: str, php_version: Optional[str] = None) -> str:
+def move_site_runtime(old_root_path: str, new_root_path: str, linux_user: str, php_version: str | None = None) -> str:
     username = validate_linux_user(linux_user)
     shell.privileged(
         "site-runtime-move",
@@ -259,7 +257,7 @@ def move_site_runtime(old_root_path: str, new_root_path: str, linux_user: str, p
     return new_root_path
 
 
-def fix_site_permissions(root_path: str, linux_user: Optional[str]) -> None:
+def fix_site_permissions(root_path: str, linux_user: str | None) -> None:
     if linux_user:
         shell.privileged(
             "fix-permissions",
@@ -296,7 +294,7 @@ def import_site_files(root_path: str, linux_user: str, staged_source: str) -> No
     )
 
 
-def fix_site_path(path: str, linux_user: Optional[str], check: bool = False) -> None:
+def fix_site_path(path: str, linux_user: str | None, check: bool = False) -> None:
     if not linux_user:
         return
     shell.privileged(
@@ -307,7 +305,7 @@ def fix_site_path(path: str, linux_user: Optional[str], check: bool = False) -> 
     )
 
 
-def delete_site_runtime(root_path: str, linux_user: Optional[str]) -> None:
+def delete_site_runtime(root_path: str, linux_user: str | None) -> None:
     if not linux_user:
         return
     shell.privileged(

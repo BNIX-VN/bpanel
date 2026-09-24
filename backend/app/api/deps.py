@@ -1,5 +1,4 @@
 from hmac import compare_digest
-from typing import Optional
 
 from fastapi import Cookie, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
@@ -10,7 +9,6 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import ALGORITHM
 from app.models.entities import RevokedToken, User
-
 
 # auto_error=False because the token may instead be in an HttpOnly cookie.
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
@@ -25,9 +23,9 @@ def _credentials_exception() -> HTTPException:
 
 
 def _resolve_token(
-    bearer: Optional[str],
-    cookie_token: Optional[str],
-) -> Optional[str]:
+    bearer: str | None,
+    cookie_token: str | None,
+) -> str | None:
     if bearer:
         return bearer
     if cookie_token:
@@ -39,8 +37,8 @@ def _user_from_token(token: str, db: Session) -> tuple[User, dict]:
     credentials_exception = _credentials_exception()
     try:
         payload = jwt.decode(token, settings.secret_key, algorithms=[ALGORITHM])
-        username: Optional[str] = payload.get("sub")
-        jti: Optional[str] = payload.get("jti")
+        username: str | None = payload.get("sub")
+        jti: str | None = payload.get("jti")
         token_version = int(payload.get("tv", 0))
         if username is None:
             raise credentials_exception
@@ -67,7 +65,7 @@ def _attach_auth_state(request: Request, token: str, payload: dict) -> None:
     request.state.jwt_token = token
 
 
-def _enforce_cookie_csrf(request: Request, bearer_token: Optional[str], session_cookie: Optional[str]) -> None:
+def _enforce_cookie_csrf(request: Request, bearer_token: str | None, session_cookie: str | None) -> None:
     # When the request was authenticated via cookie (browser flow) we ALSO
     # require a CSRF token on mutating methods. Bearer auth (CLI/SDK) is
     # exempt because it cannot be triggered cross-origin without an explicit
@@ -91,10 +89,10 @@ def _enforce_cookie_csrf(request: Request, bearer_token: Optional[str], session_
 
 def get_current_user_optional(
     request: Request,
-    bearer_token: Optional[str] = Depends(oauth2_scheme),
-    session_cookie: Optional[str] = Cookie(default=None, alias="bpanel_session"),
+    bearer_token: str | None = Depends(oauth2_scheme),
+    session_cookie: str | None = Cookie(default=None, alias="bpanel_session"),
     db: Session = Depends(get_db),
-) -> Optional[User]:
+) -> User | None:
     token = _resolve_token(bearer_token, session_cookie)
     if not token:
         return None
@@ -111,8 +109,8 @@ def get_current_user_optional(
 
 def get_current_user(
     request: Request,
-    bearer_token: Optional[str] = Depends(oauth2_scheme),
-    session_cookie: Optional[str] = Cookie(default=None, alias="bpanel_session"),
+    bearer_token: str | None = Depends(oauth2_scheme),
+    session_cookie: str | None = Cookie(default=None, alias="bpanel_session"),
     db: Session = Depends(get_db),
 ) -> User:
     token = _resolve_token(bearer_token, session_cookie)

@@ -15,8 +15,8 @@ import os
 import re
 import shlex
 import time
+from datetime import UTC
 from pathlib import Path
-from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -209,7 +209,7 @@ def ensure_app_quota(db: Session, user: User, is_admin: bool = False) -> None:
         raise ValueError(f"This package allows at most {limit} application(s)")
 
 
-def app_port_for_website(website: Website) -> Optional[int]:
+def app_port_for_website(website: Website) -> int | None:
     app = getattr(website, "app", None)
     return app.port if app else None
 
@@ -542,7 +542,7 @@ def is_running(app: SiteApp) -> bool:
     return active_state(app) == "active"
 
 
-def compose_service_states(app: SiteApp) -> Optional[list[dict]]:
+def compose_service_states(app: SiteApp) -> list[dict] | None:
     """What each container in a compose app is actually doing.
 
     The unit only says whether `docker compose up` is still attached, and it is:
@@ -583,7 +583,7 @@ CRASH_LOOP_UPTIME_SECONDS = 180
 
 def _container_uptime(started: str) -> float:
     """Seconds since a container last started, or a large number if unreadable."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     text = (started or "").replace("Z", "+00:00")
     if "." in text:  # Docker prints nanoseconds; datetime stops at microseconds
@@ -595,8 +595,8 @@ def _container_uptime(started: str) -> float:
     except ValueError:
         return float("inf")
     if moment.tzinfo is None:
-        moment = moment.replace(tzinfo=timezone.utc)
-    return (datetime.now(timezone.utc) - moment).total_seconds()
+        moment = moment.replace(tzinfo=UTC)
+    return (datetime.now(UTC) - moment).total_seconds()
 
 
 def compose_trouble(app: SiteApp) -> str:

@@ -163,7 +163,7 @@ def test_detect_mode_puts_the_blocking_threshold_out_of_reach():
 
     # The comments explain why SecRuleUpdateActionById is not used, so check the
     # lines that actually run rather than the whole function.
-    code = "\n".join(l for l in body.splitlines() if not l.strip().startswith("#"))
+    code = "\n".join(ln for ln in body.splitlines() if not ln.strip().startswith("#"))
 
     assert "inbound_anomaly_score_threshold=1000000" in code
     assert "inbound_anomaly_score_threshold=5" in code   # the blocking mode
