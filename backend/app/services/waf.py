@@ -1103,6 +1103,94 @@ def access_logs(
     return payload
 
 
+def access_summary(
+    websites: Iterable[Website],
+    *,
+    lines: int = 5000,
+    top: int = 10,
+) -> dict:
+    """Counts rather than entries: what the traffic looks like, in one answer.
+
+    `access_logs` exists already and returns the entries themselves, but it
+    caps what it returns at 500 and an assistant asked "who is hammering this
+    site" does not want 500 rows - it wants the shape. Handing a model the
+    rows and letting it count would spend the operator's tokens on arithmetic
+    and get it wrong on ties.
+
+    Reuses the same reader and the same line parser as `access_logs`, so a fix
+    to either reaches both and the two can never disagree about what a line
+    means.
+    """
+    websites = list(websites)
+    safe_lines = max(1, min(int(lines or 5000), 5000))
+    safe_top = max(1, min(int(top or 10), 50))
+
+    domains = [_validate_domain(w.domain) for w in websites]
+    blocks = _read_site_logs(domains, safe_lines)
+
+    total = 0
+    verdicts: dict[str, int] = {}
+    statuses: dict[int, int] = {}
+    by_ip: dict[str, int] = {}
+    by_path: dict[str, int] = {}
+    by_country: dict[str, int] = {}
+    blocked_ips: dict[str, int] = {}
+    first_seen = ""
+    last_seen = ""
+    missing: list[str] = []
+    sequence = 0
+
+    for domain in domains:
+        content = blocks.get(domain)
+        if content is None:
+            missing.append(domain)
+            continue
+        for line in content.splitlines():
+            sequence += 1
+            parsed = _parse_access_log_line(domain, line, sequence)
+            if not parsed:
+                continue
+            _, item = parsed
+            total += 1
+            verdicts[item["verdict"]] = verdicts.get(item["verdict"], 0) + 1
+            statuses[item["status"]] = statuses.get(item["status"], 0) + 1
+            if item["ip"]:
+                by_ip[item["ip"]] = by_ip.get(item["ip"], 0) + 1
+                if item["verdict"] == "block":
+                    blocked_ips[item["ip"]] = blocked_ips.get(item["ip"], 0) + 1
+            if item["path"]:
+                by_path[item["path"]] = by_path.get(item["path"], 0) + 1
+            if item["country"]:
+                by_country[item["country"]] = by_country.get(item["country"], 0) + 1
+            stamp = item["timestamp"]
+            if stamp:
+                if not first_seen or stamp < first_seen:
+                    first_seen = stamp
+                if stamp > last_seen:
+                    last_seen = stamp
+
+    def _top(counts: dict, key_name: str) -> list[dict]:
+        # Sorted by count, then by key, so the same log always produces the
+        # same answer - a summary that reshuffles on ties reads as a change.
+        ordered = sorted(counts.items(), key=lambda kv: (-kv[1], str(kv[0])))
+        return [{key_name: key, "requests": count} for key, count in ordered[:safe_top]]
+
+    return {
+        "domains": domains,
+        "requests": total,
+        "lines_read": safe_lines,
+        "from": first_seen,
+        "to": last_seen,
+        "verdicts": dict(sorted(verdicts.items())),
+        "top_status": _top(statuses, "status"),
+        "top_ips": _top(by_ip, "ip"),
+        "top_paths": _top(by_path, "path"),
+        "top_countries": _top(by_country, "country"),
+        "most_blocked_ips": _top(blocked_ips, "ip"),
+        "no_log_yet": missing,
+    }
+
+
 def clear_access_logs(websites: Iterable[Website]) -> int:
     _ACCESS_LOG_CACHE.clear()
     cleared = 0

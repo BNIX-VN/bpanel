@@ -33,6 +33,8 @@ from app.api import waf as waf_api
 from app.api import websites as websites_api
 from app.core.permissions import is_admin_role
 from app.models.entities import User, Website
+from app.services import file_manager
+from app.services import waf as waf_service
 from app.services.mcp import DOMAIN_ARG, Context, ToolError, tool
 
 
@@ -339,3 +341,80 @@ def _read_file(ctx: Context, args: dict):
         "note": f"Showing the first {MAX_READ_LINES} of {len(lines)} lines.",
         "content": "\n".join(lines[:MAX_READ_LINES]),
     }
+
+
+# --- the three that needed something BPanel did not have --------------------
+
+@tool("get_website", "Everything about one website",
+      "One website in full: PHP version, document root, SSL state and expiry, "
+      "the firewall settings and every alias pointing at it. Use this when "
+      "list_websites has told you the domain and you need the detail.",
+      {"domain": DOMAIN_ARG},
+      required=("domain",))
+def _get_website(ctx: Context, args: dict):
+    """Composed rather than fetched.
+
+    BPanel has no GET /websites/{id}: the panel builds this page from the
+    listing plus two more calls, and so does this. Composing here rather than
+    adding an endpoint keeps MCP from being the reason a new surface exists.
+    """
+    website = _website(ctx, args["domain"])
+    detail = _thin(
+        website, "domain", "php_version", "app_type", "status", "root_path",
+        "document_root", "ssl_enabled", "waf_enabled", "waf_default_rules",
+        "http_flood_enabled", "nginx_rewrite_mode", "linux_user", "created_at",
+    )
+    try:
+        aliases = websites_api.list_website_aliases(
+            website_id=website.id, db=ctx.db, current_user=ctx.user)
+        detail["aliases"] = [_thin(row, "domain", "mode") for row in _rows(aliases)]
+    except Exception:  # noqa: BLE001 - detail is better without it than absent
+        detail["aliases"] = []
+    try:
+        detail["ssl"] = websites_api.ssl_sources(
+            website_id=website.id, db=ctx.db, current_user=ctx.user)
+    except Exception:  # noqa: BLE001
+        pass
+    return detail
+
+
+@tool("traffic_summary", "Summarise a website's traffic",
+      "What the traffic to one website looks like: how many requests, which "
+      "addresses and paths account for most of them, which countries, and "
+      "which addresses are being blocked. This is the tool for 'is this site "
+      "under attack' and for finding an address worth blocking - it counts, "
+      "so you do not have to read thousands of log lines to do arithmetic.",
+      {"domain": DOMAIN_ARG,
+       "lines": {"type": "integer", "minimum": 100, "maximum": 5000,
+                 "description": "How far back to read. Defaults to 5000 lines."},
+       "top": {"type": "integer", "minimum": 1, "maximum": 50,
+               "description": "How many entries in each top list. Defaults to 10."}},
+      required=("domain",))
+def _traffic_summary(ctx: Context, args: dict):
+    website = _website(ctx, args["domain"])
+    return waf_service.access_summary(
+        [website], lines=args.get("lines", 5000), top=args.get("top", 10))
+
+
+@tool("search_files", "Search a website's files for text",
+      "Find which files contain a string, and on which line. Use it to locate "
+      "where something is configured, or which file mentions a domain. Skips "
+      "dependency trees, caches, uploads and binary files, and says so when "
+      "it stopped early rather than pretending it found everything.",
+      {"domain": DOMAIN_ARG,
+       "text": {"type": "string", "maxLength": 200,
+                "description": "The exact string to look for. Not a regular expression."},
+       "path": {"type": "string", "maxLength": 1024,
+                "description": "Directory to search under, relative to the website "
+                               "root. Omit to search the whole site."},
+       "max_matches": {"type": "integer", "minimum": 1, "maximum": 100,
+                       "description": "Defaults to 100."}},
+      required=("domain", "text"))
+def _search_files(ctx: Context, args: dict):
+    website = _website(ctx, args["domain"])
+    try:
+        return file_manager.search_text(
+            website, args["text"], relative_path=args.get("path", ""),
+            max_matches=args.get("max_matches", 100))
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc

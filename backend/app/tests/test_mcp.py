@@ -16,6 +16,7 @@ import pytest
 
 from app.core.permissions import Role
 from app.models.entities import McpToken, User
+from app.services import file_manager
 from app.services import mcp
 # At module scope on purpose. The tools register themselves into mcp.REGISTRY
 # when this is first imported, and several tests below swap that dict for an
@@ -587,3 +588,154 @@ def test_whoami_says_plainly_what_this_token_can_do():
 def test_whoami_never_leaks_the_token_itself():
     answer = mcp.REGISTRY["whoami"].handler(_ctx(), {})
     assert "token" not in str(answer).lower().replace("token_name", "").replace("token_expires_at", "")
+
+
+# --- searching a website's files --------------------------------------------
+
+@pytest.fixture
+def site(tmp_path):
+    """A website root with the shapes a real one has."""
+    root = tmp_path / "site"
+    (root / "wp-content" / "themes").mkdir(parents=True)
+    (root / "node_modules" / "left-pad").mkdir(parents=True)
+    (root / "wp-content" / "uploads" / "2026").mkdir(parents=True)
+    (root / ".git").mkdir()
+
+    (root / "wp-config.php").write_text("<?php\ndefine('DB_NAME', 'shop');\n", encoding="utf-8")
+    (root / "wp-content" / "themes" / "style.css").write_text(
+        "/* shop theme */\nbody{}\n", encoding="utf-8")
+    # The three that must never be walked into or read.
+    (root / "node_modules" / "left-pad" / "index.js").write_text("shop", encoding="utf-8")
+    (root / ".git" / "config").write_text("shop", encoding="utf-8")
+    (root / "wp-content" / "uploads" / "2026" / "note.txt").write_text("shop", encoding="utf-8")
+    (root / "logo.png").write_bytes(b"\x89PNG\r\n" + bytes([0]) + b"shop")
+    (root / "huge.log").write_bytes(b"shop\n" * 200_000)
+
+    return type("W", (), {"root_path": str(root), "domain": "shop.test"})()
+
+
+def test_search_finds_the_file_and_the_line(site):
+    found = file_manager.search_text(site, "DB_NAME")
+    assert [m["path"] for m in found["matches"]] == ["wp-config.php"]
+    assert found["matches"][0]["line"] == 2
+    assert "shop" in found["matches"][0]["text"]
+    assert found["complete"] is True
+
+
+def test_search_never_walks_into_the_directories_that_make_it_useless(site):
+    """node_modules, .git and uploads all contain the word and must not appear.
+
+    Without pruning, one question against a WordPress site reads a dependency
+    tree and a customer's media library, takes minutes, and answers with
+    nothing anybody wanted.
+    """
+    found = file_manager.search_text(site, "shop")
+    paths = {m["path"] for m in found["matches"]}
+    assert not any(p.startswith(("node_modules/", ".git/")) for p in paths), paths
+    assert not any("uploads/" in p for p in paths), paths
+    assert "wp-config.php" in paths
+
+
+def test_a_binary_file_is_skipped_rather_than_pasted_into_the_answer(site):
+    found = file_manager.search_text(site, "shop")
+    assert not any(m["path"] == "logo.png" for m in found["matches"])
+    assert found["skipped_binary"] >= 1
+
+
+def test_a_file_too_large_to_be_a_config_is_skipped(site):
+    """A megabyte log is not where a configuration string lives."""
+    found = file_manager.search_text(site, "shop")
+    assert not any(m["path"] == "huge.log" for m in found["matches"])
+    assert found["skipped_too_large"] >= 1
+
+
+def test_stopping_early_is_reported_rather_than_looking_like_the_whole_answer(site):
+    """"Not found" and "gave up" must not look the same to an assistant."""
+    found = file_manager.search_text(site, "shop", max_matches=1)
+    assert len(found["matches"]) == 1
+    assert found["complete"] is False
+    assert "Stopped" in found["note"]
+
+
+def test_searching_for_nothing_is_refused(site):
+    for bad in ("", "   "):
+        with pytest.raises(ValueError):
+            file_manager.search_text(site, bad)
+
+
+def test_search_cannot_be_pointed_outside_the_website(site):
+    for escape in ("../..", "/etc", "wp-content/../../.."):
+        with pytest.raises(ValueError):
+            file_manager.search_text(site, "shop", relative_path=escape)
+
+
+# --- summarising traffic ----------------------------------------------------
+
+def test_the_summary_counts_rather_than_returning_rows(monkeypatch):
+    """An assistant asked who is hammering a site wants the shape, not 500 rows.
+
+    Handing it the rows spends the operator's tokens on arithmetic and gets
+    ties wrong.
+    """
+    from app.services import waf
+
+    entries = (
+        [("1.2.3.4", "/wp-login.php", 403, "block", "Vietnam")] * 30
+        + [("5.6.7.8", "/", 200, "allow", "Germany")] * 10
+        + [("9.9.9.9", "/", 200, "allow", "Germany")] * 5
+    )
+
+    def fake_parse(domain, line, sequence):
+        index = int(line)
+        ip, path, status, verdict, country = entries[index]
+        return (datetime(2026, 9, 24, 0, index % 60), {
+            "ip": ip, "path": path, "status": status, "verdict": verdict,
+            "country": country, "timestamp": f"2026-09-24T00:00:{index % 60:02d}",
+        })
+
+    monkeypatch.setattr(waf, "_validate_domain", lambda d: d)
+    monkeypatch.setattr(waf, "_read_site_logs",
+                        lambda domains, lines: {"shop.test": "\n".join(str(i) for i in range(len(entries)))})
+    monkeypatch.setattr(waf, "_parse_access_log_line", fake_parse)
+
+    summary = waf.access_summary([type("W", (), {"domain": "shop.test"})()], top=2)
+
+    assert summary["requests"] == 45
+    assert summary["verdicts"] == {"allow": 15, "block": 30}
+    assert summary["top_ips"][0] == {"ip": "1.2.3.4", "requests": 30}
+    assert summary["most_blocked_ips"] == [{"ip": "1.2.3.4", "requests": 30}]
+    assert len(summary["top_ips"]) == 2, "top is respected"
+    assert summary["top_paths"][0]["path"] == "/wp-login.php"
+
+
+def test_the_summary_is_stable_when_counts_tie(monkeypatch):
+    """A summary that reshuffles on ties reads as a change that did not happen."""
+    from app.services import waf
+
+    def fake_parse(domain, line, sequence):
+        return (datetime(2026, 9, 24), {
+            "ip": line, "path": "/", "status": 200, "verdict": "allow",
+            "country": "", "timestamp": "2026-09-24T00:00:00",
+        })
+
+    monkeypatch.setattr(waf, "_validate_domain", lambda d: d)
+    monkeypatch.setattr(waf, "_read_site_logs",
+                        lambda domains, lines: {"a.test": "9.9.9.9\n1.1.1.1\n5.5.5.5"})
+    monkeypatch.setattr(waf, "_parse_access_log_line", fake_parse)
+
+    site = type("W", (), {"domain": "a.test"})()
+    first = waf.access_summary([site])["top_ips"]
+    second = waf.access_summary([site])["top_ips"]
+    assert first == second
+    assert [row["ip"] for row in first] == ["1.1.1.1", "5.5.5.5", "9.9.9.9"]
+
+
+def test_a_site_with_no_log_yet_is_named_not_silently_dropped(monkeypatch):
+    from app.services import waf
+
+    monkeypatch.setattr(waf, "_validate_domain", lambda d: d)
+    monkeypatch.setattr(waf, "_read_site_logs", lambda domains, lines: {"new.test": None})
+
+    summary = waf.access_summary([type("W", (), {"domain": "new.test"})()])
+    assert summary["no_log_yet"] == ["new.test"]
+    assert summary["requests"] == 0

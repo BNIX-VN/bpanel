@@ -236,6 +236,132 @@ def list_files(website: Website, relative_path: str = "") -> List[Dict]:
     return sorted(items, key=lambda entry: (not entry["is_dir"], entry["name"].lower()))
 
 
+# What a search will not walk into, and why each one. These are the
+# directories that make a grep over a WordPress site take minutes and return
+# nothing anybody wanted: dependency trees, caches and the customer's uploads.
+SEARCH_SKIP_DIRS = frozenset({
+    ".git", ".svn", ".hg", "node_modules", "vendor", "__pycache__",
+    ".cache", "cache", "uploads", ".wp-cli", ".npm", ".yarn",
+})
+# Beyond these a search is not answering a question, it is scanning a disk.
+SEARCH_MAX_FILE_BYTES = 512 * 1024
+SEARCH_MAX_FILES = 20_000
+SEARCH_MAX_TOTAL_BYTES = 200 * 1024 * 1024
+SEARCH_MAX_MATCHES = 100
+
+
+def _looks_binary(chunk: bytes) -> bool:
+    """A NUL in the first few KB. Crude, and the same test grep uses."""
+    # chunk is bytes, so iterating gives ints; 0 is the NUL byte.
+    return 0 in chunk
+
+
+def search_text(
+    website: Website,
+    needle: str,
+    *,
+    relative_path: str = "",
+    max_matches: int = SEARCH_MAX_MATCHES,
+) -> Dict:
+    """Find a string in a website's files, and stop before it becomes a scan.
+
+    Written for an assistant looking for where something is configured or
+    which file mentions a domain. Every limit here exists because without it
+    one question could read the whole disk: a WordPress site with its uploads
+    and its vendor tree is hundreds of thousands of files and tens of
+    gigabytes, and the answer is never in any of them.
+
+    Reports what it skipped rather than silently returning less, so the caller
+    can tell "not found" from "gave up".
+    """
+    needle = (needle or "").strip()
+    if not needle:
+        raise ValueError("Nothing to search for")
+    if len(needle) > 200:
+        raise ValueError("Search text is too long")
+
+    base = _safe_path(website, relative_path)
+    if not base.is_dir():
+        raise ValueError("Not a directory")
+
+    wanted = max(1, min(int(max_matches or SEARCH_MAX_MATCHES), SEARCH_MAX_MATCHES))
+    matches: List[Dict] = []
+    files_read = 0
+    bytes_read = 0
+    skipped_binary = 0
+    skipped_large = 0
+    stopped = ""
+
+    for current, directories, filenames in os.walk(base, followlinks=False):
+        # Prune in place: os.walk will not descend into what we remove here,
+        # which is the difference between skipping node_modules and walking it
+        # and discarding the results.
+        directories[:] = sorted(
+            name for name in directories
+            if name not in SEARCH_SKIP_DIRS and not os.path.islink(os.path.join(current, name))
+        )
+        for filename in sorted(filenames):
+            if len(matches) >= wanted:
+                stopped = f"Stopped at {wanted} matches."
+                break
+            if files_read >= SEARCH_MAX_FILES:
+                stopped = f"Stopped after looking at {SEARCH_MAX_FILES} files."
+                break
+            if bytes_read >= SEARCH_MAX_TOTAL_BYTES:
+                stopped = "Stopped after reading 200 MB."
+                break
+
+            item = Path(current) / filename
+            if item.is_symlink() or not item.is_file():
+                continue
+            try:
+                size = item.stat().st_size
+            except OSError:
+                continue
+            if size > SEARCH_MAX_FILE_BYTES:
+                skipped_large += 1
+                continue
+
+            try:
+                raw = item.read_bytes()
+            except OSError:
+                continue
+            files_read += 1
+            bytes_read += len(raw)
+            if _looks_binary(raw[:8192]):
+                skipped_binary += 1
+                continue
+
+            text = raw.decode("utf-8", errors="replace")
+            if needle not in text:
+                continue
+            for number, line in enumerate(text.splitlines(), start=1):
+                if needle in line:
+                    matches.append({
+                        "path": _relative_to_root(website, item),
+                        "line": number,
+                        # One line, trimmed: an assistant needs the location
+                        # and enough context to recognise it, then it reads
+                        # the file if it wants more.
+                        "text": line.strip()[:300],
+                    })
+                    if len(matches) >= wanted:
+                        break
+        if stopped:
+            break
+
+    return {
+        "searched_in": relative_path or "/",
+        "needle": needle,
+        "matches": matches,
+        "files_read": files_read,
+        "skipped_binary": skipped_binary,
+        "skipped_too_large": skipped_large,
+        "note": stopped,
+        "complete": not stopped,
+    }
+
+
 def make_directory(website: Website, parent_path: str, name: str) -> str:
     parent = _safe_path(website, parent_path or "")
     if not parent.exists() or not parent.is_dir():
