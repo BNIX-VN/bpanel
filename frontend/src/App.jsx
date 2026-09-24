@@ -5233,7 +5233,7 @@ Each account is overwritten with what is in its archive.`)) return;
       : 'This creates the first hosted site for the current account.';
     const createOpen = createFormOpen || websites.length === 0;
     return <>
-      <section className="section create-site-section">
+      {createOpen && <section className="section create-site-section">
         <div className="section-title">
           <div>
             <h2>{t(createTitle)}</h2>
@@ -5241,12 +5241,10 @@ Each account is overwritten with what is in its archive.`)) return;
           </div>
           {websites.length > 0 && <button
             type="button"
-            className={createOpen ? 'secondary-light' : ''}
-            aria-expanded={createOpen}
-            onClick={() => setCreateFormOpen(open => !open)}
-          >{createOpen ? <><X size={15}/>{t('Close')}</> : <><Plus size={15}/>{t('New website')}</>}</button>}
+            className="secondary-light"
+            onClick={() => setCreateFormOpen(false)}
+          ><X size={15}/>{t('Close')}</button>}
         </div>
-        {createOpen && <>
         <div className="form-row create-site-row">
           <input value={domain} onChange={e => setDomain(e.target.value)} placeholder="domain.com" />
           <select value={siteType} onChange={e => setSiteType(e.target.value)}>
@@ -5298,12 +5296,14 @@ Each account is overwritten with what is in its archive.`)) return;
           : siteType === 'application'
             ? 'Nginx will forward this domain to the selected application on 127.0.0.1, including WebSocket upgrades.'
             : 'A PHP-FPM vhost will be created with public_html/ folder. Upload your PHP, HTML, or static files via File Manager.')}</p>
-        </>}
-      </section>
+      </section>}
       <section className="section">
         <div className="section-title">
           <div><h2>{t('Website list')}</h2><p className="hint">{searchActive ? t('{n} result(s)', { n: visibleWebsites.length }) : t('{n} website(s)', { n: visibleWebsites.length })}</p></div>
-          <button disabled={!!loading || websiteSearching} onClick={() => loadWebsiteList(websiteSearch, true)}><RefreshCw size={15} className={websiteSearching ? 'spin' : ''}/>{t('Refresh')}</button>
+          <div className="actions">
+            {!createOpen && <button type="button" onClick={() => setCreateFormOpen(true)}><Plus size={15}/>{t('New website')}</button>}
+            <button className="secondary-light" disabled={!!loading || websiteSearching} onClick={() => loadWebsiteList(websiteSearch, true)}><RefreshCw size={15} className={websiteSearching ? 'spin' : ''}/>{t('Refresh')}</button>
+          </div>
         </div>
         <div className="website-search-bar">
           <Search size={16}/>
