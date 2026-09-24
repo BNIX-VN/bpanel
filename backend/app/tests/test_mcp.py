@@ -28,6 +28,7 @@ from app.services import mcp
 from app.services import mcp_tools
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
+HELPER_SCRIPT_MCP = PROJECT_ROOT / "installer" / "files" / "bpanel-helper.sh"
 
 
 # --- fixtures ---------------------------------------------------------------
@@ -1291,3 +1292,83 @@ def test_a_write_through_mcp_records_where_it_came_from(monkeypatch):
     fake = _FakeRequest("198.51.100.7")
     audit.log_action(_Session(), 1, "mcp_tool", "block_ip", "", request=fake)
     assert rows[0][1]["request"] is fake
+
+
+# --- the firewall stores a network, not the string you gave it ---------------
+
+@pytest.mark.parametrize("stored,asked", [
+    ("185.220.101.7/32", "185.220.101.7"),
+    ("185.220.101.7", "185.220.101.7/32"),
+    ("1.2.3.0/24", "1.2.3.0/24"),
+    ("2606:4700::1111/128", "2606:4700::1111"),
+])
+def test_a_rule_is_matched_as_a_network_not_as_text(stored, asked):
+    """Asking to block 185.220.101.7 produces a rule reading 185.220.101.7/32.
+
+    Comparing the two as strings never matched. block_ip therefore never saw
+    what it had already blocked and added a duplicate rule on every call, and
+    unblock_ip said "is not blocked" about an address that was - a confident
+    wrong answer, which is worse than the duplicates.
+    """
+    assert mcp_tools._same_network(stored, asked)
+
+
+@pytest.mark.parametrize("stored,asked", [
+    ("1.2.3.4/32", "1.2.3.5"),
+    ("1.2.3.0/24", "1.2.4.0/24"),
+])
+def test_different_addresses_still_do_not_match(stored, asked):
+    assert not mcp_tools._same_network(stored, asked)
+
+
+def test_blocking_something_already_blocked_is_seen_through_the_suffix(monkeypatch):
+    monkeypatch.setattr(mcp_tools.firewall_service, "rules",
+                        lambda: [{"ip": "8.8.8.8/32", "action": "DENY", "number": 4}])
+    called = []
+    monkeypatch.setattr(mcp_tools.firewall_api, "block_ip",
+                        lambda **kwargs: called.append(kwargs))
+
+    answer = mcp.REGISTRY["block_ip"].handler(
+        mcp.Context(db=_Session(), user=_user(), token=_token(can_write=True),
+                    client_ip="198.51.100.7", request=_FakeRequest("198.51.100.7")),
+        {"ip": "8.8.8.8"})
+    assert answer["already_blocked"] is True and answer["rule_number"] == 4
+    assert called == [], "a duplicate rule per call is how this looked in practice"
+
+
+def test_unblocking_finds_the_rule_despite_the_suffix(monkeypatch):
+    monkeypatch.setattr(mcp_tools.firewall_service, "rules",
+                        lambda: [{"ip": "8.8.8.8/32", "action": "DENY", "number": 6}])
+    removed = []
+    monkeypatch.setattr(mcp_tools.firewall_api, "delete_rule",
+                        lambda number, current_user: removed.append(number))
+
+    answer = mcp.REGISTRY["unblock_ip"].handler(
+        mcp.Context(db=_Session(), user=_user(), token=_token(can_write=True),
+                    request=_FakeRequest("198.51.100.7")),
+        {"ip": "8.8.8.8"})
+    assert removed == [6] and answer["removed_rules"] == [6]
+
+
+# --- the firewall must not close connections it is not blocking --------------
+
+def test_the_kill_step_skips_loopback():
+    """`ss -K dst 127.0.0.1` closes every local connection on the machine.
+
+    Found on .88: an assistant asked to block an address, the rule was added,
+    and the reply never arrived - "Connection reset by peer". The filter chain
+    RETURNs for -i lo before any deny set is read, so a loopback peer is by
+    definition not one the firewall is blocking. But the kill loop tested it
+    against bpanel-block4, which on a live server holds 127.0.0.1 among 186k
+    entries pulled from public blocklists, and killed everything on loopback:
+    MariaDB over TCP, Redis, phpMyAdmin, and the panel's own reply.
+    """
+    helper = HELPER_SCRIPT_MCP.read_text(encoding="utf-8")
+    body = helper.split("firewall_kill_blocked_connections() {")[1].split("\n}\n")[0]
+    assert "127.*" in body and "::1" in body, "loopback peers must be skipped"
+    # The skip has to come before the set is consulted, or it does nothing.
+    # Matched against the code line rather than "ipset test", which also
+    # appears in the comment at the top of the function explaining why testing
+    # peers against sets is the cheap direction.
+    assert body.index("127.*") < body.index('if ipset test "$set"')
+

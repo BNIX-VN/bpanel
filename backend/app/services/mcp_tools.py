@@ -168,6 +168,30 @@ def _list_databases(ctx: Context, args: dict):
     ]}
 
 
+def _same_network(rule_ip: str, wanted: str) -> bool:
+    """Whether a firewall rule is about this address.
+
+    Not a string comparison. The firewall normalises what it stores, so asking
+    it to block 185.220.101.7 produces a rule whose ip reads
+    "185.220.101.7/32" - and comparing the two as text never matches. That
+    made block_ip miss what it had already blocked and add a duplicate rule
+    every single call, and made unblock_ip answer "is not blocked" about an
+    address that was, which is the worse of the two: it is a confident wrong
+    answer rather than a mess.
+    """
+    try:
+        return (ipaddress.ip_network(rule_ip or "", strict=False)
+                == ipaddress.ip_network(wanted or "", strict=False))
+    except ValueError:
+        return (rule_ip or "").strip() == (wanted or "").strip()
+
+
+def _denied_rules(wanted: str) -> list[dict]:
+    return [rule for rule in firewall_service.rules()
+            if (rule.get("action") or "").upper() == "DENY"
+            and _same_network(rule.get("ip") or "", wanted)]
+
+
 # --- backups ----------------------------------------------------------------
 
 @tool("list_backups", "List an account's backups",
@@ -692,12 +716,10 @@ def _block_ip(ctx: Context, args: dict):
 
     # Already blocked is not an error and must not add a second rule: the list
     # fills with duplicates and every one of them has to be removed by hand.
-    existing = firewall_service.rules()
-    for rule in existing:
-        if (rule.get("ip") or "") == wanted and (rule.get("action") or "").upper() == "DENY":
-            return {"ip": wanted, "already_blocked": True,
-                    "rule_number": rule.get("number"),
-                    "note": "Already blocked; nothing was added."}
+    for rule in _denied_rules(wanted):
+        return {"ip": wanted, "already_blocked": True,
+                "rule_number": rule.get("number"),
+                "note": "Already blocked; nothing was added."}
 
     result = firewall_api.block_ip(
         payload=FirewallIpRule(ip=wanted), request=ctx.request, current_user=ctx.user)
@@ -722,9 +744,7 @@ def _unblock_ip(ctx: Context, args: dict):
     wanted = (args["ip"] or "").strip()
     if not wanted:
         raise ToolError("An address is required")
-    matches = [rule for rule in firewall_service.rules()
-               if (rule.get("ip") or "") == wanted
-               and (rule.get("action") or "").upper() == "DENY"]
+    matches = _denied_rules(wanted)
     if not matches:
         raise ToolError(
             f"{wanted} is not blocked. Use list_firewall_rules to see what is."
