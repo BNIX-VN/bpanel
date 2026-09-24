@@ -175,7 +175,7 @@ def test_banned_keeps_only_things_that_look_like_addresses(monkeypatch):
 def test_banned_returns_a_page_and_the_full_count(monkeypatch):
     """The page that shows this must not grow with the list."""
     class _Result:
-        stdout = "\n".join("10.0.0.%d" % n for n in range(1, 21)) + "\n"
+        stdout = "\n".join(f"10.0.0.{n}" for n in range(1, 21)) + "\n"
 
     monkeypatch.setattr(fail2ban.shell, "privileged", lambda *a, **k: _Result())
     page = fail2ban.banned(limit=5, offset=5)
@@ -187,7 +187,7 @@ def test_banned_returns_a_page_and_the_full_count(monkeypatch):
 def test_the_page_size_is_clamped(monkeypatch, limit, expected):
     """A caller asking for everything still gets a bounded response."""
     class _Result:
-        stdout = "\n".join("10.0.0.%d" % n for n in range(1, 10)) + "\n"
+        stdout = "\n".join(f"10.0.0.{n}" for n in range(1, 10)) + "\n"
 
     monkeypatch.setattr(fail2ban.shell, "privileged", lambda *a, **k: _Result())
     assert fail2ban.banned(limit=limit)["limit"] == expected

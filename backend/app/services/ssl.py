@@ -220,7 +220,7 @@ def release_site_certificates(db, domain: str, *, exclude_website_id: int | None
         panel_host = panel_settings.parse_panel_url(panel_settings.configured_panel_url())[1]
         if panel_host:
             keep.add(panel_host.strip().lower())
-    except Exception:  # pragma: no cover - an unset panel URL is normal
+    except Exception:  # noqa: S110  # pragma: no cover - an unset panel URL is normal
         pass
 
     if keep:

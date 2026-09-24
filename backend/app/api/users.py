@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -22,6 +23,7 @@ from app.services import mariadb, nginx, site_users, ssl, storage_quota, teardow
 from app.services.audit import log_action
 
 router = APIRouter(prefix="/users", tags=["users"])
+logger = logging.getLogger("bpanel")
 
 
 def _user_out(user: User, db: Session, *, cached_usage: bool = False) -> dict:
@@ -420,7 +422,8 @@ def suspend_user(user_id: int, request: Request, db: Session = Depends(get_db), 
             try:
                 site_users.lock_linux_user(website.linux_user)
             except Exception:
-                pass
+                logger.warning("Could not lock Linux user %s; it may still log in over SSH/SFTP",
+                               website.linux_user, exc_info=True)
 
     # Sub-accounts share the site user's uid but not its name, so locking the
     # site user above does not touch them. A suspended customer with a working
@@ -465,7 +468,7 @@ def unsuspend_user(user_id: int, request: Request, db: Session = Depends(get_db)
             try:
                 site_users.unlock_linux_user(website.linux_user)
             except Exception:
-                pass
+                logger.warning("Could not unlock Linux user %s", website.linux_user, exc_info=True)
 
     teardown.set_owner_sftp_accounts_locked(db, user.id, False)
 

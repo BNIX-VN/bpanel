@@ -758,7 +758,7 @@ def _geoip_country_reader():
             continue
         try:
             return maxminddb.open_database(str(path))
-        except Exception:
+        except Exception:  # noqa: S112 - try the next database file
             continue
     return None
 
@@ -789,8 +789,8 @@ def _ensure_dbip_country_cache() -> Path | None:
         return None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        request = urllib.request.Request(url, headers={"User-Agent": "BPanel GeoIP updater"})
-        with urllib.request.urlopen(request, timeout=DBIP_DOWNLOAD_TIMEOUT) as response:
+        request = urllib.request.Request(url, headers={"User-Agent": "BPanel GeoIP updater"})  # noqa: S310 - scheme checked above
+        with urllib.request.urlopen(request, timeout=DBIP_DOWNLOAD_TIMEOUT) as response:  # noqa: S310
             if getattr(response, "status", 200) >= 400:
                 return None
             tmp_path = path.with_suffix(path.suffix + ".tmp")

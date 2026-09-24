@@ -20,11 +20,16 @@ import ast
 from pathlib import Path
 
 import pytest
+from webauthn.helpers.exceptions import InvalidAuthenticationResponse
 
 from app.services import passkeys
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 AUTH_API = PROJECT_ROOT / "backend" / "app" / "api" / "auth.py"
+
+# How a refusal arrives: the library's own verdict, or this module's rules
+# on top of it. Anything else - a TypeError, say - is a bug, not a refusal.
+REFUSED = (ValueError, InvalidAuthenticationResponse)
 
 
 # --- what a hostname may be -------------------------------------------------
@@ -246,7 +251,7 @@ def test_a_captured_assertion_cannot_be_replayed():
     _o, first = passkeys.authentication_options([stored], HOST)
     assertion = authenticator.assert_(rp_id=RP, challenge=first, origin=ORIGIN)
     _o, second = passkeys.authentication_options([stored], HOST)
-    with pytest.raises(Exception):
+    with pytest.raises(REFUSED):
         passkeys.verify_authentication(
             credential_json=assertion, challenge=second, stored=stored, scheme="https", host=HOST
         )
@@ -258,7 +263,7 @@ def test_an_assertion_signed_for_another_site_is_refused():
     stored = _Stored(_register(authenticator))
     _o, challenge = passkeys.authentication_options([stored], HOST)
     elsewhere = authenticator.assert_(rp_id=RP, challenge=challenge, origin="https://evil.example.com")
-    with pytest.raises(Exception):
+    with pytest.raises(REFUSED):
         passkeys.verify_authentication(
             credential_json=elsewhere, challenge=challenge, stored=stored, scheme="https", host=HOST
         )
@@ -269,7 +274,7 @@ def test_an_assertion_signed_for_another_hostname_is_refused():
     stored = _Stored(_register(authenticator))
     _o, challenge = passkeys.authentication_options([stored], HOST)
     elsewhere = authenticator.assert_(rp_id="other.example.com", challenge=challenge, origin=ORIGIN)
-    with pytest.raises(Exception):
+    with pytest.raises(REFUSED):
         passkeys.verify_authentication(
             credential_json=elsewhere, challenge=challenge, stored=stored, scheme="https", host=HOST
         )
@@ -284,7 +289,7 @@ def test_a_cloned_key_is_caught_by_the_counter():
     clone.credential_id = authenticator.credential_id
     stored.sign_count = 50
     _o, challenge = passkeys.authentication_options([stored], HOST)
-    with pytest.raises(Exception):
+    with pytest.raises(REFUSED):
         passkeys.verify_authentication(
             credential_json=clone.assert_(rp_id=RP, challenge=challenge, origin=ORIGIN),
             challenge=challenge, stored=stored, scheme="https", host=HOST,

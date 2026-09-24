@@ -89,7 +89,7 @@ def http_flood_config_for_website(website) -> dict:
 
 def http_flood_zone_name(domain: str) -> str:
     safe_domain = _safe_domain(domain)
-    digest = hashlib.sha1(safe_domain.encode("utf-8")).hexdigest()[:12]
+    digest = hashlib.sha1(safe_domain.encode("utf-8"), usedforsecurity=False).hexdigest()[:12]
     return f"bpanel_hf_{digest}"
 
 
@@ -1295,7 +1295,7 @@ def render_vhost(
     resolved_document_root = site_users.document_root(resolved_root, effective_document_root)
     include_path = custom_include_path(safe_domain)
 
-    env = Environment(loader=FileSystemLoader(TEMPLATE_DIR), autoescape=False)
+    env = Environment(loader=FileSystemLoader(TEMPLATE_DIR), autoescape=False)  # noqa: S701 - renders nginx config, not HTML
     template_name = {
         "wordpress": "wordpress.conf.j2",
         "php": "php.conf.j2",

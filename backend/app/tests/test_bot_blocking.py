@@ -65,7 +65,7 @@ def test_a_dollar_sign_cannot_become_an_nginx_variable():
 
 def test_the_list_is_capped():
     with pytest.raises(ValueError):
-        nginx.normalize_blocked_bots(["bot%d" % i for i in range(nginx.MAX_BLOCKED_BOTS + 1)])
+        nginx.normalize_blocked_bots([f"bot{i}" for i in range(nginx.MAX_BLOCKED_BOTS + 1)])
     with pytest.raises(ValueError):
         nginx.normalize_blocked_bots("x" * (nginx.MAX_BOT_NAME_LENGTH + 1))
 

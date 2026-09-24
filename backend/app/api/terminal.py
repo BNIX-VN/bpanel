@@ -338,5 +338,5 @@ async def terminal_websocket(
                 "type": "error",
                 "data": "Server error. Check the panel logs for details."
             })
-        except Exception:
+        except Exception:  # noqa: S110
             pass  # WebSocket already closed

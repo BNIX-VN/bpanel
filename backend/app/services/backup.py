@@ -289,7 +289,7 @@ def list_uploaded_user_backups(username: str | None = None) -> list[str]:
             if username:
                 try:
                     manifest = read_backup_manifest(str(path))
-                except Exception:
+                except Exception:  # noqa: S112 - an unreadable archive is not this user's
                     continue
                 if (manifest.get("user") or {}).get("username") != username:
                     continue
@@ -457,11 +457,11 @@ def _safe_extract_prefix(archive: Path, prefix: str, destination: Path) -> None:
             except TypeError:
                 member_path = (destination / original.name).resolve()
                 if destination != member_path and destination not in member_path.parents:
-                    raise ValueError("Backup archive contains unsafe paths")
+                    raise ValueError("Backup archive contains unsafe paths") from None
                 if original.issym():
                     link_path = (member_path.parent / original.linkname).resolve()
                     if destination != link_path and destination not in link_path.parents:
-                        raise ValueError("Backup archive contains unsafe links")
+                        raise ValueError("Backup archive contains unsafe links") from None
                 tar.extract(original, str(destination))
 
 
@@ -859,7 +859,7 @@ def restore_backup(website: Website, backup_file: str) -> str:
             return tarfile.data_filter(member, dest_path)
 
         try:
-            tar.extractall(path=str(destination), filter=safe_filter)
+            tar.extractall(path=str(destination), filter=safe_filter)  # noqa: S202 - safe_filter ends in tarfile.data_filter
         except TypeError:
             # Older Python (<3.12) without the filter parameter — fall back to
             # manual extraction with the existing safety check.
@@ -1047,7 +1047,7 @@ def upload_to_sftp(
             )
             if host_key_obj is not None:
                 host_keys.add(host, expected_host_key_type or host_key_obj.get_name(), host_key_obj)
-        except Exception:  # pragma: no cover - decoding fallback
+        except Exception:  # noqa: S110  # pragma: no cover - decoding fallback
             pass
         # Even if we could not pre-load the key (e.g. only fingerprint stored),
         # the missing_host_key policy below performs the comparison itself.

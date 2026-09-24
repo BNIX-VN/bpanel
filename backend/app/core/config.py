@@ -1,7 +1,7 @@
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
 
-DEFAULT_SECRET_KEY = "change-this-secret-key"
+DEFAULT_SECRET_KEY = "change-this-secret-key"  # noqa: S105 - a placeholder production refuses to start with
 
 
 class Settings(BaseSettings):

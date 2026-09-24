@@ -52,7 +52,7 @@ def user_exists(db_user: str) -> bool:
     """
     safe = _validate_identifier(db_user)
     result = _run_sql(
-        f"SELECT 1 FROM mysql.user WHERE user = {_quote_sql_string(safe)} LIMIT 1;\n",
+        f"SELECT 1 FROM mysql.user WHERE user = {_quote_sql_string(safe)} LIMIT 1;\n",  # noqa: S608 - validated, then quoted
         check=False,
     )
     return "1" in (result.stdout or "")

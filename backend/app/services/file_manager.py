@@ -514,7 +514,7 @@ def _run_as_site_user(
 
 def _staging_directory() -> Path:
     if os.name != "nt":
-        return Path("/tmp")
+        return Path("/tmp")  # noqa: S108 - bpanel-api runs with PrivateTmp=true
     return Path(tempfile.gettempdir())
 
 
@@ -777,14 +777,14 @@ def copy_entries(
     sources = _transfer_sources(website, paths, "Copying", allow_executable, allow_sensitive)
     destination = _transfer_destination(website, destination_path)
     targets = [destination / source.name for source in sources]
-    for source, target in zip(sources, targets):
+    for source, target in zip(sources, targets, strict=True):
         _assert_transfer_target(source, destination, target, "copy")
         _assert_write_allowed(target, "Copying", allow_executable)
     if quota_check:
         quota_check(_total_size(sources), 0)
 
     copied = []
-    for source, target in zip(sources, targets):
+    for source, target in zip(sources, targets, strict=True):
         if website.linux_user:
             root = Path(website.root_path).resolve()
             _run_as_site_user(
@@ -819,12 +819,12 @@ def move_entries(
     sources = _transfer_sources(website, paths, "Moving", allow_executable, allow_sensitive)
     destination = _transfer_destination(website, destination_path)
     targets = [destination / source.name for source in sources]
-    for source, target in zip(sources, targets):
+    for source, target in zip(sources, targets, strict=True):
         _assert_transfer_target(source, destination, target, "move")
         _assert_write_allowed(target, "Moving", allow_executable)
 
     moved = []
-    for source, target in zip(sources, targets):
+    for source, target in zip(sources, targets, strict=True):
         if website.linux_user:
             root = Path(website.root_path).resolve()
             _run_as_site_user(
@@ -1020,7 +1020,7 @@ def _zip_uncompressed_size(
                     else:
                         raise ValueError("Archive directory conflicts with an existing file")
                 except OSError:
-                    raise ValueError("Archive directory conflicts with an existing file")
+                    raise ValueError("Archive directory conflicts with an existing file") from None
             continue
         if target.exists() and target.is_dir():
             raise ValueError("Archive file conflicts with an existing directory")

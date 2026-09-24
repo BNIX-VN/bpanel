@@ -242,7 +242,7 @@ def create_account(payload: ProvisioningAccountCreate, request: Request, db: Ses
             website.ssl_enabled = True
             website.ssl_mode = "letsencrypt"
             website.ssl_updated_at = datetime.now(UTC)
-        except Exception:
+        except Exception:  # noqa: S110 - the site stands without SSL; ssl_enabled stays False
             pass
 
     db.commit()

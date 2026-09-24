@@ -412,7 +412,7 @@ def _get_website(ctx: Context, args: dict):
     try:
         detail["ssl"] = websites_api.ssl_sources(
             website_id=website.id, db=ctx.db, current_user=ctx.user)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001, S110
         pass
     return detail
 

@@ -112,12 +112,12 @@ def _validate_panel_hostname(value: str | None) -> str | None:
 
 class Token(BaseModel):
     access_token: str
-    token_type: str = "bearer"
+    token_type: str = "bearer"  # noqa: S105 - the OAuth2 token type
 
 
 class LoginResponse(BaseModel):
     access_token: str | None = None
-    token_type: str = "bearer"
+    token_type: str = "bearer"  # noqa: S105 - the OAuth2 token type
     requires_2fa: bool = False
     # Set when this account has a passkey for the hostname being used. The
     # options are the browser's navigator.credentials.get() argument, already

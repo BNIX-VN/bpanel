@@ -63,16 +63,16 @@ def _upload_if_configured(db, schedule: BackupSchedule, archive: str) -> str:
 
     try:
         password = decrypt(target.password) if target.password else None
-    except RuntimeError:
+    except RuntimeError as exc:
         raise RuntimeError(
             "Failed to decrypt SFTP target password; please re-save the target in panel settings"
-        )
+        ) from exc
     try:
         private_key = decrypt(target.private_key) if target.private_key else None
-    except RuntimeError:
+    except RuntimeError as exc:
         raise RuntimeError(
             "Failed to decrypt SFTP target private key; please re-save the target in panel settings"
-        )
+        ) from exc
     result = backup.upload_to_sftp(
         archive,
         remote_name=remote_name,

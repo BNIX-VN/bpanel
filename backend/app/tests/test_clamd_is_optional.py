@@ -144,5 +144,5 @@ def test_the_update_leaves_it_alone_when_scan_on_upload_is_on():
 def test_the_update_routes_the_removal_through_the_panel_account():
     """The helper refuses a direct root call; `|| true` would hide that."""
     text = UPDATE_SCRIPT.read_text(encoding="utf-8")
-    line = next(l for l in text.splitlines() if "clamav-daemon-remove" in l and "sudo" in l)
+    line = next(ln for ln in text.splitlines() if "clamav-daemon-remove" in ln and "sudo" in ln)
     assert "sudo -u bpanel" in line

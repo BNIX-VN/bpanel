@@ -63,7 +63,7 @@ def _cleanup_failed_site(root_path: str, linux_user: str | None, delete_files: b
                 site_users.delete_site_runtime(root_path, linux_user)
             else:
                 wordpress.delete_wordpress(root_path)
-        except Exception:
+        except Exception:  # noqa: S110 - cleanup after a failed create; that error is the one reported
             pass
 
 

@@ -64,7 +64,7 @@ def _sftp_host() -> str:
         )
         if hostname:
             return hostname
-    except Exception:  # noqa: BLE001 - a malformed setting must not break listing
+    except Exception:  # noqa: BLE001, S110 - a malformed setting must not break listing
         pass
     try:
         from app.services import server_network
@@ -72,7 +72,7 @@ def _sftp_host() -> str:
         addresses = server_network.ipv4_addresses()
         if addresses:
             return addresses[0]
-    except Exception:  # noqa: BLE001 - same
+    except Exception:  # noqa: BLE001, S110 - same
         pass
     return ""
 

@@ -68,7 +68,7 @@ INTERNAL_ERROR = -32603
 
 # --- tokens -----------------------------------------------------------------
 
-TOKEN_PREFIX = "bpmcp_"
+TOKEN_PREFIX = "bpmcp_"  # noqa: S105 - a public marker, not a secret
 TOKEN_BYTES = 32
 PREFIX_KEPT = 12
 MAX_TOKENS_PER_USER = 10

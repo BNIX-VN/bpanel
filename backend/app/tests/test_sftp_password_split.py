@@ -199,7 +199,7 @@ def test_the_column_records_when_the_two_were_separated():
     assert hasattr(User, "sftp_password_set_at")
     src = (PROJECT_ROOT / "backend" / "app" / "models" / "entities.py").read_text(encoding="utf-8")
     block = src.split("sftp_password_set_at", 1)[0]
-    assert "NULL is load-bearing" in src, (
+    assert "NULL is load-bearing" in block, (
         "the meaning of NULL is the whole migration story and has to be written down"
     )
 

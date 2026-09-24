@@ -6,7 +6,7 @@ from pathlib import Path
 
 TOKEN_TTL_SECONDS = 60
 PANEL_LOGIN_TTL_SECONDS = 300
-TOKEN_DIR = Path("/tmp/bpanel-phpmyadmin-sso")
+TOKEN_DIR = Path("/tmp/bpanel-phpmyadmin-sso")  # noqa: S108 - bpanel-api runs with PrivateTmp=true
 
 
 def create_phpmyadmin_token(db_user: str, db_password: str, db_name: str) -> str:

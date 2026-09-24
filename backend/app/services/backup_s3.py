@@ -76,7 +76,7 @@ def stored_name(local_name: str, mode: str, *, when: datetime | None = None) -> 
     elif mode == "day_of_week":
         suffix = "-" + WEEKDAYS[when.weekday()]
     elif mode == "week_of_month":
-        suffix = "-W%d" % week_of_month(when.date())
+        suffix = f"-W{week_of_month(when.date())}"
     else:
         suffix = "-" + when.strftime("%Y-%m-%d")
     return f"{stem}{suffix}.tar.gz"

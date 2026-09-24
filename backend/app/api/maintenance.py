@@ -597,7 +597,7 @@ def _save_user_restore_upload(file: UploadFile) -> dict:
         if target:
             try:
                 backup.delete_user_backup(target)
-            except Exception:
+            except Exception:  # noqa: S110 - best-effort cleanup; the 400 below is the answer
                 pass
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     path = backup.user_backup_path(target)
@@ -685,7 +685,7 @@ def delete_backup(website_id: int, backup_file: str, db: Session = Depends(get_d
     try:
         deleted = backup.delete_backup(website.domain, backup_file)
     except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Backup not found")
+        raise HTTPException(status_code=404, detail="Backup not found") from None
     log_action(db, current_user.id, "delete_backup", website.domain, deleted)
     return {"deleted": deleted}
 
@@ -887,7 +887,7 @@ def _run_schedule_now_job(schedule_id: int) -> None:
                 schedule.last_status = "error"
                 schedule.last_message = str(exc)[:4000]
                 db.commit()
-        except Exception:  # pragma: no cover
+        except Exception:  # noqa: S110  # pragma: no cover
             pass
     finally:
         db.close()
@@ -1053,7 +1053,7 @@ def restore_bulk(
                 if not target:
                     raise ValueError("That backup target no longer exists")
                 local_file = backup.stage_remote_backup(
-                    lambda destination: backup_s3.download(target, item.key, destination),
+                    lambda destination, target=target, key=item.key: backup_s3.download(target, key, destination),
                     item.name,
                 )
             outcome = backup.restore_user_backup(local_file, db)

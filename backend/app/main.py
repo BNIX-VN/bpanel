@@ -227,7 +227,7 @@ def serve_spa(full_path: str):
     try:
         requested.relative_to(frontend_dist.resolve())
     except ValueError:
-        raise HTTPException(status_code=404, detail="Not found")
+        raise HTTPException(status_code=404, detail="Not found") from None
     if requested.is_file():
         return FileResponse(requested)
     if full_path.startswith("assets/"):
