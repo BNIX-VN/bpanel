@@ -1103,20 +1103,16 @@ button:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
 }
 
 /* --- language switcher ----------------------------------------------------- */
-/* Sits beside the theme toggle and is built to read as its pair: same height,
-   same border, same hover. A select rather than a flag - a flag names a
-   country, not a language. */
+/* Sits beside the theme toggle and reads as its pair: same height, same
+   border, same hover. Shows the language you get by pressing it, and shows the
+   code rather than a flag - a flag names a country, not a language. */
 .language-toggle{
   display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 8px 0 10px;
   border:1px solid var(--border);border-radius:var(--radius-sm);
   background:var(--surface);color:var(--text-secondary);cursor:pointer
 }
 .language-toggle:hover{border-color:var(--border-hover);color:var(--text-primary)}
-.language-toggle select{
-  height:100%;min-height:0;padding:0 2px;border:0;background:transparent;
-  color:inherit;font-weight:700;font-size:13px;cursor:pointer;box-shadow:none
-}
-.language-toggle select:focus{outline:none}
+.language-toggle span{font-weight:700;font-size:12px;letter-spacing:.04em}
 .language-toggle svg{flex:none}
 
 /* Present for screen readers, absent on screen. */

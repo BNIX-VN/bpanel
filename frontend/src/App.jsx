@@ -170,21 +170,24 @@ function ThemeToggle({ theme, onToggle, className = '' }) {
 }
 
 function LanguageToggle({ language, onChange, className = '' }) {
-  /* A select rather than a flag or a two-letter code. Flags say country, not
-   * language, and "VI" is not a word anybody is looking for - the name of the
-   * language written in that language is. Two entries today, and this does not
-   * have to change when there is a third. */
-  return <label className={`language-toggle ${className}`.trim()}>
-    <Languages size={16} aria-hidden="true"/>
-    <span className="sr-only">{t('Language')}</span>
-    <select
-      value={language}
-      aria-label={t('Language')}
-      onChange={event => onChange(event.target.value)}
-    >
-      {LANGUAGES.map(([code, name]) => <option key={code} value={code}>{name}</option>)}
-    </select>
-  </label>;
+  /* A button, not a select. There are two languages and English is the one the
+   * panel is written in, so the only thing anybody wants is to flip to the
+   * other - a dropdown asks them to open a list to choose between two items.
+   *
+   * It shows the language you get by pressing it, which is how the theme
+   * toggle next to it behaves: in dark mode that button shows a sun. */
+  const next = language === 'vi' ? 'en' : 'vi';
+  const label = next === 'vi' ? 'Chuyển sang Tiếng Việt' : 'Switch to English';
+  return <button
+    type="button"
+    className={`language-toggle ${className}`.trim()}
+    onClick={() => onChange(next)}
+    title={label}
+    aria-label={label}
+  >
+    <Languages size={16}/>
+    <span>{next === 'vi' ? 'VI' : 'EN'}</span>
+  </button>;
 }
 
 function WordPressIcon({ size = 14 }) {
@@ -1158,7 +1161,7 @@ function App() {
     const started = await request('/auth/passkey/register/options', {
       method: 'POST',
       body: JSON.stringify({ current_password: passkeyPassword || null }),
-    }, 'Preparing passkey...');
+    }, t('Preparing passkey...'));
     if (!started?.options) return;
     try {
       const parsed = JSON.parse(started.options);
@@ -1169,7 +1172,7 @@ function App() {
       const done = await request('/auth/passkey/register/verify', {
         method: 'POST',
         body: JSON.stringify({ credential: encodeRegistration(credential), name: passkeyName }),
-      }, 'Saving passkey...');
+      }, t('Saving passkey...'));
       if (done?.id) {
         setNotice(`Added passkey ${done.name}.`);
         setPasskeyPassword('');
@@ -1183,7 +1186,7 @@ function App() {
 
   async function removePasskey(credential) {
     if (!confirm(`Delete passkey ${credential.name}? That device will no longer be able to sign in.`)) return;
-    await request(`/auth/passkey/credentials/${credential.id}`, { method: 'DELETE' }, 'Deleting passkey...');
+    await request(`/auth/passkey/credentials/${credential.id}`, { method: 'DELETE' }, t('Deleting passkey...'));
     await loadPasskeyStatus();
   }
 
@@ -1259,12 +1262,12 @@ function App() {
       const nameData = await request('/panel-settings', {
         method: 'PATCH',
         body: JSON.stringify({ app_name: panelSettingsForm.app_name }),
-      }, 'Saving panel settings...');
+      }, t('Saving panel settings...'));
       if (!nameData) return;
       const sslData = await request('/panel-settings/ssl', {
         method: 'POST',
         body: JSON.stringify({ panel_hostname: hostname, panel_port: port }),
-      }, 'Installing panel SSL...');
+      }, t('Installing panel SSL...'));
       if (sslData) {
         setPanelSettings(sslData);
         setPanelSettingsForm(formFromPanelSettings(sslData));
@@ -1279,7 +1282,7 @@ function App() {
     const data = await request('/panel-settings', {
       method: 'PATCH',
       body: JSON.stringify(payload),
-    }, 'Saving panel settings...');
+    }, t('Saving panel settings...'));
     if (data) {
       setPanelSettings(data);
       setPanelSettingsForm(formFromPanelSettings(data));
@@ -1327,7 +1330,7 @@ function App() {
     const data = await request('/panel-settings/admin-account', {
       method: 'PATCH',
       body: JSON.stringify(payload),
-    }, 'Saving admin account...');
+    }, t('Saving admin account...'));
     if (!data) return;
     if (data.password_changed) {
       clearSession('Password changed. Please log in again.');
@@ -1465,7 +1468,7 @@ function App() {
         scopes: 'provisioning:read,provisioning:write',
         allowed_ips: newApiToken.allowed_ips.trim(),
       }),
-    }, 'Creating API token...');
+    }, t('Creating API token...'));
     if (data) {
       setCreatedApiToken(data.token || '');
       setNotice(t('API token created. Copy it now; it will not be shown again. Paste it into WHMCS Server Access Hash.'));
@@ -1538,7 +1541,7 @@ function App() {
       storage_limit_mb: Number(newUser.storage_limit_mb),
       sftp_accounts_limit: Number(newUser.sftp_accounts_limit || 0),
     };
-    const data = await request('/users', { method: 'POST', body: JSON.stringify(payload) }, 'Creating user...');
+    const data = await request('/users', { method: 'POST', body: JSON.stringify(payload) }, t('Creating user...'));
     if (data) {
       setNotice(`Created user ${data.username}`);
       setNewUser({ username: '', email: '', password: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024, sftp_accounts_limit: 0 });
@@ -1662,7 +1665,7 @@ function App() {
     const data = await request('/packages', {
       method: 'POST',
       body: JSON.stringify({ name: newPackage.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, sftp_accounts_limit: Number(newPackage.sftp_accounts_limit || 0) }),
-    }, 'Creating package...');
+    }, t('Creating package...'));
     if (data) {
       setNotice(`Created package ${data.name}.`);
       setNewPackage({ name: '', website_limit: 5, storage_limit_mb: 1024 });
@@ -1700,7 +1703,7 @@ function App() {
     const data = await request(`/packages/${packageId}`, {
       method: 'PATCH',
       body: JSON.stringify({ name: editingPackageForm.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, sftp_accounts_limit: Number(editingPackageForm.sftp_accounts_limit || 0) }),
-    }, 'Updating package...');
+    }, t('Updating package...'));
     if (data) {
       setNotice(`Updated package ${data.name}.`);
       cancelEditingPackage();
@@ -1744,7 +1747,9 @@ function App() {
     const data = await request(`/users/${user.id}`, { method: 'DELETE' }, `Deleting user ${user.username}...`);
     if (data) {
       const count = data.deleted_websites?.length || 0;
-      setNotice(`Deleted user ${user.username}${count ? ` and ${count} website(s)` : ''}`);
+      setNotice(count
+        ? t('Deleted user {name} and {n} website(s)', { name: user.username, n: count })
+        : t('Deleted user {name}', { name: user.username }));
       await loadUsers();
       await refreshAll();
     }
@@ -1753,7 +1758,7 @@ function App() {
   async function suspendUser(user) {
     if (!user || user.id === currentUser?.id) return;
     const siteCount = websites.filter(w => w.owner_id === user.id).length;
-    if (!confirm(`Suspend user ${user.username}? This will block login, disable all ${siteCount} website(s), lock SFTP, and kill active sessions.`)) return;
+    if (!confirm(t('Suspend user {name}? This will block login, disable all {n} website(s), lock SFTP, and kill active sessions.', { name: user.username, n: siteCount }))) return;
     const data = await request(`/users/${user.id}/suspend`, { method: 'POST' }, `Suspending user ${user.username}...`);
     if (data) {
       await loadUsers();
@@ -1831,7 +1836,7 @@ function App() {
       if (!code) return;
       payload.code = code.trim();
     }
-    const data = await request('/auth/2fa/setup', { method: 'POST', body: JSON.stringify(payload) }, 'Preparing 2FA...');
+    const data = await request('/auth/2fa/setup', { method: 'POST', body: JSON.stringify(payload) }, t('Preparing 2FA...'));
     if (data) {
       setTwoFactorSetup(data);
       setTwoFactorStatus({ enabled: false });
@@ -1839,7 +1844,7 @@ function App() {
   }
 
   async function enableTwoFactorAuth() {
-    const data = await request('/auth/2fa/enable', { method: 'POST', body: JSON.stringify({ code: twoFactorCode }) }, 'Enabling 2FA...');
+    const data = await request('/auth/2fa/enable', { method: 'POST', body: JSON.stringify({ code: twoFactorCode }) }, t('Enabling 2FA...'));
     if (data) {
       setTwoFactorStatus(data);
       setTwoFactorSetup(null);
@@ -1872,7 +1877,7 @@ function App() {
   }
 
   async function loadMalwareScanStatus() {
-    const data = await request('/malware/status', {}, 'Loading scanner status...');
+    const data = await request('/malware/status', {}, t('Loading scanner status...'));
     if (data) setMalwareScanStatus(data);
   }
 
@@ -1897,7 +1902,7 @@ function App() {
 
   async function toggleMalwareScan(enable) {
     if (enable && !malwareScanStatus?.installed) {
-      if (!confirm('The scanner is not installed on this server yet. The panel will install it now (1-2 minutes). Continue?')) return;
+      if (!confirm(t('The scanner is not installed on this server yet. The panel will install it now (1-2 minutes). Continue?'))) return;
     }
     const data = await request('/malware/toggle', {
       method: 'POST',
@@ -1928,7 +1933,7 @@ function App() {
       const e = f[name] || {};
       body[name] = { enabled: !!e.enabled, weekday: Number(e.weekday ?? 6), hour: Number(e.hour ?? 3) };
     }
-    const data = await request('/malware/schedule', { method: 'PUT', body: JSON.stringify(body) }, 'Saving scan schedule...');
+    const data = await request('/malware/schedule', { method: 'PUT', body: JSON.stringify(body) }, t('Saving scan schedule...'));
     if (data) {
       setMalwareSchedules(data);
       setMalwareSchedulesForm(data);
@@ -1938,7 +1943,7 @@ function App() {
   }
 
   async function toggleMalwareRealtime(enabled) {
-    if (enabled && !confirm('Turn on real-time protection? The panel watches website directories and scans new files as they appear. If it is not installed yet, the panel installs it (1-3 minutes).')) return;
+    if (enabled && !confirm(t('Turn on real-time protection? The panel watches website directories and scans new files as they appear. If it is not installed yet, the panel installs it (1-3 minutes).'))) return;
     const data = await request('/malware/realtime', { method: 'POST', body: JSON.stringify({ enabled }) },
       enabled ? 'Turning on real-time protection...' : 'Turning off...');
     if (data) { setMalwareScanStatus(data); setNotice(enabled ? 'Real-time protection is on (level 2).' : 'Real-time protection is off.'); }
@@ -1955,12 +1960,12 @@ function App() {
   }
 
   async function installLmd() {
-    const data = await request('/malware/lmd/install', { method: 'POST' }, 'Installing...');
+    const data = await request('/malware/lmd/install', { method: 'POST' }, t('Installing...'));
     if (data) { setMalwareScanStatus(data); setNotice(t('Installing the scanner in the background (1-3 minutes). Press Refresh for an update.')); }
   }
 
   async function updateMalwareSignatures() {
-    const data = await request('/malware/lmd/update-sigs', { method: 'POST' }, 'Updating signatures...');
+    const data = await request('/malware/lmd/update-sigs', { method: 'POST' }, t('Updating signatures...'));
     if (data) { setMalwareScanStatus(data); setNotice(data.message || 'Signatures updated.'); }
   }
 
@@ -1983,7 +1988,7 @@ function App() {
       const data = await request('/malware/run', {
         method: 'POST',
         body: JSON.stringify(body),
-      }, 'Starting scan...');
+      }, t('Starting scan...'));
       if (data) {
         setScanJob(data);
         await loadMalwareScanJobs();
@@ -2041,7 +2046,7 @@ function App() {
   }
 
   async function startClamavDaemon() {
-    const data = await request('/malware/start-daemon', { method: 'POST' }, 'Starting ClamAV daemon...');
+    const data = await request('/malware/start-daemon', { method: 'POST' }, t('Starting ClamAV daemon...'));
     if (data) {
       setNotice(data.message || 'ClamAV daemon started.');
       await loadMalwareScanStatus();
@@ -2050,7 +2055,7 @@ function App() {
 
   async function assignDomainToUser() {
     if (!assignWebsiteId || !assignUserId) return;
-    const data = await request(`/websites/${assignWebsiteId}`, { method: 'PATCH', body: JSON.stringify({ owner_id: Number(assignUserId) }) }, 'Assigning domain to user...');
+    const data = await request(`/websites/${assignWebsiteId}`, { method: 'PATCH', body: JSON.stringify({ owner_id: Number(assignUserId) }) }, t('Assigning domain to user...'));
     if (data) { setNotice(`Assigned domain ${data.domain} to user ID ${assignUserId}`); await refreshAll(); }
   }
 
@@ -2093,8 +2098,8 @@ function App() {
   }
 
   async function deleteWebsite(id) {
-    if (!confirm('Delete this website including files, vhost, database, and its SSL certificate?')) return;
-    const data = await request(`/websites/${id}?delete_files=true&delete_database=true`, { method: 'DELETE' }, 'Deleting website...');
+    if (!confirm(t('Delete this website including files, vhost, database, and its SSL certificate?'))) return;
+    const data = await request(`/websites/${id}?delete_files=true&delete_database=true`, { method: 'DELETE' }, t('Deleting website...'));
     if (data) refreshAll();
   }
 
@@ -2206,7 +2211,7 @@ function App() {
     else form.append('private_key_text', manualSslForm.private_key);
     if (manualSslFiles.ca_bundle) form.append('ca_bundle', manualSslFiles.ca_bundle);
     else if (manualSslForm.ca_bundle.trim()) form.append('ca_bundle_text', manualSslForm.ca_bundle);
-    const data = await request(`/websites/${selectedWebsiteId}/ssl/manual`, { method: 'POST', body: form }, 'Installing manual SSL...');
+    const data = await request(`/websites/${selectedWebsiteId}/ssl/manual`, { method: 'POST', body: form }, t('Installing manual SSL...'));
     if (data) {
       setManualSslForm({ certificate: '', private_key: '', ca_bundle: '' });
       setManualSslFiles({ certificate: null, private_key: null, ca_bundle: null });
@@ -2230,7 +2235,7 @@ function App() {
     if (wildcardToken.trim()) body.cloudflare_api_token = wildcardToken.trim();
     else if (!cfZone.has_token) { setError(t('Paste a Cloudflare API token (Zone.DNS Edit).')); return; }
     const data = await request(`/websites/${selectedWebsiteId}/ssl/wildcard`,
-      { method: 'POST', body: JSON.stringify(body) }, 'Issuing wildcard certificate via Cloudflare...');
+      { method: 'POST', body: JSON.stringify(body) }, t('Issuing wildcard certificate via Cloudflare...'));
     if (data) {
       setWildcardToken('');
       setNotice(`Wildcard SSL active — *.${data.ssl_source_domain} covers this site.`);
@@ -2254,7 +2259,7 @@ function App() {
     setLogViewer(null);
     setTerminalViewer(null);
     setWebsiteSettingsForm(websiteConfigForm(site));
-    const data = await request(`/websites/${site.id}/nginx-custom`, {}, 'Loading Custom Nginx...');
+    const data = await request(`/websites/${site.id}/nginx-custom`, {}, t('Loading Custom Nginx...'));
     if (data !== null) {
       setNginxCustomEditing({
         id: site.id,
@@ -2303,7 +2308,7 @@ function App() {
         env: env || '',
         web_port: Number(webPort) || null,
       }),
-    }, 'Checking the compose file...');
+    }, t('Checking the compose file...'));
   }
 
   async function checkComposeFile() {
@@ -2348,7 +2353,7 @@ function App() {
           container_port: Number(siteAppEdit.container_port) || null,
         }
       : { env: siteAppEdit.env };
-    const data = await request(`/site-apps/${app.id}`, { method: 'PUT', body: JSON.stringify(patch) }, 'Saving configuration...');
+    const data = await request(`/site-apps/${app.id}`, { method: 'PUT', body: JSON.stringify(patch) }, t('Saving configuration...'));
     if (data) {
       setSiteAppEdit(null);
       setSiteAppEditPlan(null);
@@ -2386,7 +2391,7 @@ function App() {
   }
 
   async function installDockerEngine() {
-    const data = await request('/site-runtimes/docker-install', { method: 'POST' }, 'Installing Docker, this takes a few minutes...');
+    const data = await request('/site-runtimes/docker-install', { method: 'POST' }, t('Installing Docker, this takes a few minutes...'));
     if (data) {
       setNotice(data.message || 'Docker is ready.');
       await loadSiteRuntimes();
@@ -2394,7 +2399,7 @@ function App() {
   }
 
   async function pruneDocker() {
-    const data = await request('/site-runtimes/docker-prune', { method: 'POST' }, 'Pruning unused Docker layers...');
+    const data = await request('/site-runtimes/docker-prune', { method: 'POST' }, t('Pruning unused Docker layers...'));
     if (data) {
       setNotice(data.message || 'Pruned.');
       if (data.output) setSiteAppLog({ name: 'docker prune', log: data.output });
@@ -2434,7 +2439,7 @@ function App() {
       if (siteAppDraft.web_service) body.web_service = siteAppDraft.web_service;
       if (siteAppDraft.container_port) body.container_port = Number(siteAppDraft.container_port);
     }
-    const data = await request('/site-apps', { method: 'POST', body: JSON.stringify(body) }, 'Creating application...');
+    const data = await request('/site-apps', { method: 'POST', body: JSON.stringify(body) }, t('Creating application...'));
     if (data) {
       setNotice(`Application ${data.name} created. Upload your files to ${data.directory} and press Deploy.`);
       setSiteAppDraft(EMPTY_SITE_APP_DRAFT);
@@ -2453,7 +2458,7 @@ function App() {
 
   async function deleteSiteApp(app) {
     if (!confirm(`Delete application ${app.name}? Its files stay on disk; only the runtime is removed.`)) return;
-    const data = await request(`/site-apps/${app.id}`, { method: 'DELETE' }, 'Deleting application...');
+    const data = await request(`/site-apps/${app.id}`, { method: 'DELETE' }, t('Deleting application...'));
     if (data) {
       setNotice(`Deleted ${app.name}.`);
       await loadSiteApps();
@@ -2467,7 +2472,7 @@ function App() {
 
   async function viewFullNginxConfig() {
     if (!nginxCustomEditing) return;
-    const data = await request(`/websites/${nginxCustomEditing.id}/nginx-config`, {}, 'Loading full Nginx config...');
+    const data = await request(`/websites/${nginxCustomEditing.id}/nginx-config`, {}, t('Loading full Nginx config...'));
     if (data !== null) {
       setNginxCustomEditing(prev => ({ ...prev, mode: 'full', customContent: prev?.content || '', content: data?.nginx_config || '' }));
     }
@@ -2479,7 +2484,7 @@ function App() {
     const data = await request(`/websites/${nginxCustomEditing.id}/nginx-custom`, {
       method: 'PUT',
       body: JSON.stringify({ nginx_custom: nginxCustomEditing.content }),
-    }, 'Applying Custom Nginx and reloading...');
+    }, t('Applying Custom Nginx and reloading...'));
     if (data) {
       setNotice(`Updated Custom Nginx for ${nginxCustomEditing.domain}`);
       setNginxCustomEditing(null);
@@ -2537,7 +2542,7 @@ function App() {
     const data = await request(`/websites/${nginxCustomEditing.id}/nginx-custom`, {
       method: 'PUT',
       body: JSON.stringify({ nginx_custom: '' }),
-    }, 'Clearing Custom Nginx...');
+    }, t('Clearing Custom Nginx...'));
     if (data) {
       setNotice(`Cleared Custom Nginx for ${nginxCustomEditing.domain}.`);
       setNginxCustomEditing(null);
@@ -2671,24 +2676,24 @@ function App() {
   }
 
   async function fixWordPressPermissions(id) {
-    const data = await request(`/maintenance/wordpress/${id}/fix-permissions`, { method: 'POST' }, 'Fixing permissions...');
+    const data = await request(`/maintenance/wordpress/${id}/fix-permissions`, { method: 'POST' }, t('Fixing permissions...'));
     if (data?.message) setNotice(data.message);
   }
 
   async function fixNginxSecurity(id) {
-    const data = await request(`/websites/${id}/fix-nginx-security`, { method: 'POST' }, 'Rewriting Nginx security template...');
+    const data = await request(`/websites/${id}/fix-nginx-security`, { method: 'POST' }, t('Rewriting Nginx security template...'));
     if (data?.message) setNotice(data.message);
   }
 
   async function changeDbPassword(id) {
     const newPass = prompt('Enter a new database password, minimum 12 characters:');
     if (!newPass) return;
-    await request(`/databases/${id}/password`, { method: 'POST', body: JSON.stringify({ password: newPass }) }, 'Changing database password...');
+    await request(`/databases/${id}/password`, { method: 'POST', body: JSON.stringify({ password: newPass }) }, t('Changing database password...'));
   }
 
   async function deleteDatabase(id, dbName) {
     if (!confirm(`Delete database "${dbName}"? This action cannot be undone.`)) return;
-    const data = await request(`/databases/${id}`, { method: 'DELETE' }, 'Deleting database...');
+    const data = await request(`/databases/${id}`, { method: 'DELETE' }, t('Deleting database...'));
     if (data) {
       setNotice(`Database "${dbName}" deleted successfully.`);
       await refreshAll();
@@ -2717,7 +2722,7 @@ function App() {
       db_user: dbUser || null,
       db_password: dbPass || null,
     };
-    const data = await request('/databases', { method: 'POST', body: JSON.stringify(body) }, 'Creating database...');
+    const data = await request('/databases', { method: 'POST', body: JSON.stringify(body) }, t('Creating database...'));
     if (data) {
       setCreatedDbInfo({ db_name: data.db_name, db_user: data.db_user, db_password: data.db_password });
       setNewDatabase({ db_name: '', db_user: '', db_password: '' });
@@ -2726,7 +2731,7 @@ function App() {
   }
 
   async function addCron() {
-    const data = await request('/maintenance/cron', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), schedule: cronSchedule, command: cronCommand }) }, 'Adding cron job...');
+    const data = await request('/maintenance/cron', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), schedule: cronSchedule, command: cronCommand }) }, t('Adding cron job...'));
     if (data) {
       if (data.cron_user) setCronUser(data.cron_user);
       setNotice(`Cron job added${data.cron_user ? ` as ${data.cron_user}` : ''}.`);
@@ -2736,7 +2741,7 @@ function App() {
 
   async function listCron() {
     if (!selectedWebsiteId) return;
-    const data = await request(`/maintenance/cron/${selectedWebsiteId}`, {}, 'Loading cron jobs...');
+    const data = await request(`/maintenance/cron/${selectedWebsiteId}`, {}, t('Loading cron jobs...'));
     if (data?.items) setCronItems(data.items);
     if (data?.cron_user) setCronUser(data.cron_user);
     if (data?.php_binary) setCronPhpInfo({ php_binary: data.php_binary, php_version: data.php_version || '' });
@@ -2744,7 +2749,7 @@ function App() {
 
   async function loadSftpAccounts() {
     if (!selectedWebsiteId) { setSftpAccounts([]); return; }
-    const data = await request(`/sftp-accounts?website_id=${Number(selectedWebsiteId)}`, {}, 'Loading SFTP accounts...');
+    const data = await request(`/sftp-accounts?website_id=${Number(selectedWebsiteId)}`, {}, t('Loading SFTP accounts...'));
     if (Array.isArray(data)) setSftpAccounts(data);
     const limits = await request('/sftp-accounts/limits', {}, null);
     if (limits) setSftpLimits(limits);
@@ -2759,7 +2764,7 @@ function App() {
     const data = await request(`/users/${currentUser.id}/sftp-password`, {
       method: 'POST',
       body: JSON.stringify({ password: typed ? typed : null }),
-    }, 'Setting SFTP password...');
+    }, t('Setting SFTP password...'));
     if (data) {
       if (data.password) setOwnSftpPassword(data.password);
       // The session carries sftp_password_set_at, so refresh it to clear the
@@ -2776,7 +2781,7 @@ function App() {
       label: newSftpAccount.label.trim(),
       password: newSftpAccount.password ? newSftpAccount.password : null,
     };
-    const data = await request('/sftp-accounts', { method: 'POST', body: JSON.stringify(body) }, 'Creating SFTP account...');
+    const data = await request('/sftp-accounts', { method: 'POST', body: JSON.stringify(body) }, t('Creating SFTP account...'));
     if (data?.id) {
       setCreatedSftpInfo(data);
       setNewSftpAccount({ label: '', password: '' });
@@ -2790,7 +2795,7 @@ function App() {
     const data = await request(`/sftp-accounts/${account.id}/password`, {
       method: 'POST',
       body: JSON.stringify({ password: typed ? typed : null }),
-    }, 'Updating SFTP password...');
+    }, t('Updating SFTP password...'));
     if (data) {
       if (data.password) setCreatedSftpInfo({ ...account, password: data.password });
       await loadSftpAccounts();
@@ -2799,7 +2804,7 @@ function App() {
 
   async function deleteSftpAccount(account) {
     if (!confirm(`Delete SFTP account ${account.username}? The login stops working immediately. Site files are not touched.`)) return;
-    await request(`/sftp-accounts/${account.id}`, { method: 'DELETE' }, 'Removing SFTP account...');
+    await request(`/sftp-accounts/${account.id}`, { method: 'DELETE' }, t('Removing SFTP account...'));
     if (createdSftpInfo?.id === account.id) setCreatedSftpInfo(null);
     await loadSftpAccounts();
   }
@@ -2808,7 +2813,7 @@ function App() {
     if (!confirm(`Delete cron #${index}?`)) return;
     index = Number(index);
     if (Number.isNaN(index)) return;
-    const data = await request('/maintenance/cron', { method: 'DELETE', body: JSON.stringify({ website_id: Number(selectedWebsiteId), index }) }, 'Deleting cron job...');
+    const data = await request('/maintenance/cron', { method: 'DELETE', body: JSON.stringify({ website_id: Number(selectedWebsiteId), index }) }, t('Deleting cron job...'));
     if (data) {
       if (data.cron_user) setCronUser(data.cron_user);
       setNotice(t('Cron job deleted.'));
@@ -2818,7 +2823,7 @@ function App() {
 
   async function listFiles(path = fileListPath) {
     if (!hasFileTarget()) return;
-    const data = await request(`${fileTargetBase()}?path=${encodeURIComponent(path)}`, {}, 'Loading file list...');
+    const data = await request(`${fileTargetBase()}?path=${encodeURIComponent(path)}`, {}, t('Loading file list...'));
     if (data?.items) { setFiles(data.items); setFileListPath(path); setFileUploadDir(path || ''); setSelectedFilePaths([]); }
   }
 
@@ -2826,7 +2831,7 @@ function App() {
     const targetPath = pathOverride || filePath;
     if (!hasFileTarget() || !targetPath) return;
     if (pathOverride) setFilePath(pathOverride);
-    const data = await request(`${fileTargetBase()}/read?path=${encodeURIComponent(targetPath)}`, {}, 'Reading file...');
+    const data = await request(`${fileTargetBase()}/read?path=${encodeURIComponent(targetPath)}`, {}, t('Reading file...'));
     if (data?.content !== undefined) {
       setFileContent(data.content);
       setEditorCursor({ line: 1, column: 1 });
@@ -2834,7 +2839,7 @@ function App() {
   }
 
   async function writeFile() {
-    const data = await request('/maintenance/files/write', { method: 'POST', body: JSON.stringify({ ...fileTargetBody(), path: filePath, content: fileContent }) }, 'Saving file...');
+    const data = await request('/maintenance/files/write', { method: 'POST', body: JSON.stringify({ ...fileTargetBody(), path: filePath, content: fileContent }) }, t('Saving file...'));
     if (data) { await listFiles(fileListPath); await loadCurrentUser(); }
   }
 
@@ -2875,7 +2880,7 @@ function App() {
     if (!hasFileTarget()) return;
     const name = prompt('Folder name:');
     if (!name) return;
-    const data = await request('/maintenance/files/mkdir', { method: 'POST', body: JSON.stringify({ ...fileTargetBody(), path: fileListPath || '', name }) }, 'Creating folder...');
+    const data = await request('/maintenance/files/mkdir', { method: 'POST', body: JSON.stringify({ ...fileTargetBody(), path: fileListPath || '', name }) }, t('Creating folder...'));
     if (data) await listFiles(fileListPath);
   }
 
@@ -2883,7 +2888,7 @@ function App() {
     if (!hasFileTarget()) return;
     const name = prompt('File name:', 'new-file.txt');
     if (!name) return;
-    const data = await request('/maintenance/files/create', { method: 'POST', body: JSON.stringify({ ...fileTargetBody(), path: fileListPath || '', name }) }, 'Creating file...');
+    const data = await request('/maintenance/files/create', { method: 'POST', body: JSON.stringify({ ...fileTargetBody(), path: fileListPath || '', name }) }, t('Creating file...'));
     if (data) {
       await listFiles(fileListPath);
       const newPath = [fileListPath, name].filter(Boolean).join('/');
@@ -2895,7 +2900,7 @@ function App() {
     if (!item) return;
     const newName = prompt('New name:', item.name);
     if (!newName || newName === item.name) return;
-    const data = await request('/maintenance/files/rename', { method: 'POST', body: JSON.stringify({ ...fileTargetBody(), path: item.path, new_name: newName }) }, 'Renaming...');
+    const data = await request('/maintenance/files/rename', { method: 'POST', body: JSON.stringify({ ...fileTargetBody(), path: item.path, new_name: newName }) }, t('Renaming...'));
     if (data) await listFiles(fileListPath);
   }
 
@@ -2931,14 +2936,14 @@ function App() {
       if (!data) return;
     }
     setChmodTarget(null);
-    setNotice(`Permissions set to ${mode} on ${targets.length} item(s).`);
+    setNotice(t('Permissions set to {mode} on {n} item(s).', { mode, n: targets.length }));
     await listFiles(fileListPath);
   }
 
   async function deleteSelectedFiles() {
     if (selectedFilePaths.length === 0) return;
-    if (!confirm(`Delete ${selectedFilePaths.length} selected item(s)?`)) return;
-    const data = await request('/maintenance/files/delete', { method: 'POST', body: JSON.stringify({ ...fileTargetBody(), paths: selectedFilePaths }) }, 'Deleting selected files...');
+    if (!confirm(t('Delete {n} selected item(s)?', { n: selectedFilePaths.length }))) return;
+    const data = await request('/maintenance/files/delete', { method: 'POST', body: JSON.stringify({ ...fileTargetBody(), paths: selectedFilePaths }) }, t('Deleting selected files...'));
     if (data) { await listFiles(fileListPath); await loadCurrentUser(); }
   }
 
@@ -2971,7 +2976,7 @@ function App() {
     const data = await request('/maintenance/files/archive', {
       method: 'POST',
       body: JSON.stringify({ ...fileTargetBody(), base_path: fileListPath || '', paths: selectedFilePaths, output_name: outputName, format: archiveFormat }),
-    }, 'Creating archive...');
+    }, t('Creating archive...'));
     if (data) { await listFiles(fileListPath); await loadCurrentUser(); }
   }
 
@@ -2983,7 +2988,7 @@ function App() {
     const data = await request('/maintenance/files/extract', {
       method: 'POST',
       body: JSON.stringify({ ...fileTargetBody(), archive_path: path, destination_path: targetPath }),
-    }, 'Starting extraction...');
+    }, t('Starting extraction...'));
     if (data?.job_id) upsertFileJob(data);
     else if (data) { await listFiles(targetPath === '.' ? '' : targetPath); await loadCurrentUser(); }
   }
@@ -3104,7 +3109,7 @@ function App() {
   }
 
   async function createBackup() {
-    const data = await request('/maintenance/backup', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId) }) }, 'Queueing backup...');
+    const data = await request('/maintenance/backup', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId) }) }, t('Queueing backup...'));
     if (data?.job_id) { setNotice(t('Backup queued. It will keep running on the server.')); await loadBackupJobs(); }
     else if (data?.backup_file) { setNotice(`Created backup: ${data.backup_file}`); await listBackups(); }
   }
@@ -3164,7 +3169,7 @@ function App() {
       user_id: Number(selectedBackupUserId),
       target_id: selectedSftpTargetId ? Number(selectedSftpTargetId) : null,
     };
-    const data = await request('/maintenance/user-backup', { method: 'POST', body: JSON.stringify(body) }, 'Queueing full user backup...');
+    const data = await request('/maintenance/user-backup', { method: 'POST', body: JSON.stringify(body) }, t('Queueing full user backup...'));
     if (data?.job_id) { setNotice(t('Full user backup queued. It will keep running on the server.')); await loadBackupJobs(); }
     else if (data?.backup_file) {
       setNotice(data.remote_file ? `Full user backup uploaded: ${data.remote_file}` : `Created full user backup: ${data.backup_file}`);
@@ -3196,7 +3201,7 @@ function App() {
       retention: Number(newBackupSchedule.retention || 7),
       is_active: true,
     };
-    const data = await request('/maintenance/backup-schedules', { method: 'POST', body: JSON.stringify(body) }, 'Saving backup schedule...');
+    const data = await request('/maintenance/backup-schedules', { method: 'POST', body: JSON.stringify(body) }, t('Saving backup schedule...'));
     if (data) {
       setNotice(t('Backup schedule saved.'));
       await loadBackupSchedules();
@@ -3215,7 +3220,7 @@ function App() {
   async function runBackupScheduleNow(item) {
     const who = scheduleUserLabel(item);
     if (!confirm(`Run this schedule now?\n\n${who} - ${item.schedule}\n\nThis is the real thing: the same accounts, the same destination and the same stored name. Only the timing is skipped.`)) return;
-    const data = await request(`/maintenance/backup-schedules/${item.id}/run`, { method: 'POST' }, 'Starting...');
+    const data = await request(`/maintenance/backup-schedules/${item.id}/run`, { method: 'POST' }, t('Starting...'));
     if (data) {
       setNotice(data.detail || 'Running now.');
       await loadBackupSchedules();
@@ -3241,8 +3246,8 @@ function App() {
   }
 
   async function deleteBackupSchedule(id) {
-    if (!confirm('Delete this backup schedule?')) return;
-    const data = await request(`/maintenance/backup-schedules/${id}`, { method: 'DELETE' }, 'Deleting backup schedule...');
+    if (!confirm(t('Delete this backup schedule?'))) return;
+    const data = await request(`/maintenance/backup-schedules/${id}`, { method: 'DELETE' }, t('Deleting backup schedule...'));
     if (data) await loadBackupSchedules();
   }
 
@@ -3280,7 +3285,7 @@ function App() {
   }
 
   async function loadRestoreCatalogue() {
-    const data = await request('/maintenance/restore-catalogue', {}, 'Looking for backups...');
+    const data = await request('/maintenance/restore-catalogue', {}, t('Looking for backups...'));
     if (data) {
       setRestoreCatalogue({ items: data.items || [], errors: data.errors || [], loaded: true });
       setRestorePicks([]);
@@ -3317,8 +3322,8 @@ Each account is overwritten with what is in its archive.`)) return;
   }
 
   async function deleteSftpTarget(id) {
-    if (!confirm('Delete this SFTP target?')) return;
-    const data = await request(`/maintenance/sftp-targets/${id}`, { method: 'DELETE' }, 'Deleting SFTP target...');
+    if (!confirm(t('Delete this SFTP target?'))) return;
+    const data = await request(`/maintenance/sftp-targets/${id}`, { method: 'DELETE' }, t('Deleting SFTP target...'));
     if (data) await loadSftpTargets();
   }
 
@@ -3327,7 +3332,7 @@ Each account is overwritten with what is in its archive.`)) return;
     const data = await request('/maintenance/backup-sftp', {
       method: 'POST',
       body: JSON.stringify({ website_id: Number(selectedWebsiteId), target_id: Number(selectedSftpTargetId) }),
-    }, 'Queueing SFTP backup...');
+    }, t('Queueing SFTP backup...'));
     if (data?.job_id) {
       setNotice(t('SFTP backup queued. It will keep running on the server.'));
       await loadBackupJobs();
@@ -3339,7 +3344,7 @@ Each account is overwritten with what is in its archive.`)) return;
 
   async function restoreBackup(file) {
     if (!confirm(`Restore this backup to the current website?\n${file}`)) return;
-    await request('/maintenance/restore', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), backup_file: file }) }, 'Restoring backup...');
+    await request('/maintenance/restore', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), backup_file: file }) }, t('Restoring backup...'));
   }
 
   async function downloadBackup(file) {
@@ -3377,7 +3382,7 @@ Each account is overwritten with what is in its archive.`)) return;
 
   async function restoreUserBackup(file) {
     if (!confirm(`Restore this full user backup? Missing panel user and websites will be created.\n${file}`)) return;
-    const data = await request('/maintenance/user-restore', { method: 'POST', body: JSON.stringify({ backup_file: file }) }, 'Restoring full user backup...');
+    const data = await request('/maintenance/user-restore', { method: 'POST', body: JSON.stringify({ backup_file: file }) }, t('Restoring full user backup...'));
     if (data) {
       setNotice(`Restored user ${data.username}. Websites: ${data.websites?.length || 0}`);
       await refreshAll();
@@ -3389,7 +3394,7 @@ Each account is overwritten with what is in its archive.`)) return;
 
   async function deleteUserBackup(file) {
     if (!confirm(`Delete this full user backup?\n${file}`)) return;
-    const data = await request(`/maintenance/user-backups?backup_file=${encodeURIComponent(file)}`, { method: 'DELETE' }, 'Deleting full user backup...');
+    const data = await request(`/maintenance/user-backups?backup_file=${encodeURIComponent(file)}`, { method: 'DELETE' }, t('Deleting full user backup...'));
     if (data) {
       await listUserBackups();
       await loadRestoreBackups();
@@ -3398,7 +3403,7 @@ Each account is overwritten with what is in its archive.`)) return;
 
   async function deleteRestoreBackup(file) {
     if (!confirm(`Delete this restore backup?\n${file}`)) return;
-    const data = await request(`/maintenance/user-restore-backups?backup_file=${encodeURIComponent(file)}`, { method: 'DELETE' }, 'Deleting restore backup...');
+    const data = await request(`/maintenance/user-restore-backups?backup_file=${encodeURIComponent(file)}`, { method: 'DELETE' }, t('Deleting restore backup...'));
     if (data) {
       await loadRestoreBackups();
       await listUserBackups();
@@ -3460,7 +3465,7 @@ Each account is overwritten with what is in its archive.`)) return;
 
   async function scanDaBackup(archivePath) {
     setDaScanResult(null);
-    const data = await request('/maintenance/da-import/scan', { method: 'POST', body: JSON.stringify({ archive_path: archivePath }) }, 'Scanning DA backup...');
+    const data = await request('/maintenance/da-import/scan', { method: 'POST', body: JSON.stringify({ archive_path: archivePath }) }, t('Scanning DA backup...'));
     if (data) setDaScanResult(data);
   }
 
@@ -3470,7 +3475,7 @@ Each account is overwritten with what is in its archive.`)) return;
       : 'Import this DirectAdmin backup? This will create users, websites, databases, and nginx configs.';
     if (!confirm(message)) return;
     setDaImportJob(null);
-    const data = await request('/maintenance/da-import/import', { method: 'POST', body: JSON.stringify({ archive_path: archivePath, force }) }, 'Starting DA import...');
+    const data = await request('/maintenance/da-import/import', { method: 'POST', body: JSON.stringify({ archive_path: archivePath, force }) }, t('Starting DA import...'));
     if (data?.job_id) {
       setNotice(t('DA import started. Polling for result...'));
       setDaImportJob(data);
@@ -3493,8 +3498,8 @@ Each account is overwritten with what is in its archive.`)) return;
   }
 
   async function deleteDaBackup(archivePath) {
-    if (!confirm('Delete this DA backup file?')) return;
-    const data = await request('/maintenance/da-import/backups', { method: 'DELETE', body: JSON.stringify({ archive_path: archivePath }) }, 'Deleting DA backup...');
+    if (!confirm(t('Delete this DA backup file?'))) return;
+    const data = await request('/maintenance/da-import/backups', { method: 'DELETE', body: JSON.stringify({ archive_path: archivePath }) }, t('Deleting DA backup...'));
     if (data) { setNotice(`Deleted: ${data.deleted}`); setDaScanResult(null); await listDaBackups(); }
   }
 
@@ -3515,7 +3520,7 @@ Each account is overwritten with what is in its archive.`)) return;
     setDaBulkImportJob(null);
     setDaImportJob(null);
     setDaScanResult(null);
-    const data = await request('/maintenance/da-import/bulk-import', { method: 'POST', body: JSON.stringify({ archive_paths: selectedDaBackups, force }) }, 'Starting bulk restore...');
+    const data = await request('/maintenance/da-import/bulk-import', { method: 'POST', body: JSON.stringify({ archive_paths: selectedDaBackups, force }) }, t('Starting bulk restore...'));
     if (data?.job_id) {
       setNotice(`Bulk restore started: ${data.total} backup(s). Processing sequentially...`);
       setSelectedDaBackups([]);
@@ -3546,7 +3551,7 @@ Each account is overwritten with what is in its archive.`)) return;
     if (selectedDaBackups.length === 0) return;
     if (!confirm(`Delete ${selectedDaBackups.length} selected backup file(s)?`)) return;
     for (const path of selectedDaBackups) {
-      await request('/maintenance/da-import/backups', { method: 'DELETE', body: JSON.stringify({ archive_path: path }) }, 'Deleting...');
+      await request('/maintenance/da-import/backups', { method: 'DELETE', body: JSON.stringify({ archive_path: path }) }, t('Deleting...'));
     }
     setNotice(`Deleted ${selectedDaBackups.length} backup(s).`);
     setSelectedDaBackups([]);
@@ -3590,7 +3595,7 @@ Each account is overwritten with what is in its archive.`)) return;
 
   async function deleteBackup(file) {
     if (!confirm(`Delete this backup?\n${file}`)) return;
-    const data = await request(`/maintenance/backups/${selectedWebsiteId}?backup_file=${encodeURIComponent(file)}`, { method: 'DELETE' }, 'Deleting backup...');
+    const data = await request(`/maintenance/backups/${selectedWebsiteId}?backup_file=${encodeURIComponent(file)}`, { method: 'DELETE' }, t('Deleting backup...'));
     if (data) await listBackups();
   }
 
@@ -3666,7 +3671,7 @@ Each account is overwritten with what is in its archive.`)) return;
     const data = await request('/maintenance/php-tune', {
       method: 'POST',
       body: JSON.stringify({ php_version: version }),
-    }, 'Tuning PHP for this machine...');
+    }, t('Tuning PHP for this machine...'));
     if (data) {
       if (data.plan) setPhpTune(data.plan);
       setPhpTuneApplied(true);
@@ -3675,7 +3680,7 @@ Each account is overwritten with what is in its archive.`)) return;
   }
 
   async function loadPhpConfig(version = phpConfig.php_version) {
-    const data = await request(`/maintenance/php-config?php_version=${encodeURIComponent(version)}`, {}, 'Loading PHP config...');
+    const data = await request(`/maintenance/php-config?php_version=${encodeURIComponent(version)}`, {}, t('Loading PHP config...'));
     if (data) setPhpConfig(prev => ({ ...prev, ...data, php_version: version }));
   }
 
@@ -3683,7 +3688,7 @@ Each account is overwritten with what is in its archive.`)) return;
     const data = await request('/maintenance/php-config', {
       method: 'POST',
       body: JSON.stringify({ ...phpConfig, max_execution_time: Number(phpConfig.max_execution_time), max_input_time: Number(phpConfig.max_input_time), max_input_vars: Number(phpConfig.max_input_vars) }),
-    }, 'Updating PHP config...');
+    }, t('Updating PHP config...'));
     if (data?.target) { setNotice(`Updated PHP config: ${data.target}`); await loadPhpConfig(phpConfig.php_version); }
   }
 
@@ -3692,7 +3697,7 @@ Each account is overwritten with what is in its archive.`)) return;
     const data = await request('/maintenance/php-config/defaults', {
       method: 'POST',
       body: JSON.stringify({ php_version: phpConfig.php_version }),
-    }, 'Restoring PHP defaults...');
+    }, t('Restoring PHP defaults...'));
     if (data?.values) {
       setPhpConfig(prev => ({ ...prev, ...data.values }));
       setNotice(`Restored PHP ${phpConfig.php_version} defaults.`);
@@ -3700,7 +3705,7 @@ Each account is overwritten with what is in its archive.`)) return;
   }
 
   async function loadPhpVersions() {
-    const data = await request('/maintenance/php-versions', {}, 'Loading PHP versions...');
+    const data = await request('/maintenance/php-versions', {}, t('Loading PHP versions...'));
     if (data) setPhpVersions({
       installed: sortPhpVersions(data.installed || []),
       supported: sortPhpVersions(data.supported || []),
@@ -3714,7 +3719,7 @@ Each account is overwritten with what is in its archive.`)) return;
   }
 
   async function loadFirewall() {
-    const data = await request('/firewall/status', {}, 'Loading firewall...');
+    const data = await request('/firewall/status', {}, t('Loading firewall...'));
     if (data) setFirewallStatus(data);
   }
 
@@ -3758,25 +3763,25 @@ Each account is overwritten with what is in its archive.`)) return;
   }
 
   async function enableFirewall() {
-    if (!confirm('Enable the firewall now? SSH, the panel port and 80/443/465/587 stay open automatically.')) return;
-    await runFirewallAction('/firewall/enable', { method: 'POST' }, 'Enabling firewall...');
+    if (!confirm(t('Enable the firewall now? SSH, the panel port and 80/443/465/587 stay open automatically.'))) return;
+    await runFirewallAction('/firewall/enable', { method: 'POST' }, t('Enabling firewall...'));
   }
   async function disableFirewall() {
-    if (!confirm('Disable the firewall? Every port will be reachable again.')) return;
-    await runFirewallAction('/firewall/disable', { method: 'POST' }, 'Disabling firewall...');
+    if (!confirm(t('Disable the firewall? Every port will be reachable again.'))) return;
+    await runFirewallAction('/firewall/disable', { method: 'POST' }, t('Disabling firewall...'));
   }
-  async function reloadFirewall() { await runFirewallAction('/firewall/reload', { method: 'POST' }, 'Reloading firewall...'); }
-  async function openFirewallPort() { await runFirewallAction('/firewall/allow-port', { method: 'POST', body: JSON.stringify({ port: firewallPort, protocol: firewallProtocol }) }, 'Opening port...'); }
-  async function allowFirewallIp() { await runFirewallAction('/firewall/allow-ip', { method: 'POST', body: JSON.stringify({ ip: firewallAllowIp, port: firewallAllowPort || null, protocol: firewallAllowProtocol }) }, 'Allowing IP...'); }
+  async function reloadFirewall() { await runFirewallAction('/firewall/reload', { method: 'POST' }, t('Reloading firewall...')); }
+  async function openFirewallPort() { await runFirewallAction('/firewall/allow-port', { method: 'POST', body: JSON.stringify({ port: firewallPort, protocol: firewallProtocol }) }, t('Opening port...')); }
+  async function allowFirewallIp() { await runFirewallAction('/firewall/allow-ip', { method: 'POST', body: JSON.stringify({ ip: firewallAllowIp, port: firewallAllowPort || null, protocol: firewallAllowProtocol }) }, t('Allowing IP...')); }
   async function blockFirewallIp() {
     if (!confirm(`Block ${firewallBlockIp || 'this IP'}?`)) return;
-    await runFirewallAction('/firewall/block-ip', { method: 'POST', body: JSON.stringify({ ip: firewallBlockIp, port: firewallBlockPort || null, protocol: firewallBlockProtocol }) }, 'Blocking IP...');
+    await runFirewallAction('/firewall/block-ip', { method: 'POST', body: JSON.stringify({ ip: firewallBlockIp, port: firewallBlockPort || null, protocol: firewallBlockProtocol }) }, t('Blocking IP...'));
   }
   async function deleteFirewallRule(numberOverride = firewallDeleteNumber) {
     const ruleNumber = String(numberOverride || '').trim();
     if (!ruleNumber) return;
     if (!confirm(`Delete firewall rule #${ruleNumber}?`)) return;
-    await runFirewallAction(`/firewall/rules/${encodeURIComponent(ruleNumber)}`, { method: 'DELETE' }, 'Deleting rule...');
+    await runFirewallAction(`/firewall/rules/${encodeURIComponent(ruleNumber)}`, { method: 'DELETE' }, t('Deleting rule...'));
     setFirewallDeleteNumber('');
   }
 
@@ -3794,14 +3799,14 @@ Each account is overwritten with what is in its archive.`)) return;
   }
 
   async function loadFirewallBlocklists() {
-    const data = await request('/firewall/blocklists', {}, 'Loading IP blocklists...');
+    const data = await request('/firewall/blocklists', {}, t('Loading IP blocklists...'));
     if (data) setFirewallBlocklists(data);
   }
 
   async function addFirewallBlocklistUrl() {
     const url = firewallBlocklistUrl.trim();
     if (!url) return;
-    const data = await request('/firewall/blocklists', { method: 'POST', body: JSON.stringify({ url }) }, 'Adding IP blocklist URL...');
+    const data = await request('/firewall/blocklists', { method: 'POST', body: JSON.stringify({ url }) }, t('Adding IP blocklist URL...'));
     if (data) {
       setNotice((data.stdout || data.stderr || 'IP blocklist URL added.').trim());
       setFirewallBlocklistUrl('');
@@ -3811,7 +3816,7 @@ Each account is overwritten with what is in its archive.`)) return;
 
   async function deleteFirewallBlocklistUrl(url) {
     if (!confirm(`Delete blocklist URL?\n${url}`)) return;
-    const data = await request('/firewall/blocklists/delete', { method: 'POST', body: JSON.stringify({ url }) }, 'Deleting IP blocklist URL...');
+    const data = await request('/firewall/blocklists/delete', { method: 'POST', body: JSON.stringify({ url }) }, t('Deleting IP blocklist URL...'));
     if (data) {
       setNotice((data.stdout || data.stderr || 'IP blocklist URL removed.').trim());
       await loadFirewallBlocklists();
@@ -3819,7 +3824,7 @@ Each account is overwritten with what is in its archive.`)) return;
   }
 
   async function updateFirewallBlocklistsNow() {
-    const data = await request('/firewall/blocklists/update', { method: 'POST' }, 'Refreshing IP blocklists...');
+    const data = await request('/firewall/blocklists/update', { method: 'POST' }, t('Refreshing IP blocklists...'));
     if (data) {
       setNotice((data.stdout || data.stderr || 'IP blocklists refreshed.').trim());
       await loadFirewall();
@@ -3828,7 +3833,7 @@ Each account is overwritten with what is in its archive.`)) return;
   }
 
   async function loadWafRules() {
-    const data = await request('/waf/rules', {}, 'Loading WAF rules...');
+    const data = await request('/waf/rules', {}, t('Loading WAF rules...'));
     if (data) {
       setWafRules(data);
       const firstWebsiteId = selectedWafWebsiteId || selectedWebsiteId || websites[0]?.id || '';
@@ -3865,7 +3870,7 @@ Each account is overwritten with what is in its archive.`)) return;
     const data = await request(`/waf/websites/${selectedWafWebsiteId}/bots`, {
       method: 'PUT',
       body: JSON.stringify({ blocked_bots: siteBotText }),
-    }, 'Saving blocked bots...');
+    }, t('Saving blocked bots...'));
     if (data) {
       setSiteBotText((data.blocked_bots || []).join('\n'));
       setNotice(data.message || 'Blocked bots saved.');
@@ -3887,7 +3892,7 @@ Each account is overwritten with what is in its archive.`)) return;
   }
 
   async function loadBotBlocks() {
-    const data = await request('/waf/bots', {}, 'Loading blocked bots...');
+    const data = await request('/waf/bots', {}, t('Loading blocked bots...'));
     if (data) {
       setBotBlocks(data);
       setGlobalBots(data.global_blocked_bots || []);
@@ -3898,7 +3903,7 @@ Each account is overwritten with what is in its archive.`)) return;
     const data = await request('/waf/bots/global', {
       method: 'PUT',
       body: JSON.stringify({ blocked_bots: nextList.join('\n') }),
-    }, 'Saving global bad bots...');
+    }, t('Saving global bad bots...'));
     if (data) {
       setGlobalBots(data.global_blocked_bots || []);
       setNotice(data.failed?.length
@@ -3963,7 +3968,7 @@ Each account is overwritten with what is in its archive.`)) return;
     const data = await request(`/waf/websites/${selectedWafWebsiteId}`, {
       method: 'PUT',
       body: JSON.stringify({ enabled_rule_ids: wafSiteConfig.enabled_rule_ids || [], custom_rules: wafCustomRules }),
-    }, 'Saving website WAF rules...');
+    }, t('Saving website WAF rules...'));
     if (data) {
       setWafSiteConfig(data);
       setWafCustomRules(data.custom_rules || '');
@@ -3978,7 +3983,7 @@ Each account is overwritten with what is in its archive.`)) return;
     const data = await request(`/websites/${selectedWafWebsiteId}/http-flood`, {
       method: 'PATCH',
       body: JSON.stringify({ http_flood_enabled: !!httpFloodForm.http_flood_enabled, ...config }),
-    }, 'Saving HTTP Flood settings...');
+    }, t('Saving HTTP Flood settings...'));
     if (data) {
       setNotice(`HTTP Flood settings saved for ${data.domain}.`);
       await refreshAll();
@@ -4016,7 +4021,7 @@ Each account is overwritten with what is in its archive.`)) return;
     const params = new URLSearchParams();
     if (wafAccessLogFilters.websiteId) params.set('website_id', wafAccessLogFilters.websiteId);
     const suffix = params.toString() ? `?${params.toString()}` : '';
-    const data = await request(`/waf/access-logs${suffix}`, { method: 'DELETE' }, 'Clearing access logs...');
+    const data = await request(`/waf/access-logs${suffix}`, { method: 'DELETE' }, t('Clearing access logs...'));
     if (data) {
       setNotice(data.message || 'Access logs cleared.');
       await loadWafAccessLogs(wafAccessLogFilters, false);
@@ -4043,7 +4048,7 @@ Each account is overwritten with what is in its archive.`)) return;
   }
 
   async function loadUpdates(force = false) {
-    const data = await request(`/updates/status${force ? '?refresh=true' : ''}`, {}, 'Loading update status...');
+    const data = await request(`/updates/status${force ? '?refresh=true' : ''}`, {}, t('Loading update status...'));
     if (data) setUpdatesStatus(data);
   }
 
@@ -4053,24 +4058,24 @@ Each account is overwritten with what is in its archive.`)) return;
   }
 
   async function runOsUpdate() {
-    if (!confirm('Run apt-get update && apt-get upgrade now?')) return;
+    if (!confirm(t('Run apt-get update && apt-get upgrade now?'))) return;
     setOsUpdating(true);
-    const data = await request('/updates/os/run', { method: 'POST' }, 'Updating OS packages...');
+    const data = await request('/updates/os/run', { method: 'POST' }, t('Updating OS packages...'));
     setOsUpdating(false);
     if (data) { setNotice((data.stdout || data.stderr || 'OS update completed.').trim()); if (showUpdateLog) await loadUpdates(); }
   }
 
   async function saveOsAutoUpdate() {
-    const data = await request('/updates/os/auto', { method: 'POST', body: JSON.stringify(osAutoUpdate) }, 'Saving OS auto update...');
+    const data = await request('/updates/os/auto', { method: 'POST', body: JSON.stringify(osAutoUpdate) }, t('Saving OS auto update...'));
     if (data) { setNotice((data.stdout || data.stderr || 'OS auto update saved.').trim()); if (showUpdateLog) await loadUpdates(); }
   }
 
   async function runPanelUpdate() {
-    if (!confirm('Update BPanel from GitHub now? The API may restart and this page will reload when done.')) return;
+    if (!confirm(t('Update BPanel from GitHub now? The API may restart and this page will reload when done.'))) return;
     setPanelUpdating(true);
     setShowUpdateLog(true);
     setPanelUpdateLog([]);
-    const data = await request('/updates/panel/run', { method: 'POST' }, 'Updating BPanel...');
+    const data = await request('/updates/panel/run', { method: 'POST' }, t('Updating BPanel...'));
     if (!data) {
       setPanelUpdating(false);
       return;
@@ -4385,7 +4390,7 @@ Each account is overwritten with what is in its archive.`)) return;
     >
       <option value="">-- Select website or application --</option>
       {websites.map(site => <option key={`site-${site.id}`} value={site.id}>{site.domain}</option>)}
-      {siteApps.items.map(app => <option key={`app-${app.id}`} value={`app:${app.id}`}>App: {app.name}</option>)}
+      {siteApps.items.map(app => <option key={`app-${app.id}`} value={`app:${app.id}`}>{t('App:')} {app.name}</option>)}
     </select>;
   }
 
@@ -4445,7 +4450,11 @@ Each account is overwritten with what is in its archive.`)) return;
   }
 
   function EmptyState({ icon: Icon = AlertCircle, message = 'No data yet' }) {
-    return <div className="empty-state"><Icon size={40} /><p>{message}</p></div>;
+    /* Translated here rather than at each call site. Several callers pass a
+     * ternary - message={searching ? 'No matches.' : 'None yet.'} - and a
+     * wrapper looking for message="..." cannot see inside one. Doing it here
+     * covers every caller, including the ones written tomorrow. */
+    return <div className="empty-state"><Icon size={40} /><p>{t(message)}</p></div>;
   }
 
   function formatBytes(value) {
@@ -4607,11 +4616,11 @@ Each account is overwritten with what is in its archive.`)) return;
           </div>
           <div className="dash-tiles">
             {group.tiles.map(([key, label, Icon, description]) => (
-              <button className="dash-tile" key={key} onClick={() => navigateToPage(key)} title={description}>
+              <button className="dash-tile" key={key} onClick={() => navigateToPage(key)} title={t(description)}>
                 <span className="dash-tile-icon"><Icon size={34}/></span>
                 <span className="dash-tile-text">
-                  <strong>{label}</strong>
-                  <span>{description}</span>
+                  <strong>{t(label)}</strong>
+                  <span>{t(description)}</span>
                 </span>
               </button>
             ))}
@@ -4655,8 +4664,7 @@ Each account is overwritten with what is in its archive.`)) return;
         <div>
           <h2>{t('Addons')}</h2>
           <p className="hint">
-            The parts that are not in a default install. Add what you need, remove what you do not —
-            removing turns the feature off and deletes nothing it created.
+            {t('The parts that are not in a default install. Add what you need, remove what you do not — removing turns the feature off and deletes nothing it created.')}
           </p>
         </div>
         <button className="secondary-light" disabled={!!loading} onClick={loadAddons}><RefreshCw size={14}/>{t('Refresh')}</button>
@@ -4664,19 +4672,19 @@ Each account is overwritten with what is in its archive.`)) return;
       <div className="addon-list">
         {addons.items.map(addon => <div className={`addon-card ${addon.installed ? 'installed' : ''}`} key={addon.slug}>
           <div className="addon-head">
-            <strong>{addon.name}</strong>
+            <strong>{t(addon.name)}</strong>
             <code>v{addon.installed ? (addon.installed_version || addon.version) : addon.version}</code>
             <span className={`badge ${addon.installed ? 'ok' : ''}`}>{addon.installed ? 'Installed' : 'Not installed'}</span>
             {addon.installed && addon.installed_version && addon.installed_version !== addon.version
               && <span className="badge">v{addon.version} available</span>}
           </div>
-          <p className="addon-summary">{addon.summary}</p>
+          <p className="addon-summary">{t(addon.summary)}</p>
           {addon.details?.length > 0 && <ul className="addon-details">
-            {addon.details.map((line, index) => <li key={index}>{line}</li>)}
+            {addon.details.map((line, index) => <li key={index}>{t(line)}</li>)}
           </ul>}
           {addon.notes?.length > 0 && <div className="addon-notes">
             <strong><AlertCircle size={13}/>{t('Worth knowing first')}</strong>
-            <ul>{addon.notes.map((line, index) => <li key={index}>{line}</li>)}</ul>
+            <ul>{addon.notes.map((line, index) => <li key={index}>{t(line)}</li>)}</ul>
           </div>}
           {addons.can_manage && <div className="addon-actions">
             {addon.installed
@@ -4703,9 +4711,8 @@ Each account is overwritten with what is in its archive.`)) return;
           <div>
             <h2>{t('Applications')}</h2>
             <p className="hint">
-              Each application runs on its own port under its own systemd unit. Point a website at one by setting its
-              mode to <strong>{t('Application')}</strong>.
-              {siteApps.limit > 0 && <> Using {siteApps.used} of {siteApps.limit} allowed.</>}
+              {t('Each application runs on its own port under its own systemd unit. Point a website at one by setting its mode to')} <strong>{t('Application')}</strong>.
+              {siteApps.limit > 0 && <> {t('Using {used} of {limit} allowed.', { used: siteApps.used, limit: siteApps.limit })}</>}
             </p>
           </div>
           <button disabled={!!loading} onClick={() => { loadSiteApps(); loadSiteRuntimes(); }}><RefreshCw size={14}/>{t('Refresh')}</button>
@@ -4830,8 +4837,8 @@ Each account is overwritten with what is in its archive.`)) return;
           </div>
           {composePlan && <div className={`compose-report ${composePlan.ok ? 'ok' : 'bad'}`}>
             {composePlan.ok
-              ? <p><Check size={14}/> {composePlan.services.length} service(s) will run. <strong>{composePlan.web_service}</strong> serves the domain.</p>
-              : <p><AlertCircle size={14}/> {composePlan.issues.length} thing(s) to fix before importing:</p>}
+              ? <p><Check size={14}/> {t('{n} service(s) will run.', { n: composePlan.services.length })} <strong>{composePlan.web_service}</strong> {t('serves the domain.')}</p>
+              : <p><AlertCircle size={14}/> {t('{n} thing(s) to fix before importing:', { n: composePlan.issues.length })}</p>}
             {composePlan.issues.length > 0 && <ul>
               {composePlan.issues.map((issue, index) => <li key={index}>
                 {issue.service && <code>{issue.service}</code>} {issue.message}
@@ -4849,13 +4856,13 @@ Each account is overwritten with what is in its archive.`)) return;
             </ul>}
           </div>}
         </div>}
-        {atLimit && <p className="hint">This package allows {siteApps.limit} application(s). Delete one to install another.</p>}
-        {kindHint && <p className="hint site-apps-note">{kindHint} Containers publish on <code>127.0.0.1</code> only, run as your own user with no capabilities, and are capped at the memory shown. Images come from {(siteRuntimes.allowed_registries || []).join(', ') || 'the allowed registries'}.</p>}
+        {atLimit && <p className="hint">{t('This package allows {n} application(s). Delete one to install another.', { n: siteApps.limit })}</p>}
+        {kindHint && <p className="hint site-apps-note">{kindHint} {t('Containers publish on 127.0.0.1 only, run as your own user with no capabilities, and are capped at the memory shown.')} {t('Images come from {list}.', { list: (siteRuntimes.allowed_registries || []).join(', ') || t('the allowed registries') })}</p>}
       </section>
 
       <section className="section">
         <div className="section-title">
-          <div><h2>{t('Installed')}</h2><p className="hint">{siteApps.items.length} application(s)</p></div>
+          <div><h2>{t('Installed')}</h2><p className="hint">{t('{n} application(s)', { n: siteApps.items.length })}</p></div>
         </div>
         {siteApps.items.length === 0 && <EmptyState icon={Server} message={t('No applications yet. Install one above.')} />}
         <div className="site-app-list">
@@ -4891,7 +4898,7 @@ Each account is overwritten with what is in its archive.`)) return;
                     disabled={!!loading}
                     onBlur={e => {
                       const next = Number(e.target.value);
-                      if (next && next !== app.port) updateSiteApp(app, { port: next }, 'Moving application port...');
+                      if (next && next !== app.port) updateSiteApp(app, { port: next }, t('Moving application port...'));
                     }}
                   />
                 </label>
@@ -4905,7 +4912,7 @@ Each account is overwritten with what is in its archive.`)) return;
                     disabled={!!loading}
                     onBlur={e => {
                       const next = Number(e.target.value);
-                      if (next && next !== app.memory_limit_mb) updateSiteApp(app, { memory_limit_mb: next }, 'Applying the new memory limit...');
+                      if (next && next !== app.memory_limit_mb) updateSiteApp(app, { memory_limit_mb: next }, t('Applying the new memory limit...'));
                     }}
                   />
                 </label>
@@ -4916,7 +4923,7 @@ Each account is overwritten with what is in its archive.`)) return;
                     disabled={!!loading}
                     onBlur={e => {
                       const next = e.target.value.trim();
-                      if (next && next !== app.cpu_limit) updateSiteApp(app, { cpu_limit: next }, 'Applying the new CPU limit...');
+                      if (next && next !== app.cpu_limit) updateSiteApp(app, { cpu_limit: next }, t('Applying the new CPU limit...'));
                     }}
                   />
                 </label>}
@@ -4981,8 +4988,8 @@ Each account is overwritten with what is in its archive.`)) return;
               </div>
               {siteAppEditPlan && <div className={`compose-report ${siteAppEditPlan.ok ? 'ok' : 'bad'}`}>
                 {siteAppEditPlan.ok
-                  ? <p><Check size={14}/> {siteAppEditPlan.services.length} service(s) will run. <strong>{siteAppEditPlan.web_service}</strong> serves the domain.</p>
-                  : <p><AlertCircle size={14}/> {siteAppEditPlan.issues.length} thing(s) to fix:</p>}
+                  ? <p><Check size={14}/> {t('{n} service(s) will run.', { n: siteAppEditPlan.services.length })} <strong>{siteAppEditPlan.web_service}</strong> {t('serves the domain.')}</p>
+                  : <p><AlertCircle size={14}/> {t('{n} thing(s) to fix:', { n: siteAppEditPlan.issues.length })}</p>}
                 {siteAppEditPlan.issues.length > 0 && <ul>
                   {siteAppEditPlan.issues.map((issue, index) => <li key={index}>
                     {issue.service && <code>{issue.service}</code>} {issue.message}
@@ -5074,7 +5081,7 @@ Each account is overwritten with what is in its archive.`)) return;
       {!fullConfig && <div className="site-aliases settings-domain-manager">
         <div className="domain-manager-head">
           <h3>{t('Domains')}</h3>
-          <p className="hint">Alias serves the same app. Redirect sends visitors to {nginxCustomEditing.domain}.</p>
+          <p className="hint">{t('Alias serves the same app. Redirect sends visitors to {domain}.', { domain: nginxCustomEditing.domain })}</p>
         </div>
         <div className="alias-list">
           <span className="alias-chip primary-domain"><Globe size={12}/>{nginxCustomEditing.domain}<span>{t('Main')}</span></span>
@@ -5131,7 +5138,7 @@ Each account is overwritten with what is in its archive.`)) return;
     return <section className="section nginx-modal inline-nginx-editor wordpress-install-modal">
       <div className="section-title">
         <div className="nginx-config-title">
-          <h2>Install WordPress - {wordpressInstaller.domain}</h2>
+          <h2>{t('Install WordPress -')} {wordpressInstaller.domain}</h2>
           <p className="hint">PHP {wordpressInstaller.php_version || '8.4'}</p>
         </div>
         <button className="secondary-light" onClick={() => setWordpressInstaller(null)}><X size={14}/>{t('Close')}</button>
@@ -5170,7 +5177,7 @@ Each account is overwritten with what is in its archive.`)) return;
     if (!terminalViewer) return null;
     return <section className="section nginx-modal terminal-modal">
       <div className="section-title">
-        <h2>Terminal - {terminalViewer.domain}</h2>
+        <h2>{t('Terminal -')} {terminalViewer.domain}</h2>
         <button className="secondary-light" onClick={() => setTerminalViewer(null)}><X size={14}/>{t('Close')}</button>
       </div>
       <div style={{ height: '500px', marginTop: '8px' }}>
@@ -5184,7 +5191,7 @@ Each account is overwritten with what is in its archive.`)) return;
     return <section className="section nginx-modal log-viewer">
       <div className="section-title">
         <div className="nginx-config-title">
-          <h2>Nginx logs - {logViewer.domain}</h2>
+          <h2>{t('Nginx logs -')} {logViewer.domain}</h2>
           <p className="hint">{logViewer.path || `/var/log/nginx/${logViewer.domain}.${logViewer.kind}.log`}</p>
         </div>
         <button className="secondary-light" onClick={() => setLogViewer(null)}><X size={14}/>{t('Close')}</button>
@@ -5273,7 +5280,7 @@ Each account is overwritten with what is in its archive.`)) return;
       </section>
       <section className="section">
         <div className="section-title">
-          <div><h2>{t('Website list')}</h2><p className="hint">{searchActive ? `${visibleWebsites.length} result(s)` : `${visibleWebsites.length} website(s)`}</p></div>
+          <div><h2>{t('Website list')}</h2><p className="hint">{searchActive ? t('{n} result(s)', { n: visibleWebsites.length }) : t('{n} website(s)', { n: visibleWebsites.length })}</p></div>
           <button disabled={!!loading || websiteSearching} onClick={() => loadWebsiteList(websiteSearch, true)}><RefreshCw size={15} className={websiteSearching ? 'spin' : ''}/>{t('Refresh')}</button>
         </div>
         <div className="website-search-bar">
@@ -5358,7 +5365,7 @@ Each account is overwritten with what is in its archive.`)) return;
       </>}
       {sslMode === 'wildcard' && <div className="ssl-sub-form">
         <p className="hint">{t('Issues')}<code>{cfZone.zone ? `${cfZone.zone} + *.${cfZone.zone}` : 'zone + *.zone'}</code> over
-          Cloudflare DNS. Needs an API token with <strong>Zone → DNS → Edit</strong> for the zone.
+          Cloudflare DNS. Needs an API token with <strong>{t('Zone → DNS → Edit')}</strong> for the zone.
         </p>
         {cfZone.has_token
           ? <p className="hint">✓ Token saved for <strong>{cfZone.zone}</strong>. Leave the field blank to reuse it.</p>
@@ -5479,9 +5486,7 @@ Each account is overwritten with what is in its archive.`)) return;
           <label>{t('Reaches')}</label><span>every website on this account</span>
         </div>
         {!currentUser?.sftp_password_set_at && <p className="hint" style={{color:'var(--red)'}}>
-          This login still uses your panel password. Anyone who guesses it over SFTP
-          is also in the panel. Set a separate password — your panel password will
-          stop working for SFTP the moment you do.
+          {t('This login still uses your panel password. Anyone who guesses it over SFTP is also in the panel. Set a separate password — your panel password will stop working for SFTP the moment you do.')}
         </p>}
         {currentUser?.sftp_password_set_at && <p className="hint">{t('Separate from your panel password. Changing one does not change the other.')}</p>}
         {ownSftpPassword && <div className="db-created-grid" style={{marginTop:'0.5rem'}}>
@@ -5509,9 +5514,9 @@ Each account is overwritten with what is in its archive.`)) return;
       </div>
 
       {noAllowance && <p className="hint">{t('Your hosting package does not include SFTP accounts.')}</p>}
-      {atLimit && <p className="hint">You have used all {sftpLimits.limit} SFTP accounts in your package.</p>}
+      {atLimit && <p className="hint">{t('You have used all {n} SFTP accounts in your package.', { n: sftpLimits.limit })}</p>}
       {!noAllowance && !sftpLimits.unlimited && !atLimit &&
-        <p className="hint">{sftpLimits.used} of {sftpLimits.limit} SFTP accounts used.</p>}
+        <p className="hint">{t('{used} of {limit} SFTP accounts used.', { used: sftpLimits.used, limit: sftpLimits.limit })}</p>}
 
       {createdSftpInfo && <div className="info-box db-created-box">
         <div className="db-created-head"><strong>{t('SFTP account ready')}</strong><button className="mini secondary-light" onClick={() => setCreatedSftpInfo(null)}><X size={13}/></button></div>
@@ -5540,8 +5545,7 @@ Each account is overwritten with what is in its archive.`)) return;
       </div>
 
       <p className="hint">
-        Each account reaches one website and nothing else — not your other sites, and not the server.
-        It signs in over SFTP on port 22 with its own password, which is separate from your panel password.
+        {t('Each account reaches one website and nothing else — not your other sites, and not the server. It signs in over SFTP on port 22 with its own password, which is separate from your panel password.')}
       </p>
     </section>;
   }
@@ -5568,9 +5572,10 @@ Each account is overwritten with what is in its archive.`)) return;
       </div>
       {selectedWebsiteId && <p className="hint">{t('Cron runs as')}<strong>{cronUser || currentSite?.linux_user || 'www-data'}</strong> for the selected website.</p>}
       {selectedWebsiteId && <div className="cron-help">
-        <p>{t('Write')}<code>php</code> and BPanel rewrites it to <code>{sitePhpBinary}</code>
-          {sitePhpVersion ? <> — the PHP {sitePhpVersion} CLI this website is set to</> : null}, so the job never
-          runs on the server default version. Change the website's PHP version and its cron jobs follow.
+        <p>
+          {t('Write')} <code>php</code> {t('and BPanel rewrites it to')} <code>{sitePhpBinary}</code>
+          {sitePhpVersion ? <>{t(' — the PHP {version} CLI this website is set to', { version: sitePhpVersion })}</> : null}
+          {t(', so the job never runs on the server default version. Change the website\'s PHP version and its cron jobs follow.')}
         </p>
         <ul>
           {cronExamples.map(([example, note]) => <li key={example}>
@@ -5657,12 +5662,12 @@ Each account is overwritten with what is in its archive.`)) return;
           <span>{t('Setgid — new files inside keep the folder\'s group. BPanel sets this on site folders; leave it on unless you know otherwise.')}</span>
         </label>}
         {worldWritable && <p className="chmod-note warn">
-          <AlertCircle size={13}/> World-writable: anyone with an account on the server can change
-          {hasFiles ? ' these files' : ' what is inside these folders'}. Use 755 unless something really needs it.
+          <AlertCircle size={13}/> {hasFiles
+            ? t('World-writable: anyone with an account on the server can change these files. Use 755 unless something really needs it.')
+            : t('World-writable: anyone with an account on the server can change what is inside these folders. Use 755 unless something really needs it.')}
         </p>}
         <p className="chmod-note">
-          Any permission combination is allowed. The setuid and sticky bits are not — setgid on a folder is the
-          only special bit the panel sets.
+          {t('Any permission combination is allowed. The setuid and sticky bits are not — setgid on a folder is the only special bit the panel sets.')}
         </p>
         <div className="chmod-actions">
           <button className="secondary-light" disabled={!!loading} onClick={() => setChmodTarget(null)}>{t('Cancel')}</button>
@@ -5737,7 +5742,7 @@ Each account is overwritten with what is in its archive.`)) return;
           </div>
           <div className="file-list-header">
             <label><input type="checkbox" checked={allSelected} onChange={toggleAllFiles} disabled={files.length === 0} />{t('Select')}</label>
-            <span>{files.length} item(s)</span>
+            <span>{t('{n} item(s)', { n: files.length })}</span>
           </div>
           <div className="file-list">
             {files.length === 0 && <div className="empty-box">{t('No files in this folder.')}</div>}
@@ -5872,7 +5877,7 @@ Each account is overwritten with what is in its archive.`)) return;
         </div>
         <div className="backup-list">
           {restoreBackups.map(item => <div className="backup-item" key={item.backup_file}>
-            <span>{item.filename || item.backup_file.split('/').pop()}<small>{item.valid ? `${item.source === 'opanel' ? 'opanel · ' : ''}${item.username || 'unknown user'} - ${item.websites || 0} website(s)` : (item.error || 'Invalid backup')}</small></span>
+            <span>{item.filename || item.backup_file.split('/').pop()}<small>{item.valid ? `${item.source === 'opanel' ? 'opanel · ' : ''}` + t('{user} - {n} website(s)', { user: item.username || t('unknown user'), n: item.websites || 0 }) : (item.error || 'Invalid backup')}</small></span>
             <div className="actions">
               <button disabled={!!loading} onClick={() => downloadUserBackup(item.backup_file)}><Download size={14}/>{t('Download')}</button>
               <button disabled={!!loading || !item.valid} onClick={() => restoreUserBackup(item.backup_file)}><RotateCcw size={14}/>{t('Restore user')}</button>
@@ -6004,7 +6009,7 @@ Each account is overwritten with what is in its archive.`)) return;
         </div>
         {newSftpTarget.kind === 's3'
           ? <>
-              <p className="hint">Works with S3 and anything that speaks its API: Wasabi, Backblaze B2, DigitalOcean Spaces, Cloudflare R2, MinIO. The bucket is checked before the target is saved, so a destination that cannot be reached never gets attached to a schedule.</p>
+              <p className="hint">{t('Works with S3 and anything that speaks its API: Wasabi, Backblaze B2, DigitalOcean Spaces, Cloudflare R2, MinIO. The bucket is checked before the target is saved, so a destination that cannot be reached never gets attached to a schedule.')}</p>
               <div className="sftp-form sftp-target-form">
                 <input id="s3-name" value={newSftpTarget.name} onChange={e => setNewSftpTarget(prev => ({ ...prev, name: e.target.value }))} placeholder={t('Target name')} />
                 <input id="s3-endpoint" value={newSftpTarget.endpoint} onChange={e => setNewSftpTarget(prev => ({ ...prev, endpoint: e.target.value }))} placeholder="s3.wasabisys.com" />
@@ -6059,11 +6064,11 @@ Each account is overwritten with what is in its archive.`)) return;
           <div className="da-list-head">
             <label className="da-toggle">
               <input type="checkbox" checked={selectedDaBackups.length === daBackups.length && daBackups.length > 0} onChange={toggleSelectAllDaBackups} />
-              Select all ({daBackups.length})
+              {t('Select all ({n})', { n: daBackups.length })}
             </label>
             {selectedDaBackups.length > 0 && <div className="da-actions">
-              <button disabled={!!loading} onClick={() => bulkImportDaBackups()} className="primary"><ArchiveRestore size={14}/> Restore selected ({selectedDaBackups.length})</button>
-              <button disabled={!!loading} onClick={bulkDeleteDaBackups} className="danger"><Trash2 size={14}/> Delete selected ({selectedDaBackups.length})</button>
+              <button disabled={!!loading} onClick={() => bulkImportDaBackups()} className="primary"><ArchiveRestore size={14}/> {t('Restore selected ({n})', { n: selectedDaBackups.length })}</button>
+              <button disabled={!!loading} onClick={bulkDeleteDaBackups} className="danger"><Trash2 size={14}/> {t('Delete selected ({n})', { n: selectedDaBackups.length })}</button>
             </div>}
           </div>
           <div className="backup-list">
@@ -6082,7 +6087,7 @@ Each account is overwritten with what is in its archive.`)) return;
         </>}
 
         {daScanResult && <div className="da-scan-result">
-          <h4>Scan result: {daScanResult.filename}</h4>
+          <h4>{t('Scan result:')} {daScanResult.filename}</h4>
           {daScanResult.errors?.length > 0 && <div className="error-list">
             {daScanResult.errors.map((err, i) => <p key={i} className="error-text">{err}</p>)}
           </div>}
@@ -6104,7 +6109,7 @@ Each account is overwritten with what is in its archive.`)) return;
               </table>
             </div>}
             {user.databases?.length > 0 && <div className="da-table-wrap">
-              <p className="hint">Unassigned databases ({user.databases.length})</p>
+              <p className="hint">{t('Unassigned databases ({n})', { n: user.databases.length })}</p>
               <table className="da-scan-table">
                 <thead><tr><th>{t('Database')}</th><th>{t('SQL dump')}</th></tr></thead>
                 <tbody>
@@ -6126,10 +6131,10 @@ Each account is overwritten with what is in its archive.`)) return;
         {daImportJob?.status === 'completed' && daImportJob.result?.summary && <div className="da-scan-result">
           <h4>{t('Import summary')}</h4>
           {daImportJob.result.summary.map((item, i) => <div key={i} className="da-user-block">
-            <p className="da-user-head"><strong>{item.username}</strong> <span className="badge ok">{item.imported_domains?.length || 0} domain(s)</span> <span className="badge">{item.databases?.length || 0} database(s)</span></p>
-            {item.aliases?.length > 0 && <p className="hint">Pointers: {item.aliases.join(', ')}</p>}
-            {item.ssl_enabled_domains?.length > 0 && <p className="hint">SSL enabled: {item.ssl_enabled_domains.join(', ')}</p>}
-            {item.warnings?.length > 0 && <p className="hint da-warn">Warnings: {item.warnings.join('; ')}</p>}
+            <p className="da-user-head"><strong>{item.username}</strong> <span className="badge ok">{t('{n} domain(s)', { n: item.imported_domains?.length || 0 })}</span> <span className="badge">{t('{n} database(s)', { n: item.databases?.length || 0 })}</span></p>
+            {item.aliases?.length > 0 && <p className="hint">{t('Pointers:')} {item.aliases.join(', ')}</p>}
+            {item.ssl_enabled_domains?.length > 0 && <p className="hint">{t('SSL enabled:')} {item.ssl_enabled_domains.join(', ')}</p>}
+            {item.warnings?.length > 0 && <p className="hint da-warn">{t('Warnings:')} {item.warnings.join('; ')}</p>}
           </div>)}
           {daImportJob.result.credentials && <details className="da-creds-details">
             <summary>{t('Generated credentials (click to show)')}</summary>
@@ -6146,7 +6151,7 @@ Each account is overwritten with what is in its archive.`)) return;
           <h4>{t('Bulk restore results')}</h4>
           {daBulkImportJob.results.map((item, i) => <div key={i} className={`da-user-block ${item.status === 'completed' ? 'ok' : 'bad'}`}>
             <p className="da-user-head"><strong>{item.archive}</strong> <span className={item.status === 'completed' ? 'badge ok' : 'badge bad'}>{item.status}</span></p>
-            {item.result?.summary?.map((s, j) => <p key={j} className="hint">{s.username}: {s.imported_domains?.length || 0} domain(s), {s.databases?.length || 0} db(s)</p>)}
+            {item.result?.summary?.map((s, j) => <p key={j} className="hint">{s.username}: {t('{d} domain(s), {b} db(s)', { d: s.imported_domains?.length || 0, b: s.databases?.length || 0 })}</p>)}
             {item.result?.credentials && <details className="da-creds-details">
               <summary>{t('Credentials')}</summary>
               <pre className="da-credentials">{item.result.credentials.join('\n')}</pre>
@@ -6222,7 +6227,7 @@ Each account is overwritten with what is in its archive.`)) return;
         <button className="secondary-light" disabled={!!loading} onClick={restorePhpDefaults}><RotateCcw size={14}/>{t('Restore defaults')}</button>
         <button disabled={!!loading} onClick={updatePhpConfig}>{t('Save')}</button>
         {phpTune && tuneChanges.length > 0 && <div className="php-tune-diff">
-          <strong><AlertCircle size={14}/> Auto tune will change {tuneChanges.length} setting(s) for PHP {phpTune.php_version}</strong>
+          <strong><AlertCircle size={14}/> {t('Auto tune will change {n} setting(s) for PHP {version}', { n: tuneChanges.length, version: phpTune.php_version })}</strong>
           <span>{tuneChanges.map(row => `${row.key} ${row.current || 'unset'} → ${row.value}`).join(', ')}.</span>
           <button className="mini" disabled={!!loading} onClick={applyPhpTune}>{t('Auto tune PHP')}</button>
         </div>}
@@ -6235,15 +6240,14 @@ Each account is overwritten with what is in its archive.`)) return;
           <button disabled={!!loading} onClick={applyPhpTune}><Cpu size={14}/>{t('Auto tune PHP')}</button>
           <button className="secondary-light" disabled={!!loading} onClick={toggleOpcache}>
             {phpTune.opcache_enabled
-              ? <><Ban size={14}/> Disable OPcache (PHP {phpTune.php_version})</>
-              : <><Play size={14}/> Enable OPcache (PHP {phpTune.php_version})</>}
+              ? <><Ban size={14}/> {t('Disable OPcache (PHP {version})', { version: phpTune.php_version })}</>
+              : <><Play size={14}/> {t('Enable OPcache (PHP {version})', { version: phpTune.php_version })}</>}
           </button>
         </div>
         {phpTuneApplied && <div className="notice php-tune-result">
           <strong><Check size={14}/> PHP {phpTune.php_version} tuned.</strong>
         </div>}
-        {commonPools && <p className="hint">
-          PHP-FPM pools: {commonPools.length}/{phpTune.pools.length} running pm.max_children={commonPools[0].max_children || '—'},
+        {commonPools && <p className="hint">{t('PHP-FPM pools:')} {commonPools.length}/{phpTune.pools.length} running pm.max_children={commonPools[0].max_children || '—'},
           idle {commonPools[0].idle_timeout || '—'}, up to {commonPools[0].max_requests || '—'} requests per process.
           {poolOutliers.length > 0 && ` ${poolOutliers.length} other pool(s) run different settings:`}
         </p>}
@@ -6414,7 +6418,7 @@ Each account is overwritten with what is in its archive.`)) return;
             <span className={f2b.running ? 'badge ok' : 'badge warn'}>{f2b.running ? 'Running' : 'Not running'}</span>
             <span className={f2b.bans_reach_kernel ? 'badge ok' : 'badge warn'}>{f2b.bans_reach_kernel ? 'Bans take effect' : 'Bans NOT reaching iptables'}</span>
             <span className={f2b.filter_sees_journal ? 'badge ok' : 'badge warn'}>{f2b.filter_sees_journal ? 'Reading the log' : 'Seeing NO log'}</span>
-            <span className="hint">{f2b.ssh_unit || '—'} · {f2b.banaction || '—'} · {f2b.total_failed ?? 0} failures seen</span>
+            <span className="hint">{f2b.ssh_unit || '—'} · {f2b.banaction || '—'} · {t('{n} failures seen', { n: f2b.total_failed ?? 0 })}</span>
           </div>
           <div className="detail-tabs">
             <button className={fwDetail === 'banned' ? 'chip on' : 'chip'} disabled={!!loading}
@@ -6491,20 +6495,16 @@ Each account is overwritten with what is in its archive.`)) return;
             <span className={crs.installed ? 'badge ok' : 'badge'}>
               {crs.installed ? `${crs.rule_files} rule file(s) installed` : 'Not installed'}
             </span>
-            <span className="badge">{crs.sites_opted_in ?? 0} site(s) opted in</span>
-            <span className="badge">nginx now: {crs.nginx_pss_mb || 0} MB</span>
+            <span className="badge">{t('{n} site(s) opted in', { n: crs.sites_opted_in ?? 0 })}</span>
+            <span className="badge">{t('nginx now: {n} MB', { n: crs.nginx_pss_mb || 0 })}</span>
             <span className={(crs.ram_available_mb || 0) < 1024 ? 'badge danger' : 'badge'}>
-              {crs.ram_available_mb || 0} MB RAM free
+              {t('{n} MB RAM free', { n: crs.ram_available_mb || 0 })}
             </span>
           </div>
           <div className="info-box" style={{ marginBottom: 12 }}>
             <strong>{t('Memory')}</strong>
             <p className="hint">
-              Each site that loads CRS adds its own copy of the rule set, so the cost grows with the
-              number opted in — roughly {crs.rss_mb_per_site || 50} MB each. "nginx now" above is measured on this
-              server, not estimated, and it is the figure to act on; watch it and the free-RAM figure
-              beside it as you opt sites in. Note that `ps` reports several times this, because it
-              counts pages the nginx workers share once for each worker.
+              {t('Each site that loads CRS adds its own copy of the rule set, so the cost grows with the number opted in — roughly {n} MB each. "nginx now" above is measured on this server, not estimated, and it is the figure to act on; watch it and the free-RAM figure beside it as you opt sites in. Note that `ps` reports several times this, because it counts pages the nginx workers share once for each worker.', { n: crs.rss_mb_per_site || 50 })}
             </p>
           </div>
           <div className="segmented-control">
@@ -6523,7 +6523,7 @@ Each account is overwritten with what is in its archive.`)) return;
             {crs.mode === 'block' && 'Requests scoring above the threshold are refused on every site with the WAF on. Add SecRuleRemoveById <id> to a site’s custom rules to excuse it from one rule.'}
           </p>
           {crs.mode !== 'off' && crs.panel_mode !== crs.mode && (
-            <p className="hint">Panel setting says "{crs.panel_mode}" but the server reports "{crs.mode}".</p>
+            <p className="hint">{t('Panel setting says "{panel}" but the server reports "{server}".', { panel: crs.panel_mode, server: crs.mode })}</p>
           )}
           <p className="hint">{t('This is the server-wide switch. Which sites load CRS is chosen per website below.')}</p>
         </>}
@@ -6623,7 +6623,7 @@ Each account is overwritten with what is in its archive.`)) return;
 
           <div className="global-bots-actions">
             <button disabled={!!loading} onClick={() => saveGlobalBots(globalBots)}>
-              <Shield size={14}/> Save and apply to all {websites.length} website(s)
+              <Shield size={14}/> {t('Save and apply to all {n} website(s)', { n: websites.length })}
             </button>
             <button
               className="secondary-light"
@@ -6688,13 +6688,12 @@ Each account is overwritten with what is in its archive.`)) return;
           </button>
         </div>
         <p className="hint">
-          The WAF blocks known bad paths. OWASP CRS adds payload inspection — SQL injection, XSS,
-          command injection — for this site, at roughly {crs?.rss_mb_per_site || 50} MB of nginx memory.
+          {t('The WAF blocks known bad paths. OWASP CRS adds payload inspection — SQL injection, XSS, command injection — for this site, at roughly {n} MB of nginx memory.', { n: crs?.rss_mb_per_site || 50 })}
           {wafSiteConfig?.crs_enabled && wafSiteConfig?.crs_mode === 'off'
-            ? ' This site is opted in, but CRS is switched off server-wide on the WAF page, so nothing is loaded.'
+            ? ' ' + t('This site is opted in, but CRS is switched off server-wide on the WAF page, so nothing is loaded.')
             : ''}
           {wafSiteConfig?.crs_active
-            ? ' Add SecRuleRemoveById <id> to the custom rules below to excuse this site from one CRS rule.'
+            ? ' ' + t('Add SecRuleRemoveById <id> to the custom rules below to excuse this site from one CRS rule.')
             : ''}
         </p>
       </section>
@@ -6851,7 +6850,7 @@ Each account is overwritten with what is in its archive.`)) return;
           </table>
           {rows.length === 0 && <EmptyState icon={FileText} message={t('No access log entries match these filters.')} />}
         </div>
-        {(wafAccessLogs.missing || []).length > 0 && <p className="hint">Missing log files: {wafAccessLogs.missing.join(', ')}</p>}
+        {(wafAccessLogs.missing || []).length > 0 && <p className="hint">{t('Missing log files:')} {wafAccessLogs.missing.join(', ')}</p>}
       </div>
     </section>;
   }
@@ -6880,8 +6879,8 @@ Each account is overwritten with what is in its archive.`)) return;
             <span>{t('Checked')}<strong>{panelUpdate.last_checked_at || 'never'}</strong></span>
             <span>{t('State file')}<strong>{panelUpdate.state_file || '/var/lib/bpanel/update-status.json'}</strong></span>
           </div>
-          {panelUpdate.check_error && <p className="hint">Release check failed: {panelUpdate.check_error}</p>}
-          {panelUpdate.last_update_status && <p className="hint">Last update: {panelUpdate.last_update_status}{panelUpdate.last_update_ref ? ` (${panelUpdate.last_update_ref})` : ''}{panelUpdate.last_update_finished_at ? ` at ${panelUpdate.last_update_finished_at}` : ''}</p>}
+          {panelUpdate.check_error && <p className="hint">{t('Release check failed:')} {panelUpdate.check_error}</p>}
+          {panelUpdate.last_update_status && <p className="hint">{t('Last update:')} {panelUpdate.last_update_status}{panelUpdate.last_update_ref ? ` (${panelUpdate.last_update_ref})` : ''}{panelUpdate.last_update_finished_at ? ` at ${panelUpdate.last_update_finished_at}` : ''}</p>}
         </div>
         <div className="actions">
           <button className="secondary-light" disabled={!!loading} onClick={() => loadUpdates(true)}><RefreshCw size={14}/>{t('Check releases')}</button>
@@ -6936,8 +6935,7 @@ Each account is overwritten with what is in its archive.`)) return;
 
         {pk && !pk.supported && <div className="info-box">
           <p className="hint" style={{color:'var(--red)'}}>
-            You are reaching the panel by IP address ({pk.hostname}). Browsers only create
-            passkeys for domain names, so open the panel by its domain and add one there.
+            {t('You are reaching the panel by IP address ({host}). Browsers only create passkeys for domain names, so open the panel by its domain and add one there.', { host: pk.hostname })}
           </p>
         </div>}
 
@@ -6981,8 +6979,7 @@ Each account is overwritten with what is in its archive.`)) return;
           <EmptyState icon={KeyRound} message={t('No passkeys yet.')} />}
 
         {(pk?.credentials?.length || 0) > 0 && !enabled && <p className="hint" style={{color:'var(--red)'}}>
-          A passkey is your only second factor. Reach the panel by a different domain and
-          there is no second factor at all — turn on Google Authenticator below as well.
+          {t('A passkey is your only second factor. Reach the panel by a different domain and there is no second factor at all — turn on Google Authenticator below as well.')}
         </p>}
       </section>
 
@@ -7114,7 +7111,7 @@ Each account is overwritten with what is in its archive.`)) return;
                 : mwInstalled && !mwEnabled ? <span className="badge">{t('Installed · off')}</span>
                 : <span className="badge">{t('Not installed')}</span>}
               {mw.realtime_enabled && <span className={mw.monitor_running ? 'badge ok' : 'badge warn'} style={{marginLeft:6}}>
-                Level 2 {mw.monitor_running ? 'running' : 'not running'}
+                {t(mw.monitor_running ? 'Level 2 running' : 'Level 2 not running')}
               </span>}
             </p>
           </div>
@@ -7126,7 +7123,7 @@ Each account is overwritten with what is in its archive.`)) return;
         </div>}
         <div className="info-box">
           <p className="hint">{mw.detail || 'Checking...'}</p>
-          {mw.memory_total_mb > 0 && <p className="hint">{t('Server memory:')}<strong>{mw.memory_total_mb} MB</strong> ({mw.memory_available_mb} MB free)</p>}
+          {mw.memory_total_mb > 0 && <p className="hint">{t('Server memory:')}<strong>{mw.memory_total_mb} MB</strong> {t('({n} MB free)', { n: mw.memory_available_mb })}</p>}
           {mw.lmd_installed && <p className="hint">{t('Malware signatures:')}<strong>{mw.lmd_sig_version || '—'}</strong>{mw.lmd_updated_at ? ` (updated ${mw.lmd_updated_at})` : ''}</p>}
           {!mwInstalled && <p className="hint" style={{marginTop:8}}>{t('Turning this on installs the scanner. It only runs during a scan (~1.3 GB of RAM) and releases that afterwards — nothing runs in the background, so it costs no memory at rest.')}</p>}
           <div className="actions" style={{marginTop:12}}>
@@ -7176,7 +7173,7 @@ Each account is overwritten with what is in its archive.`)) return;
             <div className="malware-scan-head">
               <div>
                 <strong>{t('Level 2 — Real-time protection')}</strong>
-                <p className="hint">Watches the website directories continuously and checks new files in short batches (~15 seconds). Catches something arriving over SFTP or through a plugin at once, instead of waiting for the next Level 1 scheduled scan.</p>
+                <p className="hint">{t('Watches the website directories continuously and checks new files in short batches (~15 seconds). Catches something arriving over SFTP or through a plugin at once, instead of waiting for the next Level 1 scheduled scan.')}</p>
               </div>
               <label className="switch-line">
                 <input type="checkbox" checked={!!mw.realtime_enabled} disabled={!!loading}
@@ -7543,7 +7540,7 @@ Each account is overwritten with what is in its archive.`)) return;
         </div>
         <div className="standalone-editor-actions">
           <span className="editor-chip">{editorMode}</span>
-          <span className="editor-chip">{editorLineCount} line(s)</span>
+          <span className="editor-chip">{t('{n} line(s)', { n: editorLineCount })}</span>
           <span className="editor-chip">Ln {editorCursor.line}, Col {editorCursor.column}</span>
           <button disabled={!selectedWebsiteId || !!loading} onClick={() => readFile(filePath)}><RefreshCw size={14}/>{t('Reload')}</button>
           <button disabled={!selectedWebsiteId || !!loading} onClick={writeFile}>{t('Save')}</button>
@@ -7553,7 +7550,7 @@ Each account is overwritten with what is in its archive.`)) return;
           <button className="secondary-light" onClick={() => window.close()}><X size={14}/>{t('Close')}</button>
         </div>
       </header>
-      {loading && <div className="loading">{loading}</div>}
+      {loading && <div className="loading">{t(loading)}</div>}
       {renderNotifications()}
       <section className="standalone-editor-body">
         <CodeEditor
@@ -7605,7 +7602,7 @@ Each account is overwritten with what is in its archive.`)) return;
         expires_in_days: Number(mcpDraft.expires_in_days || 90),
         can_write: !!mcpDraft.can_write,
       }),
-    }, 'Creating token...');
+    }, t('Creating token...'));
     if (data) {
       // Shown once and never again: the server keeps only a hash. It stays on
       // screen until the person dismisses it rather than disappearing on the
@@ -7619,7 +7616,7 @@ Each account is overwritten with what is in its archive.`)) return;
 
   async function revokeMcpToken(token) {
     if (!window.confirm(`Revoke "${token.name}"? Any assistant using it stops working immediately.`)) return;
-    const data = await request(`/mcp/tokens/${token.id}`, { method: 'DELETE' }, 'Revoking...');
+    const data = await request(`/mcp/tokens/${token.id}`, { method: 'DELETE' }, t('Revoking...'));
     if (data) {
       setNotice(t('Token revoked.'));
       await loadMcpTokens();
@@ -7656,8 +7653,7 @@ Each account is overwritten with what is in its archive.`)) return;
           <div>
             <h2>{t('AI assistants (MCP)')}</h2>
             <p className="hint">
-              Give Claude Code, Cursor or VS Code a token and it can read and operate the panel
-              with exactly your own permissions - nothing more.
+              {t('Give Claude Code, Cursor or VS Code a token and it can read and operate the panel with exactly your own permissions - nothing more.')}
             </p>
           </div>
           <button className="secondary-light" disabled={!!loading} onClick={loadMcpTokens}>
@@ -7672,8 +7668,7 @@ Each account is overwritten with what is in its archive.`)) return;
 
         {selfSigned && <div className="addon-notes">
           <strong><AlertCircle size={13}/>{t('This panel needs a real certificate')}</strong>
-          <ul><li>MCP clients refuse a self-signed certificate, so no assistant will connect
-            until the panel has one. Install it under Panel settings → SSL.</li></ul>
+          <ul><li>{t('MCP clients refuse a self-signed certificate, so no assistant will connect until the panel has one. Install it under Panel settings → SSL.')}</li></ul>
         </div>}
 
         <div className="mcp-endpoint">
@@ -7746,10 +7741,8 @@ Each account is overwritten with what is in its archive.`)) return;
         <div className="section-title"><div><h2>{t('Connecting a client')}</h2><p className="hint">
           {mcpNewToken
             ? <>Your new token is already filled in below - copy one and paste it straight in.
-                Once you dismiss the token above these go back to saying YOUR_TOKEN, because the
-                panel cannot show it to you a second time.</>
-            : <>Create a token above and it appears in these ready to copy. Otherwise replace
-                YOUR_TOKEN yourself.</>}
+                {t('Once you dismiss the token above these go back to saying YOUR_TOKEN, because the panel cannot show it to you a second time.')}</>
+            : <>{t('Create a token above and it appears in these ready to copy. Otherwise replace YOUR_TOKEN yourself.')}</>}
         </p></div></div>
         {[['Claude Code', claudeCode], ['Cursor - .cursor/mcp.json', cursor],
           ['VS Code - .vscode/mcp.json', vscode]].map(([label, snippet]) => (
@@ -7888,7 +7881,7 @@ Each account is overwritten with what is in its archive.`)) return;
         </div>
         <nav className="sidebar-nav">
           {mainNavItems.map(([key, label, Icon]) => <button key={key} type="button" className={navPage === key ? 'active' : ''} onClick={() => navigateToPage(key)} aria-current={navPage === key ? 'page' : undefined}>
-            <Icon size={17}/>{label}
+            <Icon size={17}/>{t(label)}
           </button>)}
           <div className={`sidebar-nav-group ${settingsMenuOpen ? 'open' : ''}`}>
             <button className={`sidebar-group-toggle ${settingsIsActive ? 'active' : ''}`} onClick={() => setSettingsMenuOpen(open => !open)} aria-expanded={settingsMenuOpen} aria-controls="settings-submenu">
@@ -7896,7 +7889,7 @@ Each account is overwritten with what is in its archive.`)) return;
             </button>
             {settingsMenuOpen && <div className="sidebar-subnav" id="settings-submenu">
               {settingsNavItems.map(([key, label, Icon]) => <button key={key} type="button" className={navPage === key ? 'active' : ''} onClick={() => navigateToPage(key)} aria-current={navPage === key ? 'page' : undefined}>
-                <Icon size={16}/>{label}
+                <Icon size={16}/>{t(label)}
               </button>)}
             </div>}
           </div>
@@ -7923,7 +7916,7 @@ Each account is overwritten with what is in its archive.`)) return;
         </section>
         <div className="content-body">
           {renderPage()}
-          {loading && <div className="loading"><span></span>{loading}</div>}
+          {loading && <div className="loading"><span></span>{t(loading)}</div>}
         </div>
       </div>
     </section>

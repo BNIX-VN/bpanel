@@ -84,16 +84,27 @@ export function setLanguage(code) {
   document.dispatchEvent(new CustomEvent(LANGUAGE_EVENT, { detail: code }));
 }
 
-/* Translate one string.
+/* Translate one string, filling in {placeholders} from values.
  *
  * Anything that is not a non-empty string comes straight back: render code
  * passes null, numbers and elements around freely, and t() is not the place to
- * discover that. */
-export function t(text) {
+ * discover that.
+ *
+ * The second argument exists because a count sentence cannot be translated in
+ * pieces. `{n} website(s)` is one sentence to a translator; as the two
+ * fragments JSX splits it into - '' and ' website(s)' - it is untranslatable,
+ * since Vietnamese orders and pluralises them differently. Passing the whole
+ * sentence with a hole in it keeps the translator's unit the same as the
+ * reader's. An unknown placeholder is left standing rather than blanked, so a
+ * typo shows up on screen as `{ammount}` instead of disappearing. */
+export function t(text, values) {
   if (typeof text !== 'string' || !text) return text;
   const dictionary = DICTIONARIES[current];
   const hit = dictionary && dictionary[text];
-  return typeof hit === 'string' && hit ? hit : text;
+  const out = typeof hit === 'string' && hit ? hit : text;
+  if (!values) return out;
+  return out.replace(/\{(\w+)\}/g, (whole, name) =>
+    Object.prototype.hasOwnProperty.call(values, name) ? String(values[name]) : whole);
 }
 
 /* Re-render when the language changes, and hand back the switcher.

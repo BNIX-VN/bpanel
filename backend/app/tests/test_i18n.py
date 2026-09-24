@@ -83,6 +83,27 @@ def test_every_key_is_a_string_something_actually_shows():
     assert not orphans, f"{len(orphans)} keys match nothing: {orphans[:10]}"
 
 
+def test_every_placeholder_survives_translation():
+    """A count sentence is translated whole, with {n} standing in for the
+    number. Drop the placeholder and the number vanishes from the screen;
+    invent one and it renders as the literal text {ammount}. Both are silent,
+    so they are checked here."""
+    for key, value in DICTIONARY.items():
+        assert set(re.findall(r"\{(\w+)\}", key)) == set(re.findall(r"\{(\w+)\}", value)), key
+
+
+def test_the_values_argument_is_used_where_a_sentence_has_a_hole():
+    """t() filling placeholders is the whole reason the count sentences could be
+    translated at all - as bare fragments either side of an interpolation they
+    were untranslatable."""
+    body = I18N.split("export function t(text")[1].split("\n}")[0]
+    assert "if (!values) return out;" in body
+    # An unknown name is left standing rather than blanked: a typo should be
+    # visible on screen, not swallowed.
+    assert "hasOwnProperty.call(values, name) ? String(values[name]) : whole" in body
+    assert "{n} website(s)" in DICTIONARY
+
+
 def test_the_placeholders_and_code_samples_were_left_alone():
     """Example domains and code are not language, and translating them would
     make the example wrong."""
@@ -94,14 +115,14 @@ def test_the_placeholders_and_code_samples_were_left_alone():
 # --- the fallback, which is the whole design ---------------------------------
 
 def test_an_unknown_string_falls_back_to_english():
-    body = I18N.split("export function t(text)")[1].split("\n}")[0]
+    body = I18N.split("export function t(text")[1].split("\n}")[0]
     # Returns the input when there is no hit, rather than '' or the key name.
-    assert "return typeof hit === 'string' && hit ? hit : text;" in body
+    assert "typeof hit === 'string' && hit ? hit : text" in body
 
 
 def test_anything_that_is_not_a_string_passes_straight_through():
     """Render code hands null, numbers and elements around freely."""
-    body = I18N.split("export function t(text)")[1].split("\n}")[0]
+    body = I18N.split("export function t(text")[1].split("\n}")[0]
     assert "if (typeof text !== 'string' || !text) return text;" in body
 
 
@@ -122,9 +143,20 @@ def test_storage_failures_do_not_break_the_panel():
 
 def test_the_switch_exists_and_offers_both_languages():
     assert "function LanguageToggle(" in APP
-    assert "LANGUAGES.map(" in APP
     assert "['vi', 'Tiếng Việt']" in I18N
     assert "['en', 'English']" in I18N
+
+
+def test_the_switch_is_one_button_not_a_menu():
+    """Two languages need one button, not a list to open and choose from. It
+    says where it goes - EN or VI - rather than where you are, so there is
+    nothing to read twice."""
+    toggle = APP.split("function LanguageToggle(")[1].split("\nfunction ")[0]
+    assert "<select" not in toggle and "LANGUAGES.map(" not in toggle
+    assert "const next = language === 'vi' ? 'en' : 'vi';" in toggle
+    # Labelled in the language it switches to, so a Vietnamese reader who has
+    # the panel in English can still recognise it.
+    assert "'Chuyển sang Tiếng Việt' : 'Switch to English'" in toggle
 
 
 def test_the_switch_sits_with_the_theme_toggle():
@@ -161,6 +193,67 @@ def test_page_keys_were_not_translated(page_key):
 
 def test_no_class_name_was_wrapped():
     assert "className={t(" not in APP
+
+
+# --- the dashboard map, where a miss is invisible ----------------------------
+
+def _kept_in_english() -> set:
+    block = VI.split("export const keptInEnglish = [")[1].split("];")[0]
+    return {json.loads(m) for m in re.findall(r'"(?:[^"\\]|\\.)*"', block)}
+
+
+KEPT_IN_ENGLISH = _kept_in_english()
+
+
+def test_the_terms_left_in_english_are_declared_not_guessed():
+    """The list is what separates a decision from an oversight, so it has to be
+    there and it has to be a list."""
+    assert len(KEPT_IN_ENGLISH) > 20
+    for term in ("WAF", "Cron", "SSL", "nginx, PHP, MariaDB, Redis"):
+        assert term in KEPT_IN_ENGLISH, term
+
+
+@pytest.mark.parametrize("array,pattern", [
+    ("const groups = [", r"\['[a-z-]+', '([^']+)', Ms\w+, '([^']+)'\]"),
+])
+def test_every_dashboard_tile_reads_in_vietnamese(array, pattern):
+    """The tiles are the first Vietnamese a customer sees, and the audit that
+    found the rest of the interface could not see them at all.
+
+    They live in an array and are translated where they are drawn, so no
+    t('...') wrapper appears near them - twenty-three of them sat in English
+    behind a screen that was otherwise translated, and nothing said so. The
+    only way to catch it is to read the array and ask the dictionary, which is
+    what this does.
+    """
+    body = APP.split(array)[1].split("\n    ]")[0]
+    missing = []
+    for match in re.findall(pattern, body):
+        for text in match:
+            if text not in DICTIONARY and text not in KEPT_IN_ENGLISH:
+                missing.append(text)
+    assert not missing, f"tiles still in English: {missing}"
+
+
+def test_every_dashboard_group_heading_reads_in_vietnamese():
+    body = APP.split("const groups = [")[1].split("\n    ]")[0]
+    missing = [
+        text
+        for pair in re.findall(r"title: '([^']+)',\s*\n\s*hint: '([^']+)'", body)
+        for text in pair
+        if text not in DICTIONARY and text not in KEPT_IN_ENGLISH
+    ]
+    assert not missing, f"group headings still in English: {missing}"
+
+
+@pytest.mark.parametrize("array", ["mainNavItems", "settingsNavItems"])
+def test_every_sidebar_entry_reads_in_vietnamese(array):
+    body = APP.split(f"const {array} = [")[1].split("\n  ];")[0]
+    missing = [
+        label for label in re.findall(r"\['[a-z-]+', '([^']+)'", body)
+        if label not in DICTIONARY and label not in KEPT_IN_ENGLISH
+    ]
+    assert not missing, f"{array} still in English: {missing}"
 
 
 def test_the_interface_source_has_no_vietnamese_left_in_it():

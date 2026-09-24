@@ -12,11 +12,12 @@ import sys
 HERE = pathlib.Path(__file__).parent
 OUT = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "frontend/src/locales/vi.js")
 
+# Whatever parts are on disk, in order. A hard-coded range means adding
+# vi_part7.py silently generates a dictionary without it, and the only symptom
+# is a screen that stays English.
 merged = {}
-for n in (1, 2, 3, 4):
-    part = HERE / f"vi_part{n}.py"
-    if not part.exists():
-        continue
+for part in sorted(HERE.glob("vi_part*.py")):
+    n = part.stem.removeprefix("vi_part")
     merged.update(runpy.run_path(str(part))[f"PART{n}"])
 
 HEADER = '''/* Vietnamese. Keys are the English strings exactly as they appear in the
@@ -58,31 +59,31 @@ def js(value):
 kept_in_english = sorted(key for key, value in merged.items() if key == value)
 merged = {key: value for key, value in merged.items() if key != value}
 
-note = []
-if kept_in_english:
-    note = [
-        " *",
-        " * Deliberately left in English. Vietnamese administrators say these",
-        " * words in English, and translating them makes the panel harder to",
-        " * read, not easier:",
-        " *",
-    ]
-    row = " *   "
-    for term in kept_in_english:
-        if len(row) + len(term) > 72:
-            note.append(row.rstrip().rstrip(","))
-            row = " *   "
-        row += term + ", "
-    note.append(row.rstrip().rstrip(","))
+note = [
+    " *",
+    " * The terms deliberately left in English are exported below as",
+    " * keptInEnglish, one per line. They are a list rather than a sentence in",
+    " * this comment because two of them contain commas, and a reader cannot",
+    " * tell a term from a separator in prose. A test reads that list to decide",
+    " * whether a string with no translation was a decision or an oversight.",
+]
 
 header = HEADER.rstrip("\n")
-if note:
-    header = header.replace("\n */", "\n" + "\n".join(note) + "\n */", 1)
+header = header.replace("\n */", "\n" + "\n".join(note) + "\n */", 1)
 
 lines = [header]
 for key in sorted(merged):
     lines.append(f"  {js(key)}: {js(merged[key])},")
 lines += ["};", ""]
+
+lines += [
+    "/* Said in English by the people who run these servers. Translating them",
+    " * makes the panel harder to read, not easier, so they carry no entry above",
+    " * - the fallback returns the English - and are recorded here instead. */",
+    "export const keptInEnglish = [",
+]
+lines += [f"  {js(term)}," for term in kept_in_english]
+lines += ["];", ""]
 
 OUT.parent.mkdir(parents=True, exist_ok=True)
 OUT.write_text("\n".join(lines), encoding="utf-8")
