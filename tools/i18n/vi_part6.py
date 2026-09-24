@@ -174,7 +174,6 @@ PART6.update({
     "SSL": "SSL",
     "WAF": "WAF",
     "Fail2ban": "Fail2ban",
-    "Login security": "Bảo mật đăng nhập",
 
     # the line under each tile
 })

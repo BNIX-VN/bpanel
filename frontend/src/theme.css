@@ -1,13 +1,29 @@
 /* ============================================================
    BPanel theme layer — typography + light/dark tokens.
-   Loaded last so :root here wins over style.css / brand.css.
+   Loaded after style.css / brand.css so :root here wins.
    ============================================================ */
 
-/* No web font. The operator's choice (2026-09-25): the panel is set in the
-   monospace faces already on the machine - Consolas on Windows, Liberation
-   Mono on Linux - rather than a Google font, bundled or not. All of them
-   carry Vietnamese, nothing is downloaded, and every figure in a column
-   lines up by construction. */
+/* Open Sans, the face cPanel is set in - the operator's choice (2026-09-25),
+   after the system monospace read poorly for a whole interface. Self-hosted:
+   the panel's CSP is font-src 'self', so a Google Fonts link would be refused,
+   and a panel should not call out to Google to draw its own labels anyway.
+   Variable weight 300-800; the Vietnamese subset carries every stacked mark.
+   @fontsource-variable/open-sans 5.3.0, SIL OFL 1.1 (fonts/open-sans-LICENSE.txt). */
+@font-face{
+  font-family:'Open Sans';font-style:normal;font-weight:300 800;font-display:swap;
+  src:url('./fonts/open-sans-vietnamese-wght-normal.woff2') format('woff2');
+  unicode-range:U+0102-0103,U+0110-0111,U+0128-0129,U+0168-0169,U+01A0-01A1,U+01AF-01B0,U+0300-0301,U+0303-0304,U+0308-0309,U+0323,U+0329,U+1EA0-1EF9,U+20AB;
+}
+@font-face{
+  font-family:'Open Sans';font-style:normal;font-weight:300 800;font-display:swap;
+  src:url('./fonts/open-sans-latin-ext-wght-normal.woff2') format('woff2');
+  unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;
+}
+@font-face{
+  font-family:'Open Sans';font-style:normal;font-weight:300 800;font-display:swap;
+  src:url('./fonts/open-sans-latin-wght-normal.woff2') format('woff2');
+  unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
 
 /* ==================== Typography, shared by both themes ====================
    One scale, named by role rather than by size, so a heading and a hint cannot
@@ -19,11 +35,11 @@
    sizes, ports, quotas, load averages, percentages - and proportional digits
    make a column of them ragged, so a changing figure jitters in place. */
 :root{
-  /* One stack for the interface and for code. */
-  --font-sans:var(--font-mono);
+  --font-sans:'Open Sans',sans-serif;
+  /* Code, paths, logs and the terminal stay in the system monospace. */
   /* Every hardcoded copy of this stack in the other files now points here.
      They had drifted: three different orders, two missing Consolas. */
-  --font-mono:Consolas,'Cascadia Mono','SFMono-Regular','Liberation Mono',Menlo,monospace;
+  --font-mono:Consolas,'Liberation Mono',Menlo,monospace;
 
   --text-xs:11px;      /* badges, chips */
   --text-sm:12px;      /* meta, table cells that are not the subject */
@@ -40,258 +56,274 @@
 /* ============================ LIGHT (default) ============================ */
 :root{
   color-scheme:light;
+  /* Fixed metrics, OPanel's. */
+  --radius-sm:6px;
+  --radius-md:8px;
+  --radius-lg:10px;
+  --radius-xl:12px;
+  --radius:8px;
+  --sidebar-width:248px;
+  --topbar-height:60px;
 
-  /* Brand */
-  --brand-blue:#0065bb;
-  --brand-blue-deep:#00457d;
+  /* OPanel's palette, shared across the BNIX panels: brand blue #1660cf
+     (white 5.8:1), cool slate neutrals, a navy sidebar. */
+  --primary:#1660cf;
+  --primary-hover:#1253b5;
+  --primary-active:#0f4799;
+  --primary-ink:#1459bf;
+  --primary-ink-hover:#0f4799;
+  --primary-contrast:#ffffff;
+  --primary-light:#dce9fb;
+  --primary-soft:#b3cdf3;
+  --accent:#1459bf;
+  --brand-ink:#111a2b;
+  --danger:#c22d1c;
+  --danger-hover:#a32515;
+  --danger-bg:#fdeae7;
+  --danger-border:#f2b3aa;
+  --danger-text:#8f2417;
+  --success:#087a5b;
+  --success-hover:#066b4f;
+  --success-bg:#dcf3e8;
+  --success-border:#8bd4b4;
+  --success-text:#065f46;
+  --warning:#b25a10;
+  --warning-bg:#fbeecf;
+  --warning-border:#ecc568;
+  --warning-text:#7a4310;
+  --info:#0e7fb8;
+  --info-bg:#e1f1fa;
+  --info-border:#a9d6ee;
+  --info-text:#0b5d87;
+  --text:#111a2b;
+  --text-secondary:#3b4658;
+  --text-muted:#525d6f;
+  --text-inverse:#ffffff;
+  --bg:#f3f5f8;
+  --surface:#ffffff;
+  --surface-alt:#eef1f5;
+  --surface-hover:#e8f0fc;
+  --surface-muted:#e9edf2;
+  --surface-sunken:#e9edf2;
+  --border:#dde2e9;
+  --border-hover:#bfc8d4;
+  --border-strong:#a7b2c0;
+  --ring:rgba(22,96,207,.28);
+  --overlay:rgba(15,23,42,.45);
+  --nav-bg:#0f1b2e;
+  --nav-border:#1c2b43;
+  --nav-hover:#172a45;
+  --nav-active:#1d3a63;
+  --nav-text:#c9d3e1;
+  --nav-text-strong:#ffffff;
+  --nav-muted:#8e9bb0;
+  --nav-accent:#5aa2ff;
+  --shadow-sm:0 1px 2px rgba(17,26,43,.06);
+  --shadow-md:0 8px 24px rgba(17,26,43,.10);
+  --shadow-lg:0 20px 48px rgba(17,26,43,.16);
+  --topbar-bg:#ffffff;
+  --console-bg:#111111;
+  --console-surface:#1c1c1c;
+  --console-border:#333333;
+  --console-text:#f0f0f0;
+  --console-muted:#a3a3a3;
+  --disabled-bg:#e9edf2;
+  --disabled-fg:#7d8898;
+  --disabled-border:#dde2e9;
+  --scrollbar-thumb:#c3ccd8;
+  --scrollbar-thumb-hover:#a7b2c0;
+  --scrollbar-track:transparent;
+  --tooltip-bg:#111a2b;
+  --tooltip-fg:#ffffff;
+  --editor-bg:#ffffff;
+  --editor-fg:#111a2b;
+  --editor-border:#dde2e9;
+  --editor-gutter-bg:#eef1f5;
+  --editor-gutter-fg:#525d6f;
+  --editor-active-line:#e8f0fc;
+  --editor-selection:#b3cdf3;
+  /* BPanel's older names, kept pointing at the palette above. */
+  --primary-fg:var(--primary-contrast);
+  --primary-text:var(--primary-ink);
+  --primary-border:var(--primary-soft);
+  --primary-light-hover:#cfe0f8;
+  --brand-blue:var(--primary);
+  --brand-blue-deep:var(--primary-active);
   --brand-yellow:#f6c431;
   --brand-yellow-soft:#fff8db;
-
-  --primary:#0065bb;
-  --primary-hover:#00589f;
-  --primary-active:#00457d;
-  --primary-fg:#ffffff;
-  --primary-light:#e8f2fb;
-  --primary-light-hover:#d6e8f8;
-  --primary-border:#b3d4f0;
-  --primary-text:#00579f;
-  --brand-deep:#16202b;
-  --brand-navy:#16202b;      /* legacy alias: headings stay neutral, blue is the accent */
-  --ring:rgba(0,101,187,.18);
-
-  /* Neutrals */
-  --text:#16202b;
-  --text-secondary:#4a5765;
-  /* 5.2:1 on white. The old #6f7c8a was 4.3 - under the floor, and it is
-     the colour of every hint line and every secondary cell in a table. */
-  --text-muted:#5e6b7a;
-  --text-inverse:#ffffff;
-  --bg:#f4f7fa;
-  --surface:#ffffff;
-  --surface-alt:#f8fafc;
-  --surface-sunken:#eef2f7;
-  --surface-hover:#f1f5f9;
-  --border:#dde5ee;
-  --border-hover:#c6d2e0;
-  --border-strong:#adbccd;
-  --overlay:rgba(15,23,42,.45);
-
-  /* State: danger */
-  --danger:#dc2626;
-  --danger-hover:#b91c1c;
-  --danger-bg:#fef2f2;
-  --danger-border:#fecaca;
-  --danger-text:#991b1b;
-  /* State: success */
-  --success:#059669;
-  --success-bg:#ecfdf5;
-  --success-border:#a7f3d0;
-  --success-text:#146c43;
-  /* State: warning */
-  --warning:#d97706;
-  --warning-bg:#fffbeb;
-  --warning-border:#fde68a;
-  --warning-text:#92400e;
-  /* State: info — sky, so it stays distinct from the primary blue */
-  --info:#0ea5e9;
-  --info-bg:#f0f9ff;
-  --info-border:#bae6fd;
-  --info-text:#0369a1;
-
-  /* Disabled controls */
-  --disabled-bg:#e6ebf1;
-  --disabled-fg:#9aa6b4;
-  --disabled-border:#d5dde6;
-
-  /* Code / log / terminal surfaces (dark in both themes) */
-  --code-bg:#0f1720;
-  --code-fg:#e6edf5;
-  --code-border:#26313d;
-  --code-muted:#9fb0c0;
-
-  /* Elevation */
-  --shadow-sm:0 1px 2px rgba(15,35,60,.06);
-  --shadow-md:0 10px 28px rgba(15,35,60,.08);
-  --shadow-lg:0 20px 48px rgba(15,35,60,.12);
-
-  --scrollbar-thumb:#cbd5e1;
-  --scrollbar-thumb-hover:#aebccb;
-  --scrollbar-track:transparent;
-
-  /* Chrome / surfaces that need their own value per theme */
-  --topbar-bg:rgba(255,255,255,.94);
-  --tooltip-bg:#16202b;
-  --tooltip-fg:#ffffff;
-
-  /* Code editor (Ace) */
-  --editor-bg:#ffffff;
-  --editor-fg:#16202b;
-  --editor-border:#dde5ee;
-  --editor-gutter-bg:#f5f8fb;
-  --editor-gutter-fg:#7d8a99;
-  --editor-active-line:#eaf3fc;
-  --editor-selection:#a9d0f0;
+  --brand-deep:var(--brand-ink);
+  --brand-navy:var(--brand-ink);
+  --code-bg:var(--console-bg);
+  --code-fg:var(--console-text);
+  --code-border:var(--console-border);
+  --code-muted:var(--console-muted);
 }
 
 /* ============================ DARK ============================ */
 /* Applied when the user picks dark, or when the OS prefers dark and the
-   user has not explicitly chosen light. */
+   user has not explicitly chosen light. Blue-black ground, every fill solid. */
 :root[data-theme="dark"]{
   color-scheme:dark;
-  --primary:#0065bb;
-  --primary-hover:#1a7ad0;
-  --primary-active:#00457d;
-  --primary-fg:#ffffff;
-  --primary-light:#0e2a44;
-  --primary-light-hover:#16375a;
-  --primary-border:#1d4c7a;
-  --primary-text:#7fbdf2;
-  --brand-deep:#e8eef5;
-  --brand-navy:#e8eef5;
-  --brand-blue:#3b93e0;
+  --primary:#2767c8;
+  --primary-hover:#2f73d8;
+  --primary-active:#3a7fe0;
+  --primary-ink:#6aa8f5;
+  --primary-ink-hover:#93c0f8;
+  --primary-contrast:#ffffff;
+  --primary-light:#16325a;
+  --primary-soft:#1f4a80;
+  --accent:#6aa8f5;
+  --brand-ink:#e7ebf1;
+  --danger:#f0796b;
+  --danger-hover:#f4938f;
+  --danger-bg:#3a1f1c;
+  --danger-border:#6b3630;
+  --danger-text:#f3a99f;
+  --success:#3ecf8e;
+  --success-hover:#5cdaa2;
+  --success-bg:#16302a;
+  --success-border:#2f5e4c;
+  --success-text:#74dcae;
+  --warning:#e0a533;
+  --warning-bg:#332815;
+  --warning-border:#5f4a22;
+  --warning-text:#f0c471;
+  --info:#4fb3e6;
+  --info-bg:#10283a;
+  --info-border:#1f4a66;
+  --info-text:#8fcff0;
+  --text:#e7ebf1;
+  --text-secondary:#b6c0cd;
+  --text-muted:#98a3b3;
+  --text-inverse:#111a2b;
+  --bg:#0b1018;
+  --surface:#121923;
+  --surface-alt:#18202c;
+  --surface-hover:#172a44;
+  --surface-muted:#1f2733;
+  --surface-sunken:#0e141d;
+  --border:#263041;
+  --border-hover:#364255;
+  --border-strong:#4a576b;
+  --ring:rgba(90,162,255,.40);
+  --overlay:rgba(0,0,0,.62);
+  --nav-bg:#0e1520;
+  --nav-border:#1d2735;
+  --nav-hover:#161f2d;
+  --nav-active:#1b2f4d;
+  --nav-text:#c9d3e1;
+  --nav-text-strong:#ffffff;
+  --nav-muted:#8e9bb0;
+  --nav-accent:#6aa8f5;
+  --shadow-sm:0 1px 2px rgba(0,0,0,.4);
+  --shadow-md:0 8px 24px rgba(0,0,0,.5);
+  --shadow-lg:0 20px 48px rgba(0,0,0,.62);
+  --topbar-bg:#121923;
+  --console-bg:#0d0d0d;
+  --console-surface:#181818;
+  --console-border:#333333;
+  --console-text:#f0f0f0;
+  --console-muted:#a3a3a3;
+  --disabled-bg:#1f2733;
+  --disabled-fg:#6b7789;
+  --disabled-border:#263041;
+  --scrollbar-thumb:#2c3748;
+  --scrollbar-thumb-hover:#3c4a5e;
+  --tooltip-bg:#263041;
+  --tooltip-fg:#e7ebf1;
+  --editor-bg:#0e141d;
+  --editor-fg:#e7ebf1;
+  --editor-border:#263041;
+  --editor-gutter-bg:#121923;
+  --editor-gutter-fg:#98a3b3;
+  --editor-active-line:#172a44;
+  --editor-selection:#1f4a80;
+  --primary-light-hover:#1b3b69;
   --brand-yellow:#f6c431;
   --brand-yellow-soft:#332b12;
-  --ring:rgba(0,101,187,.4);
-
-  --text:#e8eef5;
-  --text-secondary:#b3c0cd;
-  --text-muted:#8494a4;
-  --text-inverse:#16202b;
-  --bg:#0c1116;
-  --surface:#151b22;
-  --surface-alt:#1f2933;
-  --surface-sunken:#101720;
-  --surface-hover:#27333f;
-  --border:#2a343f;
-  --border-hover:#3a4653;
-  --border-strong:#4d5b6a;
-  --overlay:rgba(0,0,0,.62);
-
-  --danger:#ef4444;
-  --danger-hover:#dc2626;
-  --danger-bg:#2d1719;
-  --danger-border:#5a2427;
-  --danger-text:#fca5a5;
-  --success:#10b981;
-  --success-bg:#0e2a20;
-  --success-border:#1c4c3a;
-  --success-text:#6ee7b7;
-  --warning:#f59e0b;
-  --warning-bg:#2e2410;
-  --warning-border:#57451a;
-  --warning-text:#fcd34d;
-  --info:#38bdf8;
-  --info-bg:#0d2635;
-  --info-border:#1c4a63;
-  --info-text:#7dd3fc;
-
-  --disabled-bg:#232c35;
-  --disabled-fg:#66727e;
-  --disabled-border:#303a45;
-
-  --code-bg:#0a1017;
-  --code-fg:#e2e9f1;
-  --code-border:#222c37;
-  --code-muted:#93a3b3;
-
-  --shadow-sm:0 1px 2px rgba(0,0,0,.5);
-  --shadow-md:0 10px 28px rgba(0,0,0,.55);
-  --shadow-lg:0 20px 48px rgba(0,0,0,.6);
-
-  --scrollbar-thumb:#333e4a;
-  --scrollbar-thumb-hover:#47535f;
-
-  --topbar-bg:rgba(21,27,34,.94);
-  --tooltip-bg:#2b3541;
-  --tooltip-fg:#eef3f8;
-
-  --editor-bg:#0f151c;
-  --editor-fg:#e2e9f1;
-  --editor-border:#2a343f;
-  --editor-gutter-bg:#141b23;
-  --editor-gutter-fg:#7c8a99;
-  --editor-active-line:#16222e;
-  --editor-selection:#1d4c7a;
 }
 
 /* Follow the OS when no explicit choice is stored. */
 @media (prefers-color-scheme:dark){
   :root:not([data-theme="light"]){
     color-scheme:dark;
-    --primary:#0065bb;
-    --primary-hover:#1a7ad0;
-    --primary-active:#00457d;
-    --primary-fg:#ffffff;
-    --primary-light:#0e2a44;
-    --primary-light-hover:#16375a;
-    --primary-border:#1d4c7a;
-    --primary-text:#7fbdf2;
-    --brand-deep:#e8eef5;
-    --brand-navy:#e8eef5;
-    --brand-blue:#3b93e0;
+    --primary:#2767c8;
+    --primary-hover:#2f73d8;
+    --primary-active:#3a7fe0;
+    --primary-ink:#6aa8f5;
+    --primary-ink-hover:#93c0f8;
+    --primary-contrast:#ffffff;
+    --primary-light:#16325a;
+    --primary-soft:#1f4a80;
+    --accent:#6aa8f5;
+    --brand-ink:#e7ebf1;
+    --danger:#f0796b;
+    --danger-hover:#f4938f;
+    --danger-bg:#3a1f1c;
+    --danger-border:#6b3630;
+    --danger-text:#f3a99f;
+    --success:#3ecf8e;
+    --success-hover:#5cdaa2;
+    --success-bg:#16302a;
+    --success-border:#2f5e4c;
+    --success-text:#74dcae;
+    --warning:#e0a533;
+    --warning-bg:#332815;
+    --warning-border:#5f4a22;
+    --warning-text:#f0c471;
+    --info:#4fb3e6;
+    --info-bg:#10283a;
+    --info-border:#1f4a66;
+    --info-text:#8fcff0;
+    --text:#e7ebf1;
+    --text-secondary:#b6c0cd;
+    --text-muted:#98a3b3;
+    --text-inverse:#111a2b;
+    --bg:#0b1018;
+    --surface:#121923;
+    --surface-alt:#18202c;
+    --surface-hover:#172a44;
+    --surface-muted:#1f2733;
+    --surface-sunken:#0e141d;
+    --border:#263041;
+    --border-hover:#364255;
+    --border-strong:#4a576b;
+    --ring:rgba(90,162,255,.40);
+    --overlay:rgba(0,0,0,.62);
+    --nav-bg:#0e1520;
+    --nav-border:#1d2735;
+    --nav-hover:#161f2d;
+    --nav-active:#1b2f4d;
+    --nav-text:#c9d3e1;
+    --nav-text-strong:#ffffff;
+    --nav-muted:#8e9bb0;
+    --nav-accent:#6aa8f5;
+    --shadow-sm:0 1px 2px rgba(0,0,0,.4);
+    --shadow-md:0 8px 24px rgba(0,0,0,.5);
+    --shadow-lg:0 20px 48px rgba(0,0,0,.62);
+    --topbar-bg:#121923;
+    --console-bg:#0d0d0d;
+    --console-surface:#181818;
+    --console-border:#333333;
+    --console-text:#f0f0f0;
+    --console-muted:#a3a3a3;
+    --disabled-bg:#1f2733;
+    --disabled-fg:#6b7789;
+    --disabled-border:#263041;
+    --scrollbar-thumb:#2c3748;
+    --scrollbar-thumb-hover:#3c4a5e;
+    --tooltip-bg:#263041;
+    --tooltip-fg:#e7ebf1;
+    --editor-bg:#0e141d;
+    --editor-fg:#e7ebf1;
+    --editor-border:#263041;
+    --editor-gutter-bg:#121923;
+    --editor-gutter-fg:#98a3b3;
+    --editor-active-line:#172a44;
+    --editor-selection:#1f4a80;
+    --primary-light-hover:#1b3b69;
     --brand-yellow:#f6c431;
     --brand-yellow-soft:#332b12;
-    --ring:rgba(0,101,187,.4);
-
-    --text:#e8eef5;
-    --text-secondary:#b3c0cd;
-    --text-muted:#8494a4;
-    --text-inverse:#16202b;
-    --bg:#0c1116;
-    --surface:#151b22;
-    --surface-alt:#1f2933;
-    --surface-sunken:#101720;
-    --surface-hover:#27333f;
-    --border:#2a343f;
-    --border-hover:#3a4653;
-    --border-strong:#4d5b6a;
-    --overlay:rgba(0,0,0,.62);
-
-    --danger:#ef4444;
-    --danger-hover:#dc2626;
-    --danger-bg:#2d1719;
-    --danger-border:#5a2427;
-    --danger-text:#fca5a5;
-    --success:#10b981;
-    --success-bg:#0e2a20;
-    --success-border:#1c4c3a;
-    --success-text:#6ee7b7;
-    --warning:#f59e0b;
-    --warning-bg:#2e2410;
-    --warning-border:#57451a;
-    --warning-text:#fcd34d;
-    --info:#38bdf8;
-    --info-bg:#0d2635;
-    --info-border:#1c4a63;
-    --info-text:#7dd3fc;
-
-    --disabled-bg:#232c35;
-    --disabled-fg:#66727e;
-    --disabled-border:#303a45;
-
-    --code-bg:#0a1017;
-    --code-fg:#e2e9f1;
-    --code-border:#222c37;
-    --code-muted:#93a3b3;
-
-    --shadow-sm:0 1px 2px rgba(0,0,0,.5);
-    --shadow-md:0 10px 28px rgba(0,0,0,.55);
-    --shadow-lg:0 20px 48px rgba(0,0,0,.6);
-
-    --scrollbar-thumb:#333e4a;
-    --scrollbar-thumb-hover:#47535f;
-
-    --topbar-bg:rgba(21,27,34,.94);
-    --tooltip-bg:#2b3541;
-    --tooltip-fg:#eef3f8;
-
-    --editor-bg:#0f151c;
-    --editor-fg:#e2e9f1;
-    --editor-border:#2a343f;
-    --editor-gutter-bg:#141b23;
-    --editor-gutter-fg:#7c8a99;
-    --editor-active-line:#16222e;
-    --editor-selection:#1d4c7a;
   }
 }
 

@@ -65,7 +65,7 @@ def test_reading_a_unit_status_is_not_a_customer_operation():
 def test_the_page_is_hidden_and_refuses_rather_than_erroring():
     """Hidden in the nav, and answering for itself when reached by URL."""
     src = APP_JSX.read_text(encoding="utf-8")
-    assert "isAdmin ? [['services', 'Services Status', Server]] : []" in src, (
+    assert "isAdmin ? [['services', 'Services', Activity]] : []" in src, (
         "the nav entry is still offered to end users"
     )
     assert "isAdmin ? renderServices() : renderAdminOnly()" in src, (

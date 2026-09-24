@@ -13,22 +13,16 @@ import 'ace-builds/src-noconflict/mode-text';
 import 'ace-builds/src-noconflict/mode-yaml';
 import 'ace-builds/src-noconflict/theme-textmate';
 import 'ace-builds/src-noconflict/theme-tomorrow_night';
-import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
-// Google's Material Symbols for the dashboard tiles, inlined locally.
-// Filled and rounded: an outline set at tile size reads thin, and these are
-// the icons the rest of the web has taught people to recognise.
-import {
-  MsApplications, MsSsl, MsCron, MsFiles, MsDatabaseIcon, MsBackups,
-  MsWaf, MsFirewall, MsMalware, MsAccessLogs, MsLoginSecurity,
-  MsPhpConfig, MsUpdates, MsAddons, MsPanelUsers, MsPanelSettings,
-  MsAiAssistants, MsFail2ban, MsServices,
-} from './MaterialSymbols.jsx';
+import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle, Activity, BrickWall, Bug, Layers, LockKeyhole, PackageOpen, ScrollText, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { Terminal } from './components/Terminal';
 import { LANGUAGES, t, useLanguage } from './i18n.js';
 import './style.css';
 import './brand.css';
 import './file-manager.css';
 import './theme.css';
+// OPanel's layout layer, loaded last so it wins ties: navy sidebar in
+// groups, one account menu, one blue button per task.
+import './ui.css';
 
 const API = import.meta.env.VITE_API_URL || '/api';
 // How a site's app_type is written wherever a person reads it.
@@ -63,7 +57,6 @@ const NAV_PARENT_PAGE = { 'waf-site': 'waf' };
 
 // 'waf-site' is reached from the WAF overview rather than the sidebar, but it
 // still belongs to Settings so the menu stays open and WAF stays highlighted.
-const SETTINGS_PAGE_KEYS = ['settings', 'security', 'php', 'firewall', 'waf', 'waf-site', 'malware', 'access-logs', 'updates', 'addons', 'services', 'mcp'];
 const PAGE_ROUTES = {
   dashboard: '/',
   websites: '/website',
@@ -887,7 +880,8 @@ function App() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState('');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const userMenuRef = useRef(null);
   const [panelSettings, setPanelSettings] = useState({ app_name: 'BPanel', panel_url: '', panel_hostname: '', panel_port: 2222, logo_url: '', favicon_url: '/favicon.png', ssl_enabled: false });
   const [phpTune, setPhpTune] = useState(null);
   const [phpTuneApplied, setPhpTuneApplied] = useState(false);
@@ -4181,22 +4175,6 @@ Each account is overwritten with what is in its archive.`)) return;
     return () => clearInterval(timer);
   }, [isAuthenticated, page, isAdmin]);
 
-  // What the overview reads beyond the lists loaded at sign-in: service states
-  // and backup schedules, when the page opens. Services again every 30s - a
-  // status check runs systemctl once per unit, which is too much to repeat at
-  // the 5s the resource figures refresh at.
-  useEffect(() => {
-    if (!isAuthenticated || page !== 'dashboard' || !isAdmin) return undefined;
-    const refreshServices = async () => {
-      const names = await loadServiceNames();
-      await Promise.all(names.map(name => checkService(name)));
-    };
-    refreshServices();
-    loadBackupSchedules();
-    const timer = setInterval(refreshServices, 30000);
-    return () => clearInterval(timer);
-  }, [isAuthenticated, page, isAdmin]);
-
   useEffect(() => {
     if (!isAuthenticated || page !== 'services' || !isAdmin) return undefined;
     checkAllServices();
@@ -4341,48 +4319,61 @@ Each account is overwritten with what is in its archive.`)) return;
 
   useEffect(() => { setMobileMenuOpen(false); }, [page]);
 
+  // The account menu closes on a click anywhere else, on Escape, and on navigation.
   useEffect(() => {
-    if (SETTINGS_PAGE_KEYS.includes(page)) setSettingsMenuOpen(true);
-  }, [page]);
+    if (!userMenuOpen) return undefined;
+    const onPointer = event => { if (!userMenuRef.current?.contains(event.target)) setUserMenuOpen(false); };
+    const onKey = event => { if (event.key === 'Escape') setUserMenuOpen(false); };
+    document.addEventListener('mousedown', onPointer);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('mousedown', onPointer); document.removeEventListener('keydown', onKey); };
+  }, [userMenuOpen]);
+
+  useEffect(() => { setUserMenuOpen(false); }, [page]);
 
   function roleLabel(role) {
     return role === 'admin' ? 'Admin' : 'End user';
   }
 
-  const mainNavItems = [
-    ['dashboard', 'Dashboard', Home],
-    ['websites', 'Websites', Globe],
-    ...(appsFeatureEnabled ? [['applications', 'Applications', Server]] : []),
-    ['ssl', 'SSL', Lock],
-    ['databases', 'Database', Database],
-    ['cron', 'Cron', Clock],
-    ['files', 'File manager', FolderOpen],
-    ['sftp', 'SFTP accounts', Upload],
-    ['backups', 'Backups', Archive],
-    ...(isAdmin ? [['users', 'Panel users', Users]] : []),
-  ];
+  // The sidebar in three labelled groups, as OPanel has it - what a site
+  // needs, what guards it, and the server itself - so nothing hides behind a
+  // collapsed "Settings". Labels are English and go through t() when drawn.
+  const navSections = [
+    { key: 'home', items: [['dashboard', 'Dashboard', Home]] },
+    { key: 'hosting', title: 'Hosting', items: [
+      ['websites', 'Websites', Globe],
+      ...(appsFeatureEnabled ? [['applications', 'Applications', Boxes]] : []),
+      ['ssl', 'SSL', Lock],
+      ['databases', 'Databases', Database],
+      ['cron', 'Cron', Clock],
+      ['files', 'File manager', FolderOpen],
+      ['sftp', 'SFTP accounts', Upload],
+      ['backups', 'Backups', Archive],
+    ] },
+    { key: 'security', title: 'Security', items: [
+      ...(isAdmin ? [['firewall', 'Firewall', BrickWall]] : []),
+      ['waf', 'WAF', ShieldAlert],
+      ...(isAdmin ? [['malware', 'Malware scanner', Bug]] : []),
+      ...(isAdmin ? [['access-logs', 'Access logs', ScrollText]] : []),
+      ['security', 'Account security', LockKeyhole],
+    ] },
+    { key: 'system', title: 'System', items: [
+      ...(isAdmin ? [['services', 'Services', Activity]] : []),
+      ...(isAdmin ? [['php', 'PHP config', Code2]] : []),
+      ...(isAdmin ? [['users', 'Panel users', Users]] : []),
+      ...(isAdmin ? [['settings', 'Panel settings', SettingsIcon]] : []),
+      ...(isAdmin ? [['updates', 'Updates', RefreshCw]] : []),
+      ...(isAdmin ? [['addons', 'Addons', PackageOpen]] : []),
+      // A customer sees this only once an administrator has turned the addon
+      // on. An admin always sees it, so there is somewhere to go and read why
+      // it is off.
+      ...(mcpAddonInstalled || isAdmin ? [['mcp', 'AI assistants', Bot]] : []),
+    ] },
+  ].filter(section => section.items.length > 0);
 
-  const settingsNavItems = [
-    ...(isAdmin ? [['settings', 'Panel settings', SettingsIcon]] : []),
-    ['security', 'Security', Shield],
-    ...(isAdmin ? [['php', 'PHP config', Code2]] : []),
-    ...(isAdmin ? [['firewall', 'Firewall', Shield]] : []),
-    ['waf', 'WAF', Shield],
-    ...(isAdmin ? [['malware', 'Malware Scanner', Search]] : []),
-    ...(isAdmin ? [['access-logs', 'Access Logs', FileText]] : []),
-    ...(isAdmin ? [['updates', 'Updates', RefreshCw]] : []),
-    ...(isAdmin ? [['addons', 'Addons', Boxes]] : []),
-    ...(isAdmin ? [['services', 'Services Status', Server]] : []),
-    // A customer sees this only once an administrator has turned the addon
-    // on. An admin always sees it, so there is somewhere to go and read why
-    // it is off.
-    ...(mcpAddonInstalled || isAdmin ? [['mcp', 'AI assistants', Bot]] : []),
-  ];
-
-  const navItems = [...mainNavItems, ...settingsNavItems];
+  const navItems = navSections.flatMap(section => section.items);
   const navPage = NAV_PARENT_PAGE[page] || page;
   const activeNavItem = navItems.find(([key]) => key === navPage) || navItems[0];
-  const settingsIsActive = SETTINGS_PAGE_KEYS.includes(page);
 
   function renderNotifications() {
     const errorMessage = formatApiError(error, '').trim();
@@ -4534,7 +4525,7 @@ Each account is overwritten with what is in its archive.`)) return;
   function storageUsageText(user) {
     // -1 means the panel has not measured this account yet and did not hold
     // the list up to do it. Saying so beats drawing a zero that reads as fact.
-    if (Number(user?.storage_used_bytes) < 0) return 'measuring...';
+    if (Number(user?.storage_used_bytes) < 0) return t('measuring...');
     const used = Number(user?.storage_used_bytes || 0);
     const limit = storageLimitBytes(user);
     if (limit === null) return formatBytes(used);
@@ -4543,13 +4534,25 @@ Each account is overwritten with what is in its archive.`)) return;
 
   function ResourceCard({ icon: Icon, label, value, detail, percent }) {
     const safePercent = percent == null ? null : clampPercent(percent);
+    // Amber from 80%, red from 90%: a disk at 93% should not look like one at
+    // 30%. Named level-* because .danger and .warn are a button and a badge.
     const level = safePercent == null ? '' : safePercent >= 90 ? ' level-critical' : safePercent >= 80 ? ' level-warn' : '';
     return <article className={`resource-card${level}`}>
       <div className="resource-head"><span className="resource-icon"><Icon size={16}/></span><span>{label}</span></div>
       <strong>{value}</strong>
-      {safePercent !== null && <div className="resource-track"><span style={{ width: `${safePercent}%` }}></span></div>}
+      {/* A meter without a percentage keeps an empty track, so every card's
+          value and detail sit on the same lines as its neighbours'. */}
+      {safePercent !== null ? <div className="resource-track"><span style={{ width: `${safePercent}%` }}></span></div> : <div className="resource-track is-empty" aria-hidden="true"></div>}
       <small>{detail}</small>
     </article>;
+  }
+
+  function FeatureTile({ icon: Icon, label, hint, target }) {
+    return <button type="button" className="feature-tile" onClick={() => navigateToPage(target)}>
+      <span className="feature-tile-icon"><Icon size={18}/></span>
+      <span className="feature-tile-label">{t(label)}</span>
+      <small>{hint}</small>
+    </button>;
   }
 
   function renderDashboard() {
@@ -4559,208 +4562,86 @@ Each account is overwritten with what is in its archive.`)) return;
     const network = resourceUsage?.network || {};
     const networkTotal = (Number(network.rx_per_sec) || 0) + (Number(network.tx_per_sec) || 0);
 
-    // The overview answers "is anything wrong, and where?" before it offers a
-    // way anywhere else. It used to be a second copy of the sidebar - twenty
-    // tiles, each a link to a page the menu already lists - with the state of
-    // the server squeezed into one row above them.
-    //
-    // A site needs attention when it is not serving or has no certificate.
-    // Those sort to the top, so one broken site in forty shows without a search.
-    const siteNeedsAttention = site => site.status !== 'active' || !site.ssl_enabled;
-    const sortedSites = [...websites].sort((a, b) =>
-      Number(siteNeedsAttention(b)) - Number(siteNeedsAttention(a))
-      || String(a.domain).localeCompare(String(b.domain)));
-    const shownSites = sortedSites.slice(0, 8);
-    const sslCount = websites.filter(site => site.ssl_enabled).length;
-    const attentionCount = websites.filter(siteNeedsAttention).length;
-    const siteStatusLabel = { pending: 'Pending', suspended: 'Suspended', error: 'Error' };
+    // The BNIX launcher, drawn as OPanel draws it: the server's meters in one
+    // card, then every page in the same three groups as the sidebar, each with
+    // a live count where there is one. Every page the sidebar lists has a tile
+    // here, and so does every addon that is on - fail2ban included, although
+    // its ban list is a section of the Firewall page.
+    const sslActive = websites.filter(site => site.ssl_enabled).length;
+    const featureGroups = [
+      {
+        title: 'Hosting', icon: Layers, items: [
+          { target: 'websites', label: 'Websites', icon: Globe, hint: websites.length ? t('{count} sites', { count: websites.length }) : t('No websites yet') },
+          appsFeatureEnabled ? { target: 'applications', label: 'Applications', icon: Boxes, hint: t('Node and Docker apps') } : null,
+          { target: 'ssl', label: 'SSL', icon: Lock, hint: sslActive ? t('{secured} of {total} secured', { secured: sslActive, total: websites.length }) : t('Nothing secured yet') },
+          { target: 'databases', label: 'Databases', icon: Database, hint: t('{count} databases', { count: databases.length }) },
+          { target: 'cron', label: 'Cron', icon: Clock, hint: t('Scheduled jobs') },
+          { target: 'files', label: 'File manager', icon: FolderOpen, hint: currentUser && !isAdmin
+            ? t('{used} of {limit}', { used: formatBytes(currentUser.storage_used_bytes), limit: formatBytes(storageLimitBytes(currentUser)) })
+            : t('Browse and edit files') },
+          { target: 'sftp', label: 'SFTP accounts', icon: Upload, hint: t('One login per website') },
+          { target: 'backups', label: 'Backups', icon: Archive, hint: t('Create and restore') },
+        ],
+      },
+      {
+        title: 'Security', icon: ShieldCheck, items: [
+          isAdmin ? { target: 'firewall', label: 'Firewall', icon: BrickWall, hint: t('Ports and IP rules') } : null,
+          (fail2banAddonInstalled && isAdmin) ? { target: 'firewall', label: 'Fail2ban', icon: Ban, hint: t('SSH ban list') } : null,
+          { target: 'waf', label: 'WAF', icon: ShieldAlert, hint: t('Request filtering') },
+          isAdmin ? { target: 'malware', label: 'Malware scanner', icon: Bug, hint: t('Scan site files') } : null,
+          isAdmin ? { target: 'access-logs', label: 'Access logs', icon: ScrollText, hint: t('Requests and blocks') } : null,
+          { target: 'security', label: 'Account security', icon: LockKeyhole, hint: t('Login and access') },
+        ],
+      },
+      {
+        title: 'System', icon: Server, items: [
+          isAdmin ? { target: 'services', label: 'Services', icon: Activity, hint: t('Start, stop, restart') } : null,
+          isAdmin ? { target: 'php', label: 'PHP config', icon: Code2, hint: t('Versions and limits') } : null,
+          isAdmin ? { target: 'users', label: 'Panel users', icon: Users, hint: t('Accounts and limits') } : null,
+          isAdmin ? { target: 'settings', label: 'Panel settings', icon: SettingsIcon, hint: t('Hostname and branding') } : null,
+          isAdmin ? { target: 'updates', label: 'Updates', icon: RefreshCw, hint: t('Panel version') } : null,
+          isAdmin ? { target: 'addons', label: 'Addons', icon: PackageOpen, hint: t('Optional features') } : null,
+          (mcpAddonInstalled || isAdmin) ? { target: 'mcp', label: 'AI assistants', icon: Bot, hint: t('Tokens for AI assistants') } : null,
+        ],
+      },
+    ].map(group => ({ ...group, items: group.items.filter(Boolean) })).filter(group => group.items.length > 0);
 
-    // The same reading of `systemctl status` as the Services page.
-    const serviceRows = serviceNames.map(name => {
-      const state = serviceStates[name];
-      const text = `${state?.stdout || ''} ${state?.stderr || ''}`;
-      const status = !state ? 'unknown'
-        : text.includes('active (running)') ? 'running'
-          : (text.includes('inactive') || text.includes('failed')) ? 'stopped' : 'unknown';
-      return { name, status };
-    });
-    const stoppedServices = serviceRows.filter(row => row.status === 'stopped').length;
-    const servicesChecked = serviceRows.every(row => row.status !== 'unknown');
-
-    const activeSchedules = backupSchedules.filter(item => item.is_active);
-    const lastBackup = backupSchedules
-      .filter(item => item.last_run_at)
-      .sort((a, b) => String(b.last_run_at).localeCompare(String(a.last_run_at)))[0];
-    const failedSchedules = activeSchedules.filter(item => item.last_status === 'error').length;
-    // Stored as UTC without a zone, so read it as UTC rather than local time.
-    const formatWhen = value => {
-      if (!value) return '—';
-      const iso = /[zZ]|[+-]\d\d:?\d\d$/.test(value) ? value : `${value}Z`;
-      const date = new Date(iso);
-      if (Number.isNaN(date.getTime())) return '—';
-      // Date first, then time, in both languages: vi-VN's own order put the
-      // time first and joined the date with a dash ("09:00 25-09").
-      const pad = n => String(n).padStart(2, '0');
-      return `${pad(date.getDate())}/${pad(date.getMonth() + 1)} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
-    };
-
-    // Every page the sidebar folds away, one click from here. Name and icon
-    // only: the page says the rest once it is open. A shortcut is dropped when
-    // the account cannot reach the page. An addon that is on always gets one,
-    // even fail2ban, whose ban list is a section of the Firewall page.
-    const shortcuts = [
-      ['files', 'File manager', MsFiles],
-      ['databases', 'Database', MsDatabaseIcon],
-      ['backups', 'Backups', MsBackups],
-      ['ssl', 'SSL', MsSsl],
-      ['cron', 'Cron', MsCron],
-      ['sftp', 'SFTP accounts', MsFiles],
-      appsFeatureEnabled ? ['applications', 'Applications', MsApplications] : null,
-      ['waf', 'WAF', MsWaf],
-      isAdmin ? ['firewall', 'Firewall', MsFirewall] : null,
-      (fail2banAddonInstalled && isAdmin) ? ['firewall', 'Fail2ban', MsFail2ban] : null,
-      isAdmin ? ['malware', 'Malware Scanner', MsMalware] : null,
-      isAdmin ? ['access-logs', 'Access Logs', MsAccessLogs] : null,
-      ['security', 'Login security', MsLoginSecurity],
-      isAdmin ? ['services', 'Services Status', MsServices] : null,
-      isAdmin ? ['php', 'PHP config', MsPhpConfig] : null,
-      isAdmin ? ['users', 'Panel users', MsPanelUsers] : null,
-      isAdmin ? ['updates', 'Updates', MsUpdates] : null,
-      isAdmin ? ['addons', 'Addons', MsAddons] : null,
-      (mcpAddonInstalled || isAdmin) ? ['mcp', 'AI assistants', MsAiAssistants] : null,
-      isAdmin ? ['settings', 'Panel settings', MsPanelSettings] : null,
-    ].filter(Boolean);
-
-    const openSiteFromOverview = site => {
-      setWebsiteSearch(site.domain);
-      navigateToPage('websites');
-    };
-    const startNewWebsite = () => {
-      setCreateFormOpen(true);
-      navigateToPage('websites');
-    };
-
-    return <div className="overview">
-      {isAdmin && <section className="resource-grid">
-        <ResourceCard icon={Cpu} label="CPU" value={formatPercent(cpu.percent)} percent={cpu.percent} detail={[cpu.cores ? t('{count} cores', { count: cpu.cores }) : null, cpu.load?.length ? `load ${cpu.load.join(' / ')}` : null].filter(Boolean).join(' · ') || '--'} />
-        <ResourceCard icon={MemoryStick} label="RAM" value={formatPercent(memory.percent)} percent={memory.percent} detail={`${formatBytes(memory.used)} / ${formatBytes(memory.total)}`} />
-        <ResourceCard icon={HardDrive} label={t('Disk')} value={formatPercent(disk.percent)} percent={disk.percent} detail={`${formatBytes(disk.used)} / ${formatBytes(disk.total)}`} />
-        <ResourceCard icon={Network} label={t('Network')} value={`${formatBytes(networkTotal)}/s`} detail={t('Down {down}/s · Up {up}/s', { down: formatBytes(network.rx_per_sec), up: formatBytes(network.tx_per_sec) })} />
-      </section>}
-
-      {/* An end user never sees the server's CPU or RAM. What is theirs to
-          watch is the package: storage, and how many sites and databases. */}
-      {currentUser && !isAdmin && <section className="resource-grid">
-        <ResourceCard
-          icon={HardDrive}
-          label={t('Storage')}
-          value={formatBytes(currentUser.storage_used_bytes)}
-          percent={currentUser.storage_percent}
-          detail={t('of {limit} in your package', { limit: formatBytes(storageLimitBytes(currentUser)) })}
-        />
-        <ResourceCard icon={Globe} label={t('Websites')} value={String(websites.length)} detail={currentUser.website_limit ? t('of {limit} in your package', { limit: currentUser.website_limit }) : t('in your account')} />
-        <ResourceCard icon={Database} label={t('Database')} value={String(databases.length)} detail={t('in your account')} />
-      </section>}
-
-      <div className={isAdmin ? 'overview-main' : 'overview-main single'}>
-        <section className="overview-card overview-sites">
-          <header className="overview-card-head">
-            <div>
-              <h2>{t('Websites')}</h2>
-              <p>
-                {t('{count} websites · {ssl} with SSL', { count: websites.length, ssl: sslCount })}
-                {attentionCount > 0 && <span className="overview-flag">{t('{count} need attention', { count: attentionCount })}</span>}
-              </p>
-            </div>
-            <div className="overview-card-actions">
-              {websites.length > 0 && <button type="button" className="secondary-light" onClick={() => navigateToPage('websites')}>{t('View all')}</button>}
-              <button type="button" onClick={startNewWebsite}><Plus size={15}/>{t('New website')}</button>
-            </div>
-          </header>
-          {websites.length === 0
-            ? <div className="overview-empty">
-              <Globe size={22}/>
-              <p>{t('No websites yet. Create the first one to get started.')}</p>
-            </div>
-            : <div className="overview-table-wrap">
-              <table className="overview-table">
-                <thead><tr>
-                  <th>{t('Domain')}</th>
-                  <th className="optional">{t('Type')}</th>
-                  <th>PHP</th>
-                  <th>SSL</th>
-                  <th className="optional">WAF</th>
-                </tr></thead>
-                <tbody>{shownSites.map(site => <tr key={site.id}>
-                  <td>
-                    <button type="button" className="overview-domain" onClick={() => openSiteFromOverview(site)} title={t('Open in the website list')}>{site.domain}</button>
-                    {site.status !== 'active' && <span className="badge warn">{t(siteStatusLabel[site.status] || site.status)}</span>}
-                  </td>
-                  <td className="optional">{APP_TYPE_LABELS[site.app_type] || site.app_type}</td>
-                  <td>{site.app_type === 'static' ? '—' : site.php_version}</td>
-                  <td><span className={`overview-state ${site.ssl_enabled ? 'on' : 'off'}`}>{site.ssl_enabled ? t('On') : t('Off')}</span></td>
-                  <td className="optional"><span className={`overview-state ${site.waf_enabled ? 'on' : 'muted'}`}>{site.waf_enabled ? t('On') : t('Off')}</span></td>
-                </tr>)}</tbody>
-              </table>
-              {websites.length > shownSites.length && <button type="button" className="overview-more" onClick={() => navigateToPage('websites')}>
-                {t('{count} more websites', { count: websites.length - shownSites.length })}
-              </button>}
-            </div>}
-        </section>
-
-        {isAdmin && <div className="overview-side">
-          <section className="overview-card">
-            <header className="overview-card-head">
-              <div>
-                <h2>{t('Services')}</h2>
-                <p>{!servicesChecked && stoppedServices === 0 ? t('Checking...')
-                  : stoppedServices > 0 ? <span className="overview-flag">{t('{count} stopped', { count: stoppedServices })}</span>
-                    : t('All running')}</p>
-              </div>
-              <button type="button" className="secondary-light" onClick={() => navigateToPage('services')}>{t('Manage')}</button>
-            </header>
-            <ul className="overview-list">
-              {serviceRows.map(row => <li key={row.name}>
-                <span className={`overview-dot ${row.status}`} aria-hidden="true"></span>
-                <span className="overview-list-name">{row.name}</span>
-                <span className={`overview-list-state ${row.status}`}>
-                  {row.status === 'running' ? t('Running') : row.status === 'stopped' ? t('Stopped') : '…'}
-                </span>
-              </li>)}
-            </ul>
-          </section>
-
-          <section className="overview-card">
-            <header className="overview-card-head">
-              <div>
-                <h2>{t('Backups')}</h2>
-                <p>{activeSchedules.length > 0
-                  ? t('{count} active schedules', { count: activeSchedules.length })
-                  : <span className="overview-flag">{t('No automatic backup')}</span>}</p>
-              </div>
-              <button type="button" className="secondary-light" onClick={() => navigateToPage('backups')}>{t('Open')}</button>
-            </header>
-            <dl className="overview-facts">
-              <div><dt>{t('Last run')}</dt><dd>{formatWhen(lastBackup?.last_run_at)}</dd></div>
-              <div><dt>{t('Result')}</dt><dd>{!lastBackup ? '—'
-                : <span className={`overview-state ${lastBackup.last_status === 'ok' ? 'on' : lastBackup.last_status === 'error' ? 'off' : 'muted'}`}>
-                  {lastBackup.last_status === 'ok' ? t('Succeeded') : lastBackup.last_status === 'error' ? t('Failed') : lastBackup.last_status === 'running' ? t('Running') : t('Pending')}
-                </span>}</dd></div>
-            </dl>
-            {failedSchedules > 0 && <p className="overview-note danger">{t('{count} schedules failed on their last run.', { count: failedSchedules })}</p>}
-            {activeSchedules.length === 0 && <p className="overview-note">{t('Nothing backs these sites up on a schedule yet.')}</p>}
-          </section>
-        </div>}
-      </div>
-
-      <section className="overview-card">
-        <header className="overview-card-head"><div><h2>{t('Shortcuts')}</h2></div></header>
-        <div className="overview-shortcuts">
-          {shortcuts.map(([key, label, Icon]) => <button type="button" className="overview-shortcut" key={`${key}-${label}`} onClick={() => navigateToPage(key)}>
-            <Icon size={18}/><span>{t(label)}</span>
-          </button>)}
+    return <div className="dashboard">
+      {isAdmin && <section className="section dash-card dash-resources">
+        <div className="dash-card-head"><span className="dash-card-icon"><Activity size={16}/></span><h2>{t('Server resources')}</h2></div>
+        <div className="resource-grid">
+          <ResourceCard icon={Cpu} label="CPU" value={formatPercent(cpu.percent)} percent={cpu.percent} detail={cpu.load?.length ? t('Load {load}', { load: cpu.load.join(' / ') }) : t('{count} cores', { count: cpu.cores || '--' })} />
+          <ResourceCard icon={MemoryStick} label="RAM" value={formatPercent(memory.percent)} percent={memory.percent} detail={`${formatBytes(memory.used)} / ${formatBytes(memory.total)}`} />
+          <ResourceCard icon={HardDrive} label={t('Disk')} value={formatPercent(disk.percent)} percent={disk.percent} detail={`${formatBytes(disk.used)} / ${formatBytes(disk.total)}`} />
+          <ResourceCard icon={Network} label={t('Network')} value={`${formatBytes(networkTotal)}/s`} detail={t('Down {down}/s · Up {up}/s', { down: formatBytes(network.rx_per_sec), up: formatBytes(network.tx_per_sec) })} />
         </div>
-      </section>
+      </section>}
+      {/* A customer never sees the server's meters; their counterpart is how
+          much of the package is used. */}
+      {!isAdmin && currentUser && (() => {
+        const storageLimit = storageLimitBytes(currentUser);
+        const siteLimit = Number(currentUser.website_limit) || 0;
+        const usedBytes = Number(currentUser.storage_used_bytes) || 0;
+        const pct = (used, limit) => limit > 0 ? (used / limit) * 100 : null;
+        return <section className="section dash-card dash-resources" style={{ '--meter-cols': 3 }}>
+          <div className="dash-card-head"><span className="dash-card-icon"><Activity size={16}/></span><h2>{t('Plan usage')}</h2></div>
+          <div className="resource-grid">
+            <ResourceCard icon={HardDrive} label={t('Storage')} value={storageLimit ? formatPercent(pct(usedBytes, storageLimit)) : formatBytes(usedBytes)} percent={storageLimit ? pct(usedBytes, storageLimit) : null} detail={storageLimit ? t('{used} of {limit}', { used: formatBytes(usedBytes), limit: formatBytes(storageLimit) }) : t('unlimited')} />
+            <ResourceCard icon={Globe} label={t('Websites')} value={siteLimit ? `${websites.length} / ${siteLimit}` : String(websites.length)} percent={pct(websites.length, siteLimit)} detail={siteLimit ? t('{used} of {limit}', { used: websites.length, limit: siteLimit }) : t('unlimited')} />
+            <ResourceCard icon={Database} label={t('Databases')} value={String(databases.length)} percent={null} detail={t('in your account')} />
+          </div>
+        </section>;
+      })()}
+      {/* One card per group, side by side, each a list of links - the same
+          card shape as the meters above, so the page reads as one grid. */}
+      <div className="dash-groups" style={{ '--dash-cols': featureGroups.length }}>
+        {featureGroups.map(group => <section className="section dash-card dash-group" key={group.title}>
+          <div className="dash-card-head"><span className="dash-card-icon"><group.icon size={16}/></span><h2>{t(group.title)}</h2></div>
+          <div className="dash-links">
+            {group.items.map(item => <FeatureTile key={`${item.target}-${item.label}`} {...item} />)}
+          </div>
+        </section>)}
+      </div>
     </div>;
   }
 
@@ -5357,6 +5238,12 @@ Each account is overwritten with what is in its archive.`)) return;
       ? null
       : 'This creates the first hosted site for the current account.';
     const createOpen = createFormOpen || websites.length === 0;
+    // What secures a site, in OPanel's words: a wildcard, a certificate
+    // borrowed from another site, one uploaded by hand, or Let's Encrypt.
+    const sslBadge = site => !site.ssl_enabled ? t('No SSL')
+      : site.ssl_mode === 'cloudflare' ? t('Wildcard')
+        : site.ssl_mode === 'shared' ? t('Shared cert')
+          : site.ssl_mode === 'manual' ? t('Manual SSL') : 'SSL OK';
     return <>
       {createOpen && <section className="section create-site-section">
         <div className="section-title">
@@ -5424,14 +5311,14 @@ Each account is overwritten with what is in its archive.`)) return;
       </section>}
       <section className="section">
         <div className="section-title">
-          <div><h2>{t('Website list')}</h2><p className="hint">{searchActive ? t('{n} result(s)', { n: visibleWebsites.length }) : t('{n} website(s)', { n: visibleWebsites.length })}</p></div>
+          <div><h2>{t('Website list')}</h2></div>
           <div className="actions">
+            <button className="secondary" disabled={!!loading || websiteSearching} onClick={() => loadWebsiteList(websiteSearch, true)}><RefreshCw size={15} className={websiteSearching ? 'spin' : ''}/>{t('Refresh')}</button>
             {!createOpen && <button type="button" onClick={() => setCreateFormOpen(true)}><Plus size={15}/>{t('New website')}</button>}
-            <button className="secondary-light" disabled={!!loading || websiteSearching} onClick={() => loadWebsiteList(websiteSearch, true)}><RefreshCw size={15} className={websiteSearching ? 'spin' : ''}/>{t('Refresh')}</button>
           </div>
         </div>
-        <div className="website-search-bar">
-          <Search size={16}/>
+        <div className="website-search">
+          <Search size={15}/>
           <NoAutofillInput
             type="search"
             name="website-search"
@@ -5440,15 +5327,10 @@ Each account is overwritten with what is in its archive.`)) return;
             placeholder={t('Search domain, alias, path, or Linux user')}
             aria-label={t('Search websites')}
           />
-          {websiteSearch && <button className="secondary-light icon-button" type="button" onClick={() => setWebsiteSearch('')} aria-label={t('Clear website search')} title={t('Clear search')}><X size={15}/></button>}
+          {websiteSearch && <button className="mini secondary-light" type="button" onClick={() => setWebsiteSearch('')} aria-label={t('Clear website search')} title={t('Clear search')}><X size={13}/></button>}
+          <span className="hint">{searchActive ? t('{n} result(s)', { n: visibleWebsites.length }) : t('{n} website(s)', { n: visibleWebsites.length })}</span>
         </div>
         {visibleWebsites.length === 0 && <EmptyState icon={Globe} message={searchActive ? "No websites match this search." : "No websites yet."} />}
-        {visibleWebsites.length > 0 && <div className="site-list">
-        {/* A table in all but markup: the same column in the same place on
-            every row, so SSL or PHP can be read down the page. */}
-        <div className="site-list-header" aria-hidden="true">
-          <span>{t('Domain')}</span><span>SSL</span><span>{t('Type')}</span><span>PHP</span><span>{t('Features')}</span><span></span>
-        </div>
         <div className="site-grid">
           {visibleWebsites.map(site => <div className="site-stack" key={site.id}>
           <article className="site-card">
@@ -5459,16 +5341,14 @@ Each account is overwritten with what is in its archive.`)) return;
               </div>
             </div>
             <div className="site-meta">
-              <span className="site-cell" data-label="SSL"><span className={`overview-state ${site.ssl_enabled ? 'on' : 'off'}`}>{site.ssl_enabled ? t('On') : t('Off')}</span></span>
-              <span className="site-cell">{APP_TYPE_LABELS[site.app_type || 'wordpress'] || site.app_type}</span>
-              <span className="site-cell" data-label="PHP">{site.app_type === 'static' ? '—' : site.php_version}</span>
-              <span className="site-cell site-features">
-                {site.waf_enabled && <span className="badge ok">WAF</span>}
-                {site.http_flood_enabled && <span className="badge ok">{t('HTTP Flood')}</span>}
-                {site.nginx_custom && <span className="badge">{t('Custom Nginx')}</span>}
-                {site.app_type === 'php' && site.nginx_rewrite_mode && site.nginx_rewrite_mode !== 'none' && <span className="badge">{t('Rewrite')}{' '}<strong>{site.nginx_rewrite_mode}</strong></span>}
-                {(site.aliases || []).length > 0 && <span className="badge">{t('Domains')}{' '}<strong>{(site.aliases || []).length + 1}</strong></span>}
-              </span>
+              <span className={`badge site-ssl-badge ${site.ssl_enabled ? 'ok' : 'warn'}`}>{sslBadge(site)}</span>
+              <span>{APP_TYPE_LABELS[site.app_type || 'wordpress'] || site.app_type}</span>
+              {site.app_type !== 'static' && <span>PHP{' '}<strong>{site.php_version}</strong></span>}
+              {site.app_type === 'php' && site.nginx_rewrite_mode && site.nginx_rewrite_mode !== 'none' && <span>{t('Rewrite')}{' '}<strong>{site.nginx_rewrite_mode}</strong></span>}
+              {site.nginx_custom && <span className="badge ok">{t('Custom Nginx')}</span>}
+              {site.waf_enabled && <span className="badge ok">WAF</span>}
+              {site.http_flood_enabled && <span className="badge ok">{t('HTTP Flood')}</span>}
+              {(site.aliases || []).length > 0 && <span>{t('Domains')}{' '}<strong>{(site.aliases || []).length + 1}</strong></span>}
             </div>
             <div className="site-actions" aria-label={`Website actions for ${site.domain}`}>
               <div className="site-feature-actions">
@@ -5489,7 +5369,6 @@ Each account is overwritten with what is in its archive.`)) return;
           {terminalViewer?.id === site.id && renderWebsiteTerminal()}
           </div>)}
         </div>
-        </div>}
       </section>
     </>;
   }
@@ -5501,14 +5380,25 @@ Each account is overwritten with what is in its archive.`)) return;
     const sslLabel = currentSite?.ssl_enabled
       ? (sslLabels[currentSite?.ssl_mode] || 'SSL Enabled')
       : 'SSL Disabled';
-    const sslUpdated = currentSite?.ssl_updated_at ? new Date(currentSite.ssl_updated_at).toLocaleString() : '';
-    return <section className="section">
+    const locale = language === 'vi' ? 'vi-VN' : 'en-GB';
+    const sslUpdated = currentSite?.ssl_updated_at ? new Date(currentSite.ssl_updated_at).toLocaleString(locale) : '';
+    // Every site on one list, as OPanel has it: the unsecured first, then the
+    // rest by name, each a click from the form above.
+    const sslSites = [...websites].sort((a, b) => (a.ssl_enabled === b.ssl_enabled
+      ? String(a.domain).localeCompare(String(b.domain)) : a.ssl_enabled ? 1 : -1));
+    const securedCount = websites.filter(site => site.ssl_enabled).length;
+    const siteSslLabel = site => !site.ssl_enabled ? t('No SSL')
+      : site.ssl_mode === 'manual' ? t('Manual SSL')
+        : site.ssl_mode === 'shared' ? t('Shared cert')
+          : site.ssl_mode === 'cloudflare' ? t('Wildcard') : 'SSL OK';
+    return <>
+    <section className="section" id="ssl-manage">
       <h2>{t('SSL Certificate')}</h2>
       <WebsiteSelect />
       {currentSite && <div className="info-box" style={{marginTop:8}}>
         <strong>{currentSite.domain}</strong>
-        <span className={currentSite.ssl_enabled ? 'badge ok' : 'badge'} style={{justifySelf:'start'}}>{sslLabel}</span>
-        {sslUpdated && <span className="hint">Updated {sslUpdated}</span>}
+        <span className={currentSite.ssl_enabled ? 'badge ok' : 'badge'} style={{justifySelf:'start'}}>{t(sslLabel)}</span>
+        {sslUpdated && <span className="hint">{t('Updated')} {sslUpdated}</span>}
         {currentSite.ssl_mode === 'manual' && currentSite.ssl_has_ca && <span className="badge ok" style={{justifySelf:'start'}}>{t('CA Bundle')}</span>}
       </div>}
       <div className="segmented ssl-mode-tabs">
@@ -5560,7 +5450,20 @@ Each account is overwritten with what is in its archive.`)) return;
         <textarea rows={7} disabled={!!manualSslFiles.ca_bundle} value={manualSslForm.ca_bundle} onChange={e => setManualSslForm(prev => ({ ...prev, ca_bundle: e.target.value }))} placeholder={t('Optional CA bundle')} />
         <button className="manual-ssl-submit" disabled={!selectedWebsiteId || !!loading} onClick={installManualSsl}><Upload size={15}/>{t('Install Manual SSL')}</button>
       </div>}
-    </section>;
+    </section>
+    {websites.length > 0 && <section className="section">
+      <div className="section-title">
+        <div><h2>{t('All websites')}</h2><p className="hint">{t('{secured} of {total} secured', { secured: securedCount, total: websites.length })}</p></div>
+      </div>
+      <div className="table ssl-overview">
+        {sslSites.map(site => <div className={`row ssl-overview-row${String(site.id) === String(selectedWebsiteId) ? ' selected' : ''}`} key={site.id}>
+          <span className="ssl-overview-domain"><strong>{site.domain}</strong>{site.ssl_updated_at && <small>{t('Updated')} {new Date(site.ssl_updated_at).toLocaleDateString(locale)}</small>}</span>
+          <span className={`badge ${site.ssl_enabled ? 'ok' : 'warn'}`}>{siteSslLabel(site)}</span>
+          <button type="button" className="mini secondary" onClick={() => { setSelectedWebsiteId(String(site.id)); document.getElementById('ssl-manage')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>{site.ssl_enabled ? t('Manage') : t('Set up SSL')}</button>
+        </div>)}
+      </div>
+    </section>}
+    </>;
   }
 
   function renderDatabases() {
@@ -5577,13 +5480,27 @@ Each account is overwritten with what is in its archive.`)) return;
     return <section className="section">
       <div className="section-title">
         <h2>{t('Databases')}</h2>
-        <div className="section-actions">
-          <button className="secondary-light" disabled={!!loading || dbSearching} onClick={() => loadDatabases(dbSearch, true)}><RefreshCw size={15} className={dbSearching ? 'spin' : ''}/>{t('Refresh')}</button>
-          {!dbCreateVisible && <button type="button" onClick={() => setDbCreateOpen(true)}><Plus size={15}/>{t('Create database')}</button>}
+        <div className="actions">
+          <button className="secondary" disabled={!!loading || dbSearching} onClick={() => loadDatabases(dbSearch, true)}><RefreshCw size={15} className={dbSearching ? 'spin' : ''}/>{t('Refresh')}</button>
+          {!dbCreateVisible && <button type="button" onClick={() => setDbCreateOpen(true)}><Plus size={15}/>{t('New database')}</button>}
         </div>
       </div>
-      <div className="website-search-bar">
-        <Search size={16}/>
+      {dbCreateVisible && <div className="create-inline">
+        <div className="create-inline-head">
+          <strong>{t('Create database')}</strong>
+          {databases.length > 0 && <button type="button" className="secondary icon-only mini" onClick={() => setDbCreateOpen(false)} aria-label={t('Close')} title={t('Close')}><X size={15}/></button>}
+        </div>
+        <div className="form-row">
+          <input name="new-db-name" autoComplete="off" value={newDatabase.db_name} onChange={e => setNewDatabase(prev => ({ ...prev, db_name: e.target.value }))} placeholder="database_name" />
+          <input name="new-db-user" autoComplete="off" value={newDatabase.db_user} onChange={e => setNewDatabase(prev => ({ ...prev, db_user: e.target.value }))} placeholder={t('db_user (default = db_name)')} />
+          {/* new-password, or the browser offers the panel's own password here. */}
+          <input name="new-db-password" autoComplete="new-password" value={newDatabase.db_password} onChange={e => setNewDatabase(prev => ({ ...prev, db_password: e.target.value }))} placeholder={t('password (min 12 chars)')} />
+          <button type="button" className="mini secondary-light" title={t('Generate random password')} onClick={() => setNewDatabase(prev => ({ ...prev, db_password: generateRandomPassword() }))}><Dices size={13}/></button>
+          <button disabled={!!loading || !newDatabase.db_name.trim()} onClick={createDatabase}><Plus size={15}/>{t('Create database')}</button>
+        </div>
+      </div>}
+      <div className="list-search">
+        <Search size={15}/>
         <NoAutofillInput
           type="search"
           name="database-search"
@@ -5592,17 +5509,9 @@ Each account is overwritten with what is in its archive.`)) return;
           placeholder={t('Search by database or user name')}
           aria-label={t('Search databases')}
         />
-        {dbSearch && <button className="secondary-light icon-button" type="button" onClick={() => setDbSearch('')} aria-label={t('Clear database search')} title={t('Clear search')}><X size={15}/></button>}
+        {dbSearch && <button className="mini secondary-light" type="button" onClick={() => setDbSearch('')} aria-label={t('Clear database search')} title={t('Clear search')}><X size={13}/></button>}
+        <span className="hint">{t('{count} databases', { count: databases.length })}</span>
       </div>
-      {dbCreateVisible && <div className="form-row db-create-row">
-        <input name="new-db-name" autoComplete="off" value={newDatabase.db_name} onChange={e => setNewDatabase(prev => ({ ...prev, db_name: e.target.value }))} placeholder="database_name" />
-        <input name="new-db-user" autoComplete="off" value={newDatabase.db_user} onChange={e => setNewDatabase(prev => ({ ...prev, db_user: e.target.value }))} placeholder={t('db_user (default = db_name)')} />
-        {/* new-password, or the browser offers the panel's own password here. */}
-        <input name="new-db-password" autoComplete="new-password" value={newDatabase.db_password} onChange={e => setNewDatabase(prev => ({ ...prev, db_password: e.target.value }))} placeholder={t('password (min 12 chars)')} />
-        <button type="button" className="secondary-light" title={t('Generate random password')} onClick={() => setNewDatabase(prev => ({ ...prev, db_password: generateRandomPassword() }))}><Dices size={14}/>{t('Generate')}</button>
-        <button disabled={!!loading || !newDatabase.db_name.trim()} onClick={createDatabase}><Plus size={15}/>{t('Create database')}</button>
-        {databases.length > 0 && <button type="button" className="secondary-light icon-button" onClick={() => setDbCreateOpen(false)} aria-label={t('Close')} title={t('Close')}><X size={15}/></button>}
-      </div>}
       {createdDbInfo && <div className="info-box db-created-box">
         <div className="db-created-head"><strong>{t('Database created successfully')}</strong><button className="mini secondary-light" onClick={() => setCreatedDbInfo(null)}><X size={13}/></button></div>
         <div className="db-created-grid">
@@ -5614,15 +5523,18 @@ Each account is overwritten with what is in its archive.`)) return;
       {databases.length === 0 && !createdDbInfo && <EmptyState icon={Database} message={dbSearchActive ? 'No databases match this search.' : 'No databases found.'} />}
       <div className="table">
         {databases.map(db => {
+          // Name and the site it belongs to, the login user, then the actions:
+          // phpMyAdmin as the one labelled button, the rest as glyphs.
+          const dbSite = websites.find(site => String(site.id) === String(db.website_id));
           return <div className="row db-row" key={db.id}>
-          <span><strong>{db.db_name}</strong></span>
-          <span style={{color:'var(--text-muted)'}}>{db.db_user}</span>
-          {/* Four filled buttons a row made twenty databases eighty loud
-              rectangles. Outline for the actions, a quiet glyph for delete. */}
-          <button className="secondary-light" disabled={!!loading} onClick={() => openPhpMyAdmin(db.id)}><ExternalLink size={14}/>phpMyAdmin</button>
-          <button className="secondary-light" disabled={!!loading} onClick={() => downloadDatabase(db.id, db.db_name)}><Download size={14}/>SQL</button>
-          <button className="secondary-light" disabled={!!loading} onClick={() => changeDbPassword(db.id)}><KeyRound size={14}/>{t('Password')}</button>
-          <button className="site-icon-button danger" disabled={!!loading} onClick={() => deleteDatabase(db.id, db.db_name)} aria-label={`${t('Delete')} ${db.db_name}`} title={t('Delete')}><Trash2 size={15}/></button>
+          <span><strong>{db.db_name}</strong>{dbSite && <small className="db-owner">{dbSite.domain}</small>}</span>
+          <span className="db-user"><small>{t('User')}</small> {db.db_user}</span>
+          <span className="db-actions">
+            <button className="mini secondary" disabled={!!loading} onClick={() => openPhpMyAdmin(db.id)}>phpMyAdmin</button>
+            <button className="mini secondary-light icon-only" disabled={!!loading} onClick={() => downloadDatabase(db.id, db.db_name)} title={t('Download SQL dump')} aria-label={`${t('Download SQL dump')} ${db.db_name}`}><Download size={14}/></button>
+            <button className="mini secondary-light icon-only" disabled={!!loading} onClick={() => changeDbPassword(db.id)} title={t('Change password')} aria-label={`${t('Change password')} ${db.db_name}`}><KeyRound size={14}/></button>
+            <button className="mini danger icon-only" disabled={!!loading} onClick={() => deleteDatabase(db.id, db.db_name)} title={t('Delete')} aria-label={`${t('Delete')} ${db.db_name}`}><Trash2 size={14}/></button>
+          </span>
         </div>})}
       </div>
       <p className="hint">{t('Click phpMyAdmin to sign in directly. Token expires after 60s.')}</p>
@@ -5884,9 +5796,9 @@ Each account is overwritten with what is in its archive.`)) return;
               {fileBreadcrumbs(fileListPath).map(crumb => <button className="crumb" key={crumb.path} onClick={() => listFiles(crumb.path)}>{crumb.label}</button>)}
             </div>
             <div className="file-toolbar">
-              <button disabled={!hasFileTarget() || fileListPath === '' || !!loading} onClick={() => listFiles(parentFilePath(fileListPath))}>{t('Up')}</button>
-              <button disabled={!hasFileTarget() || !!loading} onClick={makeFileDirectory}><Plus size={14}/>{t('Folder')}</button>
-              <button disabled={!hasFileTarget() || !!loading} onClick={makeFile}><FileText size={14}/>{t('File')}</button>
+              <button className="secondary" disabled={!hasFileTarget() || fileListPath === '' || !!loading} onClick={() => listFiles(parentFilePath(fileListPath))}>{t('Up')}</button>
+              <button className="secondary" disabled={!hasFileTarget() || !!loading} onClick={makeFileDirectory}><Plus size={14}/>{t('Folder')}</button>
+              <button className="secondary" disabled={!hasFileTarget() || !!loading} onClick={makeFile}><FileText size={14}/>{t('File')}</button>
               <label className={`upload-button ${(!hasFileTarget() || !!loading) ? 'disabled' : ''}`}>
                 <Upload size={14}/>{t('Upload')}<input type="file" disabled={!hasFileTarget() || !!loading} onChange={e => { uploadSiteFile(e.target.files?.[0]); e.target.value = ''; }} />
               </label>
@@ -5894,10 +5806,10 @@ Each account is overwritten with what is in its archive.`)) return;
                 <option value="zip">zip</option>
                 <option value="tar.gz">tar.gz</option>
               </select>
-              <button disabled={selectedFilePaths.length === 0 || !!loading} onClick={copySelectedFiles}><Copy size={14}/>{t('Copy')}</button>
-              <button disabled={selectedFilePaths.length === 0 || !!loading} onClick={moveSelectedFiles}><MoveRight size={14}/>{t('Move')}</button>
-              <button disabled={selectedFilePaths.length === 0 || !!loading} onClick={archiveSelectedFiles}><Archive size={14}/>{t('Archive')}</button>
-              <button disabled={!selectedArchiveFile || !!loading} onClick={() => extractArchiveFile(selectedArchiveFile.path)}><ArchiveRestore size={14}/>{t('Extract')}</button>
+              <button className="secondary" disabled={selectedFilePaths.length === 0 || !!loading} onClick={copySelectedFiles}><Copy size={14}/>{t('Copy')}</button>
+              <button className="secondary" disabled={selectedFilePaths.length === 0 || !!loading} onClick={moveSelectedFiles}><MoveRight size={14}/>{t('Move')}</button>
+              <button className="secondary" disabled={selectedFilePaths.length === 0 || !!loading} onClick={archiveSelectedFiles}><Archive size={14}/>{t('Archive')}</button>
+              <button className="secondary" disabled={!selectedArchiveFile || !!loading} onClick={() => extractArchiveFile(selectedArchiveFile.path)}><ArchiveRestore size={14}/>{t('Extract')}</button>
               <button disabled={selectedChmodItems.length === 0 || !!loading} onClick={() => openChmodDialog(selectedChmodItems)}><Lock size={14}/>{t('Permissions')}</button>
               <button className="danger" disabled={selectedFilePaths.length === 0 || !!loading} onClick={deleteSelectedFiles}><Trash2 size={14}/>{t('Delete')}</button>
             </div>
@@ -5990,7 +5902,7 @@ Each account is overwritten with what is in its archive.`)) return;
         <div className="actions backup-toolbar">
           <button disabled={!selectedWebsiteId || !!loading} onClick={createBackup}><Plus size={14}/>{t('Create backup')}</button>
           <button className="secondary-light" disabled={!selectedWebsiteId || !!loading} onClick={refreshBackupArea}><RefreshCw size={14}/>{t('Refresh')}</button>
-          <label className="upload-button">
+          <label className="upload-button secondary">
             <Upload size={14}/>{t('Upload backup')}<input type="file" accept=".tar.gz,application/gzip" onChange={e => { uploadBackup(e.target.files?.[0]); e.target.value = ''; }} />
           </label>
         </div>
@@ -5999,8 +5911,8 @@ Each account is overwritten with what is in its archive.`)) return;
           {backups.map(file => <div className="backup-item" key={file}>
             <span>{file.split('/').pop()}</span>
             <div className="actions">
-              <button disabled={!!loading} onClick={() => downloadBackup(file)}><Download size={14}/>{t('Download')}</button>
-              <button disabled={!!loading} onClick={() => restoreBackup(file)}><RotateCcw size={14}/>{t('Restore')}</button>
+              <button className="secondary" disabled={!!loading} onClick={() => downloadBackup(file)}><Download size={14}/>{t('Download')}</button>
+              <button className="secondary" disabled={!!loading} onClick={() => restoreBackup(file)}><RotateCcw size={14}/>{t('Restore')}</button>
               <button className="danger" disabled={!!loading} onClick={() => deleteBackup(file)}><Trash2 size={14}/></button>
             </div>
           </div>)}
@@ -6010,7 +5922,7 @@ Each account is overwritten with what is in its archive.`)) return;
       {isAdmin && activeBackupTab === 'user' && <div className="backup-tab-panel">
         <div className="backup-panel-title">
           <div><h3>{t('Backup user')}</h3><p className="hint">{t('Includes the panel user, all owned websites, source files, database dumps, and restore metadata.')}</p></div>
-          <button disabled={!!loading} onClick={refreshUserBackupArea}><RefreshCw size={14}/>{t('Reload')}</button>
+          <button className="secondary" disabled={!!loading} onClick={refreshUserBackupArea}><RefreshCw size={14}/>{t('Reload')}</button>
         </div>
         <div className="sftp-run-row user-backup-row backup-run-row">
           <select value={selectedBackupUserId} onChange={e => setSelectedBackupUserId(e.target.value)}>
@@ -6025,15 +5937,15 @@ Each account is overwritten with what is in its archive.`)) return;
         </div>
         {selectedBackupUser && <p className="hint">{t('Current user:')}{' '}<strong>{selectedBackupUser.username}</strong></p>}
         <div className="actions backup-subactions">
-          <button disabled={!selectedBackupUserId || !!loading} onClick={() => listUserBackups()}><RefreshCw size={14}/>{t('Refresh list')}</button>
+          <button className="secondary" disabled={!selectedBackupUserId || !!loading} onClick={() => listUserBackups()}><RefreshCw size={14}/>{t('Refresh list')}</button>
         </div>
         {selectedBackupUserId && userBackups.length === 0 && <EmptyState icon={Archive} message={t('No user backups found.')} />}
         <div className="backup-list">
           {userBackups.map(file => <div className="backup-item" key={file}>
             <span>{file.split('/').pop()}</span>
             <div className="actions">
-              <button disabled={!!loading} onClick={() => downloadUserBackup(file)}><Download size={14}/>{t('Download')}</button>
-              <button disabled={!!loading} onClick={() => restoreUserBackup(file)}><RotateCcw size={14}/>{t('Restore user')}</button>
+              <button className="secondary" disabled={!!loading} onClick={() => downloadUserBackup(file)}><Download size={14}/>{t('Download')}</button>
+              <button className="secondary" disabled={!!loading} onClick={() => restoreUserBackup(file)}><RotateCcw size={14}/>{t('Restore user')}</button>
               <button className="danger" disabled={!!loading} onClick={() => deleteUserBackup(file)}><Trash2 size={14}/></button>
             </div>
           </div>)}
@@ -6043,7 +5955,7 @@ Each account is overwritten with what is in its archive.`)) return;
           <div><h3>{t('Restore folder')}</h3><p className="hint">{restoreBackupDir || '/var/backups/bpanel/users/restore'}</p></div>
           <div className="actions">
             <button className="secondary-light" disabled={!!loading} onClick={loadRestoreBackups}><RefreshCw size={14}/>{t('Refresh')}</button>
-            <label className="upload-button">
+            <label className="upload-button secondary">
               <Upload size={14}/>{t('Upload backups')}<input type="file" multiple accept=".tar.gz,application/gzip" onChange={e => { uploadUserBackups(e.target.files); e.target.value = ''; }} />
             </label>
           </div>
@@ -6052,8 +5964,8 @@ Each account is overwritten with what is in its archive.`)) return;
           {restoreBackups.map(item => <div className="backup-item" key={item.backup_file}>
             <span>{item.filename || item.backup_file.split('/').pop()}<small>{item.valid ? `${item.source === 'opanel' ? 'opanel · ' : ''}` + t('{user} - {n} website(s)', { user: item.username || t('unknown user'), n: item.websites || 0 }) : (item.error || 'Invalid backup')}</small></span>
             <div className="actions">
-              <button disabled={!!loading} onClick={() => downloadUserBackup(item.backup_file)}><Download size={14}/>{t('Download')}</button>
-              <button disabled={!!loading || !item.valid} onClick={() => restoreUserBackup(item.backup_file)}><RotateCcw size={14}/>{t('Restore user')}</button>
+              <button className="secondary" disabled={!!loading} onClick={() => downloadUserBackup(item.backup_file)}><Download size={14}/>{t('Download')}</button>
+              <button className="secondary" disabled={!!loading || !item.valid} onClick={() => restoreUserBackup(item.backup_file)}><RotateCcw size={14}/>{t('Restore user')}</button>
               <button className="danger" disabled={!!loading} onClick={() => deleteRestoreBackup(item.backup_file)}><Trash2 size={14}/></button>
             </div>
           </div>)}
@@ -6340,35 +6252,30 @@ Each account is overwritten with what is in its archive.`)) return;
     return <section className="section">
       <div className="section-title">
         <div>
-          <h2>{t('Services Status')}</h2>
+          <h2>{t('Services')}</h2>
           <p className="hint">{t('Auto-refreshes every 10s')}</p>
         </div>
-        <button className="secondary-light" disabled={!!loading} onClick={checkAllServices}><RefreshCw size={15}/>{t('Refresh')}</button>
+        <button className="secondary" disabled={!!loading} onClick={checkAllServices}><RefreshCw size={15}/>{t('Refresh')}</button>
       </div>
-      {/* One line per unit, read like the overview's list. The cards were
-          240px wide with three filled buttons that did not fit, so each ran
-          into the next card. A running unit offers Stop, a stopped one
-          Start; Restart is always there. */}
-      <ul className="service-list">
+      {/* A running service's Start and a stopped one's Stop are disabled, so
+          the enabled button is the obvious next step. */}
+      <div className="service-grid">
         {serviceNames.map(name => {
           const state = serviceStates[name];
           const text = `${state?.stdout || ''} ${state?.stderr || ''}`;
           const active = text.includes('active (running)');
           const inactive = text.includes('inactive') || text.includes('failed');
-          const status = active ? 'running' : inactive ? 'stopped' : 'unknown';
           const canStop = !['bpanel-api', 'redis-server'].includes(name);
-          return <li key={name}>
-            <span className={`overview-dot ${status}`} aria-hidden="true"></span>
-            <strong className="service-name">{name}</strong>
-            <span className={`overview-list-state ${status}`}>{active ? t('Running') : inactive ? t('Stopped') : '…'}</span>
+          return <div className="service-card" key={name}>
+            <div><strong>{name}</strong><span className={active ? 'badge ok' : inactive ? 'badge bad' : 'badge'}>{active ? t('Running') : inactive ? t('Stopped') : '...'}</span></div>
             {isAdmin && <div className="service-actions">
-              {!active && <button className="mini secondary-light" onClick={() => runServiceAction(name, 'start')}><Play size={13}/>{t('Start')}</button>}
-              {active && canStop && <button className="mini secondary-light" onClick={() => runServiceAction(name, 'stop')}><Square size={13}/>{t('Stop')}</button>}
-              <button className="mini secondary-light" onClick={() => runServiceAction(name, 'restart')}><RotateCcw size={13}/>{t('Restart')}</button>
+              <button className="secondary" disabled={active} onClick={() => runServiceAction(name, 'start')}><Play size={13}/>{t('Start')}</button>
+              {canStop && <button className="danger-light" disabled={inactive} onClick={() => runServiceAction(name, 'stop')}><Square size={13}/>{t('Stop')}</button>}
+              <button className="secondary" onClick={() => runServiceAction(name, 'restart')}><RotateCcw size={13}/>{t('Restart')}</button>
             </div>}
-          </li>;
+          </div>;
         })}
-      </ul>
+      </div>
     </section>;
   }
 
@@ -6483,7 +6390,7 @@ Each account is overwritten with what is in its archive.`)) return;
             {stateKnown && (enabled
               ? <button className="danger" disabled={!!loading} onClick={disableFirewall}>{t('Turn off')}</button>
               : <button disabled={!!loading} onClick={enableFirewall}><Shield size={14}/>{t('Turn on')}</button>)}
-            {enabled && <button disabled={!!loading} onClick={reloadFirewall}>{t('Reload')}</button>}
+            {enabled && <button className="secondary" disabled={!!loading} onClick={reloadFirewall}>{t('Reload')}</button>}
           </div>
         </div>
 
@@ -6675,7 +6582,7 @@ Each account is overwritten with what is in its archive.`)) return;
               Off by default because CRS needs tuning against real traffic before it can be trusted to block.
             </p>
           </div>
-          <button disabled={!!loading} onClick={loadCrs}><RefreshCw size={14}/>{t('Check')}</button>
+          <button className="secondary" disabled={!!loading} onClick={loadCrs}><RefreshCw size={14}/>{t('Check')}</button>
         </div>
         {!crs && <p className="hint">{t('Click Check to read the current state.')}</p>}
         {crs && <>
@@ -6748,7 +6655,7 @@ Each account is overwritten with what is in its archive.`)) return;
                   title={ownCountFor(site.id) > 0 ? `${ownCountFor(site.id)} set on this site, the rest from the global list` : 'All from the global list'}
                 >{bots > 0 ? `${bots} bot(s)` : 'No bots'}</span>
               </div>
-              <button disabled={!!loading} onClick={() => openWafSite(site.id)}><SettingsIcon size={14}/>{t('Configure')}</button>
+              <button className="secondary" disabled={!!loading} onClick={() => openWafSite(site.id)}><SettingsIcon size={14}/>{t('Configure')}</button>
             </div>;
           })}
         </div>
@@ -7528,7 +7435,7 @@ Each account is overwritten with what is in its archive.`)) return;
         </div>
         {createdApiToken && <div className="user-create-card">
           <label><span>{t('New token (copy now)')}</span><input id="created-api-token" readOnly value={createdApiToken} onFocus={e => e.target.select()} /></label>
-          <button disabled={!!loading} onClick={copyApiToken}><Copy size={14}/>{t('Copy token')}</button>
+          <button className="secondary" disabled={!!loading} onClick={copyApiToken}><Copy size={14}/>{t('Copy token')}</button>
           <button className="secondary-light" onClick={() => setCreatedApiToken('')}>{t('Hide')}</button>
         </div>}
         <div className="user-create-card">
@@ -7565,7 +7472,7 @@ Each account is overwritten with what is in its archive.`)) return;
         id={`users-tab-button-${key}`}
         onClick={() => setUserTab(key)}
       >
-        <Icon size={14}/> {label}
+        <Icon size={14}/>{t(label)}
       </button>
     );
 
@@ -7573,7 +7480,8 @@ Each account is overwritten with what is in its archive.`)) return;
       <div className="section-title">
         <div><h2>{t('Panel users')}</h2><p className="hint">{t('Manage users, packages, and domain ownership.')}</p></div>
       </div>
-      <div className="segmented user-tabs" role="tablist" aria-label={t('Panel user sections')}>
+      {/* One underlined row, like the backup tabs and OPanel's. */}
+      <div className="segmented-control backup-tabs user-tabs" role="tablist" aria-label={t('Panel user sections')}>
         {userTabButton('list', Users, 'List user')}
         {userTabButton('packages', HardDrive, 'Package')}
         {userTabButton('add', Plus, 'Add User')}
@@ -7589,9 +7497,9 @@ Each account is overwritten with what is in its archive.`)) return;
           {users.map(user => <div className="row user-row" key={user.id}>
             <div className="user-main"><strong>{user.username}</strong><small>{user.email}</small></div>
             <div className="user-badges">
-              <span className={user.is_active ? 'badge ok' : 'badge danger'}>{user.is_active ? 'Active' : 'Suspended'}</span>
-              <span className="badge">{roleLabel(user.role)}</span>
-              <span className="badge">{user.package_name || 'Custom'}</span>
+              <span className={user.is_active ? 'badge ok' : 'badge danger'}>{user.is_active ? t('Active') : t('Suspended')}</span>
+              <span className="badge">{t(roleLabel(user.role))}</span>
+              <span className="badge">{user.package_name || t('Custom')}</span>
               {user.totp_enabled && <span className="badge ok">2FA</span>}
             </div>
             <span className="user-metric"><HardDrive size={13}/>{storageUsageText(user)}</span>
@@ -7734,7 +7642,7 @@ Each account is overwritten with what is in its archive.`)) return;
           <span className="editor-chip">{editorMode}</span>
           <span className="editor-chip">{t('{n} line(s)', { n: editorLineCount })}</span>
           <span className="editor-chip">Ln {editorCursor.line}, Col {editorCursor.column}</span>
-          <button disabled={!selectedWebsiteId || !!loading} onClick={() => readFile(filePath)}><RefreshCw size={14}/>{t('Reload')}</button>
+          <button className="secondary" disabled={!selectedWebsiteId || !!loading} onClick={() => readFile(filePath)}><RefreshCw size={14}/>{t('Reload')}</button>
           <button disabled={!selectedWebsiteId || !!loading} onClick={writeFile}>{t('Save')}</button>
           <button disabled={!selectedWebsiteId || !filePath || !!loading} onClick={() => downloadFile(filePath)}><Download size={14}/></button>
           <LanguageToggle language={language} onChange={changeLanguage}/>
@@ -8046,7 +7954,11 @@ Each account is overwritten with what is in its archive.`)) return;
           {needsTwoFactor && <input value={otpCode} onChange={e => setOtpCode(e.target.value)} placeholder={t('Authentication code')} inputMode="numeric" autoComplete="one-time-code" onKeyDown={e => { if (e.key === 'Enter') login(); }} />}
           <label className="login-remember">
             <input type="checkbox" checked={rememberMe} onChange={e => setRememberMe(e.target.checked)} />{t('Keep me signed in for 30 days')}</label>
-          <button disabled={!!loading || !username || !password} onClick={login}>{loading ? 'Logging in...' : 'Login'}</button>
+          {/* Not onClick={login}: that hands login() the click event as its
+              passkey argument, so every click sent passkey=[object Object]
+              and an account without two-factor was refused with "no second
+              factor configured". Only Enter in a field ever worked. */}
+          <button disabled={!!loading || !username || !password} onClick={() => login()}>{loading ? t('Logging in...') : t('Login')}</button>
         </div>
       </section>
       {renderNotifications()}
@@ -8072,19 +7984,12 @@ Each account is overwritten with what is in its archive.`)) return;
           <button className="sidebar-close" onClick={() => setMobileMenuOpen(false)} aria-label={t('Close menu')}><X size={18}/></button>
         </div>
         <nav className="sidebar-nav">
-          {mainNavItems.map(([key, label, Icon]) => <button key={key} type="button" className={navPage === key ? 'active' : ''} onClick={() => navigateToPage(key)} aria-current={navPage === key ? 'page' : undefined}>
-            <Icon size={17}/>{t(label)}
-          </button>)}
-          <div className={`sidebar-nav-group ${settingsMenuOpen ? 'open' : ''}`}>
-            <button className={`sidebar-group-toggle ${settingsIsActive ? 'active' : ''}`} onClick={() => setSettingsMenuOpen(open => !open)} aria-expanded={settingsMenuOpen} aria-controls="settings-submenu">
-              <SettingsIcon size={17}/><span>{t('Settings')}</span><ChevronDown className="sidebar-group-chevron" size={16}/>
-            </button>
-            {settingsMenuOpen && <div className="sidebar-subnav" id="settings-submenu">
-              {settingsNavItems.map(([key, label, Icon]) => <button key={key} type="button" className={navPage === key ? 'active' : ''} onClick={() => navigateToPage(key)} aria-current={navPage === key ? 'page' : undefined}>
-                <Icon size={16}/>{t(label)}
-              </button>)}
-            </div>}
-          </div>
+          {navSections.map(section => <div className="sidebar-section" key={section.key}>
+            {section.title && <p className="sidebar-section-title">{t(section.title)}</p>}
+            {section.items.map(([key, label, Icon]) => <button key={key} type="button" className={navPage === key ? 'active' : ''} onClick={() => navigateToPage(key)} aria-current={navPage === key ? 'page' : undefined}>
+              <Icon size={16}/><span>{t(label)}</span>
+            </button>)}
+          </div>)}
         </nav>
         {appVersion && <div className="sidebar-version">v{appVersion}</div>}
       </aside>
@@ -8094,15 +7999,27 @@ Each account is overwritten with what is in its archive.`)) return;
             <Menu size={20}/><span><ActiveIcon size={17}/>{t(activeNavItem?.[1] || 'Menu')}</span>
           </button>
           <div className="page-title">
-            <p className="eyebrow">{t('Server Management Panel')}</p>
             <h1>{activeNavItem?.[1] ? t(activeNavItem[1]) : (panelSettings.app_name || 'BPanel')}</h1>
           </div>
-          <div className="login logged-in">
-            <div className="account-pill" title={accountLabel}><span>{t('Logged in as')}</span><strong>{accountLabel}</strong></div>
-            <div className="top-actions">
-              <LanguageToggle language={language} onChange={changeLanguage}/>
-          <ThemeToggle theme={theme} onToggle={toggleTheme}/>
-              <button className="secondary compact-btn" onClick={logout} aria-label={t('Logout')} title={t('Logout')}><LogOut size={15}/><span className="btn-label">{t('Logout')}</span></button>
+          {/* The page title, then one account menu - profile, account security
+              and sign out live in it, as they do in OPanel. */}
+          <div className="top-actions">
+            <LanguageToggle language={language} onChange={changeLanguage}/>
+            <ThemeToggle theme={theme} onToggle={toggleTheme}/>
+            <div className="user-menu" ref={userMenuRef}>
+              <button type="button" className="user-menu-trigger" onClick={() => setUserMenuOpen(open => !open)} aria-haspopup="menu" aria-expanded={userMenuOpen} title={t('Logged in as')}>
+                <span className="user-avatar" aria-hidden="true">{(currentUser?.username || username || '?').slice(0, 1).toUpperCase()}</span>
+                <span className="user-menu-name">{currentUser?.username || username}</span>
+                <ChevronDown size={14} className="user-menu-chevron"/>
+              </button>
+              {userMenuOpen && <div className="user-menu-panel" role="menu">
+                <div className="user-menu-head">
+                  <strong>{accountLabel}</strong>
+                  <small>{currentUser?.email || t(roleLabel(currentUser?.role))}</small>
+                </div>
+                <button type="button" role="menuitem" onClick={() => { setUserMenuOpen(false); navigateToPage('security'); }}><LockKeyhole size={15}/>{t('Account security')}</button>
+                <button type="button" role="menuitem" className="user-menu-logout" onClick={() => { setUserMenuOpen(false); logout(); }}><LogOut size={15}/>{t('Logout')}</button>
+              </div>}
             </div>
           </div>
         </section>

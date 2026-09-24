@@ -1,0 +1,366 @@
+/* ==========================================================================
+   Layout & component layer (loaded after brand.css, so it wins ties).
+   Tokens only -- every colour comes from the :root blocks in style.css.
+
+   The shape hosting consoles share: a navy sidebar grouped by task, a quiet
+   top bar with the page title and one account menu, white panels on a grey
+   ground, one blue button per task and neutral buttons for everything else.
+   ========================================================================== */
+
+body{font-size:14px;line-height:1.55;letter-spacing:0}
+/* No tightened tracking anywhere. */
+/* Form controls take the browser's own UI font unless told otherwise. */
+button,input,select,textarea,optgroup{font-family:inherit}
+h1,h2,h3,h4{letter-spacing:0}
+
+/* ---------- Sidebar ---------- */
+.sidebar{background:var(--nav-bg);border-right:1px solid var(--nav-border);color:var(--nav-text)}
+.sidebar-head{border-bottom:1px solid var(--nav-border);padding:0 16px}
+.sidebar-brand strong{color:var(--nav-text-strong);font-size:15px;font-weight:700}
+.sidebar-brand small{color:var(--nav-muted);font-size:12px}
+.sidebar .brand-mark{box-shadow:none}
+.sidebar-nav{display:flex;flex-direction:column;gap:12px;padding:12px 10px 16px}
+.sidebar-section{display:grid;gap:1px}
+.sidebar-section-title{margin:0 0 4px;padding:0 10px;color:var(--nav-muted);font-size:11px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;line-height:1.4}
+.sidebar .sidebar-nav button{
+  display:flex;align-items:center;justify-content:flex-start;gap:10px;width:100%;
+  height:34px;min-height:34px;padding:0 10px;border:0;border-radius:var(--radius-sm);
+  background:transparent;color:var(--nav-text);font-size:13.5px;font-weight:500;text-align:left;box-shadow:none;
+}
+.sidebar .sidebar-nav button span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sidebar .sidebar-nav button svg{flex:none;color:var(--nav-muted)}
+.sidebar .sidebar-nav button:hover:not(.active):not(:disabled){background:var(--nav-hover);color:var(--nav-text-strong);border:0}
+.sidebar .sidebar-nav button:hover:not(.active) svg{color:var(--nav-text)}
+.sidebar .sidebar-nav button.active,
+.sidebar .sidebar-nav button.active:hover:not(:disabled){background:var(--nav-active);color:var(--nav-text-strong);font-weight:600;border:0;box-shadow:inset 3px 0 0 var(--nav-accent)}
+.sidebar .sidebar-nav button.active svg{color:var(--nav-accent)}
+.sidebar .sidebar-nav button:focus-visible{outline:2px solid var(--nav-accent);outline-offset:-2px}
+.sidebar-version{color:var(--nav-muted);margin:auto 16px 14px;padding:0}
+.sidebar .sidebar-close{background:transparent;color:var(--nav-text);border:1px solid transparent}
+.sidebar .sidebar-close:hover:not(:disabled){background:var(--nav-hover);color:var(--nav-text-strong);border-color:var(--nav-border)}
+.sidebar .sidebar-lang,
+.sidebar .sidebar-lang:hover:not(:disabled){background:var(--nav-hover);color:var(--nav-text-strong);border:1px solid var(--nav-border)}
+.sidebar{scrollbar-color:var(--nav-border) transparent}
+
+/* ---------- Top bar ---------- */
+.topbar{height:var(--topbar-height);padding:0 24px;background:var(--topbar-bg);border-bottom:1px solid var(--border);box-shadow:none}
+.topbar h1{font-size:19px;font-weight:600;line-height:1.2;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.page-title{min-width:0}
+.top-actions{display:flex;align-items:center;gap:8px;flex:none}
+.top-actions .compact-btn{height:36px;min-height:36px}
+
+.user-menu{position:relative}
+.top-actions .user-menu-trigger{
+  display:inline-flex;align-items:center;gap:8px;height:36px;min-height:36px;width:auto;padding:0 10px 0 4px;
+  background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:999px;font-size:13px;font-weight:600;
+}
+.top-actions .user-menu-trigger:hover:not(:disabled),
+.top-actions .user-menu-trigger[aria-expanded="true"]{background:var(--surface-hover);color:var(--text);border-color:var(--border-hover)}
+.user-avatar{width:28px;height:28px;display:grid;place-items:center;border-radius:999px;background:var(--primary);color:var(--primary-contrast);font-size:12px;font-weight:700;flex:none}
+.user-menu-name{max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.user-menu-chevron{color:var(--text-muted);flex:none}
+.user-menu-panel{
+  position:absolute;right:0;top:calc(100% + 6px);z-index:45;width:250px;padding:6px;
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);box-shadow:var(--shadow-lg);
+  display:grid;gap:2px;animation:menuIn .12s ease;
+}
+@keyframes menuIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+.user-menu-head{display:grid;gap:2px;padding:8px 10px 10px;margin-bottom:4px;border-bottom:1px solid var(--border);min-width:0}
+.user-menu-head strong{font-size:14px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.user-menu-head small{font-size:12px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.top-actions .user-menu-panel button{
+  display:flex;align-items:center;justify-content:flex-start;gap:10px;width:100%;height:36px;min-height:36px;padding:0 10px;
+  background:transparent;color:var(--text);border:0;border-radius:var(--radius-sm);font-size:13.5px;font-weight:500;
+}
+.top-actions .user-menu-panel button svg{color:var(--text-muted)}
+.top-actions .user-menu-panel button:hover:not(:disabled){background:var(--surface-hover);color:var(--text)}
+.top-actions .user-menu-panel .user-menu-logout,
+.top-actions .user-menu-panel .user-menu-logout svg{color:var(--danger)}
+.top-actions .user-menu-panel .user-menu-logout:hover:not(:disabled){background:var(--danger-bg);color:var(--danger-text)}
+
+/* ---------- Content ---------- */
+.content-body{padding:24px 28px 36px}
+
+/* Panels are static: they do not light up under the pointer. */
+.section{padding:20px;gap:12px;border-radius:var(--radius-lg);box-shadow:var(--shadow-sm);margin-bottom:16px}
+.section:hover{border-color:var(--border)}
+.section h2{font-size:16px;font-weight:600;line-height:1.3;color:var(--text);margin:0 0 2px}
+.section h3{font-size:14px;font-weight:600}
+.section-title{align-items:center;flex-wrap:wrap}
+.section-title > div:first-child{min-width:0}
+.section-title h2{margin-bottom:2px}
+.hint{font-size:13px;color:var(--text-muted)}
+
+/* ---------- Buttons ----------
+   One solid blue per task. Refresh, reload, copy, download and the like are
+   neutral (class `secondary`) so the blue always marks the action that
+   matters. */
+button,.button-link,.upload-button{height:36px;min-height:36px;padding:0 14px;font-size:13px;font-weight:600;border-radius:var(--radius-sm);gap:7px}
+.mini{height:30px;min-height:30px;padding:0 10px;font-size:12.5px}
+.compact-btn{height:36px;min-height:36px}
+.secondary,.secondary-light{background:var(--surface);color:var(--text);border:1px solid var(--border)}
+.secondary svg,.secondary-light svg{color:var(--text-secondary)}
+.secondary:hover:not(:disabled),.secondary-light:hover:not(:disabled){background:var(--surface-hover);color:var(--text);border-color:var(--border-hover)}
+.secondary:active:not(:disabled),.secondary-light:active:not(:disabled){background:var(--primary-light)}
+button:disabled,.upload-button.disabled{background:var(--surface-muted);color:var(--text-muted);border-color:var(--border)}
+
+/* ---------- Form controls ---------- */
+input,select,textarea{border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13.5px}
+input,select{height:38px;min-height:38px;padding:0 11px}
+input[type="checkbox"],input[type="radio"]{height:auto;min-height:0;padding:0}
+select[multiple]{height:auto;padding:6px 8px}
+input:hover:not(:disabled):not(:focus),select:hover:not(:disabled):not(:focus){border-color:var(--border-hover)}
+label > span{font-size:12.5px;font-weight:600;color:var(--text-secondary)}
+
+/* ---------- Badges ---------- */
+.badge{padding:3px 9px;font-size:11.5px;font-weight:600;line-height:1.35;border-radius:999px}
+
+/* ---------- Tabs ----------
+   Section tabs (backups, users) are one underlined row that scrolls sideways
+   on a narrow screen instead of wrapping onto a second line of pills. */
+.segmented-control.backup-tabs{
+  display:flex;flex-wrap:nowrap;gap:2px;width:100%;max-width:100%;overflow-x:auto;
+  padding:0;background:transparent;border:0;border-bottom:1px solid var(--border);border-radius:0;
+}
+.segmented-control.backup-tabs button,
+.segmented-control.backup-tabs button:hover:not(:disabled){
+  flex:none;height:40px;min-height:40px;padding:0 12px;background:transparent;color:var(--text-secondary);
+  border:0;border-bottom:2px solid transparent;border-radius:0;margin-bottom:-1px;font-weight:500;
+}
+.segmented-control.backup-tabs button:hover:not(:disabled){color:var(--text)}
+.segmented-control.backup-tabs button.active,
+.segmented-control.backup-tabs button.active:hover:not(:disabled){background:transparent;color:var(--primary-ink);border-bottom-color:var(--primary);font-weight:600}
+.tab-bar{border-bottom-width:1px}
+.tab{height:40px;min-height:40px;margin-bottom:-1px;font-weight:500;color:var(--text-secondary)}
+.tab.active{color:var(--primary-ink);border-bottom-color:var(--primary);font-weight:600}
+
+/* Small switches (log kind, SSL mode): the chosen option is a raised chip,
+   not a second solid-blue button competing with the real one. */
+.segmented-control{background:var(--surface-alt);border:1px solid var(--border)}
+.segmented-control:not(.backup-tabs) button.active,
+.segmented-control:not(.backup-tabs) button.active:hover:not(:disabled){background:var(--surface);color:var(--primary-ink);box-shadow:var(--shadow-sm);border:1px solid var(--border)}
+.segmented button{background:var(--surface);color:var(--text-secondary);border:1px solid var(--border)}
+.segmented button:hover:not(:disabled){background:var(--surface-hover);color:var(--text)}
+.segmented button.active,
+.segmented button.active:hover:not(:disabled){background:var(--primary-light);color:var(--primary-ink);border-color:var(--primary-soft)}
+
+/* ---------- Lists ---------- */
+.website-search{background:var(--surface-alt);border:1px solid var(--border);border-radius:var(--radius-md)}
+.site-grid{gap:8px}
+.site-card{padding:12px 14px;gap:14px;border-radius:var(--radius-md);box-shadow:none}
+.site-card:hover{border-color:var(--border-hover);background:var(--surface)}
+.site-link{font-size:14.5px;font-weight:600}
+.site-head small{font-size:12px;color:var(--text-muted)}
+.site-meta{gap:6px;align-items:center}
+.site-meta span{padding:3px 9px;font-size:12px;font-weight:500;color:var(--text-secondary)}
+.site-meta span strong{font-weight:600}
+.row{padding:12px 14px;border-radius:var(--radius-md)}
+.row:hover{background:var(--surface);border-color:var(--border-hover)}
+
+/* ---------- Dashboard ----------
+   Every block is the same card: an icon + title head, then its content.
+   Resources are one card with four meters split by rules; the feature groups
+   are three equal columns of links below it, so no block outweighs another. */
+.dashboard{display:grid;gap:16px}
+.dashboard .section{margin:0}
+.dash-card{display:grid;gap:14px;align-content:start}
+.dash-card-head{display:flex;align-items:center;gap:10px;min-width:0}
+.dash-card-head h2{margin:0;font-size:15px;font-weight:600;color:var(--text)}
+.dash-card-icon{width:30px;height:30px;display:grid;place-items:center;flex:none;border-radius:var(--radius-md);background:var(--primary-light);color:var(--primary-ink)}
+
+.dash-resources .resource-grid{display:grid;grid-template-columns:repeat(var(--meter-cols,4),minmax(0,1fr));gap:0;margin:0}
+.dash-resources .resource-card{min-height:0;padding:2px 20px;gap:8px;background:transparent;border:0;border-left:1px solid var(--border);border-radius:0;box-shadow:none}
+.dash-resources .resource-card:first-child{border-left:0;padding-left:0}
+.dash-resources .resource-head{font-size:12.5px;font-weight:500;color:var(--text-secondary)}
+.dash-resources .resource-icon{width:auto;height:auto;background:transparent;border:0;color:var(--text-muted)}
+.dash-resources .resource-card strong{font-size:24px;font-weight:600;line-height:1.1;letter-spacing:0;color:var(--text)}
+.dash-resources .resource-track{height:6px;border:0;border-radius:999px;background:var(--surface-alt)}
+.dash-resources .resource-card small{font-size:12px;font-weight:500;color:var(--text-muted)}
+
+.dash-groups{display:grid;grid-template-columns:repeat(var(--dash-cols,3),minmax(0,1fr));gap:16px;align-items:stretch}
+.dash-resources .resource-track.is-empty{visibility:hidden}
+/* Groups stay side by side down to tablet width, then stack -- never two up
+   and one left over. */
+@media(max-width:720px){.dash-groups{grid-template-columns:1fr}}
+.dash-links{display:grid;gap:2px;margin:0 -8px}
+.dash-group .feature-tile{
+  white-space:normal;
+  display:grid;grid-template-columns:34px minmax(0,1fr) 10px;grid-template-rows:auto auto;column-gap:12px;row-gap:0;
+  align-items:center;justify-items:start;width:100%;height:auto;min-height:54px;padding:8px;
+  text-align:left;background:transparent;border:1px solid transparent;border-radius:var(--radius-md);box-shadow:none;transform:none;
+}
+.dash-group .feature-tile::after{content:'';grid-column:3;grid-row:1 / span 2;width:6px;height:6px;border-top:1.5px solid var(--text-muted);border-right:1.5px solid var(--text-muted);transform:rotate(45deg)}
+.dash-group .feature-tile-icon{grid-column:1;grid-row:1 / span 2;width:34px;height:34px;display:grid;place-items:center;border-radius:var(--radius-md);background:var(--surface-alt);color:var(--primary-ink)}
+.dash-group .feature-tile-label{grid-column:2;font-size:13.5px;font-weight:600;line-height:1.3;color:var(--text)}
+.dash-group .feature-tile small{grid-column:2;font-size:12.5px;font-weight:400;line-height:1.35;color:var(--text-muted)}
+.dash-group .feature-tile:hover:not(:disabled){background:var(--surface-hover);border-color:transparent;transform:none}
+.dash-group .feature-tile:hover .feature-tile-icon{background:var(--primary);color:var(--primary-contrast)}
+.dash-group .feature-tile:hover::after{border-color:var(--primary-ink)}
+
+/* ---------- Status / raw output ---------- */
+details.raw-output{border:1px solid var(--border);border-radius:var(--radius-md);background:var(--surface-alt)}
+details.raw-output > summary{cursor:pointer;padding:10px 12px;font-size:13px;font-weight:600;color:var(--text-secondary);list-style:none;display:flex;align-items:center;gap:8px}
+details.raw-output > summary::-webkit-details-marker{display:none}
+details.raw-output > summary::before{content:'';width:6px;height:6px;border-right:2px solid currentColor;border-bottom:2px solid currentColor;transform:rotate(-45deg);transition:transform .15s ease}
+details.raw-output[open] > summary::before{transform:rotate(45deg)}
+details.raw-output > pre,details.raw-output > .raw-output-body{margin:0 12px 12px}
+
+/* ---------- Create forms ----------
+   Folded behind a "New ..." button once the list has something in it. */
+.create-panel{border-color:var(--primary-soft)}
+.create-inline{display:grid;gap:10px;padding:14px;background:var(--surface-alt);border:1px solid var(--border);border-radius:var(--radius-md)}
+.create-inline-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.create-inline-head strong{font-size:14px;font-weight:600}
+.icon-only.mini{width:30px;min-width:30px;padding:0}
+.section-title > .actions{justify-content:flex-end}
+
+/* Databases: name and owner, the login user, then the actions. */
+.db-row{grid-template-columns:minmax(0,1.4fr) minmax(0,1fr) auto}
+.db-user{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-secondary);font-size:13px}
+.db-user small{color:var(--text-muted);font-size:11.5px;font-weight:600;margin-right:4px}
+.db-actions{display:flex;align-items:center;gap:6px;justify-content:flex-end}
+
+/* Firewall: the three rule forms side by side instead of three full-width
+   panels, each ending in its own button. */
+.firewall-rule-forms{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-bottom:16px}
+.firewall-rule-forms .section{margin:0;align-content:start}
+.firewall-rule-forms .firewall-form{grid-template-columns:repeat(2,minmax(0,1fr));align-items:end}
+.firewall-rule-forms .firewall-form label:first-child,
+.firewall-rule-forms .firewall-form button{grid-column:1 / -1}
+.firewall-status pre{max-height:320px}
+
+/* Services: a stopped service's Start and a running one's Stop are the only
+   live buttons, so the obvious next step is the enabled one. */
+.service-card>div:first-child strong{font-size:14px;font-weight:600}
+.service-actions button{height:34px;min-height:34px}
+
+/* Panel users: fixed columns so role, status, disk and actions line up from
+   one account to the next (the admin row has fewer buttons). */
+@media(min-width:951px){
+  .user-row{grid-template-columns:minmax(150px,1fr) 132px 132px 160px minmax(0,1.7fr)}
+  .user-row>.badge{justify-self:start}
+  .user-row .row-actions{justify-content:flex-end}
+}
+.segmented-control.backup-tabs{overflow-y:hidden}
+
+/* SSL: every site on one list, unsecured first, each a click from the form. */
+.ssl-overview{gap:6px}
+.ssl-overview-row{grid-template-columns:minmax(0,1fr) auto auto;padding:9px 12px}
+.ssl-overview-row.selected{border-color:var(--primary-soft);background:var(--surface-hover)}
+.ssl-overview-domain{display:grid;gap:1px;min-width:0}
+.ssl-overview-domain strong{font-size:13.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ssl-overview-domain small{font-size:12px;color:var(--text-muted)}
+.badge.warn{background:var(--warning-bg);color:var(--warning-text);border-color:var(--warning-border)}
+
+/* An icon never gives up its width to the label beside it. */
+button svg,.button-link svg,.upload-button svg{flex:none}
+.user-row .user-metric{justify-self:start}
+
+/* Schedules: every field on one row, however many the frequency needs. */
+.schedule-form{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;align-items:end}
+.schedule-form label{display:grid;gap:6px;min-width:0}
+.schedule-form button{justify-self:start}
+
+/* A switch that is on reads as a status (green), not as the page's main button. */
+.toggle-on,.toggle-on:hover:not(:disabled){background:var(--success-bg);color:var(--success-text);border:1px solid var(--success-border)}
+
+/* ---------- Responsive ---------- */
+@media(max-width:950px){
+  .topbar{padding:0 12px}
+  .topbar h1{font-size:17px}
+  .top-actions .user-menu-trigger{width:36px;padding:0;justify-content:center;border-radius:999px}
+  .user-menu-name,.user-menu-chevron{display:none}
+  .user-avatar{width:26px;height:26px}
+  .top-actions .user-menu-panel button{width:100%;height:40px;min-height:40px;padding:0 10px;border-radius:var(--radius-sm)}
+  .content-body{padding:16px 14px 28px}
+  .section{padding:16px}
+  button,.button-link,.upload-button{height:40px;min-height:40px}
+  input,select{height:40px;min-height:40px}
+  .dash-resources .resource-grid{grid-template-columns:repeat(2,minmax(0,1fr));row-gap:16px}
+  .dash-resources .resource-card:nth-child(3){border-left:0;padding-left:0}
+}
+@media(max-width:520px){
+  .dash-resources .resource-card{padding:2px 12px}
+  .dash-resources .resource-card strong{font-size:20px}
+}
+
+/* ==========================================================================
+   What OPanel keeps in style.css/brand.css and this layer leans on. BPanel's
+   own sheets grew apart from OPanel's long before this pass, so the rules
+   are carried here rather than by copying either sheet whole.
+   ========================================================================== */
+
+/* Destructive is an outline until pointed at: red text on the surface, so a
+   column of Delete buttons is not a column of red blocks. */
+.danger,.danger-light{background:var(--surface);color:var(--danger);border:1px solid var(--danger-border)}
+.danger:hover:not(:disabled),.danger-light:hover:not(:disabled){background:var(--danger);color:var(--primary-contrast);border-color:var(--danger)}
+.danger:active:not(:disabled),.danger-light:active:not(:disabled){background:var(--danger-hover);border-color:var(--danger-hover)}
+.danger:focus-visible,.danger-light:focus-visible{outline-color:var(--danger)}
+.icon-only{width:36px;height:36px;min-height:36px;padding:0}
+
+/* A filter box with the count at its end. */
+.website-search,.list-search{display:flex;align-items:center;gap:8px;margin:0 0 12px;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-md);background:var(--surface-alt)}
+.website-search svg,.list-search svg{flex:none;color:var(--text-muted)}
+.website-search input,.list-search input{flex:1;min-width:0;height:auto;min-height:0;border:0;background:transparent;padding:4px 0;font-size:14px;outline:none;box-shadow:none}
+.website-search .hint,.list-search .hint{flex:none;white-space:nowrap}
+.website-search button,.list-search button{flex:none;width:24px;min-width:24px;height:24px;min-height:24px;padding:0}
+
+.db-owner{display:block;margin-top:2px;color:var(--text-muted);font-size:11.5px;font-weight:500;line-height:1.2}
+
+/* Launcher tiles; the dashboard layer above reshapes them into rows. */
+.feature-tile{display:grid;min-width:0;width:100%;cursor:pointer;transition:border-color .15s,background .15s}
+.feature-tile:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+.feature-tile-icon{display:grid;place-items:center;color:var(--primary-ink);flex:none}
+.feature-tile-label{color:var(--brand-ink);overflow-wrap:anywhere}
+.feature-tile small{color:var(--text-muted);overflow-wrap:anywhere}
+
+/* The language and theme switches sit in the top bar at the account menu's
+   height. style.css still says `.top-actions button{height:auto}` from the
+   old layout, which shrank them to their glyphs. */
+.top-actions .theme-toggle,.top-actions .language-toggle{width:36px;height:36px;min-height:36px;padding:0;border-radius:var(--radius-sm)}
+
+/* Resource meters: the base card, which .dash-resources above reshapes into
+   four columns split by rules. */
+.resource-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.resource-card{display:grid;gap:8px;padding:16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);min-width:0}
+.resource-head{display:flex;align-items:center;gap:8px;color:var(--text-muted);font-size:12px;font-weight:600}
+.resource-icon{display:grid;place-items:center;flex:none;color:var(--primary-ink)}
+.resource-card strong{font-size:24px;line-height:1.1;color:var(--text);font-weight:600}
+.resource-track{height:6px;overflow:hidden;border-radius:999px;background:var(--surface-alt)}
+.resource-track span{display:block;height:100%;border-radius:inherit;background:var(--primary);transition:width .4s ease}
+.resource-card small{color:var(--text-muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* The bar changes colour before the number is read: amber from 80%, red
+   from 90%. A disk at 93% should not look like one at 30%. Named level-*
+   because .danger and .warn are already the delete button and a badge. */
+.resource-card.level-warn .resource-track span{background:var(--warning)}
+.resource-card.level-critical .resource-track span{background:var(--danger)}
+.resource-card.level-critical strong{color:var(--danger-text)}
+
+/* Services: wide enough for Start, Stop and Restart in Vietnamese too, and
+   the buttons wrap before they run into the next card. */
+.service-grid{grid-template-columns:repeat(auto-fill,minmax(280px,1fr))}
+.service-actions{flex-wrap:wrap}
+.service-actions button{flex:1 1 auto;min-width:0}
+
+/* Site facts as OPanel draws them: each one a bordered pill. BPanel's own
+   sheet had dropped the border, so type and PHP read as loose words. */
+.site-meta span{background:var(--surface);border:1px solid var(--border);border-radius:999px}
+
+/* BPanel's sidebar has two pages more than OPanel's, so on a short screen it
+   scrolls. The track should read as part of the navy, not a grey bar. */
+.sidebar::-webkit-scrollbar{width:6px}
+.sidebar::-webkit-scrollbar-thumb{background:var(--nav-border);border:0}
+.sidebar::-webkit-scrollbar-thumb:hover{background:var(--nav-active)}
+
+/* Panel users, BPanel's row: name, the badge group, disk, then the actions.
+   OPanel's five fixed columns assume a badge per column, which put BPanel's
+   actions in a 160px slot and stacked them. */
+@media(min-width:951px){
+  .user-row{grid-template-columns:minmax(140px,1fr) auto auto auto}
+  .user-row .user-badges{display:flex;flex-wrap:wrap;gap:6px}
+  .user-row .row-actions{display:flex;flex-wrap:nowrap;gap:6px;justify-content:flex-end}
+}
+/* An upload beside the page's own Create is not the main action. */
+.upload-button.secondary{background:var(--surface);color:var(--text);border:1px solid var(--border)}
+.upload-button.secondary:hover{background:var(--surface-hover);border-color:var(--border-hover)}
+.upload-button.secondary svg{color:var(--text-secondary)}

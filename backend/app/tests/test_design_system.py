@@ -130,42 +130,56 @@ def test_delete_in_a_list_row_is_a_glyph_not_a_block():
     assert ".site-icon-button.danger:hover:not(:disabled)" in BRAND
 
 
+UI = (SRC / "ui.css").read_text(encoding="utf-8")
+
+
 def _dashboard():
     return APP.split("function renderDashboard()")[1].split("function renderAdminOnly()")[0]
 
 
-def test_the_dashboard_is_not_a_second_sidebar():
-    """It was twenty tiles, each a link to a page the menu already lists, and
-    the operator called it ugly. Every box on the overview now holds a fact:
-    the sites, the services, the backups."""
+def test_the_dashboard_is_the_bnix_launcher():
+    """BPanel and OPanel are one brand, so one layout: the server's meters in
+    one card, then every page in the sidebar's three groups, each tile with a
+    live count where there is one. It had been twenty bare tiles, then an
+    overview of its own that no other BNIX panel had."""
     dashboard = _dashboard()
-    assert "dash-tile" not in dashboard and "dash-tile" not in BRAND
-    for part in ("overview-sites", "serviceRows", "activeSchedules"):
-        assert part in dashboard, part
+    assert "dash-resources" in dashboard and "dash-groups" in dashboard
+    assert "const featureGroups = [" in dashboard
+    for title in ("'Hosting'", "'Security'", "'System'"):
+        assert f"title: {title}" in dashboard, title
+    assert "t('{count} sites', { count: websites.length })" in dashboard
 
 
-def test_a_site_that_needs_attention_is_listed_first():
-    """One broken site in forty should show without a search."""
-    dashboard = _dashboard()
-    assert "const siteNeedsAttention = site => site.status !== 'active' || !site.ssl_enabled;" in dashboard
-    assert "Number(siteNeedsAttention(b)) - Number(siteNeedsAttention(a))" in dashboard
+def test_the_sidebar_is_three_groups_not_a_folded_settings():
+    """Twelve unrelated pages sat behind a collapsed "Settings"."""
+    assert "const navSections = [" in APP
+    assert "sidebar-subnav" not in APP and "settingsMenuOpen" not in APP
+    for title in ("'Hosting'", "'Security'", "'System'"):
+        assert f"title: {title}" in APP.split("const navSections = [")[1].split("].filter(section")[0], title
+
+
+def test_sign_out_lives_in_the_account_menu():
+    """The top bar is the page title and one account menu, as in OPanel."""
+    assert 'className="user-menu-panel"' in APP
+    menu = APP.split('className="user-menu-panel"')[1].split("</div>}")[0]
+    assert "logout()" in menu and "navigateToPage('security')" in menu
+    assert "account-pill" not in APP
 
 
 def test_a_full_disk_does_not_look_like_an_empty_one():
     """The bar changes colour before anyone reads the number."""
-    card = APP.split("function ResourceCard(")[1].split("function renderDashboard()")[0]
+    card = APP.split("function ResourceCard(")[1].split("function FeatureTile(")[0]
     assert "safePercent >= 90 ? ' level-critical' : safePercent >= 80 ? ' level-warn'" in card
-    assert ".resource-card.level-warn .resource-track span{background:var(--warning)}" in BRAND
-    assert ".resource-card.level-critical .resource-track span{background:var(--danger)}" in BRAND
-    # .danger is the red delete button: on a card it painted the whole box red.
+    assert ".resource-card.level-warn .resource-track span{background:var(--warning)}" in UI
+    assert ".resource-card.level-critical .resource-track span{background:var(--danger)}" in UI
+    # .danger is the delete button: on a card it painted the whole box red.
     assert "' danger'" not in card and "' warn'" not in card
 
 
-def test_the_shortcuts_fill_the_width_they_are_given():
-    """A fixed column count leaves a ragged right edge whenever the list is
-    not a multiple of it; auto-fill lays as many as the width takes."""
-    shortcuts = BRAND.split(".overview-shortcuts{")[1].split("}")[0]
-    assert "auto-fill" in shortcuts, shortcuts
+def test_the_groups_stack_rather_than_leave_one_over():
+    """Three groups side by side, then one column - never two up and one
+    left alone on a row of its own."""
+    assert "@media(max-width:720px){.dash-groups{grid-template-columns:1fr}}" in UI
 
 
 def test_the_create_website_form_is_not_in_front_of_the_list():
@@ -221,11 +235,13 @@ def test_the_dashboard_headings_are_translated_where_they_are_drawn():
     Every group heading was a key with a Vietnamese translation, and the
     dictionary check passed - while the page drew {group.title} raw, so the
     sidebar read "Tổng quan" beside a heading that read "Dashboard". The
-    overview's headings and shortcut names go through t() where drawn, and
-    the nav array still feeds the page title in the topbar.
+    launcher's headings and tile names go through t() where drawn, and the
+    nav array still feeds the page title in the topbar.
     """
     dashboard = _dashboard()
-    for heading in ("Websites", "Services", "Backups", "Shortcuts"):
-        assert f"<h2>{{t('{heading}')}}</h2>" in dashboard, heading
-    assert "<Icon size={18}/><span>{t(label)}</span>" in dashboard
+    assert "<h2>{t(group.title)}</h2>" in dashboard
+    assert "<h2>{t('Server resources')}</h2>" in dashboard
+    tile = APP.split("function FeatureTile(")[1].split("function renderDashboard()")[0]
+    assert '<span className="feature-tile-label">{t(label)}</span>' in tile
+    assert "<p className=\"sidebar-section-title\">{t(section.title)}</p>" in APP
     assert "{activeNavItem?.[1] ? t(activeNavItem[1])" in APP

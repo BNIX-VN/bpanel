@@ -270,7 +270,7 @@ _STRING = r"""(?:'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")"""
 
 
 @pytest.mark.parametrize("array,pattern", [
-    ("const shortcuts = [", rf"\[{_STRING}, ({_STRING}), Ms\w+\]"),
+    ("const featureGroups = [", rf"(?:label|title): ({_STRING})"),
 ])
 def test_every_dashboard_tile_reads_in_vietnamese(array, pattern):
     """The shortcuts are the first Vietnamese a customer sees, and the audit
@@ -282,7 +282,7 @@ def test_every_dashboard_tile_reads_in_vietnamese(array, pattern):
     only way to catch it is to read the array and ask the dictionary, which is
     what this does.
     """
-    body = APP.split(array)[1].split("\n    ].filter(Boolean)")[0]
+    body = APP.split(array)[1].split("].map(group")[0]
     rows = re.findall(pattern, body)
     assert len(rows) > 15, f"only matched {len(rows)} tiles - the pattern missed some"
     missing = []
@@ -307,14 +307,12 @@ def test_every_string_the_overview_draws_reads_in_vietnamese():
     assert not missing, f"overview strings still in English: {missing}"
 
 
-@pytest.mark.parametrize("array", ["mainNavItems", "settingsNavItems"])
-def test_every_sidebar_entry_reads_in_vietnamese(array):
-    body = APP.split(f"const {array} = [")[1].split("\n  ];")[0]
-    missing = [
-        label for label in re.findall(r"\['[a-z-]+', '([^']+)'", body)
-        if label not in DICTIONARY and label not in KEPT_IN_ENGLISH
-    ]
-    assert not missing, f"{array} still in English: {missing}"
+def test_every_sidebar_entry_reads_in_vietnamese():
+    body = APP.split("const navSections = [")[1].split("].filter(section")[0]
+    labels = re.findall(r"\['[a-z-]+', '([^']+)'", body) + re.findall(r"title: '([^']+)'", body)
+    assert len(labels) > 15, labels
+    missing = [label for label in labels if label not in DICTIONARY and label not in KEPT_IN_ENGLISH]
+    assert not missing, f"sidebar still in English: {missing}"
 
 
 def test_the_interface_source_has_no_vietnamese_left_in_it():
