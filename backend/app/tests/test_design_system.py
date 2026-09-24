@@ -130,18 +130,42 @@ def test_delete_in_a_list_row_is_a_glyph_not_a_block():
     assert ".site-icon-button.danger:hover:not(:disabled)" in BRAND
 
 
-def test_the_dashboard_does_not_draw_a_box_around_a_box():
-    """The groups were cards holding cards. The heading labels the run below it
-    without framing it."""
-    group = BRAND.split(".dash-group{")[1].split("}")[0]
-    assert "background:none" in group and "border:0" in group
+def _dashboard():
+    return APP.split("function renderDashboard()")[1].split("function renderAdminOnly()")[0]
 
 
-def test_the_dashboard_grid_fills_the_width_it_is_given():
-    """A fixed six columns left three empty whenever a group had three tiles,
-    which is why the page had a ragged right edge."""
-    tiles = BRAND.split(".dash-tiles{")[1].split("}")[0]
-    assert "auto-fill" in tiles, tiles
+def test_the_dashboard_is_not_a_second_sidebar():
+    """It was twenty tiles, each a link to a page the menu already lists, and
+    the operator called it ugly. Every box on the overview now holds a fact:
+    the sites, the services, the backups."""
+    dashboard = _dashboard()
+    assert "dash-tile" not in dashboard and "dash-tile" not in BRAND
+    for part in ("overview-sites", "serviceRows", "activeSchedules"):
+        assert part in dashboard, part
+
+
+def test_a_site_that_needs_attention_is_listed_first():
+    """One broken site in forty should show without a search."""
+    dashboard = _dashboard()
+    assert "const siteNeedsAttention = site => site.status !== 'active' || !site.ssl_enabled;" in dashboard
+    assert "Number(siteNeedsAttention(b)) - Number(siteNeedsAttention(a))" in dashboard
+
+
+def test_a_full_disk_does_not_look_like_an_empty_one():
+    """The bar changes colour before anyone reads the number."""
+    card = APP.split("function ResourceCard(")[1].split("function renderDashboard()")[0]
+    assert "safePercent >= 90 ? ' level-critical' : safePercent >= 80 ? ' level-warn'" in card
+    assert ".resource-card.level-warn .resource-track span{background:var(--warning)}" in BRAND
+    assert ".resource-card.level-critical .resource-track span{background:var(--danger)}" in BRAND
+    # .danger is the red delete button: on a card it painted the whole box red.
+    assert "' danger'" not in card and "' warn'" not in card
+
+
+def test_the_shortcuts_fill_the_width_they_are_given():
+    """A fixed column count leaves a ragged right edge whenever the list is
+    not a multiple of it; auto-fill lays as many as the width takes."""
+    shortcuts = BRAND.split(".overview-shortcuts{")[1].split("}")[0]
+    assert "auto-fill" in shortcuts, shortcuts
 
 
 def test_the_create_website_form_is_not_in_front_of_the_list():
@@ -196,9 +220,12 @@ def test_the_dashboard_headings_are_translated_where_they_are_drawn():
 
     Every group heading was a key with a Vietnamese translation, and the
     dictionary check passed - while the page drew {group.title} raw, so the
-    sidebar read "Tổng quan" beside a heading that read "Dashboard". The same
-    array feeds the page title in the topbar.
+    sidebar read "Tổng quan" beside a heading that read "Dashboard". The
+    overview's headings and shortcut names go through t() where drawn, and
+    the nav array still feeds the page title in the topbar.
     """
-    assert "<h2>{t(group.title)}</h2>" in APP
-    assert "<span>{t(group.hint)}</span>" in APP
+    dashboard = _dashboard()
+    for heading in ("Websites", "Services", "Backups", "Shortcuts"):
+        assert f"<h2>{{t('{heading}')}}</h2>" in dashboard, heading
+    assert "<Icon size={18}/><span>{t(label)}</span>" in dashboard
     assert "{activeNavItem?.[1] ? t(activeNavItem[1])" in APP

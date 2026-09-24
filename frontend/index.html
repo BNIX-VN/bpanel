@@ -7,19 +7,8 @@
     <meta name="color-scheme" content="light dark" />
     <meta name="theme-color" content="#0065bb" />
     <title>BPanel</title>
-    <script>
-      // Apply the stored theme before first paint so there is no flash.
-      (function () {
-        try {
-          var stored = localStorage.getItem('bpanel-theme');
-          var theme = stored === 'dark' || stored === 'light'
-            ? stored
-            : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-          document.documentElement.setAttribute('data-theme', theme);
-          document.documentElement.style.colorScheme = theme;
-        } catch (e) {}
-      })();
-    </script>
+    <!-- Blocking and first, so the theme is set before anything paints. -->
+    <script src="/theme-init.js"></script>
   </head>
   <body>
     <div id="root"></div>

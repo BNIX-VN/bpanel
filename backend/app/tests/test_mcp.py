@@ -1149,17 +1149,17 @@ def test_revoking_asks_first():
 def test_the_page_is_on_the_dashboard_map_too():
     """The defect this catches: in the sidebar, absent from the dashboard.
 
-    renderDashboard says of itself that it is "a map of the panel... every tile
-    opens a page that already exists in the sidebar". The MCP page was added to
+    The dashboard's shortcuts are the way into every page the sidebar folds
+    away. The MCP page was added to
     the sidebar only, behind a Settings group that is collapsed by default, and
     the operator could not find it - reported from a real panel on .88 where
     the code was deployed and working.
     """
-    tiles = APP_JSX.split("const groups = [")[1].split("\n    ]")[0]
+    tiles = APP_JSX.split("const shortcuts = [")[1].split("\n    ].filter(Boolean)")[0]
     assert "'mcp', 'AI assistants'" in tiles, (
         "a page reachable only from a collapsed submenu is a page nobody finds"
     )
-    assert "MsAiAssistants" in tiles, "the tile grid uses the Material Symbols set"
+    assert "MsAiAssistants" in tiles, "the shortcuts use the Material Symbols set"
 
 
 def test_every_settings_page_is_also_a_dashboard_tile():
@@ -1169,7 +1169,7 @@ def test_every_settings_page_is_also_a_dashboard_tile():
     already knows it exists, which is the opposite of what the map is for.
     """
     sidebar = APP_JSX.split("const settingsNavItems = [")[1].split("\n  ];")[0]
-    tiles = APP_JSX.split("const groups = [")[1].split("\n    ]")[0]
+    tiles = APP_JSX.split("const shortcuts = [")[1].split("\n    ].filter(Boolean)")[0]
     keys = set(__import__("re").findall(r"\['([a-z-]+)',", sidebar))
     tiled = set(__import__("re").findall(r"\['([a-z-]+)',", tiles))
     missing = sorted(keys - tiled)
@@ -1202,7 +1202,7 @@ def test_every_addon_has_a_way_in_from_the_dashboard():
     """
     from app.services import addons
 
-    tiles = APP_JSX.split("const groups = [")[1].split("\n    ]")[0]
+    tiles = APP_JSX.split("const shortcuts = [")[1].split("\n    ].filter(Boolean)")[0]
     for slug in sorted(addons.CATALOGUE):
         flag = {"application": "appsFeatureEnabled",
                 "fail2ban": "fail2banAddonInstalled",

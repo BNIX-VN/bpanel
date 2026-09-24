@@ -18,10 +18,10 @@ import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown
 // Filled and rounded: an outline set at tile size reads thin, and these are
 // the icons the rest of the web has taught people to recognise.
 import {
-  MsWebsites, MsApplications, MsSsl, MsCron, MsFiles, MsDatabaseIcon, MsBackups,
-  MsWaf, MsFirewall, MsMalware, MsAccessLogs, MsLoginSecurity, MsServices,
+  MsApplications, MsSsl, MsCron, MsFiles, MsDatabaseIcon, MsBackups,
+  MsWaf, MsFirewall, MsMalware, MsAccessLogs, MsLoginSecurity,
   MsPhpConfig, MsUpdates, MsAddons, MsPanelUsers, MsPanelSettings,
-  MsAiAssistants, MsFail2ban,
+  MsAiAssistants, MsFail2ban, MsServices,
 } from './MaterialSymbols.jsx';
 import { Terminal } from './components/Terminal';
 import { LANGUAGES, t, useLanguage } from './i18n.js';
@@ -31,6 +31,8 @@ import './file-manager.css';
 import './theme.css';
 
 const API = import.meta.env.VITE_API_URL || '/api';
+// How a site's app_type is written wherever a person reads it.
+const APP_TYPE_LABELS = { wordpress: 'WordPress', php: 'PHP', static: 'Static', application: 'App' };
 const DEFAULT_SERVICE_NAMES = ['bpanel-api', 'nginx', 'php8.3-fpm', 'php8.4-fpm', 'mariadb', 'redis-server'];
 const HTTP_FLOOD_DEFAULTS = {
   access_limit_requests: 100,
@@ -167,6 +169,23 @@ function ThemeToggle({ theme, onToggle, className = '' }) {
     aria-label={label}
     aria-pressed={isDark}
   >{isDark ? <Sun size={16}/> : <Moon size={16}/>}</button>;
+}
+
+// Chrome's password manager writes the saved panel username into text fields
+// that are not login fields at all - the website search opened as "admin",
+// and so did the passkey name beside a password box - whatever autocomplete
+// says. It never fills a read-only field, so this one stays read-only until a
+// pointer or the keyboard actually lands on it. Unlocking on pointerdown,
+// before focus, keeps a phone's keyboard coming up on the first tap.
+function NoAutofillInput({ onFocus, onPointerDown, ...props }) {
+  const unlock = event => { event.currentTarget.readOnly = false; };
+  return <input
+    autoComplete="off"
+    {...props}
+    readOnly
+    onPointerDown={event => { unlock(event); onPointerDown?.(event); }}
+    onFocus={event => { unlock(event); onFocus?.(event); }}
+  />;
 }
 
 function LanguageToggle({ language, onChange, className = '' }) {
@@ -720,6 +739,7 @@ function App() {
   const [aliasDrafts, setAliasDrafts] = useState({});
   const [aliasModes, setAliasModes] = useState({});
   const [databases, setDatabases] = useState([]);
+  const [dbCreateOpen, setDbCreateOpen] = useState(false);
   const [dbSearch, setDbSearch] = useState('');
   const [dbSearching, setDbSearching] = useState(false);
   const [newDatabase, setNewDatabase] = useState({ db_name: '', db_user: '', db_password: '' });
@@ -4161,6 +4181,22 @@ Each account is overwritten with what is in its archive.`)) return;
     return () => clearInterval(timer);
   }, [isAuthenticated, page, isAdmin]);
 
+  // What the overview reads beyond the lists loaded at sign-in: service states
+  // and backup schedules, when the page opens. Services again every 30s - a
+  // status check runs systemctl once per unit, which is too much to repeat at
+  // the 5s the resource figures refresh at.
+  useEffect(() => {
+    if (!isAuthenticated || page !== 'dashboard' || !isAdmin) return undefined;
+    const refreshServices = async () => {
+      const names = await loadServiceNames();
+      await Promise.all(names.map(name => checkService(name)));
+    };
+    refreshServices();
+    loadBackupSchedules();
+    const timer = setInterval(refreshServices, 30000);
+    return () => clearInterval(timer);
+  }, [isAuthenticated, page, isAdmin]);
+
   useEffect(() => {
     if (!isAuthenticated || page !== 'services' || !isAdmin) return undefined;
     checkAllServices();
@@ -4507,7 +4543,8 @@ Each account is overwritten with what is in its archive.`)) return;
 
   function ResourceCard({ icon: Icon, label, value, detail, percent }) {
     const safePercent = percent == null ? null : clampPercent(percent);
-    return <article className="resource-card">
+    const level = safePercent == null ? '' : safePercent >= 90 ? ' level-critical' : safePercent >= 80 ? ' level-warn' : '';
+    return <article className={`resource-card${level}`}>
       <div className="resource-head"><span className="resource-icon"><Icon size={16}/></span><span>{label}</span></div>
       <strong>{value}</strong>
       {safePercent !== null && <div className="resource-track"><span style={{ width: `${safePercent}%` }}></span></div>}
@@ -4522,121 +4559,209 @@ Each account is overwritten with what is in its archive.`)) return;
     const network = resourceUsage?.network || {};
     const networkTotal = (Number(network.rx_per_sec) || 0) + (Number(network.tx_per_sec) || 0);
 
-    // The dashboard is a map of the panel, not a second place to read numbers:
-    // every tile opens a page that already exists in the sidebar. Grouped by
-    // what an operator is trying to do, which is why Cron sits with websites
-    // (BPanel's cron jobs are per-site) rather than under the server tools.
+    // The overview answers "is anything wrong, and where?" before it offers a
+    // way anywhere else. It used to be a second copy of the sidebar - twenty
+    // tiles, each a link to a page the menu already lists - with the state of
+    // the server squeezed into one row above them.
     //
-    // A tile is dropped when the account cannot reach the page, and a group
-    // disappears when that leaves it empty - an end user gets four groups, an
-    // admin five, with no gaps either way.
-    const groups = [
-      {
-        title: 'Websites',
-        hint: 'Domains, certificates and scheduled jobs',
-        tiles: [
-          ['websites', 'Websites', MsWebsites, 'Domains, PHP version, document root'],
-          appsFeatureEnabled ? ['applications', 'Applications', MsApplications, 'Node and Docker apps'] : null,
-          ['ssl', 'SSL', MsSsl, "Let's Encrypt and uploaded certificates"],
-          ['cron', 'Cron', MsCron, 'Scheduled commands per website'],
-        ],
-      },
-      {
-        title: 'Files and databases',
-        hint: 'Content, data and copies of both',
-        tiles: [
-          ['files', 'File manager', MsFiles, 'Browse, edit and upload site files'],
-          ['databases', 'Database', MsDatabaseIcon, 'MariaDB users and phpMyAdmin'],
-          ['sftp', 'SFTP accounts', MsFiles, 'One login per website, separate from the panel password'],
-          ['backups', 'Backups', MsBackups, 'Schedules, downloads and restores'],
-        ],
-      },
-      {
-        title: 'Security',
-        hint: 'What stands between a site and the internet',
-        tiles: [
-          ['waf', 'WAF', MsWaf, 'Rules, bad bots and payload inspection'],
-          isAdmin ? ['firewall', 'Firewall', MsFirewall, 'Allowed and blocked addresses'] : null,
-          // Every addon that is on gets a way in from the map. fail2ban has no
-          // page of its own - its ban list is a section of the Firewall page -
-          // so this lands there rather than inventing a route that would only
-          // be an alias.
-          (fail2banAddonInstalled && isAdmin)
-            ? ['firewall', 'Fail2ban', MsFail2ban, 'SSH ban list, and how long each ban lasts'] : null,
-          isAdmin ? ['malware', 'Malware Scanner', MsMalware, 'Scan schedules and findings'] : null,
-          isAdmin ? ['access-logs', 'Access Logs', MsAccessLogs, 'Who reached which site, and the verdict'] : null,
-          ['security', 'Login security', MsLoginSecurity, 'Two-factor and session settings'],
-        ],
-      },
-      {
-        title: 'Server',
-        hint: 'The machine everything runs on',
-        tiles: [
-          isAdmin ? ['services', 'Services Status', MsServices, 'nginx, PHP, MariaDB, Redis'] : null,
-          isAdmin ? ['php', 'PHP config', MsPhpConfig, 'Versions, limits and extensions'] : null,
-          isAdmin ? ['updates', 'Updates', MsUpdates, 'Panel and system packages'] : null,
-          isAdmin ? ['addons', 'Addons', MsAddons, 'Optional features, off by default'] : null,
-        ],
-      },
-      {
-        title: 'Accounts',
-        hint: 'Who can sign in, and with what',
-        tiles: [
-          isAdmin ? ['users', 'Panel users', MsPanelUsers, 'Customers, packages and quotas'] : null,
-          // A token for an assistant is another way something signs in, which
-          // is exactly what this group is. It is also the only tile a customer
-          // sees here, and that is fine - an empty group is dropped anyway.
-          (mcpAddonInstalled || isAdmin)
-            ? ['mcp', 'AI assistants', MsAiAssistants, 'Tokens for Claude Code, Cursor and VS Code']
-            : null,
-          isAdmin ? ['settings', 'Panel settings', MsPanelSettings, 'Panel name, URL, branding'] : null,
-        ],
-      },
-    ]
-      .map(group => ({ ...group, tiles: group.tiles.filter(Boolean) }))
-      .filter(group => group.tiles.length > 0);
+    // A site needs attention when it is not serving or has no certificate.
+    // Those sort to the top, so one broken site in forty shows without a search.
+    const siteNeedsAttention = site => site.status !== 'active' || !site.ssl_enabled;
+    const sortedSites = [...websites].sort((a, b) =>
+      Number(siteNeedsAttention(b)) - Number(siteNeedsAttention(a))
+      || String(a.domain).localeCompare(String(b.domain)));
+    const shownSites = sortedSites.slice(0, 8);
+    const sslCount = websites.filter(site => site.ssl_enabled).length;
+    const attentionCount = websites.filter(siteNeedsAttention).length;
+    const siteStatusLabel = { pending: 'Pending', suspended: 'Suspended', error: 'Error' };
 
-    return <>
+    // The same reading of `systemctl status` as the Services page.
+    const serviceRows = serviceNames.map(name => {
+      const state = serviceStates[name];
+      const text = `${state?.stdout || ''} ${state?.stderr || ''}`;
+      const status = !state ? 'unknown'
+        : text.includes('active (running)') ? 'running'
+          : (text.includes('inactive') || text.includes('failed')) ? 'stopped' : 'unknown';
+      return { name, status };
+    });
+    const stoppedServices = serviceRows.filter(row => row.status === 'stopped').length;
+    const servicesChecked = serviceRows.every(row => row.status !== 'unknown');
+
+    const activeSchedules = backupSchedules.filter(item => item.is_active);
+    const lastBackup = backupSchedules
+      .filter(item => item.last_run_at)
+      .sort((a, b) => String(b.last_run_at).localeCompare(String(a.last_run_at)))[0];
+    const failedSchedules = activeSchedules.filter(item => item.last_status === 'error').length;
+    // Stored as UTC without a zone, so read it as UTC rather than local time.
+    const formatWhen = value => {
+      if (!value) return '—';
+      const iso = /[zZ]|[+-]\d\d:?\d\d$/.test(value) ? value : `${value}Z`;
+      const date = new Date(iso);
+      if (Number.isNaN(date.getTime())) return '—';
+      // Date first, then time, in both languages: vi-VN's own order put the
+      // time first and joined the date with a dash ("09:00 25-09").
+      const pad = n => String(n).padStart(2, '0');
+      return `${pad(date.getDate())}/${pad(date.getMonth() + 1)} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    };
+
+    // Every page the sidebar folds away, one click from here. Name and icon
+    // only: the page says the rest once it is open. A shortcut is dropped when
+    // the account cannot reach the page. An addon that is on always gets one,
+    // even fail2ban, whose ban list is a section of the Firewall page.
+    const shortcuts = [
+      ['files', 'File manager', MsFiles],
+      ['databases', 'Database', MsDatabaseIcon],
+      ['backups', 'Backups', MsBackups],
+      ['ssl', 'SSL', MsSsl],
+      ['cron', 'Cron', MsCron],
+      ['sftp', 'SFTP accounts', MsFiles],
+      appsFeatureEnabled ? ['applications', 'Applications', MsApplications] : null,
+      ['waf', 'WAF', MsWaf],
+      isAdmin ? ['firewall', 'Firewall', MsFirewall] : null,
+      (fail2banAddonInstalled && isAdmin) ? ['firewall', 'Fail2ban', MsFail2ban] : null,
+      isAdmin ? ['malware', 'Malware Scanner', MsMalware] : null,
+      isAdmin ? ['access-logs', 'Access Logs', MsAccessLogs] : null,
+      ['security', 'Login security', MsLoginSecurity],
+      isAdmin ? ['services', 'Services Status', MsServices] : null,
+      isAdmin ? ['php', 'PHP config', MsPhpConfig] : null,
+      isAdmin ? ['users', 'Panel users', MsPanelUsers] : null,
+      isAdmin ? ['updates', 'Updates', MsUpdates] : null,
+      isAdmin ? ['addons', 'Addons', MsAddons] : null,
+      (mcpAddonInstalled || isAdmin) ? ['mcp', 'AI assistants', MsAiAssistants] : null,
+      isAdmin ? ['settings', 'Panel settings', MsPanelSettings] : null,
+    ].filter(Boolean);
+
+    const openSiteFromOverview = site => {
+      setWebsiteSearch(site.domain);
+      navigateToPage('websites');
+    };
+    const startNewWebsite = () => {
+      setCreateFormOpen(true);
+      navigateToPage('websites');
+    };
+
+    return <div className="overview">
       {isAdmin && <section className="resource-grid">
-        <ResourceCard icon={Cpu} label="CPU" value={formatPercent(cpu.percent)} percent={cpu.percent} detail={[cpu.cores ? `${cpu.cores} cores` : null, cpu.load?.length ? `load ${cpu.load.join(' / ')}` : null].filter(Boolean).join(' · ') || '--'} />
+        <ResourceCard icon={Cpu} label="CPU" value={formatPercent(cpu.percent)} percent={cpu.percent} detail={[cpu.cores ? t('{count} cores', { count: cpu.cores }) : null, cpu.load?.length ? `load ${cpu.load.join(' / ')}` : null].filter(Boolean).join(' · ') || '--'} />
         <ResourceCard icon={MemoryStick} label="RAM" value={formatPercent(memory.percent)} percent={memory.percent} detail={`${formatBytes(memory.used)} / ${formatBytes(memory.total)}`} />
         <ResourceCard icon={HardDrive} label={t('Disk')} value={formatPercent(disk.percent)} percent={disk.percent} detail={`${formatBytes(disk.used)} / ${formatBytes(disk.total)}`} />
-        <ResourceCard icon={Network} label={t('Network')} value={`${formatBytes(networkTotal)}/s`} detail={`Down ${formatBytes(network.rx_per_sec)}/s / Up ${formatBytes(network.tx_per_sec)}/s`} />
+        <ResourceCard icon={Network} label={t('Network')} value={`${formatBytes(networkTotal)}/s`} detail={t('Down {down}/s · Up {up}/s', { down: formatBytes(network.rx_per_sec), up: formatBytes(network.tx_per_sec) })} />
       </section>}
 
-      {/* An end user never sees the server's CPU or RAM, so without this they
-          would open the dashboard onto no figures at all. Their quota is the
-          one number that is theirs to watch. */}
-      {currentUser && !isAdmin && <section className="resource-grid" style={{gridTemplateColumns:'minmax(0,1fr)'}}>
+      {/* An end user never sees the server's CPU or RAM. What is theirs to
+          watch is the package: storage, and how many sites and databases. */}
+      {currentUser && !isAdmin && <section className="resource-grid">
         <ResourceCard
           icon={HardDrive}
           label={t('Storage')}
           value={formatBytes(currentUser.storage_used_bytes)}
           percent={currentUser.storage_percent}
-          detail={`of ${formatBytes(storageLimitBytes(currentUser))} in your package`}
+          detail={t('of {limit} in your package', { limit: formatBytes(storageLimitBytes(currentUser)) })}
         />
+        <ResourceCard icon={Globe} label={t('Websites')} value={String(websites.length)} detail={currentUser.website_limit ? t('of {limit} in your package', { limit: currentUser.website_limit }) : t('in your account')} />
+        <ResourceCard icon={Database} label={t('Database')} value={String(databases.length)} detail={t('in your account')} />
       </section>}
 
-      <div className="dash-groups">
-        {groups.map(group => <section className="dash-group" key={group.title}>
-          <div className="dash-group-head">
-            <h2>{t(group.title)}</h2>
-            <span>{t(group.hint)}</span>
-          </div>
-          <div className="dash-tiles">
-            {group.tiles.map(([key, label, Icon, description]) => (
-              <button className="dash-tile" key={key} onClick={() => navigateToPage(key)} title={t(description)}>
-                <span className="dash-tile-icon"><Icon size={20}/></span>
-                <span className="dash-tile-text">
-                  <strong>{t(label)}</strong>
-                  <span>{t(description)}</span>
+      <div className={isAdmin ? 'overview-main' : 'overview-main single'}>
+        <section className="overview-card overview-sites">
+          <header className="overview-card-head">
+            <div>
+              <h2>{t('Websites')}</h2>
+              <p>
+                {t('{count} websites · {ssl} with SSL', { count: websites.length, ssl: sslCount })}
+                {attentionCount > 0 && <span className="overview-flag">{t('{count} need attention', { count: attentionCount })}</span>}
+              </p>
+            </div>
+            <div className="overview-card-actions">
+              {websites.length > 0 && <button type="button" className="secondary-light" onClick={() => navigateToPage('websites')}>{t('View all')}</button>}
+              <button type="button" onClick={startNewWebsite}><Plus size={15}/>{t('New website')}</button>
+            </div>
+          </header>
+          {websites.length === 0
+            ? <div className="overview-empty">
+              <Globe size={22}/>
+              <p>{t('No websites yet. Create the first one to get started.')}</p>
+            </div>
+            : <div className="overview-table-wrap">
+              <table className="overview-table">
+                <thead><tr>
+                  <th>{t('Domain')}</th>
+                  <th className="optional">{t('Type')}</th>
+                  <th>PHP</th>
+                  <th>SSL</th>
+                  <th className="optional">WAF</th>
+                </tr></thead>
+                <tbody>{shownSites.map(site => <tr key={site.id}>
+                  <td>
+                    <button type="button" className="overview-domain" onClick={() => openSiteFromOverview(site)} title={t('Open in the website list')}>{site.domain}</button>
+                    {site.status !== 'active' && <span className="badge warn">{t(siteStatusLabel[site.status] || site.status)}</span>}
+                  </td>
+                  <td className="optional">{APP_TYPE_LABELS[site.app_type] || site.app_type}</td>
+                  <td>{site.app_type === 'static' ? '—' : site.php_version}</td>
+                  <td><span className={`overview-state ${site.ssl_enabled ? 'on' : 'off'}`}>{site.ssl_enabled ? t('On') : t('Off')}</span></td>
+                  <td className="optional"><span className={`overview-state ${site.waf_enabled ? 'on' : 'muted'}`}>{site.waf_enabled ? t('On') : t('Off')}</span></td>
+                </tr>)}</tbody>
+              </table>
+              {websites.length > shownSites.length && <button type="button" className="overview-more" onClick={() => navigateToPage('websites')}>
+                {t('{count} more websites', { count: websites.length - shownSites.length })}
+              </button>}
+            </div>}
+        </section>
+
+        {isAdmin && <div className="overview-side">
+          <section className="overview-card">
+            <header className="overview-card-head">
+              <div>
+                <h2>{t('Services')}</h2>
+                <p>{!servicesChecked && stoppedServices === 0 ? t('Checking...')
+                  : stoppedServices > 0 ? <span className="overview-flag">{t('{count} stopped', { count: stoppedServices })}</span>
+                    : t('All running')}</p>
+              </div>
+              <button type="button" className="secondary-light" onClick={() => navigateToPage('services')}>{t('Manage')}</button>
+            </header>
+            <ul className="overview-list">
+              {serviceRows.map(row => <li key={row.name}>
+                <span className={`overview-dot ${row.status}`} aria-hidden="true"></span>
+                <span className="overview-list-name">{row.name}</span>
+                <span className={`overview-list-state ${row.status}`}>
+                  {row.status === 'running' ? t('Running') : row.status === 'stopped' ? t('Stopped') : '…'}
                 </span>
-              </button>
-            ))}
-          </div>
-        </section>)}
+              </li>)}
+            </ul>
+          </section>
+
+          <section className="overview-card">
+            <header className="overview-card-head">
+              <div>
+                <h2>{t('Backups')}</h2>
+                <p>{activeSchedules.length > 0
+                  ? t('{count} active schedules', { count: activeSchedules.length })
+                  : <span className="overview-flag">{t('No automatic backup')}</span>}</p>
+              </div>
+              <button type="button" className="secondary-light" onClick={() => navigateToPage('backups')}>{t('Open')}</button>
+            </header>
+            <dl className="overview-facts">
+              <div><dt>{t('Last run')}</dt><dd>{formatWhen(lastBackup?.last_run_at)}</dd></div>
+              <div><dt>{t('Result')}</dt><dd>{!lastBackup ? '—'
+                : <span className={`overview-state ${lastBackup.last_status === 'ok' ? 'on' : lastBackup.last_status === 'error' ? 'off' : 'muted'}`}>
+                  {lastBackup.last_status === 'ok' ? t('Succeeded') : lastBackup.last_status === 'error' ? t('Failed') : lastBackup.last_status === 'running' ? t('Running') : t('Pending')}
+                </span>}</dd></div>
+            </dl>
+            {failedSchedules > 0 && <p className="overview-note danger">{t('{count} schedules failed on their last run.', { count: failedSchedules })}</p>}
+            {activeSchedules.length === 0 && <p className="overview-note">{t('Nothing backs these sites up on a schedule yet.')}</p>}
+          </section>
+        </div>}
       </div>
-    </>;
+
+      <section className="overview-card">
+        <header className="overview-card-head"><div><h2>{t('Shortcuts')}</h2></div></header>
+        <div className="overview-shortcuts">
+          {shortcuts.map(([key, label, Icon]) => <button type="button" className="overview-shortcut" key={`${key}-${label}`} onClick={() => navigateToPage(key)}>
+            <Icon size={18}/><span>{t(label)}</span>
+          </button>)}
+        </div>
+      </section>
+    </div>;
   }
 
   function renderAdminOnly() {
@@ -4727,8 +4852,8 @@ Each account is overwritten with what is in its archive.`)) return;
           <button className="secondary-light" disabled={!!loading} onClick={() => { loadSiteApps(); loadSiteRuntimes(); }}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
         <div className="site-runtime-strip">
-          <span>{t('Docker:')}<strong>{dockerReady ? (siteRuntimes.docker.version || 'installed') : 'not installed'}</strong></span>
-          <span>{t('Node:')}<strong>{siteRuntimes.node_majors?.length ? siteRuntimes.node_majors.map(major => `v${major}`).join(', ') : 'system version only'}</strong></span>
+          <span>{t('Docker:')}{' '}<strong>{dockerReady ? (siteRuntimes.docker.version || 'installed') : 'not installed'}</strong></span>
+          <span>{t('Node:')}{' '}<strong>{siteRuntimes.node_majors?.length ? siteRuntimes.node_majors.map(major => `v${major}`).join(', ') : 'system version only'}</strong></span>
           {isAdmin && !dockerReady && <button className="mini secondary-light" disabled={!!loading} onClick={installDockerEngine}>{t('Install Docker')}</button>}
           {isAdmin && <button className="mini secondary-light" disabled={!!loading} onClick={() => { const major = prompt('Install which Node major version?', '22'); if (major) installNodeMajor(major.trim()); }}>{t('Add Node version')}</button>}
         </div>
@@ -4813,7 +4938,7 @@ Each account is overwritten with what is in its archive.`)) return;
             <label><span>{t('CPU per service')}</span>
               <input value={siteAppDraft.cpu_limit} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, cpu_limit: e.target.value }))} placeholder="1" />
             </label>
-            <p className="compose-hint">{t('Where the file refers to')}<code>{'${VAR}'}</code>, set the value in the <strong>.env</strong> box below,
+            <p className="compose-hint">{t('Where the file refers to')}{' '}<code>{'${VAR}'}</code>, set the value in the <strong>.env</strong> box below,
               exactly as an <code>.env</code> file beside <code>docker-compose.yml</code> would. For a public address
               (an OAuth callback, a webhook) use <code>{'${BPANEL_URL}'}</code> / <code>{'${BPANEL_DOMAIN}'}</code>:
               the app only ever sees its internal port, and the panel fills in the domain of the website pointing at it.</p>
@@ -4958,7 +5083,7 @@ Each account is overwritten with what is in its archive.`)) return;
                     onChange={e => { setSiteAppEdit(prev => ({ ...prev, compose_source: e.target.value })); setSiteAppEditPlan(null); }}
                   />
                 </label>
-                <p className="compose-hint">{t('The panel reads this file and generates the one it actually runs.')}<code>{'${VAR}'}</code> comes
+                <p className="compose-hint">{t('The panel reads this file and generates the one it actually runs.')}{' '}<code>{'${VAR}'}</code> comes
                   from the .env box; for a public address use <code>{'${BPANEL_URL}'}</code> / <code>{'${BPANEL_DOMAIN}'}</code>
                   {app.websites?.length > 0 ? ` (currently ${app.websites[0]})` : ' (point a website at this app first)'}.</p>
                 <label className="site-app-env"><span>.env (KEY=value, one per line)</span>
@@ -5284,7 +5409,7 @@ Each account is overwritten with what is in its archive.`)) return;
         {createSslMode !== 'none' && <div className="ssl-sub-form create-ssl-sub">
           {createSslMode === 'letsencrypt' && <p className="hint">{t('A certificate is issued right after the site is created — the domain must already point to this server.')}</p>}
           {createSslMode === 'wildcard' && <>
-            <p className="hint">{t('Issues')}<code>zone + *.zone</code> over Cloudflare DNS. Leave the token blank to reuse one already saved for the zone.</p>
+            <p className="hint">{t('Issues')}{' '}<code>zone + *.zone</code> over Cloudflare DNS. Leave the token blank to reuse one already saved for the zone.</p>
             <input type="password" autoComplete="off" placeholder={t('Cloudflare API token (Zone → DNS → Edit)')}
               value={createSslToken} onChange={e => setCreateSslToken(e.target.value)} />
           </>}
@@ -5307,7 +5432,9 @@ Each account is overwritten with what is in its archive.`)) return;
         </div>
         <div className="website-search-bar">
           <Search size={16}/>
-          <input
+          <NoAutofillInput
+            type="search"
+            name="website-search"
             value={websiteSearch}
             onChange={e => setWebsiteSearch(e.target.value)}
             placeholder={t('Search domain, alias, path, or Linux user')}
@@ -5316,6 +5443,12 @@ Each account is overwritten with what is in its archive.`)) return;
           {websiteSearch && <button className="secondary-light icon-button" type="button" onClick={() => setWebsiteSearch('')} aria-label={t('Clear website search')} title={t('Clear search')}><X size={15}/></button>}
         </div>
         {visibleWebsites.length === 0 && <EmptyState icon={Globe} message={searchActive ? "No websites match this search." : "No websites yet."} />}
+        {visibleWebsites.length > 0 && <div className="site-list">
+        {/* A table in all but markup: the same column in the same place on
+            every row, so SSL or PHP can be read down the page. */}
+        <div className="site-list-header" aria-hidden="true">
+          <span>{t('Domain')}</span><span>SSL</span><span>{t('Type')}</span><span>PHP</span><span>{t('Features')}</span><span></span>
+        </div>
         <div className="site-grid">
           {visibleWebsites.map(site => <div className="site-stack" key={site.id}>
           <article className="site-card">
@@ -5326,14 +5459,16 @@ Each account is overwritten with what is in its archive.`)) return;
               </div>
             </div>
             <div className="site-meta">
-              <span className={`badge site-ssl-badge ${site.ssl_enabled ? 'ok' : ''}`}>{site.ssl_enabled ? 'SSL OK' : 'No SSL'}</span>
-              <span>{t('Type')}<strong>{site.app_type || 'wordpress'}</strong></span>
-              <span>PHP <strong>{site.php_version}</strong></span>
-              {site.app_type === 'php' && site.nginx_rewrite_mode && site.nginx_rewrite_mode !== 'none' && <span>{t('Rewrite')}<strong>{site.nginx_rewrite_mode}</strong></span>}
-              {site.nginx_custom && <span className="badge ok">{t('Custom Nginx')}</span>}
-              {site.waf_enabled && <span className="badge ok">WAF</span>}
-              {site.http_flood_enabled && <span className="badge ok">{t('HTTP Flood')}</span>}
-              {(site.aliases || []).length > 0 && <span>{t('Domains')}<strong>{(site.aliases || []).length + 1}</strong></span>}
+              <span className="site-cell" data-label="SSL"><span className={`overview-state ${site.ssl_enabled ? 'on' : 'off'}`}>{site.ssl_enabled ? t('On') : t('Off')}</span></span>
+              <span className="site-cell">{APP_TYPE_LABELS[site.app_type || 'wordpress'] || site.app_type}</span>
+              <span className="site-cell" data-label="PHP">{site.app_type === 'static' ? '—' : site.php_version}</span>
+              <span className="site-cell site-features">
+                {site.waf_enabled && <span className="badge ok">WAF</span>}
+                {site.http_flood_enabled && <span className="badge ok">{t('HTTP Flood')}</span>}
+                {site.nginx_custom && <span className="badge">{t('Custom Nginx')}</span>}
+                {site.app_type === 'php' && site.nginx_rewrite_mode && site.nginx_rewrite_mode !== 'none' && <span className="badge">{t('Rewrite')}{' '}<strong>{site.nginx_rewrite_mode}</strong></span>}
+                {(site.aliases || []).length > 0 && <span className="badge">{t('Domains')}{' '}<strong>{(site.aliases || []).length + 1}</strong></span>}
+              </span>
             </div>
             <div className="site-actions" aria-label={`Website actions for ${site.domain}`}>
               <div className="site-feature-actions">
@@ -5354,6 +5489,7 @@ Each account is overwritten with what is in its archive.`)) return;
           {terminalViewer?.id === site.id && renderWebsiteTerminal()}
           </div>)}
         </div>
+        </div>}
       </section>
     </>;
   }
@@ -5386,7 +5522,7 @@ Each account is overwritten with what is in its archive.`)) return;
         <p className="hint">{t('The domain must point to the correct VPS IP before issuing SSL.')}</p>
       </>}
       {sslMode === 'wildcard' && <div className="ssl-sub-form">
-        <p className="hint">{t('Issues')}<code>{cfZone.zone ? `${cfZone.zone} + *.${cfZone.zone}` : 'zone + *.zone'}</code> over
+        <p className="hint">{t('Issues')}{' '}<code>{cfZone.zone ? `${cfZone.zone} + *.${cfZone.zone}` : 'zone + *.zone'}</code> over
           Cloudflare DNS. Needs an API token with <strong>{t('Zone → DNS → Edit')}</strong> for the zone.
         </p>
         {cfZone.has_token
@@ -5400,7 +5536,7 @@ Each account is overwritten with what is in its archive.`)) return;
       {sslMode === 'shared' && <div className="ssl-sub-form">
         <p className="hint">{t('Point this site at another BPanel website\'s certificate (e.g. a wildcard). No new certificate is issued.')}</p>
         {sslSources.length === 0
-          ? <p className="hint">{t('No other website has a certificate that covers')}<strong>{currentSite?.domain}</strong>.</p>
+          ? <p className="hint">{t('No other website has a certificate that covers')}{' '}<strong>{currentSite?.domain}</strong>.</p>
           : <>
             <select value={sharedSource} onChange={e => setSharedSource(e.target.value)}>
               <option value="">{t('Select a source website…')}</option>
@@ -5435,14 +5571,22 @@ Each account is overwritten with what is in its archive.`)) return;
       doCopy.then(() => { setCopiedField(field); setTimeout(() => setCopiedField(null), 2000); }).catch(() => setError(t('Copy failed.')));
     }
     const dbSearchActive = !!dbSearch.trim();
+    // Like the website form: making one is occasional, finding one is why
+    // the page is open. Open by itself only when there is nothing to find.
+    const dbCreateVisible = dbCreateOpen || (databases.length === 0 && !dbSearchActive);
     return <section className="section">
       <div className="section-title">
         <h2>{t('Databases')}</h2>
-        <button className="secondary-light" disabled={!!loading || dbSearching} onClick={() => loadDatabases(dbSearch, true)}><RefreshCw size={15} className={dbSearching ? 'spin' : ''}/>{t('Refresh')}</button>
+        <div className="section-actions">
+          <button className="secondary-light" disabled={!!loading || dbSearching} onClick={() => loadDatabases(dbSearch, true)}><RefreshCw size={15} className={dbSearching ? 'spin' : ''}/>{t('Refresh')}</button>
+          {!dbCreateVisible && <button type="button" onClick={() => setDbCreateOpen(true)}><Plus size={15}/>{t('Create database')}</button>}
+        </div>
       </div>
       <div className="website-search-bar">
         <Search size={16}/>
-        <input
+        <NoAutofillInput
+          type="search"
+          name="database-search"
           value={dbSearch}
           onChange={e => setDbSearch(e.target.value)}
           placeholder={t('Search by database or user name')}
@@ -5450,13 +5594,15 @@ Each account is overwritten with what is in its archive.`)) return;
         />
         {dbSearch && <button className="secondary-light icon-button" type="button" onClick={() => setDbSearch('')} aria-label={t('Clear database search')} title={t('Clear search')}><X size={15}/></button>}
       </div>
-      <div className="form-row">
-        <input value={newDatabase.db_name} onChange={e => setNewDatabase(prev => ({ ...prev, db_name: e.target.value }))} placeholder="database_name" />
-        <input value={newDatabase.db_user} onChange={e => setNewDatabase(prev => ({ ...prev, db_user: e.target.value }))} placeholder={t('db_user (default = db_name)')} />
-        <input value={newDatabase.db_password} onChange={e => setNewDatabase(prev => ({ ...prev, db_password: e.target.value }))} placeholder={t('password (min 12 chars)')} />
-        <button className="mini secondary-light" title={t('Generate random password')} onClick={() => setNewDatabase(prev => ({ ...prev, db_password: generateRandomPassword() }))}><Dices size={13}/></button>
+      {dbCreateVisible && <div className="form-row db-create-row">
+        <input name="new-db-name" autoComplete="off" value={newDatabase.db_name} onChange={e => setNewDatabase(prev => ({ ...prev, db_name: e.target.value }))} placeholder="database_name" />
+        <input name="new-db-user" autoComplete="off" value={newDatabase.db_user} onChange={e => setNewDatabase(prev => ({ ...prev, db_user: e.target.value }))} placeholder={t('db_user (default = db_name)')} />
+        {/* new-password, or the browser offers the panel's own password here. */}
+        <input name="new-db-password" autoComplete="new-password" value={newDatabase.db_password} onChange={e => setNewDatabase(prev => ({ ...prev, db_password: e.target.value }))} placeholder={t('password (min 12 chars)')} />
+        <button type="button" className="secondary-light" title={t('Generate random password')} onClick={() => setNewDatabase(prev => ({ ...prev, db_password: generateRandomPassword() }))}><Dices size={14}/>{t('Generate')}</button>
         <button disabled={!!loading || !newDatabase.db_name.trim()} onClick={createDatabase}><Plus size={15}/>{t('Create database')}</button>
-      </div>
+        {databases.length > 0 && <button type="button" className="secondary-light icon-button" onClick={() => setDbCreateOpen(false)} aria-label={t('Close')} title={t('Close')}><X size={15}/></button>}
+      </div>}
       {createdDbInfo && <div className="info-box db-created-box">
         <div className="db-created-head"><strong>{t('Database created successfully')}</strong><button className="mini secondary-light" onClick={() => setCreatedDbInfo(null)}><X size={13}/></button></div>
         <div className="db-created-grid">
@@ -5471,10 +5617,12 @@ Each account is overwritten with what is in its archive.`)) return;
           return <div className="row db-row" key={db.id}>
           <span><strong>{db.db_name}</strong></span>
           <span style={{color:'var(--text-muted)'}}>{db.db_user}</span>
-          <button disabled={!!loading} onClick={() => openPhpMyAdmin(db.id)}>phpMyAdmin</button>
-          <button disabled={!!loading} onClick={() => downloadDatabase(db.id, db.db_name)}><Download size={14}/> SQL</button>
-          <button disabled={!!loading} onClick={() => changeDbPassword(db.id)}><KeyRound size={14}/>{t('Password')}</button>
-          <button className="danger" disabled={!!loading} onClick={() => deleteDatabase(db.id, db.db_name)}><Trash2 size={14}/></button>
+          {/* Four filled buttons a row made twenty databases eighty loud
+              rectangles. Outline for the actions, a quiet glyph for delete. */}
+          <button className="secondary-light" disabled={!!loading} onClick={() => openPhpMyAdmin(db.id)}><ExternalLink size={14}/>phpMyAdmin</button>
+          <button className="secondary-light" disabled={!!loading} onClick={() => downloadDatabase(db.id, db.db_name)}><Download size={14}/>SQL</button>
+          <button className="secondary-light" disabled={!!loading} onClick={() => changeDbPassword(db.id)}><KeyRound size={14}/>{t('Password')}</button>
+          <button className="site-icon-button danger" disabled={!!loading} onClick={() => deleteDatabase(db.id, db.db_name)} aria-label={`${t('Delete')} ${db.db_name}`} title={t('Delete')}><Trash2 size={15}/></button>
         </div>})}
       </div>
       <p className="hint">{t('Click phpMyAdmin to sign in directly. Token expires after 60s.')}</p>
@@ -5592,7 +5740,7 @@ Each account is overwritten with what is in its archive.`)) return;
         <input value={cronCommand} onChange={e => setCronCommand(e.target.value)} placeholder="php -q cron.php >/dev/null 2>&1" />
         <button disabled={!selectedWebsiteId || !!loading} onClick={addCron}><Plus size={14}/>{t('Add cron')}</button>
       </div>
-      {selectedWebsiteId && <p className="hint">{t('Cron runs as')}<strong>{cronUser || currentSite?.linux_user || 'www-data'}</strong> for the selected website.</p>}
+      {selectedWebsiteId && <p className="hint">{t('Cron runs as')}{' '}<strong>{cronUser || currentSite?.linux_user || 'www-data'}</strong> for the selected website.</p>}
       {selectedWebsiteId && <div className="cron-help">
         <p>
           {t('Write')} <code>php</code> {t('and BPanel rewrites it to')} <code>{sitePhpBinary}</code>
@@ -5605,7 +5753,7 @@ Each account is overwritten with what is in its archive.`)) return;
             <small>{note}</small>
           </li>)}
         </ul>
-        <p className="cron-help-note">{t('Only PHP scripts inside')}<code>public_html</code> and the safe WP-CLI maintenance commands are allowed.
+        <p className="cron-help-note">{t('Only PHP scripts inside')}{' '}<code>public_html</code> and the safe WP-CLI maintenance commands are allowed.
           A trailing <code>&gt;</code>, <code>&gt;&gt;</code>, <code>2&gt;</code> or <code>2&gt;&amp;1</code> may
           redirect to <code>/dev/null</code> or to a file inside this website.
         </p>
@@ -5722,14 +5870,14 @@ Each account is overwritten with what is in its archive.`)) return;
             <FileTargetSelect />
             {activeFileApp
               ? <div className="file-meta">
-                <span>{t('Application:')}<strong>{activeFileApp.name}</strong></span>
-                <span>{t('Root:')}<strong>{activeFileApp.directory}{fileListPath ? `/${fileListPath}` : ''}</strong></span>
-                {currentUser && !isAdmin && <span>{t('Storage:')}<strong>{storageUsageText(currentUser)}</strong></span>}
+                <span>{t('Application:')}{' '}<strong>{activeFileApp.name}</strong></span>
+                <span>{t('Root:')}{' '}<strong>{activeFileApp.directory}{fileListPath ? `/${fileListPath}` : ''}</strong></span>
+                {currentUser && !isAdmin && <span>{t('Storage:')}{' '}<strong>{storageUsageText(currentUser)}</strong></span>}
               </div>
               : currentSite && <div className="file-meta">
-                <span>{t('Website:')}<strong>{currentSite.domain}</strong></span>
-                <span>{t('Root:')}<strong>{currentSite.root_path}{fileListPath ? `/${fileListPath}` : ''}</strong></span>
-                {currentUser && !isAdmin && <span>{t('Storage:')}<strong>{storageUsageText(currentUser)}</strong></span>}
+                <span>{t('Website:')}{' '}<strong>{currentSite.domain}</strong></span>
+                <span>{t('Root:')}{' '}<strong>{currentSite.root_path}{fileListPath ? `/${fileListPath}` : ''}</strong></span>
+                {currentUser && !isAdmin && <span>{t('Storage:')}{' '}<strong>{storageUsageText(currentUser)}</strong></span>}
               </div>}
             <div className="path-pill breadcrumb-line">
               <button className="crumb" disabled={!hasFileTarget() || fileListPath === ''} onClick={() => listFiles('')}>root</button>
@@ -5875,7 +6023,7 @@ Each account is overwritten with what is in its archive.`)) return;
           </select>
           <button disabled={!selectedBackupUserId || !!loading} onClick={createUserBackup}><Archive size={14}/>{t('Create backup')}</button>
         </div>
-        {selectedBackupUser && <p className="hint">{t('Current user:')}<strong>{selectedBackupUser.username}</strong></p>}
+        {selectedBackupUser && <p className="hint">{t('Current user:')}{' '}<strong>{selectedBackupUser.username}</strong></p>}
         <div className="actions backup-subactions">
           <button disabled={!selectedBackupUserId || !!loading} onClick={() => listUserBackups()}><RefreshCw size={14}/>{t('Refresh list')}</button>
         </div>
@@ -5940,7 +6088,7 @@ Each account is overwritten with what is in its archive.`)) return;
           </select>
           <button disabled={(!newBackupSchedule.all_users && (!newBackupSchedule.user_ids || newBackupSchedule.user_ids.length === 0)) || !!loading} onClick={createBackupSchedule}><Clock size={14}/>{t('Schedule')}</button>
         </div>
-        <p className="hint">{t('What gets appended decides how many copies pile up at the far end:')}<strong> nothing</strong> keeps one file per account and overwrites it,
+        <p className="hint">{t('What gets appended decides how many copies pile up at the far end:')}{' '}<strong> nothing</strong> keeps one file per account and overwrites it,
           <strong> day of week</strong> rotates through seven,
           <strong> week of month</strong> through five, and
           <strong> full date</strong> keeps one a day until retention prunes it.
@@ -6191,26 +6339,36 @@ Each account is overwritten with what is in its archive.`)) return;
   function renderServices() {
     return <section className="section">
       <div className="section-title">
-        <h2>{t('Services Status')}</h2>
+        <div>
+          <h2>{t('Services Status')}</h2>
+          <p className="hint">{t('Auto-refreshes every 10s')}</p>
+        </div>
         <button className="secondary-light" disabled={!!loading} onClick={checkAllServices}><RefreshCw size={15}/>{t('Refresh')}</button>
       </div>
-      <div className="service-grid">
+      {/* One line per unit, read like the overview's list. The cards were
+          240px wide with three filled buttons that did not fit, so each ran
+          into the next card. A running unit offers Stop, a stopped one
+          Start; Restart is always there. */}
+      <ul className="service-list">
         {serviceNames.map(name => {
           const state = serviceStates[name];
           const text = `${state?.stdout || ''} ${state?.stderr || ''}`;
           const active = text.includes('active (running)');
           const inactive = text.includes('inactive') || text.includes('failed');
-          return <div className="service-card" key={name}>
-            <div><strong>{name}</strong><span className={active ? 'badge ok' : inactive ? 'badge bad' : 'badge'}>{active ? 'Running' : inactive ? 'Stopped' : '...'}</span></div>
-            <small>{t('Auto-refreshes every 10s')}</small>
+          const status = active ? 'running' : inactive ? 'stopped' : 'unknown';
+          const canStop = !['bpanel-api', 'redis-server'].includes(name);
+          return <li key={name}>
+            <span className={`overview-dot ${status}`} aria-hidden="true"></span>
+            <strong className="service-name">{name}</strong>
+            <span className={`overview-list-state ${status}`}>{active ? t('Running') : inactive ? t('Stopped') : '…'}</span>
             {isAdmin && <div className="service-actions">
-              <button onClick={() => runServiceAction(name, 'start')}><Play size={13}/>{t('Start')}</button>
-              {!['bpanel-api', 'redis-server'].includes(name) && <button onClick={() => runServiceAction(name, 'stop')}><Square size={13}/>{t('Stop')}</button>}
-              <button onClick={() => runServiceAction(name, 'restart')}><RotateCcw size={13}/>{t('Restart')}</button>
+              {!active && <button className="mini secondary-light" onClick={() => runServiceAction(name, 'start')}><Play size={13}/>{t('Start')}</button>}
+              {active && canStop && <button className="mini secondary-light" onClick={() => runServiceAction(name, 'stop')}><Square size={13}/>{t('Stop')}</button>}
+              <button className="mini secondary-light" onClick={() => runServiceAction(name, 'restart')}><RotateCcw size={13}/>{t('Restart')}</button>
             </div>}
-          </div>;
+          </li>;
         })}
-      </div>
+      </ul>
     </section>;
   }
 
@@ -6336,9 +6494,9 @@ Each account is overwritten with what is in its archive.`)) return;
 
         <div className="detail-tabs">
           <button className={fwDetail === 'rules' ? 'chip on' : 'chip'} disabled={!!loading}
-            onClick={() => openFwDetail('rules')}>{t('Your rules')}<b>{userRules.length}</b></button>
+            onClick={() => openFwDetail('rules')}>{t('Your rules')}{' '}<b>{userRules.length}</b></button>
           <button className={fwDetail === 'urls' ? 'chip on' : 'chip'} disabled={!!loading}
-            onClick={() => openFwDetail('urls')}>{t('Blocklist URL')}<b>{blocklistUrls.length}</b></button>
+            onClick={() => openFwDetail('urls')}>{t('Blocklist URL')}{' '}<b>{blocklistUrls.length}</b></button>
           <button className={fwDetail === 'raw' ? 'chip on' : 'chip'} disabled={!!loading}
             onClick={() => openFwDetail('raw')}>{t('Raw status')}</button>
         </div>
@@ -6447,7 +6605,7 @@ Each account is overwritten with what is in its archive.`)) return;
           </div>
           <div className="detail-tabs">
             <button className={fwDetail === 'banned' ? 'chip on' : 'chip'} disabled={!!loading}
-              onClick={() => openFwDetail('banned')}>{t('Banned addresses')}<b>{f2b.banned ?? 0}</b></button>
+              onClick={() => openFwDetail('banned')}>{t('Banned addresses')}{' '}<b>{f2b.banned ?? 0}</b></button>
           </div>
           {fwDetail === 'banned' && <div className="detail-panel">
             <div className="detail-head">
@@ -6737,7 +6895,7 @@ Each account is overwritten with what is in its archive.`)) return;
         <div className="section-title">
           <div>
             <h2>{t('Blocked bots')}</h2>
-            <p className="hint">{t('One name per line, matched anywhere in User-Agent. Matched literally, so')}<code>bingbot/2.0</code> will not also match <code>bingbotX2Y0</code>. Blocked requests get 403 before WAF and rate limiting run.</p>
+            <p className="hint">{t('One name per line, matched anywhere in User-Agent. Matched literally, so')}{' '}<code>bingbot/2.0</code> will not also match <code>bingbotX2Y0</code>. Blocked requests get 403 before WAF and rate limiting run.</p>
           </div>
         </div>
         <textarea
@@ -6901,16 +7059,16 @@ Each account is overwritten with what is in its archive.`)) return;
     return <>
       <section className="section">
         <div className="section-title">
-          <div><h2>{t('Updates')}</h2><p className="hint">{t('OS packages use apt; panel updates use')}<code>bpanel-update</code>.</p></div>
+          <div><h2>{t('Updates')}</h2><p className="hint">{t('OS packages use apt; panel updates use')}{' '}<code>bpanel-update</code>.</p></div>
           <button className="secondary-light" disabled={!!loading} onClick={toggleUpdateLog}>{showUpdateLog ? <X size={14}/> : <FileText size={14}/>} {showUpdateLog ? 'Hide logs' : 'View logs'}</button>
         </div>
         <div className="info-box update-version-box">
           <div className="update-version-head"><strong>{t('Panel release')}</strong><span className={panelBadgeClass}>{panelBadge}</span></div>
           <div className="update-version-grid">
-            <span>{t('Current')}<strong>v{currentPanelVersion}</strong></span>
-            <span>{t('Latest')}<strong>{latestPanelVersion === 'unknown' ? 'unknown' : `v${latestPanelVersion}`}</strong></span>
-            <span>{t('Checked')}<strong>{panelUpdate.last_checked_at || 'never'}</strong></span>
-            <span>{t('State file')}<strong>{panelUpdate.state_file || '/var/lib/bpanel/update-status.json'}</strong></span>
+            <span>{t('Current')}{' '}<strong>v{currentPanelVersion}</strong></span>
+            <span>{t('Latest')}{' '}<strong>{latestPanelVersion === 'unknown' ? 'unknown' : `v${latestPanelVersion}`}</strong></span>
+            <span>{t('Checked')}{' '}<strong>{panelUpdate.last_checked_at || 'never'}</strong></span>
+            <span>{t('State file')}{' '}<strong>{panelUpdate.state_file || '/var/lib/bpanel/update-status.json'}</strong></span>
           </div>
           {panelUpdate.check_error && <p className="hint">{t('Release check failed:')} {panelUpdate.check_error}</p>}
           {panelUpdate.last_update_status && <p className="hint">{t('Last update:')} {panelUpdate.last_update_status}{panelUpdate.last_update_ref ? ` (${panelUpdate.last_update_ref})` : ''}{panelUpdate.last_update_finished_at ? ` at ${panelUpdate.last_update_finished_at}` : ''}</p>}
@@ -6973,11 +7131,12 @@ Each account is overwritten with what is in its archive.`)) return;
         </div>}
 
         {pk?.supported && <>
-          <p className="hint">{t('A passkey is tied to the domain')}<strong>{pk.rp_id}</strong>. Reach the panel by any
-            other name and it will not be offered — use Google Authenticator below for that.
+          <p className="hint">{t('A passkey is tied to the domain')}{' '}<strong>{pk.rp_id}</strong>.{' '}
+            {t('Reach the panel by any other name and it will not be offered — use Google Authenticator below for that.')}
           </p>
           <div className="cron-form">
-            <input
+            <NoAutofillInput
+              name="passkey-name"
               value={passkeyName}
               onChange={e => setPasskeyName(e.target.value)}
               placeholder={t('Device name, e.g. MacBook')}
@@ -7018,7 +7177,7 @@ Each account is overwritten with what is in its archive.`)) return;
 
       <section className="section">
         <div className="section-title">
-          <div><h2>{t('Google Authenticator 2FA')}</h2><p className="hint">{t('Current status:')}<strong>{enabled ? 'Enabled' : 'Disabled'}</strong></p></div>
+          <div><h2>{t('Google Authenticator 2FA')}</h2><p className="hint">{t('Current status:')}{' '}<strong>{enabled ? 'Enabled' : 'Disabled'}</strong></p></div>
           <button className="secondary-light" disabled={!!loading} onClick={loadTwoFactorStatus}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
         {!enabled && <div className="security-grid">
@@ -7125,7 +7284,7 @@ Each account is overwritten with what is in its archive.`)) return;
           </select>
         </div>
         <div className="malware-sched-meta">
-          {saved.enabled && saved.next_run_at && <span>{t('Next:')}<strong>{fmtStamp(saved.next_run_at)}</strong></span>}
+          {saved.enabled && saved.next_run_at && <span>{t('Next:')}{' '}<strong>{fmtStamp(saved.next_run_at)}</strong></span>}
           {saved.last_run_at && <span className={`badge ${saved.last_status === 'done' ? 'ok' : saved.last_status === 'infected' ? 'danger' : 'warn'}`}>
             {fmtStamp(saved.last_run_at)} · {scanStatusLabel(saved.last_status)}
           </span>}
@@ -7156,8 +7315,8 @@ Each account is overwritten with what is in its archive.`)) return;
         </div>}
         <div className="info-box">
           <p className="hint">{mw.detail || 'Checking...'}</p>
-          {mw.memory_total_mb > 0 && <p className="hint">{t('Server memory:')}<strong>{mw.memory_total_mb} MB</strong> {t('({n} MB free)', { n: mw.memory_available_mb })}</p>}
-          {mw.lmd_installed && <p className="hint">{t('Malware signatures:')}<strong>{mw.lmd_sig_version || '—'}</strong>{mw.lmd_updated_at ? ` (updated ${mw.lmd_updated_at})` : ''}</p>}
+          {mw.memory_total_mb > 0 && <p className="hint">{t('Server memory:')}{' '}<strong>{mw.memory_total_mb} MB</strong> {t('({n} MB free)', { n: mw.memory_available_mb })}</p>}
+          {mw.lmd_installed && <p className="hint">{t('Malware signatures:')}{' '}<strong>{mw.lmd_sig_version || '—'}</strong>{mw.lmd_updated_at ? ` (updated ${mw.lmd_updated_at})` : ''}</p>}
           {!mwInstalled && <p className="hint" style={{marginTop:8}}>{t('Turning this on installs the scanner. It only runs during a scan (~1.3 GB of RAM) and releases that afterwards — nothing runs in the background, so it costs no memory at rest.')}</p>}
           <div className="actions" style={{marginTop:12}}>
             {!mwEnabled
@@ -7695,7 +7854,7 @@ Each account is overwritten with what is in its archive.`)) return;
 
         {!mcpAddonInstalled && <div className="addon-notes">
           <strong><AlertCircle size={13}/>{t('The addon is off')}</strong>
-          <ul><li>{t('Nothing answers on this address until an administrator installs')}<strong>{t('AI assistants (MCP)')}</strong> on the Addons page. Existing tokens are kept
+          <ul><li>{t('Nothing answers on this address until an administrator installs')}{' '}<strong>{t('AI assistants (MCP)')}</strong> on the Addons page. Existing tokens are kept
             while it is off.</li></ul>
         </div>}
 
@@ -7741,7 +7900,7 @@ Each account is overwritten with what is in its archive.`)) return;
           <button disabled={!mcpDraft.name.trim() || !!loading} onClick={createMcpToken}>
             <KeyRound size={14}/>{t('Create')}</button>
         </div>
-        <p className="hint">{t('Without')}<strong>{t('Allow actions')}</strong> the token can only read, and the assistant is not
+        <p className="hint">{t('Without')}{' '}<strong>{t('Allow actions')}</strong> the token can only read, and the assistant is not
           even shown the tools that change anything. Leave it off unless you want the assistant to
           act.
         </p>

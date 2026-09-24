@@ -50,8 +50,6 @@ PART8.update({
 # so this one was invisible to all of them and stayed English on a Vietnamese
 # dashboard.
 PART8.update({
-    "Let's Encrypt and uploaded certificates":
-        "Let's Encrypt và chứng chỉ tự tải lên",
 })
 
 # Labels that arrive from an array and are drawn by a shared line of JSX -

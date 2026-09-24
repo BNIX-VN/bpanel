@@ -37,20 +37,6 @@ PART6 = {
         "Bấm Xem nhật ký để tải nhật ký cập nhật.",
 
     # --- dashboard tile descriptions ---
-    "Files and databases": "File và database",
-    "Node and Docker apps": "Ứng dụng Node và Docker",
-    "Scheduled commands per website": "Lệnh hẹn giờ theo từng website",
-    "One login per website, separate from the panel password":
-        "Một tài khoản cho mỗi website, tách biệt với mật khẩu panel",
-    "Allowed and blocked addresses": "Địa chỉ được phép và bị chặn",
-    "Panel and system packages": "Gói của panel và của hệ thống",
-    "Optional features, off by default": "Tính năng tuỳ chọn, mặc định tắt",
-    "Tokens for Claude Code, Cursor and VS Code":
-        "Token cho Claude Code, Cursor và VS Code",
-    "The machine everything runs on": "Cỗ máy mà mọi thứ chạy trên đó",
-    "What stands between a site and the internet":
-        "Thứ đứng giữa website và internet",
-    "Who can sign in, and with what": "Ai đăng nhập được, và bằng gì",
     "Protection for your websites. Open one to configure its rules and blocked bots.":
         "Bảo vệ cho website của bạn. Mở một website để cấu hình rule và bot bị chặn.",
     "Engine status and per-website protection. Open a website to configure its rules, flood limits and blocked bots.":
@@ -181,9 +167,6 @@ PART6.update({
     # group headings
     "Accounts": "Tài khoản",
     "Server": "Máy chủ",
-    "Domains, certificates and scheduled jobs":
-        "Tên miền, chứng chỉ và lệnh hẹn giờ",
-    "Content, data and copies of both": "Nội dung, dữ liệu và bản sao của cả hai",
 
     # tile labels the dictionary had not reached
     "AI assistants": "Trợ lý AI",
@@ -194,20 +177,4 @@ PART6.update({
     "Login security": "Bảo mật đăng nhập",
 
     # the line under each tile
-    "Domains, PHP version, document root": "Tên miền, phiên bản PHP, document root",
-    "Browse, edit and upload site files": "Xem, sửa và tải file của site lên",
-    "MariaDB users and phpMyAdmin": "User MariaDB và phpMyAdmin",
-    "Schedules, downloads and restores": "Lịch hẹn, tải về và khôi phục",
-    "Rules, bad bots and payload inspection":
-        "Rule, bot xấu và kiểm tra nội dung request",
-    "SSH ban list, and how long each ban lasts":
-        "Danh sách cấm SSH, và mỗi lệnh cấm kéo dài bao lâu",
-    "Scan schedules and findings": "Lịch quét và kết quả tìm được",
-    "Who reached which site, and the verdict":
-        "Ai đã vào site nào, và kết quả xử lý",
-    "nginx, PHP, MariaDB, Redis": "nginx, PHP, MariaDB, Redis",
-    "Versions, limits and extensions": "Phiên bản, giới hạn và extension",
-    "Two-factor and session settings": "Cài đặt xác thực hai lớp và phiên",
-    "Customers, packages and quotas": "Khách hàng, gói và hạn mức",
-    "Panel name, URL, branding": "Tên panel, URL, nhận diện",
 })
