@@ -88,6 +88,36 @@ MARIADB_TUNING_CONF="/etc/mysql/mariadb.conf.d/90-bpanel-tuning.cnf"
 
 deny() { echo "bpanel-helper: $*" >&2; exit 1; }
 
+# Every apt call in this file goes through here, by shadowing the command
+# rather than by editing thirty-eight call sites and hoping the next one
+# remembers. `command apt-get` is the real binary; without it this recurses.
+#
+# A freshly-booted Ubuntu runs unattended-upgrades and apt-daily in its first
+# minutes and holds the dpkg locks while it does. apt does not wait - it exits
+# immediately with "Could not get lock /var/lib/dpkg/lock-frontend". install.sh
+# learned this long ago and has had a wrapper ever since; the helper never got
+# one, so every addon the panel installs could fail for six seconds' bad luck.
+# The operator saw "500 internal server error" and nothing else.
+#
+# Not reachable from the two OS-upgrade paths that run `bash -lc '...apt-get
+# ...'` detached: a new shell does not inherit this. Those are deliberately
+# fire-and-forget and already tolerate a busy lock by running again tomorrow.
+apt-get() {
+  local waited=0
+  while fuser /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/lib/apt/lists/lock >/dev/null 2>&1; do
+    if (( waited == 0 )); then
+      echo "Waiting for another package manager to finish..." >&2
+    fi
+    if (( waited >= 300 )); then
+      deny "timed out after 5 minutes waiting for the dpkg lock; another package manager is still running"
+    fi
+    sleep 5
+    waited=$(( waited + 5 ))
+  done
+  command apt-get "$@"
+}
+
+
 # `dpkg -s <pkg>` exits 0 for a package that has been REMOVED but still has
 # its config files on disk ("deinstall ok config-files"). Every caller here
 # means "is this usable", and for a removed package the answer is no - the
