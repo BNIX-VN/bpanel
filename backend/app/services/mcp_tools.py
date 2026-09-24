@@ -548,7 +548,7 @@ def _create_backup(ctx: Context, args: dict):
             raise ToolError(f"No account named {wanted}")
     return maintenance_api.create_user_backup(
         payload=UserBackupCreate(user_id=owner.id),
-        request=None, db=ctx.db, current_user=ctx.user)
+        request=ctx.request, db=ctx.db, current_user=ctx.user)
 
 
 @tool("run_backup_schedule", "Run a backup schedule now",
@@ -560,7 +560,7 @@ def _create_backup(ctx: Context, args: dict):
       required=("schedule_id",), admin_only=True, writes=True)
 def _run_backup_schedule(ctx: Context, args: dict):
     return maintenance_api.run_backup_schedule_now(
-        schedule_id=args["schedule_id"], request=None,
+        schedule_id=args["schedule_id"], request=ctx.request,
         db=ctx.db, current_user=ctx.user)
 
 
@@ -589,7 +589,7 @@ def _set_website_waf(ctx: Context, args: dict):
     return websites_api.set_website_waf(
         website_id=website.id,
         payload=WebsiteWafUpdate(waf_enabled=bool(args["enabled"])),
-        request=None, db=ctx.db, current_user=ctx.user)
+        request=ctx.request, db=ctx.db, current_user=ctx.user)
 
 
 # --- files ------------------------------------------------------------------
@@ -700,7 +700,7 @@ def _block_ip(ctx: Context, args: dict):
                     "note": "Already blocked; nothing was added."}
 
     result = firewall_api.block_ip(
-        payload=FirewallIpRule(ip=wanted), request=None, current_user=ctx.user)
+        payload=FirewallIpRule(ip=wanted), request=ctx.request, current_user=ctx.user)
     return {"ip": wanted, "already_blocked": False, "reason": args.get("reason", ""),
             "result": result}
 

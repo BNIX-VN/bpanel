@@ -147,6 +147,17 @@ class Context:
     user: User
     token: McpToken
     client_ip: str = ""
+    # The real HTTP request, handed to every endpoint a tool calls.
+    #
+    # Passing None here was a bug that reached a live panel: firewall.block_ip
+    # reads `request.client.host` to refuse blocking a range that contains the
+    # caller's own address, and the assistant got
+    # `'NoneType' object has no attribute 'client'` - then guessed out loud
+    # that iptables was down. Two things wrong with None, and the crash was
+    # the smaller one: it also disabled the panel's own guard against locking
+    # yourself out. It carries the audit trail as well, so a write made
+    # through MCP records the address and client it came from.
+    request: Optional[Any] = None
 
     @property
     def is_admin(self) -> bool:

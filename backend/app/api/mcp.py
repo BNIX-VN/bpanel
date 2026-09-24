@@ -101,6 +101,9 @@ async def mcp_endpoint(request: Request, db: Session = Depends(get_db)):
     ctx = mcp.Context(
         db=db, user=owner, token=row,
         client_ip=request.client.host if request.client else "",
+        # Handed on to every endpoint a tool calls: some of them read it, and
+        # the audit trail wants the address and client behind a change.
+        request=request,
     )
     answer = mcp.handle_payload(ctx, payload)
     if answer is None:

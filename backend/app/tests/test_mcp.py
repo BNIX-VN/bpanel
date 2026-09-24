@@ -1221,3 +1221,73 @@ def test_the_client_snippets_carry_the_token_that_was_just_created():
     # All three snippets use it; none of them still hard-codes the placeholder.
     assert block.count("${bearer}") == 3
     assert "'Bearer YOUR_TOKEN'" not in block
+
+
+# --- the request an endpoint is handed ---------------------------------------
+
+def test_block_ip_crashed_because_the_request_was_none(monkeypatch):
+    """The bug as the operator met it on .88:
+
+        'NoneType' object has no attribute 'client'
+
+    firewall.block_ip reads request.client.host to refuse a range covering the
+    caller's own address. A tool passing request=None made that a crash - and
+    the assistant, having nothing better to go on, told the operator that
+    iptables was probably down.
+    """
+    seen = {}
+    monkeypatch.setattr(mcp_tools.firewall_service, "rules", lambda: [])
+    monkeypatch.setattr(mcp_tools.firewall_api, "block_ip",
+                        lambda payload, request, current_user: seen.update(request=request))
+
+    ctx = mcp.Context(db=_Session(), user=_user(), token=_token(can_write=True),
+                      client_ip="198.51.100.7", request=_FakeRequest("198.51.100.7"))
+    mcp.REGISTRY["block_ip"].handler(ctx, {"ip": "8.8.8.8"})
+
+    assert seen["request"] is not None, "the endpoint dereferences it"
+    assert seen["request"].client.host == "198.51.100.7"
+
+
+class _FakeRequest:
+    """Only what the endpoints actually read off a Request."""
+
+    def __init__(self, host):
+        self.client = type("C", (), {"host": host})()
+        self.headers = {"user-agent": "mcp-client/1.0"}
+
+
+def test_no_tool_hands_an_endpoint_a_missing_request():
+    """The class of bug, not the one instance.
+
+    Several endpoints take a Request and read it. A tool that passes None is a
+    crash waiting for the first person to call it, and it silently disables
+    whatever that endpoint uses the request for - here, the panel's own guard
+    against blocking the address you are connected from.
+    """
+    source = (PROJECT_ROOT / "backend" / "app" / "services" / "mcp_tools.py") \
+        .read_text(encoding="utf-8")
+    assert "request=None" not in source
+    assert source.count("request=ctx.request") == 4
+
+
+def test_the_endpoint_puts_the_real_request_on_the_context():
+    source = (PROJECT_ROOT / "backend" / "app" / "api" / "mcp.py").read_text(encoding="utf-8")
+    block = source.split("ctx = mcp.Context(")[1].split(")")[0]
+    assert "request=request" in block
+
+
+def test_a_write_through_mcp_records_where_it_came_from(monkeypatch):
+    """With the request in hand the audit row gets an address and a client.
+
+    Before this every MCP write was logged with neither, which is the one
+    question an administrator asks of a change they did not make.
+    """
+    from app.services import audit
+
+    rows = []
+    monkeypatch.setattr(audit, "log_action", lambda *a, **k: rows.append((a, k)))
+    # log_action itself appends ip= and ua= when a request is present; this
+    # checks the plumbing reaches it rather than re-testing log_action.
+    fake = _FakeRequest("198.51.100.7")
+    audit.log_action(_Session(), 1, "mcp_tool", "block_ip", "", request=fake)
+    assert rows[0][1]["request"] is fake
