@@ -437,6 +437,7 @@ export const vi = {
   "Last update:": "Cập nhật lần cuối:",
   "Latest": "Mới nhất",
   "Leave WHMCS server IP empty to allow all IPs. Multiple IPs: separate with comma.": "Để trống IP máy chủ WHMCS nếu muốn cho phép mọi IP. Nhiều IP thì ngăn cách bằng dấu phẩy.",
+  "Let's Encrypt and uploaded certificates": "Let's Encrypt và chứng chỉ tự tải lên",
   "Level 1 — Scheduled scans": "Mức 1 — Quét theo lịch",
   "Level 2 not running": "Lớp 2 không chạy",
   "Level 2 running": "Lớp 2 đang chạy",

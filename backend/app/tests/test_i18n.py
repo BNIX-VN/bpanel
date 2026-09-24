@@ -255,8 +255,22 @@ def test_the_terms_left_in_english_are_declared_not_guessed():
         assert term in KEPT_IN_ENGLISH, term
 
 
+def _quoted(text: str) -> str:
+    """The text of a JS string literal, whichever quote it was written with.
+
+    One tile description is in double quotes because it contains an apostrophe,
+    and a pattern that only knew single quotes skipped that row silently - so
+    "Let's Encrypt and uploaded certificates" sat in English on an otherwise
+    Vietnamese dashboard while this test passed.
+    """
+    return text[1:-1].replace("\\'", "'").replace('\\"', '"')
+
+
+_STRING = r"""(?:'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")"""
+
+
 @pytest.mark.parametrize("array,pattern", [
-    ("const groups = [", r"\['[a-z-]+', '([^']+)', Ms\w+, '([^']+)'\]"),
+    ("const groups = [", rf"\[{_STRING}, ({_STRING}), Ms\w+, ({_STRING})\]"),
 ])
 def test_every_dashboard_tile_reads_in_vietnamese(array, pattern):
     """The tiles are the first Vietnamese a customer sees, and the audit that
@@ -269,9 +283,12 @@ def test_every_dashboard_tile_reads_in_vietnamese(array, pattern):
     what this does.
     """
     body = APP.split(array)[1].split("\n    ]")[0]
+    rows = re.findall(pattern, body)
+    assert len(rows) > 15, f"only matched {len(rows)} tiles - the pattern missed some"
     missing = []
-    for match in re.findall(pattern, body):
-        for text in match:
+    for match in rows:
+        for literal in match:
+            text = _quoted(literal)
             if text not in DICTIONARY and text not in KEPT_IN_ENGLISH:
                 missing.append(text)
     assert not missing, f"tiles still in English: {missing}"

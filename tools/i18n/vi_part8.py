@@ -44,3 +44,12 @@ PART8.update({
 PART8.update({
     "Module, rule files and timers": "Module, file rule và lịch hẹn",
 })
+
+# The one tile description written with double quotes, because it contains an
+# apostrophe. Every check of the tile array matched single-quoted strings only,
+# so this one was invisible to all of them and stayed English on a Vietnamese
+# dashboard.
+PART8.update({
+    "Let's Encrypt and uploaded certificates":
+        "Let's Encrypt và chứng chỉ tự tải lên",
+})
