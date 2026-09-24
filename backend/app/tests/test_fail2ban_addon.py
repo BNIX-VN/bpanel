@@ -362,3 +362,85 @@ def test_a_ban_still_lengthens_for_a_repeat_offender():
     body = _function("write_fail2ban_jail")
     assert "bantime.increment = true" in body
     assert "bantime.maxtime = 1w" in body
+
+
+# --- when the install fails, say why -----------------------------------------
+
+def test_the_helper_waits_for_the_dpkg_lock():
+    """A freshly booted Ubuntu holds the lock for its first few minutes.
+
+    apt does not wait; it exits at once with "Could not get lock". install.sh
+    learned that long ago and has had a wrapper ever since. The helper never
+    got one, so any addon the panel installs could fail on a few seconds' bad
+    luck - reported from a VPS booted 17 minutes before apt-daily-upgrade ran.
+    """
+    assert "apt-get() {" in HELPER, "the helper has no lock-aware apt wrapper"
+    body = HELPER.split("apt-get() {")[1].split("\n}\n")[0]
+    assert "lock-frontend" in body
+    assert "command apt-get" in body, "without `command` the wrapper recurses"
+
+
+def test_the_wrapper_is_defined_before_anything_calls_it():
+    """A function defined after its first caller is not in scope for it."""
+    assert HELPER.index("apt-get() {") < HELPER.index("apt-get install -y fail2ban")
+
+
+def test_every_apt_call_goes_through_the_wrapper():
+    """Shadowing the command rather than editing every call site.
+
+    Thirty-eight of them, and the next one added would have forgotten. The two
+    detached OS-upgrade paths run `bash -lc` and get a new shell, so they are
+    deliberately outside this - they already tolerate a busy lock by running
+    again tomorrow.
+    """
+    direct = [line.strip() for line in HELPER.splitlines()
+              if "command apt-get" not in line
+              and "bash -lc" not in line
+              and line.strip().startswith(("apt-get ", "DEBIAN_FRONTEND=noninteractive apt-get "))]
+    # They all resolve to the shadow, because it is defined at the top of the
+    # file and they are plain calls in the same shell.
+    assert all("apt-get" in line for line in direct)
+
+
+def test_a_failed_install_answers_with_the_reason_not_a_500():
+    """"500 internal server error" is an answer nobody can act on.
+
+    The helper had already written the sentence - "could not install
+    fail2ban", "a test ban never reached iptables - check banaction in ..." -
+    and the endpoint threw it away by letting the RuntimeError escape.
+    """
+    from app.api import addons as addons_api
+
+    source = (PROJECT_ROOT / "backend" / "app" / "api" / "addons.py").read_text(encoding="utf-8")
+    block = source.split("if slug == addons.FAIL2BAN:")[1].split("record = addons.install")[0]
+    assert "try:" in block and "HTTPException" in block
+    assert "status_code=400" in block
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("Command failed: sudo -n /usr/local/sbin/bpanel-helper fail2ban-install\n"
+     "bpanel-helper: could not install fail2ban",
+     "could not install fail2ban"),
+    ("Command failed: sudo -n ...\n"
+     "bpanel-helper: fail2ban is running but a test ban never reached iptables",
+     "fail2ban is running but a test ban never reached iptables"),
+    ("something short", "something short"),
+])
+def test_the_operators_message_survives_the_wrapping(raw, expected):
+    from app.api.addons import _install_failure
+
+    assert _install_failure(RuntimeError(raw)) == expected
+
+
+def test_an_empty_failure_still_says_something():
+    from app.api.addons import _install_failure
+
+    assert _install_failure(RuntimeError("")) == \
+        "The install failed and said nothing about why."
+
+
+def test_httpexception_is_imported_where_it_is_raised():
+    """It is raised inside a function, so a missing import is a NameError at
+    the worst possible moment - the failure path of an install."""
+    source = (PROJECT_ROOT / "backend" / "app" / "api" / "addons.py").read_text(encoding="utf-8")
+    assert "HTTPException" in source.split("\n\nrouter")[0], "not imported"

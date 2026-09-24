@@ -5,7 +5,7 @@ Every other user is told what exists so they know what to ask for, without being
 able to turn it on.
 """
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -16,6 +16,22 @@ from app.services import addons, fail2ban, site_apps
 from app.services.audit import log_action
 
 router = APIRouter(prefix="/addons", tags=["addons"])
+
+
+def _install_failure(exc: Exception) -> str:
+    """The helper's own words, not a stack trace.
+
+    shell.privileged wraps a failure as "Command failed: <the whole command
+    line>" then a newline then stderr. The command line is noise to whoever is
+    reading the panel; the stderr is the sentence the helper wrote for them.
+    """
+    text = str(exc).strip()
+    _, separator, stderr = text.partition(chr(10))
+    message = (stderr if separator else text).strip()
+    for prefix in ("bpanel-helper: ", "ERROR: "):
+        if message.startswith(prefix):
+            message = message[len(prefix):]
+    return message[:500] or "The install failed and said nothing about why."
 
 
 @router.get("")
@@ -44,7 +60,17 @@ def install_addon(slug: str, db: Session = Depends(get_db), current_user: User =
         # either protects the machine or it does not. The helper proves a ban
         # reaches iptables and raises if it does not, so a failure here means
         # the addon is not recorded as installed - which is the truth.
-        fail2ban.install()
+        #
+        # Say why. Letting the RuntimeError out gave the operator "500
+        # internal server error" and nothing else, while the helper had
+        # already written the reason - "could not install fail2ban", "a test
+        # ban never reached iptables - check banaction in ...". A 500 is an
+        # answer nobody can act on, and on a live report it cost an afternoon
+        # of log reading to get back to a message that had existed all along.
+        try:
+            fail2ban.install()
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=_install_failure(exc)) from exc
     record = addons.install(slug)
     log_action(db, current_user.id, "install_addon", slug, record.get("version", ""))
     return {
