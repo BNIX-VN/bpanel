@@ -4724,7 +4724,7 @@ Each account is overwritten with what is in its archive.`)) return;
               {siteApps.limit > 0 && <> {t('Using {used} of {limit} allowed.', { used: siteApps.used, limit: siteApps.limit })}</>}
             </p>
           </div>
-          <button disabled={!!loading} onClick={() => { loadSiteApps(); loadSiteRuntimes(); }}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <button className="secondary-light" disabled={!!loading} onClick={() => { loadSiteApps(); loadSiteRuntimes(); }}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
         <div className="site-runtime-strip">
           <span>{t('Docker:')}<strong>{dockerReady ? (siteRuntimes.docker.version || 'installed') : 'not installed'}</strong></span>
@@ -5217,7 +5217,7 @@ Each account is overwritten with what is in its archive.`)) return;
           <option value={1000}>1000 lines</option>
           <option value={2000}>2000 lines</option>
         </select>
-        <button disabled={!!loading} onClick={() => loadWebsiteLog(logViewer.id, logViewer.kind, logViewer.lines, logViewer.domain)}><RefreshCw size={14}/>{t('Refresh')}</button>
+        <button className="secondary-light" disabled={!!loading} onClick={() => loadWebsiteLog(logViewer.id, logViewer.kind, logViewer.lines, logViewer.domain)}><RefreshCw size={14}/>{t('Refresh')}</button>
       </div>
       <pre className="log-output">{logViewer.exists ? (logViewer.content || 'Log is empty.') : 'Log file has not been created yet.'}</pre>
     </section>;
@@ -5438,7 +5438,7 @@ Each account is overwritten with what is in its archive.`)) return;
     return <section className="section">
       <div className="section-title">
         <h2>{t('Databases')}</h2>
-        <button disabled={!!loading || dbSearching} onClick={() => loadDatabases(dbSearch, true)}><RefreshCw size={15} className={dbSearching ? 'spin' : ''}/>{t('Refresh')}</button>
+        <button className="secondary-light" disabled={!!loading || dbSearching} onClick={() => loadDatabases(dbSearch, true)}><RefreshCw size={15} className={dbSearching ? 'spin' : ''}/>{t('Refresh')}</button>
       </div>
       <div className="website-search-bar">
         <Search size={16}/>
@@ -5494,7 +5494,7 @@ Each account is overwritten with what is in its archive.`)) return;
     return <section className="section">
       <div className="section-title">
         <div><h2>{t('SFTP accounts')}</h2></div>
-        <button disabled={!selectedWebsiteId || !!loading} onClick={loadSftpAccounts}><RefreshCw size={14}/>{t('Refresh')}</button>
+        <button className="secondary-light" disabled={!selectedWebsiteId || !!loading} onClick={loadSftpAccounts}><RefreshCw size={14}/>{t('Refresh')}</button>
       </div>
 
       <div className="info-box">
@@ -5584,7 +5584,7 @@ Each account is overwritten with what is in its archive.`)) return;
     return <section className="section">
       <div className="section-title">
         <div><h2>{t('Cron manager')}</h2></div>
-        <button disabled={!selectedWebsiteId || !!loading} onClick={listCron}><RefreshCw size={14}/>{t('Refresh')}</button>
+        <button className="secondary-light" disabled={!selectedWebsiteId || !!loading} onClick={listCron}><RefreshCw size={14}/>{t('Refresh')}</button>
       </div>
       <div className="cron-form">
         <WebsiteSelect />
@@ -5714,7 +5714,7 @@ Each account is overwritten with what is in its archive.`)) return;
       {renderChmodDialog()}
       <div className="section-title">
         <div><h2>{t('File manager')}</h2></div>
-        <button disabled={!hasFileTarget() || !!loading} onClick={() => listFiles(fileListPath)}><RefreshCw size={14}/>{t('Refresh')}</button>
+        <button className="secondary-light" disabled={!hasFileTarget() || !!loading} onClick={() => listFiles(fileListPath)}><RefreshCw size={14}/>{t('Refresh')}</button>
       </div>
       <div className="file-manager">
         <div className="file-panel">
@@ -5841,7 +5841,7 @@ Each account is overwritten with what is in its archive.`)) return;
         <WebsiteSelect />
         <div className="actions backup-toolbar">
           <button disabled={!selectedWebsiteId || !!loading} onClick={createBackup}><Plus size={14}/>{t('Create backup')}</button>
-          <button disabled={!selectedWebsiteId || !!loading} onClick={refreshBackupArea}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <button className="secondary-light" disabled={!selectedWebsiteId || !!loading} onClick={refreshBackupArea}><RefreshCw size={14}/>{t('Refresh')}</button>
           <label className="upload-button">
             <Upload size={14}/>{t('Upload backup')}<input type="file" accept=".tar.gz,application/gzip" onChange={e => { uploadBackup(e.target.files?.[0]); e.target.value = ''; }} />
           </label>
@@ -5894,7 +5894,7 @@ Each account is overwritten with what is in its archive.`)) return;
         <div className="section-title restore-title backup-panel-heading backup-subtitle">
           <div><h3>{t('Restore folder')}</h3><p className="hint">{restoreBackupDir || '/var/backups/bpanel/users/restore'}</p></div>
           <div className="actions">
-            <button disabled={!!loading} onClick={loadRestoreBackups}><RefreshCw size={14}/>{t('Refresh')}</button>
+            <button className="secondary-light" disabled={!!loading} onClick={loadRestoreBackups}><RefreshCw size={14}/>{t('Refresh')}</button>
             <label className="upload-button">
               <Upload size={14}/>{t('Upload backups')}<input type="file" multiple accept=".tar.gz,application/gzip" onChange={e => { uploadUserBackups(e.target.files); e.target.value = ''; }} />
             </label>
@@ -5916,7 +5916,7 @@ Each account is overwritten with what is in its archive.`)) return;
       {isAdmin && activeBackupTab === 'schedule' && <div className="backup-tab-panel">
         <div className="backup-panel-title">
           <div><h3>{t('Scheduled backups')}</h3><p className="hint">{t('Run full user backups automatically with optional off-server destination.')}</p></div>
-          <button disabled={!!loading} onClick={refreshScheduledBackupArea}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <button className="secondary-light" disabled={!!loading} onClick={refreshScheduledBackupArea}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
         <div className="sftp-form schedule-form backup-schedule-form">
           <label className="schedule-toggle">
@@ -5970,7 +5970,7 @@ Each account is overwritten with what is in its archive.`)) return;
             <h3>{t('Restore')}</h3>
             <p className="hint">{t('Everything that could be restored, wherever it is. Tick what you want back and restore it in one go.')}</p>
           </div>
-          <button disabled={!!loading} onClick={loadRestoreCatalogue}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <button className="secondary-light" disabled={!!loading} onClick={loadRestoreCatalogue}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
 
         {!restoreCatalogue.loaded && <p className="hint">{t('Press Refresh to look on this server and in every S3 destination.')}</p>}
@@ -6024,7 +6024,7 @@ Each account is overwritten with what is in its archive.`)) return;
       {isAdmin && activeBackupTab === 'destination' && <div className="backup-tab-panel">
         <div className="backup-panel-title">
           <div><h3>{t('Backup Destination')}</h3><p className="hint">{t('Somewhere off this machine to keep a copy. A backup that lives on the server it backs up is not a backup.')}</p></div>
-          <button disabled={!!loading} onClick={loadSftpTargets}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <button className="secondary-light" disabled={!!loading} onClick={loadSftpTargets}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
         <div className="segmented" role="tablist" aria-label={t('Destination type')}>
           <button className={newSftpTarget.kind === 'sftp' ? 'active' : ''} disabled={!!loading}
@@ -6074,7 +6074,7 @@ Each account is overwritten with what is in its archive.`)) return;
       {isAdmin && activeBackupTab === 'da-import' && <div className="backup-tab-panel">
         <div className="backup-panel-title">
           <div><h3>{t('DirectAdmin Import')}</h3><p className="hint">{t('Import websites, databases, and users from a DirectAdmin backup archive.')}</p></div>
-          <button disabled={!!loading} onClick={() => listDaBackups()}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <button className="secondary-light" disabled={!!loading} onClick={() => listDaBackups()}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
         <div className="da-toolbar">
           <label className="upload-button">
@@ -6192,7 +6192,7 @@ Each account is overwritten with what is in its archive.`)) return;
     return <section className="section">
       <div className="section-title">
         <h2>{t('Services Status')}</h2>
-        <button disabled={!!loading} onClick={checkAllServices}><RefreshCw size={15}/>{t('Refresh')}</button>
+        <button className="secondary-light" disabled={!!loading} onClick={checkAllServices}><RefreshCw size={15}/>{t('Refresh')}</button>
       </div>
       <div className="service-grid">
         {serviceNames.map(name => {
@@ -6320,7 +6320,7 @@ Each account is overwritten with what is in its archive.`)) return;
             <p className="hint">iptables + ipset. SSH, the panel port and 80/443/465/587 are always kept open.</p>
           </div>
           <div className="actions">
-            <button disabled={!!loading} onClick={loadFirewall}><RefreshCw size={14}/>{t('Refresh')}</button>
+            <button className="secondary-light" disabled={!!loading} onClick={loadFirewall}><RefreshCw size={14}/>{t('Refresh')}</button>
             {/* One of these, never both: the other is not an action available now. */}
             {stateKnown && (enabled
               ? <button className="danger" disabled={!!loading} onClick={disableFirewall}>{t('Turn off')}</button>
@@ -6434,7 +6434,7 @@ Each account is overwritten with what is in its archive.`)) return;
             <h2>Fail2ban</h2>
             <p className="hint">{t('Five failed attempts within an hour bans an address for an hour, and longer each time it comes back, up to a week. The server never bans its own addresses.')}</p>
           </div>
-          <button disabled={!!loading} onClick={loadFail2ban}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <button className="secondary-light" disabled={!!loading} onClick={loadFail2ban}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
         {!f2b && <p className="hint">{t('Status not loaded. Press Refresh.')}</p>}
         {f2b && <>
@@ -6494,7 +6494,7 @@ Each account is overwritten with what is in its archive.`)) return;
               ? 'Engine status and per-website protection. Open a website to configure its rules, flood limits and blocked bots.'
               : 'Protection for your websites. Open one to configure its rules and blocked bots.'}</p>
           </div>
-          <button disabled={!!loading} onClick={() => { loadBotBlocks(); if (isAdmin) { loadWafRules(); loadCrs(); } }}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <button className="secondary-light" disabled={!!loading} onClick={() => { loadBotBlocks(); if (isAdmin) { loadWafRules(); loadCrs(); } }}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
         {/* Folded. This is systemctl and timer output - the first thing on the
             page was eleven lines of paths and a timer table, above the
@@ -6963,7 +6963,7 @@ Each account is overwritten with what is in its archive.`)) return;
             <h2>{t('Passkey')}</h2>
             <p className="hint">{t('Sign in with a fingerprint, Face ID or a security key instead of typing a code.')}</p>
           </div>
-          <button disabled={!!loading} onClick={loadPasskeyStatus}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <button className="secondary-light" disabled={!!loading} onClick={loadPasskeyStatus}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
 
         {pk && !pk.supported && <div className="info-box">
@@ -7019,7 +7019,7 @@ Each account is overwritten with what is in its archive.`)) return;
       <section className="section">
         <div className="section-title">
           <div><h2>{t('Google Authenticator 2FA')}</h2><p className="hint">{t('Current status:')}<strong>{enabled ? 'Enabled' : 'Disabled'}</strong></p></div>
-          <button disabled={!!loading} onClick={loadTwoFactorStatus}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <button className="secondary-light" disabled={!!loading} onClick={loadTwoFactorStatus}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
         {!enabled && <div className="security-grid">
           <div className="info-box">
@@ -7148,7 +7148,7 @@ Each account is overwritten with what is in its archive.`)) return;
               </span>}
             </p>
           </div>
-          <button disabled={!!loading} onClick={loadMalwareScanStatus}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <button className="secondary-light" disabled={!!loading} onClick={loadMalwareScanStatus}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
         {mw.memory_warning && <div className="info-box malware-ram-warning">
           <strong><AlertCircle size={15}/>{t('Memory warning')}</strong>
@@ -7289,7 +7289,7 @@ Each account is overwritten with what is in its archive.`)) return;
       <section className="section">
         <div className="section-title">
           <div><h2>{t('Panel settings')}</h2><p className="hint">{t('Branding and hostname.')}</p></div>
-          <button disabled={!!loading} onClick={loadPanelSettings}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <button className="secondary-light" disabled={!!loading} onClick={loadPanelSettings}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
         <div className="panel-settings-grid panel-settings-compact">
           <label><span>{t('Panel name')}</span><input value={panelSettingsForm.app_name} onChange={e => setPanelSettingsForm(prev => ({ ...prev, app_name: e.target.value }))} placeholder="BPanel" /></label>
@@ -7365,7 +7365,7 @@ Each account is overwritten with what is in its archive.`)) return;
       <section className="section">
         <div className="section-title">
           <div><h2>{t('API Tokens')}</h2><p className="hint">{t('Create one token for WHMCS. Paste it into WHMCS Server → Access Hash.')}</p></div>
-          <button disabled={!!loading} onClick={loadApiTokens}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <button className="secondary-light" disabled={!!loading} onClick={loadApiTokens}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
         {createdApiToken && <div className="user-create-card">
           <label><span>{t('New token (copy now)')}</span><input id="created-api-token" readOnly value={createdApiToken} onFocus={e => e.target.select()} /></label>
@@ -7423,7 +7423,7 @@ Each account is overwritten with what is in its archive.`)) return;
       {activeUserTab === 'list' && <div className="user-tab-panel" id="users-tab-list" role="tabpanel" aria-labelledby="users-tab-button-list">
         <div className="section-title user-panel-title">
           <div><h2>{t('Panel user list')}</h2><p className="hint">{t('Current panel users and service limits.')}</p></div>
-          <button disabled={!!loading} onClick={loadUsers}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <button className="secondary-light" disabled={!!loading} onClick={loadUsers}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
         {users.length === 0 && <EmptyState icon={Users} message={t('No users found.')} />}
         <div className="table">
@@ -7503,7 +7503,7 @@ Each account is overwritten with what is in its archive.`)) return;
       {activeUserTab === 'packages' && <div className="user-tab-panel" id="users-tab-packages" role="tabpanel" aria-labelledby="users-tab-button-packages">
         <div className="section-title user-panel-title">
           <div><h2>{t('Package')}</h2><p className="hint">{t('Create, edit, delete, and review reusable user limits.')}</p></div>
-          <button disabled={!!loading} onClick={loadPackages}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <button className="secondary-light" disabled={!!loading} onClick={loadPackages}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
         <div className="user-create-card package-create-card">
           <label><span>{t('Package name')}</span><input value={newPackage.name} onChange={e => setNewPackage(prev => ({ ...prev, name: e.target.value }))} placeholder={t('Starter')} /></label>
