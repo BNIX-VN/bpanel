@@ -118,8 +118,6 @@ PART2 = {
         "Một nơi ngoài máy này để giữ bản sao. Backup nằm cùng máy với thứ nó backup thì không phải là backup.",
     "Everything that could be restored, wherever it is. Tick what you want back and restore it in one go.":
         "Mọi thứ có thể khôi phục, ở bất cứ đâu. Tick những gì bạn cần rồi khôi phục một lượt.",
-    "What gets appended decides how many copies pile up at the far end:":
-        "Phần thêm vào tên quyết định bao nhiêu bản sẽ tích lại ở đầu bên kia:",
     "Press Refresh to look on this server and in every S3 destination.":
         "Bấm Tải lại để tìm trên server này và trong mọi đích S3.",
     "No backups found for this website.": "Không có backup nào cho website này.",
@@ -163,8 +161,6 @@ PART2 = {
         "Bảo vệ lưu lượng Nginx trên toàn bộ website.",
     "WAF rules, flood limits and blocked bots for this website.":
         "Rule WAF, giới hạn chống dội và bot bị chặn cho website này.",
-    "This is the server-wide switch. Which sites load CRS is chosen per website below.":
-        "Đây là công tắc toàn server. Site nào nạp CRS thì chọn riêng bên dưới.",
     "One name per line, matched anywhere in User-Agent. Matched literally, so":
         "Mỗi dòng một tên, khớp ở bất kỳ đâu trong User-Agent. Khớp theo đúng chữ, nên",
     "No bots yet. Add one above, or paste a list below.":

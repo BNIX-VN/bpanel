@@ -364,3 +364,96 @@ button svg,.button-link svg,.upload-button svg{flex:none}
 .upload-button.secondary{background:var(--surface);color:var(--text);border:1px solid var(--border)}
 .upload-button.secondary:hover{background:var(--surface-hover);border-color:var(--border-hover)}
 .upload-button.secondary svg{color:var(--text-secondary)}
+
+/* ==========================================================================
+   The operator's list, 2026-09-25.
+   ========================================================================== */
+
+/* SSL: the install button is a button, not a banner across the card. */
+.ssl-install{justify-self:start;margin-top:4px}
+
+/* Cron: labelled fields; the command gets a line of its own. */
+.cron-builder{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;align-items:end;padding:14px;background:var(--surface-alt);border:1px solid var(--border);border-radius:var(--radius-md)}
+.cron-builder label{display:grid;gap:6px;min-width:0}
+.cron-builder .cron-command{grid-column:1 / -1}
+.cron-builder .cron-add{justify-self:start}
+
+/* Scheduled backups: who on the left, when/where/what on the right. */
+.backup-schedule-builder{display:grid;grid-template-columns:minmax(200px,260px) minmax(0,1fr);gap:16px;padding:14px;background:var(--surface-alt);border:1px solid var(--border);border-radius:var(--radius-md)}
+.schedule-users{display:grid;gap:8px;align-content:start}
+.schedule-users select[multiple]{min-height:150px}
+.schedule-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;align-content:start;align-items:end}
+.schedule-fields label{display:grid;gap:6px;min-width:0}
+.schedule-fields .schedule-submit{justify-self:start}
+
+/* Passkey: name and password share the width, the button keeps its own. */
+.passkey-form{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:10px;align-items:center}
+
+/* Addons: summary and button; details one click away. */
+.addon-more{border-top:1px solid var(--border);padding-top:8px}
+.addon-more > summary{cursor:pointer;font-size:13px;font-weight:600;color:var(--primary-ink);list-style:none}
+.addon-more > summary::-webkit-details-marker{display:none}
+.addon-more > summary::after{content:' ›'}
+.addon-more[open] > summary::after{content:' ‹'}
+.addon-more[open] > summary{margin-bottom:8px}
+
+/* Scan history: each run reads as a link to its own page. The global
+   `button{height:36px}` squeezed its two lines and badge into one. */
+.scan-history-item{height:auto;min-height:50px;position:relative;padding-right:28px}
+.scan-history-item::after{content:'';position:absolute;right:12px;top:50%;width:6px;height:6px;margin-top:-3px;border-top:1.5px solid var(--text-muted);border-right:1.5px solid var(--text-muted);transform:rotate(45deg)}
+.scan-detail .scan-status-panel{margin-top:0}
+
+/* Lists with a filter: flex-basis 200px was the filter's width in a row and
+   became its height once the head stacked on a phone. */
+.detail-head input{flex:1 1 auto}
+/* Raw output keeps its own height inside the scrolling panel instead of
+   being squeezed to a single line by its neighbour. */
+.detail-body > pre{flex:0 0 auto;max-height:260px}
+
+/* A button that holds a file or folder name wraps like text. */
+.file-list button.file-name{height:auto}
+
+/* ---------- Phones ---------- */
+@media(max-width:760px){
+  /* A section's own actions stay on one line under its title. */
+  .section-title > .actions{display:flex;flex-direction:row;flex-wrap:nowrap;gap:8px;width:100%}
+  .section-title > .actions > button,.section-title > .actions > .upload-button{flex:1 1 0;min-width:0}
+
+  /* Websites: no folder path, the six tools on one line. */
+  .site-head small{display:none}
+  .site-actions,.site-feature-actions{width:100%}
+  .site-feature-actions{display:flex;flex-wrap:nowrap;gap:6px}
+  .site-feature-actions .site-icon-button{flex:1 1 0;min-width:0;width:auto}
+
+  /* Databases: the actions on a line of their own. */
+  .db-row{grid-template-columns:minmax(0,1fr)}
+  .db-actions{justify-content:flex-start;flex-wrap:nowrap}
+
+  /* File manager: name on the first line; mode, size and actions on the
+     second, each in a column of its own instead of one shared cell. */
+  .file-item{grid-template-columns:22px auto auto minmax(0,1fr);gap:4px 10px}
+  .file-item > .file-name{grid-column:2 / -1;grid-row:1}
+  .file-item > .file-mode{grid-column:2;grid-row:2;justify-self:start;width:auto}
+  .file-item > .file-size{grid-column:3;grid-row:2}
+  /* The actions get a line of their own, all of it: in the fourth column
+     they had ~170px and folded onto three lines. */
+  .file-item > .file-row-actions{grid-column:2 / -1;grid-row:3;display:flex;flex-wrap:nowrap;justify-content:flex-start;gap:6px;width:auto}
+
+  /* SFTP: the name field and its button take the full width. */
+  .sftp-form{grid-template-columns:minmax(0,1fr)}
+  /* :nth-child(n), not *: an older rule spans the third field over columns
+     1-3 with an nth-child selector, which outranks * and made the grid
+     invent a second column. */
+  .sftp-form > :nth-child(n){grid-column:1 / -1;width:100%;max-width:100%}
+
+  /* Forms: one field per line. */
+  .cron-builder,.backup-schedule-builder,.schedule-fields,.passkey-form{grid-template-columns:minmax(0,1fr)}
+  .cron-builder .cron-add,.schedule-fields .schedule-submit,.ssl-install{justify-self:stretch}
+
+  /* Lists with a filter: the input at its natural height. */
+  .detail-head input{flex:0 0 auto}
+
+  /* Scan history: the title and meta wrap; the badge sits under them. */
+  .scan-history-item{grid-template-columns:22px minmax(0,1fr);align-items:start;row-gap:6px}
+  .scan-history-main strong,.scan-history-main small{white-space:normal;overflow-wrap:anywhere}
+}

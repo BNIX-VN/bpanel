@@ -37,10 +37,6 @@ PART6 = {
         "Bấm Xem nhật ký để tải nhật ký cập nhật.",
 
     # --- dashboard tile descriptions ---
-    "Protection for your websites. Open one to configure its rules and blocked bots.":
-        "Bảo vệ cho website của bạn. Mở một website để cấu hình rule và bot bị chặn.",
-    "Engine status and per-website protection. Open a website to configure its rules, flood limits and blocked bots.":
-        "Trạng thái engine và mức bảo vệ theo từng website. Mở một website để cấu hình rule, giới hạn chống dội và bot bị chặn.",
     "The parts that are not in a default install. Add what you need, remove what you do not — removing turns the feature off and deletes nothing it created.":
         "Những phần không có trong bản cài mặc định. Thêm cái cần, gỡ cái không cần — gỡ chỉ tắt tính năng, không xoá bất cứ thứ gì nó đã tạo ra.",
 
@@ -65,19 +61,12 @@ PART6 = {
     "Bans take effect": "Lệnh cấm có hiệu lực",
     "Bans NOT reaching iptables": "Lệnh cấm KHÔNG tới được iptables",
     "Seeing NO log": "KHÔNG thấy nhật ký",
-    "Enable the WAF first": "Hãy bật WAF trước",
-    "Nothing from CRS is loaded. Payload attacks are not inspected.":
-        "Không có gì từ CRS được nạp. Tấn công qua nội dung request không được kiểm tra.",
-    "Opted in, but CRS is off server-wide":
-        "Đã chọn dùng, nhưng CRS đang tắt ở mức toàn server",
     "Run detect mode first and read the logs, or a legitimate request somebody depends on may be the one it stops.":
         "Hãy chạy chế độ phát hiện trước và đọc nhật ký, kẻo thứ bị chặn lại là một request hợp lệ mà ai đó đang cần.",
     "Custom rules are arbitrary ModSecurity directives, so only an administrator can change them. Ask your provider if you need a rule added or excluded.":
         "Rule tuỳ chỉnh là chỉ thị ModSecurity tự do, nên chỉ quản trị viên được sửa. Hãy nhờ nhà cung cấp nếu bạn cần thêm hoặc loại trừ một rule.",
     "Blocked on every website on this server. A site can add more of its own from its page.":
         "Bị chặn trên mọi website của server này. Mỗi site có thể tự thêm bot riêng ở trang của nó.",
-    "Check the measured figure on this page afterwards rather than trusting the estimate.":
-        "Sau đó hãy xem số đo thật trên trang này thay vì tin vào con số ước lượng.",
 
     # --- nginx and applications ---
     "This is read-only. BPanel manages the main vhost template.":

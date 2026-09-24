@@ -57,11 +57,14 @@ def test_the_admin_only_endpoint_is_still_admin_only():
 
 
 def test_the_badge_does_not_depend_on_the_admin_payload():
-    """It may use it to name the mode; it must not need it to show the state."""
+    """It must not need the admin-only payload to show the state.
+
+    Since the WAF and CRS became one switch (2026-09-25) there is one badge per
+    site, and it reads the site's own row - never /waf/crs, whose refusal an
+    end user would otherwise see as "off" on every site.
+    """
     src = APP_JSX.read_text(encoding="utf-8")
-    block = src.split("const crsRow = ", 1)[1].split("return <div", 1)[0]
-    assert "site.crs_enabled" in block, (
-        "the badge still derives 'is CRS on' from the admin-only payload, so an "
-        "end user sees 'CRS off' on every site"
-    )
-    assert "site.crs_active" in block
+    row = src.split('className="waf-overview-row"', 1)[1].split("</div>;", 1)[0]
+    assert "site.waf_enabled ? 'badge ok' : 'badge'" in row
+    assert "crs?.websites" not in row, "the badge reads the admin-only payload again"
+    assert "CRS off" not in row, "a second, CRS-only badge is back beside the WAF one"

@@ -402,16 +402,25 @@ def set_website_crs(
 ):
     _require_admin(current_user)
     website = _website_or_404(db, website_id)
-    website.crs_enabled = bool(payload.enabled)
+    # Kept for API callers, but it is the same single switch as the WAF's:
+    # CRS on means the WAF on, and CRS off takes the WAF off with it.
+    previous = (website.waf_enabled, website.crs_enabled)
+    website.waf_enabled = website.crs_enabled = bool(payload.enabled)
     db.add(website)
     db.commit()
     db.refresh(website)
     result = waf.sync_website_rules(website)
-    if result.returncode != 0:
-        website.crs_enabled = not bool(payload.enabled)
+    error = None if result.returncode == 0 else (result.stderr or result.stdout or "Could not apply CRS").strip()
+    if error is None:
+        try:
+            nginx.update_waf_block(website.domain, bool(payload.enabled))
+        except (RuntimeError, ValueError, FileNotFoundError) as exc:
+            error = str(exc)
+    if error:
+        website.waf_enabled, website.crs_enabled = previous
         db.add(website)
         db.commit()
-        raise HTTPException(status_code=400, detail=(result.stderr or result.stdout or "Could not apply CRS").strip())
+        raise HTTPException(status_code=400, detail=error)
     mode = waf.active_crs_mode()
     # Every other per-site protection switch leaves an audit entry; this one did
     # not, so there was no way to tell who turned CRS on for a site or when.

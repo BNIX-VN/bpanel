@@ -25,6 +25,28 @@ import './theme.css';
 import './ui.css';
 
 const API = import.meta.env.VITE_API_URL || '/api';
+// Schedules offered by name; anything else is "Custom". A cron expression is
+// the one field most people get wrong, so it is picked rather than typed.
+const CRON_SCHEDULE_PRESETS = [
+  ['* * * * *', 'Every minute'],
+  ['*/5 * * * *', 'Every 5 minutes'],
+  ['*/15 * * * *', 'Every 15 minutes'],
+  ['*/30 * * * *', 'Every 30 minutes'],
+  ['0 * * * *', 'Every hour'],
+  ['0 */6 * * *', 'Every 6 hours'],
+  ['0 0 * * *', 'Every day at 00:00'],
+  ['0 2 * * *', 'Every day at 02:00'],
+  ['0 0 * * 0', 'Every Sunday at 00:00'],
+  ['0 0 1 * *', 'On the 1st of every month'],
+];
+const BACKUP_SCHEDULE_PRESETS = [
+  ['0 2 * * *', 'Every day at 02:00'],
+  ['0 3 * * *', 'Every day at 03:00'],
+  ['0 */12 * * *', 'Every 12 hours'],
+  ['0 2 * * 0', 'Every Sunday at 02:00'],
+  ['0 2 1 * *', 'On the 1st of every month at 02:00'],
+];
+const isPresetSchedule = (presets, value) => presets.some(([preset]) => preset === value);
 // How a site's app_type is written wherever a person reads it.
 const APP_TYPE_LABELS = { wordpress: 'WordPress', php: 'PHP', static: 'Static', application: 'App' };
 const DEFAULT_SERVICE_NAMES = ['bpanel-api', 'nginx', 'php8.3-fpm', 'php8.4-fpm', 'mariadb', 'redis-server'];
@@ -53,7 +75,7 @@ function composeWebPorts(plan, wanted) {
 // Pages opened from inside another page instead of the sidebar. They have no
 // nav entry of their own, so without this the header falls back to the first
 // item and titles the page "Dashboard".
-const NAV_PARENT_PAGE = { 'waf-site': 'waf' };
+const NAV_PARENT_PAGE = { 'waf-site': 'waf', 'malware-scan': 'malware' };
 
 // 'waf-site' is reached from the WAF overview rather than the sidebar, but it
 // still belongs to Settings so the menu stays open and WAF stays highlighted.
@@ -74,6 +96,7 @@ const PAGE_ROUTES = {
   firewall: '/firewall',
   waf: '/waf',
   'waf-site': '/waf-site',
+  'malware-scan': '/malware-scan',
   malware: '/malware',
   'access-logs': '/access-logs',
   updates: '/updates',
@@ -570,7 +593,7 @@ function NotificationToast({ type, message, onClose }) {
   return <div className={`app-toast ${isError ? 'app-toast-error' : 'app-toast-success'}`} role={isError ? 'alert' : 'status'} aria-live={isError ? 'assertive' : 'polite'}>
     <Icon className="app-toast-icon" size={18}/>
     <div className="app-toast-content">
-      <strong>{isError ? 'Action failed' : 'Completed'}</strong>
+      <strong>{isError ? t('Action failed') : t('Completed')}</strong>
       <span>{message}</span>
     </div>
     <button className="app-toast-close" onClick={onClose} aria-label={t('Dismiss notification')} title={t('Dismiss notification')}><X size={16}/></button>
@@ -777,6 +800,8 @@ function App() {
   const [sslSources, setSslSources] = useState([]);
   const [sharedSource, setSharedSource] = useState('');
   const [cronSchedule, setCronSchedule] = useState('*/15 * * * *');
+  const [cronScheduleCustom, setCronScheduleCustom] = useState(false);
+  const [backupScheduleCustom, setBackupScheduleCustom] = useState(false);
   const [cronCommand, setCronCommand] = useState('');
   const [cronItems, setCronItems] = useState([]);
   const [cronUser, setCronUser] = useState('');
@@ -882,6 +907,10 @@ function App() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const userMenuRef = useRef(null);
+  // Set while signing out on purpose. Requests already in flight come back
+  // 401 once the server drops the session; they are this sign-out, not an
+  // expiry, and must not replace "Logged out." with "Your session expired".
+  const signedOutRef = useRef(false);
   const [panelSettings, setPanelSettings] = useState({ app_name: 'BPanel', panel_url: '', panel_hostname: '', panel_port: 2222, logo_url: '', favicon_url: '/favicon.png', ssl_enabled: false });
   const [phpTune, setPhpTune] = useState(null);
   const [phpTuneApplied, setPhpTuneApplied] = useState(false);
@@ -1047,7 +1076,7 @@ function App() {
 
   function handleAuthExpired(status, detail = '') {
     if (status === 401 || detail === 'Could not validate credentials' || detail === 'Not authenticated') {
-      clearSession();
+      if (!signedOutRef.current) clearSession();
       return true;
     }
     return false;
@@ -1121,6 +1150,7 @@ function App() {
       } else if (res.ok && data.access_token) {
         // Don't keep the token anywhere: the HttpOnly cookie just got set by
         // the response. JS code MUST NOT touch the JWT.
+        signedOutRef.current = false;
         setIsAuthenticated(true);
         setNeedsTwoFactor(false);
         setPasskeyPrompt(null);
@@ -1138,6 +1168,7 @@ function App() {
   }
 
   async function logout() {
+    signedOutRef.current = true;
     try {
       // Best-effort server logout: clears cookies and bumps token_version.
       await fetch(`${API}/auth/logout`, {
@@ -1218,7 +1249,7 @@ function App() {
       const res = await fetch(`${API}/auth/session`, { credentials: 'include' });
       if (!res.ok) {
         if (res.status === 401) {
-          if (clearOnUnauthorized) clearSession('Session expired.');
+          if (clearOnUnauthorized && !signedOutRef.current) clearSession('Session expired.');
           else {
             clearReadableSessionCookies();
             setCurrentUser(null);
@@ -1229,7 +1260,7 @@ function App() {
       }
       const data = await res.json();
       if (!data.authenticated || !data.user) {
-        if (clearOnUnauthorized) clearSession('Session expired.');
+        if (clearOnUnauthorized && !signedOutRef.current) clearSession('Session expired.');
         else {
           clearReadableSessionCookies();
           setCurrentUser(null);
@@ -1239,6 +1270,7 @@ function App() {
       }
       setCurrentUser(data.user);
       setAdminAccountForm(prev => ({ ...prev, email: data.user?.email || '' }));
+      signedOutRef.current = false;
       setIsAuthenticated(true);
       return data.user;
     } catch {
@@ -3954,27 +3986,6 @@ Each account is overwritten with what is in its archive.`)) return;
     if (data) await loadCrs();
   }
 
-  async function toggleSiteCrs(row) {
-    const turningOn = !row.crs_enabled;
-    if (turningOn && !confirm(
-      `Load OWASP CRS on ${row.domain}?\n\n`
-      + `This adds roughly ${crs?.rss_mb_per_site || 50} MB to nginx for this site. `
-      + 'Check the measured figure on this page afterwards rather than trusting the estimate.'
-    )) return;
-    const data = await request(`/waf/websites/${row.website_id}/crs`, {
-      method: 'PUT',
-      body: JSON.stringify({ enabled: turningOn }),
-    }, `${turningOn ? 'Enabling' : 'Disabling'} CRS on ${row.domain}...`);
-    if (data) {
-      await loadCrs();
-      // The site page reads its own copy of this, so refresh it when that is
-      // where the toggle was pressed.
-      if (String(selectedWafWebsiteId) === String(row.website_id)) {
-        await loadWebsiteWafConfig(row.website_id, false);
-      }
-    }
-  }
-
   function addGlobalBots(text) {
     const incoming = String(text || '').split(/[\n,;]+/).map(s => s.trim()).filter(Boolean);
     if (incoming.length === 0) return;
@@ -4689,22 +4700,27 @@ Each account is overwritten with what is in its archive.`)) return;
           <div className="addon-head">
             <strong>{t(addon.name)}</strong>
             <code>v{addon.installed ? (addon.installed_version || addon.version) : addon.version}</code>
-            <span className={`badge ${addon.installed ? 'ok' : ''}`}>{addon.installed ? 'Installed' : 'Not installed'}</span>
+            <span className={`badge ${addon.installed ? 'ok' : ''}`}>{addon.installed ? t('Installed') : t('Not installed')}</span>
             {addon.installed && addon.installed_version && addon.installed_version !== addon.version
               && <span className="badge">v{addon.version} available</span>}
           </div>
           <p className="addon-summary">{t(addon.summary)}</p>
-          {addon.details?.length > 0 && <ul className="addon-details">
-            {addon.details.map((line, index) => <li key={index}>{t(line)}</li>)}
-          </ul>}
-          {addon.notes?.length > 0 && <div className="addon-notes">
-            <strong><AlertCircle size={13}/>{t('Worth knowing first')}</strong>
-            <ul>{addon.notes.map((line, index) => <li key={index}>{t(line)}</li>)}</ul>
-          </div>}
+          {/* The card is the summary and the button; what it installs and
+              what to know first are one click away rather than a page. */}
+          {(addon.details?.length > 0 || addon.notes?.length > 0) && <details className="addon-more">
+            <summary>{t('Details')}</summary>
+            {addon.details?.length > 0 && <ul className="addon-details">
+              {addon.details.map((line, index) => <li key={index}>{t(line)}</li>)}
+            </ul>}
+            {addon.notes?.length > 0 && <div className="addon-notes">
+              <strong><AlertCircle size={13}/>{t('Worth knowing first')}</strong>
+              <ul>{addon.notes.map((line, index) => <li key={index}>{t(line)}</li>)}</ul>
+            </div>}
+          </details>}
           {addons.can_manage && <div className="addon-actions">
             {addon.installed
               ? <>
-                  {addon.slug === 'application' && <button className="secondary-light" disabled={!!loading} onClick={() => navigateToPage('applications')}>Open {addon.name}</button>}
+                  {addon.slug === 'application' && <button className="secondary-light" disabled={!!loading} onClick={() => navigateToPage('applications')}>{t('Open')} {t(addon.name)}</button>}
                   <button className="danger" disabled={!!loading} onClick={() => setAddonInstalled(addon.slug, false)}><Trash2 size={14}/>{t('Remove')}</button>
                 </>
               : <button disabled={!!loading} onClick={() => setAddonInstalled(addon.slug, true)}><Download size={14}/>{t('Install')}</button>}
@@ -5408,7 +5424,7 @@ Each account is overwritten with what is in its archive.`)) return;
         <button className={sslMode === 'shared' ? 'active' : ''} onClick={() => setSslMode('shared')}><Copy size={14}/>{t('Use existing')}</button>
       </div>
       {sslMode === 'letsencrypt' && <>
-        <button disabled={!selectedWebsiteId || !!loading} onClick={() => enableSsl(selectedWebsiteId)} style={{marginTop:8}}><Lock size={15}/>{t('Install / Renew SSL')}</button>
+        <button className="ssl-install" disabled={!selectedWebsiteId || !!loading} onClick={() => enableSsl(selectedWebsiteId)}><Lock size={15}/>{t('Install / Renew SSL')}</button>
         <p className="hint">{t('The domain must point to the correct VPS IP before issuing SSL.')}</p>
       </>}
       {sslMode === 'wildcard' && <div className="ssl-sub-form">
@@ -5641,35 +5657,42 @@ Each account is overwritten with what is in its archive.`)) return;
       ['php cron.php >> ../logs/cron.log 2>&1', 'Keep output in a log file inside this website.'],
       ['wp cron event run --due-now', 'WP-CLI, for WordPress sites.'],
     ];
+    const cronScheduleValue = cronScheduleCustom || !isPresetSchedule(CRON_SCHEDULE_PRESETS, cronSchedule) ? 'custom' : cronSchedule;
     return <section className="section">
       <div className="section-title">
         <div><h2>{t('Cron manager')}</h2></div>
         <button className="secondary-light" disabled={!selectedWebsiteId || !!loading} onClick={listCron}><RefreshCw size={14}/>{t('Refresh')}</button>
       </div>
-      <div className="cron-form">
-        <WebsiteSelect />
-        <input value={cronSchedule} onChange={e => setCronSchedule(e.target.value)} placeholder="*/15 * * * *" />
-        <input value={cronCommand} onChange={e => setCronCommand(e.target.value)} placeholder="php -q cron.php >/dev/null 2>&1" />
-        <button disabled={!selectedWebsiteId || !!loading} onClick={addCron}><Plus size={14}/>{t('Add cron')}</button>
+      {/* The schedule is picked, not typed; "Custom" keeps the expression for
+          whoever wants it. The command starts from a template and stays
+          editable. */}
+      <div className="cron-builder">
+        <label><span>{t('Website')}</span><WebsiteSelect /></label>
+        <label><span>{t('Schedule')}</span>
+          <select value={cronScheduleValue} onChange={e => {
+            if (e.target.value === 'custom') { setCronScheduleCustom(true); return; }
+            setCronScheduleCustom(false);
+            setCronSchedule(e.target.value);
+          }}>
+            {CRON_SCHEDULE_PRESETS.map(([value, label]) => <option key={value} value={value}>{t(label)}</option>)}
+            <option value="custom">{t('Custom...')}</option>
+          </select>
+        </label>
+        {cronScheduleValue === 'custom' && <label><span>{t('Cron expression')}</span><input value={cronSchedule} onChange={e => setCronSchedule(e.target.value)} placeholder="*/15 * * * *" /></label>}
+        <label><span>{t('Command template')}</span>
+          <select value="" onChange={e => { if (e.target.value) setCronCommand(e.target.value); }}>
+            <option value="">{t('Pick a template...')}</option>
+            {cronExamples.map(([example, note]) => <option key={example} value={example}>{example} - {t(note)}</option>)}
+          </select>
+        </label>
+        <label className="cron-command"><span>{t('Command')}</span><input value={cronCommand} onChange={e => setCronCommand(e.target.value)} placeholder="php -q cron.php >/dev/null 2>&1" /></label>
+        <button className="cron-add" disabled={!selectedWebsiteId || !!loading} onClick={addCron}><Plus size={14}/>{t('Add cron')}</button>
       </div>
-      {selectedWebsiteId && <p className="hint">{t('Cron runs as')}{' '}<strong>{cronUser || currentSite?.linux_user || 'www-data'}</strong> for the selected website.</p>}
-      {selectedWebsiteId && <div className="cron-help">
-        <p>
-          {t('Write')} <code>php</code> {t('and BPanel rewrites it to')} <code>{sitePhpBinary}</code>
-          {sitePhpVersion ? <>{t(' — the PHP {version} CLI this website is set to', { version: sitePhpVersion })}</> : null}
-          {t(', so the job never runs on the server default version. Change the website\'s PHP version and its cron jobs follow.')}
-        </p>
-        <ul>
-          {cronExamples.map(([example, note]) => <li key={example}>
-            <button type="button" className="cron-example" onClick={() => setCronCommand(example)}>{example}</button>
-            <small>{note}</small>
-          </li>)}
-        </ul>
-        <p className="cron-help-note">{t('Only PHP scripts inside')}{' '}<code>public_html</code> and the safe WP-CLI maintenance commands are allowed.
-          A trailing <code>&gt;</code>, <code>&gt;&gt;</code>, <code>2&gt;</code> or <code>2&gt;&amp;1</code> may
-          redirect to <code>/dev/null</code> or to a file inside this website.
-        </p>
-      </div>}
+      {selectedWebsiteId && <p className="hint">
+        {t('Cron runs as')}{' '}<strong>{cronUser || currentSite?.linux_user || 'www-data'}</strong>{' '}{t('for this website.')}{' '}
+        {t('Write')} <code>php</code> {t('and BPanel rewrites it to')} <code>{sitePhpBinary}</code>.{' '}
+        {t('Only PHP scripts inside public_html and the safe WP-CLI commands are allowed.')}
+      </p>}
       <div className="cron-list">
         {selectedWebsiteId && cronItems.length === 0 && <EmptyState icon={Clock} message={t('No cron jobs found for this website.')} />}
         {cronItems.map(item => <div className="cron-item" key={`${item.index}-${item.line}`}>
@@ -5978,19 +6001,40 @@ Each account is overwritten with what is in its archive.`)) return;
           <div><h3>{t('Scheduled backups')}</h3><p className="hint">{t('Run full user backups automatically with optional off-server destination.')}</p></div>
           <button className="secondary-light" disabled={!!loading} onClick={refreshScheduledBackupArea}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
-        <div className="sftp-form schedule-form backup-schedule-form">
+        {/* Who, then when, where and under what name - each field labelled,
+            and one per line on a phone. It was six unlabelled controls in one
+            row of 130px cells. */}
+        <div className="backup-schedule-builder">
+          <div className="schedule-users">
           <label className="schedule-toggle">
             <input type="checkbox" checked={!!newBackupSchedule.all_users} onChange={e => setNewBackupSchedule(prev => ({ ...prev, all_users: e.target.checked }))} />
             <span>{t('All users')}</span>
           </label>
-          <select multiple value={newBackupSchedule.user_ids || []} disabled={!!newBackupSchedule.all_users} onChange={e => setNewBackupSchedule(prev => ({ ...prev, user_ids: Array.from(e.target.selectedOptions, option => option.value) }))}>
+          <select multiple size={6} value={newBackupSchedule.user_ids || []} disabled={!!newBackupSchedule.all_users} onChange={e => setNewBackupSchedule(prev => ({ ...prev, user_ids: Array.from(e.target.selectedOptions, option => option.value) }))}>
             {users.map(user => <option key={user.id} value={String(user.id)}>{user.username}</option>)}
           </select>
-          <input value={newBackupSchedule.schedule} onChange={e => setNewBackupSchedule(prev => ({ ...prev, schedule: e.target.value }))} placeholder="0 2 * * *" />
+          </div>
+          <div className="schedule-fields">
+          <label><span>{t('Schedule')}</span>
+            <select value={backupScheduleCustom || !isPresetSchedule(BACKUP_SCHEDULE_PRESETS, newBackupSchedule.schedule) ? 'custom' : newBackupSchedule.schedule}
+              onChange={e => {
+                if (e.target.value === 'custom') { setBackupScheduleCustom(true); return; }
+                setBackupScheduleCustom(false);
+                setNewBackupSchedule(prev => ({ ...prev, schedule: e.target.value }));
+              }}>
+              {BACKUP_SCHEDULE_PRESETS.map(([value, label]) => <option key={value} value={value}>{t(label)}</option>)}
+              <option value="custom">{t('Custom...')}</option>
+            </select>
+          </label>
+          {(backupScheduleCustom || !isPresetSchedule(BACKUP_SCHEDULE_PRESETS, newBackupSchedule.schedule)) && <label><span>{t('Cron expression')}</span>
+            <input value={newBackupSchedule.schedule} onChange={e => setNewBackupSchedule(prev => ({ ...prev, schedule: e.target.value }))} placeholder="0 2 * * *" /></label>}
+          <label><span>{t('Destination')}</span>
           <select value={newBackupSchedule.target_id} onChange={e => setNewBackupSchedule(prev => ({ ...prev, target_id: e.target.value }))}>
             <option value="">{t('Local only')}</option>
             {sftpTargets.map(target => <option key={target.id} value={target.id}>{target.name} ({target.kind === 's3' ? 'S3' : 'SFTP'})</option>)}
           </select>
+          </label>
+          <label><span>{t('Stored file name')}</span>
           <select value={newBackupSchedule.name_suffix} aria-label={t('Stored file name')}
             onChange={e => setNewBackupSchedule(prev => ({ ...prev, name_suffix: e.target.value }))}>
             <option value="none">{t('Append: nothing')}</option>
@@ -5998,14 +6042,11 @@ Each account is overwritten with what is in its archive.`)) return;
             <option value="week_of_month">{t('Append: week of month')}</option>
             <option value="full_date">{t('Append: full date')}</option>
           </select>
-          <button disabled={(!newBackupSchedule.all_users && (!newBackupSchedule.user_ids || newBackupSchedule.user_ids.length === 0)) || !!loading} onClick={createBackupSchedule}><Clock size={14}/>{t('Schedule')}</button>
+          </label>
+          <button className="schedule-submit" disabled={(!newBackupSchedule.all_users && (!newBackupSchedule.user_ids || newBackupSchedule.user_ids.length === 0)) || !!loading} onClick={createBackupSchedule}><Clock size={14}/>{t('Schedule')}</button>
+          </div>
         </div>
-        <p className="hint">{t('What gets appended decides how many copies pile up at the far end:')}{' '}<strong> nothing</strong> keeps one file per account and overwrites it,
-          <strong> day of week</strong> rotates through seven,
-          <strong> week of month</strong> through five, and
-          <strong> full date</strong> keeps one a day until retention prunes it.
-          The first three bound storage without anything having to delete.
-        </p>
+        <p className="hint">{t('The name suffix decides how many copies are kept: nothing keeps one per account, day of week keeps seven, week of month five, and full date one a day until retention removes it.')}</p>
         <div className="backup-list">
           {backupSchedules.map(item => {
             const scheduleTarget = sftpTargets.find(target => target.id === item.target_id);
@@ -6556,8 +6597,8 @@ Each account is overwritten with what is in its archive.`)) return;
           <div>
             <h2>WAF</h2>
             <p className="hint">{isAdmin
-              ? 'Engine status and per-website protection. Open a website to configure its rules, flood limits and blocked bots.'
-              : 'Protection for your websites. Open one to configure its rules and blocked bots.'}</p>
+              ? t('Protection for each website. Open one to set its rules, flood limit and blocked bots.')
+              : t('Protection for your websites. Open one to set its rules and blocked bots.')}</p>
           </div>
           <button className="secondary-light" disabled={!!loading} onClick={() => { loadBotBlocks(); if (isAdmin) { loadWafRules(); loadCrs(); } }}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
@@ -6576,11 +6617,7 @@ Each account is overwritten with what is in its archive.`)) return;
         <div className="section-title">
           <div>
             <h2>{t('OWASP Core Rule Set')}</h2>
-            <p className="hint">
-              BPanel's own rules block known bad paths. CRS inspects the payload - SQL injection, XSS,
-              command injection - and scores each request instead of refusing on a single match.
-              Off by default because CRS needs tuning against real traffic before it can be trusted to block.
-            </p>
+            <p className="hint">{t('Inspects each request for SQL injection, XSS and similar attacks.')}</p>
           </div>
           <button className="secondary" disabled={!!loading} onClick={loadCrs}><RefreshCw size={14}/>{t('Check')}</button>
         </div>
@@ -6588,22 +6625,16 @@ Each account is overwritten with what is in its archive.`)) return;
         {crs && <>
           <div className="waf-overview-badges" style={{ marginBottom: 12 }}>
             <span className={crs.mode === 'block' ? 'badge ok' : 'badge'}>
-              {crs.mode === 'off' ? 'Off' : (crs.mode === 'detect' ? 'Detect only' : 'Blocking')}
+              {crs.mode === 'off' ? t('Off') : (crs.mode === 'detect' ? t('Detect only') : t('Blocking'))}
             </span>
             <span className={crs.installed ? 'badge ok' : 'badge'}>
-              {crs.installed ? `${crs.rule_files} rule file(s) installed` : 'Not installed'}
+              {crs.installed ? t('{n} rule file(s) installed', { n: crs.rule_files }) : t('Not installed')}
             </span>
-            <span className="badge">{t('{n} site(s) opted in', { n: crs.sites_opted_in ?? 0 })}</span>
-            <span className="badge">{t('nginx now: {n} MB', { n: crs.nginx_pss_mb || 0 })}</span>
-            <span className={(crs.ram_available_mb || 0) < 1024 ? 'badge danger' : 'badge'}>
-              {t('{n} MB RAM free', { n: crs.ram_available_mb || 0 })}
-            </span>
-          </div>
-          <div className="info-box" style={{ marginBottom: 12 }}>
-            <strong>{t('Memory')}</strong>
-            <p className="hint">
-              {t('Each site that loads CRS adds its own copy of the rule set, so the cost grows with the number opted in — roughly {n} MB each. "nginx now" above is measured on this server, not estimated, and it is the figure to act on; watch it and the free-RAM figure beside it as you opt sites in. Note that `ps` reports several times this, because it counts pages the nginx workers share once for each worker.', { n: crs.rss_mb_per_site || 50 })}
-            </p>
+            {/* The memory essay is gone; a low-RAM warning is what is left of
+                it, because every site with the WAF on carries CRS (~50 MB). */}
+            {(crs.ram_available_mb || 0) > 0 && crs.ram_available_mb < 1024 && <span className="badge danger">
+              {t('{n} MB RAM free', { n: crs.ram_available_mb })}
+            </span>}
           </div>
           <div className="segmented-control">
             {[['off', 'Off'], ['detect', 'Detect only'], ['block', 'Block']].map(([value, label]) => (
@@ -6616,14 +6647,13 @@ Each account is overwritten with what is in its archive.`)) return;
             ))}
           </div>
           <p className="hint" style={{ marginTop: 10 }}>
-            {crs.mode === 'off' && 'Nothing from CRS is loaded. Payload attacks are not inspected.'}
-            {crs.mode === 'detect' && 'Every CRS rule runs and nothing is refused. Each request that Block mode would have stopped is recorded in /var/log/nginx/bpanel-modsec-audit.log, with the rule IDs that scored it. Read that for a while, add exceptions per site, then switch to Block.'}
-            {crs.mode === 'block' && 'Requests scoring above the threshold are refused on every site with the WAF on. Add SecRuleRemoveById <id> to a site’s custom rules to excuse it from one rule.'}
+            {crs.mode === 'off' && t('Off: requests are not inspected.')}
+            {crs.mode === 'detect' && t('Detect only: attacks are logged, nothing is blocked.')}
+            {crs.mode === 'block' && t('Block: attacks are refused on every website with the WAF on.')}
           </p>
           {crs.mode !== 'off' && crs.panel_mode !== crs.mode && (
             <p className="hint">{t('Panel setting says "{panel}" but the server reports "{server}".', { panel: crs.panel_mode, server: crs.mode })}</p>
           )}
-          <p className="hint">{t('This is the server-wide switch. Which sites load CRS is chosen per website below.')}</p>
         </>}
       </section>}
 
@@ -6633,27 +6663,17 @@ Each account is overwritten with what is in its archive.`)) return;
         <div className="table waf-overview-list">
           {websites.map(site => {
             const bots = botCountFor(site.id);
-            // The site row carries its own CRS state, so an end user sees the
-            // truth. This used to read only from /waf/crs, which is admin-only:
-            // the refusal was swallowed and every site rendered "CRS off".
-            // The admin-only payload is still used, but only to name the mode.
-            const crsRow = (crs?.websites || []).find(w => w.website_id === site.id);
-            const crsOn = site.crs_enabled ?? !!crsRow?.crs_enabled;
-            const crsLive = crsOn && site.waf_enabled
-              && (site.crs_active ?? !!(crs?.mode && crs.mode !== 'off'));
             return <div className="waf-overview-row" key={site.id}>
               <span className="waf-overview-domain"><strong>{site.domain}</strong></span>
               <div className="waf-overview-badges">
-                <span className={site.waf_enabled ? 'badge ok' : 'badge'}>{site.waf_enabled ? 'WAF on' : 'WAF off'}</span>
-                <span
-                  className={crsLive ? 'badge ok' : 'badge'}
-                  title={crsOn && !crsLive ? 'Opted in, but CRS is off server-wide' : ''}
-                >{crsOn ? (crsLive ? (crs?.mode ? `CRS ${crs.mode}` : 'CRS on') : 'CRS pending') : 'CRS off'}</span>
-                <span className={site.http_flood_enabled ? 'badge ok' : 'badge'}>{site.http_flood_enabled ? 'Flood on' : 'Flood off'}</span>
+                {/* One switch: the WAF brings OWASP CRS with it. Two badges
+                    for what a customer sees as one protection read as a trap. */}
+                <span className={site.waf_enabled ? 'badge ok' : 'badge'}>{site.waf_enabled ? t('WAF on') : t('WAF off')}</span>
+                <span className={site.http_flood_enabled ? 'badge ok' : 'badge'}>{site.http_flood_enabled ? t('Flood on') : t('Flood off')}</span>
                 <span
                   className={bots > 0 ? 'badge ok' : 'badge'}
                   title={ownCountFor(site.id) > 0 ? `${ownCountFor(site.id)} set on this site, the rest from the global list` : 'All from the global list'}
-                >{bots > 0 ? `${bots} bot(s)` : 'No bots'}</span>
+                >{bots > 0 ? t('{n} bot(s)', { n: bots }) : t('No bots')}</span>
               </div>
               <button className="secondary" disabled={!!loading} onClick={() => openWafSite(site.id)}><SettingsIcon size={14}/>{t('Configure')}</button>
             </div>;
@@ -6764,36 +6784,22 @@ Each account is overwritten with what is in its archive.`)) return;
           </div>
         </div>
         <div className="waf-site-toggles">
-          <span className={selectedSite?.waf_enabled ? 'badge ok' : 'badge'}>{selectedSite?.waf_enabled ? 'WAF enabled' : 'WAF disabled'}</span>
+          <span className={selectedSite?.waf_enabled ? 'badge ok' : 'badge'}>{selectedSite?.waf_enabled ? t('WAF on') : t('WAF off')}</span>
           <button disabled={!selectedWafWebsiteId || !!loading} onClick={() => selectedSite && toggleWebsiteWaf(selectedSite)}>
-            <Shield size={14}/> {selectedSite?.waf_enabled ? 'Disable WAF' : 'Enable WAF'}
-          </button>
-          <span className={wafSiteConfig?.crs_active ? 'badge ok' : 'badge'}>
-            {wafSiteConfig?.crs_enabled
-              ? (wafSiteConfig?.crs_mode === 'off' ? 'CRS on (server-wide: off)' : `CRS ${wafSiteConfig.crs_mode}`)
-              : 'CRS off'}
-          </span>
-          <button
-            disabled={!selectedWafWebsiteId || !!loading || !selectedSite?.waf_enabled}
-            title={selectedSite?.waf_enabled ? '' : 'Enable the WAF first'}
-            onClick={() => wafSiteConfig && toggleSiteCrs({
-              website_id: wafSiteConfig.website_id,
-              domain: wafSiteConfig.domain,
-              crs_enabled: wafSiteConfig.crs_enabled,
-            })}
-          >
-            <Shield size={14}/> {wafSiteConfig?.crs_enabled ? 'Disable CRS' : 'Enable CRS'}
+            <Shield size={14}/> {selectedSite?.waf_enabled ? t('Turn WAF off') : t('Turn WAF on')}
           </button>
         </div>
         <p className="hint">
-          {t('The WAF blocks known bad paths. OWASP CRS adds payload inspection — SQL injection, XSS, command injection — for this site, at roughly {n} MB of nginx memory.', { n: crs?.rss_mb_per_site || 50 })}
-          {wafSiteConfig?.crs_enabled && wafSiteConfig?.crs_mode === 'off'
-            ? ' ' + t('This site is opted in, but CRS is switched off server-wide on the WAF page, so nothing is loaded.')
-            : ''}
+          {t('The WAF blocks known bad paths and inspects each request for SQL injection, XSS and similar attacks.')}
           {wafSiteConfig?.crs_active
-            ? ' ' + t('Add SecRuleRemoveById <id> to the custom rules below to excuse this site from one CRS rule.')
+            ? ' ' + t('Add SecRuleRemoveById <id> to the custom rules below to excuse this site from one rule.')
             : ''}
         </p>
+        {/* A site switched on before the two became one may still carry the
+            WAF without CRS. Say so, and how to fix it, rather than pretend. */}
+        {selectedSite?.waf_enabled && wafSiteConfig && !wafSiteConfig.crs_enabled && <p className="hint">
+          {t('Request inspection is not loaded for this site yet. Turn the WAF off and on again to load it.')}
+        </p>}
       </section>
 
       {!wafSiteConfig && websites.length === 0 && <section className="section"><EmptyState icon={Globe} message={t('No websites yet.')} /></section>}
@@ -7041,7 +7047,7 @@ Each account is overwritten with what is in its archive.`)) return;
           <p className="hint">{t('A passkey is tied to the domain')}{' '}<strong>{pk.rp_id}</strong>.{' '}
             {t('Reach the panel by any other name and it will not be offered — use Google Authenticator below for that.')}
           </p>
-          <div className="cron-form">
+          <div className="passkey-form">
             <NoAutofillInput
               name="passkey-name"
               value={passkeyName}
@@ -7123,10 +7129,10 @@ Each account is overwritten with what is in its archive.`)) return;
     const activeScanJob = scanJob || scanResults || {};
     const scanRunning = ['queued', 'running'].includes(scanJob?.status);
     const scanJobTitle = job => job.scope === 'server'
-      ? 'Whole server'
+      ? t('Whole server')
       : (job.domains && job.domains.length > 0)
-        ? (job.domains.length === 1 ? job.domains[0] : `${job.domains.length} website`)
-        : (job.scope === 'all' ? 'All websites' : 'Scan');
+        ? (job.domains.length === 1 ? job.domains[0] : t('{count} websites', { count: job.domains.length }))
+        : (job.scope === 'all' ? t('All websites') : t('Scan'));
     const scanJobStamp = job => {
       const stamp = job.finished_at || job.updated_at || job.started_at || job.created_at || '';
       if (!stamp) return 'No time recorded';
@@ -7142,7 +7148,9 @@ Each account is overwritten with what is in its archive.`)) return;
         year: 'numeric',
       }).format(date).replace(',', '');
     };
-    const scanJobDetail = job => `${job.scanned || 0}/${job.total_files || job.scanned || 0} files, ${job.infected || 0} threats, ${job.errors || 0} errors`;
+    const scanJobDetail = job => t('{scanned}/{total} files, {infected} threats, {errors} errors', {
+      scanned: job.scanned || 0, total: job.total_files || job.scanned || 0, infected: job.infected || 0, errors: job.errors || 0,
+    });
     const scanJobMeta = job => `${scanJobStamp(job)} / ${scanJobDetail(job)}`;
     const scanJobBadgeClass = job => {
       if (job.status === 'done') return 'badge ok';
@@ -7198,6 +7206,52 @@ Each account is overwritten with what is in its archive.`)) return;
         </div>
       </div>;
     };
+
+    // One view of a scan, used for the run in progress on this page and for a
+    // finished run opened from the history on a page of its own.
+    const renderScanStatus = job => <div className="scan-status-panel">
+      <div className="progress-bar">
+        <div className="progress-bar-fill" style={{width: `${Number(job.progress_percent) || 0}%`}} />
+      </div>
+      <div className="scan-status-summary">
+        <span><strong>{t('Progress')}</strong>{Number(job.progress_percent) || 0}%</span>
+        <span><strong>{t('Files scanned')}</strong>{job.scanned || 0}/{job.total_files || job.scanned || 0}</span>
+        <span><strong>{t('Threats')}</strong>{job.infected > 0
+          ? <span className="badge danger">{job.infected}</span>
+          : <span className="badge ok">0</span>}
+        </span>
+        <span><strong>{t('Errors')}</strong>{job.errors || 0}</span>
+      </div>
+      {job.message && <p className="hint">{job.message}</p>}
+      {job.threats && job.threats.length > 0 && <div className="scan-threat-list">
+        <p className="hint">{t('These are the scanner\'s own family names (php.base64..., for instance), not common virus names — there is nowhere else to look them up.')}</p>
+        {job.threats.map((threat, i) => <div key={i} className="scan-threat-item">
+          <strong>{threat.signature}</strong>
+          <span>{threat.domain ? `${threat.domain}: ` : ''}{threat.path}</span>
+        </div>)}
+      </div>}
+      {job.log && job.log.length > 0 && <pre className="malware-scan-log">{job.log.join('\n')}</pre>}
+    </div>;
+
+    // A run from the history, on a page of its own: the list stays short and
+    // the one being read gets the width. Reloading the address with nothing
+    // chosen points back at the history instead of showing an empty panel.
+    if (page === 'malware-scan') {
+      const job = activeScanJob;
+      return <section className="section scan-detail">
+        <div className="section-title">
+          <div>
+            <h2>{job.job_id ? scanJobTitle(job) : t('Scan details')}</h2>
+            {job.job_id && <p className="hint">{scanJobMeta(job)}</p>}
+          </div>
+          <div className="actions">
+            {job.job_id && <span className={scanJobBadgeClass(job)}>{t(scanStatusLabel(job.status))}</span>}
+            <button type="button" className="secondary" onClick={() => navigateToPage('malware')}><ArrowLeft size={14}/>{t('Scan history')}</button>
+          </div>
+        </div>
+        {job.job_id ? renderScanStatus(job) : <EmptyState icon={Search} message={t('Pick a scan from the history.')} />}
+      </section>;
+    }
 
     return <>
       <section className="section">
@@ -7308,7 +7362,7 @@ Each account is overwritten with what is in its archive.`)) return;
               {scanJobs.slice(0, 8).map(job => <button
                 key={job.job_id}
                 className={`scan-history-item ${job.status}${activeScanJob.job_id === job.job_id ? ' active' : ''}`}
-                onClick={() => showMalwareScanJob(job)}
+                onClick={() => { showMalwareScanJob(job); navigateToPage('malware-scan'); }}
                 disabled={!!loading}
                 type="button"
               >
@@ -7321,29 +7375,9 @@ Each account is overwritten with what is in its archive.`)) return;
               </button>)}
             </div>
           </div>}
-          {(scanJob || scanResults) && <div className="scan-status-panel">
-            <div className="progress-bar">
-              <div className="progress-bar-fill" style={{width: `${Number(activeScanJob.progress_percent) || 0}%`}} />
-            </div>
-            <div className="scan-status-summary">
-              <span><strong>{t('Progress')}</strong>{Number(activeScanJob.progress_percent) || 0}%</span>
-              <span><strong>{t('Files scanned')}</strong>{activeScanJob.scanned || 0}/{activeScanJob.total_files || activeScanJob.scanned || 0}</span>
-              <span><strong>{t('Threats')}</strong>{activeScanJob.infected > 0
-                ? <span className="badge danger">{activeScanJob.infected}</span>
-                : <span className="badge ok">0</span>}
-              </span>
-              <span><strong>{t('Errors')}</strong>{activeScanJob.errors || 0}</span>
-            </div>
-            {activeScanJob.message && <p className="hint">{activeScanJob.message}</p>}
-            {activeScanJob.threats && activeScanJob.threats.length > 0 && <div className="scan-threat-list">
-              <p className="hint">{t('These are the scanner\'s own family names (php.base64..., for instance), not common virus names — there is nowhere else to look them up.')}</p>
-              {activeScanJob.threats.map((t, i) => <div key={i} className="scan-threat-item">
-                <strong>{t.signature}</strong>
-                <span>{t.domain ? `${t.domain}: ` : ''}{t.path}</span>
-              </div>)}
-            </div>}
-            {activeScanJob.log && activeScanJob.log.length > 0 && <pre className="malware-scan-log">{activeScanJob.log.join('\n')}</pre>}
-          </div>}
+          {/* The live run stays here while it is running; a finished one is
+              read on its own page from the history above. */}
+          {(scanRunning || scanLoading) && (scanJob || scanResults) && renderScanStatus(activeScanJob)}
         </div>}
       </section>
     </>;
@@ -7903,7 +7937,7 @@ Each account is overwritten with what is in its archive.`)) return;
     if (page === 'firewall') return renderFirewall();
     if (page === 'waf') return renderWaf();
     if (page === 'waf-site') return renderWafSite();
-    if (page === 'malware') return renderMalware();
+    if (page === 'malware' || page === 'malware-scan') return renderMalware();
     if (page === 'access-logs') return renderWafAccessLogs();
     if (page === 'updates') return renderUpdates();
     // Reachable by URL, so it answers for itself rather than firing a
@@ -7933,7 +7967,6 @@ Each account is overwritten with what is in its archive.`)) return;
             <div>
               <p className="eyebrow">{t('Server Management Panel')}</p>
               <h1>{panelSettings.app_name || 'BPanel'}</h1>
-              <p className="hint">{t('Manage websites, databases, backups, SSL, and services.')}</p>
             </div>
           </div>
           <LanguageToggle language={language} onChange={changeLanguage}/>

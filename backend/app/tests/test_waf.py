@@ -303,3 +303,32 @@ def test_shipped_rules_match_the_helper_copy():
 def test_unknown_rule_ids_are_rejected():
     with pytest.raises(ValueError, match="Unknown WAF rule"):
         waf.validate_enabled_rule_ids(["joomla-sensitive-files"])
+
+
+def test_the_waf_switch_carries_crs_with_it():
+    """One switch per site, at the operator's request (2026-09-25): "WAF on"
+    beside "CRS off" looked protected and was not, and end users could not
+    tell the two apart.
+
+    Both flags are set before the rule file is rendered. Rendering first, as
+    the endpoints used to, wrote the old state - turning the WAF on did not
+    load CRS until some later sync.
+    """
+    from app.api import websites as websites_api
+
+    class Site:
+        waf_enabled = False
+        crs_enabled = False
+
+    site = Site()
+    websites_api._set_waf_and_crs(site, True)
+    assert site.waf_enabled is True and site.crs_enabled is True
+    websites_api._set_waf_and_crs(site, False)
+    assert site.waf_enabled is False and site.crs_enabled is False
+
+    source = (Path(__file__).resolve().parents[1] / "api" / "websites.py").read_text(encoding="utf-8")
+    calls = [i for i in range(len(source)) if source.startswith("_set_waf_and_crs(website, bool(payload.waf_enabled))", i)]
+    assert len(calls) == 2, "both WAF endpoints set the pair"
+    for at in calls:
+        assert source.index("waf.sync_website_rules(website)", at) > at, "flags set before the rules are rendered"
+

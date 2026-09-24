@@ -245,3 +245,34 @@ def test_the_dashboard_headings_are_translated_where_they_are_drawn():
     assert '<span className="feature-tile-label">{t(label)}</span>' in tile
     assert "<p className=\"sidebar-section-title\">{t(section.title)}</p>" in APP
     assert "{activeNavItem?.[1] ? t(activeNavItem[1])" in APP
+
+
+# --- the operator's list, 2026-09-25 -----------------------------------------
+
+def test_a_filter_box_does_not_grow_tall_on_a_phone():
+    """flex-basis 200px was the filter's width in a row; when the list head
+    stacked on a phone it became its height - a 200px-tall text box. The raw
+    firewall output beside it was squeezed to a single 20px line."""
+    phone = UI.split("/* ---------- Phones ---------- */")[1]
+    assert ".detail-head input{flex:0 0 auto}" in phone
+    assert ".detail-body > pre{flex:0 0 auto;" in UI
+
+
+def test_mode_and_size_have_cells_of_their_own_on_a_phone():
+    """Both were placed in grid column 2, row 2, and drew over each other."""
+    phone = UI.split("/* ---------- Phones ---------- */")[1]
+    assert ".file-item > .file-mode{grid-column:2;grid-row:2;" in phone
+    assert ".file-item > .file-size{grid-column:3;grid-row:2}" in phone
+
+
+def test_a_scan_from_the_history_opens_its_own_page():
+    """Clicking a past run used to unfold its details at the foot of a long page."""
+    assert "'malware-scan': '/malware-scan'" in APP
+    assert "onClick={() => { showMalwareScanJob(job); navigateToPage('malware-scan'); }}" in APP
+    assert "if (page === 'malware-scan') {" in APP
+
+
+def test_a_cron_schedule_is_picked_rather_than_typed():
+    assert "const CRON_SCHEDULE_PRESETS = [" in APP
+    assert "{CRON_SCHEDULE_PRESETS.map(([value, label]) => <option key={value} value={value}>{t(label)}</option>)}" in APP
+    assert "<option value=\"custom\">{t('Custom...')}</option>" in APP
