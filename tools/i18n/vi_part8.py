@@ -33,3 +33,14 @@ PART8 = {
     # The create form folds away now, so the button that opens it is new.
     "New website": "Tạo website",
 }
+
+# The file list grew column headings, so the numbers under them say what they
+# are. "Name" and "Mode" were already keys.
+PART8.update({
+    "Size": "Dung lượng",
+})
+
+# The WAF status dump folds away now, so its summary line is new.
+PART8.update({
+    "Module, rule files and timers": "Module, file rule và lịch hẹn",
+})

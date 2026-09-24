@@ -5763,8 +5763,11 @@ Each account is overwritten with what is in its archive.`)) return;
             </div>}
           </div>
           <div className="file-list-header">
-            <label><input type="checkbox" checked={allSelected} onChange={toggleAllFiles} disabled={files.length === 0} />{t('Select')}</label>
-            <span>{t('{n} item(s)', { n: files.length })}</span>
+            <label><input type="checkbox" checked={allSelected} onChange={toggleAllFiles} disabled={files.length === 0} /><span className="sr-only">{t('Select')}</span></label>
+            <span>{t('Name')}</span>
+            <span>{t('Mode')}</span>
+            <span>{t('Size')}</span>
+            <span className="file-list-count">{t('{n} item(s)', { n: files.length })}</span>
           </div>
           <div className="file-list">
             {files.length === 0 && <div className="empty-box">{t('No files in this folder.')}</div>}
@@ -6493,7 +6496,15 @@ Each account is overwritten with what is in its archive.`)) return;
           </div>
           <button disabled={!!loading} onClick={() => { loadBotBlocks(); if (isAdmin) { loadWafRules(); loadCrs(); } }}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
-        {isAdmin && <div className="info-box firewall-status"><strong>{t('Status')}</strong><pre>{statusText}</pre></div>}
+        {/* Folded. This is systemctl and timer output - the first thing on the
+            page was eleven lines of paths and a timer table, above the
+            controls somebody came to use. What the WAF is actually doing is
+            said by the badges below in words; this is here for the operator
+            who is diagnosing, and they know to open it. */}
+        {isAdmin && <details className="info-box firewall-status output-details">
+          <summary><strong>{t('Status')}</strong><span>{t('Module, rule files and timers')}</span></summary>
+          <pre>{statusText}</pre>
+        </details>}
       </section>
 
       {isAdmin && <section className="section">

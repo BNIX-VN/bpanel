@@ -1130,3 +1130,22 @@ button:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
   position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
   clip:rect(0 0 0 0);white-space:nowrap;border:0
 }
+
+/* --- Folded operator output ------------------------------------------------ */
+/* A systemctl dump is reference, not the subject of a page. Folded it keeps
+   one line; open it behaves exactly as it did. */
+.output-details{padding:0}
+.output-details>summary{
+  display:flex;align-items:center;gap:10px;cursor:pointer;
+  padding:10px 12px;list-style:none;border-radius:inherit;
+}
+.output-details>summary::-webkit-details-marker{display:none}
+.output-details>summary::before{
+  content:'';flex:none;width:6px;height:6px;margin-left:2px;
+  border-right:2px solid var(--text-muted);border-bottom:2px solid var(--text-muted);
+  transform:rotate(-45deg);transition:transform .15s ease;
+}
+.output-details[open]>summary::before{transform:rotate(45deg)}
+.output-details>summary:hover{background:var(--surface-hover)}
+.output-details>summary span{color:var(--text-muted);font-size:var(--text-sm)}
+.output-details>pre{margin:0;padding:0 12px 12px}

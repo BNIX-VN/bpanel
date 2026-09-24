@@ -175,9 +175,13 @@
   color: var(--text);
 }
 
+/* The same grid as a row, so "755" and "4.1 KB" sit under words that say what
+   they are. They were two unlabelled columns floating between the file name
+   and the buttons, and a number with no heading is a number you have to work
+   out. */
 .file-list-header {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: 20px minmax(240px, 1fr) 62px 82px auto;
   align-items: center;
   gap: 8px;
   margin: 8px 0 0;
@@ -195,6 +199,22 @@
   display: flex;
   align-items: center;
   gap: 6px;
+}
+.file-list-count { text-align: right; }
+/* Perms and Rename on twenty-one rows is forty-two bordered boxes down the
+   middle of the page. They keep their labels - a file manager is not the place
+   to make people hover to find out what a control does - and lose the box
+   until the pointer is on the row. */
+.file-row-actions .mini:not(.danger) {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-secondary);
+}
+.file-item:hover .file-row-actions .mini:not(.danger),
+.file-row-actions .mini:not(.danger):focus-visible {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text);
 }
 
 .file-list-header input,
@@ -544,6 +564,13 @@ button.file-mode:disabled {
     grid-template-columns: 22px minmax(0, 1fr);
     gap: 6px 8px;
   }
+
+  .file-list-header {
+    display: flex;
+    justify-content: space-between;
+  }
+
+  .file-list-header span:not(.file-list-count) { display: none; }
 
   .file-size,
   .file-mode,
