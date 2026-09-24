@@ -96,7 +96,7 @@ input:focus,select:focus,textarea:focus{
   box-shadow:0 0 0 3px rgba(15,98,254,.1);
 }
 input::placeholder{color:var(--text-muted)}
-textarea{line-height:1.5;background:#0f172a;color:#e2e8f0;font-family:'JetBrains Mono',Consolas,Monaco,monospace;font-size:13px}
+textarea{line-height:1.5;background:#0f172a;color:#e2e8f0;font-family:var(--font-mono);font-size:13px}
 pre{white-space:pre-wrap;word-break:break-word;margin:0;color:var(--text-secondary);max-width:100%;overflow:auto;font-size:13px}
 
 /* Buttons */
@@ -261,8 +261,8 @@ button:disabled{opacity:.55;cursor:not-allowed;box-shadow:none}
 .segmented-control button{background:transparent;color:var(--text-secondary);box-shadow:none;min-height:32px;padding:7px 12px}
 .segmented-control button:hover:not(:disabled){background:var(--surface);box-shadow:none}
 .segmented-control button.active{background:var(--primary);color:var(--primary-fg)}
-.log-output{min-height:360px;max-height:62vh;overflow:auto;background:var(--code-bg);color:var(--code-fg);border:1px solid var(--code-border);border-radius:var(--radius-md);padding:14px;font-family:Consolas,'SFMono-Regular','Liberation Mono',Menlo,monospace;font-size:12px;line-height:1.5;white-space:pre-wrap;word-break:break-word}
-.malware-scan-log{max-height:260px;overflow:auto;margin-top:10px;background:var(--code-bg);color:var(--code-fg);border:1px solid var(--code-border);border-radius:6px;padding:10px 12px;font-family:Consolas,'SFMono-Regular','Liberation Mono',Menlo,monospace;font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-word}
+.log-output{min-height:360px;max-height:62vh;overflow:auto;background:var(--code-bg);color:var(--code-fg);border:1px solid var(--code-border);border-radius:var(--radius-md);padding:14px;font-family:var(--font-mono);font-size:12px;line-height:1.5;white-space:pre-wrap;word-break:break-word}
+.malware-scan-log{max-height:260px;overflow:auto;margin-top:10px;background:var(--code-bg);color:var(--code-fg);border:1px solid var(--code-border);border-radius:6px;padding:10px 12px;font-family:var(--font-mono);font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-word}
 @media(max-width:700px){.log-toolbar{grid-template-columns:1fr}.segmented-control{width:100%;grid-template-columns:1fr 1fr}.log-toolbar select,.log-toolbar button{width:100%}.log-output{min-height:280px}}
 
 /* System & services */
@@ -349,7 +349,11 @@ button:disabled{opacity:.55;cursor:not-allowed;box-shadow:none}
 .firewall-form span{font-weight:700;color:var(--text-secondary);font-size:13px}
 
 /* Hints */
-.hint{color:var(--text-muted);margin:0;font-size:13px;line-height:1.5}
+.hint{color:var(--text-muted);margin:0;font-size:var(--text-hint);line-height:1.5;max-width:var(--measure)}
+/* A hint inside a narrow column must not be capped twice - the column is
+   already the measure - and one that labels a full-width control reads as
+   part of it, not as prose. */
+.site-aliases .hint,.actions .hint,.toolbar .hint,td .hint,.package-row .hint{max-width:none}
 
 /* Loading indicator */
 .loading{
@@ -713,8 +717,8 @@ button:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
 .stat-card,.card{background:var(--surface);color:var(--text);border-radius:var(--radius-lg);padding:18px;box-shadow:none;min-width:0;border:1px solid var(--border);transition:var(--transition)}
 .stat-card:hover,.card:hover{border-color:var(--border-hover);box-shadow:none;transform:none}
 .stat-card{display:grid;gap:5px}
-.stat-card strong{font-size:32px;line-height:1;color:var(--text);font-weight:800;letter-spacing:0}
-.stat-card span{font-weight:600;color:var(--text-muted);font-size:13px;text-transform:none;letter-spacing:0}
+.stat-card strong{font-size:27px;line-height:1.05;color:var(--text);font-weight:800;letter-spacing:-.01em}
+.stat-card span{font-weight:600;color:var(--text-muted);font-size:var(--text-hint);text-transform:none;letter-spacing:0}
 .card{min-height:104px;display:flex;flex-direction:column;align-items:flex-start;justify-content:space-between}
 
 .form-row{display:grid;grid-template-columns:1fr 1fr 1fr 1fr 125px auto;gap:10px}
@@ -756,7 +760,12 @@ button:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
 .site-head strong{display:block;font-size:15px;color:var(--text)}
 .site-head small{display:block;margin-top:3px;color:var(--text-muted);word-break:break-all;font-size:12px}
 .site-meta{display:flex;gap:7px;flex-wrap:wrap}
-.site-meta span{background:var(--surface-alt);border:1px solid var(--border);border-radius:999px;padding:5px 9px;color:var(--text-muted);font-weight:600;font-size:12px}
+.site-meta{align-items:center;gap:6px 10px}
+.site-meta span{background:none;border:0;border-radius:0;padding:0;color:var(--text-muted);font-weight:600;font-size:var(--text-sm)}
+.site-meta span strong{font-weight:700;color:var(--text-secondary)}
+/* Still a pill, because these are states rather than facts. */
+.site-meta span.badge{background:var(--surface-alt);border:1px solid var(--border);border-radius:999px;padding:3px 8px;font-size:var(--text-xs)}
+.site-meta span.badge.ok{background:var(--success-bg);border-color:var(--success-border);color:var(--success-text)}
 .site-meta .site-ssl-badge{display:inline-flex;align-items:center;justify-content:center;min-height:28px;height:28px;min-width:74px;border-radius:20px;padding:0 12px;font-weight:600;line-height:1;white-space:nowrap;flex:none}
 .site-meta strong{color:var(--text)}
 .site-aliases{display:grid;gap:7px;min-width:0}
@@ -791,7 +800,7 @@ button:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
 .service-card small{color:var(--text-muted);font-weight:500;font-size:12px}
 .service-actions{display:flex;flex-wrap:nowrap;gap:7px}
 .service-actions button{flex:1 1 0;min-width:0;padding:8px 8px;font-size:13px;white-space:nowrap}
-.badge{background:var(--surface-alt);color:var(--text-secondary);border:1px solid var(--border);border-radius:999px;padding:4px 9px;font-size:11px;font-weight:700;white-space:nowrap}
+.badge{background:var(--surface-alt);color:var(--text-secondary);border:1px solid var(--border);border-radius:999px;padding:3px 8px;font-size:var(--text-xs);font-weight:700;white-space:nowrap}
 .badge.ok{background:var(--success-bg);color:var(--success-text);border-color:var(--success-border)}
 .badge.bad{background:var(--danger-bg);color:var(--danger-text);border-color:var(--danger-border)}
 

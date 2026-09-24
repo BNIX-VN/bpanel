@@ -96,3 +96,7 @@ backend/tests/
 
 # Misc
 images.zip
+
+# Playwright MCP session output and design survey screenshots: local only.
+.playwright-mcp/
+shots/
