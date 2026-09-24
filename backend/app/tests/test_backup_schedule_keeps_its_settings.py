@@ -114,7 +114,9 @@ def test_nothing_the_form_sends_is_accepted_and_then_dropped():
 def test_the_frontend_and_the_schema_offer_the_same_four_modes():
     """A fifth option in the form would fail validation with a 422."""
     app_jsx = (PROJECT_ROOT / "frontend" / "src" / "App.jsx").read_text(encoding="utf-8")
-    block = app_jsx.split('aria-label="Stored file name"')[1].split("</select>")[0]
+    # Matched on the label going through t(), not on a bare attribute: the
+    # translation sweep rewrote every aria-label, and this test found it.
+    block = app_jsx.split("aria-label={t('Stored file name')}")[1].split("</select>")[0]
     offered = set(part.split('"')[0] for part in block.split('<option value="')[1:])
     allowed = set(json.loads(
         BackupScheduleCreate.model_json_schema()["properties"]["name_suffix"]["pattern"]

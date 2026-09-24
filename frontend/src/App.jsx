@@ -24,6 +24,7 @@ import {
   MsAiAssistants, MsFail2ban,
 } from './MaterialSymbols.jsx';
 import { Terminal } from './components/Terminal';
+import { LANGUAGES, t, useLanguage } from './i18n.js';
 import './style.css';
 import './brand.css';
 import './file-manager.css';
@@ -166,6 +167,30 @@ function ThemeToggle({ theme, onToggle, className = '' }) {
     aria-label={label}
     aria-pressed={isDark}
   >{isDark ? <Sun size={16}/> : <Moon size={16}/>}</button>;
+}
+
+function LanguageToggle({ language, onChange, className = '' }) {
+  /* A button, not a select. There are two languages and English is the one the
+   * panel is written in, so the only thing anybody wants is to flip to the
+   * other - a dropdown asks them to open a list to choose between two items.
+   *
+   * It shows the language you get by pressing it, which is how the theme
+   * toggle next to it behaves: in dark mode that button shows a sun.
+   *
+   * Two letters and no icon. EN and VI already are the picture - a globe or
+   * a speech bubble beside them says nothing the letters do not, and any
+   * flag would name a country instead of a language. */
+  const next = language === 'vi' ? 'en' : 'vi';
+  const label = next === 'vi' ? 'Chuyển sang Tiếng Việt' : 'Switch to English';
+  return <button
+    type="button"
+    className={`language-toggle ${className}`.trim()}
+    onClick={() => onChange(next)}
+    title={label}
+    aria-label={label}
+  >
+    {next === 'vi' ? 'VI' : 'EN'}
+  </button>;
 }
 
 function WordPressIcon({ size = 14 }) {
@@ -487,8 +512,19 @@ function permissionSymbols(mode) {
 }
 
 function formatApiError(detail, fallback = 'Request failed.') {
-  if (detail === null || detail === undefined || detail === '') return fallback;
-  if (typeof detail === 'string') return detail.replace(/^Value error,\s*/i, '') || fallback;
+  /* Backend messages pass through t() on their way to the screen.
+   *
+   * The server does not know what language the reader wants, and teaching it
+   * would mean a header, a dependency and a second dictionary. Translating on
+   * display costs a lookup: a sentence the dictionary knows is shown in
+   * Vietnamese, and anything it does not know is shown in the English the
+   * server wrote - which is the same fallback the rest of the interface uses.
+   */
+  if (detail === null || detail === undefined || detail === '') return t(fallback);
+  if (typeof detail === 'string') {
+    const cleaned = detail.replace(/^Value error,\s*/i, '');
+    return cleaned ? t(cleaned) : t(fallback);
+  }
   if (typeof detail === 'number' || typeof detail === 'boolean') return String(detail);
 
   if (Array.isArray(detail)) {
@@ -525,7 +561,7 @@ function NotificationToast({ type, message, onClose }) {
       <strong>{isError ? 'Action failed' : 'Completed'}</strong>
       <span>{message}</span>
     </div>
-    <button className="app-toast-close" onClick={onClose} aria-label="Dismiss notification" title="Dismiss notification"><X size={16}/></button>
+    <button className="app-toast-close" onClick={onClose} aria-label={t('Dismiss notification')} title={t('Dismiss notification')}><X size={16}/></button>
   </div>;
 }
 
@@ -636,6 +672,10 @@ function App() {
   // the JWT at all. We track only whether the user is authenticated in memory.
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [theme, toggleTheme] = useTheme();
+  // Subscribed, not owned - the same shape as the theme. Reading it here
+  // is what makes the whole tree render again when the language changes,
+  // because every t() call is evaluated during render.
+  const [language, changeLanguage] = useLanguage();
   const [currentUser, setCurrentUser] = useState(null);
   const [bootstrapping, setBootstrapping] = useState(true);
   const [standaloneEditor] = useState(() => editorParamsFromLocation());
@@ -1052,12 +1092,12 @@ function App() {
         // whether an authenticator app is available as the way out - a passkey
         // is bound to one hostname, so there has to be one.
         setPasskeyPrompt({ options: data.passkey_options, canUseOtp: !!data.requires_2fa });
-        setNotice('Signed in with a passkey.');
+        setNotice(t('Signed in with a passkey.'));
         await usePasskey(data.passkey_options);
       } else if (res.ok && data.requires_2fa) {
         setNeedsTwoFactor(true);
         setPasskeyPrompt(null);
-        setNotice('Enter your authentication code.');
+        setNotice(t('Enter your authentication code.'));
       } else if (res.ok && data.access_token) {
         // Don't keep the token anywhere: the HttpOnly cookie just got set by
         // the response. JS code MUST NOT touch the JWT.
@@ -1065,7 +1105,7 @@ function App() {
         setNeedsTwoFactor(false);
         setPasskeyPrompt(null);
         setOtpCode('');
-        setNotice('Login successful.');
+        setNotice(t('Login successful.'));
         await loadCurrentUser();
       } else {
         setError(formatApiError(data.detail, `Login failed with status ${res.status}`));
@@ -1094,7 +1134,7 @@ function App() {
 
   async function usePasskey(optionsJson) {
     if (!passkeySupported()) {
-      setError('This browser does not support passkeys. Use the code from your authenticator app.');
+      setError(t('This browser does not support passkeys. Use the code from your authenticator app.'));
       return;
     }
     try {
@@ -1107,7 +1147,7 @@ function App() {
     } catch (err) {
       // A cancel and a hardware failure look the same here, and neither is
       // worth an alarming message: the authenticator app is still available.
-      setError('That passkey did not work. Try again, or use the code from your authenticator app.');
+      setError(t('That passkey did not work. Try again, or use the code from your authenticator app.'));
     }
   }
 
@@ -1118,13 +1158,13 @@ function App() {
 
   async function addPasskey() {
     if (!passkeySupported()) {
-      setError('This browser does not support passkeys.');
+      setError(t('This browser does not support passkeys.'));
       return;
     }
     const started = await request('/auth/passkey/register/options', {
       method: 'POST',
       body: JSON.stringify({ current_password: passkeyPassword || null }),
-    }, 'Preparing passkey...');
+    }, t('Preparing passkey...'));
     if (!started?.options) return;
     try {
       const parsed = JSON.parse(started.options);
@@ -1135,7 +1175,7 @@ function App() {
       const done = await request('/auth/passkey/register/verify', {
         method: 'POST',
         body: JSON.stringify({ credential: encodeRegistration(credential), name: passkeyName }),
-      }, 'Saving passkey...');
+      }, t('Saving passkey...'));
       if (done?.id) {
         setNotice(`Added passkey ${done.name}.`);
         setPasskeyPassword('');
@@ -1143,13 +1183,13 @@ function App() {
         await loadPasskeyStatus();
       }
     } catch (err) {
-      setError('Could not create the passkey. The device may have refused it, or you cancelled.');
+      setError(t('Could not create the passkey. The device may have refused it, or you cancelled.'));
     }
   }
 
   async function removePasskey(credential) {
     if (!confirm(`Delete passkey ${credential.name}? That device will no longer be able to sign in.`)) return;
-    await request(`/auth/passkey/credentials/${credential.id}`, { method: 'DELETE' }, 'Deleting passkey...');
+    await request(`/auth/passkey/credentials/${credential.id}`, { method: 'DELETE' }, t('Deleting passkey...'));
     await loadPasskeyStatus();
   }
 
@@ -1225,12 +1265,12 @@ function App() {
       const nameData = await request('/panel-settings', {
         method: 'PATCH',
         body: JSON.stringify({ app_name: panelSettingsForm.app_name }),
-      }, 'Saving panel settings...');
+      }, t('Saving panel settings...'));
       if (!nameData) return;
       const sslData = await request('/panel-settings/ssl', {
         method: 'POST',
         body: JSON.stringify({ panel_hostname: hostname, panel_port: port }),
-      }, 'Installing panel SSL...');
+      }, t('Installing panel SSL...'));
       if (sslData) {
         setPanelSettings(sslData);
         setPanelSettingsForm(formFromPanelSettings(sslData));
@@ -1245,7 +1285,7 @@ function App() {
     const data = await request('/panel-settings', {
       method: 'PATCH',
       body: JSON.stringify(payload),
-    }, 'Saving panel settings...');
+    }, t('Saving panel settings...'));
     if (data) {
       setPanelSettings(data);
       setPanelSettingsForm(formFromPanelSettings(data));
@@ -1261,29 +1301,29 @@ function App() {
     const code = String(adminAccountForm.code || '').trim();
 
     if (!email) {
-      setError('Email is required.');
+      setError(t('Email is required.'));
       return;
     }
     if (password && password.length < 12) {
-      setError('Password must be at least 12 characters.');
+      setError(t('Password must be at least 12 characters.'));
       return;
     }
     if (password && password !== confirmPassword) {
-      setError('Passwords do not match.');
+      setError(t('Passwords do not match.'));
       return;
     }
 
     const payload = { email };
     if (password) {
       if (!currentPassword) {
-        setError('Current password is required to change password.');
+        setError(t('Current password is required to change password.'));
         return;
       }
       payload.password = password;
       payload.current_password = currentPassword;
       if (currentUser?.totp_enabled) {
         if (!code) {
-          setError('Authentication code is required.');
+          setError(t('Authentication code is required.'));
           return;
         }
         payload.code = code;
@@ -1293,7 +1333,7 @@ function App() {
     const data = await request('/panel-settings/admin-account', {
       method: 'PATCH',
       body: JSON.stringify(payload),
-    }, 'Saving admin account...');
+    }, t('Saving admin account...'));
     if (!data) return;
     if (data.password_changed) {
       clearSession('Password changed. Please log in again.');
@@ -1423,7 +1463,7 @@ function App() {
   }
 
   async function createApiToken() {
-    if (!newApiToken.name.trim()) { setError('Token name is required.'); return; }
+    if (!newApiToken.name.trim()) { setError(t('Token name is required.')); return; }
     const data = await request('/provisioning/v1/tokens', {
       method: 'POST',
       body: JSON.stringify({
@@ -1431,10 +1471,10 @@ function App() {
         scopes: 'provisioning:read,provisioning:write',
         allowed_ips: newApiToken.allowed_ips.trim(),
       }),
-    }, 'Creating API token...');
+    }, t('Creating API token...'));
     if (data) {
       setCreatedApiToken(data.token || '');
-      setNotice('API token created. Copy it now; it will not be shown again. Paste it into WHMCS Server Access Hash.');
+      setNotice(t('API token created. Copy it now; it will not be shown again. Paste it into WHMCS Server Access Hash.'));
       setNewApiToken({ name: 'WHMCS', allowed_ips: '' });
       await loadApiTokens();
     }
@@ -1451,12 +1491,12 @@ function App() {
         input?.select();
         document.execCommand('copy');
       }
-      setNotice('API token copied. Paste it into WHMCS Server Access Hash.');
+      setNotice(t('API token copied. Paste it into WHMCS Server Access Hash.'));
     } catch {
       const input = document.getElementById('created-api-token');
       input?.focus();
       input?.select();
-      setError('Copy failed. The token is selected; press Ctrl+C.');
+      setError(t('Copy failed. The token is selected; press Ctrl+C.'));
     }
   }
 
@@ -1504,7 +1544,7 @@ function App() {
       storage_limit_mb: Number(newUser.storage_limit_mb),
       sftp_accounts_limit: Number(newUser.sftp_accounts_limit || 0),
     };
-    const data = await request('/users', { method: 'POST', body: JSON.stringify(payload) }, 'Creating user...');
+    const data = await request('/users', { method: 'POST', body: JSON.stringify(payload) }, t('Creating user...'));
     if (data) {
       setNotice(`Created user ${data.username}`);
       setNewUser({ username: '', email: '', password: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024, sftp_accounts_limit: 0 });
@@ -1561,13 +1601,13 @@ function App() {
     if (!editingUser) return;
     const websiteLimit = Number(editingUserForm.website_limit);
     const storageLimitMb = Number(editingUserForm.storage_limit_mb);
-    if (!editingUserForm.email.trim()) { setError('Email is required.'); return; }
+    if (!editingUserForm.email.trim()) { setError(t('Email is required.')); return; }
     if (!Number.isInteger(websiteLimit) || websiteLimit < 0 || websiteLimit > 1000) {
-      setError('Website limit must be between 0 and 1000.');
+      setError(t('Website limit must be between 0 and 1000.'));
       return;
     }
     if (!Number.isInteger(storageLimitMb) || storageLimitMb < 0 || storageLimitMb > 1024 * 1024) {
-      setError('Storage limit must be between 0 and 1048576 MB.');
+      setError(t('Storage limit must be between 0 and 1048576 MB.'));
       return;
     }
     const payload = {
@@ -1593,8 +1633,8 @@ function App() {
   async function submitPasswordChange(user) {
     if (!user) return;
     const pw = editingUserForm.new_password;
-    if (pw.length < 12) { setError('Password must be at least 12 characters.'); return; }
-    if (pw !== editingUserForm.confirm_password) { setError('Passwords do not match.'); return; }
+    if (pw.length < 12) { setError(t('Password must be at least 12 characters.')); return; }
+    if (pw !== editingUserForm.confirm_password) { setError(t('Passwords do not match.')); return; }
     const payload = { password: pw };
     if (user.id === currentUser?.id) {
       const currentPassword = prompt('Enter your current password to confirm this change:');
@@ -1616,19 +1656,19 @@ function App() {
   async function createPackage() {
     const websiteLimit = Number(newPackage.website_limit);
     const storageLimitMb = Number(newPackage.storage_limit_mb);
-    if (!newPackage.name.trim()) { setError('Package name is required.'); return; }
+    if (!newPackage.name.trim()) { setError(t('Package name is required.')); return; }
     if (!Number.isInteger(websiteLimit) || websiteLimit < 0 || websiteLimit > 1000) {
-      setError('Website limit must be between 0 and 1000.');
+      setError(t('Website limit must be between 0 and 1000.'));
       return;
     }
     if (!Number.isInteger(storageLimitMb) || storageLimitMb < 0 || storageLimitMb > 1024 * 1024) {
-      setError('Storage limit must be between 0 and 1048576 MB.');
+      setError(t('Storage limit must be between 0 and 1048576 MB.'));
       return;
     }
     const data = await request('/packages', {
       method: 'POST',
       body: JSON.stringify({ name: newPackage.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, sftp_accounts_limit: Number(newPackage.sftp_accounts_limit || 0) }),
-    }, 'Creating package...');
+    }, t('Creating package...'));
     if (data) {
       setNotice(`Created package ${data.name}.`);
       setNewPackage({ name: '', website_limit: 5, storage_limit_mb: 1024 });
@@ -1654,19 +1694,19 @@ function App() {
   async function updatePackage(packageId) {
     const websiteLimit = Number(editingPackageForm.website_limit);
     const storageLimitMb = Number(editingPackageForm.storage_limit_mb);
-    if (!editingPackageForm.name.trim()) { setError('Package name is required.'); return; }
+    if (!editingPackageForm.name.trim()) { setError(t('Package name is required.')); return; }
     if (!Number.isInteger(websiteLimit) || websiteLimit < 0 || websiteLimit > 1000) {
-      setError('Website limit must be between 0 and 1000.');
+      setError(t('Website limit must be between 0 and 1000.'));
       return;
     }
     if (!Number.isInteger(storageLimitMb) || storageLimitMb < 0 || storageLimitMb > 1024 * 1024) {
-      setError('Storage limit must be between 0 and 1048576 MB.');
+      setError(t('Storage limit must be between 0 and 1048576 MB.'));
       return;
     }
     const data = await request(`/packages/${packageId}`, {
       method: 'PATCH',
       body: JSON.stringify({ name: editingPackageForm.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, sftp_accounts_limit: Number(editingPackageForm.sftp_accounts_limit || 0) }),
-    }, 'Updating package...');
+    }, t('Updating package...'));
     if (data) {
       setNotice(`Updated package ${data.name}.`);
       cancelEditingPackage();
@@ -1688,7 +1728,7 @@ function App() {
   async function changeUserPassword(user) {
     const password = prompt(`Enter a new password for ${user.username} (minimum 12 characters):`);
     if (!password) return;
-    if (password.length < 12) { setError('Password must be at least 12 characters.'); return; }
+    if (password.length < 12) { setError(t('Password must be at least 12 characters.')); return; }
     const payload = { password };
     if (user.id === currentUser?.id) {
       const currentPassword = prompt('Enter your current password to confirm this change:');
@@ -1710,7 +1750,9 @@ function App() {
     const data = await request(`/users/${user.id}`, { method: 'DELETE' }, `Deleting user ${user.username}...`);
     if (data) {
       const count = data.deleted_websites?.length || 0;
-      setNotice(`Deleted user ${user.username}${count ? ` and ${count} website(s)` : ''}`);
+      setNotice(count
+        ? t('Deleted user {name} and {n} website(s)', { name: user.username, n: count })
+        : t('Deleted user {name}', { name: user.username }));
       await loadUsers();
       await refreshAll();
     }
@@ -1719,7 +1761,7 @@ function App() {
   async function suspendUser(user) {
     if (!user || user.id === currentUser?.id) return;
     const siteCount = websites.filter(w => w.owner_id === user.id).length;
-    if (!confirm(`Suspend user ${user.username}? This will block login, disable all ${siteCount} website(s), lock SFTP, and kill active sessions.`)) return;
+    if (!confirm(t('Suspend user {name}? This will block login, disable all {n} website(s), lock SFTP, and kill active sessions.', { name: user.username, n: siteCount }))) return;
     const data = await request(`/users/${user.id}/suspend`, { method: 'POST' }, `Suspending user ${user.username}...`);
     if (data) {
       await loadUsers();
@@ -1797,7 +1839,7 @@ function App() {
       if (!code) return;
       payload.code = code.trim();
     }
-    const data = await request('/auth/2fa/setup', { method: 'POST', body: JSON.stringify(payload) }, 'Preparing 2FA...');
+    const data = await request('/auth/2fa/setup', { method: 'POST', body: JSON.stringify(payload) }, t('Preparing 2FA...'));
     if (data) {
       setTwoFactorSetup(data);
       setTwoFactorStatus({ enabled: false });
@@ -1805,13 +1847,13 @@ function App() {
   }
 
   async function enableTwoFactorAuth() {
-    const data = await request('/auth/2fa/enable', { method: 'POST', body: JSON.stringify({ code: twoFactorCode }) }, 'Enabling 2FA...');
+    const data = await request('/auth/2fa/enable', { method: 'POST', body: JSON.stringify({ code: twoFactorCode }) }, t('Enabling 2FA...'));
     if (data) {
       setTwoFactorStatus(data);
       setTwoFactorSetup(null);
       setTwoFactorCode('');
       await loadCurrentUser();
-      setNotice('2FA enabled.');
+      setNotice(t('2FA enabled.'));
     }
   }
 
@@ -1827,7 +1869,7 @@ function App() {
       setTwoFactorStatus(data);
       setTwoFactorCode('');
       await loadCurrentUser();
-      setNotice('2FA disabled.');
+      setNotice(t('2FA disabled.'));
     }
   }
 
@@ -1838,7 +1880,7 @@ function App() {
   }
 
   async function loadMalwareScanStatus() {
-    const data = await request('/malware/status', {}, 'Loading scanner status...');
+    const data = await request('/malware/status', {}, t('Loading scanner status...'));
     if (data) setMalwareScanStatus(data);
   }
 
@@ -1863,7 +1905,7 @@ function App() {
 
   async function toggleMalwareScan(enable) {
     if (enable && !malwareScanStatus?.installed) {
-      if (!confirm('The scanner is not installed on this server yet. The panel will install it now (1-2 minutes). Continue?')) return;
+      if (!confirm(t('The scanner is not installed on this server yet. The panel will install it now (1-2 minutes). Continue?'))) return;
     }
     const data = await request('/malware/toggle', {
       method: 'POST',
@@ -1894,7 +1936,7 @@ function App() {
       const e = f[name] || {};
       body[name] = { enabled: !!e.enabled, weekday: Number(e.weekday ?? 6), hour: Number(e.hour ?? 3) };
     }
-    const data = await request('/malware/schedule', { method: 'PUT', body: JSON.stringify(body) }, 'Saving scan schedule...');
+    const data = await request('/malware/schedule', { method: 'PUT', body: JSON.stringify(body) }, t('Saving scan schedule...'));
     if (data) {
       setMalwareSchedules(data);
       setMalwareSchedulesForm(data);
@@ -1904,7 +1946,7 @@ function App() {
   }
 
   async function toggleMalwareRealtime(enabled) {
-    if (enabled && !confirm('Turn on real-time protection? The panel watches website directories and scans new files as they appear. If it is not installed yet, the panel installs it (1-3 minutes).')) return;
+    if (enabled && !confirm(t('Turn on real-time protection? The panel watches website directories and scans new files as they appear. If it is not installed yet, the panel installs it (1-3 minutes).'))) return;
     const data = await request('/malware/realtime', { method: 'POST', body: JSON.stringify({ enabled }) },
       enabled ? 'Turning on real-time protection...' : 'Turning off...');
     if (data) { setMalwareScanStatus(data); setNotice(enabled ? 'Real-time protection is on (level 2).' : 'Real-time protection is off.'); }
@@ -1921,12 +1963,12 @@ function App() {
   }
 
   async function installLmd() {
-    const data = await request('/malware/lmd/install', { method: 'POST' }, 'Installing...');
-    if (data) { setMalwareScanStatus(data); setNotice('Installing the scanner in the background (1-3 minutes). Press Refresh for an update.'); }
+    const data = await request('/malware/lmd/install', { method: 'POST' }, t('Installing...'));
+    if (data) { setMalwareScanStatus(data); setNotice(t('Installing the scanner in the background (1-3 minutes). Press Refresh for an update.')); }
   }
 
   async function updateMalwareSignatures() {
-    const data = await request('/malware/lmd/update-sigs', { method: 'POST' }, 'Updating signatures...');
+    const data = await request('/malware/lmd/update-sigs', { method: 'POST' }, t('Updating signatures...'));
     if (data) { setMalwareScanStatus(data); setNotice(data.message || 'Signatures updated.'); }
   }
 
@@ -1949,11 +1991,11 @@ function App() {
       const data = await request('/malware/run', {
         method: 'POST',
         body: JSON.stringify(body),
-      }, 'Starting scan...');
+      }, t('Starting scan...'));
       if (data) {
         setScanJob(data);
         await loadMalwareScanJobs();
-        setNotice('Scan started.');
+        setNotice(t('Scan started.'));
       }
     } finally {
       setScanLoading(false);
@@ -2007,7 +2049,7 @@ function App() {
   }
 
   async function startClamavDaemon() {
-    const data = await request('/malware/start-daemon', { method: 'POST' }, 'Starting ClamAV daemon...');
+    const data = await request('/malware/start-daemon', { method: 'POST' }, t('Starting ClamAV daemon...'));
     if (data) {
       setNotice(data.message || 'ClamAV daemon started.');
       await loadMalwareScanStatus();
@@ -2016,17 +2058,17 @@ function App() {
 
   async function assignDomainToUser() {
     if (!assignWebsiteId || !assignUserId) return;
-    const data = await request(`/websites/${assignWebsiteId}`, { method: 'PATCH', body: JSON.stringify({ owner_id: Number(assignUserId) }) }, 'Assigning domain to user...');
+    const data = await request(`/websites/${assignWebsiteId}`, { method: 'PATCH', body: JSON.stringify({ owner_id: Number(assignUserId) }) }, t('Assigning domain to user...'));
     if (data) { setNotice(`Assigned domain ${data.domain} to user ID ${assignUserId}`); await refreshAll(); }
   }
 
   async function createWordPress() {
     const cleanDomain = domain.trim().toLowerCase();
     const cleanAdminEmail = adminEmail.trim();
-    if (!cleanDomain) { setError('Please enter a domain name.'); return; }
+    if (!cleanDomain) { setError(t('Please enter a domain name.')); return; }
     const installWp = siteType === 'wordpress' && installWordPress;
     if (siteType === 'application' && !createSiteAppId) {
-      setError('Pick which application this website should serve.');
+      setError(t('Pick which application this website should serve.'));
       return;
     }
     const body = {
@@ -2059,8 +2101,8 @@ function App() {
   }
 
   async function deleteWebsite(id) {
-    if (!confirm('Delete this website including files, vhost, database, and its SSL certificate?')) return;
-    const data = await request(`/websites/${id}?delete_files=true&delete_database=true`, { method: 'DELETE' }, 'Deleting website...');
+    if (!confirm(t('Delete this website including files, vhost, database, and its SSL certificate?'))) return;
+    const data = await request(`/websites/${id}?delete_files=true&delete_database=true`, { method: 'DELETE' }, t('Deleting website...'));
     if (data) refreshAll();
   }
 
@@ -2118,7 +2160,7 @@ function App() {
   async function addWebsiteAlias(site) {
     const cleanAlias = String(aliasDrafts[site.id] || '').trim().toLowerCase();
     const aliasMode = aliasModes[site.id] || 'alias';
-    if (!cleanAlias) { setError('Enter a domain.'); return; }
+    if (!cleanAlias) { setError(t('Enter a domain.')); return; }
     const data = await request(`/websites/${site.id}/aliases`, {
       method: 'POST',
       body: JSON.stringify({ domain: cleanAlias, mode: aliasMode }),
@@ -2162,7 +2204,7 @@ function App() {
     const hasCert = manualSslFiles.certificate || manualSslForm.certificate.trim();
     const hasKey = manualSslFiles.private_key || manualSslForm.private_key.trim();
     if (!hasCert || !hasKey) {
-      setError('Certificate and private key are required.');
+      setError(t('Certificate and private key are required.'));
       return;
     }
     const form = new FormData();
@@ -2172,7 +2214,7 @@ function App() {
     else form.append('private_key_text', manualSslForm.private_key);
     if (manualSslFiles.ca_bundle) form.append('ca_bundle', manualSslFiles.ca_bundle);
     else if (manualSslForm.ca_bundle.trim()) form.append('ca_bundle_text', manualSslForm.ca_bundle);
-    const data = await request(`/websites/${selectedWebsiteId}/ssl/manual`, { method: 'POST', body: form }, 'Installing manual SSL...');
+    const data = await request(`/websites/${selectedWebsiteId}/ssl/manual`, { method: 'POST', body: form }, t('Installing manual SSL...'));
     if (data) {
       setManualSslForm({ certificate: '', private_key: '', ca_bundle: '' });
       setManualSslFiles({ certificate: null, private_key: null, ca_bundle: null });
@@ -2194,9 +2236,9 @@ function App() {
     if (!selectedWebsiteId) return;
     const body = {};
     if (wildcardToken.trim()) body.cloudflare_api_token = wildcardToken.trim();
-    else if (!cfZone.has_token) { setError('Paste a Cloudflare API token (Zone.DNS Edit).'); return; }
+    else if (!cfZone.has_token) { setError(t('Paste a Cloudflare API token (Zone.DNS Edit).')); return; }
     const data = await request(`/websites/${selectedWebsiteId}/ssl/wildcard`,
-      { method: 'POST', body: JSON.stringify(body) }, 'Issuing wildcard certificate via Cloudflare...');
+      { method: 'POST', body: JSON.stringify(body) }, t('Issuing wildcard certificate via Cloudflare...'));
     if (data) {
       setWildcardToken('');
       setNotice(`Wildcard SSL active — *.${data.ssl_source_domain} covers this site.`);
@@ -2220,7 +2262,7 @@ function App() {
     setLogViewer(null);
     setTerminalViewer(null);
     setWebsiteSettingsForm(websiteConfigForm(site));
-    const data = await request(`/websites/${site.id}/nginx-custom`, {}, 'Loading Custom Nginx...');
+    const data = await request(`/websites/${site.id}/nginx-custom`, {}, t('Loading Custom Nginx...'));
     if (data !== null) {
       setNginxCustomEditing({
         id: site.id,
@@ -2269,7 +2311,7 @@ function App() {
         env: env || '',
         web_port: Number(webPort) || null,
       }),
-    }, 'Checking the compose file...');
+    }, t('Checking the compose file...'));
   }
 
   async function checkComposeFile() {
@@ -2314,7 +2356,7 @@ function App() {
           container_port: Number(siteAppEdit.container_port) || null,
         }
       : { env: siteAppEdit.env };
-    const data = await request(`/site-apps/${app.id}`, { method: 'PUT', body: JSON.stringify(patch) }, 'Saving configuration...');
+    const data = await request(`/site-apps/${app.id}`, { method: 'PUT', body: JSON.stringify(patch) }, t('Saving configuration...'));
     if (data) {
       setSiteAppEdit(null);
       setSiteAppEditPlan(null);
@@ -2352,7 +2394,7 @@ function App() {
   }
 
   async function installDockerEngine() {
-    const data = await request('/site-runtimes/docker-install', { method: 'POST' }, 'Installing Docker, this takes a few minutes...');
+    const data = await request('/site-runtimes/docker-install', { method: 'POST' }, t('Installing Docker, this takes a few minutes...'));
     if (data) {
       setNotice(data.message || 'Docker is ready.');
       await loadSiteRuntimes();
@@ -2360,7 +2402,7 @@ function App() {
   }
 
   async function pruneDocker() {
-    const data = await request('/site-runtimes/docker-prune', { method: 'POST' }, 'Pruning unused Docker layers...');
+    const data = await request('/site-runtimes/docker-prune', { method: 'POST' }, t('Pruning unused Docker layers...'));
     if (data) {
       setNotice(data.message || 'Pruned.');
       if (data.output) setSiteAppLog({ name: 'docker prune', log: data.output });
@@ -2400,7 +2442,7 @@ function App() {
       if (siteAppDraft.web_service) body.web_service = siteAppDraft.web_service;
       if (siteAppDraft.container_port) body.container_port = Number(siteAppDraft.container_port);
     }
-    const data = await request('/site-apps', { method: 'POST', body: JSON.stringify(body) }, 'Creating application...');
+    const data = await request('/site-apps', { method: 'POST', body: JSON.stringify(body) }, t('Creating application...'));
     if (data) {
       setNotice(`Application ${data.name} created. Upload your files to ${data.directory} and press Deploy.`);
       setSiteAppDraft(EMPTY_SITE_APP_DRAFT);
@@ -2419,7 +2461,7 @@ function App() {
 
   async function deleteSiteApp(app) {
     if (!confirm(`Delete application ${app.name}? Its files stay on disk; only the runtime is removed.`)) return;
-    const data = await request(`/site-apps/${app.id}`, { method: 'DELETE' }, 'Deleting application...');
+    const data = await request(`/site-apps/${app.id}`, { method: 'DELETE' }, t('Deleting application...'));
     if (data) {
       setNotice(`Deleted ${app.name}.`);
       await loadSiteApps();
@@ -2433,7 +2475,7 @@ function App() {
 
   async function viewFullNginxConfig() {
     if (!nginxCustomEditing) return;
-    const data = await request(`/websites/${nginxCustomEditing.id}/nginx-config`, {}, 'Loading full Nginx config...');
+    const data = await request(`/websites/${nginxCustomEditing.id}/nginx-config`, {}, t('Loading full Nginx config...'));
     if (data !== null) {
       setNginxCustomEditing(prev => ({ ...prev, mode: 'full', customContent: prev?.content || '', content: data?.nginx_config || '' }));
     }
@@ -2445,7 +2487,7 @@ function App() {
     const data = await request(`/websites/${nginxCustomEditing.id}/nginx-custom`, {
       method: 'PUT',
       body: JSON.stringify({ nginx_custom: nginxCustomEditing.content }),
-    }, 'Applying Custom Nginx and reloading...');
+    }, t('Applying Custom Nginx and reloading...'));
     if (data) {
       setNotice(`Updated Custom Nginx for ${nginxCustomEditing.domain}`);
       setNginxCustomEditing(null);
@@ -2467,11 +2509,11 @@ function App() {
 
     if (isProxiedAppType(nextAppType)) {
       if (siteApps.items.length === 0) {
-        setError('Install an application first, on the Applications page.');
+        setError(t('Install an application first, on the Applications page.'));
         return;
       }
       if (!websiteSettingsForm.app_id) {
-        setError('Pick which application this website should serve.');
+        setError(t('Pick which application this website should serve.'));
         return;
       }
       if (String(websiteSettingsForm.app_id) !== String(original.app_id || '')) {
@@ -2503,7 +2545,7 @@ function App() {
     const data = await request(`/websites/${nginxCustomEditing.id}/nginx-custom`, {
       method: 'PUT',
       body: JSON.stringify({ nginx_custom: '' }),
-    }, 'Clearing Custom Nginx...');
+    }, t('Clearing Custom Nginx...'));
     if (data) {
       setNotice(`Cleared Custom Nginx for ${nginxCustomEditing.domain}.`);
       setNginxCustomEditing(null);
@@ -2566,11 +2608,11 @@ function App() {
     const adminEmailValue = String(wordpressInstaller.admin_email || '').trim();
     const adminPasswordValue = String(wordpressInstaller.admin_password || '').trim();
     if (!adminUser || !adminEmailValue || !adminPasswordValue) {
-      setError('Please fill all WordPress admin fields.');
+      setError(t('Please fill all WordPress admin fields.'));
       return;
     }
     if (adminPasswordValue.length < 10) {
-      setError('WordPress admin password must be at least 10 characters.');
+      setError(t('WordPress admin password must be at least 10 characters.'));
       return;
     }
     const data = await request(`/websites/${wordpressInstaller.website_id}/wordpress`, {
@@ -2637,24 +2679,24 @@ function App() {
   }
 
   async function fixWordPressPermissions(id) {
-    const data = await request(`/maintenance/wordpress/${id}/fix-permissions`, { method: 'POST' }, 'Fixing permissions...');
+    const data = await request(`/maintenance/wordpress/${id}/fix-permissions`, { method: 'POST' }, t('Fixing permissions...'));
     if (data?.message) setNotice(data.message);
   }
 
   async function fixNginxSecurity(id) {
-    const data = await request(`/websites/${id}/fix-nginx-security`, { method: 'POST' }, 'Rewriting Nginx security template...');
+    const data = await request(`/websites/${id}/fix-nginx-security`, { method: 'POST' }, t('Rewriting Nginx security template...'));
     if (data?.message) setNotice(data.message);
   }
 
   async function changeDbPassword(id) {
     const newPass = prompt('Enter a new database password, minimum 12 characters:');
     if (!newPass) return;
-    await request(`/databases/${id}/password`, { method: 'POST', body: JSON.stringify({ password: newPass }) }, 'Changing database password...');
+    await request(`/databases/${id}/password`, { method: 'POST', body: JSON.stringify({ password: newPass }) }, t('Changing database password...'));
   }
 
   async function deleteDatabase(id, dbName) {
     if (!confirm(`Delete database "${dbName}"? This action cannot be undone.`)) return;
-    const data = await request(`/databases/${id}`, { method: 'DELETE' }, 'Deleting database...');
+    const data = await request(`/databases/${id}`, { method: 'DELETE' }, t('Deleting database...'));
     if (data) {
       setNotice(`Database "${dbName}" deleted successfully.`);
       await refreshAll();
@@ -2673,17 +2715,17 @@ function App() {
     const dbName = newDatabase.db_name.trim();
     const dbUser = newDatabase.db_user.trim();
     const dbPass = newDatabase.db_password.trim();
-    if (!dbName) { setError('Please enter a database name.'); return; }
-    if (!validDbName.test(dbName)) { setError('Database name can only contain letters, numbers and underscores (no spaces or special characters).'); return; }
-    if (dbUser && !validDbName.test(dbUser)) { setError('Database user can only contain letters, numbers and underscores (no spaces or special characters).'); return; }
-    if (dbPass && dbPass.length < 12) { setError('Password must be at least 12 characters.'); return; }
-    if (dbPass && /[^\x20-\x7E]/.test(dbPass)) { setError('Password contains invalid characters. Use only ASCII characters.'); return; }
+    if (!dbName) { setError(t('Please enter a database name.')); return; }
+    if (!validDbName.test(dbName)) { setError(t('Database name can only contain letters, numbers and underscores (no spaces or special characters).')); return; }
+    if (dbUser && !validDbName.test(dbUser)) { setError(t('Database user can only contain letters, numbers and underscores (no spaces or special characters).')); return; }
+    if (dbPass && dbPass.length < 12) { setError(t('Password must be at least 12 characters.')); return; }
+    if (dbPass && /[^\x20-\x7E]/.test(dbPass)) { setError(t('Password contains invalid characters. Use only ASCII characters.')); return; }
     const body = {
       db_name: dbName,
       db_user: dbUser || null,
       db_password: dbPass || null,
     };
-    const data = await request('/databases', { method: 'POST', body: JSON.stringify(body) }, 'Creating database...');
+    const data = await request('/databases', { method: 'POST', body: JSON.stringify(body) }, t('Creating database...'));
     if (data) {
       setCreatedDbInfo({ db_name: data.db_name, db_user: data.db_user, db_password: data.db_password });
       setNewDatabase({ db_name: '', db_user: '', db_password: '' });
@@ -2692,7 +2734,7 @@ function App() {
   }
 
   async function addCron() {
-    const data = await request('/maintenance/cron', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), schedule: cronSchedule, command: cronCommand }) }, 'Adding cron job...');
+    const data = await request('/maintenance/cron', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), schedule: cronSchedule, command: cronCommand }) }, t('Adding cron job...'));
     if (data) {
       if (data.cron_user) setCronUser(data.cron_user);
       setNotice(`Cron job added${data.cron_user ? ` as ${data.cron_user}` : ''}.`);
@@ -2702,7 +2744,7 @@ function App() {
 
   async function listCron() {
     if (!selectedWebsiteId) return;
-    const data = await request(`/maintenance/cron/${selectedWebsiteId}`, {}, 'Loading cron jobs...');
+    const data = await request(`/maintenance/cron/${selectedWebsiteId}`, {}, t('Loading cron jobs...'));
     if (data?.items) setCronItems(data.items);
     if (data?.cron_user) setCronUser(data.cron_user);
     if (data?.php_binary) setCronPhpInfo({ php_binary: data.php_binary, php_version: data.php_version || '' });
@@ -2710,7 +2752,7 @@ function App() {
 
   async function loadSftpAccounts() {
     if (!selectedWebsiteId) { setSftpAccounts([]); return; }
-    const data = await request(`/sftp-accounts?website_id=${Number(selectedWebsiteId)}`, {}, 'Loading SFTP accounts...');
+    const data = await request(`/sftp-accounts?website_id=${Number(selectedWebsiteId)}`, {}, t('Loading SFTP accounts...'));
     if (Array.isArray(data)) setSftpAccounts(data);
     const limits = await request('/sftp-accounts/limits', {}, null);
     if (limits) setSftpLimits(limits);
@@ -2725,7 +2767,7 @@ function App() {
     const data = await request(`/users/${currentUser.id}/sftp-password`, {
       method: 'POST',
       body: JSON.stringify({ password: typed ? typed : null }),
-    }, 'Setting SFTP password...');
+    }, t('Setting SFTP password...'));
     if (data) {
       if (data.password) setOwnSftpPassword(data.password);
       // The session carries sftp_password_set_at, so refresh it to clear the
@@ -2742,7 +2784,7 @@ function App() {
       label: newSftpAccount.label.trim(),
       password: newSftpAccount.password ? newSftpAccount.password : null,
     };
-    const data = await request('/sftp-accounts', { method: 'POST', body: JSON.stringify(body) }, 'Creating SFTP account...');
+    const data = await request('/sftp-accounts', { method: 'POST', body: JSON.stringify(body) }, t('Creating SFTP account...'));
     if (data?.id) {
       setCreatedSftpInfo(data);
       setNewSftpAccount({ label: '', password: '' });
@@ -2756,7 +2798,7 @@ function App() {
     const data = await request(`/sftp-accounts/${account.id}/password`, {
       method: 'POST',
       body: JSON.stringify({ password: typed ? typed : null }),
-    }, 'Updating SFTP password...');
+    }, t('Updating SFTP password...'));
     if (data) {
       if (data.password) setCreatedSftpInfo({ ...account, password: data.password });
       await loadSftpAccounts();
@@ -2765,7 +2807,7 @@ function App() {
 
   async function deleteSftpAccount(account) {
     if (!confirm(`Delete SFTP account ${account.username}? The login stops working immediately. Site files are not touched.`)) return;
-    await request(`/sftp-accounts/${account.id}`, { method: 'DELETE' }, 'Removing SFTP account...');
+    await request(`/sftp-accounts/${account.id}`, { method: 'DELETE' }, t('Removing SFTP account...'));
     if (createdSftpInfo?.id === account.id) setCreatedSftpInfo(null);
     await loadSftpAccounts();
   }
@@ -2774,17 +2816,17 @@ function App() {
     if (!confirm(`Delete cron #${index}?`)) return;
     index = Number(index);
     if (Number.isNaN(index)) return;
-    const data = await request('/maintenance/cron', { method: 'DELETE', body: JSON.stringify({ website_id: Number(selectedWebsiteId), index }) }, 'Deleting cron job...');
+    const data = await request('/maintenance/cron', { method: 'DELETE', body: JSON.stringify({ website_id: Number(selectedWebsiteId), index }) }, t('Deleting cron job...'));
     if (data) {
       if (data.cron_user) setCronUser(data.cron_user);
-      setNotice('Cron job deleted.');
+      setNotice(t('Cron job deleted.'));
       await listCron();
     }
   }
 
   async function listFiles(path = fileListPath) {
     if (!hasFileTarget()) return;
-    const data = await request(`${fileTargetBase()}?path=${encodeURIComponent(path)}`, {}, 'Loading file list...');
+    const data = await request(`${fileTargetBase()}?path=${encodeURIComponent(path)}`, {}, t('Loading file list...'));
     if (data?.items) { setFiles(data.items); setFileListPath(path); setFileUploadDir(path || ''); setSelectedFilePaths([]); }
   }
 
@@ -2792,7 +2834,7 @@ function App() {
     const targetPath = pathOverride || filePath;
     if (!hasFileTarget() || !targetPath) return;
     if (pathOverride) setFilePath(pathOverride);
-    const data = await request(`${fileTargetBase()}/read?path=${encodeURIComponent(targetPath)}`, {}, 'Reading file...');
+    const data = await request(`${fileTargetBase()}/read?path=${encodeURIComponent(targetPath)}`, {}, t('Reading file...'));
     if (data?.content !== undefined) {
       setFileContent(data.content);
       setEditorCursor({ line: 1, column: 1 });
@@ -2800,7 +2842,7 @@ function App() {
   }
 
   async function writeFile() {
-    const data = await request('/maintenance/files/write', { method: 'POST', body: JSON.stringify({ ...fileTargetBody(), path: filePath, content: fileContent }) }, 'Saving file...');
+    const data = await request('/maintenance/files/write', { method: 'POST', body: JSON.stringify({ ...fileTargetBody(), path: filePath, content: fileContent }) }, t('Saving file...'));
     if (data) { await listFiles(fileListPath); await loadCurrentUser(); }
   }
 
@@ -2816,7 +2858,7 @@ function App() {
       link.href = url; link.download = path.split('/').pop() || 'download';
       document.body.appendChild(link); link.click(); link.remove();
       URL.revokeObjectURL(url);
-    } catch (err) { setError('File download failed.'); }
+    } catch (err) { setError(t('File download failed.')); }
     finally { setLoading(''); }
   }
 
@@ -2841,7 +2883,7 @@ function App() {
     if (!hasFileTarget()) return;
     const name = prompt('Folder name:');
     if (!name) return;
-    const data = await request('/maintenance/files/mkdir', { method: 'POST', body: JSON.stringify({ ...fileTargetBody(), path: fileListPath || '', name }) }, 'Creating folder...');
+    const data = await request('/maintenance/files/mkdir', { method: 'POST', body: JSON.stringify({ ...fileTargetBody(), path: fileListPath || '', name }) }, t('Creating folder...'));
     if (data) await listFiles(fileListPath);
   }
 
@@ -2849,7 +2891,7 @@ function App() {
     if (!hasFileTarget()) return;
     const name = prompt('File name:', 'new-file.txt');
     if (!name) return;
-    const data = await request('/maintenance/files/create', { method: 'POST', body: JSON.stringify({ ...fileTargetBody(), path: fileListPath || '', name }) }, 'Creating file...');
+    const data = await request('/maintenance/files/create', { method: 'POST', body: JSON.stringify({ ...fileTargetBody(), path: fileListPath || '', name }) }, t('Creating file...'));
     if (data) {
       await listFiles(fileListPath);
       const newPath = [fileListPath, name].filter(Boolean).join('/');
@@ -2861,7 +2903,7 @@ function App() {
     if (!item) return;
     const newName = prompt('New name:', item.name);
     if (!newName || newName === item.name) return;
-    const data = await request('/maintenance/files/rename', { method: 'POST', body: JSON.stringify({ ...fileTargetBody(), path: item.path, new_name: newName }) }, 'Renaming...');
+    const data = await request('/maintenance/files/rename', { method: 'POST', body: JSON.stringify({ ...fileTargetBody(), path: item.path, new_name: newName }) }, t('Renaming...'));
     if (data) await listFiles(fileListPath);
   }
 
@@ -2887,7 +2929,7 @@ function App() {
     const targets = chmodTarget || [];
     const mode = chmodMode.trim();
     if (targets.length === 0) return;
-    if (!/^[0-7]{3,4}$/.test(mode)) { setError('Mode must be octal, for example 644 or 755.'); return; }
+    if (!/^[0-7]{3,4}$/.test(mode)) { setError(t('Mode must be octal, for example 644 or 755.')); return; }
     for (const item of targets) {
       const data = await request('/maintenance/files/chmod', {
         method: 'POST',
@@ -2897,14 +2939,14 @@ function App() {
       if (!data) return;
     }
     setChmodTarget(null);
-    setNotice(`Permissions set to ${mode} on ${targets.length} item(s).`);
+    setNotice(t('Permissions set to {mode} on {n} item(s).', { mode, n: targets.length }));
     await listFiles(fileListPath);
   }
 
   async function deleteSelectedFiles() {
     if (selectedFilePaths.length === 0) return;
-    if (!confirm(`Delete ${selectedFilePaths.length} selected item(s)?`)) return;
-    const data = await request('/maintenance/files/delete', { method: 'POST', body: JSON.stringify({ ...fileTargetBody(), paths: selectedFilePaths }) }, 'Deleting selected files...');
+    if (!confirm(t('Delete {n} selected item(s)?', { n: selectedFilePaths.length }))) return;
+    const data = await request('/maintenance/files/delete', { method: 'POST', body: JSON.stringify({ ...fileTargetBody(), paths: selectedFilePaths }) }, t('Deleting selected files...'));
     if (data) { await listFiles(fileListPath); await loadCurrentUser(); }
   }
 
@@ -2937,7 +2979,7 @@ function App() {
     const data = await request('/maintenance/files/archive', {
       method: 'POST',
       body: JSON.stringify({ ...fileTargetBody(), base_path: fileListPath || '', paths: selectedFilePaths, output_name: outputName, format: archiveFormat }),
-    }, 'Creating archive...');
+    }, t('Creating archive...'));
     if (data) { await listFiles(fileListPath); await loadCurrentUser(); }
   }
 
@@ -2949,7 +2991,7 @@ function App() {
     const data = await request('/maintenance/files/extract', {
       method: 'POST',
       body: JSON.stringify({ ...fileTargetBody(), archive_path: path, destination_path: targetPath }),
-    }, 'Starting extraction...');
+    }, t('Starting extraction...'));
     if (data?.job_id) upsertFileJob(data);
     else if (data) { await listFiles(targetPath === '.' ? '' : targetPath); await loadCurrentUser(); }
   }
@@ -3043,7 +3085,7 @@ function App() {
 
   async function uploadSiteFile(file) {
     if (!file) return;
-    if (!hasFileTarget()) { setError('Please select a website or application first.'); return; }
+    if (!hasFileTarget()) { setError(t('Please select a website or application first.')); return; }
     const uploadDir = fileUploadDir.trim();
     const form = new FormData();
     form.append('file', file);
@@ -3065,13 +3107,13 @@ function App() {
       setNotice(`Uploaded ${file.name} to ${uploadDir || 'site root'}.`);
       if (String(fileListPath || '') === uploadDir) await listFiles(uploadDir);
       await loadCurrentUser();
-    } catch (err) { setError('File upload failed.'); }
+    } catch (err) { setError(t('File upload failed.')); }
     finally { setLoading(''); }
   }
 
   async function createBackup() {
-    const data = await request('/maintenance/backup', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId) }) }, 'Queueing backup...');
-    if (data?.job_id) { setNotice('Backup queued. It will keep running on the server.'); await loadBackupJobs(); }
+    const data = await request('/maintenance/backup', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId) }) }, t('Queueing backup...'));
+    if (data?.job_id) { setNotice(t('Backup queued. It will keep running on the server.')); await loadBackupJobs(); }
     else if (data?.backup_file) { setNotice(`Created backup: ${data.backup_file}`); await listBackups(); }
   }
 
@@ -3130,8 +3172,8 @@ function App() {
       user_id: Number(selectedBackupUserId),
       target_id: selectedSftpTargetId ? Number(selectedSftpTargetId) : null,
     };
-    const data = await request('/maintenance/user-backup', { method: 'POST', body: JSON.stringify(body) }, 'Queueing full user backup...');
-    if (data?.job_id) { setNotice('Full user backup queued. It will keep running on the server.'); await loadBackupJobs(); }
+    const data = await request('/maintenance/user-backup', { method: 'POST', body: JSON.stringify(body) }, t('Queueing full user backup...'));
+    if (data?.job_id) { setNotice(t('Full user backup queued. It will keep running on the server.')); await loadBackupJobs(); }
     else if (data?.backup_file) {
       setNotice(data.remote_file ? `Full user backup uploaded: ${data.remote_file}` : `Created full user backup: ${data.backup_file}`);
       await listUserBackups();
@@ -3162,9 +3204,9 @@ function App() {
       retention: Number(newBackupSchedule.retention || 7),
       is_active: true,
     };
-    const data = await request('/maintenance/backup-schedules', { method: 'POST', body: JSON.stringify(body) }, 'Saving backup schedule...');
+    const data = await request('/maintenance/backup-schedules', { method: 'POST', body: JSON.stringify(body) }, t('Saving backup schedule...'));
     if (data) {
-      setNotice('Backup schedule saved.');
+      setNotice(t('Backup schedule saved.'));
       await loadBackupSchedules();
     }
   }
@@ -3181,7 +3223,7 @@ function App() {
   async function runBackupScheduleNow(item) {
     const who = scheduleUserLabel(item);
     if (!confirm(`Run this schedule now?\n\n${who} - ${item.schedule}\n\nThis is the real thing: the same accounts, the same destination and the same stored name. Only the timing is skipped.`)) return;
-    const data = await request(`/maintenance/backup-schedules/${item.id}/run`, { method: 'POST' }, 'Starting...');
+    const data = await request(`/maintenance/backup-schedules/${item.id}/run`, { method: 'POST' }, t('Starting...'));
     if (data) {
       setNotice(data.detail || 'Running now.');
       await loadBackupSchedules();
@@ -3207,8 +3249,8 @@ function App() {
   }
 
   async function deleteBackupSchedule(id) {
-    if (!confirm('Delete this backup schedule?')) return;
-    const data = await request(`/maintenance/backup-schedules/${id}`, { method: 'DELETE' }, 'Deleting backup schedule...');
+    if (!confirm(t('Delete this backup schedule?'))) return;
+    const data = await request(`/maintenance/backup-schedules/${id}`, { method: 'DELETE' }, t('Deleting backup schedule...'));
     if (data) await loadBackupSchedules();
   }
 
@@ -3246,7 +3288,7 @@ function App() {
   }
 
   async function loadRestoreCatalogue() {
-    const data = await request('/maintenance/restore-catalogue', {}, 'Looking for backups...');
+    const data = await request('/maintenance/restore-catalogue', {}, t('Looking for backups...'));
     if (data) {
       setRestoreCatalogue({ items: data.items || [], errors: data.errors || [], loaded: true });
       setRestorePicks([]);
@@ -3283,8 +3325,8 @@ Each account is overwritten with what is in its archive.`)) return;
   }
 
   async function deleteSftpTarget(id) {
-    if (!confirm('Delete this SFTP target?')) return;
-    const data = await request(`/maintenance/sftp-targets/${id}`, { method: 'DELETE' }, 'Deleting SFTP target...');
+    if (!confirm(t('Delete this SFTP target?'))) return;
+    const data = await request(`/maintenance/sftp-targets/${id}`, { method: 'DELETE' }, t('Deleting SFTP target...'));
     if (data) await loadSftpTargets();
   }
 
@@ -3293,9 +3335,9 @@ Each account is overwritten with what is in its archive.`)) return;
     const data = await request('/maintenance/backup-sftp', {
       method: 'POST',
       body: JSON.stringify({ website_id: Number(selectedWebsiteId), target_id: Number(selectedSftpTargetId) }),
-    }, 'Queueing SFTP backup...');
+    }, t('Queueing SFTP backup...'));
     if (data?.job_id) {
-      setNotice('SFTP backup queued. It will keep running on the server.');
+      setNotice(t('SFTP backup queued. It will keep running on the server.'));
       await loadBackupJobs();
     } else if (data?.remote_file) {
       setNotice(`SFTP backup uploaded: ${data.remote_file}`);
@@ -3305,7 +3347,7 @@ Each account is overwritten with what is in its archive.`)) return;
 
   async function restoreBackup(file) {
     if (!confirm(`Restore this backup to the current website?\n${file}`)) return;
-    await request('/maintenance/restore', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), backup_file: file }) }, 'Restoring backup...');
+    await request('/maintenance/restore', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), backup_file: file }) }, t('Restoring backup...'));
   }
 
   async function downloadBackup(file) {
@@ -3320,8 +3362,8 @@ Each account is overwritten with what is in its archive.`)) return;
       link.href = url; link.download = file.split('/').pop() || 'backup.tar.gz';
       document.body.appendChild(link); link.click(); link.remove();
       URL.revokeObjectURL(url);
-      setNotice('Backup downloaded.');
-    } catch (err) { setError('Backup download failed.'); }
+      setNotice(t('Backup downloaded.'));
+    } catch (err) { setError(t('Backup download failed.')); }
     finally { setLoading(''); }
   }
 
@@ -3336,14 +3378,14 @@ Each account is overwritten with what is in its archive.`)) return;
       link.href = url; link.download = file.split('/').pop() || 'user-backup.tar.gz';
       document.body.appendChild(link); link.click(); link.remove();
       URL.revokeObjectURL(url);
-      setNotice('Full user backup downloaded.');
-    } catch (err) { setError('Full user backup download failed.'); }
+      setNotice(t('Full user backup downloaded.'));
+    } catch (err) { setError(t('Full user backup download failed.')); }
     finally { setLoading(''); }
   }
 
   async function restoreUserBackup(file) {
     if (!confirm(`Restore this full user backup? Missing panel user and websites will be created.\n${file}`)) return;
-    const data = await request('/maintenance/user-restore', { method: 'POST', body: JSON.stringify({ backup_file: file }) }, 'Restoring full user backup...');
+    const data = await request('/maintenance/user-restore', { method: 'POST', body: JSON.stringify({ backup_file: file }) }, t('Restoring full user backup...'));
     if (data) {
       setNotice(`Restored user ${data.username}. Websites: ${data.websites?.length || 0}`);
       await refreshAll();
@@ -3355,7 +3397,7 @@ Each account is overwritten with what is in its archive.`)) return;
 
   async function deleteUserBackup(file) {
     if (!confirm(`Delete this full user backup?\n${file}`)) return;
-    const data = await request(`/maintenance/user-backups?backup_file=${encodeURIComponent(file)}`, { method: 'DELETE' }, 'Deleting full user backup...');
+    const data = await request(`/maintenance/user-backups?backup_file=${encodeURIComponent(file)}`, { method: 'DELETE' }, t('Deleting full user backup...'));
     if (data) {
       await listUserBackups();
       await loadRestoreBackups();
@@ -3364,7 +3406,7 @@ Each account is overwritten with what is in its archive.`)) return;
 
   async function deleteRestoreBackup(file) {
     if (!confirm(`Delete this restore backup?\n${file}`)) return;
-    const data = await request(`/maintenance/user-restore-backups?backup_file=${encodeURIComponent(file)}`, { method: 'DELETE' }, 'Deleting restore backup...');
+    const data = await request(`/maintenance/user-restore-backups?backup_file=${encodeURIComponent(file)}`, { method: 'DELETE' }, t('Deleting restore backup...'));
     if (data) {
       await loadRestoreBackups();
       await listUserBackups();
@@ -3393,7 +3435,7 @@ Each account is overwritten with what is in its archive.`)) return;
       setNotice(`Uploaded ${data.items?.length || selectedFiles.length} full user backup file(s).`);
       await loadRestoreBackups();
       await listUserBackups();
-    } catch (err) { setError('Full user backup upload failed.'); }
+    } catch (err) { setError(t('Full user backup upload failed.')); }
     finally { setLoading(''); }
   }
 
@@ -3420,13 +3462,13 @@ Each account is overwritten with what is in its archive.`)) return;
       if (!res.ok) { if (handleAuthExpired(res.status, data.detail)) return; setError(formatApiError(data.detail, 'Upload failed.')); return; }
       setNotice(`Uploaded: ${data.filename}`);
       await listDaBackups();
-    } catch (err) { setError('DA backup upload failed.'); }
+    } catch (err) { setError(t('DA backup upload failed.')); }
     finally { setLoading(''); }
   }
 
   async function scanDaBackup(archivePath) {
     setDaScanResult(null);
-    const data = await request('/maintenance/da-import/scan', { method: 'POST', body: JSON.stringify({ archive_path: archivePath }) }, 'Scanning DA backup...');
+    const data = await request('/maintenance/da-import/scan', { method: 'POST', body: JSON.stringify({ archive_path: archivePath }) }, t('Scanning DA backup...'));
     if (data) setDaScanResult(data);
   }
 
@@ -3436,9 +3478,9 @@ Each account is overwritten with what is in its archive.`)) return;
       : 'Import this DirectAdmin backup? This will create users, websites, databases, and nginx configs.';
     if (!confirm(message)) return;
     setDaImportJob(null);
-    const data = await request('/maintenance/da-import/import', { method: 'POST', body: JSON.stringify({ archive_path: archivePath, force }) }, 'Starting DA import...');
+    const data = await request('/maintenance/da-import/import', { method: 'POST', body: JSON.stringify({ archive_path: archivePath, force }) }, t('Starting DA import...'));
     if (data?.job_id) {
-      setNotice('DA import started. Polling for result...');
+      setNotice(t('DA import started. Polling for result...'));
       setDaImportJob(data);
       pollDaImportJob(data.job_id);
     }
@@ -3452,15 +3494,15 @@ Each account is overwritten with what is in its archive.`)) return;
       const data = await request(`/maintenance/da-import/jobs/${jobId}`, { silent: true });
       if (!data) { attempts++; continue; }
       setDaImportJob(data);
-      if (data.status === 'completed') { setNotice('DA import completed successfully!'); await listDaBackups(); return; }
+      if (data.status === 'completed') { setNotice(t('DA import completed successfully!')); await listDaBackups(); return; }
       if (data.status === 'failed') { setError(`DA import failed: ${data.error || 'Unknown error'}`); return; }
       attempts++;
     }
   }
 
   async function deleteDaBackup(archivePath) {
-    if (!confirm('Delete this DA backup file?')) return;
-    const data = await request('/maintenance/da-import/backups', { method: 'DELETE', body: JSON.stringify({ archive_path: archivePath }) }, 'Deleting DA backup...');
+    if (!confirm(t('Delete this DA backup file?'))) return;
+    const data = await request('/maintenance/da-import/backups', { method: 'DELETE', body: JSON.stringify({ archive_path: archivePath }) }, t('Deleting DA backup...'));
     if (data) { setNotice(`Deleted: ${data.deleted}`); setDaScanResult(null); await listDaBackups(); }
   }
 
@@ -3481,7 +3523,7 @@ Each account is overwritten with what is in its archive.`)) return;
     setDaBulkImportJob(null);
     setDaImportJob(null);
     setDaScanResult(null);
-    const data = await request('/maintenance/da-import/bulk-import', { method: 'POST', body: JSON.stringify({ archive_paths: selectedDaBackups, force }) }, 'Starting bulk restore...');
+    const data = await request('/maintenance/da-import/bulk-import', { method: 'POST', body: JSON.stringify({ archive_paths: selectedDaBackups, force }) }, t('Starting bulk restore...'));
     if (data?.job_id) {
       setNotice(`Bulk restore started: ${data.total} backup(s). Processing sequentially...`);
       setSelectedDaBackups([]);
@@ -3512,7 +3554,7 @@ Each account is overwritten with what is in its archive.`)) return;
     if (selectedDaBackups.length === 0) return;
     if (!confirm(`Delete ${selectedDaBackups.length} selected backup file(s)?`)) return;
     for (const path of selectedDaBackups) {
-      await request('/maintenance/da-import/backups', { method: 'DELETE', body: JSON.stringify({ archive_path: path }) }, 'Deleting...');
+      await request('/maintenance/da-import/backups', { method: 'DELETE', body: JSON.stringify({ archive_path: path }) }, t('Deleting...'));
     }
     setNotice(`Deleted ${selectedDaBackups.length} backup(s).`);
     setSelectedDaBackups([]);
@@ -3534,7 +3576,7 @@ Each account is overwritten with what is in its archive.`)) return;
       if (handleAuthExpired(res.status, data.detail)) return;
       if (!res.ok || !data.url) { setError(formatApiError(data.detail, 'Cannot open phpMyAdmin.')); return; }
       window.open(data.url, '_blank', 'noopener,noreferrer');
-    } catch (err) { setError('Cannot open phpMyAdmin.'); }
+    } catch (err) { setError(t('Cannot open phpMyAdmin.')); }
     finally { setLoading(''); }
   }
 
@@ -3549,14 +3591,14 @@ Each account is overwritten with what is in its archive.`)) return;
       link.href = url; link.download = `${databaseName || 'database'}.sql`;
       document.body.appendChild(link); link.click(); link.remove();
       URL.revokeObjectURL(url);
-      setNotice('Database SQL downloaded.');
-    } catch (err) { setError('Database download failed.'); }
+      setNotice(t('Database SQL downloaded.'));
+    } catch (err) { setError(t('Database download failed.')); }
     finally { setLoading(''); }
   }
 
   async function deleteBackup(file) {
     if (!confirm(`Delete this backup?\n${file}`)) return;
-    const data = await request(`/maintenance/backups/${selectedWebsiteId}?backup_file=${encodeURIComponent(file)}`, { method: 'DELETE' }, 'Deleting backup...');
+    const data = await request(`/maintenance/backups/${selectedWebsiteId}?backup_file=${encodeURIComponent(file)}`, { method: 'DELETE' }, t('Deleting backup...'));
     if (data) await listBackups();
   }
 
@@ -3579,7 +3621,7 @@ Each account is overwritten with what is in its archive.`)) return;
       try { data = responseText ? JSON.parse(responseText) : {}; } catch { data = { detail: responseText || `HTTP ${res.status}` }; }
       if (!res.ok) { if (handleAuthExpired(res.status, data.detail)) return; setError(formatApiError(data.detail, 'Upload failed.')); return; }
       if (data.backup_file) { setNotice(`Uploaded backup: ${data.backup_file}`); await listBackups(); }
-    } catch (err) { setError('Upload backup failed.'); }
+    } catch (err) { setError(t('Upload backup failed.')); }
     finally { setLoading(''); }
   }
 
@@ -3632,7 +3674,7 @@ Each account is overwritten with what is in its archive.`)) return;
     const data = await request('/maintenance/php-tune', {
       method: 'POST',
       body: JSON.stringify({ php_version: version }),
-    }, 'Tuning PHP for this machine...');
+    }, t('Tuning PHP for this machine...'));
     if (data) {
       if (data.plan) setPhpTune(data.plan);
       setPhpTuneApplied(true);
@@ -3641,7 +3683,7 @@ Each account is overwritten with what is in its archive.`)) return;
   }
 
   async function loadPhpConfig(version = phpConfig.php_version) {
-    const data = await request(`/maintenance/php-config?php_version=${encodeURIComponent(version)}`, {}, 'Loading PHP config...');
+    const data = await request(`/maintenance/php-config?php_version=${encodeURIComponent(version)}`, {}, t('Loading PHP config...'));
     if (data) setPhpConfig(prev => ({ ...prev, ...data, php_version: version }));
   }
 
@@ -3649,7 +3691,7 @@ Each account is overwritten with what is in its archive.`)) return;
     const data = await request('/maintenance/php-config', {
       method: 'POST',
       body: JSON.stringify({ ...phpConfig, max_execution_time: Number(phpConfig.max_execution_time), max_input_time: Number(phpConfig.max_input_time), max_input_vars: Number(phpConfig.max_input_vars) }),
-    }, 'Updating PHP config...');
+    }, t('Updating PHP config...'));
     if (data?.target) { setNotice(`Updated PHP config: ${data.target}`); await loadPhpConfig(phpConfig.php_version); }
   }
 
@@ -3658,7 +3700,7 @@ Each account is overwritten with what is in its archive.`)) return;
     const data = await request('/maintenance/php-config/defaults', {
       method: 'POST',
       body: JSON.stringify({ php_version: phpConfig.php_version }),
-    }, 'Restoring PHP defaults...');
+    }, t('Restoring PHP defaults...'));
     if (data?.values) {
       setPhpConfig(prev => ({ ...prev, ...data.values }));
       setNotice(`Restored PHP ${phpConfig.php_version} defaults.`);
@@ -3666,7 +3708,7 @@ Each account is overwritten with what is in its archive.`)) return;
   }
 
   async function loadPhpVersions() {
-    const data = await request('/maintenance/php-versions', {}, 'Loading PHP versions...');
+    const data = await request('/maintenance/php-versions', {}, t('Loading PHP versions...'));
     if (data) setPhpVersions({
       installed: sortPhpVersions(data.installed || []),
       supported: sortPhpVersions(data.supported || []),
@@ -3680,7 +3722,7 @@ Each account is overwritten with what is in its archive.`)) return;
   }
 
   async function loadFirewall() {
-    const data = await request('/firewall/status', {}, 'Loading firewall...');
+    const data = await request('/firewall/status', {}, t('Loading firewall...'));
     if (data) setFirewallStatus(data);
   }
 
@@ -3724,25 +3766,25 @@ Each account is overwritten with what is in its archive.`)) return;
   }
 
   async function enableFirewall() {
-    if (!confirm('Enable the firewall now? SSH, the panel port and 80/443/465/587 stay open automatically.')) return;
-    await runFirewallAction('/firewall/enable', { method: 'POST' }, 'Enabling firewall...');
+    if (!confirm(t('Enable the firewall now? SSH, the panel port and 80/443/465/587 stay open automatically.'))) return;
+    await runFirewallAction('/firewall/enable', { method: 'POST' }, t('Enabling firewall...'));
   }
   async function disableFirewall() {
-    if (!confirm('Disable the firewall? Every port will be reachable again.')) return;
-    await runFirewallAction('/firewall/disable', { method: 'POST' }, 'Disabling firewall...');
+    if (!confirm(t('Disable the firewall? Every port will be reachable again.'))) return;
+    await runFirewallAction('/firewall/disable', { method: 'POST' }, t('Disabling firewall...'));
   }
-  async function reloadFirewall() { await runFirewallAction('/firewall/reload', { method: 'POST' }, 'Reloading firewall...'); }
-  async function openFirewallPort() { await runFirewallAction('/firewall/allow-port', { method: 'POST', body: JSON.stringify({ port: firewallPort, protocol: firewallProtocol }) }, 'Opening port...'); }
-  async function allowFirewallIp() { await runFirewallAction('/firewall/allow-ip', { method: 'POST', body: JSON.stringify({ ip: firewallAllowIp, port: firewallAllowPort || null, protocol: firewallAllowProtocol }) }, 'Allowing IP...'); }
+  async function reloadFirewall() { await runFirewallAction('/firewall/reload', { method: 'POST' }, t('Reloading firewall...')); }
+  async function openFirewallPort() { await runFirewallAction('/firewall/allow-port', { method: 'POST', body: JSON.stringify({ port: firewallPort, protocol: firewallProtocol }) }, t('Opening port...')); }
+  async function allowFirewallIp() { await runFirewallAction('/firewall/allow-ip', { method: 'POST', body: JSON.stringify({ ip: firewallAllowIp, port: firewallAllowPort || null, protocol: firewallAllowProtocol }) }, t('Allowing IP...')); }
   async function blockFirewallIp() {
     if (!confirm(`Block ${firewallBlockIp || 'this IP'}?`)) return;
-    await runFirewallAction('/firewall/block-ip', { method: 'POST', body: JSON.stringify({ ip: firewallBlockIp, port: firewallBlockPort || null, protocol: firewallBlockProtocol }) }, 'Blocking IP...');
+    await runFirewallAction('/firewall/block-ip', { method: 'POST', body: JSON.stringify({ ip: firewallBlockIp, port: firewallBlockPort || null, protocol: firewallBlockProtocol }) }, t('Blocking IP...'));
   }
   async function deleteFirewallRule(numberOverride = firewallDeleteNumber) {
     const ruleNumber = String(numberOverride || '').trim();
     if (!ruleNumber) return;
     if (!confirm(`Delete firewall rule #${ruleNumber}?`)) return;
-    await runFirewallAction(`/firewall/rules/${encodeURIComponent(ruleNumber)}`, { method: 'DELETE' }, 'Deleting rule...');
+    await runFirewallAction(`/firewall/rules/${encodeURIComponent(ruleNumber)}`, { method: 'DELETE' }, t('Deleting rule...'));
     setFirewallDeleteNumber('');
   }
 
@@ -3760,14 +3802,14 @@ Each account is overwritten with what is in its archive.`)) return;
   }
 
   async function loadFirewallBlocklists() {
-    const data = await request('/firewall/blocklists', {}, 'Loading IP blocklists...');
+    const data = await request('/firewall/blocklists', {}, t('Loading IP blocklists...'));
     if (data) setFirewallBlocklists(data);
   }
 
   async function addFirewallBlocklistUrl() {
     const url = firewallBlocklistUrl.trim();
     if (!url) return;
-    const data = await request('/firewall/blocklists', { method: 'POST', body: JSON.stringify({ url }) }, 'Adding IP blocklist URL...');
+    const data = await request('/firewall/blocklists', { method: 'POST', body: JSON.stringify({ url }) }, t('Adding IP blocklist URL...'));
     if (data) {
       setNotice((data.stdout || data.stderr || 'IP blocklist URL added.').trim());
       setFirewallBlocklistUrl('');
@@ -3777,7 +3819,7 @@ Each account is overwritten with what is in its archive.`)) return;
 
   async function deleteFirewallBlocklistUrl(url) {
     if (!confirm(`Delete blocklist URL?\n${url}`)) return;
-    const data = await request('/firewall/blocklists/delete', { method: 'POST', body: JSON.stringify({ url }) }, 'Deleting IP blocklist URL...');
+    const data = await request('/firewall/blocklists/delete', { method: 'POST', body: JSON.stringify({ url }) }, t('Deleting IP blocklist URL...'));
     if (data) {
       setNotice((data.stdout || data.stderr || 'IP blocklist URL removed.').trim());
       await loadFirewallBlocklists();
@@ -3785,7 +3827,7 @@ Each account is overwritten with what is in its archive.`)) return;
   }
 
   async function updateFirewallBlocklistsNow() {
-    const data = await request('/firewall/blocklists/update', { method: 'POST' }, 'Refreshing IP blocklists...');
+    const data = await request('/firewall/blocklists/update', { method: 'POST' }, t('Refreshing IP blocklists...'));
     if (data) {
       setNotice((data.stdout || data.stderr || 'IP blocklists refreshed.').trim());
       await loadFirewall();
@@ -3794,7 +3836,7 @@ Each account is overwritten with what is in its archive.`)) return;
   }
 
   async function loadWafRules() {
-    const data = await request('/waf/rules', {}, 'Loading WAF rules...');
+    const data = await request('/waf/rules', {}, t('Loading WAF rules...'));
     if (data) {
       setWafRules(data);
       const firstWebsiteId = selectedWafWebsiteId || selectedWebsiteId || websites[0]?.id || '';
@@ -3831,7 +3873,7 @@ Each account is overwritten with what is in its archive.`)) return;
     const data = await request(`/waf/websites/${selectedWafWebsiteId}/bots`, {
       method: 'PUT',
       body: JSON.stringify({ blocked_bots: siteBotText }),
-    }, 'Saving blocked bots...');
+    }, t('Saving blocked bots...'));
     if (data) {
       setSiteBotText((data.blocked_bots || []).join('\n'));
       setNotice(data.message || 'Blocked bots saved.');
@@ -3853,7 +3895,7 @@ Each account is overwritten with what is in its archive.`)) return;
   }
 
   async function loadBotBlocks() {
-    const data = await request('/waf/bots', {}, 'Loading blocked bots...');
+    const data = await request('/waf/bots', {}, t('Loading blocked bots...'));
     if (data) {
       setBotBlocks(data);
       setGlobalBots(data.global_blocked_bots || []);
@@ -3864,7 +3906,7 @@ Each account is overwritten with what is in its archive.`)) return;
     const data = await request('/waf/bots/global', {
       method: 'PUT',
       body: JSON.stringify({ blocked_bots: nextList.join('\n') }),
-    }, 'Saving global bad bots...');
+    }, t('Saving global bad bots...'));
     if (data) {
       setGlobalBots(data.global_blocked_bots || []);
       setNotice(data.failed?.length
@@ -3929,7 +3971,7 @@ Each account is overwritten with what is in its archive.`)) return;
     const data = await request(`/waf/websites/${selectedWafWebsiteId}`, {
       method: 'PUT',
       body: JSON.stringify({ enabled_rule_ids: wafSiteConfig.enabled_rule_ids || [], custom_rules: wafCustomRules }),
-    }, 'Saving website WAF rules...');
+    }, t('Saving website WAF rules...'));
     if (data) {
       setWafSiteConfig(data);
       setWafCustomRules(data.custom_rules || '');
@@ -3944,7 +3986,7 @@ Each account is overwritten with what is in its archive.`)) return;
     const data = await request(`/websites/${selectedWafWebsiteId}/http-flood`, {
       method: 'PATCH',
       body: JSON.stringify({ http_flood_enabled: !!httpFloodForm.http_flood_enabled, ...config }),
-    }, 'Saving HTTP Flood settings...');
+    }, t('Saving HTTP Flood settings...'));
     if (data) {
       setNotice(`HTTP Flood settings saved for ${data.domain}.`);
       await refreshAll();
@@ -3982,7 +4024,7 @@ Each account is overwritten with what is in its archive.`)) return;
     const params = new URLSearchParams();
     if (wafAccessLogFilters.websiteId) params.set('website_id', wafAccessLogFilters.websiteId);
     const suffix = params.toString() ? `?${params.toString()}` : '';
-    const data = await request(`/waf/access-logs${suffix}`, { method: 'DELETE' }, 'Clearing access logs...');
+    const data = await request(`/waf/access-logs${suffix}`, { method: 'DELETE' }, t('Clearing access logs...'));
     if (data) {
       setNotice(data.message || 'Access logs cleared.');
       await loadWafAccessLogs(wafAccessLogFilters, false);
@@ -4009,7 +4051,7 @@ Each account is overwritten with what is in its archive.`)) return;
   }
 
   async function loadUpdates(force = false) {
-    const data = await request(`/updates/status${force ? '?refresh=true' : ''}`, {}, 'Loading update status...');
+    const data = await request(`/updates/status${force ? '?refresh=true' : ''}`, {}, t('Loading update status...'));
     if (data) setUpdatesStatus(data);
   }
 
@@ -4019,24 +4061,24 @@ Each account is overwritten with what is in its archive.`)) return;
   }
 
   async function runOsUpdate() {
-    if (!confirm('Run apt-get update && apt-get upgrade now?')) return;
+    if (!confirm(t('Run apt-get update && apt-get upgrade now?'))) return;
     setOsUpdating(true);
-    const data = await request('/updates/os/run', { method: 'POST' }, 'Updating OS packages...');
+    const data = await request('/updates/os/run', { method: 'POST' }, t('Updating OS packages...'));
     setOsUpdating(false);
     if (data) { setNotice((data.stdout || data.stderr || 'OS update completed.').trim()); if (showUpdateLog) await loadUpdates(); }
   }
 
   async function saveOsAutoUpdate() {
-    const data = await request('/updates/os/auto', { method: 'POST', body: JSON.stringify(osAutoUpdate) }, 'Saving OS auto update...');
+    const data = await request('/updates/os/auto', { method: 'POST', body: JSON.stringify(osAutoUpdate) }, t('Saving OS auto update...'));
     if (data) { setNotice((data.stdout || data.stderr || 'OS auto update saved.').trim()); if (showUpdateLog) await loadUpdates(); }
   }
 
   async function runPanelUpdate() {
-    if (!confirm('Update BPanel from GitHub now? The API may restart and this page will reload when done.')) return;
+    if (!confirm(t('Update BPanel from GitHub now? The API may restart and this page will reload when done.'))) return;
     setPanelUpdating(true);
     setShowUpdateLog(true);
     setPanelUpdateLog([]);
-    const data = await request('/updates/panel/run', { method: 'POST' }, 'Updating BPanel...');
+    const data = await request('/updates/panel/run', { method: 'POST' }, t('Updating BPanel...'));
     if (!data) {
       setPanelUpdating(false);
       return;
@@ -4060,7 +4102,7 @@ Each account is overwritten with what is in its archive.`)) return;
         }
         setPanelUpdating(false);
         if (st.last_update_status === 'completed' && Number(st.progress_percent) === 100) {
-          setNotice('Panel update completed. Reloading to apply the new version...');
+          setNotice(t('Panel update completed. Reloading to apply the new version...'));
           setTimeout(() => { window.location.reload(); }, 2000);
         } else if (st.last_update_status === 'failed') {
           setNotice((st.progress_message || st.last_update_message || 'Panel update failed.').trim());
@@ -4304,7 +4346,7 @@ Each account is overwritten with what is in its archive.`)) return;
     const errorMessage = formatApiError(error, '').trim();
     const noticeMessage = formatApiError(notice, '').trim();
     if (!errorMessage && !noticeMessage) return null;
-    return <div className="app-toast-stack" aria-label="Notifications">
+    return <div className="app-toast-stack" aria-label={t('Notifications')}>
       <NotificationToast type="error" message={errorMessage} onClose={() => setError('')} />
       <NotificationToast type="success" message={noticeMessage} onClose={() => setNotice('')} />
     </div>;
@@ -4351,7 +4393,7 @@ Each account is overwritten with what is in its archive.`)) return;
     >
       <option value="">-- Select website or application --</option>
       {websites.map(site => <option key={`site-${site.id}`} value={site.id}>{site.domain}</option>)}
-      {siteApps.items.map(app => <option key={`app-${app.id}`} value={`app:${app.id}`}>App: {app.name}</option>)}
+      {siteApps.items.map(app => <option key={`app-${app.id}`} value={`app:${app.id}`}>{t('App:')} {app.name}</option>)}
     </select>;
   }
 
@@ -4411,7 +4453,11 @@ Each account is overwritten with what is in its archive.`)) return;
   }
 
   function EmptyState({ icon: Icon = AlertCircle, message = 'No data yet' }) {
-    return <div className="empty-state"><Icon size={40} /><p>{message}</p></div>;
+    /* Translated here rather than at each call site. Several callers pass a
+     * ternary - message={searching ? 'No matches.' : 'None yet.'} - and a
+     * wrapper looking for message="..." cannot see inside one. Doing it here
+     * covers every caller, including the ones written tomorrow. */
+    return <div className="empty-state"><Icon size={40} /><p>{t(message)}</p></div>;
   }
 
   function formatBytes(value) {
@@ -4548,8 +4594,8 @@ Each account is overwritten with what is in its archive.`)) return;
       {isAdmin && <section className="resource-grid">
         <ResourceCard icon={Cpu} label="CPU" value={formatPercent(cpu.percent)} percent={cpu.percent} detail={[cpu.cores ? `${cpu.cores} cores` : null, cpu.load?.length ? `load ${cpu.load.join(' / ')}` : null].filter(Boolean).join(' · ') || '--'} />
         <ResourceCard icon={MemoryStick} label="RAM" value={formatPercent(memory.percent)} percent={memory.percent} detail={`${formatBytes(memory.used)} / ${formatBytes(memory.total)}`} />
-        <ResourceCard icon={HardDrive} label="Disk" value={formatPercent(disk.percent)} percent={disk.percent} detail={`${formatBytes(disk.used)} / ${formatBytes(disk.total)}`} />
-        <ResourceCard icon={Network} label="Network" value={`${formatBytes(networkTotal)}/s`} detail={`Down ${formatBytes(network.rx_per_sec)}/s / Up ${formatBytes(network.tx_per_sec)}/s`} />
+        <ResourceCard icon={HardDrive} label={t('Disk')} value={formatPercent(disk.percent)} percent={disk.percent} detail={`${formatBytes(disk.used)} / ${formatBytes(disk.total)}`} />
+        <ResourceCard icon={Network} label={t('Network')} value={`${formatBytes(networkTotal)}/s`} detail={`Down ${formatBytes(network.rx_per_sec)}/s / Up ${formatBytes(network.tx_per_sec)}/s`} />
       </section>}
 
       {/* An end user never sees the server's CPU or RAM, so without this they
@@ -4558,7 +4604,7 @@ Each account is overwritten with what is in its archive.`)) return;
       {currentUser && !isAdmin && <section className="resource-grid" style={{gridTemplateColumns:'minmax(0,1fr)'}}>
         <ResourceCard
           icon={HardDrive}
-          label="Storage"
+          label={t('Storage')}
           value={formatBytes(currentUser.storage_used_bytes)}
           percent={currentUser.storage_percent}
           detail={`of ${formatBytes(storageLimitBytes(currentUser))} in your package`}
@@ -4573,11 +4619,11 @@ Each account is overwritten with what is in its archive.`)) return;
           </div>
           <div className="dash-tiles">
             {group.tiles.map(([key, label, Icon, description]) => (
-              <button className="dash-tile" key={key} onClick={() => navigateToPage(key)} title={description}>
+              <button className="dash-tile" key={key} onClick={() => navigateToPage(key)} title={t(description)}>
                 <span className="dash-tile-icon"><Icon size={34}/></span>
                 <span className="dash-tile-text">
-                  <strong>{label}</strong>
-                  <span>{description}</span>
+                  <strong>{t(label)}</strong>
+                  <span>{t(description)}</span>
                 </span>
               </button>
             ))}
@@ -4592,17 +4638,17 @@ Each account is overwritten with what is in its archive.`)) return;
     // They stay reachable by URL, so they say so plainly instead of rendering
     // and firing a page full of requests the server will refuse.
     return <section className="section">
-      <div className="section-title"><div><h2>Administrators only</h2></div></div>
+      <div className="section-title"><div><h2>{t('Administrators only')}</h2></div></div>
       <EmptyState
         icon={Server}
-        message="This page reports on the server itself, so only administrators can see it."
+        message={t('This page reports on the server itself, so only administrators can see it.')}
       />
     </section>;
   }
 
   function renderAddonMissing() {
     return <section className="section">
-      <div className="section-title"><div><h2>Applications</h2></div></div>
+      <div className="section-title"><div><h2>{t('Applications')}</h2></div></div>
       <EmptyState
         icon={Boxes}
         message={applicationAddonInstalled
@@ -4610,7 +4656,7 @@ Each account is overwritten with what is in its archive.`)) return;
           : 'The Applications addon is not installed on this server.'}
       />
       {isAdmin && !applicationAddonInstalled && <div className="site-app-form-actions">
-        <button disabled={!!loading} onClick={() => navigateToPage('addons')}><Boxes size={14}/> Go to Addons</button>
+        <button disabled={!!loading} onClick={() => navigateToPage('addons')}><Boxes size={14}/>{t('Go to Addons')}</button>
       </div>}
     </section>;
   }
@@ -4619,41 +4665,40 @@ Each account is overwritten with what is in its archive.`)) return;
     return <section className="section">
       <div className="section-title">
         <div>
-          <h2>Addons</h2>
+          <h2>{t('Addons')}</h2>
           <p className="hint">
-            The parts that are not in a default install. Add what you need, remove what you do not —
-            removing turns the feature off and deletes nothing it created.
+            {t('The parts that are not in a default install. Add what you need, remove what you do not — removing turns the feature off and deletes nothing it created.')}
           </p>
         </div>
-        <button className="secondary-light" disabled={!!loading} onClick={loadAddons}><RefreshCw size={14}/> Refresh</button>
+        <button className="secondary-light" disabled={!!loading} onClick={loadAddons}><RefreshCw size={14}/>{t('Refresh')}</button>
       </div>
       <div className="addon-list">
         {addons.items.map(addon => <div className={`addon-card ${addon.installed ? 'installed' : ''}`} key={addon.slug}>
           <div className="addon-head">
-            <strong>{addon.name}</strong>
+            <strong>{t(addon.name)}</strong>
             <code>v{addon.installed ? (addon.installed_version || addon.version) : addon.version}</code>
             <span className={`badge ${addon.installed ? 'ok' : ''}`}>{addon.installed ? 'Installed' : 'Not installed'}</span>
             {addon.installed && addon.installed_version && addon.installed_version !== addon.version
               && <span className="badge">v{addon.version} available</span>}
           </div>
-          <p className="addon-summary">{addon.summary}</p>
+          <p className="addon-summary">{t(addon.summary)}</p>
           {addon.details?.length > 0 && <ul className="addon-details">
-            {addon.details.map((line, index) => <li key={index}>{line}</li>)}
+            {addon.details.map((line, index) => <li key={index}>{t(line)}</li>)}
           </ul>}
           {addon.notes?.length > 0 && <div className="addon-notes">
-            <strong><AlertCircle size={13}/> Worth knowing first</strong>
-            <ul>{addon.notes.map((line, index) => <li key={index}>{line}</li>)}</ul>
+            <strong><AlertCircle size={13}/>{t('Worth knowing first')}</strong>
+            <ul>{addon.notes.map((line, index) => <li key={index}>{t(line)}</li>)}</ul>
           </div>}
           {addons.can_manage && <div className="addon-actions">
             {addon.installed
               ? <>
                   {addon.slug === 'application' && <button className="secondary-light" disabled={!!loading} onClick={() => navigateToPage('applications')}>Open {addon.name}</button>}
-                  <button className="danger" disabled={!!loading} onClick={() => setAddonInstalled(addon.slug, false)}><Trash2 size={14}/> Remove</button>
+                  <button className="danger" disabled={!!loading} onClick={() => setAddonInstalled(addon.slug, false)}><Trash2 size={14}/>{t('Remove')}</button>
                 </>
-              : <button disabled={!!loading} onClick={() => setAddonInstalled(addon.slug, true)}><Download size={14}/> Install</button>}
+              : <button disabled={!!loading} onClick={() => setAddonInstalled(addon.slug, true)}><Download size={14}/>{t('Install')}</button>}
           </div>}
         </div>)}
-        {addons.loaded && addons.items.length === 0 && <EmptyState icon={Boxes} message="No addons yet." />}
+        {addons.loaded && addons.items.length === 0 && <EmptyState icon={Boxes} message={t('No addons yet.')} />}
       </div>
     </section>;
   }
@@ -4667,38 +4712,37 @@ Each account is overwritten with what is in its archive.`)) return;
       <section className="section">
         <div className="section-title">
           <div>
-            <h2>Applications</h2>
+            <h2>{t('Applications')}</h2>
             <p className="hint">
-              Each application runs on its own port under its own systemd unit. Point a website at one by setting its
-              mode to <strong>Application</strong>.
-              {siteApps.limit > 0 && <> Using {siteApps.used} of {siteApps.limit} allowed.</>}
+              {t('Each application runs on its own port under its own systemd unit. Point a website at one by setting its mode to')} <strong>{t('Application')}</strong>.
+              {siteApps.limit > 0 && <> {t('Using {used} of {limit} allowed.', { used: siteApps.used, limit: siteApps.limit })}</>}
             </p>
           </div>
-          <button disabled={!!loading} onClick={() => { loadSiteApps(); loadSiteRuntimes(); }}><RefreshCw size={14}/> Refresh</button>
+          <button disabled={!!loading} onClick={() => { loadSiteApps(); loadSiteRuntimes(); }}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
         <div className="site-runtime-strip">
-          <span>Docker: <strong>{dockerReady ? (siteRuntimes.docker.version || 'installed') : 'not installed'}</strong></span>
-          <span>Node: <strong>{siteRuntimes.node_majors?.length ? siteRuntimes.node_majors.map(major => `v${major}`).join(', ') : 'system version only'}</strong></span>
-          {isAdmin && !dockerReady && <button className="mini secondary-light" disabled={!!loading} onClick={installDockerEngine}>Install Docker</button>}
-          {isAdmin && <button className="mini secondary-light" disabled={!!loading} onClick={() => { const major = prompt('Install which Node major version?', '22'); if (major) installNodeMajor(major.trim()); }}>Add Node version</button>}
+          <span>{t('Docker:')}<strong>{dockerReady ? (siteRuntimes.docker.version || 'installed') : 'not installed'}</strong></span>
+          <span>{t('Node:')}<strong>{siteRuntimes.node_majors?.length ? siteRuntimes.node_majors.map(major => `v${major}`).join(', ') : 'system version only'}</strong></span>
+          {isAdmin && !dockerReady && <button className="mini secondary-light" disabled={!!loading} onClick={installDockerEngine}>{t('Install Docker')}</button>}
+          {isAdmin && <button className="mini secondary-light" disabled={!!loading} onClick={() => { const major = prompt('Install which Node major version?', '22'); if (major) installNodeMajor(major.trim()); }}>{t('Add Node version')}</button>}
         </div>
         {isAdmin && dockerReady && siteRuntimes.docker?.disk?.length > 0 && <div className="site-runtime-strip">
-          <span>Docker disk (whole server, not counted against customer quotas):</span>
+          <span>{t('Docker disk (whole server, not counted against customer quotas):')}</span>
           {siteRuntimes.docker.disk.map(row => <span key={row.type}>
             {row.type}: <strong>{row.size}</strong>{row.reclaimable && !row.reclaimable.startsWith('0B') ? <> · {row.reclaimable} reclaimable</> : null}
           </span>)}
-          <button className="mini secondary-light" disabled={!!loading} onClick={pruneDocker}>Prune unused layers</button>
+          <button className="mini secondary-light" disabled={!!loading} onClick={pruneDocker}>{t('Prune unused layers')}</button>
         </div>}
         {!atLimit && <div className="site-app-form">
-          <label><span>Name</span>
+          <label><span>{t('Name')}</span>
             <input value={siteAppDraft.name} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, name: e.target.value }))} />
           </label>
-          <label><span>Runtime</span>
+          <label><span>{t('Runtime')}</span>
             <select value={siteAppDraft.kind} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, kind: e.target.value }))}>
               {SITE_APP_KINDS.map(([value, label]) => <option key={value} value={value} disabled={value === 'docker' && !dockerReady}>{label}</option>)}
             </select>
           </label>
-          <label><span>Port</span>
+          <label><span>{t('Port')}</span>
             <input
               type="number"
               value={siteAppDraft.port}
@@ -4709,7 +4753,7 @@ Each account is overwritten with what is in its archive.`)) return;
               onChange={e => setSiteAppDraft(prev => ({ ...prev, port: e.target.value }))}
             />
           </label>
-          <label><span>Memory (MB)</span>
+          <label><span>{t('Memory (MB)')}</span>
             <input
               type="number"
               value={siteAppDraft.memory_limit_mb}
@@ -4721,7 +4765,7 @@ Each account is overwritten with what is in its archive.`)) return;
             />
           </label>
           {siteAppDraft.kind === 'node' && <>
-            <label><span>Start with</span>
+            <label><span>{t('Start with')}</span>
               <select value={siteAppDraft.start_kind} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, start_kind: e.target.value }))}>
                 <option value="npm">npm run</option>
                 <option value="npx">npx</option>
@@ -4732,7 +4776,7 @@ Each account is overwritten with what is in its archive.`)) return;
             <label><span>{siteAppDraft.start_kind === 'node' ? 'Entry file' : 'Script or package'}</span>
               <input value={siteAppDraft.start_arg} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, start_arg: e.target.value }))} placeholder={siteAppDraft.start_kind === 'node' ? 'server.js' : 'start'} />
             </label>
-            <label><span>Node version</span>
+            <label><span>{t('Node version')}</span>
               <select value={siteAppDraft.node_major} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, node_major: e.target.value }))}>
                 {(siteRuntimes.node_majors?.length ? siteRuntimes.node_majors : ['22']).map(major => <option key={major} value={major}>Node {major}</option>)}
               </select>
@@ -4749,30 +4793,30 @@ Each account is overwritten with what is in its archive.`)) return;
                 placeholder={'services:\n  app:\n    image: myorg/app:1.0\n    ports: ["3000:3000"]\n  db:\n    image: postgres:16\n    volumes: ["pgdata:/var/lib/postgresql/data"]\nvolumes:\n  pgdata:'}
               />
             </label>
-            {composePlan?.services?.length > 0 && <label><span>Service behind the domain</span>
+            {composePlan?.services?.length > 0 && <label><span>{t('Service behind the domain')}</span>
               <select value={siteAppDraft.web_service} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, web_service: e.target.value }))}>
-                <option value="">Choose for me</option>
+                <option value="">{t('Choose for me')}</option>
                 {composePlan.services.map(service => <option key={service.name} value={service.name}>{service.name}{service.container_port ? ` · :${service.container_port}` : ''}</option>)}
               </select>
             </label>}
-            {composeWebPorts(composePlan, siteAppDraft.web_service).length > 1 && <label><span>Port behind the domain</span>
+            {composeWebPorts(composePlan, siteAppDraft.web_service).length > 1 && <label><span>{t('Port behind the domain')}</span>
               <select value={siteAppDraft.container_port} disabled={!!loading} onChange={e => { setSiteAppDraft(prev => ({ ...prev, container_port: e.target.value })); setComposePlan(null); }}>
                 {composeWebPorts(composePlan, siteAppDraft.web_service).map(port => <option key={port} value={port}>{port}</option>)}
               </select>
             </label>}
-            <label><span>CPU per service</span>
+            <label><span>{t('CPU per service')}</span>
               <input value={siteAppDraft.cpu_limit} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, cpu_limit: e.target.value }))} placeholder="1" />
             </label>
-            <p className="compose-hint">Where the file refers to <code>{'${VAR}'}</code>, set the value in the <strong>.env</strong> box below,
+            <p className="compose-hint">{t('Where the file refers to')}<code>{'${VAR}'}</code>, set the value in the <strong>.env</strong> box below,
               exactly as an <code>.env</code> file beside <code>docker-compose.yml</code> would. For a public address
               (an OAuth callback, a webhook) use <code>{'${BPANEL_URL}'}</code> / <code>{'${BPANEL_DOMAIN}'}</code>:
               the app only ever sees its internal port, and the panel fills in the domain of the website pointing at it.</p>
           </>}
           {siteAppDraft.kind === 'docker' && <>
-            <label><span>Image</span>
+            <label><span>{t('Image')}</span>
               <input value={siteAppDraft.image} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, image: e.target.value }))} placeholder="n8nio/n8n:latest" />
             </label>
-            <label><span>Port in container</span>
+            <label><span>{t('Port in container')}</span>
               <input type="number" value={siteAppDraft.container_port} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, container_port: e.target.value }))} placeholder="3000" />
             </label>
             <label><span>CPU</span>
@@ -4790,14 +4834,14 @@ Each account is overwritten with what is in its archive.`)) return;
             />
           </label>
           <div className="site-app-form-actions">
-            {siteAppDraft.kind === 'compose' && <button className="secondary-light" disabled={!!loading || !siteAppDraft.compose_source.trim()} onClick={checkComposeFile}>Check file</button>}
-            <button className="secondary-light" disabled={!!loading} onClick={suggestSiteAppPort}>Pick free port</button>
-            <button disabled={!!loading || !siteAppDraft.name.trim()} onClick={createSiteApp}><Plus size={14}/> Install application</button>
+            {siteAppDraft.kind === 'compose' && <button className="secondary-light" disabled={!!loading || !siteAppDraft.compose_source.trim()} onClick={checkComposeFile}>{t('Check file')}</button>}
+            <button className="secondary-light" disabled={!!loading} onClick={suggestSiteAppPort}>{t('Pick free port')}</button>
+            <button disabled={!!loading || !siteAppDraft.name.trim()} onClick={createSiteApp}><Plus size={14}/>{t('Install application')}</button>
           </div>
           {composePlan && <div className={`compose-report ${composePlan.ok ? 'ok' : 'bad'}`}>
             {composePlan.ok
-              ? <p><Check size={14}/> {composePlan.services.length} service(s) will run. <strong>{composePlan.web_service}</strong> serves the domain.</p>
-              : <p><AlertCircle size={14}/> {composePlan.issues.length} thing(s) to fix before importing:</p>}
+              ? <p><Check size={14}/> {t('{n} service(s) will run.', { n: composePlan.services.length })} <strong>{composePlan.web_service}</strong> {t('serves the domain.')}</p>
+              : <p><AlertCircle size={14}/> {t('{n} thing(s) to fix before importing:', { n: composePlan.issues.length })}</p>}
             {composePlan.issues.length > 0 && <ul>
               {composePlan.issues.map((issue, index) => <li key={index}>
                 {issue.service && <code>{issue.service}</code>} {issue.message}
@@ -4815,15 +4859,15 @@ Each account is overwritten with what is in its archive.`)) return;
             </ul>}
           </div>}
         </div>}
-        {atLimit && <p className="hint">This package allows {siteApps.limit} application(s). Delete one to install another.</p>}
-        {kindHint && <p className="hint site-apps-note">{kindHint} Containers publish on <code>127.0.0.1</code> only, run as your own user with no capabilities, and are capped at the memory shown. Images come from {(siteRuntimes.allowed_registries || []).join(', ') || 'the allowed registries'}.</p>}
+        {atLimit && <p className="hint">{t('This package allows {n} application(s). Delete one to install another.', { n: siteApps.limit })}</p>}
+        {kindHint && <p className="hint site-apps-note">{kindHint} {t('Containers publish on 127.0.0.1 only, run as your own user with no capabilities, and are capped at the memory shown.')} {t('Images come from {list}.', { list: (siteRuntimes.allowed_registries || []).join(', ') || t('the allowed registries') })}</p>}
       </section>
 
       <section className="section">
         <div className="section-title">
-          <div><h2>Installed</h2><p className="hint">{siteApps.items.length} application(s)</p></div>
+          <div><h2>{t('Installed')}</h2><p className="hint">{t('{n} application(s)', { n: siteApps.items.length })}</p></div>
         </div>
-        {siteApps.items.length === 0 && <EmptyState icon={Server} message="No applications yet. Install one above." />}
+        {siteApps.items.length === 0 && <EmptyState icon={Server} message={t('No applications yet. Install one above.')} />}
         <div className="site-app-list">
           {siteApps.items.map(app => <div className="site-app-item" key={app.id}>
             <div className="site-app-head">
@@ -4837,18 +4881,18 @@ Each account is overwritten with what is in its archive.`)) return;
             </div>
             {app.last_error && <p className="site-app-error">{app.last_error}</p>}
             <dl className="site-app-meta">
-              <div><dt>Upload code to</dt><dd><code>{app.directory}</code></dd></div>
-              {app.kind === 'node' && <div><dt>Start</dt><dd><code>{app.start_kind} {app.start_arg}</code></dd></div>}
+              <div><dt>{t('Upload code to')}</dt><dd><code>{app.directory}</code></dd></div>
+              {app.kind === 'node' && <div><dt>{t('Start')}</dt><dd><code>{app.start_kind} {app.start_arg}</code></dd></div>}
               {app.kind === 'node' && <div><dt>Node</dt><dd>v{app.node_major || '22'}</dd></div>}
-              {app.kind === 'compose' && <div><dt>Serves domain</dt><dd><code>{app.web_service}</code></dd></div>}
-              {app.kind === 'docker' && <div><dt>Image</dt><dd><code>{app.image}</code></dd></div>}
-              {app.kind === 'docker' && <div><dt>In container</dt><dd>port {app.container_port} · {app.cpu_limit} CPU</dd></div>}
-              <div><dt>Unit</dt><dd><code>{app.unit}</code></dd></div>
+              {app.kind === 'compose' && <div><dt>{t('Serves domain')}</dt><dd><code>{app.web_service}</code></dd></div>}
+              {app.kind === 'docker' && <div><dt>{t('Image')}</dt><dd><code>{app.image}</code></dd></div>}
+              {app.kind === 'docker' && <div><dt>{t('In container')}</dt><dd>port {app.container_port} · {app.cpu_limit} CPU</dd></div>}
+              <div><dt>{t('Unit')}</dt><dd><code>{app.unit}</code></dd></div>
             </dl>
             <div className="site-app-actions">
               <div className="site-app-fields">
                 <label className="site-app-port">
-                  <span>Port</span>
+                  <span>{t('Port')}</span>
                   <input
                     type="number"
                     defaultValue={app.port}
@@ -4857,12 +4901,12 @@ Each account is overwritten with what is in its archive.`)) return;
                     disabled={!!loading}
                     onBlur={e => {
                       const next = Number(e.target.value);
-                      if (next && next !== app.port) updateSiteApp(app, { port: next }, 'Moving application port...');
+                      if (next && next !== app.port) updateSiteApp(app, { port: next }, t('Moving application port...'));
                     }}
                   />
                 </label>
                 <label className="site-app-port">
-                  <span>Memory (MB)</span>
+                  <span>{t('Memory (MB)')}</span>
                   <input
                     type="number"
                     defaultValue={app.memory_limit_mb}
@@ -4871,7 +4915,7 @@ Each account is overwritten with what is in its archive.`)) return;
                     disabled={!!loading}
                     onBlur={e => {
                       const next = Number(e.target.value);
-                      if (next && next !== app.memory_limit_mb) updateSiteApp(app, { memory_limit_mb: next }, 'Applying the new memory limit...');
+                      if (next && next !== app.memory_limit_mb) updateSiteApp(app, { memory_limit_mb: next }, t('Applying the new memory limit...'));
                     }}
                   />
                 </label>
@@ -4882,19 +4926,19 @@ Each account is overwritten with what is in its archive.`)) return;
                     disabled={!!loading}
                     onBlur={e => {
                       const next = e.target.value.trim();
-                      if (next && next !== app.cpu_limit) updateSiteApp(app, { cpu_limit: next }, 'Applying the new CPU limit...');
+                      if (next && next !== app.cpu_limit) updateSiteApp(app, { cpu_limit: next }, t('Applying the new CPU limit...'));
                     }}
                   />
                 </label>}
               </div>
               <div className="site-app-buttons">
                 <button className="mini secondary-light" disabled={!!loading} onClick={() => openSiteAppEdit(app)}><Pencil size={13}/> {app.kind === 'compose' ? 'Compose' : 'Environment'}</button>
-                <button className="mini secondary-light" disabled={!!loading} onClick={() => openAppFileManager(app)}><FolderOpen size={13}/> Files</button>
-                <button className="mini" disabled={!!loading} onClick={() => deploySiteApp(app)}><Play size={13}/> Deploy</button>
-                <button className="mini secondary-light" disabled={!!loading} onClick={() => controlSiteApp(app, 'restart')}><RotateCcw size={13}/> Restart</button>
-                <button className="mini secondary-light" disabled={!!loading} onClick={() => controlSiteApp(app, 'stop')}><Square size={13}/> Stop</button>
-                <button className="mini secondary-light" disabled={!!loading} onClick={() => openSiteAppLog(app)}><FileText size={13}/> Log</button>
-                <button className="mini danger" disabled={!!loading} onClick={() => deleteSiteApp(app)}><Trash2 size={13}/> Delete</button>
+                <button className="mini secondary-light" disabled={!!loading} onClick={() => openAppFileManager(app)}><FolderOpen size={13}/>{t('Files')}</button>
+                <button className="mini" disabled={!!loading} onClick={() => deploySiteApp(app)}><Play size={13}/>{t('Deploy')}</button>
+                <button className="mini secondary-light" disabled={!!loading} onClick={() => controlSiteApp(app, 'restart')}><RotateCcw size={13}/>{t('Restart')}</button>
+                <button className="mini secondary-light" disabled={!!loading} onClick={() => controlSiteApp(app, 'stop')}><Square size={13}/>{t('Stop')}</button>
+                <button className="mini secondary-light" disabled={!!loading} onClick={() => openSiteAppLog(app)}><FileText size={13}/>{t('Log')}</button>
+                <button className="mini danger" disabled={!!loading} onClick={() => deleteSiteApp(app)}><Trash2 size={13}/>{t('Delete')}</button>
               </div>
             </div>
             {siteAppEdit?.id === app.id && <div className="site-app-editor">
@@ -4908,7 +4952,7 @@ Each account is overwritten with what is in its archive.`)) return;
                     onChange={e => { setSiteAppEdit(prev => ({ ...prev, compose_source: e.target.value })); setSiteAppEditPlan(null); }}
                   />
                 </label>
-                <p className="compose-hint">The panel reads this file and generates the one it actually runs. <code>{'${VAR}'}</code> comes
+                <p className="compose-hint">{t('The panel reads this file and generates the one it actually runs.')}<code>{'${VAR}'}</code> comes
                   from the .env box; for a public address use <code>{'${BPANEL_URL}'}</code> / <code>{'${BPANEL_DOMAIN}'}</code>
                   {app.websites?.length > 0 ? ` (currently ${app.websites[0]})` : ' (point a website at this app first)'}.</p>
                 <label className="site-app-env"><span>.env (KEY=value, one per line)</span>
@@ -4920,18 +4964,18 @@ Each account is overwritten with what is in its archive.`)) return;
                     onChange={e => { setSiteAppEdit(prev => ({ ...prev, env: e.target.value })); setSiteAppEditPlan(null); }}
                   />
                 </label>
-                {siteAppEditPlan?.services?.length > 0 && <label><span>Service behind the domain</span>
+                {siteAppEditPlan?.services?.length > 0 && <label><span>{t('Service behind the domain')}</span>
                   <select value={siteAppEdit.web_service} disabled={!!loading} onChange={e => setSiteAppEdit(prev => ({ ...prev, web_service: e.target.value }))}>
-                    <option value="">Choose for me</option>
+                    <option value="">{t('Choose for me')}</option>
                     {siteAppEditPlan.services.map(service => <option key={service.name} value={service.name}>{service.name}{service.container_port ? ` · :${service.container_port}` : ''}</option>)}
                   </select>
                 </label>}
-                {composeWebPorts(siteAppEditPlan, siteAppEdit.web_service).length > 1 && <label><span>Port behind the domain</span>
+                {composeWebPorts(siteAppEditPlan, siteAppEdit.web_service).length > 1 && <label><span>{t('Port behind the domain')}</span>
                   <select value={siteAppEdit.container_port} disabled={!!loading} onChange={e => { setSiteAppEdit(prev => ({ ...prev, container_port: e.target.value })); setSiteAppEditPlan(null); }}>
                     {composeWebPorts(siteAppEditPlan, siteAppEdit.web_service).map(port => <option key={port} value={port}>{port}</option>)}
                   </select>
                 </label>}
-              </> : <label className="site-app-env"><span>Environment (KEY=value, one per line)</span>
+              </> : <label className="site-app-env"><span>{t('Environment (KEY=value, one per line)')}</span>
                 <textarea
                   className="code-editor"
                   rows={8}
@@ -4941,14 +4985,14 @@ Each account is overwritten with what is in its archive.`)) return;
                 />
               </label>}
               <div className="site-app-form-actions">
-                {app.kind === 'compose' && <button className="secondary-light" disabled={!!loading || !siteAppEdit.compose_source.trim()} onClick={checkSiteAppEdit}>Check file</button>}
-                <button disabled={!!loading} onClick={() => saveSiteAppEdit(app)}><Save size={14}/> Save</button>
-                <button className="secondary-light" disabled={!!loading} onClick={() => { setSiteAppEdit(null); setSiteAppEditPlan(null); }}><X size={14}/> Cancel</button>
+                {app.kind === 'compose' && <button className="secondary-light" disabled={!!loading || !siteAppEdit.compose_source.trim()} onClick={checkSiteAppEdit}>{t('Check file')}</button>}
+                <button disabled={!!loading} onClick={() => saveSiteAppEdit(app)}><Save size={14}/>{t('Save')}</button>
+                <button className="secondary-light" disabled={!!loading} onClick={() => { setSiteAppEdit(null); setSiteAppEditPlan(null); }}><X size={14}/>{t('Cancel')}</button>
               </div>
               {siteAppEditPlan && <div className={`compose-report ${siteAppEditPlan.ok ? 'ok' : 'bad'}`}>
                 {siteAppEditPlan.ok
-                  ? <p><Check size={14}/> {siteAppEditPlan.services.length} service(s) will run. <strong>{siteAppEditPlan.web_service}</strong> serves the domain.</p>
-                  : <p><AlertCircle size={14}/> {siteAppEditPlan.issues.length} thing(s) to fix:</p>}
+                  ? <p><Check size={14}/> {t('{n} service(s) will run.', { n: siteAppEditPlan.services.length })} <strong>{siteAppEditPlan.web_service}</strong> {t('serves the domain.')}</p>
+                  : <p><AlertCircle size={14}/> {t('{n} thing(s) to fix:', { n: siteAppEditPlan.issues.length })}</p>}
                 {siteAppEditPlan.issues.length > 0 && <ul>
                   {siteAppEditPlan.issues.map((issue, index) => <li key={index}>
                     {issue.service && <code>{issue.service}</code>} {issue.message}
@@ -4964,7 +5008,7 @@ Each account is overwritten with what is in its archive.`)) return;
         {siteAppLog && <div className="site-app-log">
           <div className="site-app-log-head">
             <h4>{siteAppLog.name} log</h4>
-            <button className="mini secondary-light" onClick={() => setSiteAppLog(null)}><X size={13}/> Close</button>
+            <button className="mini secondary-light" onClick={() => setSiteAppLog(null)}><X size={13}/>{t('Close')}</button>
           </div>
           <pre>{siteAppLog.log}</pre>
         </div>}
@@ -4990,13 +5034,13 @@ Each account is overwritten with what is in its archive.`)) return;
             : 'Managed settings rewrite the main vhost safely. Custom Nginx is still stored as a separate include.'}</p>
         </div>
         <div className="actions">
-          {!fullConfig && isAdmin && <button className="secondary-light" disabled={!!loading} onClick={viewFullNginxConfig}><FileText size={14}/> View all</button>}
-          {fullConfig && <button className="secondary-light" disabled={!!loading} onClick={() => setNginxCustomEditing(prev => ({ ...prev, mode: 'custom', content: prev?.customContent ?? prev?.content ?? '' }))}><SettingsIcon size={14}/> Settings</button>}
-          <button className="secondary-light" onClick={() => setNginxCustomEditing(null)}><X size={14}/> Close</button>
+          {!fullConfig && isAdmin && <button className="secondary-light" disabled={!!loading} onClick={viewFullNginxConfig}><FileText size={14}/>{t('View all')}</button>}
+          {fullConfig && <button className="secondary-light" disabled={!!loading} onClick={() => setNginxCustomEditing(prev => ({ ...prev, mode: 'custom', content: prev?.customContent ?? prev?.content ?? '' }))}><SettingsIcon size={14}/>{t('Settings')}</button>}
+          <button className="secondary-light" onClick={() => setNginxCustomEditing(null)}><X size={14}/>{t('Close')}</button>
         </div>
       </div>
       {!fullConfig && <div className="website-settings-grid">
-        <label><span>Website mode</span><select
+        <label><span>{t('Website mode')}</span><select
           value={websiteSettingsForm.app_type}
           onChange={e => setWebsiteSettingsForm(prev => ({
             ...prev,
@@ -5011,22 +5055,22 @@ Each account is overwritten with what is in its archive.`)) return;
             disabled={value === 'application' && !appsFeatureEnabled}
           >{label}</option>)}
         </select></label>
-        {proxied && <label><span>Application</span><select
+        {proxied && <label><span>{t('Application')}</span><select
           value={websiteSettingsForm.app_id || ''}
           onChange={e => setWebsiteSettingsForm(prev => ({ ...prev, app_id: e.target.value }))}
           disabled={!!loading}
         >
-          <option value="">Select an application</option>
+          <option value="">{t('Select an application')}</option>
           {siteApps.items.map(app => <option key={app.id} value={app.id}>{app.name} · {SITE_APP_KIND_LABELS[app.kind] || app.kind} · :{app.port}</option>)}
         </select></label>}
-        {selectedAppType !== 'static' && !proxied && <label><span>PHP version</span><select
+        {selectedAppType !== 'static' && !proxied && <label><span>{t('PHP version')}</span><select
           value={websiteSettingsForm.php_version}
           onChange={e => setWebsiteSettingsForm(prev => ({ ...prev, php_version: e.target.value }))}
           disabled={!!loading}
         >
           {phpVersions.installed.map(v => <option key={v} value={v}>PHP {v}</option>)}
         </select></label>}
-        <label><span>Nginx rewrite</span><select
+        <label><span>{t('Nginx rewrite')}</span><select
           value={rewriteDisabled ? (selectedAppType === 'wordpress' ? 'front_controller' : 'none') : websiteSettingsForm.nginx_rewrite_mode}
           onChange={e => setWebsiteSettingsForm(prev => ({ ...prev, nginx_rewrite_mode: e.target.value }))}
           disabled={!!loading || rewriteDisabled}
@@ -5034,18 +5078,18 @@ Each account is overwritten with what is in its archive.`)) return;
           {NGINX_REWRITE_MODES.map(mode => <option key={mode.value} value={mode.value}>{mode.label}</option>)}
         </select></label>
         <div className="website-settings-actions">
-          <button disabled={!!loading} onClick={saveWebsiteSettings}><Save size={14}/> Save settings</button>
+          <button disabled={!!loading} onClick={saveWebsiteSettings}><Save size={14}/>{t('Save settings')}</button>
         </div>
       </div>}
       {!fullConfig && <div className="site-aliases settings-domain-manager">
         <div className="domain-manager-head">
-          <h3>Domains</h3>
-          <p className="hint">Alias serves the same app. Redirect sends visitors to {nginxCustomEditing.domain}.</p>
+          <h3>{t('Domains')}</h3>
+          <p className="hint">{t('Alias serves the same app. Redirect sends visitors to {domain}.', { domain: nginxCustomEditing.domain })}</p>
         </div>
         <div className="alias-list">
-          <span className="alias-chip primary-domain"><Globe size={12}/>{nginxCustomEditing.domain}<span>Main</span></span>
+          <span className="alias-chip primary-domain"><Globe size={12}/>{nginxCustomEditing.domain}<span>{t('Main')}</span></span>
           {siteDomains.length === 0
-            ? <span className="alias-empty">No extra domains</span>
+            ? <span className="alias-empty">{t('No extra domains')}</span>
             : siteDomains.map(alias => <span className="alias-chip" key={alias.id}>
               <Globe size={12}/>{alias.domain}<span>{alias.mode === 'redirect' ? 'Redirect' : 'Alias'}</span>
               <button type="button" disabled={!!loading} title={`Remove ${alias.domain}`} aria-label={`Remove ${alias.domain}`} onClick={() => deleteWebsiteAlias(settingsSite, alias)}><X size={12}/></button>
@@ -5064,14 +5108,14 @@ Each account is overwritten with what is in its archive.`)) return;
             onChange={e => setAliasModes(prev => ({ ...prev, [nginxCustomEditing.id]: e.target.value }))}
             disabled={!!loading}
           >
-            <option value="alias">Alias</option>
-            <option value="redirect">Redirect</option>
+            <option value="alias">{t('Alias')}</option>
+            <option value="redirect">{t('Redirect')}</option>
           </select>
-          <button className="secondary-light" disabled={!!loading || !(aliasDrafts[nginxCustomEditing.id] || '').trim()} onClick={() => addWebsiteAlias(settingsSite)}><Plus size={14}/> Add domain</button>
+          <button className="secondary-light" disabled={!!loading || !(aliasDrafts[nginxCustomEditing.id] || '').trim()} onClick={() => addWebsiteAlias(settingsSite)}><Plus size={14}/>{t('Add domain')}</button>
         </div>
       </div>}
       <div className="custom-nginx-block">
-        {!fullConfig && <h3>Custom Nginx</h3>}
+        {!fullConfig && <h3>{t('Custom Nginx')}</h3>}
         <textarea
           className="code-editor"
           value={nginxCustomEditing.content}
@@ -5085,8 +5129,8 @@ Each account is overwritten with what is in its archive.`)) return;
         />
       </div>
       <div className="actions">
-        {!fullConfig && <button disabled={!!loading} onClick={saveNginxCustom}>Save and reload Nginx</button>}
-        {!fullConfig && <button className="secondary-light" disabled={!!loading} onClick={resetNginxDefault}><RotateCcw size={14}/> Reset custom</button>}
+        {!fullConfig && <button disabled={!!loading} onClick={saveNginxCustom}>{t('Save and reload Nginx')}</button>}
+        {!fullConfig && <button className="secondary-light" disabled={!!loading} onClick={resetNginxDefault}><RotateCcw size={14}/>{t('Reset custom')}</button>}
         <button className="secondary-light" disabled={!!loading} onClick={() => setNginxCustomEditing(null)}>{fullConfig ? 'Close' : 'Cancel'}</button>
       </div>
     </section>;
@@ -5097,35 +5141,35 @@ Each account is overwritten with what is in its archive.`)) return;
     return <section className="section nginx-modal inline-nginx-editor wordpress-install-modal">
       <div className="section-title">
         <div className="nginx-config-title">
-          <h2>Install WordPress - {wordpressInstaller.domain}</h2>
+          <h2>{t('Install WordPress -')} {wordpressInstaller.domain}</h2>
           <p className="hint">PHP {wordpressInstaller.php_version || '8.4'}</p>
         </div>
-        <button className="secondary-light" onClick={() => setWordpressInstaller(null)}><X size={14}/> Close</button>
+        <button className="secondary-light" onClick={() => setWordpressInstaller(null)}><X size={14}/>{t('Close')}</button>
       </div>
       <div className="website-settings-grid">
-        <label><span>Site title</span><input
+        <label><span>{t('Site title')}</span><input
           value={wordpressInstaller.title}
           onChange={e => setWordpressInstaller(prev => ({ ...prev, title: e.target.value }))}
           disabled={!!loading}
         /></label>
-        <label><span>Admin user</span><input
+        <label><span>{t('Admin user')}</span><input
           value={wordpressInstaller.admin_user}
           onChange={e => setWordpressInstaller(prev => ({ ...prev, admin_user: e.target.value }))}
           disabled={!!loading}
         /></label>
-        <label><span>Admin email</span><input
+        <label><span>{t('Admin email')}</span><input
           value={wordpressInstaller.admin_email}
           onChange={e => setWordpressInstaller(prev => ({ ...prev, admin_email: e.target.value }))}
           disabled={!!loading}
         /></label>
-        <label><span>Admin password</span><input
+        <label><span>{t('Admin password')}</span><input
           value={wordpressInstaller.admin_password}
           onChange={e => setWordpressInstaller(prev => ({ ...prev, admin_password: e.target.value }))}
           disabled={!!loading}
         /></label>
         <div className="website-settings-actions">
-          <button className="secondary-light" disabled={!!loading} onClick={() => setWordpressInstaller(prev => prev ? ({ ...prev, admin_password: generateRandomPassword(20) }) : prev)}><Dices size={14}/> Generate</button>
-          <button disabled={!!loading || !wordpressInstaller.admin_user || !wordpressInstaller.admin_email || !wordpressInstaller.admin_password} onClick={installWordPressOnSite}><WordPressIcon size={14}/> Install</button>
+          <button className="secondary-light" disabled={!!loading} onClick={() => setWordpressInstaller(prev => prev ? ({ ...prev, admin_password: generateRandomPassword(20) }) : prev)}><Dices size={14}/>{t('Generate')}</button>
+          <button disabled={!!loading || !wordpressInstaller.admin_user || !wordpressInstaller.admin_email || !wordpressInstaller.admin_password} onClick={installWordPressOnSite}><WordPressIcon size={14}/>{t('Install')}</button>
         </div>
       </div>
     </section>;
@@ -5136,8 +5180,8 @@ Each account is overwritten with what is in its archive.`)) return;
     if (!terminalViewer) return null;
     return <section className="section nginx-modal terminal-modal">
       <div className="section-title">
-        <h2>Terminal - {terminalViewer.domain}</h2>
-        <button className="secondary-light" onClick={() => setTerminalViewer(null)}><X size={14}/> Close</button>
+        <h2>{t('Terminal -')} {terminalViewer.domain}</h2>
+        <button className="secondary-light" onClick={() => setTerminalViewer(null)}><X size={14}/>{t('Close')}</button>
       </div>
       <div style={{ height: '500px', marginTop: '8px' }}>
         <Terminal websiteId={terminalViewer.id} apiBase={API} />
@@ -5150,15 +5194,15 @@ Each account is overwritten with what is in its archive.`)) return;
     return <section className="section nginx-modal log-viewer">
       <div className="section-title">
         <div className="nginx-config-title">
-          <h2>Nginx logs - {logViewer.domain}</h2>
+          <h2>{t('Nginx logs -')} {logViewer.domain}</h2>
           <p className="hint">{logViewer.path || `/var/log/nginx/${logViewer.domain}.${logViewer.kind}.log`}</p>
         </div>
-        <button className="secondary-light" onClick={() => setLogViewer(null)}><X size={14}/> Close</button>
+        <button className="secondary-light" onClick={() => setLogViewer(null)}><X size={14}/>{t('Close')}</button>
       </div>
       <div className="log-toolbar">
         <div className="segmented-control">
-          <button className={logViewer.kind === 'access' ? 'active' : ''} disabled={!!loading} onClick={() => loadWebsiteLog(logViewer.id, 'access', logViewer.lines, logViewer.domain)}>Access</button>
-          <button className={logViewer.kind === 'error' ? 'active' : ''} disabled={!!loading} onClick={() => loadWebsiteLog(logViewer.id, 'error', logViewer.lines, logViewer.domain)}>Error</button>
+          <button className={logViewer.kind === 'access' ? 'active' : ''} disabled={!!loading} onClick={() => loadWebsiteLog(logViewer.id, 'access', logViewer.lines, logViewer.domain)}>{t('Access')}</button>
+          <button className={logViewer.kind === 'error' ? 'active' : ''} disabled={!!loading} onClick={() => loadWebsiteLog(logViewer.id, 'error', logViewer.lines, logViewer.domain)}>{t('Error')}</button>
         </div>
         <select value={logViewer.lines} onChange={e => loadWebsiteLog(logViewer.id, logViewer.kind, Number(e.target.value), logViewer.domain)} disabled={!!loading}>
           <option value={100}>100 lines</option>
@@ -5167,7 +5211,7 @@ Each account is overwritten with what is in its archive.`)) return;
           <option value={1000}>1000 lines</option>
           <option value={2000}>2000 lines</option>
         </select>
-        <button disabled={!!loading} onClick={() => loadWebsiteLog(logViewer.id, logViewer.kind, logViewer.lines, logViewer.domain)}><RefreshCw size={14}/> Refresh</button>
+        <button disabled={!!loading} onClick={() => loadWebsiteLog(logViewer.id, logViewer.kind, logViewer.lines, logViewer.domain)}><RefreshCw size={14}/>{t('Refresh')}</button>
       </div>
       <pre className="log-output">{logViewer.exists ? (logViewer.content || 'Log is empty.') : 'Log file has not been created yet.'}</pre>
     </section>;
@@ -5196,43 +5240,40 @@ Each account is overwritten with what is in its archive.`)) return;
           </select>
           {siteType === 'application'
             ? <select value={createSiteAppId} onChange={e => setCreateSiteAppId(e.target.value)}>
-              <option value="">Select an application</option>
+              <option value="">{t('Select an application')}</option>
               {siteApps.items.map(app => <option key={app.id} value={app.id}>{app.name} · {SITE_APP_KIND_LABELS[app.kind] || app.kind} · :{app.port}</option>)}
             </select>
             : <select value={phpVersion} onChange={e => setPhpVersion(e.target.value)}>
               {phpVersions.installed.map(v => <option key={v} value={v}>PHP {v}</option>)}
             </select>}
           {wpFieldsEnabled && <input value={adminEmail} onChange={e => setAdminEmail(e.target.value)} placeholder="admin@domain.com" />}
-          {wpFieldsEnabled && <input value={wpAdminUser} onChange={e => setWpAdminUser(e.target.value)} placeholder="WP admin user" />}
-          {wpFieldsEnabled && <input value={wpAdminPassword} onChange={e => setWpAdminPassword(e.target.value)} placeholder="WP admin password" type="password" />}
-          <button disabled={!!loading || !domain} onClick={createWordPress}><Plus size={15}/> Create</button>
+          {wpFieldsEnabled && <input value={wpAdminUser} onChange={e => setWpAdminUser(e.target.value)} placeholder={t('WP admin user')} />}
+          {wpFieldsEnabled && <input value={wpAdminPassword} onChange={e => setWpAdminPassword(e.target.value)} placeholder={t('WP admin password')} type="password" />}
+          <button disabled={!!loading || !domain} onClick={createWordPress}><Plus size={15}/>{t('Create')}</button>
         </div>
-        {siteType === 'application' && siteApps.items.length === 0 && <p className="hint">
-          No applications installed yet. Install one on the <button type="button" className="link-button" onClick={() => navigateToPage('applications')}>Applications</button> page first.
+        {siteType === 'application' && siteApps.items.length === 0 && <p className="hint">{t('No applications installed yet. Install one on the')}<button type="button" className="link-button" onClick={() => navigateToPage('applications')}>{t('Applications')}</button> page first.
         </p>}
         {siteType === 'wordpress' && <label className="check-line">
-          <input type="checkbox" checked={installWordPress} onChange={e => setInstallWordPress(e.target.checked)} />
-          Install WordPress (creates database, downloads WP, configures vhost)
-        </label>}
+          <input type="checkbox" checked={installWordPress} onChange={e => setInstallWordPress(e.target.checked)} />{t('Install WordPress (creates database, downloads WP, configures vhost)')}</label>}
         <div className="create-ssl-row">
-          <span className="create-ssl-label">SSL after creating</span>
+          <span className="create-ssl-label">{t('SSL after creating')}</span>
           <div className="segmented ssl-mode-tabs">
-            <button type="button" className={createSslMode === 'none' ? 'active' : ''} onClick={() => setCreateSslMode('none')}>Off</button>
+            <button type="button" className={createSslMode === 'none' ? 'active' : ''} onClick={() => setCreateSslMode('none')}>{t('Off')}</button>
             <button type="button" className={createSslMode === 'letsencrypt' ? 'active' : ''} onClick={() => setCreateSslMode('letsencrypt')}><Lock size={13}/> Let's Encrypt</button>
-            <button type="button" className={createSslMode === 'wildcard' ? 'active' : ''} onClick={() => setCreateSslMode('wildcard')}><Globe size={13}/> Wildcard</button>
-            <button type="button" className={createSslMode === 'shared' ? 'active' : ''} onClick={() => setCreateSslMode('shared')}><Copy size={13}/> Existing cert</button>
-            <button type="button" className={createSslMode === 'manual' ? 'active' : ''} onClick={() => setCreateSslMode('manual')}><KeyRound size={13}/> Manual</button>
+            <button type="button" className={createSslMode === 'wildcard' ? 'active' : ''} onClick={() => setCreateSslMode('wildcard')}><Globe size={13}/>{t('Wildcard')}</button>
+            <button type="button" className={createSslMode === 'shared' ? 'active' : ''} onClick={() => setCreateSslMode('shared')}><Copy size={13}/>{t('Existing cert')}</button>
+            <button type="button" className={createSslMode === 'manual' ? 'active' : ''} onClick={() => setCreateSslMode('manual')}><KeyRound size={13}/>{t('Manual')}</button>
           </div>
         </div>
         {createSslMode !== 'none' && <div className="ssl-sub-form create-ssl-sub">
-          {createSslMode === 'letsencrypt' && <p className="hint">A certificate is issued right after the site is created — the domain must already point to this server.</p>}
+          {createSslMode === 'letsencrypt' && <p className="hint">{t('A certificate is issued right after the site is created — the domain must already point to this server.')}</p>}
           {createSslMode === 'wildcard' && <>
-            <p className="hint">Issues <code>zone + *.zone</code> over Cloudflare DNS. Leave the token blank to reuse one already saved for the zone.</p>
-            <input type="password" autoComplete="off" placeholder="Cloudflare API token (Zone → DNS → Edit)"
+            <p className="hint">{t('Issues')}<code>zone + *.zone</code> over Cloudflare DNS. Leave the token blank to reuse one already saved for the zone.</p>
+            <input type="password" autoComplete="off" placeholder={t('Cloudflare API token (Zone → DNS → Edit)')}
               value={createSslToken} onChange={e => setCreateSslToken(e.target.value)} />
           </>}
-          {createSslMode === 'shared' && <p className="hint">After the site is created the panel points it at an existing certificate that covers this domain (a wildcard first). If none does, the site is created without SSL.</p>}
-          {createSslMode === 'manual' && <p className="hint">The site is created, then the panel opens the SSL page so you can paste the certificate and key.</p>}
+          {createSslMode === 'shared' && <p className="hint">{t('After the site is created the panel points it at an existing certificate that covers this domain (a wildcard first). If none does, the site is created without SSL.')}</p>}
+          {createSslMode === 'manual' && <p className="hint">{t('The site is created, then the panel opens the SSL page so you can paste the certificate and key.')}</p>}
         </div>}
         <p className="hint">{wpFieldsEnabled
           ? 'WordPress will be installed and the panel will show the URL, admin account, and password after creation.'
@@ -5242,18 +5283,18 @@ Each account is overwritten with what is in its archive.`)) return;
       </section>
       <section className="section">
         <div className="section-title">
-          <div><h2>Website list</h2><p className="hint">{searchActive ? `${visibleWebsites.length} result(s)` : `${visibleWebsites.length} website(s)`}</p></div>
-          <button disabled={!!loading || websiteSearching} onClick={() => loadWebsiteList(websiteSearch, true)}><RefreshCw size={15} className={websiteSearching ? 'spin' : ''}/> Refresh</button>
+          <div><h2>{t('Website list')}</h2><p className="hint">{searchActive ? t('{n} result(s)', { n: visibleWebsites.length }) : t('{n} website(s)', { n: visibleWebsites.length })}</p></div>
+          <button disabled={!!loading || websiteSearching} onClick={() => loadWebsiteList(websiteSearch, true)}><RefreshCw size={15} className={websiteSearching ? 'spin' : ''}/>{t('Refresh')}</button>
         </div>
         <div className="website-search-bar">
           <Search size={16}/>
           <input
             value={websiteSearch}
             onChange={e => setWebsiteSearch(e.target.value)}
-            placeholder="Search domain, alias, path, or Linux user"
-            aria-label="Search websites"
+            placeholder={t('Search domain, alias, path, or Linux user')}
+            aria-label={t('Search websites')}
           />
-          {websiteSearch && <button className="secondary-light icon-button" type="button" onClick={() => setWebsiteSearch('')} aria-label="Clear website search" title="Clear search"><X size={15}/></button>}
+          {websiteSearch && <button className="secondary-light icon-button" type="button" onClick={() => setWebsiteSearch('')} aria-label={t('Clear website search')} title={t('Clear search')}><X size={15}/></button>}
         </div>
         {visibleWebsites.length === 0 && <EmptyState icon={Globe} message={searchActive ? "No websites match this search." : "No websites yet."} />}
         <div className="site-grid">
@@ -5267,24 +5308,24 @@ Each account is overwritten with what is in its archive.`)) return;
             </div>
             <div className="site-meta">
               <span className={`badge site-ssl-badge ${site.ssl_enabled ? 'ok' : ''}`}>{site.ssl_enabled ? 'SSL OK' : 'No SSL'}</span>
-              <span>Type <strong>{site.app_type || 'wordpress'}</strong></span>
+              <span>{t('Type')}<strong>{site.app_type || 'wordpress'}</strong></span>
               <span>PHP <strong>{site.php_version}</strong></span>
-              {site.app_type === 'php' && site.nginx_rewrite_mode && site.nginx_rewrite_mode !== 'none' && <span>Rewrite <strong>{site.nginx_rewrite_mode}</strong></span>}
-              {site.nginx_custom && <span className="badge ok">Custom Nginx</span>}
+              {site.app_type === 'php' && site.nginx_rewrite_mode && site.nginx_rewrite_mode !== 'none' && <span>{t('Rewrite')}<strong>{site.nginx_rewrite_mode}</strong></span>}
+              {site.nginx_custom && <span className="badge ok">{t('Custom Nginx')}</span>}
               {site.waf_enabled && <span className="badge ok">WAF</span>}
-              {site.http_flood_enabled && <span className="badge ok">HTTP Flood</span>}
-              {(site.aliases || []).length > 0 && <span>Domains <strong>{(site.aliases || []).length + 1}</strong></span>}
+              {site.http_flood_enabled && <span className="badge ok">{t('HTTP Flood')}</span>}
+              {(site.aliases || []).length > 0 && <span>{t('Domains')}<strong>{(site.aliases || []).length + 1}</strong></span>}
             </div>
             <div className="site-actions" aria-label={`Website actions for ${site.domain}`}>
               <div className="site-feature-actions">
-                <button className="site-icon-button secondary-light" data-tooltip="Files" title="Files" aria-label={`Open file manager for ${site.domain}`} disabled={!!loading} onClick={() => openWebsiteFileManager(site)}><FolderOpen size={15}/></button>
-                <button className="site-icon-button secondary-light" data-tooltip="Logs" title="Logs" aria-label={`View logs for ${site.domain}`} disabled={!!loading} onClick={() => openWebsiteLogs(site)}><FileText size={15}/></button>
-                <button className="site-icon-button secondary-light" data-tooltip="Terminal" title="Terminal" aria-label={`Open terminal for ${site.domain}`} disabled={!!loading} onClick={() => openWebsiteTerminal(site)}><TerminalIcon size={15}/></button>
+                <button className="site-icon-button secondary-light" data-tooltip="Files" title={t('Files')} aria-label={`Open file manager for ${site.domain}`} disabled={!!loading} onClick={() => openWebsiteFileManager(site)}><FolderOpen size={15}/></button>
+                <button className="site-icon-button secondary-light" data-tooltip="Logs" title={t('Logs')} aria-label={`View logs for ${site.domain}`} disabled={!!loading} onClick={() => openWebsiteLogs(site)}><FileText size={15}/></button>
+                <button className="site-icon-button secondary-light" data-tooltip="Terminal" title={t('Terminal')} aria-label={`Open terminal for ${site.domain}`} disabled={!!loading} onClick={() => openWebsiteTerminal(site)}><TerminalIcon size={15}/></button>
                 {site.wordpress_installed ? <>
-                  <button className="site-icon-button secondary-light" data-tooltip="Update WordPress" title="Update WordPress (core + plugins + themes)" aria-label={`Update WordPress for ${site.domain}`} disabled={!!loading} onClick={() => updateWordPressAll(site)}><RefreshCw size={15}/></button>
-                </> : <button className="site-icon-button secondary-light" data-tooltip="Install WP" title="Install WordPress" aria-label={`Install WordPress for ${site.domain}`} disabled={!!loading} onClick={() => openWordPressInstaller(site)}><WordPressIcon size={15}/></button>}
-                <button className="site-icon-button secondary-light" data-tooltip="Settings" title="Settings" aria-label={`Edit settings for ${site.domain}`} disabled={!!loading} onClick={() => openNginxCustom(site)}><SettingsIcon size={15}/></button>
-                <button className="site-icon-button danger" data-tooltip="Delete" title="Delete" aria-label={`Delete ${site.domain}`} disabled={!!loading} onClick={() => deleteWebsite(site.id)}><Trash2 size={15}/></button>
+                  <button className="site-icon-button secondary-light" data-tooltip="Update WordPress" title={t('Update WordPress (core + plugins + themes)')} aria-label={`Update WordPress for ${site.domain}`} disabled={!!loading} onClick={() => updateWordPressAll(site)}><RefreshCw size={15}/></button>
+                </> : <button className="site-icon-button secondary-light" data-tooltip="Install WP" title={t('Install WordPress')} aria-label={`Install WordPress for ${site.domain}`} disabled={!!loading} onClick={() => openWordPressInstaller(site)}><WordPressIcon size={15}/></button>}
+                <button className="site-icon-button secondary-light" data-tooltip="Settings" title={t('Settings')} aria-label={`Edit settings for ${site.domain}`} disabled={!!loading} onClick={() => openNginxCustom(site)}><SettingsIcon size={15}/></button>
+                <button className="site-icon-button danger" data-tooltip="Delete" title={t('Delete')} aria-label={`Delete ${site.domain}`} disabled={!!loading} onClick={() => deleteWebsite(site.id)}><Trash2 size={15}/></button>
               </div>
             </div>
           </article>
@@ -5307,71 +5348,62 @@ Each account is overwritten with what is in its archive.`)) return;
       : 'SSL Disabled';
     const sslUpdated = currentSite?.ssl_updated_at ? new Date(currentSite.ssl_updated_at).toLocaleString() : '';
     return <section className="section">
-      <h2>SSL Certificate</h2>
+      <h2>{t('SSL Certificate')}</h2>
       <WebsiteSelect />
       {currentSite && <div className="info-box" style={{marginTop:8}}>
         <strong>{currentSite.domain}</strong>
         <span className={currentSite.ssl_enabled ? 'badge ok' : 'badge'} style={{justifySelf:'start'}}>{sslLabel}</span>
         {sslUpdated && <span className="hint">Updated {sslUpdated}</span>}
-        {currentSite.ssl_mode === 'manual' && currentSite.ssl_has_ca && <span className="badge ok" style={{justifySelf:'start'}}>CA Bundle</span>}
+        {currentSite.ssl_mode === 'manual' && currentSite.ssl_has_ca && <span className="badge ok" style={{justifySelf:'start'}}>{t('CA Bundle')}</span>}
       </div>}
       <div className="segmented ssl-mode-tabs">
         <button className={sslMode === 'letsencrypt' ? 'active' : ''} onClick={() => setSslMode('letsencrypt')}><Lock size={14}/> Let's Encrypt</button>
-        <button className={sslMode === 'manual' ? 'active' : ''} onClick={() => setSslMode('manual')}><KeyRound size={14}/> Manual</button>
-        <button className={sslMode === 'wildcard' ? 'active' : ''} onClick={() => setSslMode('wildcard')}><Globe size={14}/> Wildcard (Cloudflare)</button>
-        <button className={sslMode === 'shared' ? 'active' : ''} onClick={() => setSslMode('shared')}><Copy size={14}/> Use existing</button>
+        <button className={sslMode === 'manual' ? 'active' : ''} onClick={() => setSslMode('manual')}><KeyRound size={14}/>{t('Manual')}</button>
+        <button className={sslMode === 'wildcard' ? 'active' : ''} onClick={() => setSslMode('wildcard')}><Globe size={14}/>{t('Wildcard (Cloudflare)')}</button>
+        <button className={sslMode === 'shared' ? 'active' : ''} onClick={() => setSslMode('shared')}><Copy size={14}/>{t('Use existing')}</button>
       </div>
       {sslMode === 'letsencrypt' && <>
-        <button disabled={!selectedWebsiteId || !!loading} onClick={() => enableSsl(selectedWebsiteId)} style={{marginTop:8}}><Lock size={15}/> Install / Renew SSL</button>
-        <p className="hint">The domain must point to the correct VPS IP before issuing SSL.</p>
+        <button disabled={!selectedWebsiteId || !!loading} onClick={() => enableSsl(selectedWebsiteId)} style={{marginTop:8}}><Lock size={15}/>{t('Install / Renew SSL')}</button>
+        <p className="hint">{t('The domain must point to the correct VPS IP before issuing SSL.')}</p>
       </>}
       {sslMode === 'wildcard' && <div className="ssl-sub-form">
-        <p className="hint">
-          Issues <code>{cfZone.zone ? `${cfZone.zone} + *.${cfZone.zone}` : 'zone + *.zone'}</code> over
-          Cloudflare DNS. Needs an API token with <strong>Zone → DNS → Edit</strong> for the zone.
+        <p className="hint">{t('Issues')}<code>{cfZone.zone ? `${cfZone.zone} + *.${cfZone.zone}` : 'zone + *.zone'}</code> over
+          Cloudflare DNS. Needs an API token with <strong>{t('Zone → DNS → Edit')}</strong> for the zone.
         </p>
         {cfZone.has_token
           ? <p className="hint">✓ Token saved for <strong>{cfZone.zone}</strong>. Leave the field blank to reuse it.</p>
           : null}
-        <input type="password" autoComplete="off" placeholder="Cloudflare API token"
+        <input type="password" autoComplete="off" placeholder={t('Cloudflare API token')}
           value={wildcardToken} onChange={e => setWildcardToken(e.target.value)} />
         <button disabled={!selectedWebsiteId || !!loading} onClick={installWildcardSsl}>
-          <Globe size={15}/> Issue wildcard certificate
-        </button>
+          <Globe size={15}/>{t('Issue wildcard certificate')}</button>
       </div>}
       {sslMode === 'shared' && <div className="ssl-sub-form">
-        <p className="hint">Point this site at another BPanel website's certificate (e.g. a wildcard). No new certificate is issued.</p>
+        <p className="hint">{t('Point this site at another BPanel website\'s certificate (e.g. a wildcard). No new certificate is issued.')}</p>
         {sslSources.length === 0
-          ? <p className="hint">No other website has a certificate that covers <strong>{currentSite?.domain}</strong>.</p>
+          ? <p className="hint">{t('No other website has a certificate that covers')}<strong>{currentSite?.domain}</strong>.</p>
           : <>
             <select value={sharedSource} onChange={e => setSharedSource(e.target.value)}>
-              <option value="">Select a source website…</option>
+              <option value="">{t('Select a source website…')}</option>
               {sslSources.map(s => <option key={s.domain} value={s.domain}>
                 {s.domain}{s.wildcard ? ' (wildcard)' : ''}{s.not_after ? ` — expires ${s.not_after}` : ''}
               </option>)}
             </select>
             <button disabled={!selectedWebsiteId || !sharedSource || !!loading} onClick={installSharedSsl}>
-              <Copy size={15}/> Use this certificate
-            </button>
+              <Copy size={15}/>{t('Use this certificate')}</button>
           </>}
       </div>}
       {sslMode === 'manual' && <div className="manual-ssl-grid">
-        <label>
-          Certificate (.crt/.pem)
-          <input type="file" accept=".crt,.pem" onChange={e => setManualSslFiles(prev => ({ ...prev, certificate: e.target.files?.[0] || null }))} />
+        <label>{t('Certificate (.crt/.pem)')}<input type="file" accept=".crt,.pem" onChange={e => setManualSslFiles(prev => ({ ...prev, certificate: e.target.files?.[0] || null }))} />
         </label>
-        <label>
-          Private key (.key/.pem)
-          <input type="file" accept=".key,.pem" onChange={e => setManualSslFiles(prev => ({ ...prev, private_key: e.target.files?.[0] || null }))} />
+        <label>{t('Private key (.key/.pem)')}<input type="file" accept=".key,.pem" onChange={e => setManualSslFiles(prev => ({ ...prev, private_key: e.target.files?.[0] || null }))} />
         </label>
-        <label>
-          CA bundle (.ca/.crt/.pem)
-          <input type="file" accept=".ca,.crt,.pem" onChange={e => setManualSslFiles(prev => ({ ...prev, ca_bundle: e.target.files?.[0] || null }))} />
+        <label>{t('CA bundle (.ca/.crt/.pem)')}<input type="file" accept=".ca,.crt,.pem" onChange={e => setManualSslFiles(prev => ({ ...prev, ca_bundle: e.target.files?.[0] || null }))} />
         </label>
         <textarea rows={7} disabled={!!manualSslFiles.certificate} value={manualSslForm.certificate} onChange={e => setManualSslForm(prev => ({ ...prev, certificate: e.target.value }))} placeholder="-----BEGIN CERTIFICATE-----" />
         <textarea rows={7} disabled={!!manualSslFiles.private_key} value={manualSslForm.private_key} onChange={e => setManualSslForm(prev => ({ ...prev, private_key: e.target.value }))} placeholder="-----BEGIN PRIVATE KEY-----" />
-        <textarea rows={7} disabled={!!manualSslFiles.ca_bundle} value={manualSslForm.ca_bundle} onChange={e => setManualSslForm(prev => ({ ...prev, ca_bundle: e.target.value }))} placeholder="Optional CA bundle" />
-        <button className="manual-ssl-submit" disabled={!selectedWebsiteId || !!loading} onClick={installManualSsl}><Upload size={15}/> Install Manual SSL</button>
+        <textarea rows={7} disabled={!!manualSslFiles.ca_bundle} value={manualSslForm.ca_bundle} onChange={e => setManualSslForm(prev => ({ ...prev, ca_bundle: e.target.value }))} placeholder={t('Optional CA bundle')} />
+        <button className="manual-ssl-submit" disabled={!selectedWebsiteId || !!loading} onClick={installManualSsl}><Upload size={15}/>{t('Install Manual SSL')}</button>
       </div>}
     </section>;
   }
@@ -5381,37 +5413,37 @@ Each account is overwritten with what is in its archive.`)) return;
       const doCopy = navigator.clipboard ? navigator.clipboard.writeText(text) : new Promise((resolve, reject) => {
         try { const ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); resolve(); } catch(e) { reject(e); }
       });
-      doCopy.then(() => { setCopiedField(field); setTimeout(() => setCopiedField(null), 2000); }).catch(() => setError('Copy failed.'));
+      doCopy.then(() => { setCopiedField(field); setTimeout(() => setCopiedField(null), 2000); }).catch(() => setError(t('Copy failed.')));
     }
     const dbSearchActive = !!dbSearch.trim();
     return <section className="section">
       <div className="section-title">
-        <h2>Databases</h2>
-        <button disabled={!!loading || dbSearching} onClick={() => loadDatabases(dbSearch, true)}><RefreshCw size={15} className={dbSearching ? 'spin' : ''}/> Refresh</button>
+        <h2>{t('Databases')}</h2>
+        <button disabled={!!loading || dbSearching} onClick={() => loadDatabases(dbSearch, true)}><RefreshCw size={15} className={dbSearching ? 'spin' : ''}/>{t('Refresh')}</button>
       </div>
       <div className="website-search-bar">
         <Search size={16}/>
         <input
           value={dbSearch}
           onChange={e => setDbSearch(e.target.value)}
-          placeholder="Search by database or user name"
-          aria-label="Search databases"
+          placeholder={t('Search by database or user name')}
+          aria-label={t('Search databases')}
         />
-        {dbSearch && <button className="secondary-light icon-button" type="button" onClick={() => setDbSearch('')} aria-label="Clear database search" title="Clear search"><X size={15}/></button>}
+        {dbSearch && <button className="secondary-light icon-button" type="button" onClick={() => setDbSearch('')} aria-label={t('Clear database search')} title={t('Clear search')}><X size={15}/></button>}
       </div>
       <div className="form-row">
         <input value={newDatabase.db_name} onChange={e => setNewDatabase(prev => ({ ...prev, db_name: e.target.value }))} placeholder="database_name" />
-        <input value={newDatabase.db_user} onChange={e => setNewDatabase(prev => ({ ...prev, db_user: e.target.value }))} placeholder="db_user (default = db_name)" />
-        <input value={newDatabase.db_password} onChange={e => setNewDatabase(prev => ({ ...prev, db_password: e.target.value }))} placeholder="password (min 12 chars)" />
-        <button className="mini secondary-light" title="Generate random password" onClick={() => setNewDatabase(prev => ({ ...prev, db_password: generateRandomPassword() }))}><Dices size={13}/></button>
-        <button disabled={!!loading || !newDatabase.db_name.trim()} onClick={createDatabase}><Plus size={15}/> Create database</button>
+        <input value={newDatabase.db_user} onChange={e => setNewDatabase(prev => ({ ...prev, db_user: e.target.value }))} placeholder={t('db_user (default = db_name)')} />
+        <input value={newDatabase.db_password} onChange={e => setNewDatabase(prev => ({ ...prev, db_password: e.target.value }))} placeholder={t('password (min 12 chars)')} />
+        <button className="mini secondary-light" title={t('Generate random password')} onClick={() => setNewDatabase(prev => ({ ...prev, db_password: generateRandomPassword() }))}><Dices size={13}/></button>
+        <button disabled={!!loading || !newDatabase.db_name.trim()} onClick={createDatabase}><Plus size={15}/>{t('Create database')}</button>
       </div>
       {createdDbInfo && <div className="info-box db-created-box">
-        <div className="db-created-head"><strong>Database created successfully</strong><button className="mini secondary-light" onClick={() => setCreatedDbInfo(null)}><X size={13}/></button></div>
+        <div className="db-created-head"><strong>{t('Database created successfully')}</strong><button className="mini secondary-light" onClick={() => setCreatedDbInfo(null)}><X size={13}/></button></div>
         <div className="db-created-grid">
-          <label>Database</label><span>{createdDbInfo.db_name} <button className="mini secondary-light" title={copiedField === 'db_name' ? 'Copied!' : 'Copy'} onClick={() => copyToClipboard(createdDbInfo.db_name, 'db_name')}>{copiedField === 'db_name' ? <Check size={12} style={{color:'var(--green)'}}/> : <Copy size={12}/>}</button></span>
-          <label>User</label><span>{createdDbInfo.db_user} <button className="mini secondary-light" title={copiedField === 'db_user' ? 'Copied!' : 'Copy'} onClick={() => copyToClipboard(createdDbInfo.db_user, 'db_user')}>{copiedField === 'db_user' ? <Check size={12} style={{color:'var(--green)'}}/> : <Copy size={12}/>}</button></span>
-          <label>Password</label><span><code>{createdDbInfo.db_password}</code> <button className="mini secondary-light" title={copiedField === 'db_password' ? 'Copied!' : 'Copy'} onClick={() => copyToClipboard(createdDbInfo.db_password, 'db_password')}>{copiedField === 'db_password' ? <Check size={12} style={{color:'var(--green)'}}/> : <Copy size={12}/>}</button></span>
+          <label>{t('Database')}</label><span>{createdDbInfo.db_name} <button className="mini secondary-light" title={copiedField === 'db_name' ? 'Copied!' : 'Copy'} onClick={() => copyToClipboard(createdDbInfo.db_name, 'db_name')}>{copiedField === 'db_name' ? <Check size={12} style={{color:'var(--green)'}}/> : <Copy size={12}/>}</button></span>
+          <label>{t('User')}</label><span>{createdDbInfo.db_user} <button className="mini secondary-light" title={copiedField === 'db_user' ? 'Copied!' : 'Copy'} onClick={() => copyToClipboard(createdDbInfo.db_user, 'db_user')}>{copiedField === 'db_user' ? <Check size={12} style={{color:'var(--green)'}}/> : <Copy size={12}/>}</button></span>
+          <label>{t('Password')}</label><span><code>{createdDbInfo.db_password}</code> <button className="mini secondary-light" title={copiedField === 'db_password' ? 'Copied!' : 'Copy'} onClick={() => copyToClipboard(createdDbInfo.db_password, 'db_password')}>{copiedField === 'db_password' ? <Check size={12} style={{color:'var(--green)'}}/> : <Copy size={12}/>}</button></span>
         </div>
       </div>}
       {databases.length === 0 && !createdDbInfo && <EmptyState icon={Database} message={dbSearchActive ? 'No databases match this search.' : 'No databases found.'} />}
@@ -5422,11 +5454,11 @@ Each account is overwritten with what is in its archive.`)) return;
           <span style={{color:'var(--text-muted)'}}>{db.db_user}</span>
           <button disabled={!!loading} onClick={() => openPhpMyAdmin(db.id)}>phpMyAdmin</button>
           <button disabled={!!loading} onClick={() => downloadDatabase(db.id, db.db_name)}><Download size={14}/> SQL</button>
-          <button disabled={!!loading} onClick={() => changeDbPassword(db.id)}><KeyRound size={14}/> Password</button>
+          <button disabled={!!loading} onClick={() => changeDbPassword(db.id)}><KeyRound size={14}/>{t('Password')}</button>
           <button className="danger" disabled={!!loading} onClick={() => deleteDatabase(db.id, db.db_name)}><Trash2 size={14}/></button>
         </div>})}
       </div>
-      <p className="hint">Click phpMyAdmin to sign in directly. Token expires after 60s.</p>
+      <p className="hint">{t('Click phpMyAdmin to sign in directly. Token expires after 60s.')}</p>
     </section>;
   }
 
@@ -5435,78 +5467,74 @@ Each account is overwritten with what is in its archive.`)) return;
       const doCopy = navigator.clipboard ? navigator.clipboard.writeText(text) : new Promise((resolve, reject) => {
         try { const ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); resolve(); } catch(e) { reject(e); }
       });
-      doCopy.then(() => { setCopiedField(field); setTimeout(() => setCopiedField(null), 2000); }).catch(() => setError('Copy failed.'));
+      doCopy.then(() => { setCopiedField(field); setTimeout(() => setCopiedField(null), 2000); }).catch(() => setError(t('Copy failed.')));
     }
     const atLimit = !sftpLimits.unlimited && Number(sftpLimits.limit || 0) > 0
       && Number(sftpLimits.used || 0) >= Number(sftpLimits.limit || 0);
     const noAllowance = !sftpLimits.unlimited && Number(sftpLimits.limit || 0) <= 0;
     return <section className="section">
       <div className="section-title">
-        <div><h2>SFTP accounts</h2></div>
-        <button disabled={!selectedWebsiteId || !!loading} onClick={loadSftpAccounts}><RefreshCw size={14}/> Refresh</button>
+        <div><h2>{t('SFTP accounts')}</h2></div>
+        <button disabled={!selectedWebsiteId || !!loading} onClick={loadSftpAccounts}><RefreshCw size={14}/>{t('Refresh')}</button>
       </div>
 
       <div className="info-box">
         <div className="db-created-head">
-          <strong>Your own SFTP login</strong>
-          <button className="mini" onClick={changeOwnSftpPassword}><KeyRound size={13}/> Set password</button>
+          <strong>{t('Your own SFTP login')}</strong>
+          <button className="mini" onClick={changeOwnSftpPassword}><KeyRound size={13}/>{t('Set password')}</button>
         </div>
         <div className="db-created-grid">
-          <label>Username</label><span>{currentUser?.sftp_username || currentUser?.username}</span>
-          <label>Port</label><span>22 (SFTP)</span>
-          <label>Reaches</label><span>every website on this account</span>
+          <label>{t('Username')}</label><span>{currentUser?.sftp_username || currentUser?.username}</span>
+          <label>{t('Port')}</label><span>22 (SFTP)</span>
+          <label>{t('Reaches')}</label><span>every website on this account</span>
         </div>
         {!currentUser?.sftp_password_set_at && <p className="hint" style={{color:'var(--red)'}}>
-          This login still uses your panel password. Anyone who guesses it over SFTP
-          is also in the panel. Set a separate password — your panel password will
-          stop working for SFTP the moment you do.
+          {t('This login still uses your panel password. Anyone who guesses it over SFTP is also in the panel. Set a separate password — your panel password will stop working for SFTP the moment you do.')}
         </p>}
-        {currentUser?.sftp_password_set_at && <p className="hint">
-          Separate from your panel password. Changing one does not change the other.
-        </p>}
+        {currentUser?.sftp_password_set_at && <p className="hint">{t('Separate from your panel password. Changing one does not change the other.')}</p>}
         {ownSftpPassword && <div className="db-created-grid" style={{marginTop:'0.5rem'}}>
-          <label>New password</label>
+          <label>{t('New password')}</label>
           <span><code>{ownSftpPassword}</code> <button className="mini secondary-light" onClick={() => { copySftp(ownSftpPassword, 'own_sftp'); }}>{copiedField === 'own_sftp' ? <Check size={12} style={{color:'var(--green)'}}/> : <Copy size={12}/>}</button></span>
         </div>}
-        {ownSftpPassword && <p className="hint">Shown once. It is not stored anywhere the panel can read back.</p>}
+        {ownSftpPassword && <p className="hint">{t('Shown once. It is not stored anywhere the panel can read back.')}</p>}
       </div>
       <div className="sftp-form">
         <WebsiteSelect />
         <input
           value={newSftpAccount.label}
           onChange={e => setNewSftpAccount(prev => ({ ...prev, label: e.target.value }))}
-          placeholder="Name, e.g. designer"
-          aria-label="SFTP account name"
+          placeholder={t('Name, e.g. designer')}
+          aria-label={t('SFTP account name')}
         />
         <input
           value={newSftpAccount.password}
           onChange={e => setNewSftpAccount(prev => ({ ...prev, password: e.target.value }))}
-          placeholder="password (empty = generate)"
-          aria-label="SFTP password"
+          placeholder={t('password (empty = generate)')}
+          aria-label={t('SFTP password')}
         />
-        <button className="mini secondary-light" title="Generate random password" onClick={() => setNewSftpAccount(prev => ({ ...prev, password: generateRandomPassword() }))}><Dices size={13}/></button>
-        <button disabled={!selectedWebsiteId || !!loading || !newSftpAccount.label.trim() || atLimit || noAllowance} onClick={createSftpAccount}><Plus size={14}/> Create account</button>
+        <button className="mini secondary-light" title={t('Generate random password')} onClick={() => setNewSftpAccount(prev => ({ ...prev, password: generateRandomPassword() }))}><Dices size={13}/></button>
+        <button disabled={!selectedWebsiteId || !!loading || !newSftpAccount.label.trim() || atLimit || noAllowance} onClick={createSftpAccount}><Plus size={14}/>{t('Create account')}</button>
       </div>
 
-      {noAllowance && <p className="hint">Your hosting package does not include SFTP accounts.</p>}
-      {atLimit && <p className="hint">You have used all {sftpLimits.limit} SFTP accounts in your package.</p>}
+      {noAllowance && <p className="hint">{t('Your hosting package does not include SFTP accounts.')}</p>}
+      {atLimit && <p className="hint">{t('You have used all {n} SFTP accounts in your package.', { n: sftpLimits.limit })}</p>}
       {!noAllowance && !sftpLimits.unlimited && !atLimit &&
-        <p className="hint">{sftpLimits.used} of {sftpLimits.limit} SFTP accounts used.</p>}
+        <p className="hint">{t('{used} of {limit} SFTP accounts used.', { used: sftpLimits.used, limit: sftpLimits.limit })}</p>}
 
       {createdSftpInfo && <div className="info-box db-created-box">
-        <div className="db-created-head"><strong>SFTP account ready</strong><button className="mini secondary-light" onClick={() => setCreatedSftpInfo(null)}><X size={13}/></button></div>
+        <div className="db-created-head"><strong>{t('SFTP account ready')}</strong><button className="mini secondary-light" onClick={() => setCreatedSftpInfo(null)}><X size={13}/></button></div>
         <div className="db-created-grid">
           <label>Host</label><span>{createdSftpInfo.host} <button className="mini secondary-light" title={copiedField === 'sftp_host' ? 'Copied!' : 'Copy'} onClick={() => copySftp(createdSftpInfo.host, 'sftp_host')}>{copiedField === 'sftp_host' ? <Check size={12} style={{color:'var(--green)'}}/> : <Copy size={12}/>}</button></span>
-          <label>Port</label><span>{createdSftpInfo.port} (SFTP)</span>
-          <label>Username</label><span>{createdSftpInfo.username} <button className="mini secondary-light" title={copiedField === 'sftp_user' ? 'Copied!' : 'Copy'} onClick={() => copySftp(createdSftpInfo.username, 'sftp_user')}>{copiedField === 'sftp_user' ? <Check size={12} style={{color:'var(--green)'}}/> : <Copy size={12}/>}</button></span>
-          {createdSftpInfo.password && <><label>Password</label><span><code>{createdSftpInfo.password}</code> <button className="mini secondary-light" title={copiedField === 'sftp_pass' ? 'Copied!' : 'Copy'} onClick={() => copySftp(createdSftpInfo.password, 'sftp_pass')}>{copiedField === 'sftp_pass' ? <Check size={12} style={{color:'var(--green)'}}/> : <Copy size={12}/>}</button></span></>}
-          <label>Folder</label><span><code>{createdSftpInfo.path}</code></span>
+          <label>{t('Port')}</label><span>{createdSftpInfo.port} (SFTP)</span>
+          <label>{t('Username')}</label><span>{createdSftpInfo.username} <button className="mini secondary-light" title={copiedField === 'sftp_user' ? 'Copied!' : 'Copy'} onClick={() => copySftp(createdSftpInfo.username, 'sftp_user')}>{copiedField === 'sftp_user' ? <Check size={12} style={{color:'var(--green)'}}/> : <Copy size={12}/>}</button></span>
+          {createdSftpInfo.password && <><label>{t('Password')}</label><span><code>{createdSftpInfo.password}</code> <button className="mini secondary-light" title={copiedField === 'sftp_pass' ? 'Copied!' : 'Copy'} onClick={() => copySftp(createdSftpInfo.password, 'sftp_pass')}>{copiedField === 'sftp_pass' ? <Check size={12} style={{color:'var(--green)'}}/> : <Copy size={12}/>}</button></span></>}
+          <label>{t('Folder')}</label><span><code>{createdSftpInfo.path}</code></span>
         </div>
-        {createdSftpInfo.password && <p className="hint">This password is shown once. It is not stored anywhere the panel can read it back.</p>}
+        {createdSftpInfo.password && <p className="hint">{t('This password is shown once. It is not stored anywhere the panel can read it back.')}</p>}
       </div>}
 
       {selectedWebsiteId && sftpAccounts.length === 0 && !createdSftpInfo &&
-        <EmptyState icon={Upload} message="No SFTP accounts for this website yet." />}
+        <EmptyState icon={Upload} message={t('No SFTP accounts for this website yet.')} />}
 
       <div className="table">
         {sftpAccounts.map(account => <div className="row db-row" key={account.id}>
@@ -5514,14 +5542,13 @@ Each account is overwritten with what is in its archive.`)) return;
           <span style={{color:'var(--text-muted)'}}>{account.username}</span>
           <span style={{color:'var(--text-muted)'}}><code>{account.path}</code></span>
           {!account.is_active && <span style={{color:'var(--red)'}}>suspended</span>}
-          <button disabled={!!loading} onClick={() => resetSftpPassword(account)}><KeyRound size={14}/> Password</button>
+          <button disabled={!!loading} onClick={() => resetSftpPassword(account)}><KeyRound size={14}/>{t('Password')}</button>
           <button className="danger" disabled={!!loading} onClick={() => deleteSftpAccount(account)}><Trash2 size={14}/></button>
         </div>)}
       </div>
 
       <p className="hint">
-        Each account reaches one website and nothing else — not your other sites, and not the server.
-        It signs in over SFTP on port 22 with its own password, which is separate from your panel password.
+        {t('Each account reaches one website and nothing else — not your other sites, and not the server. It signs in over SFTP on port 22 with its own password, which is separate from your panel password.')}
       </p>
     </section>;
   }
@@ -5537,21 +5564,21 @@ Each account is overwritten with what is in its archive.`)) return;
     ];
     return <section className="section">
       <div className="section-title">
-        <div><h2>Cron manager</h2></div>
-        <button disabled={!selectedWebsiteId || !!loading} onClick={listCron}><RefreshCw size={14}/> Refresh</button>
+        <div><h2>{t('Cron manager')}</h2></div>
+        <button disabled={!selectedWebsiteId || !!loading} onClick={listCron}><RefreshCw size={14}/>{t('Refresh')}</button>
       </div>
       <div className="cron-form">
         <WebsiteSelect />
         <input value={cronSchedule} onChange={e => setCronSchedule(e.target.value)} placeholder="*/15 * * * *" />
         <input value={cronCommand} onChange={e => setCronCommand(e.target.value)} placeholder="php -q cron.php >/dev/null 2>&1" />
-        <button disabled={!selectedWebsiteId || !!loading} onClick={addCron}><Plus size={14}/> Add cron</button>
+        <button disabled={!selectedWebsiteId || !!loading} onClick={addCron}><Plus size={14}/>{t('Add cron')}</button>
       </div>
-      {selectedWebsiteId && <p className="hint">Cron runs as <strong>{cronUser || currentSite?.linux_user || 'www-data'}</strong> for the selected website.</p>}
+      {selectedWebsiteId && <p className="hint">{t('Cron runs as')}<strong>{cronUser || currentSite?.linux_user || 'www-data'}</strong> for the selected website.</p>}
       {selectedWebsiteId && <div className="cron-help">
         <p>
-          Write <code>php</code> and BPanel rewrites it to <code>{sitePhpBinary}</code>
-          {sitePhpVersion ? <> — the PHP {sitePhpVersion} CLI this website is set to</> : null}, so the job never
-          runs on the server default version. Change the website's PHP version and its cron jobs follow.
+          {t('Write')} <code>php</code> {t('and BPanel rewrites it to')} <code>{sitePhpBinary}</code>
+          {sitePhpVersion ? <>{t(' — the PHP {version} CLI this website is set to', { version: sitePhpVersion })}</> : null}
+          {t(', so the job never runs on the server default version. Change the website\'s PHP version and its cron jobs follow.')}
         </p>
         <ul>
           {cronExamples.map(([example, note]) => <li key={example}>
@@ -5559,14 +5586,13 @@ Each account is overwritten with what is in its archive.`)) return;
             <small>{note}</small>
           </li>)}
         </ul>
-        <p className="cron-help-note">
-          Only PHP scripts inside <code>public_html</code> and the safe WP-CLI maintenance commands are allowed.
+        <p className="cron-help-note">{t('Only PHP scripts inside')}<code>public_html</code> and the safe WP-CLI maintenance commands are allowed.
           A trailing <code>&gt;</code>, <code>&gt;&gt;</code>, <code>2&gt;</code> or <code>2&gt;&amp;1</code> may
           redirect to <code>/dev/null</code> or to a file inside this website.
         </p>
       </div>}
       <div className="cron-list">
-        {selectedWebsiteId && cronItems.length === 0 && <EmptyState icon={Clock} message="No cron jobs found for this website." />}
+        {selectedWebsiteId && cronItems.length === 0 && <EmptyState icon={Clock} message={t('No cron jobs found for this website.')} />}
         {cronItems.map(item => <div className="cron-item" key={`${item.index}-${item.line}`}>
           <span className="badge">#{item.index}</span>
           <span><strong>{item.schedule}</strong><small>{item.command || item.line}</small></span>
@@ -5589,13 +5615,13 @@ Each account is overwritten with what is in its archive.`)) return;
     }));
     const title = targets.length === 1 ? targets[0].name : `${targets.length} selected items`;
     return <div className="chmod-backdrop" role="presentation" onClick={() => setChmodTarget(null)}>
-      <div className="chmod-dialog" role="dialog" aria-modal="true" aria-label="Change permissions" onClick={e => e.stopPropagation()}>
+      <div className="chmod-dialog" role="dialog" aria-modal="true" aria-label={t('Change permissions')} onClick={e => e.stopPropagation()}>
         <div className="chmod-head">
           <div>
-            <h3><Lock size={15}/> Permissions</h3>
+            <h3><Lock size={15}/>{t('Permissions')}</h3>
             <p>{title}</p>
           </div>
-          <button className="mini secondary-light" onClick={() => setChmodTarget(null)} aria-label="Close"><X size={14}/></button>
+          <button className="mini secondary-light" onClick={() => setChmodTarget(null)} aria-label={t('Close')}><X size={14}/></button>
         </div>
         <table className="chmod-grid">
           <thead>
@@ -5617,7 +5643,7 @@ Each account is overwritten with what is in its archive.`)) return;
         </table>
         <div className="chmod-value">
           <label>
-            <span>Octal</span>
+            <span>{t('Octal')}</span>
             <input value={chmodMode} inputMode="numeric" maxLength={4} onChange={e => setChmodMode(e.target.value.replace(/[^0-7]/g, '').slice(0, 4))} />
           </label>
           <code>{permissionSymbols(chmodMode)}</code>
@@ -5636,18 +5662,18 @@ Each account is overwritten with what is in its archive.`)) return;
             checked={bits.special === 2}
             onChange={() => setChmodMode(permissionBitsToOctal({ ...bits, special: bits.special === 2 ? 0 : 2 }))}
           />
-          <span>Setgid — new files inside keep the folder's group. BPanel sets this on site folders; leave it on unless you know otherwise.</span>
+          <span>{t('Setgid — new files inside keep the folder\'s group. BPanel sets this on site folders; leave it on unless you know otherwise.')}</span>
         </label>}
         {worldWritable && <p className="chmod-note warn">
-          <AlertCircle size={13}/> World-writable: anyone with an account on the server can change
-          {hasFiles ? ' these files' : ' what is inside these folders'}. Use 755 unless something really needs it.
+          <AlertCircle size={13}/> {hasFiles
+            ? t('World-writable: anyone with an account on the server can change these files. Use 755 unless something really needs it.')
+            : t('World-writable: anyone with an account on the server can change what is inside these folders. Use 755 unless something really needs it.')}
         </p>}
         <p className="chmod-note">
-          Any permission combination is allowed. The setuid and sticky bits are not — setgid on a folder is the
-          only special bit the panel sets.
+          {t('Any permission combination is allowed. The setuid and sticky bits are not — setgid on a folder is the only special bit the panel sets.')}
         </p>
         <div className="chmod-actions">
-          <button className="secondary-light" disabled={!!loading} onClick={() => setChmodTarget(null)}>Cancel</button>
+          <button className="secondary-light" disabled={!!loading} onClick={() => setChmodTarget(null)}>{t('Cancel')}</button>
           <button disabled={!!loading} onClick={applyChmod}><Check size={14}/> Apply {chmodMode}</button>
         </div>
       </div>
@@ -5668,8 +5694,8 @@ Each account is overwritten with what is in its archive.`)) return;
     return <section className="section">
       {renderChmodDialog()}
       <div className="section-title">
-        <div><h2>File manager</h2></div>
-        <button disabled={!hasFileTarget() || !!loading} onClick={() => listFiles(fileListPath)}><RefreshCw size={14}/> Refresh</button>
+        <div><h2>{t('File manager')}</h2></div>
+        <button disabled={!hasFileTarget() || !!loading} onClick={() => listFiles(fileListPath)}><RefreshCw size={14}/>{t('Refresh')}</button>
       </div>
       <div className="file-manager">
         <div className="file-panel">
@@ -5677,53 +5703,52 @@ Each account is overwritten with what is in its archive.`)) return;
             <FileTargetSelect />
             {activeFileApp
               ? <div className="file-meta">
-                <span>Application: <strong>{activeFileApp.name}</strong></span>
-                <span>Root: <strong>{activeFileApp.directory}{fileListPath ? `/${fileListPath}` : ''}</strong></span>
-                {currentUser && !isAdmin && <span>Storage: <strong>{storageUsageText(currentUser)}</strong></span>}
+                <span>{t('Application:')}<strong>{activeFileApp.name}</strong></span>
+                <span>{t('Root:')}<strong>{activeFileApp.directory}{fileListPath ? `/${fileListPath}` : ''}</strong></span>
+                {currentUser && !isAdmin && <span>{t('Storage:')}<strong>{storageUsageText(currentUser)}</strong></span>}
               </div>
               : currentSite && <div className="file-meta">
-                <span>Website: <strong>{currentSite.domain}</strong></span>
-                <span>Root: <strong>{currentSite.root_path}{fileListPath ? `/${fileListPath}` : ''}</strong></span>
-                {currentUser && !isAdmin && <span>Storage: <strong>{storageUsageText(currentUser)}</strong></span>}
+                <span>{t('Website:')}<strong>{currentSite.domain}</strong></span>
+                <span>{t('Root:')}<strong>{currentSite.root_path}{fileListPath ? `/${fileListPath}` : ''}</strong></span>
+                {currentUser && !isAdmin && <span>{t('Storage:')}<strong>{storageUsageText(currentUser)}</strong></span>}
               </div>}
             <div className="path-pill breadcrumb-line">
               <button className="crumb" disabled={!hasFileTarget() || fileListPath === ''} onClick={() => listFiles('')}>root</button>
               {fileBreadcrumbs(fileListPath).map(crumb => <button className="crumb" key={crumb.path} onClick={() => listFiles(crumb.path)}>{crumb.label}</button>)}
             </div>
             <div className="file-toolbar">
-              <button disabled={!hasFileTarget() || fileListPath === '' || !!loading} onClick={() => listFiles(parentFilePath(fileListPath))}>Up</button>
-              <button disabled={!hasFileTarget() || !!loading} onClick={makeFileDirectory}><Plus size={14}/> Folder</button>
-              <button disabled={!hasFileTarget() || !!loading} onClick={makeFile}><FileText size={14}/> File</button>
+              <button disabled={!hasFileTarget() || fileListPath === '' || !!loading} onClick={() => listFiles(parentFilePath(fileListPath))}>{t('Up')}</button>
+              <button disabled={!hasFileTarget() || !!loading} onClick={makeFileDirectory}><Plus size={14}/>{t('Folder')}</button>
+              <button disabled={!hasFileTarget() || !!loading} onClick={makeFile}><FileText size={14}/>{t('File')}</button>
               <label className={`upload-button ${(!hasFileTarget() || !!loading) ? 'disabled' : ''}`}>
-                <Upload size={14}/> Upload
-                <input type="file" disabled={!hasFileTarget() || !!loading} onChange={e => { uploadSiteFile(e.target.files?.[0]); e.target.value = ''; }} />
+                <Upload size={14}/>{t('Upload')}<input type="file" disabled={!hasFileTarget() || !!loading} onChange={e => { uploadSiteFile(e.target.files?.[0]); e.target.value = ''; }} />
               </label>
               <select value={archiveFormat} onChange={e => setArchiveFormat(e.target.value)} disabled={!hasFileTarget() || !!loading}>
                 <option value="zip">zip</option>
                 <option value="tar.gz">tar.gz</option>
               </select>
-              <button disabled={selectedFilePaths.length === 0 || !!loading} onClick={copySelectedFiles}><Copy size={14}/> Copy</button>
-              <button disabled={selectedFilePaths.length === 0 || !!loading} onClick={moveSelectedFiles}><MoveRight size={14}/> Move</button>
-              <button disabled={selectedFilePaths.length === 0 || !!loading} onClick={archiveSelectedFiles}><Archive size={14}/> Archive</button>
-              <button disabled={!selectedArchiveFile || !!loading} onClick={() => extractArchiveFile(selectedArchiveFile.path)}><ArchiveRestore size={14}/> Extract</button>
-              <button disabled={selectedChmodItems.length === 0 || !!loading} onClick={() => openChmodDialog(selectedChmodItems)}><Lock size={14}/> Permissions</button>
-              <button className="danger" disabled={selectedFilePaths.length === 0 || !!loading} onClick={deleteSelectedFiles}><Trash2 size={14}/> Delete</button>
+              <button disabled={selectedFilePaths.length === 0 || !!loading} onClick={copySelectedFiles}><Copy size={14}/>{t('Copy')}</button>
+              <button disabled={selectedFilePaths.length === 0 || !!loading} onClick={moveSelectedFiles}><MoveRight size={14}/>{t('Move')}</button>
+              <button disabled={selectedFilePaths.length === 0 || !!loading} onClick={archiveSelectedFiles}><Archive size={14}/>{t('Archive')}</button>
+              <button disabled={!selectedArchiveFile || !!loading} onClick={() => extractArchiveFile(selectedArchiveFile.path)}><ArchiveRestore size={14}/>{t('Extract')}</button>
+              <button disabled={selectedChmodItems.length === 0 || !!loading} onClick={() => openChmodDialog(selectedChmodItems)}><Lock size={14}/>{t('Permissions')}</button>
+              <button className="danger" disabled={selectedFilePaths.length === 0 || !!loading} onClick={deleteSelectedFiles}><Trash2 size={14}/>{t('Delete')}</button>
             </div>
             {visibleFileJobs.length > 0 && <div className="file-job-list">
               {visibleFileJobs.map(job => <div className={`file-job ${job.status}`} key={job.job_id}>
                 <Clock size={14}/>
                 <span><strong>{job.archive_path?.split('/').pop() || 'Archive'}</strong> {job.status === 'error' ? 'failed' : job.status}</span>
                 {job.error && <small>{job.error}</small>}
-                <button className="file-job-dismiss" onClick={() => dismissFileJob(job.job_id)} aria-label="Dismiss"><X size={13}/></button>
+                <button className="file-job-dismiss" onClick={() => dismissFileJob(job.job_id)} aria-label={t('Dismiss')}><X size={13}/></button>
               </div>)}
             </div>}
           </div>
           <div className="file-list-header">
-            <label><input type="checkbox" checked={allSelected} onChange={toggleAllFiles} disabled={files.length === 0} /> Select</label>
-            <span>{files.length} item(s)</span>
+            <label><input type="checkbox" checked={allSelected} onChange={toggleAllFiles} disabled={files.length === 0} />{t('Select')}</label>
+            <span>{t('{n} item(s)', { n: files.length })}</span>
           </div>
           <div className="file-list">
-            {files.length === 0 && <div className="empty-box">No files in this folder.</div>}
+            {files.length === 0 && <div className="empty-box">{t('No files in this folder.')}</div>}
             {files.map(item => <div className={`file-item ${selectedFilePaths.includes(item.path) ? 'selected' : ''}`} key={item.path}>
               <input type="checkbox" checked={selectedFilePaths.includes(item.path)} onChange={() => toggleFileSelection(item.path)} />
               <button className="file-name" onClick={() => item.is_dir ? listFiles(item.path) : (isTextEditable(item) ? openFileEditorTab(item.path) : downloadFile(item.path))}>
@@ -5739,9 +5764,9 @@ Each account is overwritten with what is in its archive.`)) return;
               <span className="file-size">{item.is_dir ? 'Folder' : formatBytes(item.size)}</span>
               <div className="file-row-actions">
                 {!item.is_dir && <button className="mini secondary-light" disabled={!!loading} onClick={() => downloadFile(item.path)}><Download size={13}/></button>}
-                {isArchiveFile(item) && <button className="mini secondary-light" disabled={!!loading} onClick={() => extractArchiveFile(item.path)}><ArchiveRestore size={13}/> Extract</button>}
-                <button className="mini secondary-light" disabled={!!loading} onClick={() => openChmodDialog(item)}><Lock size={13}/> Perms</button>
-                <button className="mini secondary-light" disabled={!!loading} onClick={() => renameFileItem(item)}>Rename</button>
+                {isArchiveFile(item) && <button className="mini secondary-light" disabled={!!loading} onClick={() => extractArchiveFile(item.path)}><ArchiveRestore size={13}/>{t('Extract')}</button>}
+                <button className="mini secondary-light" disabled={!!loading} onClick={() => openChmodDialog(item)}><Lock size={13}/>{t('Perms')}</button>
+                <button className="mini secondary-light" disabled={!!loading} onClick={() => renameFileItem(item)}>{t('Rename')}</button>
               </div>
             </div>)}
           </div>
@@ -5768,8 +5793,8 @@ Each account is overwritten with what is in its archive.`)) return;
     const visibleBackupJobs = backupJobs.filter(job => job.status !== 'done');
 
     return <section className="section backups-page">
-      <h2>Backups</h2>
-      <div className="segmented-control backup-tabs" role="tablist" aria-label="Backup sections">
+      <h2>{t('Backups')}</h2>
+      <div className="segmented-control backup-tabs" role="tablist" aria-label={t('Backup sections')}>
         {backupTabs.map(([id, label, Icon]) => <button
           key={id}
           type="button"
@@ -5789,24 +5814,23 @@ Each account is overwritten with what is in its archive.`)) return;
 
       {activeBackupTab === 'website' && <div className="backup-tab-panel">
         <div className="backup-panel-title">
-          <div><h3>Backup website</h3><p className="hint">Backups include website source files and a database SQL export.</p></div>
+          <div><h3>{t('Backup website')}</h3><p className="hint">{t('Backups include website source files and a database SQL export.')}</p></div>
         </div>
         <WebsiteSelect />
         <div className="actions backup-toolbar">
-          <button disabled={!selectedWebsiteId || !!loading} onClick={createBackup}><Plus size={14}/> Create backup</button>
-          <button disabled={!selectedWebsiteId || !!loading} onClick={refreshBackupArea}><RefreshCw size={14}/> Refresh</button>
+          <button disabled={!selectedWebsiteId || !!loading} onClick={createBackup}><Plus size={14}/>{t('Create backup')}</button>
+          <button disabled={!selectedWebsiteId || !!loading} onClick={refreshBackupArea}><RefreshCw size={14}/>{t('Refresh')}</button>
           <label className="upload-button">
-            <Upload size={14}/> Upload backup
-            <input type="file" accept=".tar.gz,application/gzip" onChange={e => { uploadBackup(e.target.files?.[0]); e.target.value = ''; }} />
+            <Upload size={14}/>{t('Upload backup')}<input type="file" accept=".tar.gz,application/gzip" onChange={e => { uploadBackup(e.target.files?.[0]); e.target.value = ''; }} />
           </label>
         </div>
-        {backups.length === 0 && selectedWebsiteId && <EmptyState icon={Archive} message="No backups found for this website." />}
+        {backups.length === 0 && selectedWebsiteId && <EmptyState icon={Archive} message={t('No backups found for this website.')} />}
         <div className="backup-list">
           {backups.map(file => <div className="backup-item" key={file}>
             <span>{file.split('/').pop()}</span>
             <div className="actions">
-              <button disabled={!!loading} onClick={() => downloadBackup(file)}><Download size={14}/> Download</button>
-              <button disabled={!!loading} onClick={() => restoreBackup(file)}><RotateCcw size={14}/> Restore</button>
+              <button disabled={!!loading} onClick={() => downloadBackup(file)}><Download size={14}/>{t('Download')}</button>
+              <button disabled={!!loading} onClick={() => restoreBackup(file)}><RotateCcw size={14}/>{t('Restore')}</button>
               <button className="danger" disabled={!!loading} onClick={() => deleteBackup(file)}><Trash2 size={14}/></button>
             </div>
           </div>)}
@@ -5815,52 +5839,51 @@ Each account is overwritten with what is in its archive.`)) return;
 
       {isAdmin && activeBackupTab === 'user' && <div className="backup-tab-panel">
         <div className="backup-panel-title">
-          <div><h3>Backup user</h3><p className="hint">Includes the panel user, all owned websites, source files, database dumps, and restore metadata.</p></div>
-          <button disabled={!!loading} onClick={refreshUserBackupArea}><RefreshCw size={14}/> Reload</button>
+          <div><h3>{t('Backup user')}</h3><p className="hint">{t('Includes the panel user, all owned websites, source files, database dumps, and restore metadata.')}</p></div>
+          <button disabled={!!loading} onClick={refreshUserBackupArea}><RefreshCw size={14}/>{t('Reload')}</button>
         </div>
         <div className="sftp-run-row user-backup-row backup-run-row">
           <select value={selectedBackupUserId} onChange={e => setSelectedBackupUserId(e.target.value)}>
-            <option value="">Select user</option>
+            <option value="">{t('Select user')}</option>
             {users.map(user => <option key={user.id} value={user.id}>{user.username}</option>)}
           </select>
           <select value={selectedSftpTargetId} onChange={e => setSelectedSftpTargetId(e.target.value)}>
-            <option value="">Local only</option>
+            <option value="">{t('Local only')}</option>
             {sftpTargets.map(target => <option key={target.id} value={target.id}>{target.name}</option>)}
           </select>
-          <button disabled={!selectedBackupUserId || !!loading} onClick={createUserBackup}><Archive size={14}/> Create backup</button>
+          <button disabled={!selectedBackupUserId || !!loading} onClick={createUserBackup}><Archive size={14}/>{t('Create backup')}</button>
         </div>
-        {selectedBackupUser && <p className="hint">Current user: <strong>{selectedBackupUser.username}</strong></p>}
+        {selectedBackupUser && <p className="hint">{t('Current user:')}<strong>{selectedBackupUser.username}</strong></p>}
         <div className="actions backup-subactions">
-          <button disabled={!selectedBackupUserId || !!loading} onClick={() => listUserBackups()}><RefreshCw size={14}/> Refresh list</button>
+          <button disabled={!selectedBackupUserId || !!loading} onClick={() => listUserBackups()}><RefreshCw size={14}/>{t('Refresh list')}</button>
         </div>
-        {selectedBackupUserId && userBackups.length === 0 && <EmptyState icon={Archive} message="No user backups found." />}
+        {selectedBackupUserId && userBackups.length === 0 && <EmptyState icon={Archive} message={t('No user backups found.')} />}
         <div className="backup-list">
           {userBackups.map(file => <div className="backup-item" key={file}>
             <span>{file.split('/').pop()}</span>
             <div className="actions">
-              <button disabled={!!loading} onClick={() => downloadUserBackup(file)}><Download size={14}/> Download</button>
-              <button disabled={!!loading} onClick={() => restoreUserBackup(file)}><RotateCcw size={14}/> Restore user</button>
+              <button disabled={!!loading} onClick={() => downloadUserBackup(file)}><Download size={14}/>{t('Download')}</button>
+              <button disabled={!!loading} onClick={() => restoreUserBackup(file)}><RotateCcw size={14}/>{t('Restore user')}</button>
               <button className="danger" disabled={!!loading} onClick={() => deleteUserBackup(file)}><Trash2 size={14}/></button>
             </div>
           </div>)}
         </div>
 
         <div className="section-title restore-title backup-panel-heading backup-subtitle">
-          <div><h3>Restore folder</h3><p className="hint">{restoreBackupDir || '/var/backups/bpanel/users/restore'}</p></div>
+          <div><h3>{t('Restore folder')}</h3><p className="hint">{restoreBackupDir || '/var/backups/bpanel/users/restore'}</p></div>
           <div className="actions">
-            <button disabled={!!loading} onClick={loadRestoreBackups}><RefreshCw size={14}/> Refresh</button>
+            <button disabled={!!loading} onClick={loadRestoreBackups}><RefreshCw size={14}/>{t('Refresh')}</button>
             <label className="upload-button">
-              <Upload size={14}/> Upload backups
-              <input type="file" multiple accept=".tar.gz,application/gzip" onChange={e => { uploadUserBackups(e.target.files); e.target.value = ''; }} />
+              <Upload size={14}/>{t('Upload backups')}<input type="file" multiple accept=".tar.gz,application/gzip" onChange={e => { uploadUserBackups(e.target.files); e.target.value = ''; }} />
             </label>
           </div>
         </div>
         <div className="backup-list">
           {restoreBackups.map(item => <div className="backup-item" key={item.backup_file}>
-            <span>{item.filename || item.backup_file.split('/').pop()}<small>{item.valid ? `${item.source === 'opanel' ? 'opanel · ' : ''}${item.username || 'unknown user'} - ${item.websites || 0} website(s)` : (item.error || 'Invalid backup')}</small></span>
+            <span>{item.filename || item.backup_file.split('/').pop()}<small>{item.valid ? `${item.source === 'opanel' ? 'opanel · ' : ''}` + t('{user} - {n} website(s)', { user: item.username || t('unknown user'), n: item.websites || 0 }) : (item.error || 'Invalid backup')}</small></span>
             <div className="actions">
-              <button disabled={!!loading} onClick={() => downloadUserBackup(item.backup_file)}><Download size={14}/> Download</button>
-              <button disabled={!!loading || !item.valid} onClick={() => restoreUserBackup(item.backup_file)}><RotateCcw size={14}/> Restore user</button>
+              <button disabled={!!loading} onClick={() => downloadUserBackup(item.backup_file)}><Download size={14}/>{t('Download')}</button>
+              <button disabled={!!loading || !item.valid} onClick={() => restoreUserBackup(item.backup_file)}><RotateCcw size={14}/>{t('Restore user')}</button>
               <button className="danger" disabled={!!loading} onClick={() => deleteRestoreBackup(item.backup_file)}><Trash2 size={14}/></button>
             </div>
           </div>)}
@@ -5870,34 +5893,32 @@ Each account is overwritten with what is in its archive.`)) return;
 
       {isAdmin && activeBackupTab === 'schedule' && <div className="backup-tab-panel">
         <div className="backup-panel-title">
-          <div><h3>Scheduled backups</h3><p className="hint">Run full user backups automatically with optional off-server destination.</p></div>
-          <button disabled={!!loading} onClick={refreshScheduledBackupArea}><RefreshCw size={14}/> Refresh</button>
+          <div><h3>{t('Scheduled backups')}</h3><p className="hint">{t('Run full user backups automatically with optional off-server destination.')}</p></div>
+          <button disabled={!!loading} onClick={refreshScheduledBackupArea}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
         <div className="sftp-form schedule-form backup-schedule-form">
           <label className="schedule-toggle">
             <input type="checkbox" checked={!!newBackupSchedule.all_users} onChange={e => setNewBackupSchedule(prev => ({ ...prev, all_users: e.target.checked }))} />
-            <span>All users</span>
+            <span>{t('All users')}</span>
           </label>
           <select multiple value={newBackupSchedule.user_ids || []} disabled={!!newBackupSchedule.all_users} onChange={e => setNewBackupSchedule(prev => ({ ...prev, user_ids: Array.from(e.target.selectedOptions, option => option.value) }))}>
             {users.map(user => <option key={user.id} value={String(user.id)}>{user.username}</option>)}
           </select>
           <input value={newBackupSchedule.schedule} onChange={e => setNewBackupSchedule(prev => ({ ...prev, schedule: e.target.value }))} placeholder="0 2 * * *" />
           <select value={newBackupSchedule.target_id} onChange={e => setNewBackupSchedule(prev => ({ ...prev, target_id: e.target.value }))}>
-            <option value="">Local only</option>
+            <option value="">{t('Local only')}</option>
             {sftpTargets.map(target => <option key={target.id} value={target.id}>{target.name} ({target.kind === 's3' ? 'S3' : 'SFTP'})</option>)}
           </select>
-          <select value={newBackupSchedule.name_suffix} aria-label="Stored file name"
+          <select value={newBackupSchedule.name_suffix} aria-label={t('Stored file name')}
             onChange={e => setNewBackupSchedule(prev => ({ ...prev, name_suffix: e.target.value }))}>
-            <option value="none">Append: nothing</option>
-            <option value="day_of_week">Append: day of week</option>
-            <option value="week_of_month">Append: week of month</option>
-            <option value="full_date">Append: full date</option>
+            <option value="none">{t('Append: nothing')}</option>
+            <option value="day_of_week">{t('Append: day of week')}</option>
+            <option value="week_of_month">{t('Append: week of month')}</option>
+            <option value="full_date">{t('Append: full date')}</option>
           </select>
-          <button disabled={(!newBackupSchedule.all_users && (!newBackupSchedule.user_ids || newBackupSchedule.user_ids.length === 0)) || !!loading} onClick={createBackupSchedule}><Clock size={14}/> Schedule</button>
+          <button disabled={(!newBackupSchedule.all_users && (!newBackupSchedule.user_ids || newBackupSchedule.user_ids.length === 0)) || !!loading} onClick={createBackupSchedule}><Clock size={14}/>{t('Schedule')}</button>
         </div>
-        <p className="hint">
-          What gets appended decides how many copies pile up at the far end:
-          <strong> nothing</strong> keeps one file per account and overwrites it,
+        <p className="hint">{t('What gets appended decides how many copies pile up at the far end:')}<strong> nothing</strong> keeps one file per account and overwrites it,
           <strong> day of week</strong> rotates through seven,
           <strong> week of month</strong> through five, and
           <strong> full date</strong> keeps one a day until retention prunes it.
@@ -5913,8 +5934,8 @@ Each account is overwritten with what is in its archive.`)) return;
                 <small>{item.last_status}: {item.last_message || 'not run yet'}</small>
               </span>
               <div className="actions schedule-actions">
-                <button className="mini secondary-light" disabled={!!loading || item.last_status === 'running'} onClick={() => runBackupScheduleNow(item)}><Play size={14}/> Run now</button>
-                <button className="mini danger" disabled={!!loading} onClick={() => deleteBackupSchedule(item.id)}><Trash2 size={14}/> Delete</button>
+                <button className="mini secondary-light" disabled={!!loading || item.last_status === 'running'} onClick={() => runBackupScheduleNow(item)}><Play size={14}/>{t('Run now')}</button>
+                <button className="mini danger" disabled={!!loading} onClick={() => deleteBackupSchedule(item.id)}><Trash2 size={14}/>{t('Delete')}</button>
               </div>
             </div>;
           })}
@@ -5924,13 +5945,13 @@ Each account is overwritten with what is in its archive.`)) return;
       {isAdmin && activeBackupTab === 'restore' && <div className="backup-tab-panel">
         <div className="backup-panel-title">
           <div>
-            <h3>Restore</h3>
-            <p className="hint">Everything that could be restored, wherever it is. Tick what you want back and restore it in one go.</p>
+            <h3>{t('Restore')}</h3>
+            <p className="hint">{t('Everything that could be restored, wherever it is. Tick what you want back and restore it in one go.')}</p>
           </div>
-          <button disabled={!!loading} onClick={loadRestoreCatalogue}><RefreshCw size={14}/> Refresh</button>
+          <button disabled={!!loading} onClick={loadRestoreCatalogue}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
 
-        {!restoreCatalogue.loaded && <p className="hint">Press Refresh to look on this server and in every S3 destination.</p>}
+        {!restoreCatalogue.loaded && <p className="hint">{t('Press Refresh to look on this server and in every S3 destination.')}</p>}
 
         {(restoreCatalogue.errors || []).map(row => <p className="hint alarm" key={row.target_id}>
           {row.target_name}: {row.error}
@@ -5939,14 +5960,13 @@ Each account is overwritten with what is in its archive.`)) return;
         {restoreCatalogue.loaded && <>
           <div className="detail-head">
             <input id="restore-filter" value={restoreFilter} onChange={e => setRestoreFilter(e.target.value)}
-              placeholder="Filter by account or file name..." aria-label="Filter backups" />
+              placeholder={t('Filter by account or file name...')} aria-label={t('Filter backups')} />
             <span className="hint">{restorePicks.length} selected</span>
             <button className="danger" disabled={!!loading || restorePicks.length === 0} onClick={restorePicked}>
-              <RotateCcw size={14}/> Restore selected
-            </button>
+              <RotateCcw size={14}/>{t('Restore selected')}</button>
           </div>
 
-          {restoreCatalogue.items.length === 0 && <EmptyState icon={ArchiveRestore} message="No backups found, here or in any destination." />}
+          {restoreCatalogue.items.length === 0 && <EmptyState icon={ArchiveRestore} message={t('No backups found, here or in any destination.')} />}
 
           <div className="detail-body restore-list">
             {restoreCatalogue.items
@@ -5981,41 +6001,41 @@ Each account is overwritten with what is in its archive.`)) return;
 
       {isAdmin && activeBackupTab === 'destination' && <div className="backup-tab-panel">
         <div className="backup-panel-title">
-          <div><h3>Backup Destination</h3><p className="hint">Somewhere off this machine to keep a copy. A backup that lives on the server it backs up is not a backup.</p></div>
-          <button disabled={!!loading} onClick={loadSftpTargets}><RefreshCw size={14}/> Refresh</button>
+          <div><h3>{t('Backup Destination')}</h3><p className="hint">{t('Somewhere off this machine to keep a copy. A backup that lives on the server it backs up is not a backup.')}</p></div>
+          <button disabled={!!loading} onClick={loadSftpTargets}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
-        <div className="segmented" role="tablist" aria-label="Destination type">
+        <div className="segmented" role="tablist" aria-label={t('Destination type')}>
           <button className={newSftpTarget.kind === 'sftp' ? 'active' : ''} disabled={!!loading}
-            onClick={() => setNewSftpTarget(prev => ({ ...prev, kind: 'sftp' }))}>SFTP server</button>
+            onClick={() => setNewSftpTarget(prev => ({ ...prev, kind: 'sftp' }))}>{t('SFTP server')}</button>
           <button className={newSftpTarget.kind === 's3' ? 'active' : ''} disabled={!!loading}
-            onClick={() => setNewSftpTarget(prev => ({ ...prev, kind: 's3' }))}>S3 storage</button>
+            onClick={() => setNewSftpTarget(prev => ({ ...prev, kind: 's3' }))}>{t('S3 storage')}</button>
         </div>
         {newSftpTarget.kind === 's3'
           ? <>
-              <p className="hint">Works with S3 and anything that speaks its API: Wasabi, Backblaze B2, DigitalOcean Spaces, Cloudflare R2, MinIO. The bucket is checked before the target is saved, so a destination that cannot be reached never gets attached to a schedule.</p>
+              <p className="hint">{t('Works with S3 and anything that speaks its API: Wasabi, Backblaze B2, DigitalOcean Spaces, Cloudflare R2, MinIO. The bucket is checked before the target is saved, so a destination that cannot be reached never gets attached to a schedule.')}</p>
               <div className="sftp-form sftp-target-form">
-                <input id="s3-name" value={newSftpTarget.name} onChange={e => setNewSftpTarget(prev => ({ ...prev, name: e.target.value }))} placeholder="Target name" />
+                <input id="s3-name" value={newSftpTarget.name} onChange={e => setNewSftpTarget(prev => ({ ...prev, name: e.target.value }))} placeholder={t('Target name')} />
                 <input id="s3-endpoint" value={newSftpTarget.endpoint} onChange={e => setNewSftpTarget(prev => ({ ...prev, endpoint: e.target.value }))} placeholder="s3.wasabisys.com" />
-                <input id="s3-bucket" value={newSftpTarget.bucket} onChange={e => setNewSftpTarget(prev => ({ ...prev, bucket: e.target.value }))} placeholder="Bucket" />
-                <input id="s3-region" value={newSftpTarget.region} onChange={e => setNewSftpTarget(prev => ({ ...prev, region: e.target.value }))} placeholder="Region (optional)" />
-                <input id="s3-access" value={newSftpTarget.access_key} onChange={e => setNewSftpTarget(prev => ({ ...prev, access_key: e.target.value }))} placeholder="Access key" />
-                <input id="s3-secret" value={newSftpTarget.secret_key} onChange={e => setNewSftpTarget(prev => ({ ...prev, secret_key: e.target.value }))} placeholder="Secret key" type="password" />
-                <input id="s3-prefix" value={newSftpTarget.prefix} onChange={e => setNewSftpTarget(prev => ({ ...prev, prefix: e.target.value }))} placeholder="Prefix, e.g. bpanel/nightly (optional)" />
-                <label className="check-line"><input id="s3-secure" type="checkbox" checked={!!newSftpTarget.secure} onChange={e => setNewSftpTarget(prev => ({ ...prev, secure: e.target.checked }))} /><span>Use HTTPS</span></label>
-                <button disabled={!!loading || !newSftpTarget.name || !newSftpTarget.endpoint || !newSftpTarget.bucket || !newSftpTarget.access_key || !newSftpTarget.secret_key} onClick={createSftpTarget}><Plus size={14}/> Check and save</button>
+                <input id="s3-bucket" value={newSftpTarget.bucket} onChange={e => setNewSftpTarget(prev => ({ ...prev, bucket: e.target.value }))} placeholder={t('Bucket')} />
+                <input id="s3-region" value={newSftpTarget.region} onChange={e => setNewSftpTarget(prev => ({ ...prev, region: e.target.value }))} placeholder={t('Region (optional)')} />
+                <input id="s3-access" value={newSftpTarget.access_key} onChange={e => setNewSftpTarget(prev => ({ ...prev, access_key: e.target.value }))} placeholder={t('Access key')} />
+                <input id="s3-secret" value={newSftpTarget.secret_key} onChange={e => setNewSftpTarget(prev => ({ ...prev, secret_key: e.target.value }))} placeholder={t('Secret key')} type="password" />
+                <input id="s3-prefix" value={newSftpTarget.prefix} onChange={e => setNewSftpTarget(prev => ({ ...prev, prefix: e.target.value }))} placeholder={t('Prefix, e.g. bpanel/nightly (optional)')} />
+                <label className="check-line"><input id="s3-secure" type="checkbox" checked={!!newSftpTarget.secure} onChange={e => setNewSftpTarget(prev => ({ ...prev, secure: e.target.checked }))} /><span>{t('Use HTTPS')}</span></label>
+                <button disabled={!!loading || !newSftpTarget.name || !newSftpTarget.endpoint || !newSftpTarget.bucket || !newSftpTarget.access_key || !newSftpTarget.secret_key} onClick={createSftpTarget}><Plus size={14}/>{t('Check and save')}</button>
               </div>
             </>
           : <div className="sftp-form sftp-target-form">
-              <input value={newSftpTarget.name} onChange={e => setNewSftpTarget(prev => ({ ...prev, name: e.target.value }))} placeholder="Target name" />
+              <input value={newSftpTarget.name} onChange={e => setNewSftpTarget(prev => ({ ...prev, name: e.target.value }))} placeholder={t('Target name')} />
               <input value={newSftpTarget.host} onChange={e => setNewSftpTarget(prev => ({ ...prev, host: e.target.value }))} placeholder="Host" />
               <input value={newSftpTarget.port} onChange={e => setNewSftpTarget(prev => ({ ...prev, port: e.target.value }))} placeholder="22" inputMode="numeric" />
-              <input value={newSftpTarget.username} onChange={e => setNewSftpTarget(prev => ({ ...prev, username: e.target.value }))} placeholder="Username" />
-              <input value={newSftpTarget.password} onChange={e => setNewSftpTarget(prev => ({ ...prev, password: e.target.value }))} placeholder="Password" type="password" />
+              <input value={newSftpTarget.username} onChange={e => setNewSftpTarget(prev => ({ ...prev, username: e.target.value }))} placeholder={t('Username')} />
+              <input value={newSftpTarget.password} onChange={e => setNewSftpTarget(prev => ({ ...prev, password: e.target.value }))} placeholder={t('Password')} type="password" />
               <input value={newSftpTarget.remote_path} onChange={e => setNewSftpTarget(prev => ({ ...prev, remote_path: e.target.value }))} placeholder="/backups/bpanel" />
-              <textarea value={newSftpTarget.private_key} onChange={e => setNewSftpTarget(prev => ({ ...prev, private_key: e.target.value }))} placeholder="Private key (optional)" rows={4} />
-              <button disabled={!!loading || !newSftpTarget.name || !newSftpTarget.host || !newSftpTarget.username || (!newSftpTarget.password && !newSftpTarget.private_key)} onClick={createSftpTarget}><Plus size={14}/> Save target</button>
+              <textarea value={newSftpTarget.private_key} onChange={e => setNewSftpTarget(prev => ({ ...prev, private_key: e.target.value }))} placeholder={t('Private key (optional)')} rows={4} />
+              <button disabled={!!loading || !newSftpTarget.name || !newSftpTarget.host || !newSftpTarget.username || (!newSftpTarget.password && !newSftpTarget.private_key)} onClick={createSftpTarget}><Plus size={14}/>{t('Save target')}</button>
             </div>}
-        {sftpTargets.length === 0 && <EmptyState icon={Network} message="No backup destinations found." />}
+        {sftpTargets.length === 0 && <EmptyState icon={Network} message={t('No backup destinations found.')} />}
         <div className="backup-list">
           {sftpTargets.map(target => <div className="backup-item" key={target.id}>
             <span>
@@ -6031,32 +6051,27 @@ Each account is overwritten with what is in its archive.`)) return;
 
       {isAdmin && activeBackupTab === 'da-import' && <div className="backup-tab-panel">
         <div className="backup-panel-title">
-          <div><h3>DirectAdmin Import</h3><p className="hint">Import websites, databases, and users from a DirectAdmin backup archive.</p></div>
-          <button disabled={!!loading} onClick={() => listDaBackups()}><RefreshCw size={14}/> Refresh</button>
+          <div><h3>{t('DirectAdmin Import')}</h3><p className="hint">{t('Import websites, databases, and users from a DirectAdmin backup archive.')}</p></div>
+          <button disabled={!!loading} onClick={() => listDaBackups()}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
         <div className="da-toolbar">
           <label className="upload-button">
-            <Upload size={14}/> Upload DA backup
-            <input ref={daFileInputRef} type="file" accept=".tar.zst,.tzst,.tar.gz,.tgz,.tar.bz2,.tbz2,.tar.xz,.txz,.tar" onChange={e => { uploadDaBackup(e.target.files?.[0]); e.target.value = ''; }} />
+            <Upload size={14}/>{t('Upload DA backup')}<input ref={daFileInputRef} type="file" accept=".tar.zst,.tzst,.tar.gz,.tgz,.tar.bz2,.tbz2,.tar.xz,.txz,.tar" onChange={e => { uploadDaBackup(e.target.files?.[0]); e.target.value = ''; }} />
           </label>
           <label className="da-toggle">
-            <input type="checkbox" checked={daReplaceExisting} onChange={e => setDaReplaceExisting(e.target.checked)} />
-            Replace existing users/websites
-          </label>
+            <input type="checkbox" checked={daReplaceExisting} onChange={e => setDaReplaceExisting(e.target.checked)} />{t('Replace existing users/websites')}</label>
         </div>
-        {daReplaceExisting && <p className="hint da-warn">
-          Imports will delete any existing panel user, website, files and databases that share a name with the backup. Leave this off to have conflicting imports stop instead.
-        </p>}
-        {daBackups.length === 0 && <EmptyState icon={ArchiveRestore} message="No DirectAdmin backups uploaded. Upload a DA backup archive to get started." />}
+        {daReplaceExisting && <p className="hint da-warn">{t('Imports will delete any existing panel user, website, files and databases that share a name with the backup. Leave this off to have conflicting imports stop instead.')}</p>}
+        {daBackups.length === 0 && <EmptyState icon={ArchiveRestore} message={t('No DirectAdmin backups uploaded. Upload a DA backup archive to get started.')} />}
         {daBackups.length > 0 && <>
           <div className="da-list-head">
             <label className="da-toggle">
               <input type="checkbox" checked={selectedDaBackups.length === daBackups.length && daBackups.length > 0} onChange={toggleSelectAllDaBackups} />
-              Select all ({daBackups.length})
+              {t('Select all ({n})', { n: daBackups.length })}
             </label>
             {selectedDaBackups.length > 0 && <div className="da-actions">
-              <button disabled={!!loading} onClick={() => bulkImportDaBackups()} className="primary"><ArchiveRestore size={14}/> Restore selected ({selectedDaBackups.length})</button>
-              <button disabled={!!loading} onClick={bulkDeleteDaBackups} className="danger"><Trash2 size={14}/> Delete selected ({selectedDaBackups.length})</button>
+              <button disabled={!!loading} onClick={() => bulkImportDaBackups()} className="primary"><ArchiveRestore size={14}/> {t('Restore selected ({n})', { n: selectedDaBackups.length })}</button>
+              <button disabled={!!loading} onClick={bulkDeleteDaBackups} className="danger"><Trash2 size={14}/> {t('Delete selected ({n})', { n: selectedDaBackups.length })}</button>
             </div>}
           </div>
           <div className="backup-list">
@@ -6066,8 +6081,8 @@ Each account is overwritten with what is in its archive.`)) return;
                 <span>{file.filename}<small>{(file.size / (1024 * 1024)).toFixed(1)} MB</small></span>
               </label>
               <div className="da-actions">
-                <button disabled={!!loading} onClick={() => scanDaBackup(file.path)}><Search size={14}/> Scan</button>
-                <button disabled={!!loading} onClick={() => importDaBackup(file.path)}><ArchiveRestore size={14}/> Import</button>
+                <button disabled={!!loading} onClick={() => scanDaBackup(file.path)}><Search size={14}/>{t('Scan')}</button>
+                <button disabled={!!loading} onClick={() => importDaBackup(file.path)}><ArchiveRestore size={14}/>{t('Import')}</button>
                 <button className="danger" disabled={!!loading} onClick={() => deleteDaBackup(file.path)}><Trash2 size={14}/></button>
               </div>
             </div>)}
@@ -6075,7 +6090,7 @@ Each account is overwritten with what is in its archive.`)) return;
         </>}
 
         {daScanResult && <div className="da-scan-result">
-          <h4>Scan result: {daScanResult.filename}</h4>
+          <h4>{t('Scan result:')} {daScanResult.filename}</h4>
           {daScanResult.errors?.length > 0 && <div className="error-list">
             {daScanResult.errors.map((err, i) => <p key={i} className="error-text">{err}</p>)}
           </div>}
@@ -6083,7 +6098,7 @@ Each account is overwritten with what is in its archive.`)) return;
             <p className="da-user-head"><Users size={13}/> <strong>{user.username}</strong>{user.email && <small>{user.email}</small>}</p>
             {user.domains?.length > 0 && <div className="da-table-wrap">
               <table className="da-scan-table">
-                <thead><tr><th>Domain</th><th>Type</th><th>Files</th><th>Database</th><th>SQL dump</th><th>Pointers</th></tr></thead>
+                <thead><tr><th>{t('Domain')}</th><th>{t('Type')}</th><th>{t('Files')}</th><th>{t('Database')}</th><th>{t('SQL dump')}</th><th>{t('Pointers')}</th></tr></thead>
                 <tbody>
                   {user.domains.map((d, j) => <tr key={j}>
                     <td><Globe size={12}/> {d.domain}</td>
@@ -6097,9 +6112,9 @@ Each account is overwritten with what is in its archive.`)) return;
               </table>
             </div>}
             {user.databases?.length > 0 && <div className="da-table-wrap">
-              <p className="hint">Unassigned databases ({user.databases.length})</p>
+              <p className="hint">{t('Unassigned databases ({n})', { n: user.databases.length })}</p>
               <table className="da-scan-table">
-                <thead><tr><th>Database</th><th>SQL dump</th></tr></thead>
+                <thead><tr><th>{t('Database')}</th><th>{t('SQL dump')}</th></tr></thead>
                 <tbody>
                   {user.databases.map((db, j) => <tr key={j}>
                     <td><Database size={12}/> {db.db_name}</td>
@@ -6113,35 +6128,35 @@ Each account is overwritten with what is in its archive.`)) return;
 
         {daImportJob && <div className={`backup-job da-job ${daImportJob.status}`}>
           <Clock size={14}/>
-          <span><strong>DA Import</strong><small>{daImportJob.archive || ''}</small></span>
+          <span><strong>{t('DA Import')}</strong><small>{daImportJob.archive || ''}</small></span>
           <span className={daImportJob.status === 'completed' ? 'badge ok' : daImportJob.status === 'failed' ? 'badge bad' : 'badge'}>{daImportJob.status}</span>
         </div>}
         {daImportJob?.status === 'completed' && daImportJob.result?.summary && <div className="da-scan-result">
-          <h4>Import summary</h4>
+          <h4>{t('Import summary')}</h4>
           {daImportJob.result.summary.map((item, i) => <div key={i} className="da-user-block">
-            <p className="da-user-head"><strong>{item.username}</strong> <span className="badge ok">{item.imported_domains?.length || 0} domain(s)</span> <span className="badge">{item.databases?.length || 0} database(s)</span></p>
-            {item.aliases?.length > 0 && <p className="hint">Pointers: {item.aliases.join(', ')}</p>}
-            {item.ssl_enabled_domains?.length > 0 && <p className="hint">SSL enabled: {item.ssl_enabled_domains.join(', ')}</p>}
-            {item.warnings?.length > 0 && <p className="hint da-warn">Warnings: {item.warnings.join('; ')}</p>}
+            <p className="da-user-head"><strong>{item.username}</strong> <span className="badge ok">{t('{n} domain(s)', { n: item.imported_domains?.length || 0 })}</span> <span className="badge">{t('{n} database(s)', { n: item.databases?.length || 0 })}</span></p>
+            {item.aliases?.length > 0 && <p className="hint">{t('Pointers:')} {item.aliases.join(', ')}</p>}
+            {item.ssl_enabled_domains?.length > 0 && <p className="hint">{t('SSL enabled:')} {item.ssl_enabled_domains.join(', ')}</p>}
+            {item.warnings?.length > 0 && <p className="hint da-warn">{t('Warnings:')} {item.warnings.join('; ')}</p>}
           </div>)}
           {daImportJob.result.credentials && <details className="da-creds-details">
-            <summary>Generated credentials (click to show)</summary>
+            <summary>{t('Generated credentials (click to show)')}</summary>
             <pre className="da-credentials">{daImportJob.result.credentials.join('\n')}</pre>
           </details>}
         </div>}
 
         {daBulkImportJob && <div className={`backup-job da-job ${daBulkImportJob.status}`}>
           <Clock size={14}/>
-          <span><strong>Bulk restore</strong><small>{daBulkImportJob.status === 'running' ? `Processing ${daBulkImportJob.current + 1}/${daBulkImportJob.total}: ${daBulkImportJob.current_archive}` : `${daBulkImportJob.total} backup(s)`}</small></span>
+          <span><strong>{t('Bulk restore')}</strong><small>{daBulkImportJob.status === 'running' ? `Processing ${daBulkImportJob.current + 1}/${daBulkImportJob.total}: ${daBulkImportJob.current_archive}` : `${daBulkImportJob.total} backup(s)`}</small></span>
           <span className={daBulkImportJob.status === 'completed' ? 'badge ok' : 'badge'}>{daBulkImportJob.status === 'running' ? `${daBulkImportJob.current}/${daBulkImportJob.total}` : daBulkImportJob.status}</span>
         </div>}
         {daBulkImportJob?.status === 'completed' && daBulkImportJob.results && <div className="da-scan-result">
-          <h4>Bulk restore results</h4>
+          <h4>{t('Bulk restore results')}</h4>
           {daBulkImportJob.results.map((item, i) => <div key={i} className={`da-user-block ${item.status === 'completed' ? 'ok' : 'bad'}`}>
             <p className="da-user-head"><strong>{item.archive}</strong> <span className={item.status === 'completed' ? 'badge ok' : 'badge bad'}>{item.status}</span></p>
-            {item.result?.summary?.map((s, j) => <p key={j} className="hint">{s.username}: {s.imported_domains?.length || 0} domain(s), {s.databases?.length || 0} db(s)</p>)}
+            {item.result?.summary?.map((s, j) => <p key={j} className="hint">{s.username}: {t('{d} domain(s), {b} db(s)', { d: s.imported_domains?.length || 0, b: s.databases?.length || 0 })}</p>)}
             {item.result?.credentials && <details className="da-creds-details">
-              <summary>Credentials</summary>
+              <summary>{t('Credentials')}</summary>
               <pre className="da-credentials">{item.result.credentials.join('\n')}</pre>
             </details>}
             {item.error && <p className="error-text">{item.error}</p>}
@@ -6154,8 +6169,8 @@ Each account is overwritten with what is in its archive.`)) return;
   function renderServices() {
     return <section className="section">
       <div className="section-title">
-        <h2>Services Status</h2>
-        <button disabled={!!loading} onClick={checkAllServices}><RefreshCw size={15}/> Refresh</button>
+        <h2>{t('Services Status')}</h2>
+        <button disabled={!!loading} onClick={checkAllServices}><RefreshCw size={15}/>{t('Refresh')}</button>
       </div>
       <div className="service-grid">
         {serviceNames.map(name => {
@@ -6165,11 +6180,11 @@ Each account is overwritten with what is in its archive.`)) return;
           const inactive = text.includes('inactive') || text.includes('failed');
           return <div className="service-card" key={name}>
             <div><strong>{name}</strong><span className={active ? 'badge ok' : inactive ? 'badge bad' : 'badge'}>{active ? 'Running' : inactive ? 'Stopped' : '...'}</span></div>
-            <small>Auto-refreshes every 10s</small>
+            <small>{t('Auto-refreshes every 10s')}</small>
             {isAdmin && <div className="service-actions">
-              <button onClick={() => runServiceAction(name, 'start')}><Play size={13}/> Start</button>
-              {!['bpanel-api', 'redis-server'].includes(name) && <button onClick={() => runServiceAction(name, 'stop')}><Square size={13}/> Stop</button>}
-              <button onClick={() => runServiceAction(name, 'restart')}><RotateCcw size={13}/> Restart</button>
+              <button onClick={() => runServiceAction(name, 'start')}><Play size={13}/>{t('Start')}</button>
+              {!['bpanel-api', 'redis-server'].includes(name) && <button onClick={() => runServiceAction(name, 'stop')}><Square size={13}/>{t('Stop')}</button>}
+              <button onClick={() => runServiceAction(name, 'restart')}><RotateCcw size={13}/>{t('Restart')}</button>
             </div>}
           </div>;
         })}
@@ -6178,7 +6193,7 @@ Each account is overwritten with what is in its archive.`)) return;
   }
 
   function renderPhpConfig() {
-    if (!isAdmin) return <section className="section"><h2>PHP config</h2><p className="hint">You do not have permission to edit PHP config.</p></section>;
+    if (!isAdmin) return <section className="section"><h2>{t('PHP config')}</h2><p className="hint">{t('You do not have permission to edit PHP config.')}</p></section>;
     const notInstalled = sortPhpVersions(phpVersions.supported.filter(v => !phpVersions.installed.includes(v)));
     // The only thing worth an administrator's attention: settings Auto tune
     // would actually change. A row that already matches, or one pinned by the
@@ -6197,14 +6212,14 @@ Each account is overwritten with what is in its archive.`)) return;
     const poolOutliers = restPoolGroups.flat();
     return <section className="section">
       <div className="section-title">
-        <div><h2>PHP Configuration</h2></div>
+        <div><h2>{t('PHP Configuration')}</h2></div>
       </div>
       <div className="user-create-card">
-        <label><span>PHP version</span><select value={phpConfig.php_version} onChange={e => { const v = e.target.value; setPhpConfig(prev => ({ ...prev, php_version: v })); loadPhpConfig(v); loadPhpTune(v); }}>
+        <label><span>{t('PHP version')}</span><select value={phpConfig.php_version} onChange={e => { const v = e.target.value; setPhpConfig(prev => ({ ...prev, php_version: v })); loadPhpConfig(v); loadPhpTune(v); }}>
           {phpVersions.installed.map(v => <option key={v} value={v}>PHP {v}</option>)}
         </select></label>
         <label><span>display_errors</span><select value={phpConfig.display_errors} onChange={e => setPhpConfig(prev => ({ ...prev, display_errors: e.target.value }))}>
-          <option value="Off">Off (production)</option><option value="On">On (debug)</option>
+          <option value="Off">{t('Off (production)')}</option><option value="On">{t('On (debug)')}</option>
         </select></label>
         <label><span>max_execution_time</span><input type="number" value={phpConfig.max_execution_time} onChange={e => setPhpConfig(prev => ({ ...prev, max_execution_time: e.target.value }))} /></label>
         <label><span>max_input_time</span><input type="number" value={phpConfig.max_input_time} onChange={e => setPhpConfig(prev => ({ ...prev, max_input_time: e.target.value }))} /></label>
@@ -6212,12 +6227,12 @@ Each account is overwritten with what is in its archive.`)) return;
         <label><span>memory_limit</span><input value={phpConfig.memory_limit} onChange={e => setPhpConfig(prev => ({ ...prev, memory_limit: e.target.value }))} placeholder="1024M" /></label>
         <label><span>post_max_size</span><input value={phpConfig.post_max_size} onChange={e => setPhpConfig(prev => ({ ...prev, post_max_size: e.target.value }))} placeholder="1024M" /></label>
         <label><span>upload_max_filesize</span><input value={phpConfig.upload_max_filesize} onChange={e => setPhpConfig(prev => ({ ...prev, upload_max_filesize: e.target.value }))} placeholder="1024M" /></label>
-        <button className="secondary-light" disabled={!!loading} onClick={restorePhpDefaults}><RotateCcw size={14}/> Restore defaults</button>
-        <button disabled={!!loading} onClick={updatePhpConfig}>Save</button>
+        <button className="secondary-light" disabled={!!loading} onClick={restorePhpDefaults}><RotateCcw size={14}/>{t('Restore defaults')}</button>
+        <button disabled={!!loading} onClick={updatePhpConfig}>{t('Save')}</button>
         {phpTune && tuneChanges.length > 0 && <div className="php-tune-diff">
-          <strong><AlertCircle size={14}/> Auto tune will change {tuneChanges.length} setting(s) for PHP {phpTune.php_version}</strong>
+          <strong><AlertCircle size={14}/> {t('Auto tune will change {n} setting(s) for PHP {version}', { n: tuneChanges.length, version: phpTune.php_version })}</strong>
           <span>{tuneChanges.map(row => `${row.key} ${row.current || 'unset'} → ${row.value}`).join(', ')}.</span>
-          <button className="mini" disabled={!!loading} onClick={applyPhpTune}>Auto tune PHP</button>
+          <button className="mini" disabled={!!loading} onClick={applyPhpTune}>{t('Auto tune PHP')}</button>
         </div>}
         {phpTune && tuneChanges.length === 0 && <div className="notice php-tune-diff">
           <Check size={14}/> PHP {phpTune.php_version} already matches what auto tune recommends for this machine ({phpTune.facts.cpu_count} CPU, {phpTune.facts.total_memory_mb} MB RAM).
@@ -6225,18 +6240,17 @@ Each account is overwritten with what is in its archive.`)) return;
       </div>
       {phpTune && <div className="php-tune" style={{ marginTop: 16 }}>
         <div className="php-tune-actions">
-          <button disabled={!!loading} onClick={applyPhpTune}><Cpu size={14}/> Auto tune PHP</button>
+          <button disabled={!!loading} onClick={applyPhpTune}><Cpu size={14}/>{t('Auto tune PHP')}</button>
           <button className="secondary-light" disabled={!!loading} onClick={toggleOpcache}>
             {phpTune.opcache_enabled
-              ? <><Ban size={14}/> Disable OPcache (PHP {phpTune.php_version})</>
-              : <><Play size={14}/> Enable OPcache (PHP {phpTune.php_version})</>}
+              ? <><Ban size={14}/> {t('Disable OPcache (PHP {version})', { version: phpTune.php_version })}</>
+              : <><Play size={14}/> {t('Enable OPcache (PHP {version})', { version: phpTune.php_version })}</>}
           </button>
         </div>
         {phpTuneApplied && <div className="notice php-tune-result">
           <strong><Check size={14}/> PHP {phpTune.php_version} tuned.</strong>
         </div>}
-        {commonPools && <p className="hint">
-          PHP-FPM pools: {commonPools.length}/{phpTune.pools.length} running pm.max_children={commonPools[0].max_children || '—'},
+        {commonPools && <p className="hint">{t('PHP-FPM pools:')} {commonPools.length}/{phpTune.pools.length} running pm.max_children={commonPools[0].max_children || '—'},
           idle {commonPools[0].idle_timeout || '—'}, up to {commonPools[0].max_requests || '—'} requests per process.
           {poolOutliers.length > 0 && ` ${poolOutliers.length} other pool(s) run different settings:`}
         </p>}
@@ -6248,7 +6262,7 @@ Each account is overwritten with what is in its archive.`)) return;
         </ul>}
       </div>}
       {notInstalled.length > 0 && <div className="user-create-card" style={{ marginTop: 16 }}>
-        <h3>Install PHP</h3>
+        <h3>{t('Install PHP')}</h3>
         <div className="php-install-grid">
           {notInstalled.map(v => <button key={v} disabled={!!loading} onClick={() => installPhpVersion(v)}>+ PHP {v}</button>)}
         </div>
@@ -6257,7 +6271,7 @@ Each account is overwritten with what is in its archive.`)) return;
   }
 
   function renderFirewall() {
-    if (!isAdmin) return <section className="section"><h2>Firewall</h2><p className="hint">No permission.</p></section>;
+    if (!isAdmin) return <section className="section"><h2>{t('Firewall')}</h2><p className="hint">{t('No permission.')}</p></section>;
     const firewallText = firewallStatus?.stdout || firewallStatus?.stderr || 'Press Refresh to load the status.';
     const blocklistText = firewallBlocklists?.stdout || firewallBlocklists?.stderr || 'Blocklist status not loaded yet.';
     const blocklistUrls = parseFirewallBlocklistUrls(blocklistText);
@@ -6280,16 +6294,16 @@ Each account is overwritten with what is in its archive.`)) return;
       <section className="section">
         <div className="section-title">
           <div>
-            <h2>Firewall</h2>
+            <h2>{t('Firewall')}</h2>
             <p className="hint">iptables + ipset. SSH, the panel port and 80/443/465/587 are always kept open.</p>
           </div>
           <div className="actions">
-            <button disabled={!!loading} onClick={loadFirewall}><RefreshCw size={14}/> Refresh</button>
+            <button disabled={!!loading} onClick={loadFirewall}><RefreshCw size={14}/>{t('Refresh')}</button>
             {/* One of these, never both: the other is not an action available now. */}
             {stateKnown && (enabled
-              ? <button className="danger" disabled={!!loading} onClick={disableFirewall}>Turn off</button>
-              : <button disabled={!!loading} onClick={enableFirewall}><Shield size={14}/> Turn on</button>)}
-            {enabled && <button disabled={!!loading} onClick={reloadFirewall}>Reload</button>}
+              ? <button className="danger" disabled={!!loading} onClick={disableFirewall}>{t('Turn off')}</button>
+              : <button disabled={!!loading} onClick={enableFirewall}><Shield size={14}/>{t('Turn on')}</button>)}
+            {enabled && <button disabled={!!loading} onClick={reloadFirewall}>{t('Reload')}</button>}
           </div>
         </div>
 
@@ -6300,18 +6314,18 @@ Each account is overwritten with what is in its archive.`)) return;
 
         <div className="detail-tabs">
           <button className={fwDetail === 'rules' ? 'chip on' : 'chip'} disabled={!!loading}
-            onClick={() => openFwDetail('rules')}>Your rules <b>{userRules.length}</b></button>
+            onClick={() => openFwDetail('rules')}>{t('Your rules')}<b>{userRules.length}</b></button>
           <button className={fwDetail === 'urls' ? 'chip on' : 'chip'} disabled={!!loading}
-            onClick={() => openFwDetail('urls')}>Blocklist URL <b>{blocklistUrls.length}</b></button>
+            onClick={() => openFwDetail('urls')}>{t('Blocklist URL')}<b>{blocklistUrls.length}</b></button>
           <button className={fwDetail === 'raw' ? 'chip on' : 'chip'} disabled={!!loading}
-            onClick={() => openFwDetail('raw')}>Raw status</button>
+            onClick={() => openFwDetail('raw')}>{t('Raw status')}</button>
         </div>
 
         {fwDetail && <div className="detail-panel">
           {fwDetail !== 'raw' && <div className="detail-head">
             <input id="fw-filter" value={fwFilter} onChange={e => setFwFilter(e.target.value)}
-              placeholder="Filter this list..." aria-label="Filter list" />
-            <button className="secondary-light" onClick={() => setFwDetail(null)}><X size={14}/> Close</button>
+              placeholder={t('Filter this list...')} aria-label={t('Filter list')} />
+            <button className="secondary-light" onClick={() => setFwDetail(null)}><X size={14}/>{t('Close')}</button>
           </div>}
 
           {fwDetail === 'rules' && <div className="detail-body">
@@ -6325,7 +6339,7 @@ Each account is overwritten with what is in its archive.`)) return;
                 {rule.to} from {rule.from}
               </span>
               <div className="firewall-rule-actions">
-                <button className="danger" disabled={!!loading} onClick={() => deleteFirewallRule(rule.id)}><Trash2 size={14}/> Delete</button>
+                <button className="danger" disabled={!!loading} onClick={() => deleteFirewallRule(rule.id)}><Trash2 size={14}/>{t('Delete')}</button>
               </div>
             </div>)}
           </div>}
@@ -6334,51 +6348,51 @@ Each account is overwritten with what is in its archive.`)) return;
             <div className="firewall-form firewall-blocklist-form">
               <label><span>TXT URL</span><input id="fw-blocklist-url" value={firewallBlocklistUrl}
                 onChange={e => setFirewallBlocklistUrl(e.target.value)} placeholder="https://example.com/blocklist.txt" /></label>
-              <button disabled={!!loading || !firewallBlocklistUrl.trim()} onClick={addFirewallBlocklistUrl}><Plus size={14}/> Add</button>
-              <button className="secondary-light" disabled={!!loading} onClick={updateFirewallBlocklistsNow}><RefreshCw size={14}/> Update now</button>
+              <button disabled={!!loading || !firewallBlocklistUrl.trim()} onClick={addFirewallBlocklistUrl}><Plus size={14}/>{t('Add')}</button>
+              <button className="secondary-light" disabled={!!loading} onClick={updateFirewallBlocklistsNow}><RefreshCw size={14}/>{t('Update now')}</button>
             </div>
-            <p className="hint">Fetched daily at 01:00 into an ipset, so even a million-entry list costs one kernel lookup per packet.</p>
-            {shownUrls.length === 0 && <p className="hint">No URLs yet.</p>}
+            <p className="hint">{t('Fetched daily at 01:00 into an ipset, so even a million-entry list costs one kernel lookup per packet.')}</p>
+            {shownUrls.length === 0 && <p className="hint">{t('No URLs yet.')}</p>}
             {shownUrls.map(url => <div className="firewall-rule" key={url}>
               <span className="wrap-any">{url}</span>
-              <div className="firewall-rule-actions"><button className="danger" disabled={!!loading} onClick={() => deleteFirewallBlocklistUrl(url)}><Trash2 size={14}/> Delete</button></div>
+              <div className="firewall-rule-actions"><button className="danger" disabled={!!loading} onClick={() => deleteFirewallBlocklistUrl(url)}><Trash2 size={14}/>{t('Delete')}</button></div>
             </div>)}
           </div>}
 
           {fwDetail === 'raw' && <div className="detail-body">
             <div className="detail-head">
-              <strong>Firewall status</strong>
-              <button className="secondary-light" onClick={() => setFwDetail(null)}><X size={14}/> Close</button>
+              <strong>{t('Firewall status')}</strong>
+              <button className="secondary-light" onClick={() => setFwDetail(null)}><X size={14}/>{t('Close')}</button>
             </div>
             <pre>{firewallText}</pre>
-            <strong>Blocklist status</strong>
+            <strong>{t('Blocklist status')}</strong>
             <pre>{blocklistText}</pre>
             <div className="firewall-delete-inline">
-              <label><span>Delete rule #</span><input id="fw-delete-number" value={firewallDeleteNumber}
+              <label><span>{t('Delete rule #')}</span><input id="fw-delete-number" value={firewallDeleteNumber}
                 onChange={e => setFirewallDeleteNumber(e.target.value)} placeholder="12" inputMode="numeric" /></label>
-              <button className="danger" disabled={!!loading || !firewallDeleteNumber} onClick={() => deleteFirewallRule()}>Delete</button>
+              <button className="danger" disabled={!!loading || !firewallDeleteNumber} onClick={() => deleteFirewallRule()}>{t('Delete')}</button>
             </div>
           </div>}
         </div>}
 
         <div className="firewall-form rule-form">
-          <label><span>Action</span>
+          <label><span>{t('Action')}</span>
             <select id="fw-action" value={fwAction} onChange={e => setFwAction(e.target.value)}>
-              <option value="block">Block IP</option>
-              <option value="allow">Allow IP</option>
-              <option value="port">Open port</option>
+              <option value="block">{t('Block IP')}</option>
+              <option value="allow">{t('Allow IP')}</option>
+              <option value="port">{t('Open port')}</option>
             </select>
           </label>
-          {fwAction === 'block' && <label><span>IP / CIDR</span><input id="fw-block-ip" value={firewallBlockIp}
+          {fwAction === 'block' && <label><span>{t('IP / CIDR')}</span><input id="fw-block-ip" value={firewallBlockIp}
             onChange={e => setFirewallBlockIp(e.target.value)} placeholder="5.6.7.8" /></label>}
-          {fwAction === 'allow' && <label><span>IP / CIDR</span><input id="fw-allow-ip" value={firewallAllowIp}
+          {fwAction === 'allow' && <label><span>{t('IP / CIDR')}</span><input id="fw-allow-ip" value={firewallAllowIp}
             onChange={e => setFirewallAllowIp(e.target.value)} placeholder="1.2.3.4" /></label>}
           <label><span>Port{fwAction === 'port' ? '' : ' (optional)'}</span>
-            {fwAction === 'block' && <input id="fw-block-port" value={firewallBlockPort} onChange={e => setFirewallBlockPort(e.target.value)} placeholder="All ports" inputMode="numeric" />}
+            {fwAction === 'block' && <input id="fw-block-port" value={firewallBlockPort} onChange={e => setFirewallBlockPort(e.target.value)} placeholder={t('All ports')} inputMode="numeric" />}
             {fwAction === 'allow' && <input id="fw-allow-port" value={firewallAllowPort} onChange={e => setFirewallAllowPort(e.target.value)} placeholder="22" inputMode="numeric" />}
             {fwAction === 'port' && <input id="fw-port" value={firewallPort} onChange={e => setFirewallPort(e.target.value)} placeholder="80" inputMode="numeric" />}
           </label>
-          <label><span>Protocol</span>
+          <label><span>{t('Protocol')}</span>
             {fwAction === 'block' && <select id="fw-block-proto" value={firewallBlockProtocol} onChange={e => setFirewallBlockProtocol(e.target.value)}><option value="tcp">TCP</option><option value="udp">UDP</option></select>}
             {fwAction === 'allow' && <select id="fw-allow-proto" value={firewallAllowProtocol} onChange={e => setFirewallAllowProtocol(e.target.value)}><option value="tcp">TCP</option><option value="udp">UDP</option></select>}
             {fwAction === 'port' && <select id="fw-proto" value={firewallProtocol} onChange={e => setFirewallProtocol(e.target.value)}><option value="tcp">TCP</option><option value="udp">UDP</option></select>}
@@ -6396,28 +6410,28 @@ Each account is overwritten with what is in its archive.`)) return;
         <div className="section-title">
           <div>
             <h2>Fail2ban</h2>
-            <p className="hint">Five failed attempts within an hour bans an address for an hour, and longer each time it comes back, up to a week. The server never bans its own addresses.</p>
+            <p className="hint">{t('Five failed attempts within an hour bans an address for an hour, and longer each time it comes back, up to a week. The server never bans its own addresses.')}</p>
           </div>
-          <button disabled={!!loading} onClick={loadFail2ban}><RefreshCw size={14}/> Refresh</button>
+          <button disabled={!!loading} onClick={loadFail2ban}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
-        {!f2b && <p className="hint">Status not loaded. Press Refresh.</p>}
+        {!f2b && <p className="hint">{t('Status not loaded. Press Refresh.')}</p>}
         {f2b && <>
           {f2b.warning && <p className="hint alarm">{f2b.warning}</p>}
           <div className="chip-row">
             <span className={f2b.running ? 'badge ok' : 'badge warn'}>{f2b.running ? 'Running' : 'Not running'}</span>
             <span className={f2b.bans_reach_kernel ? 'badge ok' : 'badge warn'}>{f2b.bans_reach_kernel ? 'Bans take effect' : 'Bans NOT reaching iptables'}</span>
             <span className={f2b.filter_sees_journal ? 'badge ok' : 'badge warn'}>{f2b.filter_sees_journal ? 'Reading the log' : 'Seeing NO log'}</span>
-            <span className="hint">{f2b.ssh_unit || '—'} · {f2b.banaction || '—'} · {f2b.total_failed ?? 0} failures seen</span>
+            <span className="hint">{f2b.ssh_unit || '—'} · {f2b.banaction || '—'} · {t('{n} failures seen', { n: f2b.total_failed ?? 0 })}</span>
           </div>
           <div className="detail-tabs">
             <button className={fwDetail === 'banned' ? 'chip on' : 'chip'} disabled={!!loading}
-              onClick={() => openFwDetail('banned')}>Banned addresses <b>{f2b.banned ?? 0}</b></button>
+              onClick={() => openFwDetail('banned')}>{t('Banned addresses')}<b>{f2b.banned ?? 0}</b></button>
           </div>
           {fwDetail === 'banned' && <div className="detail-panel">
             <div className="detail-head">
               <input id="f2b-filter" value={fwFilter} onChange={e => setFwFilter(e.target.value)}
-                placeholder="Filter by address..." aria-label="Filter banned addresses" />
-              <button className="secondary-light" onClick={() => setFwDetail(null)}><X size={14}/> Close</button>
+                placeholder={t('Filter by address...')} aria-label={t('Filter banned addresses')} />
+              <button className="secondary-light" onClick={() => setFwDetail(null)}><X size={14}/>{t('Close')}</button>
             </div>
             <div className="detail-body">
               {shownBanned.length === 0 && <p className="hint">{f2bBanned.total === 0
@@ -6425,16 +6439,16 @@ Each account is overwritten with what is in its archive.`)) return;
               {shownBanned.map(ip => <div className="firewall-rule" key={ip}>
                 <span><code>{ip}</code></span>
                 <div className="firewall-rule-actions">
-                  <button className="danger" disabled={!!loading} onClick={() => unbanAddress(ip)}>Unban</button>
+                  <button className="danger" disabled={!!loading} onClick={() => unbanAddress(ip)}>{t('Unban')}</button>
                 </div>
               </div>)}
             </div>
             {f2bBanned.total > f2bBanned.limit && <div className="detail-foot">
               <button className="secondary-light" disabled={!!loading || f2bBanned.offset === 0}
-                onClick={() => loadBannedPage(Math.max(0, f2bBanned.offset - f2bBanned.limit))}>Previous</button>
+                onClick={() => loadBannedPage(Math.max(0, f2bBanned.offset - f2bBanned.limit))}>{t('Previous')}</button>
               <span className="hint">{f2bBanned.offset + 1}–{Math.min(f2bBanned.offset + f2bBanned.limit, f2bBanned.total)} trong {f2bBanned.total}</span>
               <button className="secondary-light" disabled={!!loading || f2bBanned.offset + f2bBanned.limit >= f2bBanned.total}
-                onClick={() => loadBannedPage(f2bBanned.offset + f2bBanned.limit)}>Sau</button>
+                onClick={() => loadBannedPage(f2bBanned.offset + f2bBanned.limit)}>{t('Next')}</button>
             </div>}
           </div>}
         </>}
@@ -6458,24 +6472,24 @@ Each account is overwritten with what is in its archive.`)) return;
               ? 'Engine status and per-website protection. Open a website to configure its rules, flood limits and blocked bots.'
               : 'Protection for your websites. Open one to configure its rules and blocked bots.'}</p>
           </div>
-          <button disabled={!!loading} onClick={() => { loadBotBlocks(); if (isAdmin) { loadWafRules(); loadCrs(); } }}><RefreshCw size={14}/> Refresh</button>
+          <button disabled={!!loading} onClick={() => { loadBotBlocks(); if (isAdmin) { loadWafRules(); loadCrs(); } }}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
-        {isAdmin && <div className="info-box firewall-status"><strong>Status</strong><pre>{statusText}</pre></div>}
+        {isAdmin && <div className="info-box firewall-status"><strong>{t('Status')}</strong><pre>{statusText}</pre></div>}
       </section>
 
       {isAdmin && <section className="section">
         <div className="section-title">
           <div>
-            <h2>OWASP Core Rule Set</h2>
+            <h2>{t('OWASP Core Rule Set')}</h2>
             <p className="hint">
               BPanel's own rules block known bad paths. CRS inspects the payload - SQL injection, XSS,
               command injection - and scores each request instead of refusing on a single match.
               Off by default because CRS needs tuning against real traffic before it can be trusted to block.
             </p>
           </div>
-          <button disabled={!!loading} onClick={loadCrs}><RefreshCw size={14}/> Check</button>
+          <button disabled={!!loading} onClick={loadCrs}><RefreshCw size={14}/>{t('Check')}</button>
         </div>
-        {!crs && <p className="hint">Click Check to read the current state.</p>}
+        {!crs && <p className="hint">{t('Click Check to read the current state.')}</p>}
         {crs && <>
           <div className="waf-overview-badges" style={{ marginBottom: 12 }}>
             <span className={crs.mode === 'block' ? 'badge ok' : 'badge'}>
@@ -6484,20 +6498,16 @@ Each account is overwritten with what is in its archive.`)) return;
             <span className={crs.installed ? 'badge ok' : 'badge'}>
               {crs.installed ? `${crs.rule_files} rule file(s) installed` : 'Not installed'}
             </span>
-            <span className="badge">{crs.sites_opted_in ?? 0} site(s) opted in</span>
-            <span className="badge">nginx now: {crs.nginx_pss_mb || 0} MB</span>
+            <span className="badge">{t('{n} site(s) opted in', { n: crs.sites_opted_in ?? 0 })}</span>
+            <span className="badge">{t('nginx now: {n} MB', { n: crs.nginx_pss_mb || 0 })}</span>
             <span className={(crs.ram_available_mb || 0) < 1024 ? 'badge danger' : 'badge'}>
-              {crs.ram_available_mb || 0} MB RAM free
+              {t('{n} MB RAM free', { n: crs.ram_available_mb || 0 })}
             </span>
           </div>
           <div className="info-box" style={{ marginBottom: 12 }}>
-            <strong>Memory</strong>
+            <strong>{t('Memory')}</strong>
             <p className="hint">
-              Each site that loads CRS adds its own copy of the rule set, so the cost grows with the
-              number opted in — roughly {crs.rss_mb_per_site || 50} MB each. "nginx now" above is measured on this
-              server, not estimated, and it is the figure to act on; watch it and the free-RAM figure
-              beside it as you opt sites in. Note that `ps` reports several times this, because it
-              counts pages the nginx workers share once for each worker.
+              {t('Each site that loads CRS adds its own copy of the rule set, so the cost grows with the number opted in — roughly {n} MB each. "nginx now" above is measured on this server, not estimated, and it is the figure to act on; watch it and the free-RAM figure beside it as you opt sites in. Note that `ps` reports several times this, because it counts pages the nginx workers share once for each worker.', { n: crs.rss_mb_per_site || 50 })}
             </p>
           </div>
           <div className="segmented-control">
@@ -6516,17 +6526,15 @@ Each account is overwritten with what is in its archive.`)) return;
             {crs.mode === 'block' && 'Requests scoring above the threshold are refused on every site with the WAF on. Add SecRuleRemoveById <id> to a site’s custom rules to excuse it from one rule.'}
           </p>
           {crs.mode !== 'off' && crs.panel_mode !== crs.mode && (
-            <p className="hint">Panel setting says "{crs.panel_mode}" but the server reports "{crs.mode}".</p>
+            <p className="hint">{t('Panel setting says "{panel}" but the server reports "{server}".', { panel: crs.panel_mode, server: crs.mode })}</p>
           )}
-          <p className="hint">
-            This is the server-wide switch. Which sites load CRS is chosen per website below.
-          </p>
+          <p className="hint">{t('This is the server-wide switch. Which sites load CRS is chosen per website below.')}</p>
         </>}
       </section>}
 
       <section className="section">
-        <div className="section-title"><h2>Websites</h2></div>
-        {websites.length === 0 && <EmptyState icon={Globe} message="No websites yet." />}
+        <div className="section-title"><h2>{t('Websites')}</h2></div>
+        {websites.length === 0 && <EmptyState icon={Globe} message={t('No websites yet.')} />}
         <div className="table waf-overview-list">
           {websites.map(site => {
             const bots = botCountFor(site.id);
@@ -6552,7 +6560,7 @@ Each account is overwritten with what is in its archive.`)) return;
                   title={ownCountFor(site.id) > 0 ? `${ownCountFor(site.id)} set on this site, the rest from the global list` : 'All from the global list'}
                 >{bots > 0 ? `${bots} bot(s)` : 'No bots'}</span>
               </div>
-              <button disabled={!!loading} onClick={() => openWafSite(site.id)}><SettingsIcon size={14}/> Configure</button>
+              <button disabled={!!loading} onClick={() => openWafSite(site.id)}><SettingsIcon size={14}/>{t('Configure')}</button>
             </div>;
           })}
         </div>
@@ -6561,7 +6569,7 @@ Each account is overwritten with what is in its archive.`)) return;
       {isAdmin && <section className="section">
         <div className="section-title">
           <div>
-            <h2>Global bad bots</h2>
+            <h2>{t('Global bad bots')}</h2>
             <p className="hint">
               Blocked on every website on this server. A site can add more of its own from its page.
               {globalBots.length > 0 ? ` Currently ${globalBots.length} bot(s).` : ' Nothing blocked globally yet.'}
@@ -6574,23 +6582,22 @@ Each account is overwritten with what is in its archive.`)) return;
           <div className="global-bots-add">
             <input
               value={newBotName}
-              placeholder="Add one bot, e.g. Amazonbot"
+              placeholder={t('Add one bot, e.g. Amazonbot')}
               onChange={e => setNewBotName(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') { addGlobalBots(newBotName); setNewBotName(''); } }}
             />
             <button type="button" disabled={!newBotName.trim()} onClick={() => { addGlobalBots(newBotName); setNewBotName(''); }}>
-              <Plus size={14}/> Add
-            </button>
+              <Plus size={14}/>{t('Add')}</button>
             <input
               className="global-bots-filter"
               value={globalBotFilter}
-              placeholder="Filter the list"
+              placeholder={t('Filter the list')}
               onChange={e => setGlobalBotFilter(e.target.value)}
             />
           </div>
 
           <div className="global-bots-list">
-            {globalBots.length === 0 && <p className="hint">No bots yet. Add one above, or paste a list below.</p>}
+            {globalBots.length === 0 && <p className="hint">{t('No bots yet. Add one above, or paste a list below.')}</p>}
             {globalBots
               .filter(name => !globalBotFilter.trim() || name.toLowerCase().includes(globalBotFilter.trim().toLowerCase()))
               .map(name => <span className="global-bot-chip" key={name}>
@@ -6604,7 +6611,7 @@ Each account is overwritten with what is in its archive.`)) return;
           </div>
 
           <details className="global-bots-paste">
-            <summary>Paste a list</summary>
+            <summary>{t('Paste a list')}</summary>
             <textarea
               className="code-editor"
               rows={6}
@@ -6614,19 +6621,18 @@ Each account is overwritten with what is in its archive.`)) return;
               placeholder={'AhrefsBot\nSemrushBot\nMJ12bot'}
             />
             <button type="button" disabled={!globalBotPaste.trim()} onClick={() => { addGlobalBots(globalBotPaste); setGlobalBotPaste(''); }}>
-              <Plus size={14}/> Add to list
-            </button>
+              <Plus size={14}/>{t('Add to list')}</button>
           </details>
 
           <div className="global-bots-actions">
             <button disabled={!!loading} onClick={() => saveGlobalBots(globalBots)}>
-              <Shield size={14}/> Save and apply to all {websites.length} website(s)
+              <Shield size={14}/> {t('Save and apply to all {n} website(s)', { n: websites.length })}
             </button>
             <button
               className="secondary-light"
               disabled={!!loading}
               onClick={() => setGlobalBots(botBlocks?.global_blocked_bots || [])}
-            >Reset</button>
+            >{t('Reset')}</button>
             <span className="hint">
               {globalBots.length} bot(s)
               {botBlocks?.max_bots ? ` - max ${botBlocks.max_bots}` : ''}
@@ -6653,13 +6659,13 @@ Each account is overwritten with what is in its archive.`)) return;
         <div className="section-title waf-site-header">
           <div>
             <h2>{wafSiteConfig?.domain || selectedSite?.domain || 'Website'}</h2>
-            <p className="hint">WAF rules, flood limits and blocked bots for this website.</p>
+            <p className="hint">{t('WAF rules, flood limits and blocked bots for this website.')}</p>
           </div>
           <div className="waf-site-header-actions">
             <select value={selectedWafWebsiteId} onChange={e => loadWebsiteWafConfig(e.target.value)}>
               {websites.map(site => <option key={site.id} value={site.id}>{site.domain}</option>)}
             </select>
-            <button className="secondary-light" onClick={() => navigateToPage('waf')}><ArrowLeft size={14}/> All websites</button>
+            <button className="secondary-light" onClick={() => navigateToPage('waf')}><ArrowLeft size={14}/>{t('All websites')}</button>
           </div>
         </div>
         <div className="waf-site-toggles">
@@ -6685,24 +6691,23 @@ Each account is overwritten with what is in its archive.`)) return;
           </button>
         </div>
         <p className="hint">
-          The WAF blocks known bad paths. OWASP CRS adds payload inspection — SQL injection, XSS,
-          command injection — for this site, at roughly {crs?.rss_mb_per_site || 50} MB of nginx memory.
+          {t('The WAF blocks known bad paths. OWASP CRS adds payload inspection — SQL injection, XSS, command injection — for this site, at roughly {n} MB of nginx memory.', { n: crs?.rss_mb_per_site || 50 })}
           {wafSiteConfig?.crs_enabled && wafSiteConfig?.crs_mode === 'off'
-            ? ' This site is opted in, but CRS is switched off server-wide on the WAF page, so nothing is loaded.'
+            ? ' ' + t('This site is opted in, but CRS is switched off server-wide on the WAF page, so nothing is loaded.')
             : ''}
           {wafSiteConfig?.crs_active
-            ? ' Add SecRuleRemoveById <id> to the custom rules below to excuse this site from one CRS rule.'
+            ? ' ' + t('Add SecRuleRemoveById <id> to the custom rules below to excuse this site from one CRS rule.')
             : ''}
         </p>
       </section>
 
-      {!wafSiteConfig && websites.length === 0 && <section className="section"><EmptyState icon={Globe} message="No websites yet." /></section>}
+      {!wafSiteConfig && websites.length === 0 && <section className="section"><EmptyState icon={Globe} message={t('No websites yet.')} /></section>}
 
       {wafSiteConfig && <section className="section bot-block-panel">
         <div className="section-title">
           <div>
-            <h2>Blocked bots</h2>
-            <p className="hint">One name per line, matched anywhere in User-Agent. Matched literally, so <code>bingbot/2.0</code> will not also match <code>bingbotX2Y0</code>. Blocked requests get 403 before WAF and rate limiting run.</p>
+            <h2>{t('Blocked bots')}</h2>
+            <p className="hint">{t('One name per line, matched anywhere in User-Agent. Matched literally, so')}<code>bingbot/2.0</code> will not also match <code>bingbotX2Y0</code>. Blocked requests get 403 before WAF and rate limiting run.</p>
           </div>
         </div>
         <textarea
@@ -6719,32 +6724,30 @@ Each account is overwritten with what is in its archive.`)) return;
           {botBlocks?.max_bots ? ` - max ${botBlocks.max_bots}` : ''}
         </p>
         <div className="actions">
-          <button disabled={!!loading} onClick={saveSiteBots}><Shield size={14}/> Save blocked bots</button>
-          <button className="secondary-light" disabled={!!loading || siteBotNames.length === 0} onClick={() => setSiteBotText('')}>Clear list</button>
+          <button disabled={!!loading} onClick={saveSiteBots}><Shield size={14}/>{t('Save blocked bots')}</button>
+          <button className="secondary-light" disabled={!!loading || siteBotNames.length === 0} onClick={() => setSiteBotText('')}>{t('Clear list')}</button>
         </div>
       </section>}
 
       {wafSiteConfig && <section className="section http-flood-panel">
         <div className="section-title">
-          <h2>HTTP Flood</h2>
+          <h2>{t('HTTP Flood')}</h2>
           <span className={httpFloodForm.http_flood_enabled ? 'badge ok' : 'badge'}>{httpFloodForm.http_flood_enabled ? 'Enabled' : 'Disabled'}</span>
         </div>
         <label className="schedule-toggle http-flood-toggle">
-          <input type="checkbox" checked={!!httpFloodForm.http_flood_enabled} onChange={e => setHttpFloodForm(prev => ({ ...prev, http_flood_enabled: e.target.checked }))} />
-          Enabled
-        </label>
+          <input type="checkbox" checked={!!httpFloodForm.http_flood_enabled} onChange={e => setHttpFloodForm(prev => ({ ...prev, http_flood_enabled: e.target.checked }))} />{t('Enabled')}</label>
         <div className="http-flood-grid">
-          <label><span>Requests</span><input type="number" min="1" max="100000" value={httpFloodForm.access_limit_requests} onChange={e => setHttpFloodForm(prev => ({ ...prev, access_limit_requests: e.target.value }))} /></label>
-          <label><span>Window (sec)</span><input type="number" min="1" max="3600" value={httpFloodForm.access_limit_window} onChange={e => setHttpFloodForm(prev => ({ ...prev, access_limit_window: e.target.value }))} /></label>
-          <label><span>Burst</span><input type="number" min="0" max="100000" value={httpFloodForm.access_limit_burst} onChange={e => setHttpFloodForm(prev => ({ ...prev, access_limit_burst: e.target.value }))} /></label>
-          <label><span>Connections/IP</span><input type="number" min="1" max="10000" value={httpFloodForm.connection_limit} onChange={e => setHttpFloodForm(prev => ({ ...prev, connection_limit: e.target.value }))} /></label>
-          <button disabled={!!loading} onClick={saveWebsiteHttpFlood}><Shield size={14}/> Save HTTP Flood</button>
+          <label><span>{t('Requests')}</span><input type="number" min="1" max="100000" value={httpFloodForm.access_limit_requests} onChange={e => setHttpFloodForm(prev => ({ ...prev, access_limit_requests: e.target.value }))} /></label>
+          <label><span>{t('Window (sec)')}</span><input type="number" min="1" max="3600" value={httpFloodForm.access_limit_window} onChange={e => setHttpFloodForm(prev => ({ ...prev, access_limit_window: e.target.value }))} /></label>
+          <label><span>{t('Burst')}</span><input type="number" min="0" max="100000" value={httpFloodForm.access_limit_burst} onChange={e => setHttpFloodForm(prev => ({ ...prev, access_limit_burst: e.target.value }))} /></label>
+          <label><span>{t('Connections/IP')}</span><input type="number" min="1" max="10000" value={httpFloodForm.connection_limit} onChange={e => setHttpFloodForm(prev => ({ ...prev, connection_limit: e.target.value }))} /></label>
+          <button disabled={!!loading} onClick={saveWebsiteHttpFlood}><Shield size={14}/>{t('Save HTTP Flood')}</button>
         </div>
       </section>}
 
       {wafSiteConfig && <section className="section waf-rules-grid">
         <div className="waf-rule-panel">
-          <div className="section-title"><h2>Default rules</h2></div>
+          <div className="section-title"><h2>{t('Default rules')}</h2></div>
           <div className="waf-default-groups">
             {Object.entries(groupedRules).map(([category, rules]) => <div className="waf-rule-group" key={category}>
               <h3>{category}</h3>
@@ -6756,7 +6759,7 @@ Each account is overwritten with what is in its archive.`)) return;
           </div>
         </div>
         <div className="waf-rule-panel">
-          <div className="section-title"><h2>Custom rules</h2></div>
+          <div className="section-title"><h2>{t('Custom rules')}</h2></div>
           <textarea
             className="code-editor"
             value={wafCustomRules}
@@ -6771,7 +6774,7 @@ Each account is overwritten with what is in its archive.`)) return;
               ? 'Custom rules are arbitrary ModSecurity directives, so only an administrator can change them. Ask your provider if you need a rule added or excluded.'
               : `Saved into ${wafSiteConfig.rules_file}`}
           </p>
-          <div className="actions"><button disabled={!!loading} onClick={saveWebsiteWafRules}>Save website WAF rules</button></div>
+          <div className="actions"><button disabled={!!loading} onClick={saveWebsiteWafRules}>{t('Save website WAF rules')}</button></div>
         </div>
       </section>}
     </>;
@@ -6783,28 +6786,28 @@ Each account is overwritten with what is in its archive.`)) return;
     const entryLabel = wafAccessLogs.total >= 1000 ? `${(wafAccessLogs.total / 1000).toFixed(1)}k entries` : `${wafAccessLogs.total || 0} entries`;
     return <section className="section access-logs-section">
       <div className="section-title access-logs-title">
-        <div><h2>Access Logs</h2><p className="hint">Protected Nginx traffic across all websites.</p></div>
+        <div><h2>{t('Access Logs')}</h2><p className="hint">{t('Protected Nginx traffic across all websites.')}</p></div>
         <div className="access-log-icon-actions">
-          <button className="secondary-light icon-button" disabled={!!loading} onClick={() => loadWafAccessLogs(wafAccessLogFilters, true)} aria-label="Refresh access logs" title="Refresh access logs"><RefreshCw size={15}/></button>
-          <button className="secondary-light icon-button" onClick={() => selectedSite && window.open(websiteUrl(selectedSite), '_blank', 'noopener,noreferrer')} disabled={!selectedSite} aria-label="Open website" title="Open website"><ExternalLink size={15}/></button>
+          <button className="secondary-light icon-button" disabled={!!loading} onClick={() => loadWafAccessLogs(wafAccessLogFilters, true)} aria-label={t('Refresh access logs')} title={t('Refresh access logs')}><RefreshCw size={15}/></button>
+          <button className="secondary-light icon-button" onClick={() => selectedSite && window.open(websiteUrl(selectedSite), '_blank', 'noopener,noreferrer')} disabled={!selectedSite} aria-label={t('Open website')} title={t('Open website')}><ExternalLink size={15}/></button>
         </div>
       </div>
       <div className="access-log-panel">
         <div className="access-log-toolbar">
-          <div className="access-log-toolbar-label"><strong>Access Logs</strong><span>{entryLabel}</span></div>
-          <button className="secondary-light" disabled={rows.length === 0} onClick={exportWafAccessLogs}><Download size={14}/> Export</button>
-          <button className="danger light" disabled={!!loading || websites.length === 0} onClick={clearWafAccessLogs}><Trash2 size={14}/> Clear</button>
+          <div className="access-log-toolbar-label"><strong>{t('Access Logs')}</strong><span>{entryLabel}</span></div>
+          <button className="secondary-light" disabled={rows.length === 0} onClick={exportWafAccessLogs}><Download size={14}/>{t('Export')}</button>
+          <button className="danger light" disabled={!!loading || websites.length === 0} onClick={clearWafAccessLogs}><Trash2 size={14}/>{t('Clear')}</button>
           <select value={wafAccessLogFilters.websiteId} onChange={e => updateWafAccessLogFilters({ websiteId: e.target.value }, true)}>
-            <option value="">All websites</option>
+            <option value="">{t('All websites')}</option>
             {websites.map(site => <option key={site.id} value={site.id}>{site.domain}</option>)}
           </select>
           <select value={wafAccessLogFilters.verdict} onChange={e => updateWafAccessLogFilters({ verdict: e.target.value }, true)}>
-            <option value="all">All verdicts</option>
-            <option value="block">Blocked</option>
-            <option value="allow">Allowed</option>
-            <option value="error">Errors</option>
+            <option value="all">{t('All verdicts')}</option>
+            <option value="block">{t('Blocked')}</option>
+            <option value="allow">{t('Allowed')}</option>
+            <option value="error">{t('Errors')}</option>
           </select>
-          <input value={wafAccessLogFilters.query} onChange={e => updateWafAccessLogFilters({ query: e.target.value })} onKeyDown={e => { if (e.key === 'Enter') applyWafAccessLogFilters(); }} placeholder="Filter logs" />
+          <input value={wafAccessLogFilters.query} onChange={e => updateWafAccessLogFilters({ query: e.target.value })} onKeyDown={e => { if (e.key === 'Enter') applyWafAccessLogFilters(); }} placeholder={t('Filter logs')} />
           <select value={wafAccessLogFilters.limit} onChange={e => updateWafAccessLogFilters({ limit: Number(e.target.value) }, true)}>
             <option value={50}>50 / page</option>
             <option value={100}>100 / page</option>
@@ -6812,51 +6815,51 @@ Each account is overwritten with what is in its archive.`)) return;
             <option value={500}>500 / page</option>
           </select>
           <select value={wafAccessLogFilters.refresh} onChange={e => updateWafAccessLogFilters({ refresh: Number(e.target.value) })}>
-            <option value={0}>Manual refresh</option>
-            <option value={5}>Refresh 5s</option>
-            <option value={10}>Refresh 10s</option>
-            <option value={30}>Refresh 30s</option>
+            <option value={0}>{t('Manual refresh')}</option>
+            <option value={5}>{t('Refresh 5s')}</option>
+            <option value={10}>{t('Refresh 10s')}</option>
+            <option value={30}>{t('Refresh 30s')}</option>
           </select>
-          <button disabled={!!loading} onClick={applyWafAccessLogFilters}><Search size={14}/> Apply</button>
+          <button disabled={!!loading} onClick={applyWafAccessLogFilters}><Search size={14}/>{t('Apply')}</button>
         </div>
         <div className="access-log-table-wrap">
           <table className="access-log-table">
             <thead>
               <tr>
-                <th>Verdict</th>
-                <th>Time</th>
-                <th>Site</th>
-                <th>Method</th>
-                <th>Path</th>
+                <th>{t('Verdict')}</th>
+                <th>{t('Time')}</th>
+                <th>{t('Site')}</th>
+                <th>{t('Method')}</th>
+                <th>{t('Path')}</th>
                 <th>IP</th>
-                <th>Country</th>
-                <th>Reason</th>
-                <th>Status</th>
+                <th>{t('Country')}</th>
+                <th>{t('Reason')}</th>
+                <th>{t('Status')}</th>
               </tr>
             </thead>
             <tbody>
               {rows.map(item => <tr key={item.id}>
-                <td data-label="Verdict"><span className={accessLogBadgeClass(item.verdict)}>{accessLogVerdictLabel(item.verdict)}</span></td>
-                <td data-label="Time"><span className="access-log-time">{formatAccessLogTime(item.timestamp)}</span><small>{item.duration_ms || 0} ms</small></td>
-                <td data-label="Site"><span className="access-log-site">{item.domain}</span></td>
-                <td data-label="Method">{item.method || '-'}</td>
-                <td data-label="Path"><code>{item.path || '-'}</code></td>
+                <td data-label={t('Verdict')}><span className={accessLogBadgeClass(item.verdict)}>{accessLogVerdictLabel(item.verdict)}</span></td>
+                <td data-label={t('Time')}><span className="access-log-time">{formatAccessLogTime(item.timestamp)}</span><small>{item.duration_ms || 0} ms</small></td>
+                <td data-label={t('Site')}><span className="access-log-site">{item.domain}</span></td>
+                <td data-label={t('Method')}>{item.method || '-'}</td>
+                <td data-label={t('Path')}><code>{item.path || '-'}</code></td>
                 <td data-label="IP"><span className="access-log-ip">{item.ip || '-'}</span></td>
-                <td data-label="Country">{accessLogCountryLabel(item)}</td>
-                <td data-label="Reason">{item.reason || '-'}</td>
-                <td data-label="Status">{item.status || '-'}</td>
+                <td data-label={t('Country')}>{accessLogCountryLabel(item)}</td>
+                <td data-label={t('Reason')}>{item.reason || '-'}</td>
+                <td data-label={t('Status')}>{item.status || '-'}</td>
               </tr>)}
             </tbody>
           </table>
-          {rows.length === 0 && <EmptyState icon={FileText} message="No access log entries match these filters." />}
+          {rows.length === 0 && <EmptyState icon={FileText} message={t('No access log entries match these filters.')} />}
         </div>
-        {(wafAccessLogs.missing || []).length > 0 && <p className="hint">Missing log files: {wafAccessLogs.missing.join(', ')}</p>}
+        {(wafAccessLogs.missing || []).length > 0 && <p className="hint">{t('Missing log files:')} {wafAccessLogs.missing.join(', ')}</p>}
       </div>
     </section>;
   }
 
   function renderUpdates() {
-    if (!isAdmin) return <section className="section"><h2>Updates</h2><p className="hint">No permission.</p></section>;
+    if (!isAdmin) return <section className="section"><h2>{t('Updates')}</h2><p className="hint">{t('No permission.')}</p></section>;
     const statusText = updatesStatus?.stdout || updatesStatus?.stderr || 'Click View logs to load update logs.';
     const panelUpdate = updatesStatus?.panel || {};
     const updateKnown = typeof panelUpdate.update_available === 'boolean';
@@ -6868,27 +6871,27 @@ Each account is overwritten with what is in its archive.`)) return;
     return <>
       <section className="section">
         <div className="section-title">
-          <div><h2>Updates</h2><p className="hint">OS packages use apt; panel updates use <code>bpanel-update</code>.</p></div>
+          <div><h2>{t('Updates')}</h2><p className="hint">{t('OS packages use apt; panel updates use')}<code>bpanel-update</code>.</p></div>
           <button className="secondary-light" disabled={!!loading} onClick={toggleUpdateLog}>{showUpdateLog ? <X size={14}/> : <FileText size={14}/>} {showUpdateLog ? 'Hide logs' : 'View logs'}</button>
         </div>
         <div className="info-box update-version-box">
-          <div className="update-version-head"><strong>Panel release</strong><span className={panelBadgeClass}>{panelBadge}</span></div>
+          <div className="update-version-head"><strong>{t('Panel release')}</strong><span className={panelBadgeClass}>{panelBadge}</span></div>
           <div className="update-version-grid">
-            <span>Current <strong>v{currentPanelVersion}</strong></span>
-            <span>Latest <strong>{latestPanelVersion === 'unknown' ? 'unknown' : `v${latestPanelVersion}`}</strong></span>
-            <span>Checked <strong>{panelUpdate.last_checked_at || 'never'}</strong></span>
-            <span>State file <strong>{panelUpdate.state_file || '/var/lib/bpanel/update-status.json'}</strong></span>
+            <span>{t('Current')}<strong>v{currentPanelVersion}</strong></span>
+            <span>{t('Latest')}<strong>{latestPanelVersion === 'unknown' ? 'unknown' : `v${latestPanelVersion}`}</strong></span>
+            <span>{t('Checked')}<strong>{panelUpdate.last_checked_at || 'never'}</strong></span>
+            <span>{t('State file')}<strong>{panelUpdate.state_file || '/var/lib/bpanel/update-status.json'}</strong></span>
           </div>
-          {panelUpdate.check_error && <p className="hint">Release check failed: {panelUpdate.check_error}</p>}
-          {panelUpdate.last_update_status && <p className="hint">Last update: {panelUpdate.last_update_status}{panelUpdate.last_update_ref ? ` (${panelUpdate.last_update_ref})` : ''}{panelUpdate.last_update_finished_at ? ` at ${panelUpdate.last_update_finished_at}` : ''}</p>}
+          {panelUpdate.check_error && <p className="hint">{t('Release check failed:')} {panelUpdate.check_error}</p>}
+          {panelUpdate.last_update_status && <p className="hint">{t('Last update:')} {panelUpdate.last_update_status}{panelUpdate.last_update_ref ? ` (${panelUpdate.last_update_ref})` : ''}{panelUpdate.last_update_finished_at ? ` at ${panelUpdate.last_update_finished_at}` : ''}</p>}
         </div>
         <div className="actions">
-          <button className="secondary-light" disabled={!!loading} onClick={() => loadUpdates(true)}><RefreshCw size={14}/> Check releases</button>
+          <button className="secondary-light" disabled={!!loading} onClick={() => loadUpdates(true)}><RefreshCw size={14}/>{t('Check releases')}</button>
           <button disabled={!!loading || osUpdating} onClick={runOsUpdate}><RefreshCw size={14} className={osUpdating ? 'spin' : ''}/> {osUpdating ? 'Updating OS...' : 'Update OS now'}</button>
           <button disabled={!!loading || panelUpdating || !updateAvailable} onClick={runPanelUpdate}><RotateCcw size={14} className={panelUpdating ? 'spin' : ''}/> {panelUpdating ? 'Updating panel...' : 'Update panel now'}</button>
         </div>
         {showUpdateLog && <div className="info-box firewall-status update-log-box">
-          <div className="update-log-head"><strong>Update logs</strong><button className="secondary-light" disabled={!!loading} onClick={() => loadUpdates(true)}><RefreshCw size={13}/> Refresh</button></div>
+          <div className="update-log-head"><strong>{t('Update logs')}</strong><button className="secondary-light" disabled={!!loading} onClick={() => loadUpdates(true)}><RefreshCw size={13}/>{t('Refresh')}</button></div>
           <pre>{statusText}</pre>
         </div>}
         {(panelUpdating || (panelUpdate.progress_percent && panelUpdate.last_update_status && panelUpdate.last_update_status !== 'completed' && panelUpdate.last_update_status !== 'failed')) && (
@@ -6909,12 +6912,12 @@ Each account is overwritten with what is in its archive.`)) return;
         )}
       </section>
       <section className="section">
-        <h2>Auto Update OS</h2>
+        <h2>{t('Auto Update OS')}</h2>
         <div className="firewall-form updates-os-form">
-          <label><span>Enabled</span><select value={osAutoUpdate.enabled ? 'on' : 'off'} onChange={e => setOsAutoUpdate(prev => ({ ...prev, enabled: e.target.value === 'on' }))}><option value="on">On</option><option value="off">Off</option></select></label>
-          <label><span>Mode</span><select value={osAutoUpdate.mode} onChange={e => setOsAutoUpdate(prev => ({ ...prev, mode: e.target.value }))}><option value="security">Security</option><option value="all">All packages</option></select></label>
-          <label><span>Auto reboot</span><select value={osAutoUpdate.auto_reboot ? 'on' : 'off'} onChange={e => setOsAutoUpdate(prev => ({ ...prev, auto_reboot: e.target.value === 'on' }))}><option value="off">Off</option><option value="on">On</option></select></label>
-          <button disabled={!!loading} onClick={saveOsAutoUpdate}>Save OS auto update</button>
+          <label><span>{t('Enabled')}</span><select value={osAutoUpdate.enabled ? 'on' : 'off'} onChange={e => setOsAutoUpdate(prev => ({ ...prev, enabled: e.target.value === 'on' }))}><option value="on">{t('On')}</option><option value="off">{t('Off')}</option></select></label>
+          <label><span>{t('Mode')}</span><select value={osAutoUpdate.mode} onChange={e => setOsAutoUpdate(prev => ({ ...prev, mode: e.target.value }))}><option value="security">{t('Security')}</option><option value="all">{t('All packages')}</option></select></label>
+          <label><span>{t('Auto reboot')}</span><select value={osAutoUpdate.auto_reboot ? 'on' : 'off'} onChange={e => setOsAutoUpdate(prev => ({ ...prev, auto_reboot: e.target.value === 'on' }))}><option value="off">{t('Off')}</option><option value="on">{t('On')}</option></select></label>
+          <button disabled={!!loading} onClick={saveOsAutoUpdate}>{t('Save OS auto update')}</button>
         </div>
       </section>
     </>;
@@ -6927,46 +6930,41 @@ Each account is overwritten with what is in its archive.`)) return;
       <section className="section">
         <div className="section-title">
           <div>
-            <h2>Passkey</h2>
-            <p className="hint">
-              Sign in with a fingerprint, Face ID or a security key instead of typing a code.
-            </p>
+            <h2>{t('Passkey')}</h2>
+            <p className="hint">{t('Sign in with a fingerprint, Face ID or a security key instead of typing a code.')}</p>
           </div>
-          <button disabled={!!loading} onClick={loadPasskeyStatus}><RefreshCw size={14}/> Refresh</button>
+          <button disabled={!!loading} onClick={loadPasskeyStatus}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
 
         {pk && !pk.supported && <div className="info-box">
           <p className="hint" style={{color:'var(--red)'}}>
-            You are reaching the panel by IP address ({pk.hostname}). Browsers only create
-            passkeys for domain names, so open the panel by its domain and add one there.
+            {t('You are reaching the panel by IP address ({host}). Browsers only create passkeys for domain names, so open the panel by its domain and add one there.', { host: pk.hostname })}
           </p>
         </div>}
 
         {pk?.supported && <>
-          <p className="hint">
-            A passkey is tied to the domain <strong>{pk.rp_id}</strong>. Reach the panel by any
+          <p className="hint">{t('A passkey is tied to the domain')}<strong>{pk.rp_id}</strong>. Reach the panel by any
             other name and it will not be offered — use Google Authenticator below for that.
           </p>
           <div className="cron-form">
             <input
               value={passkeyName}
               onChange={e => setPasskeyName(e.target.value)}
-              placeholder="Device name, e.g. MacBook"
-              aria-label="Passkey name"
+              placeholder={t('Device name, e.g. MacBook')}
+              aria-label={t('Passkey name')}
             />
             <input
               type="password"
               value={passkeyPassword}
               onChange={e => setPasskeyPassword(e.target.value)}
-              placeholder="Current password"
+              placeholder={t('Current password')}
               autoComplete="current-password"
-              aria-label="Current password"
+              aria-label={t('Current password')}
             />
             <button disabled={!!loading || !passkeyPassword} onClick={addPasskey}>
-              <KeyRound size={14}/> Add passkey
-            </button>
+              <KeyRound size={14}/>{t('Add passkey')}</button>
           </div>
-          <p className="hint">Your current password confirms it is you, the same as when turning on Google Authenticator.</p>
+          <p className="hint">{t('Your current password confirms it is you, the same as when turning on Google Authenticator.')}</p>
         </>}
 
         {pk?.credentials?.length > 0 && <div className="table">
@@ -6981,39 +6979,38 @@ Each account is overwritten with what is in its archive.`)) return;
         </div>}
 
         {pk?.supported && (pk?.credentials?.length || 0) === 0 &&
-          <EmptyState icon={KeyRound} message="No passkeys yet." />}
+          <EmptyState icon={KeyRound} message={t('No passkeys yet.')} />}
 
         {(pk?.credentials?.length || 0) > 0 && !enabled && <p className="hint" style={{color:'var(--red)'}}>
-          A passkey is your only second factor. Reach the panel by a different domain and
-          there is no second factor at all — turn on Google Authenticator below as well.
+          {t('A passkey is your only second factor. Reach the panel by a different domain and there is no second factor at all — turn on Google Authenticator below as well.')}
         </p>}
       </section>
 
       <section className="section">
         <div className="section-title">
-          <div><h2>Google Authenticator 2FA</h2><p className="hint">Current status: <strong>{enabled ? 'Enabled' : 'Disabled'}</strong></p></div>
-          <button disabled={!!loading} onClick={loadTwoFactorStatus}><RefreshCw size={14}/> Refresh</button>
+          <div><h2>{t('Google Authenticator 2FA')}</h2><p className="hint">{t('Current status:')}<strong>{enabled ? 'Enabled' : 'Disabled'}</strong></p></div>
+          <button disabled={!!loading} onClick={loadTwoFactorStatus}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
         {!enabled && <div className="security-grid">
           <div className="info-box">
-            <strong>Setup</strong>
-            {twoFactorSetup?.qr_data_url ? <img className="qr-code" src={twoFactorSetup.qr_data_url} alt="2FA QR code" /> : <p className="hint">No setup code generated.</p>}
+            <strong>{t('Setup')}</strong>
+            {twoFactorSetup?.qr_data_url ? <img className="qr-code" src={twoFactorSetup.qr_data_url} alt="2FA QR code" /> : <p className="hint">{t('No setup code generated.')}</p>}
             {twoFactorSetup?.secret && <code className="secret-text">{twoFactorSetup.secret}</code>}
             <div className="actions">
-              <button disabled={!!loading} onClick={setupTwoFactorAuth}><Shield size={14}/> Generate QR</button>
+              <button disabled={!!loading} onClick={setupTwoFactorAuth}><Shield size={14}/>{t('Generate QR')}</button>
             </div>
           </div>
           <div className="info-box">
-            <strong>Verify</strong>
+            <strong>{t('Verify')}</strong>
             <input value={twoFactorCode} onChange={e => setTwoFactorCode(e.target.value)} placeholder="123456" inputMode="numeric" />
-            <button disabled={!!loading || !twoFactorSetup || !twoFactorCode} onClick={enableTwoFactorAuth}><Lock size={14}/> Enable 2FA</button>
+            <button disabled={!!loading || !twoFactorSetup || !twoFactorCode} onClick={enableTwoFactorAuth}><Lock size={14}/>{t('Enable 2FA')}</button>
           </div>
         </div>}
         {enabled && <div className="security-grid one">
           <div className="info-box">
-            <strong>Disable 2FA</strong>
+            <strong>{t('Disable 2FA')}</strong>
             <input value={twoFactorCode} onChange={e => setTwoFactorCode(e.target.value)} placeholder="123456" inputMode="numeric" />
-            <button className="danger" disabled={!!loading || !twoFactorCode} onClick={disableTwoFactorAuth}>Disable 2FA</button>
+            <button className="danger" disabled={!!loading || !twoFactorCode} onClick={disableTwoFactorAuth}>{t('Disable 2FA')}</button>
           </div>
         </div>}
       </section>
@@ -7022,7 +7019,7 @@ Each account is overwritten with what is in its archive.`)) return;
   }
 
   function renderMalware() {
-    if (!isAdmin) return <section className="section"><h2>Malware Scanner</h2><p className="hint">No permission.</p></section>;
+    if (!isAdmin) return <section className="section"><h2>{t('Malware Scanner')}</h2><p className="hint">{t('No permission.')}</p></section>;
     const mw = malwareScanStatus || {};
     const mwActive = Boolean(mw.active);
     const mwInstalled = Boolean(mw.installed);
@@ -7088,17 +7085,17 @@ Each account is overwritten with what is in its archive.`)) return;
           <span>{MALWARE_SCHEDULE_LABELS[name]}</span>
         </label>
         <div className="malware-sched-when">
-          <select value={vn.weekday} disabled={!form.enabled} aria-label="Day"
+          <select value={vn.weekday} disabled={!form.enabled} aria-label={t('Day')}
             onChange={e => setSchedVn({ weekday: Number(e.target.value) })}>
             {WEEKDAY_LABELS.map((l, i) => <option key={i} value={i}>{l}</option>)}
           </select>
-          <select value={vn.hour} disabled={!form.enabled} aria-label="Hour"
+          <select value={vn.hour} disabled={!form.enabled} aria-label={t('Hour')}
             onChange={e => setSchedVn({ hour: Number(e.target.value) })}>
             {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>)}
           </select>
         </div>
         <div className="malware-sched-meta">
-          {saved.enabled && saved.next_run_at && <span>Next: <strong>{fmtStamp(saved.next_run_at)}</strong></span>}
+          {saved.enabled && saved.next_run_at && <span>{t('Next:')}<strong>{fmtStamp(saved.next_run_at)}</strong></span>}
           {saved.last_run_at && <span className={`badge ${saved.last_status === 'done' ? 'ok' : saved.last_status === 'infected' ? 'danger' : 'warn'}`}>
             {fmtStamp(saved.last_run_at)} · {scanStatusLabel(saved.last_status)}
           </span>}
@@ -7110,34 +7107,34 @@ Each account is overwritten with what is in its archive.`)) return;
       <section className="section">
         <div className="section-title">
           <div>
-            <h2>Malware Scanner</h2>
+            <h2>{t('Malware Scanner')}</h2>
             <p className="hint">
-              {mwActive ? <span className="badge ok">On</span>
-                : mwEnabled && !mwInstalled ? <span className="badge warn">Installing...</span>
-                : mwInstalled && !mwEnabled ? <span className="badge">Installed · off</span>
-                : <span className="badge">Not installed</span>}
+              {mwActive ? <span className="badge ok">{t('On')}</span>
+                : mwEnabled && !mwInstalled ? <span className="badge warn">{t('Installing...')}</span>
+                : mwInstalled && !mwEnabled ? <span className="badge">{t('Installed · off')}</span>
+                : <span className="badge">{t('Not installed')}</span>}
               {mw.realtime_enabled && <span className={mw.monitor_running ? 'badge ok' : 'badge warn'} style={{marginLeft:6}}>
-                Level 2 {mw.monitor_running ? 'running' : 'not running'}
+                {t(mw.monitor_running ? 'Level 2 running' : 'Level 2 not running')}
               </span>}
             </p>
           </div>
-          <button disabled={!!loading} onClick={loadMalwareScanStatus}><RefreshCw size={14}/> Refresh</button>
+          <button disabled={!!loading} onClick={loadMalwareScanStatus}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
         {mw.memory_warning && <div className="info-box malware-ram-warning">
-          <strong><AlertCircle size={15}/> Memory warning</strong>
+          <strong><AlertCircle size={15}/>{t('Memory warning')}</strong>
           <p className="hint">{mw.memory_warning}</p>
         </div>}
         <div className="info-box">
           <p className="hint">{mw.detail || 'Checking...'}</p>
-          {mw.memory_total_mb > 0 && <p className="hint">Server memory: <strong>{mw.memory_total_mb} MB</strong> ({mw.memory_available_mb} MB free)</p>}
-          {mw.lmd_installed && <p className="hint">Malware signatures: <strong>{mw.lmd_sig_version || '—'}</strong>{mw.lmd_updated_at ? ` (updated ${mw.lmd_updated_at})` : ''}</p>}
-          {!mwInstalled && <p className="hint" style={{marginTop:8}}>Turning this on installs the scanner. It only runs during a scan (~1.3 GB of RAM) and releases that afterwards — nothing runs in the background, so it costs no memory at rest.</p>}
+          {mw.memory_total_mb > 0 && <p className="hint">{t('Server memory:')}<strong>{mw.memory_total_mb} MB</strong> {t('({n} MB free)', { n: mw.memory_available_mb })}</p>}
+          {mw.lmd_installed && <p className="hint">{t('Malware signatures:')}<strong>{mw.lmd_sig_version || '—'}</strong>{mw.lmd_updated_at ? ` (updated ${mw.lmd_updated_at})` : ''}</p>}
+          {!mwInstalled && <p className="hint" style={{marginTop:8}}>{t('Turning this on installs the scanner. It only runs during a scan (~1.3 GB of RAM) and releases that afterwards — nothing runs in the background, so it costs no memory at rest.')}</p>}
           <div className="actions" style={{marginTop:12}}>
             {!mwEnabled
-              ? <button disabled={!!loading} onClick={() => toggleMalwareScan(true)}><Shield size={14}/> Turn on scanner</button>
-              : <button className="danger" disabled={!!loading} onClick={() => toggleMalwareScan(false)}>Turn off scanner</button>}
-            {mwEnabled && !mw.lmd_installed && <button disabled={!!loading} onClick={installLmd}>Install the scanner</button>}
-            {mw.lmd_installed && <button className="secondary" disabled={!!loading} onClick={updateMalwareSignatures}><RefreshCw size={13}/> Update signatures</button>}
+              ? <button disabled={!!loading} onClick={() => toggleMalwareScan(true)}><Shield size={14}/>{t('Turn on scanner')}</button>
+              : <button className="danger" disabled={!!loading} onClick={() => toggleMalwareScan(false)}>{t('Turn off scanner')}</button>}
+            {mwEnabled && !mw.lmd_installed && <button disabled={!!loading} onClick={installLmd}>{t('Install the scanner')}</button>}
+            {mw.lmd_installed && <button className="secondary" disabled={!!loading} onClick={updateMalwareSignatures}><RefreshCw size={13}/>{t('Update signatures')}</button>}
           </div>
         </div>
 
@@ -7145,31 +7142,31 @@ Each account is overwritten with what is in its archive.`)) return;
           <div className="malware-scan-runner">
             <div className="malware-scan-head">
               <div>
-                <strong>Level 1 — Scheduled scans</strong>
-                <p className="hint">Scan the website directories (fast), the whole server, or incrementally (only recently changed files — run by hand when you want it, never on the schedule).</p>
+                <strong>{t('Level 1 — Scheduled scans')}</strong>
+                <p className="hint">{t('Scan the website directories (fast), the whole server, or incrementally (only recently changed files — run by hand when you want it, never on the schedule).')}</p>
               </div>
-              <button className="secondary" disabled={!!loading} onClick={loadMalwareScanJobs}><RefreshCw size={14}/> History</button>
+              <button className="secondary" disabled={!!loading} onClick={loadMalwareScanJobs}><RefreshCw size={14}/>{t('History')}</button>
             </div>
             <div className="malware-scan-controls">
               <select value={scanTargetWebsiteId} onChange={e => { setScanTargetWebsiteId(e.target.value); setScanResults(null); setScanJob(null); }}>
                 <option value="">-- Scan now: pick a target --</option>
-                <option value="all">All websites</option>
-                <option value="incremental">Incremental scan</option>
-                <option value="server">Whole server</option>
+                <option value="all">{t('All websites')}</option>
+                <option value="incremental">{t('Incremental scan')}</option>
+                <option value="server">{t('Whole server')}</option>
                 {websites.map(w => <option key={w.id} value={w.id}>{w.domain}</option>)}
               </select>
               {scanTargetWebsiteId === 'incremental' && <select value={incrementalDays} onChange={e => setIncrementalDays(Number(e.target.value))}>
                 {[1, 2, 3, 7, 14].map(d => <option key={d} value={d}>{d} days</option>)}
               </select>}
               <button disabled={!!loading || scanRunning || !scanTargetWebsiteId} onClick={runMalwareScan}>
-                {scanRunning || scanLoading ? <><RefreshCw size={14} className="spin"/> Scanning...</> : <><Search size={14}/> Scan now</>}
+                {scanRunning || scanLoading ? <><RefreshCw size={14} className="spin"/>{t('Scanning...')}</> : <><Search size={14}/>{t('Scan now')}</>}
               </button>
             </div>
           </div>
           <div className="malware-schedule">
             <div className="malware-scan-head">
-              <div><strong>Automatic schedule</strong><p className="hint">The panel scans on its own, with nobody pressing anything. Pick an hour when few visitors are around.</p></div>
-              <button disabled={!!loading || !scheduleDirty} onClick={saveMalwareSchedule}><Clock size={14}/> Save schedule</button>
+              <div><strong>{t('Automatic schedule')}</strong><p className="hint">{t('The panel scans on its own, with nobody pressing anything. Pick an hour when few visitors are around.')}</p></div>
+              <button disabled={!!loading || !scheduleDirty} onClick={saveMalwareSchedule}><Clock size={14}/>{t('Save schedule')}</button>
             </div>
             <div className="malware-sched-list">
               {['websites', 'server'].map(renderScheduleRow)}
@@ -7178,8 +7175,8 @@ Each account is overwritten with what is in its archive.`)) return;
           <div className="malware-realtime">
             <div className="malware-scan-head">
               <div>
-                <strong>Level 2 — Real-time protection</strong>
-                <p className="hint">Watches the website directories continuously and checks new files in short batches (~15 seconds). Catches something arriving over SFTP or through a plugin at once, instead of waiting for the next Level 1 scheduled scan.</p>
+                <strong>{t('Level 2 — Real-time protection')}</strong>
+                <p className="hint">{t('Watches the website directories continuously and checks new files in short batches (~15 seconds). Catches something arriving over SFTP or through a plugin at once, instead of waiting for the next Level 1 scheduled scan.')}</p>
               </div>
               <label className="switch-line">
                 <input type="checkbox" checked={!!mw.realtime_enabled} disabled={!!loading}
@@ -7191,15 +7188,13 @@ Each account is overwritten with what is in its archive.`)) return;
           <div className="malware-realtime">
             <div className="malware-scan-head">
               <div>
-                <strong>Scan uploaded files</strong>
+                <strong>{t('Scan uploaded files')}</strong>
                 <p className="hint">
                   Scans each file uploaded through the file manager, in the background after the upload finishes, so nobody waits on it.
                   Off by default: without a resident clamd, every file reloads the whole signature database
                   (measured at 28 seconds and over 1 GB of RAM for a 20 MB file). The Level 1 scheduled scan covers these files either way.
                 </p>
-                {!mw.scan_on_upload_is_cheap && <p className="hint">
-                  This server has no resident clamd — start one first and each scan drops to milliseconds.
-                </p>}
+                {!mw.scan_on_upload_is_cheap && <p className="hint">{t('This server has no resident clamd — start one first and each scan drops to milliseconds.')}</p>}
               </div>
               <label className="switch-line">
                 <input type="checkbox" checked={!!mw.scan_on_upload} disabled={!!loading}
@@ -7210,7 +7205,7 @@ Each account is overwritten with what is in its archive.`)) return;
           </div>
           {scanJobs.length > 0 && <div className="scan-history-wrap">
             <div className="scan-history-head">
-              <strong>Scan history</strong>
+              <strong>{t('Scan history')}</strong>
               <span>{scanJobs.length} runs</span>
             </div>
             <div className="scan-history-list">
@@ -7235,17 +7230,17 @@ Each account is overwritten with what is in its archive.`)) return;
               <div className="progress-bar-fill" style={{width: `${Number(activeScanJob.progress_percent) || 0}%`}} />
             </div>
             <div className="scan-status-summary">
-              <span><strong>Progress</strong>{Number(activeScanJob.progress_percent) || 0}%</span>
-              <span><strong>Files scanned</strong>{activeScanJob.scanned || 0}/{activeScanJob.total_files || activeScanJob.scanned || 0}</span>
-              <span><strong>Threats</strong>{activeScanJob.infected > 0
+              <span><strong>{t('Progress')}</strong>{Number(activeScanJob.progress_percent) || 0}%</span>
+              <span><strong>{t('Files scanned')}</strong>{activeScanJob.scanned || 0}/{activeScanJob.total_files || activeScanJob.scanned || 0}</span>
+              <span><strong>{t('Threats')}</strong>{activeScanJob.infected > 0
                 ? <span className="badge danger">{activeScanJob.infected}</span>
                 : <span className="badge ok">0</span>}
               </span>
-              <span><strong>Errors</strong>{activeScanJob.errors || 0}</span>
+              <span><strong>{t('Errors')}</strong>{activeScanJob.errors || 0}</span>
             </div>
             {activeScanJob.message && <p className="hint">{activeScanJob.message}</p>}
             {activeScanJob.threats && activeScanJob.threats.length > 0 && <div className="scan-threat-list">
-              <p className="hint">These are the scanner's own family names (php.base64..., for instance), not common virus names — there is nowhere else to look them up.</p>
+              <p className="hint">{t('These are the scanner\'s own family names (php.base64..., for instance), not common virus names — there is nowhere else to look them up.')}</p>
               {activeScanJob.threats.map((t, i) => <div key={i} className="scan-threat-item">
                 <strong>{t.signature}</strong>
                 <span>{t.domain ? `${t.domain}: ` : ''}{t.path}</span>
@@ -7259,18 +7254,18 @@ Each account is overwritten with what is in its archive.`)) return;
   }
 
   function renderPanelSettings() {
-    if (!isAdmin) return <section className="section"><h2>Settings</h2><p className="hint">No permission.</p></section>;
+    if (!isAdmin) return <section className="section"><h2>{t('Settings')}</h2><p className="hint">{t('No permission.')}</p></section>;
     return <>
       <section className="section">
         <div className="section-title">
-          <div><h2>Panel settings</h2><p className="hint">Branding and hostname.</p></div>
-          <button disabled={!!loading} onClick={loadPanelSettings}><RefreshCw size={14}/> Refresh</button>
+          <div><h2>{t('Panel settings')}</h2><p className="hint">{t('Branding and hostname.')}</p></div>
+          <button disabled={!!loading} onClick={loadPanelSettings}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
         <div className="panel-settings-grid panel-settings-compact">
-          <label><span>Panel name</span><input value={panelSettingsForm.app_name} onChange={e => setPanelSettingsForm(prev => ({ ...prev, app_name: e.target.value }))} placeholder="BPanel" /></label>
-          <label><span>Panel hostname</span><input value={panelSettingsForm.panel_hostname} onChange={e => setPanelSettingsForm(prev => ({ ...prev, panel_hostname: e.target.value }))} placeholder="panel.domain.com" /></label>
-          <label className="check-line panel-ssl-status"><input type="checkbox" checked={!!panelSettingsForm.ssl_enabled} onChange={e => setPanelSettingsForm(prev => ({ ...prev, ssl_enabled: e.target.checked }))} /> Panel SSL</label>
-          <button disabled={!!loading || !panelSettingsForm.app_name || !panelSettingsForm.panel_hostname} onClick={savePanelSettings}><SettingsIcon size={14}/> Save settings</button>
+          <label><span>{t('Panel name')}</span><input value={panelSettingsForm.app_name} onChange={e => setPanelSettingsForm(prev => ({ ...prev, app_name: e.target.value }))} placeholder="BPanel" /></label>
+          <label><span>{t('Panel hostname')}</span><input value={panelSettingsForm.panel_hostname} onChange={e => setPanelSettingsForm(prev => ({ ...prev, panel_hostname: e.target.value }))} placeholder="panel.domain.com" /></label>
+          <label className="check-line panel-ssl-status"><input type="checkbox" checked={!!panelSettingsForm.ssl_enabled} onChange={e => setPanelSettingsForm(prev => ({ ...prev, ssl_enabled: e.target.checked }))} />{t('Panel SSL')}</label>
+          <button disabled={!!loading || !panelSettingsForm.app_name || !panelSettingsForm.panel_hostname} onClick={savePanelSettings}><SettingsIcon size={14}/>{t('Save settings')}</button>
         </div>
         <div className="panel-net-strip">
           <div className="panel-net-row">
@@ -7278,7 +7273,7 @@ Each account is overwritten with what is in its archive.`)) return;
             <div className="panel-net-value">
               {panelSettings.server_ipv4?.length > 0
                 ? panelSettings.server_ipv4.map(address => <span key={address} className="badge">{address}</span>)
-                : <span className="hint">Could not read the server's IPv4 address.</span>}
+                : <span className="hint">{t('Could not read the server\'s IPv4 address.')}</span>}
             </div>
           </div>
           <div className="panel-net-row">
@@ -7286,45 +7281,45 @@ Each account is overwritten with what is in its archive.`)) return;
             <div className="panel-net-value">
               {panelSettings.ipv6?.addresses?.length > 0
                 ? panelSettings.ipv6.addresses.map(address => <span key={address} className="badge">{address}</span>)
-                : <span className="badge">None</span>}
+                : <span className="badge">{t('None')}</span>}
               <span className={`badge ${panelSettings.ipv6?.enabled ? 'ok' : ''}`}>
                 {panelSettings.ipv6?.enabled ? 'On' : 'Off'}
               </span>
             </div>
             {panelSettings.ipv6?.enabled
-              ? <button className="secondary-light" disabled={!!loading} onClick={() => toggleIpv6(false)}>Disable IPv6</button>
-              : <button className="secondary-light" disabled={!!loading || !panelSettings.ipv6?.available} onClick={() => toggleIpv6(true)}>Enable IPv6</button>}
+              ? <button className="secondary-light" disabled={!!loading} onClick={() => toggleIpv6(false)}>{t('Disable IPv6')}</button>
+              : <button className="secondary-light" disabled={!!loading || !panelSettings.ipv6?.available} onClick={() => toggleIpv6(true)}>{t('Enable IPv6')}</button>}
           </div>
           <span className="hint">{panelSettings.ipv6?.detail}</span>
         </div>
       </section>
       <section className="section">
         <div className="section-title">
-          <div><h2>Admin account</h2></div>
+          <div><h2>{t('Admin account')}</h2></div>
         </div>
         <div className="panel-settings-grid admin-account-grid">
-          <label><span>Email</span><input type="email" value={adminAccountForm.email} onChange={e => setAdminAccountForm(prev => ({ ...prev, email: e.target.value }))} placeholder="admin@domain.com" /></label>
-          <label><span>Current password</span><input type="password" value={adminAccountForm.current_password} onChange={e => setAdminAccountForm(prev => ({ ...prev, current_password: e.target.value }))} placeholder="Current password" autoComplete="current-password" /></label>
-          <label><span>New password</span><input type="password" value={adminAccountForm.password} onChange={e => setAdminAccountForm(prev => ({ ...prev, password: e.target.value }))} placeholder="New password" autoComplete="new-password" /></label>
-          <label><span>Confirm password</span><input type="password" value={adminAccountForm.confirm_password} onChange={e => setAdminAccountForm(prev => ({ ...prev, confirm_password: e.target.value }))} placeholder="Repeat new password" autoComplete="new-password" /></label>
-          <label><span>Authenticator code</span><input value={adminAccountForm.code} onChange={e => setAdminAccountForm(prev => ({ ...prev, code: e.target.value }))} placeholder="123456" inputMode="numeric" autoComplete="one-time-code" /></label>
-          <button disabled={!!loading || !adminAccountForm.email.trim() || (!!adminAccountForm.password && adminAccountForm.password !== adminAccountForm.confirm_password)} onClick={saveAdminAccount}><Lock size={14}/> Save account</button>
+          <label><span>{t('Email')}</span><input type="email" value={adminAccountForm.email} onChange={e => setAdminAccountForm(prev => ({ ...prev, email: e.target.value }))} placeholder="admin@domain.com" /></label>
+          <label><span>{t('Current password')}</span><input type="password" value={adminAccountForm.current_password} onChange={e => setAdminAccountForm(prev => ({ ...prev, current_password: e.target.value }))} placeholder={t('Current password')} autoComplete="current-password" /></label>
+          <label><span>{t('New password')}</span><input type="password" value={adminAccountForm.password} onChange={e => setAdminAccountForm(prev => ({ ...prev, password: e.target.value }))} placeholder={t('New password')} autoComplete="new-password" /></label>
+          <label><span>{t('Confirm password')}</span><input type="password" value={adminAccountForm.confirm_password} onChange={e => setAdminAccountForm(prev => ({ ...prev, confirm_password: e.target.value }))} placeholder={t('Repeat new password')} autoComplete="new-password" /></label>
+          <label><span>{t('Authenticator code')}</span><input value={adminAccountForm.code} onChange={e => setAdminAccountForm(prev => ({ ...prev, code: e.target.value }))} placeholder="123456" inputMode="numeric" autoComplete="one-time-code" /></label>
+          <button disabled={!!loading || !adminAccountForm.email.trim() || (!!adminAccountForm.password && adminAccountForm.password !== adminAccountForm.confirm_password)} onClick={saveAdminAccount}><Lock size={14}/>{t('Save account')}</button>
         </div>
       </section>
       <section className="section">
         <div className="section-title">
-          <div><h2>Brand assets</h2><p className="hint">Upload PNG, JPG, WEBP, or ICO files up to 1 MB.</p></div>
+          <div><h2>{t('Brand assets')}</h2><p className="hint">{t('Upload PNG, JPG, WEBP, or ICO files up to 1 MB.')}</p></div>
         </div>
         <div className="brand-asset-grid">
           <div className="brand-asset-card">
             <div className="brand-preview">{renderBrandMark('settings-brand-mark')}</div>
-            <label><span>Logo</span><input type="file" accept="image/png,image/jpeg,image/webp,image/x-icon" onChange={e => setPanelLogoFile(e.target.files?.[0] || null)} /></label>
-            <button disabled={!!loading || !panelLogoFile} onClick={() => uploadPanelAsset('logo')}><Upload size={14}/> Upload logo</button>
+            <label><span>{t('Logo')}</span><input type="file" accept="image/png,image/jpeg,image/webp,image/x-icon" onChange={e => setPanelLogoFile(e.target.files?.[0] || null)} /></label>
+            <button disabled={!!loading || !panelLogoFile} onClick={() => uploadPanelAsset('logo')}><Upload size={14}/>{t('Upload logo')}</button>
           </div>
           <div className="brand-asset-card">
             <div className="brand-preview favicon-preview">{panelSettings.favicon_url ? <img src={panelSettings.favicon_url} alt="" /> : <Image size={28}/>}</div>
-            <label><span>Favicon</span><input type="file" accept="image/png,image/jpeg,image/webp,image/x-icon" onChange={e => setPanelFaviconFile(e.target.files?.[0] || null)} /></label>
-            <button disabled={!!loading || !panelFaviconFile} onClick={() => uploadPanelAsset('favicon')}><Upload size={14}/> Upload favicon</button>
+            <label><span>{t('Favicon')}</span><input type="file" accept="image/png,image/jpeg,image/webp,image/x-icon" onChange={e => setPanelFaviconFile(e.target.files?.[0] || null)} /></label>
+            <button disabled={!!loading || !panelFaviconFile} onClick={() => uploadPanelAsset('favicon')}><Upload size={14}/>{t('Upload favicon')}</button>
           </div>
         </div>
       </section>
@@ -7339,28 +7334,28 @@ Each account is overwritten with what is in its archive.`)) return;
     return <>
       <section className="section">
         <div className="section-title">
-          <div><h2>API Tokens</h2><p className="hint">Create one token for WHMCS. Paste it into WHMCS Server → Access Hash.</p></div>
-          <button disabled={!!loading} onClick={loadApiTokens}><RefreshCw size={14}/> Refresh</button>
+          <div><h2>{t('API Tokens')}</h2><p className="hint">{t('Create one token for WHMCS. Paste it into WHMCS Server → Access Hash.')}</p></div>
+          <button disabled={!!loading} onClick={loadApiTokens}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
         {createdApiToken && <div className="user-create-card">
-          <label><span>New token (copy now)</span><input id="created-api-token" readOnly value={createdApiToken} onFocus={e => e.target.select()} /></label>
-          <button disabled={!!loading} onClick={copyApiToken}><Copy size={14}/> Copy token</button>
-          <button className="secondary-light" onClick={() => setCreatedApiToken('')}>Hide</button>
+          <label><span>{t('New token (copy now)')}</span><input id="created-api-token" readOnly value={createdApiToken} onFocus={e => e.target.select()} /></label>
+          <button disabled={!!loading} onClick={copyApiToken}><Copy size={14}/>{t('Copy token')}</button>
+          <button className="secondary-light" onClick={() => setCreatedApiToken('')}>{t('Hide')}</button>
         </div>}
         <div className="user-create-card">
-          <label><span>Name</span><input value={newApiToken.name} onChange={e => setNewApiToken(prev => ({ ...prev, name: e.target.value }))} placeholder="WHMCS" /></label>
-          <label><span>WHMCS server IP</span><input value={newApiToken.allowed_ips} onChange={e => setNewApiToken(prev => ({ ...prev, allowed_ips: e.target.value }))} placeholder="optional: 1.2.3.4 or 1.2.3.4, 5.6.7.8" /></label>
-          <button disabled={!!loading || !newApiToken.name.trim()} onClick={createApiToken}><Plus size={14}/> Create token</button>
+          <label><span>{t('Name')}</span><input value={newApiToken.name} onChange={e => setNewApiToken(prev => ({ ...prev, name: e.target.value }))} placeholder="WHMCS" /></label>
+          <label><span>{t('WHMCS server IP')}</span><input value={newApiToken.allowed_ips} onChange={e => setNewApiToken(prev => ({ ...prev, allowed_ips: e.target.value }))} placeholder={t('optional: 1.2.3.4 or 1.2.3.4, 5.6.7.8')} /></label>
+          <button disabled={!!loading || !newApiToken.name.trim()} onClick={createApiToken}><Plus size={14}/>{t('Create token')}</button>
         </div>
-        <p className="hint">Leave WHMCS server IP empty to allow all IPs. Multiple IPs: separate with comma.</p>
+        <p className="hint">{t('Leave WHMCS server IP empty to allow all IPs. Multiple IPs: separate with comma.')}</p>
         <div className="package-list">
-          {apiTokens.length === 0 && <EmptyState icon={KeyRound} message="No API tokens found." />}
+          {apiTokens.length === 0 && <EmptyState icon={KeyRound} message={t('No API tokens found.')} />}
           {apiTokens.map(token => <div className="package-row" key={token.id}>
             <div className="user-main"><strong>{token.name}</strong><small>{token.allowed_ips ? `Allowed IPs: ${token.allowed_ips}` : 'Allowed IPs: all'}</small></div>
             <span className="user-metric"><KeyRound size={13}/>{token.is_active ? 'Active' : 'Revoked'}</span>
             <span className="user-metric"><Clock size={13}/>{token.last_used_at ? new Date(token.last_used_at).toLocaleString() : 'Never used'}</span>
             <div className="row-actions">
-              <button className="mini danger" disabled={!!loading || !token.is_active} onClick={() => revokeApiToken(token)}><Trash2 size={14}/> Revoke</button>
+              <button className="mini danger" disabled={!!loading || !token.is_active} onClick={() => revokeApiToken(token)}><Trash2 size={14}/>{t('Revoke')}</button>
             </div>
           </div>)}
         </div>
@@ -7369,7 +7364,7 @@ Each account is overwritten with what is in its archive.`)) return;
   }
 
   function renderUsers() {
-    if (!isAdmin) return <section className="section"><h2>Users</h2><p className="hint">No permission.</p></section>;
+    if (!isAdmin) return <section className="section"><h2>{t('Users')}</h2><p className="hint">{t('No permission.')}</p></section>;
     const activeUserTab = userTab || 'list';
     const userTabButton = (key, Icon, label) => (
       <button
@@ -7387,9 +7382,9 @@ Each account is overwritten with what is in its archive.`)) return;
 
     return <section className="section users-page">
       <div className="section-title">
-        <div><h2>Panel users</h2><p className="hint">Manage users, packages, and domain ownership.</p></div>
+        <div><h2>{t('Panel users')}</h2><p className="hint">{t('Manage users, packages, and domain ownership.')}</p></div>
       </div>
-      <div className="segmented user-tabs" role="tablist" aria-label="Panel user sections">
+      <div className="segmented user-tabs" role="tablist" aria-label={t('Panel user sections')}>
         {userTabButton('list', Users, 'List user')}
         {userTabButton('packages', HardDrive, 'Package')}
         {userTabButton('add', Plus, 'Add User')}
@@ -7397,10 +7392,10 @@ Each account is overwritten with what is in its archive.`)) return;
 
       {activeUserTab === 'list' && <div className="user-tab-panel" id="users-tab-list" role="tabpanel" aria-labelledby="users-tab-button-list">
         <div className="section-title user-panel-title">
-          <div><h2>Panel user list</h2><p className="hint">Current panel users and service limits.</p></div>
-          <button disabled={!!loading} onClick={loadUsers}><RefreshCw size={14}/> Refresh</button>
+          <div><h2>{t('Panel user list')}</h2><p className="hint">{t('Current panel users and service limits.')}</p></div>
+          <button disabled={!!loading} onClick={loadUsers}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
-        {users.length === 0 && <EmptyState icon={Users} message="No users found." />}
+        {users.length === 0 && <EmptyState icon={Users} message={t('No users found.')} />}
         <div className="table">
           {users.map(user => <div className="row user-row" key={user.id}>
             <div className="user-main"><strong>{user.username}</strong><small>{user.email}</small></div>
@@ -7412,12 +7407,12 @@ Each account is overwritten with what is in its archive.`)) return;
             </div>
             <span className="user-metric"><HardDrive size={13}/>{storageUsageText(user)}</span>
             <div className="row-actions">
-              <button className="mini secondary-light" disabled={!!loading} onClick={() => startEditingUser(user)}><Pencil size={14}/> Edit</button>
-              <button className="mini secondary-light" disabled={!!loading} onClick={() => quickLoginUser(user)}><LogIn size={14}/> Login as</button>
-              {user.totp_enabled && user.id !== currentUser?.id && <button className="mini secondary-light" disabled={!!loading} onClick={() => resetUserTwoFactor(user)}>Reset 2FA</button>}
+              <button className="mini secondary-light" disabled={!!loading} onClick={() => startEditingUser(user)}><Pencil size={14}/>{t('Edit')}</button>
+              <button className="mini secondary-light" disabled={!!loading} onClick={() => quickLoginUser(user)}><LogIn size={14}/>{t('Login as')}</button>
+              {user.totp_enabled && user.id !== currentUser?.id && <button className="mini secondary-light" disabled={!!loading} onClick={() => resetUserTwoFactor(user)}>{t('Reset 2FA')}</button>}
               {user.id !== currentUser?.id && (user.is_active
-                ? <button className="mini secondary-light" disabled={!!loading} onClick={() => suspendUser(user)}><Ban size={14}/> Suspend</button>
-                : <button className="mini secondary-light" disabled={!!loading} onClick={() => unsuspendUser(user)}><Play size={14}/> Unsuspend</button>
+                ? <button className="mini secondary-light" disabled={!!loading} onClick={() => suspendUser(user)}><Ban size={14}/>{t('Suspend')}</button>
+                : <button className="mini secondary-light" disabled={!!loading} onClick={() => unsuspendUser(user)}><Play size={14}/>{t('Unsuspend')}</button>
               )}
               {user.id !== currentUser?.id && <button className="mini danger" disabled={!!loading} onClick={() => deletePanelUser(user)}><Trash2 size={14}/></button>}
             </div>
@@ -7427,84 +7422,84 @@ Each account is overwritten with what is in its archive.`)) return;
                   {user.id === currentUser?.id ? 'Role is locked for the active admin session.' : 'Role changes sign the user out of existing sessions.'}
                   {editingUserForm.role === 'admin' ? ' Admin accounts bypass website and storage limits.' : ''}
                 </small></div>
-                <button className="user-edit-close secondary-light" onClick={cancelEditingUser} aria-label="Close user editor" title="Close user editor"><X size={16}/></button>
+                <button className="user-edit-close secondary-light" onClick={cancelEditingUser} aria-label={t('Close user editor')} title={t('Close user editor')}><X size={16}/></button>
               </div>
               <div className="user-edit-grid">
-                <label><span>Email</span><input type="email" value={editingUserForm.email} onChange={e => setEditingUserForm(prev => ({ ...prev, email: e.target.value }))} /></label>
-                <label><span>Role</span><select value={editingUserForm.role} disabled={user.id === currentUser?.id} onChange={e => setEditingUserForm(prev => ({ ...prev, role: e.target.value }))}>
-                  <option value="end_user">End user</option><option value="admin">Admin</option>
+                <label><span>{t('Email')}</span><input type="email" value={editingUserForm.email} onChange={e => setEditingUserForm(prev => ({ ...prev, email: e.target.value }))} /></label>
+                <label><span>{t('Role')}</span><select value={editingUserForm.role} disabled={user.id === currentUser?.id} onChange={e => setEditingUserForm(prev => ({ ...prev, role: e.target.value }))}>
+                  <option value="end_user">{t('End user')}</option><option value="admin">{t('Admin')}</option>
                 </select></label>
-                <label><span>Package</span><select value={editingUserForm.package_id} onChange={e => applyPackageToEditingUser(e.target.value)}>
-                  <option value="">Custom limits</option>
+                <label><span>{t('Package')}</span><select value={editingUserForm.package_id} onChange={e => applyPackageToEditingUser(e.target.value)}>
+                  <option value="">{t('Custom limits')}</option>
                   {packages.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
                 </select></label>
-                <label><span>Website limit</span><input type="number" min="0" max="1000" disabled={!!editingUserForm.package_id} value={editingUserForm.website_limit} onChange={e => setEditingUserForm(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
-                <label><span>Storage limit (MB)</span><input type="number" min="0" max="1048576" disabled={!!editingUserForm.package_id} value={editingUserForm.storage_limit_mb} onChange={e => setEditingUserForm(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
-                <label><span>SFTP accounts</span><input type="number" min="0" max="100" disabled={!!editingUserForm.package_id} value={editingUserForm.sftp_accounts_limit} onChange={e => setEditingUserForm(prev => ({ ...prev, sftp_accounts_limit: e.target.value }))} /></label>
+                <label><span>{t('Website limit')}</span><input type="number" min="0" max="1000" disabled={!!editingUserForm.package_id} value={editingUserForm.website_limit} onChange={e => setEditingUserForm(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
+                <label><span>{t('Storage limit (MB)')}</span><input type="number" min="0" max="1048576" disabled={!!editingUserForm.package_id} value={editingUserForm.storage_limit_mb} onChange={e => setEditingUserForm(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
+                <label><span>{t('SFTP accounts')}</span><input type="number" min="0" max="100" disabled={!!editingUserForm.package_id} value={editingUserForm.sftp_accounts_limit} onChange={e => setEditingUserForm(prev => ({ ...prev, sftp_accounts_limit: e.target.value }))} /></label>
               </div>
               <div className="user-edit-section">
-                <div className="user-edit-heading"><div><strong>Change password</strong><small>Minimum 12 characters. {user.id === currentUser?.id ? 'Requires current password + 2FA.' : 'Admin can set directly.'}</small></div></div>
+                <div className="user-edit-heading"><div><strong>{t('Change password')}</strong><small>Minimum 12 characters. {user.id === currentUser?.id ? 'Requires current password + 2FA.' : 'Admin can set directly.'}</small></div></div>
                 <div className="user-edit-grid">
-                  <label><span>New password</span><input type="password" placeholder="Min 12 characters" value={editingUserForm.new_password} onChange={e => setEditingUserForm(prev => ({ ...prev, new_password: e.target.value }))} /></label>
-                  <label><span>Confirm password</span><input type="password" placeholder="Repeat password" value={editingUserForm.confirm_password} onChange={e => setEditingUserForm(prev => ({ ...prev, confirm_password: e.target.value }))} /></label>
+                  <label><span>{t('New password')}</span><input type="password" placeholder={t('Min 12 characters')} value={editingUserForm.new_password} onChange={e => setEditingUserForm(prev => ({ ...prev, new_password: e.target.value }))} /></label>
+                  <label><span>{t('Confirm password')}</span><input type="password" placeholder={t('Repeat password')} value={editingUserForm.confirm_password} onChange={e => setEditingUserForm(prev => ({ ...prev, confirm_password: e.target.value }))} /></label>
                 </div>
                 <div className="user-edit-actions">
-                  <button disabled={!!loading || !editingUserForm.new_password || editingUserForm.new_password.length < 12} onClick={() => submitPasswordChange(user)}>Set password</button>
+                  <button disabled={!!loading || !editingUserForm.new_password || editingUserForm.new_password.length < 12} onClick={() => submitPasswordChange(user)}>{t('Set password')}</button>
                 </div>
               </div>
               <div className="user-edit-actions">
-                <button className="secondary-light" onClick={cancelEditingUser}>Cancel</button>
-                <button disabled={!!loading || !editingUserForm.email.trim()} onClick={updatePanelUser}><Save size={14}/> Save changes</button>
+                <button className="secondary-light" onClick={cancelEditingUser}>{t('Cancel')}</button>
+                <button disabled={!!loading || !editingUserForm.email.trim()} onClick={updatePanelUser}><Save size={14}/>{t('Save changes')}</button>
               </div>
             </div>}
           </div>)}
         </div>
         <div className="user-action-panel">
-          <div><h3>Assign domain to user</h3><p className="hint">Move an existing domain under a selected panel user.</p></div>
+          <div><h3>{t('Assign domain to user')}</h3><p className="hint">{t('Move an existing domain under a selected panel user.')}</p></div>
           <div className="assign-row">
             <select value={assignWebsiteId} onChange={e => setAssignWebsiteId(e.target.value)}>
-              <option value="">Select domain</option>
+              <option value="">{t('Select domain')}</option>
               {websites.map(site => <option key={site.id} value={site.id}>{site.domain}</option>)}
             </select>
             <select value={assignUserId} onChange={e => setAssignUserId(e.target.value)}>
-              <option value="">Select user</option>
+              <option value="">{t('Select user')}</option>
               {users.map(user => <option key={user.id} value={user.id}>{user.username} ({roleLabel(user.role)})</option>)}
             </select>
-            <button disabled={!assignWebsiteId || !assignUserId || !!loading} onClick={assignDomainToUser}>Assign</button>
+            <button disabled={!assignWebsiteId || !assignUserId || !!loading} onClick={assignDomainToUser}>{t('Assign')}</button>
           </div>
         </div>
       </div>}
 
       {activeUserTab === 'packages' && <div className="user-tab-panel" id="users-tab-packages" role="tabpanel" aria-labelledby="users-tab-button-packages">
         <div className="section-title user-panel-title">
-          <div><h2>Package</h2><p className="hint">Create, edit, delete, and review reusable user limits.</p></div>
-          <button disabled={!!loading} onClick={loadPackages}><RefreshCw size={14}/> Refresh</button>
+          <div><h2>{t('Package')}</h2><p className="hint">{t('Create, edit, delete, and review reusable user limits.')}</p></div>
+          <button disabled={!!loading} onClick={loadPackages}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
         <div className="user-create-card package-create-card">
-          <label><span>Package name</span><input value={newPackage.name} onChange={e => setNewPackage(prev => ({ ...prev, name: e.target.value }))} placeholder="Starter" /></label>
-          <label><span>Site limit</span><input type="number" min="0" max="1000" value={newPackage.website_limit} onChange={e => setNewPackage(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
-          <label><span>Storage MB</span><input type="number" min="0" max="1048576" value={newPackage.storage_limit_mb} onChange={e => setNewPackage(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
-          <label><span>SFTP accounts</span><input type="number" min="0" max="100" value={newPackage.sftp_accounts_limit} onChange={e => setNewPackage(prev => ({ ...prev, sftp_accounts_limit: e.target.value }))} /></label>
-          <button disabled={!!loading || !newPackage.name.trim()} onClick={createPackage}><Plus size={14}/> Create package</button>
+          <label><span>{t('Package name')}</span><input value={newPackage.name} onChange={e => setNewPackage(prev => ({ ...prev, name: e.target.value }))} placeholder={t('Starter')} /></label>
+          <label><span>{t('Site limit')}</span><input type="number" min="0" max="1000" value={newPackage.website_limit} onChange={e => setNewPackage(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
+          <label><span>{t('Storage MB')}</span><input type="number" min="0" max="1048576" value={newPackage.storage_limit_mb} onChange={e => setNewPackage(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
+          <label><span>{t('SFTP accounts')}</span><input type="number" min="0" max="100" value={newPackage.sftp_accounts_limit} onChange={e => setNewPackage(prev => ({ ...prev, sftp_accounts_limit: e.target.value }))} /></label>
+          <button disabled={!!loading || !newPackage.name.trim()} onClick={createPackage}><Plus size={14}/>{t('Create package')}</button>
         </div>
         <div className="package-list">
-          {packages.length === 0 && <EmptyState icon={HardDrive} message="No packages found." />}
+          {packages.length === 0 && <EmptyState icon={HardDrive} message={t('No packages found.')} />}
           {packages.map(item => <div className="package-row" key={item.id}>
             {String(editingPackageId) === String(item.id) ? <>
-              <label><span>Name</span><input value={editingPackageForm.name} onChange={e => setEditingPackageForm(prev => ({ ...prev, name: e.target.value }))} /></label>
-              <label><span>Site limit</span><input type="number" min="0" max="1000" value={editingPackageForm.website_limit} onChange={e => setEditingPackageForm(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
-              <label><span>Storage MB</span><input type="number" min="0" max="1048576" value={editingPackageForm.storage_limit_mb} onChange={e => setEditingPackageForm(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
-              <label><span>SFTP accounts</span><input type="number" min="0" max="100" value={editingPackageForm.sftp_accounts_limit} onChange={e => setEditingPackageForm(prev => ({ ...prev, sftp_accounts_limit: e.target.value }))} /></label>
+              <label><span>{t('Name')}</span><input value={editingPackageForm.name} onChange={e => setEditingPackageForm(prev => ({ ...prev, name: e.target.value }))} /></label>
+              <label><span>{t('Site limit')}</span><input type="number" min="0" max="1000" value={editingPackageForm.website_limit} onChange={e => setEditingPackageForm(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
+              <label><span>{t('Storage MB')}</span><input type="number" min="0" max="1048576" value={editingPackageForm.storage_limit_mb} onChange={e => setEditingPackageForm(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
+              <label><span>{t('SFTP accounts')}</span><input type="number" min="0" max="100" value={editingPackageForm.sftp_accounts_limit} onChange={e => setEditingPackageForm(prev => ({ ...prev, sftp_accounts_limit: e.target.value }))} /></label>
               <div className="row-actions">
-                <button className="mini secondary-light" onClick={cancelEditingPackage}>Cancel</button>
-                <button className="mini" disabled={!!loading || !editingPackageForm.name.trim()} onClick={() => updatePackage(item.id)}><Save size={14}/> Save</button>
+                <button className="mini secondary-light" onClick={cancelEditingPackage}>{t('Cancel')}</button>
+                <button className="mini" disabled={!!loading || !editingPackageForm.name.trim()} onClick={() => updatePackage(item.id)}><Save size={14}/>{t('Save')}</button>
               </div>
             </> : <>
               <div className="user-main"><strong>{item.name}</strong><small>{item.website_limit} sites - {item.storage_limit_mb} MB</small></div>
               <span className="user-metric"><Globe size={13}/>{item.website_limit} sites</span>
               <span className="user-metric"><HardDrive size={13}/>{item.storage_limit_mb} MB</span>
               <div className="row-actions">
-                <button className="mini secondary-light" disabled={!!loading} onClick={() => startEditingPackage(item)}><Pencil size={14}/> Edit</button>
+                <button className="mini secondary-light" disabled={!!loading} onClick={() => startEditingPackage(item)}><Pencil size={14}/>{t('Edit')}</button>
                 <button className="mini danger" disabled={!!loading || users.some(user => user.package_id === item.id)} onClick={() => deletePackage(item)}><Trash2 size={14}/></button>
               </div>
             </>}
@@ -7514,23 +7509,23 @@ Each account is overwritten with what is in its archive.`)) return;
 
       {activeUserTab === 'add' && <div className="user-tab-panel" id="users-tab-add" role="tabpanel" aria-labelledby="users-tab-button-add">
         <div className="section-title user-panel-title">
-          <div><h2>Add User</h2><p className="hint">Panel username is also the Linux user. Login as a user before creating websites for that account.</p></div>
+          <div><h2>{t('Add User')}</h2><p className="hint">{t('Panel username is also the Linux user. Login as a user before creating websites for that account.')}</p></div>
         </div>
         <div className="user-create-card">
-          <label><span>Username</span><input value={newUser.username} onChange={e => setNewUser(prev => ({ ...prev, username: e.target.value.toLowerCase() }))} placeholder="johndoe" /></label>
-          <label><span>Email</span><input value={newUser.email} onChange={e => setNewUser(prev => ({ ...prev, email: e.target.value }))} placeholder="user@domain.com" /></label>
-          <label><span>Password</span><input value={newUser.password} onChange={e => setNewUser(prev => ({ ...prev, password: e.target.value }))} placeholder="Min 12 characters" type="password" /></label>
-          <label><span>Role</span><select value={newUser.role} onChange={e => setNewUser(prev => ({ ...prev, role: e.target.value }))}>
-            <option value="end_user">End user</option><option value="admin">Admin</option>
+          <label><span>{t('Username')}</span><input value={newUser.username} onChange={e => setNewUser(prev => ({ ...prev, username: e.target.value.toLowerCase() }))} placeholder="johndoe" /></label>
+          <label><span>{t('Email')}</span><input value={newUser.email} onChange={e => setNewUser(prev => ({ ...prev, email: e.target.value }))} placeholder="user@domain.com" /></label>
+          <label><span>{t('Password')}</span><input value={newUser.password} onChange={e => setNewUser(prev => ({ ...prev, password: e.target.value }))} placeholder={t('Min 12 characters')} type="password" /></label>
+          <label><span>{t('Role')}</span><select value={newUser.role} onChange={e => setNewUser(prev => ({ ...prev, role: e.target.value }))}>
+            <option value="end_user">{t('End user')}</option><option value="admin">{t('Admin')}</option>
           </select></label>
-          <label><span>Package</span><select value={newUser.package_id} onChange={e => applyPackageToNewUser(e.target.value)}>
-            <option value="">Custom limits</option>
+          <label><span>{t('Package')}</span><select value={newUser.package_id} onChange={e => applyPackageToNewUser(e.target.value)}>
+            <option value="">{t('Custom limits')}</option>
             {packages.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
           </select></label>
-          <label><span>Site limit</span><input type="number" disabled={!!newUser.package_id} value={newUser.website_limit} onChange={e => setNewUser(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
-          <label><span>Storage MB</span><input type="number" disabled={!!newUser.package_id} value={newUser.storage_limit_mb} onChange={e => setNewUser(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
-          <label><span>SFTP accounts</span><input type="number" min="0" max="100" disabled={!!newUser.package_id} value={newUser.sftp_accounts_limit} onChange={e => setNewUser(prev => ({ ...prev, sftp_accounts_limit: e.target.value }))} /></label>
-          <button disabled={!!loading || !newUser.username || !newUser.password} onClick={createUser}><Plus size={14}/> Create user</button>
+          <label><span>{t('Site limit')}</span><input type="number" disabled={!!newUser.package_id} value={newUser.website_limit} onChange={e => setNewUser(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
+          <label><span>{t('Storage MB')}</span><input type="number" disabled={!!newUser.package_id} value={newUser.storage_limit_mb} onChange={e => setNewUser(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
+          <label><span>{t('SFTP accounts')}</span><input type="number" min="0" max="100" disabled={!!newUser.package_id} value={newUser.sftp_accounts_limit} onChange={e => setNewUser(prev => ({ ...prev, sftp_accounts_limit: e.target.value }))} /></label>
+          <button disabled={!!loading || !newUser.username || !newUser.password} onClick={createUser}><Plus size={14}/>{t('Create user')}</button>
         </div>
       </div>}
     </section>;
@@ -7548,16 +7543,17 @@ Each account is overwritten with what is in its archive.`)) return;
         </div>
         <div className="standalone-editor-actions">
           <span className="editor-chip">{editorMode}</span>
-          <span className="editor-chip">{editorLineCount} line(s)</span>
+          <span className="editor-chip">{t('{n} line(s)', { n: editorLineCount })}</span>
           <span className="editor-chip">Ln {editorCursor.line}, Col {editorCursor.column}</span>
-          <button disabled={!selectedWebsiteId || !!loading} onClick={() => readFile(filePath)}><RefreshCw size={14}/> Reload</button>
-          <button disabled={!selectedWebsiteId || !!loading} onClick={writeFile}>Save</button>
+          <button disabled={!selectedWebsiteId || !!loading} onClick={() => readFile(filePath)}><RefreshCw size={14}/>{t('Reload')}</button>
+          <button disabled={!selectedWebsiteId || !!loading} onClick={writeFile}>{t('Save')}</button>
           <button disabled={!selectedWebsiteId || !filePath || !!loading} onClick={() => downloadFile(filePath)}><Download size={14}/></button>
+          <LanguageToggle language={language} onChange={changeLanguage}/>
           <ThemeToggle theme={theme} onToggle={toggleTheme}/>
-          <button className="secondary-light" onClick={() => window.close()}><X size={14}/> Close</button>
+          <button className="secondary-light" onClick={() => window.close()}><X size={14}/>{t('Close')}</button>
         </div>
       </header>
-      {loading && <div className="loading">{loading}</div>}
+      {loading && <div className="loading">{t(loading)}</div>}
       {renderNotifications()}
       <section className="standalone-editor-body">
         <CodeEditor
@@ -7589,7 +7585,7 @@ Each account is overwritten with what is in its archive.`)) return;
       }
       setNotice(message || 'Copied.');
     } catch {
-      setError('Copy failed. Select the text and press Ctrl+C.');
+      setError(t('Copy failed. Select the text and press Ctrl+C.'));
     }
   }
 
@@ -7609,23 +7605,23 @@ Each account is overwritten with what is in its archive.`)) return;
         expires_in_days: Number(mcpDraft.expires_in_days || 90),
         can_write: !!mcpDraft.can_write,
       }),
-    }, 'Creating token...');
+    }, t('Creating token...'));
     if (data) {
       // Shown once and never again: the server keeps only a hash. It stays on
       // screen until the person dismisses it rather than disappearing on the
       // next render, because there is no way to get it back.
       setMcpNewToken(data.token);
       setMcpDraft({ name: '', expires_in_days: 90, can_write: false });
-      setNotice('Token created. Copy it now - it is not shown again.');
+      setNotice(t('Token created. Copy it now - it is not shown again.'));
       await loadMcpTokens();
     }
   }
 
   async function revokeMcpToken(token) {
     if (!window.confirm(`Revoke "${token.name}"? Any assistant using it stops working immediately.`)) return;
-    const data = await request(`/mcp/tokens/${token.id}`, { method: 'DELETE' }, 'Revoking...');
+    const data = await request(`/mcp/tokens/${token.id}`, { method: 'DELETE' }, t('Revoking...'));
     if (data) {
-      setNotice('Token revoked.');
+      setNotice(t('Token revoked.'));
       await loadMcpTokens();
     }
   }
@@ -7658,58 +7654,51 @@ Each account is overwritten with what is in its archive.`)) return;
       <section className="section">
         <div className="section-title">
           <div>
-            <h2>AI assistants (MCP)</h2>
+            <h2>{t('AI assistants (MCP)')}</h2>
             <p className="hint">
-              Give Claude Code, Cursor or VS Code a token and it can read and operate the panel
-              with exactly your own permissions - nothing more.
+              {t('Give Claude Code, Cursor or VS Code a token and it can read and operate the panel with exactly your own permissions - nothing more.')}
             </p>
           </div>
           <button className="secondary-light" disabled={!!loading} onClick={loadMcpTokens}>
-            <RefreshCw size={14}/> Refresh
-          </button>
+            <RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
 
         {!mcpAddonInstalled && <div className="addon-notes">
-          <strong><AlertCircle size={13}/> The addon is off</strong>
-          <ul><li>Nothing answers on this address until an administrator installs
-            <strong> AI assistants (MCP)</strong> on the Addons page. Existing tokens are kept
+          <strong><AlertCircle size={13}/>{t('The addon is off')}</strong>
+          <ul><li>{t('Nothing answers on this address until an administrator installs')}<strong>{t('AI assistants (MCP)')}</strong> on the Addons page. Existing tokens are kept
             while it is off.</li></ul>
         </div>}
 
         {selfSigned && <div className="addon-notes">
-          <strong><AlertCircle size={13}/> This panel needs a real certificate</strong>
-          <ul><li>MCP clients refuse a self-signed certificate, so no assistant will connect
-            until the panel has one. Install it under Panel settings → SSL.</li></ul>
+          <strong><AlertCircle size={13}/>{t('This panel needs a real certificate')}</strong>
+          <ul><li>{t('MCP clients refuse a self-signed certificate, so no assistant will connect until the panel has one. Install it under Panel settings → SSL.')}</li></ul>
         </div>}
 
         <div className="mcp-endpoint">
-          <span>Endpoint</span>
+          <span>{t('Endpoint')}</span>
           <code>{endpoint}</code>
           <button className="mini secondary-light" onClick={() => copyText(endpoint, 'Endpoint copied.')}>
-            <Copy size={13}/> Copy
-          </button>
+            <Copy size={13}/>{t('Copy')}</button>
         </div>
       </section>
 
       <section className="section">
-        <div className="section-title"><div><h2>New token</h2><p className="hint">
-          A token acts as you. It is shown once, when you create it.
-        </p></div></div>
+        <div className="section-title"><div><h2>{t('New token')}</h2><p className="hint">{t('A token acts as you. It is shown once, when you create it.')}</p></div></div>
         <div className="form-row">
           <input
-            placeholder="What is it for - laptop, work desktop"
+            placeholder={t('What is it for - laptop, work desktop')}
             value={mcpDraft.name}
             maxLength={100}
             onChange={event => setMcpDraft(prev => ({ ...prev, name: event.target.value }))}
           />
           <select
             value={mcpDraft.expires_in_days}
-            aria-label="Expires in"
+            aria-label={t('Expires in')}
             onChange={event => setMcpDraft(prev => ({ ...prev, expires_in_days: event.target.value }))}>
-            <option value="7">Expires in 7 days</option>
-            <option value="30">Expires in 30 days</option>
-            <option value="90">Expires in 90 days</option>
-            <option value="365">Expires in a year</option>
+            <option value="7">{t('Expires in 7 days')}</option>
+            <option value="30">{t('Expires in 30 days')}</option>
+            <option value="90">{t('Expires in 90 days')}</option>
+            <option value="365">{t('Expires in a year')}</option>
           </select>
           <label className="check-line">
             <input
@@ -7717,52 +7706,46 @@ Each account is overwritten with what is in its archive.`)) return;
               checked={!!mcpDraft.can_write}
               onChange={event => setMcpDraft(prev => ({ ...prev, can_write: event.target.checked }))}
             />
-            <span>Allow actions</span>
+            <span>{t('Allow actions')}</span>
           </label>
           <button disabled={!mcpDraft.name.trim() || !!loading} onClick={createMcpToken}>
-            <KeyRound size={14}/> Create
-          </button>
+            <KeyRound size={14}/>{t('Create')}</button>
         </div>
-        <p className="hint">
-          Without <strong>Allow actions</strong> the token can only read, and the assistant is not
+        <p className="hint">{t('Without')}<strong>{t('Allow actions')}</strong> the token can only read, and the assistant is not
           even shown the tools that change anything. Leave it off unless you want the assistant to
           act.
         </p>
 
         {mcpNewToken && <div className="mcp-secret">
           <div>
-            <strong>Copy this now. It is not shown again.</strong>
+            <strong>{t('Copy this now. It is not shown again.')}</strong>
             <code>{mcpNewToken}</code>
           </div>
           <div className="actions">
-            <button className="mini" onClick={() => copyText(mcpNewToken, 'Token copied. It is not shown again.')}><Copy size={13}/> Copy</button>
-            <button className="mini secondary-light" onClick={() => setMcpNewToken('')}>Done</button>
+            <button className="mini" onClick={() => copyText(mcpNewToken, 'Token copied. It is not shown again.')}><Copy size={13}/>{t('Copy')}</button>
+            <button className="mini secondary-light" onClick={() => setMcpNewToken('')}>{t('Done')}</button>
           </div>
         </div>}
       </section>
 
       <section className="section">
-        <div className="section-title"><div><h2>Your tokens</h2></div></div>
+        <div className="section-title"><div><h2>{t('Your tokens')}</h2></div></div>
         {mine.length === 0
-          ? <EmptyState icon={KeyRound} message="No tokens yet." />
+          ? <EmptyState icon={KeyRound} message={t('No tokens yet.')} />
           : <div className="backup-list">{mine.map(token => renderMcpTokenRow(token))}</div>}
       </section>
 
       {isAdmin && others.length > 0 && <section className="section">
-        <div className="section-title"><div><h2>Everyone else's tokens</h2><p className="hint">
-          Every key to this server, and who holds it. You can revoke any of them.
-        </p></div></div>
+        <div className="section-title"><div><h2>{t('Everyone else\'s tokens')}</h2><p className="hint">{t('Every key to this server, and who holds it. You can revoke any of them.')}</p></div></div>
         <div className="backup-list">{others.map(token => renderMcpTokenRow(token, true))}</div>
       </section>}
 
       <section className="section">
-        <div className="section-title"><div><h2>Connecting a client</h2><p className="hint">
+        <div className="section-title"><div><h2>{t('Connecting a client')}</h2><p className="hint">
           {mcpNewToken
             ? <>Your new token is already filled in below - copy one and paste it straight in.
-                Once you dismiss the token above these go back to saying YOUR_TOKEN, because the
-                panel cannot show it to you a second time.</>
-            : <>Create a token above and it appears in these ready to copy. Otherwise replace
-                YOUR_TOKEN yourself.</>}
+                {t('Once you dismiss the token above these go back to saying YOUR_TOKEN, because the panel cannot show it to you a second time.')}</>
+            : <>{t('Create a token above and it appears in these ready to copy. Otherwise replace YOUR_TOKEN yourself.')}</>}
         </p></div></div>
         {[['Claude Code', claudeCode], ['Cursor - .cursor/mcp.json', cursor],
           ['VS Code - .vscode/mcp.json', vscode]].map(([label, snippet]) => (
@@ -7770,8 +7753,7 @@ Each account is overwritten with what is in its archive.`)) return;
             <div className="mcp-snippet-head">
               <strong>{label}</strong>
               <button className="mini secondary-light" onClick={() => copyText(snippet, 'Configuration copied.')}>
-                <Copy size={13}/> Copy
-              </button>
+                <Copy size={13}/>{t('Copy')}</button>
             </div>
             <pre>{snippet}</pre>
           </div>
@@ -7802,7 +7784,7 @@ Each account is overwritten with what is in its archive.`)) return;
       </span>
       <div className="actions">
         {!revoked && <button className="mini danger" disabled={!!loading}
-          onClick={() => revokeMcpToken(token)}><Trash2 size={14}/> Revoke</button>}
+          onClick={() => revokeMcpToken(token)}><Trash2 size={14}/>{t('Revoke')}</button>}
       </div>
     </div>;
   }
@@ -7840,7 +7822,7 @@ Each account is overwritten with what is in its archive.`)) return;
   if (bootstrapping) {
     return <main className="login-page">
       <section className="login-card">
-        <div className="login-brand">{renderBrandMark('login-brand-mark')}<div><p className="eyebrow">{panelSettings.app_name || 'BPanel'}</p><h1>Loading…</h1></div></div>
+        <div className="login-brand">{renderBrandMark('login-brand-mark')}<div><p className="eyebrow">{panelSettings.app_name || 'BPanel'}</p><h1>{t('Loading…')}</h1></div></div>
       </section>
     </main>;
   }
@@ -7852,30 +7834,29 @@ Each account is overwritten with what is in its archive.`)) return;
           <div className="login-brand">
             {renderBrandMark('login-brand-mark')}
             <div>
-              <p className="eyebrow">Server Management Panel</p>
+              <p className="eyebrow">{t('Server Management Panel')}</p>
               <h1>{panelSettings.app_name || 'BPanel'}</h1>
-              <p className="hint">Manage websites, databases, backups, SSL, and services.</p>
+              <p className="hint">{t('Manage websites, databases, backups, SSL, and services.')}</p>
             </div>
           </div>
+          <LanguageToggle language={language} onChange={changeLanguage}/>
           <ThemeToggle theme={theme} onToggle={toggleTheme}/>
         </div>
         <div className="login-form">
-          <input value={username} onChange={e => setUsername(e.target.value)} placeholder="Username" autoComplete="username" />
-          <input value={password} onChange={e => setPassword(e.target.value)} placeholder="Password" type="password" autoComplete="current-password" onKeyDown={e => { if (e.key === 'Enter') login(); }} />
+          <input value={username} onChange={e => setUsername(e.target.value)} placeholder={t('Username')} autoComplete="username" />
+          <input value={password} onChange={e => setPassword(e.target.value)} placeholder={t('Password')} type="password" autoComplete="current-password" onKeyDown={e => { if (e.key === 'Enter') login(); }} />
           {passkeyPrompt && !needsTwoFactor && <div className="info-box">
-            <p className="hint">Touch your passkey to sign in.</p>
+            <p className="hint">{t('Touch your passkey to sign in.')}</p>
             <div className="site-app-form-actions">
-              <button disabled={!!loading} onClick={() => usePasskey(passkeyPrompt.options)}><KeyRound size={14}/> Try the passkey again</button>
+              <button disabled={!!loading} onClick={() => usePasskey(passkeyPrompt.options)}><KeyRound size={14}/>{t('Try the passkey again')}</button>
               {/* A passkey belongs to one hostname. Reaching the panel by
                   another name offers nothing, so the app has to stay in reach. */}
-              {passkeyPrompt.canUseOtp && <button className="secondary-light" disabled={!!loading} onClick={() => { setNeedsTwoFactor(true); setPasskeyPrompt(null); setNotice('Enter the code from your authenticator app.'); }}>Use a code instead</button>}
+              {passkeyPrompt.canUseOtp && <button className="secondary-light" disabled={!!loading} onClick={() => { setNeedsTwoFactor(true); setPasskeyPrompt(null); setNotice(t('Enter the code from your authenticator app.')); }}>{t('Use a code instead')}</button>}
             </div>
           </div>}
-          {needsTwoFactor && <input value={otpCode} onChange={e => setOtpCode(e.target.value)} placeholder="Authentication code" inputMode="numeric" autoComplete="one-time-code" onKeyDown={e => { if (e.key === 'Enter') login(); }} />}
+          {needsTwoFactor && <input value={otpCode} onChange={e => setOtpCode(e.target.value)} placeholder={t('Authentication code')} inputMode="numeric" autoComplete="one-time-code" onKeyDown={e => { if (e.key === 'Enter') login(); }} />}
           <label className="login-remember">
-            <input type="checkbox" checked={rememberMe} onChange={e => setRememberMe(e.target.checked)} />
-            Keep me signed in for 30 days
-          </label>
+            <input type="checkbox" checked={rememberMe} onChange={e => setRememberMe(e.target.checked)} />{t('Keep me signed in for 30 days')}</label>
           <button disabled={!!loading || !username || !password} onClick={login}>{loading ? 'Logging in...' : 'Login'}</button>
         </div>
       </section>
@@ -7890,28 +7871,28 @@ Each account is overwritten with what is in its archive.`)) return;
   return <main className="app-shell">
     <section className="layout">
       {mobileMenuOpen && <div className="mobile-nav-backdrop" onClick={() => setMobileMenuOpen(false)} aria-hidden="true"></div>}
-      <aside className={`sidebar ${mobileMenuOpen ? 'open' : ''}`} role="navigation" aria-label="Main navigation">
+      <aside className={`sidebar ${mobileMenuOpen ? 'open' : ''}`} role="navigation" aria-label={t('Main navigation')}>
         <div className="sidebar-head">
           <div className="sidebar-brand">
             {renderBrandMark()}
             <div>
               <strong>{panelSettings.app_name || 'BPanel'}</strong>
-              <small>Server Panel</small>
+              <small>{t('Server Panel')}</small>
             </div>
           </div>
-          <button className="sidebar-close" onClick={() => setMobileMenuOpen(false)} aria-label="Close menu"><X size={18}/></button>
+          <button className="sidebar-close" onClick={() => setMobileMenuOpen(false)} aria-label={t('Close menu')}><X size={18}/></button>
         </div>
         <nav className="sidebar-nav">
           {mainNavItems.map(([key, label, Icon]) => <button key={key} type="button" className={navPage === key ? 'active' : ''} onClick={() => navigateToPage(key)} aria-current={navPage === key ? 'page' : undefined}>
-            <Icon size={17}/>{label}
+            <Icon size={17}/>{t(label)}
           </button>)}
           <div className={`sidebar-nav-group ${settingsMenuOpen ? 'open' : ''}`}>
             <button className={`sidebar-group-toggle ${settingsIsActive ? 'active' : ''}`} onClick={() => setSettingsMenuOpen(open => !open)} aria-expanded={settingsMenuOpen} aria-controls="settings-submenu">
-              <SettingsIcon size={17}/><span>Settings</span><ChevronDown className="sidebar-group-chevron" size={16}/>
+              <SettingsIcon size={17}/><span>{t('Settings')}</span><ChevronDown className="sidebar-group-chevron" size={16}/>
             </button>
             {settingsMenuOpen && <div className="sidebar-subnav" id="settings-submenu">
               {settingsNavItems.map(([key, label, Icon]) => <button key={key} type="button" className={navPage === key ? 'active' : ''} onClick={() => navigateToPage(key)} aria-current={navPage === key ? 'page' : undefined}>
-                <Icon size={16}/>{label}
+                <Icon size={16}/>{t(label)}
               </button>)}
             </div>}
           </div>
@@ -7920,24 +7901,25 @@ Each account is overwritten with what is in its archive.`)) return;
       </aside>
       <div className="content">
         <section className="topbar">
-          <button className="mobile-nav-toggle" onClick={() => setMobileMenuOpen(o => !o)} aria-expanded={mobileMenuOpen} aria-label="Toggle navigation">
+          <button className="mobile-nav-toggle" onClick={() => setMobileMenuOpen(o => !o)} aria-expanded={mobileMenuOpen} aria-label={t('Toggle navigation')}>
             <Menu size={20}/><span><ActiveIcon size={17}/>{activeNavItem?.[1] || 'Menu'}</span>
           </button>
           <div className="page-title">
-            <p className="eyebrow">Server Management Panel</p>
+            <p className="eyebrow">{t('Server Management Panel')}</p>
             <h1>{activeNavItem?.[1] || panelSettings.app_name || 'BPanel'}</h1>
           </div>
           <div className="login logged-in">
-            <div className="account-pill" title={accountLabel}><span>Logged in as</span><strong>{accountLabel}</strong></div>
+            <div className="account-pill" title={accountLabel}><span>{t('Logged in as')}</span><strong>{accountLabel}</strong></div>
             <div className="top-actions">
-              <ThemeToggle theme={theme} onToggle={toggleTheme}/>
-              <button className="secondary compact-btn" onClick={logout} aria-label="Logout" title="Logout"><LogOut size={15}/><span className="btn-label">Logout</span></button>
+              <LanguageToggle language={language} onChange={changeLanguage}/>
+          <ThemeToggle theme={theme} onToggle={toggleTheme}/>
+              <button className="secondary compact-btn" onClick={logout} aria-label={t('Logout')} title={t('Logout')}><LogOut size={15}/><span className="btn-label">{t('Logout')}</span></button>
             </div>
           </div>
         </section>
         <div className="content-body">
           {renderPage()}
-          {loading && <div className="loading"><span></span>{loading}</div>}
+          {loading && <div className="loading"><span></span>{t(loading)}</div>}
         </div>
       </div>
     </section>

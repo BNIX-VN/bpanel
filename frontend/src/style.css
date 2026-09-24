@@ -1101,3 +1101,20 @@ button:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
 @media (max-width:640px){
   .mcp-secret{flex-direction:column;align-items:flex-start}
 }
+
+/* --- language switcher ----------------------------------------------------- */
+/* Two letters, no icon, and the same box as the theme toggle beside it: same
+   36x34, same border, same hover and focus. They are a pair, so borrowing
+   .theme-toggle's rules rather than restating them is what keeps them one after
+   the next change to either. The letters name the language you get by pressing
+   it - not a flag, which names a country. */
+.language-toggle{
+  font-family:inherit;font-weight:700;font-size:12px;letter-spacing:.04em;
+  line-height:1;
+}
+
+/* Present for screen readers, absent on screen. */
+.sr-only{
+  position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
+  clip:rect(0 0 0 0);white-space:nowrap;border:0
+}
