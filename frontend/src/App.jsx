@@ -13,7 +13,7 @@ import 'ace-builds/src-noconflict/mode-text';
 import 'ace-builds/src-noconflict/mode-yaml';
 import 'ace-builds/src-noconflict/theme-textmate';
 import 'ace-builds/src-noconflict/theme-tomorrow_night';
-import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Languages, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
 // Google's Material Symbols for the dashboard tiles, inlined locally.
 // Filled and rounded: an outline set at tile size reads thin, and these are
 // the icons the rest of the web has taught people to recognise.
@@ -175,7 +175,11 @@ function LanguageToggle({ language, onChange, className = '' }) {
    * other - a dropdown asks them to open a list to choose between two items.
    *
    * It shows the language you get by pressing it, which is how the theme
-   * toggle next to it behaves: in dark mode that button shows a sun. */
+   * toggle next to it behaves: in dark mode that button shows a sun.
+   *
+   * Two letters and no icon. EN and VI already are the picture - a globe or
+   * a speech bubble beside them says nothing the letters do not, and any
+   * flag would name a country instead of a language. */
   const next = language === 'vi' ? 'en' : 'vi';
   const label = next === 'vi' ? 'Chuyển sang Tiếng Việt' : 'Switch to English';
   return <button
@@ -185,8 +189,7 @@ function LanguageToggle({ language, onChange, className = '' }) {
     title={label}
     aria-label={label}
   >
-    <Languages size={16}/>
-    <span>{next === 'vi' ? 'VI' : 'EN'}</span>
+    {next === 'vi' ? 'VI' : 'EN'}
   </button>;
 }
 

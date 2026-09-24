@@ -159,6 +159,25 @@ def test_the_switch_is_one_button_not_a_menu():
     assert "'Chuyển sang Tiếng Việt' : 'Switch to English'" in toggle
 
 
+def test_the_switch_is_two_letters_and_no_icon():
+    """EN and VI are already the picture. A globe or a speech bubble beside them
+    says nothing the letters do not, and a flag would name a country."""
+    toggle = APP.split("function LanguageToggle(")[1].split("\nfunction ")[0]
+    assert "<Languages" not in toggle and "<svg" not in toggle
+    assert "{next === 'vi' ? 'VI' : 'EN'}" in toggle
+    # The icon import left with it rather than sitting unused in the bundle.
+    assert "Languages," not in APP
+
+
+def test_the_two_toggles_are_one_control_in_css():
+    """They sit side by side and do the same kind of thing, so they share the
+    box outright. A second copy of it drifts the first time either is
+    adjusted - which is the whole reason for the shared selector."""
+    theme_css = (SRC / "theme.css").read_text(encoding="utf-8")
+    assert ".theme-toggle,.language-toggle{" in theme_css
+    assert ".theme-toggle:hover:not(:disabled),.language-toggle:hover:not(:disabled)" in theme_css
+
+
 def test_the_switch_sits_with_the_theme_toggle():
     """Two controls that do the same kind of thing belong together; a person
     who found one will look for the other in the same place."""

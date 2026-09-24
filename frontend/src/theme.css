@@ -306,17 +306,22 @@ a:hover{color:var(--primary)}
 ::-webkit-scrollbar-thumb:hover{background:var(--scrollbar-thumb-hover);background-clip:content-box}
 
 /* ==================== Theme toggle control ==================== */
-.theme-toggle{
+/* The language switch is the same control with letters instead of a glyph, so
+   it shares these rules outright. Two buttons that sit next to each other and
+   do the same kind of thing have to stay identical, and a copy of the box
+   drifts the first time one side is adjusted. */
+.theme-toggle,.language-toggle{
   display:inline-grid;place-items:center;
   width:36px;height:34px;min-height:34px;padding:0;flex:none;
   background:var(--surface);color:var(--text-secondary);
   border:1px solid var(--border);border-radius:var(--radius-sm);
   cursor:pointer;transition:background-color .18s ease,color .18s ease,border-color .18s ease;
 }
-.theme-toggle:hover:not(:disabled){background:var(--primary-light);color:var(--primary-text);border-color:var(--primary-border)}
-.theme-toggle:focus-visible{outline:none;border-color:var(--primary);box-shadow:0 0 0 3px var(--ring)}
+.theme-toggle:hover:not(:disabled),.language-toggle:hover:not(:disabled){background:var(--primary-light);color:var(--primary-text);border-color:var(--primary-border)}
+.theme-toggle:focus-visible,.language-toggle:focus-visible{outline:none;border-color:var(--primary);box-shadow:0 0 0 3px var(--ring)}
 .theme-toggle svg{width:16px;height:16px}
-.login-card .theme-toggle,.login-page .theme-toggle{width:38px;height:38px;min-height:38px}
+.login-card .theme-toggle,.login-page .theme-toggle,
+.login-card .language-toggle,.login-page .language-toggle{width:38px;height:38px;min-height:38px}
 .login-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
 .login-card-head .login-brand{flex:1;min-width:0}
 

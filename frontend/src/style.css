@@ -1103,17 +1103,15 @@ button:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
 }
 
 /* --- language switcher ----------------------------------------------------- */
-/* Sits beside the theme toggle and reads as its pair: same height, same
-   border, same hover. Shows the language you get by pressing it, and shows the
-   code rather than a flag - a flag names a country, not a language. */
+/* Two letters, no icon, and the same box as the theme toggle beside it: same
+   36x34, same border, same hover and focus. They are a pair, so borrowing
+   .theme-toggle's rules rather than restating them is what keeps them one after
+   the next change to either. The letters name the language you get by pressing
+   it - not a flag, which names a country. */
 .language-toggle{
-  display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 8px 0 10px;
-  border:1px solid var(--border);border-radius:var(--radius-sm);
-  background:var(--surface);color:var(--text-secondary);cursor:pointer
+  font-family:inherit;font-weight:700;font-size:12px;letter-spacing:.04em;
+  line-height:1;
 }
-.language-toggle:hover{border-color:var(--border-hover);color:var(--text-primary)}
-.language-toggle span{font-weight:700;font-size:12px;letter-spacing:.04em}
-.language-toggle svg{flex:none}
 
 /* Present for screen readers, absent on screen. */
 .sr-only{
