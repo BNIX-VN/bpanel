@@ -153,11 +153,35 @@ def _http_flood_block(domain: str, config: dict | None = None) -> str:
 
 
 def render_http_flood_zones(websites) -> str:
+    # An empty key means "do not count this request" - nginx says so for both
+    # limit_req and limit_conn, and the challenge cookie already relies on it.
+    # Two things get that treatment.
+    #
+    # Static files, because counting them was measured to do nothing but harm.
+    # On two live WooCommerce sites the limiter turned away 113 and 413
+    # requests in a day; every single one was a .js or .css, and 432 of the 526
+    # came from someone who had just clicked a paid advert. A page with two
+    # hundred plugin assets opens more concurrent HTTP/2 streams than any sane
+    # connection limit, and nginx counts a stream as a connection - so one
+    # visitor, one page view, looks like a flood. What they got was a shop with
+    # its stylesheet missing.
+    #
+    # Nothing is lost by exempting them: a static file is served by nginx from
+    # disk without touching PHP or the database, which is what this protection
+    # exists to shield. A flood of asset requests is a bandwidth question, and
+    # the firewall answers that one.
     lines = [
         "# Managed by BPanel. Shared zones for per-website HTTP flood protection.",
-        "map $cookie_bpanel_http_flood_ok $bpanel_http_flood_key {",
+        "map $uri $bpanel_http_flood_static {",
+        "    default \"\";",
+        "    ~*[.](?:css|js|mjs|map|png|jpe?g|gif|webp|avif|svg|ico|woff2?|ttf|otf|eot)$ static;",
+        "}",
+        "map \"$bpanel_http_flood_static:$cookie_bpanel_http_flood_ok\" $bpanel_http_flood_key {",
         "    default $binary_remote_addr;",
-        "    1 \"\";",
+        # A static file, whoever asked for it.
+        "    \"~^static:\" \"\";",
+        # Someone who has already passed the challenge.
+        "    \"~:1$\" \"\";",
         "}",
         "limit_conn_zone $bpanel_http_flood_key zone=bpanel_conn_flood:10m;",
     ]

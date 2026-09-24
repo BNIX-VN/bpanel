@@ -67,8 +67,11 @@ def test_a_browser_can_earn_its_way_out_but_a_bot_cannot():
     assert "bpanel_http_flood_ok" in block
     zones = nginx.render_http_flood_zones([FakeSite("example.test")])
     assert "$cookie_bpanel_http_flood_ok" in zones
-    # Cookie present -> empty key -> no limit applies.
-    assert '1 "";' in zones
+    # Cookie present -> empty key -> no limit applies. The key is now built
+    # from two things - whether the path is a static file, and whether the
+    # cookie is set - so the cookie's branch matches the end of the pair
+    # rather than standing alone.
+    assert '"~:1$" "";' in zones
 
 
 def test_zones_exist_only_for_sites_that_asked_for_them():

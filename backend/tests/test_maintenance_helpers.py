@@ -168,7 +168,11 @@ def test_http_flood_zones_render_only_enabled_sites():
 
     content = nginx.render_http_flood_zones([enabled, disabled])
 
-    assert "map $cookie_bpanel_http_flood_ok $bpanel_http_flood_key" in content
+    # The key is built from the challenge cookie and from whether the path is
+    # a static file; both resolve to an empty key, which is how nginx is told
+    # not to count a request.
+    assert "$bpanel_http_flood_key {" in content
+    assert "$cookie_bpanel_http_flood_ok" in content
     assert "limit_conn_zone $bpanel_http_flood_key zone=bpanel_conn_flood:10m;" in content
     assert f"zone={nginx.http_flood_zone_name('example.com')}:10m rate=30r/m;" in content
     assert nginx.http_flood_zone_name("disabled.com") not in content
