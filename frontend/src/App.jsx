@@ -21,7 +21,7 @@ import {
   MsWebsites, MsApplications, MsSsl, MsCron, MsFiles, MsDatabaseIcon, MsBackups,
   MsWaf, MsFirewall, MsMalware, MsAccessLogs, MsLoginSecurity, MsServices,
   MsPhpConfig, MsUpdates, MsAddons, MsPanelUsers, MsPanelSettings,
-  MsAiAssistants,
+  MsAiAssistants, MsFail2ban,
 } from './MaterialSymbols.jsx';
 import { Terminal } from './components/Terminal';
 import './style.css';
@@ -843,6 +843,7 @@ function App() {
   const noticeTimer = useRef(null);
   const isAdmin = currentUser?.role === 'admin';
   const mcpAddonInstalled = !!addons.items.find(item => item.slug === 'mcp')?.installed;
+  const fail2banAddonInstalled = !!addons.items.find(item => item.slug === 'fail2ban')?.installed;
   const [mcpTokens, setMcpTokens] = useState([]);
   const [mcpDraft, setMcpDraft] = useState({ name: '', expires_in_days: 90, can_write: false });
   // Held until dismissed rather than cleared on the next render: the server
@@ -4504,6 +4505,12 @@ Each account is overwritten with what is in its archive.`)) return;
         tiles: [
           ['waf', 'WAF', MsWaf, 'Rules, bad bots and payload inspection'],
           isAdmin ? ['firewall', 'Firewall', MsFirewall, 'Allowed and blocked addresses'] : null,
+          // Every addon that is on gets a way in from the map. fail2ban has no
+          // page of its own - its ban list is a section of the Firewall page -
+          // so this lands there rather than inventing a route that would only
+          // be an alias.
+          (fail2banAddonInstalled && isAdmin)
+            ? ['firewall', 'Fail2ban', MsFail2ban, 'SSH ban list, and how long each ban lasts'] : null,
           isAdmin ? ['malware', 'Malware Scanner', MsMalware, 'Scan schedules and findings'] : null,
           isAdmin ? ['access-logs', 'Access Logs', MsAccessLogs, 'Who reached which site, and the verdict'] : null,
           ['security', 'Login security', MsLoginSecurity, 'Two-factor and session settings'],
@@ -7629,15 +7636,21 @@ Each account is overwritten with what is in its archive.`)) return;
     const others = mcpTokens.filter(token => token.user_id !== currentUser?.id);
     const selfSigned = !window.location.protocol.startsWith('https');
 
-    const claudeCode = `claude mcp add --transport http bpanel ${endpoint} \\\n  --header "Authorization: Bearer YOUR_TOKEN"`;
+    // The real token while it is still on screen, the placeholder once it has
+    // been dismissed. Somebody who has just made a token wants to paste a
+    // finished command, not paste one and then go hunting for the value to
+    // substitute - and since the panel can never show the token again, the
+    // window in which this can help is exactly the window in which it is up.
+    const bearer = mcpNewToken || 'YOUR_TOKEN';
+    const claudeCode = `claude mcp add --transport http bpanel ${endpoint} \\\n  --header "Authorization: Bearer ${bearer}"`;
     const cursor = JSON.stringify({
       mcpServers: {
-        bpanel: { url: endpoint, headers: { Authorization: 'Bearer YOUR_TOKEN' } },
+        bpanel: { url: endpoint, headers: { Authorization: `Bearer ${bearer}` } },
       },
     }, null, 2);
     const vscode = JSON.stringify({
       servers: {
-        bpanel: { type: 'http', url: endpoint, headers: { Authorization: 'Bearer YOUR_TOKEN' } },
+        bpanel: { type: 'http', url: endpoint, headers: { Authorization: `Bearer ${bearer}` } },
       },
     }, null, 2);
 
@@ -7744,7 +7757,12 @@ Each account is overwritten with what is in its archive.`)) return;
 
       <section className="section">
         <div className="section-title"><div><h2>Connecting a client</h2><p className="hint">
-          Replace YOUR_TOKEN with the token you just created.
+          {mcpNewToken
+            ? <>Your new token is already filled in below - copy one and paste it straight in.
+                Once you dismiss the token above these go back to saying YOUR_TOKEN, because the
+                panel cannot show it to you a second time.</>
+            : <>Create a token above and it appears in these ready to copy. Otherwise replace
+                YOUR_TOKEN yourself.</>}
         </p></div></div>
         {[['Claude Code', claudeCode], ['Cursor - .cursor/mcp.json', cursor],
           ['VS Code - .vscode/mcp.json', vscode]].map(([label, snippet]) => (

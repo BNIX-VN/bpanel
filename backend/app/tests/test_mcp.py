@@ -1188,3 +1188,36 @@ def test_the_icon_is_a_real_glyph_and_not_invented_path_data():
     assert len(body) > 200, "too short to be a real glyph"
     assert body.startswith("M"), "SVG path data starts with a moveto"
     assert 'viewBox="0 -960 960 960"' in symbols
+
+
+def test_every_addon_has_a_way_in_from_the_dashboard():
+    """The operator's rule: an addon that is on must show on the map.
+
+    Read from the backend catalogue rather than a list written here, so an
+    addon added later fails this until it has a tile. fail2ban was the one
+    missing it - it has no page of its own, its ban list being a section of the
+    Firewall page, and that had been treated as a reason for it to be invisible
+    rather than a reason for its tile to land on the Firewall page.
+    """
+    from app.services import addons
+
+    tiles = APP_JSX.split("const groups = [")[1].split("\n    ]")[0]
+    for slug in sorted(addons.CATALOGUE):
+        flag = {"application": "appsFeatureEnabled",
+                "fail2ban": "fail2banAddonInstalled",
+                "mcp": "mcpAddonInstalled"}.get(slug)
+        assert flag, f"addon {slug} has no dashboard gate named in this test"
+        assert flag in tiles, f"addon {slug} is installable but never appears on the dashboard"
+
+
+def test_the_client_snippets_carry_the_token_that_was_just_created():
+    """Copying a command and then editing it is two steps where one will do.
+
+    The token cannot be shown again, so the only moment this can help is while
+    it is still on screen - which is exactly when it is substituted.
+    """
+    block = APP_JSX.split("function renderMcp()")[1].split("function renderMcpTokenRow")[0]
+    assert "const bearer = mcpNewToken || 'YOUR_TOKEN';" in block
+    # All three snippets use it; none of them still hard-codes the placeholder.
+    assert block.count("${bearer}") == 3
+    assert "'Bearer YOUR_TOKEN'" not in block
