@@ -11,6 +11,7 @@ and impossible to notice afterwards:
 """
 
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -25,6 +26,8 @@ from app.services import mcp
 # leaving the registry tests passing against nothing, which is the worst way
 # for this to fail.
 from app.services import mcp_tools
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
 # --- fixtures ---------------------------------------------------------------
@@ -1085,3 +1088,58 @@ def test_a_files_contents_are_never_copied_into_the_audit_log(monkeypatch):
     assert "hunter2" not in detail
     assert "wp-config.php" in detail
     assert "content=33 chars" in detail
+
+
+# --- the panel's own page ----------------------------------------------------
+
+APP_JSX = (PROJECT_ROOT / "frontend" / "src" / "App.jsx").read_text(encoding="utf-8")
+
+
+def test_the_page_exists_and_is_routed():
+    assert "function renderMcp()" in APP_JSX
+    assert "mcp: '/ai-assistants'," in APP_JSX
+    assert "if (page === 'mcp')" in APP_JSX
+
+
+def test_a_customer_only_sees_the_menu_once_an_admin_turns_it_on():
+    """An admin always sees it, so there is somewhere to go and read why it is
+    off. A customer seeing a menu item that answers 404 is worse than no item."""
+    assert "mcpAddonInstalled || isAdmin ? [['mcp', 'AI assistants', Bot]] : []" in APP_JSX
+
+
+def test_the_page_says_a_self_signed_certificate_will_not_work():
+    """The single most likely reason this never connects, said before the
+    person has spent an afternoon on it."""
+    assert "MCP clients refuse a self-signed certificate" in APP_JSX
+
+
+def test_the_page_says_the_token_is_shown_once():
+    assert "not shown again" in APP_JSX
+
+
+def test_the_new_token_is_not_cleared_by_the_next_render():
+    """The server keeps only a hash. A token that scrolls away is gone."""
+    block = APP_JSX.split("function createMcpToken()")[1].split("async function")[0]
+    assert "setMcpNewToken(data.token)" in block
+    # It is dismissed by the person, not by the next state change.
+    assert "setMcpNewToken('')" in APP_JSX.split("function renderMcp()")[1]
+
+
+def test_the_page_offers_a_config_for_each_client_that_can_use_it():
+    block = APP_JSX.split("function renderMcp()")[1].split("function renderMcpTokenRow")[0]
+    for client in ("Claude Code", "Cursor", "VS Code"):
+        assert client in block, f"{client} has no copy-ready configuration"
+    assert "YOUR_TOKEN" in block
+
+
+def test_a_token_row_says_whether_it_can_act():
+    """Read-only against can-act is the whole permission model; it belongs in
+    the list rather than only on the form that created it."""
+    block = APP_JSX.split("function renderMcpTokenRow")[1]
+    assert "read only" in block and "can act" in block
+    assert "revoked" in block and "expired" in block
+
+
+def test_revoking_asks_first():
+    block = APP_JSX.split("async function revokeMcpToken")[1].split("function ")[0]
+    assert "window.confirm" in block
