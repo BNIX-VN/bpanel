@@ -276,3 +276,20 @@ def test_a_cron_schedule_is_picked_rather_than_typed():
     assert "const CRON_SCHEDULE_PRESETS = [" in APP
     assert "{CRON_SCHEDULE_PRESETS.map(([value, label]) => <option key={value} value={value}>{t(label)}</option>)}" in APP
     assert "<option value=\"custom\">{t('Custom...')}</option>" in APP
+
+
+def test_a_new_page_opens_at_its_top():
+    """The window scrolls, and nothing reset it on a page change: the next page
+    opened at the last one's offset, part-way down or in empty space. Instant,
+    because html{scroll-behavior:smooth} would otherwise slide it there."""
+    effect = APP.split("useLayoutEffect(() => {", 1)[1].split("}, [page]);", 1)[0]
+    assert "window.scrollTo({ top: 0, left: 0, behavior: 'instant' })" in effect
+    assert "window.history.scrollRestoration = 'manual'" in APP
+
+
+def test_scan_history_rows_are_as_tall_as_their_content():
+    """The list's max-height was shared out among auto rows and cut each run to
+    its 50px minimum; the wrapped title and badge spilled over the next one."""
+    assert ".scan-history-list{grid-auto-rows:max-content}" in UI
+    phone = UI.split("/* ---------- Phones ---------- */")[1]
+    assert ".scan-history-list{max-height:none;overflow:visible;" in phone

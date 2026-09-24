@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useLayoutEffect, useState, useCallback, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import ace from 'ace-builds/src-noconflict/ace';
 import 'ace-builds/src-noconflict/ext-language_tools';
@@ -959,6 +959,19 @@ function App() {
       window.history.replaceState({}, '', nextUrl);
     }
     setPage(nextPage);
+  }, []);
+
+  // Every page opens at its top. The window is the scroller and nothing
+  // reset it, so the next page opened at the last one's offset - part-way
+  // down, or in empty space until its content loaded. Before paint, and
+  // instant: html has scroll-behavior:smooth, which would slide there from
+  // the old offset. Back and Forward land at the top as well; the browser's
+  // own restoration ran before the page had content and restored nothing.
+  useLayoutEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+  }, [page]);
+  useEffect(() => {
+    if ('scrollRestoration' in window.history) window.history.scrollRestoration = 'manual';
   }, []);
 
   // Auto-dismiss notices after 6 seconds
