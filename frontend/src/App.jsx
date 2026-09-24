@@ -21,6 +21,7 @@ import {
   MsWebsites, MsApplications, MsSsl, MsCron, MsFiles, MsDatabaseIcon, MsBackups,
   MsWaf, MsFirewall, MsMalware, MsAccessLogs, MsLoginSecurity, MsServices,
   MsPhpConfig, MsUpdates, MsAddons, MsPanelUsers, MsPanelSettings,
+  MsAiAssistants,
 } from './MaterialSymbols.jsx';
 import { Terminal } from './components/Terminal';
 import './style.css';
@@ -4523,6 +4524,12 @@ Each account is overwritten with what is in its archive.`)) return;
         hint: 'Who can sign in, and with what',
         tiles: [
           isAdmin ? ['users', 'Panel users', MsPanelUsers, 'Customers, packages and quotas'] : null,
+          // A token for an assistant is another way something signs in, which
+          // is exactly what this group is. It is also the only tile a customer
+          // sees here, and that is fine - an empty group is dropped anyway.
+          (mcpAddonInstalled || isAdmin)
+            ? ['mcp', 'AI assistants', MsAiAssistants, 'Tokens for Claude Code, Cursor and VS Code']
+            : null,
           isAdmin ? ['settings', 'Panel settings', MsPanelSettings, 'Panel name, URL, branding'] : null,
         ],
       },

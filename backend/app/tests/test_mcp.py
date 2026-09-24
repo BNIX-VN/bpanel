@@ -1143,3 +1143,48 @@ def test_a_token_row_says_whether_it_can_act():
 def test_revoking_asks_first():
     block = APP_JSX.split("async function revokeMcpToken")[1].split("function ")[0]
     assert "window.confirm" in block
+
+
+def test_the_page_is_on_the_dashboard_map_too():
+    """The defect this catches: in the sidebar, absent from the dashboard.
+
+    renderDashboard says of itself that it is "a map of the panel... every tile
+    opens a page that already exists in the sidebar". The MCP page was added to
+    the sidebar only, behind a Settings group that is collapsed by default, and
+    the operator could not find it - reported from a real panel on .88 where
+    the code was deployed and working.
+    """
+    tiles = APP_JSX.split("const groups = [")[1].split("\n    ]")[0]
+    assert "'mcp', 'AI assistants'" in tiles, (
+        "a page reachable only from a collapsed submenu is a page nobody finds"
+    )
+    assert "MsAiAssistants" in tiles, "the tile grid uses the Material Symbols set"
+
+
+def test_every_settings_page_is_also_a_dashboard_tile():
+    """The invariant, not just this instance.
+
+    A page in the sidebar and not on the map is findable only by someone who
+    already knows it exists, which is the opposite of what the map is for.
+    """
+    sidebar = APP_JSX.split("const settingsNavItems = [")[1].split("\n  ];")[0]
+    tiles = APP_JSX.split("const groups = [")[1].split("\n    ]")[0]
+    keys = set(__import__("re").findall(r"\['([a-z-]+)',", sidebar))
+    tiled = set(__import__("re").findall(r"\['([a-z-]+)',", tiles))
+    missing = sorted(keys - tiled)
+    assert not missing, f"in the sidebar but not on the dashboard: {missing}"
+
+
+def test_the_icon_is_a_real_glyph_and_not_invented_path_data():
+    """Path data cannot be guessed; a wrong one renders as a smear.
+
+    Taken from @material-symbols/svg-400, which is what the module's own
+    comment says to regenerate from, and checked against the viewBox the rest
+    of the set uses.
+    """
+    symbols = (PROJECT_ROOT / "frontend" / "src" / "MaterialSymbols.jsx").read_text(encoding="utf-8")
+    assert "export const MsAiAssistants = symbol(" in symbols
+    body = symbols.split("export const MsAiAssistants = symbol(\"")[1].split("\")")[0]
+    assert len(body) > 200, "too short to be a real glyph"
+    assert body.startswith("M"), "SVG path data starts with a moveto"
+    assert 'viewBox="0 -960 960 960"' in symbols
