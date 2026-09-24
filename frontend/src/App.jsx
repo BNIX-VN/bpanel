@@ -4620,13 +4620,13 @@ Each account is overwritten with what is in its archive.`)) return;
       <div className="dash-groups">
         {groups.map(group => <section className="dash-group" key={group.title}>
           <div className="dash-group-head">
-            <h2>{group.title}</h2>
-            <span>{group.hint}</span>
+            <h2>{t(group.title)}</h2>
+            <span>{t(group.hint)}</span>
           </div>
           <div className="dash-tiles">
             {group.tiles.map(([key, label, Icon, description]) => (
               <button className="dash-tile" key={key} onClick={() => navigateToPage(key)} title={t(description)}>
-                <span className="dash-tile-icon"><Icon size={34}/></span>
+                <span className="dash-tile-icon"><Icon size={20}/></span>
                 <span className="dash-tile-text">
                   <strong>{t(label)}</strong>
                   <span>{t(description)}</span>
@@ -7932,11 +7932,11 @@ Each account is overwritten with what is in its archive.`)) return;
       <div className="content">
         <section className="topbar">
           <button className="mobile-nav-toggle" onClick={() => setMobileMenuOpen(o => !o)} aria-expanded={mobileMenuOpen} aria-label={t('Toggle navigation')}>
-            <Menu size={20}/><span><ActiveIcon size={17}/>{activeNavItem?.[1] || 'Menu'}</span>
+            <Menu size={20}/><span><ActiveIcon size={17}/>{t(activeNavItem?.[1] || 'Menu')}</span>
           </button>
           <div className="page-title">
             <p className="eyebrow">{t('Server Management Panel')}</p>
-            <h1>{activeNavItem?.[1] || panelSettings.app_name || 'BPanel'}</h1>
+            <h1>{activeNavItem?.[1] ? t(activeNavItem[1]) : (panelSettings.app_name || 'BPanel')}</h1>
           </div>
           <div className="login logged-in">
             <div className="account-pill" title={accountLabel}><span>{t('Logged in as')}</span><strong>{accountLabel}</strong></div>

@@ -163,3 +163,16 @@ def test_the_file_list_says_what_its_columns_are():
     row = FILES.split(".file-item {")[1].split("}")[0]
     columns = lambda block: re.search(r"grid-template-columns:([^;]+);", block).group(1).strip()  # noqa: E731
     assert columns(grid) == columns(row), "header and row columns must line up"
+
+
+def test_the_dashboard_headings_are_translated_where_they_are_drawn():
+    """Having the words in the dictionary is not the same as using them.
+
+    Every group heading was a key with a Vietnamese translation, and the
+    dictionary check passed - while the page drew {group.title} raw, so the
+    sidebar read "Tổng quan" beside a heading that read "Dashboard". The same
+    array feeds the page title in the topbar.
+    """
+    assert "<h2>{t(group.title)}</h2>" in APP
+    assert "<span>{t(group.hint)}</span>" in APP
+    assert "{activeNavItem?.[1] ? t(activeNavItem[1])" in APP
