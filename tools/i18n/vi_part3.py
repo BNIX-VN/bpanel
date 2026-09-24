@@ -52,8 +52,8 @@ PART3 = {
     "Authenticator code": "Mã từ ứng dụng xác thực",
     "Authentication code is required.": "Cần nhập mã xác thực.",
     "Enter the code from your authenticator app.":
-        "Nhập mã từ ứng dụng xác thực của anh.",
-    "Enter your authentication code.": "Nhập mã xác thực của anh.",
+        "Nhập mã từ ứng dụng xác thực của bạn.",
+    "Enter your authentication code.": "Nhập mã xác thực của bạn.",
     "Use a code instead": "Dùng mã thay thế",
     "Enable 2FA": "Bật 2FA",
     "Disable 2FA": "Tắt 2FA",
@@ -64,7 +64,7 @@ PART3 = {
     "Generate QR": "Tạo mã QR",
     "No setup code generated.": "Chưa tạo mã thiết lập.",
     "Your current password confirms it is you, the same as when turning on Google Authenticator.":
-        "Mật khẩu hiện tại để xác nhận đúng là anh, giống như khi bật Google Authenticator.",
+        "Mật khẩu hiện tại để xác nhận đúng là bạn, giống như khi bật Google Authenticator.",
     "Current password is required to change password.":
         "Cần mật khẩu hiện tại để đổi mật khẩu.",
     "Passwords do not match.": "Mật khẩu nhập lại không khớp.",
@@ -89,7 +89,7 @@ PART3 = {
     "That passkey did not work. Try again, or use the code from your authenticator app.":
         "Passkey đó không dùng được. Thử lại, hoặc dùng mã từ ứng dụng xác thực.",
     "Could not create the passkey. The device may have refused it, or you cancelled.":
-        "Không tạo được passkey. Có thể thiết bị từ chối, hoặc anh đã huỷ.",
+        "Không tạo được passkey. Có thể thiết bị từ chối, hoặc bạn đã huỷ.",
 
     # --- files and cron ---
     "Change permissions": "Đổi quyền",
@@ -98,7 +98,7 @@ PART3 = {
     "Mode must be octal, for example 644 or 755.":
         "Quyền phải ở hệ 8, ví dụ 644 hoặc 755.",
     "Setgid — new files inside keep the folder's group. BPanel sets this on site folders; leave it on unless you know otherwise.":
-        "Setgid — file mới tạo bên trong giữ nguyên group của thư mục. BPanel đặt sẵn cho thư mục site; cứ để bật trừ khi anh có lý do khác.",
+        "Setgid — file mới tạo bên trong giữ nguyên group của thư mục. BPanel đặt sẵn cho thư mục site; cứ để bật trừ khi bạn có lý do khác.",
     "File download failed.": "Tải file về thất bại.",
     "File upload failed.": "Tải file lên thất bại.",
     "Upload code to": "Tải mã nguồn lên",
@@ -144,7 +144,7 @@ PART3 = {
     "Create token": "Tạo token",
     "Token name is required.": "Cần nhập tên token.",
     "Token revoked.": "Đã thu hồi token.",
-    "Your tokens": "Token của anh",
+    "Your tokens": "Token của bạn",
     "Everyone else's tokens": "Token của những người khác",
     "No tokens yet.": "Chưa có token nào.",
     "No API tokens found.": "Không tìm thấy API token nào.",
@@ -158,13 +158,13 @@ PART3 = {
     "What is it for - laptop, work desktop":
         "Dùng cho việc gì - laptop, máy ở công ty",
     "A token acts as you. It is shown once, when you create it.":
-        "Token hành động với quyền của anh. Nó chỉ hiện đúng một lần, lúc tạo.",
+        "Token hành động với quyền của bạn. Nó chỉ hiện đúng một lần, lúc tạo.",
     "Copy this now. It is not shown again.":
         "Sao chép ngay. Nó sẽ không hiện lại lần nữa.",
     "Token created. Copy it now - it is not shown again.":
         "Đã tạo token. Sao chép ngay - nó sẽ không hiện lại.",
     "Every key to this server, and who holds it. You can revoke any of them.":
-        "Mọi chiếc chìa khoá vào server này, và ai đang giữ. Anh thu hồi được bất kỳ cái nào.",
+        "Mọi chiếc chìa khoá vào server này, và ai đang giữ. Bạn thu hồi được bất kỳ cái nào.",
     "Nothing answers on this address until an administrator installs":
         "Không có gì trả lời ở địa chỉ này cho tới khi quản trị viên cài",
     "Shown once. It is not stored anywhere the panel can read back.":
@@ -190,13 +190,13 @@ PART3 = {
     "SFTP account name": "Tên tài khoản SFTP",
     "SFTP account ready": "Tài khoản SFTP đã sẵn sàng",
     "SFTP password": "Mật khẩu SFTP",
-    "Your own SFTP login": "Tài khoản SFTP của riêng anh",
+    "Your own SFTP login": "Tài khoản SFTP của riêng bạn",
     "No SFTP accounts for this website yet.":
         "Website này chưa có tài khoản SFTP nào.",
     "Separate from your panel password. Changing one does not change the other.":
         "Tách biệt với mật khẩu panel. Đổi cái này không đổi cái kia.",
     "Your hosting package does not include SFTP accounts.":
-        "Gói hosting của anh không bao gồm tài khoản SFTP.",
+        "Gói hosting của bạn không bao gồm tài khoản SFTP.",
     "Install application": "Cài ứng dụng",
     "Select an application": "Chọn một ứng dụng",
     "Pick which application this website should serve.":
@@ -284,7 +284,7 @@ PART3 = {
         "Mật khẩu admin WordPress phải có ít nhất 10 ký tự.",
     "Package name is required.": "Cần nhập tên gói.",
     "You do not have permission to edit PHP config.":
-        "Anh không có quyền sửa cấu hình PHP.",
+        "Bạn không có quyền sửa cấu hình PHP.",
     "Upload DA backup": "Tải backup DA lên",
     "Import summary": "Tóm tắt lần nhập",
     "Replace existing users/websites": "Ghi đè người dùng/website đã có",

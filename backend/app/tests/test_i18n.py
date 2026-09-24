@@ -104,6 +104,26 @@ def test_the_values_argument_is_used_where_a_sentence_has_a_hole():
     assert "{n} website(s)" in DICTIONARY
 
 
+def test_the_vietnamese_addresses_the_reader_as_ban():
+    """Vietnamese second-person pronouns carry age and sex.
+
+    The first draft said "anh", which addresses a man older than the speaker -
+    so every woman using the panel, and every customer younger than whoever
+    wrote the string, was addressed wrongly by software they pay for. "bạn"
+    assumes neither and is what Vietnamese software says. One new string is all
+    it takes to reintroduce the others, which is why this is a test and not a
+    note in a header.
+    """
+    gendered = ("anh", "chị", "em", "ông", "bà", "cô", "chú", "bác")
+    offenders = []
+    for key, value in DICTIONARY.items():
+        words = re.findall(r"\w+", value.lower(), flags=re.UNICODE)
+        for pronoun in gendered:
+            if pronoun in words:
+                offenders.append(f"{pronoun!r} in {key!r}")
+    assert not offenders, "gendered address:\n" + "\n".join(offenders[:10])
+
+
 def test_the_placeholders_and_code_samples_were_left_alone():
     """Example domains and code are not language, and translating them would
     make the example wrong."""

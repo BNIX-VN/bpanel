@@ -52,7 +52,7 @@ PART6 = {
         "Thứ đứng giữa website và internet",
     "Who can sign in, and with what": "Ai đăng nhập được, và bằng gì",
     "Protection for your websites. Open one to configure its rules and blocked bots.":
-        "Bảo vệ cho website của anh. Mở một website để cấu hình rule và bot bị chặn.",
+        "Bảo vệ cho website của bạn. Mở một website để cấu hình rule và bot bị chặn.",
     "Engine status and per-website protection. Open a website to configure its rules, flood limits and blocked bots.":
         "Trạng thái engine và mức bảo vệ theo từng website. Mở một website để cấu hình rule, giới hạn chống dội và bot bị chặn.",
     "The parts that are not in a default install. Add what you need, remove what you do not — removing turns the feature off and deletes nothing it created.":
@@ -87,7 +87,7 @@ PART6 = {
     "Run detect mode first and read the logs, or a legitimate request somebody depends on may be the one it stops.":
         "Hãy chạy chế độ phát hiện trước và đọc nhật ký, kẻo thứ bị chặn lại là một request hợp lệ mà ai đó đang cần.",
     "Custom rules are arbitrary ModSecurity directives, so only an administrator can change them. Ask your provider if you need a rule added or excluded.":
-        "Rule tuỳ chỉnh là chỉ thị ModSecurity tự do, nên chỉ quản trị viên được sửa. Hãy nhờ nhà cung cấp nếu anh cần thêm hoặc loại trừ một rule.",
+        "Rule tuỳ chỉnh là chỉ thị ModSecurity tự do, nên chỉ quản trị viên được sửa. Hãy nhờ nhà cung cấp nếu bạn cần thêm hoặc loại trừ một rule.",
     "Blocked on every website on this server. A site can add more of its own from its page.":
         "Bị chặn trên mọi website của server này. Mỗi site có thể tự thêm bot riêng ở trang của nó.",
     "Check the measured figure on this page afterwards rather than trusting the estimate.":
@@ -103,7 +103,7 @@ PART6 = {
     "The Applications addon is not installed on this server.":
         "Server này chưa cài tiện ích Ứng dụng.",
     "Your package does not include Applications. Contact an administrator to upgrade.":
-        "Gói của anh không bao gồm Ứng dụng. Hãy liên hệ quản trị viên để nâng cấp.",
+        "Gói của bạn không bao gồm Ứng dụng. Hãy liên hệ quản trị viên để nâng cấp.",
     "Admin can set directly.": "Quản trị viên đặt được trực tiếp.",
 
     # --- cron ---
@@ -114,11 +114,11 @@ PART6 = {
 
     # --- SFTP, sessions, permissions ---
     "This login still uses your panel password. Anyone who guesses it over SFTP is also in the panel. Set a separate password — your panel password will stop working for SFTP the moment you do.":
-        "Tài khoản này vẫn dùng mật khẩu panel của anh. Ai đoán được nó qua SFTP thì cũng vào được panel. Hãy đặt một mật khẩu riêng — ngay khi đặt, mật khẩu panel sẽ không còn dùng được cho SFTP.",
+        "Tài khoản này vẫn dùng mật khẩu panel của bạn. Ai đoán được nó qua SFTP thì cũng vào được panel. Hãy đặt một mật khẩu riêng — ngay khi đặt, mật khẩu panel sẽ không còn dùng được cho SFTP.",
     "Each account reaches one website and nothing else — not your other sites, and not the server. It signs in over SFTP on port 22 with its own password, which is separate from your panel password.":
-        "Mỗi tài khoản chỉ vào được một website, không gì khác — không vào được site khác của anh, cũng không vào được server. Nó đăng nhập qua SFTP ở cổng 22 bằng mật khẩu riêng, tách biệt với mật khẩu panel.",
+        "Mỗi tài khoản chỉ vào được một website, không gì khác — không vào được site khác của bạn, cũng không vào được server. Nó đăng nhập qua SFTP ở cổng 22 bằng mật khẩu riêng, tách biệt với mật khẩu panel.",
     "A passkey is your only second factor. Reach the panel by a different domain and there is no second factor at all — turn on Google Authenticator below as well.":
-        "Passkey là lớp xác thực thứ hai duy nhất của anh. Nếu vào panel bằng một tên miền khác thì sẽ không có lớp thứ hai nào — hãy bật thêm Google Authenticator bên dưới.",
+        "Passkey là lớp xác thực thứ hai duy nhất của bạn. Nếu vào panel bằng một tên miền khác thì sẽ không có lớp thứ hai nào — hãy bật thêm Google Authenticator bên dưới.",
     "Any permission combination is allowed. The setuid and sticky bits are not — setgid on a folder is the only special bit the panel sets.":
         "Mọi tổ hợp quyền đều được phép. Bit setuid và sticky thì không — setgid trên thư mục là bit đặc biệt duy nhất panel đặt.",
     "Role changes sign the user out of existing sessions.":
@@ -128,7 +128,7 @@ PART6 = {
     "This account is suspended. Contact an administrator.":
         "Tài khoản này đang bị khoá. Hãy liên hệ quản trị viên.",
     "Your session expired. Please log in again.":
-        "Phiên của anh đã hết hạn. Hãy đăng nhập lại.",
+        "Phiên của bạn đã hết hạn. Hãy đăng nhập lại.",
     "Password changed. Please log in again.":
         "Đã đổi mật khẩu. Hãy đăng nhập lại.",
     "Minimum 12 characters.": "Tối thiểu 12 ký tự.",
@@ -156,9 +156,9 @@ PART6 = {
     "Token copied. It is not shown again.":
         "Đã sao chép token. Nó sẽ không hiện lại.",
     "Create a token above and it appears in these ready to copy. Otherwise replace YOUR_TOKEN yourself.":
-        "Tạo một token ở trên và nó sẽ tự điền vào đây, sẵn sàng để copy. Nếu không thì anh tự thay YOUR_TOKEN.",
+        "Tạo một token ở trên và nó sẽ tự điền vào đây, sẵn sàng để copy. Nếu không thì bạn tự thay YOUR_TOKEN.",
     "Give Claude Code, Cursor or VS Code a token and it can read and operate the panel with exactly your own permissions - nothing more.":
-        "Cấp một token cho Claude Code, Cursor hoặc VS Code là nó đọc và thao tác được trên panel với đúng quyền của anh — không hơn.",
+        "Cấp một token cho Claude Code, Cursor hoặc VS Code là nó đọc và thao tác được trên panel với đúng quyền của bạn — không hơn.",
     "Each application runs on its own port under its own systemd unit. Point a website at one by setting its mode to":
         "Mỗi ứng dụng chạy trên cổng riêng, dưới systemd unit riêng. Trỏ một website vào nó bằng cách đặt chế độ website thành",
 
