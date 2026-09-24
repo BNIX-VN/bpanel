@@ -17,6 +17,13 @@ import pytest
 from app.core.permissions import Role
 from app.models.entities import McpToken, User
 from app.services import mcp
+# At module scope on purpose. The tools register themselves into mcp.REGISTRY
+# when this is first imported, and several tests below swap that dict for an
+# empty one. If the first import happened inside one of those, every real tool
+# would register into the temporary dict and vanish when it was restored -
+# leaving the registry tests passing against nothing, which is the worst way
+# for this to fail.
+from app.services import mcp_tools
 
 
 # --- fixtures ---------------------------------------------------------------
@@ -403,3 +410,180 @@ def test_there_is_no_stream_to_get(client, addon_on):
         answer = call("/api/mcp")
         assert answer.status_code == 405
         assert answer.headers.get("allow") == "POST"
+
+
+# --- the tools themselves ---------------------------------------------------
+
+@pytest.fixture
+def tools():
+    """The real registry, as the endpoint sees it."""
+    return mcp.REGISTRY
+
+
+def test_every_tool_tells_the_assistant_when_to_use_it(tools):
+    """The description is the only thing steering the model's choice.
+
+    A one-word description produces a model that calls the wrong tool and then
+    reports the wrong answer confidently, which is worse than no tool at all.
+    """
+    for name, spec in tools.items():
+        assert len(spec.description) >= 40, f"{name} needs a real description"
+        assert spec.title, name
+
+
+def test_every_argument_is_described_and_bounded(tools):
+    """An unbounded string or integer is an argument the model will misuse."""
+    for name, spec in tools.items():
+        for arg, rule in spec.properties.items():
+            assert "type" in rule, f"{name}.{arg} has no type"
+            if rule["type"] == "string" and "enum" not in rule:
+                assert "maxLength" in rule, f"{name}.{arg} is an unbounded string"
+            if rule["type"] == "integer":
+                assert "minimum" in rule and "maximum" in rule, \
+                    f"{name}.{arg} is an unbounded integer"
+
+
+def test_no_read_only_tool_claims_to_write(tools):
+    for name, spec in tools.items():
+        if name.startswith(("list_", "read_", "whoami", "server_")):
+            assert not spec.writes, f"{name} reads, and must not be marked as writing"
+
+
+def test_the_administrative_tools_are_the_ones_you_would_expect(tools):
+    """A tool wrongly left off this list is one a customer can reach."""
+    assert {name for name, spec in tools.items() if spec.admin_only} == {
+        "list_users", "list_services", "list_backup_schedules",
+        "recent_audit_log", "panel_update_status",
+        "list_firewall_rules", "list_waf_rules",
+    }
+
+
+# --- addressing a website by domain -----------------------------------------
+
+class _WebsiteQuery:
+    def __init__(self, rows, owner_filtered=None):
+        self._rows = rows
+        self.filters = 0
+        self.owner_filtered = owner_filtered
+
+    def filter(self, *args):
+        self.filters += 1
+        return self
+
+    def first(self):
+        return self._rows[0] if self._rows else None
+
+
+class _WebsiteSession(_Session):
+    def __init__(self, rows):
+        super().__init__()
+        self.query_obj = _WebsiteQuery(rows)
+
+    def query(self, model):
+        return self.query_obj
+
+
+def test_someone_elses_domain_reads_as_not_existing():
+    """Never "forbidden" - that confirms the domain is real.
+
+    A customer's assistant must not be able to map the server by trying
+    domains and reading which answer comes back.
+    """
+    ctx = mcp.Context(db=_WebsiteSession([]), user=_user(role=Role.end_user), token=_token())
+    with pytest.raises(mcp.ToolError) as exc:
+        mcp_tools._website(ctx, "someone-else.test")
+    message = str(exc.value)
+    assert "No website named someone-else.test" in message
+    assert "permission" not in message.lower() and "forbidden" not in message.lower()
+
+
+def test_a_customer_lookup_is_narrowed_to_their_own_websites():
+    """Two filters for a customer, one for an administrator."""
+    customer = mcp.Context(db=_WebsiteSession([]), user=_user(role=Role.end_user), token=_token())
+    with pytest.raises(mcp.ToolError):
+        mcp_tools._website(customer, "a.test")
+    assert customer.db.query_obj.filters == 2, "domain, and owner"
+
+    admin = mcp.Context(db=_WebsiteSession([]), user=_user(role=Role.admin), token=_token())
+    with pytest.raises(mcp.ToolError):
+        mcp_tools._website(admin, "a.test")
+    assert admin.db.query_obj.filters == 1, "domain only"
+
+
+@pytest.mark.parametrize("given,wanted", [
+    ("Example.TEST", "example.test"),
+    ("  example.test  ", "example.test"),
+    (".example.test", "example.test"),
+])
+def test_a_domain_is_tidied_before_it_is_looked_up(given, wanted, monkeypatch):
+    """Models paste domains with a stray dot or capital in them."""
+    seen = {}
+
+    class _Recording(_WebsiteQuery):
+        def filter(self, *args):
+            seen.setdefault("args", args)
+            return self
+
+    session = _WebsiteSession([])
+    session.query_obj = _Recording([])
+    ctx = mcp.Context(db=session, user=_user(), token=_token())
+    with pytest.raises(mcp.ToolError) as exc:
+        mcp_tools._website(ctx, given)
+    assert wanted in str(exc.value)
+
+
+def test_an_empty_domain_says_so_rather_than_searching():
+    ctx = mcp.Context(db=_WebsiteSession([]), user=_user(), token=_token())
+    with pytest.raises(mcp.ToolError) as exc:
+        mcp_tools._website(ctx, "   ")
+    assert "domain is required" in str(exc.value)
+
+
+# --- reading a file ---------------------------------------------------------
+
+def test_a_long_file_is_truncated_and_admits_it(monkeypatch):
+    """A 40 MB log would otherwise fill the assistant's context and end the session."""
+    from app.api import maintenance as maintenance_api
+    content = "\n".join(f"line {n}" for n in range(5000))
+    monkeypatch.setattr(mcp_tools, "_website",
+                        lambda ctx, domain: type("W", (), {"id": 1})())
+    monkeypatch.setattr(maintenance_api, "read_file",
+                        lambda **kwargs: {"content": content})
+
+    result = mcp.REGISTRY["read_file"].handler(
+        _ctx(), {"domain": "a.test", "path": "wp-config.php"})
+    assert result["truncated"] is True
+    assert result["total_lines"] == 5000
+    assert result["lines"] == mcp_tools.MAX_READ_LINES
+    assert result["content"].count("\n") == mcp_tools.MAX_READ_LINES - 1
+    assert "2000 of 5000" in result["note"]
+
+
+def test_a_short_file_comes_back_whole(monkeypatch):
+    from app.api import maintenance as maintenance_api
+    monkeypatch.setattr(mcp_tools, "_website",
+                        lambda ctx, domain: type("W", (), {"id": 1})())
+    monkeypatch.setattr(maintenance_api, "read_file",
+                        lambda **kwargs: {"content": "one\ntwo\nthree"})
+
+    result = mcp.REGISTRY["read_file"].handler(_ctx(), {"domain": "a.test", "path": "x.txt"})
+    assert result["truncated"] is False and result["content"] == "one\ntwo\nthree"
+
+
+# --- whoami -----------------------------------------------------------------
+
+def test_whoami_says_plainly_what_this_token_can_do():
+    admin = mcp.REGISTRY["whoami"].handler(
+        _ctx(user=_user(role=Role.admin), token=_token(can_write=True)), {})
+    assert admin["role"] == "administrator" and admin["can_make_changes"] is True
+
+    customer = mcp.REGISTRY["whoami"].handler(
+        _ctx(user=_user(role=Role.end_user), token=_token(can_write=False)), {})
+    assert customer["role"] == "hosting customer"
+    assert customer["can_make_changes"] is False
+    assert "only websites owned by this account" in customer["scope"]
+
+
+def test_whoami_never_leaks_the_token_itself():
+    answer = mcp.REGISTRY["whoami"].handler(_ctx(), {})
+    assert "token" not in str(answer).lower().replace("token_name", "").replace("token_expires_at", "")
