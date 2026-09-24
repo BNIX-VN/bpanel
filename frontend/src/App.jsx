@@ -702,6 +702,12 @@ function App() {
   const [createSslMode, setCreateSslMode] = useState('none'); // none|letsencrypt|wildcard|shared|manual
   const [createSslToken, setCreateSslToken] = useState(''); // Cloudflare token for the wildcard mode
   const [installWordPress, setInstallWordPress] = useState(true);
+  /* The create form starts folded away. Making a website is something an
+     operator does now and then; looking one up is what they came for, and
+     the form was four hundred pixels of it between them and the list. A
+     panel with no sites yet is the exception - there the form is the only
+     thing to do, so it opens itself. */
+  const [createFormOpen, setCreateFormOpen] = useState(false);
   const [nginxCustomEditing, setNginxCustomEditing] = useState(null); // Website settings editor state
   const [websiteSettingsForm, setWebsiteSettingsForm] = useState(websiteConfigForm());
   const [logViewer, setLogViewer] = useState(null); // {id, domain, kind, lines, path, content, exists}
@@ -1890,9 +1896,9 @@ function App() {
       setError(ipv6.detail || 'This server has no IPv6 address, so this feature cannot be used.');
       return;
     }
-    if (!confirm(enable
+    if (!confirm(t(enable
       ? 'Enable IPv6 for every website and the panel?\n\nBPanel adds listen [::] to every website\'s nginx config, checks it with nginx -t, and rolls back on any error. The panel restarts.'
-      : 'Disable IPv6?\n\nWebsites and the panel will accept IPv4 only. If a domain still has an AAAA record, visitors arriving over IPv6 will not get through.')) return;
+      : 'Disable IPv6?\n\nWebsites and the panel will accept IPv4 only. If a domain still has an AAAA record, visitors arriving over IPv6 will not get through.'))) return;
     const data = await request('/panel-settings/ipv6', {
       method: 'POST',
       body: JSON.stringify({ enabled: enable }),
@@ -1949,7 +1955,7 @@ function App() {
     if (enabled && !confirm(t('Turn on real-time protection? The panel watches website directories and scans new files as they appear. If it is not installed yet, the panel installs it (1-3 minutes).'))) return;
     const data = await request('/malware/realtime', { method: 'POST', body: JSON.stringify({ enabled }) },
       enabled ? 'Turning on real-time protection...' : 'Turning off...');
-    if (data) { setMalwareScanStatus(data); setNotice(enabled ? 'Real-time protection is on (level 2).' : 'Real-time protection is off.'); }
+    if (data) { setMalwareScanStatus(data); setNotice(t(enabled ? 'Real-time protection is on (level 2).' : 'Real-time protection is off.')); }
   }
 
   async function toggleMalwareScanOnUpload(enabled) {
@@ -3473,9 +3479,9 @@ Each account is overwritten with what is in its archive.`)) return;
   }
 
   async function importDaBackup(archivePath, force = daReplaceExisting) {
-    const message = force
+    const message = t(force
       ? 'Import and REPLACE? Any existing panel user, website, files and databases with the same names are deleted first.'
-      : 'Import this DirectAdmin backup? This will create users, websites, databases, and nginx configs.';
+      : 'Import this DirectAdmin backup? This will create users, websites, databases, and nginx configs.');
     if (!confirm(message)) return;
     setDaImportJob(null);
     const data = await request('/maintenance/da-import/import', { method: 'POST', body: JSON.stringify({ archive_path: archivePath, force }) }, t('Starting DA import...'));
@@ -5225,10 +5231,22 @@ Each account is overwritten with what is in its archive.`)) return;
     const createHint = websites.length
       ? null
       : 'This creates the first hosted site for the current account.';
+    const createOpen = createFormOpen || websites.length === 0;
     return <>
-      <section className="section">
-        <h2>{createTitle}</h2>
-        {createHint && <p className="hint">{createHint}</p>}
+      <section className="section create-site-section">
+        <div className="section-title">
+          <div>
+            <h2>{t(createTitle)}</h2>
+            {createHint && <p className="hint">{t(createHint)}</p>}
+          </div>
+          {websites.length > 0 && <button
+            type="button"
+            className={createOpen ? 'secondary-light' : ''}
+            aria-expanded={createOpen}
+            onClick={() => setCreateFormOpen(open => !open)}
+          >{createOpen ? <><X size={15}/>{t('Close')}</> : <><Plus size={15}/>{t('New website')}</>}</button>}
+        </div>
+        {createOpen && <>
         <div className="form-row create-site-row">
           <input value={domain} onChange={e => setDomain(e.target.value)} placeholder="domain.com" />
           <select value={siteType} onChange={e => setSiteType(e.target.value)}>
@@ -5275,11 +5293,12 @@ Each account is overwritten with what is in its archive.`)) return;
           {createSslMode === 'shared' && <p className="hint">{t('After the site is created the panel points it at an existing certificate that covers this domain (a wildcard first). If none does, the site is created without SSL.')}</p>}
           {createSslMode === 'manual' && <p className="hint">{t('The site is created, then the panel opens the SSL page so you can paste the certificate and key.')}</p>}
         </div>}
-        <p className="hint">{wpFieldsEnabled
+        <p className="hint">{t(wpFieldsEnabled
           ? 'WordPress will be installed and the panel will show the URL, admin account, and password after creation.'
           : siteType === 'application'
             ? 'Nginx will forward this domain to the selected application on 127.0.0.1, including WebSocket upgrades.'
-            : 'A PHP-FPM vhost will be created with public_html/ folder. Upload your PHP, HTML, or static files via File Manager.'}</p>
+            : 'A PHP-FPM vhost will be created with public_html/ folder. Upload your PHP, HTML, or static files via File Manager.')}</p>
+        </>}
       </section>
       <section className="section">
         <div className="section-title">
@@ -7438,7 +7457,7 @@ Each account is overwritten with what is in its archive.`)) return;
                 <label><span>{t('SFTP accounts')}</span><input type="number" min="0" max="100" disabled={!!editingUserForm.package_id} value={editingUserForm.sftp_accounts_limit} onChange={e => setEditingUserForm(prev => ({ ...prev, sftp_accounts_limit: e.target.value }))} /></label>
               </div>
               <div className="user-edit-section">
-                <div className="user-edit-heading"><div><strong>{t('Change password')}</strong><small>Minimum 12 characters. {user.id === currentUser?.id ? 'Requires current password + 2FA.' : 'Admin can set directly.'}</small></div></div>
+                <div className="user-edit-heading"><div><strong>{t('Change password')}</strong><small>{t('Minimum 12 characters.')} {t(user.id === currentUser?.id ? 'Requires current password + 2FA.' : 'Admin can set directly.')}</small></div></div>
                 <div className="user-edit-grid">
                   <label><span>{t('New password')}</span><input type="password" placeholder={t('Min 12 characters')} value={editingUserForm.new_password} onChange={e => setEditingUserForm(prev => ({ ...prev, new_password: e.target.value }))} /></label>
                   <label><span>{t('Confirm password')}</span><input type="password" placeholder={t('Repeat password')} value={editingUserForm.confirm_password} onChange={e => setEditingUserForm(prev => ({ ...prev, confirm_password: e.target.value }))} /></label>

@@ -77,8 +77,11 @@ def test_every_key_is_a_string_something_actually_shows():
     # t('Everyone else\'s tokens') in the source does not contain the raw
     # sentence, so compare against a copy with the escaping removed. Getting
     # this wrong reports five healthy entries as orphans, which is how it was
-    # found.
-    unescaped = APP.replace("\\'", "'").replace('\\"', '"')
+    # found. A confirm() dialog with a blank line in it is the same problem one
+    # character further on: the source spells the newline \n, the string the
+    # panel shows - and so the key - has a real one.
+    unescaped = (APP.replace("\\'", "'").replace('\\"', '"')
+                 .replace("\\n", "\n").replace("\\t", "\t"))
     orphans = [k for k in DICTIONARY if k not in unescaped and k not in api]
     assert not orphans, f"{len(orphans)} keys match nothing: {orphans[:10]}"
 

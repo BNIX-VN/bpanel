@@ -761,7 +761,10 @@ button:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
 .site-head small{display:block;margin-top:3px;color:var(--text-muted);word-break:break-all;font-size:12px}
 .site-meta{display:flex;gap:7px;flex-wrap:wrap}
 .site-meta{align-items:center;gap:6px 10px}
-.site-meta span{background:none;border:0;border-radius:0;padding:0;color:var(--text-muted);font-weight:600;font-size:var(--text-sm)}
+/* inline-flex with a gap, because the label and the value are two elements
+   with no whitespace between them in the markup: as plain inline text they
+   came out as "Typewordpress". The pills used to hide that. */
+.site-meta span{display:inline-flex;align-items:baseline;gap:4px;background:none;border:0;border-radius:0;padding:0;color:var(--text-muted);font-weight:600;font-size:var(--text-sm)}
 .site-meta span strong{font-weight:700;color:var(--text-secondary)}
 /* Still a pill, because these are states rather than facts. */
 .site-meta span.badge{background:var(--surface-alt);border:1px solid var(--border);border-radius:999px;padding:3px 8px;font-size:var(--text-xs)}
