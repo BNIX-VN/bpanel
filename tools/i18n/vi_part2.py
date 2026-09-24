@@ -71,7 +71,7 @@ PART2 = {
     "Point this site at another BPanel website's certificate (e.g. a wildcard). No new certificate is issued.":
         "Trỏ site này vào chứng chỉ của một website BPanel khác (ví dụ wildcard). Không cấp chứng chỉ mới.",
     "The site is created, then the panel opens the SSL page so you can paste the certificate and key.":
-        "Site được tạo xong, panel sẽ mở trang SSL để anh dán chứng chỉ và khoá vào.",
+        "Site được tạo xong, panel sẽ mở trang SSL để bạn dán chứng chỉ và khoá vào.",
     "No other website has a certificate that covers":
         "Không website nào khác có chứng chỉ bao được",
 
@@ -117,7 +117,7 @@ PART2 = {
     "Somewhere off this machine to keep a copy. A backup that lives on the server it backs up is not a backup.":
         "Một nơi ngoài máy này để giữ bản sao. Backup nằm cùng máy với thứ nó backup thì không phải là backup.",
     "Everything that could be restored, wherever it is. Tick what you want back and restore it in one go.":
-        "Mọi thứ có thể khôi phục, ở bất cứ đâu. Tick những gì anh cần rồi khôi phục một lượt.",
+        "Mọi thứ có thể khôi phục, ở bất cứ đâu. Tick những gì bạn cần rồi khôi phục một lượt.",
     "What gets appended decides how many copies pile up at the far end:":
         "Phần thêm vào tên quyết định bao nhiêu bản sẽ tích lại ở đầu bên kia:",
     "Press Refresh to look on this server and in every S3 destination.":
@@ -146,7 +146,7 @@ PART2 = {
     "Save blocked bots": "Lưu danh sách bot",
     "Add one bot, e.g. Amazonbot": "Thêm một bot, ví dụ Amazonbot",
     "Paste a list": "Dán cả danh sách",
-    "Your rules": "Rule của anh",
+    "Your rules": "Rule của bạn",
     "Custom rules": "Rule tuỳ chỉnh",
     "Default rules": "Rule mặc định",
     "Reset custom": "Đặt lại rule tuỳ chỉnh",

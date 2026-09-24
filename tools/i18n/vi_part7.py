@@ -50,13 +50,13 @@ PART7 = {
     "This package allows {n} application(s). Delete one to install another.":
         "Gói này cho phép {n} ứng dụng. Hãy xoá một cái để cài cái khác.",
     "You have used all {n} SFTP accounts in your package.":
-        "Anh đã dùng hết {n} tài khoản SFTP trong gói của mình.",
+        "Bạn đã dùng hết {n} tài khoản SFTP trong gói của mình.",
     "{used} of {limit} SFTP accounts used.":
         "Đã dùng {used} trong {limit} tài khoản SFTP.",
 
     # --- applications ---
     "Containers publish on 127.0.0.1 only, run as your own user with no capabilities, and are capped at the memory shown.":
-        "Container chỉ mở cổng trên 127.0.0.1, chạy dưới chính user của anh mà không có đặc quyền nào, và bị giới hạn ở mức bộ nhớ hiển thị.",
+        "Container chỉ mở cổng trên 127.0.0.1, chạy dưới chính user của bạn mà không có đặc quyền nào, và bị giới hạn ở mức bộ nhớ hiển thị.",
     "Images come from {list}.": "Image được lấy từ {list}.",
     "the allowed registries": "các registry được phép",
 
@@ -100,12 +100,12 @@ PART7 = {
     "Level 2 running": "Lớp 2 đang chạy",
     "Level 2 not running": "Lớp 2 không chạy",
     "You are reaching the panel by IP address ({host}). Browsers only create passkeys for domain names, so open the panel by its domain and add one there.":
-        "Anh đang vào panel bằng địa chỉ IP ({host}). Trình duyệt chỉ tạo passkey cho tên miền, nên hãy mở panel bằng tên miền rồi thêm passkey ở đó.",
+        "Bạn đang vào panel bằng địa chỉ IP ({host}). Trình duyệt chỉ tạo passkey cho tên miền, nên hãy mở panel bằng tên miền rồi thêm passkey ở đó.",
 }
 
 # Wrapped later than the rest: its paragraph ended on a different line from the
 # tag that closed it, so the wrapper never saw it.
 PART7.update({
     "Once you dismiss the token above these go back to saying YOUR_TOKEN, because the panel cannot show it to you a second time.":
-        "Khi anh đóng token ở trên thì các đoạn này sẽ trở lại thành YOUR_TOKEN, vì panel không thể hiện lại token cho anh lần thứ hai.",
+        "Khi bạn đóng token ở trên thì các đoạn này sẽ trở lại thành YOUR_TOKEN, vì panel không thể hiện lại token cho bạn lần thứ hai.",
 })

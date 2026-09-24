@@ -54,7 +54,7 @@ PART4 = {
     "An application with that name or port already exists":
         "Đã có ứng dụng trùng tên hoặc trùng cổng đó",
     "You already have an application with that name":
-        "Anh đã có một ứng dụng trùng tên đó",
+        "Bạn đã có một ứng dụng trùng tên đó",
     "WordPress is already installed for this website":
         "Website này đã cài WordPress rồi",
     "Two-factor authentication is already enabled":
@@ -102,9 +102,9 @@ PART4 = {
     "Select at least one user": "Chọn ít nhất một người dùng",
     "Select at least one website.": "Chọn ít nhất một website.",
     "Your hosting package does not include WAF settings":
-        "Gói hosting của anh không bao gồm cài đặt WAF",
+        "Gói hosting của bạn không bao gồm cài đặt WAF",
     "Terminal is not enabled for your account.":
-        "Tài khoản của anh chưa được bật Terminal.",
+        "Tài khoản của bạn chưa được bật Terminal.",
     "Custom WAF rules can only be changed by an administrator":
         "Chỉ quản trị viên được sửa rule WAF tuỳ chỉnh",
 

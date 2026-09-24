@@ -4,6 +4,13 @@
 # website, database, backup, SSL, firewall, port, token, plugin. Translating
 # those reads as a machine translation and makes the panel harder to use, not
 # easier. What gets translated is the ordinary language around them.
+#
+# The reader is "bạn", everywhere, in every part. Vietnamese second-person
+# pronouns carry the age and the sex of the person being addressed, so the first
+# draft's "anh" quietly assumed every customer was a man older than nobody in
+# particular. "bạn" assumes neither, and it is what Vietnamese software says.
+# A test refuses any of the gendered ones, because this is exactly the kind of
+# decision that one new string reintroduces.
 
 PART1 = {
     # --- navigation and pages ---
