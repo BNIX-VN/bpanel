@@ -43,15 +43,10 @@ PART11 = {
         "Kiểm tra từng request để chặn SQL injection, XSS và các kiểu tấn công tương tự.",
     "Off: requests are not inspected.": "Tắt: request không được kiểm tra.",
     "Detect only: attacks are logged, nothing is blocked.": "Chỉ phát hiện: tấn công được ghi log, không chặn gì.",
-    "Block: attacks are refused on every website with the WAF on.": "Chặn: tấn công bị từ chối trên mọi website đang bật WAF.",
     "WAF on": "WAF bật",
     "WAF off": "WAF tắt",
-    "The WAF blocks known bad paths and inspects each request for SQL injection, XSS and similar attacks.":
-        "WAF chặn các đường dẫn độc hại đã biết và kiểm tra từng request để chặn SQL injection, XSS và các kiểu tấn công tương tự.",
     "Add SecRuleRemoveById <id> to the custom rules below to excuse this site from one rule.":
         "Thêm SecRuleRemoveById <id> vào rule tùy chỉnh bên dưới để bỏ qua một rule cho website này.",
-    "Request inspection is not loaded for this site yet. Turn the WAF off and on again to load it.":
-        "Tính năng kiểm tra request chưa được nạp cho website này. Tắt rồi bật lại WAF để nạp.",
 
     # Malware scan details
     "Scan details": "Chi tiết lần quét",
@@ -85,4 +80,28 @@ PART11 = {
     "Action failed": "Thao tác thất bại",
     "Logged out.": "Đã đăng xuất.",
     "Session expired.": "Phiên đăng nhập đã hết hạn.",
+
+    # CRS as a per-site switch on the site's WAF page
+    "Inspects each request for SQL injection, XSS and similar attacks. Each website turns it on from its own page.":
+        "Kiểm tra từng request để chặn SQL injection, XSS và các kiểu tấn công tương tự. Mỗi website tự bật trong trang cấu hình của nó.",
+    "{n} website(s) with CRS on": "{n} website bật CRS",
+    "Block: attacks are refused on websites with CRS on.": "Chặn: tấn công bị từ chối trên các website đã bật CRS.",
+    "Switch OWASP CRS to blocking?": "Chuyển OWASP CRS sang chế độ chặn?",
+    "Websites with CRS on will start refusing requests that score above the threshold. Run Detect only first and read the logs, or a request somebody depends on may be the one it stops.":
+        "Các website đã bật CRS sẽ bắt đầu từ chối request vượt ngưỡng điểm. Hãy chạy Chỉ phát hiện trước và đọc log, nếu không một request hợp lệ nào đó có thể bị chặn.",
+    "Blocks known bad paths.": "Chặn các đường dẫn độc hại đã biết.",
+    "Inspects each request for SQL injection, XSS and similar attacks. Uses about {n} MB of server RAM.":
+        "Kiểm tra từng request để chặn SQL injection, XSS và các kiểu tấn công tương tự. Tốn khoảng {n} MB RAM của server.",
+    "It loads when the WAF is on.": "CRS chỉ chạy khi WAF bật.",
+    "CRS is off for the whole server, so nothing is loaded yet.": "CRS đang tắt trên toàn server nên chưa có gì được nạp.",
+    "CRS on": "CRS bật",
+    "CRS off": "CRS tắt",
+    "Turn CRS on": "Bật CRS",
+    "Turn CRS off": "Tắt CRS",
+    "Turn the WAF on first": "Hãy bật WAF trước",
+    "Turn on OWASP CRS for {domain}? It uses about {n} MB of server RAM.": "Bật OWASP CRS cho {domain}? CRS tốn khoảng {n} MB RAM của server.",
+    "Turning CRS on for {domain}...": "Đang bật CRS cho {domain}...",
+    "Turning CRS off for {domain}...": "Đang tắt CRS cho {domain}...",
+    "OWASP CRS is on for {domain}.": "Đã bật OWASP CRS cho {domain}.",
+    "OWASP CRS is off for {domain}.": "Đã tắt OWASP CRS cho {domain}.",
 }

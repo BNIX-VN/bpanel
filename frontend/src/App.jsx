@@ -3975,15 +3975,29 @@ Each account is overwritten with what is in its archive.`)) return;
 
   async function saveCrsMode(mode) {
     if (mode === 'block' && !confirm(
-      'Switch OWASP CRS to blocking?\n\n'
-      + 'Every website with the WAF on will start refusing requests that score above the threshold. '
-      + 'Run detect mode first and read the logs, or a legitimate request somebody depends on may be the one it stops.'
+      t('Switch OWASP CRS to blocking?') + '\n\n'
+      + t('Websites with CRS on will start refusing requests that score above the threshold. Run Detect only first and read the logs, or a request somebody depends on may be the one it stops.')
     )) return;
     const data = await request('/waf/crs', {
       method: 'PUT',
       body: JSON.stringify({ mode }),
     }, `Switching OWASP CRS to ${mode}...`);
     if (data) await loadCrs();
+  }
+
+  async function toggleSiteCrs(config) {
+    const turningOn = !config.crs_enabled;
+    const domain = config.domain;
+    if (turningOn && !confirm(t('Turn on OWASP CRS for {domain}? It uses about {n} MB of server RAM.', { domain, n: crs?.rss_mb_per_site || 50 }))) return;
+    const data = await request(`/waf/websites/${config.website_id}/crs`, {
+      method: 'PUT',
+      body: JSON.stringify({ enabled: turningOn }),
+    }, turningOn ? t('Turning CRS on for {domain}...', { domain }) : t('Turning CRS off for {domain}...', { domain }));
+    if (data) {
+      setNotice(turningOn ? t('OWASP CRS is on for {domain}.', { domain }) : t('OWASP CRS is off for {domain}.', { domain }));
+      await loadWebsiteWafConfig(config.website_id, false);
+      if (isAdmin) await loadCrs();
+    }
   }
 
   function addGlobalBots(text) {
@@ -6617,7 +6631,7 @@ Each account is overwritten with what is in its archive.`)) return;
         <div className="section-title">
           <div>
             <h2>{t('OWASP Core Rule Set')}</h2>
-            <p className="hint">{t('Inspects each request for SQL injection, XSS and similar attacks.')}</p>
+            <p className="hint">{t('Inspects each request for SQL injection, XSS and similar attacks. Each website turns it on from its own page.')}</p>
           </div>
           <button className="secondary" disabled={!!loading} onClick={loadCrs}><RefreshCw size={14}/>{t('Check')}</button>
         </div>
@@ -6630,8 +6644,9 @@ Each account is overwritten with what is in its archive.`)) return;
             <span className={crs.installed ? 'badge ok' : 'badge'}>
               {crs.installed ? t('{n} rule file(s) installed', { n: crs.rule_files }) : t('Not installed')}
             </span>
+            <span className="badge">{t('{n} website(s) with CRS on', { n: crs.sites_opted_in ?? 0 })}</span>
             {/* The memory essay is gone; a low-RAM warning is what is left of
-                it, because every site with the WAF on carries CRS (~50 MB). */}
+                it, because every site that turns CRS on carries it (~50 MB). */}
             {(crs.ram_available_mb || 0) > 0 && crs.ram_available_mb < 1024 && <span className="badge danger">
               {t('{n} MB RAM free', { n: crs.ram_available_mb })}
             </span>}
@@ -6649,7 +6664,7 @@ Each account is overwritten with what is in its archive.`)) return;
           <p className="hint" style={{ marginTop: 10 }}>
             {crs.mode === 'off' && t('Off: requests are not inspected.')}
             {crs.mode === 'detect' && t('Detect only: attacks are logged, nothing is blocked.')}
-            {crs.mode === 'block' && t('Block: attacks are refused on every website with the WAF on.')}
+            {crs.mode === 'block' && t('Block: attacks are refused on websites with CRS on.')}
           </p>
           {crs.mode !== 'off' && crs.panel_mode !== crs.mode && (
             <p className="hint">{t('Panel setting says "{panel}" but the server reports "{server}".', { panel: crs.panel_mode, server: crs.mode })}</p>
@@ -6663,11 +6678,11 @@ Each account is overwritten with what is in its archive.`)) return;
         <div className="table waf-overview-list">
           {websites.map(site => {
             const bots = botCountFor(site.id);
+            // No CRS here: "WAF on" beside "CRS block" read as two things to
+            // worry about. CRS is switched on the site's own page.
             return <div className="waf-overview-row" key={site.id}>
               <span className="waf-overview-domain"><strong>{site.domain}</strong></span>
               <div className="waf-overview-badges">
-                {/* One switch: the WAF brings OWASP CRS with it. Two badges
-                    for what a customer sees as one protection read as a trap. */}
                 <span className={site.waf_enabled ? 'badge ok' : 'badge'}>{site.waf_enabled ? t('WAF on') : t('WAF off')}</span>
                 <span className={site.http_flood_enabled ? 'badge ok' : 'badge'}>{site.http_flood_enabled ? t('Flood on') : t('Flood off')}</span>
                 <span
@@ -6783,23 +6798,42 @@ Each account is overwritten with what is in its archive.`)) return;
             <button className="secondary-light" onClick={() => navigateToPage('waf')}><ArrowLeft size={14}/>{t('All websites')}</button>
           </div>
         </div>
-        <div className="waf-site-toggles">
-          <span className={selectedSite?.waf_enabled ? 'badge ok' : 'badge'}>{selectedSite?.waf_enabled ? t('WAF on') : t('WAF off')}</span>
-          <button disabled={!selectedWafWebsiteId || !!loading} onClick={() => selectedSite && toggleWebsiteWaf(selectedSite)}>
-            <Shield size={14}/> {selectedSite?.waf_enabled ? t('Turn WAF off') : t('Turn WAF on')}
-          </button>
+        {/* One row per protection: what it does, its state, its switch. CRS
+            is here and not in the list - whether a site carries it, and its
+            memory, is for whoever manages this site to decide. */}
+        <div className="waf-switches">
+          <div className="waf-switch-row">
+            <div className="waf-switch-text">
+              <strong>WAF</strong>
+              <span className="hint">{t('Blocks known bad paths.')}</span>
+            </div>
+            <span className={selectedSite?.waf_enabled ? 'badge ok' : 'badge'}>{selectedSite?.waf_enabled ? t('WAF on') : t('WAF off')}</span>
+            <button
+              className={selectedSite?.waf_enabled ? 'secondary' : ''}
+              disabled={!selectedWafWebsiteId || !!loading}
+              onClick={() => selectedSite && toggleWebsiteWaf(selectedSite)}
+            ><Shield size={14}/>{selectedSite?.waf_enabled ? t('Turn WAF off') : t('Turn WAF on')}</button>
+          </div>
+          {wafSiteConfig && <div className="waf-switch-row">
+            <div className="waf-switch-text">
+              <strong>OWASP CRS</strong>
+              <span className="hint">
+                {t('Inspects each request for SQL injection, XSS and similar attacks. Uses about {n} MB of server RAM.', { n: crs?.rss_mb_per_site || 50 })}
+                {wafSiteConfig.crs_enabled && !selectedSite?.waf_enabled ? ' ' + t('It loads when the WAF is on.') : ''}
+                {wafSiteConfig.crs_enabled && selectedSite?.waf_enabled && wafSiteConfig.crs_mode === 'off' ? ' ' + t('CRS is off for the whole server, so nothing is loaded yet.') : ''}
+                {wafSiteConfig?.crs_active && wafSiteConfig.crs_mode === 'detect' ? ' ' + t('Detect only: attacks are logged, nothing is blocked.') : ''}
+                {wafSiteConfig?.crs_active && wafSiteConfig.may_edit_custom_rules ? ' ' + t('Add SecRuleRemoveById <id> to the custom rules below to excuse this site from one rule.') : ''}
+              </span>
+            </div>
+            <span className={wafSiteConfig?.crs_active ? 'badge ok' : 'badge'}>{wafSiteConfig.crs_enabled ? t('CRS on') : t('CRS off')}</span>
+            <button
+              className={wafSiteConfig.crs_enabled ? 'secondary' : ''}
+              disabled={!!loading || (!wafSiteConfig.crs_enabled && !selectedSite?.waf_enabled)}
+              title={!wafSiteConfig.crs_enabled && !selectedSite?.waf_enabled ? t('Turn the WAF on first') : ''}
+              onClick={() => toggleSiteCrs(wafSiteConfig)}
+            ><Shield size={14}/>{wafSiteConfig.crs_enabled ? t('Turn CRS off') : t('Turn CRS on')}</button>
+          </div>}
         </div>
-        <p className="hint">
-          {t('The WAF blocks known bad paths and inspects each request for SQL injection, XSS and similar attacks.')}
-          {wafSiteConfig?.crs_active
-            ? ' ' + t('Add SecRuleRemoveById <id> to the custom rules below to excuse this site from one rule.')
-            : ''}
-        </p>
-        {/* A site switched on before the two became one may still carry the
-            WAF without CRS. Say so, and how to fix it, rather than pretend. */}
-        {selectedSite?.waf_enabled && wafSiteConfig && !wafSiteConfig.crs_enabled && <p className="hint">
-          {t('Request inspection is not loaded for this site yet. Turn the WAF off and on again to load it.')}
-        </p>}
       </section>
 
       {!wafSiteConfig && websites.length === 0 && <section className="section"><EmptyState icon={Globe} message={t('No websites yet.')} /></section>}
@@ -7158,10 +7192,12 @@ Each account is overwritten with what is in its archive.`)) return;
       if (['error', 'interrupted'].includes(job.status)) return 'badge bad';
       return 'badge warn';
     };
-    const scanStatusLabel = status => ({
+    const scanStatusLabels = {
       queued: 'Queued', running: 'Running', done: 'Finished',
       infected: 'Threats found', error: 'Error', interrupted: 'Interrupted',
-    }[status] || status || '—');
+    };
+    // Translated here, not by each caller: two of the three forgot.
+    const scanStatusLabel = status => (scanStatusLabels[status] ? t(scanStatusLabels[status]) : (status || '—'));
     const fmtStamp = s => {
       if (!s) return '';
       const d = new Date(s);
@@ -7245,7 +7281,7 @@ Each account is overwritten with what is in its archive.`)) return;
             {job.job_id && <p className="hint">{scanJobMeta(job)}</p>}
           </div>
           <div className="actions">
-            {job.job_id && <span className={scanJobBadgeClass(job)}>{t(scanStatusLabel(job.status))}</span>}
+            {job.job_id && <span className={scanJobBadgeClass(job)}>{scanStatusLabel(job.status)}</span>}
             <button type="button" className="secondary" onClick={() => navigateToPage('malware')}><ArrowLeft size={14}/>{t('Scan history')}</button>
           </div>
         </div>

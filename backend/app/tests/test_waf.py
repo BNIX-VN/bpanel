@@ -305,30 +305,31 @@ def test_unknown_rule_ids_are_rejected():
         waf.validate_enabled_rule_ids(["joomla-sensitive-files"])
 
 
-def test_the_waf_switch_carries_crs_with_it():
-    """One switch per site, at the operator's request (2026-09-25): "WAF on"
-    beside "CRS off" looked protected and was not, and end users could not
-    tell the two apart.
 
-    Both flags are set before the rule file is rendered. Rendering first, as
-    the endpoints used to, wrote the old state - turning the WAF on did not
-    load CRS until some later sync.
+def test_the_waf_switch_leaves_the_crs_opt_in_alone():
+    """CRS is a per-site opt-in with its own switch on the site's WAF page
+    (operator, 2026-09-25); the WAF switch does not touch it, and the CRS
+    switch does not touch the WAF.
+
+    The WAF switch sets waf_enabled before the rule file is rendered. The
+    renderer reads it to decide whether the opt-in loads, and rendering first,
+    as the endpoints used to, wrote the old state: turning the WAF back on
+    left CRS out until some later sync.
     """
-    from app.api import websites as websites_api
+    api = Path(__file__).resolve().parents[1] / "api"
+    source = (api / "websites.py").read_text(encoding="utf-8")
+    assert ".crs_enabled =" not in source, "a WAF endpoint writes the CRS opt-in again"
 
-    class Site:
-        waf_enabled = False
-        crs_enabled = False
+    switches = [fn for fn in source.split("\ndef ") if "nginx.update_waf_block(website.domain, payload.waf_enabled)" in fn]
+    assert len(switches) == 2, "both WAF endpoints are checked"
+    for fn in switches:
+        # update_website renders for other settings too; the render that
+        # matters is the one between this assignment and the vhost switch.
+        set_at = fn.index("website.waf_enabled = bool(payload.waf_enabled)")
+        render_at = fn.index("waf.sync_website_rules(website)", set_at)
+        switch_at = fn.index("nginx.update_waf_block(website.domain, payload.waf_enabled)")
+        assert render_at < switch_at, "the rules are rendered from the old state"
 
-    site = Site()
-    websites_api._set_waf_and_crs(site, True)
-    assert site.waf_enabled is True and site.crs_enabled is True
-    websites_api._set_waf_and_crs(site, False)
-    assert site.waf_enabled is False and site.crs_enabled is False
-
-    source = (Path(__file__).resolve().parents[1] / "api" / "websites.py").read_text(encoding="utf-8")
-    calls = [i for i in range(len(source)) if source.startswith("_set_waf_and_crs(website, bool(payload.waf_enabled))", i)]
-    assert len(calls) == 2, "both WAF endpoints set the pair"
-    for at in calls:
-        assert source.index("waf.sync_website_rules(website)", at) > at, "flags set before the rules are rendered"
-
+    crs = (api / "waf.py").read_text(encoding="utf-8")
+    crs = crs.split('@router.put("/websites/{website_id}/crs")', 1)[1].split("\n@router", 1)[0]
+    assert "waf_enabled" not in crs, "the CRS switch moves the WAF again"

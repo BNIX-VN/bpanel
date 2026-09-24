@@ -54,19 +54,6 @@ def _cleanup_failed_site(root_path: str, linux_user: str | None, delete_files: b
             pass
 
 
-def _set_waf_and_crs(website: Website, enabled: bool) -> None:
-    """One switch per site: the WAF brings OWASP CRS with it and takes it away.
-
-    Two toggles for what a customer sees as one protection read as a trap -
-    "WAF on" beside "CRS off" looked protected and was not. Both are set before
-    the rule file is rendered, so the file written already carries CRS (or has
-    dropped it); rendering first, as this used to, wrote the old state. The
-    server-wide CRS mode (off / detect / block) still decides what loads.
-    """
-    website.waf_enabled = enabled
-    website.crs_enabled = enabled
-
-
 def _ensure_default_waf_file(domain: str) -> None:
     # No CRS: a website starts with crs_enabled off, and the rule file has to
     # agree with the flag or the opt-in means nothing.
@@ -857,15 +844,18 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
         # the only extra question is whether their package includes the WAF.
         if not may_manage_waf(current_user):
             raise HTTPException(status_code=403, detail="Your hosting package does not include WAF settings")
-        previous = (website.waf_enabled, website.crs_enabled)
-        _set_waf_and_crs(website, bool(payload.waf_enabled))
+        # Set before the rule file is rendered: the renderer reads it to
+        # decide whether the site's own CRS opt-in loads, and rendering first
+        # wrote the old state - turning the WAF back on left CRS out.
+        previous = website.waf_enabled
+        website.waf_enabled = bool(payload.waf_enabled)
         try:
             result = waf.sync_website_rules(website)
             if result.returncode != 0:
                 raise RuntimeError(_command_error(result))
             nginx.update_waf_block(website.domain, payload.waf_enabled)
         except (RuntimeError, ValueError, FileNotFoundError) as exc:
-            website.waf_enabled, website.crs_enabled = previous
+            website.waf_enabled = previous
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     if payload.http_flood_enabled is not None:
         ensure_role(current_user.role, Role.admin)
@@ -951,15 +941,16 @@ def set_website_waf(website_id: int, payload: WebsiteWafUpdate, request: Request
     website = _get_authorized_website(db, website_id, current_user)
     if not may_manage_waf(current_user):
         raise HTTPException(status_code=403, detail="Your hosting package does not include WAF settings")
-    previous = (website.waf_enabled, website.crs_enabled)
-    _set_waf_and_crs(website, bool(payload.waf_enabled))
+    # Before the render, for the reason given in update_website.
+    previous = website.waf_enabled
+    website.waf_enabled = bool(payload.waf_enabled)
     try:
         result = waf.sync_website_rules(website)
         if result.returncode != 0:
             raise RuntimeError(_command_error(result))
         nginx.update_waf_block(website.domain, payload.waf_enabled)
     except (RuntimeError, ValueError, FileNotFoundError) as exc:
-        website.waf_enabled, website.crs_enabled = previous
+        website.waf_enabled = previous
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     db.commit()
     db.refresh(website)

@@ -56,15 +56,28 @@ def test_the_admin_only_endpoint_is_still_admin_only():
     assert "_require_admin(current_user)" in body
 
 
-def test_the_badge_does_not_depend_on_the_admin_payload():
-    """It must not need the admin-only payload to show the state.
-
-    Since the WAF and CRS became one switch (2026-09-25) there is one badge per
-    site, and it reads the site's own row - never /waf/crs, whose refusal an
-    end user would otherwise see as "off" on every site.
+def test_the_list_leaves_crs_to_the_site_page():
+    """"WAF on" beside "CRS block" in the list confused customers (operator,
+    2026-09-25). The list shows the WAF alone; CRS lives on each site's page.
     """
     src = APP_JSX.read_text(encoding="utf-8")
     row = src.split('className="waf-overview-row"', 1)[1].split("</div>;", 1)[0]
     assert "site.waf_enabled ? 'badge ok' : 'badge'" in row
-    assert "crs?.websites" not in row, "the badge reads the admin-only payload again"
-    assert "CRS off" not in row, "a second, CRS-only badge is back beside the WAF one"
+    assert "crs" not in row.lower(), "CRS is back in the WAF list"
+
+
+def test_the_site_page_shows_and_switches_crs_for_its_owner():
+    """The state reads the site's own config, never /waf/crs, whose refusal an
+    end user would see as "off"; and the switch is open to whoever may manage
+    the site's WAF, as the WAF switch is.
+    """
+    src = APP_JSX.read_text(encoding="utf-8")
+    page = src.split("function renderWafSite()", 1)[1].split("\n  function ", 1)[0]
+    assert "toggleSiteCrs(" in page
+    assert "wafSiteConfig?.crs_active" in page
+    assert "crs?.websites" not in page
+
+    api = WAF_API.read_text(encoding="utf-8")
+    body = api.split('@router.put("/websites/{website_id}/crs")', 1)[1].split("\n@router", 1)[0]
+    assert "_owned_website(db, website_id, current_user)" in body
+    assert "_require_admin" not in body

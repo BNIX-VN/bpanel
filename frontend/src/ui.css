@@ -400,6 +400,10 @@ button svg,.button-link svg,.upload-button svg{flex:none}
 /* Scan history: each run reads as a link to its own page. The global
    `button{height:36px}` squeezed its two lines and badge into one. */
 .scan-history-item{height:auto;min-height:50px;position:relative;padding-right:28px}
+/* Rows take their content's height. With auto rows, the list's max-height
+   was shared out among the runs and each was cut to its 50px minimum,
+   leaving the wrapped title and badge spilling over the next run. */
+.scan-history-list{grid-auto-rows:max-content}
 .scan-history-item::after{content:'';position:absolute;right:12px;top:50%;width:6px;height:6px;margin-top:-3px;border-top:1.5px solid var(--text-muted);border-right:1.5px solid var(--text-muted);transform:rotate(45deg)}
 .scan-detail .scan-status-panel{margin-top:0}
 
@@ -412,6 +416,13 @@ button svg,.button-link svg,.upload-button svg{flex:none}
 
 /* A button that holds a file or folder name wraps like text. */
 .file-list button.file-name{height:auto}
+
+/* WAF site page: one row per protection - what it does, its state, its switch. */
+.waf-switches{display:grid;border:1px solid var(--border);border-radius:var(--radius-md);background:var(--surface)}
+.waf-switch-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:8px 12px;padding:12px 14px}
+.waf-switch-row + .waf-switch-row{border-top:1px solid var(--border)}
+.waf-switch-text{display:grid;gap:2px;min-width:0}
+.waf-switch-text .hint{margin:0}
 
 /* ---------- Phones ---------- */
 @media(max-width:760px){
@@ -450,10 +461,16 @@ button svg,.button-link svg,.upload-button svg{flex:none}
   .cron-builder,.backup-schedule-builder,.schedule-fields,.passkey-form{grid-template-columns:minmax(0,1fr)}
   .cron-builder .cron-add,.schedule-fields .schedule-submit,.ssl-install{justify-self:stretch}
 
+  /* WAF site page: the switch under its text, full width. */
+  .waf-switch-row{grid-template-columns:minmax(0,1fr) auto}
+  .waf-switch-row > button{grid-column:1 / -1;width:100%}
+
   /* Lists with a filter: the input at its natural height. */
   .detail-head input{flex:0 0 auto}
 
-  /* Scan history: the title and meta wrap; the badge sits under them. */
+  /* Scan history: the title and meta wrap; the badge sits under them. No
+     scroll box inside the page: every run is shown at its full height. */
+  .scan-history-list{max-height:none;overflow:visible;padding-right:0}
   .scan-history-item{grid-template-columns:22px minmax(0,1fr);align-items:start;row-gap:6px}
   .scan-history-main strong,.scan-history-main small{white-space:normal;overflow-wrap:anywhere}
 }

@@ -400,27 +400,20 @@ def set_website_crs(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    _require_admin(current_user)
-    website = _website_or_404(db, website_id)
-    # Kept for API callers, but it is the same single switch as the WAF's:
-    # CRS on means the WAF on, and CRS off takes the WAF off with it.
-    previous = (website.waf_enabled, website.crs_enabled)
-    website.waf_enabled = website.crs_enabled = bool(payload.enabled)
+    # The site's own switch, on its WAF page: whoever may manage this site's
+    # WAF decides whether it loads CRS (operator, 2026-09-25). The server-wide
+    # mode stays admin-only, and while it is off nothing loads at all.
+    website = _owned_website(db, website_id, current_user)
+    website.crs_enabled = bool(payload.enabled)
     db.add(website)
     db.commit()
     db.refresh(website)
     result = waf.sync_website_rules(website)
-    error = None if result.returncode == 0 else (result.stderr or result.stdout or "Could not apply CRS").strip()
-    if error is None:
-        try:
-            nginx.update_waf_block(website.domain, bool(payload.enabled))
-        except (RuntimeError, ValueError, FileNotFoundError) as exc:
-            error = str(exc)
-    if error:
-        website.waf_enabled, website.crs_enabled = previous
+    if result.returncode != 0:
+        website.crs_enabled = not bool(payload.enabled)
         db.add(website)
         db.commit()
-        raise HTTPException(status_code=400, detail=error)
+        raise HTTPException(status_code=400, detail=(result.stderr or result.stdout or "Could not apply CRS").strip())
     mode = waf.active_crs_mode()
     # Every other per-site protection switch leaves an audit entry; this one did
     # not, so there was no way to tell who turned CRS on for a site or when.

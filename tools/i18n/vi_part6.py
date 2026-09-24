@@ -61,8 +61,6 @@ PART6 = {
     "Bans take effect": "Lệnh cấm có hiệu lực",
     "Bans NOT reaching iptables": "Lệnh cấm KHÔNG tới được iptables",
     "Seeing NO log": "KHÔNG thấy nhật ký",
-    "Run detect mode first and read the logs, or a legitimate request somebody depends on may be the one it stops.":
-        "Hãy chạy chế độ phát hiện trước và đọc nhật ký, kẻo thứ bị chặn lại là một request hợp lệ mà ai đó đang cần.",
     "Custom rules are arbitrary ModSecurity directives, so only an administrator can change them. Ask your provider if you need a rule added or excluded.":
         "Rule tuỳ chỉnh là chỉ thị ModSecurity tự do, nên chỉ quản trị viên được sửa. Hãy nhờ nhà cung cấp nếu bạn cần thêm hoặc loại trừ một rule.",
     "Blocked on every website on this server. A site can add more of its own from its page.":
