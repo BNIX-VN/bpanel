@@ -4745,7 +4745,7 @@ Each account is overwritten with what is in its archive.`)) return;
           </label>
           <label><span>{t('Runtime')}</span>
             <select value={siteAppDraft.kind} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, kind: e.target.value }))}>
-              {SITE_APP_KINDS.map(([value, label]) => <option key={value} value={value} disabled={value === 'docker' && !dockerReady}>{label}</option>)}
+              {SITE_APP_KINDS.map(([value, label]) => <option key={value} value={value} disabled={value === 'docker' && !dockerReady}>{t(label)}</option>)}
             </select>
           </label>
           <label><span>{t('Port')}</span>
@@ -5059,7 +5059,7 @@ Each account is overwritten with what is in its archive.`)) return;
             key={value}
             value={value}
             disabled={value === 'application' && !appsFeatureEnabled}
-          >{label}</option>)}
+          >{t(label)}</option>)}
         </select></label>
         {proxied && <label><span>{t('Application')}</span><select
           value={websiteSettingsForm.app_id || ''}
@@ -5252,7 +5252,7 @@ Each account is overwritten with what is in its archive.`)) return;
               key={value}
               value={value}
               disabled={value === 'application' && !appsFeatureEnabled}
-            >{label}</option>)}
+            >{t(label)}</option>)}
           </select>
           {siteType === 'application'
             ? <select value={createSiteAppId} onChange={e => setCreateSiteAppId(e.target.value)}>
@@ -5673,7 +5673,7 @@ Each account is overwritten with what is in its archive.`)) return;
             type="button"
             className={`mini ${chmodMode === preset ? '' : 'secondary-light'}`}
             onClick={() => setChmodMode(preset)}
-          >{preset} <small>{label}</small></button>)}
+          >{preset} <small>{t(label)}</small></button>)}
         </div>
         {onlyDirs && <label className="chmod-setgid">
           <input
@@ -5824,7 +5824,7 @@ Each account is overwritten with what is in its archive.`)) return;
           aria-selected={activeBackupTab === id}
           className={activeBackupTab === id ? 'active' : ''}
           onClick={() => setBackupTab(id)}
-        ><Icon size={14}/>{label}</button>)}
+        ><Icon size={14}/>{t(label)}</button>)}
       </div>
       {visibleBackupJobs.length > 0 && <div className="backup-job-list">
         {visibleBackupJobs.map(job => <div className={`backup-job ${job.status}`} key={job.job_id}>
@@ -6547,7 +6547,7 @@ Each account is overwritten with what is in its archive.`)) return;
                 className={crs.mode === value ? 'active' : ''}
                 disabled={!!loading || crs.mode === value}
                 onClick={() => saveCrsMode(value)}
-              >{label}</button>
+              >{t(label)}</button>
             ))}
           </div>
           <p className="hint" style={{ marginTop: 10 }}>

@@ -165,6 +165,32 @@ def test_the_file_list_says_what_its_columns_are():
     assert columns(grid) == columns(row), "header and row columns must line up"
 
 
+def test_a_label_from_an_array_goes_through_the_dictionary():
+    """The same mistake as the headings, five more times.
+
+    A list of [id, label, Icon] rows drawn by one shared line of JSX: the
+    labels are ordinary English sentences, but nothing wraps them, so the
+    backup tabs, the website-type options, the CRS switch and the chmod presets
+    all stayed English while the page around them was Vietnamese. One raw
+    {label} in a render site is the whole bug, so that is what this looks for.
+    """
+    # {t(label)} does not contain "{label}", so a plain search finds exactly
+    # the unwrapped ones. Requiring a > in front keeps it to JSX text: it steps
+    # over key={label} on an attribute and ${label} inside a template string.
+    drawn_raw = {
+        APP[match.start():match.end() + 20].split("\n")[0]
+        for match in re.finditer(r"(?<=>)\{label\}", APP)
+    }
+    allowed = {
+        # ResourceCard is handed an already-translated string by its caller.
+        "{label}</span></div>",
+        # Product and file names: "Claude Code", "Cursor - .cursor/mcp.json".
+        "{label}</strong>",
+    }
+    unexpected = sorted(text for text in drawn_raw if text not in allowed)
+    assert not unexpected, f"labels drawn without t(): {unexpected}"
+
+
 def test_the_dashboard_headings_are_translated_where_they_are_drawn():
     """Having the words in the dictionary is not the same as using them.
 

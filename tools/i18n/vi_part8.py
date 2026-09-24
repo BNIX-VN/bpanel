@@ -53,3 +53,15 @@ PART8.update({
     "Let's Encrypt and uploaded certificates":
         "Let's Encrypt và chứng chỉ tự tải lên",
 })
+
+# Labels that arrive from an array and are drawn by a shared line of JSX -
+# backup tabs, website modes, the CRS switch, the chmod presets. Five render
+# sites drew them raw, so a Vietnamese panel had English tabs. Product names
+# and the two words every host says in English stay as they are.
+PART8.update({
+    "Backup website": "Backup website",
+    "Static": "Tĩnh",
+    "Container": "Container",
+    "Detect only": "Chỉ phát hiện",
+    "Block": "Chặn",
+})
