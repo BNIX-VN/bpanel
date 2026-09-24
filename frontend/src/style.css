@@ -336,6 +336,11 @@ button:disabled{opacity:.55;cursor:not-allowed;box-shadow:none}
 
 /* Info box */
 .info-box{display:grid;gap:5px;background:var(--surface-alt);border:1px solid var(--border);border-radius:var(--radius-md);padding:14px;min-width:0}
+/* Inside a section the frame is redundant - the section already drew one
+   round this - so it reads as a shaded part of the card rather than a
+   second card. Standing on its own it keeps its border. */
+.section>.info-box,.section>*>.info-box{border-color:transparent;background:var(--surface-alt)}
+:root[data-theme="dark"] .section>.info-box,:root[data-theme="dark"] .section>*>.info-box{background:var(--surface-sunken)}
 
 /* Database created info box */
 .db-created-box{gap:10px;margin-top:8px;background:var(--surface);border-color:var(--accent)}
@@ -707,7 +712,7 @@ button:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
 .secondary,.secondary-light{background:var(--surface);color:var(--text);border:1px solid var(--border)}
 .secondary:hover:not(:disabled),.secondary-light:hover:not(:disabled){background:var(--surface-alt);border-color:var(--border-hover);color:var(--text)}
 
-.section{display:grid;gap:10px;background:var(--surface);color:var(--text);box-shadow:none;margin-bottom:16px;width:100%;border:1px solid var(--border);border-radius:var(--radius-lg);padding:18px;transition:var(--transition)}
+.section{display:grid;gap:10px;background:var(--surface);color:var(--text);box-shadow:none;margin-bottom:14px;width:100%;border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px;transition:var(--transition)}
 .section:hover{border-color:var(--border-hover);box-shadow:none}
 .section-title{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;min-width:0}
 .section-title h2{margin-bottom:4px}
