@@ -197,7 +197,7 @@ def test_terminal_command_execution_does_not_block_the_event_loop():
 
 
 def test_the_terminal_runs_in_a_mount_namespace_that_hides_other_tenants():
-    """open_basedir is a PHP mechanism; the terminal is not only PHP.
+    r"""open_basedir is a PHP mechanism; the terminal is not only PHP.
 
     node, npm, npx, yarn and git get no open_basedir - deliberately, and the
     assertion above says so. But `find . -maxdepth 0 -exec sh -c '<cmd>' \;`

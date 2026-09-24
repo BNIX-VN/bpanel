@@ -36,16 +36,16 @@ import ipaddress
 import json
 import logging
 import secrets
-from dataclasses import dataclass, field
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Callable, Iterable, Optional
+from typing import Any
 
 from sqlalchemy.orm import Session
 
 from app.core.permissions import Role, normalize_role
 from app.models.entities import McpToken, User
 from app.services.audit import log_action
-
 
 logger = logging.getLogger("bpanel.mcp")
 
@@ -95,7 +95,7 @@ def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def authenticate(db: Session, token: str) -> Optional[McpToken]:
+def authenticate(db: Session, token: str) -> McpToken | None:
     """The token row this token names, if it may still be used.
 
     Every reason to refuse returns None rather than saying which one it was:
@@ -157,7 +157,7 @@ class Context:
     # the smaller one: it also disabled the panel's own guard against locking
     # yourself out. It carries the audit trail as well, so a write made
     # through MCP records the address and client it came from.
-    request: Optional[Any] = None
+    request: Any | None = None
 
     @property
     def is_admin(self) -> bool:
@@ -211,7 +211,7 @@ class Tool:
 REGISTRY: dict[str, Tool] = {}
 
 
-def tool(name: str, title: str, description: str, properties: Optional[dict] = None, *,
+def tool(name: str, title: str, description: str, properties: dict | None = None, *,
          required: Iterable[str] = (), admin_only: bool = False,
          writes: bool = False, destructive: bool = False):
     """Register one tool.
@@ -313,7 +313,7 @@ def _check_one(name: str, value: Any, rule: dict) -> Any:
 
 # --- running a tool ---------------------------------------------------------
 
-def call_tool(ctx: Context, name: str, arguments: Optional[dict]) -> dict:
+def call_tool(ctx: Context, name: str, arguments: dict | None) -> dict:
     """Run one tool and shape the result the way `tools/call` wants it.
 
     A tool this token may not use is reported as unknown, exactly as a
@@ -382,7 +382,7 @@ def _error(request_id: Any, code: int, message: str) -> dict:
     return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
 
 
-def handle_message(ctx: Context, message: Any) -> Optional[dict]:
+def handle_message(ctx: Context, message: Any) -> dict | None:
     """One JSON-RPC message in, at most one response out.
 
     None means the message was a notification: the specification says to send
@@ -430,7 +430,7 @@ def handle_message(ctx: Context, message: Any) -> Optional[dict]:
     return _error(request_id, METHOD_NOT_FOUND, f"Unknown method: {method}")
 
 
-def handle_payload(ctx: Context, payload: Any) -> Optional[Any]:
+def handle_payload(ctx: Context, payload: Any) -> Any | None:
     """A whole request body: one message or a batch.
 
     A batch of nothing but notifications produces no response, same as a

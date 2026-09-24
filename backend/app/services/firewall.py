@@ -8,11 +8,9 @@ reports.
 import ipaddress
 import json
 import re
-from typing import Optional
 
 from app.core.config import settings
 from app.services.shell import CommandResult, shell
-
 
 PORT_RE = re.compile(r"^[0-9]{1,5}$")
 PROTOCOLS = {"tcp", "udp"}
@@ -131,7 +129,7 @@ def allow_port(port: str | int, protocol: str = "tcp") -> CommandResult:
     )
 
 
-def allow_ip(network: str, port: Optional[str | int] = None, protocol: str = "tcp") -> CommandResult:
+def allow_ip(network: str, port: str | int | None = None, protocol: str = "tcp") -> CommandResult:
     clean_network = _validate_network(network)
     if not port:
         return shell.privileged(
@@ -148,7 +146,7 @@ def allow_ip(network: str, port: Optional[str | int] = None, protocol: str = "tc
     )
 
 
-def covers_address(network: str, address: Optional[str]) -> bool:
+def covers_address(network: str, address: str | None) -> bool:
     """Would this rule cover the address the request is coming from?
 
     Deny rules are now evaluated before the ESTABLISHED return, and applying
@@ -166,9 +164,9 @@ def covers_address(network: str, address: Optional[str]) -> bool:
 
 def block_ip(
     network: str,
-    port: Optional[str | int] = None,
+    port: str | int | None = None,
     protocol: str = "tcp",
-    requester: Optional[str] = None,
+    requester: str | None = None,
 ) -> CommandResult:
     clean_network = _validate_network(network)
     if covers_address(clean_network, requester):

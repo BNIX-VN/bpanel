@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Optional
+from typing import Optional
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -12,7 +12,7 @@ class UserPackage(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(100), unique=True, index=True)
-    slug: Mapped[Optional[str]] = mapped_column(String(100), unique=True, nullable=True, index=True)
+    slug: Mapped[str | None] = mapped_column(String(100), unique=True, nullable=True, index=True)
     website_limit: Mapped[int] = mapped_column(Integer, default=5)
     storage_limit_mb: Mapped[int] = mapped_column(Integer, default=1024)
     database_limit: Mapped[int] = mapped_column(Integer, default=5)
@@ -36,7 +36,7 @@ class UserPackage(Base):
     sftp_accounts_limit: Mapped[int] = mapped_column(Integer, default=3)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
-    users: Mapped[List["User"]] = relationship(back_populates="package")
+    users: Mapped[list["User"]] = relationship(back_populates="package")
 
 
 class User(Base):
@@ -49,7 +49,7 @@ class User(Base):
     hashed_password: Mapped[str] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(String(32), default="end_user")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    package_id: Mapped[Optional[int]] = mapped_column(ForeignKey("user_packages.id", ondelete="SET NULL"), nullable=True, index=True)
+    package_id: Mapped[int | None] = mapped_column(ForeignKey("user_packages.id", ondelete="SET NULL"), nullable=True, index=True)
     website_limit: Mapped[int] = mapped_column(Integer, default=5)
     storage_limit_mb: Mapped[int] = mapped_column(Integer, default=1024)
     # Copied from the package when one is assigned, exactly like website_limit
@@ -72,17 +72,17 @@ class User(Base):
     # by brute force against sshd on port 22. Accounts created since get their
     # own secret; legacy ones are retired from the coupling the first time
     # either password is set.
-    sftp_password_set_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    sftp_password_set_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # Bumped to invalidate previously-issued JWTs (logout-everywhere, role
     # change, password reset by admin, account disable, etc).
     token_version: Mapped[int] = mapped_column(Integer, default=0)
-    totp_secret: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    totp_secret: Mapped[str | None] = mapped_column(String(255), nullable=True)
     totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
-    websites: Mapped[List["Website"]] = relationship(back_populates="owner")
-    package: Mapped[Optional[UserPackage]] = relationship(back_populates="users")
-    apps: Mapped[List["SiteApp"]] = relationship(back_populates="owner")
+    websites: Mapped[list["Website"]] = relationship(back_populates="owner")
+    package: Mapped[UserPackage | None] = relationship(back_populates="users")
+    apps: Mapped[list["SiteApp"]] = relationship(back_populates="owner")
 
 
 class Website(Base):
@@ -93,18 +93,18 @@ class Website(Base):
     owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     root_path: Mapped[str] = mapped_column(String(500))
     document_root: Mapped[str] = mapped_column(String(255), default="public_html")
-    linux_user: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    linux_user: Mapped[str | None] = mapped_column(String(32), nullable=True)
     php_version: Mapped[str] = mapped_column(String(16), default="8.4")
     app_type: Mapped[str] = mapped_column(String(32), default="wordpress")
     ssl_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     ssl_mode: Mapped[str] = mapped_column(String(16), default="none")
-    ssl_cert_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
-    ssl_key_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
-    ssl_ca_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
-    ssl_updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    ssl_cert_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    ssl_key_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    ssl_ca_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    ssl_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # For ssl_mode "cloudflare" this is the Cloudflare zone whose wildcard cert
     # this vhost points at; for "shared" it is the source website's domain.
-    ssl_source_domain: Mapped[Optional[str]] = mapped_column(String(253), nullable=True)
+    ssl_source_domain: Mapped[str | None] = mapped_column(String(253), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="pending")
     nginx_custom: Mapped[str] = mapped_column(Text, default="")
     nginx_config_mode: Mapped[str] = mapped_column(String(16), default="managed")
@@ -122,7 +122,7 @@ class Website(Base):
     # people import run to a few hundred names.
     blocked_bots: Mapped[str] = mapped_column(Text, default="")
     # Set when app_type is "application": the installed app this domain serves.
-    app_id: Mapped[Optional[int]] = mapped_column(
+    app_id: Mapped[int | None] = mapped_column(
         ForeignKey("site_apps.id", ondelete="SET NULL"), nullable=True, index=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -130,7 +130,7 @@ class Website(Base):
     owner: Mapped[User] = relationship(back_populates="websites")
     app: Mapped[Optional["SiteApp"]] = relationship(back_populates="websites")
     database: Mapped[Optional["DatabaseAccount"]] = relationship(back_populates="website", uselist=False)
-    aliases: Mapped[List["WebsiteAlias"]] = relationship(
+    aliases: Mapped[list["WebsiteAlias"]] = relationship(
         back_populates="website",
         cascade="all, delete-orphan",
         order_by="WebsiteAlias.domain",
@@ -152,12 +152,12 @@ class SiteApp(Base):
     owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     name: Mapped[str] = mapped_column(String(64), default="app")
     kind: Mapped[str] = mapped_column(String(16), default="node")
-    start_kind: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
-    start_arg: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    node_major: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
+    start_kind: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    start_arg: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    node_major: Mapped[str | None] = mapped_column(String(8), nullable=True)
     # Container runtimes: image reference, the port the process listens on inside
     # the container, and a CPU share. The published side is always loopback.
-    image: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    image: Mapped[str | None] = mapped_column(String(200), nullable=True)
     container_port: Mapped[int] = mapped_column(Integer, default=3000)
     cpu_limit: Mapped[str] = mapped_column(String(8), default="1")
     env: Mapped[str] = mapped_column(Text, default="")
@@ -165,7 +165,7 @@ class SiteApp(Base):
     # reaches. The file that actually runs is regenerated from these, never
     # stored as the source of truth.
     compose_source: Mapped[str] = mapped_column(Text, default="")
-    web_service: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    web_service: Mapped[str | None] = mapped_column(String(64), nullable=True)
     port: Mapped[int] = mapped_column(Integer, unique=True, index=True)
     memory_limit_mb: Mapped[int] = mapped_column(Integer, default=512)
     autostart: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -174,7 +174,7 @@ class SiteApp(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     owner: Mapped[User] = relationship(back_populates="apps")
-    websites: Mapped[List[Website]] = relationship(back_populates="app")
+    websites: Mapped[list[Website]] = relationship(back_populates="app")
 
     __table_args__ = (UniqueConstraint("owner_id", "name", name="uq_site_apps_owner_name"),)
 
@@ -197,21 +197,21 @@ class DatabaseAccount(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    website_id: Mapped[Optional[int]] = mapped_column(ForeignKey("websites.id"), nullable=True)
+    website_id: Mapped[int | None] = mapped_column(ForeignKey("websites.id"), nullable=True)
     db_name: Mapped[str] = mapped_column(String(64), unique=True)
     db_user: Mapped[str] = mapped_column(String(64), unique=True)
     db_password: Mapped[str] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     owner: Mapped["User"] = relationship()
-    website: Mapped[Optional[Website]] = relationship(back_populates="database")
+    website: Mapped[Website | None] = relationship(back_populates="database")
 
 
 class AuditLog(Base):
     __tablename__ = "audit_logs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     action: Mapped[str] = mapped_column(String(128))
     target: Mapped[str] = mapped_column(String(255))
     detail: Mapped[str] = mapped_column(Text, default="")
@@ -223,7 +223,7 @@ class RevokedToken(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     jti: Mapped[str] = mapped_column(String(128), unique=True, index=True)
-    user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime)
     revoked_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -248,27 +248,27 @@ class SftpBackupTarget(Base):
     kind: Mapped[str] = mapped_column(String(8), default=KIND_SFTP)
 
     # --- S3 and anything that speaks its API (Wasabi, B2, Spaces, R2, MinIO)
-    endpoint: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    region: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    bucket: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    access_key: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    secret_key: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    prefix: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    endpoint: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    region: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    bucket: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    access_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    secret_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    prefix: Mapped[str | None] = mapped_column(String(255), nullable=True)
     secure: Mapped[bool] = mapped_column(Boolean, default=True)
 
     # --- SFTP
     host: Mapped[str] = mapped_column(String(255))
     port: Mapped[int] = mapped_column(Integer, default=22)
     username: Mapped[str] = mapped_column(String(128))
-    password: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    private_key: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    password: Mapped[str | None] = mapped_column(Text, nullable=True)
+    private_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     remote_path: Mapped[str] = mapped_column(String(500), default="/backups/bpanel")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     # TOFU host key pinning so the second SSH connection on cannot be silently
     # MITM'd. Populated on first successful connect (or by an explicit rotate
     # action) and verified on every connect afterwards.
-    host_key_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
-    host_key_fingerprint: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    host_key_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    host_key_fingerprint: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -276,10 +276,10 @@ class BackupSchedule(Base):
     __tablename__ = "backup_schedules"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     user_ids: Mapped[str] = mapped_column(Text, default="")
     all_users: Mapped[bool] = mapped_column(Boolean, default=False)
-    target_id: Mapped[Optional[int]] = mapped_column(ForeignKey("sftp_backup_targets.id"), nullable=True)
+    target_id: Mapped[int | None] = mapped_column(ForeignKey("sftp_backup_targets.id"), nullable=True)
     schedule: Mapped[str] = mapped_column(String(100), default="0 2 * * *")
     # What gets appended to the stored file name, which decides how many files
     # a schedule keeps at the far end. "none" overwrites one file per account;
@@ -288,7 +288,7 @@ class BackupSchedule(Base):
     name_suffix: Mapped[str] = mapped_column(String(16), default="full_date")
     retention: Mapped[int] = mapped_column(Integer, default=7)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    last_run_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_status: Mapped[str] = mapped_column(String(32), default="pending")
     last_message: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -303,8 +303,8 @@ class ApiToken(Base):
     scopes: Mapped[str] = mapped_column(Text, default="provisioning:read,provisioning:write")
     allowed_ips: Mapped[str] = mapped_column(Text, default="")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -337,8 +337,8 @@ class McpToken(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime)
     # Written at most once a minute: every tool call would otherwise be a
     # database write, and the value is only ever read by a human.
-    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -364,18 +364,18 @@ class ProvisioningAccount(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     external_id: Mapped[str] = mapped_column(String(255), unique=True, index=True)
-    user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
-    primary_website_id: Mapped[Optional[int]] = mapped_column(ForeignKey("websites.id"), nullable=True)
-    package_id: Mapped[Optional[int]] = mapped_column(ForeignKey("user_packages.id"), nullable=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    primary_website_id: Mapped[int | None] = mapped_column(ForeignKey("websites.id"), nullable=True)
+    package_id: Mapped[int | None] = mapped_column(ForeignKey("user_packages.id"), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="pending")
     last_action: Mapped[str] = mapped_column(String(64), default="")
     last_message: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    user: Mapped[Optional[User]] = relationship()
-    primary_website: Mapped[Optional[Website]] = relationship(foreign_keys=[primary_website_id])
-    package: Mapped[Optional[UserPackage]] = relationship()
+    user: Mapped[User | None] = relationship()
+    primary_website: Mapped[Website | None] = relationship(foreign_keys=[primary_website_id])
+    package: Mapped[UserPackage | None] = relationship()
 
 
 class SftpAccount(Base):
@@ -410,7 +410,7 @@ class SftpAccount(Base):
     chroot_path: Mapped[str] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    password_set_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    password_set_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class WebauthnCredential(Base):
@@ -442,4 +442,4 @@ class WebauthnCredential(Base):
     # What the customer called it, so a lost device can be identified.
     name: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

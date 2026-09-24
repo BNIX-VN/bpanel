@@ -1,13 +1,11 @@
-import json
-from datetime import datetime, timezone
-from typing import List
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
-from app.core.permissions import Role, ensure_role, is_admin_role
+from app.core.permissions import Role, ensure_role
 from app.core.security import hash_password
 from app.models.entities import ApiToken, DatabaseAccount, ProvisioningAccount, User, UserPackage, Website
 from app.schemas.schemas import (
@@ -243,7 +241,7 @@ def create_account(payload: ProvisioningAccountCreate, request: Request, db: Ses
                 raise RuntimeError(result.stderr or result.stdout or "Could not issue SSL")
             website.ssl_enabled = True
             website.ssl_mode = "letsencrypt"
-            website.ssl_updated_at = datetime.now(timezone.utc)
+            website.ssl_updated_at = datetime.now(UTC)
         except Exception:
             pass
 
@@ -397,7 +395,7 @@ def get_usage(external_id: str, request: Request, db: Session = Depends(get_db))
 
 # ── API Tokens (admin-only, cookie auth) ─────────────────────────────────
 
-@router.get("/tokens", response_model=List[ApiTokenOut])
+@router.get("/tokens", response_model=list[ApiTokenOut])
 def list_tokens(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.admin)
     return db.query(ApiToken).order_by(ApiToken.id.desc()).all()
@@ -418,7 +416,7 @@ def revoke_token(token_id: int, request: Request, db: Session = Depends(get_db),
     if not token:
         raise HTTPException(status_code=404, detail="Token not found")
     token.is_active = False
-    token.revoked_at = datetime.now(timezone.utc)
+    token.revoked_at = datetime.now(UTC)
     db.commit()
     log_action(db, current_user.id, "revoke_api_token", token.name, request=request)
     return {"ok": True}

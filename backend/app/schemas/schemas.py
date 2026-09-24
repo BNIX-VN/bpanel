@@ -1,11 +1,10 @@
+import json
 import re
 from datetime import datetime
-import json
-from typing import Literal, Optional
+from typing import Literal
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
-
 
 DOMAIN_RE = re.compile(r"^(?!-)([a-zA-Z0-9-]{1,63}\.)+[a-zA-Z]{2,}$")
 SUPPORTED_PHP_VERSIONS = {"5.6", "7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5"}
@@ -36,7 +35,7 @@ def _validate_linux_login_password(value: str) -> str:
     return value
 
 
-def _validate_php_version(value: Optional[str]) -> Optional[str]:
+def _validate_php_version(value: str | None) -> str | None:
     if value is None:
         return value
     if value not in SUPPORTED_PHP_VERSIONS:
@@ -44,7 +43,7 @@ def _validate_php_version(value: Optional[str]) -> Optional[str]:
     return value
 
 
-def _validate_app_type(value: Optional[str]) -> Optional[str]:
+def _validate_app_type(value: str | None) -> str | None:
     if value is None:
         return value
     if value not in SUPPORTED_APP_TYPES:
@@ -52,7 +51,7 @@ def _validate_app_type(value: Optional[str]) -> Optional[str]:
     return value
 
 
-def _validate_nginx_rewrite_mode(value: Optional[str]) -> Optional[str]:
+def _validate_nginx_rewrite_mode(value: str | None) -> str | None:
     if value is None:
         return value
     normalized = value.strip().lower()
@@ -61,7 +60,7 @@ def _validate_nginx_rewrite_mode(value: Optional[str]) -> Optional[str]:
     return normalized
 
 
-def _validate_document_root(value: Optional[str]) -> Optional[str]:
+def _validate_document_root(value: str | None) -> str | None:
     if value is None:
         return value
     cleaned = value.strip().replace("\\", "/")
@@ -76,7 +75,7 @@ def _validate_document_root(value: Optional[str]) -> Optional[str]:
     return "/".join(parts)
 
 
-def _validate_panel_url(value: Optional[str]) -> Optional[str]:
+def _validate_panel_url(value: str | None) -> str | None:
     if value is None:
         return value
     value = value.strip()
@@ -98,7 +97,7 @@ def _validate_panel_url(value: Optional[str]) -> Optional[str]:
     return value
 
 
-def _validate_panel_hostname(value: Optional[str]) -> Optional[str]:
+def _validate_panel_hostname(value: str | None) -> str | None:
     if value is None:
         return value
     value = value.strip().lower().rstrip(".")
@@ -117,7 +116,7 @@ class Token(BaseModel):
 
 
 class LoginResponse(BaseModel):
-    access_token: Optional[str] = None
+    access_token: str | None = None
     token_type: str = "bearer"
     requires_2fa: bool = False
     # Set when this account has a passkey for the hostname being used. The
@@ -126,7 +125,7 @@ class LoginResponse(BaseModel):
     # authenticator app is available if the passkey cannot be used", which is
     # the whole reason both are kept.
     requires_passkey: bool = False
-    passkey_options: Optional[str] = None
+    passkey_options: str | None = None
 
 
 class TwoFactorStatus(BaseModel):
@@ -145,7 +144,7 @@ class TwoFactorCode(BaseModel):
 
 class TwoFactorSetupRequest(BaseModel):
     current_password: str = Field(min_length=1, max_length=72)
-    code: Optional[str] = Field(default=None, min_length=6, max_length=12)
+    code: str | None = Field(default=None, min_length=6, max_length=12)
 
 
 class TwoFactorEnableRequest(BaseModel):
@@ -155,8 +154,8 @@ class TwoFactorEnableRequest(BaseModel):
 class PasskeyRegisterStart(BaseModel):
     """Adding a way into the account is a sensitive action, like TOTP setup."""
 
-    current_password: Optional[str] = Field(default=None, min_length=1, max_length=72)
-    code: Optional[str] = Field(default=None, min_length=6, max_length=12)
+    current_password: str | None = Field(default=None, min_length=1, max_length=72)
+    code: str | None = Field(default=None, min_length=6, max_length=12)
 
 
 class PasskeyRegisterFinish(BaseModel):
@@ -164,17 +163,17 @@ class PasskeyRegisterFinish(BaseModel):
     # it is checked against a challenge the server issued, and against an RP ID
     # and origin the server derives from the request rather than from this.
     credential: str = Field(min_length=2, max_length=8192)
-    name: Optional[str] = Field(default=None, max_length=64)
+    name: str | None = Field(default=None, max_length=64)
 
 
 class TwoFactorDisableRequest(BaseModel):
     current_password: str = Field(min_length=1, max_length=72)
-    code: Optional[str] = Field(default=None, min_length=6, max_length=12)
+    code: str | None = Field(default=None, min_length=6, max_length=12)
 
 
 class UserPackageCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
-    slug: Optional[str] = Field(default=None, max_length=100)
+    slug: str | None = Field(default=None, max_length=100)
     website_limit: int = Field(default=5, ge=0, le=1000)
     storage_limit_mb: int = Field(default=1024, ge=0, le=1024 * 1024)
     database_limit: int = Field(default=5, ge=0, le=10000)
@@ -197,23 +196,23 @@ class UserPackageCreate(BaseModel):
 
 
 class UserPackageUpdate(BaseModel):
-    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
-    slug: Optional[str] = Field(default=None, max_length=100)
-    website_limit: Optional[int] = Field(default=None, ge=0, le=1000)
-    storage_limit_mb: Optional[int] = Field(default=None, ge=0, le=1024 * 1024)
-    database_limit: Optional[int] = Field(default=None, ge=0, le=10000)
-    alias_limit: Optional[int] = Field(default=None, ge=0, le=1000)
-    backup_retention_days: Optional[int] = Field(default=None, ge=0, le=365)
-    terminal_enabled: Optional[bool] = None
-    waf_enabled: Optional[bool] = None
-    wordpress_enabled: Optional[bool] = None
-    node_apps_limit: Optional[int] = Field(default=None, ge=0, le=100)
-    node_app_memory_mb: Optional[int] = Field(default=None, ge=64, le=16384)
-    sftp_accounts_limit: Optional[int] = Field(default=None, ge=0, le=100)
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    slug: str | None = Field(default=None, max_length=100)
+    website_limit: int | None = Field(default=None, ge=0, le=1000)
+    storage_limit_mb: int | None = Field(default=None, ge=0, le=1024 * 1024)
+    database_limit: int | None = Field(default=None, ge=0, le=10000)
+    alias_limit: int | None = Field(default=None, ge=0, le=1000)
+    backup_retention_days: int | None = Field(default=None, ge=0, le=365)
+    terminal_enabled: bool | None = None
+    waf_enabled: bool | None = None
+    wordpress_enabled: bool | None = None
+    node_apps_limit: int | None = Field(default=None, ge=0, le=100)
+    node_app_memory_mb: int | None = Field(default=None, ge=64, le=16384)
+    sftp_accounts_limit: int | None = Field(default=None, ge=0, le=100)
 
     @field_validator("name")
     @classmethod
-    def validate_name(cls, value: Optional[str]) -> Optional[str]:
+    def validate_name(cls, value: str | None) -> str | None:
         if value is None:
             return value
         value = re.sub(r"\s+", " ", value.strip())
@@ -225,7 +224,7 @@ class UserPackageUpdate(BaseModel):
 class UserPackageOut(BaseModel):
     id: int
     name: str
-    slug: Optional[str] = None
+    slug: str | None = None
     website_limit: int
     storage_limit_mb: int
     database_limit: int = 5
@@ -237,7 +236,7 @@ class UserPackageOut(BaseModel):
     node_apps_limit: int = 0
     sftp_accounts_limit: int = 3
     node_app_memory_mb: int = 512
-    created_at: Optional[datetime] = None
+    created_at: datetime | None = None
 
     class Config:
         from_attributes = True
@@ -248,7 +247,7 @@ class UserCreate(BaseModel):
     email: EmailStr
     password: str = Field(min_length=12, max_length=72)  # bcrypt 72-byte limit
     role: Literal["admin", "end_user"] = "end_user"
-    package_id: Optional[int] = Field(default=None, ge=1)
+    package_id: int | None = Field(default=None, ge=1)
     website_limit: int = Field(default=5, ge=0, le=1000)
     storage_limit_mb: int = Field(default=1024, ge=0, le=1024 * 1024)
     sftp_accounts_limit: int = Field(default=3, ge=0, le=100)
@@ -262,24 +261,24 @@ class UserCreate(BaseModel):
 
 
 class UserUpdate(BaseModel):
-    email: Optional[EmailStr] = None
-    role: Optional[Literal["admin", "end_user"]] = None
-    is_active: Optional[bool] = None
-    package_id: Optional[int] = Field(default=None, ge=1)
-    website_limit: Optional[int] = Field(default=None, ge=0, le=1000)
-    storage_limit_mb: Optional[int] = Field(default=None, ge=0, le=1024 * 1024)
+    email: EmailStr | None = None
+    role: Literal["admin", "end_user"] | None = None
+    is_active: bool | None = None
+    package_id: int | None = Field(default=None, ge=1)
+    website_limit: int | None = Field(default=None, ge=0, le=1000)
+    storage_limit_mb: int | None = Field(default=None, ge=0, le=1024 * 1024)
     # Grantable per user as well as per package, like the two above. Without
     # this the column existed, the API read it to refuse requests, and nothing
     # anywhere could raise it above zero.
-    sftp_accounts_limit: Optional[int] = Field(default=None, ge=0, le=100)
+    sftp_accounts_limit: int | None = Field(default=None, ge=0, le=100)
 
 
 class UserPasswordUpdate(BaseModel):
     """The panel password. Since 0033 it reaches no Linux account."""
 
     password: str = Field(min_length=12, max_length=72)
-    current_password: Optional[str] = Field(default=None, min_length=1, max_length=72)
-    code: Optional[str] = Field(default=None, min_length=6, max_length=12)
+    current_password: str | None = Field(default=None, min_length=1, max_length=72)
+    code: str | None = Field(default=None, min_length=6, max_length=12)
 
 
 class SftpPasswordUpdate(BaseModel):
@@ -289,13 +288,13 @@ class SftpPasswordUpdate(BaseModel):
     database and per-website sub-account flows already use.
     """
 
-    password: Optional[str] = Field(default=None, min_length=12, max_length=72)
-    current_password: Optional[str] = Field(default=None, min_length=1, max_length=72)
-    code: Optional[str] = Field(default=None, min_length=6, max_length=12)
+    password: str | None = Field(default=None, min_length=12, max_length=72)
+    current_password: str | None = Field(default=None, min_length=1, max_length=72)
+    code: str | None = Field(default=None, min_length=6, max_length=12)
 
     @field_validator("password")
     @classmethod
-    def validate_sftp_password(cls, value: Optional[str]) -> Optional[str]:
+    def validate_sftp_password(cls, value: str | None) -> str | None:
         return value if value is None else _validate_linux_login_password(value)
 
 
@@ -305,20 +304,20 @@ class UserOut(BaseModel):
     email: str
     role: str
     is_active: bool
-    package_id: Optional[int] = None
-    package_name: Optional[str] = None
+    package_id: int | None = None
+    package_name: str | None = None
     website_limit: int
     storage_limit_mb: int
     storage_used_bytes: int = 0
-    storage_limit_bytes: Optional[int] = None
+    storage_limit_bytes: int | None = None
     storage_percent: float = 0.0
     totp_enabled: bool = False
     sftp_accounts_limit: int = 3
     # NULL means this account's SFTP password has never been set on its own and
     # is still whatever the panel password was. The UI says so.
-    sftp_password_set_at: Optional[datetime] = None
+    sftp_password_set_at: datetime | None = None
     # Only ever populated on create, and only in that one response.
-    sftp_password: Optional[str] = None
+    sftp_password: str | None = None
 
     class Config:
         from_attributes = True
@@ -326,11 +325,11 @@ class UserOut(BaseModel):
 
 class AuditLogOut(BaseModel):
     id: int
-    user_id: Optional[int] = None
+    user_id: int | None = None
     action: str
     target: str
     detail: str = ""
-    created_at: Optional[str] = None
+    created_at: str | None = None
 
     class Config:
         from_attributes = True
@@ -349,16 +348,16 @@ class AuditLogOut(BaseModel):
 
 class WebsiteCreate(BaseModel):
     domain: str
-    owner_id: Optional[int] = None
+    owner_id: int | None = None
     php_version: str = "8.4"
     app_type: str = "wordpress"
     # Required when app_type is "application": which installed app to serve.
-    app_id: Optional[int] = None
+    app_id: int | None = None
     install_wordpress: bool = True
     title: str = "My WordPress Site"
     admin_user: str = "admin"
-    admin_email: Optional[EmailStr] = None
-    admin_password: Optional[str] = None
+    admin_email: EmailStr | None = None
+    admin_password: str | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -393,7 +392,7 @@ class WebsiteCreate(BaseModel):
 
     @field_validator("admin_password")
     @classmethod
-    def validate_admin_password(cls, value: Optional[str]) -> Optional[str]:
+    def validate_admin_password(cls, value: str | None) -> str | None:
         if value is None or value == "":
             return value
         if len(value) < 10:
@@ -409,40 +408,40 @@ class WebsiteWordPressInstall(BaseModel):
 
 
 class WebsiteUpdate(BaseModel):
-    php_version: Optional[str] = None
-    app_type: Optional[str] = None
-    app_id: Optional[int] = None
-    document_root: Optional[str] = None
-    status: Optional[str] = None
-    owner_id: Optional[int] = None
-    nginx_custom: Optional[str] = None
-    nginx_rewrite_mode: Optional[str] = None
-    waf_enabled: Optional[bool] = None
-    http_flood_enabled: Optional[bool] = None
+    php_version: str | None = None
+    app_type: str | None = None
+    app_id: int | None = None
+    document_root: str | None = None
+    status: str | None = None
+    owner_id: int | None = None
+    nginx_custom: str | None = None
+    nginx_rewrite_mode: str | None = None
+    waf_enabled: bool | None = None
+    http_flood_enabled: bool | None = None
 
     @field_validator("php_version")
     @classmethod
-    def validate_php(cls, value: Optional[str]) -> Optional[str]:
+    def validate_php(cls, value: str | None) -> str | None:
         return _validate_php_version(value)
 
     @field_validator("app_type")
     @classmethod
-    def validate_app(cls, value: Optional[str]) -> Optional[str]:
+    def validate_app(cls, value: str | None) -> str | None:
         return _validate_app_type(value)
 
     @field_validator("nginx_rewrite_mode")
     @classmethod
-    def validate_nginx_rewrite_mode(cls, value: Optional[str]) -> Optional[str]:
+    def validate_nginx_rewrite_mode(cls, value: str | None) -> str | None:
         return _validate_nginx_rewrite_mode(value)
 
     @field_validator("document_root")
     @classmethod
-    def validate_document_root(cls, value: Optional[str]) -> Optional[str]:
+    def validate_document_root(cls, value: str | None) -> str | None:
         return _validate_document_root(value)
 
     @field_validator("status")
     @classmethod
-    def validate_status(cls, value: Optional[str]) -> Optional[str]:
+    def validate_status(cls, value: str | None) -> str | None:
         if value is None:
             return value
         allowed = {"active", "suspended", "pending"}
@@ -524,7 +523,7 @@ class WebsiteAliasOut(BaseModel):
     domain: str
     mode: Literal["alias", "redirect"] = "alias"
     ssl_enabled: bool = False
-    created_at: Optional[datetime] = None
+    created_at: datetime | None = None
 
     class Config:
         from_attributes = True
@@ -532,11 +531,11 @@ class WebsiteAliasOut(BaseModel):
 
 class WildcardSslRequest(BaseModel):
     # Optional: omit to reuse the token already saved for the detected zone.
-    cloudflare_api_token: Optional[str] = None
+    cloudflare_api_token: str | None = None
 
     @field_validator("cloudflare_api_token")
     @classmethod
-    def _clean_token(cls, value: Optional[str]) -> Optional[str]:
+    def _clean_token(cls, value: str | None) -> str | None:
         value = (value or "").strip()
         return value or None
 
@@ -561,7 +560,7 @@ class SslSourceOut(BaseModel):
 
 
 class CloudflareZoneOut(BaseModel):
-    zone: Optional[str] = None
+    zone: str | None = None
     has_token: bool = False
 
 
@@ -617,8 +616,8 @@ class DatabasePasswordUpdate(BaseModel):
 
 class DatabaseCreate(BaseModel):
     db_name: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9_]+$")
-    db_user: Optional[str] = Field(default=None, min_length=1, max_length=64, pattern=r"^[a-z0-9_]+$")
-    db_password: Optional[str] = Field(default=None, min_length=12, max_length=128)
+    db_user: str | None = Field(default=None, min_length=1, max_length=64, pattern=r"^[a-z0-9_]+$")
+    db_password: str | None = Field(default=None, min_length=12, max_length=128)
 
     @field_validator("db_name", mode="before")
     @classmethod
@@ -629,14 +628,14 @@ class DatabaseCreate(BaseModel):
 
     @field_validator("db_user", mode="before")
     @classmethod
-    def validate_db_user(cls, value) -> Optional[str]:
+    def validate_db_user(cls, value) -> str | None:
         if value is None or value == "":
             return None
         return str(value).strip().lower()
 
     @field_validator("db_password", mode="before")
     @classmethod
-    def validate_db_password(cls, value) -> Optional[str]:
+    def validate_db_password(cls, value) -> str | None:
         if value is None or value == "":
             return None
         return value
@@ -649,10 +648,10 @@ class CronDelete(BaseModel):
 
 class ComposeValidateRequest(BaseModel):
     compose_source: str
-    web_service: Optional[str] = None
+    web_service: str | None = None
     # Which of the web service's ports the domain reaches, when it declares more
     # than one.
-    web_port: Optional[int] = Field(default=None, ge=1, le=65535)
+    web_port: int | None = Field(default=None, ge=1, le=65535)
     # The .env box, so a file written against one validates as it will run.
     env: str = ""
 
@@ -662,37 +661,37 @@ class SiteAppCreate(BaseModel):
     kind: Literal["node", "docker", "compose"] = "node"
     # Compose runtimes: the file the customer pasted and which service serves
     # the domain.
-    compose_source: Optional[str] = None
-    web_service: Optional[str] = None
+    compose_source: str | None = None
+    web_service: str | None = None
     # Admins may create an app on behalf of another panel user.
-    owner_id: Optional[int] = None
+    owner_id: int | None = None
     # Omit to let the panel pick a free port from its own range.
-    port: Optional[int] = None
-    start_kind: Optional[Literal["node", "npm", "npx", "yarn"]] = None
-    start_arg: Optional[str] = None
-    node_major: Optional[str] = None
-    image: Optional[str] = None
-    container_port: Optional[int] = None
-    cpu_limit: Optional[str] = None
-    env: Optional[str] = None
-    memory_limit_mb: Optional[int] = None
+    port: int | None = None
+    start_kind: Literal["node", "npm", "npx", "yarn"] | None = None
+    start_arg: str | None = None
+    node_major: str | None = None
+    image: str | None = None
+    container_port: int | None = None
+    cpu_limit: str | None = None
+    env: str | None = None
+    memory_limit_mb: int | None = None
     autostart: bool = True
 
 
 class SiteAppUpdate(BaseModel):
-    name: Optional[str] = None
-    port: Optional[int] = None
-    compose_source: Optional[str] = None
-    web_service: Optional[str] = None
-    start_kind: Optional[Literal["node", "npm", "npx", "yarn"]] = None
-    start_arg: Optional[str] = None
-    node_major: Optional[str] = None
-    image: Optional[str] = None
-    container_port: Optional[int] = None
-    cpu_limit: Optional[str] = None
-    env: Optional[str] = None
-    memory_limit_mb: Optional[int] = None
-    autostart: Optional[bool] = None
+    name: str | None = None
+    port: int | None = None
+    compose_source: str | None = None
+    web_service: str | None = None
+    start_kind: Literal["node", "npm", "npx", "yarn"] | None = None
+    start_arg: str | None = None
+    node_major: str | None = None
+    image: str | None = None
+    container_port: int | None = None
+    cpu_limit: str | None = None
+    env: str | None = None
+    memory_limit_mb: int | None = None
+    autostart: bool | None = None
 
 
 class SiteAppControl(BaseModel):
@@ -709,20 +708,20 @@ class SiteAppOut(BaseModel):
     name: str
     kind: str
     port: int
-    start_kind: Optional[str] = None
-    start_arg: Optional[str] = None
-    node_major: Optional[str] = None
-    image: Optional[str] = None
+    start_kind: str | None = None
+    start_arg: str | None = None
+    node_major: str | None = None
+    image: str | None = None
     container_port: int = 3000
     cpu_limit: str = "1"
     env: str = ""
     compose_source: str = ""
-    web_service: Optional[str] = None
+    web_service: str | None = None
     memory_limit_mb: int = 512
     autostart: bool = True
     status: str = "stopped"
     last_error: str = ""
-    created_at: Optional[datetime] = None
+    created_at: datetime | None = None
 
     class Config:
         from_attributes = True
@@ -734,19 +733,19 @@ class WebsiteOut(BaseModel):
     owner_id: int
     root_path: str
     document_root: str = "public_html"
-    linux_user: Optional[str] = None
-    panel_username: Optional[str] = None
-    panel_password: Optional[str] = None
+    linux_user: str | None = None
+    panel_username: str | None = None
+    panel_password: str | None = None
     php_version: str
     app_type: str
     ssl_enabled: bool
     ssl_mode: str = "none"
-    ssl_source_domain: Optional[str] = None
-    ssl_updated_at: Optional[datetime] = None
+    ssl_source_domain: str | None = None
+    ssl_updated_at: datetime | None = None
     ssl_has_ca: bool = False
-    ssl_cert_path: Optional[str] = Field(default=None, exclude=True)
-    ssl_key_path: Optional[str] = Field(default=None, exclude=True)
-    ssl_ca_path: Optional[str] = Field(default=None, exclude=True)
+    ssl_cert_path: str | None = Field(default=None, exclude=True)
+    ssl_key_path: str | None = Field(default=None, exclude=True)
+    ssl_ca_path: str | None = Field(default=None, exclude=True)
     status: str
     nginx_custom: str = ""
     nginx_config_mode: str = "managed"
@@ -768,7 +767,7 @@ class WebsiteOut(BaseModel):
     crs_enabled: bool = False
     crs_active: bool = False
     wordpress_installed: bool = False
-    app_id: Optional[int] = None
+    app_id: int | None = None
     aliases: list[WebsiteAliasOut] = Field(default_factory=list)
 
     class Config:
@@ -785,7 +784,7 @@ class WebsiteOut(BaseModel):
 class DatabaseOut(BaseModel):
     id: int
     owner_id: int
-    website_id: Optional[int] = None
+    website_id: int | None = None
     db_name: str
     db_user: str
 
@@ -818,12 +817,12 @@ class PanelSettingsOut(BaseModel):
     ipv6: dict = {}
     # The server's own public IPv4 addresses, for the settings page to show.
     server_ipv4: list[str] = []
-    message: Optional[str] = None
+    message: str | None = None
     # Optional ClamAV malware scanning status (always present, defaults off).
     malware_scan_enabled: bool = False
     malware_scan_installed: bool = False
     malware_scan_active: bool = False
-    malware_scan_detail: Optional[str] = None
+    malware_scan_detail: str | None = None
 
 
 class MalwareScanToggle(BaseModel):
@@ -848,14 +847,14 @@ class MalwareSchedulesOut(BaseModel):
 
 
 class MalwareScheduleEntryUpdate(BaseModel):
-    enabled: Optional[bool] = None
-    weekday: Optional[int] = None
-    hour: Optional[int] = None
+    enabled: bool | None = None
+    weekday: int | None = None
+    hour: int | None = None
 
 
 class MalwareSchedulesUpdate(BaseModel):
-    websites: Optional[MalwareScheduleEntryUpdate] = None
-    server: Optional[MalwareScheduleEntryUpdate] = None
+    websites: MalwareScheduleEntryUpdate | None = None
+    server: MalwareScheduleEntryUpdate | None = None
 
 
 class MalwareRealtimeToggle(BaseModel):
@@ -867,7 +866,7 @@ class MalwareScanOnUploadToggle(BaseModel):
 
 
 class MalwareScanRun(BaseModel):
-    website_id: Optional[int] = None
+    website_id: int | None = None
     all: bool = False
     # Scan every file on the machine, not just website roots.
     server: bool = False
@@ -879,7 +878,7 @@ class MalwareScanRun(BaseModel):
 class MalwareScanThreat(BaseModel):
     path: str
     signature: str
-    domain: Optional[str] = None
+    domain: str | None = None
 
 
 class MalwareScanResult(BaseModel):
@@ -898,7 +897,7 @@ class MalwareScanJob(BaseModel):
     scope: str = "website"
     engine: str = ""
     scanid: str = ""
-    website_id: Optional[int] = None
+    website_id: int | None = None
     domains: list[str] = []
     message: str = ""
     progress_percent: int = 0
@@ -934,7 +933,7 @@ class MalwareScanStatus(BaseModel):
     scan_on_upload_is_cheap: bool = False
     monitor_running: bool = False
     socket: str = "/run/clamav/clamd.sock"
-    detail: Optional[str] = None
+    detail: str | None = None
     memory_total_mb: int = 0
     memory_available_mb: int = 0
     # Set when the machine is too small to scan comfortably; explains in plain
@@ -944,16 +943,16 @@ class MalwareScanStatus(BaseModel):
 
 
 class PanelSettingsUpdate(BaseModel):
-    app_name: Optional[str] = Field(default=None, min_length=2, max_length=80)
-    panel_hostname: Optional[str] = Field(default=None, max_length=255)
-    panel_port: Optional[int] = Field(default=None, ge=1, le=65535)
+    app_name: str | None = Field(default=None, min_length=2, max_length=80)
+    panel_hostname: str | None = Field(default=None, max_length=255)
+    panel_port: int | None = Field(default=None, ge=1, le=65535)
     # Legacy API clients may still send these fields. The panel port is locked
     # after install; updates preserve the existing port and only change host/scheme.
-    panel_url: Optional[str] = Field(default=None, max_length=255)
+    panel_url: str | None = Field(default=None, max_length=255)
 
     @field_validator("app_name")
     @classmethod
-    def validate_app_name(cls, value: Optional[str]) -> Optional[str]:
+    def validate_app_name(cls, value: str | None) -> str | None:
         if value is None:
             return value
         value = value.strip()
@@ -963,20 +962,20 @@ class PanelSettingsUpdate(BaseModel):
 
     @field_validator("panel_url")
     @classmethod
-    def validate_panel_url(cls, value: Optional[str]) -> Optional[str]:
+    def validate_panel_url(cls, value: str | None) -> str | None:
         return _validate_panel_url(value)
 
     @field_validator("panel_hostname")
     @classmethod
-    def validate_panel_hostname(cls, value: Optional[str]) -> Optional[str]:
+    def validate_panel_hostname(cls, value: str | None) -> str | None:
         return _validate_panel_hostname(value)
 
 
 class AdminAccountUpdate(BaseModel):
-    email: Optional[EmailStr] = None
-    password: Optional[str] = Field(default=None, min_length=12, max_length=72)
-    current_password: Optional[str] = Field(default=None, min_length=1, max_length=72)
-    code: Optional[str] = Field(default=None, min_length=6, max_length=12)
+    email: EmailStr | None = None
+    password: str | None = Field(default=None, min_length=12, max_length=72)
+    current_password: str | None = Field(default=None, min_length=1, max_length=72)
+    code: str | None = Field(default=None, min_length=6, max_length=12)
 
     # No Linux password rule here either: since 0033 the admin's panel password
     # is not written to their Linux account.
@@ -987,24 +986,24 @@ class PanelIpv6Toggle(BaseModel):
 
 class PanelSslUseDomain(BaseModel):
     domain: str = Field(min_length=3, max_length=253)
-    panel_port: Optional[int] = Field(default=None, ge=1, le=65535)
+    panel_port: int | None = Field(default=None, ge=1, le=65535)
 
 
 class PanelSslInstall(BaseModel):
-    panel_hostname: Optional[str] = Field(default=None, min_length=3, max_length=255)
+    panel_hostname: str | None = Field(default=None, min_length=3, max_length=255)
     panel_port: int = Field(default=2222, ge=1, le=65535)
-    panel_url: Optional[str] = Field(default=None, min_length=3, max_length=255)
-    email: Optional[EmailStr] = None
+    panel_url: str | None = Field(default=None, min_length=3, max_length=255)
+    email: EmailStr | None = None
 
     @field_validator("panel_url")
     @classmethod
-    def validate_panel_url(cls, value: Optional[str]) -> Optional[str]:
+    def validate_panel_url(cls, value: str | None) -> str | None:
         validated = _validate_panel_url(value)
         return validated
 
     @field_validator("panel_hostname")
     @classmethod
-    def validate_panel_hostname(cls, value: Optional[str]) -> Optional[str]:
+    def validate_panel_hostname(cls, value: str | None) -> str | None:
         return _validate_panel_hostname(value)
 
 
@@ -1015,7 +1014,7 @@ class FirewallPortRule(BaseModel):
 
 class FirewallIpRule(BaseModel):
     ip: str = Field(min_length=3, max_length=64)
-    port: Optional[str] = Field(default=None, max_length=5)
+    port: str | None = Field(default=None, max_length=5)
     protocol: str = "tcp"
 
 
@@ -1048,7 +1047,7 @@ def _validate_backup_schedule(value: str) -> str:
 
 class UserBackupCreate(BaseModel):
     user_id: int
-    target_id: Optional[int] = None
+    target_id: int | None = None
 
 
 class UserRestoreBackup(BaseModel):
@@ -1056,11 +1055,11 @@ class UserRestoreBackup(BaseModel):
 
 
 class BackupScheduleCreate(BaseModel):
-    user_id: Optional[int] = None
+    user_id: int | None = None
     user_ids: list[int] = Field(default_factory=list)
     all_users: bool = False
     schedule: str = "0 2 * * *"
-    target_id: Optional[int] = None
+    target_id: int | None = None
     # What the stored file is called, and so how many of them pile up at the
     # far end. See backup_s3.stored_name.
     name_suffix: str = Field(default="full_date", pattern=r"^(none|day_of_week|week_of_month|full_date)$")
@@ -1089,10 +1088,10 @@ class BackupScheduleCreate(BaseModel):
 
 class BackupScheduleOut(BaseModel):
     id: int
-    user_id: Optional[int] = None
+    user_id: int | None = None
     user_ids: list[int] = Field(default_factory=list)
     all_users: bool = False
-    target_id: Optional[int] = None
+    target_id: int | None = None
     schedule: str
     # The list shows what each schedule appends, so it has to come back out.
     # Without it item.name_suffix was undefined in the panel and every
@@ -1100,7 +1099,7 @@ class BackupScheduleOut(BaseModel):
     name_suffix: str = "full_date"
     retention: int
     is_active: bool
-    last_run_at: Optional[datetime] = None
+    last_run_at: datetime | None = None
     last_status: str
     last_message: str = ""
 
@@ -1128,7 +1127,7 @@ class BulkRestoreItem(BaseModel):
     source: str = Field(default="local", pattern=r"^(local|s3)$")
     name: str = Field(min_length=1, max_length=255)
     key: str = Field(default="", max_length=1024)
-    target_id: Optional[int] = None
+    target_id: int | None = None
 
     @field_validator("name")
     @classmethod
@@ -1167,20 +1166,20 @@ class SftpBackupTargetCreate(BaseModel):
     kind: str = Field(default="sftp", pattern=r"^(sftp|s3)$")
 
     # S3 and anything that speaks its API
-    endpoint: Optional[str] = Field(default=None, max_length=255)
-    region: Optional[str] = Field(default=None, max_length=64)
-    bucket: Optional[str] = Field(default=None, max_length=255)
-    access_key: Optional[str] = Field(default=None, max_length=255)
-    secret_key: Optional[str] = Field(default=None, max_length=4096)
-    prefix: Optional[str] = Field(default=None, max_length=255)
+    endpoint: str | None = Field(default=None, max_length=255)
+    region: str | None = Field(default=None, max_length=64)
+    bucket: str | None = Field(default=None, max_length=255)
+    access_key: str | None = Field(default=None, max_length=255)
+    secret_key: str | None = Field(default=None, max_length=4096)
+    prefix: str | None = Field(default=None, max_length=255)
     secure: bool = True
 
     # SFTP. Defaulted so an S3 payload need not carry them at all.
     host: str = Field(default="", max_length=255)
     port: int = Field(default=22, ge=1, le=65535)
     username: str = Field(default="", max_length=128)
-    password: Optional[str] = Field(default=None, max_length=4096)
-    private_key: Optional[str] = Field(default=None, max_length=20000)
+    password: str | None = Field(default=None, max_length=4096)
+    private_key: str | None = Field(default=None, max_length=20000)
     remote_path: str = Field(default="/backups/bpanel", min_length=1, max_length=500)
 
     @field_validator("host")
@@ -1251,19 +1250,19 @@ class SftpBackupTargetOut(BaseModel):
     id: int
     name: str
     kind: str = "sftp"
-    endpoint: Optional[str] = None
-    region: Optional[str] = None
-    bucket: Optional[str] = None
-    access_key: Optional[str] = None
-    prefix: Optional[str] = None
+    endpoint: str | None = None
+    region: str | None = None
+    bucket: str | None = None
+    access_key: str | None = None
+    prefix: str | None = None
     secure: bool = True
     host: str = ""
     port: int = 22
     username: str = ""
     remote_path: str = ""
     is_active: bool
-    host_key_type: Optional[str] = None
-    host_key_fingerprint: Optional[str] = None
+    host_key_type: str | None = None
+    host_key_fingerprint: str | None = None
 
     class Config:
         from_attributes = True
@@ -1340,10 +1339,10 @@ class DaBulkImportRequest(BaseModel):
 class ProvisioningAccountCreate(BaseModel):
     external_id: str = Field(min_length=1, max_length=255)
     username: str = Field(min_length=3, max_length=32, pattern=r"^[a-z_][a-z0-9_-]{2,31}$")
-    email: Optional[EmailStr] = None
+    email: EmailStr | None = None
     password: str = Field(min_length=12, max_length=72)
     package_id: int = Field(ge=1)
-    domain: Optional[str] = None
+    domain: str | None = None
     php_version: str = "8.4"
     app_type: Literal["wordpress", "php", "static"] = "php"
     install_wordpress: bool = False
@@ -1358,7 +1357,7 @@ class ProvisioningAccountCreate(BaseModel):
 
     @field_validator("domain")
     @classmethod
-    def validate_domain(cls, value: Optional[str]) -> Optional[str]:
+    def validate_domain(cls, value: str | None) -> str | None:
         if value is None:
             return None
         value = value.strip().lower()
@@ -1385,13 +1384,13 @@ class ProvisioningAccountOut(BaseModel):
     # panel user it pointed at.
     username: str = ""
     email: str = ""
-    domain: Optional[str] = None
-    package_id: Optional[int] = None
-    package_name: Optional[str] = None
-    service_label: Optional[str] = None
+    domain: str | None = None
+    package_id: int | None = None
+    package_name: str | None = None
+    service_label: str | None = None
     status: str
-    panel_url: Optional[str] = None
-    created_at: Optional[datetime] = None
+    panel_url: str | None = None
+    created_at: datetime | None = None
 
     class Config:
         from_attributes = True
@@ -1416,8 +1415,8 @@ class ApiTokenOut(BaseModel):
     scopes: str
     allowed_ips: str
     is_active: bool
-    last_used_at: Optional[datetime] = None
-    created_at: Optional[datetime] = None
+    last_used_at: datetime | None = None
+    created_at: datetime | None = None
 
     class Config:
         from_attributes = True
@@ -1429,7 +1428,7 @@ class ApiTokenCreatedResponse(BaseModel):
 class ProvisioningUsageOut(BaseModel):
     external_id: str
     storage_used_bytes: int
-    storage_limit_bytes: Optional[int] = None
+    storage_limit_bytes: int | None = None
     storage_percent: float
     website_count: int
     database_count: int
@@ -1461,8 +1460,8 @@ class McpTokenOut(BaseModel):
     prefix: str
     can_write: bool
     expires_at: datetime
-    last_used_at: Optional[datetime] = None
-    revoked_at: Optional[datetime] = None
+    last_used_at: datetime | None = None
+    revoked_at: datetime | None = None
     created_at: datetime
     expired: bool = False
 

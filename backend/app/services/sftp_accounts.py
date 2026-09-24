@@ -35,7 +35,6 @@ from __future__ import annotations
 import hashlib
 import re
 from pathlib import PurePosixPath
-from typing import Optional
 
 from app.services import site_users
 from app.services.shell import shell
@@ -170,7 +169,7 @@ def delete_account(linux_user: str) -> None:
     )
 
 
-def connection_hint(linux_user: str, domain: str, host: Optional[str] = None) -> dict:
+def connection_hint(linux_user: str, domain: str, host: str | None = None) -> dict:
     """What the customer needs to type into an SFTP client.
 
     The path is what they land in: the chroot holds one directory, named after

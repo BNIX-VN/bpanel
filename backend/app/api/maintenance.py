@@ -1,14 +1,13 @@
 import json
 import logging
 import os
-import threading
 import tarfile
+import threading
 import uuid
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import FileResponse
@@ -21,15 +20,15 @@ from app.core.permissions import Role, ensure_role, is_admin_role
 from app.core.secrets import decrypt, encrypt
 from app.models.entities import BackupSchedule, DatabaseAccount, SftpBackupTarget, SiteApp, User, Website
 from app.schemas.schemas import (
-    BulkRestoreRequest,
+    BackupCreate,
     BackupScheduleCreate,
     BackupScheduleOut,
-    BackupCreate,
+    BulkRestoreRequest,
     CronCreate,
     CronDelete,
     DaBulkImportRequest,
-    PhpConfigUpdate,
     PhpConfigRestore,
+    PhpConfigUpdate,
     PhpOpcacheToggle,
     RestoreBackup,
     SftpBackupRun,
@@ -39,7 +38,18 @@ from app.schemas.schemas import (
     UserRestoreBackup,
     WpAction,
 )
-from app.services import addons, backup, backup_s3, cron, file_manager, php, site_apps, site_users, storage_quota, wordpress
+from app.services import (
+    addons,
+    backup,
+    backup_s3,
+    cron,
+    file_manager,
+    php,
+    site_apps,
+    site_users,
+    storage_quota,
+    wordpress,
+)
 from app.services.audit import log_action
 
 router = APIRouter(prefix="/maintenance", tags=["maintenance"])
@@ -59,63 +69,63 @@ _backup_jobs_lock = threading.Lock()
 
 class FileWrite(BaseModel):
     # Exactly one of these picks the tree to work in.
-    website_id: Optional[int] = None
-    app_id: Optional[int] = None
+    website_id: int | None = None
+    app_id: int | None = None
     path: str
     content: str
 
 
 class FileMkdir(BaseModel):
     # Exactly one of these picks the tree to work in.
-    website_id: Optional[int] = None
-    app_id: Optional[int] = None
+    website_id: int | None = None
+    app_id: int | None = None
     path: str = site_users.PUBLIC_DIR
     name: str
 
 
 class FileCreate(BaseModel):
     # Exactly one of these picks the tree to work in.
-    website_id: Optional[int] = None
-    app_id: Optional[int] = None
+    website_id: int | None = None
+    app_id: int | None = None
     path: str = ""
     name: str
 
 
 class FileRename(BaseModel):
     # Exactly one of these picks the tree to work in.
-    website_id: Optional[int] = None
-    app_id: Optional[int] = None
+    website_id: int | None = None
+    app_id: int | None = None
     path: str
     new_name: str
 
 
 class FileChmod(BaseModel):
     # Exactly one of these picks the tree to work in.
-    website_id: Optional[int] = None
-    app_id: Optional[int] = None
+    website_id: int | None = None
+    app_id: int | None = None
     path: str
     mode: str
 
 
 class FileBulkDelete(BaseModel):
     # Exactly one of these picks the tree to work in.
-    website_id: Optional[int] = None
-    app_id: Optional[int] = None
+    website_id: int | None = None
+    app_id: int | None = None
     paths: list[str]
 
 
 class FileTransfer(BaseModel):
     # Exactly one of these picks the tree to work in.
-    website_id: Optional[int] = None
-    app_id: Optional[int] = None
+    website_id: int | None = None
+    app_id: int | None = None
     paths: list[str]
     destination_path: str = site_users.PUBLIC_DIR
 
 
 class FileArchive(BaseModel):
     # Exactly one of these picks the tree to work in.
-    website_id: Optional[int] = None
-    app_id: Optional[int] = None
+    website_id: int | None = None
+    app_id: int | None = None
     base_path: str = site_users.PUBLIC_DIR
     paths: list[str]
     output_name: str = ""
@@ -124,8 +134,8 @@ class FileArchive(BaseModel):
 
 class FileExtract(BaseModel):
     # Exactly one of these picks the tree to work in.
-    website_id: Optional[int] = None
-    app_id: Optional[int] = None
+    website_id: int | None = None
+    app_id: int | None = None
     archive_path: str
     destination_path: str = ""
 
@@ -674,7 +684,7 @@ def delete_backup(website_id: int, backup_file: str, db: Session = Depends(get_d
     website = get_owned_website(db, current_user, website_id)
     try:
         deleted = backup.delete_backup(website.domain, backup_file)
-    except FileNotFoundError as exc:
+    except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Backup not found")
     log_action(db, current_user.id, "delete_backup", website.domain, deleted)
     return {"deleted": deleted}
@@ -951,7 +961,7 @@ def create_sftp_target(
 
 @router.get("/restore-catalogue")
 def restore_catalogue(
-    target_id: Optional[int] = None,
+    target_id: int | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):

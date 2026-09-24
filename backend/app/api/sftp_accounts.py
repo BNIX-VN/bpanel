@@ -11,7 +11,6 @@ answers 404 rather than 403, so this cannot be used to enumerate website ids.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
@@ -31,11 +30,11 @@ class SftpAccountCreate(BaseModel):
     website_id: int
     label: str = Field(min_length=2, max_length=32)
     # Optional: when absent the panel generates one and returns it once.
-    password: Optional[str] = None
+    password: str | None = None
 
 
 class SftpAccountPasswordUpdate(BaseModel):
-    password: Optional[str] = None
+    password: str | None = None
 
 
 class SftpAccountOut(BaseModel):
@@ -48,8 +47,8 @@ class SftpAccountOut(BaseModel):
     port: int
     path: str
     is_active: bool
-    created_at: Optional[datetime] = None
-    password_set_at: Optional[datetime] = None
+    created_at: datetime | None = None
+    password_set_at: datetime | None = None
 
 
 def _sftp_host() -> str:
@@ -119,7 +118,7 @@ def _out(account: SftpAccount, domain: str, host: str) -> SftpAccountOut:
 
 @router.get("", response_model=list[SftpAccountOut])
 def list_accounts(
-    website_id: Optional[int] = Query(default=None),
+    website_id: int | None = Query(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):

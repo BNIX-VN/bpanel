@@ -12,6 +12,7 @@ has no session to hand.
 
 import json
 import os
+from datetime import UTC
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
@@ -133,13 +134,13 @@ def state() -> list[dict]:
 
 def install(slug: str) -> dict:
     entry = known(slug)
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     data = _read()
     data[slug] = {
         "installed": True,
         "version": entry["version"],
-        "installed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "installed_at": datetime.now(UTC).isoformat(timespec="seconds"),
     }
     _write(data)
     return data[slug]

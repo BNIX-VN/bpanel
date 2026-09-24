@@ -25,12 +25,10 @@ thing doing the deleting is the machine that might be compromised.
 
 from __future__ import annotations
 
-import io as _io
 import os
 import re
 from datetime import date, datetime
 from pathlib import Path
-from typing import Optional
 
 # Local archives are named "<stem>-<YYYYMMDDHHMMSS>.tar.gz"; the stem is the
 # account or domain and is what a rotating name is built from.
@@ -56,7 +54,7 @@ def week_of_month(when: date) -> int:
     return min(5, (when.day - 1) // 7 + 1)
 
 
-def stored_name(local_name: str, mode: str, *, when: Optional[datetime] = None) -> str:
+def stored_name(local_name: str, mode: str, *, when: datetime | None = None) -> str:
     """What to call this archive at the far end.
 
     Takes the local file name, strips the timestamp the panel puts on every
@@ -84,7 +82,7 @@ def stored_name(local_name: str, mode: str, *, when: Optional[datetime] = None) 
     return f"{stem}{suffix}.tar.gz"
 
 
-def object_key(prefix: Optional[str], name: str) -> str:
+def object_key(prefix: str | None, name: str) -> str:
     """Join a bucket prefix to a file name without inventing a leading slash."""
     clean = (prefix or "").strip().strip("/")
     return f"{clean}/{name}" if clean else name
@@ -159,7 +157,7 @@ def check(target) -> dict:
     return {"ok": True, "bucket": target.bucket, "endpoint": target.endpoint}
 
 
-def upload(target, local_file: str, *, remote_name: Optional[str] = None) -> dict:
+def upload(target, local_file: str, *, remote_name: str | None = None) -> dict:
     """Put one archive in the bucket. Returns where it landed."""
     path = Path(local_file).resolve()
     if not path.is_file():

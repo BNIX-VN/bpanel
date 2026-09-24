@@ -3,8 +3,8 @@ import pytest
 from fastapi import HTTPException
 
 from app.core import step_up
-from app.core.security import hash_password
 from app.core.secrets import encrypt
+from app.core.security import hash_password
 from app.models.entities import User
 
 

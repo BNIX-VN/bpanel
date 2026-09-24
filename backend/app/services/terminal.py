@@ -11,13 +11,12 @@ import re
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Set
 
 from app.services import site_users
 from app.services.shell import shell
 
 # Toolchains a PHP / WordPress / Laravel site actually needs.
-RUNTIME_COMMANDS: Set[str] = {
+RUNTIME_COMMANDS: set[str] = {
     "php",
     "composer",
     "artisan",
@@ -32,7 +31,7 @@ RUNTIME_COMMANDS: Set[str] = {
 
 # General file and text utilities. These are the ones the helper path-checks,
 # so every path argument has to resolve inside the site owner's home.
-UTILITY_COMMANDS: Set[str] = {
+UTILITY_COMMANDS: set[str] = {
     "ls",
     "cat",
     "mkdir",
@@ -66,7 +65,7 @@ UTILITY_COMMANDS: Set[str] = {
 }
 
 # Commands that report state and never touch a caller-supplied path.
-INFO_COMMANDS: Set[str] = {
+INFO_COMMANDS: set[str] = {
     "pwd",
     "echo",
     "cd",
@@ -84,7 +83,7 @@ INFO_COMMANDS: Set[str] = {
 
 # Whitelist of allowed commands for terminal access. This mirrors the case
 # statement in bpanel-helper.sh `terminal-exec`; keep both in sync.
-ALLOWED_COMMANDS: Set[str] = RUNTIME_COMMANDS | UTILITY_COMMANDS | INFO_COMMANDS
+ALLOWED_COMMANDS: set[str] = RUNTIME_COMMANDS | UTILITY_COMMANDS | INFO_COMMANDS
 
 # Maximum command line length. This keeps accidental paste storms out of the
 # helper boundary while still leaving plenty of room for Composer/NPM flags.
@@ -99,7 +98,7 @@ MAX_OUTPUT_BYTES = 1024 * 1024
 DEFAULT_TIMEOUT = 60
 LONG_RUNNING_TIMEOUT = 900
 MAX_TIMEOUT = 1800
-LONG_RUNNING_COMMANDS: Set[str] = {
+LONG_RUNNING_COMMANDS: set[str] = {
     "composer",
     "npm",
     "npx",
@@ -216,9 +215,9 @@ def _truncate_output(output: str, max_bytes: int = MAX_OUTPUT_BYTES) -> str:
 def exec_command(
     linux_user: str,
     command: str,
-    cwd: Optional[str] = None,
-    timeout: Optional[int] = None,
-    php_version: Optional[str] = None,
+    cwd: str | None = None,
+    timeout: int | None = None,
+    php_version: str | None = None,
 ) -> CommandResult:
     """Execute a command as the website user.
 
@@ -292,9 +291,9 @@ def exec_command(
 def exec_batch(
     linux_user: str,
     commands: list[str],
-    cwd: Optional[str] = None,
-    timeout: Optional[int] = None,
-    php_version: Optional[str] = None,
+    cwd: str | None = None,
+    timeout: int | None = None,
+    php_version: str | None = None,
 ) -> list[CommandResult]:
     """Execute multiple commands sequentially.
 

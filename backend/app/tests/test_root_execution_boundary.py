@@ -20,8 +20,8 @@ update; and the recreate guard only fires when .venv/bin/uvicorn is missing,
 which on a healthy install it never is.
 """
 
-from pathlib import Path
 import re
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 INSTALL_SCRIPT = PROJECT_ROOT / "installer" / "install.sh"

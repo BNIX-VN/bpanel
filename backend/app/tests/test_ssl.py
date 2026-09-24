@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -15,7 +15,7 @@ HELPER_SCRIPT = Path(__file__).resolve().parents[3] / "installer" / "files" / "b
 def _cert_pair(domain="example.test", *, days=30, key=None, aliases=None):
     key = key or rsa.generate_private_key(public_exponent=65537, key_size=2048)
     subject = issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, domain)])
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     san_names = [x509.DNSName(domain)]
     for alias in aliases or []:
         san_names.append(x509.DNSName(alias))

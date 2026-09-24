@@ -1,8 +1,8 @@
 import pyotp
 from fastapi import HTTPException, status
 
-from app.core.security import verify_password
 from app.core.secrets import decrypt
+from app.core.security import verify_password
 from app.models.entities import User
 
 

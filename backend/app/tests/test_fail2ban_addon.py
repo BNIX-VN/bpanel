@@ -409,7 +409,6 @@ def test_a_failed_install_answers_with_the_reason_not_a_500():
     fail2ban", "a test ban never reached iptables - check banaction in ..." -
     and the endpoint threw it away by letting the RuntimeError escape.
     """
-    from app.api import addons as addons_api
 
     source = (PROJECT_ROOT / "backend" / "app" / "api" / "addons.py").read_text(encoding="utf-8")
     block = source.split("if slug == addons.FAIL2BAN:")[1].split("record = addons.install")[0]

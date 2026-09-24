@@ -26,7 +26,6 @@ import base64
 import json
 import secrets
 from datetime import datetime
-from typing import Optional
 
 from webauthn import (
     generate_authentication_options,
@@ -232,7 +231,7 @@ def verify_authentication(
     return new_count
 
 
-def credential_id_from(credential_json: str) -> Optional[str]:
+def credential_id_from(credential_json: str) -> str | None:
     """The id the browser says it used, so the row can be looked up.
 
     Only used to find the stored public key. Nothing is trusted about it: the

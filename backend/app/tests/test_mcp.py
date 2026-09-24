@@ -17,15 +17,14 @@ import pytest
 
 from app.core.permissions import Role
 from app.models.entities import McpToken, User
-from app.services import file_manager
-from app.services import mcp
+
 # At module scope on purpose. The tools register themselves into mcp.REGISTRY
 # when this is first imported, and several tests below swap that dict for an
 # empty one. If the first import happened inside one of those, every real tool
 # would register into the temporary dict and vanish when it was restored -
 # leaving the registry tests passing against nothing, which is the worst way
 # for this to fail.
-from app.services import mcp_tools
+from app.services import file_manager, mcp, mcp_tools
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 HELPER_SCRIPT_MCP = PROJECT_ROOT / "installer" / "files" / "bpanel-helper.sh"

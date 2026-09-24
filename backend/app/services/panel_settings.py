@@ -15,7 +15,6 @@ from app.core.config import settings
 from app.services import panel_ipv6, server_network
 from app.services.shell import shell
 
-
 SETTINGS_DIR = Path(os.environ.get("BPANEL_DATA_DIR", "/var/lib/bpanel"))
 SETTINGS_FILE = SETTINGS_DIR / "panel-settings.json"
 ASSETS_DIR = SETTINGS_DIR / "assets"

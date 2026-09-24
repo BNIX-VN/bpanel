@@ -222,7 +222,7 @@ def test_only_reachable_addresses_are_reported(monkeypatch):
     class _Result:
         returncode = 0
         stdout = (
-            "1: lo    inet 127.0.0.1/8 scope host lo\  valid_lft forever\n"
+            "1: lo    inet 127.0.0.1/8 scope host lo\\  valid_lft forever\n"
             "2: eth0    inet 64.118.132.44/22 brd 64.118.135.255 scope global eth0\n"
             "2: eth0    inet6 fe80::f843:38ff:fef7:9a00/64 scope link\n"
             "2: eth0    inet6 2404:c140:1f00:32::1e:c2e/64 scope global\n"

@@ -7,7 +7,27 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import addons as addons_api, auth, databases, fail2ban as fail2ban_api, firewall, maintenance, malware, mcp as mcp_api, packages, panel_settings as panel_settings_api, provisioning, services, sftp_accounts as sftp_accounts_api, site_apps as site_apps_api, terminal, updates, users, waf, websites
+from app.api import addons as addons_api
+from app.api import (
+    auth,
+    databases,
+    firewall,
+    maintenance,
+    malware,
+    packages,
+    provisioning,
+    services,
+    terminal,
+    updates,
+    users,
+    waf,
+    websites,
+)
+from app.api import fail2ban as fail2ban_api
+from app.api import mcp as mcp_api
+from app.api import panel_settings as panel_settings_api
+from app.api import sftp_accounts as sftp_accounts_api
+from app.api import site_apps as site_apps_api
 from app.core.config import settings
 from app.core.database import run_migrations
 from app.core.version import APP_VERSION

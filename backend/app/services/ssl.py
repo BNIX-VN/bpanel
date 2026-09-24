@@ -1,16 +1,15 @@
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import BinaryIO
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec, ed25519, ed448, padding, rsa
+from cryptography.hazmat.primitives.asymmetric import ec, ed448, ed25519, padding, rsa
 from cryptography.x509.oid import ExtensionOID, NameOID
 
 from app.core.config import settings
 from app.services.shell import CommandResult, shell
-
 
 MAX_SSL_PART_BYTES = 256 * 1024
 ALLOWED_SSL_EXTENSIONS = {".crt", ".pem", ".key", ".ca"}
@@ -457,7 +456,7 @@ def _load_private_key(raw: bytes):
 
 
 def _validate_certificate_time(cert) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     not_before = cert.not_valid_before_utc
     not_after = cert.not_valid_after_utc
     if now < not_before:

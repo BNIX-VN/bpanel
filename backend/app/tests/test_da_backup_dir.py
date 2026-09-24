@@ -10,8 +10,6 @@ write one.
 
 from pathlib import Path
 
-import pytest
-
 from app.services import da_import
 from app.services.shell import CommandResult
 

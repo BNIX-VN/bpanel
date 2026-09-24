@@ -25,8 +25,8 @@ import os
 import ssl
 import threading
 import time
+from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import Callable, Iterable
 
 logger = logging.getLogger("bpanel.sni")
 

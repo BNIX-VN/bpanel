@@ -1,10 +1,8 @@
 import json
 import os
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Optional
-
 
 TOKEN_TTL_SECONDS = 60
 PANEL_LOGIN_TTL_SECONDS = 300
@@ -30,7 +28,7 @@ def _create_token(data: dict, ttl_seconds: int) -> str:
     TOKEN_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
     token_path = _token_path(token)
     payload_data = dict(data)
-    payload_data["expires_at"] = (datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)).isoformat()
+    payload_data["expires_at"] = (datetime.now(UTC) + timedelta(seconds=ttl_seconds)).isoformat()
     payload = json.dumps(payload_data)
     # Atomic create with mode 0o600 from the start. O_EXCL prevents symlink
     # racing — if a file already exists at that path (collision or attack),
@@ -48,21 +46,21 @@ def _create_token(data: dict, ttl_seconds: int) -> str:
     return token
 
 
-def consume_phpmyadmin_token(token: str) -> Optional[dict]:
+def consume_phpmyadmin_token(token: str) -> dict | None:
     data = _consume_token(token)
     if not data or data.get("kind", "phpmyadmin") != "phpmyadmin":
         return None
     return data
 
 
-def consume_panel_login_token(token: str) -> Optional[dict]:
+def consume_panel_login_token(token: str) -> dict | None:
     data = _consume_token(token)
     if not data or data.get("kind") != "panel_login":
         return None
     return data
 
 
-def _consume_token(token: str) -> Optional[dict]:
+def _consume_token(token: str) -> dict | None:
     cleanup_expired_tokens()
     try:
         token_path = _token_path(token)
@@ -83,7 +81,7 @@ def _consume_token(token: str) -> Optional[dict]:
         expires_at = datetime.fromisoformat(data["expires_at"])
     except (ValueError, KeyError, TypeError):
         return None
-    if expires_at < datetime.now(timezone.utc):
+    if expires_at < datetime.now(UTC):
         return None
     return data
 
@@ -91,7 +89,7 @@ def _consume_token(token: str) -> Optional[dict]:
 def cleanup_expired_tokens() -> None:
     if not TOKEN_DIR.exists():
         return
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for token_path in TOKEN_DIR.glob("*.json"):
         try:
             data = json.loads(token_path.read_text(encoding="utf-8"))

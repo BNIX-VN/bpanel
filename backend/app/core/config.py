@@ -1,7 +1,6 @@
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
 
-
 DEFAULT_SECRET_KEY = "change-this-secret-key"
 
 

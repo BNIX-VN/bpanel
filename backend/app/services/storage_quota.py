@@ -9,7 +9,6 @@ from sqlalchemy.orm import Session
 from app.core.permissions import is_admin_role
 from app.models.entities import SiteApp, User, Website
 
-
 BYTES_PER_MB = 1024 * 1024
 STATIC_SITE_ESTIMATE_BYTES = 1 * BYTES_PER_MB
 WORDPRESS_SITE_ESTIMATE_BYTES = 100 * BYTES_PER_MB

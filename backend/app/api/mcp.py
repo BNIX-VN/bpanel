@@ -13,7 +13,6 @@ token is ever examined.
 """
 
 from datetime import datetime, timedelta
-from typing import Optional
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -25,9 +24,13 @@ from app.core.database import get_db
 from app.core.permissions import Role, ensure_role, is_admin_role
 from app.models.entities import McpToken, User
 from app.schemas.schemas import McpTokenCreate, McpTokenCreated, McpTokenOut
-from app.services import addons, mcp
+
 # Imported for the side effect: importing it is what registers the tools.
-from app.services import mcp_tools  # noqa: F401
+from app.services import (
+    addons,
+    mcp,
+    mcp_tools,  # noqa: F401
+)
 from app.services.audit import log_action
 
 router = APIRouter(prefix="/mcp", tags=["mcp"])

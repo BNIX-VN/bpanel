@@ -8,10 +8,10 @@ import re
 import socket
 import threading
 import urllib.request
-from datetime import datetime, timezone
+from collections.abc import Iterable
+from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Iterable
 from urllib.parse import urlparse
 
 from app.core.config import settings
@@ -764,7 +764,7 @@ def _geoip_country_reader():
 
 
 def _dbip_country_url(now: datetime | None = None) -> str:
-    current = now or datetime.now(timezone.utc)
+    current = now or datetime.now(UTC)
     template = (settings.geoip_dbip_country_url or "").strip()
     if not template:
         return ""
@@ -772,7 +772,7 @@ def _dbip_country_url(now: datetime | None = None) -> str:
 
 
 def _dbip_country_cache_path(now: datetime | None = None) -> Path:
-    current = now or datetime.now(timezone.utc)
+    current = now or datetime.now(UTC)
     cache_dir = Path((settings.geoip_dbip_cache_dir or "/var/lib/bpanel/geoip").strip())
     return cache_dir / DBIP_CACHE_BASENAME.format(year=f"{current.year:04d}", month=f"{current.month:02d}")
 
@@ -949,7 +949,7 @@ def _parse_access_log_line(domain: str, line: str, sequence: int) -> tuple[datet
     status_code = int(match.group("status"))
     method, path, protocol = _split_request(match.group("request"))
     timestamp = _parse_nginx_time(match.group("time"))
-    sort_time = timestamp or datetime.min.replace(tzinfo=timezone.utc)
+    sort_time = timestamp or datetime.min.replace(tzinfo=UTC)
     digest = hashlib.sha256(f"{domain}\0{sequence}\0{line}".encode("utf-8", errors="ignore")).hexdigest()[:16]
     ip = match.group("ip") or ""
     country = _lookup_ip_country(ip)
@@ -1094,7 +1094,7 @@ def access_logs(
         "verdict": safe_verdict,
         "query": (query or "").strip(),
         "missing": missing,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "cached": False,
     }
     if len(_ACCESS_LOG_CACHE) > 32:

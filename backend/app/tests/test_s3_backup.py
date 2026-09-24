@@ -351,7 +351,7 @@ def test_a_bad_name_is_refused_before_anything_touches_the_disk():
     def must_not_run(destination):
         raise AssertionError(f"validation let it through and staged {destination}")
 
-    for bad in ("../escape.tar.gz", "sub/dir.tar.gz", "..\escape.tar.gz",
+    for bad in ("../escape.tar.gz", "sub/dir.tar.gz", r"..\escape.tar.gz",
                 "/abs/path.tar.gz", "notanarchive.txt", ""):
         with pytest.raises(ValueError):
             backup.stage_remote_backup(must_not_run, bad)
