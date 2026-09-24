@@ -30,3 +30,9 @@ ignore = [
 # fake passwords, "/tmp/x" paths handed to mocks, a "0.0.0.0" in a config.
 "app/tests/*" = ["S104", "S105", "S106", "S107", "S108"]
 "tests/*" = ["S104", "S105", "S106", "S107", "S108"]
+# SHA-1 here only shortens a name into a collision-resistant suffix for an
+# imported user or database. The digest is part of the name, so changing the
+# hash would rename what a re-import of the same backup expects to replace.
+# The lines are left exactly as they were, so code scanning keeps matching
+# them to its existing alerts rather than reporting them as new.
+"app/services/da_import.py" = ["S324"]

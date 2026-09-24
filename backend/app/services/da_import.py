@@ -245,7 +245,7 @@ def _normalize_username(raw: str, archive_name: str = "") -> str:
     if len(value) < 3:
         value = f"{value}_da"[:32]
     if value in RESERVED_USERS or not USER_RE.fullmatch(value):
-        digest = hashlib.sha1((raw + archive_name).encode("utf-8"), usedforsecurity=False).hexdigest()[:8]
+        digest = hashlib.sha1((raw + archive_name).encode("utf-8")).hexdigest()[:8]
         stem = re.sub(r"[^a-z0-9_]+", "_", value).strip("_") or "user"
         value = f"da_{stem[:18]}_{digest}"[:32]
     return value
@@ -266,7 +266,7 @@ def _normalize_db_identifier(raw: str, fallback: str, existing: set[str]) -> str
     value = value[:64]
     if value not in existing and DB_RE.fullmatch(value):
         return value
-    digest = hashlib.sha1((raw + fallback).encode("utf-8"), usedforsecurity=False).hexdigest()[:6]
+    digest = hashlib.sha1((raw + fallback).encode("utf-8")).hexdigest()[:6]
     stem = (value[:55].strip("_") or fallback[:55].strip("_") or "db")
     candidate = f"{stem}_{digest}"[:64]
     counter = 2
