@@ -33,8 +33,6 @@ PART3 = {
         "Người dùng panel hiện có và giới hạn dịch vụ.",
     "Manage users, packages, and domain ownership.":
         "Quản lý người dùng, gói và quyền sở hữu tên miền.",
-    "Manage websites, databases, backups, SSL, and services.":
-        "Quản lý website, database, backup, SSL và dịch vụ.",
     "Create, edit, delete, and review reusable user limits.":
         "Tạo, sửa, xoá và xem lại các bộ giới hạn dùng chung.",
     "Panel username is also the Linux user. Login as a user before creating websites for that account.":

@@ -844,14 +844,19 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
         # the only extra question is whether their package includes the WAF.
         if not may_manage_waf(current_user):
             raise HTTPException(status_code=403, detail="Your hosting package does not include WAF settings")
+        # Set before the rule file is rendered: the renderer reads it to
+        # decide whether the site's own CRS opt-in loads, and rendering first
+        # wrote the old state - turning the WAF back on left CRS out.
+        previous = website.waf_enabled
+        website.waf_enabled = bool(payload.waf_enabled)
         try:
             result = waf.sync_website_rules(website)
             if result.returncode != 0:
                 raise RuntimeError(_command_error(result))
             nginx.update_waf_block(website.domain, payload.waf_enabled)
         except (RuntimeError, ValueError, FileNotFoundError) as exc:
+            website.waf_enabled = previous
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        website.waf_enabled = payload.waf_enabled
     if payload.http_flood_enabled is not None:
         ensure_role(current_user.role, Role.admin)
         next_enabled = bool(payload.http_flood_enabled)
@@ -936,14 +941,17 @@ def set_website_waf(website_id: int, payload: WebsiteWafUpdate, request: Request
     website = _get_authorized_website(db, website_id, current_user)
     if not may_manage_waf(current_user):
         raise HTTPException(status_code=403, detail="Your hosting package does not include WAF settings")
+    # Before the render, for the reason given in update_website.
+    previous = website.waf_enabled
+    website.waf_enabled = bool(payload.waf_enabled)
     try:
         result = waf.sync_website_rules(website)
         if result.returncode != 0:
             raise RuntimeError(_command_error(result))
         nginx.update_waf_block(website.domain, payload.waf_enabled)
     except (RuntimeError, ValueError, FileNotFoundError) as exc:
+        website.waf_enabled = previous
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    website.waf_enabled = payload.waf_enabled
     db.commit()
     db.refresh(website)
     log_action(db, current_user.id, "update_waf", website.domain, "enabled" if payload.waf_enabled else "disabled", request=request)

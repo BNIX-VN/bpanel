@@ -33,7 +33,6 @@ PART1 = {
     "Access Logs": "Nhật ký truy cập",
     "Updates": "Cập nhật",
     "Addons": "Tiện ích",
-    "Services Status": "Trạng thái dịch vụ",
     "AI assistants (MCP)": "Trợ lý AI (MCP)",
     "API Tokens": "API Token",
     "SFTP accounts": "Tài khoản SFTP",

@@ -17,6 +17,7 @@ can only be spent once, and a counter that goes backwards is a cloned key.
 """
 
 import ast
+import re
 from pathlib import Path
 
 import pytest
@@ -482,3 +483,15 @@ def test_an_account_with_neither_still_signs_in_on_the_password(login_db, monkey
     _account(login_db)
     result = _attempt(login_db, "panel.example.com:2222")
     assert result.access_token
+
+
+def test_clicking_login_does_not_send_the_click_as_a_passkey():
+    """login(passkeyAssertion) was wired as onClick={login}, so React handed it
+    the click event: every click posted passkey=[object Object], and an account
+    without two-factor was refused with "This account has no second factor
+    configured". Only pressing Enter in a field - login() with no argument -
+    ever signed anyone in."""
+    app = (PROJECT_ROOT / "frontend" / "src" / "App.jsx").read_text(encoding="utf-8")
+    code = re.sub(r"\{/\*.*?\*/\}", "", app, flags=re.S)
+    assert "onClick={login}" not in code
+    assert "onClick={() => login()}" in code

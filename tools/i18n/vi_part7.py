@@ -22,13 +22,11 @@ PART7 = {
     "{n} domain(s)": "{n} tên miền",
     "{d} domain(s), {b} db(s)": "{d} tên miền, {b} database",
     "{n} failures seen": "đã thấy {n} lần thất bại",
-    "{n} site(s) opted in": "{n} website đã bật",
     "{n} service(s) will run.": "{n} service sẽ chạy.",
     "serves the domain.": "phục vụ tên miền này.",
     "{n} thing(s) to fix:": "{n} thứ cần sửa:",
     "{n} thing(s) to fix before importing:": "{n} thứ cần sửa trước khi nhập:",
     "{n} MB RAM free": "còn trống {n} MB RAM",
-    "nginx now: {n} MB": "nginx hiện tại: {n} MB",
     "({n} MB free)": "(còn trống {n} MB)",
 
     # --- users and files ---
@@ -64,10 +62,6 @@ PART7 = {
     "Alias serves the same app. Redirect sends visitors to {domain}.":
         "Alias phục vụ cùng một ứng dụng. Redirect chuyển khách sang {domain}.",
     "and BPanel rewrites it to": "và BPanel sẽ đổi thành",
-    " — the PHP {version} CLI this website is set to":
-        " — bản PHP {version} CLI mà website này đang đặt",
-    ", so the job never runs on the server default version. Change the website's PHP version and its cron jobs follow.":
-        ", nên lệnh sẽ không bao giờ chạy bằng phiên bản mặc định của server. Đổi phiên bản PHP của website thì các lệnh cron cũng đổi theo.",
 
     # --- DirectAdmin import ---
     "{user} - {n} website(s)": "{user} - {n} website",
@@ -87,14 +81,6 @@ PART7 = {
     "Save and apply to all {n} website(s)": "Lưu và áp dụng cho cả {n} website",
     'Panel setting says "{panel}" but the server reports "{server}".':
         'Cài đặt trong panel là "{panel}" nhưng server báo "{server}".',
-    "The WAF blocks known bad paths. OWASP CRS adds payload inspection — SQL injection, XSS, command injection — for this site, at roughly {n} MB of nginx memory.":
-        "WAF chặn các đường dẫn xấu đã biết. OWASP CRS thêm phần kiểm tra nội dung request — SQL injection, XSS, command injection — cho website này, tốn khoảng {n} MB bộ nhớ nginx.",
-    "This site is opted in, but CRS is switched off server-wide on the WAF page, so nothing is loaded.":
-        "Website này đã bật, nhưng CRS đang tắt ở mức toàn server tại trang WAF, nên không có gì được nạp.",
-    "Add SecRuleRemoveById <id> to the custom rules below to excuse this site from one CRS rule.":
-        "Thêm SecRuleRemoveById <id> vào phần rule tuỳ chỉnh bên dưới để miễn cho website này một rule của CRS.",
-    'Each site that loads CRS adds its own copy of the rule set, so the cost grows with the number opted in — roughly {n} MB each. "nginx now" above is measured on this server, not estimated, and it is the figure to act on; watch it and the free-RAM figure beside it as you opt sites in. Note that `ps` reports several times this, because it counts pages the nginx workers share once for each worker.':
-        'Mỗi website bật CRS sẽ nạp một bản rule set riêng, nên chi phí tăng theo số website đã bật — khoảng {n} MB mỗi website. Con số "nginx hiện tại" ở trên là đo thật trên server này, không phải ước lượng, và đó mới là số để quyết định; hãy theo dõi nó cùng số RAM còn trống bên cạnh khi bật thêm website. Lưu ý `ps` báo gấp vài lần con số này, vì nó tính các trang bộ nhớ mà các worker nginx dùng chung một lần cho mỗi worker.',
 
     # --- malware and passkeys ---
     "Level 2 running": "Lớp 2 đang chạy",

@@ -303,3 +303,33 @@ def test_shipped_rules_match_the_helper_copy():
 def test_unknown_rule_ids_are_rejected():
     with pytest.raises(ValueError, match="Unknown WAF rule"):
         waf.validate_enabled_rule_ids(["joomla-sensitive-files"])
+
+
+
+def test_the_waf_switch_leaves_the_crs_opt_in_alone():
+    """CRS is a per-site opt-in with its own switch on the site's WAF page
+    (operator, 2026-09-25); the WAF switch does not touch it, and the CRS
+    switch does not touch the WAF.
+
+    The WAF switch sets waf_enabled before the rule file is rendered. The
+    renderer reads it to decide whether the opt-in loads, and rendering first,
+    as the endpoints used to, wrote the old state: turning the WAF back on
+    left CRS out until some later sync.
+    """
+    api = Path(__file__).resolve().parents[1] / "api"
+    source = (api / "websites.py").read_text(encoding="utf-8")
+    assert ".crs_enabled =" not in source, "a WAF endpoint writes the CRS opt-in again"
+
+    switches = [fn for fn in source.split("\ndef ") if "nginx.update_waf_block(website.domain, payload.waf_enabled)" in fn]
+    assert len(switches) == 2, "both WAF endpoints are checked"
+    for fn in switches:
+        # update_website renders for other settings too; the render that
+        # matters is the one between this assignment and the vhost switch.
+        set_at = fn.index("website.waf_enabled = bool(payload.waf_enabled)")
+        render_at = fn.index("waf.sync_website_rules(website)", set_at)
+        switch_at = fn.index("nginx.update_waf_block(website.domain, payload.waf_enabled)")
+        assert render_at < switch_at, "the rules are rendered from the old state"
+
+    crs = (api / "waf.py").read_text(encoding="utf-8")
+    crs = crs.split('@router.put("/websites/{website_id}/crs")', 1)[1].split("\n@router", 1)[0]
+    assert "waf_enabled" not in crs, "the CRS switch moves the WAF again"

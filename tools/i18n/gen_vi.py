@@ -47,7 +47,12 @@ export const vi = {
 
 
 def js(value):
-    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    # Newlines and tabs are escaped, not emitted raw: a confirm() message with
+    # a blank line in it is a perfectly ordinary key, and a raw newline inside
+    # a double-quoted JS string is a syntax error that takes the whole panel
+    # down rather than just that one string.
+    escaped = (value.replace("\\", "\\\\").replace('"', '\\"')
+               .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t"))
     return f'"{escaped}"'
 
 

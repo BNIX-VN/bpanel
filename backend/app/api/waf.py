@@ -400,8 +400,10 @@ def set_website_crs(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    _require_admin(current_user)
-    website = _website_or_404(db, website_id)
+    # The site's own switch, on its WAF page: whoever may manage this site's
+    # WAF decides whether it loads CRS (operator, 2026-09-25). The server-wide
+    # mode stays admin-only, and while it is off nothing loads at all.
+    website = _owned_website(db, website_id, current_user)
     website.crs_enabled = bool(payload.enabled)
     db.add(website)
     db.commit()

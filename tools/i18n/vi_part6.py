@@ -37,24 +37,6 @@ PART6 = {
         "Bấm Xem nhật ký để tải nhật ký cập nhật.",
 
     # --- dashboard tile descriptions ---
-    "Files and databases": "File và database",
-    "Node and Docker apps": "Ứng dụng Node và Docker",
-    "Scheduled commands per website": "Lệnh hẹn giờ theo từng website",
-    "One login per website, separate from the panel password":
-        "Một tài khoản cho mỗi website, tách biệt với mật khẩu panel",
-    "Allowed and blocked addresses": "Địa chỉ được phép và bị chặn",
-    "Panel and system packages": "Gói của panel và của hệ thống",
-    "Optional features, off by default": "Tính năng tuỳ chọn, mặc định tắt",
-    "Tokens for Claude Code, Cursor and VS Code":
-        "Token cho Claude Code, Cursor và VS Code",
-    "The machine everything runs on": "Cỗ máy mà mọi thứ chạy trên đó",
-    "What stands between a site and the internet":
-        "Thứ đứng giữa website và internet",
-    "Who can sign in, and with what": "Ai đăng nhập được, và bằng gì",
-    "Protection for your websites. Open one to configure its rules and blocked bots.":
-        "Bảo vệ cho website của bạn. Mở một website để cấu hình rule và bot bị chặn.",
-    "Engine status and per-website protection. Open a website to configure its rules, flood limits and blocked bots.":
-        "Trạng thái engine và mức bảo vệ theo từng website. Mở một website để cấu hình rule, giới hạn chống dội và bot bị chặn.",
     "The parts that are not in a default install. Add what you need, remove what you do not — removing turns the feature off and deletes nothing it created.":
         "Những phần không có trong bản cài mặc định. Thêm cái cần, gỡ cái không cần — gỡ chỉ tắt tính năng, không xoá bất cứ thứ gì nó đã tạo ra.",
 
@@ -79,19 +61,10 @@ PART6 = {
     "Bans take effect": "Lệnh cấm có hiệu lực",
     "Bans NOT reaching iptables": "Lệnh cấm KHÔNG tới được iptables",
     "Seeing NO log": "KHÔNG thấy nhật ký",
-    "Enable the WAF first": "Hãy bật WAF trước",
-    "Nothing from CRS is loaded. Payload attacks are not inspected.":
-        "Không có gì từ CRS được nạp. Tấn công qua nội dung request không được kiểm tra.",
-    "Opted in, but CRS is off server-wide":
-        "Đã chọn dùng, nhưng CRS đang tắt ở mức toàn server",
-    "Run detect mode first and read the logs, or a legitimate request somebody depends on may be the one it stops.":
-        "Hãy chạy chế độ phát hiện trước và đọc nhật ký, kẻo thứ bị chặn lại là một request hợp lệ mà ai đó đang cần.",
     "Custom rules are arbitrary ModSecurity directives, so only an administrator can change them. Ask your provider if you need a rule added or excluded.":
         "Rule tuỳ chỉnh là chỉ thị ModSecurity tự do, nên chỉ quản trị viên được sửa. Hãy nhờ nhà cung cấp nếu bạn cần thêm hoặc loại trừ một rule.",
     "Blocked on every website on this server. A site can add more of its own from its page.":
         "Bị chặn trên mọi website của server này. Mỗi site có thể tự thêm bot riêng ở trang của nó.",
-    "Check the measured figure on this page afterwards rather than trusting the estimate.":
-        "Sau đó hãy xem số đo thật trên trang này thay vì tin vào con số ước lượng.",
 
     # --- nginx and applications ---
     "This is read-only. BPanel manages the main vhost template.":
@@ -181,9 +154,6 @@ PART6.update({
     # group headings
     "Accounts": "Tài khoản",
     "Server": "Máy chủ",
-    "Domains, certificates and scheduled jobs":
-        "Tên miền, chứng chỉ và lệnh hẹn giờ",
-    "Content, data and copies of both": "Nội dung, dữ liệu và bản sao của cả hai",
 
     # tile labels the dictionary had not reached
     "AI assistants": "Trợ lý AI",
@@ -191,23 +161,6 @@ PART6.update({
     "SSL": "SSL",
     "WAF": "WAF",
     "Fail2ban": "Fail2ban",
-    "Login security": "Bảo mật đăng nhập",
 
     # the line under each tile
-    "Domains, PHP version, document root": "Tên miền, phiên bản PHP, document root",
-    "Browse, edit and upload site files": "Xem, sửa và tải file của site lên",
-    "MariaDB users and phpMyAdmin": "User MariaDB và phpMyAdmin",
-    "Schedules, downloads and restores": "Lịch hẹn, tải về và khôi phục",
-    "Rules, bad bots and payload inspection":
-        "Rule, bot xấu và kiểm tra nội dung request",
-    "SSH ban list, and how long each ban lasts":
-        "Danh sách cấm SSH, và mỗi lệnh cấm kéo dài bao lâu",
-    "Scan schedules and findings": "Lịch quét và kết quả tìm được",
-    "Who reached which site, and the verdict":
-        "Ai đã vào site nào, và kết quả xử lý",
-    "nginx, PHP, MariaDB, Redis": "nginx, PHP, MariaDB, Redis",
-    "Versions, limits and extensions": "Phiên bản, giới hạn và extension",
-    "Two-factor and session settings": "Cài đặt xác thực hai lớp và phiên",
-    "Customers, packages and quotas": "Khách hàng, gói và hạn mức",
-    "Panel name, URL, branding": "Tên panel, URL, nhận diện",
 })

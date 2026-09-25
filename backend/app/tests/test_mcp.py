@@ -1146,69 +1146,37 @@ def test_revoking_asks_first():
     assert "window.confirm" in block
 
 
-def test_the_page_is_on_the_dashboard_map_too():
-    """The defect this catches: in the sidebar, absent from the dashboard.
+def test_the_page_is_in_the_sidebar_and_the_sidebar_is_not_folded():
+    """The defect this caught: the MCP page sat behind a Settings group that
+    was collapsed by default, and the operator could not find it - reported
+    from a real panel on .88 where the code was deployed and working.
 
-    renderDashboard says of itself that it is "a map of the panel... every tile
-    opens a page that already exists in the sidebar". The MCP page was added to
-    the sidebar only, behind a Settings group that is collapsed by default, and
-    the operator could not find it - reported from a real panel on .88 where
-    the code was deployed and working.
+    The dashboard carried a tile for every page to make up for that. The
+    sidebar now shows its three groups open, and the dashboard shows state
+    instead (operator, 2026-09-25), so the sidebar is the one map.
     """
-    tiles = APP_JSX.split("const groups = [")[1].split("\n    ]")[0]
-    assert "'mcp', 'AI assistants'" in tiles, (
-        "a page reachable only from a collapsed submenu is a page nobody finds"
-    )
-    assert "MsAiAssistants" in tiles, "the tile grid uses the Material Symbols set"
+    sidebar = APP_JSX.split("const navSections = [")[1].split("].filter(section")[0]
+    assert "['mcp', 'AI assistants', Bot]" in sidebar
+    assert "sidebar-subnav" not in APP_JSX and "settingsMenuOpen" not in APP_JSX
 
 
-def test_every_settings_page_is_also_a_dashboard_tile():
-    """The invariant, not just this instance.
-
-    A page in the sidebar and not on the map is findable only by someone who
-    already knows it exists, which is the opposite of what the map is for.
-    """
-    sidebar = APP_JSX.split("const settingsNavItems = [")[1].split("\n  ];")[0]
-    tiles = APP_JSX.split("const groups = [")[1].split("\n    ]")[0]
-    keys = set(__import__("re").findall(r"\['([a-z-]+)',", sidebar))
-    tiled = set(__import__("re").findall(r"\['([a-z-]+)',", tiles))
-    missing = sorted(keys - tiled)
-    assert not missing, f"in the sidebar but not on the dashboard: {missing}"
-
-
-def test_the_icon_is_a_real_glyph_and_not_invented_path_data():
-    """Path data cannot be guessed; a wrong one renders as a smear.
-
-    Taken from @material-symbols/svg-400, which is what the module's own
-    comment says to regenerate from, and checked against the viewBox the rest
-    of the set uses.
-    """
-    symbols = (PROJECT_ROOT / "frontend" / "src" / "MaterialSymbols.jsx").read_text(encoding="utf-8")
-    assert "export const MsAiAssistants = symbol(" in symbols
-    body = symbols.split("export const MsAiAssistants = symbol(\"")[1].split("\")")[0]
-    assert len(body) > 200, "too short to be a real glyph"
-    assert body.startswith("M"), "SVG path data starts with a moveto"
-    assert 'viewBox="0 -960 960 960"' in symbols
-
-
-def test_every_addon_has_a_way_in_from_the_dashboard():
+def test_every_addon_has_a_way_in_from_the_sidebar():
     """The operator's rule: an addon that is on must show on the map.
 
     Read from the backend catalogue rather than a list written here, so an
-    addon added later fails this until it has a tile. fail2ban was the one
-    missing it - it has no page of its own, its ban list being a section of the
-    Firewall page, and that had been treated as a reason for it to be invisible
-    rather than a reason for its tile to land on the Firewall page.
+    addon added later fails this until it has an entry. fail2ban has no page
+    of its own - its ban list is a section of the Firewall page - so its way
+    in is the Firewall entry.
     """
     from app.services import addons
 
-    tiles = APP_JSX.split("const groups = [")[1].split("\n    ]")[0]
+    sidebar = APP_JSX.split("const navSections = [")[1].split("].filter(section")[0]
     for slug in sorted(addons.CATALOGUE):
-        flag = {"application": "appsFeatureEnabled",
-                "fail2ban": "fail2banAddonInstalled",
-                "mcp": "mcpAddonInstalled"}.get(slug)
-        assert flag, f"addon {slug} has no dashboard gate named in this test"
-        assert flag in tiles, f"addon {slug} is installable but never appears on the dashboard"
+        way_in = {"application": "appsFeatureEnabled ? [['applications',",
+                  "fail2ban": "['firewall', 'Firewall', BrickWall]",
+                  "mcp": "mcpAddonInstalled || isAdmin ? [['mcp',"}.get(slug)
+        assert way_in, f"addon {slug} has no sidebar entry named in this test"
+        assert way_in in sidebar, f"addon {slug} is installable but has no way in from the sidebar"
 
 
 def test_the_client_snippets_carry_the_token_that_was_just_created():

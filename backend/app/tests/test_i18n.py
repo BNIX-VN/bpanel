@@ -77,8 +77,11 @@ def test_every_key_is_a_string_something_actually_shows():
     # t('Everyone else\'s tokens') in the source does not contain the raw
     # sentence, so compare against a copy with the escaping removed. Getting
     # this wrong reports five healthy entries as orphans, which is how it was
-    # found.
-    unescaped = APP.replace("\\'", "'").replace('\\"', '"')
+    # found. A confirm() dialog with a blank line in it is the same problem one
+    # character further on: the source spells the newline \n, the string the
+    # panel shows - and so the key - has a real one.
+    unescaped = (APP.replace("\\'", "'").replace('\\"', '"')
+                 .replace("\\n", "\n").replace("\\t", "\t"))
     orphans = [k for k in DICTIONARY if k not in unescaped and k not in api]
     assert not orphans, f"{len(orphans)} keys match nothing: {orphans[:10]}"
 
@@ -248,51 +251,29 @@ def test_the_terms_left_in_english_are_declared_not_guessed():
     """The list is what separates a decision from an oversight, so it has to be
     there and it has to be a list."""
     assert len(KEPT_IN_ENGLISH) > 20
-    for term in ("WAF", "Cron", "SSL", "nginx, PHP, MariaDB, Redis"):
+    for term in ("WAF", "Cron", "SSL", "Fail2ban"):
         assert term in KEPT_IN_ENGLISH, term
 
 
-@pytest.mark.parametrize("array,pattern", [
-    ("const groups = [", r"\['[a-z-]+', '([^']+)', Ms\w+, '([^']+)'\]"),
-])
-def test_every_dashboard_tile_reads_in_vietnamese(array, pattern):
-    """The tiles are the first Vietnamese a customer sees, and the audit that
-    found the rest of the interface could not see them at all.
+def test_every_string_the_overview_draws_reads_in_vietnamese():
+    """Every t('...') on the dashboard, not only the headings.
 
-    They live in an array and are translated where they are drawn, so no
-    t('...') wrapper appears near them - twenty-three of them sat in English
-    behind a screen that was otherwise translated, and nothing said so. The
-    only way to catch it is to read the array and ask the dictionary, which is
-    what this does.
-    """
-    body = APP.split(array)[1].split("\n    ]")[0]
-    missing = []
-    for match in re.findall(pattern, body):
-        for text in match:
-            if text not in DICTIONARY and text not in KEPT_IN_ENGLISH:
-                missing.append(text)
-    assert not missing, f"tiles still in English: {missing}"
+    Its status words sit beside a coloured dot - "Running", "Failed" - and one
+    left in English is the kind of gap nobody reports, because the dot still
+    says enough to get by."""
+    body = APP.split("function renderDashboard()")[1].split("function renderAdminOnly()")[0]
+    drawn = set(re.findall(r"t\('((?:[^'\\]|\\.)*)'", body))
+    assert len(drawn) > 25, f"only matched {len(drawn)} strings - the pattern missed some"
+    missing = sorted(text for text in drawn if text not in DICTIONARY and text not in KEPT_IN_ENGLISH)
+    assert not missing, f"overview strings still in English: {missing}"
 
 
-def test_every_dashboard_group_heading_reads_in_vietnamese():
-    body = APP.split("const groups = [")[1].split("\n    ]")[0]
-    missing = [
-        text
-        for pair in re.findall(r"title: '([^']+)',\s*\n\s*hint: '([^']+)'", body)
-        for text in pair
-        if text not in DICTIONARY and text not in KEPT_IN_ENGLISH
-    ]
-    assert not missing, f"group headings still in English: {missing}"
-
-
-@pytest.mark.parametrize("array", ["mainNavItems", "settingsNavItems"])
-def test_every_sidebar_entry_reads_in_vietnamese(array):
-    body = APP.split(f"const {array} = [")[1].split("\n  ];")[0]
-    missing = [
-        label for label in re.findall(r"\['[a-z-]+', '([^']+)'", body)
-        if label not in DICTIONARY and label not in KEPT_IN_ENGLISH
-    ]
-    assert not missing, f"{array} still in English: {missing}"
+def test_every_sidebar_entry_reads_in_vietnamese():
+    body = APP.split("const navSections = [")[1].split("].filter(section")[0]
+    labels = re.findall(r"\['[a-z-]+', '([^']+)'", body) + re.findall(r"title: '([^']+)'", body)
+    assert len(labels) > 15, labels
+    missing = [label for label in labels if label not in DICTIONARY and label not in KEPT_IN_ENGLISH]
+    assert not missing, f"sidebar still in English: {missing}"
 
 
 def test_the_interface_source_has_no_vietnamese_left_in_it():
@@ -325,3 +306,14 @@ def test_a_handful_of_api_messages_have_translations():
     for message in ("Website not found", "Invalid username or password",
                     "Cannot delete yourself", "Request failed."):
         assert message in DICTIONARY, message
+
+
+def test_a_translated_label_is_not_glued_to_its_value():
+    """"Hiện tạiv1.0.162", "Bộ nhớ server:7941 MB", "Trạng thái hiện tại:Disabled".
+
+    Wrapping "Current <strong>" in t() turned it into {t('Current')}<strong>,
+    and the space that used to sit in the JSX text went with it - on 32 lines,
+    in both languages. Outside a flex row nothing puts it back.
+    """
+    glued = re.findall(r"\{t\('(?:[^'\\]|\\.){1,80}'\)\}<(?:strong|b|code)>", APP)
+    assert not glued, f"{len(glued)} labels run into their value: {glued[:3]}"

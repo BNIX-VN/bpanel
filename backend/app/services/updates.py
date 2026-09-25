@@ -2,6 +2,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -132,6 +133,48 @@ def panel_release_status(force_refresh: bool = False) -> dict:
         "progress_message": state.get("progress_message") or "",
         "state_file": str(UPDATE_STATE_FILE),
     }
+
+
+DASHBOARD_CHECK_SECONDS = 6 * 3600
+_background_check = threading.Lock()
+
+
+def cached_release_summary() -> dict:
+    """Whether a panel update is waiting, from the last recorded check only.
+
+    For the dashboard: panel_release_status() runs git ls-remote when its
+    cache is stale, and opening the dashboard must not wait on the network.
+    A check older than DASHBOARD_CHECK_SECONDS is refreshed in the background
+    instead, so the answer is there the next time the dashboard opens even if
+    nobody visits the Updates page.
+    """
+    state = _read_update_state()
+    latest_version = state.get("latest_version") or ""
+    current_tuple = _semver_tuple(APP_VERSION)
+    latest_tuple = _semver_tuple(latest_version)
+    if time.time() - float(state.get("last_checked_epoch") or 0) > DASHBOARD_CHECK_SECONDS:
+        _refresh_in_background()
+    return {
+        "current_version": APP_VERSION,
+        "latest_version": latest_version or APP_VERSION,
+        "update_available": bool(current_tuple and latest_tuple and latest_tuple > current_tuple),
+        "last_checked_at": state.get("last_checked_at") or "",
+    }
+
+
+def _refresh_in_background() -> None:
+    # One check at a time, however many dashboards open while it runs.
+    if not _background_check.acquire(blocking=False):
+        return
+
+    def check():
+        # panel_release_status records a failed check in the state file itself.
+        try:
+            panel_release_status(force_refresh=True)
+        finally:
+            _background_check.release()
+
+    threading.Thread(target=check, name="bpanel-release-check", daemon=True).start()
 
 
 def _read_panel_update_log(max_lines: int = 100) -> list[str]:

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useLayoutEffect, useState, useCallback, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import ace from 'ace-builds/src-noconflict/ace';
 import 'ace-builds/src-noconflict/ext-language_tools';
@@ -13,24 +13,42 @@ import 'ace-builds/src-noconflict/mode-text';
 import 'ace-builds/src-noconflict/mode-yaml';
 import 'ace-builds/src-noconflict/theme-textmate';
 import 'ace-builds/src-noconflict/theme-tomorrow_night';
-import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle } from 'lucide-react';
-// Google's Material Symbols for the dashboard tiles, inlined locally.
-// Filled and rounded: an outline set at tile size reads thin, and these are
-// the icons the rest of the web has taught people to recognise.
-import {
-  MsWebsites, MsApplications, MsSsl, MsCron, MsFiles, MsDatabaseIcon, MsBackups,
-  MsWaf, MsFirewall, MsMalware, MsAccessLogs, MsLoginSecurity, MsServices,
-  MsPhpConfig, MsUpdates, MsAddons, MsPanelUsers, MsPanelSettings,
-  MsAiAssistants, MsFail2ban,
-} from './MaterialSymbols.jsx';
+import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle, Activity, BrickWall, Bug, LockKeyhole, PackageOpen, ScrollText, ShieldAlert, CheckCircle, Zap } from 'lucide-react';
 import { Terminal } from './components/Terminal';
 import { LANGUAGES, t, useLanguage } from './i18n.js';
 import './style.css';
 import './brand.css';
 import './file-manager.css';
 import './theme.css';
+// OPanel's layout layer, loaded last so it wins ties: navy sidebar in
+// groups, one account menu, one blue button per task.
+import './ui.css';
 
 const API = import.meta.env.VITE_API_URL || '/api';
+// Schedules offered by name; anything else is "Custom". A cron expression is
+// the one field most people get wrong, so it is picked rather than typed.
+const CRON_SCHEDULE_PRESETS = [
+  ['* * * * *', 'Every minute'],
+  ['*/5 * * * *', 'Every 5 minutes'],
+  ['*/15 * * * *', 'Every 15 minutes'],
+  ['*/30 * * * *', 'Every 30 minutes'],
+  ['0 * * * *', 'Every hour'],
+  ['0 */6 * * *', 'Every 6 hours'],
+  ['0 0 * * *', 'Every day at 00:00'],
+  ['0 2 * * *', 'Every day at 02:00'],
+  ['0 0 * * 0', 'Every Sunday at 00:00'],
+  ['0 0 1 * *', 'On the 1st of every month'],
+];
+const BACKUP_SCHEDULE_PRESETS = [
+  ['0 2 * * *', 'Every day at 02:00'],
+  ['0 3 * * *', 'Every day at 03:00'],
+  ['0 */12 * * *', 'Every 12 hours'],
+  ['0 2 * * 0', 'Every Sunday at 02:00'],
+  ['0 2 1 * *', 'On the 1st of every month at 02:00'],
+];
+const isPresetSchedule = (presets, value) => presets.some(([preset]) => preset === value);
+// How a site's app_type is written wherever a person reads it.
+const APP_TYPE_LABELS = { wordpress: 'WordPress', php: 'PHP', static: 'Static', application: 'App' };
 const DEFAULT_SERVICE_NAMES = ['bpanel-api', 'nginx', 'php8.3-fpm', 'php8.4-fpm', 'mariadb', 'redis-server'];
 const HTTP_FLOOD_DEFAULTS = {
   access_limit_requests: 100,
@@ -57,11 +75,10 @@ function composeWebPorts(plan, wanted) {
 // Pages opened from inside another page instead of the sidebar. They have no
 // nav entry of their own, so without this the header falls back to the first
 // item and titles the page "Dashboard".
-const NAV_PARENT_PAGE = { 'waf-site': 'waf' };
+const NAV_PARENT_PAGE = { 'waf-site': 'waf', 'malware-scan': 'malware' };
 
 // 'waf-site' is reached from the WAF overview rather than the sidebar, but it
 // still belongs to Settings so the menu stays open and WAF stays highlighted.
-const SETTINGS_PAGE_KEYS = ['settings', 'security', 'php', 'firewall', 'waf', 'waf-site', 'malware', 'access-logs', 'updates', 'addons', 'services', 'mcp'];
 const PAGE_ROUTES = {
   dashboard: '/',
   websites: '/website',
@@ -79,6 +96,7 @@ const PAGE_ROUTES = {
   firewall: '/firewall',
   waf: '/waf',
   'waf-site': '/waf-site',
+  'malware-scan': '/malware-scan',
   malware: '/malware',
   'access-logs': '/access-logs',
   updates: '/updates',
@@ -167,6 +185,23 @@ function ThemeToggle({ theme, onToggle, className = '' }) {
     aria-label={label}
     aria-pressed={isDark}
   >{isDark ? <Sun size={16}/> : <Moon size={16}/>}</button>;
+}
+
+// Chrome's password manager writes the saved panel username into text fields
+// that are not login fields at all - the website search opened as "admin",
+// and so did the passkey name beside a password box - whatever autocomplete
+// says. It never fills a read-only field, so this one stays read-only until a
+// pointer or the keyboard actually lands on it. Unlocking on pointerdown,
+// before focus, keeps a phone's keyboard coming up on the first tap.
+function NoAutofillInput({ onFocus, onPointerDown, ...props }) {
+  const unlock = event => { event.currentTarget.readOnly = false; };
+  return <input
+    autoComplete="off"
+    {...props}
+    readOnly
+    onPointerDown={event => { unlock(event); onPointerDown?.(event); }}
+    onFocus={event => { unlock(event); onFocus?.(event); }}
+  />;
 }
 
 function LanguageToggle({ language, onChange, className = '' }) {
@@ -558,7 +593,7 @@ function NotificationToast({ type, message, onClose }) {
   return <div className={`app-toast ${isError ? 'app-toast-error' : 'app-toast-success'}`} role={isError ? 'alert' : 'status'} aria-live={isError ? 'assertive' : 'polite'}>
     <Icon className="app-toast-icon" size={18}/>
     <div className="app-toast-content">
-      <strong>{isError ? 'Action failed' : 'Completed'}</strong>
+      <strong>{isError ? t('Action failed') : t('Completed')}</strong>
       <span>{message}</span>
     </div>
     <button className="app-toast-close" onClick={onClose} aria-label={t('Dismiss notification')} title={t('Dismiss notification')}><X size={16}/></button>
@@ -702,6 +737,12 @@ function App() {
   const [createSslMode, setCreateSslMode] = useState('none'); // none|letsencrypt|wildcard|shared|manual
   const [createSslToken, setCreateSslToken] = useState(''); // Cloudflare token for the wildcard mode
   const [installWordPress, setInstallWordPress] = useState(true);
+  /* The create form starts folded away. Making a website is something an
+     operator does now and then; looking one up is what they came for, and
+     the form was four hundred pixels of it between them and the list. A
+     panel with no sites yet is the exception - there the form is the only
+     thing to do, so it opens itself. */
+  const [createFormOpen, setCreateFormOpen] = useState(false);
   const [nginxCustomEditing, setNginxCustomEditing] = useState(null); // Website settings editor state
   const [websiteSettingsForm, setWebsiteSettingsForm] = useState(websiteConfigForm());
   const [logViewer, setLogViewer] = useState(null); // {id, domain, kind, lines, path, content, exists}
@@ -714,6 +755,7 @@ function App() {
   const [aliasDrafts, setAliasDrafts] = useState({});
   const [aliasModes, setAliasModes] = useState({});
   const [databases, setDatabases] = useState([]);
+  const [dbCreateOpen, setDbCreateOpen] = useState(false);
   const [dbSearch, setDbSearch] = useState('');
   const [dbSearching, setDbSearching] = useState(false);
   const [newDatabase, setNewDatabase] = useState({ db_name: '', db_user: '', db_password: '' });
@@ -723,6 +765,7 @@ function App() {
   const [packages, setPackages] = useState([]);
   const [userTab, setUserTab] = useState('list');
   const [resourceUsage, setResourceUsage] = useState(null);
+  const [dashSummary, setDashSummary] = useState(null);
   const [serviceStates, setServiceStates] = useState({});
   const [serviceNames, setServiceNames] = useState(DEFAULT_SERVICE_NAMES);
   const [backupTab, setBackupTab] = useState('website');
@@ -758,6 +801,8 @@ function App() {
   const [sslSources, setSslSources] = useState([]);
   const [sharedSource, setSharedSource] = useState('');
   const [cronSchedule, setCronSchedule] = useState('*/15 * * * *');
+  const [cronScheduleCustom, setCronScheduleCustom] = useState(false);
+  const [backupScheduleCustom, setBackupScheduleCustom] = useState(false);
   const [cronCommand, setCronCommand] = useState('');
   const [cronItems, setCronItems] = useState([]);
   const [cronUser, setCronUser] = useState('');
@@ -861,7 +906,12 @@ function App() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState('');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const userMenuRef = useRef(null);
+  // Set while signing out on purpose. Requests already in flight come back
+  // 401 once the server drops the session; they are this sign-out, not an
+  // expiry, and must not replace "Logged out." with "Your session expired".
+  const signedOutRef = useRef(false);
   const [panelSettings, setPanelSettings] = useState({ app_name: 'BPanel', panel_url: '', panel_hostname: '', panel_port: 2222, logo_url: '', favicon_url: '/favicon.png', ssl_enabled: false });
   const [phpTune, setPhpTune] = useState(null);
   const [phpTuneApplied, setPhpTuneApplied] = useState(false);
@@ -883,7 +933,6 @@ function App() {
   const noticeTimer = useRef(null);
   const isAdmin = currentUser?.role === 'admin';
   const mcpAddonInstalled = !!addons.items.find(item => item.slug === 'mcp')?.installed;
-  const fail2banAddonInstalled = !!addons.items.find(item => item.slug === 'fail2ban')?.installed;
   const [mcpTokens, setMcpTokens] = useState([]);
   const [mcpDraft, setMcpDraft] = useState({ name: '', expires_in_days: 90, can_write: false });
   // Held until dismissed rather than cleared on the next render: the server
@@ -910,6 +959,19 @@ function App() {
       window.history.replaceState({}, '', nextUrl);
     }
     setPage(nextPage);
+  }, []);
+
+  // Every page opens at its top. The window is the scroller and nothing
+  // reset it, so the next page opened at the last one's offset - part-way
+  // down, or in empty space until its content loaded. Before paint, and
+  // instant: html has scroll-behavior:smooth, which would slide there from
+  // the old offset. Back and Forward land at the top as well; the browser's
+  // own restoration ran before the page had content and restored nothing.
+  useLayoutEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+  }, [page]);
+  useEffect(() => {
+    if ('scrollRestoration' in window.history) window.history.scrollRestoration = 'manual';
   }, []);
 
   // Auto-dismiss notices after 6 seconds
@@ -1027,7 +1089,7 @@ function App() {
 
   function handleAuthExpired(status, detail = '') {
     if (status === 401 || detail === 'Could not validate credentials' || detail === 'Not authenticated') {
-      clearSession();
+      if (!signedOutRef.current) clearSession();
       return true;
     }
     return false;
@@ -1101,6 +1163,7 @@ function App() {
       } else if (res.ok && data.access_token) {
         // Don't keep the token anywhere: the HttpOnly cookie just got set by
         // the response. JS code MUST NOT touch the JWT.
+        signedOutRef.current = false;
         setIsAuthenticated(true);
         setNeedsTwoFactor(false);
         setPasskeyPrompt(null);
@@ -1118,6 +1181,7 @@ function App() {
   }
 
   async function logout() {
+    signedOutRef.current = true;
     try {
       // Best-effort server logout: clears cookies and bumps token_version.
       await fetch(`${API}/auth/logout`, {
@@ -1198,7 +1262,7 @@ function App() {
       const res = await fetch(`${API}/auth/session`, { credentials: 'include' });
       if (!res.ok) {
         if (res.status === 401) {
-          if (clearOnUnauthorized) clearSession('Session expired.');
+          if (clearOnUnauthorized && !signedOutRef.current) clearSession('Session expired.');
           else {
             clearReadableSessionCookies();
             setCurrentUser(null);
@@ -1209,7 +1273,7 @@ function App() {
       }
       const data = await res.json();
       if (!data.authenticated || !data.user) {
-        if (clearOnUnauthorized) clearSession('Session expired.');
+        if (clearOnUnauthorized && !signedOutRef.current) clearSession('Session expired.');
         else {
           clearReadableSessionCookies();
           setCurrentUser(null);
@@ -1219,6 +1283,7 @@ function App() {
       }
       setCurrentUser(data.user);
       setAdminAccountForm(prev => ({ ...prev, email: data.user?.email || '' }));
+      signedOutRef.current = false;
       setIsAuthenticated(true);
       return data.user;
     } catch {
@@ -1529,6 +1594,14 @@ function App() {
       if (!selectedBackupUserId && data[0]) setSelectedBackupUserId(String(data[0].id));
       setNewBackupSchedule(prev => (!prev.all_users && (!prev.user_ids || prev.user_ids.length === 0) && data[0]) ? ({ ...prev, user_ids: [String(data[0].id)] }) : prev);
     }
+  }
+
+  // One request for the dashboard's cards and its "Needs attention" list;
+  // each part is best effort on the server, so a failing probe is a card
+  // that says "—", not a dashboard that fails.
+  async function loadDashboardSummary() {
+    const data = await request('/dashboard/summary', { silent: true });
+    if (data) setDashSummary(data);
   }
 
   async function loadResourceUsage() {
@@ -1890,9 +1963,9 @@ function App() {
       setError(ipv6.detail || 'This server has no IPv6 address, so this feature cannot be used.');
       return;
     }
-    if (!confirm(enable
+    if (!confirm(t(enable
       ? 'Enable IPv6 for every website and the panel?\n\nBPanel adds listen [::] to every website\'s nginx config, checks it with nginx -t, and rolls back on any error. The panel restarts.'
-      : 'Disable IPv6?\n\nWebsites and the panel will accept IPv4 only. If a domain still has an AAAA record, visitors arriving over IPv6 will not get through.')) return;
+      : 'Disable IPv6?\n\nWebsites and the panel will accept IPv4 only. If a domain still has an AAAA record, visitors arriving over IPv6 will not get through.'))) return;
     const data = await request('/panel-settings/ipv6', {
       method: 'POST',
       body: JSON.stringify({ enabled: enable }),
@@ -1949,7 +2022,7 @@ function App() {
     if (enabled && !confirm(t('Turn on real-time protection? The panel watches website directories and scans new files as they appear. If it is not installed yet, the panel installs it (1-3 minutes).'))) return;
     const data = await request('/malware/realtime', { method: 'POST', body: JSON.stringify({ enabled }) },
       enabled ? 'Turning on real-time protection...' : 'Turning off...');
-    if (data) { setMalwareScanStatus(data); setNotice(enabled ? 'Real-time protection is on (level 2).' : 'Real-time protection is off.'); }
+    if (data) { setMalwareScanStatus(data); setNotice(t(enabled ? 'Real-time protection is on (level 2).' : 'Real-time protection is off.')); }
   }
 
   async function toggleMalwareScanOnUpload(enabled) {
@@ -3473,9 +3546,9 @@ Each account is overwritten with what is in its archive.`)) return;
   }
 
   async function importDaBackup(archivePath, force = daReplaceExisting) {
-    const message = force
+    const message = t(force
       ? 'Import and REPLACE? Any existing panel user, website, files and databases with the same names are deleted first.'
-      : 'Import this DirectAdmin backup? This will create users, websites, databases, and nginx configs.';
+      : 'Import this DirectAdmin backup? This will create users, websites, databases, and nginx configs.');
     if (!confirm(message)) return;
     setDaImportJob(null);
     const data = await request('/maintenance/da-import/import', { method: 'POST', body: JSON.stringify({ archive_path: archivePath, force }) }, t('Starting DA import...'));
@@ -3923,9 +3996,8 @@ Each account is overwritten with what is in its archive.`)) return;
 
   async function saveCrsMode(mode) {
     if (mode === 'block' && !confirm(
-      'Switch OWASP CRS to blocking?\n\n'
-      + 'Every website with the WAF on will start refusing requests that score above the threshold. '
-      + 'Run detect mode first and read the logs, or a legitimate request somebody depends on may be the one it stops.'
+      t('Switch OWASP CRS to blocking?') + '\n\n'
+      + t('Websites with CRS on will start refusing requests that score above the threshold. Run Detect only first and read the logs, or a request somebody depends on may be the one it stops.')
     )) return;
     const data = await request('/waf/crs', {
       method: 'PUT',
@@ -3934,24 +4006,18 @@ Each account is overwritten with what is in its archive.`)) return;
     if (data) await loadCrs();
   }
 
-  async function toggleSiteCrs(row) {
-    const turningOn = !row.crs_enabled;
-    if (turningOn && !confirm(
-      `Load OWASP CRS on ${row.domain}?\n\n`
-      + `This adds roughly ${crs?.rss_mb_per_site || 50} MB to nginx for this site. `
-      + 'Check the measured figure on this page afterwards rather than trusting the estimate.'
-    )) return;
-    const data = await request(`/waf/websites/${row.website_id}/crs`, {
+  async function toggleSiteCrs(config) {
+    const turningOn = !config.crs_enabled;
+    const domain = config.domain;
+    if (turningOn && !confirm(t('Turn on OWASP CRS for {domain}? It uses about {n} MB of server RAM.', { domain, n: crs?.rss_mb_per_site || 50 }))) return;
+    const data = await request(`/waf/websites/${config.website_id}/crs`, {
       method: 'PUT',
       body: JSON.stringify({ enabled: turningOn }),
-    }, `${turningOn ? 'Enabling' : 'Disabling'} CRS on ${row.domain}...`);
+    }, turningOn ? t('Turning CRS on for {domain}...', { domain }) : t('Turning CRS off for {domain}...', { domain }));
     if (data) {
-      await loadCrs();
-      // The site page reads its own copy of this, so refresh it when that is
-      // where the toggle was pressed.
-      if (String(selectedWafWebsiteId) === String(row.website_id)) {
-        await loadWebsiteWafConfig(row.website_id, false);
-      }
+      setNotice(turningOn ? t('OWASP CRS is on for {domain}.', { domain }) : t('OWASP CRS is off for {domain}.', { domain }));
+      await loadWebsiteWafConfig(config.website_id, false);
+      if (isAdmin) await loadCrs();
     }
   }
 
@@ -4149,6 +4215,10 @@ Each account is overwritten with what is in its archive.`)) return;
   }, [standaloneEditor, isAuthenticated, selectedWebsiteId, filePath, fileContent]);
 
   useEffect(() => {
+    if (isAuthenticated && page === 'dashboard') loadDashboardSummary();
+  }, [isAuthenticated, page]);
+
+  useEffect(() => {
     if (!isAuthenticated || page !== 'dashboard' || !isAdmin) return undefined;
     loadResourceUsage();
     const timer = setInterval(loadResourceUsage, 5000);
@@ -4299,48 +4369,61 @@ Each account is overwritten with what is in its archive.`)) return;
 
   useEffect(() => { setMobileMenuOpen(false); }, [page]);
 
+  // The account menu closes on a click anywhere else, on Escape, and on navigation.
   useEffect(() => {
-    if (SETTINGS_PAGE_KEYS.includes(page)) setSettingsMenuOpen(true);
-  }, [page]);
+    if (!userMenuOpen) return undefined;
+    const onPointer = event => { if (!userMenuRef.current?.contains(event.target)) setUserMenuOpen(false); };
+    const onKey = event => { if (event.key === 'Escape') setUserMenuOpen(false); };
+    document.addEventListener('mousedown', onPointer);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('mousedown', onPointer); document.removeEventListener('keydown', onKey); };
+  }, [userMenuOpen]);
+
+  useEffect(() => { setUserMenuOpen(false); }, [page]);
 
   function roleLabel(role) {
     return role === 'admin' ? 'Admin' : 'End user';
   }
 
-  const mainNavItems = [
-    ['dashboard', 'Dashboard', Home],
-    ['websites', 'Websites', Globe],
-    ...(appsFeatureEnabled ? [['applications', 'Applications', Server]] : []),
-    ['ssl', 'SSL', Lock],
-    ['databases', 'Database', Database],
-    ['cron', 'Cron', Clock],
-    ['files', 'File manager', FolderOpen],
-    ['sftp', 'SFTP accounts', Upload],
-    ['backups', 'Backups', Archive],
-    ...(isAdmin ? [['users', 'Panel users', Users]] : []),
-  ];
+  // The sidebar in three labelled groups, as OPanel has it - what a site
+  // needs, what guards it, and the server itself - so nothing hides behind a
+  // collapsed "Settings". Labels are English and go through t() when drawn.
+  const navSections = [
+    { key: 'home', items: [['dashboard', 'Dashboard', Home]] },
+    { key: 'hosting', title: 'Hosting', items: [
+      ['websites', 'Websites', Globe],
+      ...(appsFeatureEnabled ? [['applications', 'Applications', Boxes]] : []),
+      ['ssl', 'SSL', Lock],
+      ['databases', 'Databases', Database],
+      ['cron', 'Cron', Clock],
+      ['files', 'File manager', FolderOpen],
+      ['sftp', 'SFTP accounts', Upload],
+      ['backups', 'Backups', Archive],
+    ] },
+    { key: 'security', title: 'Security', items: [
+      ...(isAdmin ? [['firewall', 'Firewall', BrickWall]] : []),
+      ['waf', 'WAF', ShieldAlert],
+      ...(isAdmin ? [['malware', 'Malware scanner', Bug]] : []),
+      ...(isAdmin ? [['access-logs', 'Access logs', ScrollText]] : []),
+      ['security', 'Account security', LockKeyhole],
+    ] },
+    { key: 'system', title: 'System', items: [
+      ...(isAdmin ? [['services', 'Services', Activity]] : []),
+      ...(isAdmin ? [['php', 'PHP config', Code2]] : []),
+      ...(isAdmin ? [['users', 'Panel users', Users]] : []),
+      ...(isAdmin ? [['settings', 'Panel settings', SettingsIcon]] : []),
+      ...(isAdmin ? [['updates', 'Updates', RefreshCw]] : []),
+      ...(isAdmin ? [['addons', 'Addons', PackageOpen]] : []),
+      // A customer sees this only once an administrator has turned the addon
+      // on. An admin always sees it, so there is somewhere to go and read why
+      // it is off.
+      ...(mcpAddonInstalled || isAdmin ? [['mcp', 'AI assistants', Bot]] : []),
+    ] },
+  ].filter(section => section.items.length > 0);
 
-  const settingsNavItems = [
-    ...(isAdmin ? [['settings', 'Panel settings', SettingsIcon]] : []),
-    ['security', 'Security', Shield],
-    ...(isAdmin ? [['php', 'PHP config', Code2]] : []),
-    ...(isAdmin ? [['firewall', 'Firewall', Shield]] : []),
-    ['waf', 'WAF', Shield],
-    ...(isAdmin ? [['malware', 'Malware Scanner', Search]] : []),
-    ...(isAdmin ? [['access-logs', 'Access Logs', FileText]] : []),
-    ...(isAdmin ? [['updates', 'Updates', RefreshCw]] : []),
-    ...(isAdmin ? [['addons', 'Addons', Boxes]] : []),
-    ...(isAdmin ? [['services', 'Services Status', Server]] : []),
-    // A customer sees this only once an administrator has turned the addon
-    // on. An admin always sees it, so there is somewhere to go and read why
-    // it is off.
-    ...(mcpAddonInstalled || isAdmin ? [['mcp', 'AI assistants', Bot]] : []),
-  ];
-
-  const navItems = [...mainNavItems, ...settingsNavItems];
+  const navItems = navSections.flatMap(section => section.items);
   const navPage = NAV_PARENT_PAGE[page] || page;
   const activeNavItem = navItems.find(([key]) => key === navPage) || navItems[0];
-  const settingsIsActive = SETTINGS_PAGE_KEYS.includes(page);
 
   function renderNotifications() {
     const errorMessage = formatApiError(error, '').trim();
@@ -4492,7 +4575,7 @@ Each account is overwritten with what is in its archive.`)) return;
   function storageUsageText(user) {
     // -1 means the panel has not measured this account yet and did not hold
     // the list up to do it. Saying so beats drawing a zero that reads as fact.
-    if (Number(user?.storage_used_bytes) < 0) return 'measuring...';
+    if (Number(user?.storage_used_bytes) < 0) return t('measuring...');
     const used = Number(user?.storage_used_bytes || 0);
     const limit = storageLimitBytes(user);
     if (limit === null) return formatBytes(used);
@@ -4501,10 +4584,15 @@ Each account is overwritten with what is in its archive.`)) return;
 
   function ResourceCard({ icon: Icon, label, value, detail, percent }) {
     const safePercent = percent == null ? null : clampPercent(percent);
-    return <article className="resource-card">
+    // Amber from 80%, red from 90%: a disk at 93% should not look like one at
+    // 30%. Named level-* because .danger and .warn are a button and a badge.
+    const level = safePercent == null ? '' : safePercent >= 90 ? ' level-critical' : safePercent >= 80 ? ' level-warn' : '';
+    return <article className={`resource-card${level}`}>
       <div className="resource-head"><span className="resource-icon"><Icon size={16}/></span><span>{label}</span></div>
       <strong>{value}</strong>
-      {safePercent !== null && <div className="resource-track"><span style={{ width: `${safePercent}%` }}></span></div>}
+      {/* A meter without a percentage keeps an empty track, so every card's
+          value and detail sit on the same lines as its neighbours'. */}
+      {safePercent !== null ? <div className="resource-track"><span style={{ width: `${safePercent}%` }}></span></div> : <div className="resource-track is-empty" aria-hidden="true"></div>}
       <small>{detail}</small>
     </article>;
   }
@@ -4516,121 +4604,159 @@ Each account is overwritten with what is in its archive.`)) return;
     const network = resourceUsage?.network || {};
     const networkTotal = (Number(network.rx_per_sec) || 0) + (Number(network.tx_per_sec) || 0);
 
-    // The dashboard is a map of the panel, not a second place to read numbers:
-    // every tile opens a page that already exists in the sidebar. Grouped by
-    // what an operator is trying to do, which is why Cron sits with websites
-    // (BPanel's cron jobs are per-site) rather than under the server tools.
-    //
-    // A tile is dropped when the account cannot reach the page, and a group
-    // disappears when that leaves it empty - an end user gets four groups, an
-    // admin five, with no gaps either way.
-    const groups = [
-      {
-        title: 'Websites',
-        hint: 'Domains, certificates and scheduled jobs',
-        tiles: [
-          ['websites', 'Websites', MsWebsites, 'Domains, PHP version, document root'],
-          appsFeatureEnabled ? ['applications', 'Applications', MsApplications, 'Node and Docker apps'] : null,
-          ['ssl', 'SSL', MsSsl, "Let's Encrypt and uploaded certificates"],
-          ['cron', 'Cron', MsCron, 'Scheduled commands per website'],
-        ],
-      },
-      {
-        title: 'Files and databases',
-        hint: 'Content, data and copies of both',
-        tiles: [
-          ['files', 'File manager', MsFiles, 'Browse, edit and upload site files'],
-          ['databases', 'Database', MsDatabaseIcon, 'MariaDB users and phpMyAdmin'],
-          ['sftp', 'SFTP accounts', MsFiles, 'One login per website, separate from the panel password'],
-          ['backups', 'Backups', MsBackups, 'Schedules, downloads and restores'],
-        ],
-      },
-      {
-        title: 'Security',
-        hint: 'What stands between a site and the internet',
-        tiles: [
-          ['waf', 'WAF', MsWaf, 'Rules, bad bots and payload inspection'],
-          isAdmin ? ['firewall', 'Firewall', MsFirewall, 'Allowed and blocked addresses'] : null,
-          // Every addon that is on gets a way in from the map. fail2ban has no
-          // page of its own - its ban list is a section of the Firewall page -
-          // so this lands there rather than inventing a route that would only
-          // be an alias.
-          (fail2banAddonInstalled && isAdmin)
-            ? ['firewall', 'Fail2ban', MsFail2ban, 'SSH ban list, and how long each ban lasts'] : null,
-          isAdmin ? ['malware', 'Malware Scanner', MsMalware, 'Scan schedules and findings'] : null,
-          isAdmin ? ['access-logs', 'Access Logs', MsAccessLogs, 'Who reached which site, and the verdict'] : null,
-          ['security', 'Login security', MsLoginSecurity, 'Two-factor and session settings'],
-        ],
-      },
-      {
-        title: 'Server',
-        hint: 'The machine everything runs on',
-        tiles: [
-          isAdmin ? ['services', 'Services Status', MsServices, 'nginx, PHP, MariaDB, Redis'] : null,
-          isAdmin ? ['php', 'PHP config', MsPhpConfig, 'Versions, limits and extensions'] : null,
-          isAdmin ? ['updates', 'Updates', MsUpdates, 'Panel and system packages'] : null,
-          isAdmin ? ['addons', 'Addons', MsAddons, 'Optional features, off by default'] : null,
-        ],
-      },
-      {
-        title: 'Accounts',
-        hint: 'Who can sign in, and with what',
-        tiles: [
-          isAdmin ? ['users', 'Panel users', MsPanelUsers, 'Customers, packages and quotas'] : null,
-          // A token for an assistant is another way something signs in, which
-          // is exactly what this group is. It is also the only tile a customer
-          // sees here, and that is fine - an empty group is dropped anyway.
-          (mcpAddonInstalled || isAdmin)
-            ? ['mcp', 'AI assistants', MsAiAssistants, 'Tokens for Claude Code, Cursor and VS Code']
-            : null,
-          isAdmin ? ['settings', 'Panel settings', MsPanelSettings, 'Panel name, URL, branding'] : null,
-        ],
-      },
-    ]
-      .map(group => ({ ...group, tiles: group.tiles.filter(Boolean) }))
-      .filter(group => group.tiles.length > 0);
+    // How things stand, not a second copy of the sidebar: the three groups of
+    // links that were here repeated it item for item. Until the summary
+    // arrives, the lists already loaded stand in for it.
+    const sum = dashSummary || {};
+    const sites = sum.websites || { total: websites.length, suspended: 0, waf_on: websites.filter(site => site.waf_enabled).length };
+    const ssl = sum.ssl || { total: websites.length, secured: websites.filter(site => site.ssl_enabled).length, unsecured: [], unsecured_count: 0 };
+    const dbCount = sum.databases?.total ?? databases.length;
+    // dd/mm hh:mm. Backup times are stored without a zone, in the server's
+    // local time, which is what a Date then shows them as.
+    const shortDate = value => {
+      const d = value ? new Date(value) : null;
+      if (!d || Number.isNaN(d.getTime())) return '—';
+      const two = n => String(n).padStart(2, '0');
+      return `${two(d.getDate())}/${two(d.getMonth() + 1)} ${two(d.getHours())}:${two(d.getMinutes())}`;
+    };
 
-    return <>
-      {isAdmin && <section className="resource-grid">
-        <ResourceCard icon={Cpu} label="CPU" value={formatPercent(cpu.percent)} percent={cpu.percent} detail={[cpu.cores ? `${cpu.cores} cores` : null, cpu.load?.length ? `load ${cpu.load.join(' / ')}` : null].filter(Boolean).join(' · ') || '--'} />
-        <ResourceCard icon={MemoryStick} label="RAM" value={formatPercent(memory.percent)} percent={memory.percent} detail={`${formatBytes(memory.used)} / ${formatBytes(memory.total)}`} />
-        <ResourceCard icon={HardDrive} label={t('Disk')} value={formatPercent(disk.percent)} percent={disk.percent} detail={`${formatBytes(disk.used)} / ${formatBytes(disk.total)}`} />
-        <ResourceCard icon={Network} label={t('Network')} value={`${formatBytes(networkTotal)}/s`} detail={`Down ${formatBytes(network.rx_per_sec)}/s / Up ${formatBytes(network.tx_per_sec)}/s`} />
+    // Each card says how one thing stands, and how loudly: ok / warn / bad /
+    // neutral, drawn as the colour of its left edge. A customer's plan-usage
+    // card already counts websites and databases, so theirs start at SSL.
+    const sslCard = { key: 'ssl', icon: Lock, label: t('SSL'), value: `${ssl.secured}/${ssl.total}`,
+      detail: !ssl.total ? t('No websites yet') : ssl.unsecured_count ? t('{n} without SSL', { n: ssl.unsecured_count }) : t('All secured'),
+      tone: !ssl.total ? 'neutral' : ssl.unsecured_count ? 'warn' : 'ok' };
+    const cards = [];
+    if (isAdmin) {
+      cards.push({ key: 'websites', icon: Globe, label: t('Websites'), value: String(sites.total),
+        detail: sites.suspended ? t('{n} suspended', { n: sites.suspended }) : sites.total ? t('All running') : t('No websites yet'),
+        tone: sites.suspended ? 'warn' : sites.total ? 'ok' : 'neutral' });
+      cards.push(sslCard);
+      cards.push({ key: 'databases', icon: Database, label: t('Databases'), value: String(dbCount), detail: 'MariaDB', tone: 'neutral' });
+      const backups = sum.backups;
+      cards.push({ key: 'backups', icon: Archive, label: t('Backups'),
+        value: backups?.last_run_at ? shortDate(backups.last_run_at) : '—',
+        detail: !backups ? t('Checking...') : !backups.schedules ? t('No schedule') : backups.failed ? t('Last run failed') : t('{n} schedule(s)', { n: backups.schedules }),
+        tone: !backups ? 'neutral' : !backups.schedules ? 'warn' : backups.failed ? 'bad' : 'ok' });
+      const firewallOn = sum.firewall?.enabled;
+      cards.push({ key: 'firewall', icon: BrickWall, label: t('Firewall'),
+        value: firewallOn === true ? t('On') : firewallOn === false ? t('Off') : '—', detail: 'iptables + ipset',
+        tone: firewallOn === true ? 'ok' : firewallOn === false ? 'bad' : 'neutral' });
+      const engine = sum.waf?.engine;
+      cards.push({ key: 'waf', icon: ShieldAlert, label: 'WAF',
+        value: engine === 'on' ? t('On') : engine === 'off' ? t('Not installed') : '—', detail: t('ModSecurity engine'),
+        tone: engine === 'on' ? 'ok' : engine === 'off' ? 'warn' : 'neutral' });
+      const scanner = sum.malware;
+      const lastScan = scanner?.last_scan;
+      cards.push({ key: 'malware', icon: Bug, label: t('Malware scanner'),
+        value: !scanner ? '—' : !scanner.installed ? t('Not installed') : lastScan?.infected ? t('{n} threat(s)', { n: lastScan.infected }) : lastScan ? t('Clean') : t('No scan yet'),
+        detail: scanner?.running ? t('Scanning...') : lastScan ? t('Last scan {when}', { when: shortDate(lastScan.finished_at) }) : t('Last scan'),
+        tone: !scanner ? 'neutral' : !scanner.installed ? 'warn' : lastScan?.infected ? 'bad' : lastScan ? 'ok' : 'neutral' });
+      const services = sum.services;
+      cards.push({ key: 'services', icon: Activity, label: t('Services'),
+        value: services ? `${services.running}/${services.total}` : '—',
+        detail: services?.stopped?.length ? t('Stopped: {names}', { names: services.stopped.join(', ') }) : services ? t('All running') : t('Checking...'),
+        tone: !services ? 'neutral' : services.stopped?.length ? 'bad' : 'ok' });
+    } else {
+      cards.push(sslCard);
+      const wafOn = sites.waf_on ?? 0;
+      cards.push({ key: 'waf', icon: ShieldAlert, label: 'WAF', value: `${wafOn}/${sites.total}`,
+        detail: !sites.total ? t('No websites yet') : wafOn === sites.total ? t('On for every website') : t('{n} website(s) without WAF', { n: sites.total - wafOn }),
+        tone: !sites.total ? 'neutral' : wafOn === sites.total ? 'ok' : 'warn' });
+      const twoFactor = !!currentUser?.totp_enabled;
+      cards.push({ key: 'security', icon: LockKeyhole, label: t('Two-factor sign-in'),
+        value: twoFactor ? t('On') : t('Off'), detail: t('Account security'), tone: twoFactor ? 'ok' : 'warn' });
+    }
+
+    // Only what is actually wrong, worst first, each with a way to the page
+    // that fixes it.
+    const attention = [];
+    const flag = (tone, text, target, action = t('Open'), icon = AlertCircle) => attention.push({ tone, text, target, action, icon });
+    if (isAdmin && sum.services?.stopped?.length) flag('bad', t('Stopped: {names}', { names: sum.services.stopped.join(', ') }), 'services');
+    if (isAdmin && sum.firewall?.enabled === false) flag('bad', t('The firewall is off.'), 'firewall');
+    if (isAdmin && sum.malware?.last_scan?.infected) flag('bad', t('The last malware scan found {n} threat(s).', { n: sum.malware.last_scan.infected }), 'malware');
+    if (isAdmin && sum.backups?.failed) flag('bad', t('{n} scheduled backup(s) failed on their last run.', { n: sum.backups.failed }), 'backups');
+    if (ssl.unsecured_count) flag('warn', t('{n} website(s) without SSL: {domains}', {
+      n: ssl.unsecured_count, domains: ssl.unsecured.join(', ') + (ssl.unsecured_count > ssl.unsecured.length ? ', ...' : ''),
+    }), 'ssl', t('Install SSL'));
+    if (sites.suspended) flag('warn', t('{n} website(s) suspended.', { n: sites.suspended }), 'websites');
+    if (isAdmin && sum.backups && !sum.backups.schedules) flag('warn', t('No scheduled backup is set up.'), 'backups', t('Set up'));
+    if (isAdmin && sum.waf?.engine === 'off') flag('warn', t('The WAF engine is not installed.'), 'waf');
+    if (isAdmin && sum.malware && !sum.malware.installed) flag('warn', t('The malware scanner is not installed.'), 'malware');
+    if (!isAdmin && currentUser && !currentUser.totp_enabled) flag('info', t('Two-factor sign-in is off for your account.'), 'security', t('Turn on'), LockKeyhole);
+    if (isAdmin && sum.updates?.update_available) flag('info', t('Panel update {version} is available.', { version: sum.updates.latest_version }), 'updates', t('Open'), RefreshCw);
+
+    // The create forms open with the page, so "New website" is one click.
+    const quickActions = [
+      { key: 'site', icon: Plus, label: t('New website'), primary: true, run: () => { setCreateFormOpen(true); navigateToPage('websites'); } },
+      { key: 'db', icon: Database, label: t('New database'), run: () => { setDbCreateOpen(true); navigateToPage('databases'); } },
+      { key: 'ssl', icon: Lock, label: t('Install SSL'), run: () => navigateToPage('ssl') },
+      { key: 'backup', icon: Archive, label: t('Back up a website'), run: () => navigateToPage('backups') },
+      { key: 'sftp', icon: KeyRound, label: t('New SFTP account'), run: () => {
+        navigateToPage('sftp');
+        window.setTimeout(() => document.querySelector('.sftp-form input')?.focus(), 150);
+      } },
+      ...(isAdmin ? [{ key: 'users', icon: Users, label: t('Panel users'), run: () => navigateToPage('users') }] : []),
+    ];
+
+    return <div className="dashboard">
+      {isAdmin && <section className="section dash-card dash-resources">
+        <div className="dash-card-head"><span className="dash-card-icon"><Activity size={16}/></span><h2>{t('Server resources')}</h2></div>
+        <div className="resource-grid">
+          <ResourceCard icon={Cpu} label="CPU" value={formatPercent(cpu.percent)} percent={cpu.percent} detail={cpu.load?.length ? t('Load {load}', { load: cpu.load.join(' / ') }) : t('{count} cores', { count: cpu.cores || '--' })} />
+          <ResourceCard icon={MemoryStick} label="RAM" value={formatPercent(memory.percent)} percent={memory.percent} detail={`${formatBytes(memory.used)} / ${formatBytes(memory.total)}`} />
+          <ResourceCard icon={HardDrive} label={t('Disk')} value={formatPercent(disk.percent)} percent={disk.percent} detail={`${formatBytes(disk.used)} / ${formatBytes(disk.total)}`} />
+          <ResourceCard icon={Network} label={t('Network')} value={`${formatBytes(networkTotal)}/s`} detail={t('Down {down}/s · Up {up}/s', { down: formatBytes(network.rx_per_sec), up: formatBytes(network.tx_per_sec) })} />
+        </div>
       </section>}
-
-      {/* An end user never sees the server's CPU or RAM, so without this they
-          would open the dashboard onto no figures at all. Their quota is the
-          one number that is theirs to watch. */}
-      {currentUser && !isAdmin && <section className="resource-grid" style={{gridTemplateColumns:'minmax(0,1fr)'}}>
-        <ResourceCard
-          icon={HardDrive}
-          label={t('Storage')}
-          value={formatBytes(currentUser.storage_used_bytes)}
-          percent={currentUser.storage_percent}
-          detail={`of ${formatBytes(storageLimitBytes(currentUser))} in your package`}
-        />
-      </section>}
-
-      <div className="dash-groups">
-        {groups.map(group => <section className="dash-group" key={group.title}>
-          <div className="dash-group-head">
-            <h2>{group.title}</h2>
-            <span>{group.hint}</span>
+      {/* A customer never sees the server's meters; their counterpart is how
+          much of the package is used. */}
+      {!isAdmin && currentUser && (() => {
+        const storageLimit = storageLimitBytes(currentUser);
+        const siteLimit = Number(currentUser.website_limit) || 0;
+        const usedBytes = Number(currentUser.storage_used_bytes) || 0;
+        const pct = (used, limit) => limit > 0 ? (used / limit) * 100 : null;
+        return <section className="section dash-card dash-resources" style={{ '--meter-cols': 3 }}>
+          <div className="dash-card-head"><span className="dash-card-icon"><Activity size={16}/></span><h2>{t('Plan usage')}</h2></div>
+          <div className="resource-grid">
+            <ResourceCard icon={HardDrive} label={t('Storage')} value={storageLimit ? formatPercent(pct(usedBytes, storageLimit)) : formatBytes(usedBytes)} percent={storageLimit ? pct(usedBytes, storageLimit) : null} detail={storageLimit ? t('{used} of {limit}', { used: formatBytes(usedBytes), limit: formatBytes(storageLimit) }) : t('unlimited')} />
+            <ResourceCard icon={Globe} label={t('Websites')} value={siteLimit ? `${websites.length} / ${siteLimit}` : String(websites.length)} percent={pct(websites.length, siteLimit)} detail={siteLimit ? t('{used} of {limit}', { used: websites.length, limit: siteLimit }) : t('unlimited')} />
+            <ResourceCard icon={Database} label={t('Databases')} value={String(databases.length)} percent={null} detail={t('in your account')} />
           </div>
-          <div className="dash-tiles">
-            {group.tiles.map(([key, label, Icon, description]) => (
-              <button className="dash-tile" key={key} onClick={() => navigateToPage(key)} title={t(description)}>
-                <span className="dash-tile-icon"><Icon size={34}/></span>
-                <span className="dash-tile-text">
-                  <strong>{t(label)}</strong>
-                  <span>{t(description)}</span>
-                </span>
-              </button>
-            ))}
-          </div>
-        </section>)}
+        </section>;
+      })()}
+
+      {/* Eight cards for an administrator go 4 + 4, three for a customer sit
+          in one row; each opens its page. */}
+      <div className={`status-grid${cards.length > 4 ? ' many' : ''}`} style={{ '--status-cols': Math.min(4, cards.length) }}>
+        {cards.map(card => <button type="button" key={card.key} className={`status-card tone-${card.tone}`} onClick={() => navigateToPage(card.key)}>
+          <span className="status-card-head"><card.icon size={15}/><span>{card.label}</span></span>
+          <strong>{card.value}</strong>
+          <small>{card.detail}</small>
+        </button>)}
       </div>
-    </>;
+
+      <div className="dash-bottom">
+        <section className="section dash-card">
+          <div className="dash-card-head"><span className="dash-card-icon"><AlertCircle size={16}/></span><h2>{t('Needs attention')}</h2></div>
+          {attention.length === 0
+            ? <div className="attention-ok"><CheckCircle size={16}/>{dashSummary ? t('Everything looks fine.') : t('Checking...')}</div>
+            : <div className="attention-list">
+                {attention.map(item => <div className={`attention-item tone-${item.tone}`} key={item.text}>
+                  <item.icon size={15}/>
+                  <span>{item.text}</span>
+                  <button type="button" className="mini secondary" onClick={() => navigateToPage(item.target)}>{item.action}</button>
+                </div>)}
+              </div>}
+        </section>
+        <section className="section dash-card">
+          <div className="dash-card-head"><span className="dash-card-icon"><Zap size={16}/></span><h2>{t('Quick actions')}</h2></div>
+          <div className="quick-actions">
+            {quickActions.map(action => <button type="button" key={action.key} className={action.primary ? '' : 'secondary'} onClick={action.run}><action.icon size={15}/>{action.label}</button>)}
+          </div>
+        </section>
+      </div>
+    </div>;
   }
 
   function renderAdminOnly() {
@@ -4677,22 +4803,27 @@ Each account is overwritten with what is in its archive.`)) return;
           <div className="addon-head">
             <strong>{t(addon.name)}</strong>
             <code>v{addon.installed ? (addon.installed_version || addon.version) : addon.version}</code>
-            <span className={`badge ${addon.installed ? 'ok' : ''}`}>{addon.installed ? 'Installed' : 'Not installed'}</span>
+            <span className={`badge ${addon.installed ? 'ok' : ''}`}>{addon.installed ? t('Installed') : t('Not installed')}</span>
             {addon.installed && addon.installed_version && addon.installed_version !== addon.version
               && <span className="badge">v{addon.version} available</span>}
           </div>
           <p className="addon-summary">{t(addon.summary)}</p>
-          {addon.details?.length > 0 && <ul className="addon-details">
-            {addon.details.map((line, index) => <li key={index}>{t(line)}</li>)}
-          </ul>}
-          {addon.notes?.length > 0 && <div className="addon-notes">
-            <strong><AlertCircle size={13}/>{t('Worth knowing first')}</strong>
-            <ul>{addon.notes.map((line, index) => <li key={index}>{t(line)}</li>)}</ul>
-          </div>}
+          {/* The card is the summary and the button; what it installs and
+              what to know first are one click away rather than a page. */}
+          {(addon.details?.length > 0 || addon.notes?.length > 0) && <details className="addon-more">
+            <summary>{t('Details')}</summary>
+            {addon.details?.length > 0 && <ul className="addon-details">
+              {addon.details.map((line, index) => <li key={index}>{t(line)}</li>)}
+            </ul>}
+            {addon.notes?.length > 0 && <div className="addon-notes">
+              <strong><AlertCircle size={13}/>{t('Worth knowing first')}</strong>
+              <ul>{addon.notes.map((line, index) => <li key={index}>{t(line)}</li>)}</ul>
+            </div>}
+          </details>}
           {addons.can_manage && <div className="addon-actions">
             {addon.installed
               ? <>
-                  {addon.slug === 'application' && <button className="secondary-light" disabled={!!loading} onClick={() => navigateToPage('applications')}>Open {addon.name}</button>}
+                  {addon.slug === 'application' && <button className="secondary-light" disabled={!!loading} onClick={() => navigateToPage('applications')}>{t('Open')} {t(addon.name)}</button>}
                   <button className="danger" disabled={!!loading} onClick={() => setAddonInstalled(addon.slug, false)}><Trash2 size={14}/>{t('Remove')}</button>
                 </>
               : <button disabled={!!loading} onClick={() => setAddonInstalled(addon.slug, true)}><Download size={14}/>{t('Install')}</button>}
@@ -4718,11 +4849,11 @@ Each account is overwritten with what is in its archive.`)) return;
               {siteApps.limit > 0 && <> {t('Using {used} of {limit} allowed.', { used: siteApps.used, limit: siteApps.limit })}</>}
             </p>
           </div>
-          <button disabled={!!loading} onClick={() => { loadSiteApps(); loadSiteRuntimes(); }}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <button className="secondary-light" disabled={!!loading} onClick={() => { loadSiteApps(); loadSiteRuntimes(); }}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
         <div className="site-runtime-strip">
-          <span>{t('Docker:')}<strong>{dockerReady ? (siteRuntimes.docker.version || 'installed') : 'not installed'}</strong></span>
-          <span>{t('Node:')}<strong>{siteRuntimes.node_majors?.length ? siteRuntimes.node_majors.map(major => `v${major}`).join(', ') : 'system version only'}</strong></span>
+          <span>{t('Docker:')}{' '}<strong>{dockerReady ? (siteRuntimes.docker.version || 'installed') : 'not installed'}</strong></span>
+          <span>{t('Node:')}{' '}<strong>{siteRuntimes.node_majors?.length ? siteRuntimes.node_majors.map(major => `v${major}`).join(', ') : 'system version only'}</strong></span>
           {isAdmin && !dockerReady && <button className="mini secondary-light" disabled={!!loading} onClick={installDockerEngine}>{t('Install Docker')}</button>}
           {isAdmin && <button className="mini secondary-light" disabled={!!loading} onClick={() => { const major = prompt('Install which Node major version?', '22'); if (major) installNodeMajor(major.trim()); }}>{t('Add Node version')}</button>}
         </div>
@@ -4739,7 +4870,7 @@ Each account is overwritten with what is in its archive.`)) return;
           </label>
           <label><span>{t('Runtime')}</span>
             <select value={siteAppDraft.kind} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, kind: e.target.value }))}>
-              {SITE_APP_KINDS.map(([value, label]) => <option key={value} value={value} disabled={value === 'docker' && !dockerReady}>{label}</option>)}
+              {SITE_APP_KINDS.map(([value, label]) => <option key={value} value={value} disabled={value === 'docker' && !dockerReady}>{t(label)}</option>)}
             </select>
           </label>
           <label><span>{t('Port')}</span>
@@ -4807,7 +4938,7 @@ Each account is overwritten with what is in its archive.`)) return;
             <label><span>{t('CPU per service')}</span>
               <input value={siteAppDraft.cpu_limit} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, cpu_limit: e.target.value }))} placeholder="1" />
             </label>
-            <p className="compose-hint">{t('Where the file refers to')}<code>{'${VAR}'}</code>, set the value in the <strong>.env</strong> box below,
+            <p className="compose-hint">{t('Where the file refers to')}{' '}<code>{'${VAR}'}</code>, set the value in the <strong>.env</strong> box below,
               exactly as an <code>.env</code> file beside <code>docker-compose.yml</code> would. For a public address
               (an OAuth callback, a webhook) use <code>{'${BPANEL_URL}'}</code> / <code>{'${BPANEL_DOMAIN}'}</code>:
               the app only ever sees its internal port, and the panel fills in the domain of the website pointing at it.</p>
@@ -4952,7 +5083,7 @@ Each account is overwritten with what is in its archive.`)) return;
                     onChange={e => { setSiteAppEdit(prev => ({ ...prev, compose_source: e.target.value })); setSiteAppEditPlan(null); }}
                   />
                 </label>
-                <p className="compose-hint">{t('The panel reads this file and generates the one it actually runs.')}<code>{'${VAR}'}</code> comes
+                <p className="compose-hint">{t('The panel reads this file and generates the one it actually runs.')}{' '}<code>{'${VAR}'}</code> comes
                   from the .env box; for a public address use <code>{'${BPANEL_URL}'}</code> / <code>{'${BPANEL_DOMAIN}'}</code>
                   {app.websites?.length > 0 ? ` (currently ${app.websites[0]})` : ' (point a website at this app first)'}.</p>
                 <label className="site-app-env"><span>.env (KEY=value, one per line)</span>
@@ -5053,7 +5184,7 @@ Each account is overwritten with what is in its archive.`)) return;
             key={value}
             value={value}
             disabled={value === 'application' && !appsFeatureEnabled}
-          >{label}</option>)}
+          >{t(label)}</option>)}
         </select></label>
         {proxied && <label><span>{t('Application')}</span><select
           value={websiteSettingsForm.app_id || ''}
@@ -5211,7 +5342,7 @@ Each account is overwritten with what is in its archive.`)) return;
           <option value={1000}>1000 lines</option>
           <option value={2000}>2000 lines</option>
         </select>
-        <button disabled={!!loading} onClick={() => loadWebsiteLog(logViewer.id, logViewer.kind, logViewer.lines, logViewer.domain)}><RefreshCw size={14}/>{t('Refresh')}</button>
+        <button className="secondary-light" disabled={!!loading} onClick={() => loadWebsiteLog(logViewer.id, logViewer.kind, logViewer.lines, logViewer.domain)}><RefreshCw size={14}/>{t('Refresh')}</button>
       </div>
       <pre className="log-output">{logViewer.exists ? (logViewer.content || 'Log is empty.') : 'Log file has not been created yet.'}</pre>
     </section>;
@@ -5225,10 +5356,26 @@ Each account is overwritten with what is in its archive.`)) return;
     const createHint = websites.length
       ? null
       : 'This creates the first hosted site for the current account.';
+    const createOpen = createFormOpen || websites.length === 0;
+    // What secures a site, in OPanel's words: a wildcard, a certificate
+    // borrowed from another site, one uploaded by hand, or Let's Encrypt.
+    const sslBadge = site => !site.ssl_enabled ? t('No SSL')
+      : site.ssl_mode === 'cloudflare' ? t('Wildcard')
+        : site.ssl_mode === 'shared' ? t('Shared cert')
+          : site.ssl_mode === 'manual' ? t('Manual SSL') : 'SSL OK';
     return <>
-      <section className="section">
-        <h2>{createTitle}</h2>
-        {createHint && <p className="hint">{createHint}</p>}
+      {createOpen && <section className="section create-site-section">
+        <div className="section-title">
+          <div>
+            <h2>{t(createTitle)}</h2>
+            {createHint && <p className="hint">{t(createHint)}</p>}
+          </div>
+          {websites.length > 0 && <button
+            type="button"
+            className="secondary-light"
+            onClick={() => setCreateFormOpen(false)}
+          ><X size={15}/>{t('Close')}</button>}
+        </div>
         <div className="form-row create-site-row">
           <input value={domain} onChange={e => setDomain(e.target.value)} placeholder="domain.com" />
           <select value={siteType} onChange={e => setSiteType(e.target.value)}>
@@ -5236,7 +5383,7 @@ Each account is overwritten with what is in its archive.`)) return;
               key={value}
               value={value}
               disabled={value === 'application' && !appsFeatureEnabled}
-            >{label}</option>)}
+            >{t(label)}</option>)}
           </select>
           {siteType === 'application'
             ? <select value={createSiteAppId} onChange={e => setCreateSiteAppId(e.target.value)}>
@@ -5268,33 +5415,39 @@ Each account is overwritten with what is in its archive.`)) return;
         {createSslMode !== 'none' && <div className="ssl-sub-form create-ssl-sub">
           {createSslMode === 'letsencrypt' && <p className="hint">{t('A certificate is issued right after the site is created — the domain must already point to this server.')}</p>}
           {createSslMode === 'wildcard' && <>
-            <p className="hint">{t('Issues')}<code>zone + *.zone</code> over Cloudflare DNS. Leave the token blank to reuse one already saved for the zone.</p>
+            <p className="hint">{t('Issues')}{' '}<code>zone + *.zone</code> over Cloudflare DNS. Leave the token blank to reuse one already saved for the zone.</p>
             <input type="password" autoComplete="off" placeholder={t('Cloudflare API token (Zone → DNS → Edit)')}
               value={createSslToken} onChange={e => setCreateSslToken(e.target.value)} />
           </>}
           {createSslMode === 'shared' && <p className="hint">{t('After the site is created the panel points it at an existing certificate that covers this domain (a wildcard first). If none does, the site is created without SSL.')}</p>}
           {createSslMode === 'manual' && <p className="hint">{t('The site is created, then the panel opens the SSL page so you can paste the certificate and key.')}</p>}
         </div>}
-        <p className="hint">{wpFieldsEnabled
+        <p className="hint">{t(wpFieldsEnabled
           ? 'WordPress will be installed and the panel will show the URL, admin account, and password after creation.'
           : siteType === 'application'
             ? 'Nginx will forward this domain to the selected application on 127.0.0.1, including WebSocket upgrades.'
-            : 'A PHP-FPM vhost will be created with public_html/ folder. Upload your PHP, HTML, or static files via File Manager.'}</p>
-      </section>
+            : 'A PHP-FPM vhost will be created with public_html/ folder. Upload your PHP, HTML, or static files via File Manager.')}</p>
+      </section>}
       <section className="section">
         <div className="section-title">
-          <div><h2>{t('Website list')}</h2><p className="hint">{searchActive ? t('{n} result(s)', { n: visibleWebsites.length }) : t('{n} website(s)', { n: visibleWebsites.length })}</p></div>
-          <button disabled={!!loading || websiteSearching} onClick={() => loadWebsiteList(websiteSearch, true)}><RefreshCw size={15} className={websiteSearching ? 'spin' : ''}/>{t('Refresh')}</button>
+          <div><h2>{t('Website list')}</h2></div>
+          <div className="actions">
+            <button className="secondary" disabled={!!loading || websiteSearching} onClick={() => loadWebsiteList(websiteSearch, true)}><RefreshCw size={15} className={websiteSearching ? 'spin' : ''}/>{t('Refresh')}</button>
+            {!createOpen && <button type="button" onClick={() => setCreateFormOpen(true)}><Plus size={15}/>{t('New website')}</button>}
+          </div>
         </div>
-        <div className="website-search-bar">
-          <Search size={16}/>
-          <input
+        <div className="website-search">
+          <Search size={15}/>
+          <NoAutofillInput
+            type="search"
+            name="website-search"
             value={websiteSearch}
             onChange={e => setWebsiteSearch(e.target.value)}
             placeholder={t('Search domain, alias, path, or Linux user')}
             aria-label={t('Search websites')}
           />
-          {websiteSearch && <button className="secondary-light icon-button" type="button" onClick={() => setWebsiteSearch('')} aria-label={t('Clear website search')} title={t('Clear search')}><X size={15}/></button>}
+          {websiteSearch && <button className="mini secondary-light" type="button" onClick={() => setWebsiteSearch('')} aria-label={t('Clear website search')} title={t('Clear search')}><X size={13}/></button>}
+          <span className="hint">{searchActive ? t('{n} result(s)', { n: visibleWebsites.length }) : t('{n} website(s)', { n: visibleWebsites.length })}</span>
         </div>
         {visibleWebsites.length === 0 && <EmptyState icon={Globe} message={searchActive ? "No websites match this search." : "No websites yet."} />}
         <div className="site-grid">
@@ -5307,14 +5460,14 @@ Each account is overwritten with what is in its archive.`)) return;
               </div>
             </div>
             <div className="site-meta">
-              <span className={`badge site-ssl-badge ${site.ssl_enabled ? 'ok' : ''}`}>{site.ssl_enabled ? 'SSL OK' : 'No SSL'}</span>
-              <span>{t('Type')}<strong>{site.app_type || 'wordpress'}</strong></span>
-              <span>PHP <strong>{site.php_version}</strong></span>
-              {site.app_type === 'php' && site.nginx_rewrite_mode && site.nginx_rewrite_mode !== 'none' && <span>{t('Rewrite')}<strong>{site.nginx_rewrite_mode}</strong></span>}
+              <span className={`badge site-ssl-badge ${site.ssl_enabled ? 'ok' : 'warn'}`}>{sslBadge(site)}</span>
+              <span>{APP_TYPE_LABELS[site.app_type || 'wordpress'] || site.app_type}</span>
+              {site.app_type !== 'static' && <span>PHP{' '}<strong>{site.php_version}</strong></span>}
+              {site.app_type === 'php' && site.nginx_rewrite_mode && site.nginx_rewrite_mode !== 'none' && <span>{t('Rewrite')}{' '}<strong>{site.nginx_rewrite_mode}</strong></span>}
               {site.nginx_custom && <span className="badge ok">{t('Custom Nginx')}</span>}
               {site.waf_enabled && <span className="badge ok">WAF</span>}
               {site.http_flood_enabled && <span className="badge ok">{t('HTTP Flood')}</span>}
-              {(site.aliases || []).length > 0 && <span>{t('Domains')}<strong>{(site.aliases || []).length + 1}</strong></span>}
+              {(site.aliases || []).length > 0 && <span>{t('Domains')}{' '}<strong>{(site.aliases || []).length + 1}</strong></span>}
             </div>
             <div className="site-actions" aria-label={`Website actions for ${site.domain}`}>
               <div className="site-feature-actions">
@@ -5346,14 +5499,25 @@ Each account is overwritten with what is in its archive.`)) return;
     const sslLabel = currentSite?.ssl_enabled
       ? (sslLabels[currentSite?.ssl_mode] || 'SSL Enabled')
       : 'SSL Disabled';
-    const sslUpdated = currentSite?.ssl_updated_at ? new Date(currentSite.ssl_updated_at).toLocaleString() : '';
-    return <section className="section">
+    const locale = language === 'vi' ? 'vi-VN' : 'en-GB';
+    const sslUpdated = currentSite?.ssl_updated_at ? new Date(currentSite.ssl_updated_at).toLocaleString(locale) : '';
+    // Every site on one list, as OPanel has it: the unsecured first, then the
+    // rest by name, each a click from the form above.
+    const sslSites = [...websites].sort((a, b) => (a.ssl_enabled === b.ssl_enabled
+      ? String(a.domain).localeCompare(String(b.domain)) : a.ssl_enabled ? 1 : -1));
+    const securedCount = websites.filter(site => site.ssl_enabled).length;
+    const siteSslLabel = site => !site.ssl_enabled ? t('No SSL')
+      : site.ssl_mode === 'manual' ? t('Manual SSL')
+        : site.ssl_mode === 'shared' ? t('Shared cert')
+          : site.ssl_mode === 'cloudflare' ? t('Wildcard') : 'SSL OK';
+    return <>
+    <section className="section" id="ssl-manage">
       <h2>{t('SSL Certificate')}</h2>
       <WebsiteSelect />
       {currentSite && <div className="info-box" style={{marginTop:8}}>
         <strong>{currentSite.domain}</strong>
-        <span className={currentSite.ssl_enabled ? 'badge ok' : 'badge'} style={{justifySelf:'start'}}>{sslLabel}</span>
-        {sslUpdated && <span className="hint">Updated {sslUpdated}</span>}
+        <span className={currentSite.ssl_enabled ? 'badge ok' : 'badge'} style={{justifySelf:'start'}}>{t(sslLabel)}</span>
+        {sslUpdated && <span className="hint">{t('Updated')} {sslUpdated}</span>}
         {currentSite.ssl_mode === 'manual' && currentSite.ssl_has_ca && <span className="badge ok" style={{justifySelf:'start'}}>{t('CA Bundle')}</span>}
       </div>}
       <div className="segmented ssl-mode-tabs">
@@ -5363,11 +5527,11 @@ Each account is overwritten with what is in its archive.`)) return;
         <button className={sslMode === 'shared' ? 'active' : ''} onClick={() => setSslMode('shared')}><Copy size={14}/>{t('Use existing')}</button>
       </div>
       {sslMode === 'letsencrypt' && <>
-        <button disabled={!selectedWebsiteId || !!loading} onClick={() => enableSsl(selectedWebsiteId)} style={{marginTop:8}}><Lock size={15}/>{t('Install / Renew SSL')}</button>
+        <button className="ssl-install" disabled={!selectedWebsiteId || !!loading} onClick={() => enableSsl(selectedWebsiteId)}><Lock size={15}/>{t('Install / Renew SSL')}</button>
         <p className="hint">{t('The domain must point to the correct VPS IP before issuing SSL.')}</p>
       </>}
       {sslMode === 'wildcard' && <div className="ssl-sub-form">
-        <p className="hint">{t('Issues')}<code>{cfZone.zone ? `${cfZone.zone} + *.${cfZone.zone}` : 'zone + *.zone'}</code> over
+        <p className="hint">{t('Issues')}{' '}<code>{cfZone.zone ? `${cfZone.zone} + *.${cfZone.zone}` : 'zone + *.zone'}</code> over
           Cloudflare DNS. Needs an API token with <strong>{t('Zone → DNS → Edit')}</strong> for the zone.
         </p>
         {cfZone.has_token
@@ -5381,7 +5545,7 @@ Each account is overwritten with what is in its archive.`)) return;
       {sslMode === 'shared' && <div className="ssl-sub-form">
         <p className="hint">{t('Point this site at another BPanel website\'s certificate (e.g. a wildcard). No new certificate is issued.')}</p>
         {sslSources.length === 0
-          ? <p className="hint">{t('No other website has a certificate that covers')}<strong>{currentSite?.domain}</strong>.</p>
+          ? <p className="hint">{t('No other website has a certificate that covers')}{' '}<strong>{currentSite?.domain}</strong>.</p>
           : <>
             <select value={sharedSource} onChange={e => setSharedSource(e.target.value)}>
               <option value="">{t('Select a source website…')}</option>
@@ -5405,7 +5569,20 @@ Each account is overwritten with what is in its archive.`)) return;
         <textarea rows={7} disabled={!!manualSslFiles.ca_bundle} value={manualSslForm.ca_bundle} onChange={e => setManualSslForm(prev => ({ ...prev, ca_bundle: e.target.value }))} placeholder={t('Optional CA bundle')} />
         <button className="manual-ssl-submit" disabled={!selectedWebsiteId || !!loading} onClick={installManualSsl}><Upload size={15}/>{t('Install Manual SSL')}</button>
       </div>}
-    </section>;
+    </section>
+    {websites.length > 0 && <section className="section">
+      <div className="section-title">
+        <div><h2>{t('All websites')}</h2><p className="hint">{t('{secured} of {total} secured', { secured: securedCount, total: websites.length })}</p></div>
+      </div>
+      <div className="table ssl-overview">
+        {sslSites.map(site => <div className={`row ssl-overview-row${String(site.id) === String(selectedWebsiteId) ? ' selected' : ''}`} key={site.id}>
+          <span className="ssl-overview-domain"><strong>{site.domain}</strong>{site.ssl_updated_at && <small>{t('Updated')} {new Date(site.ssl_updated_at).toLocaleDateString(locale)}</small>}</span>
+          <span className={`badge ${site.ssl_enabled ? 'ok' : 'warn'}`}>{siteSslLabel(site)}</span>
+          <button type="button" className="mini secondary" onClick={() => { setSelectedWebsiteId(String(site.id)); document.getElementById('ssl-manage')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>{site.ssl_enabled ? t('Manage') : t('Set up SSL')}</button>
+        </div>)}
+      </div>
+    </section>}
+    </>;
   }
 
   function renderDatabases() {
@@ -5416,27 +5593,43 @@ Each account is overwritten with what is in its archive.`)) return;
       doCopy.then(() => { setCopiedField(field); setTimeout(() => setCopiedField(null), 2000); }).catch(() => setError(t('Copy failed.')));
     }
     const dbSearchActive = !!dbSearch.trim();
+    // Like the website form: making one is occasional, finding one is why
+    // the page is open. Open by itself only when there is nothing to find.
+    const dbCreateVisible = dbCreateOpen || (databases.length === 0 && !dbSearchActive);
     return <section className="section">
       <div className="section-title">
         <h2>{t('Databases')}</h2>
-        <button disabled={!!loading || dbSearching} onClick={() => loadDatabases(dbSearch, true)}><RefreshCw size={15} className={dbSearching ? 'spin' : ''}/>{t('Refresh')}</button>
+        <div className="actions">
+          <button className="secondary" disabled={!!loading || dbSearching} onClick={() => loadDatabases(dbSearch, true)}><RefreshCw size={15} className={dbSearching ? 'spin' : ''}/>{t('Refresh')}</button>
+          {!dbCreateVisible && <button type="button" onClick={() => setDbCreateOpen(true)}><Plus size={15}/>{t('New database')}</button>}
+        </div>
       </div>
-      <div className="website-search-bar">
-        <Search size={16}/>
-        <input
+      {dbCreateVisible && <div className="create-inline">
+        <div className="create-inline-head">
+          <strong>{t('Create database')}</strong>
+          {databases.length > 0 && <button type="button" className="secondary icon-only mini" onClick={() => setDbCreateOpen(false)} aria-label={t('Close')} title={t('Close')}><X size={15}/></button>}
+        </div>
+        <div className="form-row">
+          <input name="new-db-name" autoComplete="off" value={newDatabase.db_name} onChange={e => setNewDatabase(prev => ({ ...prev, db_name: e.target.value }))} placeholder="database_name" />
+          <input name="new-db-user" autoComplete="off" value={newDatabase.db_user} onChange={e => setNewDatabase(prev => ({ ...prev, db_user: e.target.value }))} placeholder={t('db_user (default = db_name)')} />
+          {/* new-password, or the browser offers the panel's own password here. */}
+          <input name="new-db-password" autoComplete="new-password" value={newDatabase.db_password} onChange={e => setNewDatabase(prev => ({ ...prev, db_password: e.target.value }))} placeholder={t('password (min 12 chars)')} />
+          <button type="button" className="mini secondary-light" title={t('Generate random password')} onClick={() => setNewDatabase(prev => ({ ...prev, db_password: generateRandomPassword() }))}><Dices size={13}/></button>
+          <button disabled={!!loading || !newDatabase.db_name.trim()} onClick={createDatabase}><Plus size={15}/>{t('Create database')}</button>
+        </div>
+      </div>}
+      <div className="list-search">
+        <Search size={15}/>
+        <NoAutofillInput
+          type="search"
+          name="database-search"
           value={dbSearch}
           onChange={e => setDbSearch(e.target.value)}
           placeholder={t('Search by database or user name')}
           aria-label={t('Search databases')}
         />
-        {dbSearch && <button className="secondary-light icon-button" type="button" onClick={() => setDbSearch('')} aria-label={t('Clear database search')} title={t('Clear search')}><X size={15}/></button>}
-      </div>
-      <div className="form-row">
-        <input value={newDatabase.db_name} onChange={e => setNewDatabase(prev => ({ ...prev, db_name: e.target.value }))} placeholder="database_name" />
-        <input value={newDatabase.db_user} onChange={e => setNewDatabase(prev => ({ ...prev, db_user: e.target.value }))} placeholder={t('db_user (default = db_name)')} />
-        <input value={newDatabase.db_password} onChange={e => setNewDatabase(prev => ({ ...prev, db_password: e.target.value }))} placeholder={t('password (min 12 chars)')} />
-        <button className="mini secondary-light" title={t('Generate random password')} onClick={() => setNewDatabase(prev => ({ ...prev, db_password: generateRandomPassword() }))}><Dices size={13}/></button>
-        <button disabled={!!loading || !newDatabase.db_name.trim()} onClick={createDatabase}><Plus size={15}/>{t('Create database')}</button>
+        {dbSearch && <button className="mini secondary-light" type="button" onClick={() => setDbSearch('')} aria-label={t('Clear database search')} title={t('Clear search')}><X size={13}/></button>}
+        <span className="hint">{t('{count} databases', { count: databases.length })}</span>
       </div>
       {createdDbInfo && <div className="info-box db-created-box">
         <div className="db-created-head"><strong>{t('Database created successfully')}</strong><button className="mini secondary-light" onClick={() => setCreatedDbInfo(null)}><X size={13}/></button></div>
@@ -5449,13 +5642,18 @@ Each account is overwritten with what is in its archive.`)) return;
       {databases.length === 0 && !createdDbInfo && <EmptyState icon={Database} message={dbSearchActive ? 'No databases match this search.' : 'No databases found.'} />}
       <div className="table">
         {databases.map(db => {
+          // Name and the site it belongs to, the login user, then the actions:
+          // phpMyAdmin as the one labelled button, the rest as glyphs.
+          const dbSite = websites.find(site => String(site.id) === String(db.website_id));
           return <div className="row db-row" key={db.id}>
-          <span><strong>{db.db_name}</strong></span>
-          <span style={{color:'var(--text-muted)'}}>{db.db_user}</span>
-          <button disabled={!!loading} onClick={() => openPhpMyAdmin(db.id)}>phpMyAdmin</button>
-          <button disabled={!!loading} onClick={() => downloadDatabase(db.id, db.db_name)}><Download size={14}/> SQL</button>
-          <button disabled={!!loading} onClick={() => changeDbPassword(db.id)}><KeyRound size={14}/>{t('Password')}</button>
-          <button className="danger" disabled={!!loading} onClick={() => deleteDatabase(db.id, db.db_name)}><Trash2 size={14}/></button>
+          <span><strong>{db.db_name}</strong>{dbSite && <small className="db-owner">{dbSite.domain}</small>}</span>
+          <span className="db-user"><small>{t('User')}</small> {db.db_user}</span>
+          <span className="db-actions">
+            <button className="mini secondary" disabled={!!loading} onClick={() => openPhpMyAdmin(db.id)}>phpMyAdmin</button>
+            <button className="mini secondary-light icon-only" disabled={!!loading} onClick={() => downloadDatabase(db.id, db.db_name)} title={t('Download SQL dump')} aria-label={`${t('Download SQL dump')} ${db.db_name}`}><Download size={14}/></button>
+            <button className="mini secondary-light icon-only" disabled={!!loading} onClick={() => changeDbPassword(db.id)} title={t('Change password')} aria-label={`${t('Change password')} ${db.db_name}`}><KeyRound size={14}/></button>
+            <button className="mini danger icon-only" disabled={!!loading} onClick={() => deleteDatabase(db.id, db.db_name)} title={t('Delete')} aria-label={`${t('Delete')} ${db.db_name}`}><Trash2 size={14}/></button>
+          </span>
         </div>})}
       </div>
       <p className="hint">{t('Click phpMyAdmin to sign in directly. Token expires after 60s.')}</p>
@@ -5475,7 +5673,7 @@ Each account is overwritten with what is in its archive.`)) return;
     return <section className="section">
       <div className="section-title">
         <div><h2>{t('SFTP accounts')}</h2></div>
-        <button disabled={!selectedWebsiteId || !!loading} onClick={loadSftpAccounts}><RefreshCw size={14}/>{t('Refresh')}</button>
+        <button className="secondary-light" disabled={!selectedWebsiteId || !!loading} onClick={loadSftpAccounts}><RefreshCw size={14}/>{t('Refresh')}</button>
       </div>
 
       <div className="info-box">
@@ -5562,35 +5760,42 @@ Each account is overwritten with what is in its archive.`)) return;
       ['php cron.php >> ../logs/cron.log 2>&1', 'Keep output in a log file inside this website.'],
       ['wp cron event run --due-now', 'WP-CLI, for WordPress sites.'],
     ];
+    const cronScheduleValue = cronScheduleCustom || !isPresetSchedule(CRON_SCHEDULE_PRESETS, cronSchedule) ? 'custom' : cronSchedule;
     return <section className="section">
       <div className="section-title">
         <div><h2>{t('Cron manager')}</h2></div>
-        <button disabled={!selectedWebsiteId || !!loading} onClick={listCron}><RefreshCw size={14}/>{t('Refresh')}</button>
+        <button className="secondary-light" disabled={!selectedWebsiteId || !!loading} onClick={listCron}><RefreshCw size={14}/>{t('Refresh')}</button>
       </div>
-      <div className="cron-form">
-        <WebsiteSelect />
-        <input value={cronSchedule} onChange={e => setCronSchedule(e.target.value)} placeholder="*/15 * * * *" />
-        <input value={cronCommand} onChange={e => setCronCommand(e.target.value)} placeholder="php -q cron.php >/dev/null 2>&1" />
-        <button disabled={!selectedWebsiteId || !!loading} onClick={addCron}><Plus size={14}/>{t('Add cron')}</button>
+      {/* The schedule is picked, not typed; "Custom" keeps the expression for
+          whoever wants it. The command starts from a template and stays
+          editable. */}
+      <div className="cron-builder">
+        <label><span>{t('Website')}</span><WebsiteSelect /></label>
+        <label><span>{t('Schedule')}</span>
+          <select value={cronScheduleValue} onChange={e => {
+            if (e.target.value === 'custom') { setCronScheduleCustom(true); return; }
+            setCronScheduleCustom(false);
+            setCronSchedule(e.target.value);
+          }}>
+            {CRON_SCHEDULE_PRESETS.map(([value, label]) => <option key={value} value={value}>{t(label)}</option>)}
+            <option value="custom">{t('Custom...')}</option>
+          </select>
+        </label>
+        {cronScheduleValue === 'custom' && <label><span>{t('Cron expression')}</span><input value={cronSchedule} onChange={e => setCronSchedule(e.target.value)} placeholder="*/15 * * * *" /></label>}
+        <label><span>{t('Command template')}</span>
+          <select value="" onChange={e => { if (e.target.value) setCronCommand(e.target.value); }}>
+            <option value="">{t('Pick a template...')}</option>
+            {cronExamples.map(([example, note]) => <option key={example} value={example}>{example} - {t(note)}</option>)}
+          </select>
+        </label>
+        <label className="cron-command"><span>{t('Command')}</span><input value={cronCommand} onChange={e => setCronCommand(e.target.value)} placeholder="php -q cron.php >/dev/null 2>&1" /></label>
+        <button className="cron-add" disabled={!selectedWebsiteId || !!loading} onClick={addCron}><Plus size={14}/>{t('Add cron')}</button>
       </div>
-      {selectedWebsiteId && <p className="hint">{t('Cron runs as')}<strong>{cronUser || currentSite?.linux_user || 'www-data'}</strong> for the selected website.</p>}
-      {selectedWebsiteId && <div className="cron-help">
-        <p>
-          {t('Write')} <code>php</code> {t('and BPanel rewrites it to')} <code>{sitePhpBinary}</code>
-          {sitePhpVersion ? <>{t(' — the PHP {version} CLI this website is set to', { version: sitePhpVersion })}</> : null}
-          {t(', so the job never runs on the server default version. Change the website\'s PHP version and its cron jobs follow.')}
-        </p>
-        <ul>
-          {cronExamples.map(([example, note]) => <li key={example}>
-            <button type="button" className="cron-example" onClick={() => setCronCommand(example)}>{example}</button>
-            <small>{note}</small>
-          </li>)}
-        </ul>
-        <p className="cron-help-note">{t('Only PHP scripts inside')}<code>public_html</code> and the safe WP-CLI maintenance commands are allowed.
-          A trailing <code>&gt;</code>, <code>&gt;&gt;</code>, <code>2&gt;</code> or <code>2&gt;&amp;1</code> may
-          redirect to <code>/dev/null</code> or to a file inside this website.
-        </p>
-      </div>}
+      {selectedWebsiteId && <p className="hint">
+        {t('Cron runs as')}{' '}<strong>{cronUser || currentSite?.linux_user || 'www-data'}</strong>{' '}{t('for this website.')}{' '}
+        {t('Write')} <code>php</code> {t('and BPanel rewrites it to')} <code>{sitePhpBinary}</code>.{' '}
+        {t('Only PHP scripts inside public_html and the safe WP-CLI commands are allowed.')}
+      </p>}
       <div className="cron-list">
         {selectedWebsiteId && cronItems.length === 0 && <EmptyState icon={Clock} message={t('No cron jobs found for this website.')} />}
         {cronItems.map(item => <div className="cron-item" key={`${item.index}-${item.line}`}>
@@ -5654,7 +5859,7 @@ Each account is overwritten with what is in its archive.`)) return;
             type="button"
             className={`mini ${chmodMode === preset ? '' : 'secondary-light'}`}
             onClick={() => setChmodMode(preset)}
-          >{preset} <small>{label}</small></button>)}
+          >{preset} <small>{t(label)}</small></button>)}
         </div>
         {onlyDirs && <label className="chmod-setgid">
           <input
@@ -5695,7 +5900,7 @@ Each account is overwritten with what is in its archive.`)) return;
       {renderChmodDialog()}
       <div className="section-title">
         <div><h2>{t('File manager')}</h2></div>
-        <button disabled={!hasFileTarget() || !!loading} onClick={() => listFiles(fileListPath)}><RefreshCw size={14}/>{t('Refresh')}</button>
+        <button className="secondary-light" disabled={!hasFileTarget() || !!loading} onClick={() => listFiles(fileListPath)}><RefreshCw size={14}/>{t('Refresh')}</button>
       </div>
       <div className="file-manager">
         <div className="file-panel">
@@ -5703,23 +5908,23 @@ Each account is overwritten with what is in its archive.`)) return;
             <FileTargetSelect />
             {activeFileApp
               ? <div className="file-meta">
-                <span>{t('Application:')}<strong>{activeFileApp.name}</strong></span>
-                <span>{t('Root:')}<strong>{activeFileApp.directory}{fileListPath ? `/${fileListPath}` : ''}</strong></span>
-                {currentUser && !isAdmin && <span>{t('Storage:')}<strong>{storageUsageText(currentUser)}</strong></span>}
+                <span>{t('Application:')}{' '}<strong>{activeFileApp.name}</strong></span>
+                <span>{t('Root:')}{' '}<strong>{activeFileApp.directory}{fileListPath ? `/${fileListPath}` : ''}</strong></span>
+                {currentUser && !isAdmin && <span>{t('Storage:')}{' '}<strong>{storageUsageText(currentUser)}</strong></span>}
               </div>
               : currentSite && <div className="file-meta">
-                <span>{t('Website:')}<strong>{currentSite.domain}</strong></span>
-                <span>{t('Root:')}<strong>{currentSite.root_path}{fileListPath ? `/${fileListPath}` : ''}</strong></span>
-                {currentUser && !isAdmin && <span>{t('Storage:')}<strong>{storageUsageText(currentUser)}</strong></span>}
+                <span>{t('Website:')}{' '}<strong>{currentSite.domain}</strong></span>
+                <span>{t('Root:')}{' '}<strong>{currentSite.root_path}{fileListPath ? `/${fileListPath}` : ''}</strong></span>
+                {currentUser && !isAdmin && <span>{t('Storage:')}{' '}<strong>{storageUsageText(currentUser)}</strong></span>}
               </div>}
             <div className="path-pill breadcrumb-line">
               <button className="crumb" disabled={!hasFileTarget() || fileListPath === ''} onClick={() => listFiles('')}>root</button>
               {fileBreadcrumbs(fileListPath).map(crumb => <button className="crumb" key={crumb.path} onClick={() => listFiles(crumb.path)}>{crumb.label}</button>)}
             </div>
             <div className="file-toolbar">
-              <button disabled={!hasFileTarget() || fileListPath === '' || !!loading} onClick={() => listFiles(parentFilePath(fileListPath))}>{t('Up')}</button>
-              <button disabled={!hasFileTarget() || !!loading} onClick={makeFileDirectory}><Plus size={14}/>{t('Folder')}</button>
-              <button disabled={!hasFileTarget() || !!loading} onClick={makeFile}><FileText size={14}/>{t('File')}</button>
+              <button className="secondary" disabled={!hasFileTarget() || fileListPath === '' || !!loading} onClick={() => listFiles(parentFilePath(fileListPath))}>{t('Up')}</button>
+              <button className="secondary" disabled={!hasFileTarget() || !!loading} onClick={makeFileDirectory}><Plus size={14}/>{t('Folder')}</button>
+              <button className="secondary" disabled={!hasFileTarget() || !!loading} onClick={makeFile}><FileText size={14}/>{t('File')}</button>
               <label className={`upload-button ${(!hasFileTarget() || !!loading) ? 'disabled' : ''}`}>
                 <Upload size={14}/>{t('Upload')}<input type="file" disabled={!hasFileTarget() || !!loading} onChange={e => { uploadSiteFile(e.target.files?.[0]); e.target.value = ''; }} />
               </label>
@@ -5727,10 +5932,10 @@ Each account is overwritten with what is in its archive.`)) return;
                 <option value="zip">zip</option>
                 <option value="tar.gz">tar.gz</option>
               </select>
-              <button disabled={selectedFilePaths.length === 0 || !!loading} onClick={copySelectedFiles}><Copy size={14}/>{t('Copy')}</button>
-              <button disabled={selectedFilePaths.length === 0 || !!loading} onClick={moveSelectedFiles}><MoveRight size={14}/>{t('Move')}</button>
-              <button disabled={selectedFilePaths.length === 0 || !!loading} onClick={archiveSelectedFiles}><Archive size={14}/>{t('Archive')}</button>
-              <button disabled={!selectedArchiveFile || !!loading} onClick={() => extractArchiveFile(selectedArchiveFile.path)}><ArchiveRestore size={14}/>{t('Extract')}</button>
+              <button className="secondary" disabled={selectedFilePaths.length === 0 || !!loading} onClick={copySelectedFiles}><Copy size={14}/>{t('Copy')}</button>
+              <button className="secondary" disabled={selectedFilePaths.length === 0 || !!loading} onClick={moveSelectedFiles}><MoveRight size={14}/>{t('Move')}</button>
+              <button className="secondary" disabled={selectedFilePaths.length === 0 || !!loading} onClick={archiveSelectedFiles}><Archive size={14}/>{t('Archive')}</button>
+              <button className="secondary" disabled={!selectedArchiveFile || !!loading} onClick={() => extractArchiveFile(selectedArchiveFile.path)}><ArchiveRestore size={14}/>{t('Extract')}</button>
               <button disabled={selectedChmodItems.length === 0 || !!loading} onClick={() => openChmodDialog(selectedChmodItems)}><Lock size={14}/>{t('Permissions')}</button>
               <button className="danger" disabled={selectedFilePaths.length === 0 || !!loading} onClick={deleteSelectedFiles}><Trash2 size={14}/>{t('Delete')}</button>
             </div>
@@ -5744,8 +5949,11 @@ Each account is overwritten with what is in its archive.`)) return;
             </div>}
           </div>
           <div className="file-list-header">
-            <label><input type="checkbox" checked={allSelected} onChange={toggleAllFiles} disabled={files.length === 0} />{t('Select')}</label>
-            <span>{t('{n} item(s)', { n: files.length })}</span>
+            <label><input type="checkbox" checked={allSelected} onChange={toggleAllFiles} disabled={files.length === 0} /><span className="sr-only">{t('Select')}</span></label>
+            <span>{t('Name')}</span>
+            <span>{t('Mode')}</span>
+            <span>{t('Size')}</span>
+            <span className="file-list-count">{t('{n} item(s)', { n: files.length })}</span>
           </div>
           <div className="file-list">
             {files.length === 0 && <div className="empty-box">{t('No files in this folder.')}</div>}
@@ -5802,7 +6010,7 @@ Each account is overwritten with what is in its archive.`)) return;
           aria-selected={activeBackupTab === id}
           className={activeBackupTab === id ? 'active' : ''}
           onClick={() => setBackupTab(id)}
-        ><Icon size={14}/>{label}</button>)}
+        ><Icon size={14}/>{t(label)}</button>)}
       </div>
       {visibleBackupJobs.length > 0 && <div className="backup-job-list">
         {visibleBackupJobs.map(job => <div className={`backup-job ${job.status}`} key={job.job_id}>
@@ -5819,8 +6027,8 @@ Each account is overwritten with what is in its archive.`)) return;
         <WebsiteSelect />
         <div className="actions backup-toolbar">
           <button disabled={!selectedWebsiteId || !!loading} onClick={createBackup}><Plus size={14}/>{t('Create backup')}</button>
-          <button disabled={!selectedWebsiteId || !!loading} onClick={refreshBackupArea}><RefreshCw size={14}/>{t('Refresh')}</button>
-          <label className="upload-button">
+          <button className="secondary-light" disabled={!selectedWebsiteId || !!loading} onClick={refreshBackupArea}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <label className="upload-button secondary">
             <Upload size={14}/>{t('Upload backup')}<input type="file" accept=".tar.gz,application/gzip" onChange={e => { uploadBackup(e.target.files?.[0]); e.target.value = ''; }} />
           </label>
         </div>
@@ -5829,8 +6037,8 @@ Each account is overwritten with what is in its archive.`)) return;
           {backups.map(file => <div className="backup-item" key={file}>
             <span>{file.split('/').pop()}</span>
             <div className="actions">
-              <button disabled={!!loading} onClick={() => downloadBackup(file)}><Download size={14}/>{t('Download')}</button>
-              <button disabled={!!loading} onClick={() => restoreBackup(file)}><RotateCcw size={14}/>{t('Restore')}</button>
+              <button className="secondary" disabled={!!loading} onClick={() => downloadBackup(file)}><Download size={14}/>{t('Download')}</button>
+              <button className="secondary" disabled={!!loading} onClick={() => restoreBackup(file)}><RotateCcw size={14}/>{t('Restore')}</button>
               <button className="danger" disabled={!!loading} onClick={() => deleteBackup(file)}><Trash2 size={14}/></button>
             </div>
           </div>)}
@@ -5840,7 +6048,7 @@ Each account is overwritten with what is in its archive.`)) return;
       {isAdmin && activeBackupTab === 'user' && <div className="backup-tab-panel">
         <div className="backup-panel-title">
           <div><h3>{t('Backup user')}</h3><p className="hint">{t('Includes the panel user, all owned websites, source files, database dumps, and restore metadata.')}</p></div>
-          <button disabled={!!loading} onClick={refreshUserBackupArea}><RefreshCw size={14}/>{t('Reload')}</button>
+          <button className="secondary" disabled={!!loading} onClick={refreshUserBackupArea}><RefreshCw size={14}/>{t('Reload')}</button>
         </div>
         <div className="sftp-run-row user-backup-row backup-run-row">
           <select value={selectedBackupUserId} onChange={e => setSelectedBackupUserId(e.target.value)}>
@@ -5853,17 +6061,17 @@ Each account is overwritten with what is in its archive.`)) return;
           </select>
           <button disabled={!selectedBackupUserId || !!loading} onClick={createUserBackup}><Archive size={14}/>{t('Create backup')}</button>
         </div>
-        {selectedBackupUser && <p className="hint">{t('Current user:')}<strong>{selectedBackupUser.username}</strong></p>}
+        {selectedBackupUser && <p className="hint">{t('Current user:')}{' '}<strong>{selectedBackupUser.username}</strong></p>}
         <div className="actions backup-subactions">
-          <button disabled={!selectedBackupUserId || !!loading} onClick={() => listUserBackups()}><RefreshCw size={14}/>{t('Refresh list')}</button>
+          <button className="secondary" disabled={!selectedBackupUserId || !!loading} onClick={() => listUserBackups()}><RefreshCw size={14}/>{t('Refresh list')}</button>
         </div>
         {selectedBackupUserId && userBackups.length === 0 && <EmptyState icon={Archive} message={t('No user backups found.')} />}
         <div className="backup-list">
           {userBackups.map(file => <div className="backup-item" key={file}>
             <span>{file.split('/').pop()}</span>
             <div className="actions">
-              <button disabled={!!loading} onClick={() => downloadUserBackup(file)}><Download size={14}/>{t('Download')}</button>
-              <button disabled={!!loading} onClick={() => restoreUserBackup(file)}><RotateCcw size={14}/>{t('Restore user')}</button>
+              <button className="secondary" disabled={!!loading} onClick={() => downloadUserBackup(file)}><Download size={14}/>{t('Download')}</button>
+              <button className="secondary" disabled={!!loading} onClick={() => restoreUserBackup(file)}><RotateCcw size={14}/>{t('Restore user')}</button>
               <button className="danger" disabled={!!loading} onClick={() => deleteUserBackup(file)}><Trash2 size={14}/></button>
             </div>
           </div>)}
@@ -5872,8 +6080,8 @@ Each account is overwritten with what is in its archive.`)) return;
         <div className="section-title restore-title backup-panel-heading backup-subtitle">
           <div><h3>{t('Restore folder')}</h3><p className="hint">{restoreBackupDir || '/var/backups/bpanel/users/restore'}</p></div>
           <div className="actions">
-            <button disabled={!!loading} onClick={loadRestoreBackups}><RefreshCw size={14}/>{t('Refresh')}</button>
-            <label className="upload-button">
+            <button className="secondary-light" disabled={!!loading} onClick={loadRestoreBackups}><RefreshCw size={14}/>{t('Refresh')}</button>
+            <label className="upload-button secondary">
               <Upload size={14}/>{t('Upload backups')}<input type="file" multiple accept=".tar.gz,application/gzip" onChange={e => { uploadUserBackups(e.target.files); e.target.value = ''; }} />
             </label>
           </div>
@@ -5882,8 +6090,8 @@ Each account is overwritten with what is in its archive.`)) return;
           {restoreBackups.map(item => <div className="backup-item" key={item.backup_file}>
             <span>{item.filename || item.backup_file.split('/').pop()}<small>{item.valid ? `${item.source === 'opanel' ? 'opanel · ' : ''}` + t('{user} - {n} website(s)', { user: item.username || t('unknown user'), n: item.websites || 0 }) : (item.error || 'Invalid backup')}</small></span>
             <div className="actions">
-              <button disabled={!!loading} onClick={() => downloadUserBackup(item.backup_file)}><Download size={14}/>{t('Download')}</button>
-              <button disabled={!!loading || !item.valid} onClick={() => restoreUserBackup(item.backup_file)}><RotateCcw size={14}/>{t('Restore user')}</button>
+              <button className="secondary" disabled={!!loading} onClick={() => downloadUserBackup(item.backup_file)}><Download size={14}/>{t('Download')}</button>
+              <button className="secondary" disabled={!!loading || !item.valid} onClick={() => restoreUserBackup(item.backup_file)}><RotateCcw size={14}/>{t('Restore user')}</button>
               <button className="danger" disabled={!!loading} onClick={() => deleteRestoreBackup(item.backup_file)}><Trash2 size={14}/></button>
             </div>
           </div>)}
@@ -5894,21 +6102,42 @@ Each account is overwritten with what is in its archive.`)) return;
       {isAdmin && activeBackupTab === 'schedule' && <div className="backup-tab-panel">
         <div className="backup-panel-title">
           <div><h3>{t('Scheduled backups')}</h3><p className="hint">{t('Run full user backups automatically with optional off-server destination.')}</p></div>
-          <button disabled={!!loading} onClick={refreshScheduledBackupArea}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <button className="secondary-light" disabled={!!loading} onClick={refreshScheduledBackupArea}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
-        <div className="sftp-form schedule-form backup-schedule-form">
+        {/* Who, then when, where and under what name - each field labelled,
+            and one per line on a phone. It was six unlabelled controls in one
+            row of 130px cells. */}
+        <div className="backup-schedule-builder">
+          <div className="schedule-users">
           <label className="schedule-toggle">
             <input type="checkbox" checked={!!newBackupSchedule.all_users} onChange={e => setNewBackupSchedule(prev => ({ ...prev, all_users: e.target.checked }))} />
             <span>{t('All users')}</span>
           </label>
-          <select multiple value={newBackupSchedule.user_ids || []} disabled={!!newBackupSchedule.all_users} onChange={e => setNewBackupSchedule(prev => ({ ...prev, user_ids: Array.from(e.target.selectedOptions, option => option.value) }))}>
+          <select multiple size={6} value={newBackupSchedule.user_ids || []} disabled={!!newBackupSchedule.all_users} onChange={e => setNewBackupSchedule(prev => ({ ...prev, user_ids: Array.from(e.target.selectedOptions, option => option.value) }))}>
             {users.map(user => <option key={user.id} value={String(user.id)}>{user.username}</option>)}
           </select>
-          <input value={newBackupSchedule.schedule} onChange={e => setNewBackupSchedule(prev => ({ ...prev, schedule: e.target.value }))} placeholder="0 2 * * *" />
+          </div>
+          <div className="schedule-fields">
+          <label><span>{t('Schedule')}</span>
+            <select value={backupScheduleCustom || !isPresetSchedule(BACKUP_SCHEDULE_PRESETS, newBackupSchedule.schedule) ? 'custom' : newBackupSchedule.schedule}
+              onChange={e => {
+                if (e.target.value === 'custom') { setBackupScheduleCustom(true); return; }
+                setBackupScheduleCustom(false);
+                setNewBackupSchedule(prev => ({ ...prev, schedule: e.target.value }));
+              }}>
+              {BACKUP_SCHEDULE_PRESETS.map(([value, label]) => <option key={value} value={value}>{t(label)}</option>)}
+              <option value="custom">{t('Custom...')}</option>
+            </select>
+          </label>
+          {(backupScheduleCustom || !isPresetSchedule(BACKUP_SCHEDULE_PRESETS, newBackupSchedule.schedule)) && <label><span>{t('Cron expression')}</span>
+            <input value={newBackupSchedule.schedule} onChange={e => setNewBackupSchedule(prev => ({ ...prev, schedule: e.target.value }))} placeholder="0 2 * * *" /></label>}
+          <label><span>{t('Destination')}</span>
           <select value={newBackupSchedule.target_id} onChange={e => setNewBackupSchedule(prev => ({ ...prev, target_id: e.target.value }))}>
             <option value="">{t('Local only')}</option>
             {sftpTargets.map(target => <option key={target.id} value={target.id}>{target.name} ({target.kind === 's3' ? 'S3' : 'SFTP'})</option>)}
           </select>
+          </label>
+          <label><span>{t('Stored file name')}</span>
           <select value={newBackupSchedule.name_suffix} aria-label={t('Stored file name')}
             onChange={e => setNewBackupSchedule(prev => ({ ...prev, name_suffix: e.target.value }))}>
             <option value="none">{t('Append: nothing')}</option>
@@ -5916,14 +6145,11 @@ Each account is overwritten with what is in its archive.`)) return;
             <option value="week_of_month">{t('Append: week of month')}</option>
             <option value="full_date">{t('Append: full date')}</option>
           </select>
-          <button disabled={(!newBackupSchedule.all_users && (!newBackupSchedule.user_ids || newBackupSchedule.user_ids.length === 0)) || !!loading} onClick={createBackupSchedule}><Clock size={14}/>{t('Schedule')}</button>
+          </label>
+          <button className="schedule-submit" disabled={(!newBackupSchedule.all_users && (!newBackupSchedule.user_ids || newBackupSchedule.user_ids.length === 0)) || !!loading} onClick={createBackupSchedule}><Clock size={14}/>{t('Schedule')}</button>
+          </div>
         </div>
-        <p className="hint">{t('What gets appended decides how many copies pile up at the far end:')}<strong> nothing</strong> keeps one file per account and overwrites it,
-          <strong> day of week</strong> rotates through seven,
-          <strong> week of month</strong> through five, and
-          <strong> full date</strong> keeps one a day until retention prunes it.
-          The first three bound storage without anything having to delete.
-        </p>
+        <p className="hint">{t('The name suffix decides how many copies are kept: nothing keeps one per account, day of week keeps seven, week of month five, and full date one a day until retention removes it.')}</p>
         <div className="backup-list">
           {backupSchedules.map(item => {
             const scheduleTarget = sftpTargets.find(target => target.id === item.target_id);
@@ -5948,7 +6174,7 @@ Each account is overwritten with what is in its archive.`)) return;
             <h3>{t('Restore')}</h3>
             <p className="hint">{t('Everything that could be restored, wherever it is. Tick what you want back and restore it in one go.')}</p>
           </div>
-          <button disabled={!!loading} onClick={loadRestoreCatalogue}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <button className="secondary-light" disabled={!!loading} onClick={loadRestoreCatalogue}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
 
         {!restoreCatalogue.loaded && <p className="hint">{t('Press Refresh to look on this server and in every S3 destination.')}</p>}
@@ -6002,7 +6228,7 @@ Each account is overwritten with what is in its archive.`)) return;
       {isAdmin && activeBackupTab === 'destination' && <div className="backup-tab-panel">
         <div className="backup-panel-title">
           <div><h3>{t('Backup Destination')}</h3><p className="hint">{t('Somewhere off this machine to keep a copy. A backup that lives on the server it backs up is not a backup.')}</p></div>
-          <button disabled={!!loading} onClick={loadSftpTargets}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <button className="secondary-light" disabled={!!loading} onClick={loadSftpTargets}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
         <div className="segmented" role="tablist" aria-label={t('Destination type')}>
           <button className={newSftpTarget.kind === 'sftp' ? 'active' : ''} disabled={!!loading}
@@ -6052,7 +6278,7 @@ Each account is overwritten with what is in its archive.`)) return;
       {isAdmin && activeBackupTab === 'da-import' && <div className="backup-tab-panel">
         <div className="backup-panel-title">
           <div><h3>{t('DirectAdmin Import')}</h3><p className="hint">{t('Import websites, databases, and users from a DirectAdmin backup archive.')}</p></div>
-          <button disabled={!!loading} onClick={() => listDaBackups()}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <button className="secondary-light" disabled={!!loading} onClick={() => listDaBackups()}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
         <div className="da-toolbar">
           <label className="upload-button">
@@ -6169,22 +6395,27 @@ Each account is overwritten with what is in its archive.`)) return;
   function renderServices() {
     return <section className="section">
       <div className="section-title">
-        <h2>{t('Services Status')}</h2>
-        <button disabled={!!loading} onClick={checkAllServices}><RefreshCw size={15}/>{t('Refresh')}</button>
+        <div>
+          <h2>{t('Services')}</h2>
+          <p className="hint">{t('Auto-refreshes every 10s')}</p>
+        </div>
+        <button className="secondary" disabled={!!loading} onClick={checkAllServices}><RefreshCw size={15}/>{t('Refresh')}</button>
       </div>
+      {/* A running service's Start and a stopped one's Stop are disabled, so
+          the enabled button is the obvious next step. */}
       <div className="service-grid">
         {serviceNames.map(name => {
           const state = serviceStates[name];
           const text = `${state?.stdout || ''} ${state?.stderr || ''}`;
           const active = text.includes('active (running)');
           const inactive = text.includes('inactive') || text.includes('failed');
+          const canStop = !['bpanel-api', 'redis-server'].includes(name);
           return <div className="service-card" key={name}>
-            <div><strong>{name}</strong><span className={active ? 'badge ok' : inactive ? 'badge bad' : 'badge'}>{active ? 'Running' : inactive ? 'Stopped' : '...'}</span></div>
-            <small>{t('Auto-refreshes every 10s')}</small>
+            <div><strong>{name}</strong><span className={active ? 'badge ok' : inactive ? 'badge bad' : 'badge'}>{active ? t('Running') : inactive ? t('Stopped') : '...'}</span></div>
             {isAdmin && <div className="service-actions">
-              <button onClick={() => runServiceAction(name, 'start')}><Play size={13}/>{t('Start')}</button>
-              {!['bpanel-api', 'redis-server'].includes(name) && <button onClick={() => runServiceAction(name, 'stop')}><Square size={13}/>{t('Stop')}</button>}
-              <button onClick={() => runServiceAction(name, 'restart')}><RotateCcw size={13}/>{t('Restart')}</button>
+              <button className="secondary" disabled={active} onClick={() => runServiceAction(name, 'start')}><Play size={13}/>{t('Start')}</button>
+              {canStop && <button className="danger-light" disabled={inactive} onClick={() => runServiceAction(name, 'stop')}><Square size={13}/>{t('Stop')}</button>}
+              <button className="secondary" onClick={() => runServiceAction(name, 'restart')}><RotateCcw size={13}/>{t('Restart')}</button>
             </div>}
           </div>;
         })}
@@ -6298,12 +6529,12 @@ Each account is overwritten with what is in its archive.`)) return;
             <p className="hint">iptables + ipset. SSH, the panel port and 80/443/465/587 are always kept open.</p>
           </div>
           <div className="actions">
-            <button disabled={!!loading} onClick={loadFirewall}><RefreshCw size={14}/>{t('Refresh')}</button>
+            <button className="secondary-light" disabled={!!loading} onClick={loadFirewall}><RefreshCw size={14}/>{t('Refresh')}</button>
             {/* One of these, never both: the other is not an action available now. */}
             {stateKnown && (enabled
               ? <button className="danger" disabled={!!loading} onClick={disableFirewall}>{t('Turn off')}</button>
               : <button disabled={!!loading} onClick={enableFirewall}><Shield size={14}/>{t('Turn on')}</button>)}
-            {enabled && <button disabled={!!loading} onClick={reloadFirewall}>{t('Reload')}</button>}
+            {enabled && <button className="secondary" disabled={!!loading} onClick={reloadFirewall}>{t('Reload')}</button>}
           </div>
         </div>
 
@@ -6314,9 +6545,9 @@ Each account is overwritten with what is in its archive.`)) return;
 
         <div className="detail-tabs">
           <button className={fwDetail === 'rules' ? 'chip on' : 'chip'} disabled={!!loading}
-            onClick={() => openFwDetail('rules')}>{t('Your rules')}<b>{userRules.length}</b></button>
+            onClick={() => openFwDetail('rules')}>{t('Your rules')}{' '}<b>{userRules.length}</b></button>
           <button className={fwDetail === 'urls' ? 'chip on' : 'chip'} disabled={!!loading}
-            onClick={() => openFwDetail('urls')}>{t('Blocklist URL')}<b>{blocklistUrls.length}</b></button>
+            onClick={() => openFwDetail('urls')}>{t('Blocklist URL')}{' '}<b>{blocklistUrls.length}</b></button>
           <button className={fwDetail === 'raw' ? 'chip on' : 'chip'} disabled={!!loading}
             onClick={() => openFwDetail('raw')}>{t('Raw status')}</button>
         </div>
@@ -6412,7 +6643,7 @@ Each account is overwritten with what is in its archive.`)) return;
             <h2>Fail2ban</h2>
             <p className="hint">{t('Five failed attempts within an hour bans an address for an hour, and longer each time it comes back, up to a week. The server never bans its own addresses.')}</p>
           </div>
-          <button disabled={!!loading} onClick={loadFail2ban}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <button className="secondary-light" disabled={!!loading} onClick={loadFail2ban}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
         {!f2b && <p className="hint">{t('Status not loaded. Press Refresh.')}</p>}
         {f2b && <>
@@ -6425,7 +6656,7 @@ Each account is overwritten with what is in its archive.`)) return;
           </div>
           <div className="detail-tabs">
             <button className={fwDetail === 'banned' ? 'chip on' : 'chip'} disabled={!!loading}
-              onClick={() => openFwDetail('banned')}>{t('Banned addresses')}<b>{f2b.banned ?? 0}</b></button>
+              onClick={() => openFwDetail('banned')}>{t('Banned addresses')}{' '}<b>{f2b.banned ?? 0}</b></button>
           </div>
           {fwDetail === 'banned' && <div className="detail-panel">
             <div className="detail-head">
@@ -6469,46 +6700,45 @@ Each account is overwritten with what is in its archive.`)) return;
           <div>
             <h2>WAF</h2>
             <p className="hint">{isAdmin
-              ? 'Engine status and per-website protection. Open a website to configure its rules, flood limits and blocked bots.'
-              : 'Protection for your websites. Open one to configure its rules and blocked bots.'}</p>
+              ? t('Protection for each website. Open one to set its rules, flood limit and blocked bots.')
+              : t('Protection for your websites. Open one to set its rules and blocked bots.')}</p>
           </div>
-          <button disabled={!!loading} onClick={() => { loadBotBlocks(); if (isAdmin) { loadWafRules(); loadCrs(); } }}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <button className="secondary-light" disabled={!!loading} onClick={() => { loadBotBlocks(); if (isAdmin) { loadWafRules(); loadCrs(); } }}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
-        {isAdmin && <div className="info-box firewall-status"><strong>{t('Status')}</strong><pre>{statusText}</pre></div>}
+        {/* Folded. This is systemctl and timer output - the first thing on the
+            page was eleven lines of paths and a timer table, above the
+            controls somebody came to use. What the WAF is actually doing is
+            said by the badges below in words; this is here for the operator
+            who is diagnosing, and they know to open it. */}
+        {isAdmin && <details className="info-box firewall-status output-details">
+          <summary><strong>{t('Status')}</strong><span>{t('Module, rule files and timers')}</span></summary>
+          <pre>{statusText}</pre>
+        </details>}
       </section>
 
       {isAdmin && <section className="section">
         <div className="section-title">
           <div>
             <h2>{t('OWASP Core Rule Set')}</h2>
-            <p className="hint">
-              BPanel's own rules block known bad paths. CRS inspects the payload - SQL injection, XSS,
-              command injection - and scores each request instead of refusing on a single match.
-              Off by default because CRS needs tuning against real traffic before it can be trusted to block.
-            </p>
+            <p className="hint">{t('Inspects each request for SQL injection, XSS and similar attacks. Each website turns it on from its own page.')}</p>
           </div>
-          <button disabled={!!loading} onClick={loadCrs}><RefreshCw size={14}/>{t('Check')}</button>
+          <button className="secondary" disabled={!!loading} onClick={loadCrs}><RefreshCw size={14}/>{t('Check')}</button>
         </div>
         {!crs && <p className="hint">{t('Click Check to read the current state.')}</p>}
         {crs && <>
           <div className="waf-overview-badges" style={{ marginBottom: 12 }}>
             <span className={crs.mode === 'block' ? 'badge ok' : 'badge'}>
-              {crs.mode === 'off' ? 'Off' : (crs.mode === 'detect' ? 'Detect only' : 'Blocking')}
+              {crs.mode === 'off' ? t('Off') : (crs.mode === 'detect' ? t('Detect only') : t('Blocking'))}
             </span>
             <span className={crs.installed ? 'badge ok' : 'badge'}>
-              {crs.installed ? `${crs.rule_files} rule file(s) installed` : 'Not installed'}
+              {crs.installed ? t('{n} rule file(s) installed', { n: crs.rule_files }) : t('Not installed')}
             </span>
-            <span className="badge">{t('{n} site(s) opted in', { n: crs.sites_opted_in ?? 0 })}</span>
-            <span className="badge">{t('nginx now: {n} MB', { n: crs.nginx_pss_mb || 0 })}</span>
-            <span className={(crs.ram_available_mb || 0) < 1024 ? 'badge danger' : 'badge'}>
-              {t('{n} MB RAM free', { n: crs.ram_available_mb || 0 })}
-            </span>
-          </div>
-          <div className="info-box" style={{ marginBottom: 12 }}>
-            <strong>{t('Memory')}</strong>
-            <p className="hint">
-              {t('Each site that loads CRS adds its own copy of the rule set, so the cost grows with the number opted in — roughly {n} MB each. "nginx now" above is measured on this server, not estimated, and it is the figure to act on; watch it and the free-RAM figure beside it as you opt sites in. Note that `ps` reports several times this, because it counts pages the nginx workers share once for each worker.', { n: crs.rss_mb_per_site || 50 })}
-            </p>
+            <span className="badge">{t('{n} website(s) with CRS on', { n: crs.sites_opted_in ?? 0 })}</span>
+            {/* The memory essay is gone; a low-RAM warning is what is left of
+                it, because every site that turns CRS on carries it (~50 MB). */}
+            {(crs.ram_available_mb || 0) > 0 && crs.ram_available_mb < 1024 && <span className="badge danger">
+              {t('{n} MB RAM free', { n: crs.ram_available_mb })}
+            </span>}
           </div>
           <div className="segmented-control">
             {[['off', 'Off'], ['detect', 'Detect only'], ['block', 'Block']].map(([value, label]) => (
@@ -6517,18 +6747,17 @@ Each account is overwritten with what is in its archive.`)) return;
                 className={crs.mode === value ? 'active' : ''}
                 disabled={!!loading || crs.mode === value}
                 onClick={() => saveCrsMode(value)}
-              >{label}</button>
+              >{t(label)}</button>
             ))}
           </div>
           <p className="hint" style={{ marginTop: 10 }}>
-            {crs.mode === 'off' && 'Nothing from CRS is loaded. Payload attacks are not inspected.'}
-            {crs.mode === 'detect' && 'Every CRS rule runs and nothing is refused. Each request that Block mode would have stopped is recorded in /var/log/nginx/bpanel-modsec-audit.log, with the rule IDs that scored it. Read that for a while, add exceptions per site, then switch to Block.'}
-            {crs.mode === 'block' && 'Requests scoring above the threshold are refused on every site with the WAF on. Add SecRuleRemoveById <id> to a site’s custom rules to excuse it from one rule.'}
+            {crs.mode === 'off' && t('Off: requests are not inspected.')}
+            {crs.mode === 'detect' && t('Detect only: attacks are logged, nothing is blocked.')}
+            {crs.mode === 'block' && t('Block: attacks are refused on websites with CRS on.')}
           </p>
           {crs.mode !== 'off' && crs.panel_mode !== crs.mode && (
             <p className="hint">{t('Panel setting says "{panel}" but the server reports "{server}".', { panel: crs.panel_mode, server: crs.mode })}</p>
           )}
-          <p className="hint">{t('This is the server-wide switch. Which sites load CRS is chosen per website below.')}</p>
         </>}
       </section>}
 
@@ -6538,29 +6767,19 @@ Each account is overwritten with what is in its archive.`)) return;
         <div className="table waf-overview-list">
           {websites.map(site => {
             const bots = botCountFor(site.id);
-            // The site row carries its own CRS state, so an end user sees the
-            // truth. This used to read only from /waf/crs, which is admin-only:
-            // the refusal was swallowed and every site rendered "CRS off".
-            // The admin-only payload is still used, but only to name the mode.
-            const crsRow = (crs?.websites || []).find(w => w.website_id === site.id);
-            const crsOn = site.crs_enabled ?? !!crsRow?.crs_enabled;
-            const crsLive = crsOn && site.waf_enabled
-              && (site.crs_active ?? !!(crs?.mode && crs.mode !== 'off'));
+            // No CRS here: "WAF on" beside "CRS block" read as two things to
+            // worry about. CRS is switched on the site's own page.
             return <div className="waf-overview-row" key={site.id}>
               <span className="waf-overview-domain"><strong>{site.domain}</strong></span>
               <div className="waf-overview-badges">
-                <span className={site.waf_enabled ? 'badge ok' : 'badge'}>{site.waf_enabled ? 'WAF on' : 'WAF off'}</span>
-                <span
-                  className={crsLive ? 'badge ok' : 'badge'}
-                  title={crsOn && !crsLive ? 'Opted in, but CRS is off server-wide' : ''}
-                >{crsOn ? (crsLive ? (crs?.mode ? `CRS ${crs.mode}` : 'CRS on') : 'CRS pending') : 'CRS off'}</span>
-                <span className={site.http_flood_enabled ? 'badge ok' : 'badge'}>{site.http_flood_enabled ? 'Flood on' : 'Flood off'}</span>
+                <span className={site.waf_enabled ? 'badge ok' : 'badge'}>{site.waf_enabled ? t('WAF on') : t('WAF off')}</span>
+                <span className={site.http_flood_enabled ? 'badge ok' : 'badge'}>{site.http_flood_enabled ? t('Flood on') : t('Flood off')}</span>
                 <span
                   className={bots > 0 ? 'badge ok' : 'badge'}
                   title={ownCountFor(site.id) > 0 ? `${ownCountFor(site.id)} set on this site, the rest from the global list` : 'All from the global list'}
-                >{bots > 0 ? `${bots} bot(s)` : 'No bots'}</span>
+                >{bots > 0 ? t('{n} bot(s)', { n: bots }) : t('No bots')}</span>
               </div>
-              <button disabled={!!loading} onClick={() => openWafSite(site.id)}><SettingsIcon size={14}/>{t('Configure')}</button>
+              <button className="secondary" disabled={!!loading} onClick={() => openWafSite(site.id)}><SettingsIcon size={14}/>{t('Configure')}</button>
             </div>;
           })}
         </div>
@@ -6668,37 +6887,42 @@ Each account is overwritten with what is in its archive.`)) return;
             <button className="secondary-light" onClick={() => navigateToPage('waf')}><ArrowLeft size={14}/>{t('All websites')}</button>
           </div>
         </div>
-        <div className="waf-site-toggles">
-          <span className={selectedSite?.waf_enabled ? 'badge ok' : 'badge'}>{selectedSite?.waf_enabled ? 'WAF enabled' : 'WAF disabled'}</span>
-          <button disabled={!selectedWafWebsiteId || !!loading} onClick={() => selectedSite && toggleWebsiteWaf(selectedSite)}>
-            <Shield size={14}/> {selectedSite?.waf_enabled ? 'Disable WAF' : 'Enable WAF'}
-          </button>
-          <span className={wafSiteConfig?.crs_active ? 'badge ok' : 'badge'}>
-            {wafSiteConfig?.crs_enabled
-              ? (wafSiteConfig?.crs_mode === 'off' ? 'CRS on (server-wide: off)' : `CRS ${wafSiteConfig.crs_mode}`)
-              : 'CRS off'}
-          </span>
-          <button
-            disabled={!selectedWafWebsiteId || !!loading || !selectedSite?.waf_enabled}
-            title={selectedSite?.waf_enabled ? '' : 'Enable the WAF first'}
-            onClick={() => wafSiteConfig && toggleSiteCrs({
-              website_id: wafSiteConfig.website_id,
-              domain: wafSiteConfig.domain,
-              crs_enabled: wafSiteConfig.crs_enabled,
-            })}
-          >
-            <Shield size={14}/> {wafSiteConfig?.crs_enabled ? 'Disable CRS' : 'Enable CRS'}
-          </button>
+        {/* One row per protection: what it does, its state, its switch. CRS
+            is here and not in the list - whether a site carries it, and its
+            memory, is for whoever manages this site to decide. */}
+        <div className="waf-switches">
+          <div className="waf-switch-row">
+            <div className="waf-switch-text">
+              <strong>WAF</strong>
+              <span className="hint">{t('Blocks known bad paths.')}</span>
+            </div>
+            <span className={selectedSite?.waf_enabled ? 'badge ok' : 'badge'}>{selectedSite?.waf_enabled ? t('WAF on') : t('WAF off')}</span>
+            <button
+              className={selectedSite?.waf_enabled ? 'secondary' : ''}
+              disabled={!selectedWafWebsiteId || !!loading}
+              onClick={() => selectedSite && toggleWebsiteWaf(selectedSite)}
+            ><Shield size={14}/>{selectedSite?.waf_enabled ? t('Turn WAF off') : t('Turn WAF on')}</button>
+          </div>
+          {wafSiteConfig && <div className="waf-switch-row">
+            <div className="waf-switch-text">
+              <strong>OWASP CRS</strong>
+              <span className="hint">
+                {t('Inspects each request for SQL injection, XSS and similar attacks. Uses about {n} MB of server RAM.', { n: crs?.rss_mb_per_site || 50 })}
+                {wafSiteConfig.crs_enabled && !selectedSite?.waf_enabled ? ' ' + t('It loads when the WAF is on.') : ''}
+                {wafSiteConfig.crs_enabled && selectedSite?.waf_enabled && wafSiteConfig.crs_mode === 'off' ? ' ' + t('CRS is off for the whole server, so nothing is loaded yet.') : ''}
+                {wafSiteConfig?.crs_active && wafSiteConfig.crs_mode === 'detect' ? ' ' + t('Detect only: attacks are logged, nothing is blocked.') : ''}
+                {wafSiteConfig?.crs_active && wafSiteConfig.may_edit_custom_rules ? ' ' + t('Add SecRuleRemoveById <id> to the custom rules below to excuse this site from one rule.') : ''}
+              </span>
+            </div>
+            <span className={wafSiteConfig?.crs_active ? 'badge ok' : 'badge'}>{wafSiteConfig.crs_enabled ? t('CRS on') : t('CRS off')}</span>
+            <button
+              className={wafSiteConfig.crs_enabled ? 'secondary' : ''}
+              disabled={!!loading || (!wafSiteConfig.crs_enabled && !selectedSite?.waf_enabled)}
+              title={!wafSiteConfig.crs_enabled && !selectedSite?.waf_enabled ? t('Turn the WAF on first') : ''}
+              onClick={() => toggleSiteCrs(wafSiteConfig)}
+            ><Shield size={14}/>{wafSiteConfig.crs_enabled ? t('Turn CRS off') : t('Turn CRS on')}</button>
+          </div>}
         </div>
-        <p className="hint">
-          {t('The WAF blocks known bad paths. OWASP CRS adds payload inspection — SQL injection, XSS, command injection — for this site, at roughly {n} MB of nginx memory.', { n: crs?.rss_mb_per_site || 50 })}
-          {wafSiteConfig?.crs_enabled && wafSiteConfig?.crs_mode === 'off'
-            ? ' ' + t('This site is opted in, but CRS is switched off server-wide on the WAF page, so nothing is loaded.')
-            : ''}
-          {wafSiteConfig?.crs_active
-            ? ' ' + t('Add SecRuleRemoveById <id> to the custom rules below to excuse this site from one CRS rule.')
-            : ''}
-        </p>
       </section>
 
       {!wafSiteConfig && websites.length === 0 && <section className="section"><EmptyState icon={Globe} message={t('No websites yet.')} /></section>}
@@ -6707,7 +6931,7 @@ Each account is overwritten with what is in its archive.`)) return;
         <div className="section-title">
           <div>
             <h2>{t('Blocked bots')}</h2>
-            <p className="hint">{t('One name per line, matched anywhere in User-Agent. Matched literally, so')}<code>bingbot/2.0</code> will not also match <code>bingbotX2Y0</code>. Blocked requests get 403 before WAF and rate limiting run.</p>
+            <p className="hint">{t('One name per line, matched anywhere in User-Agent. Matched literally, so')}{' '}<code>bingbot/2.0</code> will not also match <code>bingbotX2Y0</code>. Blocked requests get 403 before WAF and rate limiting run.</p>
           </div>
         </div>
         <textarea
@@ -6871,16 +7095,16 @@ Each account is overwritten with what is in its archive.`)) return;
     return <>
       <section className="section">
         <div className="section-title">
-          <div><h2>{t('Updates')}</h2><p className="hint">{t('OS packages use apt; panel updates use')}<code>bpanel-update</code>.</p></div>
+          <div><h2>{t('Updates')}</h2><p className="hint">{t('OS packages use apt; panel updates use')}{' '}<code>bpanel-update</code>.</p></div>
           <button className="secondary-light" disabled={!!loading} onClick={toggleUpdateLog}>{showUpdateLog ? <X size={14}/> : <FileText size={14}/>} {showUpdateLog ? 'Hide logs' : 'View logs'}</button>
         </div>
         <div className="info-box update-version-box">
           <div className="update-version-head"><strong>{t('Panel release')}</strong><span className={panelBadgeClass}>{panelBadge}</span></div>
           <div className="update-version-grid">
-            <span>{t('Current')}<strong>v{currentPanelVersion}</strong></span>
-            <span>{t('Latest')}<strong>{latestPanelVersion === 'unknown' ? 'unknown' : `v${latestPanelVersion}`}</strong></span>
-            <span>{t('Checked')}<strong>{panelUpdate.last_checked_at || 'never'}</strong></span>
-            <span>{t('State file')}<strong>{panelUpdate.state_file || '/var/lib/bpanel/update-status.json'}</strong></span>
+            <span>{t('Current')}{' '}<strong>v{currentPanelVersion}</strong></span>
+            <span>{t('Latest')}{' '}<strong>{latestPanelVersion === 'unknown' ? 'unknown' : `v${latestPanelVersion}`}</strong></span>
+            <span>{t('Checked')}{' '}<strong>{panelUpdate.last_checked_at || 'never'}</strong></span>
+            <span>{t('State file')}{' '}<strong>{panelUpdate.state_file || '/var/lib/bpanel/update-status.json'}</strong></span>
           </div>
           {panelUpdate.check_error && <p className="hint">{t('Release check failed:')} {panelUpdate.check_error}</p>}
           {panelUpdate.last_update_status && <p className="hint">{t('Last update:')} {panelUpdate.last_update_status}{panelUpdate.last_update_ref ? ` (${panelUpdate.last_update_ref})` : ''}{panelUpdate.last_update_finished_at ? ` at ${panelUpdate.last_update_finished_at}` : ''}</p>}
@@ -6933,7 +7157,7 @@ Each account is overwritten with what is in its archive.`)) return;
             <h2>{t('Passkey')}</h2>
             <p className="hint">{t('Sign in with a fingerprint, Face ID or a security key instead of typing a code.')}</p>
           </div>
-          <button disabled={!!loading} onClick={loadPasskeyStatus}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <button className="secondary-light" disabled={!!loading} onClick={loadPasskeyStatus}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
 
         {pk && !pk.supported && <div className="info-box">
@@ -6943,11 +7167,12 @@ Each account is overwritten with what is in its archive.`)) return;
         </div>}
 
         {pk?.supported && <>
-          <p className="hint">{t('A passkey is tied to the domain')}<strong>{pk.rp_id}</strong>. Reach the panel by any
-            other name and it will not be offered — use Google Authenticator below for that.
+          <p className="hint">{t('A passkey is tied to the domain')}{' '}<strong>{pk.rp_id}</strong>.{' '}
+            {t('Reach the panel by any other name and it will not be offered — use Google Authenticator below for that.')}
           </p>
-          <div className="cron-form">
-            <input
+          <div className="passkey-form">
+            <NoAutofillInput
+              name="passkey-name"
               value={passkeyName}
               onChange={e => setPasskeyName(e.target.value)}
               placeholder={t('Device name, e.g. MacBook')}
@@ -6988,8 +7213,8 @@ Each account is overwritten with what is in its archive.`)) return;
 
       <section className="section">
         <div className="section-title">
-          <div><h2>{t('Google Authenticator 2FA')}</h2><p className="hint">{t('Current status:')}<strong>{enabled ? 'Enabled' : 'Disabled'}</strong></p></div>
-          <button disabled={!!loading} onClick={loadTwoFactorStatus}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <div><h2>{t('Google Authenticator 2FA')}</h2><p className="hint">{t('Current status:')}{' '}<strong>{enabled ? 'Enabled' : 'Disabled'}</strong></p></div>
+          <button className="secondary-light" disabled={!!loading} onClick={loadTwoFactorStatus}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
         {!enabled && <div className="security-grid">
           <div className="info-box">
@@ -7027,10 +7252,10 @@ Each account is overwritten with what is in its archive.`)) return;
     const activeScanJob = scanJob || scanResults || {};
     const scanRunning = ['queued', 'running'].includes(scanJob?.status);
     const scanJobTitle = job => job.scope === 'server'
-      ? 'Whole server'
+      ? t('Whole server')
       : (job.domains && job.domains.length > 0)
-        ? (job.domains.length === 1 ? job.domains[0] : `${job.domains.length} website`)
-        : (job.scope === 'all' ? 'All websites' : 'Scan');
+        ? (job.domains.length === 1 ? job.domains[0] : t('{count} websites', { count: job.domains.length }))
+        : (job.scope === 'all' ? t('All websites') : t('Scan'));
     const scanJobStamp = job => {
       const stamp = job.finished_at || job.updated_at || job.started_at || job.created_at || '';
       if (!stamp) return 'No time recorded';
@@ -7046,7 +7271,9 @@ Each account is overwritten with what is in its archive.`)) return;
         year: 'numeric',
       }).format(date).replace(',', '');
     };
-    const scanJobDetail = job => `${job.scanned || 0}/${job.total_files || job.scanned || 0} files, ${job.infected || 0} threats, ${job.errors || 0} errors`;
+    const scanJobDetail = job => t('{scanned}/{total} files, {infected} threats, {errors} errors', {
+      scanned: job.scanned || 0, total: job.total_files || job.scanned || 0, infected: job.infected || 0, errors: job.errors || 0,
+    });
     const scanJobMeta = job => `${scanJobStamp(job)} / ${scanJobDetail(job)}`;
     const scanJobBadgeClass = job => {
       if (job.status === 'done') return 'badge ok';
@@ -7054,10 +7281,12 @@ Each account is overwritten with what is in its archive.`)) return;
       if (['error', 'interrupted'].includes(job.status)) return 'badge bad';
       return 'badge warn';
     };
-    const scanStatusLabel = status => ({
+    const scanStatusLabels = {
       queued: 'Queued', running: 'Running', done: 'Finished',
       infected: 'Threats found', error: 'Error', interrupted: 'Interrupted',
-    }[status] || status || '—');
+    };
+    // Translated here, not by each caller: two of the three forgot.
+    const scanStatusLabel = status => (scanStatusLabels[status] ? t(scanStatusLabels[status]) : (status || '—'));
     const fmtStamp = s => {
       if (!s) return '';
       const d = new Date(s);
@@ -7095,13 +7324,59 @@ Each account is overwritten with what is in its archive.`)) return;
           </select>
         </div>
         <div className="malware-sched-meta">
-          {saved.enabled && saved.next_run_at && <span>{t('Next:')}<strong>{fmtStamp(saved.next_run_at)}</strong></span>}
+          {saved.enabled && saved.next_run_at && <span>{t('Next:')}{' '}<strong>{fmtStamp(saved.next_run_at)}</strong></span>}
           {saved.last_run_at && <span className={`badge ${saved.last_status === 'done' ? 'ok' : saved.last_status === 'infected' ? 'danger' : 'warn'}`}>
             {fmtStamp(saved.last_run_at)} · {scanStatusLabel(saved.last_status)}
           </span>}
         </div>
       </div>;
     };
+
+    // One view of a scan, used for the run in progress on this page and for a
+    // finished run opened from the history on a page of its own.
+    const renderScanStatus = job => <div className="scan-status-panel">
+      <div className="progress-bar">
+        <div className="progress-bar-fill" style={{width: `${Number(job.progress_percent) || 0}%`}} />
+      </div>
+      <div className="scan-status-summary">
+        <span><strong>{t('Progress')}</strong>{Number(job.progress_percent) || 0}%</span>
+        <span><strong>{t('Files scanned')}</strong>{job.scanned || 0}/{job.total_files || job.scanned || 0}</span>
+        <span><strong>{t('Threats')}</strong>{job.infected > 0
+          ? <span className="badge danger">{job.infected}</span>
+          : <span className="badge ok">0</span>}
+        </span>
+        <span><strong>{t('Errors')}</strong>{job.errors || 0}</span>
+      </div>
+      {job.message && <p className="hint">{job.message}</p>}
+      {job.threats && job.threats.length > 0 && <div className="scan-threat-list">
+        <p className="hint">{t('These are the scanner\'s own family names (php.base64..., for instance), not common virus names — there is nowhere else to look them up.')}</p>
+        {job.threats.map((threat, i) => <div key={i} className="scan-threat-item">
+          <strong>{threat.signature}</strong>
+          <span>{threat.domain ? `${threat.domain}: ` : ''}{threat.path}</span>
+        </div>)}
+      </div>}
+      {job.log && job.log.length > 0 && <pre className="malware-scan-log">{job.log.join('\n')}</pre>}
+    </div>;
+
+    // A run from the history, on a page of its own: the list stays short and
+    // the one being read gets the width. Reloading the address with nothing
+    // chosen points back at the history instead of showing an empty panel.
+    if (page === 'malware-scan') {
+      const job = activeScanJob;
+      return <section className="section scan-detail">
+        <div className="section-title">
+          <div>
+            <h2>{job.job_id ? scanJobTitle(job) : t('Scan details')}</h2>
+            {job.job_id && <p className="hint">{scanJobMeta(job)}</p>}
+          </div>
+          <div className="actions">
+            {job.job_id && <span className={scanJobBadgeClass(job)}>{scanStatusLabel(job.status)}</span>}
+            <button type="button" className="secondary" onClick={() => navigateToPage('malware')}><ArrowLeft size={14}/>{t('Scan history')}</button>
+          </div>
+        </div>
+        {job.job_id ? renderScanStatus(job) : <EmptyState icon={Search} message={t('Pick a scan from the history.')} />}
+      </section>;
+    }
 
     return <>
       <section className="section">
@@ -7118,7 +7393,7 @@ Each account is overwritten with what is in its archive.`)) return;
               </span>}
             </p>
           </div>
-          <button disabled={!!loading} onClick={loadMalwareScanStatus}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <button className="secondary-light" disabled={!!loading} onClick={loadMalwareScanStatus}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
         {mw.memory_warning && <div className="info-box malware-ram-warning">
           <strong><AlertCircle size={15}/>{t('Memory warning')}</strong>
@@ -7126,8 +7401,8 @@ Each account is overwritten with what is in its archive.`)) return;
         </div>}
         <div className="info-box">
           <p className="hint">{mw.detail || 'Checking...'}</p>
-          {mw.memory_total_mb > 0 && <p className="hint">{t('Server memory:')}<strong>{mw.memory_total_mb} MB</strong> {t('({n} MB free)', { n: mw.memory_available_mb })}</p>}
-          {mw.lmd_installed && <p className="hint">{t('Malware signatures:')}<strong>{mw.lmd_sig_version || '—'}</strong>{mw.lmd_updated_at ? ` (updated ${mw.lmd_updated_at})` : ''}</p>}
+          {mw.memory_total_mb > 0 && <p className="hint">{t('Server memory:')}{' '}<strong>{mw.memory_total_mb} MB</strong> {t('({n} MB free)', { n: mw.memory_available_mb })}</p>}
+          {mw.lmd_installed && <p className="hint">{t('Malware signatures:')}{' '}<strong>{mw.lmd_sig_version || '—'}</strong>{mw.lmd_updated_at ? ` (updated ${mw.lmd_updated_at})` : ''}</p>}
           {!mwInstalled && <p className="hint" style={{marginTop:8}}>{t('Turning this on installs the scanner. It only runs during a scan (~1.3 GB of RAM) and releases that afterwards — nothing runs in the background, so it costs no memory at rest.')}</p>}
           <div className="actions" style={{marginTop:12}}>
             {!mwEnabled
@@ -7212,7 +7487,7 @@ Each account is overwritten with what is in its archive.`)) return;
               {scanJobs.slice(0, 8).map(job => <button
                 key={job.job_id}
                 className={`scan-history-item ${job.status}${activeScanJob.job_id === job.job_id ? ' active' : ''}`}
-                onClick={() => showMalwareScanJob(job)}
+                onClick={() => { showMalwareScanJob(job); navigateToPage('malware-scan'); }}
                 disabled={!!loading}
                 type="button"
               >
@@ -7225,29 +7500,9 @@ Each account is overwritten with what is in its archive.`)) return;
               </button>)}
             </div>
           </div>}
-          {(scanJob || scanResults) && <div className="scan-status-panel">
-            <div className="progress-bar">
-              <div className="progress-bar-fill" style={{width: `${Number(activeScanJob.progress_percent) || 0}%`}} />
-            </div>
-            <div className="scan-status-summary">
-              <span><strong>{t('Progress')}</strong>{Number(activeScanJob.progress_percent) || 0}%</span>
-              <span><strong>{t('Files scanned')}</strong>{activeScanJob.scanned || 0}/{activeScanJob.total_files || activeScanJob.scanned || 0}</span>
-              <span><strong>{t('Threats')}</strong>{activeScanJob.infected > 0
-                ? <span className="badge danger">{activeScanJob.infected}</span>
-                : <span className="badge ok">0</span>}
-              </span>
-              <span><strong>{t('Errors')}</strong>{activeScanJob.errors || 0}</span>
-            </div>
-            {activeScanJob.message && <p className="hint">{activeScanJob.message}</p>}
-            {activeScanJob.threats && activeScanJob.threats.length > 0 && <div className="scan-threat-list">
-              <p className="hint">{t('These are the scanner\'s own family names (php.base64..., for instance), not common virus names — there is nowhere else to look them up.')}</p>
-              {activeScanJob.threats.map((t, i) => <div key={i} className="scan-threat-item">
-                <strong>{t.signature}</strong>
-                <span>{t.domain ? `${t.domain}: ` : ''}{t.path}</span>
-              </div>)}
-            </div>}
-            {activeScanJob.log && activeScanJob.log.length > 0 && <pre className="malware-scan-log">{activeScanJob.log.join('\n')}</pre>}
-          </div>}
+          {/* The live run stays here while it is running; a finished one is
+              read on its own page from the history above. */}
+          {(scanRunning || scanLoading) && (scanJob || scanResults) && renderScanStatus(activeScanJob)}
         </div>}
       </section>
     </>;
@@ -7259,7 +7514,7 @@ Each account is overwritten with what is in its archive.`)) return;
       <section className="section">
         <div className="section-title">
           <div><h2>{t('Panel settings')}</h2><p className="hint">{t('Branding and hostname.')}</p></div>
-          <button disabled={!!loading} onClick={loadPanelSettings}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <button className="secondary-light" disabled={!!loading} onClick={loadPanelSettings}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
         <div className="panel-settings-grid panel-settings-compact">
           <label><span>{t('Panel name')}</span><input value={panelSettingsForm.app_name} onChange={e => setPanelSettingsForm(prev => ({ ...prev, app_name: e.target.value }))} placeholder="BPanel" /></label>
@@ -7335,11 +7590,11 @@ Each account is overwritten with what is in its archive.`)) return;
       <section className="section">
         <div className="section-title">
           <div><h2>{t('API Tokens')}</h2><p className="hint">{t('Create one token for WHMCS. Paste it into WHMCS Server → Access Hash.')}</p></div>
-          <button disabled={!!loading} onClick={loadApiTokens}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <button className="secondary-light" disabled={!!loading} onClick={loadApiTokens}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
         {createdApiToken && <div className="user-create-card">
           <label><span>{t('New token (copy now)')}</span><input id="created-api-token" readOnly value={createdApiToken} onFocus={e => e.target.select()} /></label>
-          <button disabled={!!loading} onClick={copyApiToken}><Copy size={14}/>{t('Copy token')}</button>
+          <button className="secondary" disabled={!!loading} onClick={copyApiToken}><Copy size={14}/>{t('Copy token')}</button>
           <button className="secondary-light" onClick={() => setCreatedApiToken('')}>{t('Hide')}</button>
         </div>}
         <div className="user-create-card">
@@ -7376,7 +7631,7 @@ Each account is overwritten with what is in its archive.`)) return;
         id={`users-tab-button-${key}`}
         onClick={() => setUserTab(key)}
       >
-        <Icon size={14}/> {label}
+        <Icon size={14}/>{t(label)}
       </button>
     );
 
@@ -7384,7 +7639,8 @@ Each account is overwritten with what is in its archive.`)) return;
       <div className="section-title">
         <div><h2>{t('Panel users')}</h2><p className="hint">{t('Manage users, packages, and domain ownership.')}</p></div>
       </div>
-      <div className="segmented user-tabs" role="tablist" aria-label={t('Panel user sections')}>
+      {/* One underlined row, like the backup tabs and OPanel's. */}
+      <div className="segmented-control backup-tabs user-tabs" role="tablist" aria-label={t('Panel user sections')}>
         {userTabButton('list', Users, 'List user')}
         {userTabButton('packages', HardDrive, 'Package')}
         {userTabButton('add', Plus, 'Add User')}
@@ -7393,16 +7649,16 @@ Each account is overwritten with what is in its archive.`)) return;
       {activeUserTab === 'list' && <div className="user-tab-panel" id="users-tab-list" role="tabpanel" aria-labelledby="users-tab-button-list">
         <div className="section-title user-panel-title">
           <div><h2>{t('Panel user list')}</h2><p className="hint">{t('Current panel users and service limits.')}</p></div>
-          <button disabled={!!loading} onClick={loadUsers}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <button className="secondary-light" disabled={!!loading} onClick={loadUsers}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
         {users.length === 0 && <EmptyState icon={Users} message={t('No users found.')} />}
         <div className="table">
           {users.map(user => <div className="row user-row" key={user.id}>
             <div className="user-main"><strong>{user.username}</strong><small>{user.email}</small></div>
             <div className="user-badges">
-              <span className={user.is_active ? 'badge ok' : 'badge danger'}>{user.is_active ? 'Active' : 'Suspended'}</span>
-              <span className="badge">{roleLabel(user.role)}</span>
-              <span className="badge">{user.package_name || 'Custom'}</span>
+              <span className={user.is_active ? 'badge ok' : 'badge danger'}>{user.is_active ? t('Active') : t('Suspended')}</span>
+              <span className="badge">{t(roleLabel(user.role))}</span>
+              <span className="badge">{user.package_name || t('Custom')}</span>
               {user.totp_enabled && <span className="badge ok">2FA</span>}
             </div>
             <span className="user-metric"><HardDrive size={13}/>{storageUsageText(user)}</span>
@@ -7438,7 +7694,7 @@ Each account is overwritten with what is in its archive.`)) return;
                 <label><span>{t('SFTP accounts')}</span><input type="number" min="0" max="100" disabled={!!editingUserForm.package_id} value={editingUserForm.sftp_accounts_limit} onChange={e => setEditingUserForm(prev => ({ ...prev, sftp_accounts_limit: e.target.value }))} /></label>
               </div>
               <div className="user-edit-section">
-                <div className="user-edit-heading"><div><strong>{t('Change password')}</strong><small>Minimum 12 characters. {user.id === currentUser?.id ? 'Requires current password + 2FA.' : 'Admin can set directly.'}</small></div></div>
+                <div className="user-edit-heading"><div><strong>{t('Change password')}</strong><small>{t('Minimum 12 characters.')} {t(user.id === currentUser?.id ? 'Requires current password + 2FA.' : 'Admin can set directly.')}</small></div></div>
                 <div className="user-edit-grid">
                   <label><span>{t('New password')}</span><input type="password" placeholder={t('Min 12 characters')} value={editingUserForm.new_password} onChange={e => setEditingUserForm(prev => ({ ...prev, new_password: e.target.value }))} /></label>
                   <label><span>{t('Confirm password')}</span><input type="password" placeholder={t('Repeat password')} value={editingUserForm.confirm_password} onChange={e => setEditingUserForm(prev => ({ ...prev, confirm_password: e.target.value }))} /></label>
@@ -7473,7 +7729,7 @@ Each account is overwritten with what is in its archive.`)) return;
       {activeUserTab === 'packages' && <div className="user-tab-panel" id="users-tab-packages" role="tabpanel" aria-labelledby="users-tab-button-packages">
         <div className="section-title user-panel-title">
           <div><h2>{t('Package')}</h2><p className="hint">{t('Create, edit, delete, and review reusable user limits.')}</p></div>
-          <button disabled={!!loading} onClick={loadPackages}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <button className="secondary-light" disabled={!!loading} onClick={loadPackages}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
         <div className="user-create-card package-create-card">
           <label><span>{t('Package name')}</span><input value={newPackage.name} onChange={e => setNewPackage(prev => ({ ...prev, name: e.target.value }))} placeholder={t('Starter')} /></label>
@@ -7545,7 +7801,7 @@ Each account is overwritten with what is in its archive.`)) return;
           <span className="editor-chip">{editorMode}</span>
           <span className="editor-chip">{t('{n} line(s)', { n: editorLineCount })}</span>
           <span className="editor-chip">Ln {editorCursor.line}, Col {editorCursor.column}</span>
-          <button disabled={!selectedWebsiteId || !!loading} onClick={() => readFile(filePath)}><RefreshCw size={14}/>{t('Reload')}</button>
+          <button className="secondary" disabled={!selectedWebsiteId || !!loading} onClick={() => readFile(filePath)}><RefreshCw size={14}/>{t('Reload')}</button>
           <button disabled={!selectedWebsiteId || !!loading} onClick={writeFile}>{t('Save')}</button>
           <button disabled={!selectedWebsiteId || !filePath || !!loading} onClick={() => downloadFile(filePath)}><Download size={14}/></button>
           <LanguageToggle language={language} onChange={changeLanguage}/>
@@ -7665,7 +7921,7 @@ Each account is overwritten with what is in its archive.`)) return;
 
         {!mcpAddonInstalled && <div className="addon-notes">
           <strong><AlertCircle size={13}/>{t('The addon is off')}</strong>
-          <ul><li>{t('Nothing answers on this address until an administrator installs')}<strong>{t('AI assistants (MCP)')}</strong> on the Addons page. Existing tokens are kept
+          <ul><li>{t('Nothing answers on this address until an administrator installs')}{' '}<strong>{t('AI assistants (MCP)')}</strong> on the Addons page. Existing tokens are kept
             while it is off.</li></ul>
         </div>}
 
@@ -7711,7 +7967,7 @@ Each account is overwritten with what is in its archive.`)) return;
           <button disabled={!mcpDraft.name.trim() || !!loading} onClick={createMcpToken}>
             <KeyRound size={14}/>{t('Create')}</button>
         </div>
-        <p className="hint">{t('Without')}<strong>{t('Allow actions')}</strong> the token can only read, and the assistant is not
+        <p className="hint">{t('Without')}{' '}<strong>{t('Allow actions')}</strong> the token can only read, and the assistant is not
           even shown the tools that change anything. Leave it off unless you want the assistant to
           act.
         </p>
@@ -7806,7 +8062,7 @@ Each account is overwritten with what is in its archive.`)) return;
     if (page === 'firewall') return renderFirewall();
     if (page === 'waf') return renderWaf();
     if (page === 'waf-site') return renderWafSite();
-    if (page === 'malware') return renderMalware();
+    if (page === 'malware' || page === 'malware-scan') return renderMalware();
     if (page === 'access-logs') return renderWafAccessLogs();
     if (page === 'updates') return renderUpdates();
     // Reachable by URL, so it answers for itself rather than firing a
@@ -7836,7 +8092,6 @@ Each account is overwritten with what is in its archive.`)) return;
             <div>
               <p className="eyebrow">{t('Server Management Panel')}</p>
               <h1>{panelSettings.app_name || 'BPanel'}</h1>
-              <p className="hint">{t('Manage websites, databases, backups, SSL, and services.')}</p>
             </div>
           </div>
           <LanguageToggle language={language} onChange={changeLanguage}/>
@@ -7857,7 +8112,11 @@ Each account is overwritten with what is in its archive.`)) return;
           {needsTwoFactor && <input value={otpCode} onChange={e => setOtpCode(e.target.value)} placeholder={t('Authentication code')} inputMode="numeric" autoComplete="one-time-code" onKeyDown={e => { if (e.key === 'Enter') login(); }} />}
           <label className="login-remember">
             <input type="checkbox" checked={rememberMe} onChange={e => setRememberMe(e.target.checked)} />{t('Keep me signed in for 30 days')}</label>
-          <button disabled={!!loading || !username || !password} onClick={login}>{loading ? 'Logging in...' : 'Login'}</button>
+          {/* Not onClick={login}: that hands login() the click event as its
+              passkey argument, so every click sent passkey=[object Object]
+              and an account without two-factor was refused with "no second
+              factor configured". Only Enter in a field ever worked. */}
+          <button disabled={!!loading || !username || !password} onClick={() => login()}>{loading ? t('Logging in...') : t('Login')}</button>
         </div>
       </section>
       {renderNotifications()}
@@ -7883,37 +8142,42 @@ Each account is overwritten with what is in its archive.`)) return;
           <button className="sidebar-close" onClick={() => setMobileMenuOpen(false)} aria-label={t('Close menu')}><X size={18}/></button>
         </div>
         <nav className="sidebar-nav">
-          {mainNavItems.map(([key, label, Icon]) => <button key={key} type="button" className={navPage === key ? 'active' : ''} onClick={() => navigateToPage(key)} aria-current={navPage === key ? 'page' : undefined}>
-            <Icon size={17}/>{t(label)}
-          </button>)}
-          <div className={`sidebar-nav-group ${settingsMenuOpen ? 'open' : ''}`}>
-            <button className={`sidebar-group-toggle ${settingsIsActive ? 'active' : ''}`} onClick={() => setSettingsMenuOpen(open => !open)} aria-expanded={settingsMenuOpen} aria-controls="settings-submenu">
-              <SettingsIcon size={17}/><span>{t('Settings')}</span><ChevronDown className="sidebar-group-chevron" size={16}/>
-            </button>
-            {settingsMenuOpen && <div className="sidebar-subnav" id="settings-submenu">
-              {settingsNavItems.map(([key, label, Icon]) => <button key={key} type="button" className={navPage === key ? 'active' : ''} onClick={() => navigateToPage(key)} aria-current={navPage === key ? 'page' : undefined}>
-                <Icon size={16}/>{t(label)}
-              </button>)}
-            </div>}
-          </div>
+          {navSections.map(section => <div className="sidebar-section" key={section.key}>
+            {section.title && <p className="sidebar-section-title">{t(section.title)}</p>}
+            {section.items.map(([key, label, Icon]) => <button key={key} type="button" className={navPage === key ? 'active' : ''} onClick={() => navigateToPage(key)} aria-current={navPage === key ? 'page' : undefined}>
+              <Icon size={16}/><span>{t(label)}</span>
+            </button>)}
+          </div>)}
         </nav>
         {appVersion && <div className="sidebar-version">v{appVersion}</div>}
       </aside>
       <div className="content">
         <section className="topbar">
           <button className="mobile-nav-toggle" onClick={() => setMobileMenuOpen(o => !o)} aria-expanded={mobileMenuOpen} aria-label={t('Toggle navigation')}>
-            <Menu size={20}/><span><ActiveIcon size={17}/>{activeNavItem?.[1] || 'Menu'}</span>
+            <Menu size={20}/><span><ActiveIcon size={17}/>{t(activeNavItem?.[1] || 'Menu')}</span>
           </button>
           <div className="page-title">
-            <p className="eyebrow">{t('Server Management Panel')}</p>
-            <h1>{activeNavItem?.[1] || panelSettings.app_name || 'BPanel'}</h1>
+            <h1>{activeNavItem?.[1] ? t(activeNavItem[1]) : (panelSettings.app_name || 'BPanel')}</h1>
           </div>
-          <div className="login logged-in">
-            <div className="account-pill" title={accountLabel}><span>{t('Logged in as')}</span><strong>{accountLabel}</strong></div>
-            <div className="top-actions">
-              <LanguageToggle language={language} onChange={changeLanguage}/>
-          <ThemeToggle theme={theme} onToggle={toggleTheme}/>
-              <button className="secondary compact-btn" onClick={logout} aria-label={t('Logout')} title={t('Logout')}><LogOut size={15}/><span className="btn-label">{t('Logout')}</span></button>
+          {/* The page title, then one account menu - profile, account security
+              and sign out live in it, as they do in OPanel. */}
+          <div className="top-actions">
+            <LanguageToggle language={language} onChange={changeLanguage}/>
+            <ThemeToggle theme={theme} onToggle={toggleTheme}/>
+            <div className="user-menu" ref={userMenuRef}>
+              <button type="button" className="user-menu-trigger" onClick={() => setUserMenuOpen(open => !open)} aria-haspopup="menu" aria-expanded={userMenuOpen} title={t('Logged in as')}>
+                <span className="user-avatar" aria-hidden="true">{(currentUser?.username || username || '?').slice(0, 1).toUpperCase()}</span>
+                <span className="user-menu-name">{currentUser?.username || username}</span>
+                <ChevronDown size={14} className="user-menu-chevron"/>
+              </button>
+              {userMenuOpen && <div className="user-menu-panel" role="menu">
+                <div className="user-menu-head">
+                  <strong>{accountLabel}</strong>
+                  <small>{currentUser?.email || t(roleLabel(currentUser?.role))}</small>
+                </div>
+                <button type="button" role="menuitem" onClick={() => { setUserMenuOpen(false); navigateToPage('security'); }}><LockKeyhole size={15}/>{t('Account security')}</button>
+                <button type="button" role="menuitem" className="user-menu-logout" onClick={() => { setUserMenuOpen(false); logout(); }}><LogOut size={15}/>{t('Logout')}</button>
+              </div>}
             </div>
           </div>
         </section>
