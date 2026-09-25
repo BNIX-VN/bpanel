@@ -64,6 +64,29 @@ def status() -> CommandResult:
     )
 
 
+def is_enabled() -> bool | None:
+    """Whether the firewall is on and filtering, from the helper's status.
+
+    "Status: enabled" alone is the saved setting; "Chain active" says whether
+    INPUT actually jumps to the panel's chain. Enabled without the chain is a
+    firewall that is not protecting anything, so it counts as off. None when
+    the output says neither (no helper on a dev box), so a caller can tell
+    "off" from "could not tell".
+    """
+    state = chain = ""
+    for line in (status().stdout or "").splitlines():
+        key, _, value = line.partition(":")
+        if key.strip() == "Status":
+            state = value.strip().lower()
+        elif key.strip() == "Chain active":
+            chain = value.strip().lower()
+    if state == "disabled":
+        return False
+    if state == "enabled":
+        return chain != "no"
+    return None
+
+
 def rules() -> list[dict]:
     """Return the helper's structured rule list.
 

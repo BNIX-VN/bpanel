@@ -137,17 +137,40 @@ def _dashboard():
     return APP.split("function renderDashboard()")[1].split("function renderAdminOnly()")[0]
 
 
-def test_the_dashboard_is_the_bnix_launcher():
-    """BPanel and OPanel are one brand, so one layout: the server's meters in
-    one card, then every page in the sidebar's three groups, each tile with a
-    live count where there is one. It had been twenty bare tiles, then an
-    overview of its own that no other BNIX panel had."""
+def test_the_dashboard_says_how_things_stand_not_the_sidebar_again():
+    """Its Hosting / Security / System blocks repeated the sidebar item for
+    item (operator, 2026-09-25). What is left is what the sidebar cannot say:
+    the meters, a card per thing that can be wrong, what needs attention and
+    the few things done often - as in OPanel, one brand, one layout."""
     dashboard = _dashboard()
-    assert "dash-resources" in dashboard and "dash-groups" in dashboard
-    assert "const featureGroups = [" in dashboard
-    for title in ("'Hosting'", "'Security'", "'System'"):
-        assert f"title: {title}" in dashboard, title
-    assert "t('{count} sites', { count: websites.length })" in dashboard
+    assert "featureGroups" not in APP and "function FeatureTile(" not in APP
+    assert "dash-resources" in dashboard and 'className={`status-card tone-${card.tone}`}' in dashboard
+    for key in ("websites", "ssl", "databases", "backups", "firewall", "waf", "malware", "services"):
+        assert f"key: '{key}'" in dashboard, key
+    assert "<h2>{t('Needs attention')}</h2>" in dashboard and "<h2>{t('Quick actions')}</h2>" in dashboard
+    assert "t('Everything looks fine.')" in dashboard
+    # "New website" and "New database" arrive with their form open.
+    assert "setCreateFormOpen(true); navigateToPage('websites');" in dashboard
+    assert "setDbCreateOpen(true); navigateToPage('databases');" in dashboard
+
+
+def test_the_card_rail_says_how_bad_it_is():
+    for tone, colour in (("ok", "success"), ("warn", "warning"), ("bad", "danger")):
+        assert f".status-card.tone-{tone},.status-card.tone-{tone}:hover:not(:disabled){{border-left-color:var(--{colour})}}" in UI
+
+
+def test_a_customer_is_not_shown_the_server():
+    """Server state is an administrator's: the endpoint leaves it out for a
+    customer, and the cards that read it sit in the admin branch."""
+    dashboard = _dashboard()
+    index = dashboard.index("cards.push({ key: 'services'")
+    before = dashboard[:index]
+    assert before.rfind("if (isAdmin) {") > before.rfind("} else {"), "the services card is not inside the admin branch"
+    customer = dashboard.split("} else {\n      cards.push(sslCard);", 1)[1].split("\n    }\n", 1)[0]
+    assert "key: 'waf'" in customer and "key: 'security'" in customer
+    assert "key: 'websites'" not in customer and "key: 'databases'" not in customer, (
+        "the plan-usage card above already counts them"
+    )
 
 
 def test_the_sidebar_is_three_groups_not_a_folded_settings():
@@ -168,7 +191,7 @@ def test_sign_out_lives_in_the_account_menu():
 
 def test_a_full_disk_does_not_look_like_an_empty_one():
     """The bar changes colour before anyone reads the number."""
-    card = APP.split("function ResourceCard(")[1].split("function FeatureTile(")[0]
+    card = APP.split("function ResourceCard(")[1].split("function renderDashboard()")[0]
     assert "safePercent >= 90 ? ' level-critical' : safePercent >= 80 ? ' level-warn'" in card
     assert ".resource-card.level-warn .resource-track span{background:var(--warning)}" in UI
     assert ".resource-card.level-critical .resource-track span{background:var(--danger)}" in UI
@@ -176,10 +199,11 @@ def test_a_full_disk_does_not_look_like_an_empty_one():
     assert "' danger'" not in card and "' warn'" not in card
 
 
-def test_the_groups_stack_rather_than_leave_one_over():
-    """Three groups side by side, then one column - never two up and one
-    left alone on a row of its own."""
-    assert "@media(max-width:720px){.dash-groups{grid-template-columns:1fr}}" in UI
+def test_eight_cards_never_leave_two_over():
+    """Four and four, then two columns - never 3 + 3 + 2."""
+    assert "@media(max-width:1100px){.status-grid.many{grid-template-columns:repeat(2,minmax(0,1fr))}}" in UI
+    phone = UI.split("/* ---------- Phones ---------- */")[1]
+    assert ".status-grid,.status-grid.many{grid-template-columns:repeat(2,minmax(0,1fr));" in phone
 
 
 def test_the_create_website_form_is_not_in_front_of_the_list():
@@ -239,10 +263,10 @@ def test_the_dashboard_headings_are_translated_where_they_are_drawn():
     nav array still feeds the page title in the topbar.
     """
     dashboard = _dashboard()
-    assert "<h2>{t(group.title)}</h2>" in dashboard
     assert "<h2>{t('Server resources')}</h2>" in dashboard
-    tile = APP.split("function FeatureTile(")[1].split("function renderDashboard()")[0]
-    assert '<span className="feature-tile-label">{t(label)}</span>' in tile
+    # Card labels are translated where they are built; the one left raw is
+    # WAF, which reads the same in both languages.
+    assert re.findall(r"label: '([^']+)'", dashboard) == ["WAF", "WAF"]
     assert "<p className=\"sidebar-section-title\">{t(section.title)}</p>" in APP
     assert "{activeNavItem?.[1] ? t(activeNavItem[1])" in APP
 

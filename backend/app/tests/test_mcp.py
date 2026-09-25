@@ -1146,55 +1146,37 @@ def test_revoking_asks_first():
     assert "window.confirm" in block
 
 
-def test_the_page_is_on_the_dashboard_map_too():
-    """The defect this catches: in the sidebar, absent from the dashboard.
+def test_the_page_is_in_the_sidebar_and_the_sidebar_is_not_folded():
+    """The defect this caught: the MCP page sat behind a Settings group that
+    was collapsed by default, and the operator could not find it - reported
+    from a real panel on .88 where the code was deployed and working.
 
-    The dashboard's shortcuts are the way into every page the sidebar folds
-    away. The MCP page was added to
-    the sidebar only, behind a Settings group that is collapsed by default, and
-    the operator could not find it - reported from a real panel on .88 where
-    the code was deployed and working.
-    """
-    tiles = APP_JSX.split("const featureGroups = [")[1].split("].map(group")[0]
-    assert "target: 'mcp', label: 'AI assistants'" in tiles, (
-        "a page reachable only from a collapsed submenu is a page nobody finds"
-    )
-    assert "icon: Bot" in tiles, "the tile uses the same icon as the sidebar"
-
-
-def test_every_settings_page_is_also_a_dashboard_tile():
-    """The invariant, not just this instance.
-
-    A page in the sidebar and not on the map is findable only by someone who
-    already knows it exists, which is the opposite of what the map is for.
+    The dashboard carried a tile for every page to make up for that. The
+    sidebar now shows its three groups open, and the dashboard shows state
+    instead (operator, 2026-09-25), so the sidebar is the one map.
     """
     sidebar = APP_JSX.split("const navSections = [")[1].split("].filter(section")[0]
-    tiles = APP_JSX.split("const featureGroups = [")[1].split("].map(group")[0]
-    keys = set(__import__("re").findall(r"\['([a-z-]+)',", sidebar))
-    tiled = set(__import__("re").findall(r"target: '([a-z-]+)'", tiles))
-    # The dashboard is the one page that needs no tile of its own.
-    missing = sorted(keys - tiled - {"dashboard"})
-    assert not missing, f"in the sidebar but not on the dashboard: {missing}"
+    assert "['mcp', 'AI assistants', Bot]" in sidebar
+    assert "sidebar-subnav" not in APP_JSX and "settingsMenuOpen" not in APP_JSX
 
 
-def test_every_addon_has_a_way_in_from_the_dashboard():
+def test_every_addon_has_a_way_in_from_the_sidebar():
     """The operator's rule: an addon that is on must show on the map.
 
     Read from the backend catalogue rather than a list written here, so an
-    addon added later fails this until it has a tile. fail2ban was the one
-    missing it - it has no page of its own, its ban list being a section of the
-    Firewall page, and that had been treated as a reason for it to be invisible
-    rather than a reason for its tile to land on the Firewall page.
+    addon added later fails this until it has an entry. fail2ban has no page
+    of its own - its ban list is a section of the Firewall page - so its way
+    in is the Firewall entry.
     """
     from app.services import addons
 
-    tiles = APP_JSX.split("const featureGroups = [")[1].split("].map(group")[0]
+    sidebar = APP_JSX.split("const navSections = [")[1].split("].filter(section")[0]
     for slug in sorted(addons.CATALOGUE):
-        flag = {"application": "appsFeatureEnabled",
-                "fail2ban": "fail2banAddonInstalled",
-                "mcp": "mcpAddonInstalled"}.get(slug)
-        assert flag, f"addon {slug} has no dashboard gate named in this test"
-        assert flag in tiles, f"addon {slug} is installable but never appears on the dashboard"
+        way_in = {"application": "appsFeatureEnabled ? [['applications',",
+                  "fail2ban": "['firewall', 'Firewall', BrickWall]",
+                  "mcp": "mcpAddonInstalled || isAdmin ? [['mcp',"}.get(slug)
+        assert way_in, f"addon {slug} has no sidebar entry named in this test"
+        assert way_in in sidebar, f"addon {slug} is installable but has no way in from the sidebar"
 
 
 def test_the_client_snippets_carry_the_token_that_was_just_created():

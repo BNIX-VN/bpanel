@@ -72,3 +72,14 @@ def test_the_page_is_hidden_and_refuses_rather_than_erroring():
         "the page renders for end users and fires requests that will be refused"
     )
     assert "function renderAdminOnly()" in src
+
+
+def test_the_dashboard_services_card_is_admin_only():
+    """The card sits in the dashboard's admin branch, and the summary endpoint
+    leaves the services out for a customer."""
+    src = APP_JSX.read_text(encoding="utf-8")
+    index = src.index("cards.push({ key: 'services'")
+    before = src[:index]
+    assert before.rfind("if (isAdmin) {") > before.rfind("} else {"), "services card is not inside the isAdmin branch"
+    api = (PROJECT_ROOT / "backend" / "app" / "api" / "dashboard.py").read_text(encoding="utf-8")
+    assert '    if admin:\n' in api and 'summary["services"] = _safe(_services)' in api.split("    if admin:\n", 1)[1]

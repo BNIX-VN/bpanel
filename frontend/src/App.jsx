@@ -13,7 +13,7 @@ import 'ace-builds/src-noconflict/mode-text';
 import 'ace-builds/src-noconflict/mode-yaml';
 import 'ace-builds/src-noconflict/theme-textmate';
 import 'ace-builds/src-noconflict/theme-tomorrow_night';
-import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle, Activity, BrickWall, Bug, Layers, LockKeyhole, PackageOpen, ScrollText, ShieldAlert, ShieldCheck } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle, Activity, BrickWall, Bug, LockKeyhole, PackageOpen, ScrollText, ShieldAlert, CheckCircle, Zap } from 'lucide-react';
 import { Terminal } from './components/Terminal';
 import { LANGUAGES, t, useLanguage } from './i18n.js';
 import './style.css';
@@ -765,6 +765,7 @@ function App() {
   const [packages, setPackages] = useState([]);
   const [userTab, setUserTab] = useState('list');
   const [resourceUsage, setResourceUsage] = useState(null);
+  const [dashSummary, setDashSummary] = useState(null);
   const [serviceStates, setServiceStates] = useState({});
   const [serviceNames, setServiceNames] = useState(DEFAULT_SERVICE_NAMES);
   const [backupTab, setBackupTab] = useState('website');
@@ -932,7 +933,6 @@ function App() {
   const noticeTimer = useRef(null);
   const isAdmin = currentUser?.role === 'admin';
   const mcpAddonInstalled = !!addons.items.find(item => item.slug === 'mcp')?.installed;
-  const fail2banAddonInstalled = !!addons.items.find(item => item.slug === 'fail2ban')?.installed;
   const [mcpTokens, setMcpTokens] = useState([]);
   const [mcpDraft, setMcpDraft] = useState({ name: '', expires_in_days: 90, can_write: false });
   // Held until dismissed rather than cleared on the next render: the server
@@ -1594,6 +1594,14 @@ function App() {
       if (!selectedBackupUserId && data[0]) setSelectedBackupUserId(String(data[0].id));
       setNewBackupSchedule(prev => (!prev.all_users && (!prev.user_ids || prev.user_ids.length === 0) && data[0]) ? ({ ...prev, user_ids: [String(data[0].id)] }) : prev);
     }
+  }
+
+  // One request for the dashboard's cards and its "Needs attention" list;
+  // each part is best effort on the server, so a failing probe is a card
+  // that says "—", not a dashboard that fails.
+  async function loadDashboardSummary() {
+    const data = await request('/dashboard/summary', { silent: true });
+    if (data) setDashSummary(data);
   }
 
   async function loadResourceUsage() {
@@ -4207,6 +4215,10 @@ Each account is overwritten with what is in its archive.`)) return;
   }, [standaloneEditor, isAuthenticated, selectedWebsiteId, filePath, fileContent]);
 
   useEffect(() => {
+    if (isAuthenticated && page === 'dashboard') loadDashboardSummary();
+  }, [isAuthenticated, page]);
+
+  useEffect(() => {
     if (!isAuthenticated || page !== 'dashboard' || !isAdmin) return undefined;
     loadResourceUsage();
     const timer = setInterval(loadResourceUsage, 5000);
@@ -4585,14 +4597,6 @@ Each account is overwritten with what is in its archive.`)) return;
     </article>;
   }
 
-  function FeatureTile({ icon: Icon, label, hint, target }) {
-    return <button type="button" className="feature-tile" onClick={() => navigateToPage(target)}>
-      <span className="feature-tile-icon"><Icon size={18}/></span>
-      <span className="feature-tile-label">{t(label)}</span>
-      <small>{hint}</small>
-    </button>;
-  }
-
   function renderDashboard() {
     const cpu = resourceUsage?.cpu || {};
     const memory = resourceUsage?.memory || {};
@@ -4600,49 +4604,100 @@ Each account is overwritten with what is in its archive.`)) return;
     const network = resourceUsage?.network || {};
     const networkTotal = (Number(network.rx_per_sec) || 0) + (Number(network.tx_per_sec) || 0);
 
-    // The BNIX launcher, drawn as OPanel draws it: the server's meters in one
-    // card, then every page in the same three groups as the sidebar, each with
-    // a live count where there is one. Every page the sidebar lists has a tile
-    // here, and so does every addon that is on - fail2ban included, although
-    // its ban list is a section of the Firewall page.
-    const sslActive = websites.filter(site => site.ssl_enabled).length;
-    const featureGroups = [
-      {
-        title: 'Hosting', icon: Layers, items: [
-          { target: 'websites', label: 'Websites', icon: Globe, hint: websites.length ? t('{count} sites', { count: websites.length }) : t('No websites yet') },
-          appsFeatureEnabled ? { target: 'applications', label: 'Applications', icon: Boxes, hint: t('Node and Docker apps') } : null,
-          { target: 'ssl', label: 'SSL', icon: Lock, hint: sslActive ? t('{secured} of {total} secured', { secured: sslActive, total: websites.length }) : t('Nothing secured yet') },
-          { target: 'databases', label: 'Databases', icon: Database, hint: t('{count} databases', { count: databases.length }) },
-          { target: 'cron', label: 'Cron', icon: Clock, hint: t('Scheduled jobs') },
-          { target: 'files', label: 'File manager', icon: FolderOpen, hint: currentUser && !isAdmin
-            ? t('{used} of {limit}', { used: formatBytes(currentUser.storage_used_bytes), limit: formatBytes(storageLimitBytes(currentUser)) })
-            : t('Browse and edit files') },
-          { target: 'sftp', label: 'SFTP accounts', icon: Upload, hint: t('One login per website') },
-          { target: 'backups', label: 'Backups', icon: Archive, hint: t('Create and restore') },
-        ],
-      },
-      {
-        title: 'Security', icon: ShieldCheck, items: [
-          isAdmin ? { target: 'firewall', label: 'Firewall', icon: BrickWall, hint: t('Ports and IP rules') } : null,
-          (fail2banAddonInstalled && isAdmin) ? { target: 'firewall', label: 'Fail2ban', icon: Ban, hint: t('SSH ban list') } : null,
-          { target: 'waf', label: 'WAF', icon: ShieldAlert, hint: t('Request filtering') },
-          isAdmin ? { target: 'malware', label: 'Malware scanner', icon: Bug, hint: t('Scan site files') } : null,
-          isAdmin ? { target: 'access-logs', label: 'Access logs', icon: ScrollText, hint: t('Requests and blocks') } : null,
-          { target: 'security', label: 'Account security', icon: LockKeyhole, hint: t('Login and access') },
-        ],
-      },
-      {
-        title: 'System', icon: Server, items: [
-          isAdmin ? { target: 'services', label: 'Services', icon: Activity, hint: t('Start, stop, restart') } : null,
-          isAdmin ? { target: 'php', label: 'PHP config', icon: Code2, hint: t('Versions and limits') } : null,
-          isAdmin ? { target: 'users', label: 'Panel users', icon: Users, hint: t('Accounts and limits') } : null,
-          isAdmin ? { target: 'settings', label: 'Panel settings', icon: SettingsIcon, hint: t('Hostname and branding') } : null,
-          isAdmin ? { target: 'updates', label: 'Updates', icon: RefreshCw, hint: t('Panel version') } : null,
-          isAdmin ? { target: 'addons', label: 'Addons', icon: PackageOpen, hint: t('Optional features') } : null,
-          (mcpAddonInstalled || isAdmin) ? { target: 'mcp', label: 'AI assistants', icon: Bot, hint: t('Tokens for AI assistants') } : null,
-        ],
-      },
-    ].map(group => ({ ...group, items: group.items.filter(Boolean) })).filter(group => group.items.length > 0);
+    // How things stand, not a second copy of the sidebar: the three groups of
+    // links that were here repeated it item for item. Until the summary
+    // arrives, the lists already loaded stand in for it.
+    const sum = dashSummary || {};
+    const sites = sum.websites || { total: websites.length, suspended: 0, waf_on: websites.filter(site => site.waf_enabled).length };
+    const ssl = sum.ssl || { total: websites.length, secured: websites.filter(site => site.ssl_enabled).length, unsecured: [], unsecured_count: 0 };
+    const dbCount = sum.databases?.total ?? databases.length;
+    // dd/mm hh:mm. Backup times are stored without a zone, in the server's
+    // local time, which is what a Date then shows them as.
+    const shortDate = value => {
+      const d = value ? new Date(value) : null;
+      if (!d || Number.isNaN(d.getTime())) return '—';
+      const two = n => String(n).padStart(2, '0');
+      return `${two(d.getDate())}/${two(d.getMonth() + 1)} ${two(d.getHours())}:${two(d.getMinutes())}`;
+    };
+
+    // Each card says how one thing stands, and how loudly: ok / warn / bad /
+    // neutral, drawn as the colour of its left edge. A customer's plan-usage
+    // card already counts websites and databases, so theirs start at SSL.
+    const sslCard = { key: 'ssl', icon: Lock, label: t('SSL'), value: `${ssl.secured}/${ssl.total}`,
+      detail: !ssl.total ? t('No websites yet') : ssl.unsecured_count ? t('{n} without SSL', { n: ssl.unsecured_count }) : t('All secured'),
+      tone: !ssl.total ? 'neutral' : ssl.unsecured_count ? 'warn' : 'ok' };
+    const cards = [];
+    if (isAdmin) {
+      cards.push({ key: 'websites', icon: Globe, label: t('Websites'), value: String(sites.total),
+        detail: sites.suspended ? t('{n} suspended', { n: sites.suspended }) : sites.total ? t('All running') : t('No websites yet'),
+        tone: sites.suspended ? 'warn' : sites.total ? 'ok' : 'neutral' });
+      cards.push(sslCard);
+      cards.push({ key: 'databases', icon: Database, label: t('Databases'), value: String(dbCount), detail: 'MariaDB', tone: 'neutral' });
+      const backups = sum.backups;
+      cards.push({ key: 'backups', icon: Archive, label: t('Backups'),
+        value: backups?.last_run_at ? shortDate(backups.last_run_at) : '—',
+        detail: !backups ? t('Checking...') : !backups.schedules ? t('No schedule') : backups.failed ? t('Last run failed') : t('{n} schedule(s)', { n: backups.schedules }),
+        tone: !backups ? 'neutral' : !backups.schedules ? 'warn' : backups.failed ? 'bad' : 'ok' });
+      const firewallOn = sum.firewall?.enabled;
+      cards.push({ key: 'firewall', icon: BrickWall, label: t('Firewall'),
+        value: firewallOn === true ? t('On') : firewallOn === false ? t('Off') : '—', detail: 'iptables + ipset',
+        tone: firewallOn === true ? 'ok' : firewallOn === false ? 'bad' : 'neutral' });
+      const engine = sum.waf?.engine;
+      cards.push({ key: 'waf', icon: ShieldAlert, label: 'WAF',
+        value: engine === 'on' ? t('On') : engine === 'off' ? t('Not installed') : '—', detail: t('ModSecurity engine'),
+        tone: engine === 'on' ? 'ok' : engine === 'off' ? 'warn' : 'neutral' });
+      const scanner = sum.malware;
+      const lastScan = scanner?.last_scan;
+      cards.push({ key: 'malware', icon: Bug, label: t('Malware scanner'),
+        value: !scanner ? '—' : !scanner.installed ? t('Not installed') : lastScan?.infected ? t('{n} threat(s)', { n: lastScan.infected }) : lastScan ? t('Clean') : t('No scan yet'),
+        detail: scanner?.running ? t('Scanning...') : lastScan ? t('Last scan {when}', { when: shortDate(lastScan.finished_at) }) : t('Last scan'),
+        tone: !scanner ? 'neutral' : !scanner.installed ? 'warn' : lastScan?.infected ? 'bad' : lastScan ? 'ok' : 'neutral' });
+      const services = sum.services;
+      cards.push({ key: 'services', icon: Activity, label: t('Services'),
+        value: services ? `${services.running}/${services.total}` : '—',
+        detail: services?.stopped?.length ? t('Stopped: {names}', { names: services.stopped.join(', ') }) : services ? t('All running') : t('Checking...'),
+        tone: !services ? 'neutral' : services.stopped?.length ? 'bad' : 'ok' });
+    } else {
+      cards.push(sslCard);
+      const wafOn = sites.waf_on ?? 0;
+      cards.push({ key: 'waf', icon: ShieldAlert, label: 'WAF', value: `${wafOn}/${sites.total}`,
+        detail: !sites.total ? t('No websites yet') : wafOn === sites.total ? t('On for every website') : t('{n} website(s) without WAF', { n: sites.total - wafOn }),
+        tone: !sites.total ? 'neutral' : wafOn === sites.total ? 'ok' : 'warn' });
+      const twoFactor = !!currentUser?.totp_enabled;
+      cards.push({ key: 'security', icon: LockKeyhole, label: t('Two-factor sign-in'),
+        value: twoFactor ? t('On') : t('Off'), detail: t('Account security'), tone: twoFactor ? 'ok' : 'warn' });
+    }
+
+    // Only what is actually wrong, worst first, each with a way to the page
+    // that fixes it.
+    const attention = [];
+    const flag = (tone, text, target, action = t('Open'), icon = AlertCircle) => attention.push({ tone, text, target, action, icon });
+    if (isAdmin && sum.services?.stopped?.length) flag('bad', t('Stopped: {names}', { names: sum.services.stopped.join(', ') }), 'services');
+    if (isAdmin && sum.firewall?.enabled === false) flag('bad', t('The firewall is off.'), 'firewall');
+    if (isAdmin && sum.malware?.last_scan?.infected) flag('bad', t('The last malware scan found {n} threat(s).', { n: sum.malware.last_scan.infected }), 'malware');
+    if (isAdmin && sum.backups?.failed) flag('bad', t('{n} scheduled backup(s) failed on their last run.', { n: sum.backups.failed }), 'backups');
+    if (ssl.unsecured_count) flag('warn', t('{n} website(s) without SSL: {domains}', {
+      n: ssl.unsecured_count, domains: ssl.unsecured.join(', ') + (ssl.unsecured_count > ssl.unsecured.length ? ', ...' : ''),
+    }), 'ssl', t('Install SSL'));
+    if (sites.suspended) flag('warn', t('{n} website(s) suspended.', { n: sites.suspended }), 'websites');
+    if (isAdmin && sum.backups && !sum.backups.schedules) flag('warn', t('No scheduled backup is set up.'), 'backups', t('Set up'));
+    if (isAdmin && sum.waf?.engine === 'off') flag('warn', t('The WAF engine is not installed.'), 'waf');
+    if (isAdmin && sum.malware && !sum.malware.installed) flag('warn', t('The malware scanner is not installed.'), 'malware');
+    if (!isAdmin && currentUser && !currentUser.totp_enabled) flag('info', t('Two-factor sign-in is off for your account.'), 'security', t('Turn on'), LockKeyhole);
+    if (isAdmin && sum.updates?.update_available) flag('info', t('Panel update {version} is available.', { version: sum.updates.latest_version }), 'updates', t('Open'), RefreshCw);
+
+    // The create forms open with the page, so "New website" is one click.
+    const quickActions = [
+      { key: 'site', icon: Plus, label: t('New website'), primary: true, run: () => { setCreateFormOpen(true); navigateToPage('websites'); } },
+      { key: 'db', icon: Database, label: t('New database'), run: () => { setDbCreateOpen(true); navigateToPage('databases'); } },
+      { key: 'ssl', icon: Lock, label: t('Install SSL'), run: () => navigateToPage('ssl') },
+      { key: 'backup', icon: Archive, label: t('Back up a website'), run: () => navigateToPage('backups') },
+      { key: 'sftp', icon: KeyRound, label: t('New SFTP account'), run: () => {
+        navigateToPage('sftp');
+        window.setTimeout(() => document.querySelector('.sftp-form input')?.focus(), 150);
+      } },
+      ...(isAdmin ? [{ key: 'users', icon: Users, label: t('Panel users'), run: () => navigateToPage('users') }] : []),
+    ];
 
     return <div className="dashboard">
       {isAdmin && <section className="section dash-card dash-resources">
@@ -4670,15 +4725,36 @@ Each account is overwritten with what is in its archive.`)) return;
           </div>
         </section>;
       })()}
-      {/* One card per group, side by side, each a list of links - the same
-          card shape as the meters above, so the page reads as one grid. */}
-      <div className="dash-groups" style={{ '--dash-cols': featureGroups.length }}>
-        {featureGroups.map(group => <section className="section dash-card dash-group" key={group.title}>
-          <div className="dash-card-head"><span className="dash-card-icon"><group.icon size={16}/></span><h2>{t(group.title)}</h2></div>
-          <div className="dash-links">
-            {group.items.map(item => <FeatureTile key={`${item.target}-${item.label}`} {...item} />)}
+
+      {/* Eight cards for an administrator go 4 + 4, three for a customer sit
+          in one row; each opens its page. */}
+      <div className={`status-grid${cards.length > 4 ? ' many' : ''}`} style={{ '--status-cols': Math.min(4, cards.length) }}>
+        {cards.map(card => <button type="button" key={card.key} className={`status-card tone-${card.tone}`} onClick={() => navigateToPage(card.key)}>
+          <span className="status-card-head"><card.icon size={15}/><span>{card.label}</span></span>
+          <strong>{card.value}</strong>
+          <small>{card.detail}</small>
+        </button>)}
+      </div>
+
+      <div className="dash-bottom">
+        <section className="section dash-card">
+          <div className="dash-card-head"><span className="dash-card-icon"><AlertCircle size={16}/></span><h2>{t('Needs attention')}</h2></div>
+          {attention.length === 0
+            ? <div className="attention-ok"><CheckCircle size={16}/>{dashSummary ? t('Everything looks fine.') : t('Checking...')}</div>
+            : <div className="attention-list">
+                {attention.map(item => <div className={`attention-item tone-${item.tone}`} key={item.text}>
+                  <item.icon size={15}/>
+                  <span>{item.text}</span>
+                  <button type="button" className="mini secondary" onClick={() => navigateToPage(item.target)}>{item.action}</button>
+                </div>)}
+              </div>}
+        </section>
+        <section className="section dash-card">
+          <div className="dash-card-head"><span className="dash-card-icon"><Zap size={16}/></span><h2>{t('Quick actions')}</h2></div>
+          <div className="quick-actions">
+            {quickActions.map(action => <button type="button" key={action.key} className={action.primary ? '' : 'secondary'} onClick={action.run}><action.icon size={15}/>{action.label}</button>)}
           </div>
-        </section>)}
+        </section>
       </div>
     </div>;
   }
