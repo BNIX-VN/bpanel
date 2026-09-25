@@ -111,3 +111,78 @@ class TestHelper:
         assert "maldet_write_ignores" in conf
         sigs = helper.split("maldet-update-sigs)", 1)[1].split(";;", 1)[0]
         assert "maldet_write_conf" in sigs
+
+
+# --- progress while a scan runs (operator, 2026-09-26) ------------------------
+# With the ClamAV engine maldet prints nothing between "scan ... in progress"
+# and the end, and the panel read nothing until the end: a four-hour scan sat
+# at 0 files and 0% the whole way.
+
+def test_progress_reads_the_helper(monkeypatch):
+    calls = {}
+
+    def fake_privileged(cmd, helper_args=None, **kw):
+        calls["cmd"], calls["args"] = cmd, helper_args
+
+        class R:
+            stdout = "stage=scanning\ntotal=182332\nscanned=10899\n"
+            returncode = 0
+        return R()
+
+    monkeypatch.setattr(maldet.shell, "privileged", fake_privileged)
+    assert maldet.progress("abc123") == {"stage": "scanning", "total": 182332, "scanned": 10899}
+    assert calls == {"cmd": "maldet-progress", "args": ["abc123"]}
+
+
+def test_the_job_moves_while_maldet_runs(monkeypatch):
+    import threading
+
+    from app.services import panel_settings
+
+    updates = []
+    readings = iter([
+        {"stage": "listing", "total": 0, "scanned": 0},
+        {"stage": "scanning", "total": 200, "scanned": 50},
+        {"stage": "scanning", "total": 200, "scanned": 199},
+    ])
+    seen_enough = threading.Event()
+
+    def fake_progress(job_id):
+        try:
+            return next(readings)
+        except StopIteration:
+            seen_enough.set()
+            return {"stage": "scanning", "total": 200, "scanned": 199}
+
+    def fake_scan(job_id, targets, recent_days=None):
+        assert seen_enough.wait(5), "no progress was read while the scan ran"
+        return {"scanid": "260926-0059.1", "exit": 0, "raw": ""}
+
+    monkeypatch.setattr(panel_settings, "SERVER_SCAN_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(panel_settings, "_update_malware_job", lambda job_id, **kw: updates.append(kw))
+    monkeypatch.setattr(panel_settings, "_append_malware_log", lambda job_id, line: None)
+    monkeypatch.setattr(maldet, "progress", fake_progress)
+    monkeypatch.setattr(maldet, "scan", fake_scan)
+    monkeypatch.setattr(maldet, "read_job_report", lambda job_id: (200, []))
+
+    panel_settings._run_maldet_job("abc123", "/home")
+
+    moving = [u for u in updates if "scanned" in u and u.get("progress_percent", 0) < 100]
+    assert {"message": "Building the file list...", "scanned": 0, "progress_percent": 0, "total_files": 0} in moving
+    assert {"message": "Scanning files...", "scanned": 50, "progress_percent": 25, "total_files": 200} in moving
+    assert max(u["progress_percent"] for u in moving) == 99, "never 100% before it is over"
+    final = updates[-1]
+    assert final["status"] == "done" and final["progress_percent"] == 100 and final["scanned"] == 200
+
+
+def test_the_helper_reports_numbers_from_the_scanners_position():
+    helper = HELPER_SCRIPT.read_text(encoding="utf-8")
+    assert "maldet-progress)" in helper
+    body = helper.split("maldet_scan_progress() {", 1)[1].split("\n}\n", 1)[0]
+    assert '[[ "$job" =~ ^[0-9a-f]{8,64}$ ]] || deny' in body
+    assert "/proc/${clam}/fdinfo/" in body and 'pgrep -P "$pid" -x clamscan' in body
+    # set -euo pipefail: a grep that matches nothing must not end the helper.
+    for line in body.splitlines():
+        if "$(grep" in line or "$(awk" in line:
+            assert "|| true)" in line, line
+    assert "printf 'stage=%s\\ntotal=%s\\nscanned=%s\\n'" in body

@@ -104,6 +104,29 @@ def scan(job_id: str, targets: list[str], *, recent_days: int | None = None, tim
     return {"scanid": scanid, "exit": exit_code, "raw": result.stdout or ""}
 
 
+def progress(job_id: str) -> dict:
+    """How far a running scan has got: {"stage", "total", "scanned"}.
+
+    stage is none / starting / listing / scanning / results. The helper reads
+    the scanner's position in maldet's file list; only root can see it.
+    """
+    result = shell.privileged(
+        "maldet-progress",
+        helper_args=[job_id],
+        check=False,
+        fallback=["bash", "-lc", "echo stage=none"],
+    )
+    kv = _kv(result.stdout)
+
+    def number(key: str) -> int:
+        try:
+            return max(0, int(kv.get(key, 0)))
+        except (TypeError, ValueError):
+            return 0
+
+    return {"stage": kv.get("stage", "none"), "total": number("total"), "scanned": number("scanned")}
+
+
 def _report_path(job_id: str) -> Path:
     return JOBS_DIR / f"{job_id}.maldet.report"
 

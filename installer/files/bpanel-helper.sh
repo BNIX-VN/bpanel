@@ -1505,6 +1505,40 @@ run_maldet_scan() {
   printf 'exit=%s\n' "$rc"
 }
 
+maldet_scan_progress() {
+  # maldet_scan_progress <job-id>: how far a running maldet scan has got.
+  # With the ClamAV engine maldet prints nothing between "scan ... in
+  # progress" and the end - four hours on a whole server - so the panel sat at
+  # 0%. clamscan reads maldet's file list one line at a time; the read offset
+  # of that list, in /proc/<pid>/fdinfo (root only), says how many files are
+  # behind it. Prints numbers only, never a path.
+  local job="$1"
+  [[ "$job" =~ ^[0-9a-f]{8,64}$ ]] || deny "invalid scan job id"
+  local out="${MALWARE_JOBS_DIR}/${job}.maldet.out"
+  local stage="none" total="" scanned=0 pid="" list clam fd pos
+  if [[ -f "$out" ]]; then
+    stage="starting"
+    grep -q 'building file list' "$out" && stage="listing"
+    total="$(grep -oE 'found [0-9]+ files' "$out" | tail -n1 | tr -dc '0-9' || true)"
+    [[ -n "$total" ]] && stage="scanning"
+    grep -qE 'processing scan results|scan completed' "$out" && stage="results"
+    pid="$(grep -oE '^maldet\([0-9]+\)' "$out" | head -n1 | tr -dc '0-9' || true)"
+  fi
+  if [[ "$stage" == "scanning" && -n "$pid" ]]; then
+    list="${MALDET_HOME}/tmp/.find.${pid}"
+    for clam in $(pgrep -P "$pid" -x clamscan 2>/dev/null || true); do
+      for fd in /proc/"$clam"/fd/*; do
+        [[ "$(readlink "$fd" 2>/dev/null || true)" == "$list" ]] || continue
+        pos="$(awk '/^pos:/ {print $2}' "/proc/${clam}/fdinfo/${fd##*/}" 2>/dev/null || true)"
+        if [[ "$pos" =~ ^[0-9]+$ ]]; then
+          scanned="$(head -c "$pos" "$list" 2>/dev/null | wc -l || true)"
+        fi
+      done
+    done
+  fi
+  printf 'stage=%s\ntotal=%s\nscanned=%s\n' "$stage" "${total:-0}" "${scanned:-0}"
+}
+
 install_php_version() {
   local version="$1"
   export DEBIAN_FRONTEND=noninteractive
@@ -5059,6 +5093,12 @@ case "$cmd" in
     # maldet-scan <job-id> <all|recent> <days> <path>...
     [[ $# -ge 4 ]] || deny "usage: maldet-scan <job-id> <all|recent> <days> <path>..."
     run_maldet_scan "$@"
+    ;;
+
+  maldet-progress)
+    # maldet-progress <job-id>
+    [[ $# -eq 1 ]] || deny "usage: maldet-progress <job-id>"
+    maldet_scan_progress "$1"
     ;;
 
   maldet-report)

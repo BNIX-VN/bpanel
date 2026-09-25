@@ -7334,12 +7334,21 @@ Each account is overwritten with what is in its archive.`)) return;
 
     // One view of a scan, used for the run in progress on this page and for a
     // finished run opened from the history on a page of its own.
+    // A /home scan is 180,000 files or more, so a whole percent takes a minute
+    // or two to tick over and the figure looked stuck. While a scan runs it is
+    // worked out from the counts, with a decimal below 10%.
+    const scanPercent = job => {
+      const total = Number(job.total_files) || 0;
+      if (job.status !== 'running' || !total) return String(Number(job.progress_percent) || 0);
+      const exact = Math.min(99, (Number(job.scanned) || 0) * 100 / total);
+      return exact > 0 && exact < 10 ? exact.toFixed(1) : String(Math.floor(exact));
+    };
     const renderScanStatus = job => <div className="scan-status-panel">
       <div className="progress-bar">
-        <div className="progress-bar-fill" style={{width: `${Number(job.progress_percent) || 0}%`}} />
+        <div className="progress-bar-fill" style={{width: `${scanPercent(job)}%`}} />
       </div>
       <div className="scan-status-summary">
-        <span><strong>{t('Progress')}</strong>{Number(job.progress_percent) || 0}%</span>
+        <span><strong>{t('Progress')}</strong>{scanPercent(job)}%</span>
         <span><strong>{t('Files scanned')}</strong>{job.scanned || 0}/{job.total_files || job.scanned || 0}</span>
         <span><strong>{t('Threats')}</strong>{job.infected > 0
           ? <span className="badge danger">{job.infected}</span>
@@ -7347,7 +7356,9 @@ Each account is overwritten with what is in its archive.`)) return;
         </span>
         <span><strong>{t('Errors')}</strong>{job.errors || 0}</span>
       </div>
-      {job.message && <p className="hint">{job.message}</p>}
+      {/* The scanner's stage messages are fixed sentences in the dictionary;
+          one that is not (an older job's) shows as it was written. */}
+      {job.message && <p className="hint">{t(job.message)}</p>}
       {job.threats && job.threats.length > 0 && <div className="scan-threat-list">
         <p className="hint">{t('These are the scanner\'s own family names (php.base64..., for instance), not common virus names — there is nowhere else to look them up.')}</p>
         {job.threats.map((threat, i) => <div key={i} className="scan-threat-item">

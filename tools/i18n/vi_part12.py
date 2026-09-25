@@ -41,4 +41,12 @@ PART12 = {
     "Quick actions": "Thao tác nhanh",
     "Back up a website": "Sao lưu website",
     "New SFTP account": "Tạo tài khoản SFTP",
+
+    # A malware scan's stage, while LMD runs
+    "Starting the scan...": "Đang bắt đầu quét...",
+    "Building the file list...": "Đang lập danh sách file...",
+    "Scanning files...": "Đang quét file...",
+    "Reading the results...": "Đang đọc kết quả...",
+    "Scan finished.": "Đã quét xong.",
+    "Scan failed": "Quét thất bại",
 }
