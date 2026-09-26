@@ -853,6 +853,7 @@ function App() {
   const [editingPackageId, setEditingPackageId] = useState('');
   const [editingPackageForm, setEditingPackageForm] = useState({ name: '', website_limit: 5, storage_limit_mb: 1024, sftp_accounts_limit: 0 });
   const [phpConfig, setPhpConfig] = useState({ php_version: '8.4', display_errors: 'Off', max_execution_time: 300, max_input_time: 600, max_input_vars: 10000, memory_limit: '1024M', post_max_size: '1024M', upload_max_filesize: '1024M' });
+  const [phpExtensions, setPhpExtensions] = useState({ versions: [], extensions: [] });
   const [phpVersions, setPhpVersions] = useState({ installed: ['8.4'], supported: ['5.6', '7.4', '8.0', '8.1', '8.2', '8.3', '8.4', '8.5'] });
   const [firewallStatus, setFirewallStatus] = useState(null);
   const [firewallPort, setFirewallPort] = useState('80');
@@ -3788,6 +3789,25 @@ Each account is overwritten with what is in its archive.`)) return;
     });
   }
 
+  async function loadPhpExtensions() {
+    const data = await request('/maintenance/php-extensions', { silent: true });
+    if (data) setPhpExtensions({ versions: data.versions || [], extensions: data.extensions || [] });
+  }
+
+  // One version at a time, so "every version" is several short apt runs and
+  // the table fills in as each one lands.
+  async function installPhpExtension(extension, versions) {
+    for (const version of versions) {
+      const data = await request('/maintenance/php-extensions', {
+        method: 'POST',
+        body: JSON.stringify({ php_version: version, extension }),
+      }, t('Installing php{version}-{extension}...', { version, extension }));
+      if (!data) return;
+      setPhpExtensions({ versions: data.versions || [], extensions: data.extensions || [] });
+    }
+    setNotice(t('{extension} installed for PHP {versions}.', { extension, versions: versions.join(', ') }));
+  }
+
   async function installPhpVersion(version) {
     if (!confirm(`Install PHP ${version}? This will install php${version}-fpm via apt.`)) return;
     const data = await request(`/maintenance/php-versions/${version}/install`, { method: 'POST' }, `Installing PHP ${version}...`);
@@ -4316,7 +4336,7 @@ Each account is overwritten with what is in its archive.`)) return;
 
   useEffect(() => {
     if (isAuthenticated && page === 'users') { loadUsers(); loadPackages(); }
-    if (isAuthenticated && page === 'php') { loadPhpConfig(); loadPhpTune(phpConfig.php_version); }
+    if (isAuthenticated && page === 'php') { loadPhpConfig(); loadPhpTune(phpConfig.php_version); loadPhpExtensions(); }
     if (isAuthenticated && page === 'firewall') { loadFirewall(); loadFirewallBlocklists(); loadFail2ban(); }
     if (isAuthenticated && ['waf', 'waf-site'].includes(page)) {
       loadBotBlocks();
@@ -6503,6 +6523,34 @@ Each account is overwritten with what is in its archive.`)) return;
             <span>pm.max_children={p.max_children || '—'}, idle {p.idle_timeout || '—'}, up to {p.max_requests || '—'} requests</span>
           </li>)}
         </ul>}
+      </div>}
+      {phpExtensions.versions.length > 0 && <div className="php-ext-card">
+        <h3>{t('PHP extensions')}</h3>
+        <p className="hint">{t('Installed from the system packages; PHP-FPM reloads so websites can use it straight away. Removing is not offered here, since a website may depend on it.')}</p>
+        <div className="php-ext-table" role="table" style={{ '--php-cols': phpExtensions.versions.length }}>
+          <div className="php-ext-row php-ext-head" role="row">
+            <span role="columnheader">{t('Name')}</span>
+            {phpExtensions.versions.map(v => <span role="columnheader" key={v}>PHP {v}</span>)}
+            <span role="columnheader" className="php-ext-all" aria-hidden="true"></span>
+          </div>
+          {phpExtensions.extensions.map(ext => {
+            const missing = phpExtensions.versions.filter(v => ext.versions[v] === 'available');
+            return <div className="php-ext-row" role="row" key={ext.name}>
+              <code role="cell">{ext.name}</code>
+              {phpExtensions.versions.map(v => {
+                const state = ext.versions[v];
+                return <span role="cell" key={v}>
+                  {(state === 'installed' || state === 'builtin') && <span className="badge ok" title={state === 'builtin' ? t('Built into PHP') : t('Installed')}><Check size={12}/></span>}
+                  {state === 'available' && <button className="mini secondary" disabled={!!loading} aria-label={t('Install')} title={`php${v}-${ext.name}`} onClick={() => installPhpExtension(ext.name, [v])}><Plus size={12}/><span className="php-ext-install-label">{t('Install')}</span></button>}
+                  {state === 'unavailable' && <span className="php-ext-none" title={t('Not in the package repository for this version')}>—</span>}
+                </span>;
+              })}
+              <span role="cell" className="php-ext-all">
+                {missing.length > 1 && <button className="mini secondary" disabled={!!loading} onClick={() => installPhpExtension(ext.name, missing)}>{t('All versions')}</button>}
+              </span>
+            </div>;
+          })}
+        </div>
       </div>}
       {notInstalled.length > 0 && <div className="user-create-card" style={{ marginTop: 16 }}>
         <h3>{t('Install PHP')}</h3>

@@ -30,6 +30,7 @@ from app.schemas.schemas import (
     DaBulkImportRequest,
     PhpConfigUpdate,
     PhpConfigRestore,
+    PhpExtensionInstall,
     PhpOpcacheToggle,
     RestoreBackup,
     SftpBackupRun,
@@ -1232,6 +1233,35 @@ def install_php_version(php_version: str, current_user: User = Depends(get_curre
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return result
+
+
+@router.get("/php-extensions")
+def get_php_extensions(current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.admin)
+    return php.list_extensions()
+
+
+@router.post("/php-extensions")
+def install_php_extension(
+    payload: PhpExtensionInstall,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Install one PHP extension for one installed version (admin only).
+
+    Only from the list the panel offers; the helper checks it again. Returns
+    the table afresh so the page shows what is loaded now.
+    """
+    ensure_role(current_user.role, Role.admin)
+    try:
+        output = php.install_extension(payload.php_version, payload.extension)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    log_action(db, current_user.id, "php_extension_install", f"php{payload.php_version}-{payload.extension}", request=request)
+    return {"output": output, **php.list_extensions()}
 
 
 @router.post("/cron")

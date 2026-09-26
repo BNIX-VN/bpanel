@@ -103,6 +103,86 @@ def read_php_ini(php_version: str) -> dict:
     return values
 
 
+# The extensions the PHP config page offers, one apt package each
+# (php<version>-<name>). The helper keeps the same list and enforces it.
+PHP_EXTENSIONS = tuple("apcu bcmath bz2 curl enchant gd gmp igbinary imagick imap intl ldap mailparse mbstring memcached mongodb msgpack mysql opcache pgsql redis soap sqlite3 ssh2 tidy uuid xml xsl yaml zip".split())
+
+# `php -m` names where they differ from the package: php-mysql brings mysqli
+# and pdo_mysql, php-xml brings dom and friends, and OPcache is built into
+# PHP 8.5 with no package of its own.
+_MODULE_NAMES = {
+    "mysql": ("mysqli",),
+    "xml": ("dom",),
+    "opcache": ("zend opcache",),
+}
+
+
+def _command_output(args: list[str]) -> str:
+    try:
+        result = shell.run(args, check=False, timeout=30)
+    except (OSError, ValueError):  # no dpkg / php on a development machine
+        return ""
+    return result.stdout or ""
+
+
+def list_extensions() -> dict:
+    """Every offered extension against every installed PHP version.
+
+    A cell is "installed" (its package is), "builtin" (PHP loads the module
+    without a package, OPcache on 8.5), "available" (the repository has it)
+    or "unavailable". Read-only, and needs no root: dpkg-query, apt-cache and
+    php -m are open to anyone.
+    """
+    versions = list_installed_php()
+    installed = set()
+    for line in _command_output(["dpkg-query", "-W", "-f=${Package}\t${Status}\n", "php*"]).splitlines():
+        package, _, status = line.partition("\t")
+        if status == "install ok installed":
+            installed.add(package)
+    available = set(_command_output(["apt-cache", "pkgnames", "php"]).split())
+    modules = {
+        version: {line.strip().lower() for line in _command_output([f"php{version}", "-m"]).splitlines()}
+        for version in versions
+    }
+    rows = []
+    for ext in PHP_EXTENSIONS:
+        states = {}
+        for version in versions:
+            package = f"php{version}-{ext}"
+            if package in installed:
+                states[version] = "installed"
+            elif any(name in modules[version] for name in _MODULE_NAMES.get(ext, (ext,))):
+                states[version] = "builtin"
+            elif package in available:
+                states[version] = "available"
+            else:
+                states[version] = "unavailable"
+        rows.append({"name": ext, "versions": states})
+    return {"versions": versions, "extensions": rows}
+
+
+def install_extension(php_version: str, extension: str) -> str:
+    """Install one offered extension for an installed PHP version.
+
+    apt, then a PHP-FPM reload so sites load it at once. Raises ValueError for
+    anything the panel does not offer, RuntimeError when apt or PHP refuse.
+    """
+    if php_version not in list_installed_php():
+        raise ValueError(f"PHP {php_version} is not installed")
+    if extension not in PHP_EXTENSIONS:
+        raise ValueError(f"PHP extension not offered by the panel: {extension}")
+    result = shell.privileged(
+        "php-ext-install",
+        helper_args=[php_version, extension],
+        check=False,
+        timeout=600,
+        fallback=["bash", "-lc", f"echo would install php{php_version}-{extension}"],
+    )
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout or f"Could not install php{php_version}-{extension}").strip()[-600:])
+    return (result.stdout or "").strip()
+
+
 def list_installed_php() -> list[str]:
     """List PHP versions that are currently installed on the system."""
     installed = []
@@ -146,6 +226,7 @@ def install_php(php_version: str) -> dict:
             f"php{php_version}-bcmath",
             f"php{php_version}-redis",
             f"php{php_version}-imagick",
+            f"php{php_version}-imap",
         ],
     )
     return {"status": "ensured" if already_installed else "installed", "version": php_version, "output": result.stdout}

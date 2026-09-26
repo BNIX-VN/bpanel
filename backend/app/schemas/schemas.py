@@ -1314,6 +1314,11 @@ class PhpOpcacheToggle(BaseModel):
     enabled: bool = True
 
 
+class PhpExtensionInstall(BaseModel):
+    php_version: str = Field(pattern=r"^\d\.\d$")
+    extension: str = Field(pattern=r"^[a-z0-9]{2,20}$")
+
+
 class PhpConfigRestore(BaseModel):
     php_version: str = "8.4"
 

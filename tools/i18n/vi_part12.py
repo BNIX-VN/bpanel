@@ -52,4 +52,14 @@ PART12 = {
 
     # File manager
     "Modified": "Ngày sửa",
+
+    # PHP extensions
+    "PHP extensions": "PHP extension",
+    "Installed from the system packages; PHP-FPM reloads so websites can use it straight away. Removing is not offered here, since a website may depend on it.":
+        "Cài từ gói của hệ điều hành; PHP-FPM tự nạp lại để website dùng được ngay. Không có nút gỡ, vì có thể có website đang cần extension đó.",
+    "Built into PHP": "Có sẵn trong PHP",
+    "Not in the package repository for this version": "Kho gói không có bản cho phiên bản PHP này",
+    "All versions": "Cài cho mọi bản",
+    "Installing php{version}-{extension}...": "Đang cài php{version}-{extension}...",
+    "{extension} installed for PHP {versions}.": "Đã cài {extension} cho PHP {versions}.",
 }

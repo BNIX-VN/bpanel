@@ -387,6 +387,7 @@ install_php() {
       "php${version}-bcmath"
       "php${version}-redis"
       "php${version}-imagick"
+      "php${version}-imap"
     )
 
     available_packages=()

@@ -438,6 +438,29 @@ button svg,.button-link svg,.upload-button svg{flex:none}
 .waf-switch-text{display:grid;gap:2px;min-width:0}
 .waf-switch-text .hint{margin:0}
 
+/* PHP extensions: one row per extension, one column per installed PHP. */
+.php-ext-card{display:grid;gap:10px;margin-top:16px;padding:16px;border:1px solid var(--border);border-radius:var(--radius-lg);background:var(--surface)}
+.php-ext-card h3{margin:0;font-size:15px}
+.php-ext-card .hint{margin:0}
+.php-ext-table{display:grid;border:1px solid var(--border);border-radius:var(--radius-md);overflow:hidden}
+/* Every row is a grid of its own, so no column may size itself to its
+   content - "All versions" is on some rows and not others - or the
+   version columns would sit at a different place on each row. */
+.php-ext-row{display:grid;grid-template-columns:minmax(80px,1fr) repeat(var(--php-cols,1),minmax(52px,104px)) 136px;align-items:center;gap:8px;padding:6px 12px;min-height:40px}
+.php-ext-row + .php-ext-row{border-top:1px solid var(--border)}
+.php-ext-row:hover:not(.php-ext-head){background:var(--surface-hover)}
+.php-ext-head{background:var(--surface-alt);color:var(--text-muted);font-size:12px;font-weight:700;min-height:34px}
+.php-ext-row > code{font-size:13px;color:var(--text)}
+.php-ext-row .badge{display:inline-flex;align-items:center;justify-content:center;min-width:28px}
+.php-ext-none{color:var(--text-muted)}
+.php-ext-all{justify-self:end}
+/* Below the width where "Install" fits in every version column, the
+   button is its + (the label stays for screen readers and the tooltip). */
+@media(max-width:1240px){
+  .php-ext-install-label{display:none}
+  .php-ext-row .mini{padding:0 8px}
+}
+
 /* ---------- Phones ---------- */
 @media(max-width:760px){
   /* Dashboard: cards two by two, the lists one above the other, and each
@@ -477,6 +500,12 @@ button svg,.button-link svg,.upload-button svg{flex:none}
   /* WAF site page: the switch under its text, full width. */
   .waf-switch-row{grid-template-columns:minmax(0,1fr) auto}
   .waf-switch-row > button{grid-column:1 / -1;width:100%}
+
+  /* PHP extensions: narrower version columns; "every version" goes, the
+     per-version buttons do the same job. */
+  .php-ext-card{padding:12px}
+  .php-ext-row{grid-template-columns:minmax(64px,1fr) repeat(var(--php-cols,1),48px);gap:4px;padding:6px}
+  .php-ext-all{display:none}
 
   /* Lists with a filter: the input at its natural height. */
   .detail-head input{flex:0 0 auto}
