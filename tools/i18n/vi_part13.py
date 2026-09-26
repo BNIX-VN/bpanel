@@ -136,4 +136,12 @@ PART13 = {
     "Versions, limits and extensions": "Phiên bản, giới hạn và extension",
     "Hostname, branding and API tokens": "Tên miền panel, thương hiệu và API token",
     "Panel version": "Phiên bản panel",
+
+    # WAF: the server's custom rules, now that they apply
+    "Global custom rules": "Rule tuỳ chỉnh toàn cục",
+    "{n} rule(s)": "{n} rule",
+    "ModSecurity rules for every website with the WAF on. Rules an AI assistant added are marked # bpanel-mcp; delete a rule by deleting its lines.":
+        "Rule ModSecurity áp dụng cho mọi website đang bật WAF. Rule do trợ lý AI thêm có dòng # bpanel-mcp; muốn xoá rule nào thì xoá các dòng của rule đó.",
+    "Global WAF rules saved. They apply to every website with the WAF on.":
+        "Đã lưu rule WAF toàn cục. Rule áp dụng cho mọi website đang bật WAF.",
 }
