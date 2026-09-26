@@ -375,9 +375,14 @@ def stage_remote_backup(fetch, name: str) -> str:
     # Never overwrite something already staged: two targets can hold a file of
     # the same name, and a half-finished download must not clobber a good one.
     local = destination / f"{stem}-{secrets.token_hex(3)}.tar.gz"
-    fetch(str(local))
-    if not local.is_file() or local.stat().st_size == 0:
-        raise ValueError("The download produced no file")
+    try:
+        fetch(str(local))
+        if not local.is_file() or local.stat().st_size == 0:
+            raise ValueError("The download produced no file")
+    except BaseException:
+        # A download cut short must not stay behind looking like a backup.
+        local.unlink(missing_ok=True)
+        raise
     return local.name
 
 

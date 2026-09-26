@@ -603,3 +603,45 @@ button svg,.button-link svg,.upload-button svg{flex:none}
      they had ~170px and folded onto three lines. */
   .file-item > .file-row-actions{grid-column:2 / -1;grid-row:3;display:flex;flex-wrap:nowrap;justify-content:flex-start;gap:6px;width:auto}
 }
+
+/* ---------- Restore: DirectAdmin's four steps ----------
+   Source, details, users, button - each a numbered block, one under the
+   other, so the page reads top to bottom the way the work is done. */
+.restore-flow{gap:14px}
+.restore-step{display:grid;gap:10px;padding:14px;border:1px solid var(--border);border-radius:var(--radius-md,10px);background:var(--surface)}
+.restore-step h4{display:flex;align-items:center;gap:8px;margin:0;font-size:14px;font-weight:600;color:var(--text)}
+.restore-step-no{display:inline-grid;place-items:center;flex:none;width:22px;height:22px;border-radius:999px;background:var(--primary-light);color:var(--primary-ink);font-size:12px;font-weight:700}
+.restore-sources{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px}
+.restore-source,.restore-source:hover:not(:disabled){display:flex;align-items:center;gap:10px;height:auto;min-height:56px;padding:10px 12px;text-align:left;justify-content:flex-start;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:var(--radius-sm)}
+.restore-source:hover:not(:disabled){border-color:var(--border-hover);background:var(--surface-alt)}
+.restore-source.active,.restore-source.active:hover:not(:disabled){border-color:var(--primary);background:var(--primary-light);box-shadow:0 0 0 1px var(--primary) inset}
+.restore-source svg{flex:none;color:var(--primary-ink)}
+.restore-source span{display:grid;gap:2px;min-width:0}
+.restore-source strong{font-size:13.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.restore-source small{font-size:12px;color:var(--text-muted);font-weight:400}
+.restore-remote{display:grid;grid-template-columns:140px minmax(0,2fr) 90px minmax(0,1fr) minmax(0,1fr) minmax(0,1.4fr);gap:8px;align-items:end}
+.restore-remote label{display:grid;gap:4px;min-width:0}
+.restore-remote label span{font-size:12.5px;color:var(--text-secondary)}
+.restore-go{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+.restore-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px}
+.restore-toolbar .check-line{flex:none;margin:0}
+.restore-toolbar input:not([type]){flex:1 1 220px;min-width:0;max-width:360px}
+.restore-users{display:grid;gap:6px;max-height:420px;overflow-y:auto}
+.restore-user{display:grid;grid-template-columns:minmax(0,1fr) minmax(170px,240px);gap:10px;align-items:center;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface)}
+.restore-user.picked{border-color:var(--primary);background:var(--primary-light)}
+.restore-user-main{display:flex;align-items:center;gap:10px;min-width:0;cursor:pointer;padding:4px 0}
+.restore-user-main input[type="checkbox"]{flex:none;width:16px;height:16px;accent-color:var(--primary);cursor:pointer}
+.restore-user-main .badge{margin-left:auto;flex:none}
+.restore-user select{min-width:0}
+.restore-when{text-align:right}
+.restore-progress{display:grid;gap:6px;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-alt)}
+.restore-progress-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.restore-progress-error{flex-basis:100%;color:var(--danger-text)}
+@media(max-width:900px){
+  .restore-remote{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(max-width:560px){
+  .restore-remote{grid-template-columns:minmax(0,1fr)}
+  .restore-user{grid-template-columns:minmax(0,1fr)}
+  .restore-when{text-align:left}
+}

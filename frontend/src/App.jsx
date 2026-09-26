@@ -13,7 +13,7 @@ import 'ace-builds/src-noconflict/mode-text';
 import 'ace-builds/src-noconflict/mode-yaml';
 import 'ace-builds/src-noconflict/theme-textmate';
 import 'ace-builds/src-noconflict/theme-tomorrow_night';
-import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle, Activity, BrickWall, Bug, LockKeyhole, PackageOpen, ScrollText, ShieldAlert, CheckCircle, Zap, Bell, Mail, Send } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle, Activity, BrickWall, Bug, LockKeyhole, PackageOpen, ScrollText, ShieldAlert, CheckCircle, Zap, Bell, Mail, Send, Cloud } from 'lucide-react';
 import { Terminal } from './components/Terminal';
 import { LANGUAGES, t, useLanguage } from './i18n.js';
 import './style.css';
@@ -797,9 +797,16 @@ function App() {
   const [newSftpTarget, setNewSftpTarget] = useState({ name: '', kind: 'sftp', host: '', port: 22, username: '', password: '', private_key: '', remote_path: '/backups/bpanel', endpoint: '', region: '', bucket: '', access_key: '', secret_key: '', prefix: '', secure: true });
   // The restore catalogue: local archives and whatever is in each S3 bucket,
   // in one list, because "what can I restore" is not answered by this disk alone.
-  const [restoreCatalogue, setRestoreCatalogue] = useState({ items: [], errors: [], loaded: false });
+  // Restore, DirectAdmin's way: a source ('local', 'target:<id>' or
+  // 'remote'), another server's details when that is the source, what the
+  // source holds, which users are ticked, and the job restoring them.
+  const [restoreSource, setRestoreSource] = useState('local');
+  const [restoreRemote, setRestoreRemote] = useState({ protocol: 'sftp', host: '', port: '', username: '', password: '', path: '/' });
+  const [restoreListing, setRestoreListing] = useState(null);
+  const [restoreChoice, setRestoreChoice] = useState({});
   const [restorePicks, setRestorePicks] = useState([]);
   const [restoreFilter, setRestoreFilter] = useState('');
+  const [restoreJob, setRestoreJob] = useState(null);
   const [daBackups, setDaBackups] = useState([]);
   const [daReplaceExisting, setDaReplaceExisting] = useState(false);
   const [daScanResult, setDaScanResult] = useState(null);
@@ -3457,40 +3464,81 @@ function App() {
     }
   }
 
-  async function loadRestoreCatalogue() {
-    const data = await request('/maintenance/restore-catalogue', {}, t('Looking for backups...'));
-    if (data) {
-      setRestoreCatalogue({ items: data.items || [], errors: data.errors || [], loaded: true });
-      setRestorePicks([]);
-    }
+  function restoreSourceBody(source) {
+    if (source === 'local') return { kind: 'local' };
+    if (source.startsWith('target:')) return { kind: 'target', target_id: Number(source.slice(7)) };
+    return {
+      kind: 'remote', ...restoreRemote, port: restoreRemote.port ? Number(restoreRemote.port) : null,
+      // The key the server showed when it was listed: the download checks it
+      // is still the same server before the password is sent again.
+      host_key: restoreListing?.source === 'remote' ? (restoreListing.host_key?.fingerprint || '') : '',
+    };
   }
 
-  function toggleRestorePick(item) {
-    const id = `${item.source}:${item.target_id || 0}:${item.key}`;
+  async function listRestoreSource(source) {
+    setRestoreListing(null);
+    setRestorePicks([]);
+    setRestoreChoice({});
+    const data = await request('/maintenance/restore/list', {
+      method: 'POST', body: JSON.stringify({ source: restoreSourceBody(source) }),
+    }, t('Looking for backups...'));
+    if (data) setRestoreListing({ ...data, source });
+  }
+
+  function chooseRestoreSource(source) {
+    setRestoreSource(source);
+    setRestoreListing(null);
+    setRestorePicks([]);
+    setRestoreChoice({});
+    if (source !== 'remote') listRestoreSource(source);
+  }
+
+  function editRestoreRemote(changes) {
+    setRestoreRemote(prev => ({ ...prev, ...changes }));
+    // What was listed belongs to the details it was listed with.
+    if (restoreListing?.source === 'remote') { setRestoreListing(null); setRestorePicks([]); }
+  }
+
+  // One row per account, its backups newest first; a file whose name does
+  // not say the account is a row of its own.
+  function restoreGroupsOf(listing) {
+    const groups = new Map();
+    for (const item of listing?.items || []) {
+      const id = item.username || `file:${item.key}`;
+      if (!groups.has(id)) groups.set(id, { id, username: item.username, backups: [] });
+      groups.get(id).backups.push(item);
+    }
+    return [...groups.values()].sort((a, b) => (!a.username - !b.username) || (a.username || a.id).localeCompare(b.username || b.id));
+  }
+
+  function chosenRestoreBackup(group) {
+    return group.backups.find(item => item.key === restoreChoice[group.id]) || group.backups[0];
+  }
+
+  function toggleRestorePick(id) {
     setRestorePicks(prev => prev.includes(id) ? prev.filter(entry => entry !== id) : [...prev, id]);
   }
 
-  async function restorePicked() {
-    const chosen = (restoreCatalogue.items || []).filter(item =>
-      restorePicks.includes(`${item.source}:${item.target_id || 0}:${item.key}`));
-    if (chosen.length === 0) return;
-    const names = chosen.map(item => item.username || item.name).join(', ');
-    if (!confirm(`Restore ${chosen.length} backup(s)?
-
-${names}
-
-Each account is overwritten with what is in its archive.`)) return;
-    const data = await request('/maintenance/restore-bulk', {
+  async function runRestore() {
+    const picked = restoreGroupsOf(restoreListing).filter(group => restorePicks.includes(group.id));
+    if (picked.length === 0) return;
+    const names = picked.map(group => group.username || chosenRestoreBackup(group).name).join(', ');
+    if (!confirm(`${t('Restore {n} user(s)? An account that already exists on this server is overwritten with what is in its backup.', { n: picked.length })}\n\n${names}`)) return;
+    const data = await request('/maintenance/restore/run', {
       method: 'POST',
-      body: JSON.stringify({ items: chosen.map(item => ({ source: item.source, name: item.name, key: item.key, target_id: item.target_id })) }),
-    }, `Restoring ${chosen.length} backup(s)...`);
-    if (data) {
-      const failed = (data.results || []).filter(row => row.status === 'failed');
-      if (failed.length === 0) setNotice(`Restored ${data.restored} of ${data.total}.`);
-      else setError(`Restored ${data.restored} of ${data.total}. Failed: ` +
-        failed.map(row => `${row.name} (${row.detail})`).join('; '));
+      body: JSON.stringify({
+        source: restoreSourceBody(restoreListing.source),
+        items: picked.map(group => {
+          const item = chosenRestoreBackup(group);
+          return { key: item.key, size: item.size, username: group.username };
+        }),
+      }),
+    }, t('Starting the restore...'));
+    if (data?.job_id) {
+      setRestoreJob(data);
       setRestorePicks([]);
-      await loadRestoreCatalogue();
+      setNotice(t('Restore started. It keeps running on the server; this page shows each user as it goes.'));
+      loadBackupJobs();
     }
   }
 
@@ -4414,7 +4462,21 @@ Each account is overwritten with what is in its archive.`)) return;
   useEffect(() => { if (page === 'backups' && backupTab === 'da-import') { listDaBackups(); setSelectedDaBackups([]); setDaBulkImportJob(null); } }, [backupTab, page]);
   // The catalogue reaches out to every S3 bucket, so it is fetched when the
   // tab is opened rather than on every visit to the Backups page.
-  useEffect(() => { if (page === 'backups' && backupTab === 'restore' && isAdmin) loadRestoreCatalogue(); }, [backupTab, page]);
+  useEffect(() => { if (page === 'backups' && backupTab === 'restore' && isAdmin && restoreSource !== 'remote') listRestoreSource(restoreSource); }, [backupTab, page]);
+  useEffect(() => {
+    if (!restoreJob?.job_id || !['queued', 'running'].includes(restoreJob.status)) return undefined;
+    const timer = setInterval(async () => {
+      const data = await request(`/maintenance/backup-jobs/${restoreJob.job_id}`, { silent: true });
+      if (!data?.job_id) return;
+      setRestoreJob(data);
+      if (!['queued', 'running'].includes(data.status)) {
+        loadBackupJobs();
+        loadUsers();
+        if (restoreListing && restoreListing.source !== 'remote') listRestoreSource(restoreListing.source);
+      }
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [restoreJob?.job_id, restoreJob?.status]);
 
   useEffect(() => { if (selectedWebsiteId && page === 'cron') listCron(); }, [selectedWebsiteId, page]);
   // Which optional features exist decides what the nav shows, so this is asked
@@ -6303,7 +6365,24 @@ Each account is overwritten with what is in its archive.`)) return;
 
   function renderBackups() {
     const selectedBackupUser = users.find(user => String(user.id) === String(selectedBackupUserId));
-    const jobTitle = job => ({ site_backup: 'Website backup', user_backup: 'Full user backup', sftp_backup: 'SFTP backup' }[job.kind] || 'Backup task');
+    const jobTitle = job => ({ site_backup: 'Website backup', user_backup: 'Full user backup', sftp_backup: 'SFTP backup', user_restore: 'Restore' }[job.kind] || 'Backup task');
+    const restoreGroups = restoreGroupsOf(restoreListing);
+    const restoreNeedle = restoreFilter.trim().toLowerCase();
+    const shownRestoreGroups = restoreGroups.filter(group => !restoreNeedle
+      || `${group.username} ${group.backups.map(item => item.name).join(' ')}`.toLowerCase().includes(restoreNeedle));
+    const allRestoreShownPicked = shownRestoreGroups.length > 0 && shownRestoreGroups.every(group => restorePicks.includes(group.id));
+    const restoreRunning = !!restoreJob && ['queued', 'running'].includes(restoreJob.status);
+    const restoreDate = value => { const d = new Date(value); return value && !Number.isNaN(d.getTime()) ? d.toLocaleString('vi-VN', { hour12: false }) : '—'; };
+    const restoreSourceOptions = [
+      { id: 'local', Icon: HardDrive, label: t('This server'), hint: t('The panel\'s backup folder') },
+      ...sftpTargets.filter(target => target.is_active !== false).map(target => ({
+        id: `target:${target.id}`, Icon: target.kind === 's3' ? Cloud : Network, label: target.name,
+        hint: target.kind === 's3' ? t('S3 destination') : t('SFTP destination'),
+      })),
+      { id: 'remote', Icon: Server, label: t('Another server'), hint: t('SFTP, FTP or FTPS') },
+    ];
+    const restoreStatus = { queued: ['Waiting', 'badge'], fetching: ['Downloading', 'badge warn'], restoring: ['Restoring', 'badge warn'], done: ['Restored', 'badge ok'], failed: ['Failed', 'badge bad'] };
+    const restoreDone = (restoreJob?.results || []).filter(row => row.status === 'done').length;
     const jobDetail = job => job.error || job.remote_file || job.backup_file || job.message || job.status;
     const backupTabs = isAdmin
       ? [
@@ -6486,61 +6565,111 @@ Each account is overwritten with what is in its archive.`)) return;
         </div>
       </div>}
 
-      {isAdmin && activeBackupTab === 'restore' && <div className="backup-tab-panel">
+      {isAdmin && activeBackupTab === 'restore' && <div className="backup-tab-panel restore-flow">
         <div className="backup-panel-title">
           <div>
             <h3>{t('Restore')}</h3>
-            <p className="hint">{t('Everything that could be restored, wherever it is. Tick what you want back and restore it in one go.')}</p>
+            <p className="hint">{t('Where the backups are, what that needs, which users - then restore. The same steps as DirectAdmin.')}</p>
           </div>
-          <button className="secondary-light" disabled={!!loading} onClick={loadRestoreCatalogue}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
 
-        {!restoreCatalogue.loaded && <p className="hint">{t('Press Refresh to look on this server and in every S3 destination.')}</p>}
-
-        {(restoreCatalogue.errors || []).map(row => <p className="hint alarm" key={row.target_id}>
-          {row.target_name}: {row.error}
-        </p>)}
-
-        {restoreCatalogue.loaded && <>
-          <div className="detail-head">
-            <input id="restore-filter" value={restoreFilter} onChange={e => setRestoreFilter(e.target.value)}
-              placeholder={t('Filter by account or file name...')} aria-label={t('Filter backups')} />
-            <span className="hint">{restorePicks.length} selected</span>
-            <button className="danger" disabled={!!loading || restorePicks.length === 0} onClick={restorePicked}>
-              <RotateCcw size={14}/>{t('Restore selected')}</button>
+        <section className="restore-step">
+          <h4><span className="restore-step-no">1</span>{t('Choose the source')}</h4>
+          <div className="restore-sources" role="radiogroup" aria-label={t('Choose the source')}>
+            {restoreSourceOptions.map(option => <button type="button" role="radio" key={option.id}
+              aria-checked={restoreSource === option.id} disabled={!!loading || restoreRunning}
+              className={`restore-source${restoreSource === option.id ? ' active' : ''}`} onClick={() => chooseRestoreSource(option.id)}>
+              <option.Icon size={18}/>
+              <span><strong>{option.label}</strong><small>{option.hint}</small></span>
+            </button>)}
           </div>
+        </section>
 
-          {restoreCatalogue.items.length === 0 && <EmptyState icon={ArchiveRestore} message={t('No backups found, here or in any destination.')} />}
+        <section className="restore-step">
+          <h4><span className="restore-step-no">2</span>{t('Connection details')}</h4>
+          {restoreSource === 'remote'
+            ? <>
+                <div className="restore-remote">
+                  <label><span>{t('Protocol')}</span><select value={restoreRemote.protocol} disabled={restoreRunning} onChange={e => editRestoreRemote({ protocol: e.target.value })}>
+                    <option value="sftp">SFTP</option><option value="ftp">FTP</option><option value="ftps">FTPS (FTP + TLS)</option>
+                  </select></label>
+                  <label><span>{t('Server')}</span><input value={restoreRemote.host} placeholder="backup.example.com" disabled={restoreRunning} onChange={e => editRestoreRemote({ host: e.target.value })} /></label>
+                  <label><span>{t('Port')}</span><input value={restoreRemote.port} inputMode="numeric" placeholder={restoreRemote.protocol === 'sftp' ? '22' : '21'} disabled={restoreRunning} onChange={e => editRestoreRemote({ port: e.target.value.replace(/[^0-9]/g, '') })} /></label>
+                  <label><span>{t('Username')}</span><input value={restoreRemote.username} autoComplete="off" disabled={restoreRunning} onChange={e => editRestoreRemote({ username: e.target.value })} /></label>
+                  <label><span>{t('Password')}</span><input type="password" value={restoreRemote.password} autoComplete="new-password" disabled={restoreRunning} onChange={e => editRestoreRemote({ password: e.target.value })} /></label>
+                  <label><span>{t('Folder')}</span><input value={restoreRemote.path} placeholder="/backups" disabled={restoreRunning} onChange={e => editRestoreRemote({ path: e.target.value })} /></label>
+                </div>
+                <div className="restore-go">
+                  <button type="button" disabled={!!loading || restoreRunning || !restoreRemote.host.trim() || !restoreRemote.username.trim() || !restoreRemote.password} onClick={() => listRestoreSource('remote')}><Search size={14}/>{t('Connect and list')}</button>
+                  <span className="hint">{t('Used for this restore only and never saved. To keep a server, add it under Backup Destination.')}</span>
+                </div>
+                {restoreListing?.host_key && <p className="hint">{t('Server key')}: <code>{restoreListing.host_key.type} {restoreListing.host_key.fingerprint}</code></p>}
+              </>
+            : <p className="hint">{t('Nothing to fill in for this source.')}{restoreListing?.location && <>{' '}<code>{restoreListing.location}</code></>}</p>}
+        </section>
 
-          <div className="detail-body restore-list">
-            {restoreCatalogue.items
-              .filter(item => {
-                const needle = restoreFilter.trim().toLowerCase();
-                if (!needle) return true;
-                return `${item.username} ${item.name} ${item.target_name}`.toLowerCase().includes(needle);
-              })
-              .map(item => {
-                const id = `${item.source}:${item.target_id || 0}:${item.key}`;
-                return <label className="restore-row" key={id}>
-                  <input type="checkbox" checked={restorePicks.includes(id)} disabled={!!loading}
-                    onChange={() => toggleRestorePick(item)} />
-                  <span className="restore-main">
-                    <strong>{item.username || item.name}</strong>
-                    <small>{item.name}</small>
-                  </span>
-                  <span className={item.source === 's3' ? 'badge' : 'badge ok'}>{item.source === 's3' ? item.target_name : 'This server'}</span>
-                  <span className="hint">{formatBytes(item.size)}</span>
-                  <span className="hint">{item.modified ? String(item.modified).slice(0, 19).replace('T', ' ') : '--'}</span>
-                  {item.valid === false && <span className="badge bad">{item.error || 'not a usable backup'}</span>}
-                </label>;
-              })}
+        <section className="restore-step">
+          <h4><span className="restore-step-no">3</span>{t('Choose the users')}</h4>
+          {!restoreListing
+            ? <p className="hint">{restoreSource === 'remote' ? t('Fill in the server above and press Connect and list.') : t('Looking for backups...')}</p>
+            : restoreGroups.length === 0
+              ? <EmptyState icon={ArchiveRestore} message={t('No backups found in this source.')} />
+              : <>
+                  <div className="restore-toolbar">
+                    <label className="check-line"><input type="checkbox" checked={allRestoreShownPicked} disabled={!!loading || restoreRunning}
+                      onChange={() => setRestorePicks(prev => allRestoreShownPicked
+                        ? prev.filter(id => !shownRestoreGroups.some(group => group.id === id))
+                        : [...new Set([...prev, ...shownRestoreGroups.map(group => group.id)])])} />{t('Select all')}</label>
+                    <input id="restore-filter" value={restoreFilter} onChange={e => setRestoreFilter(e.target.value)} placeholder={t('Filter by user...')} aria-label={t('Filter by user...')} />
+                    <span className="hint">{t('{n} selected', { n: restorePicks.length })}</span>
+                  </div>
+                  <div className="restore-users">
+                    {shownRestoreGroups.map(group => {
+                      const chosen = chosenRestoreBackup(group);
+                      const picked = restorePicks.includes(group.id);
+                      const exists = !!group.username && (restoreListing.existing || []).includes(group.username);
+                      return <div className={`restore-user${picked ? ' picked' : ''}`} key={group.id}>
+                        <label className="restore-user-main">
+                          <input type="checkbox" checked={picked} disabled={!!loading || restoreRunning} onChange={() => toggleRestorePick(group.id)} />
+                          <span className="restore-main">
+                            <strong>{group.username || chosen.name}</strong>
+                            <small>{!group.username ? t('The user is read from the backup when it is restored') : exists ? t('Exists on this server - will be overwritten') : t('New on this server')}</small>
+                          </span>
+                          {group.username && <span className={exists ? 'badge warn' : 'badge ok'}>{exists ? t('Overwrite') : t('New')}</span>}
+                        </label>
+                        {group.backups.length > 1
+                          ? <select value={chosen.key} disabled={!!loading || restoreRunning} aria-label={t('Backup to restore')}
+                              onChange={e => setRestoreChoice(prev => ({ ...prev, [group.id]: e.target.value }))}>
+                              {group.backups.map(item => <option key={item.key} value={item.key}>{restoreDate(item.modified)} · {formatBytes(item.size)}</option>)}
+                            </select>
+                          : <span className="hint restore-when">{restoreDate(chosen.modified)} · {formatBytes(chosen.size)}</span>}
+                      </div>;
+                    })}
+                  </div>
+                </>}
+        </section>
+
+        <section className="restore-step">
+          <h4><span className="restore-step-no">4</span>{t('Start the restore')}</h4>
+          <div className="restore-go">
+            <button type="button" className="danger" disabled={!!loading || restoreRunning || restorePicks.length === 0} onClick={runRestore}>
+              <RotateCcw size={14}/>{t('Restore {n} user(s)', { n: restorePicks.length })}</button>
+            <span className="hint">{t('One user after another, in the background. A user that already exists is overwritten with its backup.')}</span>
           </div>
-          <p className="hint">
-            A file in a bucket is downloaded here first, then restored the same way an uploaded one is.
-            Restoring overwrites the account in the archive. One failure does not stop the rest -
-            each is reported on its own.
-          </p>
-        </>}
+          {restoreJob && <div className="restore-progress" aria-live="polite">
+            <strong>{restoreRunning
+              ? t('Restoring: {done} of {total} done', { done: restoreDone, total: (restoreJob.results || []).length })
+              : t('Finished: {done} of {total} restored', { done: restoreDone, total: (restoreJob.results || []).length })}</strong>
+            {(restoreJob.results || []).map((row, index) => {
+              const [label, badge] = restoreStatus[row.status] || restoreStatus.queued;
+              return <div className="restore-progress-row" key={`${row.name}-${index}`}>
+                <span>{row.username || row.name}</span>
+                <span className={badge}>{t(label)}</span>
+                {row.status === 'failed' && row.detail && <small className="restore-progress-error">{row.detail}</small>}
+              </div>;
+            })}
+          </div>}
+        </section>
       </div>}
 
       {isAdmin && activeBackupTab === 'destination' && <div className="backup-tab-panel">

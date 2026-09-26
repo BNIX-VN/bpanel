@@ -1122,42 +1122,54 @@ class BackupScheduleOut(BaseModel):
         from_attributes = True
 
 
-class BulkRestoreItem(BaseModel):
-    """One archive to restore, wherever it currently lives."""
+class RestoreSource(BaseModel):
+    """Where a restore comes from: this server, a saved destination, or
+    another server whose details are typed in for this restore only."""
 
-    source: str = Field(default="local", pattern=r"^(local|s3)$")
-    name: str = Field(min_length=1, max_length=255)
-    key: str = Field(default="", max_length=1024)
+    kind: str = Field(pattern=r"^(local|target|remote)$")
     target_id: Optional[int] = None
-
-    @field_validator("name")
-    @classmethod
-    def validate_name(cls, value: str) -> str:
-        text = value.strip()
-        # A name is a file name, never a path: the caller does not get to pick
-        # where on this disk the restore reads from.
-        if "/" in text or "\\" in text or ".." in text or not text.endswith(".tar.gz"):
-            raise ValueError("Not a backup file name")
-        return text
-
-    @field_validator("key")
-    @classmethod
-    def validate_key(cls, value: str) -> str:
-        text = (value or "").strip()
-        if text.startswith("/") or ".." in text.split("/"):
-            raise ValueError("Not a valid object key")
-        return text
+    protocol: str = Field(default="sftp", pattern=r"^(sftp|ftp|ftps)$")
+    host: str = Field(default="", max_length=253)
+    port: Optional[int] = Field(default=None, ge=1, le=65535)
+    username: str = Field(default="", max_length=128)
+    password: str = Field(default="", max_length=512)
+    path: str = Field(default="/", max_length=1024)
+    # The SFTP key the server presented when it was listed; a download checks
+    # it is still the same server before sending the password again.
+    host_key: str = Field(default="", max_length=128)
 
     @model_validator(mode="after")
     def check_source(self):
-        if self.source == "s3" and (not self.key or not self.target_id):
-            raise ValueError("An S3 item needs a target and a key")
+        if self.kind == "target" and not self.target_id:
+            raise ValueError("Pick a backup destination")
+        if self.kind == "remote":
+            self.host = self.host.strip()
+            if not re.fullmatch(r"[A-Za-z0-9.-]{1,253}|\[?[0-9A-Fa-f:.]{2,45}\]?", self.host):
+                raise ValueError("Enter the server's host name or IP address")
+            self.host = self.host.strip("[]")
+            if not self.username.strip():
+                raise ValueError("Enter the username")
+            if not self.password:
+                raise ValueError("Enter the password")
+            if any(ord(char) < 32 for char in self.username + self.path):
+                raise ValueError("The username or folder contains a control character")
         return self
 
 
-class BulkRestoreRequest(BaseModel):
+class RestoreItem(BaseModel):
+    key: str = Field(min_length=1, max_length=1024)
+    size: int = Field(default=0, ge=0)
+    username: str = Field(default="", max_length=64)
+
+
+class RestoreListRequest(BaseModel):
+    source: RestoreSource
+
+
+class RestoreRunRequest(BaseModel):
+    source: RestoreSource
     # Bounded so one request cannot queue an afternoon of restores.
-    items: list[BulkRestoreItem] = Field(min_length=1, max_length=50)
+    items: list[RestoreItem] = Field(min_length=1, max_length=50)
 
 
 class SftpBackupTargetCreate(BaseModel):
