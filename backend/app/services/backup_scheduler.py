@@ -146,6 +146,11 @@ def run_one(db, schedule: BackupSchedule, now: datetime | None = None) -> bool:
         try:
             archive = backup.create_user_backup(user, db)
             target = _upload_if_configured(db, schedule, archive)
+            if schedule.target_id:
+                # The copies live on the destination now; keeping them here
+                # too doubled the disk a destination is meant to spare. A
+                # failed upload raised above and leaves the archive in place.
+                backup.discard_local_copy(archive)
             backup.prune_user_backups(user.username, schedule.retention)
             messages.append(f"{user.username}: {target}")
         except Exception as exc:  # pragma: no cover - operational path

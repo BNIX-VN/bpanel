@@ -74,10 +74,16 @@ def create_backup(website: Website, db_name: Optional[str] = None) -> str:
         mariadb.export_database(db_name, str(sql_file))
         if settings.command_dry_run and not sql_file.exists():
             sql_file.write_text(f"-- DRY RUN database dump for {db_name}\n", encoding="utf-8")
-    with tarfile.open(archive, "w:gz") as tar:
-        tar.add(website.root_path, arcname="site")
-        if sql_file.exists():
-            tar.add(sql_file, arcname=f"database/{sql_file.name}")
+    try:
+        with tarfile.open(archive, "w:gz") as tar:
+            tar.add(website.root_path, arcname="site")
+            if sql_file.exists():
+                tar.add(sql_file, arcname=f"database/{sql_file.name}")
+    finally:
+        # The dump is inside the archive, and restore reads it from there.
+        # Left beside it, every website backup kept a second, uncompressed
+        # copy of the database that nothing ever removed.
+        sql_file.unlink(missing_ok=True)
     return str(archive)
 
 
@@ -416,6 +422,22 @@ def delete_user_restore_backup(backup_file: str) -> str:
         raise FileNotFoundError("Backup not found")
     path.unlink()
     return str(path)
+
+
+def discard_local_copy(archive: str) -> None:
+    """Remove an archive that has just been uploaded off-server.
+
+    A backup sent to S3 or SFTP used to stay on this disk as well, so a
+    schedule with a destination kept a week of full-account archives in both
+    places - on .88, 32 archives and 6 GB on the very disk the destination was
+    meant to spare (operator, 2026-09-27). Call this only once the upload has
+    succeeded: when it fails, the local archive is the one copy there is, and
+    it stays. Never reaches outside the backup folder.
+    """
+    try:
+        user_backup_path(archive).unlink()
+    except FileNotFoundError:
+        pass
 
 
 def prune_user_backups(username: str, keep: int) -> None:

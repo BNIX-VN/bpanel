@@ -202,4 +202,8 @@ PART13 = {
     "List the server first, so its key can be checked": "Hãy liệt kê máy chủ trước để kiểm tra khoá của nó",
     "Not a backup file": "Không phải file backup",
     "That file is not in the folder that was listed": "File này không nằm trong thư mục đã liệt kê",
+
+    # A backup sent off-server is kept there only
+    "With a destination, the backups are kept there only: each one is removed from this server once it has uploaded, and stays here only if the upload fails.":
+        "Khi có đích lưu, backup chỉ được giữ ở đó: mỗi bản sẽ bị xoá khỏi server này ngay khi tải lên xong, và chỉ ở lại đây nếu tải lên thất bại.",
 }
