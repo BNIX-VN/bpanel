@@ -90,7 +90,6 @@ PART2 = {
     "Restore selected": "Khôi phục mục đã chọn",
     "Restore user": "Khôi phục người dùng",
     "Restore folder": "Thư mục khôi phục",
-    "Filter backups": "Lọc backup",
     "Local only": "Chỉ lưu tại máy",
     "S3 storage": "S3 storage",
     "SFTP server": "Máy chủ SFTP",
@@ -116,16 +115,9 @@ PART2 = {
         "Tự động backup toàn bộ tài khoản, có thể gửi ra ngoài server.",
     "Somewhere off this machine to keep a copy. A backup that lives on the server it backs up is not a backup.":
         "Một nơi ngoài máy này để giữ bản sao. Backup nằm cùng máy với thứ nó backup thì không phải là backup.",
-    "Everything that could be restored, wherever it is. Tick what you want back and restore it in one go.":
-        "Mọi thứ có thể khôi phục, ở bất cứ đâu. Tick những gì bạn cần rồi khôi phục một lượt.",
-    "Press Refresh to look on this server and in every S3 destination.":
-        "Bấm Tải lại để tìm trên server này và trong mọi đích S3.",
     "No backups found for this website.": "Không có backup nào cho website này.",
-    "No backups found, here or in any destination.":
-        "Không tìm thấy backup nào, cả ở đây lẫn ở các đích lưu.",
     "No backup destinations found.": "Chưa có đích lưu backup nào.",
     "No user backups found.": "Chưa có backup tài khoản nào.",
-    "Filter by account or file name...": "Lọc theo tài khoản hoặc tên file...",
 
     # --- security, firewall, WAF ---
     "Firewall status": "Trạng thái tường lửa",

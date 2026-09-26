@@ -70,10 +70,12 @@ def test_every_key_is_a_string_something_actually_shows():
     Checked against the interface source and against the messages the API
     returns, which are the two places a key can legitimately come from. The
     API's messages include the ones a service writes and the API passes on -
-    a malware scan's stage, which the job carries and the page translates.
+    a malware scan's stage, which the job carries and the page translates -
+    and the ones a request model's validator raises, which reach the page as
+    the error of a refused form.
     """
     api = ""
-    for folder in ("api", "services"):
+    for folder in ("api", "services", "schemas"):
         for path in sorted((PROJECT_ROOT / "backend" / "app" / folder).glob("*.py")):
             api += path.read_text(encoding="utf-8")
 

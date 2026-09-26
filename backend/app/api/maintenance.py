@@ -21,7 +21,6 @@ from app.core.permissions import Role, ensure_role, is_admin_role
 from app.core.secrets import decrypt, encrypt
 from app.models.entities import BackupSchedule, DatabaseAccount, SftpBackupTarget, SiteApp, User, Website
 from app.schemas.schemas import (
-    BulkRestoreRequest,
     BackupScheduleCreate,
     BackupScheduleOut,
     BackupCreate,
@@ -33,6 +32,8 @@ from app.schemas.schemas import (
     PhpExtensionInstall,
     PhpOpcacheToggle,
     RestoreBackup,
+    RestoreListRequest,
+    RestoreRunRequest,
     SftpBackupRun,
     SftpBackupTargetCreate,
     SftpBackupTargetOut,
@@ -40,7 +41,19 @@ from app.schemas.schemas import (
     UserRestoreBackup,
     WpAction,
 )
-from app.services import addons, backup, backup_s3, cron, file_manager, php, site_apps, site_users, storage_quota, wordpress
+from app.services import (
+    addons,
+    backup,
+    backup_s3,
+    cron,
+    file_manager,
+    php,
+    restore_sources,
+    site_apps,
+    site_users,
+    storage_quota,
+    wordpress,
+)
 from app.services.audit import log_action
 
 router = APIRouter(prefix="/maintenance", tags=["maintenance"])
@@ -231,6 +244,8 @@ def _public_backup_job(job: dict) -> dict:
         "created_at": job.get("created_at", ""),
         "started_at": job.get("started_at", ""),
         "finished_at": job.get("finished_at", ""),
+        # A restore reports each account it was asked for.
+        "results": [dict(row) for row in job.get("results") or []],
     }
 
 
@@ -950,114 +965,104 @@ def create_sftp_target(
     return target
 
 
-@router.get("/restore-catalogue")
-def restore_catalogue(
-    target_id: Optional[int] = None,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Every backup that could be restored, local and remote in one list.
+@router.post("/restore/list")
+def restore_list(payload: RestoreListRequest, db: Session = Depends(get_db),
+                 current_user: User = Depends(get_current_user)):
+    """What one source holds that can be restored, newest first, and which of
+    those accounts already exist here (restoring one overwrites it).
 
-    The page that offers a bulk restore has to show what there is to pick
-    from, and "what there is" is not only what happens to be on this disk -
-    the whole point of a remote target is that the copy which survives the
-    machine is the one over there.
-
-    A remote target that cannot be reached is reported as an error on that
-    target rather than failing the whole listing: one unreachable bucket must
-    not hide the backups sitting locally.
-    """
+    POST because another server's password travels in the body."""
     ensure_role(current_user.role, Role.admin)
-    items = []
+    try:
+        result = restore_sources.list_source(payload.source.model_dump(), db)
+    except backup.SftpHostKeyMismatch as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except restore_sources.RestoreSourceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    names = {row["username"] for row in result["items"] if row["username"]}
+    existing = {name for (name,) in db.query(User.username).filter(User.username.in_(names))} if names else set()
+    result["existing"] = sorted(existing)
+    return result
 
-    for entry in backup.list_user_restore_backups():
-        items.append({
-            "source": "local",
-            "target_id": None,
-            "target_name": "This server",
-            "name": entry.get("filename") or "",
-            "key": entry.get("filename") or "",
-            "size": entry.get("size") or 0,
-            "modified": entry.get("generated_at") or "",
-            "username": entry.get("username") or "",
-            "valid": bool(entry.get("valid")),
-            "error": entry.get("error") or "",
-        })
 
-    errors = []
-    query = db.query(SftpBackupTarget).filter(SftpBackupTarget.is_active == True)  # noqa: E712
-    if target_id:
-        query = query.filter(SftpBackupTarget.id == target_id)
-    for target in query.order_by(SftpBackupTarget.id.asc()).all():
-        if (target.kind or "sftp") != "s3":
-            # Listing an SFTP directory is a second SSH round trip per target
-            # and the panel has no cache for it; remote listing is S3 only for
-            # now, and the UI says so.
-            continue
+# One restore at a time: two workers could otherwise restore the same account
+# twice at once, and a restore already takes the machine's disk to itself.
+_restore_run_lock = threading.Lock()
+
+
+def _set_restore_result(job_id: str, index: int, **updates) -> None:
+    with _backup_jobs_lock:
+        job = _backup_jobs.get(job_id)
+        if job and index < len(job.get("results") or []):
+            job["results"][index].update(updates)
+
+
+def _run_restore_job(job_id: str, request_user_id: int, source: dict, items: list[dict]) -> None:
+    with _restore_run_lock:
+        _set_backup_job(job_id, status="running", started_at=_now_iso(), message="Restoring")
+        db = SessionLocal()
+        restored = 0
         try:
-            for row in backup_s3.listing(target):
-                items.append({
-                    "source": "s3",
-                    "target_id": target.id,
-                    "target_name": target.name,
-                    "name": row["name"],
-                    "key": row["key"],
-                    "size": row["size"],
-                    "modified": row["modified"],
-                    "username": backup.username_from_archive_name(row["name"]),
-                    # Only reading the manifest can say for sure, and that
-                    # means downloading it. The listing does not pretend.
-                    "valid": None,
-                    "error": "",
-                })
-        except backup_s3.S3Error as exc:
-            errors.append({"target_id": target.id, "target_name": target.name, "error": str(exc)})
+            for index, item in enumerate(items):
+                staged = ""
+                try:
+                    _set_restore_result(job_id, index, status="fetching" if source["kind"] != "local" else "restoring")
+                    path, is_copy = restore_sources.fetch(source, item["key"], item.get("size") or 0, db)
+                    staged = path if is_copy else ""
+                    _set_restore_result(job_id, index, status="restoring")
+                    outcome = backup.restore_user_backup(path, db)
+                    username = outcome.get("username", "") if isinstance(outcome, dict) else ""
+                    _set_restore_result(job_id, index, status="done", username=username or item.get("username", ""),
+                                        detail=outcome.get("message", "") if isinstance(outcome, dict) else "")
+                    restored += 1
+                    if staged:
+                        # The copy has done its job; 800 MB archives pile up.
+                        Path(staged).unlink(missing_ok=True)
+                except Exception as exc:  # noqa: BLE001 - one bad archive must not stop the rest
+                    db.rollback()
+                    logger.warning("restore %s failed: %s", item.get("key"), exc)
+                    _set_restore_result(job_id, index, status="failed", detail=str(exc)[:500])
+            total = len(items)
+            if restored == total:
+                _set_backup_job(job_id, status="done", message=f"Restored {restored} of {total}",
+                                finished_at=_now_iso())
+            else:
+                _set_backup_job(job_id, status="error", message=f"Restored {restored} of {total}",
+                                error=f"Restored {restored} of {total}", finished_at=_now_iso())
+            log_action(db, request_user_id, "restore_users", restore_sources.describe(source, db),
+                       f"{restored}/{total}")
+        except Exception as exc:  # noqa: BLE001 - the job must end in a state the page can show
+            logger.exception("restore job %s failed", job_id)
+            _set_backup_job(job_id, status="error", error=str(exc)[:500], finished_at=_now_iso())
+        finally:
+            db.close()
 
-    items.sort(key=lambda row: (row["modified"] or ""), reverse=True)
-    return {"items": items, "errors": errors}
 
-
-@router.post("/restore-bulk")
-def restore_bulk(
-    payload: BulkRestoreRequest,
-    request: Request,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Restore several backups in one go, reporting each on its own.
-
-    One failure does not abandon the rest: restoring six accounts and having
-    the third refuse should still restore the other five, and say which one
-    did not.
-    """
+@router.post("/restore/run")
+def restore_run(payload: RestoreRunRequest, request: Request, db: Session = Depends(get_db),
+                current_user: User = Depends(get_current_user)):
+    """Restore the picked archives from one source, in the background, one
+    account after another. Each is reported on its own; one failure does not
+    stop the rest."""
     ensure_role(current_user.role, Role.admin)
+    source = payload.source.model_dump()
+    if source["kind"] == "remote" and source["protocol"] == "sftp" and not source["host_key"]:
+        raise HTTPException(status_code=400, detail="List the server first, so its key can be checked")
     results = []
     for item in payload.items:
-        record = {"name": item.name, "source": item.source, "status": "done", "detail": ""}
         try:
-            local_file = item.name
-            if item.source == "s3":
-                target = db.query(SftpBackupTarget).filter(
-                    SftpBackupTarget.id == item.target_id,
-                    SftpBackupTarget.is_active == True,  # noqa: E712
-                ).first()
-                if not target:
-                    raise ValueError("That backup target no longer exists")
-                local_file = backup.stage_remote_backup(
-                    lambda destination: backup_s3.download(target, item.key, destination),
-                    item.name,
-                )
-            outcome = backup.restore_user_backup(local_file, db)
-            record["detail"] = outcome.get("message", "") if isinstance(outcome, dict) else ""
-        except Exception as exc:  # noqa: BLE001 - one bad archive must not stop the rest
-            record["status"] = "failed"
-            record["detail"] = str(exc)
-        results.append(record)
-
-    done = sum(1 for row in results if row["status"] == "done")
-    log_action(db, current_user.id, "restore_bulk",
-               f"{done}/{len(results)}", request=request)
-    return {"results": results, "restored": done, "total": len(results)}
+            name = restore_sources.check_key(source, item.key)
+        except restore_sources.RestoreSourceError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        results.append({"name": name, "username": item.username, "status": "queued", "detail": ""})
+    job = _queue_backup_job(current_user, "user_restore", "Restore queued", results=results)
+    # The source - another server's password included - goes to the worker
+    # only; it is never kept in the job the page can read.
+    _backup_job_executor.submit(_run_restore_job, job["job_id"], current_user.id, source,
+                                [item.model_dump() for item in payload.items])
+    log_action(db, current_user.id, "queue_restore_users", restore_sources.describe(source, db),
+               f"{len(results)} backup(s)", request=request)
+    return job
 
 
 @router.delete("/sftp-targets/{target_id}")
