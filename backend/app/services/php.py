@@ -167,19 +167,25 @@ def install_extension(php_version: str, extension: str) -> str:
     apt, then a PHP-FPM reload so sites load it at once. Raises ValueError for
     anything the panel does not offer, RuntimeError when apt or PHP refuse.
     """
-    if php_version not in list_installed_php():
-        raise ValueError(f"PHP {php_version} is not installed")
-    if extension not in PHP_EXTENSIONS:
-        raise ValueError(f"PHP extension not offered by the panel: {extension}")
+    # What reaches the command line is the panel's own constant, picked by the
+    # request's value, never the request's string itself - and there is no
+    # shell anywhere on the way.
+    version = next((v for v in SUPPORTED_PHP_VERSIONS if v == php_version), None)
+    name = next((e for e in PHP_EXTENSIONS if e == extension), None)
+    if name is None:
+        raise ValueError("PHP extension not offered by the panel")
+    if version is None or version not in list_installed_php():
+        raise ValueError("That PHP version is not installed")
+    package = f"php{version}-{name}"
     result = shell.privileged(
         "php-ext-install",
-        helper_args=[php_version, extension],
+        helper_args=[version, name],
         check=False,
         timeout=600,
-        fallback=["bash", "-lc", f"echo would install php{php_version}-{extension}"],
+        fallback=["apt-get", "install", "-y", package],
     )
     if result.returncode != 0:
-        raise RuntimeError((result.stderr or result.stdout or f"Could not install php{php_version}-{extension}").strip()[-600:])
+        raise RuntimeError((result.stderr or result.stdout or f"Could not install {package}").strip()[-600:])
     return (result.stdout or "").strip()
 
 
