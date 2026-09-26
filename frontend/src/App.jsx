@@ -6615,7 +6615,7 @@ function App() {
             : restoreGroups.length === 0
               ? <EmptyState icon={ArchiveRestore} message={t('No backups found in this source.')} />
               : <>
-                  <div className="detail-head">
+                  <div className="restore-toolbar">
                     <label className="check-line"><input type="checkbox" checked={allRestoreShownPicked} disabled={!!loading || restoreRunning}
                       onChange={() => setRestorePicks(prev => allRestoreShownPicked
                         ? prev.filter(id => !shownRestoreGroups.some(group => group.id === id))

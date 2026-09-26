@@ -131,6 +131,22 @@ def test_an_sftp_server_with_another_key_never_sees_the_password(monkeypatch):
     assert _Transport.sent == [], "the password was sent to a server with the wrong key"
 
 
+def test_a_login_that_does_not_start_sftp_says_so_instead_of_a_500(monkeypatch):
+    """Seen on .88: an account whose shell is nologin signs in, then prints a
+    line into the SFTP stream - paramiko's "Garbage packet received" came out
+    of the API as a bare 500."""
+    monkeypatch.setattr(restore_sources.socket, "create_connection", lambda address, timeout=None: object())
+    monkeypatch.setattr(restore_sources.paramiko, "Transport", _Transport)
+
+    def garbage(transport):
+        raise restore_sources.paramiko.SFTPError("Garbage packet received")
+
+    monkeypatch.setattr(restore_sources.paramiko.SFTPClient, "from_transport", garbage)
+    with pytest.raises(restore_sources.RestoreSourceError, match="did not start SFTP"):
+        with restore_sources._sftp("h", 22, "u", password="p"):
+            pass
+
+
 def test_a_download_from_another_sftp_server_needs_the_key_seen_when_listing(backups):
     with pytest.raises(restore_sources.RestoreSourceError):
         restore_sources.fetch(_remote(host_key=""), "/backups/user-a-1.tar.gz", 10, db=None)

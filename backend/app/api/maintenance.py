@@ -979,6 +979,9 @@ def restore_list(payload: RestoreListRequest, db: Session = Depends(get_db),
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except restore_sources.RestoreSourceError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - a remote server can fail in ways nobody listed
+        logger.exception("restore listing failed")
+        raise HTTPException(status_code=502, detail=f"Could not list the source: {type(exc).__name__}: {exc}"[:500]) from exc
     names = {row["username"] for row in result["items"] if row["username"]}
     existing = {name for (name,) in db.query(User.username).filter(User.username.in_(names))} if names else set()
     result["existing"] = sorted(existing)

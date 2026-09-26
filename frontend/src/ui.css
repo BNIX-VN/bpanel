@@ -623,6 +623,9 @@ button svg,.button-link svg,.upload-button svg{flex:none}
 .restore-remote label{display:grid;gap:4px;min-width:0}
 .restore-remote label span{font-size:12.5px;color:var(--text-secondary)}
 .restore-go{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+.restore-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px}
+.restore-toolbar .check-line{flex:none;margin:0}
+.restore-toolbar input:not([type]){flex:1 1 220px;min-width:0;max-width:360px}
 .restore-users{display:grid;gap:6px;max-height:420px;overflow-y:auto}
 .restore-user{display:grid;grid-template-columns:minmax(0,1fr) minmax(170px,240px);gap:10px;align-items:center;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface)}
 .restore-user.picked{border-color:var(--primary);background:var(--primary-light)}

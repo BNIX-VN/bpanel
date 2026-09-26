@@ -146,11 +146,19 @@ def _sftp(host: str, port: int, username: str, *, password: str = "", private_ke
                 transport.auth_password(username, password)
         except paramiko.AuthenticationException:
             raise RestoreSourceError("The server refused the username or password") from None
-        client = paramiko.SFTPClient.from_transport(transport)
+        try:
+            client = paramiko.SFTPClient.from_transport(transport)
+        except (paramiko.SSHException, paramiko.SFTPError, EOFError, OSError) as exc:
+            # Typically an account whose shell prints a message (nologin) or
+            # has no SFTP subsystem: the login worked, SFTP did not start.
+            raise RestoreSourceError(f"Signed in, but the server did not start SFTP for this account ({exc})") from None
         if client is None:
             raise RestoreSourceError("The server did not open an SFTP session")
         client.get_channel().settimeout(TIMEOUT * 4)
-        yield client, seen
+        try:
+            yield client, seen
+        except (paramiko.SSHException, paramiko.SFTPError, EOFError, socket.timeout) as exc:
+            raise RestoreSourceError(f"SFTP: the connection failed partway ({exc or type(exc).__name__})") from None
     finally:
         transport.close()
 
@@ -297,6 +305,8 @@ def list_source(source: dict, db) -> dict:
     ftp = _ftp_open(source)
     try:
         rows = _ftp_list(ftp, folder)
+    except (ftplib.Error, OSError, EOFError) as exc:
+        raise RestoreSourceError(f"FTP: the listing failed ({exc or type(exc).__name__})") from None
     finally:
         _ftp_close(ftp)
     return {"items": _newest_first(rows), "location": f"{source['protocol']}://{source['host']}{folder}",
