@@ -1602,7 +1602,7 @@ SITE_REFRESH_INPUTS=(
 if ! step_inputs_changed site-refresh "${SITE_REFRESH_INPUTS[@]}"; then
   log "Managed site config unchanged since last update; skipping the per-site refresh"
 elif id -u bpanel >/dev/null 2>&1; then
-  log "Refreshing managed site permissions"
+  log "Refreshing managed site configuration"
   sudo -u bpanel env HOME="$APP_DIR" BPANEL_USE_HELPER=true "$APP_DIR/backend/.venv/bin/python" - <<'PY'
 from app.core.database import SessionLocal
 from app.models.entities import Website
@@ -1633,7 +1633,10 @@ with SessionLocal() as db:
                         getattr(website, "document_root", "public_html") or "public_html",
                         website.linux_user,
                     )
-                site_users.fix_site_permissions(website.root_path, website.linux_user)
+                # No fix_site_permissions here: it resets every file of the
+                # site to 644, undoing modes the owner chose, on each update
+                # that changed a service (operator, 2026-09-27).
+                # ensure_site_runtime above already puts the ownership right.
                 result = waf.sync_website_rules(website)
                 if result.returncode != 0:
                     print(f"WARNING: could not refresh WAF rules for {website.domain}: {result.stderr or result.stdout}")

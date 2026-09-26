@@ -216,3 +216,51 @@ def test_rm_site_helper_binds_delete_to_user_root_and_deletes_no_follow():
     assert "os.O_NOFOLLOW" in helper
     assert "os.unlink(name, dir_fd=dir_fd)" in helper
     assert 'usage: rm-site <site-user> <site-root> <path>' in helper
+
+
+def _verb(helper: str, name: str) -> str:
+    return helper.split(f"\n  {name})\n")[1].split("\n    ;;\n")[0]
+
+
+def test_only_an_explicit_request_resets_file_modes():
+    """Operator, 2026-09-27: pipe.php set to 755 in the file manager was back
+    on 644 "a while later". Five things reset it without being asked - an
+    update, a new cron job or PHP version (site-runtime-ensure), a save,
+    rename, move or extract in the file manager (site-path-fix), and the
+    folders above a saved file. They now put ownership right and leave the
+    modes alone; 755/644 is applied only where somebody asked for it or the
+    panel has just put a whole tree there."""
+    helper = HELPER_SCRIPT.read_text(encoding="utf-8")
+    own = helper.split("own_site_tree() {")[1].split("\n}\n")[0]
+    assert 'chown -R "$user:$BPANEL_SITES_GROUP" "$target"' in own
+    assert "chmod 755" not in own and "chmod 644" not in own and "SITE_FILE_MODE" not in own
+    assert "-exec chmod u-s {} +" in own and "-exec chmod -t {} +" in own, "the refused special bits still go"
+    for verb in ("site-path-fix", "site-runtime-ensure", "site-runtime-move"):
+        body = _verb(helper, verb)
+        assert "own_site_tree " in body and "fix_site_tree " not in body, verb
+    extract = helper.split('install -o "$user" -g "$BPANEL_SITES_GROUP" -m 0644 -- "$tmp_archive" "$archive_target"')[1]
+    assert extract.split("\n    ;;\n")[0].count("own_site_tree ") == 1
+    # Where a full reset is still right: the button, a restore or import that
+    # replaces the whole tree, one freshly uploaded file.
+    callers = sorted(name for name in ("fix-permissions", "site-populate", "site-file-install", "site-path-fix",
+                                       "site-runtime-ensure", "site-runtime-move", "site-file-write")
+                     if "fix_site_tree " in _verb(helper, name))
+    assert callers == ["fix-permissions", "site-file-install", "site-populate"]
+
+
+def test_saving_a_file_keeps_its_mode_and_the_folders_above_it_keep_theirs():
+    helper = HELPER_SCRIPT.read_text(encoding="utf-8")
+    write = _verb(helper, "site-file-write")
+    assert 'if [[ -n "$existing_mode" && "$mode_arg" == "0644" ]]; then\n      # Saving a file keeps the mode it had' in write
+    assert 'chmod "$existing_mode" "$tmp"' in write
+    path = helper.split("harden_site_dir_path() {")[1].split("\n}\n")[0]
+    assert "harden_site_dir " not in path and path.count("harden_site_dir_if_foreign ") == 2
+    foreign = helper.split("harden_site_dir_if_foreign() {")[1].split("\n}\n")[0]
+    assert '[[ "$(stat -c \'%U:%G\' -- "$target")" == "$user:$BPANEL_SITES_GROUP" ]] && return 0' in foreign
+
+
+def test_the_update_refresh_does_not_reset_modes():
+    update = UPDATE_SCRIPT.read_text(encoding="utf-8")
+    refresh = update.split('log "Refreshing managed site configuration"')[1].split("\nPY\n")[0]
+    assert "site_users.fix_site_permissions(" not in refresh
+    assert "site_users.ensure_site_runtime(" in refresh

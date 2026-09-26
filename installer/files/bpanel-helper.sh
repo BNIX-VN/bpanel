@@ -4173,7 +4173,7 @@ harden_site_dir_path() {
     *) deny "directory path outside site root: $target" ;;
   esac
   [[ -d "$target" ]] || deny "site directory does not exist: $target"
-  harden_site_dir "$root" "$user"
+  harden_site_dir_if_foreign "$root" "$user"
   [[ "$target" == "$root" ]] && return 0
   relative="${target#${root}/}"
   current="$root"
@@ -4181,8 +4181,18 @@ harden_site_dir_path() {
   for part in "${root_parts[@]}"; do
     current="$current/$part"
     [[ -d "$current" ]] || deny "site directory does not exist: $current"
-    harden_site_dir "$current" "$user"
+    harden_site_dir_if_foreign "$current" "$user"
   done
+}
+
+# A folder that already belongs to the site keeps its mode - saving a file
+# inside a 777 upload folder must not make the folder 755. One that is new or
+# belongs to someone else (made by root, or by the user outside the site
+# group) is brought to the site's owner, group and default mode.
+harden_site_dir_if_foreign() {
+  local target="$1" user="$2"
+  [[ "$(stat -c '%U:%G' -- "$target")" == "$user:$BPANEL_SITES_GROUP" ]] && return 0
+  harden_site_dir "$target" "$user"
 }
 
 ensure_panel_user_home() {
@@ -4884,16 +4894,36 @@ ensure_php_runtime_dirs() {
   chmod g+s "$upload_dir" 2>/dev/null || true
 }
 
-fix_site_tree() {
+# Ownership and ACLs for a site tree, and nothing else about its modes: they
+# are the owner's to choose in the file manager - a 755 script, a 777 upload
+# folder, a 600 secret. This is what runs after anything the owner did not
+# ask to reset permissions with: a file manager operation, a new cron job, a
+# PHP version change, an update. Resetting modes there undid those choices
+# without a word (operator, 2026-09-27). The special bits the file manager
+# refuses are still taken off: setuid, setgid on a file, the sticky bit.
+own_site_tree() {
   local target="$1" user="$2"
   ensure_sites_group
   require_linux_user "$user"
   chown -R "$user:$BPANEL_SITES_GROUP" "$target"
-  if [[ -d "$target" ]]; then
-    if command -v setfacl >/dev/null 2>&1; then
-      setfacl -Rb "$target" 2>/dev/null || true
+  if command -v setfacl >/dev/null 2>&1; then
+    setfacl -Rb "$target" 2>/dev/null || true
+    if [[ -d "$target" ]]; then
       find "$target" -type d -exec setfacl -k {} + 2>/dev/null || true
     fi
+  fi
+  find "$target" ! -type l -perm /4000 -exec chmod u-s {} + 2>/dev/null || true
+  find "$target" -type f -perm /2000 -exec chmod g-s {} + 2>/dev/null || true
+  find "$target" ! -type l -perm /1000 -exec chmod -t {} + 2>/dev/null || true
+}
+
+# The same, then every folder 755 and every file 644: only for an explicit
+# request - the fix-permissions button, a WordPress install, a restore, a
+# DirectAdmin import - or for a tree the panel has just put there.
+fix_site_tree() {
+  local target="$1" user="$2"
+  own_site_tree "$target" "$user"
+  if [[ -d "$target" ]]; then
     find "$target" -type d -exec chmod 755 {} +
     find "$target" -type d -exec chmod a-s {} + 2>/dev/null || true
     find "$target" -type d -exec chmod -t {} + 2>/dev/null || true
@@ -5832,9 +5862,12 @@ PY
     ;;
 
   site-path-fix)
+    # After a file manager operation (save, rename, move, copy, extract, new
+    # file or folder): the owner and group are put right, the modes are not
+    # touched. What is new was created with 644/755 already.
     [[ $# -eq 2 ]] || deny "usage: site-path-fix <path> <site-user>"
     target=$(require_managed_path "$1" "$2")
-    fix_site_tree "$target" "$2"
+    own_site_tree "$target" "$2"
     ;;
 
   site-chmod)
@@ -5894,7 +5927,14 @@ PY
     rm -f -- "$tmp"
     cat >"$tmp"
     chown "$user:$BPANEL_SITES_GROUP" "$tmp"
-    chmod "$mode_arg" "$tmp"
+    if [[ -n "$existing_mode" && "$mode_arg" == "0644" ]]; then
+      # Saving a file keeps the mode it had: a 755 script stays executable, a
+      # 600 secret stays private. An explicit 0640 (wp-config.php) still wins.
+      chmod "$existing_mode" "$tmp"
+      chmod u-s,g-s,-t "$tmp"
+    else
+      chmod "$mode_arg" "$tmp"
+    fi
     mv -f -- "$tmp" "$target"
     ;;
 
@@ -6161,7 +6201,9 @@ PY
     # The archive may contain an entry with its own filename. Restore the
     # original source archive after extraction so it cannot overwrite itself.
     install -o "$user" -g "$BPANEL_SITES_GROUP" -m 0644 -- "$tmp_archive" "$archive_target"
-    fix_site_tree "$destination_target" "$user"
+    # The destination is usually a folder that already holds the site; the
+    # extracted entries are new (644/755), the rest keeps its modes.
+    own_site_tree "$destination_target" "$user"
     rm -f -- "$tmp_archive"
     trap - EXIT
     ;;
@@ -6215,7 +6257,9 @@ PY
     fi
     mkdir -p "$target/public_html"
     harden_site_dir_path "$target" "$target/public_html" "$user"
-    fix_site_tree "$target" "$user"
+    # Runs on every new cron job, PHP version change and update: ownership
+    # only, never the modes of what is already in the site.
+    own_site_tree "$target" "$user"
     ensure_php_pool "$user" "$target" "$php_version"
     ;;
 
@@ -6239,7 +6283,7 @@ PY
     fi
     mkdir -p "$new_target/public_html"
     harden_site_dir_path "$new_target" "$new_target/public_html" "$user"
-    fix_site_tree "$new_target" "$user"
+    own_site_tree "$new_target" "$user"
     ensure_php_pool "$user" "$new_target" "$php_version"
     ;;
 
