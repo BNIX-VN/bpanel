@@ -459,12 +459,9 @@ button svg,.button-link svg,.upload-button svg{flex:none}
 .php-ext-row .badge{display:inline-flex;align-items:center;justify-content:center;min-width:28px}
 .php-ext-none{color:var(--text-muted)}
 .php-ext-all{justify-self:end}
-/* Below the width where "Install" fits in every version column, the
-   button is its + (the label stays for screen readers and the tooltip). */
-@media(max-width:1240px){
-  .php-ext-install-label{display:none}
-  .php-ext-row .mini{padding:0 8px}
-}
+/* Not installed: a + the size of the installed tick beside it. What it
+   installs is in its tooltip and its accessible name. */
+.php-ext-install{width:32px;min-width:32px;height:28px;min-height:28px;padding:0;justify-content:center}
 
 /* Notifications: two channel cards, the events as a checklist, then (for an
    administrator) the server's channels and the delivery log. */

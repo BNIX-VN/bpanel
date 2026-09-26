@@ -6827,7 +6827,7 @@ Each account is overwritten with what is in its archive.`)) return;
                 const state = ext.versions[v];
                 return <span role="cell" key={v}>
                   {(state === 'installed' || state === 'builtin') && <span className="badge ok" title={state === 'builtin' ? t('Built into PHP') : t('Installed')}><Check size={12}/></span>}
-                  {state === 'available' && <button className="mini secondary" disabled={!!loading} aria-label={t('Install')} title={`php${v}-${ext.name}`} onClick={() => installPhpExtension(ext.name, [v])}><Plus size={12}/><span className="php-ext-install-label">{t('Install')}</span></button>}
+                  {state === 'available' && <button className="mini secondary php-ext-install" disabled={!!loading} aria-label={`${t('Install')} php${v}-${ext.name}`} title={`${t('Install')} php${v}-${ext.name}`} onClick={() => installPhpExtension(ext.name, [v])}><Plus size={14}/></button>}
                   {state === 'unavailable' && <span className="php-ext-none" title={t('Not in the package repository for this version')}>—</span>}
                 </span>;
               })}
