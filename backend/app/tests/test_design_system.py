@@ -219,7 +219,7 @@ def test_the_file_list_says_what_its_columns_are():
     """755 and 4.1 KB floated between the name and the buttons under no
     heading at all."""
     header = APP.split('<div className="file-list-header">')[1].split("</div>")[0]
-    for column in ("t('Name')", "t('Mode')", "t('Size')"):
+    for column in ("t('Name')", "t('Mode')", "t('Size')", "t('Modified')"):
         assert column in header, column
     grid = FILES.split(".file-list-header {")[1].split("}")[0]
     row = FILES.split(".file-item {")[1].split("}")[0]
@@ -282,11 +282,20 @@ def test_a_filter_box_does_not_grow_tall_on_a_phone():
     assert ".detail-body > pre{flex:0 0 auto;" in UI
 
 
-def test_mode_and_size_have_cells_of_their_own_on_a_phone():
-    """Both were placed in grid column 2, row 2, and drew over each other."""
-    phone = UI.split("/* ---------- Phones ---------- */")[1]
-    assert ".file-item > .file-mode{grid-column:2;grid-row:2;" in phone
-    assert ".file-item > .file-size{grid-column:3;grid-row:2}" in phone
+def test_mode_size_and_date_have_cells_of_their_own_when_narrow():
+    """Mode and size were placed in grid column 2, row 2, and drew over each
+    other on a phone; the date shares their line, in a column of its own."""
+    narrow = UI.split("/* ---------- File list, below the six-column width ----------")[1]
+    assert narrow.split("*/", 1)[1].lstrip().startswith("@media(max-width:1240px){")
+    assert ".file-item > .file-mode{grid-column:2;grid-row:2;" in narrow
+    assert ".file-item > .file-size{grid-column:3;grid-row:2}" in narrow
+    assert ".file-item > .file-modified{grid-column:4;grid-row:2;" in narrow
+
+
+def test_the_file_list_says_when_each_file_was_changed():
+    """The API has sent every entry's mtime all along; nothing drew it."""
+    row = APP.split('<div className="file-list">')[1].split("</div>)}")[0]
+    assert '<span className="file-modified" title={formatFileTime(item.modified, true)}>{formatFileTime(item.modified)}</span>' in row
 
 
 def test_a_scan_from_the_history_opens_its_own_page():
@@ -317,3 +326,15 @@ def test_scan_history_rows_are_as_tall_as_their_content():
     assert ".scan-history-list{grid-auto-rows:max-content}" in UI
     phone = UI.split("/* ---------- Phones ---------- */")[1]
     assert ".scan-history-list{max-height:none;overflow:visible;" in phone
+
+
+def test_every_row_puts_its_columns_where_the_header_does():
+    """Each row is a grid of its own. With an auto actions column every row
+    sized it to its own buttons - two for a folder, four for an archive - and
+    mode, size and date moved up to 120px from row to row, under no heading."""
+    row = FILES.split(".file-item {")[1].split("}")[0]
+    assert re.search(r"grid-template-columns:[^;]* 264px;", row), "the actions column is not a fixed width"
+    for block in (".file-list {", ".file-list-header {"):
+        assert "scrollbar-gutter: stable;" in FILES.split(block)[1].split("}")[0], block
+    # A three-line row was cut to ~40px by the list's max-height otherwise.
+    assert ".file-list{grid-auto-rows:max-content}" in UI

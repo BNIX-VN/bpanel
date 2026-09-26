@@ -180,8 +180,16 @@
    and the buttons, and a number with no heading is a number you have to work
    out. */
 .file-list-header {
+  /* Every row is a grid of its own. With an auto last column each one
+     sized it to its own buttons - two for a folder, four for an archive -
+     so mode, size and date sat up to 120px apart from row to row and under
+     no heading. A fixed actions column (four buttons, right-aligned) puts
+     every row's columns where the header's are; the scrollbar gutter is
+     reserved on both so a long, scrolling list does not shift them 10px. */
+  overflow: hidden;
+  scrollbar-gutter: stable;
   display: grid;
-  grid-template-columns: 20px minmax(240px, 1fr) 62px 82px auto;
+  grid-template-columns: 20px minmax(200px, 1fr) 62px 82px 112px 264px;
   align-items: center;
   gap: 8px;
   margin: 8px 0 0;
@@ -229,6 +237,7 @@
 .file-list {
   display: grid;
   grid-template-columns: 1fr;
+  scrollbar-gutter: stable;
   gap: 0;
   max-height: min(68vh, 760px);
   overflow: auto;
@@ -240,7 +249,7 @@
 
 .file-item {
   display: grid;
-  grid-template-columns: 20px minmax(240px, 1fr) 62px 82px auto;
+  grid-template-columns: 20px minmax(200px, 1fr) 62px 82px 112px 264px;
   gap: 8px;
   align-items: center;
   background: var(--surface);
@@ -311,11 +320,16 @@
   height: 15px;
 }
 
-.file-size {
+.file-size,
+.file-modified {
   font-size: 11px;
   color: var(--text-muted);
   font-weight: 700;
   white-space: nowrap;
+}
+
+.file-modified {
+  font-variant-numeric: tabular-nums;
 }
 
 .file-mode {

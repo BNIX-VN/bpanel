@@ -4553,6 +4553,16 @@ Each account is overwritten with what is in its archive.`)) return;
     return `${size >= 10 || unit === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unit]}`;
   }
 
+  // dd/mm/yyyy hh:mm in the reader's clock; with seconds for a tooltip.
+  // The API sends Unix seconds.
+  function formatFileTime(seconds, withSeconds = false) {
+    const d = new Date(Number(seconds) * 1000);
+    if (!seconds || Number.isNaN(d.getTime())) return '';
+    const two = n => String(n).padStart(2, '0');
+    const stamp = `${two(d.getDate())}/${two(d.getMonth() + 1)}/${d.getFullYear()} ${two(d.getHours())}:${two(d.getMinutes())}`;
+    return withSeconds ? `${stamp}:${two(d.getSeconds())}` : stamp;
+  }
+
   function formatPercent(value) {
     const amount = Number(value);
     if (!Number.isFinite(amount)) return '--';
@@ -5953,6 +5963,7 @@ Each account is overwritten with what is in its archive.`)) return;
             <span>{t('Name')}</span>
             <span>{t('Mode')}</span>
             <span>{t('Size')}</span>
+            <span>{t('Modified')}</span>
             <span className="file-list-count">{t('{n} item(s)', { n: files.length })}</span>
           </div>
           <div className="file-list">
@@ -5969,7 +5980,8 @@ Each account is overwritten with what is in its archive.`)) return;
                 title={`Permissions ${item.mode || '---'} (${permissionSymbols(item.mode)}) - click to change`}
                 onClick={() => openChmodDialog(item)}
               >{item.mode || '---'}</button>
-              <span className="file-size">{item.is_dir ? 'Folder' : formatBytes(item.size)}</span>
+              <span className="file-size">{item.is_dir ? t('Folder') : formatBytes(item.size)}</span>
+              <span className="file-modified" title={formatFileTime(item.modified, true)}>{formatFileTime(item.modified)}</span>
               <div className="file-row-actions">
                 {!item.is_dir && <button className="mini secondary-light" disabled={!!loading} onClick={() => downloadFile(item.path)}><Download size={13}/></button>}
                 {isArchiveFile(item) && <button className="mini secondary-light" disabled={!!loading} onClick={() => extractArchiveFile(item.path)}><ArchiveRestore size={13}/>{t('Extract')}</button>}

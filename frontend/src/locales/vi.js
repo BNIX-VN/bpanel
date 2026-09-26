@@ -538,6 +538,7 @@ export const vi = {
   "ModSecurity engine": "Engine ModSecurity",
   "Mode": "Chế độ",
   "Mode must be octal, for example 644 or 755.": "Quyền phải ở hệ 8, ví dụ 644 hoặc 755.",
+  "Modified": "Ngày sửa",
   "Module, rule files and timers": "Module, file rule và lịch hẹn",
   "Move": "Di chuyển",
   "Move an existing domain under a selected panel user.": "Chuyển một tên miền đã có sang cho một người dùng panel.",

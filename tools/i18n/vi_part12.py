@@ -49,4 +49,7 @@ PART12 = {
     "Reading the results...": "Đang đọc kết quả...",
     "Scan finished.": "Đã quét xong.",
     "Scan failed": "Quét thất bại",
+
+    # File manager
+    "Modified": "Ngày sửa",
 }
