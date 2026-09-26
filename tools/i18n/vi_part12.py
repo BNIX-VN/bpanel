@@ -62,4 +62,12 @@ PART12 = {
     "All versions": "Cài cho mọi bản",
     "Installing php{version}-{extension}...": "Đang cài php{version}-{extension}...",
     "{extension} installed for PHP {versions}.": "Đã cài {extension} cho PHP {versions}.",
+
+    # chmod presets (file manager)
+    "Default": "Mặc định",
+    "Executable": "Chạy được",
+    "Private": "Riêng tư",
+    "Read-only": "Chỉ đọc",
+    "Group read": "Nhóm đọc",
+    "Group write": "Nhóm ghi",
 }
