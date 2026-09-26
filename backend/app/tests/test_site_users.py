@@ -104,6 +104,25 @@ def test_site_trees_use_the_standard_644_755_modes():
     assert 'find "$site_dir" -type f -exec chmod 644 {} +' in update
 
 
+def test_an_update_leaves_the_modes_the_owner_chose():
+    """Operator, 2026-09-27: a file set to 755 in the file manager was back on
+    644 "after a while" - the update had run. The sweep that reset every file
+    of every site on each update was the one-time move off the pre-v1.0.106
+    layout (folders 2750, files 0640), and now runs only on a site still on
+    it: its own folder is 2750. Ownership and ACLs are still put right."""
+    update = UPDATE_SCRIPT.read_text(encoding="utf-8")
+    sweep = update.split("harden_existing_panel_users() {")[1].split("\n}\n")[0]
+    guard = '[[ "$(stat -c \'%a\' "$site_dir" 2>/dev/null)" == "2750" ]] || continue'
+    assert sweep.count(guard) == 1
+    before, after = sweep.split(guard)
+    assert 'chown -R "$user:bpanel-sites" "$site_dir"' in before, "ownership is still fixed on every site"
+    assert 'setfacl -Rb "$site_dir"' in before
+    assert "chmod" not in before.split("find \"$home_dir\" -mindepth 1")[1], "no mode is changed before the guard"
+    for line in ('find "$site_dir" -type d -exec chmod 755 {} +', 'find "$site_dir" -type f -exec chmod 644 {} +',
+                 'find "$site_dir" -type d -exec chmod a-s {} +'):
+        assert line in after, line
+
+
 def test_files_holding_database_credentials_stay_group_only():
     helper = HELPER_SCRIPT.read_text(encoding="utf-8")
     update = UPDATE_SCRIPT.read_text(encoding="utf-8")
