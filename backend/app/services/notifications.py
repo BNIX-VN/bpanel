@@ -46,12 +46,15 @@ SMTP_SECURITY = ("starttls", "ssl", "none")
 TELEGRAM_API = "https://api.telegram.org"
 LINK_CODE_MINUTES = 15
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# A private chat or group is a number (groups and channels negative); a public
+# channel can also be named.
+_CHAT_ID_RE = re.compile(r"^(-?\d{3,20}|@[A-Za-z][A-Za-z0-9_]{4,31})$")
 
 DEFAULTS: dict = {
     "language": "vi",
     "smtp": {"host": "", "port": 587, "security": "starttls", "username": "",
              "password_enc": "", "from_email": "", "from_name": "BPanel"},
-    "telegram": {"bot_token_enc": "", "bot_username": "", "update_offset": 0},
+    "telegram": {"bot_token_enc": "", "bot_username": "", "chat_id": "", "update_offset": 0},
     "thresholds": {"disk_percent": 90, "ssl_days": 7, "quota_percent": 90},
 }
 
@@ -95,13 +98,25 @@ def telegram_ready(config: dict) -> bool:
     return bool(config["telegram"].get("bot_token_enc"))
 
 
+def admin_chat(config: dict) -> str:
+    """The server's admin chat, when there is a bot to send through."""
+    return config["telegram"].get("chat_id", "") if telegram_ready(config) else ""
+
+
+def valid_chat_id(value: str) -> str:
+    chat = str(value or "").strip()
+    if chat and not _CHAT_ID_RE.match(chat):
+        raise ValueError("A chat ID is a number (negative for a group) or a @channel name")
+    return chat
+
+
 def public_config(config: dict | None = None) -> dict:
     """The settings as the page shows them: secrets reduced to "is one set"."""
     config = config or load_config()
     smtp = {k: v for k, v in config["smtp"].items() if k != "password_enc"}
     smtp["password_set"] = bool(config["smtp"].get("password_enc"))
     telegram = {"bot_username": config["telegram"].get("bot_username", ""),
-                "token_set": telegram_ready(config)}
+                "token_set": telegram_ready(config), "chat_id": config["telegram"].get("chat_id", "")}
     return {
         "language": config["language"],
         "smtp": smtp,
@@ -156,8 +171,10 @@ def save_config(changes: dict) -> dict:
             raise ValueError(f"Telegram refused the token: {exc}") from exc
         config["telegram"].update({"bot_token_enc": secret_box.encrypt(token),
                                    "bot_username": me.get("username", ""), "update_offset": 0})
+    if telegram.get("chat_id") is not None:
+        config["telegram"]["chat_id"] = valid_chat_id(telegram["chat_id"])
     if telegram.get("clear_bot_token"):
-        config["telegram"].update({"bot_token_enc": "", "bot_username": "", "update_offset": 0})
+        config["telegram"].update({"bot_token_enc": "", "bot_username": "", "chat_id": "", "update_offset": 0})
 
     thresholds = changes.get("thresholds") or {}
     for key, low, high in (("disk_percent", 50, 99), ("ssl_days", 1, 60), ("quota_percent", 50, 100)):
@@ -267,10 +284,11 @@ def _admins(db) -> list[User]:
     return [u for u in db.query(User).filter(User.is_active.is_(True)).all() if is_admin_role(u.role)]
 
 
-def _recently_sent(db, user_id: int, dedupe_key: str, cooldown: timedelta) -> bool:
+def _recently_sent(db, user_id: int | None, dedupe_key: str, cooldown: timedelta) -> bool:
     since = datetime.utcnow() - cooldown
+    owner = NotificationLog.user_id.is_(None) if user_id is None else NotificationLog.user_id == user_id
     return db.query(NotificationLog.id).filter(
-        NotificationLog.user_id == user_id,
+        owner,
         NotificationLog.dedupe_key == dedupe_key,
         NotificationLog.status == "sent",
         NotificationLog.created_at >= since,
@@ -290,8 +308,14 @@ def notify(event: str, params: dict, *, user_ids: list[int] | None = None, admin
     accounts, suspended ones included (a suspension notice is for them). A
     person gets it on each channel that is set up on the server, turned on in
     their settings and reachable (an email address, a linked chat), unless
-    they muted the event. Never raises: a notification must not break the
-    thing it is about.
+    they muted the event.
+
+    Telegram has one more destination: the server's admin chat (token + chat
+    ID in the server settings). An event about the server goes there once,
+    not once per administrator, as long as one administrator still wants it;
+    an administrator with no chat of their own also hears about their own
+    account there. Never raises: a notification must not break the thing it
+    is about.
     """
     if event not in notify_messages.EVENTS:
         raise ValueError(f"unknown notification event: {event}")
@@ -303,6 +327,9 @@ def notify(event: str, params: dict, *, user_ids: list[int] | None = None, admin
             return 0
         title, body = notify_messages.render(event, params, config.get("language", "vi"))
         subject = f"[{server_label()}] {title}"
+        about_server = notify_messages.EVENTS[event]["audience"] == notify_messages.ADMIN
+        server_chat = admin_chat(config)
+        wanted_in_admin_chat = False
         sent = 0
         db = SessionLocal()
         try:
@@ -317,6 +344,9 @@ def notify(event: str, params: dict, *, user_ids: list[int] | None = None, admin
                 pref = prefs_for(db, user.id)
                 if event in muted(pref):
                     continue
+                admin = is_admin_role(user.role)
+                if admin and about_server:
+                    wanted_in_admin_chat = True
                 if dedupe_key and _recently_sent(db, user.id, dedupe_key, cooldown):
                     continue
                 if smtp_ready(config) and pref.email_enabled and _EMAIL_RE.match(user.email or ""):
@@ -326,13 +356,24 @@ def notify(event: str, params: dict, *, user_ids: list[int] | None = None, admin
                         sent += 1
                     except Exception as exc:  # noqa: BLE001 - recorded, never raised
                         _log(db, user.id, event, "email", "failed", title, f"{type(exc).__name__}: {exc}", dedupe_key)
-                if telegram_ready(config) and pref.telegram_enabled and pref.telegram_chat_id:
+                chat = pref.telegram_chat_id or (server_chat if admin else "")
+                if about_server and server_chat:
+                    chat = ""  # said once in the admin chat, below
+                if telegram_ready(config) and pref.telegram_enabled and chat:
                     try:
-                        send_telegram(config, pref.telegram_chat_id, title, f"{body}\n\n{server_label()}")
+                        send_telegram(config, chat, title, f"{body}\n\n{server_label()}")
                         _log(db, user.id, event, "telegram", "sent", title, dedupe_key=dedupe_key)
                         sent += 1
                     except Exception as exc:  # noqa: BLE001 - recorded, never raised
                         _log(db, user.id, event, "telegram", "failed", title, str(exc), dedupe_key)
+            if about_server and server_chat and wanted_in_admin_chat and not (
+                    dedupe_key and _recently_sent(db, None, dedupe_key, cooldown)):
+                try:
+                    send_telegram(config, server_chat, title, f"{body}\n\n{server_label()}")
+                    _log(db, None, event, "telegram", "sent", title, dedupe_key=dedupe_key)
+                    sent += 1
+                except Exception as exc:  # noqa: BLE001 - recorded, never raised
+                    _log(db, None, event, "telegram", "failed", title, str(exc), dedupe_key)
             db.commit()
         finally:
             db.close()
@@ -465,6 +506,28 @@ def collect_telegram_links(db) -> list[int]:
     return linked
 
 
+def recent_chats() -> list[dict]:
+    """Chats that recently wrote to the bot, so the admin chat can be picked
+    rather than looked up. Reads without consuming: the /start links still
+    find their messages afterwards."""
+    config = load_config()
+    if not telegram_ready(config):
+        raise ValueError("Set the Telegram bot token first")
+    token = secret_box.decrypt(config["telegram"]["bot_token_enc"])
+    offset = int(config["telegram"].get("update_offset") or 0)
+    updates = telegram_call(token, "getUpdates", {"offset": offset, "timeout": 0}, timeout=20)
+    chats: dict[str, dict] = {}
+    for update in updates if isinstance(updates, list) else []:
+        for kind in ("message", "channel_post", "my_chat_member"):
+            chat = (update.get(kind) or {}).get("chat") or {}
+            if chat.get("id") is None:
+                continue
+            name = chat.get("title") or " ".join(filter(None, [chat.get("first_name"), chat.get("last_name")])) \
+                or (f"@{chat['username']}" if chat.get("username") else "")
+            chats[str(chat["id"])] = {"id": str(chat["id"]), "type": chat.get("type", ""), "name": name}
+    return list(chats.values())
+
+
 def send_test(user: User, channel: str, db) -> str:
     """A test message to the person asking, on one channel. Raises on failure
     with what the server said, which is the point of a test."""
@@ -481,6 +544,13 @@ def send_test(user: User, channel: str, db) -> str:
         _log(db, user.id, "test", "email", "sent", title)
         db.commit()
         return user.email
+    if channel == "telegram_admin":
+        if not admin_chat(config):
+            raise ValueError("Set the bot token and the chat ID first")
+        send_telegram(config, admin_chat(config), title, body)
+        _log(db, None, "test", "telegram", "sent", title)
+        db.commit()
+        return config["telegram"]["chat_id"]
     if channel == "telegram":
         pref = prefs_for(db, user.id)
         if not telegram_ready(config):

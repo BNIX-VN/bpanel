@@ -153,7 +153,7 @@ def test_secrets_are_stored_encrypted_and_never_shown(env, monkeypatch):
     stored = notifications.CONFIG_FILE.read_text(encoding="utf-8")
     assert "hunter22" not in stored and ("A" * 35) not in stored
     assert result["smtp"]["password_set"] is True and "password_enc" not in result["smtp"]
-    assert result["telegram"] == {"bot_username": "bnix_bot", "token_set": True}
+    assert result["telegram"] == {"bot_username": "bnix_bot", "token_set": True, "chat_id": ""}
     # Saving the form again without retyping the password keeps it.
     notifications.save_config({"smtp": {"host": "smtp2.example.test", "password": None}})
     assert notifications.public_config()["smtp"]["password_set"] is True
@@ -279,11 +279,12 @@ def test_the_watcher_stays_quiet_until_it_is_wanted(env):
 def test_every_route_needs_the_addon_and_the_server_settings_need_an_admin():
     api = (PROJECT_ROOT / "backend" / "app" / "api" / "notifications.py").read_text(encoding="utf-8")
     assert "dependencies=[Depends(require_notifications)]" in api
-    for route in ('@router.get("/settings")', '@router.put("/settings")', '@router.get("/log")'):
+    for route in ('@router.get("/settings")', '@router.put("/settings")', '@router.get("/log")',
+                  '@router.get("/telegram/chats")'):
         body = api.split(route)[1].split("\n@router")[0]
         assert "ensure_role(current_user.role, Role.admin)" in body, route
     test_route = api.split('@router.post("/test")')[1].split("\n@router")[0]
-    assert 'if payload.channel == "email":\n        ensure_role(current_user.role, Role.admin)' in test_route
+    assert 'if payload.channel in ("email", "telegram_admin"):\n        ensure_role(current_user.role, Role.admin)' in test_route
 
 
 # --- where the events come from ---------------------------------------------------------
@@ -311,3 +312,75 @@ def test_the_watcher_is_scheduled_by_both_installers():
         assert "ExecStart=${APP_DIR}/backend/.venv/bin/python -m app.services.notify_watch" in script, name
         assert "OnUnitActiveSec=5min" in script.split("bpanel-notify.timer")[1], name
         assert "systemctl enable --now bpanel-notify.timer" in script, name
+
+
+# --- Telegram: a token and a chat ID (operator, 2026-09-27) ---------------------------
+
+def _telegram_on(chat_id="-1001234567890"):
+    addons.install(addons.NOTIFICATIONS)
+    config = notifications.load_config()
+    config["telegram"].update({"bot_token_enc": notifications.secret_box.encrypt("123:abc"),
+                               "bot_username": "bnix_bot", "chat_id": chat_id})
+    notifications._write_config(config)
+
+
+def test_a_server_event_goes_to_the_admin_chat_once(env):
+    _telegram_on()
+    second = User(username="boss2", email="boss2@example.test", role="admin", is_active=True,
+                  hashed_password=hash_password("PasswordLongEnough1"))
+    env.db.add(second)
+    env.db.commit()
+    for admin in (env.people["boss"], second):
+        notifications.prefs_for(env.db, admin.id).telegram_chat_id = f"55{admin.id}"
+    env.db.commit()
+    notifications.notify("firewall_off", {}, admins=True)
+    assert [s[1] for s in env.sent if s[0] == "telegram"] == ["-1001234567890"], "once, in the admin chat"
+
+
+def test_the_admin_chat_stays_quiet_when_every_admin_muted_the_event(env):
+    _telegram_on()
+    notifications.prefs_for(env.db, env.people["boss"].id).muted_events = "firewall_off"
+    env.db.commit()
+    notifications.notify("firewall_off", {}, admins=True)
+    assert env.sent == []
+
+
+def test_own_events_go_to_ones_own_chat_and_an_admin_falls_back_to_the_admin_chat(env):
+    _telegram_on()
+    alice = env.people["alice"]
+    notifications.prefs_for(env.db, alice.id).telegram_chat_id = "777"
+    env.db.commit()
+    notifications.notify("login_new_ip", {"username": "alice", "ip": "198.51.100.5", "when": "now"}, user_ids=[alice.id])
+    notifications.notify("login_new_ip", {"username": "boss", "ip": "198.51.100.5", "when": "now"},
+                         user_ids=[env.people["boss"].id])
+    notifications.notify("login_new_ip", {"username": "bob", "ip": "198.51.100.5", "when": "now"},
+                         user_ids=[env.people["bob"].id])
+    chats = [s[1] for s in env.sent if s[0] == "telegram"]
+    # Alice to her chat, the administrator (no chat of his own) to the admin
+    # chat, Bob - a customer with no chat - nowhere on Telegram.
+    assert chats == ["777", "-1001234567890"]
+
+
+def test_a_chat_id_is_a_number_or_a_channel_name(env):
+    for good in ("123456789", "-1001234567890", "@bnix_alerts"):
+        assert notifications.valid_chat_id(good) == good
+    for bad in ("12", "hello", "@ab", "123 456"):
+        with pytest.raises(ValueError):
+            notifications.valid_chat_id(bad)
+
+
+def test_the_bot_lists_who_wrote_to_it_without_using_up_the_messages(env, monkeypatch):
+    _telegram_on(chat_id="")
+    seen = []
+
+    def fake_call(token, method, payload, timeout=15):
+        seen.append((method, payload.get("offset")))
+        return [{"update_id": 9, "message": {"chat": {"id": 42, "type": "private", "first_name": "Giang"}}},
+                {"update_id": 10, "my_chat_member": {"chat": {"id": -100555, "type": "supergroup", "title": "BNIX ops"}}}]
+
+    monkeypatch.setattr(notifications, "telegram_call", fake_call)
+    assert notifications.recent_chats() == [
+        {"id": "42", "type": "private", "name": "Giang"},
+        {"id": "-100555", "type": "supergroup", "name": "BNIX ops"},
+    ]
+    assert notifications.load_config()["telegram"]["update_offset"] == 0, "the offset did not move"

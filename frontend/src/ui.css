@@ -38,6 +38,11 @@ h1,h2,h3,h4{letter-spacing:0}
 .sidebar-version{color:var(--nav-muted);margin:auto 16px 14px;padding:0}
 .sidebar .sidebar-close{background:transparent;color:var(--nav-text);border:1px solid transparent}
 .sidebar .sidebar-close:hover:not(:disabled){background:var(--nav-hover);color:var(--nav-text-strong);border-color:var(--nav-border)}
+/* The close button is its icon's size. An older rule stretched it across the
+   head (267px on a phone) and squeezed the brand to nothing, so hovering or
+   focusing it covered the logo and the panel's name. */
+.sidebar-head .sidebar-close{flex:none;width:36px;min-width:36px;justify-content:center}
+.sidebar-head .sidebar-brand{flex:1 1 auto;min-width:0}
 .sidebar .sidebar-lang,
 .sidebar .sidebar-lang:hover:not(:disabled){background:var(--nav-hover);color:var(--nav-text-strong);border:1px solid var(--nav-border)}
 .sidebar{scrollbar-color:var(--nav-border) transparent}
@@ -495,6 +500,22 @@ button svg,.button-link svg,.upload-button svg{flex:none}
 .notify-log-detail{grid-column:3 / -1;color:var(--danger-text);overflow-wrap:anywhere}
 @media(max-width:1240px){.notify-settings{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:1000px){.notify-settings,.notify-event-list{grid-template-columns:minmax(0,1fr)}}
+
+/* Settings: everything the sidebar does not hold, one click further. */
+.settings-hub{display:grid;gap:16px}
+.settings-group h2{margin:0 0 12px;font-size:15px;font-weight:600}
+.settings-links{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
+.settings-link{display:grid;grid-template-columns:40px minmax(0,1fr);gap:12px;align-items:center;justify-items:start;width:100%;height:auto;min-height:64px;padding:12px 14px;text-align:left;white-space:normal;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:var(--radius-lg);box-shadow:none;cursor:pointer}
+.settings-link:hover:not(:disabled){background:var(--surface-hover);color:var(--text);border-color:var(--primary-soft);transform:none}
+.settings-link:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+.settings-link-icon{width:40px;height:40px;display:grid;place-items:center;border-radius:var(--radius-md);background:var(--primary-light);color:var(--primary-ink)}
+.settings-link-text{display:grid;gap:2px;min-width:0}
+.settings-link-text strong{font-size:14px;font-weight:600;color:var(--text)}
+.settings-link-text small{font-size:12.5px;line-height:1.35;color:var(--text-muted)}
+.notify-chats{display:flex;flex-wrap:wrap;gap:6px}
+.notify-chats .mini{height:auto;min-height:30px;gap:6px}
+.notify-chats code{font-size:11.5px}
+.notify-own-chat{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}
 
 /* ---------- Phones ---------- */
 @media(max-width:760px){

@@ -40,6 +40,7 @@ class SmtpSettings(BaseModel):
 
 class TelegramSettings(BaseModel):
     bot_token: str | None = Field(default=None, max_length=128)
+    chat_id: str | None = Field(default=None, max_length=40)
     clear_bot_token: bool = False
 
 
@@ -59,11 +60,12 @@ class SettingsUpdate(BaseModel):
 class MyPrefsUpdate(BaseModel):
     email_enabled: bool | None = None
     telegram_enabled: bool | None = None
+    telegram_chat_id: str | None = Field(default=None, max_length=40)
     muted: list[str] | None = None
 
 
 class TestRequest(BaseModel):
-    channel: str = Field(pattern=r"^(email|telegram)$")
+    channel: str = Field(pattern=r"^(email|telegram|telegram_admin)$")
 
 
 def _events(admin: bool) -> list[dict]:
@@ -92,11 +94,15 @@ def _me(db: Session, user: User) -> dict:
     config = notifications.load_config()
     pref = notifications.prefs_for(db, user.id)
     db.commit()
+    admin_chat = notifications.admin_chat(config) if is_admin_role(user.role) else ""
     return {
         "email": user.email or "",
         "email_enabled": bool(pref.email_enabled),
         "telegram_enabled": bool(pref.telegram_enabled),
         "telegram_linked": bool(pref.telegram_chat_id),
+        "telegram_chat_id": pref.telegram_chat_id or "",
+        # An administrator with no chat of their own hears in the admin chat.
+        "telegram_admin_chat": admin_chat if not pref.telegram_chat_id else "",
         "telegram_link_pending": bool(pref.telegram_link_code and pref.telegram_link_expires_at
                                       and pref.telegram_link_expires_at >= datetime.utcnow()),
         "muted": sorted(notifications.muted(pref)),
@@ -119,6 +125,12 @@ def put_my_prefs(payload: MyPrefsUpdate, db: Session = Depends(get_db),
         pref.email_enabled = payload.email_enabled
     if payload.telegram_enabled is not None:
         pref.telegram_enabled = payload.telegram_enabled
+    if payload.telegram_chat_id is not None:
+        try:
+            pref.telegram_chat_id = notifications.valid_chat_id(payload.telegram_chat_id) or None
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        pref.telegram_link_code = None
     if payload.muted is not None:
         allowed = set(notify_messages.events_for(is_admin_role(current_user.role)))
         unknown = sorted(set(payload.muted) - allowed)
@@ -162,8 +174,9 @@ def unlink_telegram(db: Session = Depends(get_db), current_user: User = Depends(
 @router.post("/test")
 def send_test(payload: TestRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     # Email goes out through the server's SMTP account, whose quota belongs to
-    # the administrator; a customer can test the Telegram chat they linked.
-    if payload.channel == "email":
+    # the administrator, and the admin chat is the administrators'; a customer
+    # can test the Telegram chat they linked.
+    if payload.channel in ("email", "telegram_admin"):
         ensure_role(current_user.role, Role.admin)
     try:
         target = notifications.send_test(current_user, payload.channel, db)
@@ -172,6 +185,18 @@ def send_test(payload: TestRequest, db: Session = Depends(get_db), current_user:
     except Exception as exc:  # noqa: BLE001 - the server's answer is what a test is for
         raise HTTPException(status_code=502, detail=f"{type(exc).__name__}: {exc}"[:500]) from exc
     return {"sent_to": target}
+
+
+@router.get("/telegram/chats")
+def telegram_chats(current_user: User = Depends(get_current_user)):
+    """Who recently wrote to the bot: pick the admin chat instead of looking it up."""
+    ensure_role(current_user.role, Role.admin)
+    try:
+        return notifications.recent_chats()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=f"Telegram: {exc}") from exc
 
 
 @router.get("/log")

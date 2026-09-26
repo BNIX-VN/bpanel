@@ -63,7 +63,6 @@ PART13 = {
     "Open the bot and press Start:": "Mở bot và bấm Start:",
     "Or send the bot this message:": "Hoặc gửi cho bot tin nhắn này:",
     "Then press Check. The code works for {n} minutes.": "Sau đó bấm Kiểm tra. Mã có hiệu lực trong {n} phút.",
-    "Connect Telegram": "Kết nối Telegram",
     "About your account": "Về tài khoản của bạn",
     "About the server": "Về server",
     "Server channels": "Kênh gửi của server",
@@ -77,8 +76,6 @@ PART13 = {
     "Send me a test email": "Gửi email thử cho tôi",
     "Email settings saved.": "Đã lưu cấu hình email.",
     "Telegram bot": "Bot Telegram",
-    "In Telegram, open @BotFather, send /newbot, and paste the token it gives you here.":
-        "Trong Telegram, mở @BotFather, gửi /newbot, rồi dán token nhận được vào đây.",
     "Bot token": "Token của bot",
     "Saved - paste a new one to replace it": "Đã lưu - dán token mới để thay",
     "Telegram bot saved.": "Đã lưu bot Telegram.",
@@ -112,4 +109,31 @@ PART13 = {
     "That does not look like a bot token from @BotFather": "Đây không giống token bot do @BotFather cấp",
     "The sender address is not an email address": "Địa chỉ gửi không phải là địa chỉ email",
     "Open Notifications to set up the SMTP server or a Telegram bot.": "Mở trang Thông báo để cấu hình máy chủ SMTP hoặc bot Telegram.",
+
+    # Telegram: a token and a chat ID
+    "Create a bot with @BotFather (/newbot) and paste its token. Then send the bot any message - or add it to a group - press Find chat ID and pick the chat.":
+        "Tạo bot bằng @BotFather (/newbot) rồi dán token. Sau đó nhắn cho bot một tin bất kỳ - hoặc thêm bot vào group - bấm Tìm Chat ID và chọn chat.",
+    "Find chat ID": "Tìm Chat ID",
+    "No messages yet. Send the bot a message first, then press Find chat ID again.":
+        "Bot chưa nhận tin nhắn nào. Hãy nhắn cho bot trước, rồi bấm Tìm Chat ID lại.",
+    "Server events go to this chat once. An administrator with no chat of their own hears about their account here too.":
+        "Các sự kiện của server được gửi vào chat này một lần. Quản trị viên chưa có chat riêng cũng nhận tin về tài khoản của mình tại đây.",
+    "You hear in the admin chat ({chat}). Connect a chat of your own to hear there instead.":
+        "Bạn đang nhận tin ở chat quản trị ({chat}). Kết nối chat riêng nếu muốn nhận ở đó.",
+    "Your chat ID": "Chat ID của bạn",
+    "Find my chat ID for me": "Tự tìm Chat ID giúp tôi",
+    "A chat ID is a number (negative for a group) or a @channel name":
+        "Chat ID là một số (số âm nếu là group) hoặc tên kênh dạng @kenh",
+    "Set the bot token and the chat ID first": "Hãy nhập token bot và Chat ID trước",
+
+    # The Settings page: everything the sidebar does not hold
+    "Ports, IP rules, blocklists and Fail2ban": "Cổng, luật IP, blocklist và Fail2ban",
+    "Request filtering for each website": "Lọc request cho từng website",
+    "Scans, schedules and history": "Quét, lịch quét và lịch sử",
+    "Requests and blocks": "Request và các lần chặn",
+    "Password, two-factor sign-in and passkeys": "Mật khẩu, đăng nhập hai lớp và passkey",
+    "Start, stop and restart": "Bật, tắt và khởi động lại",
+    "Versions, limits and extensions": "Phiên bản, giới hạn và extension",
+    "Hostname, branding and API tokens": "Tên miền panel, thương hiệu và API token",
+    "Panel version": "Phiên bản panel",
 }

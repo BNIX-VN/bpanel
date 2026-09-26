@@ -91,6 +91,7 @@ const PAGE_ROUTES = {
   backups: '/backups',
   users: '/users',
   settings: '/settings',
+  'panel-settings': '/panel-settings',
   security: '/security',
   php: '/php',
   firewall: '/firewall',
@@ -255,8 +256,8 @@ const ROUTE_PAGES = new Map([
   ['/file-manager', 'files'],
   ['/website', 'websites'],
   // API tokens moved into Panel settings. Old links still land somewhere real.
-  ['/api-token', 'settings'],
-  ['/api-tokens', 'settings'],
+  ['/api-token', 'panel-settings'],
+  ['/api-tokens', 'panel-settings'],
 ]);
 
 function pageFromPathname(pathname) {
@@ -774,6 +775,9 @@ function App() {
   const [telegramLink, setTelegramLink] = useState(null);
   const [smtpForm, setSmtpForm] = useState({ host: '', port: 587, security: 'starttls', username: '', password: '', from_email: '', from_name: 'BPanel' });
   const [botTokenInput, setBotTokenInput] = useState('');
+  const [adminChatInput, setAdminChatInput] = useState('');
+  const [telegramChats, setTelegramChats] = useState(null);
+  const [myChatInput, setMyChatInput] = useState('');
   const [notifyLimits, setNotifyLimits] = useState({ disk_percent: 90, ssl_days: 7, quota_percent: 90, language: 'vi' });
   const [serviceStates, setServiceStates] = useState({});
   const [serviceNames, setServiceNames] = useState(DEFAULT_SERVICE_NAMES);
@@ -1661,6 +1665,8 @@ function App() {
     setNotifySettings(data);
     setSmtpForm({ ...data.smtp, password: '' });
     setBotTokenInput('');
+    setAdminChatInput(data.telegram.chat_id || '');
+    setTelegramChats(null);
     setNotifyLimits({ ...data.thresholds, language: data.language });
   }
 
@@ -1675,6 +1681,11 @@ function App() {
     applyNotifySettings(data);
     setNotice(done);
     loadNotifyMe();
+  }
+
+  async function findTelegramChats() {
+    const data = await request('/notifications/telegram/chats', {}, t('Checking...'));
+    if (Array.isArray(data)) setTelegramChats(data);
   }
 
   async function loadNotifyLog() {
@@ -4447,7 +4458,7 @@ Each account is overwritten with what is in its archive.`)) return;
       if (isAdmin) { loadMalwareScanStatus(); loadMalwareScanJobs(); loadLatestMalwareScanJob(); }
       if (!websites.length) refreshAll();
     }
-    if (isAuthenticated && page === 'settings') { loadPanelSettings(); if (isAdmin) loadApiTokens(); }
+    if (isAuthenticated && page === 'panel-settings') { loadPanelSettings(); if (isAdmin) loadApiTokens(); }
     if (isAuthenticated && page === 'mcp' && mcpAddonInstalled) loadMcpTokens();
     if (isAuthenticated && page === 'backups' && currentUser?.role === 'admin') { loadUsers(); loadSftpTargets(); loadBackupSchedules(); loadRestoreBackups(); }
   }, [isAuthenticated, page, currentUser?.role]);
@@ -4496,9 +4507,12 @@ Each account is overwritten with what is in its archive.`)) return;
   // The sidebar in three labelled groups, as OPanel has it - what a site
   // needs, what guards it, and the server itself - so nothing hides behind a
   // collapsed "Settings". Labels are English and go through t() when drawn.
+  // The sidebar holds what is used every day (operator, 2026-09-27); the rest
+  // is one click further, on the Settings page. An addon shows only once it
+  // is on - Application, AI assistants, Notifications.
   const navSections = [
-    { key: 'home', items: [['dashboard', 'Dashboard', Home]] },
-    { key: 'hosting', title: 'Hosting', items: [
+    { key: 'main', items: [
+      ['dashboard', 'Dashboard', Home],
       ['websites', 'Websites', Globe],
       ...(appsFeatureEnabled ? [['applications', 'Applications', Boxes]] : []),
       ['ssl', 'SSL', Lock],
@@ -4507,34 +4521,41 @@ Each account is overwritten with what is in its archive.`)) return;
       ['files', 'File manager', FolderOpen],
       ['sftp', 'SFTP accounts', Upload],
       ['backups', 'Backups', Archive],
-    ] },
-    { key: 'security', title: 'Security', items: [
-      ...(isAdmin ? [['firewall', 'Firewall', BrickWall]] : []),
-      ['waf', 'WAF', ShieldAlert],
-      ...(isAdmin ? [['malware', 'Malware scanner', Bug]] : []),
-      ...(isAdmin ? [['access-logs', 'Access logs', ScrollText]] : []),
-      ['security', 'Account security', LockKeyhole],
-    ] },
-    { key: 'system', title: 'System', items: [
-      ...(isAdmin ? [['services', 'Services', Activity]] : []),
-      ...(isAdmin ? [['php', 'PHP config', Code2]] : []),
       ...(isAdmin ? [['users', 'Panel users', Users]] : []),
-      ...(isAdmin ? [['settings', 'Panel settings', SettingsIcon]] : []),
-      ...(isAdmin ? [['updates', 'Updates', RefreshCw]] : []),
-      ...(isAdmin ? [['addons', 'Addons', PackageOpen]] : []),
-      // A customer sees this only once an administrator has turned the addon
-      // on. An admin always sees it, so there is somewhere to go and read why
-      // it is off.
-      ...(mcpAddonInstalled || isAdmin ? [['mcp', 'AI assistants', Bot]] : []),
-      // Everyone's own settings live here, so it is not admin-only; it is
-      // there only once an administrator has installed the addon.
+    ] },
+    { key: 'addons', items: [
+      ...(mcpAddonInstalled ? [['mcp', 'AI assistants', Bot]] : []),
       ...(notificationsAddonInstalled ? [['notifications', 'Notifications', Bell]] : []),
     ] },
+    { key: 'settings', items: [['settings', 'Settings', SettingsIcon]] },
   ].filter(section => section.items.length > 0);
 
+  // Everything else, on the Settings page: [page, label, icon, hint].
+  const settingsGroups = [
+    { title: 'Security', items: [
+      isAdmin && ['firewall', 'Firewall', BrickWall, 'Ports, IP rules, blocklists and Fail2ban'],
+      ['waf', 'WAF', ShieldAlert, 'Request filtering for each website'],
+      isAdmin && ['malware', 'Malware scanner', Bug, 'Scans, schedules and history'],
+      isAdmin && ['access-logs', 'Access logs', ScrollText, 'Requests and blocks'],
+      ['security', 'Account security', LockKeyhole, 'Password, two-factor sign-in and passkeys'],
+    ] },
+    { title: 'System', items: [
+      isAdmin && ['services', 'Services', Activity, 'Start, stop and restart'],
+      isAdmin && ['php', 'PHP config', Code2, 'Versions, limits and extensions'],
+      isAdmin && ['panel-settings', 'Panel settings', SettingsIcon, 'Hostname, branding and API tokens'],
+      isAdmin && ['updates', 'Updates', RefreshCw, 'Panel version'],
+      isAdmin && ['addons', 'Addons', PackageOpen, 'Optional features'],
+    ] },
+  ].map(group => ({ ...group, items: group.items.filter(Boolean) })).filter(group => group.items.length > 0);
+  const settingsItems = settingsGroups.flatMap(group => group.items);
+
   const navItems = navSections.flatMap(section => section.items);
-  const navPage = NAV_PARENT_PAGE[page] || page;
+  const basePage = NAV_PARENT_PAGE[page] || page;
+  // A page reached from Settings lights up Settings in the sidebar...
+  const navPage = settingsItems.some(([key]) => key === basePage) ? 'settings' : basePage;
   const activeNavItem = navItems.find(([key]) => key === navPage) || navItems[0];
+  // ...and is still called by its own name at the top: "Firewall", not "Settings".
+  const pageItem = [...navItems, ...settingsItems].find(([key]) => key === basePage) || activeNavItem;
 
   function renderNotifications() {
     const errorMessage = formatApiError(error, '').trim();
@@ -4926,12 +4947,18 @@ Each account is overwritten with what is in its archive.`)) return;
               </div>
               {!me.channels.telegram && <p className="hint">{t('Telegram is not set up on this server yet.')}</p>}
               {me.channels.telegram && me.telegram_linked && <>
+                <p className="hint">Chat ID: <code>{me.telegram_chat_id}</code></p>
                 <label className="switch-line"><input type="checkbox" checked={me.telegram_enabled} disabled={!!loading} onChange={e => saveNotifyMe({ telegram_enabled: e.target.checked })} />{t('Send me Telegram messages')}</label>
                 <div className="notify-actions">
                   <button type="button" className="secondary" disabled={!!loading} onClick={() => sendNotifyTest('telegram')}><Send size={14}/>{t('Send a test')}</button>
                   <button type="button" className="secondary-light" disabled={!!loading} onClick={unlinkTelegram}>{t('Disconnect')}</button>
                 </div>
               </>}
+              {me.channels.telegram && !me.telegram_linked && me.telegram_admin_chat && <p className="hint">{t('You hear in the admin chat ({chat}). Connect a chat of your own to hear there instead.', { chat: me.telegram_admin_chat })}</p>}
+              {me.channels.telegram && !me.telegram_linked && <div className="notify-own-chat">
+                <input value={myChatInput} placeholder={t('Your chat ID')} aria-label={t('Your chat ID')} onChange={e => setMyChatInput(e.target.value)} />
+                <button type="button" className="secondary" disabled={!!loading || !myChatInput.trim()} onClick={() => saveNotifyMe({ telegram_chat_id: myChatInput.trim() })}>{t('Save')}</button>
+              </div>}
               {me.channels.telegram && !me.telegram_linked && (telegramLink
                 ? <div className="notify-link">
                     <ol>
@@ -4941,7 +4968,7 @@ Each account is overwritten with what is in its archive.`)) return;
                     </ol>
                     <div className="notify-actions"><button type="button" disabled={!!loading} onClick={verifyTelegramLink}><Check size={14}/>{t('Check')}</button></div>
                   </div>
-                : <div className="notify-actions"><button type="button" disabled={!!loading} onClick={startTelegramLink}><Send size={14}/>{t('Connect Telegram')}</button></div>)}
+                : <div className="notify-actions"><button type="button" className="secondary" disabled={!!loading} onClick={startTelegramLink}><Send size={14}/>{t('Find my chat ID for me')}</button></div>)}
             </div>
           </div>
           <div className="notify-events">
@@ -4983,11 +5010,20 @@ Each account is overwritten with what is in its archive.`)) return;
           </div>
           <div className="notify-card">
             <h3><Send size={16}/>{t('Telegram bot')}</h3>
-            <p className="hint">{t('In Telegram, open @BotFather, send /newbot, and paste the token it gives you here.')}</p>
+            <p className="hint">{t('Create a bot with @BotFather (/newbot) and paste its token. Then send the bot any message - or add it to a group - press Find chat ID and pick the chat.')}</p>
             {s.telegram.token_set && <p className="notify-bot"><span className="badge ok">@{s.telegram.bot_username}</span></p>}
             <label className="notify-form"><span>{t('Bot token')}</span><input type="password" value={botTokenInput} autoComplete="off" placeholder={s.telegram.token_set ? t('Saved - paste a new one to replace it') : '123456789:AA...'} onChange={e => setBotTokenInput(e.target.value)} /></label>
+            <div className="notify-form">
+              <label><span>Chat ID</span><input value={adminChatInput} placeholder="-1001234567890" onChange={e => setAdminChatInput(e.target.value)} /></label>
+              <div className="notify-actions"><button type="button" className="secondary" disabled={!!loading || !s.telegram.token_set} onClick={findTelegramChats}><Search size={14}/>{t('Find chat ID')}</button></div>
+              {telegramChats && (telegramChats.length > 0
+                ? <div className="notify-chats">{telegramChats.map(chat => <button type="button" key={chat.id} className={adminChatInput === chat.id ? 'mini' : 'mini secondary'} onClick={() => setAdminChatInput(chat.id)}>{chat.name || chat.type}<code>{chat.id}</code></button>)}</div>
+                : <p className="hint">{t('No messages yet. Send the bot a message first, then press Find chat ID again.')}</p>)}
+            </div>
+            <p className="hint">{t('Server events go to this chat once. An administrator with no chat of their own hears about their account here too.')}</p>
             <div className="notify-actions">
-              <button type="button" disabled={!!loading || !botTokenInput.trim()} onClick={() => saveNotifySettings({ telegram: { bot_token: botTokenInput.trim() } }, t('Telegram bot saved.'))}>{t('Save')}</button>
+              <button type="button" disabled={!!loading || (!s.telegram.token_set && !botTokenInput.trim())} onClick={() => saveNotifySettings({ telegram: { bot_token: botTokenInput.trim() || null, chat_id: adminChatInput.trim() } }, t('Telegram bot saved.'))}>{t('Save')}</button>
+              <button type="button" className="secondary" disabled={!!loading || !s.telegram.token_set || !s.telegram.chat_id} onClick={() => sendNotifyTest('telegram_admin')}><Send size={14}/>{t('Send a test')}</button>
               {s.telegram.token_set && <button type="button" className="secondary-light" disabled={!!loading} onClick={() => saveNotifySettings({ telegram: { clear_bot_token: true } }, t('Telegram bot removed.'))}>{t('Remove the bot')}</button>}
             </div>
           </div>
@@ -5029,6 +5065,20 @@ Each account is overwritten with what is in its archive.`)) return;
             </div>}
       </section>}
     </>;
+  }
+
+  function renderSettingsHub() {
+    return <div className="settings-hub">
+      {settingsGroups.map(group => <section className="section settings-group" key={group.title}>
+        <h2>{t(group.title)}</h2>
+        <div className="settings-links">
+          {group.items.map(([key, label, Icon, hint]) => <button type="button" className="settings-link" key={key} onClick={() => navigateToPage(key)}>
+            <span className="settings-link-icon"><Icon size={18}/></span>
+            <span className="settings-link-text"><strong>{t(label)}</strong><small>{t(hint)}</small></span>
+          </button>)}
+        </div>
+      </section>)}
+    </div>;
   }
 
   function renderAddonMissing() {
@@ -8370,7 +8420,8 @@ Each account is overwritten with what is in its archive.`)) return;
     if (page === 'services') return isAdmin ? renderServices() : renderAdminOnly();
     if (page === 'mcp') return (mcpAddonInstalled || isAdmin) ? renderMcp() : renderAddonMissing();
     if (page === 'notifications') return notificationsAddonInstalled ? renderNotificationsPage() : renderAddonMissing();
-    if (page === 'settings') return renderPanelSettings();
+    if (page === 'settings') return renderSettingsHub();
+    if (page === 'panel-settings') return renderPanelSettings();
     if (page === 'users') return renderUsers();
     return renderDashboard();
   }
@@ -8426,7 +8477,7 @@ Each account is overwritten with what is in its archive.`)) return;
 
   if (standaloneEditor) return renderStandaloneEditor();
 
-  const ActiveIcon = activeNavItem?.[2] || Home;
+  const ActiveIcon = pageItem?.[2] || Home;
 
   return <main className="app-shell">
     <section className="layout">
@@ -8455,10 +8506,10 @@ Each account is overwritten with what is in its archive.`)) return;
       <div className="content">
         <section className="topbar">
           <button className="mobile-nav-toggle" onClick={() => setMobileMenuOpen(o => !o)} aria-expanded={mobileMenuOpen} aria-label={t('Toggle navigation')}>
-            <Menu size={20}/><span><ActiveIcon size={17}/>{t(activeNavItem?.[1] || 'Menu')}</span>
+            <Menu size={20}/><span><ActiveIcon size={17}/>{t(pageItem?.[1] || 'Menu')}</span>
           </button>
           <div className="page-title">
-            <h1>{activeNavItem?.[1] ? t(activeNavItem[1]) : (panelSettings.app_name || 'BPanel')}</h1>
+            <h1>{pageItem?.[1] ? t(pageItem[1]) : (panelSettings.app_name || 'BPanel')}</h1>
           </div>
           {/* The page title, then one account menu - profile, account security
               and sign out live in it, as they do in OPanel. */}
