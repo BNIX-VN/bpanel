@@ -67,12 +67,15 @@ def test_no_entry_is_empty():
 def test_every_key_is_a_string_something_actually_shows():
     """A key matching nothing is a translation nobody will ever see.
 
-    Checked against the interface source and against the API messages, which
-    are the two places a key can legitimately come from.
+    Checked against the interface source and against the messages the API
+    returns, which are the two places a key can legitimately come from. The
+    API's messages include the ones a service writes and the API passes on -
+    a malware scan's stage, which the job carries and the page translates.
     """
     api = ""
-    for path in sorted((PROJECT_ROOT / "backend" / "app" / "api").glob("*.py")):
-        api += path.read_text(encoding="utf-8")
+    for folder in ("api", "services"):
+        for path in sorted((PROJECT_ROOT / "backend" / "app" / folder).glob("*.py")):
+            api += path.read_text(encoding="utf-8")
 
     # t('Everyone else\'s tokens') in the source does not contain the raw
     # sentence, so compare against a copy with the escaping removed. Getting

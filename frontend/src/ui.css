@@ -426,6 +426,10 @@ button svg,.button-link svg,.upload-button svg{flex:none}
 
 /* A button that holds a file or folder name wraps like text. */
 .file-list button.file-name{height:auto}
+/* Rows take their content's height. With auto rows, the list's max-height
+   was shared out among them and a three-line row was cut to ~40px, drawing
+   its buttons over the next file (the scan history had the same bug). */
+.file-list{grid-auto-rows:max-content}
 
 /* WAF site page: one row per protection - what it does, its state, its switch. */
 .waf-switches{display:grid;border:1px solid var(--border);border-radius:var(--radius-md);background:var(--surface)}
@@ -433,6 +437,29 @@ button svg,.button-link svg,.upload-button svg{flex:none}
 .waf-switch-row + .waf-switch-row{border-top:1px solid var(--border)}
 .waf-switch-text{display:grid;gap:2px;min-width:0}
 .waf-switch-text .hint{margin:0}
+
+/* PHP extensions: one row per extension, one column per installed PHP. */
+.php-ext-card{display:grid;gap:10px;margin-top:16px;padding:16px;border:1px solid var(--border);border-radius:var(--radius-lg);background:var(--surface)}
+.php-ext-card h3{margin:0;font-size:15px}
+.php-ext-card .hint{margin:0}
+.php-ext-table{display:grid;border:1px solid var(--border);border-radius:var(--radius-md);overflow:hidden}
+/* Every row is a grid of its own, so no column may size itself to its
+   content - "All versions" is on some rows and not others - or the
+   version columns would sit at a different place on each row. */
+.php-ext-row{display:grid;grid-template-columns:minmax(80px,1fr) repeat(var(--php-cols,1),minmax(52px,104px)) 136px;align-items:center;gap:8px;padding:6px 12px;min-height:40px}
+.php-ext-row + .php-ext-row{border-top:1px solid var(--border)}
+.php-ext-row:hover:not(.php-ext-head){background:var(--surface-hover)}
+.php-ext-head{background:var(--surface-alt);color:var(--text-muted);font-size:12px;font-weight:700;min-height:34px}
+.php-ext-row > code{font-size:13px;color:var(--text)}
+.php-ext-row .badge{display:inline-flex;align-items:center;justify-content:center;min-width:28px}
+.php-ext-none{color:var(--text-muted)}
+.php-ext-all{justify-self:end}
+/* Below the width where "Install" fits in every version column, the
+   button is its + (the label stays for screen readers and the tooltip). */
+@media(max-width:1240px){
+  .php-ext-install-label{display:none}
+  .php-ext-row .mini{padding:0 8px}
+}
 
 /* ---------- Phones ---------- */
 @media(max-width:760px){
@@ -459,16 +486,6 @@ button svg,.button-link svg,.upload-button svg{flex:none}
   .db-row{grid-template-columns:minmax(0,1fr)}
   .db-actions{justify-content:flex-start;flex-wrap:nowrap}
 
-  /* File manager: name on the first line; mode, size and actions on the
-     second, each in a column of its own instead of one shared cell. */
-  .file-item{grid-template-columns:22px auto auto minmax(0,1fr);gap:4px 10px}
-  .file-item > .file-name{grid-column:2 / -1;grid-row:1}
-  .file-item > .file-mode{grid-column:2;grid-row:2;justify-self:start;width:auto}
-  .file-item > .file-size{grid-column:3;grid-row:2}
-  /* The actions get a line of their own, all of it: in the fourth column
-     they had ~170px and folded onto three lines. */
-  .file-item > .file-row-actions{grid-column:2 / -1;grid-row:3;display:flex;flex-wrap:nowrap;justify-content:flex-start;gap:6px;width:auto}
-
   /* SFTP: the name field and its button take the full width. */
   .sftp-form{grid-template-columns:minmax(0,1fr)}
   /* :nth-child(n), not *: an older rule spans the third field over columns
@@ -484,6 +501,12 @@ button svg,.button-link svg,.upload-button svg{flex:none}
   .waf-switch-row{grid-template-columns:minmax(0,1fr) auto}
   .waf-switch-row > button{grid-column:1 / -1;width:100%}
 
+  /* PHP extensions: narrower version columns; "every version" goes, the
+     per-version buttons do the same job. */
+  .php-ext-card{padding:12px}
+  .php-ext-row{grid-template-columns:minmax(64px,1fr) repeat(var(--php-cols,1),48px);gap:4px;padding:6px}
+  .php-ext-all{display:none}
+
   /* Lists with a filter: the input at its natural height. */
   .detail-head input{flex:0 0 auto}
 
@@ -492,4 +515,29 @@ button svg,.button-link svg,.upload-button svg{flex:none}
   .scan-history-list{max-height:none;overflow:visible;padding-right:0}
   .scan-history-item{grid-template-columns:22px minmax(0,1fr);align-items:start;row-gap:6px}
   .scan-history-main strong,.scan-history-main small{white-space:normal;overflow-wrap:anywhere}
+}
+
+/* ---------- File list, below the six-column width ----------
+   Name on the first line; mode, size and date on the second, each in a column
+   of its own instead of one shared cell; the actions on the third. The six
+   columns need ~800px of list, which is a 1200px window beside the sidebar;
+   below 1240px this layout takes over (it used to start at 1100px, with each
+   of these on a line of its own, and the date would have made it five). */
+@media(max-width:1240px){
+  .file-list-header{display:flex;justify-content:space-between}
+  .file-list-header span:not(.file-list-count){display:none}
+  /* Mode and size get fixed widths: as auto columns each row sized them to
+     its own content and the actions line under them, so the date sat at a
+     different place on every row and ran off the edge on a phone. */
+  .file-item{grid-template-columns:22px 40px 64px minmax(0,1fr);gap:4px 10px}
+  /* .file-list in front: file-manager.css puts button.file-name in column 2
+     on a phone with a stronger selector, which squeezed the name into the
+     40px mode column one letter per line. */
+  .file-list .file-item > .file-name{grid-column:2 / -1;grid-row:1}
+  .file-item > .file-mode{grid-column:2;grid-row:2;justify-self:start;width:auto}
+  .file-item > .file-size{grid-column:3;grid-row:2}
+  .file-item > .file-modified{grid-column:4;grid-row:2;justify-self:start}
+  /* The actions get a line of their own, all of it: in the fourth column
+     they had ~170px and folded onto three lines. */
+  .file-item > .file-row-actions{grid-column:2 / -1;grid-row:3;display:flex;flex-wrap:nowrap;justify-content:flex-start;gap:6px;width:auto}
 }

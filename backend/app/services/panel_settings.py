@@ -1039,17 +1039,65 @@ def _domain_from_path(path: str) -> str:
     return m.group(1) if m else ""
 
 
+# What the job says at each stage of an LMD scan. Fixed sentences, so the
+# interface can translate them; the numbers are in their own fields.
+_MALDET_STAGE_MESSAGES = {
+    "starting": "Starting the scan...",
+    "listing": "Building the file list...",
+    "scanning": "Scanning files...",
+    "results": "Reading the results...",
+}
+
+
+def _publish_maldet_progress(job_id: str, progress: dict) -> None:
+    stage = progress.get("stage")
+    if stage not in _MALDET_STAGE_MESSAGES:
+        return
+    total = int(progress.get("total") or 0)
+    scanned = total if stage == "results" else min(int(progress.get("scanned") or 0), total)
+    _update_malware_job(
+        job_id,
+        total_files=total,
+        scanned=scanned,
+        progress_percent=min(99, int(scanned * 100 / total)) if total else 0,
+        message=_MALDET_STAGE_MESSAGES[stage],
+    )
+
+
 def _run_maldet_job(job_id: str, target: str, *, recent_days: int | None = None) -> None:
     from app.services import maldet
 
     kind = f"incremental, {recent_days} days" if recent_days else "full"
     _update_malware_job(
         job_id, status="running", started_at=_now_iso(), engine="lmd",
-        message=f"Scanning ({kind}) with LMD: {target}",
+        message=_MALDET_STAGE_MESSAGES["starting"],
     )
-    _append_malware_log(job_id, f"maldet scan of {target} started")
+    _append_malware_log(job_id, f"maldet scan ({kind}) of {target} started")
+    # maldet runs in the foreground until the scan is over - hours on a whole
+    # server - and says nothing on the way. A second thread asks the helper
+    # how far it has got, so the job's count and percentage move meanwhile.
+    stop = threading.Event()
+
+    def watch() -> None:
+        while not stop.wait(SERVER_SCAN_POLL_SECONDS):
+            try:
+                progress = maldet.progress(job_id)
+            except Exception as exc:  # noqa: BLE001 - a missed reading is not a failed scan
+                logging.getLogger("bpanel.panel_settings").debug("scan %s: no progress reading: %s", job_id, exc)
+                continue
+            if not stop.is_set():
+                _publish_maldet_progress(job_id, progress)
+
+    watcher = threading.Thread(target=watch, daemon=True)
+    watcher.start()
     try:
-        result = maldet.scan(job_id, [target], recent_days=recent_days)
+        try:
+            result = maldet.scan(job_id, [target], recent_days=recent_days)
+        finally:
+            # Stopped before the final figures are written, so a late reading
+            # cannot put the finished job back at 99%.
+            stop.set()
+            watcher.join(timeout=30)
         total, threats = maldet.read_job_report(job_id)
         for threat in threats:
             threat["domain"] = threat.get("domain") or _domain_from_path(threat["path"])
@@ -1062,7 +1110,7 @@ def _run_maldet_job(job_id: str, target: str, *, recent_days: int | None = None)
             job_id, status=status, progress_percent=100,
             total_files=total, scanned=total, infected=len(threats),
             threats=threats, scanid=result["scanid"],
-            message=f"Scan finished: {total} files, {len(threats)} threats",
+            message="Scan finished.",
             finished_at=_now_iso(),
         )
         _append_malware_log(job_id, "maldet scan finished")

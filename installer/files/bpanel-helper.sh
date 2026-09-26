@@ -1505,6 +1505,81 @@ run_maldet_scan() {
   printf 'exit=%s\n' "$rc"
 }
 
+maldet_scan_progress() {
+  # maldet_scan_progress <job-id>: how far a running maldet scan has got.
+  # With the ClamAV engine maldet prints nothing between "scan ... in
+  # progress" and the end - four hours on a whole server - so the panel sat at
+  # 0%. clamscan reads maldet's file list one line at a time; the read offset
+  # of that list, in /proc/<pid>/fdinfo (root only), says how many files are
+  # behind it. Prints numbers only, never a path.
+  local job="$1"
+  [[ "$job" =~ ^[0-9a-f]{8,64}$ ]] || deny "invalid scan job id"
+  local out="${MALWARE_JOBS_DIR}/${job}.maldet.out"
+  local stage="none" total="" scanned=0 pid="" list clam fd pos
+  if [[ -f "$out" ]]; then
+    stage="starting"
+    grep -q 'building file list' "$out" && stage="listing"
+    total="$(grep -oE 'found [0-9]+ files' "$out" | tail -n1 | tr -dc '0-9' || true)"
+    [[ -n "$total" ]] && stage="scanning"
+    grep -qE 'processing scan results|scan completed' "$out" && stage="results"
+    pid="$(grep -oE '^maldet\([0-9]+\)' "$out" | head -n1 | tr -dc '0-9' || true)"
+  fi
+  if [[ "$stage" == "scanning" && -n "$pid" ]]; then
+    list="${MALDET_HOME}/tmp/.find.${pid}"
+    for clam in $(pgrep -P "$pid" -x clamscan 2>/dev/null || true); do
+      for fd in /proc/"$clam"/fd/*; do
+        [[ "$(readlink "$fd" 2>/dev/null || true)" == "$list" ]] || continue
+        pos="$(awk '/^pos:/ {print $2}' "/proc/${clam}/fdinfo/${fd##*/}" 2>/dev/null || true)"
+        if [[ "$pos" =~ ^[0-9]+$ ]]; then
+          scanned="$(head -c "$pos" "$list" 2>/dev/null | wc -l || true)"
+        fi
+      done
+    done
+  fi
+  printf 'stage=%s\ntotal=%s\nscanned=%s\n' "$stage" "${total:-0}" "${scanned:-0}"
+}
+
+# The PHP extensions the panel offers to install, one apt package each
+# (php<version>-<name>). The list is the boundary, not a convenience: the same
+# repository carries php<v>-cgi and libapache2-mod-php<v>, which bring Apache
+# and a second web server onto the ports nginx owns. backend/app/services/php.py
+# keeps the same list for the page; a test holds the two together.
+PHP_EXTENSION_WHITELIST=(apcu bcmath bz2 curl enchant gd gmp igbinary imagick imap intl ldap mailparse mbstring memcached mongodb msgpack mysql opcache pgsql redis soap sqlite3 ssh2 tidy uuid xml xsl yaml zip)
+
+install_php_extension() {
+  # install_php_extension <version> <extension>
+  local version="$1" ext="$2"
+  require_php_version "$version"
+  [[ "$ext" =~ ^[a-z0-9]{2,20}$ ]] || deny "invalid PHP extension name"
+  [[ " ${PHP_EXTENSION_WHITELIST[*]} " == *" ${ext} "* ]] || deny "PHP extension not offered by the panel: $ext"
+  [[ -f "/etc/php/${version}/fpm/php-fpm.conf" ]] || deny "PHP ${version} is not installed"
+  local pkg="php${version}-${ext}"
+  export DEBIAN_FRONTEND=noninteractive
+  if pkg_installed "$pkg"; then
+    echo "$pkg is already installed."
+  else
+    if ! apt-cache show "$pkg" >/dev/null 2>&1; then
+      apt-get update --allow-releaseinfo-change >/dev/null 2>&1 || true
+      apt-cache show "$pkg" >/dev/null 2>&1 || deny "$pkg is not in the package repositories"
+    fi
+    apt-get install -y "$pkg" || deny "apt-get could not install $pkg"
+    # Out of autoremove's reach, as install.sh does for the default set.
+    apt-mark manual "$pkg" >/dev/null 2>&1 || true
+  fi
+  # A module whose .so did not land is reported, not hidden: PHP would print
+  # "Unable to load dynamic library" on every run.
+  # Read whole, then matched: `| grep -q` exits at the first match and, under
+  # pipefail, the SIGPIPE it leaves php with would turn "found" into "not".
+  local load_errors
+  load_errors="$("php${version}" -v 2>&1 | grep -i 'unable to load' || true)"
+  if [[ -n "$load_errors" ]]; then
+    head -n 3 <<<"$load_errors" >&2
+    deny "$pkg is installed but PHP ${version} cannot load it"
+  fi
+  systemctl reload "php${version}-fpm" 2>/dev/null || systemctl restart "php${version}-fpm"
+  echo "$pkg is ready; php${version}-fpm reloaded."
+}
+
 install_php_version() {
   local version="$1"
   export DEBIAN_FRONTEND=noninteractive
@@ -1537,6 +1612,7 @@ install_php_version() {
     "php${version}-bcmath"
     "php${version}-redis"
     "php${version}-imagick"
+    "php${version}-imap"
   )
   local available_packages=() missing_packages=() package
   for package in "${packages[@]}"; do
@@ -5061,6 +5137,12 @@ case "$cmd" in
     run_maldet_scan "$@"
     ;;
 
+  maldet-progress)
+    # maldet-progress <job-id>
+    [[ $# -eq 1 ]] || deny "usage: maldet-progress <job-id>"
+    maldet_scan_progress "$1"
+    ;;
+
   maldet-report)
     [[ $# -eq 1 ]] || deny "usage: maldet-report <scanid>"
     [[ "$1" =~ ^[0-9]{6}-[0-9]{4}\.[0-9]+$ ]] || deny "invalid scanid"
@@ -5187,6 +5269,11 @@ case "$cmd" in
   php-install)
     [[ $# -eq 1 ]] || deny "usage: php-install <version>"
     install_php_version "$1"
+    ;;
+
+  php-ext-install)
+    [[ $# -eq 2 ]] || deny "usage: php-ext-install <version> <extension>"
+    install_php_extension "$1" "$2"
     ;;
 
   php-opcache-set)
