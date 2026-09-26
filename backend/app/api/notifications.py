@@ -1,9 +1,11 @@
 """The Notifications addon's API.
 
+Administrators only (operator, 2026-09-27: customers get no notifications).
 The server's settings (SMTP, the Telegram bot, thresholds, language) and the
-delivery log are an administrator's. Everyone - customers included - has
-their own page: which channels, which events, and their Telegram link. Every
-route answers 409 while the addon is not installed.
+delivery log are shared; each administrator also has their own choices:
+which channels, which events, and their own Telegram chat. Every route
+answers 409 while the addon is not installed, and 403 to anybody who is not
+an administrator.
 """
 from datetime import datetime
 
@@ -13,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
-from app.core.permissions import Role, ensure_role, is_admin_role
+from app.core.permissions import Role, ensure_role
 from app.models.entities import NotificationLog, User
 from app.services import addons, notifications, notify_messages
 from app.services.audit import log_action
@@ -23,8 +25,12 @@ def require_notifications() -> None:
     addons.require(addons.NOTIFICATIONS)
 
 
+def require_admin(current_user: User = Depends(get_current_user)) -> None:
+    ensure_role(current_user.role, Role.admin)
+
+
 router = APIRouter(prefix="/notifications", tags=["notifications"],
-                   dependencies=[Depends(require_notifications)])
+                   dependencies=[Depends(require_notifications), Depends(require_admin)])
 
 
 class SmtpSettings(BaseModel):
@@ -47,7 +53,6 @@ class TelegramSettings(BaseModel):
 class Thresholds(BaseModel):
     disk_percent: int | None = None
     ssl_days: int | None = None
-    quota_percent: int | None = None
 
 
 class SettingsUpdate(BaseModel):
@@ -68,20 +73,18 @@ class TestRequest(BaseModel):
     channel: str = Field(pattern=r"^(email|telegram|telegram_admin)$")
 
 
-def _events(admin: bool) -> list[dict]:
-    return [{"key": key, **notify_messages.EVENTS[key]} for key in notify_messages.events_for(admin)]
+def _events() -> list[dict]:
+    return [{"key": key, **entry} for key, entry in notify_messages.EVENTS.items()]
 
 
 @router.get("/settings")
-def get_settings(current_user: User = Depends(get_current_user)):
-    ensure_role(current_user.role, Role.admin)
+def get_settings():
     return notifications.public_config()
 
 
 @router.put("/settings")
 def put_settings(payload: SettingsUpdate, request: Request, db: Session = Depends(get_db),
                  current_user: User = Depends(get_current_user)):
-    ensure_role(current_user.role, Role.admin)
     try:
         result = notifications.save_config(payload.model_dump(exclude_none=True))
     except ValueError as exc:
@@ -94,7 +97,7 @@ def _me(db: Session, user: User) -> dict:
     config = notifications.load_config()
     pref = notifications.prefs_for(db, user.id)
     db.commit()
-    admin_chat = notifications.admin_chat(config) if is_admin_role(user.role) else ""
+    admin_chat = notifications.admin_chat(config)
     return {
         "email": user.email or "",
         "email_enabled": bool(pref.email_enabled),
@@ -106,7 +109,7 @@ def _me(db: Session, user: User) -> dict:
         "telegram_link_pending": bool(pref.telegram_link_code and pref.telegram_link_expires_at
                                       and pref.telegram_link_expires_at >= datetime.utcnow()),
         "muted": sorted(notifications.muted(pref)),
-        "events": _events(is_admin_role(user.role)),
+        "events": _events(),
         "channels": {"email": notifications.smtp_ready(config), "telegram": notifications.telegram_ready(config),
                      "bot_username": config["telegram"].get("bot_username", "")},
     }
@@ -132,7 +135,7 @@ def put_my_prefs(payload: MyPrefsUpdate, db: Session = Depends(get_db),
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         pref.telegram_link_code = None
     if payload.muted is not None:
-        allowed = set(notify_messages.events_for(is_admin_role(current_user.role)))
+        allowed = set(notify_messages.EVENTS)
         unknown = sorted(set(payload.muted) - allowed)
         if unknown:
             raise HTTPException(status_code=400, detail=f"Unknown event(s): {', '.join(unknown)}")
@@ -173,11 +176,6 @@ def unlink_telegram(db: Session = Depends(get_db), current_user: User = Depends(
 
 @router.post("/test")
 def send_test(payload: TestRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    # Email goes out through the server's SMTP account, whose quota belongs to
-    # the administrator, and the admin chat is the administrators'; a customer
-    # can test the Telegram chat they linked.
-    if payload.channel in ("email", "telegram_admin"):
-        ensure_role(current_user.role, Role.admin)
     try:
         target = notifications.send_test(current_user, payload.channel, db)
     except ValueError as exc:
@@ -188,9 +186,8 @@ def send_test(payload: TestRequest, db: Session = Depends(get_db), current_user:
 
 
 @router.get("/telegram/chats")
-def telegram_chats(current_user: User = Depends(get_current_user)):
+def telegram_chats():
     """Who recently wrote to the bot: pick the admin chat instead of looking it up."""
-    ensure_role(current_user.role, Role.admin)
     try:
         return notifications.recent_chats()
     except ValueError as exc:
@@ -200,8 +197,7 @@ def telegram_chats(current_user: User = Depends(get_current_user)):
 
 
 @router.get("/log")
-def delivery_log(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    ensure_role(current_user.role, Role.admin)
+def delivery_log(db: Session = Depends(get_db)):
     rows = (db.query(NotificationLog, User.username)
             .outerjoin(User, User.id == NotificationLog.user_id)
             .order_by(NotificationLog.id.desc()).limit(100).all())

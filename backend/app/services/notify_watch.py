@@ -11,8 +11,10 @@ a condition is reported when it starts, not every five minutes while it lasts:
   points below it;
 - the firewall off;
 - once a day: certificates about to expire (read from what nginx actually
-  serves, so no certificate file needs to be readable), accounts near their
-  storage limit, and a new panel release.
+  serves, so no certificate file needs to be readable) and a new panel
+  release.
+
+Everything goes to administrators; customers get no notifications.
 """
 from __future__ import annotations
 
@@ -22,13 +24,12 @@ import os
 import shutil
 import socket
 import ssl
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
 from app.core.database import SessionLocal
-from app.core.permissions import is_admin_role
-from app.models.entities import User, Website
+from app.models.entities import Website
 from app.services import notifications
 from app.services.shell import shell
 
@@ -148,12 +149,12 @@ def check_certificates(days_limit: int) -> None:
     db = SessionLocal()
     try:
         sites = db.query(Website).filter(Website.ssl_enabled.is_(True)).all()
-        rows = [(site.domain, site.owner_id, site.status) for site in sites]
+        rows = [(site.domain, site.status) for site in sites]
     finally:
         db.close()
     now = datetime.now(UTC)
-    expiring: list[tuple[int, dict]] = []
-    for domain, owner_id, status in rows:
+    expiring: list[dict] = []
+    for domain, status in rows:
         if status == "suspended":
             continue
         expires = served_certificate_expiry(domain)
@@ -161,39 +162,12 @@ def check_certificates(days_limit: int) -> None:
             continue
         days = (expires - now).days
         if days <= days_limit:
-            expiring.append((owner_id, {"domain": domain, "days": max(days, 0),
-                                        "expires": expires.astimezone().strftime("%d/%m/%Y")}))
+            expiring.append({"domain": domain, "days": max(days, 0),
+                             "expires": expires.astimezone().strftime("%d/%m/%Y")})
     if not expiring:
         return
-    today = date.today().isoformat()
-    notifications.notify("ssl_expiring_admin", {"sites": [site for _, site in expiring]}, admins=True,
-                         dedupe_key=f"ssl:{today}")
-    by_owner: dict[int, list[dict]] = {}
-    for owner_id, site in expiring:
-        by_owner.setdefault(owner_id, []).append(site)
-    for owner_id, sites in by_owner.items():
-        notifications.notify("ssl_expiring", {"sites": sites}, user_ids=[owner_id], dedupe_key=f"ssl:{today}")
-
-
-def check_quotas(percent_limit: int) -> None:
-    from app.services import storage_quota
-
-    db = SessionLocal()
-    try:
-        for user in db.query(User).filter(User.is_active.is_(True)).all():
-            if is_admin_role(user.role):
-                continue
-            summary = storage_quota.storage_usage_summary(db, user)
-            limit = summary.get("storage_limit_bytes")
-            percent = summary.get("storage_percent") or 0
-            if not limit or percent < percent_limit:
-                continue
-            notifications.notify("quota_high", {
-                "username": user.username, "percent": round(percent),
-                "used": _human(summary["storage_used_bytes"]), "limit": _human(limit),
-            }, user_ids=[user.id], dedupe_key=f"quota:{user.id}", cooldown=timedelta(days=3))
-    finally:
-        db.close()
+    notifications.notify("ssl_expiring_admin", {"sites": expiring}, admins=True,
+                         dedupe_key=f"ssl:{date.today().isoformat()}")
 
 
 def check_update(state: dict) -> None:
@@ -227,7 +201,6 @@ def run() -> str:
     today = date.today().isoformat()
     if state.get("daily") != today:
         for name, check in (("certificates", lambda: check_certificates(int(thresholds["ssl_days"]))),
-                            ("quotas", lambda: check_quotas(int(thresholds["quota_percent"]))),
                             ("update", lambda: check_update(state))):
             try:
                 check()

@@ -778,10 +778,12 @@ function App() {
   const [adminChatInput, setAdminChatInput] = useState('');
   const [telegramChats, setTelegramChats] = useState(null);
   const [myChatInput, setMyChatInput] = useState('');
-  const [notifyLimits, setNotifyLimits] = useState({ disk_percent: 90, ssl_days: 7, quota_percent: 90, language: 'vi' });
+  const [notifyLimits, setNotifyLimits] = useState({ disk_percent: 90, ssl_days: 7, language: 'vi' });
   const [serviceStates, setServiceStates] = useState({});
   const [serviceNames, setServiceNames] = useState(DEFAULT_SERVICE_NAMES);
   const [backupTab, setBackupTab] = useState('website');
+  // An old /api-tokens link opens the tab the tokens now live on.
+  const [panelSettingsTab, setPanelSettingsTab] = useState(() => (/^\/api-tokens?\/?$/i.test(window.location.pathname) ? 'api' : 'general'));
   const [backups, setBackups] = useState([]);
   const [backupJobs, setBackupJobs] = useState([]);
   const [userBackups, setUserBackups] = useState([]);
@@ -4339,9 +4341,10 @@ Each account is overwritten with what is in its archive.`)) return;
   }, [isAuthenticated, page]);
 
   useEffect(() => {
-    if (!isAuthenticated || page !== 'notifications' || !notificationsAddonInstalled) return;
+    if (!isAuthenticated || page !== 'notifications' || !notificationsAddonInstalled || !isAdmin) return;
     loadNotifyMe();
-    if (isAdmin) { loadNotifySettings(); loadNotifyLog(); }
+    loadNotifySettings();
+    loadNotifyLog();
   }, [isAuthenticated, page, notificationsAddonInstalled, isAdmin]);
 
   useEffect(() => {
@@ -4532,7 +4535,7 @@ Each account is overwritten with what is in its archive.`)) return;
     ] },
     { key: 'addons', items: [
       ...(mcpAddonInstalled ? [['mcp', 'AI assistants', Bot]] : []),
-      ...(notificationsAddonInstalled ? [['notifications', 'Notifications', Bell]] : []),
+      ...(notificationsAddonInstalled && isAdmin ? [['notifications', 'Notifications', Bell]] : []),
     ] },
     { key: 'settings', items: [['settings', 'Settings', SettingsIcon]] },
   ].filter(section => section.items.length > 0);
@@ -4979,17 +4982,15 @@ Each account is overwritten with what is in its archive.`)) return;
             </div>
           </div>
           <div className="notify-events">
+            <h3>{t('About the server')}</h3>
+            <div className="notify-event-list">{events.filter(ev => ev.audience === 'admin').map(eventRow)}</div>
             <h3>{t('About your account')}</h3>
             <div className="notify-event-list">{events.filter(ev => ev.audience === 'user').map(eventRow)}</div>
-            {isAdmin && <>
-              <h3>{t('About the server')}</h3>
-              <div className="notify-event-list">{events.filter(ev => ev.audience === 'admin').map(eventRow)}</div>
-            </>}
           </div>
         </>}
       </section>
 
-      {isAdmin && s && <section className="section">
+      {s && <section className="section">
         <div className="section-title"><div>
           <h2>{t('Server channels')}</h2>
           <p className="hint">{t('What every notification on this server goes out through.')}</p>
@@ -5039,21 +5040,20 @@ Each account is overwritten with what is in its archive.`)) return;
             <div className="notify-form">
               <label><span>{t('Disk usage (%)')}</span><input type="number" min="50" max="99" value={notifyLimits.disk_percent} onChange={e => setNotifyLimits(v => ({ ...v, disk_percent: e.target.value }))} /></label>
               <label><span>{t('Certificate expiry (days)')}</span><input type="number" min="1" max="60" value={notifyLimits.ssl_days} onChange={e => setNotifyLimits(v => ({ ...v, ssl_days: e.target.value }))} /></label>
-              <label><span>{t('Plan storage used (%)')}</span><input type="number" min="50" max="100" value={notifyLimits.quota_percent} onChange={e => setNotifyLimits(v => ({ ...v, quota_percent: e.target.value }))} /></label>
               <label><span>{t('Language of the messages')}</span><select value={notifyLimits.language} onChange={e => setNotifyLimits(v => ({ ...v, language: e.target.value }))}>
                 <option value="vi">Tiếng Việt</option><option value="en">English</option>
               </select></label>
             </div>
             <div className="notify-actions">
               <button type="button" disabled={!!loading} onClick={() => saveNotifySettings({ language: notifyLimits.language, thresholds: {
-                disk_percent: Number(notifyLimits.disk_percent), ssl_days: Number(notifyLimits.ssl_days), quota_percent: Number(notifyLimits.quota_percent),
+                disk_percent: Number(notifyLimits.disk_percent), ssl_days: Number(notifyLimits.ssl_days),
               } }, t('Saved.'))}>{t('Save')}</button>
             </div>
           </div>
         </div>
       </section>}
 
-      {isAdmin && <section className="section">
+      <section className="section">
         <div className="section-title">
           <div><h2>{t('Delivery log')}</h2><p className="hint">{t('The last 100 messages sent, and the ones that failed.')}</p></div>
           <div className="actions"><button type="button" className="secondary" disabled={!!loading} onClick={loadNotifyLog}><RefreshCw size={14}/>{t('Refresh')}</button></div>
@@ -5070,7 +5070,7 @@ Each account is overwritten with what is in its archive.`)) return;
                 {row.status !== 'sent' && row.detail && <small className="notify-log-detail">{row.detail}</small>}
               </div>)}
             </div>}
-      </section>}
+      </section>
     </>;
   }
 
@@ -7882,10 +7882,32 @@ Each account is overwritten with what is in its archive.`)) return;
 
   function renderPanelSettings() {
     if (!isAdmin) return <section className="section"><h2>{t('Settings')}</h2><p className="hint">{t('No permission.')}</p></section>;
-    return <>
-      <section className="section">
-        <div className="section-title">
-          <div><h2>{t('Panel settings')}</h2><p className="hint">{t('Branding and hostname.')}</p></div>
+    // Four tabs, one underlined row like Backups and Panel users (operator,
+    // 2026-09-27): the page had grown into four unrelated forms stacked up.
+    const tabs = [
+      ['general', 'General', SettingsIcon],
+      ['brand', 'Brand assets', Image],
+      ['account', 'Admin account', Lock],
+      ['api', 'API Tokens', KeyRound],
+    ];
+    const activeTab = tabs.some(([id]) => id === panelSettingsTab) ? panelSettingsTab : 'general';
+    const tabPanel = (id, content) => activeTab === id && <div className="backup-tab-panel" id={`panel-settings-tab-${id}`} role="tabpanel" aria-labelledby={`panel-settings-tab-button-${id}`}>{content}</div>;
+    return <section className="section panel-settings-page">
+      <div className="segmented-control backup-tabs" role="tablist" aria-label={t('Panel settings sections')}>
+        {tabs.map(([id, label, Icon]) => <button
+          key={id}
+          type="button"
+          role="tab"
+          id={`panel-settings-tab-button-${id}`}
+          aria-controls={`panel-settings-tab-${id}`}
+          aria-selected={activeTab === id}
+          className={activeTab === id ? 'active' : ''}
+          onClick={() => setPanelSettingsTab(id)}
+        ><Icon size={14}/>{t(label)}</button>)}
+      </div>
+      {tabPanel('general', <>
+        <div className="backup-panel-title">
+          <div><h3>{t('General')}</h3><p className="hint">{t('Panel name, hostname and the server\'s addresses.')}</p></div>
           <button className="secondary-light" disabled={!!loading} onClick={loadPanelSettings}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
         <div className="panel-settings-grid panel-settings-compact">
@@ -7919,23 +7941,10 @@ Each account is overwritten with what is in its archive.`)) return;
           </div>
           <span className="hint">{panelSettings.ipv6?.detail}</span>
         </div>
-      </section>
-      <section className="section">
-        <div className="section-title">
-          <div><h2>{t('Admin account')}</h2></div>
-        </div>
-        <div className="panel-settings-grid admin-account-grid">
-          <label><span>{t('Email')}</span><input type="email" value={adminAccountForm.email} onChange={e => setAdminAccountForm(prev => ({ ...prev, email: e.target.value }))} placeholder="admin@domain.com" /></label>
-          <label><span>{t('Current password')}</span><input type="password" value={adminAccountForm.current_password} onChange={e => setAdminAccountForm(prev => ({ ...prev, current_password: e.target.value }))} placeholder={t('Current password')} autoComplete="current-password" /></label>
-          <label><span>{t('New password')}</span><input type="password" value={adminAccountForm.password} onChange={e => setAdminAccountForm(prev => ({ ...prev, password: e.target.value }))} placeholder={t('New password')} autoComplete="new-password" /></label>
-          <label><span>{t('Confirm password')}</span><input type="password" value={adminAccountForm.confirm_password} onChange={e => setAdminAccountForm(prev => ({ ...prev, confirm_password: e.target.value }))} placeholder={t('Repeat new password')} autoComplete="new-password" /></label>
-          <label><span>{t('Authenticator code')}</span><input value={adminAccountForm.code} onChange={e => setAdminAccountForm(prev => ({ ...prev, code: e.target.value }))} placeholder="123456" inputMode="numeric" autoComplete="one-time-code" /></label>
-          <button disabled={!!loading || !adminAccountForm.email.trim() || (!!adminAccountForm.password && adminAccountForm.password !== adminAccountForm.confirm_password)} onClick={saveAdminAccount}><Lock size={14}/>{t('Save account')}</button>
-        </div>
-      </section>
-      <section className="section">
-        <div className="section-title">
-          <div><h2>{t('Brand assets')}</h2><p className="hint">{t('Upload PNG, JPG, WEBP, or ICO files up to 1 MB.')}</p></div>
+      </>)}
+      {tabPanel('brand', <>
+        <div className="backup-panel-title">
+          <div><h3>{t('Brand assets')}</h3><p className="hint">{t('Upload PNG, JPG, WEBP, or ICO files up to 1 MB.')}</p></div>
         </div>
         <div className="brand-asset-grid">
           <div className="brand-asset-card">
@@ -7949,19 +7958,23 @@ Each account is overwritten with what is in its archive.`)) return;
             <button disabled={!!loading || !panelFaviconFile} onClick={() => uploadPanelAsset('favicon')}><Upload size={14}/>{t('Upload favicon')}</button>
           </div>
         </div>
-      </section>
-      {renderApiTokenSections()}
-    </>;
-  }
-
-  // Its own function, not its own page: tokens are a panel-wide setting, and a
-  // nav entry of their own made people hunt for them.
-  function renderApiTokenSections() {
-    if (!isAdmin) return null;
-    return <>
-      <section className="section">
-        <div className="section-title">
-          <div><h2>{t('API Tokens')}</h2><p className="hint">{t('Create one token for WHMCS. Paste it into WHMCS Server → Access Hash.')}</p></div>
+      </>)}
+      {tabPanel('account', <>
+        <div className="backup-panel-title">
+          <div><h3>{t('Admin account')}</h3><p className="hint">{t('A new password needs the current one, and the authenticator code when two-factor sign-in is on.')}</p></div>
+        </div>
+        <div className="panel-settings-grid admin-account-grid">
+          <label><span>{t('Email')}</span><input type="email" value={adminAccountForm.email} onChange={e => setAdminAccountForm(prev => ({ ...prev, email: e.target.value }))} placeholder="admin@domain.com" /></label>
+          <label><span>{t('Current password')}</span><input type="password" value={adminAccountForm.current_password} onChange={e => setAdminAccountForm(prev => ({ ...prev, current_password: e.target.value }))} placeholder={t('Current password')} autoComplete="current-password" /></label>
+          <label><span>{t('New password')}</span><input type="password" value={adminAccountForm.password} onChange={e => setAdminAccountForm(prev => ({ ...prev, password: e.target.value }))} placeholder={t('New password')} autoComplete="new-password" /></label>
+          <label><span>{t('Confirm password')}</span><input type="password" value={adminAccountForm.confirm_password} onChange={e => setAdminAccountForm(prev => ({ ...prev, confirm_password: e.target.value }))} placeholder={t('Repeat new password')} autoComplete="new-password" /></label>
+          <label><span>{t('Authenticator code')}</span><input value={adminAccountForm.code} onChange={e => setAdminAccountForm(prev => ({ ...prev, code: e.target.value }))} placeholder="123456" inputMode="numeric" autoComplete="one-time-code" /></label>
+          <button disabled={!!loading || !adminAccountForm.email.trim() || (!!adminAccountForm.password && adminAccountForm.password !== adminAccountForm.confirm_password)} onClick={saveAdminAccount}><Lock size={14}/>{t('Save account')}</button>
+        </div>
+      </>)}
+      {tabPanel('api', <>
+        <div className="backup-panel-title">
+          <div><h3>{t('API Tokens')}</h3><p className="hint">{t('Create one token for WHMCS. Paste it into WHMCS Server → Access Hash.')}</p></div>
           <button className="secondary-light" disabled={!!loading} onClick={loadApiTokens}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
         {createdApiToken && <div className="user-create-card">
@@ -7986,8 +7999,8 @@ Each account is overwritten with what is in its archive.`)) return;
             </div>
           </div>)}
         </div>
-      </section>
-    </>;
+      </>)}
+    </section>;
   }
 
   function renderUsers() {
@@ -8441,7 +8454,8 @@ Each account is overwritten with what is in its archive.`)) return;
     // page full of requests that will every one be refused.
     if (page === 'services') return isAdmin ? renderServices() : renderAdminOnly();
     if (page === 'mcp') return (mcpAddonInstalled || isAdmin) ? renderMcp() : renderAddonMissing();
-    if (page === 'notifications') return notificationsAddonInstalled ? renderNotificationsPage() : renderAddonMissing();
+    // Administrators only (operator, 2026-09-27): customers get no notifications.
+    if (page === 'notifications') return !isAdmin ? renderAdminOnly() : notificationsAddonInstalled ? renderNotificationsPage() : renderAddonMissing();
     if (page === 'settings') return renderSettingsHub();
     if (page === 'panel-settings') return renderPanelSettings();
     if (page === 'users') return renderUsers();

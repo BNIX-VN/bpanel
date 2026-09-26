@@ -3,18 +3,8 @@
 
 PART13 = {
     # The addon card
-    "Tells administrators and customers what needs their attention, by email and Telegram.":
-        "Báo cho quản trị viên và khách hàng những việc cần lưu ý, qua email và Telegram.",
-    "Administrators hear about the server: a service that stopped, a disk filling up, the firewall off, a failed backup, malware, certificates about to expire, a panel update.":
-        "Quản trị viên nhận tin về server: dịch vụ bị dừng, ổ đĩa sắp đầy, tường lửa tắt, backup lỗi, mã độc, chứng chỉ sắp hết hạn, có bản cập nhật panel.",
-    "Every account hears about itself: a sign-in from a new place, a password or two-factor change, a suspension, and its own backups, malware, certificates and storage.":
-        "Mỗi tài khoản nhận tin về chính mình: đăng nhập từ nơi mới, đổi mật khẩu hoặc đăng nhập hai lớp, bị tạm khoá, cùng backup, mã độc, chứng chỉ và dung lượng của mình.",
-    "Email goes through the SMTP server you set; Telegram through a bot you create with @BotFather. Each person picks their channels and mutes what they do not want.":
-        "Email gửi qua máy chủ SMTP bạn cấu hình; Telegram qua bot bạn tạo bằng @BotFather. Mỗi người tự chọn kênh và tắt những thông báo không muốn nhận.",
     "Email needs an SMTP account (host, port, sender address). Mail sent straight from the server usually lands in spam.":
         "Email cần một tài khoản SMTP (máy chủ, cổng, địa chỉ gửi). Thư gửi thẳng từ server thường rơi vào spam.",
-    "Turning the addon off stops every message and keeps the settings, each person's choices and the delivery log.":
-        "Tắt addon sẽ dừng mọi thông báo nhưng giữ nguyên cấu hình, lựa chọn của từng người và lịch sử gửi.",
 
     # The events
     "A service stopped or came back": "Dịch vụ bị dừng hoặc chạy lại",
@@ -37,16 +27,6 @@ PART13 = {
     "Your account signed in from an IP it has not used before.": "Tài khoản của bạn đăng nhập từ một IP chưa từng dùng.",
     "Password or two-factor changed": "Đổi mật khẩu hoặc đăng nhập hai lớp",
     "So a change you did not make does not go unnoticed.": "Để một thay đổi không phải do bạn làm không bị bỏ sót.",
-    "Account suspended or restored": "Tài khoản bị tạm khoá hoặc mở lại",
-    "Your websites stop, or start again.": "Các website của bạn ngừng hoạt động, hoặc chạy lại.",
-    "Your scheduled backup failed": "Backup theo lịch của bạn bị lỗi",
-    "The backup of your account did not complete.": "Backup tài khoản của bạn không hoàn tất.",
-    "Malware in your websites": "Mã độc trong website của bạn",
-    "A scan found suspicious files in a website you own.": "Một lần quét tìm thấy file nghi nhiễm trong website của bạn.",
-    "Your certificates about to expire": "Chứng chỉ của bạn sắp hết hạn",
-    "A website of yours whose SSL certificate runs out soon.": "Website của bạn có chứng chỉ SSL sắp hết hạn.",
-    "Your storage is nearly full": "Dung lượng của bạn sắp đầy",
-    "Checked once a day against your plan.": "Kiểm tra mỗi ngày một lần theo gói của bạn.",
 
     # The page
     "My notifications": "Thông báo của tôi",
@@ -84,7 +64,6 @@ PART13 = {
     "When to warn": "Ngưỡng cảnh báo",
     "Disk usage (%)": "Ổ đĩa đã dùng (%)",
     "Certificate expiry (days)": "Chứng chỉ còn hạn (ngày)",
-    "Plan storage used (%)": "Dung lượng gói đã dùng (%)",
     "Language of the messages": "Ngôn ngữ của thông báo",
     "Saved.": "Đã lưu.",
     "Saving...": "Đang lưu...",
@@ -144,4 +123,25 @@ PART13 = {
         "Rule ModSecurity áp dụng cho mọi website đang bật WAF. Rule do trợ lý AI thêm có dòng # bpanel-mcp; muốn xoá rule nào thì xoá các dòng của rule đó.",
     "Global WAF rules saved. They apply to every website with the WAF on.":
         "Đã lưu rule WAF toàn cục. Rule áp dụng cho mọi website đang bật WAF.",
+
+    # Panel settings in four tabs
+    "Panel settings sections": "Các mục cài đặt panel",
+    "General": "Chung",
+    "Panel name, hostname and the server's addresses.": "Tên panel, tên miền panel và địa chỉ IP của server.",
+    "A new password needs the current one, and the authenticator code when two-factor sign-in is on.":
+        "Đổi mật khẩu cần nhập mật khẩu hiện tại, và mã xác thực nếu đang bật đăng nhập hai lớp.",
+
+    # Notifications: administrators only
+    "Tells administrators what needs their attention on the server, by email and Telegram.":
+        "Báo cho quản trị viên những việc cần lưu ý trên server, qua email và Telegram.",
+    "The server: a service that stopped, a disk filling up, the firewall off, a failed backup, malware, certificates about to expire, a panel update.":
+        "Về server: dịch vụ bị dừng, ổ đĩa sắp đầy, tường lửa tắt, backup lỗi, mã độc, chứng chỉ sắp hết hạn, có bản cập nhật panel.",
+    "Your own account: a sign-in from a new place, a password or two-factor change.":
+        "Về tài khoản của bạn: đăng nhập từ nơi mới, đổi mật khẩu hoặc đăng nhập hai lớp.",
+    "Email goes through the SMTP server you set; Telegram through a bot you create with @BotFather. Each administrator picks their channels and mutes what they do not want.":
+        "Email gửi qua máy chủ SMTP bạn cấu hình; Telegram qua bot bạn tạo bằng @BotFather. Mỗi quản trị viên tự chọn kênh và tắt những thông báo không muốn nhận.",
+    "For administrators only: customers do not see it and are not sent anything.":
+        "Chỉ dành cho quản trị viên: khách hàng không thấy tính năng này và không nhận thông báo nào.",
+    "Turning the addon off stops every message and keeps the settings, each administrator's choices and the delivery log.":
+        "Tắt addon sẽ dừng mọi thông báo nhưng giữ nguyên cấu hình, lựa chọn của từng quản trị viên và lịch sử gửi.",
 }

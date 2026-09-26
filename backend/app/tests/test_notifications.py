@@ -2,7 +2,9 @@
 
 The operator asked for an addon with two channels, email over SMTP and
 Telegram, and left the content to be worked out (2026-09-27): administrators
-hear about the server, every account about itself.
+hear about the server and about their own account. The same day it became an
+administrators' feature only: "Phần thông báo không dành cho end user nữa" -
+customers are sent nothing and do not see the page.
 """
 from datetime import UTC, timedelta
 from pathlib import Path
@@ -62,15 +64,11 @@ def test_every_event_reads_in_both_languages():
     samples = {
         "service_down": {"services": ["nginx"]}, "disk_high": {"percent": 93, "used": "9 GB", "total": "10 GB", "free": "1 GB"},
         "firewall_off": {}, "update_available": {"version": "1.0.170", "current": "1.0.164"},
-        "backup_failed_admin": {"errors": ["alice: disk full"], "when": "now"}, "backup_failed": {"errors": ["x"], "when": "now"},
+        "backup_failed_admin": {"errors": ["alice: disk full"], "when": "now"},
         "malware_found_admin": {"threats": [{"path": "/home/a/x.php", "signature": "php.shell"}], "count": 1},
-        "malware_found": {"threats": [{"path": "/home/a/x.php", "signature": "php.shell"}], "count": 1},
         "ssl_expiring_admin": {"sites": [{"domain": "a.test", "days": 3, "expires": "30/09/2026"}]},
-        "ssl_expiring": {"sites": [{"domain": "a.test", "days": 3, "expires": "30/09/2026"}]},
-        "login_new_ip": {"username": "alice", "ip": "203.0.113.9", "when": "now", "agent": "Firefox"},
-        "security_change": {"kind": "2fa_off", "username": "alice", "when": "now"},
-        "account_status": {"suspended": True, "username": "alice"},
-        "quota_high": {"username": "alice", "percent": 95, "used": "9 GB", "limit": "10 GB"},
+        "login_new_ip": {"username": "boss", "ip": "203.0.113.9", "when": "now", "agent": "Firefox"},
+        "security_change": {"kind": "2fa_off", "username": "boss", "when": "now"},
     }
     assert set(samples) == set(notify_messages.EVENTS)
     for event, params in samples.items():
@@ -79,12 +77,11 @@ def test_every_event_reads_in_both_languages():
         assert vi[0] and vi[1] and en[0] and en[1] and vi != en, event
 
 
-def test_a_customer_is_offered_only_their_own_events():
-    customer = set(notify_messages.events_for(False))
-    admin = set(notify_messages.events_for(True))
-    assert customer < admin
-    assert all(notify_messages.EVENTS[key]["audience"] == notify_messages.USER for key in customer)
-    assert "service_down" not in customer and "login_new_ip" in customer
+def test_a_customer_is_offered_nothing():
+    assert notify_messages.events_for(False) == []
+    assert notify_messages.events_for(True) == list(notify_messages.EVENTS)
+    for gone in ("account_status", "backup_failed", "malware_found", "ssl_expiring", "quota_high"):
+        assert gone not in notify_messages.EVENTS, gone
 
 
 # --- who hears it ------------------------------------------------------------------
@@ -94,32 +91,33 @@ def test_nothing_is_sent_while_the_addon_is_off(env):
     assert env.sent == []
 
 
-def test_admins_hear_about_the_server_and_an_owner_about_their_own(env):
+def test_administrators_hear_and_customers_never_do(env):
     _turn_on()
     assert notifications.notify("firewall_off", {}, admins=True) == 1
     assert [s[1] for s in env.sent] == ["boss@example.test"]
     assert env.sent[0][2].startswith("[panel.test] ")
-    notifications.notify("quota_high", {"username": "alice", "percent": 95, "used": "9 GB", "limit": "10 GB"},
-                         user_ids=[env.people["alice"].id])
-    assert env.sent[-1][1] == "alice@example.test"
+    params = {"username": "x", "ip": "198.51.100.5", "when": "now"}
+    assert notifications.notify("login_new_ip", params, user_ids=[env.people["alice"].id]) == 0
+    assert notifications.notify("login_new_ip", params, user_ids=[env.people["boss"].id]) == 1
+    assert [s[1] for s in env.sent] == ["boss@example.test", "boss@example.test"]
 
 
 def test_muted_events_and_switched_off_channels_are_respected(env):
     _turn_on()
-    alice = env.people["alice"].id
-    pref = notifications.prefs_for(env.db, alice)
-    pref.muted_events = "quota_high"
+    boss = env.people["boss"].id
+    pref = notifications.prefs_for(env.db, boss)
+    pref.muted_events = "login_new_ip"
     pref.telegram_chat_id = "12345"
     env.db.commit()
-    params = {"username": "alice", "percent": 95, "used": "9 GB", "limit": "10 GB"}
-    assert notifications.notify("quota_high", params, user_ids=[alice]) == 0
+    params = {"username": "boss", "ip": "198.51.100.5", "when": "now"}
+    assert notifications.notify("login_new_ip", params, user_ids=[boss]) == 0
     pref.muted_events = ""
     pref.email_enabled = False
     env.db.commit()
     config = notifications.load_config()
     config["telegram"]["bot_token_enc"] = notifications.secret_box.encrypt("123:abc")
     notifications._write_config(config)
-    assert notifications.notify("quota_high", params, user_ids=[alice]) == 1
+    assert notifications.notify("login_new_ip", params, user_ids=[boss]) == 1
     assert env.sent[-1][0] == "telegram" and env.sent[-1][1] == "12345"
 
 
@@ -180,8 +178,8 @@ def test_a_start_message_with_the_code_links_the_chat(env, monkeypatch):
     config = notifications.load_config()
     config["telegram"].update({"bot_token_enc": notifications.secret_box.encrypt("123:abc"), "bot_username": "bnix_bot"})
     notifications._write_config(config)
-    alice = env.people["alice"].id
-    link = notifications.start_telegram_link(env.db, alice)
+    boss = env.people["boss"].id
+    link = notifications.start_telegram_link(env.db, boss)
     assert link["link"] == f"https://t.me/bnix_bot?start={link['code']}"
     calls = []
 
@@ -193,8 +191,8 @@ def test_a_start_message_with_the_code_links_the_chat(env, monkeypatch):
         return {}
 
     monkeypatch.setattr(notifications, "telegram_call", fake_call)
-    assert notifications.collect_telegram_links(env.db) == [alice]
-    pref = env.db.get(NotificationPref, alice)
+    assert notifications.collect_telegram_links(env.db) == [boss]
+    pref = env.db.get(NotificationPref, boss)
     assert pref.telegram_chat_id == "777" and pref.telegram_link_code is None
     assert notifications.load_config()["telegram"]["update_offset"] == 43
     assert calls == ["getUpdates", "sendMessage"]
@@ -215,11 +213,11 @@ def test_a_new_network_is_reported_and_the_first_sign_in_is_not(env, monkeypatch
             self.target()
 
     monkeypatch.setattr(notifications.threading, "Thread", Now)
-    uid = env.people["alice"].id
-    notifications.record_login(uid, "alice", "203.0.113.9")     # first ever: silent
-    notifications.record_login(uid, "alice", "203.0.113.77")    # same /24: silent
-    notifications.record_login(uid, "alice", "198.51.100.5")    # new network: reported
-    notifications.record_login(uid, "alice", "198.51.100.5")    # seen: silent
+    uid = env.people["boss"].id
+    notifications.record_login(uid, "boss", "203.0.113.9")     # first ever: silent
+    notifications.record_login(uid, "boss", "203.0.113.77")    # same /24: silent
+    notifications.record_login(uid, "boss", "198.51.100.5")    # new network: reported
+    notifications.record_login(uid, "boss", "198.51.100.5")    # seen: silent
     assert heard == [("login_new_ip", "198.51.100.5")]
     assert env.db.query(LoginSource).filter(LoginSource.user_id == uid).count() == 3
 
@@ -249,7 +247,7 @@ def test_the_disk_warns_once_until_it_has_dropped_back(env, monkeypatch):
     assert heard == [93, 91]
 
 
-def test_expiring_certificates_go_to_admins_and_to_each_owner(env, monkeypatch):
+def test_expiring_certificates_go_to_admins_only(env, monkeypatch):
     from datetime import datetime
 
     alice, bob = env.people["alice"], env.people["bob"]
@@ -264,8 +262,7 @@ def test_expiring_certificates_go_to_admins_and_to_each_owner(env, monkeypatch):
     heard = []
     monkeypatch.setattr(notifications, "notify", lambda event, params, **kw: heard.append((event, [s["domain"] for s in params["sites"]], kw.get("user_ids"))))
     notify_watch.check_certificates(7)
-    assert heard[0] == ("ssl_expiring_admin", ["a.test", "b.test"], None)
-    assert sorted(heard[1:]) == sorted([("ssl_expiring", ["a.test"], [alice.id]), ("ssl_expiring", ["b.test"], [bob.id])])
+    assert heard == [("ssl_expiring_admin", ["a.test", "b.test"], None)], "and not to the owners"
 
 
 def test_the_watcher_stays_quiet_until_it_is_wanted(env):
@@ -276,15 +273,18 @@ def test_the_watcher_stays_quiet_until_it_is_wanted(env):
 
 # --- the API ---------------------------------------------------------------------------
 
-def test_every_route_needs_the_addon_and_the_server_settings_need_an_admin():
-    api = (PROJECT_ROOT / "backend" / "app" / "api" / "notifications.py").read_text(encoding="utf-8")
-    assert "dependencies=[Depends(require_notifications)]" in api
-    for route in ('@router.get("/settings")', '@router.put("/settings")', '@router.get("/log")',
-                  '@router.get("/telegram/chats")'):
-        body = api.split(route)[1].split("\n@router")[0]
-        assert "ensure_role(current_user.role, Role.admin)" in body, route
-    test_route = api.split('@router.post("/test")')[1].split("\n@router")[0]
-    assert 'if payload.channel in ("email", "telegram_admin"):\n        ensure_role(current_user.role, Role.admin)' in test_route
+def test_every_route_needs_the_addon_and_an_administrator():
+    """One router-wide dependency, so a route added later cannot forget it."""
+    from fastapi import HTTPException
+
+    from app.api import notifications as api
+
+    source = (PROJECT_ROOT / "backend" / "app" / "api" / "notifications.py").read_text(encoding="utf-8")
+    assert "dependencies=[Depends(require_notifications), Depends(require_admin)]" in source
+    with pytest.raises(HTTPException) as refused:
+        api.require_admin(SimpleNamespace(role="end_user"))
+    assert refused.value.status_code == 403
+    api.require_admin(SimpleNamespace(role="admin"))
 
 
 # --- where the events come from ---------------------------------------------------------
@@ -296,9 +296,10 @@ def test_the_events_are_raised_where_they_happen():
     assert '"kind": "2fa_off"' in auth
     users = (app_dir / "api" / "users.py").read_text(encoding="utf-8")
     assert '"kind": "password"' in users and '"kind": "2fa_reset"' in users
-    assert users.count('notifications.notify_in_background("account_status"') == 2
+    assert "if not is_admin_role(user.role):\n        return\n    notifications.record_login(" in auth, \
+        "a customer's sign-ins are not even recorded"
     prov = (app_dir / "services" / "provisioning.py").read_text(encoding="utf-8")
-    assert prov.count('notify_in_background("account_status"') == 2
+    assert "account_status" not in users and "account_status" not in prov, "customers are told nothing"
     backup = (app_dir / "services" / "backup_scheduler.py").read_text(encoding="utf-8")
     assert backup.count("_notify_failure(schedule,") == 2
     scans = (app_dir / "services" / "panel_settings.py").read_text(encoding="utf-8")
@@ -347,17 +348,19 @@ def test_the_admin_chat_stays_quiet_when_every_admin_muted_the_event(env):
 
 def test_own_events_go_to_ones_own_chat_and_an_admin_falls_back_to_the_admin_chat(env):
     _telegram_on()
-    alice = env.people["alice"]
-    notifications.prefs_for(env.db, alice.id).telegram_chat_id = "777"
+    second = User(username="boss2", email="boss2@example.test", role="admin", is_active=True,
+                  hashed_password=hash_password("PasswordLongEnough1"))
+    env.db.add(second)
     env.db.commit()
-    notifications.notify("login_new_ip", {"username": "alice", "ip": "198.51.100.5", "when": "now"}, user_ids=[alice.id])
-    notifications.notify("login_new_ip", {"username": "boss", "ip": "198.51.100.5", "when": "now"},
-                         user_ids=[env.people["boss"].id])
-    notifications.notify("login_new_ip", {"username": "bob", "ip": "198.51.100.5", "when": "now"},
-                         user_ids=[env.people["bob"].id])
+    notifications.prefs_for(env.db, second.id).telegram_chat_id = "777"
+    notifications.prefs_for(env.db, env.people["alice"].id).telegram_chat_id = "888"
+    env.db.commit()
+    for user in (second, env.people["boss"], env.people["alice"]):
+        notifications.notify("login_new_ip", {"username": user.username, "ip": "198.51.100.5", "when": "now"},
+                             user_ids=[user.id])
     chats = [s[1] for s in env.sent if s[0] == "telegram"]
-    # Alice to her chat, the administrator (no chat of his own) to the admin
-    # chat, Bob - a customer with no chat - nowhere on Telegram.
+    # The second administrator to their own chat, the first (no chat of their
+    # own) to the admin chat, Alice - a customer - nowhere, chat or not.
     assert chats == ["777", "-1001234567890"]
 
 
@@ -384,3 +387,10 @@ def test_the_bot_lists_who_wrote_to_it_without_using_up_the_messages(env, monkey
         {"id": "-100555", "type": "supergroup", "name": "BNIX ops"},
     ]
     assert notifications.load_config()["telegram"]["update_offset"] == 0, "the offset did not move"
+
+
+def test_the_page_and_its_menu_entry_are_for_administrators():
+    app = (PROJECT_ROOT / "frontend" / "src" / "App.jsx").read_text(encoding="utf-8")
+    assert "...(notificationsAddonInstalled && isAdmin ? [['notifications', 'Notifications', Bell]] : [])," in app
+    assert "if (page === 'notifications') return !isAdmin ? renderAdminOnly() :" in app
+    assert "quota_percent" not in app

@@ -124,10 +124,6 @@ def suspend_account(db: Session, account: ProvisioningAccount, reason: str = "")
     account.last_action = "suspend"
     account.last_message = reason
     db.commit()
-    from app.services import notifications
-
-    notifications.notify_in_background("account_status", {"suspended": True, "username": user.username},
-                                       user_ids=[user.id])
 
 
 def unsuspend_account(db: Session, account: ProvisioningAccount) -> None:
@@ -167,10 +163,6 @@ def unsuspend_account(db: Session, account: ProvisioningAccount) -> None:
     account.last_action = "unsuspend"
     account.last_message = ""
     db.commit()
-    from app.services import notifications
-
-    notifications.notify_in_background("account_status", {"suspended": False, "username": user.username},
-                                       user_ids=[user.id])
 
 
 def terminate_account(db: Session, account: ProvisioningAccount, backup: bool = False) -> list[str]:

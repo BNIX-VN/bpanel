@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user, get_current_user_optional
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.permissions import Role, ensure_role
+from app.core.permissions import Role, ensure_role, is_admin_role
 from app.core.security import create_access_token, hash_password, needs_rehash, verify_password
 from app.core.secrets import decrypt, encrypt
 from app.core.step_up import require_sensitive_action_step_up, verify_totp
@@ -81,10 +81,14 @@ def _note_sign_in(request: Request, user: User) -> None:
     """Tell the Notifications addon where this account just signed in from.
 
     Only real sign-ins: an administrator's "Login as" and the session
-    re-issued after a 2FA change are not the account holder arriving.
+    re-issued after a 2FA change are not the account holder arriving. And
+    only administrators: customers get no notifications, so there is nothing
+    to remember their addresses for.
     """
     from app.services import notifications
 
+    if not is_admin_role(user.role):
+        return
     notifications.record_login(user.id, user.username, _client_key(request),
                                request.headers.get("user-agent", ""))
 

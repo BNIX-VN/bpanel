@@ -441,11 +441,6 @@ def suspend_user(user_id: int, request: Request, db: Session = Depends(get_db), 
 
     db.commit()
     log_action(db, current_user.id, "suspend_user", user.username, request=request)
-    from app.services import notifications
-
-    notifications.notify_in_background("account_status", {
-        "suspended": True, "username": user.username,
-    }, user_ids=[user.id])
     return {"message": f"Suspended user {user.username}", "affected_websites": len(websites)}
 
 @router.post("/{user_id}/unsuspend")
@@ -488,11 +483,6 @@ def unsuspend_user(user_id: int, request: Request, db: Session = Depends(get_db)
 
     db.commit()
     log_action(db, current_user.id, "unsuspend_user", user.username, request=request)
-    from app.services import notifications
-
-    notifications.notify_in_background("account_status", {
-        "suspended": False, "username": user.username,
-    }, user_ids=[user.id])
     return {"message": f"Unsuspended user {user.username}", "affected_websites": len(websites)}
 
 

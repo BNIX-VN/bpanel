@@ -197,6 +197,20 @@ def test_a_settings_page_keeps_its_own_name_and_lights_up_settings():
     assert "<h1>{pageItem?.[1] ? t(pageItem[1])" in APP
 
 
+def test_panel_settings_is_four_tabs():
+    """Operator, 2026-09-27: "Phần panel setting: Chia làm 4 tab nhé". One
+    underlined row, like Backups and Panel users, one form showing at a time."""
+    page = APP.split("  function renderPanelSettings() {")[1].split("  function renderUsers() {")[0]
+    tabs = re.findall(r"\['([a-z]+)', '([^']+)', \w+\],", page.split("const tabs = [")[1].split("];")[0])
+    assert tabs == [("general", "General"), ("brand", "Brand assets"), ("account", "Admin account"), ("api", "API Tokens")]
+    assert 'className="segmented-control backup-tabs" role="tablist"' in page
+    for key, _label in tabs:
+        assert f"{{tabPanel('{key}', <>" in page, key
+    assert page.count('<section className="section') == 2, "the no-permission answer and the page: the tabs are not separate sections"
+    # The tokens used to be their own page; an old link still opens their tab.
+    assert "/^\\/api-tokens?\\/?$/i.test(window.location.pathname) ? 'api' : 'general'" in APP
+
+
 def test_sign_out_lives_in_the_account_menu():
     """The top bar is the page title and one account menu, as in OPanel."""
     assert 'className="user-menu-panel"' in APP

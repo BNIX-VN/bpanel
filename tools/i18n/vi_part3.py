@@ -219,7 +219,6 @@ PART3 = {
     "Panel SSL": "SSL của panel",
     "Panel release": "Bản phát hành panel",
     "Brand assets": "Nhận diện thương hiệu",
-    "Branding and hostname.": "Nhận diện và hostname.",
     "Upload logo": "Tải logo lên",
     "Upload favicon": "Tải favicon lên",
     "Favicon": "Favicon",

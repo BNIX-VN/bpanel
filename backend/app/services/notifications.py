@@ -3,8 +3,10 @@
 Everything here is a no-op until an administrator installs the addon. The
 server's own settings - the SMTP account, the Telegram bot, the thresholds and
 the language - live in a JSON file beside the panel's other settings, with the
-SMTP password and the bot token encrypted. What each person wants lives in
-their notification_prefs row.
+SMTP password and the bot token encrypted. What each administrator wants
+lives in their notification_prefs row. Only administrators receive anything
+(operator, 2026-09-27): an account that is not one is skipped wherever it is
+named.
 
 `notify()` is the one way anything is sent. It runs wherever the event happens:
 the API, the backup scheduler, the malware scheduler, the 5-minute watcher. It
@@ -55,7 +57,7 @@ DEFAULTS: dict = {
     "smtp": {"host": "", "port": 587, "security": "starttls", "username": "",
              "password_enc": "", "from_email": "", "from_name": "BPanel"},
     "telegram": {"bot_token_enc": "", "bot_username": "", "chat_id": "", "update_offset": 0},
-    "thresholds": {"disk_percent": 90, "ssl_days": 7, "quota_percent": 90},
+    "thresholds": {"disk_percent": 90, "ssl_days": 7},
 }
 
 
@@ -177,7 +179,7 @@ def save_config(changes: dict) -> dict:
         config["telegram"].update({"bot_token_enc": "", "bot_username": "", "chat_id": "", "update_offset": 0})
 
     thresholds = changes.get("thresholds") or {}
-    for key, low, high in (("disk_percent", 50, 99), ("ssl_days", 1, 60), ("quota_percent", 50, 100)):
+    for key, low, high in (("disk_percent", 50, 99), ("ssl_days", 1, 60)):
         if thresholds.get(key) is not None:
             value = int(thresholds[key])
             if not low <= value <= high:
@@ -305,10 +307,10 @@ def notify(event: str, params: dict, *, user_ids: list[int] | None = None, admin
     """Send one event to the people it concerns. Returns how many messages went.
 
     `admins=True` adds every active administrator; `user_ids` adds those
-    accounts, suspended ones included (a suspension notice is for them). A
-    person gets it on each channel that is set up on the server, turned on in
-    their settings and reachable (an email address, a linked chat), unless
-    they muted the event.
+    accounts when they are administrators - anybody else is skipped, because
+    customers get no notifications. An administrator gets it on each channel
+    that is set up on the server, turned on in their settings and reachable
+    (an email address, a chat), unless they muted the event.
 
     Telegram has one more destination: the server's admin chat (token + chat
     ID in the server settings). An event about the server goes there once,
@@ -338,14 +340,13 @@ def notify(event: str, params: dict, *, user_ids: list[int] | None = None, admin
                 people.update({u.id: u for u in _admins(db)})
             for uid in user_ids or []:
                 user = db.get(User, uid)
-                if user is not None:
+                if user is not None and is_admin_role(user.role):
                     people[user.id] = user
             for user in people.values():
                 pref = prefs_for(db, user.id)
                 if event in muted(pref):
                     continue
-                admin = is_admin_role(user.role)
-                if admin and about_server:
+                if about_server:
                     wanted_in_admin_chat = True
                 if dedupe_key and _recently_sent(db, user.id, dedupe_key, cooldown):
                     continue
@@ -356,7 +357,7 @@ def notify(event: str, params: dict, *, user_ids: list[int] | None = None, admin
                         sent += 1
                     except Exception as exc:  # noqa: BLE001 - recorded, never raised
                         _log(db, user.id, event, "email", "failed", title, f"{type(exc).__name__}: {exc}", dedupe_key)
-                chat = pref.telegram_chat_id or (server_chat if admin else "")
+                chat = pref.telegram_chat_id or server_chat
                 if about_server and server_chat:
                     chat = ""  # said once in the admin chat, below
                 if telegram_ready(config) and pref.telegram_enabled and chat:

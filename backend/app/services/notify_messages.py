@@ -1,11 +1,11 @@
 """What the Notifications addon can say, to whom, and in which words.
 
-Two audiences. An administrator hears about the server: a service that
-stopped, a disk filling up, the firewall off, a failed scheduled backup,
-malware, certificates about to expire, a panel update. Every account - an
-administrator's included - hears about itself: a sign-in from an address it
-has not used before, a password or two-factor change, a suspension, and the
-backups, malware, certificates and storage of its own websites.
+Only administrators hear anything: customers get no notifications
+(operator, 2026-09-27). An administrator hears about the server - a service
+that stopped, a disk filling up, the firewall off, a failed scheduled backup,
+malware, certificates about to expire, a panel update - and about their own
+account: a sign-in from an address it has not used before, a password or
+two-factor change.
 
 Each message exists in Vietnamese and English; the panel-wide setting picks
 one. A message is a title and a few lines, plain text, so the same words work
@@ -35,21 +35,11 @@ EVENTS: dict[str, dict] = {
                             "hint": "Any scan on the server that finds something."},
     "ssl_expiring_admin": {"audience": ADMIN, "label": "Certificates about to expire",
                            "hint": "Every website's certificate, checked once a day."},
-    # --- an account, to its own holder ----------------------------------------
+    # --- an administrator's own account ----------------------------------------
     "login_new_ip": {"audience": USER, "label": "Sign-in from a new address",
                      "hint": "Your account signed in from an IP it has not used before."},
     "security_change": {"audience": USER, "label": "Password or two-factor changed",
                         "hint": "So a change you did not make does not go unnoticed."},
-    "account_status": {"audience": USER, "label": "Account suspended or restored",
-                       "hint": "Your websites stop, or start again."},
-    "backup_failed": {"audience": USER, "label": "Your scheduled backup failed",
-                      "hint": "The backup of your account did not complete."},
-    "malware_found": {"audience": USER, "label": "Malware in your websites",
-                      "hint": "A scan found suspicious files in a website you own."},
-    "ssl_expiring": {"audience": USER, "label": "Your certificates about to expire",
-                     "hint": "A website of yours whose SSL certificate runs out soon."},
-    "quota_high": {"audience": USER, "label": "Your storage is nearly full",
-                   "hint": "Checked once a day against your plan."},
 }
 
 LANGUAGES = ("vi", "en")
@@ -175,34 +165,9 @@ def _security_change(p: dict, lang: str) -> tuple[str, list[str]]:
     vi, en = _SECURITY_KINDS.get(p.get("kind"), _SECURITY_KINDS["password"])
     if lang == "vi":
         return (vi, [f"Tài khoản {p['username']}, lúc {p['when']}.",
-                     "Nếu không phải bạn làm, hãy liên hệ nhà cung cấp hosting ngay."])
+                     "Nếu không phải bạn làm, hãy đổi mật khẩu ngay và kiểm tra lại các tài khoản quản trị."])
     return (en, [f"Account {p['username']}, at {p['when']}.",
-                 "If this was not you, contact your hosting provider now."])
-
-
-def _account_status(p: dict, lang: str) -> tuple[str, list[str]]:
-    suspended = p.get("suspended")
-    if lang == "vi":
-        return (("Tài khoản đã bị tạm khoá" if suspended else "Tài khoản đã được mở lại"),
-                [f"Tài khoản {p['username']}: "
-                 + ("các website và SFTP tạm ngừng hoạt động." if suspended else "các website và SFTP hoạt động trở lại."),
-                 *( ["Liên hệ nhà cung cấp hosting để biết lý do."] if suspended else [] )])
-    return (("Your account was suspended" if suspended else "Your account was restored"),
-            [f"Account {p['username']}: "
-             + ("its websites and SFTP are stopped." if suspended else "its websites and SFTP are running again."),
-             *( ["Contact your hosting provider for the reason."] if suspended else [] )])
-
-
-def _quota_high(p: dict, lang: str) -> tuple[str, list[str]]:
-    if lang == "vi":
-        return (f"Dung lượng đã dùng {p['percent']}%", [
-            f"Tài khoản {p['username']} đã dùng {p['used']} trên {p['limit']} của gói.",
-            "Khi đầy, việc tải file lên và backup sẽ bị từ chối. Hãy dọn bớt hoặc nâng gói.",
-        ])
-    return (f"Storage {p['percent']}% used", [
-        f"Account {p['username']} uses {p['used']} of the plan's {p['limit']}.",
-        "When it is full, uploads and backups are refused. Clean up or upgrade the plan.",
-    ])
+                 "If this was not you, change the password now and check the administrator accounts."])
 
 
 _RENDER: dict[str, Callable[[dict, str], tuple[str, list[str]]]] = {
@@ -211,15 +176,10 @@ _RENDER: dict[str, Callable[[dict, str], tuple[str, list[str]]]] = {
     "firewall_off": _firewall_off,
     "update_available": _update_available,
     "backup_failed_admin": _backup_failed,
-    "backup_failed": _backup_failed,
     "malware_found_admin": _malware_found,
-    "malware_found": _malware_found,
     "ssl_expiring_admin": _ssl_expiring,
-    "ssl_expiring": _ssl_expiring,
     "login_new_ip": _login_new_ip,
     "security_change": _security_change,
-    "account_status": _account_status,
-    "quota_high": _quota_high,
 }
 
 
@@ -231,5 +191,6 @@ def render(event: str, params: dict, lang: str = "vi") -> tuple[str, str]:
 
 
 def events_for(role_is_admin: bool) -> list[str]:
-    """The events a person can receive: their own, plus the server's for admins."""
-    return [key for key, entry in EVENTS.items() if entry["audience"] == USER or role_is_admin]
+    """The events a person can receive: all of them for an administrator,
+    none for anybody else."""
+    return list(EVENTS) if role_is_admin else []

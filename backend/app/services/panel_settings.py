@@ -1041,39 +1041,15 @@ def _domain_from_path(path: str) -> str:
 
 
 def _notify_threats(job_id: str, threats: list[dict]) -> None:
-    """Administrators hear about every find; a website's owner about theirs.
-
-    The same dedupe key for both, so an administrator who also owns the site
-    gets one message, not two.
-    """
+    """Administrators hear about every find (customers get no notifications)."""
     if not threats:
         return
     try:
-        from app.core.database import SessionLocal
-        from app.models.entities import Website
         from app.services import notifications
 
-        if not notifications.is_enabled():
-            return
-        key = f"malware:{job_id}"
-        brief = [{"path": t.get("path", ""), "signature": t.get("signature", ""),
-                  "domain": t.get("domain") or _domain_from_path(t.get("path", ""))} for t in threats]
-        notifications.notify("malware_found_admin", {"threats": brief, "count": len(brief)}, admins=True, dedupe_key=key)
-        domains = {t["domain"] for t in brief if t["domain"]}
-        if not domains:
-            return
-        db = SessionLocal()
-        try:
-            owners = {w.domain: w.owner_id for w in db.query(Website).filter(Website.domain.in_(domains)).all()}
-        finally:
-            db.close()
-        by_owner: dict[int, list[dict]] = {}
-        for threat in brief:
-            owner = owners.get(threat["domain"])
-            if owner:
-                by_owner.setdefault(owner, []).append(threat)
-        for owner, items in by_owner.items():
-            notifications.notify("malware_found", {"threats": items, "count": len(items)}, user_ids=[owner], dedupe_key=key)
+        brief = [{"path": t.get("path", ""), "signature": t.get("signature", "")} for t in threats]
+        notifications.notify("malware_found_admin", {"threats": brief, "count": len(brief)}, admins=True,
+                             dedupe_key=f"malware:{job_id}")
     except Exception:  # noqa: BLE001 - the scan's own record already holds the result
         pass
 
