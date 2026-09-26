@@ -1,0 +1,115 @@
+# Vietnamese, part 13: the Notifications addon (2026-09-27) - its page, the
+# events a person can choose, the addon's description and its API errors.
+
+PART13 = {
+    # The addon card
+    "Tells administrators and customers what needs their attention, by email and Telegram.":
+        "Báo cho quản trị viên và khách hàng những việc cần lưu ý, qua email và Telegram.",
+    "Administrators hear about the server: a service that stopped, a disk filling up, the firewall off, a failed backup, malware, certificates about to expire, a panel update.":
+        "Quản trị viên nhận tin về server: dịch vụ bị dừng, ổ đĩa sắp đầy, tường lửa tắt, backup lỗi, mã độc, chứng chỉ sắp hết hạn, có bản cập nhật panel.",
+    "Every account hears about itself: a sign-in from a new place, a password or two-factor change, a suspension, and its own backups, malware, certificates and storage.":
+        "Mỗi tài khoản nhận tin về chính mình: đăng nhập từ nơi mới, đổi mật khẩu hoặc đăng nhập hai lớp, bị tạm khoá, cùng backup, mã độc, chứng chỉ và dung lượng của mình.",
+    "Email goes through the SMTP server you set; Telegram through a bot you create with @BotFather. Each person picks their channels and mutes what they do not want.":
+        "Email gửi qua máy chủ SMTP bạn cấu hình; Telegram qua bot bạn tạo bằng @BotFather. Mỗi người tự chọn kênh và tắt những thông báo không muốn nhận.",
+    "Email needs an SMTP account (host, port, sender address). Mail sent straight from the server usually lands in spam.":
+        "Email cần một tài khoản SMTP (máy chủ, cổng, địa chỉ gửi). Thư gửi thẳng từ server thường rơi vào spam.",
+    "Turning the addon off stops every message and keeps the settings, each person's choices and the delivery log.":
+        "Tắt addon sẽ dừng mọi thông báo nhưng giữ nguyên cấu hình, lựa chọn của từng người và lịch sử gửi.",
+
+    # The events
+    "A service stopped or came back": "Dịch vụ bị dừng hoặc chạy lại",
+    "nginx, PHP-FPM, MariaDB, Redis or the panel itself, checked every 5 minutes.":
+        "nginx, PHP-FPM, MariaDB, Redis hoặc chính panel, kiểm tra mỗi 5 phút.",
+    "The disk is nearly full": "Ổ đĩa sắp đầy",
+    "Once when usage passes the threshold, again only after it has dropped back.":
+        "Báo một lần khi vượt ngưỡng, chỉ báo lại sau khi đã giảm xuống.",
+    "The firewall is off": "Tường lửa đang tắt",
+    "Switched off, or on but not filtering.": "Bị tắt, hoặc đang bật nhưng không lọc.",
+    "A panel update is available": "Có bản cập nhật panel",
+    "Once per new version.": "Một lần cho mỗi phiên bản mới.",
+    "A scheduled backup failed": "Backup theo lịch bị lỗi",
+    "Any schedule on the server, with the error.": "Bất kỳ lịch nào trên server, kèm nội dung lỗi.",
+    "Malware found": "Phát hiện mã độc",
+    "Any scan on the server that finds something.": "Mọi lần quét trên server tìm thấy file nghi nhiễm.",
+    "Certificates about to expire": "Chứng chỉ sắp hết hạn",
+    "Every website's certificate, checked once a day.": "Chứng chỉ của mọi website, kiểm tra mỗi ngày một lần.",
+    "Sign-in from a new address": "Đăng nhập từ địa chỉ mới",
+    "Your account signed in from an IP it has not used before.": "Tài khoản của bạn đăng nhập từ một IP chưa từng dùng.",
+    "Password or two-factor changed": "Đổi mật khẩu hoặc đăng nhập hai lớp",
+    "So a change you did not make does not go unnoticed.": "Để một thay đổi không phải do bạn làm không bị bỏ sót.",
+    "Account suspended or restored": "Tài khoản bị tạm khoá hoặc mở lại",
+    "Your websites stop, or start again.": "Các website của bạn ngừng hoạt động, hoặc chạy lại.",
+    "Your scheduled backup failed": "Backup theo lịch của bạn bị lỗi",
+    "The backup of your account did not complete.": "Backup tài khoản của bạn không hoàn tất.",
+    "Malware in your websites": "Mã độc trong website của bạn",
+    "A scan found suspicious files in a website you own.": "Một lần quét tìm thấy file nghi nhiễm trong website của bạn.",
+    "Your certificates about to expire": "Chứng chỉ của bạn sắp hết hạn",
+    "A website of yours whose SSL certificate runs out soon.": "Website của bạn có chứng chỉ SSL sắp hết hạn.",
+    "Your storage is nearly full": "Dung lượng của bạn sắp đầy",
+    "Checked once a day against your plan.": "Kiểm tra mỗi ngày một lần theo gói của bạn.",
+
+    # The page
+    "My notifications": "Thông báo của tôi",
+    "Where the panel reaches you, and about what.": "Panel gửi thông báo cho bạn qua đâu, và về việc gì.",
+    "Not set up": "Chưa cấu hình",
+    "Not connected": "Chưa kết nối",
+    "Sent to {email}, the address on your account.": "Gửi tới {email}, địa chỉ email của tài khoản.",
+    "Email is not set up on this server yet.": "Server chưa cấu hình gửi email.",
+    "Send me email": "Gửi email cho tôi",
+    "Telegram is not set up on this server yet.": "Server chưa cấu hình Telegram.",
+    "Send me Telegram messages": "Gửi tin Telegram cho tôi",
+    "Send a test": "Gửi thử",
+    "Disconnect": "Ngắt kết nối",
+    "Open the bot and press Start:": "Mở bot và bấm Start:",
+    "Or send the bot this message:": "Hoặc gửi cho bot tin nhắn này:",
+    "Then press Check. The code works for {n} minutes.": "Sau đó bấm Kiểm tra. Mã có hiệu lực trong {n} phút.",
+    "Connect Telegram": "Kết nối Telegram",
+    "About your account": "Về tài khoản của bạn",
+    "About the server": "Về server",
+    "Server channels": "Kênh gửi của server",
+    "What every notification on this server goes out through.": "Mọi thông báo trên server này được gửi qua đây.",
+    "Email (SMTP)": "Email (máy chủ SMTP)",
+    "SMTP server": "Máy chủ SMTP",
+    "Encryption": "Mã hoá",
+    "Saved - leave empty to keep it": "Đã lưu - để trống để giữ nguyên",
+    "Sender address": "Địa chỉ gửi",
+    "Sender name": "Tên người gửi",
+    "Send me a test email": "Gửi email thử cho tôi",
+    "Email settings saved.": "Đã lưu cấu hình email.",
+    "Telegram bot": "Bot Telegram",
+    "In Telegram, open @BotFather, send /newbot, and paste the token it gives you here.":
+        "Trong Telegram, mở @BotFather, gửi /newbot, rồi dán token nhận được vào đây.",
+    "Bot token": "Token của bot",
+    "Saved - paste a new one to replace it": "Đã lưu - dán token mới để thay",
+    "Telegram bot saved.": "Đã lưu bot Telegram.",
+    "Remove the bot": "Gỡ bot",
+    "Telegram bot removed.": "Đã gỡ bot Telegram.",
+    "When to warn": "Ngưỡng cảnh báo",
+    "Disk usage (%)": "Ổ đĩa đã dùng (%)",
+    "Certificate expiry (days)": "Chứng chỉ còn hạn (ngày)",
+    "Plan storage used (%)": "Dung lượng gói đã dùng (%)",
+    "Language of the messages": "Ngôn ngữ của thông báo",
+    "Saved.": "Đã lưu.",
+    "Saving...": "Đang lưu...",
+    "Sending...": "Đang gửi...",
+    "Loading...": "Đang tải...",
+    "Delivery log": "Lịch sử gửi",
+    "The last 100 messages sent, and the ones that failed.": "100 thông báo gần nhất đã gửi, và những lần gửi lỗi.",
+    "Nothing sent yet.": "Chưa gửi thông báo nào.",
+    "Sent": "Đã gửi",
+    "Telegram connected.": "Đã kết nối Telegram.",
+    "Telegram disconnected.": "Đã ngắt kết nối Telegram.",
+    "Test sent to {target}.": "Đã gửi thử tới {target}.",
+    "The bot has not received your /start message yet. Send it, then press Check again.":
+        "Bot chưa nhận được tin nhắn /start của bạn. Hãy gửi rồi bấm Kiểm tra lại.",
+
+    # API errors a person can meet on this page
+    "No Telegram bot is set up on this server yet": "Server chưa cấu hình bot Telegram",
+    "Set the SMTP server and sender address first": "Hãy nhập máy chủ SMTP và địa chỉ gửi trước",
+    "Your account has no email address": "Tài khoản của bạn chưa có địa chỉ email",
+    "Connect your Telegram first": "Hãy kết nối Telegram trước",
+    "Set the Telegram bot token first": "Hãy nhập token bot Telegram trước",
+    "That does not look like a bot token from @BotFather": "Đây không giống token bot do @BotFather cấp",
+    "The sender address is not an email address": "Địa chỉ gửi không phải là địa chỉ email",
+    "Open Notifications to set up the SMTP server or a Telegram bot.": "Mở trang Thông báo để cấu hình máy chủ SMTP hoặc bot Telegram.",
+}

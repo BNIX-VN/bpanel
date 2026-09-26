@@ -77,6 +77,18 @@ def _client_key(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def _note_sign_in(request: Request, user: User) -> None:
+    """Tell the Notifications addon where this account just signed in from.
+
+    Only real sign-ins: an administrator's "Login as" and the session
+    re-issued after a 2FA change are not the account holder arriving.
+    """
+    from app.services import notifications
+
+    notifications.record_login(user.id, user.username, _client_key(request),
+                               request.headers.get("user-agent", ""))
+
+
 def _username_key(username: str) -> str:
     name = (username or "").strip().lower()
     return f"user:{name}" if name else "user:_unknown"
@@ -621,6 +633,7 @@ def login(
     remember_me = remember.strip().lower() in {"1", "true", "on", "yes"}
     lifetime = settings.remember_me_expire_minutes if remember_me else None
     token = _issue_login_session(response, request, user, lifetime_minutes=lifetime)
+    _note_sign_in(request, user)
 
     # Bearer token still returned for backward compatibility with CLI tools or
     # mobile clients that cannot set cookies. Browser clients should ignore it
@@ -643,6 +656,7 @@ def sso_login(token: str, request: Request, db: Session = Depends(get_db)):
 
     response = RedirectResponse(url="/", status_code=302)
     _issue_login_session(response, request, user)
+    _note_sign_in(request, user)
     log_action(db, None, "auth.sso", user.username, detail="provisioning", request=request)
     return response
 
@@ -838,6 +852,11 @@ def disable_two_factor(
     db.commit()
     db.refresh(current_user)
     _issue_login_session(response, request, current_user)
+    from app.services import notifications
+
+    notifications.notify_in_background("security_change", {
+        "kind": "2fa_off", "username": current_user.username, "when": notifications.now_text(),
+    }, user_ids=[current_user.id])
     return TwoFactorStatus(enabled=False)
 
 

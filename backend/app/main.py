@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import addons as addons_api, auth, dashboard, databases, fail2ban as fail2ban_api, firewall, maintenance, malware, mcp as mcp_api, packages, panel_settings as panel_settings_api, provisioning, services, sftp_accounts as sftp_accounts_api, site_apps as site_apps_api, terminal, updates, users, waf, websites
+from app.api import addons as addons_api, auth, dashboard, databases, fail2ban as fail2ban_api, firewall, maintenance, malware, mcp as mcp_api, notifications as notifications_api, packages, panel_settings as panel_settings_api, provisioning, services, sftp_accounts as sftp_accounts_api, site_apps as site_apps_api, terminal, updates, users, waf, websites
 from app.core.config import settings
 from app.core.database import run_migrations
 from app.core.version import APP_VERSION
@@ -146,6 +146,7 @@ app.include_router(provisioning.router, prefix="/api")
 app.include_router(addons_api.router, prefix="/api")
 app.include_router(mcp_api.router, prefix="/api")
 app.include_router(dashboard.router, prefix="/api")
+app.include_router(notifications_api.router, prefix="/api")
 # Registered whether or not the Application addon is installed: the routers
 # themselves answer 409 when it is not, which tells the panel why a section is
 # missing instead of leaving it looking broken.

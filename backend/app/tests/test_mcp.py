@@ -1174,7 +1174,8 @@ def test_every_addon_has_a_way_in_from_the_sidebar():
     for slug in sorted(addons.CATALOGUE):
         way_in = {"application": "appsFeatureEnabled ? [['applications',",
                   "fail2ban": "['firewall', 'Firewall', BrickWall]",
-                  "mcp": "mcpAddonInstalled || isAdmin ? [['mcp',"}.get(slug)
+                  "mcp": "mcpAddonInstalled || isAdmin ? [['mcp',",
+                  "notifications": "notificationsAddonInstalled ? [['notifications',"}.get(slug)
         assert way_in, f"addon {slug} has no sidebar entry named in this test"
         assert way_in in sidebar, f"addon {slug} is installable but has no way in from the sidebar"
 

@@ -1012,6 +1012,46 @@ Persistent=true
 WantedBy=timers.target
 SERVICE
 
+  # The Notifications addon's watcher. It exits at once while the addon is
+  # off, so installing it everywhere costs one short Python start every five
+  # minutes and nothing else.
+  cat >/etc/systemd/system/bpanel-notify.service <<SERVICE
+[Unit]
+Description=BPanel notifications watcher (services, disk, firewall, certificates)
+After=network.target
+
+[Service]
+Type=oneshot
+TimeoutStartSec=15min
+User=bpanel
+Group=bpanel
+SupplementaryGroups=www-data bpanel-sites
+WorkingDirectory=${APP_DIR}/backend
+EnvironmentFile=${APP_DIR}/backend/.env
+Environment=HOME=${APP_DIR}
+Environment=BPANEL_USE_HELPER=true
+ExecStart=${APP_DIR}/backend/.venv/bin/python -m app.services.notify_watch
+NoNewPrivileges=false
+ProtectSystem=false
+ProtectHome=false
+ReadWritePaths=${APP_DIR} /var/lib/bpanel /tmp
+PrivateTmp=true
+SERVICE
+
+  cat >/etc/systemd/system/bpanel-notify.timer <<'SERVICE'
+[Unit]
+Description=Run the BPanel notifications watcher every 5 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+SERVICE
+
   # bpanel-helper refuses to run unless SUDO_USER names the panel account, so
   # this unit sets it. The sibling boot units (firewall, blocklist) do the same:
   # the helper then runs as root here with no real sudo in front of it.
@@ -1544,6 +1584,7 @@ else
 fi
 systemctl enable --now bpanel-backup-scheduler.timer >/dev/null 2>&1 || true
 systemctl enable --now bpanel-malware-scheduler.timer >/dev/null 2>&1 || true
+systemctl enable --now bpanel-notify.timer >/dev/null 2>&1 || true
 
 SITE_REFRESH_INPUTS=(
   "$SOURCE_DIR/installer/files/bpanel-helper.sh"

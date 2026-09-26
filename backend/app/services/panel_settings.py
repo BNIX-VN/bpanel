@@ -1006,6 +1006,7 @@ def _run_server_scan_job(job_id: str) -> None:
             finished_at=_now_iso(),
         )
         _append_malware_log(job_id, "Scan finished")
+        _notify_threats(job_id, progress.threats)
     except Exception as exc:  # noqa: BLE001 - a failed scan is reported, not raised
         stop.set()
         _update_malware_job(
@@ -1037,6 +1038,44 @@ _DOMAIN_IN_PATH = re.compile(r"^/home/[^/]+/([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])
 def _domain_from_path(path: str) -> str:
     m = _DOMAIN_IN_PATH.match(path or "")
     return m.group(1) if m else ""
+
+
+def _notify_threats(job_id: str, threats: list[dict]) -> None:
+    """Administrators hear about every find; a website's owner about theirs.
+
+    The same dedupe key for both, so an administrator who also owns the site
+    gets one message, not two.
+    """
+    if not threats:
+        return
+    try:
+        from app.core.database import SessionLocal
+        from app.models.entities import Website
+        from app.services import notifications
+
+        if not notifications.is_enabled():
+            return
+        key = f"malware:{job_id}"
+        brief = [{"path": t.get("path", ""), "signature": t.get("signature", ""),
+                  "domain": t.get("domain") or _domain_from_path(t.get("path", ""))} for t in threats]
+        notifications.notify("malware_found_admin", {"threats": brief, "count": len(brief)}, admins=True, dedupe_key=key)
+        domains = {t["domain"] for t in brief if t["domain"]}
+        if not domains:
+            return
+        db = SessionLocal()
+        try:
+            owners = {w.domain: w.owner_id for w in db.query(Website).filter(Website.domain.in_(domains)).all()}
+        finally:
+            db.close()
+        by_owner: dict[int, list[dict]] = {}
+        for threat in brief:
+            owner = owners.get(threat["domain"])
+            if owner:
+                by_owner.setdefault(owner, []).append(threat)
+        for owner, items in by_owner.items():
+            notifications.notify("malware_found", {"threats": items, "count": len(items)}, user_ids=[owner], dedupe_key=key)
+    except Exception:  # noqa: BLE001 - the scan's own record already holds the result
+        pass
 
 
 # What the job says at each stage of an LMD scan. Fixed sentences, so the
@@ -1114,6 +1153,7 @@ def _run_maldet_job(job_id: str, target: str, *, recent_days: int | None = None)
             finished_at=_now_iso(),
         )
         _append_malware_log(job_id, "maldet scan finished")
+        _notify_threats(job_id, threats)
     except Exception as exc:  # noqa: BLE001 - a failed scan is reported, not raised
         _update_malware_job(
             job_id, status="error", message="Scan failed", error=str(exc), finished_at=_now_iso(),
@@ -1249,6 +1289,7 @@ def _run_scan_job(job_id: str, targets: list[dict]) -> None:
             finished_at=_now_iso(),
         )
         _append_malware_log(job_id, "Scan finished")
+        _notify_threats(job_id, threats)
     except Exception as exc:  # noqa: BLE001 - scan jobs should report errors, not crash the API
         _update_malware_job(
             job_id,
