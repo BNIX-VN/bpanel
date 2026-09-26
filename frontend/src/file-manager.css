@@ -892,7 +892,7 @@ button.file-mode:disabled {
 
 .chmod-presets .mini {
   display: inline-flex;
-  align-items: baseline;
+  align-items: center;
   gap: 5px;
   font-family: var(--font-mono);
   font-weight: 700;
