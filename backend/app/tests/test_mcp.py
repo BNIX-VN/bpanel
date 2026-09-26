@@ -1102,10 +1102,11 @@ def test_the_page_exists_and_is_routed():
     assert "if (page === 'mcp')" in APP_JSX
 
 
-def test_a_customer_only_sees_the_menu_once_an_admin_turns_it_on():
-    """An admin always sees it, so there is somewhere to go and read why it is
-    off. A customer seeing a menu item that answers 404 is worse than no item."""
-    assert "mcpAddonInstalled || isAdmin ? [['mcp', 'AI assistants', Bot]] : []" in APP_JSX
+def test_nobody_sees_the_menu_until_the_addon_is_on():
+    """An addon shows in the sidebar only once it is on - for administrators
+    too, who reach a switched-off addon from the Addons page (operator,
+    2026-09-27)."""
+    assert "...(mcpAddonInstalled ? [['mcp', 'AI assistants', Bot]] : [])," in APP_JSX
 
 
 def test_the_page_says_a_self_signed_certificate_will_not_work():
@@ -1151,9 +1152,9 @@ def test_the_page_is_in_the_sidebar_and_the_sidebar_is_not_folded():
     was collapsed by default, and the operator could not find it - reported
     from a real panel on .88 where the code was deployed and working.
 
-    The dashboard carried a tile for every page to make up for that. The
-    sidebar now shows its three groups open, and the dashboard shows state
-    instead (operator, 2026-09-25), so the sidebar is the one map.
+    The sidebar now holds the everyday pages and the addons that are on, and
+    everything else sits on the Settings page - a page one click away, not a
+    submenu that can be left folded (operator, 2026-09-27).
     """
     sidebar = APP_JSX.split("const navSections = [")[1].split("].filter(section")[0]
     assert "['mcp', 'AI assistants', Bot]" in sidebar
@@ -1166,15 +1167,18 @@ def test_every_addon_has_a_way_in_from_the_sidebar():
     Read from the backend catalogue rather than a list written here, so an
     addon added later fails this until it has an entry. fail2ban has no page
     of its own - its ban list is a section of the Firewall page - so its way
-    in is the Firewall entry.
+    in is Settings, then Firewall.
     """
     from app.services import addons
 
     sidebar = APP_JSX.split("const navSections = [")[1].split("].filter(section")[0]
+    sidebar += APP_JSX.split("const settingsGroups = [")[1].split("const settingsItems = ")[0]
     for slug in sorted(addons.CATALOGUE):
         way_in = {"application": "appsFeatureEnabled ? [['applications',",
-                  "fail2ban": "['firewall', 'Firewall', BrickWall]",
-                  "mcp": "mcpAddonInstalled || isAdmin ? [['mcp',"}.get(slug)
+                  "fail2ban": "isAdmin && ['firewall', 'Firewall', BrickWall,",
+                  "mcp": "mcpAddonInstalled ? [['mcp',",
+                  # Administrators only (operator, 2026-09-27).
+                  "notifications": "notificationsAddonInstalled && isAdmin ? [['notifications',"}.get(slug)
         assert way_in, f"addon {slug} has no sidebar entry named in this test"
         assert way_in in sidebar, f"addon {slug} is installable but has no way in from the sidebar"
 

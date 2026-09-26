@@ -137,6 +137,7 @@ def run_one(db, schedule: BackupSchedule, now: datetime | None = None) -> bool:
         schedule.last_status = "error"
         schedule.last_message = "No users selected"
         db.commit()
+        _notify_failure(schedule, ["No users selected"], now)
         return False
 
     messages = []
@@ -157,7 +158,20 @@ def run_one(db, schedule: BackupSchedule, now: datetime | None = None) -> bool:
     )
     schedule.last_run_at = now
     db.commit()
+    if not ok:
+        _notify_failure(schedule, errors, now)
     return ok
+
+
+def _notify_failure(schedule: BackupSchedule, errors: list[str], when: datetime) -> None:
+    """Administrators hear about every failure (customers get no notifications)."""
+    try:
+        from app.services import notifications
+
+        notifications.notify("backup_failed_admin", {"when": when.strftime("%d/%m/%Y %H:%M"), "errors": errors},
+                             admins=True, dedupe_key=f"backup:{schedule.id}:{when:%Y%m%d%H%M}")
+    except Exception:  # noqa: BLE001 - the schedule's own record already says it failed
+        pass
 
 
 def run_due_schedules(now: datetime | None = None) -> int:

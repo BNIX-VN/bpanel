@@ -774,6 +774,14 @@ harden_existing_panel_users() {
         setfacl -Rb "$site_dir" 2>/dev/null || true
         find "$site_dir" -type d -exec setfacl -k {} + 2>/dev/null || true
       fi
+      # The modes are the owner's: the file manager lets them make a script
+      # 755, an upload folder 777 or a secret 600. This sweep once reset every
+      # file of every site to 644 on each update that touched this script,
+      # undoing those choices on customer servers (operator, 2026-09-27). It
+      # only exists to move a site off the pre-v1.0.106 layout - folders 2750,
+      # files 0640 - so it runs on a site still on that layout, whose own
+      # folder is 2750, and never again once the folder is 755.
+      [[ "$(stat -c '%a' "$site_dir" 2>/dev/null)" == "2750" ]] || continue
       find "$site_dir" -type d -exec chmod 755 {} + 2>/dev/null || true
       find "$site_dir" -type d -exec chmod a-s {} + 2>/dev/null || true
       find "$site_dir" -type d -exec chmod -t {} + 2>/dev/null || true
@@ -824,11 +832,11 @@ install_panel_runtime() {
   fi
   usermod -aG bpanel-sites bpanel 2>/dev/null || true
   usermod -aG bpanel-sites www-data 2>/dev/null || true
-  # A recursive chown + four chmod sweeps over every file of every site. It
-  # retrofits old installs to the current permission policy; once that policy
-  # (which lives in this script) is applied it does not drift, so re-run it
-  # only when the script itself changed. The panel sets permissions correctly
-  # on every site it creates in between.
+  # A recursive chown and ACL clean-up over every file of every site, plus the
+  # one-time move of pre-v1.0.106 sites to 755/644. It retrofits old installs
+  # to the current ownership policy; once that policy (which lives in this
+  # script) is applied it does not drift, so re-run it only when the script
+  # itself changed. It never touches the modes of a site already on 755/644.
   if step_inputs_changed user-hardening "${BPANEL_UPDATE_ORIGINAL_SCRIPT:-$SOURCE_DIR/installer/update.sh}"; then
     harden_existing_panel_users
     step_mark_done user-hardening "${BPANEL_UPDATE_ORIGINAL_SCRIPT:-$SOURCE_DIR/installer/update.sh}"
@@ -1006,6 +1014,46 @@ Description=Ask every quarter of an hour whether the weekly malware scan is due
 OnBootSec=5min
 OnUnitActiveSec=15min
 AccuracySec=1min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+SERVICE
+
+  # The Notifications addon's watcher. It exits at once while the addon is
+  # off, so installing it everywhere costs one short Python start every five
+  # minutes and nothing else.
+  cat >/etc/systemd/system/bpanel-notify.service <<SERVICE
+[Unit]
+Description=BPanel notifications watcher (services, disk, firewall, certificates)
+After=network.target
+
+[Service]
+Type=oneshot
+TimeoutStartSec=15min
+User=bpanel
+Group=bpanel
+SupplementaryGroups=www-data bpanel-sites
+WorkingDirectory=${APP_DIR}/backend
+EnvironmentFile=${APP_DIR}/backend/.env
+Environment=HOME=${APP_DIR}
+Environment=BPANEL_USE_HELPER=true
+ExecStart=${APP_DIR}/backend/.venv/bin/python -m app.services.notify_watch
+NoNewPrivileges=false
+ProtectSystem=false
+ProtectHome=false
+ReadWritePaths=${APP_DIR} /var/lib/bpanel /tmp
+PrivateTmp=true
+SERVICE
+
+  cat >/etc/systemd/system/bpanel-notify.timer <<'SERVICE'
+[Unit]
+Description=Run the BPanel notifications watcher every 5 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+AccuracySec=30s
 Persistent=true
 
 [Install]
@@ -1544,6 +1592,7 @@ else
 fi
 systemctl enable --now bpanel-backup-scheduler.timer >/dev/null 2>&1 || true
 systemctl enable --now bpanel-malware-scheduler.timer >/dev/null 2>&1 || true
+systemctl enable --now bpanel-notify.timer >/dev/null 2>&1 || true
 
 SITE_REFRESH_INPUTS=(
   "$SOURCE_DIR/installer/files/bpanel-helper.sh"

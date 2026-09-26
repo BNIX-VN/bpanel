@@ -309,6 +309,11 @@ def update_user_password(user_id: int, payload: UserPasswordUpdate, request: Req
     user.token_version = (user.token_version or 0) + 1
     db.commit()
     log_action(db, current_user.id, "update_user_password", user.username, request=request)
+    from app.services import notifications
+
+    notifications.notify_in_background("security_change", {
+        "kind": "password", "username": user.username, "when": notifications.now_text(),
+    }, user_ids=[user.id])
     body = {"message": f"Changed password for user {user.username}"}
     if minted is not None:
         # This account's SFTP login was the panel password until a moment ago.
@@ -389,6 +394,11 @@ def reset_user_two_factor(user_id: int, request: Request, db: Session = Depends(
     user.token_version = (user.token_version or 0) + 1
     db.commit()
     log_action(db, current_user.id, "reset_user_2fa", user.username, request=request)
+    from app.services import notifications
+
+    notifications.notify_in_background("security_change", {
+        "kind": "2fa_reset", "username": user.username, "when": notifications.now_text(),
+    }, user_ids=[user.id])
     return {"message": f"Reset 2FA for user {user.username}"}
 
 @router.post("/{user_id}/suspend")

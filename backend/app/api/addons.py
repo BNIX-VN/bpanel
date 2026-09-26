@@ -84,7 +84,10 @@ def install_addon(slug: str, db: Session = Depends(get_db), current_user: User =
         "next_step": "Open the Application page to install Docker or the Node.js versions you need."
         if slug == addons.APPLICATION else (
             "SSH is protected now. Banned addresses are listed on the Firewall page."
-            if slug == addons.FAIL2BAN else ""
+            if slug == addons.FAIL2BAN else (
+                "Open Notifications to set up the SMTP server or a Telegram bot."
+                if slug == addons.NOTIFICATIONS else ""
+            )
         ),
     }
 

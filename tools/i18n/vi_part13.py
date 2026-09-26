@@ -1,0 +1,147 @@
+# Vietnamese, part 13: the Notifications addon (2026-09-27) - its page, the
+# events a person can choose, the addon's description and its API errors.
+
+PART13 = {
+    # The addon card
+    "Email needs an SMTP account (host, port, sender address). Mail sent straight from the server usually lands in spam.":
+        "Email cần một tài khoản SMTP (máy chủ, cổng, địa chỉ gửi). Thư gửi thẳng từ server thường rơi vào spam.",
+
+    # The events
+    "A service stopped or came back": "Dịch vụ bị dừng hoặc chạy lại",
+    "nginx, PHP-FPM, MariaDB, Redis or the panel itself, checked every 5 minutes.":
+        "nginx, PHP-FPM, MariaDB, Redis hoặc chính panel, kiểm tra mỗi 5 phút.",
+    "The disk is nearly full": "Ổ đĩa sắp đầy",
+    "Once when usage passes the threshold, again only after it has dropped back.":
+        "Báo một lần khi vượt ngưỡng, chỉ báo lại sau khi đã giảm xuống.",
+    "The firewall is off": "Tường lửa đang tắt",
+    "Switched off, or on but not filtering.": "Bị tắt, hoặc đang bật nhưng không lọc.",
+    "A panel update is available": "Có bản cập nhật panel",
+    "Once per new version.": "Một lần cho mỗi phiên bản mới.",
+    "A scheduled backup failed": "Backup theo lịch bị lỗi",
+    "Any schedule on the server, with the error.": "Bất kỳ lịch nào trên server, kèm nội dung lỗi.",
+    "Malware found": "Phát hiện mã độc",
+    "Any scan on the server that finds something.": "Mọi lần quét trên server tìm thấy file nghi nhiễm.",
+    "Certificates about to expire": "Chứng chỉ sắp hết hạn",
+    "Every website's certificate, checked once a day.": "Chứng chỉ của mọi website, kiểm tra mỗi ngày một lần.",
+    "Sign-in from a new address": "Đăng nhập từ địa chỉ mới",
+    "Your account signed in from an IP it has not used before.": "Tài khoản của bạn đăng nhập từ một IP chưa từng dùng.",
+    "Password or two-factor changed": "Đổi mật khẩu hoặc đăng nhập hai lớp",
+    "So a change you did not make does not go unnoticed.": "Để một thay đổi không phải do bạn làm không bị bỏ sót.",
+
+    # The page
+    "My notifications": "Thông báo của tôi",
+    "Where the panel reaches you, and about what.": "Panel gửi thông báo cho bạn qua đâu, và về việc gì.",
+    "Not set up": "Chưa cấu hình",
+    "Not connected": "Chưa kết nối",
+    "Sent to {email}, the address on your account.": "Gửi tới {email}, địa chỉ email của tài khoản.",
+    "Email is not set up on this server yet.": "Server chưa cấu hình gửi email.",
+    "Send me email": "Gửi email cho tôi",
+    "Telegram is not set up on this server yet.": "Server chưa cấu hình Telegram.",
+    "Send me Telegram messages": "Gửi tin Telegram cho tôi",
+    "Send a test": "Gửi thử",
+    "Disconnect": "Ngắt kết nối",
+    "Open the bot and press Start:": "Mở bot và bấm Start:",
+    "Or send the bot this message:": "Hoặc gửi cho bot tin nhắn này:",
+    "Then press Check. The code works for {n} minutes.": "Sau đó bấm Kiểm tra. Mã có hiệu lực trong {n} phút.",
+    "About your account": "Về tài khoản của bạn",
+    "About the server": "Về server",
+    "Server channels": "Kênh gửi của server",
+    "What every notification on this server goes out through.": "Mọi thông báo trên server này được gửi qua đây.",
+    "Email (SMTP)": "Email (máy chủ SMTP)",
+    "SMTP server": "Máy chủ SMTP",
+    "Encryption": "Mã hoá",
+    "Saved - leave empty to keep it": "Đã lưu - để trống để giữ nguyên",
+    "Sender address": "Địa chỉ gửi",
+    "Sender name": "Tên người gửi",
+    "Send me a test email": "Gửi email thử cho tôi",
+    "Email settings saved.": "Đã lưu cấu hình email.",
+    "Telegram bot": "Bot Telegram",
+    "Bot token": "Token của bot",
+    "Saved - paste a new one to replace it": "Đã lưu - dán token mới để thay",
+    "Telegram bot saved.": "Đã lưu bot Telegram.",
+    "Remove the bot": "Gỡ bot",
+    "Telegram bot removed.": "Đã gỡ bot Telegram.",
+    "When to warn": "Ngưỡng cảnh báo",
+    "Disk usage (%)": "Ổ đĩa đã dùng (%)",
+    "Certificate expiry (days)": "Chứng chỉ còn hạn (ngày)",
+    "Language of the messages": "Ngôn ngữ của thông báo",
+    "Saved.": "Đã lưu.",
+    "Saving...": "Đang lưu...",
+    "Sending...": "Đang gửi...",
+    "Loading...": "Đang tải...",
+    "Delivery log": "Lịch sử gửi",
+    "The last 100 messages sent, and the ones that failed.": "100 thông báo gần nhất đã gửi, và những lần gửi lỗi.",
+    "Nothing sent yet.": "Chưa gửi thông báo nào.",
+    "Sent": "Đã gửi",
+    "Telegram connected.": "Đã kết nối Telegram.",
+    "Telegram disconnected.": "Đã ngắt kết nối Telegram.",
+    "Test sent to {target}.": "Đã gửi thử tới {target}.",
+    "The bot has not received your /start message yet. Send it, then press Check again.":
+        "Bot chưa nhận được tin nhắn /start của bạn. Hãy gửi rồi bấm Kiểm tra lại.",
+
+    # API errors a person can meet on this page
+    "No Telegram bot is set up on this server yet": "Server chưa cấu hình bot Telegram",
+    "Set the SMTP server and sender address first": "Hãy nhập máy chủ SMTP và địa chỉ gửi trước",
+    "Your account has no email address": "Tài khoản của bạn chưa có địa chỉ email",
+    "Connect your Telegram first": "Hãy kết nối Telegram trước",
+    "Set the Telegram bot token first": "Hãy nhập token bot Telegram trước",
+    "That does not look like a bot token from @BotFather": "Đây không giống token bot do @BotFather cấp",
+    "The sender address is not an email address": "Địa chỉ gửi không phải là địa chỉ email",
+    "Open Notifications to set up the SMTP server or a Telegram bot.": "Mở trang Thông báo để cấu hình máy chủ SMTP hoặc bot Telegram.",
+
+    # Telegram: a token and a chat ID
+    "Create a bot with @BotFather (/newbot) and paste its token. Then send the bot any message - or add it to a group - press Find chat ID and pick the chat.":
+        "Tạo bot bằng @BotFather (/newbot) rồi dán token. Sau đó nhắn cho bot một tin bất kỳ - hoặc thêm bot vào group - bấm Tìm Chat ID và chọn chat.",
+    "Find chat ID": "Tìm Chat ID",
+    "No messages yet. Send the bot a message first, then press Find chat ID again.":
+        "Bot chưa nhận tin nhắn nào. Hãy nhắn cho bot trước, rồi bấm Tìm Chat ID lại.",
+    "Server events go to this chat once. An administrator with no chat of their own hears about their account here too.":
+        "Các sự kiện của server được gửi vào chat này một lần. Quản trị viên chưa có chat riêng cũng nhận tin về tài khoản của mình tại đây.",
+    "You hear in the admin chat ({chat}). Connect a chat of your own to hear there instead.":
+        "Bạn đang nhận tin ở chat quản trị ({chat}). Kết nối chat riêng nếu muốn nhận ở đó.",
+    "Your chat ID": "Chat ID của bạn",
+    "Find my chat ID for me": "Tự tìm Chat ID giúp tôi",
+    "A chat ID is a number (negative for a group) or a @channel name":
+        "Chat ID là một số (số âm nếu là group) hoặc tên kênh dạng @kenh",
+    "Set the bot token and the chat ID first": "Hãy nhập token bot và Chat ID trước",
+
+    # The Settings page: everything the sidebar does not hold
+    "Ports, IP rules, blocklists and Fail2ban": "Cổng, luật IP, blocklist và Fail2ban",
+    "Request filtering for each website": "Lọc request cho từng website",
+    "Scans, schedules and history": "Quét, lịch quét và lịch sử",
+    "Requests and blocks": "Request và các lần chặn",
+    "Password, two-factor sign-in and passkeys": "Mật khẩu, đăng nhập hai lớp và passkey",
+    "Start, stop and restart": "Bật, tắt và khởi động lại",
+    "Versions, limits and extensions": "Phiên bản, giới hạn và extension",
+    "Hostname, branding and API tokens": "Tên miền panel, thương hiệu và API token",
+    "Panel version": "Phiên bản panel",
+
+    # WAF: the server's custom rules, now that they apply
+    "Global custom rules": "Rule tuỳ chỉnh toàn cục",
+    "{n} rule(s)": "{n} rule",
+    "ModSecurity rules for every website with the WAF on. Rules an AI assistant added are marked # bpanel-mcp; delete a rule by deleting its lines.":
+        "Rule ModSecurity áp dụng cho mọi website đang bật WAF. Rule do trợ lý AI thêm có dòng # bpanel-mcp; muốn xoá rule nào thì xoá các dòng của rule đó.",
+    "Global WAF rules saved. They apply to every website with the WAF on.":
+        "Đã lưu rule WAF toàn cục. Rule áp dụng cho mọi website đang bật WAF.",
+
+    # Panel settings in four tabs
+    "Panel settings sections": "Các mục cài đặt panel",
+    "General": "Chung",
+    "Panel name, hostname and the server's addresses.": "Tên panel, tên miền panel và địa chỉ IP của server.",
+    "A new password needs the current one, and the authenticator code when two-factor sign-in is on.":
+        "Đổi mật khẩu cần nhập mật khẩu hiện tại, và mã xác thực nếu đang bật đăng nhập hai lớp.",
+
+    # Notifications: administrators only
+    "Tells administrators what needs their attention on the server, by email and Telegram.":
+        "Báo cho quản trị viên những việc cần lưu ý trên server, qua email và Telegram.",
+    "The server: a service that stopped, a disk filling up, the firewall off, a failed backup, malware, certificates about to expire, a panel update.":
+        "Về server: dịch vụ bị dừng, ổ đĩa sắp đầy, tường lửa tắt, backup lỗi, mã độc, chứng chỉ sắp hết hạn, có bản cập nhật panel.",
+    "Your own account: a sign-in from a new place, a password or two-factor change.":
+        "Về tài khoản của bạn: đăng nhập từ nơi mới, đổi mật khẩu hoặc đăng nhập hai lớp.",
+    "Email goes through the SMTP server you set; Telegram through a bot you create with @BotFather. Each administrator picks their channels and mutes what they do not want.":
+        "Email gửi qua máy chủ SMTP bạn cấu hình; Telegram qua bot bạn tạo bằng @BotFather. Mỗi quản trị viên tự chọn kênh và tắt những thông báo không muốn nhận.",
+    "For administrators only: customers do not see it and are not sent anything.":
+        "Chỉ dành cho quản trị viên: khách hàng không thấy tính năng này và không nhận thông báo nào.",
+    "Turning the addon off stops every message and keeps the settings, each administrator's choices and the delivery log.":
+        "Tắt addon sẽ dừng mọi thông báo nhưng giữ nguyên cấu hình, lựa chọn của từng quản trị viên và lịch sử gửi.",
+}

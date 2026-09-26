@@ -23,6 +23,7 @@ ADDONS_FILE = ADDONS_DIR / "addons.json"
 APPLICATION = "application"
 FAIL2BAN = "fail2ban"
 MCP = "mcp"
+NOTIFICATIONS = "notifications"
 
 # What an administrator sees in the Addons page. The version is the addon's own:
 # it moves when the addon changes, independently of the panel's version.
@@ -60,6 +61,22 @@ CATALOGUE: dict[str, dict] = {
         # Stop is reversible and keeps the tokens; uninstall is the one that
         # revokes them, and the Addons page says so before it happens.
         "keeps_data_on_uninstall": False,
+    },
+    NOTIFICATIONS: {
+        "name": "Notifications",
+        "version": "1.0.0",
+        "summary": "Tells administrators what needs their attention on the server, by email and Telegram.",
+        "details": [
+            "The server: a service that stopped, a disk filling up, the firewall off, a failed backup, malware, certificates about to expire, a panel update.",
+            "Your own account: a sign-in from a new place, a password or two-factor change.",
+            "Email goes through the SMTP server you set; Telegram through a bot you create with @BotFather. Each administrator picks their channels and mutes what they do not want.",
+            "For administrators only: customers do not see it and are not sent anything.",
+        ],
+        "notes": [
+            "Email needs an SMTP account (host, port, sender address). Mail sent straight from the server usually lands in spam.",
+            "Turning the addon off stops every message and keeps the settings, each administrator's choices and the delivery log.",
+        ],
+        "keeps_data_on_uninstall": True,
     },
     APPLICATION: {
         "name": "Application",

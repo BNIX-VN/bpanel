@@ -274,7 +274,9 @@ def test_every_string_the_overview_draws_reads_in_vietnamese():
 def test_every_sidebar_entry_reads_in_vietnamese():
     body = APP.split("const navSections = [")[1].split("].filter(section")[0]
     labels = re.findall(r"\['[a-z-]+', '([^']+)'", body) + re.findall(r"title: '([^']+)'", body)
-    assert len(labels) > 15, labels
+    # Thirteen since the sidebar was cut to the everyday pages (2026-09-27);
+    # the rest are checked on the Settings page.
+    assert len(labels) >= 12, labels
     missing = [label for label in labels if label not in DICTIONARY and label not in KEPT_IN_ENGLISH]
     assert not missing, f"sidebar still in English: {missing}"
 
@@ -320,3 +322,14 @@ def test_a_translated_label_is_not_glued_to_its_value():
     """
     glued = re.findall(r"\{t\('(?:[^'\\]|\\.){1,80}'\)\}<(?:strong|b|code)>", APP)
     assert not glued, f"{len(glued)} labels run into their value: {glued[:3]}"
+
+
+def test_every_settings_page_entry_reads_in_vietnamese():
+    """The Settings page's names and one-line hints live in an array, like the
+    sidebar's, and are translated where they are drawn."""
+    hub = APP.split("const settingsGroups = [")[1].split("const settingsItems = ")[0]
+    rows = re.findall(r"\['[a-z-]+', '([^']+)', \w+, '([^']+)'\]", hub)
+    assert len(rows) >= 10, rows
+    texts = [text for row in rows for text in row] + re.findall(r"title: '([^']+)'", hub)
+    missing = [text for text in texts if text not in DICTIONARY and text not in KEPT_IN_ENGLISH]
+    assert not missing, f"Settings page still in English: {missing}"

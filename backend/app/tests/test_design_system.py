@@ -173,12 +173,42 @@ def test_a_customer_is_not_shown_the_server():
     )
 
 
-def test_the_sidebar_is_three_groups_not_a_folded_settings():
-    """Twelve unrelated pages sat behind a collapsed "Settings"."""
-    assert "const navSections = [" in APP
+def test_the_sidebar_holds_what_is_used_every_day():
+    """The operator's list (2026-09-27): Dashboard, Website, Application, SSL,
+    Database, Cron, File manager, SFTP, Backups, Panel users - then the addons
+    that are on, then Settings. Everything else is one click further, on the
+    Settings page, which is a page and not a collapsed submenu: a folded
+    Settings once hid the MCP page from the operator."""
+    sidebar = APP.split("const navSections = [")[1].split("].filter(section")[0]
+    keys = re.findall(r"\['([a-z-]+)', '", sidebar)
+    assert keys == ["dashboard", "websites", "applications", "ssl", "databases", "cron", "files",
+                    "sftp", "backups", "users", "mcp", "notifications", "settings"]
     assert "sidebar-subnav" not in APP and "settingsMenuOpen" not in APP
-    for title in ("'Hosting'", "'Security'", "'System'"):
-        assert f"title: {title}" in APP.split("const navSections = [")[1].split("].filter(section")[0], title
+    hub = APP.split("const settingsGroups = [")[1].split("const settingsItems = ")[0]
+    hub_keys = re.findall(r"\['([a-z-]+)', '", hub)
+    assert hub_keys == ["firewall", "waf", "malware", "access-logs", "security",
+                        "services", "php", "panel-settings", "updates", "addons"]
+    assert not set(keys) & set(hub_keys), "a page in both places"
+    assert "if (page === 'settings') return renderSettingsHub();" in APP
+
+
+def test_a_settings_page_keeps_its_own_name_and_lights_up_settings():
+    assert "const navPage = settingsItems.some(([key]) => key === basePage) ? 'settings' : basePage;" in APP
+    assert "<h1>{pageItem?.[1] ? t(pageItem[1])" in APP
+
+
+def test_panel_settings_is_four_tabs():
+    """Operator, 2026-09-27: "Phần panel setting: Chia làm 4 tab nhé". One
+    underlined row, like Backups and Panel users, one form showing at a time."""
+    page = APP.split("  function renderPanelSettings() {")[1].split("  function renderUsers() {")[0]
+    tabs = re.findall(r"\['([a-z]+)', '([^']+)', \w+\],", page.split("const tabs = [")[1].split("];")[0])
+    assert tabs == [("general", "General"), ("brand", "Brand assets"), ("account", "Admin account"), ("api", "API Tokens")]
+    assert 'className="segmented-control backup-tabs" role="tablist"' in page
+    for key, _label in tabs:
+        assert f"{{tabPanel('{key}', <>" in page, key
+    assert page.count('<section className="section') == 2, "the no-permission answer and the page: the tabs are not separate sections"
+    # The tokens used to be their own page; an old link still opens their tab.
+    assert "/^\\/api-tokens?\\/?$/i.test(window.location.pathname) ? 'api' : 'general'" in APP
 
 
 def test_sign_out_lives_in_the_account_menu():
@@ -268,7 +298,7 @@ def test_the_dashboard_headings_are_translated_where_they_are_drawn():
     # WAF, which reads the same in both languages.
     assert re.findall(r"label: '([^']+)'", dashboard) == ["WAF", "WAF"]
     assert "<p className=\"sidebar-section-title\">{t(section.title)}</p>" in APP
-    assert "{activeNavItem?.[1] ? t(activeNavItem[1])" in APP
+    assert "{pageItem?.[1] ? t(pageItem[1])" in APP
 
 
 # --- the operator's list, 2026-09-25 -----------------------------------------
@@ -338,3 +368,13 @@ def test_every_row_puts_its_columns_where_the_header_does():
         assert "scrollbar-gutter: stable;" in FILES.split(block)[1].split("}")[0], block
     # A three-line row was cut to ~40px by the list's max-height otherwise.
     assert ".file-list{grid-auto-rows:max-content}" in UI
+
+
+def test_no_function_in_the_app_is_declared_twice():
+    """A second `function renderNotifications()` - the Notifications page -
+    silently replaced the toast renderer of the same name: every toast in the
+    panel drew the Notifications page instead, and nothing failed. Inside one
+    component the later declaration simply wins."""
+    names = re.findall(r"^  (?:async )?function (\w+)\(", APP, flags=re.M)
+    duplicated = sorted({name for name in names if names.count(name) > 1})
+    assert not duplicated, f"declared more than once: {duplicated}"

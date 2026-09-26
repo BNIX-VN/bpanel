@@ -443,3 +443,63 @@ class WebauthnCredential(Base):
     name: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class NotificationPref(Base):
+    """How one person wants to hear from the panel (the Notifications addon).
+
+    One row per user, created the first time they open their notification
+    settings or are sent something. Email goes to the account's own address;
+    Telegram needs the chat the person linked from their settings page.
+    `muted_events` lists the event keys they turned off, comma-separated, so a
+    new event added later reaches everyone until they decide otherwise.
+    """
+
+    __tablename__ = "notification_prefs"
+
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    email_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    telegram_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    telegram_chat_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    telegram_link_code: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    telegram_link_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    muted_events: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class NotificationLog(Base):
+    """One delivery attempt: who, which event, which channel, and how it went.
+
+    Also what keeps a repeating condition from repeating the message: a send
+    with a dedupe key is skipped while an earlier one with the same key is
+    recent enough.
+    """
+
+    __tablename__ = "notification_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    event: Mapped[str] = mapped_column(String(48), index=True)
+    channel: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(16))
+    title: Mapped[str] = mapped_column(String(255), default="")
+    detail: Mapped[str] = mapped_column(Text, default="")
+    dedupe_key: Mapped[Optional[str]] = mapped_column(String(191), nullable=True, index=True)
+
+
+class LoginSource(Base):
+    """An address a user has signed in from, so a new one can be pointed out.
+
+    Sessions are JWTs and keep no record of where they were issued, so the
+    Notifications addon keeps its own. Only written while the addon is on.
+    """
+
+    __tablename__ = "login_sources"
+    __table_args__ = (UniqueConstraint("user_id", "ip", name="uq_login_sources_user_ip"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    ip: Mapped[str] = mapped_column(String(64))
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

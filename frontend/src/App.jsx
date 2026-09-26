@@ -13,7 +13,7 @@ import 'ace-builds/src-noconflict/mode-text';
 import 'ace-builds/src-noconflict/mode-yaml';
 import 'ace-builds/src-noconflict/theme-textmate';
 import 'ace-builds/src-noconflict/theme-tomorrow_night';
-import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle, Activity, BrickWall, Bug, LockKeyhole, PackageOpen, ScrollText, ShieldAlert, CheckCircle, Zap } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle, Activity, BrickWall, Bug, LockKeyhole, PackageOpen, ScrollText, ShieldAlert, CheckCircle, Zap, Bell, Mail, Send } from 'lucide-react';
 import { Terminal } from './components/Terminal';
 import { LANGUAGES, t, useLanguage } from './i18n.js';
 import './style.css';
@@ -91,6 +91,7 @@ const PAGE_ROUTES = {
   backups: '/backups',
   users: '/users',
   settings: '/settings',
+  'panel-settings': '/panel-settings',
   security: '/security',
   php: '/php',
   firewall: '/firewall',
@@ -103,6 +104,7 @@ const PAGE_ROUTES = {
   services: '/services',
   addons: '/addons',
   mcp: '/ai-assistants',
+  notifications: '/notifications',
 };
 
 /* ---------------------------------------------------------------
@@ -254,8 +256,8 @@ const ROUTE_PAGES = new Map([
   ['/file-manager', 'files'],
   ['/website', 'websites'],
   // API tokens moved into Panel settings. Old links still land somewhere real.
-  ['/api-token', 'settings'],
-  ['/api-tokens', 'settings'],
+  ['/api-token', 'panel-settings'],
+  ['/api-tokens', 'panel-settings'],
 ]);
 
 function pageFromPathname(pathname) {
@@ -766,9 +768,22 @@ function App() {
   const [userTab, setUserTab] = useState('list');
   const [resourceUsage, setResourceUsage] = useState(null);
   const [dashSummary, setDashSummary] = useState(null);
+  // Notifications addon: my own settings, and (administrators) the server's.
+  const [notifyMe, setNotifyMe] = useState(null);
+  const [notifySettings, setNotifySettings] = useState(null);
+  const [notifyLog, setNotifyLog] = useState([]);
+  const [telegramLink, setTelegramLink] = useState(null);
+  const [smtpForm, setSmtpForm] = useState({ host: '', port: 587, security: 'starttls', username: '', password: '', from_email: '', from_name: 'BPanel' });
+  const [botTokenInput, setBotTokenInput] = useState('');
+  const [adminChatInput, setAdminChatInput] = useState('');
+  const [telegramChats, setTelegramChats] = useState(null);
+  const [myChatInput, setMyChatInput] = useState('');
+  const [notifyLimits, setNotifyLimits] = useState({ disk_percent: 90, ssl_days: 7, language: 'vi' });
   const [serviceStates, setServiceStates] = useState({});
   const [serviceNames, setServiceNames] = useState(DEFAULT_SERVICE_NAMES);
   const [backupTab, setBackupTab] = useState('website');
+  // An old /api-tokens link opens the tab the tokens now live on.
+  const [panelSettingsTab, setPanelSettingsTab] = useState(() => (/^\/api-tokens?\/?$/i.test(window.location.pathname) ? 'api' : 'general'));
   const [backups, setBackups] = useState([]);
   const [backupJobs, setBackupJobs] = useState([]);
   const [userBackups, setUserBackups] = useState([]);
@@ -868,6 +883,7 @@ function App() {
   const [firewallBlocklists, setFirewallBlocklists] = useState(null);
   const [firewallBlocklistUrl, setFirewallBlocklistUrl] = useState('');
   const [wafRules, setWafRules] = useState({ status: null, default_rules: '', custom_rules: '' });
+  const [wafGlobalRules, setWafGlobalRules] = useState('');
   const [wafCustomRules, setWafCustomRules] = useState('');
   const [selectedWafWebsiteId, setSelectedWafWebsiteId] = useState('');
   const [wafSiteConfig, setWafSiteConfig] = useState(null);
@@ -934,6 +950,7 @@ function App() {
   const noticeTimer = useRef(null);
   const isAdmin = currentUser?.role === 'admin';
   const mcpAddonInstalled = !!addons.items.find(item => item.slug === 'mcp')?.installed;
+  const notificationsAddonInstalled = !!addons.items.find(item => item.slug === 'notifications')?.installed;
   const [mcpTokens, setMcpTokens] = useState([]);
   const [mcpDraft, setMcpDraft] = useState({ name: '', expires_in_days: 90, can_write: false });
   // Held until dismissed rather than cleared on the next render: the server
@@ -1600,6 +1617,85 @@ function App() {
   // One request for the dashboard's cards and its "Needs attention" list;
   // each part is best effort on the server, so a failing probe is a card
   // that says "—", not a dashboard that fails.
+  async function loadNotifyMe() {
+    const data = await request('/notifications/me', { silent: true });
+    if (data) setNotifyMe(data);
+  }
+
+  // The switch moves when it is clicked, not when the server answers; a
+  // refusal puts back what the server holds.
+  async function saveNotifyMe(changes) {
+    setNotifyMe(prev => (prev ? { ...prev, ...changes } : prev));
+    const data = await request('/notifications/me', { method: 'PUT', body: JSON.stringify(changes) });
+    if (data) setNotifyMe(data); else loadNotifyMe();
+  }
+
+  function toggleNotifyEvent(key, on) {
+    const muted = new Set(notifyMe?.muted || []);
+    if (on) muted.delete(key); else muted.add(key);
+    saveNotifyMe({ muted: [...muted] });
+  }
+
+  async function startTelegramLink() {
+    const data = await request('/notifications/me/telegram/link', { method: 'POST' });
+    if (data) setTelegramLink(data);
+  }
+
+  async function verifyTelegramLink() {
+    const data = await request('/notifications/me/telegram/verify', { method: 'POST' }, t('Checking...'));
+    if (!data) return;
+    setNotifyMe(data);
+    if (data.telegram_linked) {
+      setTelegramLink(null);
+      setNotice(t('Telegram connected.'));
+    } else {
+      setError(t('The bot has not received your /start message yet. Send it, then press Check again.'));
+    }
+  }
+
+  async function unlinkTelegram() {
+    const data = await request('/notifications/me/telegram', { method: 'DELETE' });
+    if (data) { setNotifyMe(data); setNotice(t('Telegram disconnected.')); }
+  }
+
+  async function sendNotifyTest(channel) {
+    const data = await request('/notifications/test', { method: 'POST', body: JSON.stringify({ channel }) }, t('Sending...'));
+    if (data) setNotice(t('Test sent to {target}.', { target: data.sent_to }));
+    if (isAdmin) loadNotifyLog();
+  }
+
+  function applyNotifySettings(data) {
+    setNotifySettings(data);
+    setSmtpForm({ ...data.smtp, password: '' });
+    setBotTokenInput('');
+    setAdminChatInput(data.telegram.chat_id || '');
+    setTelegramChats(null);
+    setNotifyLimits({ ...data.thresholds, language: data.language });
+  }
+
+  async function loadNotifySettings() {
+    const data = await request('/notifications/settings', { silent: true });
+    if (data) applyNotifySettings(data);
+  }
+
+  async function saveNotifySettings(body, done) {
+    const data = await request('/notifications/settings', { method: 'PUT', body: JSON.stringify(body) }, t('Saving...'));
+    if (!data) return;
+    applyNotifySettings(data);
+    setNotice(done);
+    loadNotifyMe();
+  }
+
+  async function findTelegramChats() {
+    const data = await request('/notifications/telegram/chats', {}, t('Checking...'));
+    if (Array.isArray(data)) setTelegramChats(data);
+  }
+
+  async function loadNotifyLog() {
+    const data = await request('/notifications/log', { silent: true });
+    if (Array.isArray(data)) setNotifyLog(data);
+  }
+
   async function loadDashboardSummary() {
     const data = await request('/dashboard/summary', { silent: true });
     if (data) setDashSummary(data);
@@ -3932,6 +4028,7 @@ Each account is overwritten with what is in its archive.`)) return;
     const data = await request('/waf/rules', {}, t('Loading WAF rules...'));
     if (data) {
       setWafRules(data);
+      setWafGlobalRules(data.custom_rules || '');
       const firstWebsiteId = selectedWafWebsiteId || selectedWebsiteId || websites[0]?.id || '';
       if (firstWebsiteId) {
         setSelectedWafWebsiteId(String(firstWebsiteId));
@@ -4007,6 +4104,11 @@ Each account is overwritten with what is in its archive.`)) return;
         : (data.message || 'Global bad bots saved.'));
       await loadBotBlocks();
     }
+  }
+
+  async function saveWafGlobalRules() {
+    const data = await request('/waf/rules/custom', { method: 'PUT', body: JSON.stringify({ content: wafGlobalRules }) }, t('Saving...'));
+    if (data) { setNotice(t('Global WAF rules saved. They apply to every website with the WAF on.')); await loadWafRules(); }
   }
 
   async function loadCrs() {
@@ -4239,6 +4341,13 @@ Each account is overwritten with what is in its archive.`)) return;
   }, [isAuthenticated, page]);
 
   useEffect(() => {
+    if (!isAuthenticated || page !== 'notifications' || !notificationsAddonInstalled || !isAdmin) return;
+    loadNotifyMe();
+    loadNotifySettings();
+    loadNotifyLog();
+  }, [isAuthenticated, page, notificationsAddonInstalled, isAdmin]);
+
+  useEffect(() => {
     if (!isAuthenticated || page !== 'dashboard' || !isAdmin) return undefined;
     loadResourceUsage();
     const timer = setInterval(loadResourceUsage, 5000);
@@ -4359,7 +4468,7 @@ Each account is overwritten with what is in its archive.`)) return;
       if (isAdmin) { loadMalwareScanStatus(); loadMalwareScanJobs(); loadLatestMalwareScanJob(); }
       if (!websites.length) refreshAll();
     }
-    if (isAuthenticated && page === 'settings') { loadPanelSettings(); if (isAdmin) loadApiTokens(); }
+    if (isAuthenticated && page === 'panel-settings') { loadPanelSettings(); if (isAdmin) loadApiTokens(); }
     if (isAuthenticated && page === 'mcp' && mcpAddonInstalled) loadMcpTokens();
     if (isAuthenticated && page === 'backups' && currentUser?.role === 'admin') { loadUsers(); loadSftpTargets(); loadBackupSchedules(); loadRestoreBackups(); }
   }, [isAuthenticated, page, currentUser?.role]);
@@ -4408,9 +4517,12 @@ Each account is overwritten with what is in its archive.`)) return;
   // The sidebar in three labelled groups, as OPanel has it - what a site
   // needs, what guards it, and the server itself - so nothing hides behind a
   // collapsed "Settings". Labels are English and go through t() when drawn.
+  // The sidebar holds what is used every day (operator, 2026-09-27); the rest
+  // is one click further, on the Settings page. An addon shows only once it
+  // is on - Application, AI assistants, Notifications.
   const navSections = [
-    { key: 'home', items: [['dashboard', 'Dashboard', Home]] },
-    { key: 'hosting', title: 'Hosting', items: [
+    { key: 'main', items: [
+      ['dashboard', 'Dashboard', Home],
       ['websites', 'Websites', Globe],
       ...(appsFeatureEnabled ? [['applications', 'Applications', Boxes]] : []),
       ['ssl', 'SSL', Lock],
@@ -4419,31 +4531,41 @@ Each account is overwritten with what is in its archive.`)) return;
       ['files', 'File manager', FolderOpen],
       ['sftp', 'SFTP accounts', Upload],
       ['backups', 'Backups', Archive],
-    ] },
-    { key: 'security', title: 'Security', items: [
-      ...(isAdmin ? [['firewall', 'Firewall', BrickWall]] : []),
-      ['waf', 'WAF', ShieldAlert],
-      ...(isAdmin ? [['malware', 'Malware scanner', Bug]] : []),
-      ...(isAdmin ? [['access-logs', 'Access logs', ScrollText]] : []),
-      ['security', 'Account security', LockKeyhole],
-    ] },
-    { key: 'system', title: 'System', items: [
-      ...(isAdmin ? [['services', 'Services', Activity]] : []),
-      ...(isAdmin ? [['php', 'PHP config', Code2]] : []),
       ...(isAdmin ? [['users', 'Panel users', Users]] : []),
-      ...(isAdmin ? [['settings', 'Panel settings', SettingsIcon]] : []),
-      ...(isAdmin ? [['updates', 'Updates', RefreshCw]] : []),
-      ...(isAdmin ? [['addons', 'Addons', PackageOpen]] : []),
-      // A customer sees this only once an administrator has turned the addon
-      // on. An admin always sees it, so there is somewhere to go and read why
-      // it is off.
-      ...(mcpAddonInstalled || isAdmin ? [['mcp', 'AI assistants', Bot]] : []),
     ] },
+    { key: 'addons', items: [
+      ...(mcpAddonInstalled ? [['mcp', 'AI assistants', Bot]] : []),
+      ...(notificationsAddonInstalled && isAdmin ? [['notifications', 'Notifications', Bell]] : []),
+    ] },
+    { key: 'settings', items: [['settings', 'Settings', SettingsIcon]] },
   ].filter(section => section.items.length > 0);
 
+  // Everything else, on the Settings page: [page, label, icon, hint].
+  const settingsGroups = [
+    { title: 'Security', items: [
+      isAdmin && ['firewall', 'Firewall', BrickWall, 'Ports, IP rules, blocklists and Fail2ban'],
+      ['waf', 'WAF', ShieldAlert, 'Request filtering for each website'],
+      isAdmin && ['malware', 'Malware scanner', Bug, 'Scans, schedules and history'],
+      isAdmin && ['access-logs', 'Access logs', ScrollText, 'Requests and blocks'],
+      ['security', 'Account security', LockKeyhole, 'Password, two-factor sign-in and passkeys'],
+    ] },
+    { title: 'System', items: [
+      isAdmin && ['services', 'Services', Activity, 'Start, stop and restart'],
+      isAdmin && ['php', 'PHP config', Code2, 'Versions, limits and extensions'],
+      isAdmin && ['panel-settings', 'Panel settings', SettingsIcon, 'Hostname, branding and API tokens'],
+      isAdmin && ['updates', 'Updates', RefreshCw, 'Panel version'],
+      isAdmin && ['addons', 'Addons', PackageOpen, 'Optional features'],
+    ] },
+  ].map(group => ({ ...group, items: group.items.filter(Boolean) })).filter(group => group.items.length > 0);
+  const settingsItems = settingsGroups.flatMap(group => group.items);
+
   const navItems = navSections.flatMap(section => section.items);
-  const navPage = NAV_PARENT_PAGE[page] || page;
+  const basePage = NAV_PARENT_PAGE[page] || page;
+  // A page reached from Settings lights up Settings in the sidebar...
+  const navPage = settingsItems.some(([key]) => key === basePage) ? 'settings' : basePage;
   const activeNavItem = navItems.find(([key]) => key === navPage) || navItems[0];
+  // ...and is still called by its own name at the top: "Firewall", not "Settings".
+  const pageItem = [...navItems, ...settingsItems].find(([key]) => key === basePage) || activeNavItem;
 
   function renderNotifications() {
     const errorMessage = formatApiError(error, '').trim();
@@ -4800,6 +4922,170 @@ Each account is overwritten with what is in its archive.`)) return;
         message={t('This page reports on the server itself, so only administrators can see it.')}
       />
     </section>;
+  }
+
+  function renderNotificationsPage() {
+    const me = notifyMe;
+    const s = notifySettings;
+    const events = me?.events || [];
+    const muted = new Set(me?.muted || []);
+    const eventRow = ev => <label className="notify-event" key={ev.key}>
+      <input type="checkbox" checked={!muted.has(ev.key)} disabled={!!loading} onChange={e => toggleNotifyEvent(ev.key, e.target.checked)} />
+      <span><strong>{t(ev.label)}</strong><small>{t(ev.hint)}</small></span>
+    </label>;
+    const fmtTime = value => { const d = new Date(value.endsWith('Z') ? value : `${value}Z`); return Number.isNaN(d.getTime()) ? value : d.toLocaleString('vi-VN', { hour12: false }); };
+    return <>
+      <section className="section">
+        <div className="section-title"><div>
+          <h2>{t('My notifications')}</h2>
+          <p className="hint">{t('Where the panel reaches you, and about what.')}</p>
+        </div></div>
+        {!me ? <p className="hint">{t('Loading...')}</p> : <>
+          <div className="notify-channels">
+            <div className="notify-channel">
+              <div className="notify-channel-head"><Mail size={16}/><strong>Email</strong>
+                <span className={me.channels.email && me.email_enabled ? 'badge ok' : 'badge'}>{me.channels.email ? (me.email_enabled ? t('On') : t('Off')) : t('Not set up')}</span>
+              </div>
+              <p className="hint">{me.channels.email
+                ? t('Sent to {email}, the address on your account.', { email: me.email || '—' })
+                : t('Email is not set up on this server yet.')}</p>
+              {me.channels.email && <label className="switch-line"><input type="checkbox" checked={me.email_enabled} disabled={!!loading} onChange={e => saveNotifyMe({ email_enabled: e.target.checked })} />{t('Send me email')}</label>}
+            </div>
+            <div className="notify-channel">
+              <div className="notify-channel-head"><Send size={16}/><strong>Telegram</strong>
+                <span className={me.telegram_linked && me.telegram_enabled ? 'badge ok' : 'badge'}>{!me.channels.telegram ? t('Not set up') : me.telegram_linked ? (me.telegram_enabled ? t('On') : t('Off')) : t('Not connected')}</span>
+              </div>
+              {!me.channels.telegram && <p className="hint">{t('Telegram is not set up on this server yet.')}</p>}
+              {me.channels.telegram && me.telegram_linked && <>
+                <p className="hint">Chat ID: <code>{me.telegram_chat_id}</code></p>
+                <label className="switch-line"><input type="checkbox" checked={me.telegram_enabled} disabled={!!loading} onChange={e => saveNotifyMe({ telegram_enabled: e.target.checked })} />{t('Send me Telegram messages')}</label>
+                <div className="notify-actions">
+                  <button type="button" className="secondary" disabled={!!loading} onClick={() => sendNotifyTest('telegram')}><Send size={14}/>{t('Send a test')}</button>
+                  <button type="button" className="secondary-light" disabled={!!loading} onClick={unlinkTelegram}>{t('Disconnect')}</button>
+                </div>
+              </>}
+              {me.channels.telegram && !me.telegram_linked && me.telegram_admin_chat && <p className="hint">{t('You hear in the admin chat ({chat}). Connect a chat of your own to hear there instead.', { chat: me.telegram_admin_chat })}</p>}
+              {me.channels.telegram && !me.telegram_linked && <div className="notify-own-chat">
+                <input value={myChatInput} placeholder={t('Your chat ID')} aria-label={t('Your chat ID')} onChange={e => setMyChatInput(e.target.value)} />
+                <button type="button" className="secondary" disabled={!!loading || !myChatInput.trim()} onClick={() => saveNotifyMe({ telegram_chat_id: myChatInput.trim() })}>{t('Save')}</button>
+              </div>}
+              {me.channels.telegram && !me.telegram_linked && (telegramLink
+                ? <div className="notify-link">
+                    <ol>
+                      <li>{t('Open the bot and press Start:')}{' '}{telegramLink.link ? <a href={telegramLink.link} target="_blank" rel="noreferrer">@{telegramLink.bot_username}</a> : <code>@{telegramLink.bot_username}</code>}</li>
+                      <li>{t('Or send the bot this message:')}{' '}<code>/start {telegramLink.code}</code></li>
+                      <li>{t('Then press Check. The code works for {n} minutes.', { n: telegramLink.expires_minutes })}</li>
+                    </ol>
+                    <div className="notify-actions"><button type="button" disabled={!!loading} onClick={verifyTelegramLink}><Check size={14}/>{t('Check')}</button></div>
+                  </div>
+                : <div className="notify-actions"><button type="button" className="secondary" disabled={!!loading} onClick={startTelegramLink}><Send size={14}/>{t('Find my chat ID for me')}</button></div>)}
+            </div>
+          </div>
+          <div className="notify-events">
+            <h3>{t('About the server')}</h3>
+            <div className="notify-event-list">{events.filter(ev => ev.audience === 'admin').map(eventRow)}</div>
+            <h3>{t('About your account')}</h3>
+            <div className="notify-event-list">{events.filter(ev => ev.audience === 'user').map(eventRow)}</div>
+          </div>
+        </>}
+      </section>
+
+      {s && <section className="section">
+        <div className="section-title"><div>
+          <h2>{t('Server channels')}</h2>
+          <p className="hint">{t('What every notification on this server goes out through.')}</p>
+        </div></div>
+        <div className="notify-settings">
+          <div className="notify-card">
+            <h3><Mail size={16}/>{t('Email (SMTP)')}</h3>
+            <div className="notify-form">
+              <label><span>{t('SMTP server')}</span><input value={smtpForm.host} placeholder="smtp.example.com" onChange={e => setSmtpForm(f => ({ ...f, host: e.target.value }))} /></label>
+              <div className="notify-form-pair">
+                <label><span>{t('Encryption')}</span><select value={smtpForm.security} onChange={e => setSmtpForm(f => ({ ...f, security: e.target.value, port: { starttls: 587, ssl: 465, none: 25 }[e.target.value] }))}>
+                  <option value="starttls">STARTTLS</option><option value="ssl">SSL/TLS</option><option value="none">{t('None')}</option>
+                </select></label>
+                <label><span>{t('Port')}</span><input type="number" value={smtpForm.port} onChange={e => setSmtpForm(f => ({ ...f, port: e.target.value }))} /></label>
+              </div>
+              <label><span>{t('Username')}</span><input value={smtpForm.username} autoComplete="off" onChange={e => setSmtpForm(f => ({ ...f, username: e.target.value }))} /></label>
+              <label><span>{t('Password')}</span><input type="password" value={smtpForm.password} autoComplete="new-password" placeholder={s.smtp.password_set ? t('Saved - leave empty to keep it') : ''} onChange={e => setSmtpForm(f => ({ ...f, password: e.target.value }))} /></label>
+              <label><span>{t('Sender address')}</span><input value={smtpForm.from_email} placeholder="noreply@example.com" onChange={e => setSmtpForm(f => ({ ...f, from_email: e.target.value }))} /></label>
+              <label><span>{t('Sender name')}</span><input value={smtpForm.from_name} onChange={e => setSmtpForm(f => ({ ...f, from_name: e.target.value }))} /></label>
+            </div>
+            <div className="notify-actions">
+              <button type="button" disabled={!!loading} onClick={() => saveNotifySettings({ smtp: { ...smtpForm, port: Number(smtpForm.port) || 587, password: smtpForm.password || null } }, t('Email settings saved.'))}>{t('Save')}</button>
+              <button type="button" className="secondary" disabled={!!loading || !s.smtp_ready} onClick={() => sendNotifyTest('email')}><Mail size={14}/>{t('Send me a test email')}</button>
+            </div>
+          </div>
+          <div className="notify-card">
+            <h3><Send size={16}/>{t('Telegram bot')}</h3>
+            <p className="hint">{t('Create a bot with @BotFather (/newbot) and paste its token. Then send the bot any message - or add it to a group - press Find chat ID and pick the chat.')}</p>
+            {s.telegram.token_set && <p className="notify-bot"><span className="badge ok">@{s.telegram.bot_username}</span></p>}
+            <label className="notify-form"><span>{t('Bot token')}</span><input type="password" value={botTokenInput} autoComplete="off" placeholder={s.telegram.token_set ? t('Saved - paste a new one to replace it') : '123456789:AA...'} onChange={e => setBotTokenInput(e.target.value)} /></label>
+            <div className="notify-form">
+              <label><span>Chat ID</span><input value={adminChatInput} placeholder="-1001234567890" onChange={e => setAdminChatInput(e.target.value)} /></label>
+              <div className="notify-actions"><button type="button" className="secondary" disabled={!!loading || !s.telegram.token_set} onClick={findTelegramChats}><Search size={14}/>{t('Find chat ID')}</button></div>
+              {telegramChats && (telegramChats.length > 0
+                ? <div className="notify-chats">{telegramChats.map(chat => <button type="button" key={chat.id} className={adminChatInput === chat.id ? 'mini' : 'mini secondary'} onClick={() => setAdminChatInput(chat.id)}>{chat.name || chat.type}<code>{chat.id}</code></button>)}</div>
+                : <p className="hint">{t('No messages yet. Send the bot a message first, then press Find chat ID again.')}</p>)}
+            </div>
+            <p className="hint">{t('Server events go to this chat once. An administrator with no chat of their own hears about their account here too.')}</p>
+            <div className="notify-actions">
+              <button type="button" disabled={!!loading || (!s.telegram.token_set && !botTokenInput.trim())} onClick={() => saveNotifySettings({ telegram: { bot_token: botTokenInput.trim() || null, chat_id: adminChatInput.trim() } }, t('Telegram bot saved.'))}>{t('Save')}</button>
+              <button type="button" className="secondary" disabled={!!loading || !s.telegram.token_set || !s.telegram.chat_id} onClick={() => sendNotifyTest('telegram_admin')}><Send size={14}/>{t('Send a test')}</button>
+              {s.telegram.token_set && <button type="button" className="secondary-light" disabled={!!loading} onClick={() => saveNotifySettings({ telegram: { clear_bot_token: true } }, t('Telegram bot removed.'))}>{t('Remove the bot')}</button>}
+            </div>
+          </div>
+          <div className="notify-card">
+            <h3><AlertCircle size={16}/>{t('When to warn')}</h3>
+            <div className="notify-form">
+              <label><span>{t('Disk usage (%)')}</span><input type="number" min="50" max="99" value={notifyLimits.disk_percent} onChange={e => setNotifyLimits(v => ({ ...v, disk_percent: e.target.value }))} /></label>
+              <label><span>{t('Certificate expiry (days)')}</span><input type="number" min="1" max="60" value={notifyLimits.ssl_days} onChange={e => setNotifyLimits(v => ({ ...v, ssl_days: e.target.value }))} /></label>
+              <label><span>{t('Language of the messages')}</span><select value={notifyLimits.language} onChange={e => setNotifyLimits(v => ({ ...v, language: e.target.value }))}>
+                <option value="vi">Tiếng Việt</option><option value="en">English</option>
+              </select></label>
+            </div>
+            <div className="notify-actions">
+              <button type="button" disabled={!!loading} onClick={() => saveNotifySettings({ language: notifyLimits.language, thresholds: {
+                disk_percent: Number(notifyLimits.disk_percent), ssl_days: Number(notifyLimits.ssl_days),
+              } }, t('Saved.'))}>{t('Save')}</button>
+            </div>
+          </div>
+        </div>
+      </section>}
+
+      <section className="section">
+        <div className="section-title">
+          <div><h2>{t('Delivery log')}</h2><p className="hint">{t('The last 100 messages sent, and the ones that failed.')}</p></div>
+          <div className="actions"><button type="button" className="secondary" disabled={!!loading} onClick={loadNotifyLog}><RefreshCw size={14}/>{t('Refresh')}</button></div>
+        </div>
+        {notifyLog.length === 0
+          ? <EmptyState icon={Bell} message="Nothing sent yet." />
+          : <div className="notify-log">
+              {notifyLog.map(row => <div className="notify-log-row" key={row.id}>
+                <span className="notify-log-time">{fmtTime(row.created_at)}</span>
+                <span className="notify-log-user">{row.username || '—'}</span>
+                <span className="notify-log-title">{row.title}</span>
+                <span className="notify-log-channel">{row.channel === 'email' ? 'Email' : 'Telegram'}</span>
+                <span className={row.status === 'sent' ? 'badge ok' : 'badge danger'}>{row.status === 'sent' ? t('Sent') : t('Failed')}</span>
+                {row.status !== 'sent' && row.detail && <small className="notify-log-detail">{row.detail}</small>}
+              </div>)}
+            </div>}
+      </section>
+    </>;
+  }
+
+  function renderSettingsHub() {
+    return <div className="settings-hub">
+      {settingsGroups.map(group => <section className="section settings-group" key={group.title}>
+        <h2>{t(group.title)}</h2>
+        <div className="settings-links">
+          {group.items.map(([key, label, Icon, hint]) => <button type="button" className="settings-link" key={key} onClick={() => navigateToPage(key)}>
+            <span className="settings-link-icon"><Icon size={18}/></span>
+            <span className="settings-link-text"><strong>{t(label)}</strong><small>{t(hint)}</small></span>
+          </button>)}
+        </div>
+      </section>)}
+    </div>;
   }
 
   function renderAddonMissing() {
@@ -6541,7 +6827,7 @@ Each account is overwritten with what is in its archive.`)) return;
                 const state = ext.versions[v];
                 return <span role="cell" key={v}>
                   {(state === 'installed' || state === 'builtin') && <span className="badge ok" title={state === 'builtin' ? t('Built into PHP') : t('Installed')}><Check size={12}/></span>}
-                  {state === 'available' && <button className="mini secondary" disabled={!!loading} aria-label={t('Install')} title={`php${v}-${ext.name}`} onClick={() => installPhpExtension(ext.name, [v])}><Plus size={12}/><span className="php-ext-install-label">{t('Install')}</span></button>}
+                  {state === 'available' && <button className="mini secondary php-ext-install" disabled={!!loading} aria-label={`${t('Install')} php${v}-${ext.name}`} title={`${t('Install')} php${v}-${ext.name}`} onClick={() => installPhpExtension(ext.name, [v])}><Plus size={14}/></button>}
                   {state === 'unavailable' && <span className="php-ext-none" title={t('Not in the package repository for this version')}>—</span>}
                 </span>;
               })}
@@ -6844,6 +7130,21 @@ Each account is overwritten with what is in its archive.`)) return;
           })}
         </div>
       </section>
+
+      {isAdmin && <section className="section">
+        <div className="section-title">
+          <div>
+            <h2>{t('Global custom rules')}</h2>
+            <p className="hint">{t('ModSecurity rules for every website with the WAF on. Rules an AI assistant added are marked # bpanel-mcp; delete a rule by deleting its lines.')}</p>
+          </div>
+          <span className="badge">{t('{n} rule(s)', { n: (wafGlobalRules.match(/^\s*SecRule/gm) || []).length })}</span>
+        </div>
+        <textarea className="code-editor" rows={12} spellCheck={false} value={wafGlobalRules} onChange={e => setWafGlobalRules(e.target.value)} />
+        <div className="notify-actions" style={{ marginTop: 10 }}>
+          <button type="button" disabled={!!loading || wafGlobalRules === (wafRules.custom_rules || '')} onClick={saveWafGlobalRules}>{t('Save')}</button>
+          <button type="button" className="secondary-light" disabled={!!loading || wafGlobalRules === (wafRules.custom_rules || '')} onClick={() => setWafGlobalRules(wafRules.custom_rules || '')}>{t('Reset')}</button>
+        </div>
+      </section>}
 
       {isAdmin && <section className="section">
         <div className="section-title">
@@ -7581,10 +7882,32 @@ Each account is overwritten with what is in its archive.`)) return;
 
   function renderPanelSettings() {
     if (!isAdmin) return <section className="section"><h2>{t('Settings')}</h2><p className="hint">{t('No permission.')}</p></section>;
-    return <>
-      <section className="section">
-        <div className="section-title">
-          <div><h2>{t('Panel settings')}</h2><p className="hint">{t('Branding and hostname.')}</p></div>
+    // Four tabs, one underlined row like Backups and Panel users (operator,
+    // 2026-09-27): the page had grown into four unrelated forms stacked up.
+    const tabs = [
+      ['general', 'General', SettingsIcon],
+      ['brand', 'Brand assets', Image],
+      ['account', 'Admin account', Lock],
+      ['api', 'API Tokens', KeyRound],
+    ];
+    const activeTab = tabs.some(([id]) => id === panelSettingsTab) ? panelSettingsTab : 'general';
+    const tabPanel = (id, content) => activeTab === id && <div className="backup-tab-panel" id={`panel-settings-tab-${id}`} role="tabpanel" aria-labelledby={`panel-settings-tab-button-${id}`}>{content}</div>;
+    return <section className="section panel-settings-page">
+      <div className="segmented-control backup-tabs" role="tablist" aria-label={t('Panel settings sections')}>
+        {tabs.map(([id, label, Icon]) => <button
+          key={id}
+          type="button"
+          role="tab"
+          id={`panel-settings-tab-button-${id}`}
+          aria-controls={`panel-settings-tab-${id}`}
+          aria-selected={activeTab === id}
+          className={activeTab === id ? 'active' : ''}
+          onClick={() => setPanelSettingsTab(id)}
+        ><Icon size={14}/>{t(label)}</button>)}
+      </div>
+      {tabPanel('general', <>
+        <div className="backup-panel-title">
+          <div><h3>{t('General')}</h3><p className="hint">{t('Panel name, hostname and the server\'s addresses.')}</p></div>
           <button className="secondary-light" disabled={!!loading} onClick={loadPanelSettings}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
         <div className="panel-settings-grid panel-settings-compact">
@@ -7618,23 +7941,10 @@ Each account is overwritten with what is in its archive.`)) return;
           </div>
           <span className="hint">{panelSettings.ipv6?.detail}</span>
         </div>
-      </section>
-      <section className="section">
-        <div className="section-title">
-          <div><h2>{t('Admin account')}</h2></div>
-        </div>
-        <div className="panel-settings-grid admin-account-grid">
-          <label><span>{t('Email')}</span><input type="email" value={adminAccountForm.email} onChange={e => setAdminAccountForm(prev => ({ ...prev, email: e.target.value }))} placeholder="admin@domain.com" /></label>
-          <label><span>{t('Current password')}</span><input type="password" value={adminAccountForm.current_password} onChange={e => setAdminAccountForm(prev => ({ ...prev, current_password: e.target.value }))} placeholder={t('Current password')} autoComplete="current-password" /></label>
-          <label><span>{t('New password')}</span><input type="password" value={adminAccountForm.password} onChange={e => setAdminAccountForm(prev => ({ ...prev, password: e.target.value }))} placeholder={t('New password')} autoComplete="new-password" /></label>
-          <label><span>{t('Confirm password')}</span><input type="password" value={adminAccountForm.confirm_password} onChange={e => setAdminAccountForm(prev => ({ ...prev, confirm_password: e.target.value }))} placeholder={t('Repeat new password')} autoComplete="new-password" /></label>
-          <label><span>{t('Authenticator code')}</span><input value={adminAccountForm.code} onChange={e => setAdminAccountForm(prev => ({ ...prev, code: e.target.value }))} placeholder="123456" inputMode="numeric" autoComplete="one-time-code" /></label>
-          <button disabled={!!loading || !adminAccountForm.email.trim() || (!!adminAccountForm.password && adminAccountForm.password !== adminAccountForm.confirm_password)} onClick={saveAdminAccount}><Lock size={14}/>{t('Save account')}</button>
-        </div>
-      </section>
-      <section className="section">
-        <div className="section-title">
-          <div><h2>{t('Brand assets')}</h2><p className="hint">{t('Upload PNG, JPG, WEBP, or ICO files up to 1 MB.')}</p></div>
+      </>)}
+      {tabPanel('brand', <>
+        <div className="backup-panel-title">
+          <div><h3>{t('Brand assets')}</h3><p className="hint">{t('Upload PNG, JPG, WEBP, or ICO files up to 1 MB.')}</p></div>
         </div>
         <div className="brand-asset-grid">
           <div className="brand-asset-card">
@@ -7648,19 +7958,23 @@ Each account is overwritten with what is in its archive.`)) return;
             <button disabled={!!loading || !panelFaviconFile} onClick={() => uploadPanelAsset('favicon')}><Upload size={14}/>{t('Upload favicon')}</button>
           </div>
         </div>
-      </section>
-      {renderApiTokenSections()}
-    </>;
-  }
-
-  // Its own function, not its own page: tokens are a panel-wide setting, and a
-  // nav entry of their own made people hunt for them.
-  function renderApiTokenSections() {
-    if (!isAdmin) return null;
-    return <>
-      <section className="section">
-        <div className="section-title">
-          <div><h2>{t('API Tokens')}</h2><p className="hint">{t('Create one token for WHMCS. Paste it into WHMCS Server → Access Hash.')}</p></div>
+      </>)}
+      {tabPanel('account', <>
+        <div className="backup-panel-title">
+          <div><h3>{t('Admin account')}</h3><p className="hint">{t('A new password needs the current one, and the authenticator code when two-factor sign-in is on.')}</p></div>
+        </div>
+        <div className="panel-settings-grid admin-account-grid">
+          <label><span>{t('Email')}</span><input type="email" value={adminAccountForm.email} onChange={e => setAdminAccountForm(prev => ({ ...prev, email: e.target.value }))} placeholder="admin@domain.com" /></label>
+          <label><span>{t('Current password')}</span><input type="password" value={adminAccountForm.current_password} onChange={e => setAdminAccountForm(prev => ({ ...prev, current_password: e.target.value }))} placeholder={t('Current password')} autoComplete="current-password" /></label>
+          <label><span>{t('New password')}</span><input type="password" value={adminAccountForm.password} onChange={e => setAdminAccountForm(prev => ({ ...prev, password: e.target.value }))} placeholder={t('New password')} autoComplete="new-password" /></label>
+          <label><span>{t('Confirm password')}</span><input type="password" value={adminAccountForm.confirm_password} onChange={e => setAdminAccountForm(prev => ({ ...prev, confirm_password: e.target.value }))} placeholder={t('Repeat new password')} autoComplete="new-password" /></label>
+          <label><span>{t('Authenticator code')}</span><input value={adminAccountForm.code} onChange={e => setAdminAccountForm(prev => ({ ...prev, code: e.target.value }))} placeholder="123456" inputMode="numeric" autoComplete="one-time-code" /></label>
+          <button disabled={!!loading || !adminAccountForm.email.trim() || (!!adminAccountForm.password && adminAccountForm.password !== adminAccountForm.confirm_password)} onClick={saveAdminAccount}><Lock size={14}/>{t('Save account')}</button>
+        </div>
+      </>)}
+      {tabPanel('api', <>
+        <div className="backup-panel-title">
+          <div><h3>{t('API Tokens')}</h3><p className="hint">{t('Create one token for WHMCS. Paste it into WHMCS Server → Access Hash.')}</p></div>
           <button className="secondary-light" disabled={!!loading} onClick={loadApiTokens}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
         {createdApiToken && <div className="user-create-card">
@@ -7685,8 +7999,8 @@ Each account is overwritten with what is in its archive.`)) return;
             </div>
           </div>)}
         </div>
-      </section>
-    </>;
+      </>)}
+    </section>;
   }
 
   function renderUsers() {
@@ -8140,7 +8454,10 @@ Each account is overwritten with what is in its archive.`)) return;
     // page full of requests that will every one be refused.
     if (page === 'services') return isAdmin ? renderServices() : renderAdminOnly();
     if (page === 'mcp') return (mcpAddonInstalled || isAdmin) ? renderMcp() : renderAddonMissing();
-    if (page === 'settings') return renderPanelSettings();
+    // Administrators only (operator, 2026-09-27): customers get no notifications.
+    if (page === 'notifications') return !isAdmin ? renderAdminOnly() : notificationsAddonInstalled ? renderNotificationsPage() : renderAddonMissing();
+    if (page === 'settings') return renderSettingsHub();
+    if (page === 'panel-settings') return renderPanelSettings();
     if (page === 'users') return renderUsers();
     return renderDashboard();
   }
@@ -8196,7 +8513,7 @@ Each account is overwritten with what is in its archive.`)) return;
 
   if (standaloneEditor) return renderStandaloneEditor();
 
-  const ActiveIcon = activeNavItem?.[2] || Home;
+  const ActiveIcon = pageItem?.[2] || Home;
 
   return <main className="app-shell">
     <section className="layout">
@@ -8225,10 +8542,10 @@ Each account is overwritten with what is in its archive.`)) return;
       <div className="content">
         <section className="topbar">
           <button className="mobile-nav-toggle" onClick={() => setMobileMenuOpen(o => !o)} aria-expanded={mobileMenuOpen} aria-label={t('Toggle navigation')}>
-            <Menu size={20}/><span><ActiveIcon size={17}/>{t(activeNavItem?.[1] || 'Menu')}</span>
+            <Menu size={20}/><span><ActiveIcon size={17}/>{t(pageItem?.[1] || 'Menu')}</span>
           </button>
           <div className="page-title">
-            <h1>{activeNavItem?.[1] ? t(activeNavItem[1]) : (panelSettings.app_name || 'BPanel')}</h1>
+            <h1>{pageItem?.[1] ? t(pageItem[1]) : (panelSettings.app_name || 'BPanel')}</h1>
           </div>
           {/* The page title, then one account menu - profile, account security
               and sign out live in it, as they do in OPanel. */}
