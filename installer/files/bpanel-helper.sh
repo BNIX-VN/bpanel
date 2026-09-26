@@ -816,10 +816,22 @@ save_waf_custom_rules() {
     rm -f "$tmp"
     deny "WAF custom rules must be 64 KB or smaller"
   fi
-  install -m 0644 -o root -g root "$tmp" /etc/nginx/modsec/bpanel-custom.conf
+  # Every site's rule file includes this one, so a rule nginx refuses would
+  # fail the next reload for all of them. Keep the old file until nginx has
+  # accepted the new one.
+  local target=/etc/nginx/modsec/bpanel-custom.conf backup=""
+  if [[ -f "$target" ]]; then
+    backup="${target}.bak.$(date +%s)"
+    cp "$target" "$backup"
+  fi
+  install -m 0644 -o root -g root "$tmp" "$target"
   rm -f "$tmp"
   write_modsec_main_conf
-  nginx -t
+  if ! nginx -t; then
+    if [[ -n "$backup" ]]; then mv -f "$backup" "$target"; else : >"$target"; fi
+    deny "Nginx rejected the WAF custom rules; the previous rules are still in place"
+  fi
+  rm -f "$backup" 2>/dev/null || true
   systemctl reload nginx
   echo "WAF custom rules saved"
 }
@@ -932,6 +944,9 @@ save_waf_site_rules() {
     deny "WAF site rules must be 160 KB or smaller"
   fi
   target="/etc/nginx/modsec/sites/${domain}.conf"
+  # The site file includes the global custom rules; Include on a missing file
+  # fails nginx -t, so it must exist even when nobody has written a rule yet.
+  [[ -f /etc/nginx/modsec/bpanel-custom.conf ]] || install -m 0644 -o root -g root /dev/null /etc/nginx/modsec/bpanel-custom.conf
   if [[ -f "$target" ]]; then
     backup="${target}.bak.$(date +%s)"
     cp "$target" "$backup"

@@ -225,6 +225,11 @@ def site_rules_file(domain: str) -> str:
 
 
 CRS_CONF_PATH = "/etc/nginx/modsec/bpanel-crs.conf"
+# The server-wide custom rules: the WAF page's global box and what add_waf_rule
+# writes. Loaded by every site's rule file - since the per-site files arrived
+# (2026-06-03) this file had been loaded by nothing, and every rule in it,
+# typed or added over MCP, did nothing at all.
+GLOBAL_CUSTOM_PATH = "/etc/nginx/modsec/bpanel-custom.conf"
 CRS_MODES = ("off", "detect", "block")
 
 
@@ -255,8 +260,10 @@ def render_site_rules(
         # After BPanel's own rules, which deny outright on a single match and
         # are cheaper: no point scoring a request that is already refused.
         chunks.extend(["", f"# OWASP CRS ({mode})", f"Include {CRS_CONF_PATH}"])
-    # Custom rules go last on purpose: SecRuleRemoveById only affects rules that
-    # are already loaded, so this is where a per-site CRS exception belongs.
+    # The server's custom rules, then the site's own. Both after everything
+    # else: SecRuleRemoveById only affects rules that are already loaded, so a
+    # site can still excuse itself from a CRS rule or from a global one.
+    chunks.extend(["", "# BPanel global custom rules", f"Include {GLOBAL_CUSTOM_PATH}"])
     chunks.extend(["", "# BPanel custom rules"])
     if custom:
         chunks.append(custom)
@@ -1147,6 +1154,74 @@ def mcp_rule_value(value: str) -> str:
     return candidate
 
 
+# What real visitors send. A user-agent rule matches by substring, so a value
+# found in any of these would block people, or the crawlers a website lives on.
+# Not hypothetical: an assistant added "10_15_7" - every Mac browser's version
+# string - to block one scanner.
+ORDINARY_USER_AGENTS = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 Edg/140.0.0.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) coc_coc_browser/140.0.0 Chrome/134.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:143.0) Gecko/20100101 Firefox/143.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Safari/605.1.15",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Zalo iOS/25.9 ZaloTheme/light ZaloLanguage/vn",
+    "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 6.0.1; Nexus 5X Build/MMB29P) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+    "Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)",
+    "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
+)
+
+# Paths every WordPress or PHP site serves to its own visitors and editors. A
+# path rule matches by substring too: "/wp-json/batch/v1" is the block editor's
+# own endpoint, and "wp-login" would lock every administrator out.
+ORDINARY_PATHS = (
+    "/", "/index.php", "/wp-login.php", "/wp-admin/", "/wp-admin/admin-ajax.php",
+    "/wp-admin/post.php?post=1&action=edit", "/wp-json/wp/v2/posts", "/wp-json/batch/v1",
+    "/wp-content/themes/theme/style.css", "/wp-includes/js/jquery/jquery.min.js",
+    "/wp-content/uploads/2026/09/photo.jpg", "/feed/", "/sitemap.xml", "/robots.txt",
+    "/favicon.ico", "/cart/", "/checkout/", "/my-account/",
+)
+
+
+def ordinary_traffic_conflict(match: str, value: str) -> str:
+    """Why a rule would block ordinary traffic, or "" when it would not."""
+    import ipaddress
+
+    needle = value.lower()
+    if match == "user_agent":
+        if len(needle) < 4:
+            return "a user-agent value that short matches browsers by accident"
+        for agent in ORDINARY_USER_AGENTS:
+            if needle in agent.lower():
+                return f"it appears in the user agent of ordinary visitors or search crawlers: {agent[:90]}"
+    elif match == "path":
+        if len(needle) < 4:
+            return "a path that short matches ordinary pages"
+        for path in ORDINARY_PATHS:
+            if needle in path.lower():
+                return f"it matches pages every site serves, such as {path}"
+    elif match == "query":
+        if len(needle) < 3:
+            return "a query value that short matches ordinary links"
+    elif match == "ip":
+        try:
+            network = ipaddress.ip_network(value, strict=False)
+        except ValueError:
+            return ""
+        if network.prefixlen < (16 if network.version == 4 else 32):
+            return f"{network} is too wide a range: it covers {network.num_addresses:,} addresses"
+        # The server reaches its own sites over loopback (health and
+        # certificate checks); a LAN range would be its neighbours.
+        internal = [ipaddress.ip_network(n) for n in (
+            "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "::1/128", "fc00::/7", "fe80::/10")]
+        if any(network.version == n.version and (network.subnet_of(n) or n.subnet_of(network)) for n in internal):
+            return f"{network} is the server itself or its private network"
+    return ""
+
+
 def next_mcp_rule_id(existing: str) -> int:
     """The lowest id in the reserved range that the file is not already using.
 
@@ -1177,6 +1252,9 @@ def render_mcp_rule(match: str, value: str, *, rule_id: int, who: str, when: str
             "match must be one of: " + ", ".join(sorted(MCP_RULE_TARGETS))
         )
     safe_value = mcp_rule_value(value)
+    conflict = ordinary_traffic_conflict(match, safe_value)
+    if conflict:
+        raise ValueError(f"Refused: {conflict}. Block something narrower.")
     if not MCP_RULE_ID_FIRST <= int(rule_id) <= MCP_RULE_ID_LAST:
         raise ValueError("Rule id is outside the range reserved for this")
 

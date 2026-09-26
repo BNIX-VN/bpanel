@@ -333,3 +333,64 @@ def test_the_waf_switch_leaves_the_crs_opt_in_alone():
     crs = (api / "waf.py").read_text(encoding="utf-8")
     crs = crs.split('@router.put("/websites/{website_id}/crs")', 1)[1].split("\n@router", 1)[0]
     assert "waf_enabled" not in crs, "the CRS switch moves the WAF again"
+
+
+# --- the global custom rules (reported through MCP, 2026-09-27) ---------------------
+# add_waf_rule wrote to bpanel-custom.conf, which no vhost had loaded since the
+# per-site rule files arrived on 2026-06-03: every global rule did nothing.
+
+def test_every_site_rule_file_loads_the_global_custom_rules():
+    content = waf.render_site_rules("example.test", [], "SecRuleRemoveById 1090001", crs_mode="block")
+    include = f"Include {waf.GLOBAL_CUSTOM_PATH}"
+    assert include in content
+    # After CRS, before the site's own rules - so a site can still excuse
+    # itself from a global rule with SecRuleRemoveById.
+    assert content.index(f"Include {waf.CRS_CONF_PATH}") < content.index(include)
+    assert content.index(include) < content.index("SecRuleRemoveById 1090001")
+
+
+@pytest.mark.parametrize("match,value", [
+    ("user_agent", "10_15_7"),            # every Mac browser
+    ("user_agent", "Mozilla"),
+    ("user_agent", "facebookexternalhit"),
+    ("user_agent", "Googlebot"),
+    ("user_agent", "coc_coc"),
+    ("path", "/wp-json/batch/v1"),        # the block editor's own endpoint
+    ("path", "wp-login"),
+    ("path", "/"),
+    ("ip", "0.0.0.0/0"),
+    ("ip", "10.0.0.0/8"),
+    ("ip", "127.0.0.1"),
+])
+def test_a_rule_that_would_block_ordinary_visitors_is_refused(match, value):
+    assert waf.ordinary_traffic_conflict(match, value)
+    with pytest.raises(ValueError, match="Refused"):
+        waf.render_mcp_rule(match, value, rule_id=waf.MCP_RULE_ID_FIRST, who="admin", when="2026-09-27")
+
+
+@pytest.mark.parametrize("match,value", [
+    ("user_agent", "python-requests"), ("user_agent", "tphotobot"), ("user_agent", "MJ12bot"),
+    ("path", "/wp-admin/install.php"), ("path", "/icecoder/"), ("path", "sftp-config.json"),
+    ("ip", "45.13.0.0/24"), ("ip", "185.220.101.7"), ("ip", "2a0d:5600::/32"), ("query", "union+select"),
+])
+def test_a_narrow_rule_still_goes_through(match, value):
+    assert waf.ordinary_traffic_conflict(match, value) == ""
+
+
+def test_a_global_file_nginx_rejects_is_put_back():
+    """Every site includes it now, so a bad rule left in place would fail the
+    next reload for all of them."""
+    helper = (Path(__file__).resolve().parents[3] / "installer" / "files" / "bpanel-helper.sh").read_text(encoding="utf-8")
+    body = helper.split("save_waf_custom_rules() {", 1)[1].split("\n}\n", 1)[0]
+    assert 'cp "$target" "$backup"' in body and "if ! nginx -t; then" in body
+    assert 'mv -f "$backup" "$target"' in body
+    site = helper.split("save_waf_site_rules() {", 1)[1].split("\n}\n", 1)[0]
+    assert "[[ -f /etc/nginx/modsec/bpanel-custom.conf ]] || install -m 0644" in site, "an Include of a missing file fails nginx -t"
+
+
+def test_the_global_rules_can_be_read_and_removed_on_the_waf_page():
+    """add_waf_rule tells the assistant a wrong rule can be removed on the WAF
+    page; until now the page had nowhere to see one."""
+    app_jsx = (Path(__file__).resolve().parents[3] / "frontend" / "src" / "App.jsx").read_text(encoding="utf-8")
+    assert "request('/waf/rules/custom', { method: 'PUT', body: JSON.stringify({ content: wafGlobalRules }) }" in app_jsx
+    assert "<h2>{t('Global custom rules')}</h2>" in app_jsx

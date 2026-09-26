@@ -881,6 +881,7 @@ function App() {
   const [firewallBlocklists, setFirewallBlocklists] = useState(null);
   const [firewallBlocklistUrl, setFirewallBlocklistUrl] = useState('');
   const [wafRules, setWafRules] = useState({ status: null, default_rules: '', custom_rules: '' });
+  const [wafGlobalRules, setWafGlobalRules] = useState('');
   const [wafCustomRules, setWafCustomRules] = useState('');
   const [selectedWafWebsiteId, setSelectedWafWebsiteId] = useState('');
   const [wafSiteConfig, setWafSiteConfig] = useState(null);
@@ -4025,6 +4026,7 @@ Each account is overwritten with what is in its archive.`)) return;
     const data = await request('/waf/rules', {}, t('Loading WAF rules...'));
     if (data) {
       setWafRules(data);
+      setWafGlobalRules(data.custom_rules || '');
       const firstWebsiteId = selectedWafWebsiteId || selectedWebsiteId || websites[0]?.id || '';
       if (firstWebsiteId) {
         setSelectedWafWebsiteId(String(firstWebsiteId));
@@ -4100,6 +4102,11 @@ Each account is overwritten with what is in its archive.`)) return;
         : (data.message || 'Global bad bots saved.'));
       await loadBotBlocks();
     }
+  }
+
+  async function saveWafGlobalRules() {
+    const data = await request('/waf/rules/custom', { method: 'PUT', body: JSON.stringify({ content: wafGlobalRules }) }, t('Saving...'));
+    if (data) { setNotice(t('Global WAF rules saved. They apply to every website with the WAF on.')); await loadWafRules(); }
   }
 
   async function loadCrs() {
@@ -7123,6 +7130,21 @@ Each account is overwritten with what is in its archive.`)) return;
           })}
         </div>
       </section>
+
+      {isAdmin && <section className="section">
+        <div className="section-title">
+          <div>
+            <h2>{t('Global custom rules')}</h2>
+            <p className="hint">{t('ModSecurity rules for every website with the WAF on. Rules an AI assistant added are marked # bpanel-mcp; delete a rule by deleting its lines.')}</p>
+          </div>
+          <span className="badge">{t('{n} rule(s)', { n: (wafGlobalRules.match(/^\s*SecRule/gm) || []).length })}</span>
+        </div>
+        <textarea className="code-editor" rows={12} spellCheck={false} value={wafGlobalRules} onChange={e => setWafGlobalRules(e.target.value)} />
+        <div className="notify-actions" style={{ marginTop: 10 }}>
+          <button type="button" disabled={!!loading || wafGlobalRules === (wafRules.custom_rules || '')} onClick={saveWafGlobalRules}>{t('Save')}</button>
+          <button type="button" className="secondary-light" disabled={!!loading || wafGlobalRules === (wafRules.custom_rules || '')} onClick={() => setWafGlobalRules(wafRules.custom_rules || '')}>{t('Reset')}</button>
+        </div>
+      </section>}
 
       {isAdmin && <section className="section">
         <div className="section-title">

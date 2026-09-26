@@ -314,6 +314,15 @@ def save_waf_custom_rules(payload: WafCustomRulesUpdate, current_user: User = De
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if result.returncode != 0:
         raise HTTPException(status_code=400, detail=(result.stderr or result.stdout or "Could not save WAF rules").strip())
+    # These apply to every website with the WAF on; who changed them matters.
+    from app.core.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        log_action(db, current_user.id, "waf_global_custom_rules", "global",
+                   f"{payload.content.count('SecRule')} rule(s)")
+    finally:
+        db.close()
     return result.__dict__
 
 
