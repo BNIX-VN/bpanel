@@ -127,6 +127,9 @@ def served_certificate_expiry(domain: str) -> datetime | None:
     context = ssl.create_default_context()
     context.check_hostname = False
     context.verify_mode = ssl.CERT_NONE
+    # Only the certificate is wanted, and every nginx speaks TLS 1.2 or 1.3;
+    # there is no reason to offer anything older.
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
     try:
         with socket.create_connection(("127.0.0.1", 443), timeout=5) as sock:
             with context.wrap_socket(sock, server_hostname=domain) as tls:
