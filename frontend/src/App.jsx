@@ -1615,9 +1615,12 @@ function App() {
     if (data) setNotifyMe(data);
   }
 
+  // The switch moves when it is clicked, not when the server answers; a
+  // refusal puts back what the server holds.
   async function saveNotifyMe(changes) {
+    setNotifyMe(prev => (prev ? { ...prev, ...changes } : prev));
     const data = await request('/notifications/me', { method: 'PUT', body: JSON.stringify(changes) });
-    if (data) setNotifyMe(data);
+    if (data) setNotifyMe(data); else loadNotifyMe();
   }
 
   function toggleNotifyEvent(key, on) {
@@ -4890,7 +4893,7 @@ Each account is overwritten with what is in its archive.`)) return;
     </section>;
   }
 
-  function renderNotifications() {
+  function renderNotificationsPage() {
     const me = notifyMe;
     const s = notifySettings;
     const events = me?.events || [];
@@ -8366,7 +8369,7 @@ Each account is overwritten with what is in its archive.`)) return;
     // page full of requests that will every one be refused.
     if (page === 'services') return isAdmin ? renderServices() : renderAdminOnly();
     if (page === 'mcp') return (mcpAddonInstalled || isAdmin) ? renderMcp() : renderAddonMissing();
-    if (page === 'notifications') return notificationsAddonInstalled ? renderNotifications() : renderAddonMissing();
+    if (page === 'notifications') return notificationsAddonInstalled ? renderNotificationsPage() : renderAddonMissing();
     if (page === 'settings') return renderPanelSettings();
     if (page === 'users') return renderUsers();
     return renderDashboard();

@@ -338,3 +338,13 @@ def test_every_row_puts_its_columns_where_the_header_does():
         assert "scrollbar-gutter: stable;" in FILES.split(block)[1].split("}")[0], block
     # A three-line row was cut to ~40px by the list's max-height otherwise.
     assert ".file-list{grid-auto-rows:max-content}" in UI
+
+
+def test_no_function_in_the_app_is_declared_twice():
+    """A second `function renderNotifications()` - the Notifications page -
+    silently replaced the toast renderer of the same name: every toast in the
+    panel drew the Notifications page instead, and nothing failed. Inside one
+    component the later declaration simply wins."""
+    names = re.findall(r"^  (?:async )?function (\w+)\(", APP, flags=re.M)
+    duplicated = sorted({name for name in names if names.count(name) > 1})
+    assert not duplicated, f"declared more than once: {duplicated}"
