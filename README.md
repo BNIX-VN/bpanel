@@ -83,7 +83,7 @@ Chụp từ bản demo (giao diện tiếng Anh). Bấm vào ảnh để xem kí
 - Cài WordPress một lần bấm (WP-CLI), website PHP thường, hoặc website chạy
   ứng dụng Node.js / Docker (addon Application).
 - Nhiều phiên bản PHP chạy song song: 5.6, 7.4, 8.0 đến 8.5. Mỗi website một
-  pool PHP-FPM riêng, chạy bằng user Linux riêng.
+  pool PHP-FPM riêng, chạy bằng user Linux của chủ website.
 - Sửa được toàn bộ vhost Nginx, có sẵn các mẫu rewrite, tên miền phụ (alias).
 - MariaDB, phpMyAdmin đăng nhập một lần (token 60 giây).
 - SSL Let's Encrypt cho website và cho chính panel.
