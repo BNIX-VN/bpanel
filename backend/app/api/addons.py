@@ -12,7 +12,7 @@ from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.permissions import Role, ensure_role, is_admin_role
 from app.models.entities import SiteApp, User
-from app.services import addons, fail2ban, site_apps
+from app.services import addons, fail2ban, panel_settings, site_apps
 from app.services.audit import log_action
 
 router = APIRouter(prefix="/addons", tags=["addons"])
@@ -71,6 +71,13 @@ def install_addon(slug: str, db: Session = Depends(get_db), current_user: User =
             fail2ban.install()
         except (RuntimeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=_install_failure(exc)) from exc
+    if slug == addons.MALWARE:
+        # The scanner's own switch: installs LMD and the ClamAV engine in the
+        # background when they are missing, and returns at once.
+        try:
+            panel_settings.set_malware_scan(True)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=_install_failure(exc)) from exc
     record = addons.install(slug)
     log_action(db, current_user.id, "install_addon", slug, record.get("version", ""))
     return {
@@ -86,7 +93,10 @@ def install_addon(slug: str, db: Session = Depends(get_db), current_user: User =
             "SSH is protected now. Banned addresses are listed on the Firewall page."
             if slug == addons.FAIL2BAN else (
                 "Open Notifications to set up the SMTP server or a Telegram bot."
-                if slug == addons.NOTIFICATIONS else ""
+                if slug == addons.NOTIFICATIONS else (
+                    "Open Malware scanner under Settings. If LMD and ClamAV were not installed, they are installing now (1-3 minutes)."
+                    if slug == addons.MALWARE else ""
+                )
             )
         ),
     }
@@ -119,6 +129,14 @@ def uninstall_addon(slug: str, db: Session = Depends(get_db), current_user: User
             stopped.append("fail2ban")
         except RuntimeError:
             failed.append("fail2ban")
+    if slug == addons.MALWARE:
+        # Stops the real-time monitor and clamd; the schedule and the scan of
+        # uploads stop with the addon itself (they check it before running).
+        try:
+            panel_settings.set_malware_scan(False)
+            stopped.append("malware scanner")
+        except RuntimeError:
+            failed.append("malware scanner")
     revoked = 0
     if slug == addons.MCP:
         # The one addon whose removal destroys something, and the reason its
@@ -138,6 +156,8 @@ def uninstall_addon(slug: str, db: Session = Depends(get_db), current_user: User
         "revoked_tokens": revoked,
         "kept": "The package, the jail configuration and the ban history are all kept."
         if slug == addons.FAIL2BAN
+        else "LMD, ClamAV, the scan history and the schedule settings are all kept."
+        if slug == addons.MALWARE
         else (f"{revoked} MCP token(s) were revoked. Assistants using them can no longer reach the panel."
               if slug == addons.MCP
               else "Application directories, volumes and panel data are all kept."),

@@ -18,6 +18,24 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 FRONTEND = PROJECT_ROOT / "frontend" / "src" / "App.jsx"
 
 
+@pytest.fixture(autouse=True)
+def _malware_addon(monkeypatch, tmp_path):
+    """The Malware Scanner addon is installed unless a test says otherwise."""
+    from app.services import addons
+
+    monkeypatch.setattr(addons, "ADDONS_DIR", tmp_path)
+    monkeypatch.setattr(addons, "ADDONS_FILE", tmp_path / "addons.json")
+    addons.install(addons.MALWARE)
+
+
+def test_off_while_the_addon_is_not_installed(monkeypatch):
+    from app.services import addons
+
+    addons.uninstall(addons.MALWARE)
+    _panel_settings(monkeypatch, lambda: {malware_queue.SETTING_KEY: True})
+    assert malware_queue.scan_on_upload_enabled() is False
+
+
 def _panel_settings(monkeypatch, raw):
     """Stand a settings module in for the one the queue imports at call time.
 

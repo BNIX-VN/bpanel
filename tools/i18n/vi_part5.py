@@ -136,8 +136,6 @@ PART5 = {
     "Preparing 2FA...": "Đang chuẩn bị 2FA...",
     "Enabling 2FA...": "Đang bật 2FA...",
     "Preparing passkey...": "Đang chuẩn bị passkey...",
-    "Enabling the scanner...": "Đang bật trình quét...",
-    "Disabling the scanner...": "Đang tắt trình quét...",
 
     # --- the prompts that ask first ---
     "Delete this backup schedule?": "Xoá lịch backup này?",
@@ -153,8 +151,6 @@ PART5 = {
         "Chạy apt-get update && apt-get upgrade ngay?",
     "Update BPanel from GitHub now? The API may restart and this page will reload when done.":
         "Cập nhật BPanel từ GitHub ngay? API có thể khởi động lại và trang này sẽ tự tải lại khi xong.",
-    "The scanner is not installed on this server yet. The panel will install it now (1-2 minutes). Continue?":
-        "Server này chưa cài trình quét. Panel sẽ cài ngay bây giờ (1-2 phút). Tiếp tục?",
     "Turn on real-time protection? The panel watches website directories and scans new files as they appear. If it is not installed yet, the panel installs it (1-3 minutes).":
         "Bật bảo vệ thời gian thực? Panel sẽ theo dõi thư mục website và quét file mới ngay khi chúng xuất hiện. Nếu chưa cài thì panel sẽ cài (1-3 phút).",
 

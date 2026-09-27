@@ -215,4 +215,30 @@ PART13 = {
     "The source is not valid": "Nguồn không hợp lệ",
     "Nothing to send: the archive is already on this server": "Không cần gửi: bản backup đã nằm trên server này",
     "This is not a full user backup": "Đây không phải bản backup đầy đủ của người dùng",
+
+    # The Malware Scanner addon
+    "Scans the websites and the server for malware with Linux Malware Detect and ClamAV.":
+        "Quét mã độc cho các website và toàn server bằng Linux Malware Detect và ClamAV.",
+    "Scans a website, every website or the whole server on demand, and on a weekly schedule.":
+        "Quét một website, mọi website hoặc toàn server khi cần, và theo lịch hằng tuần.",
+    "Optional real-time monitoring of the websites (Level 2) and a scan of each uploaded file.":
+        "Tuỳ chọn giám sát thời gian thực các website (Cấp 2) và quét từng file được tải lên.",
+    "Suspicious files are listed with their signature; nothing is deleted or quarantined without you.":
+        "File nghi nhiễm được liệt kê kèm chữ ký; không file nào bị xoá hay cách ly khi bạn chưa đồng ý.",
+    "Installing it installs LMD and the ClamAV engine if they are not there yet (1-3 minutes).":
+        "Cài addon sẽ cài LMD và ClamAV nếu server chưa có (1-3 phút).",
+    "A scan uses about 1.3 GB of memory while it runs and releases it afterwards; nothing stays resident unless Level 2 is on.":
+        "Mỗi lần quét dùng khoảng 1,3 GB RAM và trả lại sau khi xong; không có gì chạy thường trực trừ khi bật Cấp 2.",
+    "Removing it stops the schedule, the scan of uploads and the real-time monitor, which stays off until you turn Level 2 on again. LMD, ClamAV, the history and the schedule are kept.":
+        "Gỡ addon sẽ dừng lịch quét, quét file tải lên và giám sát thời gian thực (Cấp 2 sẽ tắt cho đến khi bạn bật lại). LMD, ClamAV, lịch sử và lịch quét được giữ nguyên.",
+    "Open Malware scanner under Settings. If LMD and ClamAV were not installed, they are installing now (1-3 minutes).":
+        "Mở Quét mã độc trong Cài đặt. Nếu server chưa có LMD và ClamAV thì chúng đang được cài (1-3 phút).",
+    "LMD, ClamAV, the scan history and the schedule settings are all kept.":
+        "LMD, ClamAV, lịch sử quét và cấu hình lịch quét đều được giữ nguyên.",
+    "Addon off": "Chưa bật addon",
+    "Install it on the Addons page": "Cài ở trang Tiện ích",
+    "LMD and ClamAV are installing (1-3 minutes). Press Refresh to see when they are ready.":
+        "LMD và ClamAV đang được cài (1-3 phút). Bấm Tải lại để xem khi nào xong.",
+    "To turn the scanner off, remove the Malware Scanner addon on the Addons page. The history and the settings are kept.":
+        "Muốn tắt trình quét, hãy gỡ addon Quét mã độc ở trang Tiện ích. Lịch sử và cấu hình được giữ nguyên.",
 }

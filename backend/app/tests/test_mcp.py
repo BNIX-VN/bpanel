@@ -1176,6 +1176,8 @@ def test_every_addon_has_a_way_in_from_the_sidebar():
     for slug in sorted(addons.CATALOGUE):
         way_in = {"application": "appsFeatureEnabled ? [['applications',",
                   "fail2ban": "isAdmin && ['firewall', 'Firewall', BrickWall,",
+                  # An addon since 2026-09-27, found on the Settings page once on.
+                  "malware": "isAdmin && malwareAddonInstalled && ['malware', 'Malware scanner', Bug,",
                   "mcp": "mcpAddonInstalled ? [['mcp',",
                   # Administrators only (operator, 2026-09-27).
                   "notifications": "notificationsAddonInstalled && isAdmin ? [['notifications',"}.get(slug)

@@ -22,6 +22,7 @@ ADDONS_FILE = ADDONS_DIR / "addons.json"
 
 APPLICATION = "application"
 FAIL2BAN = "fail2ban"
+MALWARE = "malware"
 MCP = "mcp"
 NOTIFICATIONS = "notifications"
 
@@ -75,6 +76,22 @@ CATALOGUE: dict[str, dict] = {
         "notes": [
             "Email needs an SMTP account (host, port, sender address). Mail sent straight from the server usually lands in spam.",
             "Turning the addon off stops every message and keeps the settings, each administrator's choices and the delivery log.",
+        ],
+        "keeps_data_on_uninstall": True,
+    },
+    MALWARE: {
+        "name": "Malware Scanner",
+        "version": "1.0.0",
+        "summary": "Scans the websites and the server for malware with Linux Malware Detect and ClamAV.",
+        "details": [
+            "Scans a website, every website or the whole server on demand, and on a weekly schedule.",
+            "Optional real-time monitoring of the websites (Level 2) and a scan of each uploaded file.",
+            "Suspicious files are listed with their signature; nothing is deleted or quarantined without you.",
+        ],
+        "notes": [
+            "Installing it installs LMD and the ClamAV engine if they are not there yet (1-3 minutes).",
+            "A scan uses about 1.3 GB of memory while it runs and releases it afterwards; nothing stays resident unless Level 2 is on.",
+            "Removing it stops the schedule, the scan of uploads and the real-time monitor, which stays off until you turn Level 2 on again. LMD, ClamAV, the history and the schedule are kept.",
         ],
         "keeps_data_on_uninstall": True,
     },
@@ -211,3 +228,8 @@ def require(slug: str) -> None:
 def require_application() -> None:
     """FastAPI dependency for every route the Application addon owns."""
     require(APPLICATION)
+
+
+def require_malware() -> None:
+    """FastAPI dependency for every route the Malware Scanner addon owns."""
+    require(MALWARE)

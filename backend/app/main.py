@@ -38,6 +38,19 @@ def _adopt_addons_already_in_use() -> None:
             logger.info("Addon 'application' adopted: %s existing application(s)", count)
     except Exception:  # noqa: BLE001 - never let this stop the panel booting
         logger.warning("Could not check for existing applications", exc_info=True)
+    try:
+        # The same for the malware scanner, which became an addon on
+        # 2026-09-27: a server where it was switched on, scheduled or
+        # watching in real time keeps it.
+        from app.services import panel_settings
+
+        if addons.adopt_existing(addons.MALWARE, panel_settings.malware_in_use()):
+            # Installed means switched on; a server adopted for its schedule
+            # alone had the switch off, and the scan of uploads reads it.
+            panel_settings._persist_malware_enabled(True)
+            logger.info("Addon 'malware' adopted: the scanner was already in use")
+    except Exception:  # noqa: BLE001 - never let this stop the panel booting
+        logger.warning("Could not check whether the malware scanner was in use", exc_info=True)
 
 
 _adopt_addons_already_in_use()

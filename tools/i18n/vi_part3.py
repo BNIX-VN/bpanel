@@ -107,8 +107,6 @@ PART3 = {
 
     # --- malware scanner ---
     "Install the scanner": "Cài trình quét",
-    "Turn on scanner": "Bật trình quét",
-    "Turn off scanner": "Tắt trình quét",
     "Scan history": "Lịch sử quét",
     "Scan started.": "Đã bắt đầu quét.",
     "Scanning...": "Đang quét...",
@@ -121,8 +119,6 @@ PART3 = {
     "Level 2 — Real-time protection": "Mức 2 — Bảo vệ thời gian thực",
     "The panel scans on its own, with nobody pressing anything. Pick an hour when few visitors are around.":
         "Panel tự quét, không cần ai bấm gì. Chọn giờ ít khách truy cập.",
-    "Turning this on installs the scanner. It only runs during a scan (~1.3 GB of RAM) and releases that afterwards — nothing runs in the background, so it costs no memory at rest.":
-        "Bật cái này sẽ cài trình quét. Nó chỉ chạy trong lúc quét (~1,3 GB RAM) rồi trả lại ngay — không có gì chạy nền, nên lúc bình thường không tốn bộ nhớ.",
     "These are the scanner's own family names (php.base64..., for instance), not common virus names — there is nowhere else to look them up.":
         "Đây là tên họ mã độc do chính trình quét đặt (ví dụ php.base64...), không phải tên virus phổ thông — không có chỗ nào khác để tra.",
     "This server has no resident clamd — start one first and each scan drops to milliseconds.":
