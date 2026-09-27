@@ -59,7 +59,10 @@ def _waf_engine() -> str:
 def _malware() -> dict:
     jobs = panel_settings.list_malware_scan_jobs(limit=20)
     last = next((job for job in jobs if job.get("status") in FINISHED_SCANS), None)
+    from app.services import addons
+
     return {
+        "addon": addons.is_installed(addons.MALWARE),
         "installed": bool(maldet.installed() or malware_scan.clamav_installed()),
         "running": any(job.get("status") in {"queued", "running"} for job in jobs),
         "last_scan": {

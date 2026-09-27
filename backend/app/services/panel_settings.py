@@ -615,6 +615,18 @@ def _install_realtime_flow() -> None:
         _malware_scan._write_status({**_malware_scan.refresh_status(), "detail": "LMD install/monitor failed"})
 
 
+def malware_in_use() -> bool:
+    """Whether this server was using the malware scanner before it became an
+    addon: switched on, watching in real time, or on a schedule. Decides,
+    once, whether the addon starts out installed."""
+    from app.services import malware_schedule
+
+    raw = _read_raw_lenient()
+    scheduled = any(isinstance(entry, dict) and entry.get("enabled")
+                    for entry in malware_schedule.get_schedules().values())
+    return bool(_malware_scan._persisted_enabled() or raw.get("malware_realtime_enabled") or scheduled)
+
+
 def malware_scan_status() -> dict:
     return _malware_scan.refresh_status()
 

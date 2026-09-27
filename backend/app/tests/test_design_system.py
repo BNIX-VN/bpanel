@@ -182,12 +182,14 @@ def test_the_sidebar_holds_what_is_used_every_day():
     sidebar = APP.split("const navSections = [")[1].split("].filter(section")[0]
     keys = re.findall(r"\['([a-z-]+)', '", sidebar)
     assert keys == ["dashboard", "websites", "applications", "ssl", "databases", "cron", "files",
-                    "sftp", "backups", "users", "mcp", "notifications", "settings"]
+                    "sftp", "backups", "users", "mcp", "notifications", "malware", "settings"]
     assert "sidebar-subnav" not in APP and "settingsMenuOpen" not in APP
     hub = APP.split("const settingsGroups = [")[1].split("const settingsItems = ")[0]
     hub_keys = re.findall(r"\['([a-z-]+)', '", hub)
-    assert hub_keys == ["firewall", "waf", "malware", "access-logs", "security",
-                        "services", "php", "panel-settings", "updates", "addons"]
+    # Panel settings heads its group (operator, 2026-09-27); the malware
+    # scanner is an addon now and sits in the sidebar once it is on.
+    assert hub_keys == ["firewall", "waf", "access-logs", "security",
+                        "panel-settings", "services", "php", "updates", "addons"]
     assert not set(keys) & set(hub_keys), "a page in both places"
     assert "if (page === 'settings') return renderSettingsHub();" in APP
 

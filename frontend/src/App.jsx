@@ -959,6 +959,7 @@ function App() {
   const isAdmin = currentUser?.role === 'admin';
   const mcpAddonInstalled = !!addons.items.find(item => item.slug === 'mcp')?.installed;
   const notificationsAddonInstalled = !!addons.items.find(item => item.slug === 'notifications')?.installed;
+  const malwareAddonInstalled = !!addons.items.find(item => item.slug === 'malware')?.installed;
   const [mcpTokens, setMcpTokens] = useState([]);
   const [mcpDraft, setMcpDraft] = useState({ name: '', expires_in_days: 90, can_write: false });
   // Held until dismissed rather than cleared on the next render: the server
@@ -2081,21 +2082,6 @@ function App() {
     }
   }
 
-  async function toggleMalwareScan(enable) {
-    if (enable && !malwareScanStatus?.installed) {
-      if (!confirm(t('The scanner is not installed on this server yet. The panel will install it now (1-2 minutes). Continue?'))) return;
-    }
-    const data = await request('/malware/toggle', {
-      method: 'POST',
-      body: JSON.stringify({ enabled: enable }),
-    }, enable ? 'Enabling the scanner...' : 'Disabling the scanner...');
-    if (data) {
-      setPanelSettings(data);
-      setNotice(data.message || `Scanner ${enable ? 'enabled' : 'disabled'}.`);
-      await loadMalwareScanStatus();
-    }
-  }
-
   async function loadMalwareSchedule() {
     const data = await request('/malware/schedule', { silent: true }, '');
     if (data) {
@@ -2466,13 +2452,15 @@ function App() {
   async function setAddonInstalled(slug, install) {
     const addon = addons.items.find(item => item.slug === slug);
     const label = addon?.name || slug;
-    if (!install && !confirm(`Remove the ${label} addon?\n\nAnything running is stopped. Directories, volumes and panel data stay exactly where they are, and installing again picks up from there.`)) return;
+    if (!install && !confirm(t('Remove the {name} addon? Anything it runs is stopped; its data stays where it is, and installing it again picks up from there.', { name: t(label) }))) return;
     const data = await request(`/addons/${slug}/${install ? 'install' : 'uninstall'}`, { method: 'POST' },
-      install ? `Installing ${label}...` : `Removing ${label}...`);
+      install ? t('Installing {name}...', { name: t(label) }) : t('Removing {name}...', { name: t(label) }));
     if (data) {
+      // Each addon says in its own words what it stopped and what it kept;
+      // "Stopped 1 app(s)" was Application's sentence, shown for every addon.
       setNotice(install
-        ? `${label} installed. ${data.next_step || ''}`.trim()
-        : `${label} removed.${data.stopped?.length ? ` Stopped ${data.stopped.length} app(s).` : ''}`);
+        ? `${t('{name} installed.', { name: t(label) })} ${data.next_step ? t(data.next_step) : ''}`.trim()
+        : `${t('{name} removed.', { name: t(label) })} ${data.kept ? t(data.kept) : ''}`.trim());
       await loadAddons();
       // The nav and the website mode picker both hang off this.
       if (install) await loadSiteApps();
@@ -4420,6 +4408,15 @@ function App() {
   }, [isAuthenticated, page]);
 
   useEffect(() => {
+    if (!isAuthenticated || page !== 'malware' || !isAdmin || !malwareAddonInstalled) return;
+    loadMalwareScanStatus();
+    loadMalwareScanJobs();
+    loadLatestMalwareScanJob();
+    loadMalwareSchedule();
+    if (websites.length === 0) loadWebsiteList('', false);
+  }, [isAuthenticated, page, isAdmin, malwareAddonInstalled]);
+
+  useEffect(() => {
     if (!isAuthenticated || page !== 'notifications' || !notificationsAddonInstalled || !isAdmin) return;
     loadNotifyMe();
     loadNotifySettings();
@@ -4545,13 +4542,6 @@ function App() {
       // /waf/rules and /waf/crs describe the whole server and stay admin-only.
       if (isAdmin) { loadWafRules(); loadCrs(); }
     }
-    if (isAuthenticated && page === 'malware' && isAdmin) {
-      loadMalwareScanStatus();
-      loadMalwareScanJobs();
-      loadLatestMalwareScanJob();
-      loadMalwareSchedule();
-      if (websites.length === 0) loadWebsiteList('', false);
-    }
     if (isAuthenticated && page === 'access-logs' && currentUser?.role === 'admin') {
       loadWafAccessLogs(wafAccessLogFilters, true);
     }
@@ -4629,6 +4619,7 @@ function App() {
     { key: 'addons', items: [
       ...(mcpAddonInstalled ? [['mcp', 'AI assistants', Bot]] : []),
       ...(notificationsAddonInstalled && isAdmin ? [['notifications', 'Notifications', Bell]] : []),
+      ...(malwareAddonInstalled && isAdmin ? [['malware', 'Malware scanner', Bug]] : []),
     ] },
     { key: 'settings', items: [['settings', 'Settings', SettingsIcon]] },
   ].filter(section => section.items.length > 0);
@@ -4638,14 +4629,13 @@ function App() {
     { title: 'Security', items: [
       isAdmin && ['firewall', 'Firewall', BrickWall, 'Ports, IP rules, blocklists and Fail2ban'],
       ['waf', 'WAF', ShieldAlert, 'Request filtering for each website'],
-      isAdmin && ['malware', 'Malware scanner', Bug, 'Scans, schedules and history'],
       isAdmin && ['access-logs', 'Access logs', ScrollText, 'Requests and blocks'],
       ['security', 'Account security', LockKeyhole, 'Password, two-factor sign-in and passkeys'],
     ] },
     { title: 'System', items: [
+      isAdmin && ['panel-settings', 'Panel settings', SettingsIcon, 'Hostname, branding and API tokens'],
       isAdmin && ['services', 'Services', Activity, 'Start, stop and restart'],
       isAdmin && ['php', 'PHP config', Code2, 'Versions, limits and extensions'],
-      isAdmin && ['panel-settings', 'Panel settings', SettingsIcon, 'Hostname, branding and API tokens'],
       isAdmin && ['updates', 'Updates', RefreshCw, 'Panel version'],
       isAdmin && ['addons', 'Addons', PackageOpen, 'Optional features'],
     ] },
@@ -4894,9 +4884,9 @@ function App() {
       const scanner = sum.malware;
       const lastScan = scanner?.last_scan;
       cards.push({ key: 'malware', icon: Bug, label: t('Malware scanner'),
-        value: !scanner ? '—' : !scanner.installed ? t('Not installed') : lastScan?.infected ? t('{n} threat(s)', { n: lastScan.infected }) : lastScan ? t('Clean') : t('No scan yet'),
-        detail: scanner?.running ? t('Scanning...') : lastScan ? t('Last scan {when}', { when: shortDate(lastScan.finished_at) }) : t('Last scan'),
-        tone: !scanner ? 'neutral' : !scanner.installed ? 'warn' : lastScan?.infected ? 'bad' : lastScan ? 'ok' : 'neutral' });
+        value: !scanner ? '—' : scanner.addon === false ? t('Addon off') : !scanner.installed ? t('Not installed') : lastScan?.infected ? t('{n} threat(s)', { n: lastScan.infected }) : lastScan ? t('Clean') : t('No scan yet'),
+        detail: scanner?.addon === false ? t('Install it on the Addons page') : scanner?.running ? t('Scanning...') : lastScan ? t('Last scan {when}', { when: shortDate(lastScan.finished_at) }) : t('Last scan'),
+        tone: !scanner || scanner.addon === false ? 'neutral' : !scanner.installed ? 'warn' : lastScan?.infected ? 'bad' : lastScan ? 'ok' : 'neutral' });
       const services = sum.services;
       cards.push({ key: 'services', icon: Activity, label: t('Services'),
         value: services ? `${services.running}/${services.total}` : '—',
@@ -4927,7 +4917,7 @@ function App() {
     if (sites.suspended) flag('warn', t('{n} website(s) suspended.', { n: sites.suspended }), 'websites');
     if (isAdmin && sum.backups && !sum.backups.schedules) flag('warn', t('No scheduled backup is set up.'), 'backups', t('Set up'));
     if (isAdmin && sum.waf?.engine === 'off') flag('warn', t('The WAF engine is not installed.'), 'waf');
-    if (isAdmin && sum.malware && !sum.malware.installed) flag('warn', t('The malware scanner is not installed.'), 'malware');
+    if (isAdmin && sum.malware?.addon && !sum.malware.installed) flag('warn', t('The malware scanner is not installed.'), 'malware');
     if (!isAdmin && currentUser && !currentUser.totp_enabled) flag('info', t('Two-factor sign-in is off for your account.'), 'security', t('Turn on'), LockKeyhole);
     if (isAdmin && sum.updates?.update_available) flag('info', t('Panel update {version} is available.', { version: sum.updates.latest_version }), 'updates', t('Open'), RefreshCw);
 
@@ -5181,16 +5171,21 @@ function App() {
     </div>;
   }
 
-  function renderAddonMissing() {
+  // Which addon a page belongs to decides the words: this said
+  // "Applications" on the Malware, MCP and Notifications pages too.
+  function renderAddonMissing(slug = 'application') {
+    const addon = addons.items.find(item => item.slug === slug);
+    const name = addon?.name || 'Application';
+    const installed = !!addon?.installed;
     return <section className="section">
-      <div className="section-title"><div><h2>{t('Applications')}</h2></div></div>
+      <div className="section-title"><div><h2>{t(name)}</h2></div></div>
       <EmptyState
         icon={Boxes}
-        message={applicationAddonInstalled
-          ? 'Your package does not include Applications. Contact an administrator to upgrade.'
-          : 'The Applications addon is not installed on this server.'}
+        message={slug === 'application' && installed
+          ? t('Your package does not include Applications. Contact an administrator to upgrade.')
+          : t('The {name} addon is not installed on this server.', { name: t(name) })}
       />
-      {isAdmin && !applicationAddonInstalled && <div className="site-app-form-actions">
+      {isAdmin && !installed && <div className="site-app-form-actions">
         <button disabled={!!loading} onClick={() => navigateToPage('addons')}><Boxes size={14}/>{t('Go to Addons')}</button>
       </div>}
     </section>;
@@ -7957,12 +7952,10 @@ function App() {
           <p className="hint">{mw.detail || 'Checking...'}</p>
           {mw.memory_total_mb > 0 && <p className="hint">{t('Server memory:')}{' '}<strong>{mw.memory_total_mb} MB</strong> {t('({n} MB free)', { n: mw.memory_available_mb })}</p>}
           {mw.lmd_installed && <p className="hint">{t('Malware signatures:')}{' '}<strong>{mw.lmd_sig_version || '—'}</strong>{mw.lmd_updated_at ? ` (updated ${mw.lmd_updated_at})` : ''}</p>}
-          {!mwInstalled && <p className="hint" style={{marginTop:8}}>{t('Turning this on installs the scanner. It only runs during a scan (~1.3 GB of RAM) and releases that afterwards — nothing runs in the background, so it costs no memory at rest.')}</p>}
+          {!mwInstalled && <p className="hint" style={{marginTop:8}}>{t('LMD and ClamAV are installing (1-3 minutes). Press Refresh to see when they are ready.')}</p>}
+          <p className="hint" style={{marginTop:8}}>{t('To turn the scanner off, remove the Malware Scanner addon on the Addons page. The history and the settings are kept.')}</p>
           <div className="actions" style={{marginTop:12}}>
-            {!mwEnabled
-              ? <button disabled={!!loading} onClick={() => toggleMalwareScan(true)}><Shield size={14}/>{t('Turn on scanner')}</button>
-              : <button className="danger" disabled={!!loading} onClick={() => toggleMalwareScan(false)}>{t('Turn off scanner')}</button>}
-            {mwEnabled && !mw.lmd_installed && <button disabled={!!loading} onClick={installLmd}>{t('Install the scanner')}</button>}
+            {!mw.lmd_installed && <button disabled={!!loading} onClick={installLmd}>{t('Install the scanner')}</button>}
             {mw.lmd_installed && <button className="secondary" disabled={!!loading} onClick={updateMalwareSignatures}><RefreshCw size={13}/>{t('Update signatures')}</button>}
           </div>
         </div>
@@ -8617,7 +8610,7 @@ function App() {
     if (page === 'addons') return renderAddons();
     // Reachable by URL after the addon is removed, so it answers for itself
     // rather than rendering a page whose every request would be refused.
-    if (page === 'applications') return appsFeatureEnabled ? renderApplications() : renderAddonMissing();
+    if (page === 'applications') return appsFeatureEnabled ? renderApplications() : renderAddonMissing('application');
     if (page === 'ssl') return renderSsl();
     if (page === 'databases') return renderDatabases();
     if (page === 'sftp') return renderSftp();
@@ -8629,15 +8622,16 @@ function App() {
     if (page === 'firewall') return renderFirewall();
     if (page === 'waf') return renderWaf();
     if (page === 'waf-site') return renderWafSite();
-    if (page === 'malware' || page === 'malware-scan') return renderMalware();
+    // An addon since 2026-09-27: the page is there once it is installed.
+    if (page === 'malware' || page === 'malware-scan') return malwareAddonInstalled ? renderMalware() : renderAddonMissing('malware');
     if (page === 'access-logs') return renderWafAccessLogs();
     if (page === 'updates') return renderUpdates();
     // Reachable by URL, so it answers for itself rather than firing a
     // page full of requests that will every one be refused.
     if (page === 'services') return isAdmin ? renderServices() : renderAdminOnly();
-    if (page === 'mcp') return (mcpAddonInstalled || isAdmin) ? renderMcp() : renderAddonMissing();
+    if (page === 'mcp') return (mcpAddonInstalled || isAdmin) ? renderMcp() : renderAddonMissing('mcp');
     // Administrators only (operator, 2026-09-27): customers get no notifications.
-    if (page === 'notifications') return !isAdmin ? renderAdminOnly() : notificationsAddonInstalled ? renderNotificationsPage() : renderAddonMissing();
+    if (page === 'notifications') return !isAdmin ? renderAdminOnly() : notificationsAddonInstalled ? renderNotificationsPage() : renderAddonMissing('notifications');
     if (page === 'settings') return renderSettingsHub();
     if (page === 'panel-settings') return renderPanelSettings();
     if (page === 'users') return renderUsers();

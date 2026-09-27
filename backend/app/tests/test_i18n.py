@@ -331,7 +331,8 @@ def test_every_settings_page_entry_reads_in_vietnamese():
     sidebar's, and are translated where they are drawn."""
     hub = APP.split("const settingsGroups = [")[1].split("const settingsItems = ")[0]
     rows = re.findall(r"\['[a-z-]+', '([^']+)', \w+, '([^']+)'\]", hub)
-    assert len(rows) >= 10, rows
+    # Nine since the malware scanner became an addon with a sidebar entry.
+    assert len(rows) >= 9, rows
     texts = [text for row in rows for text in row] + re.findall(r"title: '([^']+)'", hub)
     missing = [text for text in texts if text not in DICTIONARY and text not in KEPT_IN_ENGLISH]
     assert not missing, f"Settings page still in English: {missing}"

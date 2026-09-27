@@ -73,8 +73,6 @@ PART6 = {
         "Các cài đặt được quản lý sẽ ghi lại vhost chính một cách an toàn. Nginx tuỳ chỉnh vẫn được lưu thành một include riêng.",
     "Nginx will forward this domain to the selected application on 127.0.0.1, including WebSocket upgrades.":
         "Nginx sẽ chuyển tên miền này tới ứng dụng đã chọn trên 127.0.0.1, bao gồm cả nâng cấp WebSocket.",
-    "The Applications addon is not installed on this server.":
-        "Server này chưa cài tiện ích Ứng dụng.",
     "Your package does not include Applications. Contact an administrator to upgrade.":
         "Gói của bạn không bao gồm Ứng dụng. Hãy liên hệ quản trị viên để nâng cấp.",
     "Admin can set directly.": "Quản trị viên đặt được trực tiếp.",
