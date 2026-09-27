@@ -1,0 +1,654 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BPanel — Bảng điều khiển hosting gọn nhẹ cho Ubuntu 24.04</title>
+<meta name="description" content="BPanel quản lý website WordPress và PHP, database, SSL, backup, tường lửa, WAF và người dùng trong một giao diện web tiếng Việt. Mã nguồn mở, cài bằng một lệnh trên Ubuntu 24.04.">
+<meta property="og:title" content="BPanel — Bảng điều khiển hosting gọn nhẹ">
+<meta property="og:description" content="Website, database, SSL, backup, tường lửa, WAF và người dùng trong một giao diện web tiếng Việt. Cài bằng một lệnh.">
+<meta property="og:image" content="screenshots/02-dashboard.png">
+<meta property="og:type" content="website">
+<meta name="theme-color" content="#1660cf">
+<link rel="icon" type="image/png" href="assets/favicon.png">
+<link rel="preload" href="assets/fonts/open-sans-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+<style>
+@font-face{font-family:'Open Sans';font-style:normal;font-weight:300 800;font-display:swap;
+  src:url('assets/fonts/open-sans-vietnamese-wght-normal.woff2') format('woff2');
+  unicode-range:U+0102-0103,U+0110-0111,U+0128-0129,U+0168-0169,U+01A0-01A1,U+01AF-01B0,U+0300-0301,U+0303-0304,U+0308-0309,U+0323,U+0329,U+1EA0-1EF9,U+20AB}
+@font-face{font-family:'Open Sans';font-style:normal;font-weight:300 800;font-display:swap;
+  src:url('assets/fonts/open-sans-latin-ext-wght-normal.woff2') format('woff2');
+  unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF}
+@font-face{font-family:'Open Sans';font-style:normal;font-weight:300 800;font-display:swap;
+  src:url('assets/fonts/open-sans-latin-wght-normal.woff2') format('woff2');
+  unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
+
+/* The panel's own palette (frontend/src/theme.css), so the page and the
+   product read as one thing. */
+:root{
+  --primary:#1660cf;--primary-hover:#1253b5;--primary-ink:#1459bf;--primary-light:#dce9fb;--primary-soft:#b3cdf3;
+  --navy:#111a2b;--navy-2:#18243a;--yellow:#f6c431;
+  --bg:#f5f7fa;--surface:#ffffff;--surface-alt:#eef1f5;--border:#dde2e9;
+  --text:#111a2b;--text-2:#3b4658;--muted:#5a6578;
+  --success:#087a5b;--success-bg:#e3f5ee;
+  --radius:12px;--radius-sm:8px;--shadow:0 1px 2px rgba(17,26,43,.06),0 8px 24px rgba(17,26,43,.08);
+  --shadow-lg:0 2px 4px rgba(17,26,43,.06),0 24px 60px rgba(17,26,43,.16);
+  --font:'Open Sans',system-ui,-apple-system,'Segoe UI',sans-serif;
+  --mono:Consolas,'Liberation Mono',Menlo,monospace;
+  --max:1160px;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --primary:#3d82ea;--primary-hover:#5a95ee;--primary-ink:#7fb0f5;--primary-light:#18284a;--primary-soft:#2a4677;
+    --bg:#0c1220;--surface:#121a2b;--surface-alt:#18223a;--border:#26324a;
+    --text:#e7ebf1;--text-2:#c0c9d6;--muted:#98a3b3;--success:#3ecf8e;--success-bg:#10281f;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.3);--shadow-lg:0 24px 60px rgba(0,0,0,.45);
+  }
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:76px}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{transition:none!important;animation:none!important}}
+body{margin:0;font-family:var(--font);font-size:16px;line-height:1.6;color:var(--text);background:var(--bg);-webkit-font-smoothing:antialiased}
+img{max-width:100%;height:auto;display:block}
+a{color:var(--primary-ink)}
+a:focus-visible,button:focus-visible,summary:focus-visible{outline:3px solid var(--primary-soft);outline-offset:2px;border-radius:6px}
+code,pre{font-family:var(--mono)}
+.wrap{width:100%;max-width:var(--max);margin:0 auto;padding:0 20px}
+.skip{position:absolute;left:-999px;top:8px;background:var(--surface);padding:8px 12px;border-radius:8px;z-index:100}
+.skip:focus{left:12px}
+
+/* --- header ------------------------------------------------------------ */
+.site-head{position:sticky;top:0;z-index:50;background:color-mix(in srgb,var(--bg) 86%,transparent);backdrop-filter:saturate(1.4) blur(10px);border-bottom:1px solid var(--border)}
+.head-row{display:flex;align-items:center;gap:20px;height:64px}
+.brand{display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--text);font-weight:800;font-size:19px;letter-spacing:-.01em}
+.mark{position:relative;display:inline-grid;place-items:center;width:34px;height:34px;border-radius:9px;background:#1660cf;color:#fff;font-size:12px;font-weight:800;letter-spacing:.02em;overflow:hidden;flex:none}
+.mark::after{content:'';position:absolute;left:7px;right:7px;bottom:5px;height:2.5px;border-radius:9px;background:var(--yellow)}
+.mark span{transform:translateY(-2px)}
+.nav{display:flex;gap:4px;margin-left:12px}
+.nav a{color:var(--text-2);text-decoration:none;font-size:14.5px;font-weight:600;padding:8px 10px;border-radius:8px}
+.nav a:hover{color:var(--text);background:var(--surface-alt)}
+.head-actions{margin-left:auto;display:flex;gap:8px;align-items:center}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:0 18px;border-radius:10px;font-weight:700;font-size:15px;text-decoration:none;border:1px solid transparent;cursor:pointer;font-family:inherit;transition:background .15s,border-color .15s,transform .15s}
+.btn svg{width:18px;height:18px;flex:none}
+.btn-primary{background:var(--primary);color:#fff}
+.btn-primary:hover{background:var(--primary-hover)}
+.btn-ghost{background:var(--surface);color:var(--text);border-color:var(--border)}
+.btn-ghost:hover{border-color:var(--primary-soft);background:var(--surface-alt)}
+.btn-sm{min-height:38px;padding:0 14px;font-size:14px}
+.menu-toggle{display:none}
+
+/* --- hero ---------------------------------------------------------------- */
+.hero{position:relative;overflow:hidden;padding:64px 0 40px}
+.hero::before{content:'';position:absolute;inset:-40% -10% auto;height:640px;background:radial-gradient(closest-side,color-mix(in srgb,var(--primary) 16%,transparent),transparent);pointer-events:none}
+.hero-grid{position:relative;display:grid;grid-template-columns:minmax(0,1fr);gap:44px;align-items:center}
+.eyebrow{display:inline-flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 18px;padding:6px 12px;border:1px solid var(--border);border-radius:999px;background:var(--surface);color:var(--text-2);font-size:13.5px;font-weight:600}
+.eyebrow b{color:var(--success)}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--border)}
+h1{margin:0;font-size:clamp(34px,5.2vw,58px);line-height:1.1;letter-spacing:-.025em;font-weight:800;max-width:17ch}
+h1 em{font-style:normal;color:var(--primary-ink);position:relative;white-space:nowrap}
+h1 em::after{content:'';position:absolute;left:0;right:0;bottom:.06em;height:.14em;background:var(--yellow);border-radius:9px;z-index:-1;opacity:.9}
+.lead{margin:20px 0 0;max-width:62ch;font-size:clamp(17px,1.6vw,19px);color:var(--text-2)}
+.hero-cta{display:flex;flex-wrap:wrap;gap:12px;margin-top:28px}
+.cmd{margin-top:22px;display:flex;align-items:center;gap:10px;max-width:720px;padding:10px 10px 10px 16px;background:var(--navy);color:#e7ebf1;border-radius:12px;box-shadow:var(--shadow)}
+.cmd code{flex:1;min-width:0;overflow-x:auto;white-space:nowrap;font-size:14px;scrollbar-width:none;-webkit-mask-image:linear-gradient(90deg,#000 88%,transparent)}
+.cmd code::-webkit-scrollbar{display:none}
+.cmd code::before{content:'$ ';color:#7fb0f5}
+.copy{flex:none;display:inline-flex;align-items:center;gap:6px;min-height:36px;padding:0 12px;border-radius:8px;border:1px solid #2c3b57;background:#18243a;color:#e7ebf1;font:600 13px var(--font);cursor:pointer}
+.copy:hover{background:#22314d}
+.copy svg{width:15px;height:15px}
+.hero-shot{position:relative;margin-top:8px}
+.browser{border-radius:14px;background:var(--surface);border:1px solid var(--border);box-shadow:var(--shadow-lg);overflow:hidden}
+.browser-bar{display:flex;align-items:center;gap:6px;height:36px;padding:0 12px;background:var(--surface-alt);border-bottom:1px solid var(--border)}
+.browser-bar i{width:10px;height:10px;border-radius:50%;background:var(--border)}
+.browser-bar span{margin-left:10px;font-size:12px;color:var(--muted);font-family:var(--mono);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.phone{position:absolute;right:-12px;bottom:-36px;width:132px;border-radius:22px;border:6px solid var(--navy);box-shadow:var(--shadow-lg);overflow:hidden;background:var(--navy)}
+@media (min-width:1000px){
+  .hero{padding:84px 0 56px}
+  .hero-grid{grid-template-columns:minmax(0,1fr) minmax(0,1.05fr)}
+  .phone{width:148px;right:-28px}
+}
+@media (max-width:640px){.phone{display:none}}
+
+/* --- facts strip ---------------------------------------------------------- */
+.facts{margin-top:56px;display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px}
+.fact{padding:18px 20px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius)}
+.fact strong{display:block;font-size:20px;letter-spacing:-.01em}
+.fact span{color:var(--muted);font-size:14px}
+
+/* --- sections -------------------------------------------------------------- */
+section{padding:72px 0}
+.section-head{max-width:720px;margin:0 0 36px}
+.kicker{display:inline-block;margin-bottom:10px;color:var(--primary-ink);font-weight:800;font-size:13px;letter-spacing:.08em;text-transform:uppercase}
+h2{margin:0;font-size:clamp(26px,3.4vw,38px);line-height:1.2;letter-spacing:-.02em}
+.section-head p{margin:12px 0 0;color:var(--text-2);font-size:17px}
+.alt{background:var(--surface);border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
+
+.features{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px}
+.card{padding:24px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);transition:border-color .15s,box-shadow .15s}
+.alt .card{background:var(--bg)}
+.card:hover{border-color:var(--primary-soft);box-shadow:var(--shadow)}
+.icon{display:inline-grid;place-items:center;width:44px;height:44px;border-radius:11px;background:var(--primary-light);color:var(--primary-ink);margin-bottom:14px}
+.icon svg{width:22px;height:22px}
+.card h3{margin:0 0 10px;font-size:18px;letter-spacing:-.01em}
+.card ul{margin:0;padding:0;list-style:none;display:grid;gap:8px}
+.card li{position:relative;padding-left:22px;color:var(--text-2);font-size:15px;line-height:1.5}
+.card li::before{content:'';position:absolute;left:2px;top:.55em;width:10px;height:6px;border-left:2px solid var(--success);border-bottom:2px solid var(--success);transform:rotate(-45deg)}
+
+.spot{display:grid;grid-template-columns:minmax(0,1fr);gap:32px;align-items:center;padding:28px 0}
+.spot + .spot{border-top:1px dashed var(--border)}
+.spot h3{margin:0 0 12px;font-size:clamp(22px,2.6vw,28px);letter-spacing:-.015em;line-height:1.25}
+.spot p{margin:0 0 14px;color:var(--text-2)}
+.spot ul{margin:0;padding:0;list-style:none;display:grid;gap:9px}
+.spot li{display:flex;gap:10px;color:var(--text-2)}
+.spot li svg{flex:none;width:20px;height:20px;color:var(--success);margin-top:2px}
+.shot{border-radius:12px;border:1px solid var(--border);box-shadow:var(--shadow);overflow:hidden;background:var(--surface)}
+@media (min-width:900px){
+  .spot{grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);gap:56px}
+  .spot.flip .spot-text{order:2}
+}
+
+.addons{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px}
+.addon{padding:22px;border-radius:var(--radius);border:1px solid var(--border);background:var(--bg)}
+.addon h3{margin:0 0 6px;font-size:17px}
+.addon p{margin:0;color:var(--text-2);font-size:14.5px}
+.note{margin-top:18px;display:flex;gap:10px;align-items:flex-start;padding:14px 16px;border-radius:10px;background:var(--primary-light);color:var(--text)}
+.note svg{flex:none;width:20px;height:20px;color:var(--primary-ink);margin-top:2px}
+
+/* --- gallery -------------------------------------------------------------- */
+.tabs{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:22px}
+.tab{min-height:40px;padding:0 16px;border-radius:999px;border:1px solid var(--border);background:var(--surface);color:var(--text-2);font:600 14px var(--font);cursor:pointer}
+.tab:hover{border-color:var(--primary-soft);color:var(--text)}
+.tab[aria-selected="true"]{background:var(--primary);border-color:var(--primary);color:#fff}
+.gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px}
+.thumb{display:block;padding:0;border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--surface);cursor:zoom-in;text-align:left;font:inherit;color:inherit;transition:transform .15s,box-shadow .15s}
+.thumb:hover{transform:translateY(-2px);box-shadow:var(--shadow)}
+.thumb img{aspect-ratio:16/10;object-fit:cover;object-position:top left;width:100%}
+.thumb span{display:block;padding:10px 12px;font-size:14px;font-weight:600;border-top:1px solid var(--border)}
+dialog.lightbox{padding:0;border:0;border-radius:12px;max-width:min(1200px,94vw);max-height:92vh;background:var(--surface);box-shadow:var(--shadow-lg)}
+dialog.lightbox::backdrop{background:rgba(8,12,22,.72)}
+.lightbox img{max-height:calc(92vh - 56px);width:auto;margin:0 auto}
+.lightbox-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;height:56px;padding:0 10px 0 16px;border-top:1px solid var(--border);font-weight:600}
+.lightbox-bar button{min-width:44px;min-height:40px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font:600 14px var(--font);cursor:pointer}
+
+/* --- install ---------------------------------------------------------------- */
+.steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;counter-reset:step}
+.step{position:relative;padding:22px 22px 22px 70px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface)}
+.step::before{counter-increment:step;content:counter(step);position:absolute;left:20px;top:20px;width:34px;height:34px;display:grid;place-items:center;border-radius:50%;background:var(--primary);color:#fff;font-weight:800}
+.step h3{margin:0 0 6px;font-size:17px}
+.step p{margin:0;color:var(--text-2);font-size:15px}
+.step code{font-size:13.5px;background:var(--surface-alt);padding:1px 6px;border-radius:5px}
+.code-block{position:relative;margin:18px 0 0;padding:18px 20px;background:var(--navy);color:#e7ebf1;border-radius:12px;overflow-x:auto;font-size:14px;line-height:1.7}
+.code-block .c{color:#8f9bb0}
+.code-block .k{color:#7fb0f5}
+.two{display:grid;grid-template-columns:minmax(0,1fr);gap:24px;margin-top:28px}
+@media (min-width:900px){.two{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
+.box{padding:24px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface)}
+.box h3{margin:0 0 10px;font-size:18px}
+.box ul{margin:0;padding-left:20px;color:var(--text-2);display:grid;gap:6px}
+
+/* --- security ---------------------------------------------------------------- */
+.flow{display:grid;gap:10px;justify-items:start;font-family:var(--mono);font-size:14px}
+.flow div{padding:12px 16px;border-radius:10px;border:1px solid var(--border);background:var(--bg)}
+.flow .arrow{border:0;background:none;padding:0 0 0 28px;color:var(--muted)}
+.flow strong{font-family:var(--font)}
+
+/* --- faq ------------------------------------------------------------------- */
+.faq{display:grid;gap:10px;max-width:860px}
+.faq details{border:1px solid var(--border);border-radius:10px;background:var(--surface)}
+.faq summary{cursor:pointer;list-style:none;display:flex;justify-content:space-between;gap:16px;align-items:center;padding:16px 18px;font-weight:700}
+.faq summary::-webkit-details-marker{display:none}
+.faq summary::after{content:'+';font-size:22px;line-height:1;color:var(--muted);transition:transform .15s}
+.faq details[open] summary::after{transform:rotate(45deg)}
+.faq details p{margin:0;padding:0 18px 16px;color:var(--text-2)}
+
+/* --- final cta + footer ----------------------------------------------------- */
+.final{padding:64px 0}
+.final-card{display:grid;gap:18px;justify-items:start;padding:40px;border-radius:18px;background:linear-gradient(135deg,#0f1a2e,#16305e);color:#fff;box-shadow:var(--shadow-lg)}
+.final-card h2{color:#fff}
+.final-card p{margin:0;color:#c9d4e6;max-width:60ch}
+.final-card .btn-ghost{background:transparent;color:#fff;border-color:#3a4d73}
+.final-card .btn-ghost:hover{background:#1d2c4c}
+footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted);font-size:14px}
+.foot{display:flex;flex-wrap:wrap;gap:16px;justify-content:space-between;align-items:center}
+.foot nav{display:flex;flex-wrap:wrap;gap:16px}
+.foot a{color:var(--text-2);text-decoration:none}
+.foot a:hover{color:var(--primary-ink)}
+
+@media (max-width:900px){
+  .nav{display:none;position:absolute;left:0;right:0;top:64px;flex-direction:column;gap:0;padding:8px 12px 14px;margin:0;background:var(--surface);border-bottom:1px solid var(--border);box-shadow:var(--shadow)}
+  .nav.open{display:flex}
+  .nav a{padding:12px 10px}
+  .menu-toggle{display:inline-flex;width:44px;padding:0}
+  .head-actions{margin-left:auto}
+  .head-actions .btn-github{display:none}
+}
+@media (max-width:520px){
+  section{padding:56px 0}
+  .head-actions .btn-demo{display:none}
+  .step{padding:64px 20px 20px}
+  .final-card{padding:28px 22px}
+  .gallery{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .thumb span{padding:8px 9px;font-size:12.5px}
+}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Bỏ qua, tới nội dung</a>
+
+<!-- Icons, drawn once and referenced below (Lucide, ISC licence) -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-globe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></symbol>
+  <symbol id="i-archive" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></symbol>
+  <symbol id="i-server" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><path d="M6 6h.01M6 18h.01"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m8 12 3 3 5-6"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></symbol>
+  <symbol id="i-github" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.4 5.4 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65S8.93 17.38 9 18v4"/><path d="M9 18c-4.51 2-5-2-7-2"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></symbol>
+  <symbol id="i-boxes" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></symbol>
+  <symbol id="i-ban" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></symbol>
+  <symbol id="i-bug" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m8 2 1.88 1.88M14.12 3.88 16 2M9 7.13v-1a3 3 0 1 1 6 0v1"/><path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6M12 20v-9M6.53 9C4.6 8.8 3 7.1 3 5M6 13H2M3 21c0-2.1 1.7-3.9 3.8-4M20.97 5c0 2.1-1.6 3.8-3.5 4M22 13h-4M17.2 17c2.1.1 3.8 1.9 3.8 4"/></symbol>
+  <symbol id="i-bot" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2M20 14h2M15 13v2M9 13v2"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.27 21a2 2 0 0 0 3.46 0"/><path d="M3.26 15.33A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.67C19.41 13.96 18 12.5 18 8A6 6 0 0 0 6 8c0 4.5-1.41 5.96-2.74 7.33"/></symbol>
+</svg>
+
+<header class="site-head">
+  <div class="wrap head-row">
+    <a class="brand" href="#top" aria-label="BPanel, về đầu trang"><span class="mark"><span>BP</span></span>BPanel</a>
+    <nav class="nav" id="nav" aria-label="Mục lục">
+      <a href="#tinh-nang">Tính năng</a>
+      <a href="#tien-ich">Tiện ích</a>
+      <a href="#hinh-anh">Hình ảnh</a>
+      <a href="#cai-dat">Cài đặt</a>
+      <a href="#bao-mat">Bảo mật</a>
+      <a href="#hoi-dap">Hỏi đáp</a>
+    </nav>
+    <div class="head-actions">
+      <a class="btn btn-ghost btn-sm btn-github" href="https://github.com/BNIX-VN/bpanel" rel="noopener"><svg aria-hidden="true"><use href="#i-github"/></svg>GitHub</a>
+      <a class="btn btn-primary btn-sm btn-demo" href="https://demo.bnix.io.vn:2222" rel="noopener">Xem demo</a>
+      <button class="btn btn-ghost btn-sm menu-toggle" type="button" aria-controls="nav" aria-expanded="false" aria-label="Mở mục lục"><svg aria-hidden="true"><use href="#i-menu"/></svg></button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+<div id="top"></div>
+
+<!-- ============================ HERO ============================ -->
+<section class="hero" aria-labelledby="hero-title">
+  <div class="wrap">
+    <div class="hero-grid">
+      <div>
+        <p class="eyebrow"><b>Mã nguồn mở</b><i class="dot"></i>Miễn phí<i class="dot"></i>Ubuntu 24.04</p>
+        <h1 id="hero-title">Quản lý hosting gọn nhẹ, trọn vẹn <em>tiếng Việt</em></h1>
+        <p class="lead">BPanel quản lý website WordPress và PHP, database, SSL, backup, tường lửa, WAF và người dùng trong một giao diện web — sáng hoặc tối, tiếng Việt hoặc tiếng Anh. Cài bằng một lệnh.</p>
+        <div class="hero-cta">
+          <a class="btn btn-primary" href="#cai-dat"><svg aria-hidden="true"><use href="#i-download"/></svg>Cài đặt ngay</a>
+          <a class="btn btn-ghost" href="https://demo.bnix.io.vn:2222" rel="noopener"><svg aria-hidden="true"><use href="#i-play"/></svg>Xem bản demo</a>
+        </div>
+        <div class="cmd">
+          <code id="cmd-hero">curl -fsSL https://raw.githubusercontent.com/BNIX-VN/bpanel/refs/heads/main/install.sh | bash</code>
+          <button class="copy" type="button" data-copy="cmd-hero"><svg aria-hidden="true"><use href="#i-copy"/></svg><span>Sao chép</span></button>
+        </div>
+      </div>
+      <div class="hero-shot">
+        <div class="browser">
+          <div class="browser-bar" aria-hidden="true"><i></i><i></i><i></i><span>demo.bnix.io.vn:2222</span></div>
+          <img src="screenshots/02-dashboard.png" width="1440" height="900" alt="Trang Tổng quan của BPanel: CPU, RAM, ổ đĩa, mạng, các thẻ trạng thái và việc cần xử lý" fetchpriority="high">
+        </div>
+        <img class="phone" src="screenshots/30-mobile.png" width="390" height="844" alt="BPanel trên điện thoại" loading="lazy">
+      </div>
+    </div>
+
+    <div class="facts">
+      <div class="fact"><strong>PHP 5.6 → 8.5</strong><span>Nhiều phiên bản chạy song song</span></div>
+      <div class="fact"><strong>S3 · SFTP · FTP</strong><span>Backup và khôi phục theo từng bước</span></div>
+      <div class="fact"><strong>WAF + OWASP CRS</strong><span>Bật tắt riêng cho từng website</span></div>
+      <div class="fact"><strong>Không chạy bằng root</strong><span>Mọi việc quyền cao đi qua một helper</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ FEATURES ============================ -->
+<section id="tinh-nang" class="alt" aria-labelledby="features-title">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="kicker">Tính năng</span>
+      <h2 id="features-title">Đủ để vận hành một server hosting</h2>
+      <p>Từ tạo website đến backup, bảo mật và phân quyền khách hàng — trong một panel, không cần ghép nhiều công cụ.</p>
+    </div>
+    <div class="features">
+      <article class="card">
+        <span class="icon"><svg aria-hidden="true"><use href="#i-globe"/></svg></span>
+        <h3>Website và ứng dụng</h3>
+        <ul>
+          <li>Cài WordPress một lần bấm (WP-CLI) hoặc website PHP thường</li>
+          <li>Mỗi website một pool PHP-FPM riêng, chạy bằng user Linux của chủ website</li>
+          <li>Sửa vhost Nginx, mẫu rewrite, tên miền phụ</li>
+          <li>MariaDB với phpMyAdmin đăng nhập một lần</li>
+          <li>SSL Let's Encrypt, quản lý file, cron, terminal</li>
+        </ul>
+      </article>
+      <article class="card">
+        <span class="icon"><svg aria-hidden="true"><use href="#i-archive"/></svg></span>
+        <h3>Backup và khôi phục</h3>
+        <ul>
+          <li>Backup website, backup cả tài khoản, lịch tự động</li>
+          <li>Đích lưu S3 (Wasabi, B2, R2, MinIO…) hoặc SFTP</li>
+          <li>Khôi phục từ server, đích lưu hoặc máy chủ khác qua SFTP/FTP/FTPS</li>
+          <li>Nhập backup từ DirectAdmin</li>
+        </ul>
+      </article>
+      <article class="card">
+        <span class="icon"><svg aria-hidden="true"><use href="#i-shield"/></svg></span>
+        <h3>Bảo mật</h3>
+        <ul>
+          <li>Tường lửa iptables + ipset, blocklist theo URL</li>
+          <li>WAF ModSecurity, OWASP CRS, chống HTTP flood</li>
+          <li>Đăng nhập hai lớp (TOTP) và passkey</li>
+          <li>Nhật ký truy cập và các lần chặn</li>
+        </ul>
+      </article>
+      <article class="card">
+        <span class="icon"><svg aria-hidden="true"><use href="#i-server"/></svg></span>
+        <h3>Hệ thống và khách hàng</h3>
+        <ul>
+          <li>Tổng quan tài nguyên và việc cần xử lý</li>
+          <li>Tự điều chỉnh PHP-FPM, MariaDB theo RAM/CPU</li>
+          <li>Người dùng, gói dịch vụ, hạn mức website và dung lượng</li>
+          <li>API cấp phát và module WHMCS</li>
+        </ul>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ SPOTLIGHTS ============================ -->
+<section aria-labelledby="spot-title">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="kicker">Làm việc hằng ngày</span>
+      <h2 id="spot-title">Những việc bạn làm mỗi ngày, ít bước hơn</h2>
+    </div>
+
+    <div class="spot">
+      <div class="spot-text">
+        <h3>Website, từ tạo mới đến cấu hình Nginx</h3>
+        <p>Tạo website WordPress hoặc PHP, chọn phiên bản PHP, đổi kiểu rewrite, thêm tên miền phụ và sửa vhost ngay trên một màn hình.</p>
+        <ul>
+          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Mỗi tài khoản một user Linux, mỗi website một pool PHP-FPM riêng</span></li>
+          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Terminal chạy bằng user của website, chỉ cho các lệnh an toàn</span></li>
+          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Quản lý file giữ nguyên quyền bạn đã đặt</span></li>
+        </ul>
+      </div>
+      <img class="shot" src="screenshots/04-website-settings.png" width="1440" height="900" alt="Cấu hình một website: chế độ, phiên bản PHP, rewrite Nginx, tên miền" loading="lazy">
+    </div>
+
+    <div class="spot flip">
+      <div class="spot-text">
+        <h3>Khôi phục theo từng bước, như DirectAdmin</h3>
+        <p>Chọn nguồn, điền thông tin nếu cần, chọn tài khoản rồi khôi phục. Chạy nền, báo kết quả từng tài khoản; một tài khoản lỗi không làm dừng các tài khoản khác.</p>
+        <ul>
+          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Nguồn: server này, đích lưu S3/SFTP, hoặc máy chủ khác qua SFTP, FTP, FTPS</span></li>
+          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Khoá SFTP được kiểm tra trước khi gửi mật khẩu</span></li>
+          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Backup đã lên đích lưu không chiếm thêm ổ đĩa của server</span></li>
+        </ul>
+      </div>
+      <img class="shot" src="screenshots/13-restore.png" width="1440" height="1010" alt="Khôi phục: nguồn, thông tin, tài khoản cần khôi phục và nút khôi phục" loading="lazy">
+    </div>
+
+    <div class="spot">
+      <div class="spot-text">
+        <h3>Bảo mật cho từng website</h3>
+        <p>WAF ModSecurity bật sẵn, bộ luật OWASP CRS bật tắt theo website, chặn bot theo User-Agent, giới hạn HTTP flood và rule tuỳ chỉnh toàn cục.</p>
+        <ul>
+          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Tường lửa iptables + ipset: một triệu địa chỉ vẫn nhẹ</span></li>
+          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Nhật ký truy cập cho biết request nào bị chặn và vì sao</span></li>
+          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Fail2ban và quét mã độc là tiện ích, bật khi cần</span></li>
+        </ul>
+      </div>
+      <img class="shot" src="screenshots/20-waf.png" width="1440" height="900" alt="Trang WAF: trạng thái, OWASP CRS và danh sách website" loading="lazy">
+    </div>
+  </div>
+</section>
+
+<!-- ============================ ADDONS ============================ -->
+<section id="tien-ich" class="alt" aria-labelledby="addons-title">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="kicker">Tiện ích</span>
+      <h2 id="addons-title">Chỉ cài thứ server của bạn cần</h2>
+      <p>Những phần không phải server nào cũng dùng được tách thành tiện ích, bật và tắt trong <b>Cài đặt → Tiện ích</b>.</p>
+    </div>
+    <div class="addons">
+      <article class="addon"><span class="icon"><svg aria-hidden="true"><use href="#i-boxes"/></svg></span><h3>Application</h3><p>Chạy ứng dụng Node.js, container và Docker Compose sau Nginx.</p></article>
+      <article class="addon"><span class="icon"><svg aria-hidden="true"><use href="#i-ban"/></svg></span><h3>Fail2ban</h3><p>Chặn các địa chỉ dò mật khẩu SSH.</p></article>
+      <article class="addon"><span class="icon"><svg aria-hidden="true"><use href="#i-bug"/></svg></span><h3>Quét mã độc</h3><p>LMD + ClamAV: quét theo yêu cầu, theo lịch, giám sát thời gian thực và quét file tải lên.</p></article>
+      <article class="addon"><span class="icon"><svg aria-hidden="true"><use href="#i-bot"/></svg></span><h3>Trợ lý AI (MCP)</h3><p>Cho Claude Code, Cursor, VS Code đọc và thao tác panel bằng token cá nhân.</p></article>
+      <article class="addon"><span class="icon"><svg aria-hidden="true"><use href="#i-bell"/></svg></span><h3>Thông báo</h3><p>Cảnh báo quản trị viên qua email và Telegram: dịch vụ dừng, ổ đĩa đầy, backup lỗi, chứng chỉ sắp hết hạn…</p></article>
+    </div>
+    <p class="note"><svg aria-hidden="true"><use href="#i-info"/></svg><span>Mọi tiện ích đều <b>tắt mặc định</b>. Gỡ tiện ích chỉ tắt tính năng, không xoá dữ liệu nó đã tạo; cài lại là dùng tiếp.</span></p>
+  </div>
+</section>
+
+<!-- ============================ GALLERY ============================ -->
+<section id="hinh-anh" aria-labelledby="gallery-title">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="kicker">Hình ảnh</span>
+      <h2 id="gallery-title">Xem qua từng trang</h2>
+      <p>Chụp từ bản demo. Bấm vào ảnh để xem kích thước đầy đủ.</p>
+    </div>
+    <div class="tabs" role="tablist" aria-label="Nhóm ảnh">
+      <button class="tab" role="tab" type="button" aria-selected="true" data-group="all">Tất cả</button>
+      <button class="tab" role="tab" type="button" aria-selected="false" data-group="web">Website</button>
+      <button class="tab" role="tab" type="button" aria-selected="false" data-group="backup">Backup</button>
+      <button class="tab" role="tab" type="button" aria-selected="false" data-group="security">Bảo mật</button>
+      <button class="tab" role="tab" type="button" aria-selected="false" data-group="system">Hệ thống</button>
+    </div>
+    <div class="gallery" id="gallery"></div>
+  </div>
+</section>
+
+<dialog class="lightbox" id="lightbox" aria-label="Ảnh chụp màn hình">
+  <img id="lightbox-img" alt="">
+  <div class="lightbox-bar">
+    <button type="button" id="lb-prev" aria-label="Ảnh trước">‹</button>
+    <span id="lightbox-caption"></span>
+    <span><button type="button" id="lb-next" aria-label="Ảnh sau">›</button> <button type="button" id="lb-close">Đóng</button></span>
+  </div>
+</dialog>
+
+<!-- ============================ INSTALL ============================ -->
+<section id="cai-dat" class="alt" aria-labelledby="install-title">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="kicker">Cài đặt</span>
+      <h2 id="install-title">Từ VPS trắng đến panel chạy, bằng một lệnh</h2>
+      <p>Trình cài dựng Nginx, MariaDB, Redis, PHP-FPM, SFTP, certbot, phpMyAdmin, WP-CLI và tường lửa, rồi tự điều chỉnh PHP-FPM và MariaDB theo cấu hình VPS.</p>
+    </div>
+    <div class="steps">
+      <div class="step"><h3>Chuẩn bị server</h3><p>Ubuntu 24.04 mới cài, quyền root. Tuỳ chọn: một tên miền trỏ về IP để panel có SSL.</p></div>
+      <div class="step"><h3>Chạy lệnh cài</h3><p>Trả lời tên miền, cổng (mặc định <code>2222</code>) và email SSL — hoặc truyền sẵn qua biến môi trường.</p></div>
+      <div class="step"><h3>Đăng nhập</h3><p>Địa chỉ, tên đăng nhập và mật khẩu được in ra cuối và lưu ở <code>/root/login.txt</code>.</p></div>
+    </div>
+    <div class="cmd" style="max-width:none">
+      <code id="cmd-install">curl -fsSL https://raw.githubusercontent.com/BNIX-VN/bpanel/refs/heads/main/install.sh | bash</code>
+      <button class="copy" type="button" data-copy="cmd-install"><svg aria-hidden="true"><use href="#i-copy"/></svg><span>Sao chép</span></button>
+    </div>
+    <div class="two">
+      <div class="box">
+        <h3>Cài tự động, không cần trả lời</h3>
+        <pre class="code-block"><span class="k">export</span> PANEL_URL=https://panel.example.com:2222
+<span class="k">export</span> ENABLE_SSL=yes
+<span class="k">export</span> SSL_EMAIL=admin@example.com
+<span class="k">export</span> BPANEL_ADMIN_PASSWORD=<span class="c">'mật-khẩu-mạnh'</span>
+curl -fsSL https://raw.githubusercontent.com/BNIX-VN/bpanel/refs/heads/main/install.sh | bash</pre>
+      </div>
+      <div class="box">
+        <h3>Yêu cầu và cập nhật</h3>
+        <ul>
+          <li>Ubuntu 24.04 LTS, quyền root</li>
+          <li>Tối thiểu 1 vCPU / 1 GB RAM, khuyến nghị 2 vCPU / 2 GB RAM</li>
+          <li>Quét mã độc cần khoảng 1,3 GB RAM trong lúc quét</li>
+        </ul>
+        <pre class="code-block"><span class="c"># lên bản phát hành mới nhất</span>
+bpanel-update --release
+<span class="c"># menu cứu hộ khi không vào được panel</span>
+bpanel</pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ SECURITY MODEL ============================ -->
+<section id="bao-mat" aria-labelledby="security-title">
+  <div class="wrap">
+    <div class="spot" style="padding-top:0">
+      <div class="spot-text">
+        <span class="kicker">Mô hình bảo mật</span>
+        <h2 id="security-title" style="margin-bottom:14px">Panel không chạy bằng root</h2>
+        <p>Tiến trình panel chạy bằng user hệ thống <code>bpanel</code>. Mọi việc cần quyền cao đi qua một script trợ giúp duy nhất thuộc root, chỉ chạy những thao tác nằm trong danh sách cho phép.</p>
+        <ul>
+          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Helper kiểm tra tên miền, cổng, IP và đường dẫn trước khi gọi chương trình thật</span></li>
+          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Các tài khoản tách nhau bằng user Linux, SFTP chroot và shell <code>nologin</code>; mỗi website có <code>open_basedir</code> riêng</span></li>
+          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Cookie HttpOnly kèm CSRF, giới hạn đăng nhập, mật khẩu database mã hoá khi lưu</span></li>
+        </ul>
+      </div>
+      <div class="box flow" aria-label="Luồng quyền của BPanel">
+        <div><strong>bpanel-api</strong> — user <code>bpanel</code>, unit systemd đã siết chặt</div>
+        <div class="arrow">↓ sudo -n /usr/local/sbin/bpanel-helper &lt;lệnh con&gt;</div>
+        <div><strong>bpanel-helper</strong> — root, chỉ các thao tác trong danh sách cho phép</div>
+        <div class="arrow">↓ nginx · certbot · php-fpm · mariadb · iptables · useradd</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ FAQ ============================ -->
+<section id="hoi-dap" class="alt" aria-labelledby="faq-title">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="kicker">Hỏi đáp</span>
+      <h2 id="faq-title">Câu hỏi thường gặp</h2>
+    </div>
+    <div class="faq">
+      <details><summary>BPanel có mất phí không?</summary><p>Không. BPanel là mã nguồn mở, mã nguồn nằm trên GitHub và cài miễn phí bằng lệnh ở trên.</p></details>
+      <details><summary>Chạy được trên hệ điều hành nào?</summary><p>Ubuntu 24.04 LTS. Trình cài dừng lại nếu gặp hệ điều hành khác, để không để lại một server cài dở.</p></details>
+      <details><summary>Tôi đang dùng DirectAdmin, chuyển sang được không?</summary><p>Được. Tab <b>Backup → Nhập DA</b> nhập backup của DirectAdmin; tab <b>Khôi phục</b> lấy được backup từ server này, từ đích lưu S3/SFTP, hoặc từ một máy chủ khác qua SFTP, FTP, FTPS.</p></details>
+      <details><summary>Khách hàng của tôi thấy gì?</summary><p>Người dùng thường chỉ quản lý website của mình: file, database, SSL, WordPress, cron và backup, trong giới hạn số website và dung lượng của gói. Phần server chỉ quản trị viên thấy.</p></details>
+      <details><summary>Có kết nối với WHMCS không?</summary><p>Có. BPanel có API cấp phát và một module WHMCS dùng chung cho BPanel và OPanel: tạo, tạm khoá, mở khoá, xoá tài khoản, đổi gói, đổi mật khẩu và đăng nhập một lần từ khu vực khách hàng.</p></details>
+      <details><summary>Cập nhật có ảnh hưởng website đang chạy không?</summary><p>Dữ liệu, website và database giữ nguyên; Nginx chỉ được nạp lại chứ không dừng. Chạy <code>bpanel-update --release</code> hoặc bấm cập nhật trong trang Cập nhật.</p></details>
+      <details><summary>Gỡ một tiện ích có mất dữ liệu không?</summary><p>Không. Gỡ tiện ích chỉ tắt tính năng; dữ liệu nó đã tạo được giữ nguyên để lần cài sau dùng tiếp.</p></details>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ FINAL CTA ============================ -->
+<section class="final" aria-labelledby="final-title">
+  <div class="wrap">
+    <div class="final-card">
+      <h2 id="final-title">Thử BPanel ngay hôm nay</h2>
+      <p>Xem bản demo để làm quen giao diện, rồi cài lên một VPS Ubuntu 24.04 bằng một lệnh.</p>
+      <div class="hero-cta" style="margin-top:0">
+        <a class="btn btn-primary" href="#cai-dat"><svg aria-hidden="true"><use href="#i-download"/></svg>Cài đặt</a>
+        <a class="btn btn-ghost" href="https://demo.bnix.io.vn:2222" rel="noopener"><svg aria-hidden="true"><use href="#i-play"/></svg>Xem bản demo</a>
+        <a class="btn btn-ghost" href="https://github.com/BNIX-VN/bpanel" rel="noopener"><svg aria-hidden="true"><use href="#i-github"/></svg>GitHub</a>
+      </div>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap foot">
+    <a class="brand" href="#top"><span class="mark"><span>BP</span></span>BPanel</a>
+    <nav aria-label="Liên kết">
+      <a href="https://github.com/BNIX-VN/bpanel" rel="noopener">GitHub</a>
+      <a href="https://github.com/BNIX-VN/bpanel/releases" rel="noopener">Bản phát hành</a>
+      <a href="https://github.com/BNIX-VN/bpanel#readme" rel="noopener">Tài liệu</a>
+      <a href="https://demo.bnix.io.vn:2222" rel="noopener">Demo</a>
+    </nav>
+    <span>© BNIX · Giấy phép MIT</span>
+  </div>
+</footer>
+
+<script>
+(() => {
+  // The gallery: one list, filtered by the tabs; a click opens the full image.
+  const shots = [
+    ['02-dashboard', 'Tổng quan', 'system'], ['03-websites', 'Danh sách website', 'web'],
+    ['04-website-settings', 'Cấu hình website', 'web'], ['04b-website-terminal', 'Terminal của website', 'web'],
+    ['09-file-manager', 'Quản lý file', 'web'], ['05-applications', 'Ứng dụng Node.js / Docker', 'web'],
+    ['06-ssl', 'SSL', 'web'], ['07-databases', 'Database', 'web'], ['08-cron', 'Cron', 'web'],
+    ['10-sftp', 'Tài khoản SFTP', 'web'], ['11-backups', 'Backup website', 'backup'],
+    ['12-backup-schedule', 'Lịch backup tự động', 'backup'], ['13-restore', 'Khôi phục', 'backup'],
+    ['14-backup-destination', 'Đích lưu backup', 'backup'], ['19-firewall', 'Tường lửa và Fail2ban', 'security'],
+    ['20-waf', 'WAF và OWASP CRS', 'security'], ['21-waf-site', 'WAF của một website', 'security'],
+    ['22-access-logs', 'Nhật ký truy cập', 'security'], ['23-security', 'Passkey và 2FA', 'security'],
+    ['15-panel-users', 'Người dùng panel', 'system'], ['16-packages', 'Gói dịch vụ', 'system'],
+    ['18-settings', 'Cài đặt', 'system'], ['26-panel-settings', 'Cài đặt panel', 'system'],
+    ['24-services', 'Dịch vụ', 'system'], ['25-php', 'Cấu hình PHP', 'system'],
+    ['27-updates', 'Cập nhật', 'system'], ['28-addons', 'Tiện ích', 'system'],
+    ['17-notifications', 'Thông báo', 'system'], ['29-dark-mode', 'Giao diện tối', 'system'],
+    ['01-login', 'Đăng nhập', 'system'],
+  ];
+  const gallery = document.getElementById('gallery');
+  let visible = [];
+  const render = group => {
+    visible = shots.filter(s => group === 'all' || s[2] === group);
+    gallery.replaceChildren(...visible.map(([file, caption], index) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'thumb';
+      button.innerHTML = `<img src="screenshots/${file}.png" alt="${caption}" loading="lazy" width="1440" height="900"><span>${caption}</span>`;
+      button.addEventListener('click', () => open(index));
+      return button;
+    }));
+  };
+  document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.setAttribute('aria-selected', String(t === tab)));
+    render(tab.dataset.group);
+  }));
+  render('all');
+
+  const box = document.getElementById('lightbox');
+  const img = document.getElementById('lightbox-img');
+  const cap = document.getElementById('lightbox-caption');
+  let current = 0;
+  const show = index => {
+    current = (index + visible.length) % visible.length;
+    const [file, caption] = visible[current];
+    img.src = `screenshots/${file}.png`; img.alt = caption; cap.textContent = caption;
+  };
+  const open = index => { show(index); box.showModal(); };
+  document.getElementById('lb-prev').addEventListener('click', () => show(current - 1));
+  document.getElementById('lb-next').addEventListener('click', () => show(current + 1));
+  document.getElementById('lb-close').addEventListener('click', () => box.close());
+  box.addEventListener('click', e => { if (e.target === box) box.close(); });
+  box.addEventListener('keydown', e => { if (e.key === 'ArrowLeft') show(current - 1); if (e.key === 'ArrowRight') show(current + 1); });
+
+  // Copy buttons.
+  document.querySelectorAll('[data-copy]').forEach(button => button.addEventListener('click', async () => {
+    const text = document.getElementById(button.dataset.copy).textContent;
+    const label = button.querySelector('span');
+    try { await navigator.clipboard.writeText(text); label.textContent = 'Đã chép'; }
+    catch { label.textContent = 'Chọn và chép'; }
+    setTimeout(() => { label.textContent = 'Sao chép'; }, 1800);
+  }));
+
+  // The phone-width menu.
+  const toggle = document.querySelector('.menu-toggle');
+  const nav = document.getElementById('nav');
+  toggle.addEventListener('click', () => {
+    const open = nav.classList.toggle('open');
+    toggle.setAttribute('aria-expanded', String(open));
+  });
+  nav.querySelectorAll('a').forEach(a => a.addEventListener('click', () => { nav.classList.remove('open'); toggle.setAttribute('aria-expanded', 'false'); }));
+})();
+</script>
+</body>
+</html>
