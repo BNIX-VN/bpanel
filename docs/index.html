@@ -109,11 +109,11 @@ code,pre{font-family:var(--mono)}
 .eyebrow{display:inline-flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 18px;padding:6px 12px;border:1px solid var(--border);border-radius:999px;background:var(--surface);color:var(--text-2);font-size:13.5px;font-weight:600}
 .eyebrow b{color:var(--success)}
 .dot{width:6px;height:6px;border-radius:50%;background:var(--border)}
-h1{margin:0;font-size:clamp(34px,5.2vw,58px);line-height:1.1;letter-spacing:-.025em;font-weight:800;max-width:17ch}
+h1{margin:0;font-size:clamp(32px,4.6vw,50px);line-height:1.1;letter-spacing:-.025em;font-weight:800;max-width:17ch}
 h1 em{font-style:normal;color:var(--primary-ink);position:relative;white-space:nowrap}
 /* Below the dot-below marks (ọ, ẹ), which a line through them would hide. */
 h1 em::after{content:'';position:absolute;left:0;right:0;bottom:-.1em;height:.09em;background:var(--yellow);border-radius:9px;opacity:.9}
-.lead{margin:20px 0 0;max-width:62ch;font-size:clamp(17px,1.6vw,19px);color:var(--text-2)}
+.lead{margin:20px 0 0;max-width:62ch;font-size:clamp(16px,1.4vw,18px);color:var(--text-2)}
 .hero-cta{display:flex;flex-wrap:wrap;gap:12px;margin-top:28px}
 .cmd{margin-top:22px;display:flex;align-items:center;gap:10px;max-width:720px;padding:10px 10px 10px 16px;background:var(--navy);color:#e7ebf1;border:1px solid var(--navy);border-radius:12px;box-shadow:var(--shadow)}
 .cmd code{flex:1;min-width:0;overflow-x:auto;white-space:nowrap;font-size:14px;scrollbar-width:none;-webkit-mask-image:linear-gradient(90deg,#000 88%,transparent)}
@@ -138,15 +138,15 @@ h1 em::after{content:'';position:absolute;left:0;right:0;bottom:-.1em;height:.09
 /* --- facts strip ---------------------------------------------------------- */
 .facts{margin-top:56px;display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px}
 .fact{padding:18px 20px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius)}
-.fact strong{display:block;font-size:20px;letter-spacing:-.01em}
+.fact strong{display:block;font-size:18px;letter-spacing:-.01em}
 .fact span{color:var(--muted);font-size:14px}
 
 /* --- sections -------------------------------------------------------------- */
 section{padding:72px 0}
-.section-head{max-width:720px;margin:0 0 36px}
+.section-head{margin:0 0 32px}
 .kicker{display:inline-block;margin-bottom:10px;color:var(--primary-ink);font-weight:800;font-size:13px;letter-spacing:.08em;text-transform:uppercase}
-h2{margin:0;font-size:clamp(26px,3.4vw,38px);line-height:1.2;letter-spacing:-.02em}
-.section-head p{margin:12px 0 0;color:var(--text-2);font-size:17px}
+h2{margin:0;font-size:clamp(24px,2.8vw,32px);line-height:1.2;letter-spacing:-.02em}
+.section-head p{margin:10px 0 0;color:var(--text-2);font-size:16px}
 .alt{background:var(--surface);border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
 
 .features{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px}
@@ -155,14 +155,14 @@ h2{margin:0;font-size:clamp(26px,3.4vw,38px);line-height:1.2;letter-spacing:-.02
 .card:hover{border-color:var(--primary-soft);box-shadow:var(--shadow)}
 .icon{display:inline-grid;place-items:center;width:44px;height:44px;border-radius:11px;background:var(--primary-light);color:var(--primary-ink);margin-bottom:14px}
 .icon svg{width:22px;height:22px}
-.card h3{margin:0 0 10px;font-size:18px;letter-spacing:-.01em}
+.card h3{margin:0 0 10px;font-size:17px;letter-spacing:-.01em}
 .card ul{margin:0;padding:0;list-style:none;display:grid;gap:8px}
 .card li{position:relative;padding-left:22px;color:var(--text-2);font-size:15px;line-height:1.5}
 .card li::before{content:'';position:absolute;left:2px;top:.55em;width:10px;height:6px;border-left:2px solid var(--success);border-bottom:2px solid var(--success);transform:rotate(-45deg)}
 
 .spot{display:grid;grid-template-columns:minmax(0,1fr);gap:32px;align-items:center;padding:28px 0}
 .spot + .spot{border-top:1px dashed var(--border)}
-.spot h3{margin:0 0 12px;font-size:clamp(22px,2.6vw,28px);letter-spacing:-.015em;line-height:1.25}
+.spot h3{margin:0 0 12px;font-size:clamp(20px,2.2vw,24px);letter-spacing:-.015em;line-height:1.25}
 .spot p{margin:0 0 14px;color:var(--text-2)}
 .spot ul{margin:0;padding:0;list-style:none;display:grid;gap:9px}
 .spot li{display:flex;gap:10px;color:var(--text-2)}
@@ -335,7 +335,7 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
     <div class="head-actions">
       <a class="btn btn-ghost btn-sm btn-github" href="https://github.com/BNIX-VN/bpanel" rel="noopener"><svg aria-hidden="true"><use href="#i-github"/></svg>GitHub</a>
       <button class="btn btn-ghost btn-sm icon-btn theme-toggle" type="button" aria-label="Đổi giao diện sáng/tối" title="Đổi giao diện sáng/tối"><svg class="i-moon" aria-hidden="true"><use href="#i-moon"/></svg><svg class="i-sun" aria-hidden="true"><use href="#i-sun"/></svg></button>
-      <a class="btn btn-primary btn-sm btn-demo" href="https://demo.bnix.io.vn:2222" rel="noopener">Xem demo</a>
+      <a class="btn btn-primary btn-sm btn-demo" href="https://bpanel.bnix.io.vn:2222" rel="noopener">Xem demo</a>
       <button class="btn btn-ghost btn-sm menu-toggle" type="button" aria-controls="nav" aria-expanded="false" aria-label="Mở mục lục"><svg aria-hidden="true"><use href="#i-menu"/></svg></button>
     </div>
   </div>
@@ -354,7 +354,7 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
         <p class="lead">BPanel quản lý website WordPress và PHP, database, SSL, backup, tường lửa, WAF và người dùng trong một giao diện web — sáng hoặc tối, tiếng Việt hoặc tiếng Anh. Cài bằng một lệnh.</p>
         <div class="hero-cta">
           <a class="btn btn-primary" href="#cai-dat"><svg aria-hidden="true"><use href="#i-download"/></svg>Cài đặt ngay</a>
-          <a class="btn btn-ghost" href="https://demo.bnix.io.vn:2222" rel="noopener"><svg aria-hidden="true"><use href="#i-play"/></svg>Xem bản demo</a>
+          <a class="btn btn-ghost" href="https://bpanel.bnix.io.vn:2222" rel="noopener"><svg aria-hidden="true"><use href="#i-play"/></svg>Xem bản demo</a>
         </div>
         <div class="cmd">
           <code id="cmd-hero">curl -fsSL https://raw.githubusercontent.com/BNIX-VN/bpanel/refs/heads/main/install.sh | bash</code>
@@ -363,7 +363,7 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
       </div>
       <div class="hero-shot">
         <div class="browser">
-          <div class="browser-bar" aria-hidden="true"><i></i><i></i><i></i><span>demo.bnix.io.vn:2222</span></div>
+          <div class="browser-bar" aria-hidden="true"><i></i><i></i><i></i><span>bpanel.bnix.io.vn:2222</span></div>
           <picture>
             <source id="hero-dark" srcset="screenshots/29-dark-mode.png" media="(prefers-color-scheme: dark)">
             <img src="screenshots/02-dashboard.png" width="1440" height="900" alt="Trang Tổng quan của BPanel: CPU, RAM, ổ đĩa, mạng, các thẻ trạng thái và việc cần xử lý" fetchpriority="high">
@@ -652,7 +652,7 @@ bpanel</pre>
       <p>Xem bản demo để làm quen giao diện, rồi cài lên một VPS Ubuntu 24.04 bằng một lệnh.</p>
       <div class="hero-cta" style="margin-top:0">
         <a class="btn btn-primary" href="#cai-dat"><svg aria-hidden="true"><use href="#i-download"/></svg>Cài đặt</a>
-        <a class="btn btn-ghost" href="https://demo.bnix.io.vn:2222" rel="noopener"><svg aria-hidden="true"><use href="#i-play"/></svg>Xem bản demo</a>
+        <a class="btn btn-ghost" href="https://bpanel.bnix.io.vn:2222" rel="noopener"><svg aria-hidden="true"><use href="#i-play"/></svg>Xem bản demo</a>
         <a class="btn btn-ghost" href="https://github.com/BNIX-VN/bpanel" rel="noopener"><svg aria-hidden="true"><use href="#i-github"/></svg>GitHub</a>
       </div>
     </div>
@@ -667,7 +667,7 @@ bpanel</pre>
       <a href="https://github.com/BNIX-VN/bpanel" rel="noopener">GitHub</a>
       <a href="https://github.com/BNIX-VN/bpanel/releases" rel="noopener">Bản phát hành</a>
       <a href="https://github.com/BNIX-VN/bpanel#readme" rel="noopener">Tài liệu</a>
-      <a href="https://demo.bnix.io.vn:2222" rel="noopener">Demo</a>
+      <a href="https://bpanel.bnix.io.vn:2222" rel="noopener">Demo</a>
       <a href="#ho-tro">Hỗ trợ</a>
     </nav>
     <span>© <a href="https://bnix.vn" rel="noopener">BNIX</a> · <a href="https://github.com/BNIX-VN/bpanel/blob/main/LICENSE" rel="noopener">Giấy phép MIT</a></span>
