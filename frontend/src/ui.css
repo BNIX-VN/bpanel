@@ -648,3 +648,14 @@ button svg,.button-link svg,.upload-button svg{flex:none}
   .restore-user{grid-template-columns:minmax(0,1fr)}
   .restore-when{text-align:left}
 }
+
+/* Access logs: the nine toolbar controls need about 1320px on one row, and
+   beside the sidebar a 1440px screen gives the card about 1100px - the row ran
+   out of the card ("Refresh 5..." cut off). Between the phone layout and a
+   screen wide enough for one row, the controls wrap instead. */
+@media(min-width:951px) and (max-width:1700px){
+  .access-log-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+  .access-log-toolbar > button,.access-log-toolbar-label{flex:none}
+  .access-log-toolbar select{flex:1 1 150px;width:auto}
+  .access-log-toolbar input{flex:2 1 240px;width:auto}
+}
