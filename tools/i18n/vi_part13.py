@@ -241,4 +241,20 @@ PART13 = {
         "LMD và ClamAV đang được cài (1-3 phút). Bấm Tải lại để xem khi nào xong.",
     "To turn the scanner off, remove the Malware Scanner addon on the Addons page. The history and the settings are kept.":
         "Muốn tắt trình quét, hãy gỡ addon Quét mã độc ở trang Tiện ích. Lịch sử và cấu hình được giữ nguyên.",
+    # Installing and removing an addon, in each addon's own words
+    "Remove the {name} addon? Anything it runs is stopped; its data stays where it is, and installing it again picks up from there.":
+        "Gỡ addon {name}? Những gì addon đang chạy sẽ dừng; dữ liệu vẫn giữ nguyên, cài lại là dùng tiếp được.",
+    "Installing {name}...": "Đang cài {name}...",
+    "Removing {name}...": "Đang gỡ {name}...",
+    "{name} installed.": "Đã cài {name}.",
+    "{name} removed.": "Đã gỡ {name}.",
+    "The package, the jail configuration and the ban history are all kept.":
+        "Gói phần mềm, cấu hình jail và lịch sử chặn đều được giữ nguyên.",
+    "Application directories, volumes and panel data are all kept.":
+        "Thư mục ứng dụng, volume và dữ liệu panel đều được giữ nguyên.",
+    "Open the Application page to install Docker or the Node.js versions you need.":
+        "Mở trang Ứng dụng để cài Docker hoặc các phiên bản Node.js bạn cần.",
+    "SSH is protected now. Banned addresses are listed on the Firewall page.":
+        "SSH đã được bảo vệ. Các địa chỉ bị chặn được liệt kê ở trang Tường lửa.",
+    "The {name} addon is not installed on this server.": "Addon {name} chưa được cài trên server này.",
 }

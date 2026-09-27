@@ -2452,13 +2452,15 @@ function App() {
   async function setAddonInstalled(slug, install) {
     const addon = addons.items.find(item => item.slug === slug);
     const label = addon?.name || slug;
-    if (!install && !confirm(`Remove the ${label} addon?\n\nAnything running is stopped. Directories, volumes and panel data stay exactly where they are, and installing again picks up from there.`)) return;
+    if (!install && !confirm(t('Remove the {name} addon? Anything it runs is stopped; its data stays where it is, and installing it again picks up from there.', { name: t(label) }))) return;
     const data = await request(`/addons/${slug}/${install ? 'install' : 'uninstall'}`, { method: 'POST' },
-      install ? `Installing ${label}...` : `Removing ${label}...`);
+      install ? t('Installing {name}...', { name: t(label) }) : t('Removing {name}...', { name: t(label) }));
     if (data) {
+      // Each addon says in its own words what it stopped and what it kept;
+      // "Stopped 1 app(s)" was Application's sentence, shown for every addon.
       setNotice(install
-        ? `${label} installed. ${data.next_step || ''}`.trim()
-        : `${label} removed.${data.stopped?.length ? ` Stopped ${data.stopped.length} app(s).` : ''}`);
+        ? `${t('{name} installed.', { name: t(label) })} ${data.next_step ? t(data.next_step) : ''}`.trim()
+        : `${t('{name} removed.', { name: t(label) })} ${data.kept ? t(data.kept) : ''}`.trim());
       await loadAddons();
       // The nav and the website mode picker both hang off this.
       if (install) await loadSiteApps();
@@ -5169,16 +5171,21 @@ function App() {
     </div>;
   }
 
-  function renderAddonMissing() {
+  // Which addon a page belongs to decides the words: this said
+  // "Applications" on the Malware, MCP and Notifications pages too.
+  function renderAddonMissing(slug = 'application') {
+    const addon = addons.items.find(item => item.slug === slug);
+    const name = addon?.name || 'Application';
+    const installed = !!addon?.installed;
     return <section className="section">
-      <div className="section-title"><div><h2>{t('Applications')}</h2></div></div>
+      <div className="section-title"><div><h2>{t(name)}</h2></div></div>
       <EmptyState
         icon={Boxes}
-        message={applicationAddonInstalled
-          ? 'Your package does not include Applications. Contact an administrator to upgrade.'
-          : 'The Applications addon is not installed on this server.'}
+        message={slug === 'application' && installed
+          ? t('Your package does not include Applications. Contact an administrator to upgrade.')
+          : t('The {name} addon is not installed on this server.', { name: t(name) })}
       />
-      {isAdmin && !applicationAddonInstalled && <div className="site-app-form-actions">
+      {isAdmin && !installed && <div className="site-app-form-actions">
         <button disabled={!!loading} onClick={() => navigateToPage('addons')}><Boxes size={14}/>{t('Go to Addons')}</button>
       </div>}
     </section>;
@@ -8603,7 +8610,7 @@ function App() {
     if (page === 'addons') return renderAddons();
     // Reachable by URL after the addon is removed, so it answers for itself
     // rather than rendering a page whose every request would be refused.
-    if (page === 'applications') return appsFeatureEnabled ? renderApplications() : renderAddonMissing();
+    if (page === 'applications') return appsFeatureEnabled ? renderApplications() : renderAddonMissing('application');
     if (page === 'ssl') return renderSsl();
     if (page === 'databases') return renderDatabases();
     if (page === 'sftp') return renderSftp();
@@ -8616,15 +8623,15 @@ function App() {
     if (page === 'waf') return renderWaf();
     if (page === 'waf-site') return renderWafSite();
     // An addon since 2026-09-27: the page is there once it is installed.
-    if (page === 'malware' || page === 'malware-scan') return malwareAddonInstalled ? renderMalware() : renderAddonMissing();
+    if (page === 'malware' || page === 'malware-scan') return malwareAddonInstalled ? renderMalware() : renderAddonMissing('malware');
     if (page === 'access-logs') return renderWafAccessLogs();
     if (page === 'updates') return renderUpdates();
     // Reachable by URL, so it answers for itself rather than firing a
     // page full of requests that will every one be refused.
     if (page === 'services') return isAdmin ? renderServices() : renderAdminOnly();
-    if (page === 'mcp') return (mcpAddonInstalled || isAdmin) ? renderMcp() : renderAddonMissing();
+    if (page === 'mcp') return (mcpAddonInstalled || isAdmin) ? renderMcp() : renderAddonMissing('mcp');
     // Administrators only (operator, 2026-09-27): customers get no notifications.
-    if (page === 'notifications') return !isAdmin ? renderAdminOnly() : notificationsAddonInstalled ? renderNotificationsPage() : renderAddonMissing();
+    if (page === 'notifications') return !isAdmin ? renderAdminOnly() : notificationsAddonInstalled ? renderNotificationsPage() : renderAddonMissing('notifications');
     if (page === 'settings') return renderSettingsHub();
     if (page === 'panel-settings') return renderPanelSettings();
     if (page === 'users') return renderUsers();
