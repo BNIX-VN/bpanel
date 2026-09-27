@@ -6498,7 +6498,7 @@ function App() {
 
       {isAdmin && activeBackupTab === 'schedule' && <div className="backup-tab-panel">
         <div className="backup-panel-title">
-          <div><h3>{t('Scheduled backups')}</h3><p className="hint">{t('Run full user backups automatically with optional off-server destination.')}</p></div>
+          <div><h3>{t('Scheduled backups')}</h3><p className="hint">{t('Run full user backups automatically with optional off-server destination.')}{' '}{t('With a destination, the backups are kept there only: each one is removed from this server once it has uploaded, and stays here only if the upload fails.')}</p></div>
           <button className="secondary-light" disabled={!!loading} onClick={refreshScheduledBackupArea}><RefreshCw size={14}/>{t('Refresh')}</button>
         </div>
         {/* Who, then when, where and under what name - each field labelled,

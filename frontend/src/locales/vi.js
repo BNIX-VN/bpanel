@@ -1193,6 +1193,7 @@ export const vi = {
   "Where the panel reaches you, and about what.": "Panel gửi thông báo cho bạn qua đâu, và về việc gì.",
   "Whole server": "Toàn server",
   "Window (sec)": "Cửa sổ (giây)",
+  "With a destination, the backups are kept there only: each one is removed from this server once it has uploaded, and stays here only if the upload fails.": "Khi có đích lưu, backup chỉ được giữ ở đó: mỗi bản sẽ bị xoá khỏi server này ngay khi tải lên xong, và chỉ ở lại đây nếu tải lên thất bại.",
   "Without": "Không có",
   "WordPress admin password must be at least 10 characters.": "Mật khẩu admin WordPress phải có ít nhất 10 ký tự.",
   "WordPress is already installed for this website": "Website này đã cài WordPress rồi",
