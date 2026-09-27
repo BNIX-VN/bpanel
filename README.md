@@ -4,7 +4,8 @@ Bảng điều khiển hosting gọn nhẹ cho **Ubuntu 24.04**. Quản lý webs
 và PHP, database, SSL, backup, tường lửa, WAF và người dùng trong một giao diện
 web, với tiếng Việt và tiếng Anh, chế độ sáng và tối.
 
-**Demo:** <https://bpanel.bnix.io.vn:2222>
+**Demo:** <https://bpanel.bnix.io.vn:2222> — chỉ xem, mọi thay đổi bị từ chối.
+Quản trị `demo` / `demo123`, khách hàng `khachhang` / `demo123`.
 
 ![Tổng quan](docs/screenshots/02-dashboard.png)
 
@@ -133,6 +134,7 @@ tính năng, không xoá dữ liệu nó đã tạo.
 | **Fail2ban** | Chặn địa chỉ dò mật khẩu SSH. |
 | **Quét mã độc** | LMD + ClamAV: quét theo yêu cầu, theo lịch, giám sát thời gian thực (Lớp 2), quét file tải lên. |
 | **Trợ lý AI (MCP)** | Cho Claude Code, Cursor, VS Code đọc và thao tác panel bằng token cá nhân. |
+| **Chế độ demo** | Tài khoản demo công khai cho quản trị và khách hàng, có nút đăng nhập nhanh trên trang đăng nhập. Xem mọi trang, mọi thay đổi bị từ chối; không mở được nội dung file, tải xuống, phpMyAdmin hay terminal. |
 | **Thông báo** | Gửi cảnh báo cho quản trị viên qua email (SMTP) và Telegram: dịch vụ dừng, ổ đĩa đầy, backup lỗi, mã độc, chứng chỉ sắp hết hạn, có bản cập nhật... |
 
 Tiện ích có trang riêng sẽ hiện trên menu bên trái khi được bật.
