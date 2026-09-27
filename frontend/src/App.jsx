@@ -6407,7 +6407,7 @@ function App() {
     const restoreTargets = sftpTargets.filter(target => target.is_active !== false);
     const restoreSourceOptions = [
       { id: 'local', Icon: HardDrive, label: t('This server'), hint: t('The panel\'s backup folder') },
-      { id: 'target', Icon: Cloud, label: t('Backup Destination'), hint: t('S3 or SFTP, saved under Backup Destination') },
+      { id: 'target', Icon: Cloud, label: t('Backup Destination'), hint: t('S3 or SFTP') },
       { id: 'remote', Icon: Server, label: t('Another server'), hint: t('SFTP, FTP or FTPS') },
     ];
     const restoreStepTwo = { local: 'Backups on this server', target: 'Backup Destination', remote: 'Connection' }[restoreSource];

@@ -862,7 +862,7 @@ export const vi = {
   "Run now": "Chạy ngay",
   "Running": "Đang chạy",
   "Runtime": "Môi trường chạy",
-  "S3 or SFTP, saved under Backup Destination": "S3 hoặc SFTP, đã lưu ở Đích lưu backup",
+  "S3 or SFTP": "S3 hoặc SFTP",
   "SFTP account name": "Tên tài khoản SFTP",
   "SFTP account not found": "Không tìm thấy tài khoản SFTP",
   "SFTP account ready": "Tài khoản SFTP đã sẵn sàng",

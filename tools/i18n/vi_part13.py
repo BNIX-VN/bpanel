@@ -200,7 +200,7 @@ PART13 = {
 
     # Restore, laid out by the operator: source, then per source upload + refresh
     "Source": "Nguồn",
-    "S3 or SFTP, saved under Backup Destination": "S3 hoặc SFTP, đã lưu ở Đích lưu backup",
+    "S3 or SFTP": "S3 hoặc SFTP",
     "Backups on this server": "Backup trên server này",
     "Connection": "Kết nối",
     "Scheduled and manual backups kept on this server, and the ones uploaded here.":
