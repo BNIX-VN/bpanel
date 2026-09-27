@@ -5238,7 +5238,9 @@ function App() {
         <label><span>{t(label)}</span>
           <select value={demoDraft[slot].username} disabled={!!loading} onChange={e => setSlot(slot, 'username', e.target.value)}>
             <option value="">{t('Not offered')}</option>
-            {(candidates[slot] || []).filter(name => name !== currentUser?.username).map(name => <option key={name} value={name}>{name}</option>)}
+            {/* Not yourself - the server refuses it - unless you are looking at it from the
+                demo account itself, which must still show what is chosen. */}
+            {(candidates[slot] || []).filter(name => name !== currentUser?.username || name === demoDraft[slot].username).map(name => <option key={name} value={name}>{name}</option>)}
           </select>
         </label>
         <label><span>{t('Password shown on the login page')}</span>
