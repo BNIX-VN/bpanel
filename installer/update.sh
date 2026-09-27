@@ -451,18 +451,26 @@ ensure_panel_https() {
   # no business answering in the clear. A server with no domain has nothing a
   # certificate authority will sign, so it gets a self-signed certificate: a
   # warning the operator clicks through once beats a password on the wire.
-  local panel_port="$1" server_ip="$2" cert key host mode live_dir
+  local panel_port="$1" server_ip="$2" cert key host mode live_dir had_https="no"
   cert="$(env_get PANEL_SSL_CERT)"
   key="$(env_get PANEL_SSL_KEY)"
   host="$(env_get PANEL_DOMAIN)"
   mode="$(env_get PANEL_SSL_MODE)"
+  [[ -n "$cert" && -n "$key" && -f "$cert" && -f "$key" ]] && had_https="yes"
 
   # If the panel answers on a domain that already has a real certificate, use
   # it: a name the browser trusts beats one it warns about, and there is nothing
   # to choose between when the panel's own hostname is the domain in question.
-  live_dir="/etc/letsencrypt/live/${host}"
+  live_dir="${LETSENCRYPT_LIVE_DIR:-/etc/letsencrypt/live}/${host}"
   if [[ -n "$host" && -f "${live_dir}/fullchain.pem" && -f "${live_dir}/privkey.pem" \
         && "$mode" != "letsencrypt" && "$mode" != "domain" ]]; then
+    # Already serving exactly this certificate: the installer got it for the
+    # panel's own hostname and, before 1.0.169, did not record the mode. Only
+    # the record is missing; there is nothing to switch and nothing to say.
+    if [[ "$had_https" == "yes" ]] && cmp -s "${live_dir}/fullchain.pem" "$cert"; then
+      env_set PANEL_SSL_MODE "letsencrypt"
+      return 0
+    fi
     log "Panel domain ${host} already has a certificate; using it"
     install -d -o root -g bpanel -m 0750 /etc/bpanel
     install -m 0640 -o root -g bpanel "${live_dir}/fullchain.pem" /etc/bpanel/panel-fullchain.pem
@@ -473,6 +481,7 @@ ensure_panel_https() {
     env_set PANEL_URL "https://${host}:${panel_port}"
     env_set ALLOWED_ORIGINS "https://${host}:${panel_port}"
     PANEL_SWITCHED_TO_HTTPS="https://${host}:${panel_port}"
+    [[ "$had_https" == "yes" ]] && PANEL_WAS_HTTP="no" || PANEL_WAS_HTTP="yes"
     return 0
   fi
 
@@ -500,6 +509,29 @@ ensure_panel_https() {
   env_set PANEL_URL "https://${host}:${panel_port}"
   env_set ALLOWED_ORIGINS "https://${host}:${panel_port}"
   PANEL_SWITCHED_TO_HTTPS="https://${host}:${panel_port}"
+  PANEL_WAS_HTTP="yes"
+}
+
+panel_https_note() {
+  # What the certificate step changed, in words that are true for this server:
+  # "self-signed" only when it is, "http:// will not load" only when the panel
+  # was on http:// before. It used to say both after every switch, including
+  # a switch to the domain's real certificate on a panel already on HTTPS.
+  echo ""
+  if [[ "${PANEL_WAS_HTTP:-yes}" == "yes" ]]; then
+    echo "  The panel now answers over HTTPS only:"
+    echo "      ${PANEL_SWITCHED_TO_HTTPS}"
+    echo "  The old http:// address will not load."
+  else
+    echo "  The panel now uses the certificate of its domain:"
+    echo "      ${PANEL_SWITCHED_TO_HTTPS}"
+  fi
+  if [[ "$(env_get PANEL_SSL_MODE)" == "selfsigned" ]]; then
+    echo "  The certificate is self-signed, so the browser warns once; to replace it"
+    echo "  with a real one, point a domain at this server and use Panel settings -> SSL."
+  else
+    echo "  It is a real certificate, so the browser shows no warning."
+  fi
 }
 
 write_tools_nginx_config() {
@@ -1931,12 +1963,7 @@ for _ in {1..20}; do
     echo "Update completed."
     echo "If the browser still shows the old UI, hard refresh (Ctrl + Shift + R)."
     if [[ -n "${PANEL_SWITCHED_TO_HTTPS:-}" ]]; then
-      echo ""
-      echo "  The panel now answers over HTTPS only:"
-      echo "      ${PANEL_SWITCHED_TO_HTTPS}"
-      echo "  The old http:// address will not load. The certificate is self-signed,"
-      echo "  so the browser warns once; to replace it with a real one, point a domain"
-      echo "  at this server and use Panel settings -> SSL."
+      panel_https_note
     fi
     write_update_state "completed" "${UPDATE_REF:-}" "Update completed"
     update_progress 100 "completed" "Update completed"
