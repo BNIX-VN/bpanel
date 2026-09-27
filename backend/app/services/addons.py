@@ -21,6 +21,7 @@ ADDONS_DIR = Path(os.environ.get("BPANEL_DATA_DIR", "/var/lib/bpanel"))
 ADDONS_FILE = ADDONS_DIR / "addons.json"
 
 APPLICATION = "application"
+DEMO = "demo"
 FAIL2BAN = "fail2ban"
 MALWARE = "malware"
 MCP = "mcp"
@@ -92,6 +93,22 @@ CATALOGUE: dict[str, dict] = {
             "Installing it installs LMD and the ClamAV engine if they are not there yet (1-3 minutes).",
             "A scan uses about 1.3 GB of memory while it runs and releases it afterwards; nothing stays resident unless Level 2 is on.",
             "Removing it stops the schedule, the scan of uploads and the real-time monitor, which stays off until you turn Level 2 on again. LMD, ClamAV, the history and the schedule are kept.",
+        ],
+        "keeps_data_on_uninstall": True,
+    },
+    DEMO: {
+        "name": "Demo mode",
+        "version": "1.0.0",
+        "summary": "Public demo accounts that can look at every page and change nothing.",
+        "details": [
+            "One administrator account and one customer account, with sign-in buttons on the login page so a visitor is one click from either.",
+            "Every change a demo account tries is refused with a message saying this is a demo. So are file contents, downloads, phpMyAdmin, backups and the terminal.",
+            "Your own administrator account is untouched and keeps full control.",
+        ],
+        "notes": [
+            "The demo passwords are shown on the sign-in page, so pick accounts that exist only for the demo. They are never the SFTP or SSH password.",
+            "Signing out of a demo account ends only that visitor's session, not everyone else's.",
+            "Removing the addon gives both accounts a random password, so the public ones stop working. Installing it again restores them.",
         ],
         "keeps_data_on_uninstall": True,
     },
@@ -228,6 +245,11 @@ def require(slug: str) -> None:
 def require_application() -> None:
     """FastAPI dependency for every route the Application addon owns."""
     require(APPLICATION)
+
+
+def require_demo() -> None:
+    """FastAPI dependency for the Demo mode addon's settings routes."""
+    require(DEMO)
 
 
 def require_malware() -> None:

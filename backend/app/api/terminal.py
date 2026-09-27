@@ -17,7 +17,7 @@ from app.core.database import get_db
 from app.core.permissions import Role, ensure_role, is_admin_role
 from app.core.security import ALGORITHM
 from app.models.entities import RevokedToken, User, Website
-from app.services import terminal
+from app.services import demo_mode, terminal
 
 logger = logging.getLogger("bpanel.terminal")
 
@@ -219,6 +219,12 @@ async def terminal_websocket(
         return
 
     current_user = user
+
+    # The REST side refuses a demo visitor in get_current_user; this door does
+    # not pass through it, so it asks the same question itself.
+    if demo_mode.is_demo_session(current_user, payload):
+        await websocket.close(code=4003, reason=demo_mode.REFUSED_READ)
+        return
 
     # Get website
     website = db.query(Website).filter(Website.id == website_id).first()

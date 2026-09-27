@@ -21,7 +21,7 @@ from app.schemas.schemas import (
     UserUpdate,
 )
 from app.services.audit import log_action
-from app.services import mariadb, nginx, site_users, ssl, storage_quota, teardown, waf, wordpress
+from app.services import demo_mode, mariadb, nginx, site_users, ssl, storage_quota, teardown, waf, wordpress
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -488,6 +488,7 @@ def unsuspend_user(user_id: int, request: Request, db: Session = Depends(get_db)
 
 @router.get("/audit/log", response_model=List[AuditLogOut])
 def list_audit(
+    request: Request,
     user_id: Optional[int] = Query(default=None),
     action: Optional[str] = Query(default=None, max_length=64),
     limit: int = Query(default=100, ge=1, le=1000),
@@ -502,4 +503,11 @@ def list_audit(
     if action:
         query = query.filter(AuditLog.action == action)
     rows = query.offset(offset).limit(limit).all()
-    return [AuditLogOut.from_row(row) for row in rows]
+    entries = [AuditLogOut.from_row(row) for row in rows]
+    if demo_mode.is_demo_session(current_user, getattr(request.state, "jwt_payload", None)):
+        # Every visitor is the same demo account; none of them should see where
+        # the others came from.
+        for entry in entries:
+            entry.detail = demo_mode.mask_ips(entry.detail)
+            entry.target = demo_mode.mask_ips(entry.target)
+    return entries

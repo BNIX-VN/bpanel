@@ -36,7 +36,7 @@ from app.schemas.schemas import (
     TwoFactorSetupRequest,
     TwoFactorStatus,
 )
-from app.services import storage_quota
+from app.services import demo_mode, storage_quota
 from app.services.audit import log_action
 from app.services.sso_tokens import consume_panel_login_token
 
@@ -87,6 +87,10 @@ def _note_sign_in(request: Request, user: User) -> None:
     """
     from app.services import notifications
 
+    # A demo account is signed into by strangers all day; remembering where
+    # each came from would only hand their addresses to the next one.
+    if demo_mode.is_demo_user(user):
+        return
     if not is_admin_role(user.role):
         return
     notifications.record_login(user.id, user.username, _client_key(request),
@@ -678,7 +682,10 @@ def logout(
     forces all other devices/tabs holding a JWT for this user to re-authenticate.
     """
     _revoke_request_token(db, request, current_user)
-    current_user.token_version = (current_user.token_version or 0) + 1
+    # A demo account is shared by every visitor at once: bumping its version
+    # would sign all of them out because one of them left.
+    if not demo_mode.is_demo_session(current_user, getattr(request.state, "jwt_payload", None)):
+        current_user.token_version = (current_user.token_version or 0) + 1
     db.commit()
     _clear_session_cookies(response)
     return {"ok": True}
@@ -686,6 +693,7 @@ def logout(
 
 @router.get("/session")
 def session_status(
+    request: Request,
     response: Response,
     db: Session = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
@@ -712,6 +720,9 @@ def session_status(
         # What they type into an SFTP client. The Linux user is the panel
         # username; only its password is different now.
         "sftp_username": current_user.username,
+        # The panel shows a "this is a demo" strip, and the server refuses
+        # changes whatever the page does (services/demo_mode.py).
+        "demo": demo_mode.is_demo_session(current_user, getattr(request.state, "jwt_payload", None)),
     }
     user_data.update(storage_quota.storage_usage_summary(db, current_user))
     return {"authenticated": True, "user": user_data}
