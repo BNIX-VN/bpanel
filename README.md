@@ -24,6 +24,8 @@ web, với tiếng Việt và tiếng Anh, chế độ sáng và tối.
 - [Lệnh thường dùng](#lệnh-thường-dùng)
 - [Mô hình bảo mật](#mô-hình-bảo-mật)
 - [Cấu trúc mã nguồn](#cấu-trúc-mã-nguồn)
+- [Hỗ trợ](#hỗ-trợ)
+- [Giấy phép](#giấy-phép)
 
 ## Ảnh chụp màn hình
 
@@ -337,6 +339,19 @@ bpanel/
 `-- docs/screenshots/ ảnh chụp màn hình
 ```
 
+## Hỗ trợ
+
+- **Khách hàng dùng VPS tại [BNIX](https://bnix.vn)** được BNIX **hỗ trợ BPanel
+  miễn phí**.
+- Dùng VPS ở nơi khác: BPanel vẫn miễn phí theo giấy phép MIT, và bạn có thể
+  báo lỗi hoặc đề xuất tính năng qua
+  [GitHub Issues](https://github.com/BNIX-VN/bpanel/issues).
+
 ## Giấy phép
 
-MIT.
+BPanel phát hành theo giấy phép **MIT** — xem [LICENSE](LICENSE).
+
+Tóm tắt: bạn được dùng, sao chép, sửa đổi, phân phối và bán lại BPanel, kể cả
+cho mục đích thương mại, miễn là giữ nguyên thông báo bản quyền và nội dung
+giấy phép trong các bản sao. Phần mềm được cung cấp "nguyên trạng", không kèm
+bất kỳ bảo đảm nào. Bản tiếng Anh trong file [LICENSE](LICENSE) là bản có hiệu lực.
