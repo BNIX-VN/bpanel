@@ -250,8 +250,81 @@ def test_the_routes_are_admin_only_and_the_password_stays_out_of_the_job():
 
 def test_the_restore_tab_asks_source_details_users_then_the_button():
     tab = APP.split("activeBackupTab === 'restore' &&")[1].split("activeBackupTab === 'destination' &&")[0]
-    steps = ["Choose the source", "Connection details", "Choose the users", "Start the restore"]
-    positions = [tab.index(f"t('{step}')") for step in steps]
-    assert positions == sorted(positions), "the four steps, in DirectAdmin's order"
+    steps = ["Source", "restoreStepTwo", "Accounts to restore", "restore-step-no\">4</span>{t('Restore')}"]
+    positions = [tab.index(step) for step in steps]
+    assert positions == sorted(positions), "the four steps, in the operator's order"
+    assert "{ local: 'Backups on this server', target: 'Backup Destination', remote: 'Connection' }" in APP
+    for kind in ("local", "target", "remote"):
+        block = tab.split(f"{{restoreSource === '{kind}' && ")[1][:4000]
+        assert "{restoreTools}" in block, f"step 2 of {kind} has Upload backup + Refresh"
     assert "'/maintenance/restore/list'" in APP and "'/maintenance/restore/run'" in APP
     assert "restore-catalogue" not in APP and "restore-bulk" not in APP
+
+
+# --- Upload backup, into the source picked in step 1 ---------------------------------------
+
+def _account_backup(tmp_path, name="user-acme-20260927020000.tar.gz"):
+    import io
+    import json
+    import tarfile
+
+    from starlette.datastructures import UploadFile
+
+    manifest = json.dumps({"kind": "bpanel_user", "user": {"username": "acme"}}).encode()
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
+        info = tarfile.TarInfo("manifest.json")
+        info.size = len(manifest)
+        tar.addfile(info, io.BytesIO(manifest))
+    return UploadFile(file=io.BytesIO(buffer.getvalue()), filename=name)
+
+
+def _upload(monkeypatch, tmp_path, source, pushed=None, fail=None):
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(maintenance, "log_action", lambda *a, **k: None)
+
+    def push(spec, local_file, db):
+        if fail:
+            raise restore_sources.RestoreSourceError(fail)
+        pushed.append((spec["kind"], Path(local_file).name, Path(local_file).exists()))
+        return f"/backups/{Path(local_file).name}"
+
+    monkeypatch.setattr(restore_sources, "push", push)
+    import json
+    try:
+        return maintenance.restore_upload(request=None, files=[_account_backup(tmp_path)], source=json.dumps(source),
+                                          db=None, current_user=SimpleNamespace(id=1, role="admin"))
+    except HTTPException as exc:
+        return exc
+
+
+def test_an_upload_to_this_server_stays_in_its_restore_folder(backups, monkeypatch):
+    result = _upload(monkeypatch, backups.root, {"kind": "local"}, pushed=[])
+    assert result == {"uploaded": ["user-acme-20260927020000.tar.gz"]}
+    assert [row["key"] for row in restore_sources.list_local()] == ["restore/user-acme-20260927020000.tar.gz"]
+
+
+def test_an_upload_to_a_destination_is_sent_there_and_not_kept_here(backups, monkeypatch):
+    pushed = []
+    result = _upload(monkeypatch, backups.root, {"kind": "target", "target_id": 3}, pushed=pushed)
+    assert pushed == [("target", "user-acme-20260927020000.tar.gz", True)], "checked, then sent"
+    assert result == {"uploaded": ["/backups/user-acme-20260927020000.tar.gz"]}
+    assert restore_sources.list_local() == [], "the copy passing through is gone"
+
+
+def test_a_failed_send_reports_it_and_leaves_nothing_here(backups, monkeypatch):
+    result = _upload(monkeypatch, backups.root, _remote(), fail="The server refused the username or password")
+    assert result.status_code == 400 and "refused" in result.detail
+    assert restore_sources.list_local() == []
+
+
+def test_only_an_account_backup_is_accepted(backups, monkeypatch):
+    import io
+
+    from fastapi import HTTPException
+    from starlette.datastructures import UploadFile
+
+    with pytest.raises(HTTPException):
+        maintenance._save_user_restore_upload(UploadFile(file=io.BytesIO(b"not a tar"), filename="user-x-1.tar.gz"))
+    assert restore_sources.list_local() == []

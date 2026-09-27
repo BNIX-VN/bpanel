@@ -313,6 +313,54 @@ def list_source(source: dict, db) -> dict:
             "host_key": None}
 
 
+def push(source: dict, local_file: str, db) -> str:
+    """Put an uploaded archive in a destination or on another server, so it
+    is listed there (the page's Upload backup, for a source that is not this
+    server). Returns where it landed."""
+    name = Path(local_file).name
+    if source["kind"] == "target":
+        target = _target(db, source.get("target_id"))
+        if (target.kind or "sftp") == "s3":
+            try:
+                return backup_s3.upload(target, local_file, remote_name=name)["remote_file"]
+            except backup_s3.S3Error as exc:
+                raise RestoreSourceError(str(exc)) from None
+        folder = remote_folder(target.remote_path)
+        with _target_sftp(target) as (client, seen):
+            _sftp_put(client, local_file, folder, name)
+        if not target.host_key_fingerprint:
+            target.host_key_type, target.host_key_fingerprint = seen["type"], seen["fingerprint"]
+            db.commit()
+        return posixpath.join(folder, name)
+    if source["kind"] != "remote":
+        raise RestoreSourceError("Nothing to send: the archive is already on this server")
+    folder = remote_folder(source.get("path"))
+    if source["protocol"] == "sftp":
+        port = int(source.get("port") or DEFAULT_PORTS["sftp"])
+        with _sftp(source["host"], port, source["username"], password=source["password"],
+                   pinned=source.get("host_key") or "") as (client, _seen):
+            _sftp_put(client, local_file, folder, name)
+        return posixpath.join(folder, name)
+    ftp = _ftp_open(source)
+    try:
+        with open(local_file, "rb") as handle:
+            ftp.storbinary(f"STOR {posixpath.join(folder, name)}", handle, blocksize=1024 * 1024)
+    except ftplib.error_perm as exc:
+        raise RestoreSourceError(f"The server refused the file in {folder} ({exc})") from None
+    except (ftplib.Error, OSError, EOFError) as exc:
+        raise RestoreSourceError(f"FTP: the upload failed ({exc or type(exc).__name__})") from None
+    finally:
+        _ftp_close(ftp)
+    return posixpath.join(folder, name)
+
+
+def _sftp_put(client: paramiko.SFTPClient, local_file: str, folder: str, name: str) -> None:
+    try:
+        client.put(local_file, posixpath.join(folder, name))
+    except OSError as exc:
+        raise RestoreSourceError(f"Could not write {name} in {folder} on the server ({exc})") from None
+
+
 def check_key(source: dict, key: str) -> str:
     """Refuse a key this source could not have listed; return its file name."""
     if _CONTROL.search(key or ""):

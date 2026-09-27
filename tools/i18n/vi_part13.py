@@ -148,21 +148,13 @@ PART13 = {
     # Restore, DirectAdmin's four steps
     "Where the backups are, what that needs, which users - then restore. The same steps as DirectAdmin.":
         "Chọn nơi chứa backup, điền thông tin nếu cần, chọn người dùng rồi khôi phục - các bước giống DirectAdmin.",
-    "Choose the source": "Chọn nguồn",
     "This server": "Server này",
     "The panel's backup folder": "Thư mục backup của panel",
-    "S3 destination": "Đích lưu S3",
-    "SFTP destination": "Đích lưu SFTP",
     "Another server": "Máy chủ khác",
     "SFTP, FTP or FTPS": "SFTP, FTP hoặc FTPS",
-    "Connection details": "Thông tin kết nối",
-    "Nothing to fill in for this source.": "Nguồn này không cần điền thêm thông tin.",
-    "Connect and list": "Kết nối và liệt kê",
     "Used for this restore only and never saved. To keep a server, add it under Backup Destination.":
         "Chỉ dùng cho lần khôi phục này và không được lưu lại. Muốn giữ máy chủ này, hãy thêm nó ở Đích lưu backup.",
     "Server key": "Khoá của máy chủ",
-    "Choose the users": "Chọn người dùng",
-    "Fill in the server above and press Connect and list.": "Điền thông tin máy chủ ở trên rồi bấm Kết nối và liệt kê.",
     "No backups found in this source.": "Không tìm thấy backup nào ở nguồn này.",
     "Select all": "Chọn tất cả",
     "Filter by user...": "Lọc theo người dùng...",
@@ -173,7 +165,6 @@ PART13 = {
     "Overwrite": "Ghi đè",
     "New": "Mới",
     "Backup to restore": "Bản backup cần khôi phục",
-    "Start the restore": "Bắt đầu khôi phục",
     "Restore {n} user(s)": "Khôi phục {n} người dùng",
     "One user after another, in the background. A user that already exists is overwritten with its backup.":
         "Khôi phục lần lượt từng người dùng và chạy nền. Người dùng đã có sẽ bị ghi đè bằng bản backup.",
@@ -206,4 +197,22 @@ PART13 = {
     # A backup sent off-server is kept there only
     "With a destination, the backups are kept there only: each one is removed from this server once it has uploaded, and stays here only if the upload fails.":
         "Khi có đích lưu, backup chỉ được giữ ở đó: mỗi bản sẽ bị xoá khỏi server này ngay khi tải lên xong, và chỉ ở lại đây nếu tải lên thất bại.",
+
+    # Restore, laid out by the operator: source, then per source upload + refresh
+    "Source": "Nguồn",
+    "S3 or SFTP": "S3 hoặc SFTP",
+    "Backups on this server": "Backup trên server này",
+    "Connection": "Kết nối",
+    "Scheduled and manual backups kept on this server, and the ones uploaded here.":
+        "Backup theo lịch và backup thủ công đang lưu trên server này, cùng các bản đã tải lên đây.",
+    "No backup destination yet. Add one in the Backup Destination tab.":
+        "Chưa có đích lưu backup nào. Hãy thêm ở tab Đích lưu backup.",
+    "Accounts to restore": "Tài khoản cần khôi phục",
+    "Press Refresh in step 2 to list the backups.": "Bấm Tải lại ở bước 2 để liệt kê các bản backup.",
+    "Restore {n} account(s)": "Khôi phục {n} tài khoản",
+    "Uploading {n} backup(s)...": "Đang tải lên {n} bản backup...",
+    "Uploaded {n} backup(s).": "Đã tải lên {n} bản backup.",
+    "The source is not valid": "Nguồn không hợp lệ",
+    "Nothing to send: the archive is already on this server": "Không cần gửi: bản backup đã nằm trên server này",
+    "This is not a full user backup": "Đây không phải bản backup đầy đủ của người dùng",
 }
