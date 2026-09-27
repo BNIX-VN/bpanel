@@ -141,6 +141,20 @@ h1 em::after{content:'';position:absolute;left:0;right:0;bottom:-.1em;height:.09
 .fact strong{display:block;font-size:18px;letter-spacing:-.01em}
 .fact span{color:var(--muted);font-size:14px}
 
+/* --- demo accounts ----------------------------------------------------------- */
+.demo-card{margin-top:16px;display:grid;grid-template-columns:minmax(0,1fr);gap:24px;padding:28px;border:1px solid var(--primary-soft);border-radius:16px;background:var(--surface);box-shadow:var(--shadow)}
+.demo-card h2{font-size:clamp(22px,2.2vw,26px)}
+.demo-card p{margin:10px 0 18px;color:var(--text-2)}
+.demo-logins{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}
+.demo-login{padding:18px;border:1px solid var(--border);border-radius:12px;background:var(--bg)}
+.demo-login strong{display:block;font-size:16px}
+.demo-login > span{display:block;margin:2px 0 12px;color:var(--muted);font-size:14px;line-height:1.45}
+.demo-login dl{margin:0;display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px 12px;align-items:center;font-size:14px}
+.demo-login dt{color:var(--muted)}
+.demo-login dd{margin:0}
+.demo-login code{font-family:var(--mono);font-size:14px;padding:2px 8px;border-radius:6px;background:var(--surface-alt);color:var(--text)}
+@media (min-width:900px){.demo-card{grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);align-items:center;padding:32px 36px}}
+
 /* --- sections -------------------------------------------------------------- */
 section{padding:72px 0}
 .section-head{margin:0 0 32px}
@@ -179,7 +193,7 @@ h2{margin:0;font-size:clamp(24px,2.8vw,32px);line-height:1.2;letter-spacing:-.02
 .support .card.featured{border-color:var(--primary);box-shadow:inset 0 0 0 1px var(--primary)}
 .badge{display:inline-block;margin-bottom:10px;padding:3px 10px;border-radius:999px;background:var(--primary-light);color:var(--primary-ink);font-size:12.5px;font-weight:800}
 
-.addons{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px}
+.addons{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
 .addon{padding:22px;border-radius:var(--radius);border:1px solid var(--border);background:var(--bg)}
 .addon h3{margin:0 0 6px;font-size:17px}
 .addon p{margin:0;color:var(--text-2);font-size:14.5px}
@@ -280,6 +294,7 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
   .fact{padding:14px}
   .fact strong{font-size:16px}
   .fact span{font-size:13px;line-height:1.45;display:block;margin-top:2px}
+  .demo-card{padding:20px}
   .section-head{margin-bottom:28px}
   .faq summary{padding:14px 16px}
   .faq details p{padding:0 16px 16px}
@@ -317,6 +332,7 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
   <symbol id="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></symbol>
   <symbol id="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></symbol>
   <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/></symbol>
   <symbol id="i-bell" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.27 21a2 2 0 0 0 3.46 0"/><path d="M3.26 15.33A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.67C19.41 13.96 18 12.5 18 8A6 6 0 0 0 6 8c0 4.5-1.41 5.96-2.74 7.33"/></symbol>
 </svg>
 
@@ -378,6 +394,27 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
       <div class="fact"><strong>S3 · SFTP · FTP</strong><span>Backup và khôi phục theo từng bước</span></div>
       <div class="fact"><strong>WAF + OWASP CRS</strong><span>Bật tắt riêng cho từng website</span></div>
       <div class="fact"><strong>Không chạy bằng root</strong><span>Mọi việc quyền cao đi qua một helper</span></div>
+    </div>
+
+    <div class="demo-card" id="demo" aria-labelledby="demo-title">
+      <div>
+        <span class="kicker">Dùng thử</span>
+        <h2 id="demo-title">Vào bản demo, không cần cài đặt</h2>
+        <p>Đăng nhập bằng một trong hai tài khoản demo, hoặc bấm nút có sẵn trên trang đăng nhập. Bản demo chỉ để xem: mọi thay đổi đều bị từ chối, nên cứ thoải mái bấm thử.</p>
+        <a class="btn btn-primary" href="https://bpanel.bnix.io.vn:2222" rel="noopener"><svg aria-hidden="true"><use href="#i-play"/></svg>Mở bản demo</a>
+      </div>
+      <div class="demo-logins">
+        <div class="demo-login">
+          <strong>Quản trị</strong>
+          <span>Toàn bộ server: website, người dùng, tường lửa, WAF, tiện ích.</span>
+          <dl><dt>Tên đăng nhập</dt><dd><code>demo</code></dd><dt>Mật khẩu</dt><dd><code>demo123</code></dd></dl>
+        </div>
+        <div class="demo-login">
+          <strong>Khách hàng</strong>
+          <span>Những gì khách hosting của bạn thấy, trong giới hạn gói.</span>
+          <dl><dt>Tên đăng nhập</dt><dd><code>khachhang</code></dd><dt>Mật khẩu</dt><dd><code>demo123</code></dd></dl>
+        </div>
+      </div>
     </div>
   </div>
 </section>
@@ -498,6 +535,7 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
       <article class="addon"><span class="icon"><svg aria-hidden="true"><use href="#i-ban"/></svg></span><h3>Fail2ban</h3><p>Chặn các địa chỉ dò mật khẩu SSH.</p></article>
       <article class="addon"><span class="icon"><svg aria-hidden="true"><use href="#i-bug"/></svg></span><h3>Quét mã độc</h3><p>LMD + ClamAV: quét theo yêu cầu, theo lịch, giám sát thời gian thực và quét file tải lên.</p></article>
       <article class="addon"><span class="icon"><svg aria-hidden="true"><use href="#i-bot"/></svg></span><h3>Trợ lý AI (MCP)</h3><p>Cho Claude Code, Cursor, VS Code đọc và thao tác panel bằng token cá nhân.</p></article>
+      <article class="addon"><span class="icon"><svg aria-hidden="true"><use href="#i-eye"/></svg></span><h3>Chế độ demo</h3><p>Tài khoản demo công khai cho quản trị và khách hàng: xem mọi trang, không thay đổi được gì, có nút đăng nhập nhanh.</p></article>
       <article class="addon"><span class="icon"><svg aria-hidden="true"><use href="#i-bell"/></svg></span><h3>Thông báo</h3><p>Cảnh báo quản trị viên qua email và Telegram: dịch vụ dừng, ổ đĩa đầy, backup lỗi, chứng chỉ sắp hết hạn…</p></article>
     </div>
     <p class="note"><svg aria-hidden="true"><use href="#i-info"/></svg><span>Mọi tiện ích đều <b>tắt mặc định</b>. Gỡ tiện ích chỉ tắt tính năng, không xoá dữ liệu nó đã tạo; cài lại là dùng tiếp.</span></p>
@@ -603,6 +641,7 @@ bpanel</pre>
     <div class="faq">
       <details><summary>BPanel có mất phí không?</summary><p>Không. BPanel là mã nguồn mở theo <a href="https://github.com/BNIX-VN/bpanel/blob/main/LICENSE" rel="noopener">giấy phép MIT</a>: bạn được dùng, sửa đổi và phân phối lại miễn phí, kể cả cho mục đích thương mại.</p></details>
       <details><summary>Ai được hỗ trợ?</summary><p>Khách hàng dùng VPS tại <a href="https://bnix.vn" rel="noopener">BNIX</a> được BNIX hỗ trợ BPanel miễn phí. Dùng VPS ở nơi khác, bạn vẫn dùng BPanel miễn phí và có thể báo lỗi qua <a href="https://github.com/BNIX-VN/bpanel/issues" rel="noopener">GitHub Issues</a>.</p></details>
+      <details><summary>Có bản demo để xem thử không?</summary><p>Có, tại <a href="https://bpanel.bnix.io.vn:2222" rel="noopener">bpanel.bnix.io.vn:2222</a>. Quản trị: <code>demo</code> / <code>demo123</code>; khách hàng: <code>khachhang</code> / <code>demo123</code>. Bản demo chạy tiện ích <b>Chế độ demo</b>: xem được mọi trang nhưng mọi thay đổi đều bị từ chối.</p></details>
       <details><summary>Chạy được trên hệ điều hành nào?</summary><p>Ubuntu 24.04 LTS. Trình cài dừng lại nếu gặp hệ điều hành khác, để không để lại một server cài dở.</p></details>
       <details><summary>Tôi đang dùng DirectAdmin, chuyển sang được không?</summary><p>Được. Tab <b>Backup → Nhập DA</b> nhập backup của DirectAdmin; tab <b>Khôi phục</b> lấy được backup từ server này, từ đích lưu S3/SFTP, hoặc từ một máy chủ khác qua SFTP, FTP, FTPS.</p></details>
       <details><summary>Khách hàng của tôi thấy gì?</summary><p>Người dùng thường chỉ quản lý website của mình: file, database, SSL, WordPress, cron và backup, trong giới hạn số website và dung lượng của gói. Phần server chỉ quản trị viên thấy.</p></details>
