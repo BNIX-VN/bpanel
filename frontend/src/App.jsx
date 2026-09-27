@@ -7656,7 +7656,9 @@ function App() {
           <div className="update-log-head"><strong>{t('Update logs')}</strong><button className="secondary-light" disabled={!!loading} onClick={() => loadUpdates(true)}><RefreshCw size={13}/>{t('Refresh')}</button></div>
           <pre>{statusText}</pre>
         </div>}
-        {(panelUpdating || (panelUpdate.progress_percent && panelUpdate.last_update_status && panelUpdate.last_update_status !== 'completed' && panelUpdate.last_update_status !== 'failed')) && (
+        {/* Number(...) > 0, not the bare value: a progress of 0 made this
+            whole expression 0, and React printed a stray "0" under the buttons. */}
+        {(panelUpdating || (Number(panelUpdate.progress_percent) > 0 && panelUpdate.last_update_status && panelUpdate.last_update_status !== 'completed' && panelUpdate.last_update_status !== 'failed')) && (
           <div className="info-box firewall-status update-progress-box">
             <div className="update-progress-row">
               <span className={panelUpdate.last_update_status === 'failed' ? 'badge bad' : 'badge ok'}>

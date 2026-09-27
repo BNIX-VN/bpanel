@@ -380,3 +380,12 @@ def test_no_function_in_the_app_is_declared_twice():
     names = re.findall(r"^  (?:async )?function (\w+)\(", APP, flags=re.M)
     duplicated = sorted({name for name in names if names.count(name) > 1})
     assert not duplicated, f"declared more than once: {duplicated}"
+
+
+def test_the_updates_page_prints_no_stray_zero():
+    """A panel update at 0% made `{(updating || (progress_percent && ...)) && ...}`
+    evaluate to 0, and React printed "0" under the buttons (seen on the demo
+    server, 2026-09-27)."""
+    page = APP.split("  function renderUpdates() {")[1].split("\n  function ")[0]
+    assert "(panelUpdate.progress_percent &&" not in page
+    assert "Number(panelUpdate.progress_percent) > 0 &&" in page
