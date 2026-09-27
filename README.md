@@ -1,226 +1,251 @@
 # BPanel
 
-Lightweight hosting management panel for Ubuntu 24.04. BPanel helps you run
-WordPress and PHP websites from a single clean web UI with user
-ownership, quotas, backups, SSL, services, and firewall tools built in.
+Bảng điều khiển hosting gọn nhẹ cho **Ubuntu 24.04**. Quản lý website WordPress
+và PHP, database, SSL, backup, tường lửa, WAF và người dùng trong một giao diện
+web, với tiếng Việt và tiếng Anh, chế độ sáng và tối.
 
-- Dashboard resource monitoring for CPU, RAM, disk, and network throughput
-- WordPress one-click installer (PHP 8.4 default, 8.3/8.4 supported) with WP-CLI
-- WordPress and PHP sites with editable full Nginx vhosts
-- Panel users map to Linux/SFTP users; website source lives in `/home/<panel-user>/<domain>/public_html`
-- Admin quick-login for creating sites as a selected user, plus one-owner assignment per website
-- Website count limits and BPanel soft storage quotas per end user
-- User packages for reusable website/storage limits on panel accounts
-- MariaDB database creation and management with phpMyAdmin SSO (60s tokens)
-- Let's Encrypt SSL via certbot
-- Native BPanel file manager with upload, edit, archive, and extract support
-- Backups: archive site files + SQL, scheduled full-user backups, restore, upload, download
-- SFTP backup targets for off-server backup copies
-- iptables + ipset firewall with protected panel/web/mail ports, per-IP allow/deny rules,
-  and URL blocklists loaded straight into an ipset
-- Update controls for apt-based OS packages and BPanel source updates
-- Nginx ModSecurity/WAF engine installed by default, using lightweight WordPress/Laravel/PHP rules, per-site toggles, and HTTP Flood limits
-- PHP-FPM config editor per version
-- Cron job manager with whitelisted WP-CLI commands
-- Role-based access: Admin / End user
-- Google Authenticator compatible 2FA
+**Demo:** <https://demo.bnix.io.vn:2222>
 
-## Tech stack
+![Tổng quan](docs/screenshots/02-dashboard.png)
 
-- Backend: FastAPI, SQLAlchemy, SQLite (default), Pydantic v2
-- Frontend: React 18, Vite, lucide-react
-- Server: Nginx, OpenSSH/SFTP, ModSecurity/WAF, systemd, MariaDB, Redis, PHP-FPM, certbot
+## Mục lục
 
-## Versioning
+- [Ảnh chụp màn hình](#ảnh-chụp-màn-hình)
+- [Tính năng](#tính-năng)
+- [Tiện ích (addon)](#tiện-ích-addon)
+- [Yêu cầu hệ thống](#yêu-cầu-hệ-thống)
+- [Cài đặt](#cài-đặt)
+- [Cập nhật](#cập-nhật)
+- [Menu cứu hộ qua SSH](#menu-cứu-hộ-qua-ssh)
+- [Tường lửa](#tường-lửa)
+- [Người dùng, quyền và hạn mức](#người-dùng-quyền-và-hạn-mức)
+- [API cấp phát và module WHMCS](#api-cấp-phát-và-module-whmcs)
+- [Cấu hình](#cấu-hình)
+- [Lệnh thường dùng](#lệnh-thường-dùng)
+- [Mô hình bảo mật](#mô-hình-bảo-mật)
+- [Cấu trúc mã nguồn](#cấu-trúc-mã-nguồn)
 
-Current release: `1.0.84`.
+## Ảnh chụp màn hình
 
-BPanel versions use semantic versioning: `major.minor.patch`.
+Chụp từ bản demo (giao diện tiếng Anh). Bấm vào ảnh để xem kích thước đầy đủ.
 
-## System requirements
+**Đăng nhập và tổng quan**
 
-- Ubuntu 24.04 LTS (clean install recommended)
-- Root access
-- Optional: a domain pointing to the server's public IP (for SSL on the panel)
-- 1 vCPU / 1 GB RAM minimum, 2 vCPU / 2 GB RAM recommended
+| | |
+|---|---|
+| <a href="docs/screenshots/01-login.png"><img src="docs/screenshots/01-login.png" alt="Đăng nhập"></a><br>Đăng nhập | <a href="docs/screenshots/02-dashboard.png"><img src="docs/screenshots/02-dashboard.png" alt="Tổng quan"></a><br>Tổng quan |
+| <a href="docs/screenshots/29-dark-mode.png"><img src="docs/screenshots/29-dark-mode.png" alt="Giao diện tối"></a><br>Giao diện tối | <a href="docs/screenshots/30-mobile.png"><img src="docs/screenshots/30-mobile.png" alt="Trên điện thoại"></a><br>Trên điện thoại |
 
-## Fresh install
+**Website**
 
-Run as root on a fresh Ubuntu 24.04 server.
+| | |
+|---|---|
+| <a href="docs/screenshots/03-websites.png"><img src="docs/screenshots/03-websites.png" alt="Danh sách website"></a><br>Danh sách website | <a href="docs/screenshots/04-website-settings.png"><img src="docs/screenshots/04-website-settings.png" alt="Cấu hình website"></a><br>Cấu hình website |
+| <a href="docs/screenshots/04b-website-terminal.png"><img src="docs/screenshots/04b-website-terminal.png" alt="Terminal của website"></a><br>Terminal của website | <a href="docs/screenshots/09-file-manager.png"><img src="docs/screenshots/09-file-manager.png" alt="Quản lý file"></a><br>Quản lý file |
+| <a href="docs/screenshots/05-applications.png"><img src="docs/screenshots/05-applications.png" alt="Ứng dụng Node.js / Docker (addon)"></a><br>Ứng dụng Node.js / Docker (addon) | <a href="docs/screenshots/06-ssl.png"><img src="docs/screenshots/06-ssl.png" alt="SSL"></a><br>SSL |
+| <a href="docs/screenshots/07-databases.png"><img src="docs/screenshots/07-databases.png" alt="Database"></a><br>Database | <a href="docs/screenshots/08-cron.png"><img src="docs/screenshots/08-cron.png" alt="Cron"></a><br>Cron |
+| <a href="docs/screenshots/10-sftp.png"><img src="docs/screenshots/10-sftp.png" alt="Tài khoản SFTP"></a><br>Tài khoản SFTP |  |
 
-Single-command install:
+**Backup và khôi phục**
+
+| | |
+|---|---|
+| <a href="docs/screenshots/11-backups.png"><img src="docs/screenshots/11-backups.png" alt="Backup website"></a><br>Backup website | <a href="docs/screenshots/12-backup-schedule.png"><img src="docs/screenshots/12-backup-schedule.png" alt="Lịch backup tự động"></a><br>Lịch backup tự động |
+| <a href="docs/screenshots/13-restore.png"><img src="docs/screenshots/13-restore.png" alt="Khôi phục"></a><br>Khôi phục | <a href="docs/screenshots/14-backup-destination.png"><img src="docs/screenshots/14-backup-destination.png" alt="Đích lưu backup (S3 / SFTP)"></a><br>Đích lưu backup (S3 / SFTP) |
+
+**Người dùng**
+
+| | |
+|---|---|
+| <a href="docs/screenshots/15-panel-users.png"><img src="docs/screenshots/15-panel-users.png" alt="Người dùng panel"></a><br>Người dùng panel | <a href="docs/screenshots/16-packages.png"><img src="docs/screenshots/16-packages.png" alt="Gói dịch vụ"></a><br>Gói dịch vụ |
+
+**Bảo mật**
+
+| | |
+|---|---|
+| <a href="docs/screenshots/19-firewall.png"><img src="docs/screenshots/19-firewall.png" alt="Tường lửa và Fail2ban"></a><br>Tường lửa và Fail2ban | <a href="docs/screenshots/20-waf.png"><img src="docs/screenshots/20-waf.png" alt="WAF và OWASP CRS"></a><br>WAF và OWASP CRS |
+| <a href="docs/screenshots/21-waf-site.png"><img src="docs/screenshots/21-waf-site.png" alt="WAF của một website"></a><br>WAF của một website | <a href="docs/screenshots/22-access-logs.png"><img src="docs/screenshots/22-access-logs.png" alt="Nhật ký truy cập"></a><br>Nhật ký truy cập |
+| <a href="docs/screenshots/23-security.png"><img src="docs/screenshots/23-security.png" alt="Passkey và đăng nhập hai lớp"></a><br>Passkey và đăng nhập hai lớp |  |
+
+**Hệ thống**
+
+| | |
+|---|---|
+| <a href="docs/screenshots/18-settings.png"><img src="docs/screenshots/18-settings.png" alt="Cài đặt"></a><br>Cài đặt | <a href="docs/screenshots/26-panel-settings.png"><img src="docs/screenshots/26-panel-settings.png" alt="Cài đặt panel"></a><br>Cài đặt panel |
+| <a href="docs/screenshots/24-services.png"><img src="docs/screenshots/24-services.png" alt="Dịch vụ"></a><br>Dịch vụ | <a href="docs/screenshots/25-php.png"><img src="docs/screenshots/25-php.png" alt="Cấu hình PHP và extension"></a><br>Cấu hình PHP và extension |
+| <a href="docs/screenshots/27-updates.png"><img src="docs/screenshots/27-updates.png" alt="Cập nhật"></a><br>Cập nhật | <a href="docs/screenshots/28-addons.png"><img src="docs/screenshots/28-addons.png" alt="Tiện ích"></a><br>Tiện ích |
+| <a href="docs/screenshots/17-notifications.png"><img src="docs/screenshots/17-notifications.png" alt="Thông báo (addon)"></a><br>Thông báo (addon) |  |
+
+## Tính năng
+
+**Website và ứng dụng**
+
+- Cài WordPress một lần bấm (WP-CLI), website PHP thường, hoặc website chạy
+  ứng dụng Node.js / Docker (addon Application).
+- Nhiều phiên bản PHP chạy song song: 5.6, 7.4, 8.0 đến 8.5. Mỗi website một
+  pool PHP-FPM riêng, chạy bằng user Linux riêng.
+- Sửa được toàn bộ vhost Nginx, có sẵn các mẫu rewrite, tên miền phụ (alias).
+- MariaDB, phpMyAdmin đăng nhập một lần (token 60 giây).
+- SSL Let's Encrypt cho website và cho chính panel.
+- Quản lý file: tải lên, sửa, nén, giải nén, đổi quyền; quyền bạn đặt được
+  giữ nguyên, panel không tự đặt lại.
+- Cron, tài khoản SFTP giới hạn trong một thư mục, terminal cho từng website.
+
+**Backup và khôi phục**
+
+- Backup website (file + SQL), backup toàn bộ tài khoản, lịch backup tự động.
+- Đích lưu S3 (AWS, Wasabi, Backblaze B2, Cloudflare R2, MinIO...) hoặc SFTP.
+  Backup đã gửi lên đích lưu không giữ thêm bản trên server.
+- Khôi phục theo từng bước như DirectAdmin: chọn nguồn (server này, đích lưu,
+  hoặc máy chủ khác qua SFTP/FTP/FTPS), chọn tài khoản, khôi phục. Chạy nền và
+  báo kết quả từng tài khoản.
+- Nhập backup từ DirectAdmin.
+
+**Bảo mật**
+
+- Tường lửa iptables + ipset: luật cho phép / chặn theo IP, blocklist theo URL.
+- WAF ModSecurity cho từng website, bộ luật OWASP CRS bật tắt theo website,
+  chống HTTP flood, rule tuỳ chỉnh toàn cục, nhật ký truy cập và các lần chặn.
+- Đăng nhập hai lớp (TOTP, tương thích Google Authenticator) và passkey.
+- Quét mã độc bằng Linux Malware Detect + ClamAV (addon).
+- Chặn dò mật khẩu SSH bằng Fail2ban (addon).
+
+**Hệ thống**
+
+- Tổng quan: CPU, RAM, ổ đĩa, mạng và các việc cần xử lý.
+- Quản lý dịch vụ, cấu hình PHP và cài PHP extension, tự điều chỉnh PHP-FPM và
+  MariaDB theo RAM/CPU của VPS.
+- Cập nhật panel ngay trong giao diện.
+- Người dùng panel, gói dịch vụ, hạn mức website và dung lượng.
+- API cấp phát và module WHMCS dùng chung cho BPanel và OPanel.
+
+## Tiện ích (addon)
+
+Những phần không cần cho mọi server được tách thành tiện ích. Tất cả đều
+**tắt mặc định**, bật và tắt trong **Cài đặt → Tiện ích**. Gỡ tiện ích chỉ tắt
+tính năng, không xoá dữ liệu nó đã tạo.
+
+| Tiện ích | Chức năng |
+|---|---|
+| **Application** | Chạy ứng dụng Node.js, container và Docker Compose sau Nginx. |
+| **Fail2ban** | Chặn địa chỉ dò mật khẩu SSH. |
+| **Quét mã độc** | LMD + ClamAV: quét theo yêu cầu, theo lịch, giám sát thời gian thực (Lớp 2), quét file tải lên. |
+| **Trợ lý AI (MCP)** | Cho Claude Code, Cursor, VS Code đọc và thao tác panel bằng token cá nhân. |
+| **Thông báo** | Gửi cảnh báo cho quản trị viên qua email (SMTP) và Telegram: dịch vụ dừng, ổ đĩa đầy, backup lỗi, mã độc, chứng chỉ sắp hết hạn, có bản cập nhật... |
+
+Tiện ích có trang riêng sẽ hiện trên menu bên trái khi được bật.
+
+## Yêu cầu hệ thống
+
+- Ubuntu 24.04 LTS, nên là máy mới cài.
+- Quyền root.
+- Tối thiểu 1 vCPU / 1 GB RAM; khuyến nghị 2 vCPU / 2 GB RAM. Quét mã độc cần
+  khoảng 1,3 GB RAM trong lúc quét.
+- Tuỳ chọn: một tên miền trỏ về IP của server để panel có SSL.
+
+## Cài đặt
+
+Chạy bằng root trên server Ubuntu 24.04 mới:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/BNIX-VN/bpanel/refs/heads/main/install.sh | bash
 ```
 
-The bootstrap script downloads the newest semantic release tag from GitHub,
-then runs the installer from that tag. It also copies `VERSION` into the
-runtime root so the panel shows the installed release, not the fallback.
+Script tải bản phát hành mới nhất trên GitHub rồi cài. Trình cài sẽ hỏi:
 
-The installer will:
+- Tên miền của panel (để trống thì dùng IP của server).
+- Cổng của panel (mặc định `2222`; tường lửa chỉ mở cổng này).
+- Có cấp SSL Let's Encrypt cho tên miền panel không, và email đăng ký SSL.
 
-1. Install git, Nginx, MariaDB, Redis, OpenSSH/SFTP, PHP 8.4 default (8.3/8.4 supported), Node.js 22,
-   certbot, phpMyAdmin, WP-CLI, iptables, ipset.
-2. Copy source to `/opt/bpanel`, build the frontend, set up the Python venv.
-3. Create the `bpanel` service account and the `admin` Linux/SFTP account.
-4. Create the systemd service `bpanel-api`.
-5. Configure phpMyAdmin SSO.
-6. Auto-tune PHP-FPM and MariaDB from VPS RAM/CPU and keep that tuning on reboot.
-7. Start the panel directly on the configured panel port without relying on Nginx for login.
-8. Issue Let's Encrypt SSL for the panel domain (optional).
-9. Install `/usr/local/sbin/bpanel-update` and `/usr/local/sbin/bpanel-rescue-firewall`.
-10. Remove the extracted release source.
-11. Print only the panel URL, user, and password; save the same fields to
-   `/root/login.txt`.
+Cài không cần hỏi (ví dụ trong script tự động):
 
-You will be prompted for:
+```bash
+export PANEL_URL=https://panel.example.com:2222
+export ENABLE_SSL=yes
+export SSL_EMAIL=admin@example.com
+export BPANEL_ADMIN_PASSWORD='mật-khẩu-mạnh'   # bỏ trống thì trình cài tự tạo
+curl -fsSL https://raw.githubusercontent.com/BNIX-VN/bpanel/refs/heads/main/install.sh | bash
+```
 
-- Panel hostname (optional; blank uses the server IP)
-- Panel port (default `2222`; the firewall opens only the selected panel port)
-- Whether to enable Let's Encrypt SSL for the panel domain
-- An email for SSL registration
+Trình cài sẽ cài Nginx, MariaDB, Redis, PHP-FPM (mặc định PHP 8.4), OpenSSH/SFTP,
+certbot, phpMyAdmin, WP-CLI, iptables, ipset và Node.js; dựng panel ở
+`/opt/bpanel`, tạo dịch vụ `bpanel-api`, tạo tài khoản `admin`, tự điều chỉnh
+PHP-FPM và MariaDB theo cấu hình VPS. Cuối cùng nó in ra địa chỉ panel, tên đăng
+nhập và mật khẩu, đồng thời lưu vào `/root/login.txt`. Hãy cất mật khẩu vào
+trình quản lý mật khẩu.
 
-After install, open the `Panel URL` printed at the end of the installer. The
-admin password is shown there and saved to `/root/login.txt`; store it in a
-password manager.
+Panel không bị gắn với một tên miền: nó giữ bản sao của mọi chứng chỉ trên
+server và chọn theo SNI, nên `https://<tên miền bất kỳ trên server>:<cổng panel>`
+đều mở được panel với chứng chỉ hợp lệ.
 
-The panel is not tied to that one hostname. It holds a copy of every
-certificate on the machine and picks one per TLS handshake (SNI), so
-`https://<any domain hosted here>:<panel port>` opens the same panel with a
-certificate the browser accepts. `bpanel login` and the Panel settings page
-both list the hostnames that work. `PANEL_URL` only decides which certificate
-a browser gets when it asks for a name that has none of its own, and which
-address the installer prints.
+## Cập nhật
 
-## SSH rescue menu
+```bash
+bpanel-update --release          # lên bản phát hành mới nhất
+bpanel-update --tag v1.0.167     # lên một bản cụ thể
+```
 
-Run as root:
+Hoặc bấm cập nhật trong trang **Cài đặt → Cập nhật**. Nếu trình duyệt vẫn hiện
+giao diện cũ sau khi cập nhật, nhấn Ctrl + Shift + R.
+
+## Menu cứu hộ qua SSH
+
+Khi không vào được panel, chạy bằng root:
 
 ```bash
 bpanel
 ```
 
-Use this menu when the web panel is unavailable. It can show the saved login,
-show rescue status, print recent logs, restart panel services, reopen required
-firewall ports, reset the panel URL/port, repair panel SSL, fix runtime
-permissions, change the `admin` password, and update BPanel from the latest
-release tag. Website and user management stays in the web panel.
-
-Common SSH rescue commands:
+Menu cho xem thông tin đăng nhập, trạng thái, log, khởi động lại dịch vụ, mở lại
+các cổng cần thiết, đặt lại địa chỉ và cổng panel, sửa SSL của panel, sửa quyền
+file, đổi mật khẩu `admin` và cập nhật panel. Một số lệnh dùng trực tiếp:
 
 ```bash
-# Change the server IP without prompts
-bpanel change-ip OLD_IP NEW_IP
-
-# Make the BPanel admin password match the current Linux root password
-bpanel sync-admin-root-password
-
-# Last resort when a firewall rule locked you out: back up the current state,
-# drop every BPanel/UFW filter rule, and rebuild with protected ports only
-bpanel-rescue-firewall
+bpanel change-ip IP_CŨ IP_MỚI         # đổi IP server không cần hỏi
+bpanel change-admin-password          # đổi mật khẩu admin của panel
+bpanel sync-admin-root-password       # dùng mật khẩu root hiện tại cho admin
+bpanel-rescue-firewall                # bị tường lửa khoá ngoài: sao lưu rồi dựng lại luật tối thiểu
 ```
 
-## Firewall
+## Tường lửa
 
-IP filtering runs on **iptables + ipset**. The panel never writes rules by
-hand at request time: `/var/lib/bpanel/firewall/rules.tsv` is the source of
-truth, and every change rebuilds the `BPANEL-INPUT` chain and reloads the
-ipsets from disk. `bpanel-firewall.service` replays the same apply at boot, so
-no `iptables-save` state can drift.
+Lọc IP chạy trên **iptables + ipset**. File `/var/lib/bpanel/firewall/rules.tsv`
+là nguồn gốc duy nhất; mỗi thay đổi dựng lại chuỗi `BPANEL-INPUT` và nạp lại
+các ipset từ file, và `bpanel-firewall.service` làm lại đúng việc đó khi khởi động.
 
-- **Protected ports** (SSH from `sshd -T`, the panel port, 80/443/465/587) are
-  always allowed and cannot be deleted from the panel.
-- **Allow/deny IP** rules go into `hash:net` sets; rules with a port go into
-  `hash:net,port` sets. Allow rules are evaluated before deny rules.
-- **URL blocklists** are fetched daily into `bpanel-block4` / `bpanel-block6`.
-  A million-entry list costs one hash lookup per packet instead of a million
-  Nginx `geo` entries or UFW rules.
-- The chain uses `RETURN` (not `ACCEPT`) for allowed traffic, so fail2ban and
-  any other `INPUT` rules still see the packet.
-- Disabling the firewall removes the jump from `INPUT`; it does not change the
-  `INPUT` policy, so nothing else on the box is affected.
+- **Cổng được bảo vệ** (SSH, cổng panel, 80/443/465/587) luôn mở và không xoá
+  được từ panel.
+- Luật **cho phép** được xét trước luật **chặn**.
+- **Blocklist theo URL** được tải hằng ngày vào `bpanel-block4` / `bpanel-block6`:
+  một triệu địa chỉ vẫn chỉ tốn một lần tra bảng băm cho mỗi gói tin.
+- Tắt tường lửa chỉ gỡ lệnh nhảy từ `INPUT`, không đổi chính sách của `INPUT`.
 
-Upgrades from a BPanel release that used UFW/Nginx run `bpanel-helper
-firewall-migrate`, which imports surviving UFW user rules, purges UFW and its
-config, removes the Nginx `geo` blocklist (`bpanel-ip-blocklist.conf`,
-`ip-blocklist-geo.conf`, and the per-vhost `include`), then applies the new
-chain.
+## Người dùng, quyền và hạn mức
 
-The migration inherits the previous enforcement state rather than assuming it:
-if UFW was active, or blocklist URLs were configured, the new firewall is
-enabled; on a box that had no active firewall the rules are staged but not
-enforced, so nothing the panel does not know about gets cut off. Turn it on
-from the Firewall page when you are ready. Fresh installs always enforce.
+| Vai trò | Quyền |
+|---|---|
+| `admin` | Toàn quyền: website, người dùng, dịch vụ, tường lửa, cấu hình PHP, backup, bảo mật, tiện ích. |
+| `end_user` | Chỉ quản lý website của mình: file, database, SSL, WordPress, cron, backup của mình. |
 
-## Updates
+- Mỗi người dùng panel có một user Linux cùng tên; website nằm ở
+  `/home/<người dùng>/<tên miền>/public_html`.
+- Mật khẩu panel đồng bộ với mật khẩu SFTP; SFTP bị giới hạn (chroot) trong thư
+  mục của người dùng, không có shell.
+- Quản trị viên có thể đăng nhập thay một người dùng để tạo website cho họ, và
+  chuyển website sang người dùng khác.
+- Người dùng thường có giới hạn số website và dung lượng (MB), gom thành các gói
+  dùng lại được. Dung lượng được kiểm tra ở tầng ứng dụng khi tạo website, tải
+  lên, sửa, nén, giải nén.
+- Xoá người dùng sẽ xoá hẳn mọi website, file, database, cron và dữ liệu Linux
+  của người đó.
 
-BPanel can update itself from the latest stable GitHub release tag. Run it from
-SSH:
+## API cấp phát và module WHMCS
 
-```bash
-bpanel-update --release
-```
+`modules/servers/bpanel/` là một module WHMCS dùng chung cho **BPanel và OPanel**.
+Xác thực bằng Bearer token (tạo ở **Cài đặt panel → API Token**, dán vào Access
+Hash của server trong WHMCS).
 
-The same action is available in the panel's **Updates** page. The update script
-checks release tags, downloads the selected release zip to a temporary
-directory, syncs source to `/opt/bpanel`, rebuilds the frontend, refreshes
-helper scripts, restarts the API, reloads Nginx, and removes the temporary
-source. `/opt/bpanel-source` is not kept for normal release updates; it is only a
-developer `--branch` or `--skip-pull` source directory.
-
-The panel stores release check and update progress in
-`/var/lib/bpanel/update-status.json`. The Updates page compares the installed
-version with the newest release tag and enables the panel update button only
-when a newer release is available.
-
-To stay on a specific release:
-
-```bash
-bpanel-update --tag v1.0.84
-```
-
-If the browser still shows the old UI, do a hard refresh (Ctrl + Shift + R) or
-open in incognito.
-
-## Project layout
-
-```
-bpanel/
-|-- backend/                    FastAPI application
-|   |-- app/
-|   |   |-- api/                  HTTP routes
-|   |   |-- core/                 config, db, security, permissions, secrets
-|   |   |-- models/               SQLAlchemy entities
-|   |   |-- schemas/              Pydantic v2 schemas
-|   |   |-- services/             nginx, mariadb, wp, firewall, backup, etc.
-|   |   |-- templates/nginx/      Jinja2 vhost templates
-|   |   |-- main.py
-|   |   `-- seed.py               Seeds the first admin user
-|   |-- tests/                   pytest smoke tests for validators
-|   `-- requirements.txt
-|-- frontend/                   React + Vite SPA
-|   `-- src/
-|-- installer/
-|   |-- files/                   bpanel-helper.sh + sudoers rule
-|   |-- install.sh               Full first-time install
-|   |-- rescue-firewall.sh       Emergency firewall reset (locked-out recovery)
-|   `-- update.sh                Pull from GitHub and redeploy
-`-- README.md
-```
-
-## Provisioning API and the shared billing module
-
-`modules/servers/bpanel/` is a single WHMCS server module used against **both
-BPanel and OPanel**. The module is the fixed side of this contract: BPanel
-matches what the module already expects, rather than the module being adapted
-per panel. `backend/app/tests/test_provisioning_module_contract.py` pins the
-response keys it reads.
-
-It authenticates with a Bearer token (created under **API Tokens**, pasted into
-the server's Access Hash). Every hook maps to one endpoint:
-
-| WHMCS hook | Endpoint |
+| Hook WHMCS | Endpoint |
 |---|---|
 | `TestConnection`, `PackageLoader` | `GET /plans` |
 | `CreateAccount` | `POST /accounts` |
@@ -232,316 +257,86 @@ the server's Access Hash). Every hook maps to one endpoint:
 | `UsageUpdate` | `GET /accounts/{external_id}/usage` |
 | `LoginLink`, `ClientArea` | `POST /accounts/{external_id}/login` |
 
-`external_id` is `whmcs:<serviceid>`, so a service maps to exactly one panel
-account across renames.
+`external_id` có dạng `whmcs:<serviceid>`. Đăng nhập một lần (SSO) dùng token chỉ
+dùng được một lần, hết hạn sau 5 phút. Tạm khoá sẽ tắt đăng nhập, huỷ mọi phiên
+đang mở và chuyển các website sang trang "tạm ngưng"; mở khoá khôi phục lại
+nguyên trạng.
 
-Cross-panel notes:
+## Cấu hình
 
-- **Response envelope**: OPanel replies with `{"success": ..., "data": ...}`;
-  BPanel replies with bare objects. The module unwraps a body only when it
-  carries *both* keys, so no BPanel response may use that pair together.
-- **SSO**: the module reads `data.login_url` only. BPanel returns it as an
-  absolute URL built from the hostname the API call arrived on - so the
-  customer lands on the domain the billing system already uses - falling back
-  to `PANEL_URL` when that hostname is not one this panel serves, and to a
-  relative path the module prefixes itself. `url` and `path` come along too. The token is single-use
-  and expires after 5 minutes; `/api/auth/sso/<token>` sets the session cookie
-  and redirects. A suspended account is redirected to
-  `/?error=account_suspended` instead of being logged in.
-- **Suspend** disables the panel login, bumps `token_version` (killing live
-  sessions), rewrites each vhost as a static "suspended" site, and locks the
-  site Linux users. **Unsuspend** restores the real vhost, aliases, WAF and
-  flood settings from the database.
-- **Terminate** takes no query string from the module, so `backup` defaults to
-  off. Pass `?backup=true` to write a full user backup to `/var/backups/bpanel`
-  before the account is deleted; it runs inline, so only use it from a caller
-  that can wait. A failed backup is recorded on the account and never blocks
-  the termination.
-- A terminated account keeps its billing row with empty `username`/`email`, so
-  the client area can still render the service.
-
-## Roles
-
-| Role | Capabilities |
-|------|--------------|
-| `admin` | Full control: websites, users, ownership assignment, services, firewall, PHP config, backups, and security settings. |
-| `end_user` | Manage only websites assigned to the account, including files, databases, SSL, WordPress tools, cron, and own backups. |
-
-## User and website ownership
-
-- Each panel user also has a Linux user with the same normalized username.
-- The panel password is synced to the Linux password so the same account can
-  log in with chrooted SFTP, for example `admin` -> `/home/admin`.
-- Panel Linux users are members of `bpanel-sftp`; the installer adds an SSHD
-  `Match Group bpanel-sftp` block for password-based SFTP access. SSH shells,
-  TTYs and forwarding are disabled for these users.
-- New websites are created under `/home/<panel-user>/<domain>/public_html`.
-- If an admin creates a website without impersonating another user, the website
-  belongs to the admin account.
-- Admins can quick-login as another panel user before creating websites for
-  that account.
-- Admins can assign a website to exactly one panel user. Moving ownership also
-  moves the site path to the new Linux user and rewrites the PHP-FPM/Nginx
-  runtime configuration.
-- Deleting a panel user permanently deletes all websites, files, databases,
-  backup schedule links, cron entries, PHP-FPM pools, and Linux-user data owned
-  by that user.
-
-## Quotas
-
-- End users have a website count limit and a storage limit in MB.
-- Admin users are not storage-limited.
-- Storage usage is calculated from all websites owned by the user.
-- BPanel enforces the storage limit before site creation, upload, edit, archive,
-  extract, and ownership assignment operations.
-- This is an application-level soft quota, not an OS disk quota.
-
-## Configuration
-
-`/opt/bpanel/backend/.env` is generated by the installer and contains:
+Trình cài tạo `/opt/bpanel/backend/.env`:
 
 ```ini
 APP_ENV=production
-SECRET_KEY=<random-32-bytes>
+SECRET_KEY=<ngẫu nhiên 32 byte>
 COMMAND_DRY_RUN=false
 DATABASE_URL=sqlite:////opt/bpanel/backend/bpanel.db
 REDIS_URL=redis://localhost:6379/0
 RATE_LIMIT_BACKEND=redis
-ALLOWED_ORIGINS=https://panel.example.com
 BACKUP_ROOT=/var/backups/bpanel
 SSL_EMAIL=admin@example.com
-PANEL_URL=http://SERVER_IP:2222  # uses the selected panel port
-PANEL_DOMAIN=
-PANEL_PORT=2222                  # default; installer can set another port
-PANEL_SSL_CERT=                  # default certificate, for hostnames with none
-PANEL_SSL_KEY=
-PANEL_SNI_DIR=/etc/bpanel/sni    # one certificate per hostname, kept by the helper
+PANEL_URL=https://panel.example.com:2222
+PANEL_PORT=2222
+PANEL_SNI_DIR=/etc/bpanel/sni
 FRONTEND_DIST=/opt/bpanel/frontend/dist
 ```
 
-### PHP-FPM auto tuning
-
-BPanel creates one PHP-FPM pool per managed PHP site. Pool sizing is tuned when
-a site runtime is created or refreshed: the helper reads total RAM, CPU count,
-and the number of managed PHP-FPM pools, then sets conservative `ondemand`
-values for `pm.max_children`, idle timeout, request recycling, and hard request
-timeout. Small VPS plans keep fewer children alive and recycle sooner; larger
-plans receive a higher per-pool cap without using the same static values as a
-1 GB server.
-
-Optional overrides can be added to `/opt/bpanel/backend/.env`:
-
-```ini
-BPANEL_PHP_FPM_WORKER_MB=128
-BPANEL_PHP_FPM_MAX_CHILDREN=
-BPANEL_PHP_FPM_IDLE_TIMEOUT=
-BPANEL_PHP_FPM_MAX_REQUESTS=
-BPANEL_PHP_FPM_REQUEST_TERMINATE_TIMEOUT=300
-```
-
-After changing overrides, retune existing pools:
+PHP-FPM và MariaDB được tự điều chỉnh theo RAM và CPU. Có thể ghi đè trong `.env`
+(ví dụ `BPANEL_PHP_FPM_MAX_CHILDREN`, `BPANEL_MARIADB_BUFFER_POOL_SIZE`) rồi chạy lại:
 
 ```bash
 sudo -u bpanel env HOME=/opt/bpanel sudo -n /usr/local/sbin/bpanel-helper php-fpm-retune
-```
-
-### MariaDB auto tuning
-
-BPanel also writes `/etc/mysql/mariadb.conf.d/90-bpanel-tuning.cnf` with VPS
-sized MariaDB defaults. The helper tunes InnoDB buffer pool, connection count,
-thread/table caches, temporary table limits, packet size, and slow-query logging
-from total RAM and CPU count. The defaults leave memory for Nginx, PHP-FPM,
-Redis, and the panel process instead of giving MariaDB a fixed oversized cache.
-
-Optional overrides can be added to `/opt/bpanel/backend/.env`:
-
-```ini
-BPANEL_MARIADB_BUFFER_POOL_SIZE=
-BPANEL_MARIADB_MAX_CONNECTIONS=
-BPANEL_MARIADB_THREAD_CACHE_SIZE=
-BPANEL_MARIADB_TABLE_OPEN_CACHE=
-BPANEL_MARIADB_TMP_TABLE_SIZE=
-BPANEL_MARIADB_MAX_ALLOWED_PACKET=
-BPANEL_MARIADB_LOG_FILE_SIZE=
-BPANEL_MARIADB_IO_CAPACITY=
-BPANEL_MARIADB_OPEN_FILES_LIMIT=
-```
-
-After changing overrides, retune MariaDB:
-
-```bash
 sudo -u bpanel env HOME=/opt/bpanel sudo -n /usr/local/sbin/bpanel-helper mariadb-retune
 ```
 
-The backend refuses to start in production with `COMMAND_DRY_RUN=true` or
-`ALLOWED_ORIGINS=*`. SECRET_KEY must be at least 32 chars in production.
-
-## Service commands
+## Lệnh thường dùng
 
 ```bash
-# API logs
-journalctl -u bpanel-api -f
-
-# Restart the API after backend changes
-systemctl restart bpanel-api
-
-# Reload Nginx after vhost edits
-nginx -t && systemctl reload nginx
-
-# Service status
-systemctl status bpanel-api nginx mariadb redis-server php8.3-fpm php8.4-fpm
-
-# SSH rescue menu
-bpanel
-
-# Change the server IP
-bpanel change-ip
-bpanel change-ip OLD_IP NEW_IP
-
-# Change the BPanel admin login password
-bpanel change-admin-password
-
-# Make BPanel admin use the current root password
-bpanel sync-admin-root-password
+journalctl -u bpanel-api -f                    # log của API
+systemctl restart bpanel-api                   # khởi động lại API
+nginx -t && systemctl reload nginx             # nạp lại Nginx sau khi sửa vhost
+systemctl status bpanel-api nginx mariadb redis-server php8.4-fpm
 ```
 
-## Security model
+## Mô hình bảo mật
 
-The panel daemon does **not** run as root. The installer creates a system user
-`bpanel` and a single root-owned helper script that does all privileged work.
+Tiến trình panel **không chạy bằng root**. Trình cài tạo user hệ thống `bpanel`
+và một script trợ giúp duy nhất thuộc root làm mọi việc cần quyền cao:
 
 ```
-bpanel-api  (uvicorn, user=bpanel, hardened systemd unit)
+bpanel-api  (uvicorn, user=bpanel, unit systemd đã siết chặt)
    |
-   |  sudo -n /usr/local/sbin/bpanel-helper <subcommand> ...
+   |  sudo -n /usr/local/sbin/bpanel-helper <lệnh con> ...
    v
-bpanel-helper  (root, runs only whitelisted operations)
+bpanel-helper  (root, chỉ chạy các thao tác nằm trong danh sách cho phép)
 ```
 
-What the helper allows:
+- Helper kiểm tra tên miền, cổng, IP và đường dẫn trước khi gọi chương trình
+  thật; mọi lệnh ngoài danh sách đều bị từ chối.
+- Website được tách nhau bằng user Linux riêng, pool PHP-FPM riêng với
+  `open_basedir`, SFTP chroot và shell `nologin`.
+- Terminal của website chạy bằng user của website, chỉ cho các lệnh trong danh
+  sách (PHP, Composer, WP-CLI, Node, npm, git và các công cụ file thường dùng),
+  kiểm tra đường dẫn và giới hạn thời gian.
+- Đăng nhập bị giới hạn tần suất qua Redis; mật khẩu database mã hoá khi lưu;
+  cookie HttpOnly kèm token CSRF; Content-Security-Policy chặt; phiên bị huỷ khi
+  đổi mật khẩu, đổi quyền, khoá tài khoản hoặc đổi đăng nhập hai lớp.
+- Nếu API bị chiếm, kẻ tấn công chỉ ghi được vào cấu hình Nginx, thư mục website
+  và thư mục backup, và chỉ chạy được các lệnh con của helper; không có đường
+  lên root qua tiến trình API.
 
-- `systemctl start/stop/restart/reload <whitelisted service>`
-- `nginx -t`, `nginx reload`
-- `certbot --nginx ...` for a single validated domain
-- create/delete panel Linux users, sync their SFTP password, and manage per-user PHP-FPM pools
-- `firewall-status/enable/disable/allow-port/allow-ip/deny-ip/delete` (iptables + ipset)
-- fix ownership/ACLs for managed site paths under `/home/<panel-user>/<domain>`
-- `rm -rf <managed site path>`
-- WP-CLI and crontab management as the website's Linux user
-- `terminal-exec`: an allowlisted command as the website's Linux user
+## Cấu trúc mã nguồn
 
-### Website terminal
+```
+bpanel/
+|-- backend/          FastAPI, SQLAlchemy, Pydantic v2 (API, dịch vụ, test)
+|-- frontend/         React 19 + Vite (giao diện)
+|-- installer/        install.sh, update.sh, bpanel-helper.sh, cứu hộ tường lửa
+|-- modules/          module WHMCS
+|-- tools/i18n/       bản dịch tiếng Việt
+`-- docs/screenshots/ ảnh chụp màn hình
+```
 
-The per-site terminal runs commands as the website's own Linux user through
-`bpanel-helper terminal-exec`. Commands are split into argv in Python (no shell
-is involved, so `;`, `|`, backticks and globs are ordinary arguments) and the
-executable must be on the allowlist, which covers the PHP toolchain
-(`php`, `composer`, `artisan`, `wp`, `phpunit`), the JS toolchain
-(`node`, `npm`, `npx`, `yarn`), `git`, and the usual file/text utilities
-(`ls`, `cat`, `sed`, `awk`, `grep`, `find`, `tar`, `wc`, `stat`, …).
+## Giấy phép
 
-- Every path argument to a file utility must resolve inside
-  `/home/<panel-user>/`; `curl`/`wget` additionally reject `file://` and any
-  output path outside that home.
-- `php`/`composer`/`wp` run against the site's configured PHP version
-  (`php8.4`, not the system default), so Composer platform checks pass.
-- Each command gets a wall-clock budget enforced by `timeout` inside the
-  helper: 60s for quick utilities, 900s for installers and updaters
-  (`composer`, `npm`, `wp`, `git`, `php`, …). The API adds a slightly longer
-  backstop so a wedged helper cannot pin a worker.
-- The allowlist is a guardrail, not a privilege boundary: `php -r` can already
-  run arbitrary code **as that site's Linux user**. Isolation comes from the
-  per-site Unix user, the chrooted home, and the helper's path checks.
-
-Anything else is rejected. The helper validates domains, ports, IPs, and
-filesystem paths before invoking the real binary.
-
-The installer also creates a local MariaDB `bpanel` account used by the API to
-create per-site databases and users for WordPress installs.
-
-Additional hardening on the systemd unit:
-
-- Runs as `bpanel` with only the `www-data` and `bpanel-sites` supplementary groups.
-  `bpanel` is the service account for the API, not a panel login user; fresh
-  installs do not create `/home/bpanel` or `/home/bpanel-sites`.
-- Panel login users are Linux users in the `bpanel-sftp` group. Their
-  home directories live directly under `/home/<username>`, are root-owned
-  SFTP chroots, and contain user-owned site directories. `/home` is
-  executable-only for non-root users, so panel users cannot list other
-  usernames.
-- Malware scanning is a page of its own, not a toggle on the Security page.
-  It scans one website, every website, or every file on the machine, and can do
-  the last one on a weekly schedule the admin sets. A whole-machine scan runs
-  through the helper so clamd can read files its own user cannot, skips the
-  kernel filesystems and the signature database, and is niced to the floor so a
-  scan is never the reason a website goes slow.
-- A fresh install turns IPv6 on by itself when the machine already holds a
-  global IPv6 address, and says so in the summary it prints. A server that
-  updates into this release is left as its admin set it. Neither can conjure
-  an address a provider assigned but never configured: on most VPS the
-  metadata service publishes no network data at all.
-- Otherwise IPv6 is off until an admin turns it on in Panel settings. Turning it on
-  checks for a global IPv6 address first and refuses on a server without one:
-  nginx cannot bind an address family the machine does not have, and it would
-  refuse to start, taking every website with it. When it is on, the helper adds
-  the IPv6 twin of every listen directive it manages - including the
-  certbot-written `listen 443 ssl` lines - runs `nginx -t`, and restores every
-  file it touched if nginx refuses. `/etc/bpanel/ipv6-enabled` is the switch;
-  an update re-applies it, and it turns itself off if the address ever goes
-  away. The firewall was already dual-stack.
-- Inside a site tree the defaults are `644` for files and `755` for folders,
-  the same modes every hosting panel and every PHP application expects.
-  `wp-config.php`, `.env` and `.my.cnf` are put back to `640` after any bulk
-  permission pass. Sites are kept apart by the per-pool PHP-FPM `open_basedir`,
-  by the SFTP chroot, by `nologin` shells and by the panel terminal's path
-  checks - not by the mode bits.
-- Uses `PrivateTmp`, `PrivateDevices`, `ProtectKernelTunables`,
-  `ProtectKernelModules`, `ProtectKernelLogs`, `ProtectControlGroups`,
-  `ProtectClock`, `ProtectHostname`, and `ProtectProc=invisible`.
-- Uses `RestrictNamespaces`, `RestrictRealtime`, `LockPersonality`,
-  `MemoryDenyWriteExecute`, `SystemCallArchitectures=native`, and
-  `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK`.
-- Drops ambient capabilities with `CapabilityBoundingSet=~`.
-
-`NoNewPrivileges=false`, `ProtectSystem=false`, `ProtectHome=false`, and
-`RestrictSUIDSGID=false` are intentional because the API must invoke the sudo
-helper and manage website files under `/home`. Privileged operations stay
-constrained by the root-owned helper and sudoers allowlist.
-
-If the API itself were ever compromised, the attacker would be limited to:
-- writing into `/etc/nginx/conf.d/`, managed site paths under `/home`, and `/var/backups/bpanel/`
-- running the helper subcommands above (no arbitrary code execution as root)
-
-There is no path back to root via the API process.
-
-## Security notes
-
-- Login is rate-limited in Redis (8 attempts / minute, lockout after 20 fails),
-  so counters are shared across uvicorn workers.
-- Google Authenticator compatible TOTP 2FA can be enabled per account.
-- Constant-time login path: bcrypt is verified even when the user does not
-  exist, to avoid username enumeration via timing.
-- DB and WordPress passwords are passed via stdin / `--prompt`, never as
-  command-line args, so they don't appear in `ps`.
-- DB passwords are encrypted at rest (Fernet, key derived from SECRET_KEY).
-- Custom Nginx blocks are validated: braces must balance, dangerous directives
-  (`server {`, `http {`, `events {`, `include`, `load_module`, `user`, `lua_*`,
-  `proxy_pass`, `alias`, `*_log`, `ssl_*`) are rejected, max 16 KB.
-- File manager rejects symlinks anywhere in the path. Website owners can manage
-  their own deploy sources, including PHP, `.htaccess`, `.env`, and
-  `wp-config.php`, with quota and ownership checks enforced by BPanel.
-- Path traversal is blocked at every layer that touches the filesystem.
-- Auth uses HttpOnly cookies (`bpanel_session`) plus a CSRF token cookie
-  (`bpanel_csrf`) echoed in the `X-CSRF-Token` header. The JWT is never
-  exposed to JavaScript, mitigating token theft via XSS.
-- Strict `Content-Security-Policy` (`script-src 'self'`, `frame-ancestors 'none'`).
-- JWTs include a `jti`; revoked session IDs are stored server-side, and
-  `token_version` invalidates previously issued JWTs on password change, role
-  change, account disable, 2FA changes, or explicit logout.
-- Production installs require `RATE_LIMIT_BACKEND=redis`, reject
-  `ALLOWED_ORIGINS=*`, enforce `COMMAND_DRY_RUN=false`, and return generic
-  500 responses for unhandled errors.
-
-## License
-
-MIT - see LICENSE.
+MIT.
