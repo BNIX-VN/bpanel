@@ -108,7 +108,6 @@ PART13 = {
     # The Settings page: everything the sidebar does not hold
     "Ports, IP rules, blocklists and Fail2ban": "Cổng, luật IP, blocklist và Fail2ban",
     "Request filtering for each website": "Lọc request cho từng website",
-    "Scans, schedules and history": "Quét, lịch quét và lịch sử",
     "Requests and blocks": "Request và các lần chặn",
     "Password, two-factor sign-in and passkeys": "Mật khẩu, đăng nhập hai lớp và passkey",
     "Start, stop and restart": "Bật, tắt và khởi động lại",

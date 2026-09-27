@@ -4619,6 +4619,7 @@ function App() {
     { key: 'addons', items: [
       ...(mcpAddonInstalled ? [['mcp', 'AI assistants', Bot]] : []),
       ...(notificationsAddonInstalled && isAdmin ? [['notifications', 'Notifications', Bell]] : []),
+      ...(malwareAddonInstalled && isAdmin ? [['malware', 'Malware scanner', Bug]] : []),
     ] },
     { key: 'settings', items: [['settings', 'Settings', SettingsIcon]] },
   ].filter(section => section.items.length > 0);
@@ -4628,14 +4629,13 @@ function App() {
     { title: 'Security', items: [
       isAdmin && ['firewall', 'Firewall', BrickWall, 'Ports, IP rules, blocklists and Fail2ban'],
       ['waf', 'WAF', ShieldAlert, 'Request filtering for each website'],
-      isAdmin && malwareAddonInstalled && ['malware', 'Malware scanner', Bug, 'Scans, schedules and history'],
       isAdmin && ['access-logs', 'Access logs', ScrollText, 'Requests and blocks'],
       ['security', 'Account security', LockKeyhole, 'Password, two-factor sign-in and passkeys'],
     ] },
     { title: 'System', items: [
+      isAdmin && ['panel-settings', 'Panel settings', SettingsIcon, 'Hostname, branding and API tokens'],
       isAdmin && ['services', 'Services', Activity, 'Start, stop and restart'],
       isAdmin && ['php', 'PHP config', Code2, 'Versions, limits and extensions'],
-      isAdmin && ['panel-settings', 'Panel settings', SettingsIcon, 'Hostname, branding and API tokens'],
       isAdmin && ['updates', 'Updates', RefreshCw, 'Panel version'],
       isAdmin && ['addons', 'Addons', PackageOpen, 'Optional features'],
     ] },

@@ -937,7 +937,6 @@ export const vi = {
   "Scanning...": "Đang quét...",
   "Scans a website, every website or the whole server on demand, and on a weekly schedule.": "Quét một website, mọi website hoặc toàn server khi cần, và theo lịch hằng tuần.",
   "Scans the websites and the server for malware with Linux Malware Detect and ClamAV.": "Quét mã độc cho các website và toàn server bằng Linux Malware Detect và ClamAV.",
-  "Scans, schedules and history": "Quét, lịch quét và lịch sử",
   "Schedule": "Lịch hẹn",
   "Schedule not found": "Không tìm thấy lịch",
   "Scheduled and manual backups kept on this server, and the ones uploaded here.": "Backup theo lịch và backup thủ công đang lưu trên server này, cùng các bản đã tải lên đây.",
