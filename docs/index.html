@@ -9,7 +9,10 @@
 <meta property="og:description" content="Website, database, SSL, backup, tường lửa, WAF và người dùng trong một giao diện web tiếng Việt. Cài bằng một lệnh.">
 <meta property="og:image" content="screenshots/02-dashboard.png">
 <meta property="og:type" content="website">
-<meta name="theme-color" content="#1660cf">
+<meta name="theme-color" content="#f5f7fa" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0c1220" media="(prefers-color-scheme: dark)">
+<meta name="color-scheme" content="light dark">
+<script>try{var t=localStorage.getItem('bpanel-theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t}catch(e){}</script>
 <link rel="icon" type="image/png" href="assets/favicon.png">
 <link rel="preload" href="assets/fonts/open-sans-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
 <style>
@@ -36,14 +39,25 @@
   --font:'Open Sans',system-ui,-apple-system,'Segoe UI',sans-serif;
   --mono:Consolas,'Liberation Mono',Menlo,monospace;
   --max:1160px;
+  color-scheme:light;
 }
+/* Dark follows the system unless the visitor chose a theme with the
+   header toggle (saved in localStorage, applied before first paint). */
 @media (prefers-color-scheme:dark){
-  :root{
-    --primary:#3d82ea;--primary-hover:#5a95ee;--primary-ink:#7fb0f5;--primary-light:#18284a;--primary-soft:#2a4677;
+  :root:not([data-theme="light"]){
+    --primary:#2f6fd6;--primary-hover:#2861c2;--primary-ink:#7fb0f5;--primary-light:#18284a;--primary-soft:#2a4677;
     --bg:#0c1220;--surface:#121a2b;--surface-alt:#18223a;--border:#26324a;
     --text:#e7ebf1;--text-2:#c0c9d6;--muted:#98a3b3;--success:#3ecf8e;--success-bg:#10281f;
     --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.3);--shadow-lg:0 24px 60px rgba(0,0,0,.45);
+    color-scheme:dark;
   }
+}
+:root[data-theme="dark"]{
+    --primary:#2f6fd6;--primary-hover:#2861c2;--primary-ink:#7fb0f5;--primary-light:#18284a;--primary-soft:#2a4677;
+    --bg:#0c1220;--surface:#121a2b;--surface-alt:#18223a;--border:#26324a;
+    --text:#e7ebf1;--text-2:#c0c9d6;--muted:#98a3b3;--success:#3ecf8e;--success-bg:#10281f;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.3);--shadow-lg:0 24px 60px rgba(0,0,0,.45);
+    color-scheme:dark;
 }
 *{box-sizing:border-box}
 html{scroll-behavior:smooth;scroll-padding-top:76px}
@@ -65,8 +79,9 @@ code,pre{font-family:var(--mono)}
 .mark::after{content:'';position:absolute;left:7px;right:7px;bottom:5px;height:2.5px;border-radius:9px;background:var(--yellow)}
 .mark span{transform:translateY(-2px)}
 .nav{display:flex;gap:4px;margin-left:12px}
-.nav a{color:var(--text-2);text-decoration:none;font-size:14.5px;font-weight:600;padding:8px 10px;border-radius:8px}
+.nav a{color:var(--text-2);text-decoration:none;font-size:14.5px;font-weight:600;padding:8px 10px;border-radius:8px;white-space:nowrap}
 .nav a:hover{color:var(--text);background:var(--surface-alt)}
+.nav a[aria-current="true"]{color:var(--primary-ink);background:var(--primary-light)}
 .head-actions{margin-left:auto;display:flex;gap:8px;align-items:center}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:0 18px;border-radius:10px;font-weight:700;font-size:15px;text-decoration:none;border:1px solid transparent;cursor:pointer;font-family:inherit;transition:background .15s,border-color .15s,transform .15s}
 .btn svg{width:18px;height:18px;flex:none}
@@ -76,6 +91,16 @@ code,pre{font-family:var(--mono)}
 .btn-ghost:hover{border-color:var(--primary-soft);background:var(--surface-alt)}
 .btn-sm{min-height:38px;padding:0 14px;font-size:14px}
 .menu-toggle{display:none}
+/* The full menu needs the room; GitHub is also in the footer and final card. */
+@media (max-width:1080px){.head-actions .btn-github{display:none}}
+.icon-btn{width:38px;padding:0}
+.theme-toggle .i-sun{display:none}
+:root[data-theme="dark"] .theme-toggle .i-sun{display:block}
+:root[data-theme="dark"] .theme-toggle .i-moon{display:none}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]) .theme-toggle .i-sun{display:block}
+  :root:not([data-theme="light"]) .theme-toggle .i-moon{display:none}
+}
 
 /* --- hero ---------------------------------------------------------------- */
 .hero{position:relative;overflow:hidden;padding:64px 0 40px}
@@ -86,10 +111,11 @@ code,pre{font-family:var(--mono)}
 .dot{width:6px;height:6px;border-radius:50%;background:var(--border)}
 h1{margin:0;font-size:clamp(34px,5.2vw,58px);line-height:1.1;letter-spacing:-.025em;font-weight:800;max-width:17ch}
 h1 em{font-style:normal;color:var(--primary-ink);position:relative;white-space:nowrap}
-h1 em::after{content:'';position:absolute;left:0;right:0;bottom:.06em;height:.14em;background:var(--yellow);border-radius:9px;z-index:-1;opacity:.9}
+/* Below the dot-below marks (ọ, ẹ), which a line through them would hide. */
+h1 em::after{content:'';position:absolute;left:0;right:0;bottom:-.1em;height:.09em;background:var(--yellow);border-radius:9px;opacity:.9}
 .lead{margin:20px 0 0;max-width:62ch;font-size:clamp(17px,1.6vw,19px);color:var(--text-2)}
 .hero-cta{display:flex;flex-wrap:wrap;gap:12px;margin-top:28px}
-.cmd{margin-top:22px;display:flex;align-items:center;gap:10px;max-width:720px;padding:10px 10px 10px 16px;background:var(--navy);color:#e7ebf1;border-radius:12px;box-shadow:var(--shadow)}
+.cmd{margin-top:22px;display:flex;align-items:center;gap:10px;max-width:720px;padding:10px 10px 10px 16px;background:var(--navy);color:#e7ebf1;border:1px solid var(--navy);border-radius:12px;box-shadow:var(--shadow)}
 .cmd code{flex:1;min-width:0;overflow-x:auto;white-space:nowrap;font-size:14px;scrollbar-width:none;-webkit-mask-image:linear-gradient(90deg,#000 88%,transparent)}
 .cmd code::-webkit-scrollbar{display:none}
 .cmd code::before{content:'$ ';color:#7fb0f5}
@@ -186,8 +212,9 @@ dialog.lightbox::backdrop{background:rgba(8,12,22,.72)}
 .code-block{position:relative;margin:18px 0 0;padding:18px 20px;background:var(--navy);color:#e7ebf1;border-radius:12px;overflow-x:auto;font-size:14px;line-height:1.7}
 .code-block .c{color:#8f9bb0}
 .code-block .k{color:#7fb0f5}
-.two{display:grid;grid-template-columns:minmax(0,1fr);gap:24px;margin-top:28px}
-@media (min-width:900px){.two{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
+.req{display:grid;grid-template-columns:minmax(0,1fr);gap:24px;margin-top:28px}
+.req .code-block{margin:0}
+@media (min-width:900px){.req{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:40px}}
 .box{padding:24px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface)}
 .box h3{margin:0 0 10px;font-size:18px}
 .box ul{margin:0;padding-left:20px;color:var(--text-2);display:grid;gap:6px}
@@ -199,13 +226,14 @@ dialog.lightbox::backdrop{background:rgba(8,12,22,.72)}
 .flow strong{font-family:var(--font)}
 
 /* --- faq ------------------------------------------------------------------- */
-.faq{display:grid;gap:10px;max-width:860px}
+.faq{display:grid;gap:10px}
 .faq details{border:1px solid var(--border);border-radius:10px;background:var(--surface)}
-.faq summary{cursor:pointer;list-style:none;display:flex;justify-content:space-between;gap:16px;align-items:center;padding:16px 18px;font-weight:700}
+.faq details:hover,.faq details[open]{border-color:var(--primary-soft)}
+.faq summary{cursor:pointer;list-style:none;display:flex;justify-content:space-between;gap:16px;align-items:center;min-height:56px;padding:14px 20px;font-weight:700}
 .faq summary::-webkit-details-marker{display:none}
 .faq summary::after{content:'+';font-size:22px;line-height:1;color:var(--muted);transition:transform .15s}
 .faq details[open] summary::after{transform:rotate(45deg)}
-.faq details p{margin:0;padding:0 18px 16px;color:var(--text-2)}
+.faq details p{margin:0;padding:0 20px 18px;max-width:100ch;color:var(--text-2)}
 
 /* --- final cta + footer ----------------------------------------------------- */
 .final{padding:64px 0}
@@ -214,6 +242,8 @@ dialog.lightbox::backdrop{background:rgba(8,12,22,.72)}
 .final-card p{margin:0;color:#c9d4e6;max-width:60ch}
 .final-card .btn-ghost{background:transparent;color:#fff;border-color:#3a4d73}
 .final-card .btn-ghost:hover{background:#1d2c4c}
+:root[data-theme="dark"] .cmd,:root[data-theme="dark"] .code-block,:root[data-theme="dark"] .final-card{border:1px solid var(--border)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .cmd,:root:not([data-theme="light"]) .code-block,:root:not([data-theme="light"]) .final-card{border:1px solid var(--border)}}
 footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted);font-size:14px}
 .foot{display:flex;flex-wrap:wrap;gap:16px;justify-content:space-between;align-items:center}
 .foot nav{display:flex;flex-wrap:wrap;gap:16px}
@@ -228,9 +258,33 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
   .head-actions{margin-left:auto}
   .head-actions .btn-github{display:none}
 }
+/* Fingers need 44px targets. */
+@media (max-width:900px),(pointer:coarse){
+  .btn-sm,.copy,.tab{min-height:44px}
+  .icon-btn{width:44px}
+  .brand{min-height:44px}
+  .foot nav{gap:4px 8px}
+  .foot nav a,.foot span a{display:inline-flex;align-items:center;justify-content:center;min-height:44px;min-width:44px;padding:0 6px}
+  .lightbox-bar button{min-height:44px}
+}
 @media (max-width:520px){
   section{padding:56px 0}
+  .hero{padding:40px 0 32px}
   .head-actions .btn-demo{display:none}
+  .eyebrow{gap:6px;padding:5px 11px;font-size:12.5px}
+  .hero-cta .btn{flex:1 1 100%}
+  .cmd{flex-wrap:wrap;padding:14px}
+  .cmd code{flex:1 1 100%;white-space:normal;word-break:break-all;overflow:visible;-webkit-mask-image:none;mask-image:none;line-height:1.55}
+  .cmd .copy{margin-left:auto}
+  .facts{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:40px}
+  .fact{padding:14px}
+  .fact strong{font-size:16px}
+  .fact span{font-size:13px;line-height:1.45;display:block;margin-top:2px}
+  .section-head{margin-bottom:28px}
+  .faq summary{padding:14px 16px}
+  .faq details p{padding:0 16px 16px}
+  .flow{font-size:13px}
+  .flow div{max-width:100%;overflow-wrap:anywhere}
   .step{padding:64px 20px 20px}
   .final-card{padding:28px 22px}
   .gallery{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
@@ -260,7 +314,10 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
   <symbol id="i-bot" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2M20 14h2M15 13v2M9 13v2"/></symbol>
   <symbol id="i-headset" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-5Zm0 0a9 9 0 1 1 18 0m0 0v5a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3Z"/><path d="M21 16v2a4 4 0 0 1-4 4h-5"/></symbol>
   <symbol id="i-scale" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z"/><path d="m2 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z"/><path d="M7 21h10"/><path d="M12 3v18"/><path d="M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2"/></symbol>
-  <symbol id="i-bell"viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.27 21a2 2 0 0 0 3.46 0"/><path d="M3.26 15.33A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.67C19.41 13.96 18 12.5 18 8A6 6 0 0 0 6 8c0 4.5-1.41 5.96-2.74 7.33"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.27 21a2 2 0 0 0 3.46 0"/><path d="M3.26 15.33A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.67C19.41 13.96 18 12.5 18 8A6 6 0 0 0 6 8c0 4.5-1.41 5.96-2.74 7.33"/></symbol>
 </svg>
 
 <header class="site-head">
@@ -277,6 +334,7 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
     </nav>
     <div class="head-actions">
       <a class="btn btn-ghost btn-sm btn-github" href="https://github.com/BNIX-VN/bpanel" rel="noopener"><svg aria-hidden="true"><use href="#i-github"/></svg>GitHub</a>
+      <button class="btn btn-ghost btn-sm icon-btn theme-toggle" type="button" aria-label="Đổi giao diện sáng/tối" title="Đổi giao diện sáng/tối"><svg class="i-moon" aria-hidden="true"><use href="#i-moon"/></svg><svg class="i-sun" aria-hidden="true"><use href="#i-sun"/></svg></button>
       <a class="btn btn-primary btn-sm btn-demo" href="https://demo.bnix.io.vn:2222" rel="noopener">Xem demo</a>
       <button class="btn btn-ghost btn-sm menu-toggle" type="button" aria-controls="nav" aria-expanded="false" aria-label="Mở mục lục"><svg aria-hidden="true"><use href="#i-menu"/></svg></button>
     </div>
@@ -292,7 +350,7 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
     <div class="hero-grid">
       <div>
         <p class="eyebrow"><b>Mã nguồn mở</b><i class="dot"></i>Miễn phí<i class="dot"></i>Ubuntu 24.04</p>
-        <h1 id="hero-title">Quản lý hosting gọn nhẹ, trọn vẹn <em>tiếng Việt</em></h1>
+        <h1 id="hero-title">Quản lý hosting <em>gọn nhẹ</em></h1>
         <p class="lead">BPanel quản lý website WordPress và PHP, database, SSL, backup, tường lửa, WAF và người dùng trong một giao diện web — sáng hoặc tối, tiếng Việt hoặc tiếng Anh. Cài bằng một lệnh.</p>
         <div class="hero-cta">
           <a class="btn btn-primary" href="#cai-dat"><svg aria-hidden="true"><use href="#i-download"/></svg>Cài đặt ngay</a>
@@ -306,7 +364,10 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
       <div class="hero-shot">
         <div class="browser">
           <div class="browser-bar" aria-hidden="true"><i></i><i></i><i></i><span>demo.bnix.io.vn:2222</span></div>
-          <img src="screenshots/02-dashboard.png" width="1440" height="900" alt="Trang Tổng quan của BPanel: CPU, RAM, ổ đĩa, mạng, các thẻ trạng thái và việc cần xử lý" fetchpriority="high">
+          <picture>
+            <source id="hero-dark" srcset="screenshots/29-dark-mode.png" media="(prefers-color-scheme: dark)">
+            <img src="screenshots/02-dashboard.png" width="1440" height="900" alt="Trang Tổng quan của BPanel: CPU, RAM, ổ đĩa, mạng, các thẻ trạng thái và việc cần xử lý" fetchpriority="high">
+          </picture>
         </div>
         <img class="phone" src="screenshots/30-mobile.png" width="390" height="844" alt="BPanel trên điện thoại" loading="lazy">
       </div>
@@ -458,7 +519,7 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
       <button class="tab" role="tab" type="button" aria-selected="false" data-group="security">Bảo mật</button>
       <button class="tab" role="tab" type="button" aria-selected="false" data-group="system">Hệ thống</button>
     </div>
-    <div class="gallery" id="gallery"></div>
+    <div class="gallery" id="gallery" role="tabpanel" aria-label="Ảnh chụp màn hình"></div>
   </div>
 </section>
 
@@ -481,29 +542,24 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
     </div>
     <div class="steps">
       <div class="step"><h3>Chuẩn bị server</h3><p>Ubuntu 24.04 mới cài, quyền root. Tuỳ chọn: một tên miền trỏ về IP để panel có SSL.</p></div>
-      <div class="step"><h3>Chạy lệnh cài</h3><p>Trả lời tên miền, cổng (mặc định <code>2222</code>) và email SSL — hoặc truyền sẵn qua biến môi trường.</p></div>
+      <div class="step"><h3>Chạy lệnh cài</h3><p>Trả lời tên miền, cổng (mặc định <code>2222</code>) và email SSL.</p></div>
       <div class="step"><h3>Đăng nhập</h3><p>Địa chỉ, tên đăng nhập và mật khẩu được in ra cuối và lưu ở <code>/root/login.txt</code>.</p></div>
     </div>
     <div class="cmd" style="max-width:none">
       <code id="cmd-install">curl -fsSL https://raw.githubusercontent.com/BNIX-VN/bpanel/refs/heads/main/install.sh | bash</code>
       <button class="copy" type="button" data-copy="cmd-install"><svg aria-hidden="true"><use href="#i-copy"/></svg><span>Sao chép</span></button>
     </div>
-    <div class="two">
-      <div class="box">
-        <h3>Cài tự động, không cần trả lời</h3>
-        <pre class="code-block"><span class="k">export</span> PANEL_URL=https://panel.example.com:2222
-<span class="k">export</span> ENABLE_SSL=yes
-<span class="k">export</span> SSL_EMAIL=admin@example.com
-<span class="k">export</span> BPANEL_ADMIN_PASSWORD=<span class="c">'mật-khẩu-mạnh'</span>
-curl -fsSL https://raw.githubusercontent.com/BNIX-VN/bpanel/refs/heads/main/install.sh | bash</pre>
-      </div>
-      <div class="box">
-        <h3>Yêu cầu và cập nhật</h3>
+    <div class="box req">
+      <div>
+        <h3>Yêu cầu hệ thống</h3>
         <ul>
           <li>Ubuntu 24.04 LTS, quyền root</li>
           <li>Tối thiểu 1 vCPU / 1 GB RAM, khuyến nghị 2 vCPU / 2 GB RAM</li>
           <li>Quét mã độc cần khoảng 1,3 GB RAM trong lúc quét</li>
         </ul>
+      </div>
+      <div>
+        <h3>Cập nhật và cứu hộ</h3>
         <pre class="code-block"><span class="c"># lên bản phát hành mới nhất</span>
 bpanel-update --release
 <span class="c"># menu cứu hộ khi không vào được panel</span>
@@ -651,10 +707,22 @@ bpanel</pre>
       return button;
     }));
   };
-  document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach(t => t.setAttribute('aria-selected', String(t === tab)));
+  const tabs = [...document.querySelectorAll('.tab')];
+  const select = tab => {
+    tabs.forEach(t => { t.setAttribute('aria-selected', String(t === tab)); t.tabIndex = t === tab ? 0 : -1; });
     render(tab.dataset.group);
-  }));
+  };
+  tabs.forEach((tab, i) => {
+    tab.tabIndex = i === 0 ? 0 : -1;
+    tab.addEventListener('click', () => select(tab));
+    tab.addEventListener('keydown', e => {
+      const step = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+      if (!step) return;
+      e.preventDefault();
+      const next = tabs[(i + step + tabs.length) % tabs.length];
+      next.focus(); select(next);
+    });
+  });
   render('all');
 
   const box = document.getElementById('lightbox');
@@ -682,14 +750,51 @@ bpanel</pre>
     setTimeout(() => { label.textContent = 'Sao chép'; }, 1800);
   }));
 
+  // Light/dark: the system decides until the visitor picks one here.
+  const root = document.documentElement;
+  const systemDark = matchMedia('(prefers-color-scheme: dark)');
+  const heroDark = document.getElementById('hero-dark');
+  const themeButton = document.querySelector('.theme-toggle');
+  const isDark = () => root.dataset.theme ? root.dataset.theme === 'dark' : systemDark.matches;
+  const syncTheme = () => {
+    const chosen = root.dataset.theme;
+    heroDark.media = chosen === 'dark' ? 'all' : chosen === 'light' ? 'not all' : '(prefers-color-scheme: dark)';
+    const label = isDark() ? 'Chuyển sang giao diện sáng' : 'Chuyển sang giao diện tối';
+    themeButton.setAttribute('aria-label', label); themeButton.title = label;
+    document.querySelectorAll('meta[name="theme-color"]').forEach(m => { if (chosen) m.content = chosen === 'dark' ? '#0c1220' : '#f5f7fa'; });
+  };
+  themeButton.addEventListener('click', () => {
+    root.dataset.theme = isDark() ? 'light' : 'dark';
+    try { localStorage.setItem('bpanel-theme', root.dataset.theme); } catch (e) { /* private mode: this visit only */ }
+    syncTheme();
+  });
+  systemDark.addEventListener('change', syncTheme);
+  syncTheme();
+
   // The phone-width menu.
   const toggle = document.querySelector('.menu-toggle');
+  const toggleIcon = toggle.querySelector('use');
   const nav = document.getElementById('nav');
-  toggle.addEventListener('click', () => {
-    const open = nav.classList.toggle('open');
+  const setMenu = open => {
+    nav.classList.toggle('open', open);
     toggle.setAttribute('aria-expanded', String(open));
-  });
-  nav.querySelectorAll('a').forEach(a => a.addEventListener('click', () => { nav.classList.remove('open'); toggle.setAttribute('aria-expanded', 'false'); }));
+    toggle.setAttribute('aria-label', open ? 'Đóng mục lục' : 'Mở mục lục');
+    toggleIcon.setAttribute('href', open ? '#i-x' : '#i-menu');
+  };
+  toggle.addEventListener('click', () => setMenu(!nav.classList.contains('open')));
+  nav.querySelectorAll('a').forEach(a => a.addEventListener('click', () => setMenu(false)));
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && nav.classList.contains('open')) { setMenu(false); toggle.focus(); } });
+  document.addEventListener('click', e => { if (nav.classList.contains('open') && !nav.contains(e.target) && !toggle.contains(e.target)) setMenu(false); });
+
+  // Mark the section in view in the header menu.
+  const links = new Map([...nav.querySelectorAll('a')].map(a => [a.getAttribute('href').slice(1), a]));
+  const inView = new Set();
+  const spy = new IntersectionObserver(entries => {
+    entries.forEach(entry => entry.isIntersecting ? inView.add(entry.target.id) : inView.delete(entry.target.id));
+    const current = [...links.keys()].find(id => inView.has(id));
+    links.forEach((a, id) => id === current ? a.setAttribute('aria-current', 'true') : a.removeAttribute('aria-current'));
+  }, { rootMargin: '-45% 0px -50% 0px' });
+  links.forEach((a, id) => { const section = document.getElementById(id); if (section) spy.observe(section); });
 })();
 </script>
 </body>
