@@ -336,3 +336,16 @@ def test_every_settings_page_entry_reads_in_vietnamese():
     texts = [text for row in rows for text in row] + re.findall(r"title: '([^']+)'", hub)
     missing = [text for text in texts if text not in DICTIONARY and text not in KEPT_IN_ENGLISH]
     assert not missing, f"Settings page still in English: {missing}"
+
+
+def test_every_addon_card_is_in_vietnamese():
+    """Seen 2026-09-28: the Application, Fail2ban and MCP cards on the Addons
+    page were still English in the Vietnamese UI - their catalogue text had
+    never been added to the dictionary. Read from the catalogue itself, so an
+    addon added later fails here until its card is translated."""
+    from app.services import addons
+
+    texts = [text for entry in addons.CATALOGUE.values()
+             for text in (entry["name"], entry["summary"], *entry["details"], *entry["notes"])]
+    missing = [text for text in texts if text not in DICTIONARY and text not in KEPT_IN_ENGLISH]
+    assert not missing, f"Addon cards still in English: {missing}"

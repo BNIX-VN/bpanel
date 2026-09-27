@@ -1374,6 +1374,12 @@ setup_ssl() {
     -e "s#^PANEL_URL=.*#PANEL_URL=${PANEL_URL}#" \
     -e "s#^ALLOWED_ORIGINS=.*#ALLOWED_ORIGINS=${PANEL_URL}#" \
     "${APP_DIR}/backend/.env"
+  # Say which certificate this is. Left unrecorded, the first update took the
+  # panel's own Let's Encrypt certificate for one it had not adopted yet,
+  # copied it over itself and announced a switch to a self-signed one.
+  grep -q "^PANEL_SSL_MODE=" "${APP_DIR}/backend/.env" \
+    && sed -i "s#^PANEL_SSL_MODE=.*#PANEL_SSL_MODE=letsencrypt#" "${APP_DIR}/backend/.env" \
+    || echo "PANEL_SSL_MODE=letsencrypt" >>"${APP_DIR}/backend/.env"
   write_tools_nginx_config
   nginx -t
   systemctl reload nginx

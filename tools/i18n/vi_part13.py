@@ -300,4 +300,45 @@ PART13 = {
     "Demo": "Bản demo",
     "Look around without changing anything.": "Xem thử mọi trang, không thay đổi được gì.",
     "Sign in": "Đăng nhập",
+    "Stops SSH password guessing by banning an address that keeps getting it wrong.":
+        "Chặn việc dò mật khẩu SSH bằng cách cấm các địa chỉ nhập sai liên tục.",
+    "sshd on a public address collects hundreds of password attempts a day with nobody watching; one live customer server logged 679 failures in 24 hours.":
+        "sshd trên địa chỉ công khai nhận hàng trăm lần thử mật khẩu mỗi ngày mà không ai để ý; một server khách hàng đang chạy ghi nhận 679 lần sai trong 24 giờ.",
+    "Five failures within an hour bans an address for an hour, and longer each time it comes back, up to a week.":
+        "Sai năm lần trong một giờ thì địa chỉ bị cấm một giờ, và lâu hơn mỗi lần quay lại, tối đa một tuần.",
+    "Never bans the server itself: loopback and every address the machine holds are on the ignore list.":
+        "Không bao giờ cấm chính server: loopback và mọi địa chỉ của máy đều nằm trong danh sách bỏ qua.",
+    "The ban action is pinned to iptables-multiport rather than left for fail2ban to detect. A machine that once had ufw keeps its ufw chains, which is enough for fail2ban to pick wrong and hand every ban to a firewall that is not running.":
+        "Hành động cấm được cố định là iptables-multiport thay vì để fail2ban tự dò. Máy từng dùng ufw vẫn còn các chain của ufw, đủ để fail2ban chọn sai và giao mọi lệnh cấm cho một tường lửa không chạy.",
+    "On install the panel bans an address that is never routed, then checks it really is in iptables. If it is not, the install fails rather than leaving a service that looks healthy and protects nothing.":
+        "Khi cài, panel cấm thử một địa chỉ không bao giờ được định tuyến rồi kiểm tra nó có thật trong iptables. Nếu không, việc cài thất bại thay vì để lại một dịch vụ trông vẫn chạy mà không bảo vệ gì.",
+    "Turning the addon off only stops the service: the package, the jail file and the ban history all stay.":
+        "Tắt addon chỉ dừng dịch vụ: gói phần mềm, file jail và lịch sử chặn đều được giữ nguyên.",
+    "Lets Claude Code, Cursor or VS Code read and operate the panel with a personal token.":
+        "Cho Claude Code, Cursor hoặc VS Code đọc và thao tác panel bằng token cá nhân.",
+    "Each person creates their own token, and it acts with exactly their own permissions: an administrator's reaches the whole server, a customer's reaches only their own websites, databases, backups and files.":
+        "Mỗi người tự tạo token của mình, và token chỉ có đúng quyền của người đó: token của quản trị viên với tới cả server, token của khách hàng chỉ với tới website, database, backup và file của chính họ.",
+    "A token is read-only unless the person ticks Allow actions when creating it. A read-only token is not even shown the tools that write.":
+        "Token chỉ đọc, trừ khi người tạo đánh dấu Cho phép thao tác. Token chỉ đọc thậm chí không thấy các công cụ ghi.",
+    "Nothing new listens on the network. The assistant talks to the panel's own address, over the panel's own certificate.":
+        "Không mở thêm cổng nào. Trợ lý kết nối vào chính địa chỉ của panel, qua chứng chỉ của panel.",
+    "Needs a real certificate. MCP clients refuse a self-signed one, so on a panel still using the self-signed certificate this addon cannot be reached at all.":
+        "Cần chứng chỉ thật. Các ứng dụng MCP từ chối chứng chỉ tự ký, nên panel còn dùng chứng chỉ tự ký thì addon này không kết nối được.",
+    "Works with clients that send a Bearer token - Claude Code, Cursor, VS Code. The claude.ai and ChatGPT web connectors need OAuth, which this does not have.":
+        "Dùng được với các ứng dụng gửi Bearer token: Claude Code, Cursor, VS Code. Connector web của claude.ai và ChatGPT cần OAuth, addon này chưa hỗ trợ.",
+    "Turning the addon off closes the endpoint and leaves the tokens alone. Removing it revokes every token on the server.":
+        "Tắt addon sẽ đóng endpoint và giữ nguyên các token. Gỡ addon sẽ thu hồi mọi token trên server.",
+    "Runs Node.js apps, containers and Docker Compose, and puts them behind a domain with Nginx.":
+        "Chạy ứng dụng Node.js, container và Docker Compose, đặt sau tên miền bằng Nginx.",
+    "Installs Docker and the Node.js versions you need; none of it is in a default install.":
+        "Cài Docker và các phiên bản Node.js bạn cần; bản cài mặc định không có sẵn những thứ này.",
+    "Each app gets its own internal port, its own memory and CPU limits, and runs as the customer's user.":
+        "Mỗi ứng dụng có cổng nội bộ riêng, giới hạn RAM và CPU riêng, và chạy bằng user của khách hàng.",
+    "Set a website to Application mode and Nginx points at the app you installed.":
+        "Đặt website sang chế độ Ứng dụng là Nginx trỏ tới ứng dụng bạn đã cài.",
+    "Backups do not yet include application data (the apps directory and named volumes).":
+        "Backup chưa bao gồm dữ liệu ứng dụng (thư mục apps và các named volume).",
+    "Docker image and volume size is not counted against a customer's disk quota.":
+        "Dung lượng image và volume của Docker không tính vào hạn mức ổ đĩa của khách hàng.",
+    "The install failed and said nothing about why.": "Cài đặt thất bại mà không báo lý do.",
 }
