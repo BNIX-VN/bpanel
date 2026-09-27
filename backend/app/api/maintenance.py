@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -34,6 +34,7 @@ from app.schemas.schemas import (
     RestoreBackup,
     RestoreListRequest,
     RestoreRunRequest,
+    RestoreSource,
     SftpBackupRun,
     SftpBackupTargetCreate,
     SftpBackupTargetOut,
@@ -601,15 +602,18 @@ def _save_user_restore_upload(file: UploadFile) -> dict:
     try:
         target = backup.save_uploaded_user_backup(file.filename or "user-backup.tar.gz", file.file)
         manifest = backup.read_backup_manifest(target)
-        if manifest.get("kind") != "bpanel_user":
+        if manifest.get("kind") not in backup.RESTORABLE_BACKUP_KINDS:
             raise ValueError("This is not a full user backup")
-    except (ValueError, FileNotFoundError) as exc:
+    except (ValueError, FileNotFoundError, tarfile.TarError, OSError, EOFError) as exc:
+        # A file that is not a gzip'd tar at all used to raise ReadError past
+        # this, answer 500 and stay in the restore folder looking like a backup.
         if target:
             try:
                 backup.delete_user_backup(target)
             except Exception:
                 pass
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        detail = str(exc) if isinstance(exc, ValueError) else "This is not a full user backup"
+        raise HTTPException(status_code=400, detail=detail) from exc
     path = backup.user_backup_path(target)
     return {
         "backup_file": target,
@@ -967,6 +971,44 @@ def create_sftp_target(
     db.refresh(target)
     log_action(db, current_user.id, "create_backup_target", f"{target.kind}:{target.name}", request=request)
     return target
+
+
+@router.post("/restore/upload")
+def restore_upload(
+    request: Request,
+    files: list[UploadFile] = File(...),
+    source: str = Form(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Upload backup, in step 2 of the Restore tab: into this server's restore
+    folder, or on to the destination or server picked in step 1, where a
+    Refresh then lists it. Each file is checked to be an account backup
+    before it goes anywhere; a copy only passing through is not kept here."""
+    ensure_role(current_user.role, Role.admin)
+    try:
+        spec = RestoreSource.model_validate_json(source).model_dump()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="The source is not valid") from exc
+    if not files:
+        raise HTTPException(status_code=400, detail="No backup files uploaded")
+    uploaded = []
+    for file in files:
+        item = _save_user_restore_upload(file)
+        if spec["kind"] == "local":
+            uploaded.append(item["filename"])
+            continue
+        try:
+            uploaded.append(restore_sources.push(spec, item["backup_file"], db))
+        except backup.SftpHostKeyMismatch as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except restore_sources.RestoreSourceError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            Path(item["backup_file"]).unlink(missing_ok=True)
+    log_action(db, current_user.id, "upload_restore_backups", restore_sources.describe(spec, db),
+               ", ".join(uploaded), request=request)
+    return {"uploaded": uploaded}
 
 
 @router.post("/restore/list")

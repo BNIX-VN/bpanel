@@ -801,6 +801,7 @@ function App() {
   // 'remote'), another server's details when that is the source, what the
   // source holds, which users are ticked, and the job restoring them.
   const [restoreSource, setRestoreSource] = useState('local');
+  const [restoreTargetId, setRestoreTargetId] = useState('');
   const [restoreRemote, setRestoreRemote] = useState({ protocol: 'sftp', host: '', port: '', username: '', password: '', path: '/' });
   const [restoreListing, setRestoreListing] = useState(null);
   const [restoreChoice, setRestoreChoice] = useState({});
@@ -3464,6 +3465,7 @@ function App() {
     }
   }
 
+  // A source is 'local', 'target:<id>' (a Backup Destination) or 'remote'.
   function restoreSourceBody(source) {
     if (source === 'local') return { kind: 'local' };
     if (source.startsWith('target:')) return { kind: 'target', target_id: Number(source.slice(7)) };
@@ -3485,12 +3487,41 @@ function App() {
     if (data) setRestoreListing({ ...data, source });
   }
 
-  function chooseRestoreSource(source) {
-    setRestoreSource(source);
+  // Step 1 has three cards; the destination itself is picked in step 2.
+  function chooseRestoreSource(kind) {
+    setRestoreSource(kind);
     setRestoreListing(null);
     setRestorePicks([]);
     setRestoreChoice({});
-    if (source !== 'remote') listRestoreSource(source);
+    if (kind === 'local') listRestoreSource('local');
+    if (kind === 'target') {
+      const first = restoreTargetId || String(sftpTargets.find(target => target.is_active !== false)?.id || '');
+      setRestoreTargetId(first);
+      if (first) listRestoreSource(`target:${first}`);
+    }
+  }
+
+  function currentRestoreSource() {
+    if (restoreSource === 'target') return restoreTargetId ? `target:${restoreTargetId}` : '';
+    return restoreSource;
+  }
+
+  // Upload backup, into the source picked in step 1: this server's restore
+  // folder, the chosen destination, or the connected server. Refresh then
+  // shows it in step 3.
+  async function uploadRestoreBackups(files) {
+    const chosen = Array.from(files || []);
+    const source = currentRestoreSource();
+    if (chosen.length === 0 || !source) return;
+    const form = new FormData();
+    chosen.forEach(file => form.append('files', file));
+    form.append('source', JSON.stringify(restoreSourceBody(source)));
+    const data = await request('/maintenance/restore/upload', { method: 'POST', body: form },
+      t('Uploading {n} backup(s)...', { n: chosen.length }));
+    if (data) {
+      setNotice(t('Uploaded {n} backup(s).', { n: (data.uploaded || []).length }));
+      await listRestoreSource(source);
+    }
   }
 
   function editRestoreRemote(changes) {
@@ -4462,7 +4493,7 @@ function App() {
   useEffect(() => { if (page === 'backups' && backupTab === 'da-import') { listDaBackups(); setSelectedDaBackups([]); setDaBulkImportJob(null); } }, [backupTab, page]);
   // The catalogue reaches out to every S3 bucket, so it is fetched when the
   // tab is opened rather than on every visit to the Backups page.
-  useEffect(() => { if (page === 'backups' && backupTab === 'restore' && isAdmin && restoreSource !== 'remote') listRestoreSource(restoreSource); }, [backupTab, page]);
+  useEffect(() => { if (page === 'backups' && backupTab === 'restore' && isAdmin && restoreSource === 'local') listRestoreSource('local'); }, [backupTab, page]);
   useEffect(() => {
     if (!restoreJob?.job_id || !['queued', 'running'].includes(restoreJob.status)) return undefined;
     const timer = setInterval(async () => {
@@ -6373,14 +6404,24 @@ function App() {
     const allRestoreShownPicked = shownRestoreGroups.length > 0 && shownRestoreGroups.every(group => restorePicks.includes(group.id));
     const restoreRunning = !!restoreJob && ['queued', 'running'].includes(restoreJob.status);
     const restoreDate = value => { const d = new Date(value); return value && !Number.isNaN(d.getTime()) ? d.toLocaleString('vi-VN', { hour12: false }) : '—'; };
+    const restoreTargets = sftpTargets.filter(target => target.is_active !== false);
     const restoreSourceOptions = [
       { id: 'local', Icon: HardDrive, label: t('This server'), hint: t('The panel\'s backup folder') },
-      ...sftpTargets.filter(target => target.is_active !== false).map(target => ({
-        id: `target:${target.id}`, Icon: target.kind === 's3' ? Cloud : Network, label: target.name,
-        hint: target.kind === 's3' ? t('S3 destination') : t('SFTP destination'),
-      })),
+      { id: 'target', Icon: Cloud, label: t('Backup Destination'), hint: t('S3 or SFTP, saved under Backup Destination') },
       { id: 'remote', Icon: Server, label: t('Another server'), hint: t('SFTP, FTP or FTPS') },
     ];
+    const restoreStepTwo = { local: 'Backups on this server', target: 'Backup Destination', remote: 'Connection' }[restoreSource];
+    const restoreRemoteReady = !!restoreRemote.host.trim() && !!restoreRemote.username.trim() && !!restoreRemote.password;
+    const restoreCanUse = !loading && !restoreRunning && (restoreSource !== 'target' || !!restoreTargetId) && (restoreSource !== 'remote' || restoreRemoteReady);
+    const restoreTools = <div className="restore-go">
+      <label className={`upload-button secondary${restoreCanUse ? '' : ' disabled'}`} aria-disabled={!restoreCanUse}>
+        <Upload size={14}/>{t('Upload backup')}
+        <input type="file" multiple accept=".tar.gz,application/gzip" disabled={!restoreCanUse}
+          onChange={e => { uploadRestoreBackups(e.target.files); e.target.value = ''; }} />
+      </label>
+      <button type="button" className="secondary" disabled={!restoreCanUse} onClick={() => listRestoreSource(currentRestoreSource())}>
+        <RefreshCw size={14}/>{t('Refresh')}</button>
+    </div>;
     const restoreStatus = { queued: ['Waiting', 'badge'], fetching: ['Downloading', 'badge warn'], restoring: ['Restoring', 'badge warn'], done: ['Restored', 'badge ok'], failed: ['Failed', 'badge bad'] };
     const restoreDone = (restoreJob?.results || []).filter(row => row.status === 'done').length;
     const jobDetail = job => job.error || job.remote_file || job.backup_file || job.message || job.status;
@@ -6574,8 +6615,8 @@ function App() {
         </div>
 
         <section className="restore-step">
-          <h4><span className="restore-step-no">1</span>{t('Choose the source')}</h4>
-          <div className="restore-sources" role="radiogroup" aria-label={t('Choose the source')}>
+          <h4><span className="restore-step-no">1</span>{t('Source')}</h4>
+          <div className="restore-sources" role="radiogroup" aria-label={t('Source')}>
             {restoreSourceOptions.map(option => <button type="button" role="radio" key={option.id}
               aria-checked={restoreSource === option.id} disabled={!!loading || restoreRunning}
               className={`restore-source${restoreSource === option.id ? ' active' : ''}`} onClick={() => chooseRestoreSource(option.id)}>
@@ -6586,9 +6627,24 @@ function App() {
         </section>
 
         <section className="restore-step">
-          <h4><span className="restore-step-no">2</span>{t('Connection details')}</h4>
-          {restoreSource === 'remote'
-            ? <>
+          <h4><span className="restore-step-no">2</span>{t(restoreStepTwo)}</h4>
+          {restoreSource === 'local' && <>
+            <p className="hint">{t('Scheduled and manual backups kept on this server, and the ones uploaded here.')}{restoreListing?.location && <>{' '}<code>{restoreListing.location}</code></>}</p>
+            {restoreTools}
+          </>}
+          {restoreSource === 'target' && (restoreTargets.length === 0
+            ? <p className="hint">{t('No backup destination yet. Add one in the Backup Destination tab.')}</p>
+            : <>
+                <label className="restore-target-pick"><span>{t('Destination')}</span>
+                  <select value={restoreTargetId} disabled={!!loading || restoreRunning}
+                    onChange={e => { setRestoreTargetId(e.target.value); if (e.target.value) listRestoreSource(`target:${e.target.value}`); }}>
+                    {restoreTargets.map(target => <option key={target.id} value={target.id}>{target.name} · {target.kind === 's3' ? 'S3' : 'SFTP'}</option>)}
+                  </select>
+                </label>
+                {restoreListing?.location && <p className="hint"><code>{restoreListing.location}</code></p>}
+                {restoreTools}
+              </>)}
+          {restoreSource === 'remote' && <>
                 <div className="restore-remote">
                   <label><span>{t('Protocol')}</span><select value={restoreRemote.protocol} disabled={restoreRunning} onChange={e => editRestoreRemote({ protocol: e.target.value })}>
                     <option value="sftp">SFTP</option><option value="ftp">FTP</option><option value="ftps">FTPS (FTP + TLS)</option>
@@ -6599,19 +6655,16 @@ function App() {
                   <label><span>{t('Password')}</span><input type="password" value={restoreRemote.password} autoComplete="new-password" disabled={restoreRunning} onChange={e => editRestoreRemote({ password: e.target.value })} /></label>
                   <label><span>{t('Folder')}</span><input value={restoreRemote.path} placeholder="/backups" disabled={restoreRunning} onChange={e => editRestoreRemote({ path: e.target.value })} /></label>
                 </div>
-                <div className="restore-go">
-                  <button type="button" disabled={!!loading || restoreRunning || !restoreRemote.host.trim() || !restoreRemote.username.trim() || !restoreRemote.password} onClick={() => listRestoreSource('remote')}><Search size={14}/>{t('Connect and list')}</button>
-                  <span className="hint">{t('Used for this restore only and never saved. To keep a server, add it under Backup Destination.')}</span>
-                </div>
+                {restoreTools}
+                <p className="hint">{t('Used for this restore only and never saved. To keep a server, add it under Backup Destination.')}</p>
                 {restoreListing?.host_key && <p className="hint">{t('Server key')}: <code>{restoreListing.host_key.type} {restoreListing.host_key.fingerprint}</code></p>}
-              </>
-            : <p className="hint">{t('Nothing to fill in for this source.')}{restoreListing?.location && <>{' '}<code>{restoreListing.location}</code></>}</p>}
+              </>}
         </section>
 
         <section className="restore-step">
-          <h4><span className="restore-step-no">3</span>{t('Choose the users')}</h4>
+          <h4><span className="restore-step-no">3</span>{t('Accounts to restore')}</h4>
           {!restoreListing
-            ? <p className="hint">{restoreSource === 'remote' ? t('Fill in the server above and press Connect and list.') : t('Looking for backups...')}</p>
+            ? <p className="hint">{restoreSource === 'local' ? t('Looking for backups...') : restoreSource === 'target' && restoreTargets.length === 0 ? '—' : t('Press Refresh in step 2 to list the backups.')}</p>
             : restoreGroups.length === 0
               ? <EmptyState icon={ArchiveRestore} message={t('No backups found in this source.')} />
               : <>
@@ -6650,10 +6703,10 @@ function App() {
         </section>
 
         <section className="restore-step">
-          <h4><span className="restore-step-no">4</span>{t('Start the restore')}</h4>
+          <h4><span className="restore-step-no">4</span>{t('Restore')}</h4>
           <div className="restore-go">
             <button type="button" className="danger" disabled={!!loading || restoreRunning || restorePicks.length === 0} onClick={runRestore}>
-              <RotateCcw size={14}/>{t('Restore {n} user(s)', { n: restorePicks.length })}</button>
+              <RotateCcw size={14}/>{t('Restore {n} account(s)', { n: restorePicks.length })}</button>
             <span className="hint">{t('One user after another, in the background. A user that already exists is overwritten with its backup.')}</span>
           </div>
           {restoreJob && <div className="restore-progress" aria-live="polite">
