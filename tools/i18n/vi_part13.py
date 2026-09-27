@@ -256,4 +256,48 @@ PART13 = {
     "SSH is protected now. Banned addresses are listed on the Firewall page.":
         "SSH đã được bảo vệ. Các địa chỉ bị chặn được liệt kê ở trang Tường lửa.",
     "The {name} addon is not installed on this server.": "Addon {name} chưa được cài trên server này.",
+    "Demo mode": "Chế độ demo",
+    "Public demo accounts that can look at every page and change nothing.":
+        "Tài khoản demo công khai: xem được mọi trang nhưng không thay đổi được gì.",
+    "One administrator account and one customer account, with sign-in buttons on the login page so a visitor is one click from either.":
+        "Một tài khoản quản trị và một tài khoản khách hàng, có nút đăng nhập ngay trên trang đăng nhập để khách vào bằng một cú bấm.",
+    "Every change a demo account tries is refused with a message saying this is a demo. So are file contents, downloads, phpMyAdmin, backups and the terminal.":
+        "Mọi thay đổi từ tài khoản demo đều bị từ chối kèm thông báo đây là bản demo. Nội dung file, tải xuống, phpMyAdmin, backup và terminal cũng bị chặn.",
+    "Your own administrator account is untouched and keeps full control.":
+        "Tài khoản quản trị của bạn không bị ảnh hưởng và vẫn toàn quyền.",
+    "The demo passwords are shown on the sign-in page, so pick accounts that exist only for the demo. They are never the SFTP or SSH password.":
+        "Mật khẩu demo hiện công khai trên trang đăng nhập, nên hãy chọn các tài khoản chỉ dùng cho demo. Đây không bao giờ là mật khẩu SFTP hay SSH.",
+    "Signing out of a demo account ends only that visitor's session, not everyone else's.":
+        "Đăng xuất khỏi tài khoản demo chỉ kết thúc phiên của người đó, không đăng xuất những người khác.",
+    "Removing the addon gives both accounts a random password, so the public ones stop working. Installing it again restores them.":
+        "Gỡ tiện ích sẽ đặt mật khẩu ngẫu nhiên cho cả hai tài khoản để mật khẩu công khai hết tác dụng. Cài lại sẽ khôi phục chúng.",
+    "Choose the demo accounts on the Addons page. Until you do, the sign-in page offers none.":
+        "Chọn tài khoản demo ở trang Tiện ích. Khi chưa chọn, trang đăng nhập chưa hiện tài khoản demo nào.",
+    "The demo accounts now have random passwords, so the public ones no longer work. Installing the addon again restores them.":
+        "Các tài khoản demo đã được đặt mật khẩu ngẫu nhiên, mật khẩu công khai không còn dùng được. Cài lại tiện ích sẽ khôi phục chúng.",
+    "No demo accounts were set.": "Chưa có tài khoản demo nào được chọn.",
+    "This is a demo: you can look at everything, but changes are not saved.":
+        "Đây là bản demo: bạn xem được mọi thứ, nhưng thay đổi sẽ không được lưu.",
+    "This is a demo: file contents, downloads, database access and the terminal are not available.":
+        "Đây là bản demo: không mở được nội dung file, tải xuống, truy cập database hay terminal.",
+    "That account does not exist.": "Tài khoản này không tồn tại.",
+    "You cannot make your own account a demo account.":
+        "Bạn không thể đặt chính tài khoản của mình làm tài khoản demo.",
+    "The administrator demo account must be an administrator.": "Tài khoản demo quản trị phải là tài khoản quản trị.",
+    "The customer demo account must be a customer, not an administrator.":
+        "Tài khoản demo khách hàng phải là khách hàng, không phải quản trị.",
+    "A demo password must be 6 to 128 characters.": "Mật khẩu demo phải dài từ 6 đến 128 ký tự.",
+    "Demo accounts saved.": "Đã lưu tài khoản demo.",
+    "Demo accounts": "Tài khoản demo",
+    "Visitors sign in with these from the login page. The passwords are shown to everyone, so pick accounts that exist only for the demo.":
+        "Khách đăng nhập bằng các tài khoản này từ trang đăng nhập. Mật khẩu hiện công khai, nên hãy chọn tài khoản chỉ dùng cho demo.",
+    "Administrator": "Quản trị",
+    "Customer": "Khách hàng",
+    "Not offered": "Không dùng",
+    "Password shown on the login page": "Mật khẩu hiện trên trang đăng nhập",
+    "At least 6 characters": "Ít nhất 6 ký tự",
+    "Save demo accounts": "Lưu tài khoản demo",
+    "Demo": "Bản demo",
+    "Look around without changing anything.": "Xem thử mọi trang, không thay đổi được gì.",
+    "Sign in": "Đăng nhập",
 }

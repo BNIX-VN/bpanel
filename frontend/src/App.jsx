@@ -13,7 +13,7 @@ import 'ace-builds/src-noconflict/mode-text';
 import 'ace-builds/src-noconflict/mode-yaml';
 import 'ace-builds/src-noconflict/theme-textmate';
 import 'ace-builds/src-noconflict/theme-tomorrow_night';
-import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle, Activity, BrickWall, Bug, LockKeyhole, PackageOpen, ScrollText, ShieldAlert, CheckCircle, Zap, Bell, Mail, Send, Cloud } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, Eye, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle, Activity, BrickWall, Bug, LockKeyhole, PackageOpen, ScrollText, ShieldAlert, CheckCircle, Zap, Bell, Mail, Send, Cloud } from 'lucide-react';
 import { Terminal } from './components/Terminal';
 import { LANGUAGES, t, useLanguage } from './i18n.js';
 import './style.css';
@@ -842,6 +842,10 @@ function App() {
   // Optional features. Until this has loaded nothing addon-owned is offered, so
   // a slow first request cannot flash a section that turns out not to be there.
   const [addons, setAddons] = useState({ items: [], can_manage: false, loaded: false });
+  // Demo mode addon: the accounts the login page offers, and the form that picks them.
+  const [demoAccess, setDemoAccess] = useState({ enabled: false, accounts: [] });
+  const [demoSettings, setDemoSettings] = useState(null);
+  const [demoDraft, setDemoDraft] = useState({ admin: { username: '', password: '' }, customer: { username: '', password: '' } });
   const [f2b, setF2b] = useState(null);
   // Which list the operator asked to see. Null keeps the page one screen tall
   // however many rules, banned addresses or blocklist URLs there are.
@@ -1160,14 +1164,17 @@ function App() {
     }
   }
 
-  async function login(passkeyAssertion = '') {
+  async function login(passkeyAssertion = '', credentials = null) {
     try {
       setError('');
       setLoading('Logging in...');
-      const body = new URLSearchParams({ username, password });
+      // credentials: a demo account's button on the login page, which signs in
+      // without the visitor typing what the button already shows.
+      if (credentials) setUsername(credentials.username);
+      const body = new URLSearchParams(credentials || { username, password });
       // An otp and a passkey are never sent together: the customer either used
       // the key or chose the app.
-      if (otpCode) body.set('otp', otpCode);
+      if (otpCode && !credentials) body.set('otp', otpCode);
       else if (passkeyAssertion) body.set('passkey', passkeyAssertion);
       if (rememberMe) body.set('remember', 'true');
       const res = await fetch(`${API}/auth/login`, {
@@ -2447,6 +2454,33 @@ function App() {
   async function loadAddons() {
     const data = await request('/addons', { silent: true });
     setAddons({ items: data?.items || [], can_manage: !!data?.can_manage, loaded: true });
+  }
+
+  async function loadDemoAccess() {
+    // Public: an ordinary panel answers "not enabled" and the login page shows nothing.
+    try {
+      const res = await fetch(`${API}/demo-mode/public`, { credentials: 'include' });
+      if (res.ok) setDemoAccess(await res.json());
+    } catch {}
+  }
+
+  async function loadDemoSettings() {
+    const data = await request('/demo-mode', { silent: true });
+    if (!data) return;
+    setDemoSettings(data);
+    setDemoDraft({
+      admin: data.accounts?.admin || { username: '', password: '' },
+      customer: data.accounts?.customer || { username: '', password: '' },
+    });
+  }
+
+  async function saveDemoAccounts() {
+    const slot = entry => (entry.username ? entry : null);
+    const data = await request('/demo-mode', {
+      method: 'PUT',
+      body: JSON.stringify({ admin: slot(demoDraft.admin), customer: slot(demoDraft.customer) }),
+    }, t('Saving...'));
+    if (data) setDemoSettings(data);
   }
 
   async function setAddonInstalled(slug, install) {
@@ -4510,6 +4544,9 @@ function App() {
   // Which optional features exist decides what the nav shows, so this is asked
   // once per session rather than per page.
   useEffect(() => { if (currentUser) loadAddons(); }, [currentUser]);
+  useEffect(() => { if (!isAuthenticated) loadDemoAccess(); }, [isAuthenticated]);
+  const demoAddonInstalled = addons.items.some(item => item.slug === 'demo' && item.installed);
+  useEffect(() => { if (isAdmin && demoAddonInstalled) loadDemoSettings(); }, [isAdmin, demoAddonInstalled]);
 
   // The websites page needs the list too, for the Application picker on create.
   useEffect(() => {
@@ -5191,6 +5228,31 @@ function App() {
     </section>;
   }
 
+  function renderDemoAccounts() {
+    const candidates = demoSettings?.candidates || { admin: [], customer: [] };
+    const setSlot = (slot, field, value) => setDemoDraft(prev => ({ ...prev, [slot]: { ...prev[slot], [field]: value } }));
+    return <div className="demo-accounts">
+      <strong>{t('Demo accounts')}</strong>
+      <p className="hint">{t('Visitors sign in with these from the login page. The passwords are shown to everyone, so pick accounts that exist only for the demo.')}</p>
+      {[['admin', 'Administrator'], ['customer', 'Customer']].map(([slot, label]) => <div className="demo-account-row" key={slot}>
+        <label><span>{t(label)}</span>
+          <select value={demoDraft[slot].username} disabled={!!loading} onChange={e => setSlot(slot, 'username', e.target.value)}>
+            <option value="">{t('Not offered')}</option>
+            {/* Not yourself - the server refuses it - unless you are looking at it from the
+                demo account itself, which must still show what is chosen. */}
+            {(candidates[slot] || []).filter(name => name !== currentUser?.username || name === demoDraft[slot].username).map(name => <option key={name} value={name}>{name}</option>)}
+          </select>
+        </label>
+        <label><span>{t('Password shown on the login page')}</span>
+          <input value={demoDraft[slot].password} disabled={!!loading || !demoDraft[slot].username} onChange={e => setSlot(slot, 'password', e.target.value)} placeholder={t('At least 6 characters')} autoComplete="off" spellCheck={false} data-lpignore="true" data-1p-ignore="true"/>
+        </label>
+      </div>)}
+      <div className="addon-actions">
+        <button disabled={!!loading} onClick={saveDemoAccounts}><Save size={14}/>{t('Save demo accounts')}</button>
+      </div>
+    </div>;
+  }
+
   function renderAddons() {
     return <section className="section">
       <div className="section-title">
@@ -5232,6 +5294,7 @@ function App() {
                 </>
               : <button disabled={!!loading} onClick={() => setAddonInstalled(addon.slug, true)}><Download size={14}/>{t('Install')}</button>}
           </div>}
+          {addon.slug === 'demo' && addon.installed && addons.can_manage && renderDemoAccounts()}
         </div>)}
         {addons.loaded && addons.items.length === 0 && <EmptyState icon={Boxes} message={t('No addons yet.')} />}
       </div>
@@ -8684,6 +8747,16 @@ function App() {
               factor configured". Only Enter in a field ever worked. */}
           <button disabled={!!loading || !username || !password} onClick={() => login()}>{loading ? t('Logging in...') : t('Login')}</button>
         </div>
+        {demoAccess.enabled && <div className="demo-login">
+          <p className="demo-login-title"><Eye size={15}/><strong>{t('Demo')}</strong><span>{t('Look around without changing anything.')}</span></p>
+          {demoAccess.accounts.map(account => <div className="demo-login-row" key={account.slot}>
+            <div className="demo-login-account">
+              <strong>{t(account.slot === 'admin' ? 'Administrator' : 'Customer')}</strong>
+              <code>{account.username} / {account.password}</code>
+            </div>
+            <button className="secondary-light" disabled={!!loading} onClick={() => login('', { username: account.username, password: account.password })}><LogIn size={14}/>{t('Sign in')}</button>
+          </div>)}
+        </div>}
       </section>
       {renderNotifications()}
     </main>;
@@ -8747,6 +8820,7 @@ function App() {
             </div>
           </div>
         </section>
+        {currentUser?.demo && <div className="demo-strip" role="status"><Eye size={15}/><span>{t('This is a demo: you can look at everything, but changes are not saved.')}</span></div>}
         <div className="content-body">
           {renderPage()}
           {loading && <div className="loading"><span></span>{t(loading)}</div>}

@@ -12,7 +12,7 @@ from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.permissions import Role, ensure_role, is_admin_role
 from app.models.entities import SiteApp, User
-from app.services import addons, fail2ban, panel_settings, site_apps
+from app.services import addons, demo_mode, fail2ban, panel_settings, site_apps
 from app.services.audit import log_action
 
 router = APIRouter(prefix="/addons", tags=["addons"])
@@ -79,6 +79,10 @@ def install_addon(slug: str, db: Session = Depends(get_db), current_user: User =
         except RuntimeError as exc:
             raise HTTPException(status_code=400, detail=_install_failure(exc)) from exc
     record = addons.install(slug)
+    if slug == addons.DEMO:
+        # Accounts chosen before the addon was last removed get their public
+        # passwords back; see demo_mode.switch_off for why they lost them.
+        demo_mode.switch_on(db)
     log_action(db, current_user.id, "install_addon", slug, record.get("version", ""))
     return {
         "slug": slug,
@@ -95,7 +99,10 @@ def install_addon(slug: str, db: Session = Depends(get_db), current_user: User =
                 "Open Notifications to set up the SMTP server or a Telegram bot."
                 if slug == addons.NOTIFICATIONS else (
                     "Open Malware scanner under Settings. If LMD and ClamAV were not installed, they are installing now (1-3 minutes)."
-                    if slug == addons.MALWARE else ""
+                    if slug == addons.MALWARE else (
+                        "Choose the demo accounts on the Addons page. Until you do, the sign-in page offers none."
+                        if slug == addons.DEMO else ""
+                    )
                 )
             )
         ),
@@ -145,6 +152,11 @@ def uninstall_addon(slug: str, db: Session = Depends(get_db), current_user: User
         # answers again the moment someone reinstalls is not "keeping data".
         from app.api import mcp as mcp_api
         revoked = mcp_api.revoke_all(db)
+    retired: list[str] = []
+    if slug == addons.DEMO:
+        # Before the flag goes: once it has, these are ordinary accounts, and
+        # their passwords are on the sign-in page and in every screenshot.
+        retired = demo_mode.switch_off(db)
     addons.uninstall(slug)
     log_action(db, current_user.id, "uninstall_addon", slug, f"stopped {len(stopped)} revoked {revoked}")
     return {
@@ -154,7 +166,10 @@ def uninstall_addon(slug: str, db: Session = Depends(get_db), current_user: User
         "stopped": stopped,
         "could_not_stop": failed,
         "revoked_tokens": revoked,
-        "kept": "The package, the jail configuration and the ban history are all kept."
+        "kept": ("The demo accounts now have random passwords, so the public ones no longer work. Installing the addon again restores them."  # noqa: E501
+                 if retired else "No demo accounts were set.")
+        if slug == addons.DEMO
+        else "The package, the jail configuration and the ban history are all kept."
         if slug == addons.FAIL2BAN
         else "LMD, ClamAV, the scan history and the schedule settings are all kept."
         if slug == addons.MALWARE

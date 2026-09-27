@@ -1179,6 +1179,9 @@ def test_every_addon_has_a_way_in_from_the_sidebar():
                   # An addon since 2026-09-27, in the sidebar once it is on.
                   "malware": "malwareAddonInstalled && isAdmin ? [['malware', 'Malware scanner', Bug]]",
                   "mcp": "mcpAddonInstalled ? [['mcp',",
+                  # No page of its own: its accounts are set on its card in
+                  # Settings, then Addons (2026-09-28).
+                  "demo": "isAdmin && ['addons', 'Addons', PackageOpen,",
                   # Administrators only (operator, 2026-09-27).
                   "notifications": "notificationsAddonInstalled && isAdmin ? [['notifications',"}.get(slug)
         assert way_in, f"addon {slug} has no sidebar entry named in this test"

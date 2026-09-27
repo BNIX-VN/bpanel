@@ -512,6 +512,25 @@ button:disabled,.upload-button.disabled{background:var(--disabled-bg);color:var(
 .addon-notes strong{display:flex;align-items:center;gap:5px;font-size:11px;letter-spacing:.03em;text-transform:uppercase}
 .addon-notes ul{margin:0;padding-left:16px;display:grid;gap:3px;font-weight:600}
 .addon-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:2px}
+/* Demo mode addon: the accounts form on its card, the login page's buttons and
+   the strip a demo visitor sees on every page. */
+.demo-accounts{display:grid;gap:10px;margin-top:4px;padding:11px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-alt)}
+.demo-accounts > strong{font-size:13px;color:var(--text)}
+.demo-accounts .hint{margin:0}
+.demo-account-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
+.demo-account-row label{display:grid;gap:5px}
+.demo-account-row label span{font-size:12px;font-weight:700;color:var(--text-muted)}
+.demo-login{display:grid;gap:8px;padding-top:16px;border-top:1px solid var(--border)}
+.demo-login-title{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin:0;font-size:13px;color:var(--text-secondary)}
+.demo-login-title svg{color:var(--primary)}
+.demo-login-title strong{color:var(--text)}
+.demo-login-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-alt)}
+.demo-login-account{display:grid;gap:2px;min-width:0}
+.demo-login-account strong{font-size:13px;color:var(--text)}
+.demo-login-account code{font-family:var(--font-mono);font-size:12px;color:var(--text-muted);overflow-wrap:anywhere}
+.demo-login-row button{flex:none;width:auto}
+.demo-strip{display:flex;align-items:center;gap:8px;margin:0 0 2px;padding:8px 14px;border-bottom:1px solid var(--warning-border);background:var(--warning-bg);color:var(--warning-text);font-size:13px;font-weight:600;line-height:1.45}
+.demo-strip svg{flex:none}
 .site-app-editor{display:grid;gap:10px;margin-top:10px;padding:11px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-alt)}
 .site-app-editor label{display:grid;gap:6px;font-weight:700;color:var(--text-secondary)}
 .site-app-editor label span{font-size:12px;color:var(--text-muted)}
