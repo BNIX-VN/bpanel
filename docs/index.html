@@ -154,23 +154,15 @@ h1 em::after{content:'';position:absolute;left:0;right:0;bottom:-.1em;height:.09
 .server li{position:relative;padding-left:22px;color:var(--text-2);font-size:15px;line-height:1.5}
 .server li::before{content:'';position:absolute;left:2px;top:.55em;width:10px;height:6px;border-left:2px solid var(--success);border-bottom:2px solid var(--success);transform:rotate(-45deg)}
 .server-links{display:flex;flex-wrap:wrap;gap:8px;margin-top:auto}
-.demo-buttons{display:flex;flex-wrap:wrap;gap:10px}
+.demo-buttons{display:grid;gap:10px}
 .cmd-hint{margin:10px 0 0;color:var(--muted);font-size:14px}
 .cmd-hint code{font-size:13.5px;background:var(--surface-alt);padding:1px 6px;border-radius:5px;color:var(--text)}
 
 /* --- demo accounts ----------------------------------------------------------- */
 .demo-card{margin-top:16px;display:grid;grid-template-columns:minmax(0,1fr);gap:24px;padding:28px;border:1px solid var(--primary-soft);border-radius:16px;background:var(--surface);box-shadow:var(--shadow)}
 .demo-card h2{font-size:clamp(22px,2.2vw,26px)}
-.demo-card p{margin:10px 0 18px;color:var(--text-2)}
-.demo-logins{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}
-.demo-login{padding:18px;border:1px solid var(--border);border-radius:12px;background:var(--bg)}
-.demo-login strong{display:block;font-size:16px}
-.demo-login > span{display:block;margin:2px 0 12px;color:var(--muted);font-size:14px;line-height:1.45}
-.demo-login dl{margin:0;display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px 12px;align-items:center;font-size:14px}
-.demo-login dt{color:var(--muted)}
-.demo-login dd{margin:0}
-.demo-login code{font-family:var(--mono);font-size:14px;padding:2px 8px;border-radius:6px;background:var(--surface-alt);color:var(--text)}
-@media (min-width:900px){.demo-card{grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);align-items:center;padding:32px 36px}}
+.demo-card p{margin:10px 0 0;max-width:68ch;color:var(--text-2)}
+@media (min-width:900px){.demo-card{grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:40px;padding:32px 36px}}
 
 /* --- sections -------------------------------------------------------------- */
 section{padding:72px 0}
@@ -312,7 +304,6 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
   .fact strong{font-size:16px}
   .fact span{font-size:13px;line-height:1.45;display:block;margin-top:2px}
   .demo-card{padding:20px}
-  .demo-buttons .btn{flex:1 1 100%}
   .section-head{margin-bottom:28px}
   .faq summary{padding:14px 16px}
   .faq details p{padding:0 16px 16px}
@@ -418,23 +409,11 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
       <div>
         <span class="kicker">Dùng thử</span>
         <h2 id="demo-title">Vào bản demo, không cần cài đặt</h2>
-        <p>Có một bản demo cho mỗi web server. Bản Nginx (BPanel) đăng nhập bằng tài khoản Quản trị hoặc Khách hàng, hoặc nút có sẵn trên trang đăng nhập; bản này chỉ để xem, mọi thay đổi đều bị từ chối, nên cứ thoải mái bấm thử.</p>
-        <div class="demo-buttons">
-          <a class="btn btn-primary" href="https://bpanel.bnix.io.vn:2222" rel="noopener" target="_blank"><svg aria-hidden="true"><use href="#i-play"/></svg>Nginx (BPanel)</a>
-          <a class="btn btn-ghost" href="https://bpanel-ols.bnix.io.vn:2222/" rel="noopener" target="_blank"><svg aria-hidden="true"><use href="#i-play"/></svg>OpenLiteSpeed (OPanel)</a>
-        </div>
+        <p>Có một bản demo cho mỗi web server. Trang đăng nhập của bản demo có sẵn nút đăng nhập một chạm vào tài khoản quản trị hoặc khách hàng, không cần nhớ mật khẩu. Bản demo chỉ để xem: mọi thay đổi đều bị từ chối, nên cứ thoải mái bấm thử.</p>
       </div>
-      <div class="demo-logins">
-        <div class="demo-login">
-          <strong>Quản trị</strong>
-          <span>Toàn bộ server: website, người dùng, tường lửa, WAF, tiện ích.</span>
-          <dl><dt>Tên đăng nhập</dt><dd><code>demo</code></dd><dt>Mật khẩu</dt><dd><code>demo123</code></dd></dl>
-        </div>
-        <div class="demo-login">
-          <strong>Khách hàng</strong>
-          <span>Những gì khách hosting của bạn thấy, trong giới hạn gói.</span>
-          <dl><dt>Tên đăng nhập</dt><dd><code>khachhang</code></dd><dt>Mật khẩu</dt><dd><code>demo123</code></dd></dl>
-        </div>
+      <div class="demo-buttons">
+        <a class="btn btn-primary" href="https://bpanel.bnix.io.vn:2222" rel="noopener" target="_blank"><svg aria-hidden="true"><use href="#i-play"/></svg>Nginx (BPanel)</a>
+        <a class="btn btn-ghost" href="https://bpanel-ols.bnix.io.vn:2222/" rel="noopener" target="_blank"><svg aria-hidden="true"><use href="#i-play"/></svg>OpenLiteSpeed (OPanel)</a>
       </div>
     </div>
   </div>
@@ -503,7 +482,7 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
           <li>Mỗi website một pool PHP-FPM riêng, PHP 5.6 → 8.5 chạy song song</li>
           <li>Sửa vhost Nginx, mẫu rewrite có sẵn</li>
           <li>WAF có bộ luật OWASP CRS và chống HTTP flood</li>
-          <li>Terminal của website; tiện ích Application (Node.js, Docker) và Chế độ demo</li>
+          <li>Terminal của website; tiện ích Application (Node.js, Docker)</li>
         </ul>
         <div class="server-links">
           <a class="btn btn-ghost btn-sm" href="https://bpanel.bnix.io.vn:2222" rel="noopener" target="_blank"><svg aria-hidden="true"><use href="#i-play"/></svg>Xem demo</a>
@@ -592,7 +571,7 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
       <article class="addon"><span class="icon"><svg aria-hidden="true"><use href="#i-eye"/></svg></span><h3>Chế độ demo</h3><p>Tài khoản demo công khai cho quản trị và khách hàng: xem mọi trang, không thay đổi được gì, có nút đăng nhập nhanh.</p></article>
       <article class="addon"><span class="icon"><svg aria-hidden="true"><use href="#i-bell"/></svg></span><h3>Thông báo</h3><p>Cảnh báo quản trị viên qua email và Telegram: dịch vụ dừng, ổ đĩa đầy, backup lỗi, chứng chỉ sắp hết hạn…</p></article>
     </div>
-    <p class="note"><svg aria-hidden="true"><use href="#i-info"/></svg><span>Mọi tiện ích đều <b>tắt mặc định</b>. Gỡ tiện ích chỉ tắt tính năng, không xoá dữ liệu nó đã tạo; cài lại là dùng tiếp. Application và Chế độ demo hiện có trên bản Nginx (BPanel).</span></p>
+    <p class="note"><svg aria-hidden="true"><use href="#i-info"/></svg><span>Mọi tiện ích đều <b>tắt mặc định</b>. Gỡ tiện ích chỉ tắt tính năng, không xoá dữ liệu nó đã tạo; cài lại là dùng tiếp. Application hiện có trên bản Nginx (BPanel).</span></p>
   </div>
 </section>
 
@@ -699,7 +678,7 @@ opanel</pre>
       <details><summary>Có mất phí không?</summary><p>Không. BPanel và OPanel là mã nguồn mở theo <a href="https://github.com/BNIX-VN/bpanel/blob/main/LICENSE" rel="noopener" target="_blank">giấy phép AGPL-3.0</a>: bạn được dùng miễn phí, kể cả cho mục đích thương mại. Nếu sửa đổi rồi phân phối, hoặc cho người khác dùng bản đã sửa qua mạng, bạn phải công bố mã nguồn của bản đó theo cùng giấy phép.</p></details>
       <details><summary>Ai được hỗ trợ?</summary><p>Khách hàng dùng VPS tại <a href="https://bnix.vn" rel="noopener" target="_blank">BNIX</a> được BNIX hỗ trợ panel miễn phí, cả BPanel lẫn OPanel. Dùng VPS ở nơi khác, bạn vẫn dùng panel miễn phí và có thể báo lỗi qua GitHub Issues của <a href="https://github.com/BNIX-VN/bpanel/issues" rel="noopener" target="_blank">BPanel</a> hoặc <a href="https://github.com/bnixvn/opanel/issues" rel="noopener" target="_blank">OPanel</a>.</p></details>
       <details><summary>Nên chọn Nginx hay OpenLiteSpeed?</summary><p>Chọn <b>Nginx (BPanel)</b> nếu bạn quen cấu hình Nginx, cần bộ luật OWASP CRS, terminal cho website hoặc tiện ích Application (Node.js, Docker). Chọn <b>OpenLiteSpeed (OPanel)</b> nếu website của bạn dùng <code>.htaccess</code> hoặc bạn muốn LSCache cho WordPress. Hai panel cùng giao diện; lệnh cài hỏi bạn chọn một.</p></details>
-      <details><summary>Có bản demo để xem thử không?</summary><p>Có, mỗi web server một bản. OpenLiteSpeed (OPanel): <a href="https://bpanel-ols.bnix.io.vn:2222/" rel="noopener" target="_blank">bpanel-ols.bnix.io.vn:2222</a>. Nginx (BPanel): <a href="https://bpanel.bnix.io.vn:2222" rel="noopener" target="_blank">bpanel.bnix.io.vn:2222</a>. Quản trị: <code>demo</code> / <code>demo123</code>; khách hàng: <code>khachhang</code> / <code>demo123</code>. Bản demo chạy tiện ích <b>Chế độ demo</b>: xem được mọi trang nhưng mọi thay đổi đều bị từ chối.</p></details>
+      <details><summary>Có bản demo để xem thử không?</summary><p>Có, mỗi web server một bản. OpenLiteSpeed (OPanel): <a href="https://bpanel-ols.bnix.io.vn:2222/" rel="noopener" target="_blank">bpanel-ols.bnix.io.vn:2222</a>. Nginx (BPanel): <a href="https://bpanel.bnix.io.vn:2222" rel="noopener" target="_blank">bpanel.bnix.io.vn:2222</a>. Trang đăng nhập có sẵn nút đăng nhập một chạm vào tài khoản quản trị hoặc khách hàng. Bản demo chỉ để xem: mọi thay đổi đều bị từ chối.</p></details>
       <details><summary>Chạy được trên hệ điều hành nào?</summary><p>Ubuntu 24.04 LTS. Trình cài dừng lại nếu gặp hệ điều hành khác, để không để lại một server cài dở.</p></details>
       <details><summary>Tôi đang dùng DirectAdmin, chuyển sang được không?</summary><p>Được. Tab <b>Backup → Nhập DA</b> nhập backup của DirectAdmin; tab <b>Khôi phục</b> lấy được backup từ server này, từ đích lưu S3/SFTP, hoặc từ một máy chủ khác qua SFTP, FTP, FTPS.</p></details>
       <details><summary>Khách hàng của tôi thấy gì?</summary><p>Người dùng thường chỉ quản lý website của mình: file, database, SSL, WordPress, cron và backup, trong giới hạn số website và dung lượng của gói. Phần server chỉ quản trị viên thấy.</p></details>

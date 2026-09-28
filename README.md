@@ -4,8 +4,8 @@ Bảng điều khiển hosting gọn nhẹ cho **Ubuntu 24.04**. Quản lý webs
 và PHP, database, SSL, backup, tường lửa, WAF và người dùng trong một giao diện
 web, với tiếng Việt và tiếng Anh, chế độ sáng và tối.
 
-**Demo:** <https://bpanel.bnix.io.vn:2222> — chỉ xem, mọi thay đổi bị từ chối.
-Quản trị `demo` / `demo123`, khách hàng `khachhang` / `demo123`.
+**Demo:** <https://bpanel.bnix.io.vn:2222> — chỉ xem, mọi thay đổi bị từ chối. Trang
+đăng nhập có sẵn nút đăng nhập một chạm vào tài khoản quản trị hoặc khách hàng.
 
 ![Tổng quan](docs/screenshots/02-dashboard.png)
 
