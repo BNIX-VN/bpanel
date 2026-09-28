@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>BPanel — Bảng điều khiển hosting gọn nhẹ cho Ubuntu 24.04</title>
-<meta name="description" content="BPanel quản lý website WordPress và PHP, database, SSL, backup, tường lửa, WAF và người dùng trong một giao diện web tiếng Việt. Mã nguồn mở, cài bằng một lệnh trên Ubuntu 24.04.">
-<meta property="og:title" content="BPanel — Bảng điều khiển hosting gọn nhẹ">
-<meta property="og:description" content="Website, database, SSL, backup, tường lửa, WAF và người dùng trong một giao diện web tiếng Việt. Cài bằng một lệnh.">
+<title>BPanel — Panel hosting gọn nhẹ cho Nginx và OpenLiteSpeed</title>
+<meta name="description" content="Panel hosting của BNIX cho Ubuntu 24.04, chạy trên Nginx (BPanel) hoặc OpenLiteSpeed (OPanel): website WordPress và PHP, database, SSL, backup, tường lửa, WAF và người dùng trong một giao diện web tiếng Việt. Mã nguồn mở, cài bằng một lệnh.">
+<meta property="og:title" content="BPanel — Panel hosting gọn nhẹ cho Nginx và OpenLiteSpeed">
+<meta property="og:description" content="Website, database, SSL, backup, tường lửa, WAF và người dùng trong một giao diện web tiếng Việt, trên Nginx hoặc OpenLiteSpeed. Cài bằng một lệnh.">
 <meta property="og:image" content="screenshots/02-dashboard.png">
 <meta property="og:type" content="website">
 <meta name="theme-color" content="#f5f7fa" media="(prefers-color-scheme: light)">
@@ -140,6 +140,22 @@ h1 em::after{content:'';position:absolute;left:0;right:0;bottom:-.1em;height:.09
 .fact{padding:18px 20px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius)}
 .fact strong{display:block;font-size:18px;letter-spacing:-.01em}
 .fact span{color:var(--muted);font-size:14px}
+
+/* --- web servers ------------------------------------------------------------- */
+.servers-head{margin:44px 0 16px}
+.servers-head h3{margin:0;font-size:clamp(20px,2.2vw,24px);letter-spacing:-.015em}
+.servers-head p{margin:6px 0 0;color:var(--text-2)}
+.servers{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
+.server{display:flex;flex-direction:column;gap:12px;padding:24px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg)}
+.server-top{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.server-top strong{font-size:19px;letter-spacing:-.01em}
+.server-top span{color:var(--muted);font-weight:700;font-size:14px}
+.server ul{margin:0;padding:0;list-style:none;display:grid;gap:8px}
+.server li{position:relative;padding-left:22px;color:var(--text-2);font-size:15px;line-height:1.5}
+.server li::before{content:'';position:absolute;left:2px;top:.55em;width:10px;height:6px;border-left:2px solid var(--success);border-bottom:2px solid var(--success);transform:rotate(-45deg)}
+.server .btn{align-self:flex-start;margin-top:auto}
+.cmd-hint{margin:10px 0 0;color:var(--muted);font-size:14px}
+.cmd-hint code{font-size:13.5px;background:var(--surface-alt);padding:1px 6px;border-radius:5px;color:var(--text)}
 
 /* --- demo accounts ----------------------------------------------------------- */
 .demo-card{margin-top:16px;display:grid;grid-template-columns:minmax(0,1fr);gap:24px;padding:28px;border:1px solid var(--primary-soft);border-radius:16px;background:var(--surface);box-shadow:var(--shadow)}
@@ -367,13 +383,13 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
       <div>
         <p class="eyebrow"><b>Mã nguồn mở</b><i class="dot"></i>Miễn phí<i class="dot"></i>Ubuntu 24.04</p>
         <h1 id="hero-title">Quản lý hosting <em>gọn nhẹ</em></h1>
-        <p class="lead">BPanel quản lý website WordPress và PHP, database, SSL, backup, tường lửa, WAF và người dùng trong một giao diện web — sáng hoặc tối, tiếng Việt hoặc tiếng Anh. Cài bằng một lệnh.</p>
+        <p class="lead">Quản lý website WordPress và PHP, database, SSL, backup, tường lửa, WAF và người dùng trong một giao diện web — sáng hoặc tối, tiếng Việt hoặc tiếng Anh. Chọn web server khi cài: <b>Nginx</b> hoặc <b>OpenLiteSpeed</b>.</p>
         <div class="hero-cta">
           <a class="btn btn-primary" href="#cai-dat"><svg aria-hidden="true"><use href="#i-download"/></svg>Cài đặt ngay</a>
           <a class="btn btn-ghost" href="https://bpanel.bnix.io.vn:2222" rel="noopener"><svg aria-hidden="true"><use href="#i-play"/></svg>Xem bản demo</a>
         </div>
         <div class="cmd">
-          <code id="cmd-hero">curl -fsSL https://raw.githubusercontent.com/BNIX-VN/bpanel/refs/heads/main/install.sh | bash</code>
+          <code id="cmd-hero">bash &lt;(curl -fsSL https://raw.githubusercontent.com/BNIX-VN/bpanel/refs/heads/main/panel-setup.sh)</code>
           <button class="copy" type="button" data-copy="cmd-hero"><svg aria-hidden="true"><use href="#i-copy"/></svg><span>Sao chép</span></button>
         </div>
       </div>
@@ -390,17 +406,17 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
     </div>
 
     <div class="facts">
-      <div class="fact"><strong>PHP 5.6 → 8.5</strong><span>Nhiều phiên bản chạy song song</span></div>
+      <div class="fact"><strong>Nginx · OpenLiteSpeed</strong><span>Chọn web server khi cài</span></div>
       <div class="fact"><strong>S3 · SFTP · FTP</strong><span>Backup và khôi phục theo từng bước</span></div>
-      <div class="fact"><strong>WAF + OWASP CRS</strong><span>Bật tắt riêng cho từng website</span></div>
-      <div class="fact"><strong>Không chạy bằng root</strong><span>Mọi việc quyền cao đi qua một helper</span></div>
+      <div class="fact"><strong>WAF ModSecurity</strong><span>Bật tắt riêng cho từng website</span></div>
+      <div class="fact"><strong>Mỗi tài khoản một user</strong><span>Các tài khoản không đọc được file của nhau</span></div>
     </div>
 
     <div class="demo-card" id="demo" aria-labelledby="demo-title">
       <div>
         <span class="kicker">Dùng thử</span>
         <h2 id="demo-title">Vào bản demo, không cần cài đặt</h2>
-        <p>Đăng nhập bằng một trong hai tài khoản demo, hoặc bấm nút có sẵn trên trang đăng nhập. Bản demo chỉ để xem: mọi thay đổi đều bị từ chối, nên cứ thoải mái bấm thử.</p>
+        <p>Đăng nhập bằng một trong hai tài khoản demo, hoặc bấm nút có sẵn trên trang đăng nhập. Bản demo chạy BPanel trên Nginx và chỉ để xem: mọi thay đổi đều bị từ chối, nên cứ thoải mái bấm thử.</p>
         <a class="btn btn-primary" href="https://bpanel.bnix.io.vn:2222" rel="noopener"><svg aria-hidden="true"><use href="#i-play"/></svg>Mở bản demo</a>
       </div>
       <div class="demo-logins">
@@ -433,10 +449,10 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
         <h3>Website và ứng dụng</h3>
         <ul>
           <li>Cài WordPress một lần bấm (WP-CLI) hoặc website PHP thường</li>
-          <li>Mỗi website một pool PHP-FPM riêng, chạy bằng user Linux của chủ website</li>
-          <li>Sửa vhost Nginx, mẫu rewrite, tên miền phụ</li>
+          <li>PHP của mỗi website chạy bằng user Linux của chủ website</li>
+          <li>Nhiều phiên bản PHP, tên miền phụ cho mỗi website</li>
           <li>MariaDB với phpMyAdmin đăng nhập một lần</li>
-          <li>SSL Let's Encrypt, quản lý file, cron, terminal</li>
+          <li>SSL Let's Encrypt, quản lý file, cron</li>
         </ul>
       </article>
       <article class="card">
@@ -454,7 +470,7 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
         <h3>Bảo mật</h3>
         <ul>
           <li>Tường lửa iptables + ipset, blocklist theo URL</li>
-          <li>WAF ModSecurity, OWASP CRS, chống HTTP flood</li>
+          <li>WAF ModSecurity bật tắt theo website, chặn bad bot</li>
           <li>Đăng nhập hai lớp (TOTP) và passkey</li>
           <li>Nhật ký truy cập và các lần chặn</li>
         </ul>
@@ -464,10 +480,37 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
         <h3>Hệ thống và khách hàng</h3>
         <ul>
           <li>Tổng quan tài nguyên và việc cần xử lý</li>
-          <li>Tự điều chỉnh PHP-FPM, MariaDB theo RAM/CPU</li>
+          <li>Tự điều chỉnh PHP và MariaDB theo RAM/CPU</li>
           <li>Người dùng, gói dịch vụ, hạn mức website và dung lượng</li>
           <li>API cấp phát và module WHMCS</li>
         </ul>
+      </article>
+    </div>
+
+    <div class="servers-head" id="web-server">
+      <h3>Hai web server, một giao diện</h3>
+      <p>Cùng do BNIX phát triển, cùng cách quản lý. Lệnh cài hỏi bạn chọn một.</p>
+    </div>
+    <div class="servers">
+      <article class="server">
+        <div class="server-top"><strong>Nginx</strong><span>BPanel</span></div>
+        <ul>
+          <li>Mỗi website một pool PHP-FPM riêng, PHP 5.6 → 8.5 chạy song song</li>
+          <li>Sửa vhost Nginx, mẫu rewrite có sẵn</li>
+          <li>WAF có bộ luật OWASP CRS và chống HTTP flood</li>
+          <li>Terminal của website; tiện ích Application (Node.js, Docker) và Chế độ demo</li>
+        </ul>
+        <a class="btn btn-ghost btn-sm" href="https://github.com/BNIX-VN/bpanel" rel="noopener"><svg aria-hidden="true"><use href="#i-github"/></svg>BPanel trên GitHub</a>
+      </article>
+      <article class="server">
+        <div class="server-top"><strong>OpenLiteSpeed</strong><span>OPanel</span></div>
+        <ul>
+          <li>LSPHP 8.4 và 8.3 cài sẵn, thêm 7.4 → 8.5 ngay trong panel</li>
+          <li>Hỗ trợ <code>.htaccess</code> đầy đủ</li>
+          <li>LSCache cho WordPress</li>
+          <li>WAF ModSecurity với bộ rule gọn cho WordPress, Laravel và PHP</li>
+        </ul>
+        <a class="btn btn-ghost btn-sm" href="https://github.com/bnixvn/opanel" rel="noopener"><svg aria-hidden="true"><use href="#i-github"/></svg>OPanel trên GitHub</a>
       </article>
     </div>
   </div>
@@ -483,12 +526,12 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
 
     <div class="spot">
       <div class="spot-text">
-        <h3>Website, từ tạo mới đến cấu hình Nginx</h3>
-        <p>Tạo website WordPress hoặc PHP, chọn phiên bản PHP, đổi kiểu rewrite, thêm tên miền phụ và sửa vhost ngay trên một màn hình.</p>
+        <h3>Website, từ tạo mới đến cấu hình web server</h3>
+        <p>Tạo website WordPress hoặc PHP, chọn phiên bản PHP, thêm tên miền phụ và chỉnh cấu hình ngay trên một màn hình: vhost và mẫu rewrite trên Nginx, <code>.htaccess</code> trên OpenLiteSpeed.</p>
         <ul>
-          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Mỗi tài khoản một user Linux, mỗi website một pool PHP-FPM riêng</span></li>
-          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Terminal chạy bằng user của website, chỉ cho các lệnh an toàn</span></li>
-          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Quản lý file giữ nguyên quyền bạn đã đặt</span></li>
+          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Mỗi tài khoản một user Linux; PHP của website chạy bằng chính user đó</span></li>
+          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Terminal chạy bằng user của website, chỉ cho các lệnh an toàn (Nginx)</span></li>
+          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Quản lý file: tải lên, sửa, nén và giải nén, phân quyền</span></li>
         </ul>
       </div>
       <img class="shot" src="screenshots/04-website-settings.png" width="1440" height="900" alt="Cấu hình một website: chế độ, phiên bản PHP, rewrite Nginx, tên miền" loading="lazy">
@@ -510,7 +553,7 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
     <div class="spot">
       <div class="spot-text">
         <h3>Bảo mật cho từng website</h3>
-        <p>WAF ModSecurity bật sẵn, bộ luật OWASP CRS bật tắt theo website, chặn bot theo User-Agent, giới hạn HTTP flood và rule tuỳ chỉnh toàn cục.</p>
+        <p>WAF ModSecurity bật tắt theo website, chặn bot theo User-Agent và rule tuỳ chỉnh. Trên Nginx có thêm bộ luật OWASP CRS và giới hạn HTTP flood.</p>
         <ul>
           <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Tường lửa iptables + ipset: một triệu địa chỉ vẫn nhẹ</span></li>
           <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Nhật ký truy cập cho biết request nào bị chặn và vì sao</span></li>
@@ -538,7 +581,7 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
       <article class="addon"><span class="icon"><svg aria-hidden="true"><use href="#i-eye"/></svg></span><h3>Chế độ demo</h3><p>Tài khoản demo công khai cho quản trị và khách hàng: xem mọi trang, không thay đổi được gì, có nút đăng nhập nhanh.</p></article>
       <article class="addon"><span class="icon"><svg aria-hidden="true"><use href="#i-bell"/></svg></span><h3>Thông báo</h3><p>Cảnh báo quản trị viên qua email và Telegram: dịch vụ dừng, ổ đĩa đầy, backup lỗi, chứng chỉ sắp hết hạn…</p></article>
     </div>
-    <p class="note"><svg aria-hidden="true"><use href="#i-info"/></svg><span>Mọi tiện ích đều <b>tắt mặc định</b>. Gỡ tiện ích chỉ tắt tính năng, không xoá dữ liệu nó đã tạo; cài lại là dùng tiếp.</span></p>
+    <p class="note"><svg aria-hidden="true"><use href="#i-info"/></svg><span>Mọi tiện ích đều <b>tắt mặc định</b>. Gỡ tiện ích chỉ tắt tính năng, không xoá dữ liệu nó đã tạo; cài lại là dùng tiếp. Application và Chế độ demo hiện có trên bản Nginx (BPanel).</span></p>
   </div>
 </section>
 
@@ -548,7 +591,7 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
     <div class="section-head">
       <span class="kicker">Hình ảnh</span>
       <h2 id="gallery-title">Xem qua từng trang</h2>
-      <p>Chụp từ bản demo. Bấm vào ảnh để xem kích thước đầy đủ.</p>
+      <p>Chụp từ bản demo BPanel (Nginx); OPanel dùng cùng bố cục giao diện. Bấm vào ảnh để xem kích thước đầy đủ.</p>
     </div>
     <div class="tabs" role="tablist" aria-label="Nhóm ảnh">
       <button class="tab" role="tab" type="button" aria-selected="true" data-group="all">Tất cả</button>
@@ -576,32 +619,35 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
     <div class="section-head">
       <span class="kicker">Cài đặt</span>
       <h2 id="install-title">Từ VPS trắng đến panel chạy, bằng một lệnh</h2>
-      <p>Trình cài dựng Nginx, MariaDB, Redis, PHP-FPM, SFTP, certbot, phpMyAdmin, WP-CLI và tường lửa, rồi tự điều chỉnh PHP-FPM và MariaDB theo cấu hình VPS.</p>
+      <p>Lệnh cài hỏi bạn chọn web server: Nginx cài BPanel, OpenLiteSpeed cài OPanel. Trình cài của panel đó dựng web server, MariaDB, Redis, PHP, SFTP, certbot, phpMyAdmin, WP-CLI và tường lửa, rồi tự điều chỉnh PHP và MariaDB theo cấu hình VPS.</p>
     </div>
     <div class="steps">
       <div class="step"><h3>Chuẩn bị server</h3><p>Ubuntu 24.04 mới cài, quyền root. Tuỳ chọn: một tên miền trỏ về IP để panel có SSL.</p></div>
-      <div class="step"><h3>Chạy lệnh cài</h3><p>Trả lời tên miền, cổng (mặc định <code>2222</code>) và email SSL.</p></div>
+      <div class="step"><h3>Chạy lệnh cài</h3><p>Chọn <b>1</b> cho Nginx (BPanel) hoặc <b>2</b> cho OpenLiteSpeed (OPanel), rồi trả lời tên miền, cổng (mặc định <code>2222</code>) và email SSL.</p></div>
       <div class="step"><h3>Đăng nhập</h3><p>Địa chỉ, tên đăng nhập và mật khẩu được in ra cuối và lưu ở <code>/root/login.txt</code>.</p></div>
     </div>
     <div class="cmd" style="max-width:none">
-      <code id="cmd-install">curl -fsSL https://raw.githubusercontent.com/BNIX-VN/bpanel/refs/heads/main/install.sh | bash</code>
+      <code id="cmd-install">bash &lt;(curl -fsSL https://raw.githubusercontent.com/BNIX-VN/bpanel/refs/heads/main/panel-setup.sh)</code>
       <button class="copy" type="button" data-copy="cmd-install"><svg aria-hidden="true"><use href="#i-copy"/></svg><span>Sao chép</span></button>
     </div>
+    <p class="cmd-hint">Cài thẳng không cần chọn: thêm <code>nginx</code> hoặc <code>openlitespeed</code> vào cuối lệnh.</p>
     <div class="box req">
       <div>
         <h3>Yêu cầu hệ thống</h3>
         <ul>
           <li>Ubuntu 24.04 LTS, quyền root</li>
           <li>Tối thiểu 1 vCPU / 1 GB RAM, khuyến nghị 2 vCPU / 2 GB RAM</li>
-          <li>Quét mã độc cần khoảng 1,3 GB RAM trong lúc quét</li>
+          <li>Tiện ích Quét mã độc cần thêm khoảng 1,3–1,5 GB RAM khi quét</li>
         </ul>
       </div>
       <div>
         <h3>Cập nhật và cứu hộ</h3>
-        <pre class="code-block"><span class="c"># lên bản phát hành mới nhất</span>
+        <pre class="code-block"><span class="c"># BPanel (Nginx)</span>
 bpanel-update --release
-<span class="c"># menu cứu hộ khi không vào được panel</span>
-bpanel</pre>
+bpanel
+<span class="c"># OPanel (OpenLiteSpeed)</span>
+opanel-update
+opanel</pre>
       </div>
     </div>
   </div>
@@ -612,7 +658,7 @@ bpanel</pre>
   <div class="wrap">
     <div class="spot" style="padding-top:0">
       <div class="spot-text">
-        <span class="kicker">Mô hình bảo mật</span>
+        <span class="kicker">Mô hình bảo mật của BPanel</span>
         <h2 id="security-title" style="margin-bottom:14px">Panel không chạy bằng root</h2>
         <p>Tiến trình panel chạy bằng user hệ thống <code>bpanel</code>. Mọi việc cần quyền cao đi qua một script trợ giúp duy nhất thuộc root, chỉ chạy những thao tác nằm trong danh sách cho phép.</p>
         <ul>
@@ -639,14 +685,15 @@ bpanel</pre>
       <h2 id="faq-title">Câu hỏi thường gặp</h2>
     </div>
     <div class="faq">
-      <details><summary>BPanel có mất phí không?</summary><p>Không. BPanel là mã nguồn mở theo <a href="https://github.com/BNIX-VN/bpanel/blob/main/LICENSE" rel="noopener">giấy phép AGPL-3.0</a>: bạn được dùng miễn phí, kể cả cho mục đích thương mại. Nếu sửa đổi rồi phân phối, hoặc cho người khác dùng bản đã sửa qua mạng, bạn phải công bố mã nguồn của bản đó theo cùng giấy phép.</p></details>
-      <details><summary>Ai được hỗ trợ?</summary><p>Khách hàng dùng VPS tại <a href="https://bnix.vn" rel="noopener">BNIX</a> được BNIX hỗ trợ BPanel miễn phí. Dùng VPS ở nơi khác, bạn vẫn dùng BPanel miễn phí và có thể báo lỗi qua <a href="https://github.com/BNIX-VN/bpanel/issues" rel="noopener">GitHub Issues</a>.</p></details>
-      <details><summary>Có bản demo để xem thử không?</summary><p>Có, tại <a href="https://bpanel.bnix.io.vn:2222" rel="noopener">bpanel.bnix.io.vn:2222</a>. Quản trị: <code>demo</code> / <code>demo123</code>; khách hàng: <code>khachhang</code> / <code>demo123</code>. Bản demo chạy tiện ích <b>Chế độ demo</b>: xem được mọi trang nhưng mọi thay đổi đều bị từ chối.</p></details>
+      <details><summary>Có mất phí không?</summary><p>Không. BPanel và OPanel là mã nguồn mở theo <a href="https://github.com/BNIX-VN/bpanel/blob/main/LICENSE" rel="noopener">giấy phép AGPL-3.0</a>: bạn được dùng miễn phí, kể cả cho mục đích thương mại. Nếu sửa đổi rồi phân phối, hoặc cho người khác dùng bản đã sửa qua mạng, bạn phải công bố mã nguồn của bản đó theo cùng giấy phép.</p></details>
+      <details><summary>Ai được hỗ trợ?</summary><p>Khách hàng dùng VPS tại <a href="https://bnix.vn" rel="noopener">BNIX</a> được BNIX hỗ trợ panel miễn phí, cả BPanel lẫn OPanel. Dùng VPS ở nơi khác, bạn vẫn dùng panel miễn phí và có thể báo lỗi qua GitHub Issues của <a href="https://github.com/BNIX-VN/bpanel/issues" rel="noopener">BPanel</a> hoặc <a href="https://github.com/bnixvn/opanel/issues" rel="noopener">OPanel</a>.</p></details>
+      <details><summary>Nên chọn Nginx hay OpenLiteSpeed?</summary><p>Chọn <b>Nginx (BPanel)</b> nếu bạn quen cấu hình Nginx, cần bộ luật OWASP CRS, terminal cho website hoặc tiện ích Application (Node.js, Docker). Chọn <b>OpenLiteSpeed (OPanel)</b> nếu website của bạn dùng <code>.htaccess</code> hoặc bạn muốn LSCache cho WordPress. Hai panel cùng giao diện; lệnh cài hỏi bạn chọn một.</p></details>
+      <details><summary>Có bản demo để xem thử không?</summary><p>Có, bản BPanel (Nginx) tại <a href="https://bpanel.bnix.io.vn:2222" rel="noopener">bpanel.bnix.io.vn:2222</a>. Quản trị: <code>demo</code> / <code>demo123</code>; khách hàng: <code>khachhang</code> / <code>demo123</code>. Bản demo chạy tiện ích <b>Chế độ demo</b>: xem được mọi trang nhưng mọi thay đổi đều bị từ chối.</p></details>
       <details><summary>Chạy được trên hệ điều hành nào?</summary><p>Ubuntu 24.04 LTS. Trình cài dừng lại nếu gặp hệ điều hành khác, để không để lại một server cài dở.</p></details>
       <details><summary>Tôi đang dùng DirectAdmin, chuyển sang được không?</summary><p>Được. Tab <b>Backup → Nhập DA</b> nhập backup của DirectAdmin; tab <b>Khôi phục</b> lấy được backup từ server này, từ đích lưu S3/SFTP, hoặc từ một máy chủ khác qua SFTP, FTP, FTPS.</p></details>
       <details><summary>Khách hàng của tôi thấy gì?</summary><p>Người dùng thường chỉ quản lý website của mình: file, database, SSL, WordPress, cron và backup, trong giới hạn số website và dung lượng của gói. Phần server chỉ quản trị viên thấy.</p></details>
       <details><summary>Có kết nối với WHMCS không?</summary><p>Có. BPanel có API cấp phát và một module WHMCS dùng chung cho BPanel và OPanel: tạo, tạm khoá, mở khoá, xoá tài khoản, đổi gói, đổi mật khẩu và đăng nhập một lần từ khu vực khách hàng.</p></details>
-      <details><summary>Cập nhật có ảnh hưởng website đang chạy không?</summary><p>Dữ liệu, website và database giữ nguyên; Nginx chỉ được nạp lại chứ không dừng. Chạy <code>bpanel-update --release</code> hoặc bấm cập nhật trong trang Cập nhật.</p></details>
+      <details><summary>Cập nhật có ảnh hưởng website đang chạy không?</summary><p>Dữ liệu, website và database giữ nguyên. Chạy <code>bpanel-update --release</code> (BPanel) hoặc <code>opanel-update</code> (OPanel), hoặc bấm cập nhật trong trang Cập nhật.</p></details>
       <details><summary>Gỡ một tiện ích có mất dữ liệu không?</summary><p>Không. Gỡ tiện ích chỉ tắt tính năng; dữ liệu nó đã tạo được giữ nguyên để lần cài sau dùng tiếp.</p></details>
     </div>
   </div>
@@ -664,13 +711,13 @@ bpanel</pre>
         <span class="icon"><svg aria-hidden="true"><use href="#i-headset"/></svg></span>
         <span class="badge">Khách hàng BNIX</span>
         <h3>Dùng VPS tại BNIX</h3>
-        <p>Khách hàng dùng VPS tại BNIX được BNIX hỗ trợ BPanel miễn phí.</p>
+        <p>Khách hàng dùng VPS tại BNIX được BNIX hỗ trợ panel miễn phí, cả BPanel (Nginx) lẫn OPanel (OpenLiteSpeed).</p>
         <a class="btn btn-primary btn-sm" href="https://bnix.vn" rel="noopener"><svg aria-hidden="true"><use href="#i-play"/></svg>Xem VPS tại bnix.vn</a>
       </article>
       <article class="card">
         <span class="icon"><svg aria-hidden="true"><use href="#i-bug"/></svg></span>
         <h3>Dùng VPS ở nơi khác</h3>
-        <p>BPanel vẫn miễn phí. Gặp lỗi hoặc muốn đề xuất tính năng, hãy mở một issue trên GitHub.</p>
+        <p>Panel vẫn miễn phí. Gặp lỗi hoặc muốn đề xuất tính năng, hãy mở một issue trên GitHub.</p>
         <a class="btn btn-ghost btn-sm" href="https://github.com/BNIX-VN/bpanel/issues" rel="noopener"><svg aria-hidden="true"><use href="#i-github"/></svg>GitHub Issues</a>
       </article>
       <article class="card">
@@ -703,7 +750,8 @@ bpanel</pre>
   <div class="wrap foot">
     <a class="brand" href="#top"><span class="mark"><span>BP</span></span>BPanel</a>
     <nav aria-label="Liên kết">
-      <a href="https://github.com/BNIX-VN/bpanel" rel="noopener">GitHub</a>
+      <a href="https://github.com/BNIX-VN/bpanel" rel="noopener">BPanel</a>
+      <a href="https://github.com/bnixvn/opanel" rel="noopener">OPanel</a>
       <a href="https://github.com/BNIX-VN/bpanel/releases" rel="noopener">Bản phát hành</a>
       <a href="https://github.com/BNIX-VN/bpanel#readme" rel="noopener">Tài liệu</a>
       <a href="https://bpanel.bnix.io.vn:2222" rel="noopener">Demo</a>
