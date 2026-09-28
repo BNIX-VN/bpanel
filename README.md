@@ -345,15 +345,36 @@ bpanel/
 
 - **Khách hàng dùng VPS tại [BNIX](https://bnix.vn)** được BNIX **hỗ trợ BPanel
   miễn phí**.
-- Dùng VPS ở nơi khác: BPanel vẫn miễn phí theo giấy phép MIT, và bạn có thể
+- Dùng VPS ở nơi khác: BPanel vẫn miễn phí theo giấy phép AGPL-3.0, và bạn có thể
   báo lỗi hoặc đề xuất tính năng qua
   [GitHub Issues](https://github.com/BNIX-VN/bpanel/issues).
 
 ## Giấy phép
 
-BPanel phát hành theo giấy phép **MIT** — xem [LICENSE](LICENSE).
+BPanel phát hành theo giấy phép **GNU Affero General Public License, phiên bản 3
+(AGPL-3.0)**. Xem [LICENSE](LICENSE).
 
-Tóm tắt: bạn được dùng, sao chép, sửa đổi, phân phối và bán lại BPanel, kể cả
-cho mục đích thương mại, miễn là giữ nguyên thông báo bản quyền và nội dung
-giấy phép trong các bản sao. Phần mềm được cung cấp "nguyên trạng", không kèm
-bất kỳ bảo đảm nào. Bản tiếng Anh trong file [LICENSE](LICENSE) là bản có hiệu lực.
+Tóm tắt (không thay thế giấy phép):
+
+- Bạn được dùng, sao chép, sửa đổi và phân phối BPanel, kể cả cho mục đích
+  thương mại.
+- Khi phân phối BPanel hay một bản đã sửa đổi, bạn phải kèm mã nguồn, giữ cùng
+  giấy phép AGPL-3.0 và giữ nguyên các thông báo bản quyền.
+- Nếu bạn sửa đổi BPanel rồi cho người khác dùng bản đó qua mạng (ví dụ cấp panel
+  cho khách hosting), bạn phải cho những người dùng đó tải được mã nguồn của bản
+  đã sửa.
+- Phần mềm được cung cấp "nguyên trạng", không kèm bất kỳ bảo đảm nào.
+
+Bản tiếng Anh trong file [LICENSE](LICENSE) là bản có hiệu lực.
+
+```
+BPanel - Copyright (C) 2026 BNIX (https://bnix.vn)
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License, version 3, as published by
+the Free Software Foundation.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
+```
