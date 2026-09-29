@@ -698,7 +698,8 @@ SSHD
 install_privileged_helper() {
   install -m 0750 -o root -g bpanel "${SCRIPT_DIR}/files/bpanel-helper.sh" /usr/local/sbin/bpanel-helper
   sed -i "s#^APP_DIR=\"/opt/bpanel\"#APP_DIR=\"${APP_DIR}\"#" /usr/local/sbin/bpanel-helper
-  install -m 0755 -o root -g root "${SCRIPT_DIR}/update.sh" /usr/local/sbin/bpanel-update
+  # The launcher: every update fetches its steps from the release it installs.
+  install -m 0755 -o root -g root "${SCRIPT_DIR}/files/bpanel-update" /usr/local/sbin/bpanel-update
   install -m 0440 -o root -g root "${SCRIPT_DIR}/files/bpanel-sudoers" /etc/sudoers.d/bpanel
   visudo -c -f /etc/sudoers.d/bpanel >/dev/null
   install -m 0755 -o root -g root "${SCRIPT_DIR}/rescue-firewall.sh" /usr/local/sbin/bpanel-rescue-firewall
