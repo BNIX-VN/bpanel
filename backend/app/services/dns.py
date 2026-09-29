@@ -2,8 +2,12 @@
 
 Operator, 2026-09-29: "Phát triển thêm addon DNS Manager". Chosen with them:
 a DNS server on the VPS itself, as DirectAdmin does; administrators edit every
-zone and a customer the zones of their own websites; a website made while the
-addon is on gets a zone, and the zone stays when the website goes.
+zone and a customer the zones of their own websites; the zone stays when the
+website goes. Then, the same day: "All domain trên VPS đều sẽ được cấp DNS zone
+đầy đủ, chứ không cấp tay kiểu này. Mỗi user đều có thể sửa DNS của domain
+trong user mình." So every website domain and alias on the server has a full
+zone without anyone asking (sync() below), and a zone belongs to whoever owns
+the domain's website.
 
 PowerDNS (gsqlite3 backend) holds the zones. The panel edits them through
 PowerDNS's HTTP API on 127.0.0.1:8053 with a key only root and the panel can
@@ -30,7 +34,7 @@ from urllib.parse import urlparse
 from sqlalchemy.orm import Session
 
 from app.core.permissions import is_admin_role
-from app.models.entities import DnsZone, User
+from app.models.entities import DnsZone, User, Website, WebsiteAlias
 from app.services import addons, panel_settings, server_network
 from app.services.shell import shell
 
@@ -382,9 +386,19 @@ def may_edit(db: Session, user: User, zone_name: str) -> str:
     if is_admin_role(user.role):
         return zone
     row = _row(db, zone)
-    if row is None or row.owner_id != user.id:
+    if row is None:
+        raise DnsError("There is no such zone.", status=404)
+    if row.owner_id != user.id and zone not in _domains_of(db, user.id):
         raise DnsError("There is no such zone.", status=404)
     return zone
+
+
+def _domains_of(db: Session, user_id: int) -> set[str]:
+    """The website domains and aliases in one account."""
+    names = {website.domain.lower() for website in db.query(Website).filter(Website.owner_id == user_id)}
+    names |= {alias.domain.lower() for alias in db.query(WebsiteAlias).join(Website)
+              .filter(Website.owner_id == user_id)}
+    return names
 
 
 def list_zones(db: Session, user: User) -> list[dict]:
@@ -424,9 +438,17 @@ def create_zone(db: Session, name: str, owner_id: int | None, *, claim_existing:
          "records": [{"content": _absolute(ns), "disabled": False} for ns in config["nameservers"]]},
     ]
     if config["zone_ip"]:
-        for host in (apex, f"www.{apex}"):
+        # What DirectAdmin puts in a new zone, less what BPanel does not run
+        # (FTP, POP): the domain, www and mail here, mail as the domain's
+        # mail exchanger, and an SPF record so mail the server sends for the
+        # domain - WordPress's, say - is not taken for spoofing.
+        for host in (apex, f"www.{apex}", f"mail.{apex}"):
             rrsets.append({"name": host, "type": "A", "ttl": ttl,
                            "records": [{"content": config["zone_ip"], "disabled": False}]})
+        rrsets.append({"name": apex, "type": "MX", "ttl": ttl,
+                       "records": [{"content": f"10 mail.{apex}", "disabled": False}]})
+        rrsets.append({"name": apex, "type": "TXT", "ttl": ttl,
+                       "records": [{"content": '"v=spf1 a mx ~all"', "disabled": False}]})
     try:
         _request("POST", "/zones", {
             "name": apex, "kind": "Native", "soa_edit_api": SOA_EDIT_API,
@@ -584,37 +606,112 @@ def delete_record(zone: str, record: dict, *, admin: bool) -> None:
     _patch(zone, changes)
 
 
-# --- websites ------------------------------------------------------------------------
+# --- every domain on the server -------------------------------------------------------
 
-def zone_for_new_website(db: Session, website) -> str | None:
-    """A zone for a website just created, when the addon is on and set to.
+def _ready(config: dict) -> bool:
+    return bool(active() and config["auto_zone"] and len(config["nameservers"]) >= 2 and config["zone_ip"])
+
+
+def provision_domain(db: Session, domain: str, owner_id: int | None, config: dict | None = None) -> tuple[str, str] | None:
+    """Give one domain its DNS here. Returns what was done, or None.
 
     Inside a zone the same person already has on this server (a subdomain of
-    their own domain), the website becomes a record there. Anywhere else it
-    gets a zone of its own. Never the reason a website fails to be created.
+    their own domain) the domain becomes an A record there, if the name has
+    no record yet. Anywhere else it gets a full zone of its own. A zone
+    PowerDNS already serves that the panel did not make is left alone.
     """
+    config = config or settings()
+    domain = normalize_zone(domain)
+    containing = [row for row in db.query(DnsZone).all()
+                  if domain == row.name or domain.endswith("." + row.name)]
+    parent = max(containing, key=lambda row: len(row.name), default=None)
+    if parent is not None and parent.name == domain:
+        return None
+    if parent is not None and parent.owner_id == owner_id:
+        name = _absolute(domain)
+        if any(rrset.get("name") == name for rrset in _zone_data(parent.name).get("rrsets", [])):
+            return None
+        label = domain[: -len(parent.name) - 1]
+        add_record(parent.name, {"name": label, "type": "A", "ttl": config["ttl"],
+                                 "content": config["zone_ip"]}, admin=True)
+        return ("record", parent.name)
+    try:
+        return ("zone", create_zone(db, domain, owner_id, claim_existing=False))
+    except DnsError as exc:
+        if exc.status == 409:
+            return None
+        raise
+
+
+def zone_for_new_domain(db: Session, domain: str, owner_id: int | None) -> tuple[str, str] | None:
+    """A website or alias just added gets its DNS. Never the reason it fails."""
+    try:
+        config = settings()
+        if not _ready(config):
+            return None
+        return provision_domain(db, domain, owner_id, config)
+    except (DnsError, DnsInputError) as exc:
+        logger.warning("No DNS for new domain %s: %s", domain, exc)
+        db.rollback()
+        return None
+
+
+def zone_for_new_website(db: Session, website) -> str | None:
+    done = zone_for_new_domain(db, website.domain, website.owner_id)
+    return done[1] if done else None
+
+
+def sync(db: Session) -> dict:
+    """Every website domain and alias on the server has its DNS here.
+
+    Makes the zones that are missing (existing websites when the addon is
+    installed; websites that came by restore, DirectAdmin import or WHMCS),
+    and hands a zone to whoever owns the website of the same name, so a
+    customer can edit the DNS of every domain in their account.
+    """
+    config = settings()
+    summary = {"zones": [], "records": [], "owners": [], "failed": [], "ready": _ready(config)}
+    if not summary["ready"]:
+        return summary
+    domains: dict[str, int | None] = {}
+    for website in db.query(Website).all():
+        domains[website.domain.lower()] = website.owner_id
+    for alias in db.query(WebsiteAlias).join(Website).all():
+        domains.setdefault(alias.domain.lower(), alias.website.owner_id)
+
+    rows = {row.name: row for row in db.query(DnsZone).all()}
+    for domain, owner_id in domains.items():
+        row = rows.get(domain)
+        if row is not None and row.owner_id != owner_id:
+            row.owner_id = owner_id
+            summary["owners"].append(domain)
+    db.commit()
+
+    # Parents before their subdomains, so blog.example.com lands in
+    # example.com's zone rather than one of its own.
+    for domain in sorted(domains, key=lambda name: (name.count("."), name)):
+        try:
+            done = provision_domain(db, domain, domains[domain], config)
+        except (DnsError, DnsInputError) as exc:
+            db.rollback()
+            summary["failed"].append(domain)
+            logger.warning("No DNS for %s: %s", domain, exc)
+            continue
+        if done and done[0] == "zone":
+            summary["zones"].append(done[1])
+        elif done:
+            summary["records"].append(domain)
+    return summary
+
+
+def sync_quietly(db: Session) -> dict | None:
+    """sync() for the places that must not fail because of DNS: startup, a
+    restore, an import, WHMCS provisioning."""
     try:
         if not active():
             return None
-        config = settings()
-        if not config["auto_zone"] or len(config["nameservers"]) < 2 or not config["zone_ip"]:
-            return None
-        domain = normalize_zone(website.domain)
-        containing = [row for row in db.query(DnsZone).all()
-                      if domain == row.name or domain.endswith("." + row.name)]
-        parent = max(containing, key=lambda row: len(row.name), default=None)
-        if parent is not None and parent.name == domain:
-            return None
-        if parent is not None and parent.owner_id == website.owner_id:
-            label = domain[: -len(parent.name) - 1]
-            try:
-                add_record(parent.name, {"name": label, "type": "A", "ttl": config["ttl"],
-                                         "content": config["zone_ip"]}, admin=True)
-            except DnsInputError:
-                pass  # already there, or a CNAME holds the name
-            return parent.name
-        return create_zone(db, domain, website.owner_id, claim_existing=False)
-    except (DnsError, DnsInputError) as exc:
-        logger.warning("No DNS zone for new website %s: %s", getattr(website, "domain", "?"), exc)
+        return sync(db)
+    except Exception:  # noqa: BLE001 - DNS is never the reason something else fails
+        logger.warning("DNS sync failed", exc_info=True)
         db.rollback()
         return None

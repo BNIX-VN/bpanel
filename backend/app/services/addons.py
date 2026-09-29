@@ -103,14 +103,15 @@ CATALOGUE: dict[str, dict] = {
         "summary": "Runs the DNS for your domains on this server, and lets you edit their records in the panel.",
         "details": [
             "Installs PowerDNS and opens port 53. Point a domain's nameservers at this server and its records are served from here.",
-            "A website created while the addon is on gets its zone, with the domain and www pointing at this server.",
-            "Administrators edit every zone; a customer edits the zones of their own websites. A, AAAA, CNAME, MX, TXT, NS, SRV and CAA records.",
+            "Every domain on the server gets a full zone by itself: the websites already here when the addon is installed, new websites and their aliases. The domain, www and mail point at this server, with an MX and an SPF record.",
+            "Administrators edit every zone; a customer edits the DNS of every domain in their account. A, AAAA, CNAME, MX, TXT, NS, SRV and CAA records.",
         ],
         "notes": [
             "Set the nameservers on the DNS page, then create glue records for them at the registrar, pointing to this server's IP address.",
             "Both nameservers are this one server, so the domains it serves are only as reachable as the server itself.",
             "If the server's IP address changes, remove the addon and install it again so PowerDNS listens on the new address.",
-            "Deleting a website keeps its zone. Removing the addon stops PowerDNS and closes port 53; every zone is kept and is served again when you install it again.",
+            "Deleting a website keeps its zone. Only administrators delete zones, and a zone whose website is still here comes back at the next sync.",
+            "Removing the addon stops PowerDNS and closes port 53; every zone is kept and is served again when you install it again.",
         ],
         "keeps_data_on_uninstall": True,
     },

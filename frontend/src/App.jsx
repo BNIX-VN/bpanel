@@ -2585,6 +2585,14 @@ function App() {
     setDnsDraft(prev => ({ ...prev, ttl: data.ttl || 3600 }));
   }
 
+  async function syncDnsZones() {
+    const data = await request('/dns/sync', { method: 'POST' }, t('Syncing...'));
+    if (!data) return;
+    setNotice(t('Every domain on the server has its DNS zone. New zones: {zones}, new records: {records}, owners corrected: {owners}.',
+      { zones: data.zones.length, records: data.records.length, owners: data.owners.length }));
+    loadDnsZones();
+  }
+
   async function saveDnsSettings() {
     const body = {
       nameservers: (dnsSettings.nameservers || []).map(name => (name || '').trim()).filter(Boolean),
@@ -5381,13 +5389,13 @@ function App() {
             <strong className="dns-zones-title">{t('Zones')}</strong>
             {dnsZones.loaded && zones.length === 0 && <p className="hint">{isAdmin
               ? t('No zones yet. Add one below, or create a website.')
-              : t('No zones yet. Each new website gets its zone.')}</p>}
+              : t('No zones yet. Every domain in your account gets its zone.')}</p>}
             {zones.map(zone => <div key={zone.name} className={`dns-zone ${zone.name === dnsZone ? 'active' : ''}`}>
               <button type="button" className="dns-zone-open" onClick={() => selectDnsZone(zone.name)} aria-current={zone.name === dnsZone ? 'true' : undefined}>
                 <strong>{zone.name}</strong>
                 {isAdmin && <small>{zone.owner || t('No owner')}</small>}
               </button>
-              <button type="button" className="mini danger" disabled={!!loading} onClick={() => deleteDnsZone(zone.name)} aria-label={t('Delete zone')} title={t('Delete zone')}><Trash2 size={13}/></button>
+              {isAdmin && <button type="button" className="mini danger" disabled={!!loading} onClick={() => deleteDnsZone(zone.name)} aria-label={t('Delete zone')} title={t('Delete zone')}><Trash2 size={13}/></button>}
             </div>)}
             {isAdmin && <div className="dns-zone-add">
               <input value={dnsNewZone.name} onChange={e => setDnsNewZone(prev => ({ ...prev, name: e.target.value }))} placeholder="example.com" aria-label={t('Domain')} />
@@ -5475,8 +5483,11 @@ function App() {
           <datalist id="dns-server-ipv4">{(dnsSettings.server_ipv4 || []).map(ip => <option key={ip} value={ip} />)}</datalist>
         </label>
         <label><span>{t('Default TTL (seconds)')}</span><input type="number" min={60} max={604800} value={dnsSettings.ttl || 3600} onChange={e => setField('ttl', e.target.value)} /></label>
-        <label className="login-remember dns-auto"><input type="checkbox" checked={!!dnsSettings.auto_zone} onChange={e => setField('auto_zone', e.target.checked)} />{t('Create a zone for each new website')}</label>
-        <button className="cron-add" disabled={!!loading} onClick={saveDnsSettings}><Save size={14}/>{t('Save settings')}</button>
+        <label className="login-remember dns-auto"><input type="checkbox" checked={!!dnsSettings.auto_zone} onChange={e => setField('auto_zone', e.target.checked)} />{t('Give every domain on the server a DNS zone')}</label>
+        <div className="dns-form-actions">
+          <button disabled={!!loading} onClick={saveDnsSettings}><Save size={14}/>{t('Save settings')}</button>
+          <button className="secondary-light" disabled={!!loading || !dnsSettings.auto_zone} onClick={syncDnsZones}><RefreshCw size={14}/>{t('Sync zones now')}</button>
+        </div>
       </div>
       <p className="hint">{t('If the nameservers are names under your own domain, create glue records for them at that domain\'s registrar, pointing to this server\'s IP address.')}</p>
     </section>;

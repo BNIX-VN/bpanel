@@ -642,6 +642,8 @@ def create_website_alias(
     db.commit()
     db.refresh(alias)
     log_action(db, current_user.id, "create_website_alias", website.domain, payload.domain, request=request)
+    # DNS Manager: every domain on the server gets its DNS (operator, 2026-09-29).
+    dns.zone_for_new_domain(db, payload.domain, website.owner_id)
     return alias
 
 

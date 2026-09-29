@@ -78,6 +78,9 @@ def create_zone(payload: ZoneIn, request: Request, db: Session = Depends(get_db)
 @router.delete("/zones/{zone}")
 def delete_zone(zone: str, request: Request, db: Session = Depends(get_db),
                 current_user: User = Depends(get_current_user)):
+    # An administrator's call: every domain on the server has a zone, and a
+    # customer's would come back at the next sync while its website exists.
+    ensure_role(current_user.role, Role.admin)
     name = _answer(lambda: dns.may_edit(db, current_user, zone))
     _answer(lambda: dns.delete_zone(db, name))
     log_action(db, current_user.id, "dns_delete_zone", name, request=request)
@@ -132,4 +135,22 @@ def save_settings(payload: SettingsIn, request: Request, db: Session = Depends(g
     ensure_role(current_user.role, Role.admin)
     saved = _answer(lambda: dns.save_settings(payload.nameservers, payload.zone_ip, payload.ttl, payload.auto_zone))
     log_action(db, current_user.id, "dns_settings", ", ".join(saved["nameservers"]), request=request)
+    # Nameservers set for the first time, or the automatic zones switched
+    # back on: the domains still without a zone get one now.
+    dns.sync_quietly(db)
     return {**saved, "message": "DNS settings saved."}
+
+
+@router.post("/sync")
+def sync_zones(request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Give every domain on the server its zone now, and hand each zone to the
+    owner of its website."""
+    ensure_role(current_user.role, Role.admin)
+    summary = _answer(lambda: dns.sync(db))
+    if not summary["ready"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Set two nameservers and the IP address for new zones, and turn on the automatic zones, first.",
+        )
+    log_action(db, current_user.id, "dns_sync", f"{len(summary['zones'])} zone(s)", request=request)
+    return {**summary, "message": "Every domain on the server has its DNS zone."}

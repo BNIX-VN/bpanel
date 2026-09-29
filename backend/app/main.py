@@ -55,6 +55,25 @@ def _adopt_addons_already_in_use() -> None:
 
 _adopt_addons_already_in_use()
 
+
+def _sync_dns_zones() -> None:
+    """DNS Manager: every domain on the server has its zone (operator,
+    2026-09-29), including websites that arrived while the panel was not
+    looking. In the background: startup must not wait on PowerDNS."""
+    import threading
+
+    def run() -> None:
+        from app.core.database import SessionLocal
+        from app.services import dns
+
+        with SessionLocal() as db:
+            dns.sync_quietly(db)
+
+    threading.Thread(target=run, name="bpanel-dns-sync", daemon=True).start()
+
+
+_sync_dns_zones()
+
 # Secure default umask: files get 644 (-rw-r--r--), dirs get 755 (rwxr-xr-x)
 os.umask(0o022)
 

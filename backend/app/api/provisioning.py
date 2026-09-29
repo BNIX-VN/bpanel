@@ -249,6 +249,11 @@ def create_account(payload: ProvisioningAccountCreate, request: Request, db: Ses
 
     db.commit()
     log_action(db, None, "provisioning_create", payload.external_id, detail=payload.domain or payload.username, request=request)
+    if payload.domain:
+        # DNS Manager: every domain on the server gets its DNS.
+        from app.services import dns
+
+        dns.zone_for_new_domain(db, payload.domain, user.id)
     return account_to_dict(account, db)
 
 
