@@ -3,6 +3,7 @@ from io import StringIO
 import hashlib
 import json
 import logging
+import os
 from pathlib import Path
 import posixpath
 import re
@@ -19,7 +20,7 @@ from app.core.config import settings
 from app.core.secrets import decrypt, encrypt
 from app.core.security import hash_password
 from app.core.permissions import Role
-from app.models.entities import DatabaseAccount, SiteApp, User, Website, WebsiteAlias
+from app.models.entities import DatabaseAccount, MailAccount, SiteApp, User, Website, WebsiteAlias
 from app.services import mariadb, nginx, site_users, waf, wordpress
 from app.services.shell import shell
 
@@ -160,7 +161,22 @@ def create_user_backup(user: User, db) -> str:
             },
             "websites": [],
             "applications": [],
+            # Email addon: each mailbox and its password hash; the mail itself
+            # is under mail/<domain>/<name> in the archive.
+            "mail": [],
         }
+        mail_boxes: list[tuple[str, Path]] = []
+        linux_user = site_users.linux_user_for_panel_username(user.username)
+        for account in (db.query(MailAccount).filter(MailAccount.owner_id == user.id)
+                        .order_by(MailAccount.domain, MailAccount.local_part).all()):
+            manifest["mail"].append({
+                "local_part": account.local_part,
+                "domain": account.domain,
+                "password_hash": account.password_hash,
+                "quota_mb": account.quota_mb,
+            })
+            mail_boxes.append((f"mail/{account.domain}/{account.local_part}",
+                               Path(f"/home/{linux_user}/mail/{account.domain}/{account.local_part}")))
 
         # Applications are not websites and their data is not under a website
         # root, so without this a restore brought back the sites and quietly
@@ -224,7 +240,39 @@ def create_user_backup(user: User, db) -> str:
             for name, payload in app_payloads.items():
                 if payload.exists():
                     tar.add(payload, arcname=f"applications/{name}.tar")
+            for arcname, box in mail_boxes:
+                _add_readable_tree(tar, box, arcname)
     return str(archive)
+
+
+def _add_readable_tree(tar: tarfile.TarFile, root: Path, arcname: str) -> None:
+    """A directory tree, skipping what cannot be read instead of failing.
+
+    A mailbox is being written to while the backup runs: Dovecot renames
+    files between new/ and cur/ and removes its temporary ones. One that
+    vanished between listing and reading is not a reason to lose the whole
+    account's backup.
+    """
+    if not root.is_dir():
+        return
+    tar.add(root, arcname=arcname, recursive=False)
+    for directory, dirnames, filenames in os.walk(root):
+        dirnames.sort()
+        base = Path(directory)
+        relative = base.relative_to(root)
+        for name in dirnames:
+            try:
+                tar.add(base / name, arcname=f"{arcname}/{(relative / name).as_posix()}", recursive=False)
+            except OSError:
+                continue
+        for name in sorted(filenames):
+            path = base / name
+            if path.is_symlink():
+                continue
+            try:
+                tar.add(path, arcname=f"{arcname}/{(relative / name).as_posix()}", recursive=False)
+            except OSError as exc:
+                logger.info("Skipped %s in a mail backup: %s", path, exc)
 
 
 def _collect_applications(user: User, db, tmp_dir: Path) -> list[tuple[dict, Optional[Path]]]:
@@ -729,11 +777,22 @@ def restore_user_backup(backup_file: str, db) -> dict:
 
         restored_apps = _restore_applications(manifest, user, db, archive, tmp_dir)
 
+        from app.services import mail
+
+        def stage_mail(domain: str, local: str) -> Optional[Path]:
+            stage = tmp_dir / "mail" / domain / local
+            _safe_extract_prefix(archive, f"mail/{domain}/{local}", stage)
+            return stage if any(stage.iterdir()) else None
+
+        restored_mail = mail.restore_accounts(db, user, manifest.get("mail") or [], stage_mail)
+
     db.commit()
     # DNS Manager: the restored domains get their zones, owned by the account.
     from app.services import dns
 
     dns.sync_quietly(db)
+    # Email: the restored mailboxes reach the mail server, and their DKIM the zones.
+    mail.sync_quietly(db)
     return {
         "created_user": created_user,
         "username": username,
@@ -743,6 +802,7 @@ def restore_user_backup(backup_file: str, db) -> dict:
         "role": user.role,
         "websites": restored_websites,
         "applications": restored_apps,
+        "mailboxes": restored_mail,
     }
 
 

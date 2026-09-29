@@ -34,6 +34,9 @@ class UserPackage(Base):
     # password. Defaulting it to 0 did not make anyone safer, it made the
     # feature refuse everybody (0034).
     sftp_accounts_limit: Mapped[int] = mapped_column(Integer, default=3)
+    # Mailboxes on the Email addon's server. Only means anything with the
+    # addon installed; administrators are not held to it.
+    mail_accounts_limit: Mapped[int] = mapped_column(Integer, default=10)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     users: Mapped[List["User"]] = relationship(back_populates="package")
@@ -64,6 +67,8 @@ class User(Base):
     # this is not 0: it delegates access the customer already has rather than
     # granting new access, so an admin narrows it rather than opening it.
     sftp_accounts_limit: Mapped[int] = mapped_column(Integer, default=3)
+    # Copied from the package like the limits above.
+    mail_accounts_limit: Mapped[int] = mapped_column(Integer, default=10)
     # When this account's Linux/SFTP password was last set on its own.
     #
     # NULL is load-bearing: it means the Linux password has never been set
@@ -520,3 +525,30 @@ class DnsZone(Base):
     name: Mapped[str] = mapped_column(String(253), unique=True, index=True)
     owner_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class MailAccount(Base):
+    """A mailbox on this server (Email addon): <local_part>@<domain>.
+
+    The mail is in the owner's home, /home/<user>/mail/<domain>/<local_part>,
+    so it counts toward their disk space and goes into their backups. These
+    rows are the whole list the helper's mail-sync turns into what Exim and
+    Dovecot read; nothing there is edited by hand. The password is kept only
+    as the SHA512-CRYPT hash Dovecot checks.
+    """
+
+    __tablename__ = "mail_accounts"
+    __table_args__ = (UniqueConstraint("domain", "local_part", name="uq_mail_account_address"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    domain: Mapped[str] = mapped_column(String(253), index=True)
+    local_part: Mapped[str] = mapped_column(String(64))
+    password_hash: Mapped[str] = mapped_column(String(255))
+    # 0 is no limit of its own; the account's disk space still counts it.
+    quota_mb: Mapped[int] = mapped_column(Integer, default=1024)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    @property
+    def address(self) -> str:
+        return f"{self.local_part}@{self.domain}"

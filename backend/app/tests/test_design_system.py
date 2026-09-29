@@ -182,7 +182,7 @@ def test_the_sidebar_holds_what_is_used_every_day():
     sidebar = APP.split("const navSections = [")[1].split("].filter(section")[0]
     keys = re.findall(r"\['([a-z-]+)', '", sidebar)
     assert keys == ["dashboard", "websites", "applications", "ssl", "databases", "cron", "files",
-                    "sftp", "backups", "users", "dns", "mcp", "notifications", "malware", "settings"]
+                    "sftp", "backups", "users", "dns", "mail", "mcp", "notifications", "malware", "settings"]
     assert "sidebar-subnav" not in APP and "settingsMenuOpen" not in APP
     hub = APP.split("const settingsGroups = [")[1].split("const settingsItems = ")[0]
     hub_keys = re.findall(r"\['([a-z-]+)', '", hub)

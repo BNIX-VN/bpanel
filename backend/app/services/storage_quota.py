@@ -151,6 +151,18 @@ def app_storage_used_bytes(db: Session, user: User) -> int:
     return total
 
 
+def mail_storage_used_bytes(user: User) -> int:
+    """The Email addon keeps a customer's mailboxes in their home. The panel
+    reads them through group bpanel; nothing there means no mail."""
+    from app.services import site_users
+
+    try:
+        linux_user = site_users.linux_user_for_panel_username(user.username)
+    except ValueError:
+        return 0
+    return path_usage_bytes(f"/home/{linux_user}/mail")
+
+
 def user_storage_used_bytes(db: Session, user: User, *, use_cache: bool = False) -> int:
     if use_cache:
         with _user_usage_lock:
@@ -159,7 +171,8 @@ def user_storage_used_bytes(db: Session, user: User, *, use_cache: bool = False)
             return cached[1]
     websites = db.query(Website).filter(Website.owner_id == user.id).all()
     total = (sum(website_storage_used_bytes(website) for website in websites)
-             + app_storage_used_bytes(db, user))
+             + app_storage_used_bytes(db, user)
+             + mail_storage_used_bytes(user))
     if use_cache:
         with _user_usage_lock:
             _user_usage_cache[user.id] = (time.monotonic(), total)
