@@ -2350,6 +2350,10 @@ for domain in domains:
 
 
 def write(path, lines, gid):
+    try:
+        before = os.stat(path).st_mtime_ns // 1_000_000_000
+    except FileNotFoundError:
+        before = None
     tmp = path + ".new"
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640)
     try:
@@ -2359,6 +2363,12 @@ def write(path, lines, gid):
     finally:
         os.close(fd)
     os.replace(tmp, path)
+    # Dovecot reloads its passwd-file when the mtime (in whole seconds) or
+    # the size changed. A new password is a hash of the same length, so a
+    # rewrite in the same second as the last one would never be seen.
+    if before is not None and os.stat(path).st_mtime_ns // 1_000_000_000 <= before:
+        bumped = (before + 1) * 1_000_000_000
+        os.utime(path, ns=(bumped, bumped))
 
 
 write(os.path.join(exim_dir, "domains"), [f"{d}: {d}" for d in domains], exim_gid)

@@ -78,6 +78,7 @@ def test_assigning_a_package_copies_its_terminal_flag():
         # Every limit _apply_package_limits copies has to exist on the stub, or
         # this test fails for a reason that has nothing to do with terminals.
         sftp_accounts_limit = 3
+        mail_accounts_limit = 10
 
     class _Target:
         package_id = None
