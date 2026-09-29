@@ -5292,12 +5292,16 @@ function App() {
     </select>;
   }
 
-  function EmptyState({ icon: Icon = AlertCircle, message = 'No data yet' }) {
+  function EmptyState({ icon: Icon = AlertCircle, message = 'No data yet', action }) {
     /* Translated here rather than at each call site. Several callers pass a
      * ternary - message={searching ? 'No matches.' : 'None yet.'} - and a
      * wrapper looking for message="..." cannot see inside one. Doing it here
      * covers every caller, including the ones written tomorrow. */
-    return <div className="empty-state"><Icon size={40} /><p>{t(message)}</p></div>;
+    return <div className="empty-state">
+      <Icon size={40} />
+      <p>{t(message)}</p>
+      {action && <button type="button" className="mini secondary-light" onClick={action.onClick}>{action.icon ? <action.icon size={14}/> : null} {action.label}</button>}
+    </div>;
   }
 
   function formatBytes(value) {
@@ -5981,11 +5985,11 @@ function App() {
     </section>;
   }
 
-  function renderCopyBlock(title, text, { multiline = false } = {}) {
+  function renderCopyBlock(title, text, { multiline = false, copiedMessage } = {}) {
     return <div className="copy-block">
       <div className="copy-block-head">
         <span>{title}</span>
-        <button type="button" className="mini secondary-light" onClick={() => copyText(text, t('Copied.'))}><Copy size={13}/> {t('Copy')}</button>
+        <button type="button" className="mini secondary" onClick={() => copyText(text, copiedMessage || t('Copied to clipboard.'))}><Copy size={13}/> {t('Copy')}</button>
       </div>
       {multiline ? <pre className="copy-block-code">{text}</pre> : <code className="copy-block-code">{text}</code>}
     </div>;

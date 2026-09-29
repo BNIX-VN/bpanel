@@ -304,6 +304,7 @@ export const vi = {
   "Connection": "Kết nối",
   "Connections/IP": "Kết nối mỗi IP",
   "Containers publish on 127.0.0.1 only, run as your own user with no capabilities, and are capped at the memory shown.": "Container chỉ mở cổng trên 127.0.0.1, chạy dưới chính user của bạn mà không có đặc quyền nào, và bị giới hạn ở mức bộ nhớ hiển thị.",
+  "Copied to clipboard.": "Đã sao chép vào bộ nhớ tạm.",
   "Copied.": "Đã sao chép.",
   "Copy": "Sao chép",
   "Copy failed.": "Sao chép thất bại.",
