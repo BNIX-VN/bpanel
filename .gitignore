@@ -66,9 +66,10 @@ backup/
 # BPanel runtime
 backend/bpanel.db
 
-# Landing page
-landing.html
-style.css
+# Landing page (the repo root's own files: frontend/src/shared/style.css is
+# the panel's stylesheet and must be committed)
+/landing.html
+/style.css
 
 # Dev / CI / tooling (not part of release)
 .codex/

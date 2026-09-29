@@ -16,13 +16,11 @@ import 'ace-builds/src-noconflict/theme-tomorrow_night';
 import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, Eye, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle, Activity, BrickWall, Bug, LockKeyhole, PackageOpen, ScrollText, ShieldAlert, CheckCircle, Zap, Bell, Mail, Send, Cloud, Inbox, Forward, ShieldCheck } from 'lucide-react';
 import { Terminal } from './components/Terminal';
 import { LANGUAGES, t, useLanguage } from './i18n.js';
-import './style.css';
-import './brand.css';
-import './file-manager.css';
-import './theme.css';
-// OPanel's layout layer, loaded last so it wins ties: navy sidebar in
-// groups, one account menu, one blue button per task.
-import './ui.css';
+import './shared/style.css';
+import './shared/brand.css';
+import './shared/ui.css';
+import './shared/file-manager.css';
+import './bpanel.css';
 
 const API = import.meta.env.VITE_API_URL || '/api';
 // Schedules offered by name; anything else is "Custom". A cron expression is

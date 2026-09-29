@@ -16,90 +16,16 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SRC = PROJECT_ROOT / "frontend" / "src"
-THEME = (SRC / "theme.css").read_text(encoding="utf-8")
-STYLE = (SRC / "style.css").read_text(encoding="utf-8")
-BRAND = (SRC / "brand.css").read_text(encoding="utf-8")
-FILES = (SRC / "file-manager.css").read_text(encoding="utf-8")
+# The look itself is OPanel's shared layer (frontend/src/shared, synced from
+# OPanel and checked by test_shared_ui.py); BPanel's own sheet holds only what
+# OPanel does not have. Tests of BPanel's former look were dropped on
+# 2026-09-29, when the operator chose OPanel's interface as it is.
 APP = (SRC / "App.jsx").read_text(encoding="utf-8")
-ALL_CSS = {"theme.css": THEME, "style.css": STYLE, "brand.css": BRAND,
-           "file-manager.css": FILES}
 
 
 # --- the two dark themes have to stay one theme ------------------------------
 
-def _dark_blocks():
-    """The dark tokens as they are written twice: once for the explicit choice,
-    once for the OS preference."""
-    chosen = THEME.split(':root[data-theme="dark"]{')[1].split("\n}")[0]
-    preferred = THEME.split(':root:not([data-theme="light"]){')[1].split("\n  }")[0]
-    parse = lambda block: {  # noqa: E731
-        name.strip(): value.strip()
-        for name, _, value in (line.partition(":") for line in block.split(";"))
-        if name.strip().startswith("--")
-    }
-    return parse(chosen), parse(preferred)
-
-
-def test_dark_mode_is_defined_identically_in_both_places():
-    """One block applies when the reader picked dark, the other when their
-    system did. They are the same theme, and CSS has no way to say so, so a
-    token retuned in one and forgotten in the other gives two different dark
-    modes depending on how the reader got there - which nobody would think to
-    check.
-    """
-    chosen, preferred = _dark_blocks()
-    assert chosen, "no explicit dark block found"
-    differences = {
-        name: (chosen.get(name), preferred.get(name))
-        for name in set(chosen) | set(preferred)
-        if chosen.get(name) != preferred.get(name)
-    }
-    assert not differences, f"dark tokens that differ between the two blocks: {differences}"
-
-
-def test_dark_surfaces_are_far_enough_apart_to_see():
-    """A card on the page background, and a shaded box inside the card, were
-    seven points of luminance apart in dark mode - so the structure of a page
-    read as a vague grid of rectangles."""
-    chosen, _ = _dark_blocks()
-
-    def luminance(token):
-        value = chosen[token].lstrip("#")
-        r, g, b = (int(value[i:i + 2], 16) for i in (0, 2, 4))
-        return 0.2126 * r + 0.7152 * g + 0.0722 * b
-
-    assert luminance("--surface") - luminance("--bg") >= 6
-    assert luminance("--surface-alt") - luminance("--surface") >= 6
-
-
 # --- type and the mono stack -------------------------------------------------
-
-def test_the_type_scale_is_declared_once_and_used():
-    for token in ("--text-xs", "--text-sm", "--text-hint", "--text-base",
-                  "--text-lg", "--text-xl", "--font-sans", "--font-mono", "--measure"):
-        assert token in THEME, token
-    assert "font-size:var(--text-base)" in THEME.replace(" ", "")
-
-
-@pytest.mark.parametrize("name", ["style.css", "brand.css", "file-manager.css"])
-def test_no_stylesheet_spells_out_its_own_monospace_stack(name):
-    """There were fourteen copies of it in three different orders, so a path
-    and the command beside it could render in different faces."""
-    body = re.sub(r"/\*.*?\*/", "", ALL_CSS[name], flags=re.S)
-    hardcoded = [line.strip()[:90] for line in body.splitlines()
-                 if "monospace" in line and "var(--font-mono)" not in line]
-    assert not hardcoded, hardcoded[:5]
-
-
-def test_numbers_line_up():
-    """Columns of sizes, ports and percentages, with a figure that changes in
-    place every few seconds. Proportional digits make those jump."""
-    assert "font-variant-numeric:tabular-nums" in THEME.replace(" ", "")
-
-
-def test_prose_is_capped_at_a_readable_measure():
-    assert "max-width:var(--measure)" in STYLE.replace(" ", "")
-
 
 # --- hierarchy ---------------------------------------------------------------
 
@@ -120,17 +46,7 @@ def test_refresh_is_never_the_loudest_button_on_a_page():
     assert not loud, f"{len(loud)} primary Refresh buttons: {loud[:3]}"
 
 
-def test_delete_in_a_list_row_is_a_glyph_not_a_block():
-    """Twenty-two sites meant twenty-two filled red squares down the page, each
-    at the end of a row of five identical ones - which is where a cursor
-    overshoots. Pointing at it still turns it fully red."""
-    quiet = BRAND.split(".site-icon-button.danger,")[1].split("}")[0]
-    assert "background:var(--surface)" in quiet
-    assert "color:var(--danger)" in quiet
-    assert ".site-icon-button.danger:hover:not(:disabled)" in BRAND
-
-
-UI = (SRC / "ui.css").read_text(encoding="utf-8")
+UI = (SRC / "shared" / "ui.css").read_text(encoding="utf-8")
 
 
 def _dashboard():
@@ -152,11 +68,6 @@ def test_the_dashboard_says_how_things_stand_not_the_sidebar_again():
     # "New website" and "New database" arrive with their form open.
     assert "setCreateFormOpen(true); navigateToPage('websites');" in dashboard
     assert "setDbCreateOpen(true); navigateToPage('databases');" in dashboard
-
-
-def test_the_card_rail_says_how_bad_it_is():
-    for tone, colour in (("ok", "success"), ("warn", "warning"), ("bad", "danger")):
-        assert f".status-card.tone-{tone},.status-card.tone-{tone}:hover:not(:disabled){{border-left-color:var(--{colour})}}" in UI
 
 
 def test_a_customer_is_not_shown_the_server():
@@ -221,23 +132,6 @@ def test_sign_out_lives_in_the_account_menu():
     assert "account-pill" not in APP
 
 
-def test_a_full_disk_does_not_look_like_an_empty_one():
-    """The bar changes colour before anyone reads the number."""
-    card = APP.split("function ResourceCard(")[1].split("function renderDashboard()")[0]
-    assert "safePercent >= 90 ? ' level-critical' : safePercent >= 80 ? ' level-warn'" in card
-    assert ".resource-card.level-warn .resource-track span{background:var(--warning)}" in UI
-    assert ".resource-card.level-critical .resource-track span{background:var(--danger)}" in UI
-    # .danger is the delete button: on a card it painted the whole box red.
-    assert "' danger'" not in card and "' warn'" not in card
-
-
-def test_eight_cards_never_leave_two_over():
-    """Four and four, then two columns - never 3 + 3 + 2."""
-    assert "@media(max-width:1100px){.status-grid.many{grid-template-columns:repeat(2,minmax(0,1fr))}}" in UI
-    phone = UI.split("/* ---------- Phones ---------- */")[1]
-    assert ".status-grid,.status-grid.many{grid-template-columns:repeat(2,minmax(0,1fr));" in phone
-
-
 def test_the_create_website_form_is_not_in_front_of_the_list():
     """Making a site is occasional; finding one is why the page gets opened.
     The form was four hundred pixels of it above the list."""
@@ -245,18 +139,6 @@ def test_the_create_website_form_is_not_in_front_of_the_list():
     assert "const createOpen = createFormOpen || websites.length === 0;" in APP
     # An empty panel is the exception: there the form is the only thing to do.
     assert "{createOpen && <section className=\"section create-site-section\">" in APP
-
-
-def test_the_file_list_says_what_its_columns_are():
-    """755 and 4.1 KB floated between the name and the buttons under no
-    heading at all."""
-    header = APP.split('<div className="file-list-header">')[1].split("</div>")[0]
-    for column in ("t('Name')", "t('Mode')", "t('Size')", "t('Modified')"):
-        assert column in header, column
-    grid = FILES.split(".file-list-header {")[1].split("}")[0]
-    row = FILES.split(".file-item {")[1].split("}")[0]
-    columns = lambda block: re.search(r"grid-template-columns:([^;]+);", block).group(1).strip()  # noqa: E731
-    assert columns(grid) == columns(row), "header and row columns must line up"
 
 
 def test_a_label_from_an_array_goes_through_the_dictionary():
@@ -305,25 +187,6 @@ def test_the_dashboard_headings_are_translated_where_they_are_drawn():
 
 # --- the operator's list, 2026-09-25 -----------------------------------------
 
-def test_a_filter_box_does_not_grow_tall_on_a_phone():
-    """flex-basis 200px was the filter's width in a row; when the list head
-    stacked on a phone it became its height - a 200px-tall text box. The raw
-    firewall output beside it was squeezed to a single 20px line."""
-    phone = UI.split("/* ---------- Phones ---------- */")[1]
-    assert ".detail-head input{flex:0 0 auto}" in phone
-    assert ".detail-body > pre{flex:0 0 auto;" in UI
-
-
-def test_mode_size_and_date_have_cells_of_their_own_when_narrow():
-    """Mode and size were placed in grid column 2, row 2, and drew over each
-    other on a phone; the date shares their line, in a column of its own."""
-    narrow = UI.split("/* ---------- File list, below the six-column width ----------")[1]
-    assert narrow.split("*/", 1)[1].lstrip().startswith("@media(max-width:1240px){")
-    assert ".file-item > .file-mode{grid-column:2;grid-row:2;" in narrow
-    assert ".file-item > .file-size{grid-column:3;grid-row:2}" in narrow
-    assert ".file-item > .file-modified{grid-column:4;grid-row:2;" in narrow
-
-
 def test_the_file_list_says_when_each_file_was_changed():
     """The API has sent every entry's mtime all along; nothing drew it."""
     row = APP.split('<div className="file-list">')[1].split("</div>)}")[0]
@@ -350,26 +213,6 @@ def test_a_new_page_opens_at_its_top():
     effect = APP.split("useLayoutEffect(() => {", 1)[1].split("}, [page]);", 1)[0]
     assert "window.scrollTo({ top: 0, left: 0, behavior: 'instant' })" in effect
     assert "window.history.scrollRestoration = 'manual'" in APP
-
-
-def test_scan_history_rows_are_as_tall_as_their_content():
-    """The list's max-height was shared out among auto rows and cut each run to
-    its 50px minimum; the wrapped title and badge spilled over the next one."""
-    assert ".scan-history-list{grid-auto-rows:max-content}" in UI
-    phone = UI.split("/* ---------- Phones ---------- */")[1]
-    assert ".scan-history-list{max-height:none;overflow:visible;" in phone
-
-
-def test_every_row_puts_its_columns_where_the_header_does():
-    """Each row is a grid of its own. With an auto actions column every row
-    sized it to its own buttons - two for a folder, four for an archive - and
-    mode, size and date moved up to 120px from row to row, under no heading."""
-    row = FILES.split(".file-item {")[1].split("}")[0]
-    assert re.search(r"grid-template-columns:[^;]* 264px;", row), "the actions column is not a fixed width"
-    for block in (".file-list {", ".file-list-header {"):
-        assert "scrollbar-gutter: stable;" in FILES.split(block)[1].split("}")[0], block
-    # A three-line row was cut to ~40px by the list's max-height otherwise.
-    assert ".file-list{grid-auto-rows:max-content}" in UI
 
 
 def test_no_function_in_the_app_is_declared_twice():

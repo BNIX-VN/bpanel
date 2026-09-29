@@ -197,15 +197,6 @@ def test_the_switch_is_two_letters_and_no_icon():
     assert "Languages," not in APP
 
 
-def test_the_two_toggles_are_one_control_in_css():
-    """They sit side by side and do the same kind of thing, so they share the
-    box outright. A second copy of it drifts the first time either is
-    adjusted - which is the whole reason for the shared selector."""
-    theme_css = (SRC / "theme.css").read_text(encoding="utf-8")
-    assert ".theme-toggle,.language-toggle{" in theme_css
-    assert ".theme-toggle:hover:not(:disabled),.language-toggle:hover:not(:disabled)" in theme_css
-
-
 def test_the_switch_sits_with_the_theme_toggle():
     """Two controls that do the same kind of thing belong together; a person
     who found one will look for the other in the same place."""
