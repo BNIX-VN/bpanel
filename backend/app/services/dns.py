@@ -57,6 +57,18 @@ DEFAULT_TTL = 3600
 MIN_TTL = 60
 MAX_TTL = 604800
 CAA_TAGS = ("issue", "issuewild", "iodef")
+# What a new zone holds besides SOA and NS, one record per line: name, type,
+# then the value (an MX or SRV value starts with its priority). {ip} is the
+# address for new zones, {domain} the zone, {spf} the server's SPF record -
+# "v=spf1 a mx ~all", with the smarthost's include when mail is relayed.
+# DirectAdmin's template, less what BPanel does not run (FTP, POP).
+DEFAULT_TEMPLATE = """@     A    {ip}
+www   A    {ip}
+mail  A    {ip}
+@     MX   10 mail
+@     TXT  {spf}
+"""
+MAX_TEMPLATE_LINES = 100
 
 # A zone is a domain: letters, digits and hyphens, a dot between labels, a
 # top-level label of letters (or an IDN one, which arrives as xn--).
@@ -175,15 +187,72 @@ def settings() -> dict:
     stored = stored if isinstance(stored, dict) else {}
     nameservers = [str(name) for name in (stored.get("nameservers") or []) if str(name).strip()]
     ttl = stored.get("ttl")
+    template = stored.get("template")
     return {
         "nameservers": nameservers or default_nameservers(),
         "zone_ip": str(stored.get("zone_ip") or "") or default_zone_ip(),
         "ttl": ttl if isinstance(ttl, int) and MIN_TTL <= ttl <= MAX_TTL else DEFAULT_TTL,
         "auto_zone": stored.get("auto_zone", True) is not False,
+        "template": template if isinstance(template, str) and template.strip() else DEFAULT_TEMPLATE,
+        "spf": spf_record(),
     }
 
 
-def save_settings(nameservers: list[str], zone_ip: str, ttl: int, auto_zone: bool) -> dict:
+def spf_record() -> str:
+    """The SPF record every domain here should publish.
+
+    The server itself sends ("a mx"), and when mail goes out through a
+    smarthost, so does the smarthost: its include goes in before "~all".
+    """
+    from app.services import mail
+
+    include = mail.spf_include()
+    return f"v=spf1 a mx {include} ~all" if include else "v=spf1 a mx ~all"
+
+
+def template_records(template: str, zone: str, zone_ip: str, ttl: int) -> list[dict]:
+    """A template's lines, filled in for one zone, as records to_pdns reads.
+
+    A line using {ip} is left out when there is no address for new zones.
+    Raises DnsInputError naming the first line it cannot use.
+    """
+    records = []
+    # Numbered as the administrator sees them, comments and blank lines included.
+    lines = [(number, line.strip()) for number, line in enumerate((template or "").splitlines(), start=1)]
+    lines = [(number, line) for number, line in lines if line and not line.startswith("#")]
+    if len(lines) > MAX_TEMPLATE_LINES:
+        raise DnsInputError("The template can hold at most 100 records.")
+    spf = spf_record()
+    for number, line in lines:
+        if "{ip}" in line and not zone_ip:
+            continue
+        filled = line.replace("{ip}", zone_ip).replace("{domain}", zone).replace("{spf}", spf)
+        parts = filled.split(None, 2)
+        if len(parts) < 3:
+            raise DnsInputError(f"Line {number}: " + "Each line is a name, a type and a value, such as www A {ip}.")
+        name, rtype, value = parts[0], parts[1].upper(), parts[2]
+        record = {"name": name, "type": rtype, "ttl": ttl, "content": value}
+        if rtype in {"MX", "SRV"}:
+            priority, _, rest = value.partition(" ")
+            record.update(priority=priority, content=rest.strip())
+        try:
+            to_pdns(zone, record)
+        except DnsInputError as exc:
+            raise DnsInputError(f"Line {number}: {exc}") from exc
+        records.append(record)
+    return records
+
+
+def check_template(template: str) -> str:
+    """The template, if every line makes a valid record; raises otherwise."""
+    template = (template or "").replace("\r\n", "\n").strip()
+    if not template:
+        return DEFAULT_TEMPLATE
+    template_records(template, "example.com", "192.0.2.10", DEFAULT_TTL)
+    return template + "\n"
+
+
+def save_settings(nameservers: list[str], zone_ip: str, ttl: int, auto_zone: bool, template: str | None = None) -> dict:
     names = []
     for name in nameservers:
         name = (name or "").strip().lower().rstrip(".")
@@ -204,7 +273,11 @@ def save_settings(nameservers: list[str], zone_ip: str, ttl: int, auto_zone: boo
     if not MIN_TTL <= int(ttl) <= MAX_TTL:
         raise DnsInputError("TTL must be between 60 seconds and 7 days.")
     stored = panel_settings._read_raw()
-    stored[SETTINGS_KEY] = {"nameservers": names, "zone_ip": zone_ip, "ttl": int(ttl), "auto_zone": bool(auto_zone)}
+    previous = stored.get(SETTINGS_KEY) if isinstance(stored.get(SETTINGS_KEY), dict) else {}
+    kept = previous.get("template") if template is None else None
+    template = check_template(template) if template is not None else (kept or DEFAULT_TEMPLATE)
+    stored[SETTINGS_KEY] = {"nameservers": names, "zone_ip": zone_ip, "ttl": int(ttl), "auto_zone": bool(auto_zone),
+                            "template": template}
     panel_settings._write_raw(stored)
     return settings()
 
@@ -437,18 +510,20 @@ def create_zone(db: Session, name: str, owner_id: int | None, *, claim_existing:
         {"name": apex, "type": "NS", "ttl": ttl,
          "records": [{"content": _absolute(ns), "disabled": False} for ns in config["nameservers"]]},
     ]
-    if config["zone_ip"]:
-        # What DirectAdmin puts in a new zone, less what BPanel does not run
-        # (FTP, POP): the domain, www and mail here, mail as the domain's
-        # mail exchanger, and an SPF record so mail the server sends for the
-        # domain - WordPress's, say - is not taken for spoofing.
-        for host in (apex, f"www.{apex}", f"mail.{apex}"):
-            rrsets.append({"name": host, "type": "A", "ttl": ttl,
-                           "records": [{"content": config["zone_ip"], "disabled": False}]})
-        rrsets.append({"name": apex, "type": "MX", "ttl": ttl,
-                       "records": [{"content": f"10 mail.{apex}", "disabled": False}]})
-        rrsets.append({"name": apex, "type": "TXT", "ttl": ttl,
-                       "records": [{"content": '"v=spf1 a mx ~all"', "disabled": False}]})
+    # The rest from the template (by default what DirectAdmin puts in a new
+    # zone, less what BPanel does not run): records of one name and type
+    # become one RRset.
+    grouped: dict[tuple[str, str], list[str]] = {}
+    for record in template_records(config["template"], zone, config["zone_ip"], ttl):
+        name, rtype, _, content = to_pdns(zone, record)
+        if rtype == "NS" and name == apex:
+            continue
+        contents = grouped.setdefault((name, rtype), [])
+        if content not in contents:
+            contents.append(content)
+    for (name, rtype), contents in grouped.items():
+        rrsets.append({"name": name, "type": rtype, "ttl": ttl,
+                       "records": [{"content": content, "disabled": False} for content in contents]})
     try:
         _request("POST", "/zones", {
             "name": apex, "kind": "Native", "soa_edit_api": SOA_EDIT_API,
@@ -718,6 +793,32 @@ def sync_quietly(db: Session) -> dict | None:
 
 
 # --- mail (Email addon) -------------------------------------------------------------
+
+def replace_spf(db: Session, old: str, new: str) -> list[str]:
+    """Move every zone still publishing the old SPF record to the new one.
+
+    Only an apex SPF equal to the old one changes: a customer who wrote
+    their own keeps it. Returns the zones changed.
+    """
+    if not active() or old == new:
+        return []
+    changed = []
+    for row in db.query(DnsZone).order_by(DnsZone.name).all():
+        try:
+            data = _zone_data(row.name)
+        except DnsError:
+            continue
+        apex = _absolute(row.name)
+        rrset = _rrset(data, apex, "TXT")
+        contents = _contents(rrset)
+        if not any(_untxt(content) == old for content in contents):
+            continue
+        updated = [_txt(new) if _untxt(content) == old else content for content in contents]
+        _serial_follows_edits(row.name, data)
+        _patch(row.name, {(apex, "TXT"): ((rrset or {}).get("ttl", DEFAULT_TTL), updated)})
+        changed.append(row.name)
+    return changed
+
 
 DKIM_SELECTOR = "bpanel"
 

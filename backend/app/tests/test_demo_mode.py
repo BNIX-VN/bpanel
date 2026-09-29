@@ -37,6 +37,10 @@ REVIEWED_READS = {
     # Email (2026-09-29): mailboxes, DKIM public keys, client settings and the
     # mail server's state. No password or hash; the webmail link is a POST.
     "/api/mail/overview", "/api/mail/status",
+    # The spam filter's and the smarthost's settings: the smarthost password
+    # is never sent, only whether one is saved. (The filtering log names real
+    # correspondents and is in demo_mode.BLOCKED_READS.)
+    "/api/mail/settings",
     "/api/fail2ban/banned", "/api/fail2ban/status", "/api/firewall/blocklists", "/api/firewall/status",
     "/api/health", "/api/maintenance/app-files/{app_id}", "/api/maintenance/backup-jobs",
     "/api/maintenance/backup-jobs/{job_id}", "/api/maintenance/backup-schedules",

@@ -18,6 +18,13 @@ Single sign-on: the panel signs a token naming one mailbox with the secret in
 /etc/bpanel/webmail-sso.key, which only root, the panel and the webmail can
 read. The webmail turns it into a session once, within a minute, and opens the
 mailbox as Dovecot's master user; the mailbox password is never needed.
+
+Then (operator, 2026-09-29): "Addon cần code thêm rspamd để có thể xem log
+chặn mail xem có nhầm không. Thêm config relay smarthost cho exim -> Custom
+spf/dns mẫu". Rspamd scans mail from outside; its history is the filtering
+log on the Email page, where an administrator can put a sender on the
+allowlist when it was a mistake. A smarthost carries outgoing mail for servers
+whose port 25 is blocked, and its SPF include goes into every domain's SPF.
 """
 
 from __future__ import annotations
@@ -33,6 +40,8 @@ import re
 import secrets
 import socket
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -43,6 +52,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings as app_settings
 from app.core.permissions import is_admin_role
+from app.core.secrets import decrypt, encrypt
 from app.models.entities import MailAccount, User, Website, WebsiteAlias
 from app.services import addons, panel_settings, site_users
 from app.services.shell import shell
@@ -64,6 +74,14 @@ LOCAL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$")
 DOMAIN_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$")
 # Client ports, as the helper opens them.
 PORTS = {"imap": 993, "pop3": 995, "smtps": 465, "submission": 587}
+SETTINGS_KEY = "mail"
+RSPAMD_KEY_FILE = Path("/etc/bpanel/rspamd-controller.key")
+RSPAMD_CONTROLLER = "http://127.0.0.1:11334"
+ADDRESS_RE = re.compile(r"^[A-Za-z0-9._%+=-]{1,64}@[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$")
+# One SPF mechanism of a smarthost, such as include:spf.smtp2go.com or ip4:192.0.2.0/24.
+SPF_TERM_RE = re.compile(r"^[+?~-]?(include|a|mx|ip4|ip6|exists):[A-Za-z0-9._:/%{}-]{1,200}$")
+RELAY_SECURITY = ("starttls", "ssl")
+MAX_ALLOW = 5000
 
 
 class MailError(Exception):
@@ -100,8 +118,10 @@ def hostname() -> str:
 
 
 def install() -> dict:
-    """Install Exim, Dovecot and the webmail, and prove they answer. Raises if not."""
+    """Install Exim, Dovecot, Rspamd and the webmail, and prove they answer.
+    Then the spam filter and the smarthost as they were last saved. Raises if not."""
     shell.privileged("mail-install", helper_args=[hostname()], fallback=["true"], timeout=1500)
+    apply_settings()
     return server_status()
 
 
@@ -117,14 +137,15 @@ def server_status() -> dict:
         check=False,
         fallback=["bash", "-lc", "echo installed=no"],
     )
-    info = {"installed": False, "exim": False, "dovecot": False, "webmail": False, "port_open": False, "hostname": ""}
+    info = {"installed": False, "exim": False, "dovecot": False, "webmail": False, "port_open": False, "hostname": "",
+            "rspamd": False, "spam_filter": False, "relay": ""}
     for line in (result.stdout or "").splitlines():
         key, _, value = line.partition("=")
         key, value = key.strip(), value.strip()
-        if key in {"installed", "exim", "dovecot", "webmail", "port_open"}:
+        if key in {"installed", "exim", "dovecot", "webmail", "port_open", "rspamd", "spam_filter"}:
             info[key] = value == "yes"
-        elif key == "hostname":
-            info["hostname"] = value
+        elif key in {"hostname", "relay"}:
+            info[key] = value
     return info
 
 
@@ -429,6 +450,294 @@ def sync_quietly(db: Session) -> dict | None:
         return None
 
 
+# --- settings: the spam filter and the smarthost --------------------------------------------
+
+def _stored() -> dict:
+    data = panel_settings._read_raw_lenient().get(SETTINGS_KEY)
+    return data if isinstance(data, dict) else {}
+
+
+def _store(section: str, value: dict) -> None:
+    raw = panel_settings._read_raw()
+    current = raw.get(SETTINGS_KEY) if isinstance(raw.get(SETTINGS_KEY), dict) else {}
+    current[section] = value
+    raw[SETTINGS_KEY] = current
+    panel_settings._write_raw(raw)
+
+
+def _score(value, default: float) -> float:
+    try:
+        return round(float(value), 2)
+    except (TypeError, ValueError):
+        return default
+
+
+def spam_settings() -> dict:
+    stored = _stored().get("spam")
+    stored = stored if isinstance(stored, dict) else {}
+    allow = [str(item) for item in stored.get("allow") or [] if str(item).strip()]
+    return {
+        "enabled": stored.get("enabled", True) is not False,
+        "allow": allow,
+        "reject_score": _score(stored.get("reject_score"), 15.0),
+        "junk_score": _score(stored.get("junk_score"), 6.0),
+    }
+
+
+def _split_allow(entries: list[str]) -> tuple[list[str], list[str], list[str]]:
+    """An allowlist as typed -> (addresses, domains, the cleaned list)."""
+    senders, domains, cleaned = [], [], []
+    for entry in entries or []:
+        item = str(entry).strip().lower()
+        if not item or item in cleaned:
+            continue
+        if "@" in item:
+            if not ADDRESS_RE.fullmatch(item):
+                raise MailError("Each allowlist line is an email address or a domain, such as friend@example.com or example.com.")
+            senders.append(item)
+        else:
+            try:
+                item = normalize_domain(item)
+            except MailError as exc:
+                raise MailError("Each allowlist line is an email address or a domain, such as friend@example.com or example.com.") from exc
+            domains.append(item)
+        cleaned.append(item)
+    if len(cleaned) > MAX_ALLOW:
+        raise MailError("The allowlist is limited to 5000 lines.")
+    return senders, domains, cleaned
+
+
+def _apply_spam(settings: dict) -> None:
+    senders, domains, _ = _split_allow(settings["allow"])
+    body = {"enabled": settings["enabled"], "senders": senders, "domains": domains,
+            "reject_score": settings["reject_score"], "junk_score": settings["junk_score"]}
+    try:
+        shell.privileged("mail-spam-set", input=json.dumps(body), fallback=["true"], timeout=180)
+    except RuntimeError as exc:
+        raise MailError(_helper_message(exc), status=502) from exc
+
+
+def save_spam(enabled: bool, allow: list[str], reject_score: float, junk_score: float) -> dict:
+    _, _, cleaned = _split_allow(allow)
+    reject, junk = _score(reject_score, 15.0), _score(junk_score, 6.0)
+    if not (0 < junk < reject <= 100):
+        raise MailError("The Junk score must be above 0 and below the reject score, which is at most 100.")
+    settings = {"enabled": bool(enabled), "allow": cleaned, "reject_score": reject, "junk_score": junk}
+    if active():
+        _apply_spam(settings)
+    _store("spam", settings)
+    return spam_settings()
+
+
+def relay_settings(*, with_password: bool = False) -> dict:
+    stored = _stored().get("relay")
+    stored = stored if isinstance(stored, dict) else {}
+    port = stored.get("port")
+    result = {
+        "enabled": bool(stored.get("enabled")),
+        "host": str(stored.get("host") or ""),
+        "port": port if isinstance(port, int) and 1 <= port <= 65535 else 587,
+        "security": stored.get("security") if stored.get("security") in RELAY_SECURITY else "starttls",
+        "username": str(stored.get("username") or ""),
+        "has_password": bool(stored.get("password")),
+        "spf_include": str(stored.get("spf_include") or ""),
+    }
+    if with_password:
+        try:
+            result["password"] = decrypt(stored.get("password")) if stored.get("password") else ""
+        except RuntimeError:
+            result["password"] = ""
+    return result
+
+
+def spf_include() -> str:
+    """The smarthost's SPF mechanisms, when mail goes out through one."""
+    if not active():
+        return ""
+    relay = relay_settings()
+    return relay["spf_include"] if relay["enabled"] else ""
+
+
+def check_spf_include(value: str) -> str:
+    terms = (value or "").split()
+    if len(" ".join(terms)) > 255 or not all(SPF_TERM_RE.fullmatch(term) for term in terms):
+        raise MailError("The SPF part is one or more mechanisms such as include:spf.smtp2go.com or ip4:192.0.2.1.")
+    return " ".join(terms)
+
+
+def _apply_relay(settings: dict, password: str) -> None:
+    body = {"enabled": settings["enabled"], "host": settings["host"], "port": settings["port"],
+            "security": settings["security"], "username": settings["username"], "password": password}
+    try:
+        shell.privileged("mail-relay-set", input=json.dumps(body), sensitive=True, fallback=["true"], timeout=120)
+    except RuntimeError as exc:
+        raise MailError(_helper_message(exc), status=502) from exc
+
+
+def save_relay(db: Session, *, enabled: bool, host: str, port: int, security: str, username: str,
+               password: str | None, spf_include_value: str) -> dict:
+    """Send outgoing mail through a smarthost, or straight out again.
+
+    An empty password keeps the saved one. Turning the relay off keeps the
+    host and credentials, so turning it on again is one click. When the SPF
+    record changes, every zone still publishing the old one follows.
+    """
+    current = relay_settings(with_password=True)
+    host = (host or "").strip().lower().rstrip(".")
+    username = (username or "").strip()
+    secret = password if password else current.get("password", "")
+    settings = {"enabled": bool(enabled), "host": host, "port": int(port), "security": security,
+                "username": username, "spf_include": check_spf_include(spf_include_value)}
+    if enabled:
+        try:
+            ipaddress.ip_address(host)
+            raise MailError("Give the smarthost by name, such as smtp.example.com: its certificate is checked against it.")
+        except ValueError:
+            pass
+        if not DOMAIN_RE.fullmatch(host):
+            raise MailError("Give the smarthost by name, such as smtp.example.com: its certificate is checked against it.")
+        if security not in RELAY_SECURITY:
+            raise MailError("Choose STARTTLS or SSL for the smarthost.")
+        if not 1 <= int(port) <= 65535:
+            raise MailError("The smarthost port is a number from 1 to 65535.")
+        for value in (username, secret):
+            if not value or value != value.strip() or any(ord(char) < 32 or ord(char) == 127 for char in value):
+                raise MailError("Enter the smarthost's user name and password. Neither can start or end with a space.")
+    old_spf = _spf_now()
+    if active():
+        _apply_relay(settings, secret)
+    stored = dict(settings)
+    stored["password"] = encrypt(secret) if secret else ""
+    _store("relay", stored)
+    new_spf = _spf_now()
+    zones: list[str] = []
+    if old_spf != new_spf:
+        from app.services import dns
+
+        try:
+            zones = dns.replace_spf(db, old_spf, new_spf)
+        except (dns.DnsError, dns.DnsInputError) as exc:
+            logger.warning("SPF not updated in the zones: %s", exc)
+    return {"relay": relay_settings(), "spf": new_spf, "zones_updated": zones}
+
+
+def _spf_now() -> str:
+    from app.services import dns
+
+    return dns.spf_record()
+
+
+def relay_test(to: str) -> list[str]:
+    """Send one message now and return what Exim logged for it."""
+    address = (to or "").strip()
+    if not ADDRESS_RE.fullmatch(address.lower()):
+        raise MailError("Enter the address to send the test message to.")
+    result = shell.privileged("mail-relay-test", helper_args=[address], check=False, fallback=["true"], timeout=150)
+    if result.returncode != 0:
+        lines = [line for line in (result.stderr or "").splitlines() if line.startswith("bpanel-helper: ")]
+        raise MailError(lines[-1][len("bpanel-helper: "):] if lines else "The test message could not be sent.", status=502)
+    return [line for line in (result.stdout or "").splitlines() if line.strip()]
+
+
+def apply_settings() -> None:
+    """The saved spam filter and smarthost, onto a freshly installed server."""
+    _apply_spam(spam_settings())
+    relay = relay_settings(with_password=True)
+    if relay["enabled"] and relay["password"]:
+        _apply_relay(relay, relay["password"])
+
+
+def admin_settings() -> dict:
+    from app.services import dns
+
+    return {"spam": spam_settings(), "relay": relay_settings(), "spf": dns.spf_record()}
+
+
+# --- the filtering log (Rspamd's history) -------------------------------------------------
+
+LOG_VIEWS = {
+    "blocked": {"reject", "soft reject"},
+    "spam": {"add header", "rewrite subject"},
+    "all": None,
+}
+
+
+def _controller(path: str):
+    try:
+        key = RSPAMD_KEY_FILE.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise MailError("The spam filter is not set up on this server. Reinstall the Email addon.", status=503) from exc
+    request = urllib.request.Request(RSPAMD_CONTROLLER + path, headers={"Password": key})
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:  # noqa: S310 - fixed loopback URL
+            return json.loads(response.read().decode("utf-8"))
+    except (OSError, ValueError, urllib.error.URLError) as exc:
+        raise MailError("The spam filter is not answering. Check that Rspamd is running.", status=502) from exc
+
+
+def _as_list(value) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value if item]
+    return [str(value)] if value else []
+
+
+def _log_row(row: dict, recipients: list[str]) -> dict:
+    symbols = row.get("symbols") if isinstance(row.get("symbols"), dict) else {}
+    reasons = []
+    for name, info in symbols.items():
+        info = info if isinstance(info, dict) else {}
+        score = _score(info.get("score"), 0.0)
+        if score:
+            reasons.append({"name": str(name), "score": score,
+                            "options": [str(option) for option in _as_list(info.get("options"))][:3]})
+    reasons.sort(key=lambda item: -abs(item["score"]))
+    sender_mime = _as_list(row.get("sender_mime"))
+    return {
+        "time": int(_score(row.get("unix_time"), 0.0)),
+        "action": str(row.get("action") or ""),
+        "score": _score(row.get("score"), 0.0),
+        "required": _score(row.get("required_score"), 0.0),
+        "from": sender_mime[0] if sender_mime else str(row.get("sender_smtp") or ""),
+        "envelope_from": str(row.get("sender_smtp") or ""),
+        "to": recipients,
+        "subject": str(row.get("subject") or ""),
+        "ip": str(row.get("ip") or ""),
+        "size": int(_score(row.get("size"), 0.0)),
+        "reasons": reasons[:15],
+        "allowed": any(str(name).startswith("BPANEL_ALLOW") for name in symbols),
+    }
+
+
+def spam_log(db: Session, user: User, view: str = "blocked", limit: int = 200) -> dict:
+    """What the spam filter decided, newest first. A customer sees only mail
+    to their own domains, and only their own recipients on it."""
+    if view not in LOG_VIEWS:
+        view = "blocked"
+    settings = spam_settings()
+    if not settings["enabled"]:
+        return {"enabled": False, "rows": []}
+    data = _controller("/history")
+    rows = data.get("rows") if isinstance(data, dict) else []
+    admin = is_admin_role(user.role)
+    mine = set() if admin else set(domains_for(db, user)) | {account.domain for account in visible_accounts(db, user)}
+    wanted = LOG_VIEWS[view]
+    result = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        if wanted is not None and str(row.get("action") or "") not in wanted:
+            continue
+        recipients = _as_list(row.get("rcpt_smtp")) or _as_list(row.get("rcpt_mime"))
+        if not admin:
+            recipients = [item for item in recipients if item.rpartition("@")[2].lower() in mine]
+            if not recipients:
+                continue
+        result.append(_log_row(row, recipients))
+    result.sort(key=lambda item: -item["time"])
+    return {"enabled": True, "rows": result[: max(1, min(int(limit), 500))],
+            "thresholds": {"reject": settings["reject_score"], "junk": settings["junk_score"]}}
+
+
 # --- what a customer needs to know -------------------------------------------------
 
 def webmail_hosts() -> set[str]:
@@ -454,7 +763,7 @@ def domain_overview(db: Session, user: User) -> list[dict]:
     for domain in sorted(counts):
         records = [
             {"name": domain, "type": "MX", "value": f"10 {server}"},
-            {"name": domain, "type": "TXT", "value": "v=spf1 a mx ~all"},
+            {"name": domain, "type": "TXT", "value": dns.spf_record()},
             {"name": f"_dmarc.{domain}", "type": "TXT", "value": "v=DMARC1; p=none"},
             {"name": f"webmail.{domain}", "type": "A", "value": dns.default_zone_ip()},
         ]

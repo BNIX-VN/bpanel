@@ -467,3 +467,47 @@ def test_port_53_opens_with_the_addon_and_closes_without_it():
     remove = HELPER.split("remove_dns() {")[1].split("\n}\n")[0]
     assert "printf '53 tcp\\n53 udp\\n' >\"$FIREWALL_ADDON_PORTS_DIR/dns.ports\"" in install
     assert 'rm -f "$FIREWALL_ADDON_PORTS_DIR/dns.ports"' in remove
+
+
+# --- the template for new zones (operator, 2026-09-29: "Custom spf/dns mẫu") ------------------
+
+def test_the_default_template_makes_the_zone_directadmin_would(env):
+    zone = dns.create_zone(env.db, "mau.vn", None)
+    assert env.fake.rrset(zone, "mau.vn.", "A") == ["203.0.113.10"]
+    assert env.fake.rrset(zone, "www.mau.vn.", "A") == ["203.0.113.10"]
+    assert env.fake.rrset(zone, "mail.mau.vn.", "A") == ["203.0.113.10"]
+    assert env.fake.rrset(zone, "mau.vn.", "MX") == ["10 mail.mau.vn."]
+    assert env.fake.rrset(zone, "mau.vn.", "TXT") == ['"v=spf1 a mx ~all"']
+
+
+def test_a_template_of_ones_own_is_used_for_new_zones(env):
+    template = "@ A {ip}\nshop CNAME {domain}\n@ MX 20 mx.provider.net\n@ TXT v=spf1 include:_spf.google.com ~all\n@ CAA 0 issue letsencrypt.org\n"
+    response = env.client.put("/api/dns/settings", headers=env.as_("owner"), json={
+        "nameservers": ["ns1.bnix.vn", "ns2.bnix.vn"], "zone_ip": "203.0.113.10", "ttl": 3600, "auto_zone": True,
+        "template": template})
+    assert response.status_code == 200 and response.json()["template"] == template
+    zone = dns.create_zone(env.db, "rieng.vn", None)
+    assert env.fake.rrset(zone, "shop.rieng.vn.", "CNAME") == ["rieng.vn."]
+    assert env.fake.rrset(zone, "rieng.vn.", "MX") == ["20 mx.provider.net."]
+    assert env.fake.rrset(zone, "rieng.vn.", "CAA") == ['0 issue "letsencrypt.org"']
+    assert env.fake.rrset(zone, "www.rieng.vn.", "A") is None
+
+
+def test_a_template_line_that_makes_no_record_is_refused_with_its_number(env):
+    response = env.client.put("/api/dns/settings", headers=env.as_("owner"), json={
+        "nameservers": ["ns1.bnix.vn", "ns2.bnix.vn"], "zone_ip": "203.0.113.10", "ttl": 3600, "auto_zone": True,
+        "template": "@ A {ip}\n# a comment\nwww A not-an-ip\n"})
+    assert response.status_code == 400
+    assert response.json()["detail"].startswith("Line 3: An A record points at an IPv4 address")
+
+
+def test_saving_the_settings_from_an_older_page_keeps_the_template(env):
+    env.stored["dns"]["template"] = "@ A {ip}\n"
+    response = env.client.put("/api/dns/settings", headers=env.as_("owner"), json={
+        "nameservers": ["ns1.bnix.vn", "ns2.bnix.vn"], "zone_ip": "203.0.113.10", "ttl": 3600, "auto_zone": True})
+    assert response.json()["template"] == "@ A {ip}\n"
+
+
+def test_template_lines_needing_an_address_wait_for_one(env):
+    records = dns.template_records(dns.DEFAULT_TEMPLATE, "x.vn", "", 3600)
+    assert [(r["name"], r["type"]) for r in records] == [("@", "MX"), ("@", "TXT")]
