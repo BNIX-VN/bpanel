@@ -195,10 +195,17 @@ def test_the_file_list_says_when_each_file_was_changed():
 
 
 def test_a_scan_from_the_history_opens_its_own_page():
-    """Clicking a past run used to unfold its details at the foot of a long page."""
+    """Clicking a past run used to unfold its details at the foot of a long page.
+
+    As in OPanel it opens as a sub-page of the scanner, with a back button on
+    the left; the address it used to have (/malware-scan) shows the scanner.
+    """
+    malware = APP.split("  function renderMalware() {")[1].split("\n  function ")[0]
+    assert "onClick={() => openMalwareScanDetail(job)}" in malware
+    assert "if (malwareDetailJob) {" in malware
+    assert "<button className=\"secondary\" onClick={() => setMalwareDetailJob(null)}><ArrowLeft size={14}/> {t('Malware scanner')}</button>" in malware
     assert "'malware-scan': '/malware-scan'" in APP
-    assert "onClick={() => { showMalwareScanJob(job); navigateToPage('malware-scan'); }}" in APP
-    assert "if (page === 'malware-scan') {" in APP
+    assert "!['malware', 'malware-scan'].includes(page)" in APP
 
 
 def test_updating_wordpress_asks_first():
