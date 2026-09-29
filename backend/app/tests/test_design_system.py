@@ -130,11 +130,16 @@ def test_sign_out_lives_in_the_account_menu():
 
 def test_the_create_website_form_is_not_in_front_of_the_list():
     """Making a site is occasional; finding one is why the page gets opened.
-    The form was four hundred pixels of it above the list."""
+    The form was four hundred pixels of it above the list. As in OPanel it is
+    a create-panel section, closed by an icon-only X, and "New website" on
+    the list (or its empty state) opens it."""
     assert "const [createFormOpen, setCreateFormOpen] = useState(false);" in APP
     assert "const createOpen = createFormOpen || websites.length === 0;" in APP
     # An empty panel is the exception: there the form is the only thing to do.
-    assert "{createOpen && <section className=\"section create-site-section\">" in APP
+    assert "{createOpen && <section className=\"section create-panel\">" in APP
+    page = APP.split("  function renderWebsites() {")[1].split("  function renderSsl() {")[0]
+    assert 'className="secondary icon-only mini" onClick={() => setCreateFormOpen(false)}' in page
+    assert "action={{ label: t('New website'), icon: Plus, onClick: openCreate }}" in page
 
 
 def test_a_label_from_an_array_goes_through_the_dictionary():
@@ -196,10 +201,28 @@ def test_a_scan_from_the_history_opens_its_own_page():
     assert "if (page === 'malware-scan') {" in APP
 
 
+def test_updating_wordpress_asks_first():
+    """The card's Update button ran core, plugins and themes at once. As in
+    OPanel it opens the inline WordPress panel, and "Update All" there runs it."""
+    page = APP.split("  function renderWebsites() {")[1].split("  function renderSsl() {")[0]
+    card = page.split('<div className="site-feature-actions">')[1].split("</article>")[0]
+    assert "onClick={() => openWordPressUpdate(site)}" in card and "updateWordPressAll" not in card
+    panel = page.split('<div className="wp-manager-panel">')[1]
+    assert "onClick={() => updateWordPressAll(site)}><RefreshCw size={14}/> {t('Update All')}" in panel
+
+
 def test_a_cron_schedule_is_picked_rather_than_typed():
-    assert "const CRON_SCHEDULE_PRESETS = [" in APP
-    assert "{CRON_SCHEDULE_PRESETS.map(([value, label]) => <option key={value} value={value}>{t(label)}</option>)}" in APP
-    assert "<option value=\"custom\">{t('Custom...')}</option>" in APP
+    """OPanel's schedule picker: a preset dropdown beside the raw expression,
+    both always there; typing in the expression switches it to "Custom…".
+    The list names each schedule and shows the expression beside it."""
+    assert "const CRON_PRESETS = [" in APP
+    picker = APP.split("  function renderSchedulePicker(key, value, onChange, inputId) {")[1].split("\n  }\n")[0]
+    assert '<div className="schedule-picker">' in picker
+    assert "{CRON_PRESETS.map(([expr, label]) => <option key={expr} value={expr}>{t(label)}</option>)}" in picker
+    assert "<option value=\"custom\">{t('Custom…')}</option>" in picker
+    cron = APP.split("  function renderCron() {")[1].split("\n  }\n")[0]
+    assert "renderSchedulePicker('cron', cronSchedule, setCronSchedule, 'cron-schedule-input')" in cron
+    assert '<code className="cron-expr">{item.schedule}</code>' in cron
 
 
 def test_a_new_page_opens_at_its_top():
