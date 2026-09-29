@@ -529,7 +529,8 @@ def save_spam(enabled: bool, allow: list[str], reject_score: float, junk_score: 
     return spam_settings()
 
 
-def relay_settings(*, with_password: bool = False) -> dict:
+def relay_settings() -> dict:
+    """The smarthost as the page shows it: whether a password is saved, never the password."""
     stored = _stored().get("relay")
     stored = stored if isinstance(stored, dict) else {}
     port = stored.get("port")
@@ -542,12 +543,23 @@ def relay_settings(*, with_password: bool = False) -> dict:
         "has_password": bool(stored.get("password")),
         "spf_include": str(stored.get("spf_include") or ""),
     }
-    if with_password:
-        try:
-            result["password"] = decrypt(stored.get("password")) if stored.get("password") else ""
-        except RuntimeError:
-            result["password"] = ""
     return result
+
+
+def _relay_password() -> str:
+    """The saved smarthost password, for the mail server only.
+
+    Kept out of relay_settings() altogether: that dict reaches the page, the
+    SPF record and from there the audit log.
+    """
+    stored = _stored().get("relay")
+    encrypted = stored.get("password") if isinstance(stored, dict) else ""
+    if not encrypted:
+        return ""
+    try:
+        return decrypt(encrypted)
+    except RuntimeError:
+        return ""
 
 
 def spf_include() -> str:
@@ -582,10 +594,9 @@ def save_relay(db: Session, *, enabled: bool, host: str, port: int, security: st
     host and credentials, so turning it on again is one click. When the SPF
     record changes, every zone still publishing the old one follows.
     """
-    current = relay_settings(with_password=True)
     host = (host or "").strip().lower().rstrip(".")
     username = (username or "").strip()
-    secret = password if password else current.get("password", "")
+    secret = password if password else _relay_password()
     settings = {"enabled": bool(enabled), "host": host, "port": int(port), "security": security,
                 "username": username, "spf_include": check_spf_include(spf_include_value)}
     if enabled:
@@ -642,9 +653,10 @@ def relay_test(to: str) -> list[str]:
 def apply_settings() -> None:
     """The saved spam filter and smarthost, onto a freshly installed server."""
     _apply_spam(spam_settings())
-    relay = relay_settings(with_password=True)
-    if relay["enabled"] and relay["password"]:
-        _apply_relay(relay, relay["password"])
+    relay = relay_settings()
+    secret = _relay_password()
+    if relay["enabled"] and secret:
+        _apply_relay(relay, secret)
 
 
 def admin_settings() -> dict:
