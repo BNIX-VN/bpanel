@@ -179,10 +179,10 @@ def save_relay(payload: RelayIn, request: Request, db: Session = Depends(get_db)
     result = _answer(lambda: mail.save_relay(
         db, enabled=payload.enabled, host=payload.host, port=payload.port, security=payload.security,
         username=payload.username, password=payload.password, spf_include_value=payload.spf_include))
-    relay = result["relay"]
+    # Logged from the request's own host and port, never from what came back
+    # out of the function the password went into.
     log_action(db, current_user.id, "mail_relay_settings",
-               f"{relay['host']}:{relay['port']}" if relay["enabled"] else "off",
-               f"spf zones updated {len(result['zones_updated'])}", request=request)
+               f"{payload.host.strip().lower()}:{payload.port}" if payload.enabled else "off", "", request=request)
     return result
 
 
