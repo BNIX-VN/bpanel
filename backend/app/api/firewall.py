@@ -47,6 +47,12 @@ def reload_firewall(current_user: User = Depends(get_current_user)):
     return _result(firewall.reload())
 
 
+@router.post("/repair")
+def repair_firewall(current_user: User = Depends(get_current_user)):
+    _require_admin(current_user)
+    return _result(firewall.repair())
+
+
 @router.post("/allow-port")
 def allow_port(payload: FirewallPortRule, current_user: User = Depends(get_current_user)):
     _require_admin(current_user)
