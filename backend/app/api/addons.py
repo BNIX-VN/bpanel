@@ -103,9 +103,15 @@ def install_addon(slug: str, db: Session = Depends(get_db), current_user: User =
     if slug == addons.DNS:
         # Every domain already on the server gets its zone now.
         dns.sync_quietly(db)
-    if slug in (addons.MAIL, addons.DNS):
-        # Mailboxes made before the addon was last removed come back; with DNS
-        # on as well, their domains' DKIM records are published.
+    if slug == addons.MAIL:
+        # Mail domains made before the addon was last removed come back, with
+        # their DKIM keys.
+        try:
+            mail.after_install(db)
+        except mail.MailError:
+            db.rollback()
+    if slug == addons.DNS:
+        # With Email on as well, its domains' records go into their new zones.
         mail.sync_quietly(db)
     if slug == addons.DEMO:
         # Accounts chosen before the addon was last removed get their public

@@ -161,20 +161,16 @@ def create_user_backup(user: User, db) -> str:
             },
             "websites": [],
             "applications": [],
-            # Email addon: each mailbox and its password hash; the mail itself
-            # is under mail/<domain>/<name> in the archive.
-            "mail": [],
         }
+        # Email addon: the account's mail domains, mailboxes (password hashes)
+        # and forwarders; the mail itself is under mail/<domain>/<name>.
+        from app.services import mail
+
+        manifest["mail"] = mail.backup_manifest(db, user)
         mail_boxes: list[tuple[str, Path]] = []
         linux_user = site_users.linux_user_for_panel_username(user.username)
         for account in (db.query(MailAccount).filter(MailAccount.owner_id == user.id)
                         .order_by(MailAccount.domain, MailAccount.local_part).all()):
-            manifest["mail"].append({
-                "local_part": account.local_part,
-                "domain": account.domain,
-                "password_hash": account.password_hash,
-                "quota_mb": account.quota_mb,
-            })
             mail_boxes.append((f"mail/{account.domain}/{account.local_part}",
                                Path(f"/home/{linux_user}/mail/{account.domain}/{account.local_part}")))
 
@@ -784,7 +780,7 @@ def restore_user_backup(backup_file: str, db) -> dict:
             _safe_extract_prefix(archive, f"mail/{domain}/{local}", stage)
             return stage if any(stage.iterdir()) else None
 
-        restored_mail = mail.restore_accounts(db, user, manifest.get("mail") or [], stage_mail)
+        restored_mail = mail.restore_manifest(db, user, manifest.get("mail") or {}, stage_mail)
 
     db.commit()
     # DNS Manager: the restored domains get their zones, owned by the account.

@@ -79,6 +79,7 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setattr(addons, "ADDONS_DIR", tmp_path)
     monkeypatch.setattr(addons, "ADDONS_FILE", tmp_path / "addons.json")
     monkeypatch.setattr(server_network, "ipv4_addresses", lambda: ["203.0.113.10"])
+    monkeypatch.setattr(server_network, "ipv6_addresses", lambda: [])
     fake = FakePowerDNS()
     monkeypatch.setattr(dns, "_request", fake)
     monkeypatch.setattr(dns, "server_status", lambda: {"installed": True, "running": True, "api": True,
@@ -180,7 +181,8 @@ def test_a_new_zone_is_a_full_zone(env):
     assert env.fake.rrset("example.com", "www.example.com.", "A") == ["203.0.113.10"]
     assert env.fake.rrset("example.com", "mail.example.com.", "A") == ["203.0.113.10"]
     assert env.fake.rrset("example.com", "example.com.", "MX") == ["10 mail.example.com."]
-    assert env.fake.rrset("example.com", "example.com.", "TXT") == ['"v=spf1 a mx ~all"']
+    # This server by name and by address (the same SPF the Email addon suggests).
+    assert env.fake.rrset("example.com", "example.com.", "TXT") == ['"v=spf1 mx a ip4:203.0.113.10 ~all"']
     assert env.fake.rrset("example.com", "example.com.", "SOA")[0].startswith("ns1.bnix.vn. hostmaster.example.com.")
     assert env.db.query(DnsZone).filter_by(name="example.com").one().owner_id == env.user("khach").id
     assert "SOA" not in {record["type"] for record in dns.records("example.com")}
@@ -271,7 +273,10 @@ def test_a_customer_sees_and_edits_only_their_own_zones(env):
     added = env.client.post("/api/dns/zones/mine.vn/records", headers=env.as_("khach"),
                             json={"name": "x", "type": "A", "content": "203.0.113.9"})
     assert added.status_code == 200
-    assert {"name": "x", "type": "A", "ttl": 3600, "content": "203.0.113.9", "priority": None} in added.json()["records"]
+    row = next(r for r in added.json()["records"] if r["name"] == "x")
+    assert (row["type"], row["ttl"], row["content"], row["value"], row["priority"], row["locked"]) == (
+        "A", 3600, "203.0.113.9", "203.0.113.9", None, False)
+    assert row["fqdn"] == "x.mine.vn" and row["mail"] == ""
 
 
 def test_only_an_administrator_creates_zones_and_changes_settings(env):
@@ -477,7 +482,7 @@ def test_the_default_template_makes_the_zone_directadmin_would(env):
     assert env.fake.rrset(zone, "www.mau.vn.", "A") == ["203.0.113.10"]
     assert env.fake.rrset(zone, "mail.mau.vn.", "A") == ["203.0.113.10"]
     assert env.fake.rrset(zone, "mau.vn.", "MX") == ["10 mail.mau.vn."]
-    assert env.fake.rrset(zone, "mau.vn.", "TXT") == ['"v=spf1 a mx ~all"']
+    assert env.fake.rrset(zone, "mau.vn.", "TXT") == ['"v=spf1 mx a ip4:203.0.113.10 ~all"']
 
 
 def test_a_template_of_ones_own_is_used_for_new_zones(env):
@@ -511,3 +516,46 @@ def test_saving_the_settings_from_an_older_page_keeps_the_template(env):
 def test_template_lines_needing_an_address_wait_for_one(env):
     records = dns.template_records(dns.DEFAULT_TEMPLATE, "x.vn", "", 3600)
     assert [(r["name"], r["type"]) for r in records] == [("@", "MX"), ("@", "TXT")]
+
+
+# --- the DNS page, laid out like OPanel's ------------------------------------------------------------
+
+def test_the_overview_gives_every_account_the_nameservers_and_default_ttl(env):
+    view = env.client.get("/api/dns/overview", headers=env.as_("khach")).json()
+    assert view["nameservers"] == ["ns1.bnix.vn", "ns2.bnix.vn"] and view["default_ttl"] == 3600
+    assert view["is_admin"] is False and view["addresses"]["ipv4"][0] == "203.0.113.10"
+
+
+def test_the_zone_list_is_searched_paged_and_says_what_left_the_panel(env):
+    for name in ("khach.vn", "zzz-gone.vn", "other.vn"):
+        dns.create_zone(env.db, name, env.user("owner").id)
+    _website(env, "khach.vn", "khach")
+    _website(env, "shop.other.vn", "owner")
+    listed = env.client.get("/api/dns/zones?q=vn&per_page=2&page=1", headers=env.as_("owner")).json()
+    assert listed["total"] == 3 and [z["name"] for z in listed["items"]] == ["khach.vn", "other.vn"]
+    second = env.client.get("/api/dns/zones?q=vn&per_page=2&page=2", headers=env.as_("owner")).json()
+    assert [(z["name"], z["on_panel"]) for z in second["items"]] == [("zzz-gone.vn", False)]
+    assert listed["items"][0]["on_panel"] is True and listed["items"][0]["created_at"]
+    assert [z["name"] for z in env.client.get("/api/dns/zones?q=other", headers=env.as_("owner")).json()["items"]] == ["other.vn"]
+
+
+def test_restoring_puts_back_the_panels_records_and_keeps_the_owners(env):
+    zone = dns.create_zone(env.db, "khach.vn", env.user("khach").id)
+    dns.delete_record(zone, {"name": "www", "type": "A", "content": "203.0.113.10"}, admin=False)
+    dns.add_record(zone, {"name": "shop", "type": "CNAME", "content": "shops.example.net"}, admin=False)
+    apex = "khach.vn."
+    env.fake.zones[apex] = [r for r in env.fake.zones[apex] if not (r["name"] == apex and r["type"] == "NS")]
+    restored = env.client.post("/api/dns/zones/khach.vn/defaults", headers=env.as_("khach"))
+    assert restored.status_code == 200
+    assert env.fake.rrset("khach.vn", "www.khach.vn.", "A") == ["203.0.113.10"]
+    assert sorted(env.fake.rrset("khach.vn", apex, "NS")) == ["ns1.bnix.vn.", "ns2.bnix.vn."]
+    assert env.fake.rrset("khach.vn", "shop.khach.vn.", "CNAME") == ["shops.example.net."]
+
+
+def test_new_nameservers_go_into_every_zone(env):
+    dns.create_zone(env.db, "khach.vn", env.user("khach").id)
+    saved = env.client.put("/api/dns/settings", headers=env.as_("owner"), json={
+        "nameservers": ["ns1.newhost.vn", "ns2.newhost.vn"], "zone_ip": "203.0.113.10", "ttl": 3600, "auto_zone": True})
+    assert saved.status_code == 200, saved.text
+    assert sorted(env.fake.rrset("khach.vn", "khach.vn.", "NS")) == ["ns1.newhost.vn.", "ns2.newhost.vn."]
+    assert env.fake.rrset("khach.vn", "khach.vn.", "SOA")[0].startswith("ns1.newhost.vn. ")

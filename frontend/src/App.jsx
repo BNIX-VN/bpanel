@@ -13,7 +13,7 @@ import 'ace-builds/src-noconflict/mode-text';
 import 'ace-builds/src-noconflict/mode-yaml';
 import 'ace-builds/src-noconflict/theme-textmate';
 import 'ace-builds/src-noconflict/theme-tomorrow_night';
-import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, Eye, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle, Activity, BrickWall, Bug, LockKeyhole, PackageOpen, ScrollText, ShieldAlert, CheckCircle, Zap, Bell, Mail, Send, Cloud } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, Eye, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle, Activity, BrickWall, Bug, LockKeyhole, PackageOpen, ScrollText, ShieldAlert, CheckCircle, Zap, Bell, Mail, Send, Cloud, Inbox, Forward, ShieldCheck } from 'lucide-react';
 import { Terminal } from './components/Terminal';
 import { LANGUAGES, t, useLanguage } from './i18n.js';
 import './style.css';
@@ -310,28 +310,19 @@ const EMPTY_SITE_APP_DRAFT = {
   env: '',
 };
 const SITE_APP_KIND_LABELS = { node: 'Node.js', docker: 'Container', compose: 'Compose' };
-// DNS Manager addon: the record types it edits, and an example value for each.
-const DNS_RECORD_TYPES = ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'SRV', 'CAA'];
-const DNS_VALUE_HINTS = {
-  A: '203.0.113.10',
-  AAAA: '2001:db8::10',
-  CNAME: 'example.com',
-  MX: 'mail.example.com',
-  TXT: 'v=spf1 a mx ~all',
-  NS: 'ns1.example.com',
-  SRV: '5 5060 sip.example.com',
-  CAA: '0 issue letsencrypt.org',
+// DNS Manager addon, laid out like OPanel's: the record types, the TTLs the
+// form offers, and an example value for each type.
+const DNS_TYPES = ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'SRV', 'CAA'];
+const DNS_TTLS = [60, 300, 900, 1800, 3600, 14400, 43200, 86400];
+const DNS_PLACEHOLDERS = {
+  A: '203.0.113.10', AAAA: '2001:db8::10', CNAME: 'target.example.com', MX: 'mail.example.com',
+  TXT: 'v=spf1 mx -all', NS: 'ns1.example.net', SRV: '5 5060 sip.example.com', CAA: '0 issue letsencrypt.org',
 };
-const DNS_EMPTY_RECORD = { name: '@', type: 'A', ttl: 3600, content: '', priority: 10 };
-const MAIL_EMPTY_DRAFT = { local_part: '', domain: '', password: '', quota_mb: 1024 };
+const emptyDnsRecord = () => ({ type: 'A', name: '', value: '', priority: '', ttl: '' });
 // The SPF part of the smarthosts customers use most.
 const MAIL_SPF_INCLUDES = ['include:spf.smtp2go.com', 'include:mailgun.org', 'include:sendgrid.net', 'include:amazonses.com',
   'include:spf.brevo.com', 'include:spf.mandrillapp.com', 'include:_spf.google.com', 'include:spf.protection.outlook.com'];
-// Rspamd's action -> what the log calls it, and its badge colour.
-const MAIL_LOG_ACTIONS = {
-  reject: ['Blocked', 'bad'], 'soft reject': ['Deferred', 'warn'], 'add header': ['Sent to Junk', 'warn'],
-  'rewrite subject': ['Sent to Junk', 'warn'], 'no action': ['Delivered', 'ok'], greylist: ['Delivered', 'ok'],
-};
+
 
 const SITE_APP_KINDS = [
   ['node', 'Node.js', 'BPanel installs dependencies and keeps the process running under systemd.'],
@@ -873,26 +864,50 @@ function App() {
   // Demo mode addon: the accounts the login page offers, and the form that picks them.
   const [demoAccess, setDemoAccess] = useState({ enabled: false, accounts: [] });
   const [demoSettings, setDemoSettings] = useState(null);
-  // DNS Manager addon.
-  const [dnsZones, setDnsZones] = useState({ zones: [], nameservers: [], can_manage: false, loaded: false });
-  const [dnsZone, setDnsZone] = useState('');
-  const [dnsRecords, setDnsRecords] = useState([]);
-  const [dnsDraft, setDnsDraft] = useState(DNS_EMPTY_RECORD);
-  const [dnsEditing, setDnsEditing] = useState(null);
+  // DNS Manager addon: the zones, one zone's records, the settings.
+  const [dnsInfo, setDnsInfo] = useState(null);
+  const [dnsTab, setDnsTab] = useState('zones');
+  const [dnsZones, setDnsZones] = useState(null);
+  const [dnsQuery, setDnsQuery] = useState('');
+  const [dnsPage, setDnsPage] = useState(1);
+  const [dnsZone, setDnsZone] = useState(null);
+  const [dnsDelegation, setDnsDelegation] = useState(null);
+  const [dnsRecordForm, setDnsRecordForm] = useState(emptyDnsRecord);
+  const [dnsRecordEdit, setDnsRecordEdit] = useState(null);
+  const [dnsRecordFilter, setDnsRecordFilter] = useState('');
   const [dnsSettings, setDnsSettings] = useState(null);
   const [dnsNewZone, setDnsNewZone] = useState({ name: '', owner_id: '' });
-  const [mailData, setMailData] = useState({ accounts: [], domains: [], limit: {}, mail_domains: [], client: null, loaded: false });
-  const [mailDraft, setMailDraft] = useState(MAIL_EMPTY_DRAFT);
-  const [mailEditing, setMailEditing] = useState(null);
-  const [mailCreated, setMailCreated] = useState(null);
-  const [mailStatus, setMailStatus] = useState(null);
-  const [mailSettings, setMailSettings] = useState(null);
-  const [spamDraft, setSpamDraft] = useState(null);
-  const [relayDraft, setRelayDraft] = useState(null);
+  // Email: domains, mailboxes and forwarders, and for administrators the
+  // relays, the spam filter and the mail server.
+  const [mailInfo, setMailInfo] = useState(null);
+  const [mailTab, setMailTab] = useState('mailboxes');
+  const [mailFilter, setMailFilter] = useState({ domain_id: '', q: '' });
+  const [mailPage, setMailPage] = useState(1);
+  const [mailboxList, setMailboxList] = useState(null);
+  const [forwarderList, setForwarderList] = useState(null);
+  const [showCreateMailbox, setShowCreateMailbox] = useState(false);
+  const [mailboxForm, setMailboxForm] = useState({ domain_id: '', local_part: '', password: '', quota_mb: '' });
+  const [showCreateForwarder, setShowCreateForwarder] = useState(false);
+  const [forwarderForm, setForwarderForm] = useState({ domain_id: '', local_part: '', destinations: '' });
+  const [mailboxEdit, setMailboxEdit] = useState(null);
+  const [forwarderEdit, setForwarderEdit] = useState(null);
+  const [mailDomainForm, setMailDomainForm] = useState({ domain: '', owner_id: '' });
+  const [catchAllDraft, setCatchAllDraft] = useState({});
+  const [mailDns, setMailDns] = useState(null);
+  const [mailRelays, setMailRelays] = useState(null);
+  const [relayForm, setRelayForm] = useState(null);
   const [relayTestTo, setRelayTestTo] = useState('');
   const [relayTestLines, setRelayTestLines] = useState(null);
-  const [mailLog, setMailLog] = useState({ view: 'blocked', rows: [], enabled: true, loaded: false });
-  const [mailLogOpen, setMailLogOpen] = useState('');
+  const [rspamdView, setRspamdView] = useState('history');
+  const [rspamdStat, setRspamdStat] = useState(null);
+  const [rspamdHistory, setRspamdHistory] = useState(null);
+  const [rspamdFilter, setRspamdFilter] = useState({ q: '', action: '', page: 1 });
+  const [rspamdLog, setRspamdLog] = useState(null);
+  const [rspamdLogQuery, setRspamdLogQuery] = useState({ q: '', lines: 500 });
+  const [eximLog, setEximLog] = useState(null);
+  const [eximLogQuery, setEximLogQuery] = useState({ q: '', lines: 500 });
+  const [mailSettings, setMailSettings] = useState(null);
+  const [mailSettingsForm, setMailSettingsForm] = useState(null);
   const [demoDraft, setDemoDraft] = useState({ admin: { username: '', password: '' }, customer: { username: '', password: '' } });
   const [f2b, setF2b] = useState(null);
   // Which list the operator asked to see. Null keeps the page one screen tall
@@ -1039,6 +1054,8 @@ function App() {
     } else if (options.replace && window.location.pathname !== route) {
       window.history.replaceState({}, '', nextUrl);
     }
+    // The sidebar's DNS Manager opens the list, not the zone last looked at.
+    if (nextPage === 'dns') { setDnsZone(null); setDnsTab('zones'); }
     setPage(nextPage);
   }, []);
 
@@ -2530,67 +2547,109 @@ function App() {
     });
   }
 
-  function sameDnsRecord(a, b) {
-    return a.name === b.name && a.type === b.type && a.content === b.content && (a.priority ?? null) === (b.priority ?? null);
+  // --- DNS Manager, laid out like OPanel's: the zones, one zone, the settings ---
+  const dnsPath = zone => `/dns/zones/${encodeURIComponent(zone.name)}`;
+
+  async function loadDnsInfo() {
+    const data = await request('/dns/overview', { silent: true });
+    if (data) setDnsInfo(data);
+    return data;
   }
 
-  function dnsRecordBody(record) {
-    const withPriority = record.type === 'MX' || record.type === 'SRV';
+  async function loadDnsZones(page = dnsPage) {
+    const params = new URLSearchParams({ page: String(page), per_page: '50' });
+    if (dnsQuery.trim()) params.set('q', dnsQuery.trim());
+    const data = await request(`/dns/zones?${params}`, { silent: true });
+    if (data) setDnsZones(data);
+  }
+
+  async function loadDnsSettings() {
+    const data = await request('/dns/settings', { silent: true });
+    if (data) setDnsSettings({ ...data, ns1: data.nameservers?.[0] || '', ns2: data.nameservers?.[1] || '' });
+  }
+
+  async function openDnsZone(zone) {
+    if (page !== 'dns') navigateToPage('dns');
+    setDnsTab('zones');
+    setDnsZone({ zone, records: null });
+    setDnsDelegation(null);
+    setDnsRecordEdit(null);
+    setDnsRecordFilter('');
+    setDnsRecordForm(emptyDnsRecord());
+    const data = await request(`${dnsPath(zone)}/records`);
+    if (!data) { setDnsZone(null); return; }
+    setDnsZone({ zone, records: data.records || [] });
+    const check = await request(`${dnsPath(zone)}/delegation`, { silent: true });
+    setDnsDelegation(check || { status: 'unknown', expected: [], found: [] });
+  }
+
+  function dnsRecordBody(form) {
+    const withPriority = ['MX', 'SRV'].includes(form.type);
     return {
-      name: (record.name || '@').trim(),
-      type: record.type,
-      ttl: Number(record.ttl) || 3600,
-      content: (record.content || '').trim(),
-      priority: withPriority ? Number(record.priority) : null,
+      name: String(form.name || '').trim() || '@',
+      type: form.type,
+      ttl: Number(form.ttl) || Number(dnsInfo?.default_ttl) || 3600,
+      content: String(form.value ?? '').trim(),
+      priority: withPriority ? (String(form.priority ?? '').trim() === '' ? 10 : Number(form.priority)) : null,
     };
   }
 
-  async function loadDnsZones() {
-    const data = await request('/dns/zones', { silent: true });
+  // A record as the server listed it: how the server finds it again.
+  function dnsRecordKey(record) {
+    return { name: record.name, type: record.type, ttl: Number(record.ttl) || 3600, content: record.content, priority: record.priority ?? null };
+  }
+
+  function applyDnsRecords(data) {
+    setDnsZone(prev => (prev ? { ...prev, records: data.records || [] } : prev));
+  }
+
+  async function addDnsRecord() {
+    const data = await request(`${dnsPath(dnsZone.zone)}/records`, { method: 'POST', body: JSON.stringify(dnsRecordBody(dnsRecordForm)) }, t('Saving the record...'));
     if (!data) return;
-    setDnsZones({ ...data, loaded: true });
-    const names = (data.zones || []).map(zone => zone.name);
-    if (!names.length) { setDnsZone(''); setDnsRecords([]); return; }
-    if (!names.includes(dnsZone)) selectDnsZone(names[0]);
+    applyDnsRecords(data);
+    setDnsRecordForm(prev => ({ ...prev, name: '', value: '', priority: '' }));
+    setNotice(t('Record added.'));
   }
 
-  async function selectDnsZone(name) {
-    setDnsZone(name);
-    setDnsEditing(null);
-    setDnsDraft(prev => ({ ...DNS_EMPTY_RECORD, ttl: prev.ttl }));
-    const data = await request(`/dns/zones/${encodeURIComponent(name)}/records`);
-    setDnsRecords(data?.records || []);
-  }
-
-  async function saveDnsRecord() {
-    const path = `/dns/zones/${encodeURIComponent(dnsZone)}/records`;
-    const body = dnsRecordBody(dnsDraft);
-    const data = dnsEditing
-      ? await request(path, { method: 'PUT', body: JSON.stringify({ original: dnsRecordBody(dnsEditing), record: body }) }, t('Saving...'))
-      : await request(path, { method: 'POST', body: JSON.stringify(body) }, t('Saving...'));
+  async function saveDnsRecordEdit() {
+    const { old, form } = dnsRecordEdit;
+    const body = { original: dnsRecordKey(old), record: dnsRecordBody(form) };
+    const data = await request(`${dnsPath(dnsZone.zone)}/records`, { method: 'PUT', body: JSON.stringify(body) }, t('Saving the record...'));
     if (!data) return;
-    setDnsRecords(data.records || []);
-    setDnsEditing(null);
-    setDnsDraft(prev => ({ ...DNS_EMPTY_RECORD, type: prev.type, ttl: prev.ttl }));
-  }
-
-  function editDnsRecord(record) {
-    setDnsEditing(record);
-    setDnsDraft({ ...record, priority: record.priority ?? 10 });
-  }
-
-  function cancelDnsEdit() {
-    setDnsEditing(null);
-    setDnsDraft(prev => ({ ...DNS_EMPTY_RECORD, ttl: prev.ttl }));
+    applyDnsRecords(data);
+    setDnsRecordEdit(null);
+    setNotice(t('Record saved.'));
   }
 
   async function deleteDnsRecord(record) {
-    if (!confirm(t('Delete the {type} record {name}?', { type: record.type, name: record.name }))) return;
-    const data = await request(`/dns/zones/${encodeURIComponent(dnsZone)}/records/delete`,
-      { method: 'POST', body: JSON.stringify(dnsRecordBody(record)) }, t('Deleting...'));
+    const question = record.mail
+      ? t('The Email addon keeps this record for {domain} and writes it again when the email settings of {domain} change. Delete the {type} record of {name} anyway?', { domain: record.mail, type: record.type, name: record.name })
+      : t('Delete the {type} record of {name}: {value}?', { type: record.type, name: record.name, value: record.value });
+    if (!confirm(question)) return;
+    const data = await request(`${dnsPath(dnsZone.zone)}/records/delete`, { method: 'POST', body: JSON.stringify(dnsRecordKey(record)) }, t('Deleting the record...'));
     if (!data) return;
-    setDnsRecords(data.records || []);
-    if (dnsEditing && sameDnsRecord(dnsEditing, record)) cancelDnsEdit();
+    applyDnsRecords(data);
+    if (dnsRecordEdit?.old?.content === record.content) setDnsRecordEdit(null);
+    setNotice(t('Record deleted.'));
+  }
+
+  async function restoreDnsDefaults() {
+    if (!confirm(t('Put back the records the panel manages for {zone}: nameservers, websites and email. Records you added are kept.', { zone: dnsZone.zone.name }))) return;
+    const data = await request(`${dnsPath(dnsZone.zone)}/defaults`, { method: 'POST' }, t("Restoring the panel's records..."));
+    if (!data) return;
+    applyDnsRecords(data);
+    setNotice(t("The panel's records are back in {zone}.", { zone: dnsZone.zone.name }));
+  }
+
+  async function deleteDnsZone(zone) {
+    const typed = prompt(t('Every record of {zone} is deleted, and the domain stops resolving once its nameservers point here. Type the domain name to confirm.', { zone: zone.name }));
+    if (typed === null) return;
+    if (typed.trim().toLowerCase().replace(/\.$/, '') !== zone.name) { setError(t('The name did not match; nothing was deleted.')); return; }
+    const data = await request(dnsPath(zone), { method: 'DELETE' }, t('Deleting the zone...'));
+    if (!data) return;
+    setNotice(t('Zone {zone} deleted.', { zone: zone.name }));
+    setDnsZone(null);
+    loadDnsZones();
   }
 
   async function addDnsZone() {
@@ -2598,23 +2657,8 @@ function App() {
     const data = await request('/dns/zones', { method: 'POST', body: JSON.stringify(body) }, t('Saving...'));
     if (!data) return;
     setDnsNewZone({ name: '', owner_id: '' });
-    await loadDnsZones();
-    selectDnsZone(data.zone);
-  }
-
-  async function deleteDnsZone(name) {
-    if (!confirm(t('Delete the zone {zone} and every record in it? The domain stops resolving from this server.', { zone: name }))) return;
-    const data = await request(`/dns/zones/${encodeURIComponent(name)}`, { method: 'DELETE' }, t('Deleting...'));
-    if (!data) return;
-    if (name === dnsZone) { setDnsZone(''); setDnsRecords([]); }
     loadDnsZones();
-  }
-
-  async function loadDnsSettings() {
-    const data = await request('/dns/settings', { silent: true });
-    if (!data) return;
-    setDnsSettings(data);
-    setDnsDraft(prev => ({ ...prev, ttl: data.ttl || 3600 }));
+    openDnsZone({ name: data.zone });
   }
 
   async function syncDnsZones() {
@@ -2626,170 +2670,319 @@ function App() {
   }
 
   async function saveDnsSettings() {
+    const f = dnsSettings;
     const body = {
-      nameservers: (dnsSettings.nameservers || []).map(name => (name || '').trim()).filter(Boolean),
-      zone_ip: (dnsSettings.zone_ip || '').trim(),
-      ttl: Number(dnsSettings.ttl) || 3600,
-      auto_zone: !!dnsSettings.auto_zone,
-      template: dnsSettings.template || '',
+      nameservers: [f.ns1, f.ns2].map(name => String(name || '').trim()).filter(Boolean),
+      zone_ip: String(f.zone_ip || '').trim(),
+      ttl: Number(f.ttl) || 3600,
+      auto_zone: !!f.auto_zone,
+      template: f.template || '',
     };
-    const data = await request('/dns/settings', { method: 'PUT', body: JSON.stringify(body) }, t('Saving...'));
+    const data = await request('/dns/settings', { method: 'PUT', body: JSON.stringify(body) }, t('Saving DNS settings...'));
     if (!data) return;
-    await loadDnsSettings();
+    setNotice(t('DNS settings saved.'));
+    loadDnsSettings();
+    loadDnsInfo();
     loadDnsZones();
   }
 
-  async function loadMail() {
+  // --- Email (OPanel's structure): domains, mailboxes, forwarders ---
+  async function loadMailInfo() {
     const data = await request('/mail/overview', { silent: true });
-    if (!data) return;
-    setMailData({ ...data, loaded: true });
-    const domains = data.domains || [];
-    setMailDraft(prev => ({ ...prev, domain: domains.includes(prev.domain) ? prev.domain : (domains[0] || '') }));
+    if (data) setMailInfo(data);
+    return data;
   }
 
-  async function loadMailStatus() {
-    const data = await request('/mail/status', { silent: true });
-    if (data) setMailStatus(data);
+  function mailQuery(page) {
+    const params = new URLSearchParams({ page: String(page), per_page: '50' });
+    if (mailFilter.domain_id) params.set('domain_id', mailFilter.domain_id);
+    if (mailFilter.q.trim()) params.set('q', mailFilter.q.trim());
+    return params.toString();
   }
 
-  async function createMailbox() {
-    const body = {
-      local_part: mailDraft.local_part.trim(),
-      domain: mailDraft.domain,
-      password: mailDraft.password,
-      quota_mb: mailDraft.quota_mb === '' ? 1024 : Number(mailDraft.quota_mb) || 0,
-    };
-    const data = await request('/mail/accounts', { method: 'POST', body: JSON.stringify(body) }, t('Creating mailbox...'));
-    if (!data) return;
-    setMailCreated({ address: data.address, password: mailDraft.password });
-    setMailDraft(prev => ({ ...MAIL_EMPTY_DRAFT, domain: prev.domain, quota_mb: prev.quota_mb }));
-    loadMail();
+  async function loadMailboxes(page = mailPage) {
+    const data = await request(`/mail/mailboxes?${mailQuery(page)}`, { silent: true });
+    if (data) setMailboxList(data);
   }
 
-  async function saveMailbox() {
-    if (!mailEditing) return;
-    const body = { quota_mb: Number(mailEditing.quota_mb) || 0 };
-    if (mailEditing.password) body.password = mailEditing.password;
-    const data = await request(`/mail/accounts/${mailEditing.id}`, { method: 'PUT', body: JSON.stringify(body) }, t('Saving...'));
-    if (!data) return;
-    setNotice(mailEditing.password ? t('Saved. The new password works from now on.') : t('Saved.'));
-    setMailEditing(null);
-    loadMail();
+  async function loadForwarders(page = mailPage) {
+    const data = await request(`/mail/forwarders?${mailQuery(page)}`, { silent: true });
+    if (data) setForwarderList(data);
   }
 
-  async function deleteMailbox(account) {
-    if (!confirm(t('Delete {address} and all the mail in it? This cannot be undone.', { address: account.address }))) return;
-    const data = await request(`/mail/accounts/${account.id}`, { method: 'DELETE' }, t('Deleting...'));
-    if (!data) return;
-    if (mailEditing?.id === account.id) setMailEditing(null);
-    loadMail();
+  function refreshMail() {
+    loadMailInfo();
+    if (mailTab === 'mailboxes') loadMailboxes();
+    if (mailTab === 'forwarders') loadForwarders();
   }
 
-  async function openWebmail(account) {
-    // The tab opens on the click itself; opened after the request, a browser
-    // would take it for a pop-up.
-    const tab = window.open('', '_blank');
-    const data = await request(`/mail/accounts/${account.id}/webmail`, { method: 'POST' }, t('Opening webmail...'));
-    if (!data?.url) { tab?.close(); return; }
-    if (tab) {
-      tab.opener = null;
-      tab.location.href = data.url;
-    } else {
-      window.open(data.url, '_blank', 'noopener,noreferrer');
+  function mailPassword() {
+    // The server wants at least one letter and one digit.
+    let value = '';
+    do { value = generateRandomPassword(16); } while (!/[A-Za-z]/.test(value) || !/\d/.test(value));
+    return value;
+  }
+
+  function splitAddresses(text) {
+    return String(text || '').split(/[\s,;]+/).map(item => item.trim()).filter(Boolean);
+  }
+
+  async function addMailDomain() {
+    const domain = mailDomainForm.domain.trim().toLowerCase();
+    if (!domain) return;
+    const body = { domain };
+    if (isAdmin && mailDomainForm.owner_id) body.owner_id = Number(mailDomainForm.owner_id);
+    const data = await request('/mail/domains', { method: 'POST', body: JSON.stringify(body) }, t('Turning on email...'));
+    if (data) {
+      setMailDomainForm({ domain: '', owner_id: '' });
+      setNotice(t('Email is on for {domain}. Publish its DNS records next.', { domain: data.domain }));
+      await loadMailInfo();
+      openMailDns(data);
     }
   }
 
-  async function enableWebmailHost(domain) {
-    if (!confirm(t('webmail.{domain} has to point to this server first. Get a certificate for it now?', { domain }))) return;
-    const data = await request(`/mail/domains/${encodeURIComponent(domain)}/webmail`, { method: 'POST' }, t('Getting a certificate...'));
-    if (!data) return;
-    setNotice(t('The webmail is ready at {url}', { url: data.url }));
-    loadMail();
+  async function deleteMailDomain(domain) {
+    const typed = prompt(t('This deletes every mailbox of {domain} with all its mail, and its forwarders. It cannot be undone.\n\nType the domain name to confirm:', { domain: domain.domain }));
+    if (typed === null) return;
+    if (typed.trim().toLowerCase() !== domain.domain) { setError(t('The name did not match; nothing was deleted.')); return; }
+    const data = await request(`/mail/domains/${domain.id}?confirm=${encodeURIComponent(domain.domain)}`, { method: 'DELETE' }, t('Deleting...'));
+    if (data) {
+      setNotice(t('Email for {domain} deleted.', { domain: domain.domain }));
+      if (mailFilter.domain_id === String(domain.id)) setMailFilter(prev => ({ ...prev, domain_id: '' }));
+      refreshMail();
+    }
   }
 
-  async function disableWebmailHost(domain) {
-    if (!confirm(t('Stop serving the webmail on webmail.{domain}?', { domain }))) return;
-    const data = await request(`/mail/domains/${encodeURIComponent(domain)}/webmail`, { method: 'DELETE' }, t('Saving...'));
-    if (data) loadMail();
+  async function saveCatchAll(domain) {
+    const value = String(catchAllDraft[domain.id] ?? domain.catch_all ?? '').trim();
+    const data = await request(`/mail/domains/${domain.id}`, { method: 'PUT', body: JSON.stringify({ catch_all: value }) }, t('Saving...'));
+    if (data) {
+      setNotice(value
+        ? t('Mail to unknown addresses at {domain} now goes to {target}.', { domain: domain.domain, target: value })
+        : t('Mail to unknown addresses at {domain} is now refused.', { domain: domain.domain }));
+      setCatchAllDraft(prev => { const next = { ...prev }; delete next[domain.id]; return next; });
+      loadMailInfo();
+    }
   }
 
-  async function loadMailSettings() {
-    const data = await request('/mail/settings', { silent: true });
-    if (!data) return;
-    setMailSettings(data);
-    setSpamDraft({ ...data.spam, allow: (data.spam.allow || []).join('\n') });
-    setRelayDraft({ ...data.relay, password: '' });
+  async function rotateMailDkim(domain) {
+    if (!confirm(t('Make a new DKIM key for {domain}?\n\nMail is signed with the new key at once, so update the DKIM record in DNS right away: until you do, receivers cannot verify the signature.', { domain: domain.domain }))) return;
+    const data = await request(`/mail/domains/${domain.id}/dkim/rotate`, { method: 'POST' }, t('Creating a new key...'));
+    if (data) { setNotice(t('New DKIM key created. Update the DKIM record.')); openMailDns(domain); }
   }
 
-  async function loadMailLog(view = mailLog.view) {
-    setMailLog(prev => ({ ...prev, view }));
-    const data = await request(`/mail/spam/log?view=${encodeURIComponent(view)}&limit=200`, { silent: true });
-    if (!data) { setMailLog(prev => ({ ...prev, loaded: true, rows: [] })); return; }
-    setMailLog({ view, rows: data.rows || [], enabled: data.enabled !== false, loaded: true });
+  async function toggleWebmailHost(domain, enabled) {
+    if (enabled && !confirm(t("Serve webmail at webmail.{domain}?\n\nIts A record must already point at this server: a Let's Encrypt certificate is issued for it now.", { domain: domain.domain }))) return;
+    if (!enabled && !confirm(t("Stop serving webmail at webmail.{domain}? Webmail stays available on the server's own address.", { domain: domain.domain }))) return;
+    const data = await request(`/mail/domains/${domain.id}/webmail-host`, { method: 'POST', body: JSON.stringify({ enabled }) },
+      enabled ? t('Issuing a certificate for webmail.{domain}...', { domain: domain.domain }) : t('Removing...'));
+    if (data) {
+      setNotice(enabled ? t('Webmail is now at https://webmail.{domain}/', { domain: domain.domain }) : t('webmail.{domain} removed.', { domain: domain.domain }));
+      loadMailInfo();
+    }
   }
 
-  function spamBody(draft) {
-    return {
-      enabled: !!draft.enabled,
-      allow: String(draft.allow || '').split(/[\s,]+/).map(item => item.trim()).filter(Boolean),
-      reject_score: Number(draft.reject_score) || 15,
-      junk_score: Number(draft.junk_score) || 6,
-    };
+  async function createMailbox() {
+    const body = { domain_id: Number(mailboxForm.domain_id), local_part: mailboxForm.local_part.trim().toLowerCase(), password: mailboxForm.password };
+    if (String(mailboxForm.quota_mb).trim() !== '') body.quota_mb = Number(mailboxForm.quota_mb);
+    const data = await request('/mail/mailboxes', { method: 'POST', body: JSON.stringify(body) }, t('Creating mailbox...'));
+    if (data) {
+      setNotice(t('{address} created.', { address: data.address }));
+      setMailboxForm(prev => ({ ...prev, local_part: '', password: '' }));
+      setShowCreateMailbox(false);
+      loadMailboxes();
+      loadMailInfo();
+    }
   }
 
-  async function saveSpam() {
-    const data = await request('/mail/settings/spam', { method: 'PUT', body: JSON.stringify(spamBody(spamDraft)) }, t('Saving...'));
-    if (!data) return;
-    setNotice(data.enabled ? t('Spam filter saved.') : t('Spam filter turned off. Mail from outside is delivered unscanned.'));
-    await loadMailSettings();
-    loadMailStatus();
-    loadMailLog();
+  async function saveMailboxEdit() {
+    const edit = mailboxEdit;
+    const body = {};
+    if (edit.password) body.password = edit.password;
+    if (String(edit.quota_mb) !== String(edit.box.quota_mb)) body.quota_mb = Number(edit.quota_mb);
+    if (!Object.keys(body).length) { setMailboxEdit(null); return; }
+    const data = await request(`/mail/mailboxes/${edit.box.id}`, { method: 'PUT', body: JSON.stringify(body) }, t('Saving...'));
+    if (data) { setNotice(t('{address} saved.', { address: data.address })); setMailboxEdit(null); loadMailboxes(); }
   }
 
-  async function allowSender(value) {
-    if (!mailSettings) return;
-    if (!confirm(t('Never block mail from {sender}?', { sender: value }))) return;
-    const allow = [...(mailSettings.spam.allow || []), value];
-    const body = spamBody({ ...mailSettings.spam, allow: allow.join('\n') });
-    const data = await request('/mail/settings/spam', { method: 'PUT', body: JSON.stringify(body) }, t('Saving...'));
-    if (!data) return;
-    setNotice(t('{sender} is on the allowlist. Ask the sender to send the message again.', { sender: value }));
-    await loadMailSettings();
-    loadMailLog();
+  async function setMailboxEnabled(box, enabled) {
+    if (!enabled && !confirm(t('Suspend {address}?\n\nIt keeps receiving mail, but nobody can sign in to it or send from it until it is resumed.', { address: box.address }))) return;
+    const data = await request(`/mail/mailboxes/${box.id}`, { method: 'PUT', body: JSON.stringify({ enabled }) }, t('Saving...'));
+    if (data) { setNotice(enabled ? t('{address} resumed.', { address: box.address }) : t('{address} suspended.', { address: box.address })); loadMailboxes(); }
+  }
+
+  async function deleteMailbox(box) {
+    if (!confirm(t('Delete {address} and all of its mail?\n\nThis cannot be undone.', { address: box.address }))) return;
+    const data = await request(`/mail/mailboxes/${box.id}`, { method: 'DELETE' }, t('Deleting...'));
+    if (data) { setNotice(t('{address} deleted.', { address: box.address })); loadMailboxes(); loadMailInfo(); }
+  }
+
+  async function openWebmail(box) {
+    // Opened inside the click so no pop-up blocker stops it; the signed link
+    // arrives a moment later.
+    const win = window.open('about:blank', '_blank');
+    const data = await request(`/mail/mailboxes/${box.id}/webmail`, { method: 'POST' }, t('Opening webmail...'));
+    if (data?.url) {
+      if (win) { win.opener = null; win.location.href = data.url; } else window.location.href = data.url;
+    } else if (win) {
+      win.close();
+    }
+  }
+
+  async function createForwarder() {
+    const body = { domain_id: Number(forwarderForm.domain_id), local_part: forwarderForm.local_part.trim().toLowerCase(), destinations: splitAddresses(forwarderForm.destinations) };
+    const data = await request('/mail/forwarders', { method: 'POST', body: JSON.stringify(body) }, t('Creating forwarder...'));
+    if (data) {
+      setNotice(t('{address} now forwards to {destinations}.', { address: data.address, destinations: data.destinations.join(', ') }));
+      setForwarderForm(prev => ({ ...prev, local_part: '', destinations: '' }));
+      setShowCreateForwarder(false);
+      loadForwarders();
+      loadMailInfo();
+    }
+  }
+
+  async function saveForwarderEdit() {
+    const data = await request(`/mail/forwarders/${forwarderEdit.item.id}`, { method: 'PUT', body: JSON.stringify({ destinations: splitAddresses(forwarderEdit.destinations) }) }, t('Saving...'));
+    if (data) { setNotice(t('{address} saved.', { address: data.address })); setForwarderEdit(null); loadForwarders(); }
+  }
+
+  async function deleteForwarder(item) {
+    if (!confirm(t('Delete the forwarder {address}?', { address: item.address }))) return;
+    const data = await request(`/mail/forwarders/${item.id}`, { method: 'DELETE' }, t('Deleting...'));
+    if (data) { setNotice(t('{address} deleted.', { address: item.address })); loadForwarders(); loadMailInfo(); }
+  }
+
+  function applyMailDnsView(domain, data) {
+    setMailDns({ domain, records: data?.records || [], relay: data?.relay || null, hostedZone: data?.hosted_zone || '' });
+  }
+
+  async function openMailDns(domain) {
+    setMailDns({ domain, records: null, relay: null });
+    const data = await request(`/mail/domains/${domain.id}/dns`, { silent: true });
+    applyMailDnsView(domain, data);
+  }
+
+  function dnsRecordsBody(rows) {
+    return rows
+      .filter(r => String(r.value || '').trim())
+      .map(r => ({
+        type: r.type,
+        name: String(r.name || '@').trim() || '@',
+        value: String(r.value).trim(),
+        ...(r.type === 'MX' && String(r.priority ?? '').trim() !== '' ? { priority: Number(r.priority) } : {}),
+      }));
+  }
+
+  async function saveDomainRelay(value) {
+    const data = await request(`/mail/domains/${mailDns.domain.id}/relay`, { method: 'PUT', body: JSON.stringify({ relay: value }) }, t('Saving...'));
+    if (data) { setNotice(t('Outgoing mail for {domain} saved.', { domain: mailDns.domain.domain })); applyMailDnsView(mailDns.domain, data); }
+  }
+
+  // --- Email: relays (administrators) ---
+  async function loadMailRelays() {
+    const data = await request('/mail/relays', { silent: true });
+    if (data) setMailRelays(data);
+  }
+
+  function editRelay(relay) {
+    setRelayForm(relay
+      ? { ...relay, password: '', dns_records: (relay.dns_records || []).map(r => ({ ...r, priority: r.priority ?? '' })), make_default: false }
+      : { name: '', host: '', port: 587, tls: 'starttls', username: '', password: '', spf_include: '', dns_records: [],
+          make_default: !(mailRelays?.relays || []).length });
   }
 
   async function saveRelay() {
+    const f = relayForm;
     const body = {
-      enabled: !!relayDraft.enabled,
-      host: (relayDraft.host || '').trim(),
-      port: Number(relayDraft.port) || 587,
-      security: relayDraft.security || 'starttls',
-      username: (relayDraft.username || '').trim(),
-      password: relayDraft.password || null,
-      spf_include: (relayDraft.spf_include || '').trim(),
+      name: f.name.trim(), host: f.host.trim(), port: Number(f.port) || 587, tls: f.tls,
+      username: f.username.trim(), password: f.password, spf_include: f.spf_include.trim(),
+      dns_records: dnsRecordsBody(f.dns_records), make_default: !!f.make_default,
     };
-    const data = await request('/mail/settings/relay', { method: 'PUT', body: JSON.stringify(body) }, t('Saving...'));
-    if (!data) return;
-    setNotice(data.zones_updated?.length
-      ? t('Saved. The SPF record is now {spf}, and {n} zones were updated to it.', { spf: data.spf, n: data.zones_updated.length })
-      : t('Saved. The SPF record is now {spf}.', { spf: data.spf }));
-    await loadMailSettings();
-    loadMailStatus();
-    loadMail();
+    const data = await request(f.id ? `/mail/relays/${f.id}` : '/mail/relays', { method: f.id ? 'PUT' : 'POST', body: JSON.stringify(body) }, t('Saving relay...'));
+    if (data) { setMailRelays(data); setRelayForm(null); setNotice(t('Relay saved. Domains that use it need its DNS records.')); }
+  }
+
+  async function deleteRelay(relay) {
+    if (!confirm(t('Delete the relay {name}?\n\nDomains that use it go back to the default relay.', { name: relay.name }))) return;
+    const data = await request(`/mail/relays/${relay.id}`, { method: 'DELETE' }, t('Deleting...'));
+    if (data) { setMailRelays(data); setNotice(t('{name} deleted.', { name: relay.name })); }
+  }
+
+  async function setDefaultRelay(relayId) {
+    const data = await request('/mail/default-relay', { method: 'PUT', body: JSON.stringify({ relay_id: relayId }) }, t('Saving...'));
+    if (data) { setMailRelays(data); setNotice(relayId ? t('Default relay saved.') : t('Mail now leaves directly, except for domains with a relay of their own.')); }
   }
 
   async function testRelay() {
     setRelayTestLines(null);
-    const data = await request('/mail/relay/test', { method: 'POST', body: JSON.stringify({ to: relayTestTo.trim() }) }, t('Sending a test message...'));
+    const data = await request('/mail/relays/test', { method: 'POST', body: JSON.stringify({ to: relayTestTo.trim() }) }, t('Sending a test message...'));
     if (data) setRelayTestLines(data.lines || []);
   }
 
-  async function syncMail() {
-    const data = await request('/mail/sync', { method: 'POST' }, t('Syncing...'));
-    if (!data) return;
-    setNotice(t('The mail server has every mailbox: {n}.', { n: data.mailboxes }));
-    loadMail();
-    loadMailStatus();
+  // --- Email: Rspamd and logs (administrators) ---
+  async function loadRspamdStat() {
+    const data = await request('/mail/rspamd/stat', { silent: true });
+    setRspamdStat(data || null);
+  }
+
+  async function loadRspamdHistory(page = rspamdFilter.page, action = rspamdFilter.action) {
+    const params = new URLSearchParams({ page: String(page), per_page: '50' });
+    if (rspamdFilter.q.trim()) params.set('q', rspamdFilter.q.trim());
+    if (action) params.set('action', action);
+    const data = await request(`/mail/rspamd/history?${params}`, { silent: true });
+    setRspamdHistory(data || { items: [], total: 0, page: 1, per_page: 50 });
+    setRspamdFilter(prev => ({ ...prev, page, action }));
+  }
+
+  async function loadRspamdLog(query = rspamdLogQuery) {
+    const params = new URLSearchParams({ lines: String(query.lines) });
+    if (query.q.trim()) params.set('q', query.q.trim());
+    const data = await request(`/mail/rspamd/log?${params}`, { silent: true });
+    setRspamdLog(data?.lines || []);
+  }
+
+  async function loadEximLog(query = eximLogQuery) {
+    const params = new URLSearchParams({ lines: String(query.lines) });
+    if (query.q.trim()) params.set('q', query.q.trim());
+    const data = await request(`/mail/log?${params}`, { silent: true });
+    setEximLog(data?.lines || []);
+  }
+
+  async function allowMailSender(value) {
+    if (!confirm(t('Never block mail from {sender}?', { sender: value }))) return;
+    const data = await request('/mail/rspamd/allow', { method: 'POST', body: JSON.stringify({ value }) }, t('Saving...'));
+    if (data) {
+      setNotice(t('{sender} is on the allowlist. Ask the sender to send the message again.', { sender: value }));
+      applyMailSettings({ ...(mailSettings || {}), settings: data.settings });
+      loadRspamdHistory(rspamdFilter.page);
+    }
+  }
+
+  function applyMailSettings(data) {
+    setMailSettings(data);
+    setMailSettingsForm({ ...data.settings, allow: (data.settings?.allow || []).join('\n') });
+  }
+
+  async function loadMailSettings() {
+    const data = await request('/mail/settings', { silent: true });
+    if (data) applyMailSettings(data);
+  }
+
+  async function saveMailSettings() {
+    const f = mailSettingsForm;
+    const body = {
+      auth_rate_per_hour: Number(f.auth_rate_per_hour) || 0,
+      local_rate_per_hour: Number(f.local_rate_per_hour) || 0,
+      max_message_mb: Number(f.max_message_mb) || 50,
+      spam_enabled: !!f.spam_enabled,
+      spam_header_score: Number(f.spam_header_score) || 6,
+      spam_reject_score: Number(f.spam_reject_score) || 15,
+      greylisting: !!f.greylisting,
+      default_quota_mb: Number(f.default_quota_mb) || 1024,
+      allow: splitAddresses(f.allow),
+    };
+    const data = await request('/mail/settings', { method: 'PUT', body: JSON.stringify(body) }, t('Applying mail settings...'));
+    if (data) { setNotice(t('Mail settings applied.')); loadMailSettings(); }
   }
 
   async function saveDemoAccounts() {
@@ -4868,15 +5061,33 @@ function App() {
   useEffect(() => { if (isAdmin && demoAddonInstalled) loadDemoSettings(); }, [isAdmin, demoAddonInstalled]);
   useEffect(() => {
     if (!isAuthenticated || page !== 'dns' || !dnsAddonInstalled) return;
-    loadDnsZones();
+    loadDnsInfo();
     if (isAdmin) { loadDnsSettings(); loadUsers(); }
   }, [isAuthenticated, page, dnsAddonInstalled, isAdmin]);
   useEffect(() => {
+    if (!isAuthenticated || page !== 'dns' || !dnsAddonInstalled) return;
+    loadDnsZones(dnsPage);
+  }, [isAuthenticated, page, dnsAddonInstalled, dnsPage]);
+  useEffect(() => {
     if (!isAuthenticated || page !== 'mail' || !mailAddonInstalled) return;
-    loadMail();
-    loadMailLog('blocked');
-    if (isAdmin) { loadMailStatus(); loadMailSettings(); }
+    setMailDns(null);
+    loadMailInfo();
+    if (isAdmin) loadUsers();
   }, [isAuthenticated, page, mailAddonInstalled, isAdmin]);
+  useEffect(() => {
+    if (!isAuthenticated || page !== 'mail' || !mailAddonInstalled) return;
+    if (mailTab === 'mailboxes') loadMailboxes(mailPage);
+    else if (mailTab === 'forwarders') loadForwarders(mailPage);
+  }, [isAuthenticated, page, mailAddonInstalled, mailTab, mailPage, mailFilter.domain_id]);
+  useEffect(() => {
+    if (!isAuthenticated || page !== 'mail' || !mailAddonInstalled || !isAdmin) return;
+    if (mailTab === 'relay') loadMailRelays();
+    else if (mailTab === 'rspamd') { loadRspamdStat(); loadRspamdHistory(1); loadMailSettings(); }
+    else if (mailTab === 'server') { loadMailSettings(); loadEximLog(); }
+  }, [isAuthenticated, page, mailAddonInstalled, isAdmin, mailTab]);
+  useEffect(() => {
+    if (isAuthenticated && page === 'mail' && isAdmin && mailTab === 'rspamd' && rspamdView === 'log') loadRspamdLog();
+  }, [isAuthenticated, page, isAdmin, mailTab, rspamdView]);
 
   // The websites page needs the list too, for the Application picker on create.
   useEffect(() => {
@@ -4984,7 +5195,7 @@ function App() {
       ...(isAdmin ? [['users', 'Panel users', Users]] : []),
     ] },
     { key: 'addons', items: [
-      ...(dnsAddonInstalled ? [['dns', 'DNS', Network]] : []),
+      ...(dnsAddonInstalled ? [['dns', 'DNS Manager', Network]] : []),
       ...(mailAddonInstalled ? [['mail', 'Email', Mail]] : []),
       ...(mcpAddonInstalled ? [['mcp', 'AI assistants', Bot]] : []),
       ...(notificationsAddonInstalled && isAdmin ? [['notifications', 'Notifications', Bell]] : []),
@@ -5560,446 +5771,909 @@ function App() {
     </section>;
   }
 
-  function renderDns() {
-    const zones = dnsZones.zones || [];
-    const needsPriority = dnsDraft.type === 'MX' || dnsDraft.type === 'SRV';
-    const setDraft = (field, value) => setDnsDraft(prev => ({ ...prev, [field]: value }));
-    return <>
-      <section className="section">
-        <div className="section-title">
-          <div>
-            <h2>{t('DNS')}</h2>
-            <p className="hint">{t('The zones this server answers for. Point a domain at the nameservers below and its records are served from here.')}</p>
-          </div>
-          <button className="secondary-light" disabled={!!loading} onClick={() => { loadDnsZones(); if (dnsZone) selectDnsZone(dnsZone); }}><RefreshCw size={14}/>{t('Refresh')}</button>
-        </div>
-        {dnsZones.nameservers?.length > 0 && <div className="dns-ns">
-          <strong>{t('Nameservers')}</strong>
-          {dnsZones.nameservers.map(name => <code key={name}>{name}</code>)}
-          <span>{t('Set these as the nameservers of each domain, at its registrar.')}</span>
-        </div>}
-        <div className="dns-layout">
-          <div className="dns-zones">
-            <strong className="dns-zones-title">{t('Zones')}</strong>
-            {dnsZones.loaded && zones.length === 0 && <p className="hint">{isAdmin
-              ? t('No zones yet. Add one below, or create a website.')
-              : t('No zones yet. Every domain in your account gets its zone.')}</p>}
-            {zones.map(zone => <div key={zone.name} className={`dns-zone ${zone.name === dnsZone ? 'active' : ''}`}>
-              <button type="button" className="dns-zone-open" onClick={() => selectDnsZone(zone.name)} aria-current={zone.name === dnsZone ? 'true' : undefined}>
-                <strong>{zone.name}</strong>
-                {isAdmin && <small>{zone.owner || t('No owner')}</small>}
-              </button>
-              {isAdmin && <button type="button" className="mini danger" disabled={!!loading} onClick={() => deleteDnsZone(zone.name)} aria-label={t('Delete zone')} title={t('Delete zone')}><Trash2 size={13}/></button>}
-            </div>)}
-            {isAdmin && <div className="dns-zone-add">
-              <input value={dnsNewZone.name} onChange={e => setDnsNewZone(prev => ({ ...prev, name: e.target.value }))} placeholder="example.com" aria-label={t('Domain')} />
-              <select value={dnsNewZone.owner_id} onChange={e => setDnsNewZone(prev => ({ ...prev, owner_id: e.target.value }))} aria-label={t('Owner')}>
-                <option value="">{t('No owner')}</option>
-                {users.map(user => <option key={user.id} value={user.id}>{user.username}</option>)}
-              </select>
-              <button disabled={!!loading || !dnsNewZone.name.trim()} onClick={addDnsZone}><Plus size={14}/>{t('Add zone')}</button>
-            </div>}
-          </div>
-          <div className="dns-records">
-            {!dnsZone ? <EmptyState icon={Network} message={t('Choose a zone to see its records.')} /> : <>
-              <h3 className="dns-records-title">{dnsZone}</h3>
-              <div className="cron-builder dns-form">
-                <label><span>{t('Name')}</span><input value={dnsDraft.name} onChange={e => setDraft('name', e.target.value)} placeholder="@" spellCheck={false} /></label>
-                <label><span>{t('Type')}</span>
-                  <select value={dnsDraft.type} onChange={e => setDraft('type', e.target.value)}>
-                    {DNS_RECORD_TYPES.map(type => <option key={type} value={type}>{type}</option>)}
-                  </select>
-                </label>
-                <label><span>TTL</span><input type="number" min={60} max={604800} value={dnsDraft.ttl} onChange={e => setDraft('ttl', e.target.value)} /></label>
-                {needsPriority && <label><span>{t('Priority')}</span><input type="number" min={0} max={65535} value={dnsDraft.priority ?? ''} onChange={e => setDraft('priority', e.target.value)} /></label>}
-                <label className="cron-command"><span>{t('Value')}</span><input value={dnsDraft.content} onChange={e => setDraft('content', e.target.value)} placeholder={DNS_VALUE_HINTS[dnsDraft.type] || ''} spellCheck={false} /></label>
-                <div className="dns-form-actions">
-                  <button disabled={!!loading || !(dnsDraft.content || '').trim()} onClick={saveDnsRecord}>
-                    {dnsEditing ? <><Save size={14}/>{t('Save record')}</> : <><Plus size={14}/>{t('Add record')}</>}
-                  </button>
-                  {dnsEditing && <button className="secondary-light" disabled={!!loading} onClick={cancelDnsEdit}>{t('Cancel')}</button>}
-                </div>
-              </div>
-              <p className="hint">{t('The name is relative to the zone: @ is {zone} itself, www is www.{zone}.', { zone: dnsZone })}</p>
-              <div className="dns-list">
-                {dnsRecords.length === 0 && <EmptyState icon={Network} message={t('No records.')} />}
-                {dnsRecords.map(record => <div key={`${record.name}|${record.type}|${record.priority}|${record.content}`}
-                  className={`dns-record ${dnsEditing && sameDnsRecord(dnsEditing, record) ? 'editing' : ''}`}>
-                  <span className="dns-name">{record.name}</span>
-                  <span className="badge">{record.type}</span>
-                  <span className="dns-value">{record.priority != null && <b>{record.priority} </b>}{record.content}</span>
-                  <span className="dns-ttl">{record.ttl}s</span>
-                  {/* The zone's own nameservers are an administrator's to change;
-                      the server refuses a customer, so the page does not offer it. */}
-                  {!isAdmin && record.type === 'NS' && record.name === '@'
-                    ? <span className="dns-actions dns-locked" title={t("Only an administrator can change the zone's own nameservers.")}><Lock size={13}/></span>
-                    : <span className="dns-actions">
-                      <button className="mini secondary-light" disabled={!!loading} onClick={() => editDnsRecord(record)} aria-label={t('Edit')} title={t('Edit')}><Pencil size={13}/></button>
-                      <button className="mini danger" disabled={!!loading} onClick={() => deleteDnsRecord(record)} aria-label={t('Delete')} title={t('Delete')}><Trash2 size={13}/></button>
-                    </span>}
-                </div>)}
-              </div>
-            </>}
-          </div>
-        </div>
-      </section>
-      {isAdmin && renderDnsSettings()}
-    </>;
+  function dnsTtlLabel(seconds) {
+    const n = Number(seconds) || 0;
+    if (n >= 86400 && n % 86400 === 0) return t('{n} d', { n: n / 86400 });
+    if (n >= 3600 && n % 3600 === 0) return t('{n} h', { n: n / 3600 });
+    if (n >= 60 && n % 60 === 0) return t('{n} min', { n: n / 60 });
+    return t('{n} s', { n });
   }
 
-  function renderDnsSettings() {
-    if (!dnsSettings) return null;
-    const server = dnsSettings.server || {};
-    const serving = server.running && server.api;
-    const setField = (field, value) => setDnsSettings(prev => ({ ...prev, [field]: value }));
-    const setNameserver = (index, value) => setDnsSettings(prev => {
-      const next = [...(prev.nameservers || [])];
-      next[index] = value;
-      return { ...prev, nameservers: next };
-    });
-    return <section className="section">
-      <div className="section-title">
-        <div>
-          <h2>{t('DNS settings')}</h2>
-          <p className="hint">{t('Used for each new zone. Changing them does not rewrite the zones that already exist.')}</p>
-        </div>
-      </div>
-      <div className="dns-server">
-        <span className={`badge ${serving ? 'ok' : 'bad'}`}>{serving ? t('PowerDNS is running') : t('PowerDNS is not running')}</span>
-        <span className={`badge ${server.port_open ? 'ok' : 'warn'}`}>{server.port_open ? t('Port 53 open') : t('Port 53 closed')}</span>
-        {server.listen?.length > 0 && <span className="hint">{t('Listening on')} {server.listen.join(', ')}</span>}
-      </div>
-      <div className="cron-builder">
-        <label><span>{t('Nameserver 1')}</span><input value={dnsSettings.nameservers?.[0] || ''} onChange={e => setNameserver(0, e.target.value)} placeholder="ns1.example.com" spellCheck={false} /></label>
-        <label><span>{t('Nameserver 2')}</span><input value={dnsSettings.nameservers?.[1] || ''} onChange={e => setNameserver(1, e.target.value)} placeholder="ns2.example.com" spellCheck={false} /></label>
-        <label><span>{t('IP address for new zones')}</span>
-          <input value={dnsSettings.zone_ip || ''} onChange={e => setField('zone_ip', e.target.value)} list="dns-server-ipv4" spellCheck={false} />
-          <datalist id="dns-server-ipv4">{(dnsSettings.server_ipv4 || []).map(ip => <option key={ip} value={ip} />)}</datalist>
-        </label>
-        <label><span>{t('Default TTL (seconds)')}</span><input type="number" min={60} max={604800} value={dnsSettings.ttl || 3600} onChange={e => setField('ttl', e.target.value)} /></label>
-        <label className="login-remember dns-auto"><input type="checkbox" checked={!!dnsSettings.auto_zone} onChange={e => setField('auto_zone', e.target.checked)} />{t('Give every domain on the server a DNS zone')}</label>
-        <label className="dns-template"><span>{t('Records for new zones')}</span>
-          <textarea rows={7} value={dnsSettings.template || ''} onChange={e => setField('template', e.target.value)} spellCheck={false} />
-        </label>
-        <p className="hint dns-template-hint">{t('One record per line: name, type, then the value; an MX value starts with its priority. {ip} is the address for new zones, {domain} the zone, and {spf} the SPF record:')} <code>{dnsSettings.spf}</code>. {t('Zones that already exist are not changed.')}</p>
-        <div className="dns-form-actions">
-          <button disabled={!!loading} onClick={saveDnsSettings}><Save size={14}/>{t('Save settings')}</button>
-          <button className="secondary-light" disabled={!!loading || !dnsSettings.auto_zone} onClick={syncDnsZones}><RefreshCw size={14}/>{t('Sync zones now')}</button>
-        </div>
-      </div>
-      <p className="hint">{t('If the nameservers are names under your own domain, create glue records for them at that domain\'s registrar, pointing to this server\'s IP address.')}</p>
-    </section>;
+  function dnsTypeHint(type) {
+    const ip4 = dnsInfo?.addresses?.ipv4?.[0];
+    const ip6 = dnsInfo?.addresses?.ipv6?.[0];
+    return {
+      A: ip4 ? t('The IPv4 address the name points to. This server: {ip}.', { ip: ip4 }) : t('The IPv4 address the name points to.'),
+      AAAA: ip6 ? t('The IPv6 address the name points to. This server: {ip}.', { ip: ip6 }) : t('The IPv6 address the name points to.'),
+      CNAME: t('Makes the name an alias of another host. A name with a CNAME can have no other record.'),
+      MX: t('A mail server for the domain; the lowest priority is tried first.'),
+      TXT: t('Text such as SPF, DKIM or a site verification. A long value is split into strings for you.'),
+      NS: t('Hands a subdomain to other nameservers.'),
+      SRV: t('Where a service runs: weight port target, with the priority in its own field. The name is like _sip._tcp.'),
+      CAA: t('Which certificate authorities may issue for the domain, for example 0 issue letsencrypt.org.'),
+    }[type] || '';
   }
 
-  function renderMail() {
-    const accounts = mailData.accounts || [];
-    const domains = mailData.domains || [];
-    const limit = mailData.limit || {};
-    const unlimited = limit.limit === null || limit.limit === undefined;
-    const atLimit = !unlimited && Number(limit.used || 0) >= Number(limit.limit || 0);
-    const setDraft = (field, value) => setMailDraft(prev => ({ ...prev, [field]: value }));
-    return <>
-      <section className="section">
-        <div className="section-title">
-          <div>
-            <h2>{t('Email')}</h2>
-            <p className="hint">{t('Mailboxes on the domains of your websites. The mail is kept in your account and counts toward its disk space.')}</p>
-          </div>
-          <button className="secondary-light" disabled={!!loading} onClick={loadMail}><RefreshCw size={14}/>{t('Refresh')}</button>
-        </div>
-        {mailData.loaded && domains.length === 0
-          ? <EmptyState icon={Mail} message={t('Create a website first: mailboxes are made on the domains of your websites.')} />
-          : <div className="cron-builder mail-form">
-            <label className="mail-address"><span>{t('Address')}</span>
-              <div className="mail-address-input">
-                <input value={mailDraft.local_part} onChange={e => setDraft('local_part', e.target.value.toLowerCase())} placeholder="info" spellCheck={false} autoComplete="off" aria-label={t('Mailbox name')} />
-                <span aria-hidden="true">@</span>
-                <select value={mailDraft.domain} onChange={e => setDraft('domain', e.target.value)} aria-label={t('Domain')}>
-                  {domains.map(domain => <option key={domain} value={domain}>{domain}</option>)}
-                </select>
-              </div>
-            </label>
-            <label><span>{t('Password')}</span>
-              <div className="mail-password-input">
-                <input value={mailDraft.password} onChange={e => setDraft('password', e.target.value)} placeholder={t('At least 8 characters')} autoComplete="new-password" spellCheck={false} data-lpignore="true" data-1p-ignore="true" />
-                <button type="button" className="mini secondary-light" title={t('Generate random password')} aria-label={t('Generate random password')} onClick={() => setDraft('password', generateRandomPassword(16))}><Dices size={13}/></button>
-              </div>
-            </label>
-            <label><span>{t('Size (MB, 0 = no limit)')}</span><input type="number" min={0} max={1048576} value={mailDraft.quota_mb} onChange={e => setDraft('quota_mb', e.target.value)} /></label>
-            <div className="dns-form-actions">
-              <button disabled={!!loading || atLimit || !mailDraft.local_part.trim() || !mailDraft.domain || (mailDraft.password || '').length < 8} onClick={createMailbox}><Plus size={14}/>{t('Create mailbox')}</button>
-            </div>
-          </div>}
-        {!unlimited && mailData.loaded && <p className="hint">{atLimit
-          ? t('You have used all {n} mailboxes in your package.', { n: limit.limit })
-          : t('{used} of {limit} mailboxes used.', { used: limit.used || 0, limit: limit.limit })}</p>}
-        {mailCreated && <div className="info-box db-created-box">
-          <div className="db-created-head"><strong>{t('Mailbox ready')}</strong><button className="mini secondary-light" onClick={() => setMailCreated(null)} aria-label={t('Close')} title={t('Close')}><X size={13}/></button></div>
-          <div className="db-created-grid">
-            <label>{t('Address')}</label><span><code>{mailCreated.address}</code> <button className="mini secondary-light" onClick={() => copyText(mailCreated.address, t('Copied.'))} aria-label={t('Copy')} title={t('Copy')}><Copy size={12}/></button></span>
-            <label>{t('Password')}</label><span><code>{mailCreated.password}</code> <button className="mini secondary-light" onClick={() => copyText(mailCreated.password, t('Copied.'))} aria-label={t('Copy')} title={t('Copy')}><Copy size={12}/></button></span>
-          </div>
-          <p className="hint">{t('This password is shown once. It is not stored anywhere the panel can read it back.')}</p>
-        </div>}
-        <div className="mail-list">
-          {mailData.loaded && accounts.length === 0 && <EmptyState icon={Mail} message={t('No mailboxes yet.')} />}
-          {accounts.map(account => renderMailbox(account))}
-        </div>
-      </section>
-      {renderMailDomains()}
-      {renderMailClient()}
-      {renderMailLog()}
-      {isAdmin && renderMailSpam()}
-      {isAdmin && renderMailRelay()}
-      {isAdmin && renderMailServer()}
-    </>;
+  function renderDnsRecordFields(form, set, { lockType = false } = {}) {
+    const hasPriority = ['MX', 'SRV'].includes(form.type);
+    const current = Number(form.ttl) || 0;
+    const ttls = !current || DNS_TTLS.includes(current) ? DNS_TTLS : [...DNS_TTLS, current].sort((a, b) => a - b);
+    return <div className={`dns-record-fields${hasPriority ? ' with-priority' : ''}`}>
+      <label className="field"><span className="field-label">{t('Type')}</span>
+        <select value={form.type} disabled={lockType} onChange={e => set({ type: e.target.value })}>
+          {DNS_TYPES.map(type => <option key={type} value={type}>{type}</option>)}
+        </select></label>
+      <label className="field"><span className="field-label">{t('Name')}</span>
+        <input value={form.name} placeholder="@" spellCheck={false} autoCapitalize="off" onChange={e => set({ name: e.target.value })} /></label>
+      {hasPriority && <label className="field"><span className="field-label">{t('Priority')}</span>
+        <input type="number" min="0" max="65535" value={form.priority} placeholder="10" onChange={e => set({ priority: e.target.value })} /></label>}
+      <label className="field dns-value-field"><span className="field-label">{t('Value')}</span>
+        {form.type === 'TXT'
+          ? <textarea rows={2} value={form.value} placeholder={DNS_PLACEHOLDERS.TXT} spellCheck={false} onChange={e => set({ value: e.target.value.replace(/[\r\n]+/g, ' ') })} />
+          : <input value={form.value} placeholder={DNS_PLACEHOLDERS[form.type]} spellCheck={false} autoCapitalize="off" onChange={e => set({ value: e.target.value })} />}</label>
+      <label className="field"><span className="field-label">TTL</span>
+        <select value={form.ttl} onChange={e => set({ ttl: e.target.value })}>
+          <option value="">{t('Default ({ttl})', { ttl: dnsTtlLabel(dnsInfo?.default_ttl || 3600) })}</option>
+          {ttls.map(ttl => <option key={ttl} value={String(ttl)}>{dnsTtlLabel(ttl)}</option>)}
+        </select></label>
+    </div>;
   }
 
-  function renderMailLog() {
-    const rows = mailLog.rows || [];
-    const views = [['blocked', 'Blocked'], ['spam', 'Sent to Junk'], ['all', 'All mail']];
-    const addressOf = text => (String(text || '').match(/[^\s<>"]+@[^\s<>"]+/) || [''])[0].toLowerCase();
-    return <section className="section">
-      <div className="section-title">
-        <div>
-          <h2>{t('Spam filter log')}</h2>
-          <p className="hint">{t('What the spam filter decided about mail from outside, newest first, and why. Look here when someone says their message never arrived.')}</p>
-        </div>
-        <button className="secondary-light" disabled={!!loading} onClick={() => loadMailLog()}><RefreshCw size={14}/>{t('Refresh')}</button>
-      </div>
-      <div className="mail-log-views" role="group" aria-label={t('Show')}>
-        {views.map(([key, label]) => <button key={key} type="button" aria-pressed={mailLog.view === key}
-          className={`mini ${mailLog.view === key ? '' : 'secondary-light'}`} disabled={!!loading} onClick={() => loadMailLog(key)}>{t(label)}</button>)}
-      </div>
-      {mailLog.loaded && !mailLog.enabled && <EmptyState icon={ShieldAlert} message={t('The spam filter is off: mail from outside is delivered unscanned.')} />}
-      {mailLog.loaded && mailLog.enabled && rows.length === 0 && <EmptyState icon={Mail} message={t('Nothing in the log for this view yet.')} />}
-      <div className="mail-log">
-        {rows.map((row, index) => {
-          const key = `${row.time}-${index}`;
-          const open = mailLogOpen === key;
-          const [label, tone] = MAIL_LOG_ACTIONS[row.action] || [row.action, ''];
-          const sender = addressOf(row.from) || addressOf(row.envelope_from);
-          const senderDomain = sender.split('@')[1] || '';
-          return <div className={`mail-log-row ${open ? 'open' : ''}`} key={key}>
-            <button type="button" className="mail-log-head" onClick={() => setMailLogOpen(open ? '' : key)} aria-expanded={open}>
-              <span className={`badge ${tone}`}>{t(label)}</span>
-              <span className="mail-log-subject">{row.subject || t('(no subject)')}</span>
-              <span className="mail-log-meta">{row.from || row.envelope_from || '<>'} → {(row.to || []).join(', ')}</span>
-              <span className="mail-log-score" title={t('Score, and the score at which mail is refused')}>{row.score} / {row.required}</span>
-              <span className="mail-log-time">{formatFileTime(row.time)}</span>
-            </button>
-            {open && <div className="mail-log-detail">
-              <div className="db-created-grid">
-                <label>{t('From')}</label><span>{row.from}{row.envelope_from && addressOf(row.envelope_from) !== sender ? ` (${row.envelope_from})` : ''}</span>
-                <label>{t('To')}</label><span>{(row.to || []).join(', ')}</span>
-                <label>{t('Sending server')}</label><span>{row.ip || '--'}</span>
-                <label>{t('Size')}</label><span>{formatBytes(row.size)}</span>
-              </div>
-              <strong className="mail-log-why">{t('Why')}</strong>
-              <div className="mail-log-reasons">
-                {(row.reasons || []).length === 0 && <span className="hint">{t('No rule scored this message.')}</span>}
-                {(row.reasons || []).map(reason => <span key={reason.name} className={`mail-log-reason ${reason.score > 0 ? 'bad' : 'good'}`}
-                  title={(reason.options || []).join(', ')}>{reason.name} <b>{reason.score > 0 ? '+' : ''}{reason.score}</b></span>)}
-              </div>
-              {row.allowed && <p className="hint">{t('This sender is on the allowlist.')}</p>}
-              {isAdmin && !row.allowed && sender && <div className="dns-form-actions">
-                <button className="mini secondary-light" disabled={!!loading} onClick={() => allowSender(sender)}><Check size={13}/>{t('Allow {sender}', { sender })}</button>
-                {senderDomain && <button className="mini secondary-light" disabled={!!loading} onClick={() => allowSender(senderDomain)}><Check size={13}/>{t('Allow everyone at {domain}', { domain: senderDomain })}</button>}
-              </div>}
-            </div>}
-          </div>;
-        })}
-      </div>
-    </section>;
+  // One line: the nameservers a domain's registrar is given.
+  function renderDnsNameservers() {
+    const names = dnsInfo?.nameservers || [];
+    return <div className="dns-ns-line">
+      <span className="dns-ns-label"><Network size={14}/> {t('Nameservers')}</span>
+      {names.length > 0
+        ? <>
+          {names.map(name => <code key={name}>{name}</code>)}
+          <button type="button" className="mini secondary-light icon-only" aria-label={t('Copy')} title={t('Copy')}
+            onClick={() => copyText(names.join('\n'), t('Copied.'))}><Copy size={13}/></button>
+        </>
+        : <span className="hint">{isAdmin ? t('Not set yet: open Settings.') : t('The administrator has not set the nameservers yet.')}</span>}
+    </div>;
   }
 
-  function renderMailSpam() {
-    if (!spamDraft) return null;
-    const set = (field, value) => setSpamDraft(prev => ({ ...prev, [field]: value }));
-    return <section className="section">
-      <div className="section-title">
-        <div>
-          <h2>{t('Spam filter')}</h2>
-          <p className="hint">{t('Rspamd scores each message from outside. Above the Junk score it goes to the Junk folder; above the reject score it is refused and the sender is told. Mail sent from mailboxes here is not scanned.')}</p>
-        </div>
-      </div>
-      <div className="cron-builder mail-spam-form">
-        <label className="login-remember dns-auto"><input type="checkbox" checked={!!spamDraft.enabled} onChange={e => set('enabled', e.target.checked)} />{t('Filter mail from outside')}</label>
-        <label><span>{t('Junk score')}</span><input type="number" min={0.5} max={100} step={0.5} value={spamDraft.junk_score} onChange={e => set('junk_score', e.target.value)} disabled={!spamDraft.enabled} /></label>
-        <label><span>{t('Reject score')}</span><input type="number" min={1} max={100} step={0.5} value={spamDraft.reject_score} onChange={e => set('reject_score', e.target.value)} disabled={!spamDraft.enabled} /></label>
-        <label className="mail-allow"><span>{t('Allowlist')}</span>
-          <textarea rows={5} value={spamDraft.allow} onChange={e => set('allow', e.target.value)} placeholder={'friend@example.com\nexample.org'} spellCheck={false} disabled={!spamDraft.enabled} />
-        </label>
-        <div className="dns-form-actions">
-          <button disabled={!!loading} onClick={saveSpam}><Save size={14}/>{t('Save spam filter')}</button>
-        </div>
-      </div>
-      <p className="hint">{t('One email address or domain per line. Mail from them is never blocked or sent to Junk. Higher scores block less; Rspamd uses 6 and 15.')}</p>
-    </section>;
+  function renderDnsPager() {
+    const list = dnsZones;
+    const pages = Math.max(1, Math.ceil((list?.total || 0) / (list?.per_page || 50)));
+    if (pages <= 1) return null;
+    return <div className="firewall-ip-pager">
+      <button className="mini secondary-light" disabled={dnsPage <= 1} onClick={() => setDnsPage(p => Math.max(1, p - 1))}>{t('Previous')}</button>
+      <span className="hint">{t('Page {page} of {pages}', { page: dnsPage, pages })}</span>
+      <button className="mini secondary-light" disabled={dnsPage >= pages} onClick={() => setDnsPage(p => p + 1)}>{t('Next')}</button>
+    </div>;
   }
 
-  function renderMailRelay() {
-    if (!relayDraft) return null;
-    const set = (field, value) => setRelayDraft(prev => ({ ...prev, [field]: value }));
-    return <section className="section">
-      <div className="section-title">
-        <div>
-          <h2>{t('Smarthost')}</h2>
-          <p className="hint">{t('Send outgoing mail through another mail service - SMTP2GO, Mailgun, SendGrid, Amazon SES... - when the provider blocks port 25 on this server, or for better delivery.')}</p>
-        </div>
-      </div>
-      <div className="cron-builder mail-relay-form">
-        <label className="login-remember dns-auto"><input type="checkbox" checked={!!relayDraft.enabled} onChange={e => set('enabled', e.target.checked)} />{t('Send outgoing mail through a smarthost')}</label>
-        <label><span>{t('Server')}</span><input value={relayDraft.host} onChange={e => set('host', e.target.value)} placeholder="mail.smtp2go.com" spellCheck={false} autoComplete="off" /></label>
-        <label><span>{t('Port')}</span><input type="number" min={1} max={65535} value={relayDraft.port} onChange={e => set('port', e.target.value)} /></label>
-        <label><span>{t('Security')}</span>
-          <select value={relayDraft.security} onChange={e => { const security = e.target.value; setRelayDraft(prev => ({ ...prev, security, port: security === 'ssl' ? 465 : (Number(prev.port) === 465 ? 587 : prev.port) })); }}>
-            <option value="starttls">STARTTLS</option>
-            <option value="ssl">SSL/TLS</option>
-          </select>
-        </label>
-        <label><span>{t('User name')}</span><input value={relayDraft.username} onChange={e => set('username', e.target.value)} autoComplete="off" spellCheck={false} data-lpignore="true" data-1p-ignore="true" /></label>
-        <label><span>{t('Password')}</span><input type="password" value={relayDraft.password} onChange={e => set('password', e.target.value)} autoComplete="new-password"
-          placeholder={mailSettings?.relay?.has_password ? t('Saved - leave empty to keep it') : ''} data-lpignore="true" data-1p-ignore="true" /></label>
-        <label className="mail-spf"><span>{t('SPF of the smarthost')}</span>
-          <input value={relayDraft.spf_include} onChange={e => set('spf_include', e.target.value)} list="mail-spf-includes" placeholder="include:spf.smtp2go.com" spellCheck={false} />
-          <datalist id="mail-spf-includes">{MAIL_SPF_INCLUDES.map(item => <option key={item} value={item} />)}</datalist>
-        </label>
-        <div className="dns-form-actions">
-          <button disabled={!!loading} onClick={saveRelay}><Save size={14}/>{t('Save smarthost')}</button>
-        </div>
-      </div>
-      <p className="hint">{t('The SPF record for every domain here:')} <code>{mailSettings?.spf}</code>. {dnsAddonInstalled
-        ? t('Zones still using the previous SPF record follow it by themselves.')
-        : t('Update it wherever each domain\'s DNS is managed.')}</p>
-      <div className="mail-relay-test">
-        <input type="email" value={relayTestTo} onChange={e => setRelayTestTo(e.target.value)} placeholder="you@gmail.com" aria-label={t('Send a test message to')} />
-        <button className="secondary-light" disabled={!!loading || !relayTestTo.includes('@')} onClick={testRelay}><Send size={14}/>{t('Send a test message')}</button>
-      </div>
-      {relayTestLines && <pre className="mail-relay-log">{relayTestLines.length ? relayTestLines.join('\n') : t('Exim logged nothing more about it.')}</pre>}
-    </section>;
-  }
-
-  function renderMailbox(account) {
-    const quotaBytes = Number(account.quota_mb || 0) * 1024 * 1024;
-    const percent = quotaBytes ? Math.min(100, Math.round(Number(account.used_bytes || 0) * 100 / quotaBytes)) : 0;
-    const editing = mailEditing?.id === account.id;
-    const setEdit = (field, value) => setMailEditing(prev => ({ ...prev, [field]: value }));
-    return <div className={`mail-row ${editing ? 'editing' : ''}`} key={account.id}>
-      <div className="mail-main">
-        <strong>{account.address}</strong>
-        <small>
-          {quotaBytes
-            ? t('{used} of {size}', { used: formatBytes(account.used_bytes), size: formatBytes(quotaBytes) })
-            : t('{used}, no limit of its own', { used: formatBytes(account.used_bytes) })}
-          {isAdmin && account.owner ? ` · ${account.owner}` : ''}
-        </small>
-        {quotaBytes > 0 && <div className="progress-bar mail-usage" role="progressbar" aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100} aria-label={t('Mailbox size used')}>
-          <div className={`progress-bar-fill ${percent >= 90 ? 'danger' : ''}`} style={{ width: `${percent}%` }} />
-        </div>}
-      </div>
-      <div className="row-actions">
-        <button className="mini" disabled={!!loading} onClick={() => openWebmail(account)}><ExternalLink size={13}/>{t('Webmail')}</button>
-        <button className="mini secondary-light" disabled={!!loading} onClick={() => setMailEditing(editing ? null : { id: account.id, password: '', quota_mb: account.quota_mb })} aria-label={t('Edit')} title={t('Edit')}><Pencil size={13}/></button>
-        <button className="mini danger" disabled={!!loading} onClick={() => deleteMailbox(account)} aria-label={t('Delete')} title={t('Delete')}><Trash2 size={13}/></button>
-      </div>
-      {editing && <div className="cron-builder mail-edit">
-        <label><span>{t('New password')}</span>
-          <div className="mail-password-input">
-            <input value={mailEditing.password} onChange={e => setEdit('password', e.target.value)} placeholder={t('Leave empty to keep it')} autoComplete="new-password" spellCheck={false} data-lpignore="true" data-1p-ignore="true" />
-            <button type="button" className="mini secondary-light" title={t('Generate random password')} aria-label={t('Generate random password')} onClick={() => setEdit('password', generateRandomPassword(16))}><Dices size={13}/></button>
-          </div>
-        </label>
-        <label><span>{t('Size (MB, 0 = no limit)')}</span><input type="number" min={0} max={1048576} value={mailEditing.quota_mb} onChange={e => setEdit('quota_mb', e.target.value)} /></label>
-        <div className="dns-form-actions">
-          <button disabled={!!loading || (mailEditing.password && mailEditing.password.length < 8)} onClick={saveMailbox}><Save size={14}/>{t('Save')}</button>
-          <button className="secondary-light" disabled={!!loading} onClick={() => setMailEditing(null)}>{t('Cancel')}</button>
+  function renderDnsZones() {
+    const list = dnsZones;
+    const items = list?.items || [];
+    return <div className="mail-tab">
+      {renderDnsNameservers()}
+      <form className="mail-search dns-search" onSubmit={e => { e.preventDefault(); setDnsPage(1); loadDnsZones(1); }}>
+        <input value={dnsQuery} placeholder={t('Search domains')} aria-label={t('Search domains')} onChange={e => setDnsQuery(e.target.value)} />
+        <button type="submit" className="secondary-light icon-only" aria-label={t('Search')} title={t('Search')}><Search size={14}/></button>
+      </form>
+      {list === null && <p className="hint">{t('Loading…')}</p>}
+      {list && items.length === 0 && <EmptyState icon={Network} message={dnsQuery.trim() ? 'No domain matches the search.' : 'No domains yet.'} />}
+      {items.length > 0 && <div className="table">
+        {items.map(zone => <div className="row dns-zone-row" key={zone.name}>
+          <span className="mail-row-name">
+            <strong>{zone.name}</strong>
+            <small>{[isAdmin && zone.owner ? `${t('Account')}: ${zone.owner}` : '',
+              zone.created_at ? `${t('Added')} ${new Date(zone.created_at).toLocaleDateString()}` : '',
+              zone.on_panel === false ? t('No longer on the panel') : ''].filter(Boolean).join(' · ')}</small>
+          </span>
+          <span className="row-actions">
+            <button className="mini secondary-light" disabled={!!loading} onClick={() => openDnsZone(zone)}><Pencil size={13}/> {t('Records')}</button>
+          </span>
+        </div>)}
+      </div>}
+      {renderDnsPager()}
+      {isAdmin && <div className="create-inline dns-new-zone">
+        <div className="create-inline-head"><strong>{t('A zone for a domain that is not on the panel')}</strong></div>
+        <div className="mail-create-grid">
+          <label className="field"><span className="field-label">{t('Domain')}</span>
+            <input value={dnsNewZone.name} placeholder="example.com" spellCheck={false} onChange={e => setDnsNewZone(prev => ({ ...prev, name: e.target.value.trim().toLowerCase() }))} /></label>
+          <label className="field"><span className="field-label">{t('Account')}</span>
+            <select value={dnsNewZone.owner_id} onChange={e => setDnsNewZone(prev => ({ ...prev, owner_id: e.target.value }))}>
+              <option value="">{t('No owner')}</option>
+              {users.map(user => <option key={user.id} value={user.id}>{user.username}</option>)}
+            </select></label>
+          <button disabled={!dnsNewZone.name.trim() || !!loading} onClick={addDnsZone}><Plus size={14}/> {t('Add zone')}</button>
         </div>
       </div>}
     </div>;
   }
 
-  function renderMailDomains() {
-    const domains = mailData.mail_domains || [];
-    if (!domains.length) return null;
-    return <section className="section">
+  function renderDnsSettings() {
+    const f = dnsSettings;
+    const set = patch => setDnsSettings(prev => ({ ...prev, ...patch }));
+    const server = f?.server || {};
+    const serving = server.running && server.api;
+    const address = [dnsInfo?.addresses?.ipv4?.[0], dnsInfo?.addresses?.ipv6?.[0]].filter(Boolean).join(' / ');
+    const ttl = Number(f?.ttl) || 3600;
+    const ttls = DNS_TTLS.includes(ttl) ? DNS_TTLS : [...DNS_TTLS, ttl].sort((a, b) => a - b);
+    return <section className="section dns-page">
       <div className="section-title">
-        <div>
-          <h2>{t('Mail domains')}</h2>
-          <p className="hint">{dnsAddonInstalled
-            ? t('This server serves these records itself for the domains in DNS. For a domain whose DNS is elsewhere, add them there.')
-            : t('Add these records where each domain\'s DNS is managed, so mail reaches this server and is not taken for spam.')}</p>
+        <div className="waf-detail-title">
+          <button className="secondary-light" onClick={() => setDnsTab('zones')}><ArrowLeft size={14}/> {t('DNS Manager')}</button>
+          <div><h2>{t('DNS settings')}</h2>
+            <p className="hint">{t('The nameservers and default TTL of every zone on this server, and what a new zone holds.')}</p></div>
         </div>
       </div>
-      {domains.map(item => <div className="mail-domain" key={item.domain}>
-        <div className="mail-domain-head">
-          <strong>{item.domain}</strong>
-          <span className="badge">{t('{n} mailboxes', { n: item.mailboxes })}</span>
-          {item.webmail
-            ? <span className="mail-webmail">
-                <a href={item.webmail} target="_blank" rel="noopener noreferrer"><ExternalLink size={13}/>{item.webmail.replace('https://', '')}</a>
-                <button className="mini secondary-light" disabled={!!loading} onClick={() => disableWebmailHost(item.domain)} aria-label={t('Remove')} title={t('Remove')}><X size={13}/></button>
-              </span>
-            : <button className="mini secondary-light" disabled={!!loading} onClick={() => enableWebmailHost(item.domain)}><Globe size={13}/>{t('Set up webmail.{domain}', { domain: item.domain })}</button>}
+      {!f ? <p className="hint">{t('Loading…')}</p> : <div className="create-inline">
+        <div className="dns-server">
+          <span className={`badge ${serving ? 'ok' : 'bad'}`}>{serving ? t('PowerDNS is running') : t('PowerDNS is not running')}</span>
+          <span className={`badge ${server.port_open ? 'ok' : 'warn'}`}>{server.port_open ? t('Port 53 open') : t('Port 53 closed')}</span>
+          {server.listen?.length > 0 && <span className="hint">{t('Listening on')} {server.listen.join(', ')}</span>}
         </div>
-        <details className="mail-records">
-          <summary>{t('DNS records for mail')}</summary>
-          <div className="dns-list">
-            {item.records.map(record => <div className="dns-record" key={`${record.name}|${record.type}`}>
-              <span className="dns-name">{record.name}</span>
-              <span className="badge">{record.type}</span>
-              <span className="dns-value">{record.value}</span>
-              <span className="dns-ttl" />
-              <span className="dns-actions">
-                <button className="mini secondary-light" onClick={() => copyText(record.value, t('Copied.'))} aria-label={t('Copy')} title={t('Copy')}><Copy size={13}/></button>
-              </span>
-            </div>)}
-          </div>
-        </details>
-      </div>)}
+        <div className="mail-settings-grid">
+          <label className="field"><span className="field-label">{t('Nameserver 1')}</span>
+            <input value={f.ns1} placeholder="ns1.example.com" spellCheck={false} onChange={e => set({ ns1: e.target.value })} /></label>
+          <label className="field"><span className="field-label">{t('Nameserver 2')}</span>
+            <input value={f.ns2} placeholder="ns2.example.com" spellCheck={false} onChange={e => set({ ns2: e.target.value })} /></label>
+          <label className="field"><span className="field-label">{t('IP address for new zones')}</span>
+            <input value={f.zone_ip || ''} list="dns-server-ipv4" spellCheck={false} onChange={e => set({ zone_ip: e.target.value })} />
+            <datalist id="dns-server-ipv4">{(f.server_ipv4 || []).map(ip => <option key={ip} value={ip} />)}</datalist></label>
+          <label className="field"><span className="field-label">{t('Default TTL')}</span>
+            <select value={String(ttl)} onChange={e => set({ ttl: e.target.value })}>
+              {ttls.map(value => <option key={value} value={String(value)}>{dnsTtlLabel(value)}</option>)}
+            </select></label>
+        </div>
+        <label className="check-line"><input type="checkbox" checked={!!f.auto_zone} onChange={e => set({ auto_zone: e.target.checked })} /> {t('Give every domain on the server a DNS zone')}</label>
+        <label className="field dns-template"><span className="field-label">{t('Records for new zones')}</span>
+          <textarea rows={6} value={f.template || ''} spellCheck={false} onChange={e => set({ template: e.target.value })} /></label>
+        <p className="hint dns-template-hint">{t('One record per line: name, type, then the value; an MX value starts with its priority. {ip} is the address for new zones, {domain} the zone, and {spf} the SPF record:')} <code>{f.spf}</code>. {t('Zones that already exist are not changed.')}</p>
+        <p className="hint">{t('A changed nameserver is written into the NS and SOA records of every zone. Register both names as glue (child nameserver) records at the registrar of their domain, pointing at this server.')} {address && t('This server: {address}.', { address })}</p>
+        <div className="actions">
+          <button type="button" disabled={!String(f.ns1 || '').trim() || !String(f.ns2 || '').trim() || !!loading} onClick={saveDnsSettings}><Save size={14}/> {t('Save settings')}</button>
+          <button type="button" className="secondary-light" disabled={!!loading || !f.auto_zone} onClick={syncDnsZones}><RefreshCw size={14}/> {t('Sync zones now')}</button>
+        </div>
+      </div>}
     </section>;
   }
 
-  function renderMailClient() {
-    const client = mailData.client;
-    if (!client) return null;
-    return <section className="section">
+  function renderDnsZone() {
+    const { zone, records } = dnsZone;
+    const delegation = dnsDelegation;
+    const statusLabel = { ok: t('Served from here'), missing: t('Not delegated'), different: t('Other nameservers'), unknown: t('Not checked') };
+    const statusClass = { ok: 'ok', missing: 'bad', different: 'warn', unknown: '' };
+    const term = dnsRecordFilter.trim().toLowerCase();
+    const shown = (records || []).filter(r => !term || `${r.name} ${r.type} ${r.value}`.toLowerCase().includes(term));
+    const form = dnsRecordForm;
+    const edit = dnsRecordEdit;
+    const isEditing = record => edit && edit.old.name === record.name && edit.old.type === record.type && edit.old.content === record.content;
+    const delegationText = !delegation ? t('Checking the nameservers…')
+      : delegation.status === 'ok' ? t('{zone} is answered by this server.', { zone: zone.name })
+      : delegation.status === 'different' ? t('{zone} uses other nameservers now ({found}). Set {expected} at its registrar.', { zone: zone.name, found: delegation.found.join(', '), expected: delegation.expected.join(', ') })
+      : delegation.status === 'missing' ? t('Set {expected} as the nameservers of {zone} at its registrar. Until then these records are not used.', { expected: delegation.expected.join(', '), zone: zone.name })
+      : t('The nameservers of {zone} could not be looked up.', { zone: zone.name });
+    return <section className="section dns-zone-page">
       <div className="section-title">
-        <div>
-          <h2>{t('Mail app settings')}</h2>
-          <p className="hint">{t('For Outlook, Thunderbird or a phone. The user name is the full email address, and the password is the mailbox\'s.')}</p>
+        <div className="waf-detail-title">
+          <button className="secondary-light" onClick={() => { setDnsZone(null); loadDnsZones(); }}><ArrowLeft size={14}/> {t('DNS Manager')}</button>
+          <div><h2>{zone.name}</h2>
+            <p className="hint">{[isAdmin && zone.owner ? `${t('Account')}: ${zone.owner}` : '', records ? t('{n} records', { n: records.length }) : ''].filter(Boolean).join(' · ')}</p></div>
+        </div>
+        <div className="actions">
+          <button className="secondary-light" disabled={!!loading} onClick={() => openDnsZone(zone)}><RefreshCw size={14}/> {t('Refresh')}</button>
+          <button className="secondary-light" disabled={!!loading || records === null} onClick={restoreDnsDefaults}><RotateCcw size={14}/> {t('Restore panel records')}</button>
+          {isAdmin && zone.on_panel === false && <button className="danger" disabled={!!loading} onClick={() => deleteDnsZone(zone)}><Trash2 size={14}/> {t('Delete zone')}</button>}
         </div>
       </div>
-      <div className="db-created-grid mail-client">
-        <label>{t('Incoming mail (IMAP)')}</label><span><code>{client.imap.host}</code> · {client.imap.port} · SSL/TLS</span>
-        <label>{t('Incoming mail (POP3)')}</label><span><code>{client.pop3.host}</code> · {client.pop3.port} · SSL/TLS</span>
-        <label>{t('Outgoing mail (SMTP)')}</label><span><code>{client.smtp.host}</code> · {client.smtp.port} · SSL/TLS, {t('or')} {client.submission.port} · STARTTLS</span>
-        <label>{t('Webmail')}</label><span><a href={client.webmail} target="_blank" rel="noopener noreferrer">{client.webmail}</a></span>
+      <div className="dns-delegation">
+        <span className={`badge ${statusClass[delegation?.status] || ''}`}>{delegation ? statusLabel[delegation.status] || delegation.status : '…'}</span>
+        <span className="hint">{delegationText}</span>
       </div>
+      <div className="create-inline dns-record-form">
+        <div className="create-inline-head"><strong>{t('Add a record')}</strong></div>
+        {renderDnsRecordFields(form, patch => setDnsRecordForm(prev => ({ ...prev, ...patch })))}
+        <p className="hint">{dnsTypeHint(form.type)} {t('Names are relative to {zone}: @ is the domain itself.', { zone: zone.name })}</p>
+        <div className="actions"><button type="button" disabled={!String(form.value).trim() || !!loading || records === null} onClick={addDnsRecord}><Plus size={14}/> {t('Add record')}</button></div>
+      </div>
+      <div className="mail-toolbar">
+        <strong>{t('Records')}</strong>
+        <div className="mail-search"><input value={dnsRecordFilter} placeholder={t('Filter records')} aria-label={t('Filter records')} onChange={e => setDnsRecordFilter(e.target.value)} /></div>
+      </div>
+      {records === null && <p className="hint">{t('Loading…')}</p>}
+      {records && <div className="table dns-records">
+        <div className="row dns-record-row dns-record-head" aria-hidden="true">
+          <span>{t('Name')}</span><span>{t('Type')}</span><span>TTL</span><span>{t('Value')}</span><span/>
+        </div>
+        {shown.map(record => isEditing(record)
+          ? <div className="row dns-record-edit" key={`${record.name}|${record.type}|${record.content}`}>
+              {renderDnsRecordFields(edit.form, patch => setDnsRecordEdit(prev => ({ ...prev, form: { ...prev.form, ...patch } })), { lockType: true })}
+              <div className="actions">
+                <button type="button" className="secondary-light" onClick={() => setDnsRecordEdit(null)}>{t('Cancel')}</button>
+                <button type="button" disabled={!String(edit.form.value).trim() || !!loading} onClick={saveDnsRecordEdit}><Save size={14}/> {t('Save')}</button>
+              </div>
+            </div>
+          : <div className="row dns-record-row" key={`${record.name}|${record.type}|${record.content}`}>
+              <span className="dns-record-name" title={record.fqdn}>{record.name}</span>
+              <span><code className="dns-type">{record.type}</code></span>
+              <span className="dns-record-ttl">{dnsTtlLabel(record.ttl)}</span>
+              <span className="dns-record-value">{record.priority != null && <small title={t('Priority')}>{record.priority}</small>}<code>{record.value}</code>
+                {record.mail && <span className="badge dns-mail-badge" title={t('Kept in step with the email of {domain}', { domain: record.mail })}><Mail size={11}/> {t('Email')}</span>}</span>
+              <span className="row-actions">
+                {record.locked
+                  ? <span className="dns-locked" title={t("Follows DNS Manager's nameserver settings")}><Lock size={13}/></span>
+                  : <>
+                    <button type="button" className="mini secondary-light icon-only" disabled={!!loading} aria-label={t('Edit')} title={t('Edit')}
+                      onClick={() => setDnsRecordEdit({ old: record, form: { type: record.type, name: record.name, value: record.value, priority: record.priority ?? '', ttl: String(record.ttl || '') } })}><Pencil size={13}/></button>
+                    <button type="button" className="mini danger icon-only" disabled={!!loading} aria-label={t('Delete')} title={t('Delete')} onClick={() => deleteDnsRecord(record)}><Trash2 size={13}/></button>
+                  </>}
+              </span>
+            </div>)}
+        {shown.length === 0 && <p className="hint">{t('No record matches the filter.')}</p>}
+      </div>}
     </section>;
+  }
+
+  function renderDns() {
+    if (dnsZone) return renderDnsZone();
+    if (isAdmin && dnsTab === 'settings') return renderDnsSettings();
+    return <section className="section dns-page">
+      <div className="section-title">
+        <div><h2>{t('DNS Manager')}</h2>
+          <p className="hint">{isAdmin ? t('Every domain on the panel, answered by this server.') : t('The DNS records of your domains, answered by this server.')}</p></div>
+        <div className="actions">
+          {isAdmin && <button type="button" className="secondary-light" onClick={() => setDnsTab('settings')}><SettingsIcon size={14}/> {t('Settings')}</button>}
+          <button type="button" className="secondary-light" disabled={!!loading} onClick={() => { loadDnsInfo(); loadDnsZones(); }}><RefreshCw size={14}/> {t('Refresh')}</button>
+        </div>
+      </div>
+      {renderDnsZones()}
+    </section>;
+  }
+
+  function renderCopyBlock(title, text, { multiline = false } = {}) {
+    return <div className="copy-block">
+      <div className="copy-block-head">
+        <span>{title}</span>
+        <button type="button" className="mini secondary-light" onClick={() => copyText(text, t('Copied.'))}><Copy size={13}/> {t('Copy')}</button>
+      </div>
+      {multiline ? <pre className="copy-block-code">{text}</pre> : <code className="copy-block-code">{text}</code>}
+    </div>;
+  }
+
+  function mailDomainOptions(placeholder) {
+    return <>
+      {placeholder && <option value="">{placeholder}</option>}
+      {(mailInfo?.domains || []).map(d => <option key={d.id} value={String(d.id)}>{d.domain}{isAdmin && d.owner ? ` (${d.owner})` : ''}</option>)}
+    </>;
+  }
+
+  function renderMailFilter(onSearch) {
+    return <div className="mail-filter">
+      <select value={mailFilter.domain_id} aria-label={t('Domain')} onChange={e => { setMailFilter(prev => ({ ...prev, domain_id: e.target.value })); setMailPage(1); }}>
+        {mailDomainOptions(t('All domains'))}
+      </select>
+      <form className="mail-search" onSubmit={e => { e.preventDefault(); setMailPage(1); onSearch(); }}>
+        <input value={mailFilter.q} placeholder={t('Search')} aria-label={t('Search')} onChange={e => setMailFilter(prev => ({ ...prev, q: e.target.value }))} />
+        <button type="submit" className="secondary-light icon-only" aria-label={t('Search')} title={t('Search')}><Search size={14}/></button>
+      </form>
+    </div>;
+  }
+
+  function renderMailPager(list) {
+    const pages = Math.max(1, Math.ceil((list?.total || 0) / (list?.per_page || 50)));
+    if (pages <= 1) return null;
+    return <div className="firewall-ip-pager">
+      <button className="mini secondary-light" disabled={mailPage <= 1} onClick={() => setMailPage(p => Math.max(1, p - 1))}>{t('Previous')}</button>
+      <span className="hint">{t('Page {page} of {pages}', { page: mailPage, pages })}</span>
+      <button className="mini secondary-light" disabled={mailPage >= pages} onClick={() => setMailPage(p => p + 1)}>{t('Next')}</button>
+    </div>;
+  }
+
+  function renderMailboxes() {
+    const info = mailInfo;
+    const list = mailboxList;
+    const items = list?.items || [];
+    const limit = info.mailbox_limit;
+    const atLimit = !isAdmin && !!info.at_limit;
+    const local = mailboxForm.local_part.trim().toLowerCase();
+    const canCreate = !!mailboxForm.domain_id && /^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$/.test(local) && !local.includes('..')
+      && mailboxForm.password.length >= 8 && /[A-Za-z]/.test(mailboxForm.password) && /\d/.test(mailboxForm.password);
+    const openCreate = () => {
+      setShowCreateMailbox(true);
+      setMailboxForm(prev => ({
+        ...prev,
+        domain_id: prev.domain_id || mailFilter.domain_id || String(info.domains[0]?.id || ''),
+        password: prev.password || mailPassword(),
+        quota_mb: prev.quota_mb === '' ? String(info.default_quota_mb || 1024) : prev.quota_mb,
+      }));
+    };
+    return <div className="mail-tab">
+      <div className="mail-toolbar">
+        {renderMailFilter(() => loadMailboxes(1))}
+        {!showCreateMailbox && <button type="button" disabled={atLimit} title={atLimit ? t('Mailbox limit reached') : ''} onClick={openCreate}><Plus size={15}/> {t('New mailbox')}</button>}
+      </div>
+      {atLimit && <p className="hint">{limit
+        ? t('You have used all {n} of your mailboxes. Delete one, or ask your provider for more.', { n: limit })
+        : t('Your hosting package does not include mailboxes. Ask your provider.')}</p>}
+      {showCreateMailbox && <div className="create-inline">
+        <div className="create-inline-head">
+          <strong>{t('New mailbox')}</strong>
+          <button type="button" className="secondary-light icon-only mini" onClick={() => setShowCreateMailbox(false)} aria-label={t('Close')} title={t('Close')}><X size={15}/></button>
+        </div>
+        <div className="mail-create-grid">
+          <div className="field mail-address-field"><span className="field-label">{t('Address')}</span>
+            <div className="mail-address-input">
+              <input value={mailboxForm.local_part} placeholder="info" autoComplete="off" spellCheck={false} aria-label={t('Mailbox name')}
+                onChange={e => setMailboxForm(prev => ({ ...prev, local_part: e.target.value.toLowerCase().replace(/[^a-z0-9._-]/g, '') }))} />
+              <span>@</span>
+              <select value={mailboxForm.domain_id} aria-label={t('Domain')} onChange={e => setMailboxForm(prev => ({ ...prev, domain_id: e.target.value }))}>{mailDomainOptions(t('Choose a domain'))}</select>
+            </div>
+          </div>
+          <div className="field"><span className="field-label">{t('Password')}</span>
+            <div className="password-with-generate">
+              <input value={mailboxForm.password} autoComplete="new-password" spellCheck={false} placeholder={t('8+ characters, letters and digits')} onChange={e => setMailboxForm(prev => ({ ...prev, password: e.target.value }))} data-lpignore="true" data-1p-ignore="true" />
+              <button type="button" className="secondary-light icon-only" title={t('Generate random password')} aria-label={t('Generate random password')} onClick={() => setMailboxForm(prev => ({ ...prev, password: mailPassword() }))}><Dices size={15}/></button>
+              <button type="button" className="secondary-light icon-only" title={t('Copy')} aria-label={t('Copy')} onClick={() => copyText(mailboxForm.password, t('Copied.'))}><Copy size={15}/></button>
+            </div>
+          </div>
+          <div className="field mail-quota-field"><span className="field-label">{t('Size (MB)')}{isAdmin && <em> {t('0 = unlimited')}</em>}</span>
+            <input type="number" min={isAdmin ? 0 : 1} max={isAdmin ? 1048576 : info.max_user_quota_mb} value={mailboxForm.quota_mb} onChange={e => setMailboxForm(prev => ({ ...prev, quota_mb: e.target.value }))} />
+          </div>
+          <button disabled={!canCreate || !!loading} onClick={createMailbox}><Plus size={14}/> {t('Create')}</button>
+        </div>
+        <p className="hint">{t('Copy the password now — it is not shown again. It signs in to webmail and to any mail app, with the full address as the username.')}</p>
+      </div>}
+      {list === null && <p className="hint">{t('Loading…')}</p>}
+      {list && items.length === 0 && <EmptyState icon={Inbox} message={mailFilter.q || mailFilter.domain_id ? t('No mailbox matches.') : t('No mailboxes yet.')} />}
+      {items.length > 0 && <div className="table">
+        {items.map(box => {
+          const percent = box.quota_mb && box.used_mb != null ? Math.min(100, Math.round(box.used_mb / box.quota_mb * 100)) : null;
+          return <div className="row mail-row" key={box.id}>
+            <span className="mail-row-name">
+              <strong>{box.address}</strong>
+              <small>
+                {!box.enabled && <span className="badge warn">{t('Suspended')}</span>}
+                {isAdmin && box.owner ? <span>{t('Account')}: {box.owner}</span> : null}
+              </small>
+            </span>
+            <span className="mail-row-usage">
+              <small>{box.used_mb != null ? t('{n} MB', { n: box.used_mb }) : '—'} / {box.quota_mb ? t('{n} MB', { n: box.quota_mb }) : t('unlimited')}</small>
+              {percent != null && <span className={`mail-meter ${percent >= 90 ? 'bad' : percent >= 75 ? 'warn' : ''}`}><span style={{ width: `${percent}%` }} /></span>}
+            </span>
+            <span className="row-actions">
+              <button className="mini" disabled={!!loading || !box.enabled} onClick={() => openWebmail(box)} title={t('Open this mailbox in webmail, no password needed')}><Mail size={13}/> {t('Webmail')}</button>
+              <button className="mini secondary-light" disabled={!!loading} onClick={() => setMailboxEdit({ box, password: '', quota_mb: String(box.quota_mb) })}><Pencil size={13}/> {t('Edit')}</button>
+              <button className="mini secondary-light" disabled={!!loading} onClick={() => setMailboxEnabled(box, !box.enabled)}>{box.enabled ? <><Ban size={13}/> {t('Suspend')}</> : <><Play size={13}/> {t('Resume')}</>}</button>
+              <button className="mini danger" disabled={!!loading} onClick={() => deleteMailbox(box)} aria-label={t('Delete {name}', { name: box.address })} title={t('Delete')}><Trash2 size={13}/></button>
+            </span>
+          </div>;
+        })}
+      </div>}
+      {renderMailPager(list)}
+    </div>;
+  }
+
+  function renderForwarders() {
+    const info = mailInfo;
+    const list = forwarderList;
+    const items = list?.items || [];
+    const local = forwarderForm.local_part.trim().toLowerCase();
+    const canCreate = !!forwarderForm.domain_id && /^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$/.test(local) && splitAddresses(forwarderForm.destinations).length > 0;
+    return <div className="mail-tab">
+      <div className="mail-toolbar">
+        {renderMailFilter(() => loadForwarders(1))}
+        {!showCreateForwarder && <button type="button" onClick={() => { setShowCreateForwarder(true); setForwarderForm(prev => ({ ...prev, domain_id: prev.domain_id || mailFilter.domain_id || String(info.domains[0]?.id || '') })); }}><Plus size={15}/> {t('New forwarder')}</button>}
+      </div>
+      {showCreateForwarder && <div className="create-inline">
+        <div className="create-inline-head">
+          <strong>{t('New forwarder')}</strong>
+          <button type="button" className="secondary-light icon-only mini" onClick={() => setShowCreateForwarder(false)} aria-label={t('Close')} title={t('Close')}><X size={15}/></button>
+        </div>
+        <div className="mail-create-grid">
+          <div className="field mail-address-field"><span className="field-label">{t('Address')}</span>
+            <div className="mail-address-input">
+              <input value={forwarderForm.local_part} placeholder="sales" autoComplete="off" spellCheck={false} aria-label={t('Forwarder name')}
+                onChange={e => setForwarderForm(prev => ({ ...prev, local_part: e.target.value.toLowerCase().replace(/[^a-z0-9._-]/g, '') }))} />
+              <span>@</span>
+              <select value={forwarderForm.domain_id} aria-label={t('Domain')} onChange={e => setForwarderForm(prev => ({ ...prev, domain_id: e.target.value }))}>{mailDomainOptions(t('Choose a domain'))}</select>
+            </div>
+          </div>
+          <div className="field mail-destinations-field"><span className="field-label">{t('Forward to')}</span>
+            <textarea rows={2} value={forwarderForm.destinations} spellCheck={false} placeholder={t('one or more addresses, separated by commas')} onChange={e => setForwarderForm(prev => ({ ...prev, destinations: e.target.value }))} />
+          </div>
+          <button disabled={!canCreate || !!loading} onClick={createForwarder}><Plus size={14}/> {t('Create')}</button>
+        </div>
+        <p className="hint">{t('If a mailbox has the same address, it keeps a copy of each message as well.')}</p>
+      </div>}
+      {list === null && <p className="hint">{t('Loading…')}</p>}
+      {list && items.length === 0 && <EmptyState icon={Forward} message={mailFilter.q || mailFilter.domain_id ? t('No forwarder matches.') : t('No forwarders yet.')} />}
+      {items.length > 0 && <div className="table">
+        {items.map(item => <div className="row mail-row" key={item.id}>
+          <span className="mail-row-name"><strong>{item.address}</strong>{item.keeps_copy && <small><span className="badge">{t('Keeps a copy')}</span></small>}</span>
+          <span className="mail-row-destinations"><MoveRight size={13}/> <span>{item.destinations.join(', ')}</span></span>
+          <span className="row-actions">
+            <button className="mini secondary-light" disabled={!!loading} onClick={() => setForwarderEdit({ item, destinations: item.destinations.join(', ') })}><Pencil size={13}/> {t('Edit')}</button>
+            <button className="mini danger" disabled={!!loading} onClick={() => deleteForwarder(item)} aria-label={t('Delete {name}', { name: item.address })} title={t('Delete')}><Trash2 size={13}/></button>
+          </span>
+        </div>)}
+      </div>}
+      {renderMailPager(list)}
+    </div>;
+  }
+
+  function renderMailDomains() {
+    const info = mailInfo;
+    const domains = info.domains || [];
+    const candidates = info.candidates || [];
+    return <div className="mail-tab">
+      <div className="create-inline">
+        <div className="create-inline-head"><strong>{t('Turn on email for a domain')}</strong></div>
+        <div className="mail-create-grid">
+          {isAdmin
+            ? <div className="field"><span className="field-label">{t('Domain')}</span>
+                <input list="mail-domain-candidates" value={mailDomainForm.domain} placeholder="example.com" spellCheck={false}
+                  onChange={e => setMailDomainForm(prev => ({ ...prev, domain: e.target.value.trim().toLowerCase() }))} />
+                <datalist id="mail-domain-candidates">{candidates.map(name => <option key={name} value={name} />)}</datalist>
+              </div>
+            : <div className="field"><span className="field-label">{t('Domain')}</span>
+                <select value={mailDomainForm.domain} onChange={e => setMailDomainForm(prev => ({ ...prev, domain: e.target.value }))}>
+                  <option value="">{t('Choose one of your websites')}</option>
+                  {candidates.map(name => <option key={name} value={name}>{name}</option>)}
+                </select>
+              </div>}
+          {isAdmin && <div className="field"><span className="field-label">{t('Account')}</span>
+            <select value={mailDomainForm.owner_id} onChange={e => setMailDomainForm(prev => ({ ...prev, owner_id: e.target.value }))}>
+              <option value="">{t("The website's owner")}</option>
+              {users.map(user => <option key={user.id} value={user.id}>{user.username}</option>)}
+            </select>
+          </div>}
+          <button disabled={!mailDomainForm.domain.trim() || !!loading} onClick={addMailDomain}><Plus size={14}/> {t('Turn on email')}</button>
+        </div>
+        {!isAdmin && candidates.length === 0 && <p className="hint">{t('Every domain of your websites already has email. Add a website or a domain alias to use another one.')}</p>}
+        <p className="hint">{t('Mail for a domain arrives here once its MX record points at this server; the DNS records to add are shown next.')}</p>
+      </div>
+      {domains.length === 0 && <EmptyState icon={Mail} message={t('No mail domains yet.')} />}
+      {domains.length > 0 && <div className="table">
+        {domains.map(d => {
+          const draft = String(catchAllDraft[d.id] ?? d.catch_all ?? '');
+          return <div className="row mail-domain-row" key={d.id}>
+            <span className="mail-row-name">
+              <strong>{d.domain}</strong>
+              <small>{t('{mailboxes} mailboxes · {forwarders} forwarders', { mailboxes: d.mailboxes, forwarders: d.forwarders })}{isAdmin && d.owner ? ` · ${t('Account')}: ${d.owner}` : ''}</small>
+            </span>
+            <span className="mail-catchall">
+              <span className="field-label">{t('Catch-all')}</span>
+              <span className="mail-catchall-input">
+                <input value={draft} placeholder={t('Off: unknown addresses are refused')} spellCheck={false} aria-label={t('Catch-all for {domain}', { domain: d.domain })}
+                  onChange={e => setCatchAllDraft(prev => ({ ...prev, [d.id]: e.target.value }))} />
+                {draft.trim() !== (d.catch_all || '') && <button className="mini" disabled={!!loading} onClick={() => saveCatchAll(d)} aria-label={t('Save')} title={t('Save')}><Save size={13}/></button>}
+              </span>
+            </span>
+            <label className="check-line mail-webmail-host" title={t('Serve webmail at webmail.{domain} with its own certificate', { domain: d.domain })}>
+              <input type="checkbox" checked={!!d.webmail_host} disabled={!!loading} onChange={e => toggleWebmailHost(d, e.target.checked)} />
+              <span>webmail.{d.domain}</span>
+            </label>
+            <span className="row-actions">
+              <button className="mini secondary-light" disabled={!!loading} onClick={() => openMailDns(d)}><Globe size={13}/> {t('DNS records')}</button>
+              <button className="mini danger" disabled={!!loading} onClick={() => deleteMailDomain(d)} aria-label={t('Delete {name}', { name: d.domain })} title={t('Delete')}><Trash2 size={13}/></button>
+            </span>
+          </div>;
+        })}
+      </div>}
+    </div>;
+  }
+
+  // A relay's DNS template: what every domain sending through it publishes.
+  function renderDnsRecordEditor(rows, onChange) {
+    const setRow = (index, patch) => onChange(rows.map((row, i) => i === index ? { ...row, ...patch } : row));
+    return <div className="dns-editor">
+      {rows.map((row, index) => <div className={`dns-editor-row${row.type === 'MX' ? ' with-priority' : ''}`} key={index}>
+        <select value={row.type} aria-label={t('Type')} onChange={e => setRow(index, { type: e.target.value })}>
+          {['TXT', 'CNAME', 'MX', 'A', 'AAAA'].map(type => <option key={type} value={type}>{type}</option>)}
+        </select>
+        <input value={row.name} placeholder="@" aria-label={t('Name')} spellCheck={false} onChange={e => setRow(index, { name: e.target.value })} />
+        {row.type === 'MX' && <input type="number" min="0" max="65535" value={row.priority ?? ''} placeholder="10" aria-label={t('Priority')} onChange={e => setRow(index, { priority: e.target.value })} />}
+        <input className="dns-editor-value" value={row.value} placeholder={t('Value ({domain} = the domain)')} aria-label={t('Value')} spellCheck={false} onChange={e => setRow(index, { value: e.target.value })} />
+        <button type="button" className="mini danger icon-only" aria-label={t('Remove')} title={t('Remove')} onClick={() => onChange(rows.filter((_, i) => i !== index))}><Trash2 size={13}/></button>
+      </div>)}
+      <div className="actions dns-editor-actions">
+        <button type="button" className="mini secondary-light" disabled={rows.length >= 10} onClick={() => onChange([...rows, { type: 'TXT', name: '@', value: '', priority: '' }])}><Plus size={13}/> {t('Add a record')}</button>
+      </div>
+      <p className="hint">{t('Names are relative to each domain that uses the relay: @ is the domain itself, brevo1._domainkey a name under it. {domain} in a value becomes the domain name.')}</p>
+    </div>;
+  }
+
+  function renderMailDns() {
+    const { domain, records, relay, hostedZone } = mailDns;
+    const statusLabel = { ok: t('Found'), missing: t('Missing'), different: t('Different'), unknown: t('Not checked') };
+    const statusClass = { ok: 'ok', missing: 'bad', different: 'warn', unknown: '' };
+    const titles = {
+      mx: t('Receiving mail (MX)'),
+      mail: t('Mail server address (A)'),
+      spf: t('Allowed senders (SPF)'),
+      dkim: t('Signature key (DKIM)'),
+      dmarc: t('Policy (DMARC)'),
+      webmail: t('Webmail address (optional)'),
+    };
+    const titleFor = record => titles[record.key] || t('Asked for by the relay {relay}', { relay: record.relay });
+    return <section className="section mail-dns-page">
+      <div className="section-title">
+        <div className="waf-detail-title">
+          <button className="secondary-light" onClick={() => setMailDns(null)}><ArrowLeft size={14}/> {t('Email')}</button>
+          <div><h2>{t('DNS records for {domain}', { domain: domain.domain })}</h2>
+            <p className="hint">{t('Add these at the DNS provider of {domain}. A change can take a few hours to be seen everywhere.', { domain: domain.domain })}</p></div>
+        </div>
+        <div className="actions">
+          <button className="secondary-light" disabled={!!loading || records === null} onClick={() => openMailDns(domain)}><RefreshCw size={14}/> {t('Check again')}</button>
+          <button className="secondary-light" disabled={!!loading} onClick={() => rotateMailDkim(domain)}><KeyRound size={14}/> {t('New DKIM key')}</button>
+        </div>
+      </div>
+      {relay && <div className="mail-relay-card">
+        <div className="mail-relay-card-head"><Send size={15}/><strong>{t('Outgoing mail')}</strong></div>
+        {isAdmin && <select value={relay.choice} disabled={!!loading} aria-label={t('Outgoing mail')} onChange={e => saveDomainRelay(e.target.value)}>
+          <option value="">{t('Server default')}</option>
+          <option value="direct">{t('Direct, without a relay')}</option>
+          {relay.options.map(option => <option key={option.id} value={option.id}>{t('Relay: {name}', { name: option.name })}</option>)}
+        </select>}
+        <p className="hint">{relay.effective_name
+          ? t('Mail from {domain} leaves through the relay {relay}; the records it asks for are listed below.', { domain: domain.domain, relay: relay.effective_name })
+          : t('Mail from {domain} is delivered directly from this server.', { domain: domain.domain })}</p>
+      </div>}
+      {hostedZone && <div className="info-box dns-managed-box">
+        <Network size={14}/>
+        <span>{t('DNS Manager on this server holds the zone {zone} and keeps these records in it, taking back the ones email no longer needs. "In the zone" is what the zone holds; the other badge is what public DNS answers, which matches once the domain\'s nameservers point here.', { zone: hostedZone })}</span>
+        <button type="button" className="mini secondary-light" onClick={() => openDnsZone({ name: hostedZone })}>{t('Open zone')}</button>
+      </div>}
+      {records === null && <p className="hint">{t('Checking DNS…')}</p>}
+      {records && <div className="mail-dns-list">
+        {records.map(record => <div className="mail-dns-record" key={record.key}>
+          <div className="mail-dns-head">
+            <strong>{titleFor(record)}</strong>
+            <span className="mail-dns-type"><code>{record.type}</code>{record.priority != null && <small>{t('priority {n}', { n: record.priority })}</small>}</span>
+            {hostedZone && record.in_zone != null && <span className={`badge mail-dns-zone ${record.in_zone ? 'ok' : 'warn'}`}
+              title={t("DNS Manager's zone on this server")}>{record.in_zone ? t('In the zone') : t('Not in the zone')}</span>}
+            <span className={`badge mail-dns-status ${statusClass[record.status] || ''}`} title={t('What public DNS answers now')}>{statusLabel[record.status] || record.status}</span>
+          </div>
+          {renderCopyBlock(t('Name'), record.name)}
+          {renderCopyBlock(t('Value'), record.value, { multiline: record.key === 'dkim' })}
+          {record.status === 'different' && (record.found || []).length > 0 && <p className="hint">{t('Found now:')} <code>{record.found.join(' | ')}</code></p>}
+          {record.key === 'webmail' && <p className="hint">{t('Only needed for webmail.{domain}; turn that on in the Domains tab once this record is in place.', { domain: domain.domain })}</p>}
+        </div>)}
+      </div>}
+    </section>;
+  }
+
+  function relayTlsLabel(tls) {
+    return { starttls: 'STARTTLS', ssl: 'SSL/TLS', none: t('no TLS') }[tls] || tls;
+  }
+
+  function renderRelayForm() {
+    const f = relayForm;
+    const set = patch => setRelayForm(prev => ({ ...prev, ...patch }));
+    const canSave = f.name.trim() && f.host.trim() && (!f.username.trim() || f.password || f.password_set);
+    return <div className="mail-tab">
+      <div className="create-inline mail-relay-form">
+        <div className="create-inline-head">
+          <strong>{f.id ? t('Edit relay {name}', { name: f.name }) : t('New relay')}</strong>
+          <button type="button" className="secondary-light icon-only mini" onClick={() => setRelayForm(null)} aria-label={t('Close')} title={t('Close')}><X size={15}/></button>
+        </div>
+        <div className="mail-settings-grid">
+          <label className="field"><span className="field-label">{t('Name')}</span><input value={f.name} placeholder="Brevo" onChange={e => set({ name: e.target.value })} /></label>
+          <label className="field"><span className="field-label">{t('Relay host')}</span><input value={f.host} placeholder="smtp-relay.brevo.com" spellCheck={false} onChange={e => set({ host: e.target.value })} /></label>
+          <label className="field"><span className="field-label">{t('Port')}</span><input type="number" min="1" max="65535" value={f.port}
+            onChange={e => set({ port: e.target.value, ...(e.target.value === '465' ? { tls: 'ssl' } : f.tls === 'ssl' ? { tls: 'starttls' } : {}) })} /></label>
+          <label className="field"><span className="field-label">TLS</span>
+            <select value={f.tls} onChange={e => set({ tls: e.target.value })}>
+              <option value="starttls">STARTTLS</option>
+              <option value="ssl">SSL/TLS</option>
+              <option value="none">{t('None (private network only)')}</option>
+            </select></label>
+          <label className="field"><span className="field-label">{t('Username')}</span><input value={f.username} autoComplete="off" spellCheck={false} onChange={e => set({ username: e.target.value })} data-lpignore="true" data-1p-ignore="true" /></label>
+          <label className="field"><span className="field-label">{t('Password')}</span><input type="password" value={f.password} autoComplete="new-password"
+            placeholder={f.password_set ? t('Saved — leave empty to keep') : ''} onChange={e => set({ password: e.target.value })} data-lpignore="true" data-1p-ignore="true" /></label>
+        </div>
+        <div className="mail-relay-template">
+          <strong>{t('Mail DNS template')}</strong>
+          <p className="hint">{t("What every domain that sends through this relay must publish. Customers see it on their domain's DNS records page and set up their domain from it.")}</p>
+          <label className="field"><span className="field-label">{t('SPF for this relay')} <em>{t('added to the SPF record of every domain that uses it')}</em></span>
+            <input value={f.spf_include} placeholder="include:spf.brevo.com" spellCheck={false} list="mail-spf-includes" onChange={e => set({ spf_include: e.target.value })} />
+            <datalist id="mail-spf-includes">{MAIL_SPF_INCLUDES.map(item => <option key={item} value={item} />)}</datalist></label>
+          <div className="field"><span className="field-label">{t('DNS records the relay asks for')}</span>
+            {renderDnsRecordEditor(f.dns_records, rows => set({ dns_records: rows }))}</div>
+        </div>
+        {!f.id && <label className="check-line"><input type="checkbox" checked={!!f.make_default} onChange={e => set({ make_default: e.target.checked })} /> {t('Use it as the default relay')}</label>}
+        <p className="hint">{t("587 uses STARTTLS and 465 SSL/TLS, and the relay's certificate must be valid. Leave the username empty for a relay that knows this server by its address.")}</p>
+        <div className="actions">
+          <button type="button" className="secondary-light" onClick={() => setRelayForm(null)}>{t('Cancel')}</button>
+          <button type="button" disabled={!canSave || !!loading} onClick={saveRelay}><Save size={14}/> {t('Save relay')}</button>
+        </div>
+      </div>
+    </div>;
+  }
+
+  function renderMailRelays() {
+    if (relayForm) return renderRelayForm();
+    const data = mailRelays;
+    const relays = data?.relays || [];
+    return <div className="mail-tab">
+      <p className="hint">{t('A relay (smarthost) sends this server\'s outgoing mail for it: needed where the provider blocks port 25, and it can help mail reach the inbox. Each domain uses the default relay unless its DNS page picks another one or direct delivery.')}</p>
+      <div className="mail-toolbar">
+        <label className="field mail-default-relay"><span className="field-label">{t('Default relay')}</span>
+          <select value={data?.default_relay || ''} disabled={!data || !!loading} onChange={e => setDefaultRelay(e.target.value)}>
+            <option value="">{t('None: deliver directly')}</option>
+            {relays.map(relay => <option key={relay.id} value={relay.id}>{relay.name}</option>)}
+          </select></label>
+        <button type="button" onClick={() => editRelay(null)}><Plus size={15}/> {t('New relay')}</button>
+      </div>
+      {data === null && <p className="hint">{t('Loading…')}</p>}
+      {data && relays.length === 0 && <EmptyState icon={Send} message={t('No relay yet: mail leaves this server directly.')} />}
+      {relays.length > 0 && <div className="table">
+        {relays.map(relay => <div className="row mail-relay-row" key={relay.id}>
+          <span className="mail-row-name">
+            <strong>{relay.name}{relay.default && <span className="badge ok">{t('Default')}</span>}</strong>
+            <small>{relay.host}:{relay.port} · {relayTlsLabel(relay.tls)}{relay.username ? ` · ${relay.username}` : ` · ${t('no login')}`}</small>
+          </span>
+          <span className="mail-relay-meta">
+            {relay.spf_include && <small><code>{relay.spf_include}</code></small>}
+            {(relay.dns_records || []).length > 0 && <small>{t('{n} DNS records', { n: relay.dns_records.length })}</small>}
+            {(relay.domains || []).length > 0 && <small>{t('Chosen by {domains}', { domains: relay.domains.join(', ') })}</small>}
+          </span>
+          <span className="row-actions">
+            <button className="mini secondary-light" disabled={!!loading} onClick={() => editRelay(relay)}><Pencil size={13}/> {t('Edit')}</button>
+            <button className="mini danger" disabled={!!loading} onClick={() => deleteRelay(relay)} aria-label={t('Delete {name}', { name: relay.name })} title={t('Delete')}><Trash2 size={13}/></button>
+          </span>
+        </div>)}
+      </div>}
+      <h3 className="mail-subhead">{t('Send a test message')}</h3>
+      <div className="mail-relay-test">
+        <input type="email" value={relayTestTo} onChange={e => setRelayTestTo(e.target.value)} placeholder="you@gmail.com" aria-label={t('Send a test message to')} />
+        <button className="secondary-light" disabled={!!loading || !relayTestTo.includes('@')} onClick={testRelay}><Send size={14}/> {t('Send a test message')}</button>
+      </div>
+      <p className="hint">{t('Sent from postmaster at the server name, through the relay the default route uses. What Exim logged for it is shown, the receiving server\'s answer included.')}</p>
+      {relayTestLines && <pre className="mail-log">{relayTestLines.length ? relayTestLines.join('\n') : t('Exim logged nothing more about it.')}</pre>}
+    </div>;
+  }
+
+  function rspamdActionLabel(action) {
+    return {
+      'no action': t('Delivered'),
+      'add header': t('Marked as spam'),
+      'rewrite subject': t('Subject marked'),
+      greylist: t('Greylisted'),
+      'soft reject': t('Deferred'),
+      reject: t('Rejected'),
+    }[action] || action;
+  }
+
+  function renderLogViewer(lines, query, setQuery, reload) {
+    return <>
+      <div className="mail-toolbar mail-log-toolbar">
+        <form className="mail-search" onSubmit={e => { e.preventDefault(); reload(query); }}>
+          <input value={query.q} placeholder={t('Filter, e.g. an address or a message ID')} aria-label={t('Filter')} onChange={e => setQuery(prev => ({ ...prev, q: e.target.value }))} />
+          <button type="submit" className="secondary-light icon-only" aria-label={t('Search')} title={t('Search')}><Search size={14}/></button>
+        </form>
+        <select value={query.lines} aria-label={t('Lines')} onChange={e => { const next = { ...query, lines: Number(e.target.value) }; setQuery(next); reload(next); }}>
+          {[200, 500, 1000, 3000].map(n => <option key={n} value={n}>{t('Last {n} lines', { n })}</option>)}
+        </select>
+        <button type="button" className="secondary-light" disabled={!!loading} onClick={() => reload(query)}><RefreshCw size={14}/> {t('Refresh')}</button>
+      </div>
+      {lines === null ? <p className="hint">{t('Loading…')}</p>
+        : lines.length ? <pre className="mail-log">{lines.join('\n')}</pre>
+          : <p className="hint">{query.q ? t('No line matches.') : t('The log is empty.')}</p>}
+    </>;
+  }
+
+  function renderMailRspamd() {
+    const stat = rspamdStat;
+    const list = rspamdHistory;
+    const pages = Math.max(1, Math.ceil((list?.total || 0) / (list?.per_page || 50)));
+    const actionClass = { reject: 'bad', 'soft reject': 'warn', greylist: 'warn', 'add header': 'warn', 'rewrite subject': 'warn', 'no action': 'ok' };
+    const cards = [['Scanned', stat?.scanned], ['Spam', stat?.spam], ['Ham', stat?.ham], ['Learned', stat?.learned]];
+    const addressOf = text => (String(text || '').match(/[^\s<>"]+@[^\s<>"]+/) || [''])[0].toLowerCase();
+    const f = mailSettingsForm;
+    return <div className="mail-tab">
+      <div className="mail-stat-grid">
+        {cards.map(([label, value]) => <div className="mail-stat" key={label}><small>{t(label)}</small><strong>{value ?? '—'}</strong></div>)}
+        {stat && Object.entries(stat.actions || {}).filter(([, count]) => count > 0).map(([action, count]) =>
+          <div className="mail-stat" key={action}><small>{rspamdActionLabel(action)}</small><strong>{count}</strong></div>)}
+      </div>
+      <div className="segmented-control" role="tablist" aria-label="Rspamd">
+        {[['history', 'Scan history'], ['log', 'Log'], ['allow', 'Allowlist']].map(([id, label]) => <button key={id} type="button" role="tab"
+          aria-selected={rspamdView === id} className={rspamdView === id ? 'active' : ''} onClick={() => setRspamdView(id)}>{t(label)}</button>)}
+      </div>
+      {rspamdView === 'history' && <>
+        <div className="mail-toolbar">
+          <form className="mail-search" onSubmit={e => { e.preventDefault(); loadRspamdHistory(1); }}>
+            <input value={rspamdFilter.q} placeholder={t('Sender, recipient, subject or IP')} aria-label={t('Search')} onChange={e => setRspamdFilter(prev => ({ ...prev, q: e.target.value }))} />
+            <button type="submit" className="secondary-light icon-only" aria-label={t('Search')} title={t('Search')}><Search size={14}/></button>
+          </form>
+          <select value={rspamdFilter.action} aria-label={t('Result')} onChange={e => loadRspamdHistory(1, e.target.value)}>
+            <option value="">{t('Every result')}</option>
+            {['no action', 'add header', 'rewrite subject', 'greylist', 'soft reject', 'reject'].map(action => <option key={action} value={action}>{rspamdActionLabel(action)}</option>)}
+          </select>
+          <button type="button" className="secondary-light" disabled={!!loading} onClick={() => { loadRspamdStat(); loadRspamdHistory(rspamdFilter.page); }}><RefreshCw size={14}/> {t('Refresh')}</button>
+        </div>
+        {list === null && <p className="hint">{t('Loading…')}</p>}
+        {list && list.items.length === 0 && <EmptyState icon={ShieldCheck} message={rspamdFilter.q || rspamdFilter.action ? t('No scanned message matches.') : t('No message has been scanned yet.')} />}
+        {list && list.items.length > 0 && <div className="table">
+          {list.items.map((item, index) => {
+            const sender = addressOf(item.from) || addressOf(item.envelope_from);
+            const senderDomain = sender.split('@')[1] || '';
+            return <div className="row rspamd-row" key={`${item.time}-${index}`}>
+              <span className="rspamd-when">
+                <small>{formatFileTime(item.time)}</small>
+                <span className={`badge ${actionClass[item.action] || ''}`}>{rspamdActionLabel(item.action)}</span>
+              </span>
+              <span className="mail-row-name">
+                <strong title={item.subject}>{item.subject || t('(no subject)')}</strong>
+                <small>{item.from || '—'} → {item.to.join(', ') || '—'}</small>
+                {item.ip && <small>{item.ip}{item.user ? ` · ${t('signed in as {user}', { user: item.user })}` : ''}</small>}
+                {item.allowed
+                  ? <small className="rspamd-allowed">{t('This sender is on the allowlist.')}</small>
+                  : sender && item.action !== 'no action' && <span className="rspamd-allow">
+                      <button className="mini secondary-light" disabled={!!loading} onClick={() => allowMailSender(sender)}><Check size={12}/> {t('Allow {sender}', { sender })}</button>
+                      {senderDomain && <button className="mini secondary-light" disabled={!!loading} onClick={() => allowMailSender(senderDomain)}><Check size={12}/> {t('Allow everyone at {domain}', { domain: senderDomain })}</button>}
+                    </span>}
+              </span>
+              <span className="rspamd-score"><strong>{item.score}</strong><small>/ {item.required}</small></span>
+              <span className="rspamd-symbols">{item.symbols.slice(0, 10).map(symbol =>
+                <code key={symbol.name} className={symbol.score > 0 ? 'pos' : symbol.score < 0 ? 'neg' : ''} title={String(symbol.score)}>{symbol.name}{symbol.score ? ` ${symbol.score > 0 ? '+' : ''}${symbol.score}` : ''}</code>)}</span>
+            </div>;
+          })}
+        </div>}
+        {pages > 1 && <div className="firewall-ip-pager">
+          <button className="mini secondary-light" disabled={rspamdFilter.page <= 1} onClick={() => loadRspamdHistory(rspamdFilter.page - 1)}>{t('Previous')}</button>
+          <span className="hint">{t('Page {page} of {pages}', { page: rspamdFilter.page, pages })}</span>
+          <button className="mini secondary-light" disabled={rspamdFilter.page >= pages} onClick={() => loadRspamdHistory(rspamdFilter.page + 1)}>{t('Next')}</button>
+        </div>}
+        <p className="hint">{t('Rspamd keeps the last 2000 scans. A message sent by a signed-in mailbox is not scanned. A message stopped by a test pattern (GTUBE) is not kept.')}</p>
+      </>}
+      {rspamdView === 'log' && renderLogViewer(rspamdLog, rspamdLogQuery, setRspamdLogQuery, loadRspamdLog)}
+      {rspamdView === 'allow' && (f ? <div className="create-inline mail-settings">
+        <p className="hint">{t('One email address or domain per line. Mail from them is never blocked or sent to Junk: use it when the scan history shows a mistake.')}</p>
+        <textarea className="mail-allow" rows={8} value={f.allow || ''} spellCheck={false} placeholder={'friend@example.com\nexample.org'}
+          onChange={e => setMailSettingsForm(prev => ({ ...prev, allow: e.target.value }))} />
+        <div className="actions"><button type="button" disabled={!!loading} onClick={saveMailSettings}><Save size={14}/> {t('Save allowlist')}</button></div>
+      </div> : <p className="hint">{t('Loading…')}</p>)}
+    </div>;
   }
 
   function renderMailServer() {
-    const status = mailStatus;
-    if (!status) return null;
+    const f = mailSettingsForm;
+    const status = mailSettings?.status || {};
+    const set = patch => setMailSettingsForm(prev => ({ ...prev, ...patch }));
+    return <div className="mail-tab">
+      {!f ? <p className="hint">{t('Loading…')}</p> : <div className="create-inline mail-settings">
+        <div className="create-inline-head"><strong>{t('Mail server')}</strong></div>
+        <p className="hint">{t('Server name: {host}. Messages waiting to be sent: {queue}.', { host: mailSettings?.hostname || '—', queue: mailSettings?.queue ?? '—' })}</p>
+        <div className="dns-server">
+          {[['exim', 'Exim'], ['dovecot', 'Dovecot'], ['rspamd', 'Rspamd'], ['webmail', 'Webmail']].map(([key, label]) =>
+            <span key={key} className={`badge ${status[key] ? 'ok' : key === 'rspamd' && !f.spam_enabled ? '' : 'bad'}`}>{status[key] ? t('{name} is running', { name: label }) : t('{name} is not running', { name: label })}</span>)}
+          <span className={`badge ${status.outbound_smtp ? 'ok' : 'warn'}`}>{status.outbound_smtp ? t('Can send to other mail servers') : t('Outgoing port 25 is blocked')}</span>
+        </div>
+        {!status.outbound_smtp && <p className="hint">{t('This server cannot reach other mail servers on port 25, so mail to outside addresses waits in the queue and comes back after a few days. Ask the provider to open it, or send through a relay (Relays tab).')}</p>}
+        {f.spam_enabled && status.resolver === 'system' && <p className="hint">{t("This server's provider lets DNS out only to its own resolvers, so Rspamd uses them; Spamhaus and other DNS blocklists refuse such resolvers, so those checks are off. The other checks still run.")}</p>}
+        <div className="mail-settings-grid">
+          <label className="field"><span className="field-label">{t('Recipients per mailbox per hour')} <em>{t('0 = no limit')}</em></span><input type="number" min="0" value={f.auth_rate_per_hour ?? 300} onChange={e => set({ auth_rate_per_hour: e.target.value })} /></label>
+          <label className="field"><span className="field-label">{t('Messages per website account per hour')} <em>{t('0 = no limit')}</em></span><input type="number" min="0" value={f.local_rate_per_hour ?? 300} onChange={e => set({ local_rate_per_hour: e.target.value })} /></label>
+          <label className="field"><span className="field-label">{t('Largest message (MB)')}</span><input type="number" min="1" max="200" value={f.max_message_mb ?? 50} onChange={e => set({ max_message_mb: e.target.value })} /></label>
+          <label className="field"><span className="field-label">{t('New mailbox size (MB)')}</span><input type="number" min="1" value={f.default_quota_mb ?? 1024} onChange={e => set({ default_quota_mb: e.target.value })} /></label>
+          <label className="field"><span className="field-label">{t('Spam score: move to Junk')}</span><input type="number" min="1" max="100" step="0.5" value={f.spam_header_score ?? 6} disabled={!f.spam_enabled} onChange={e => set({ spam_header_score: e.target.value })} /></label>
+          <label className="field"><span className="field-label">{t('Spam score: refuse')}</span><input type="number" min="1" max="100" step="0.5" value={f.spam_reject_score ?? 15} disabled={!f.spam_enabled} onChange={e => set({ spam_reject_score: e.target.value })} /></label>
+        </div>
+        <label className="check-line"><input type="checkbox" checked={!!f.spam_enabled} onChange={e => set({ spam_enabled: e.target.checked })} />
+          {t('Spam filter (Rspamd) for mail from outside')}</label>
+        <label className="check-line"><input type="checkbox" checked={!!f.greylisting} disabled={!f.spam_enabled} onChange={e => set({ greylisting: e.target.checked })} />
+          {t('Greylisting: doubtful senders are asked to retry a few minutes later')}</label>
+        <div className="actions"><button type="button" disabled={!!loading} onClick={saveMailSettings}><Save size={14}/> {t('Apply mail settings')}</button></div>
+      </div>}
+      <h3 className="mail-subhead">{t('Exim log')}</h3>
+      {renderLogViewer(eximLog, eximLogQuery, setEximLogQuery, loadEximLog)}
+    </div>;
+  }
+
+  function renderMailClientHelp() {
+    const client = mailInfo?.client || {};
     return <section className="section">
       <div className="section-title">
-        <div>
-          <h2>{t('Mail server')}</h2>
-          <p className="hint">{t('Mail server name: {name}', { name: status.hostname || '--' })}</p>
-        </div>
-        <button className="secondary-light" disabled={!!loading} onClick={syncMail}><RefreshCw size={14}/>{t('Sync mailboxes now')}</button>
+        <div><h2>{t('Mail app settings')}</h2>
+          <p className="hint">{t("For Outlook, Thunderbird, Apple Mail or a phone. The username is the full email address, the password the mailbox's own.")}</p></div>
       </div>
-      <div className="dns-server">
-        {[['exim', 'Exim'], ['dovecot', 'Dovecot'], ['webmail', 'Webmail']].map(([key, label]) =>
-          <span key={key} className={`badge ${status[key] ? 'ok' : 'bad'}`}>{status[key] ? t('{name} is running', { name: label }) : t('{name} is not running', { name: label })}</span>)}
-        <span className={`badge ${status.port_open ? 'ok' : 'warn'}`}>{status.port_open ? t('Mail ports open') : t('Mail ports closed')}</span>
-        <span className={`badge ${status.outbound_smtp ? 'ok' : 'warn'}`}>{status.outbound_smtp ? t('Can send to other mail servers') : t('Outgoing port 25 is blocked')}</span>
-        <span className={`badge ${status.spam_filter && status.rspamd ? 'ok' : 'warn'}`}>{status.spam_filter && status.rspamd ? t('Spam filter on') : t('Spam filter off')}</span>
-        {status.relay && <span className="badge ok">{t('Smarthost: {host}', { host: status.relay.split(' ')[0] })}</span>}
+      <div className="sftp-connect-grid">
+        {renderCopyBlock(t('Server (IMAP, POP3 and SMTP)'), client.host || '—')}
       </div>
-      {!status.outbound_smtp && !status.relay && <p className="hint">{t('This server cannot reach other mail servers on port 25, so mail to outside addresses waits in the queue and comes back after a few days. Ask the provider to open it, or send through a smarthost below.')}</p>}
+      <ul className="mail-client-ports">
+        <li><strong>IMAP</strong> {t('port {port}, SSL/TLS', { port: client.imap_port || 993 })}</li>
+        <li><strong>POP3</strong> {t('port {port}, SSL/TLS', { port: client.pop3_port || 995 })}</li>
+        <li><strong>SMTP</strong> {t('port {port}, SSL/TLS — or {submission} with STARTTLS', { port: client.smtp_port || 465, submission: client.submission_port || 587 })}</li>
+      </ul>
     </section>;
+  }
+
+  function renderMailModals() {
+    return <>
+      {mailboxEdit && <div className="modal-overlay" onClick={() => setMailboxEdit(null)}>
+        <div className="modal-card" onClick={e => e.stopPropagation()}>
+          <div className="modal-header">
+            <h3>{mailboxEdit.box.address}</h3>
+            <button className="secondary-light" onClick={() => setMailboxEdit(null)} aria-label={t('Close')}><X size={16}/></button>
+          </div>
+          <div className="modal-body">
+            <label className="field"><span className="field-label">{t('New password')} <small>{t('(leave empty to keep)')}</small></span>
+              <div className="password-with-generate">
+                <input value={mailboxEdit.password} autoComplete="new-password" spellCheck={false} onChange={e => setMailboxEdit(prev => ({ ...prev, password: e.target.value }))} data-lpignore="true" data-1p-ignore="true" />
+                <button type="button" className="secondary-light icon-only" title={t('Generate random password')} aria-label={t('Generate random password')} onClick={() => setMailboxEdit(prev => ({ ...prev, password: mailPassword() }))}><Dices size={15}/></button>
+                <button type="button" className="secondary-light icon-only" title={t('Copy')} aria-label={t('Copy')} onClick={() => copyText(mailboxEdit.password, t('Copied.'))}><Copy size={15}/></button>
+              </div>
+            </label>
+            <label className="field"><span className="field-label">{t('Size (MB)')}{isAdmin && <em> {t('0 = unlimited')}</em>}</span>
+              <input type="number" min={isAdmin ? 0 : 1} value={mailboxEdit.quota_mb} onChange={e => setMailboxEdit(prev => ({ ...prev, quota_mb: e.target.value }))} />
+            </label>
+            <p className="hint">{t('A new password takes effect at once: mail apps using the old one must be updated.')}</p>
+          </div>
+          <div className="modal-actions">
+            <button className="secondary-light" onClick={() => setMailboxEdit(null)}>{t('Cancel')}</button>
+            <button disabled={!!loading || (mailboxEdit.password !== '' && (mailboxEdit.password.length < 8 || !/[A-Za-z]/.test(mailboxEdit.password) || !/\d/.test(mailboxEdit.password)))} onClick={saveMailboxEdit}><Save size={14}/> {t('Save')}</button>
+          </div>
+        </div>
+      </div>}
+      {forwarderEdit && <div className="modal-overlay" onClick={() => setForwarderEdit(null)}>
+        <div className="modal-card" onClick={e => e.stopPropagation()}>
+          <div className="modal-header">
+            <h3>{forwarderEdit.item.address}</h3>
+            <button className="secondary-light" onClick={() => setForwarderEdit(null)} aria-label={t('Close')}><X size={16}/></button>
+          </div>
+          <div className="modal-body">
+            <label className="field"><span className="field-label">{t('Forward to')}</span>
+              <textarea rows={3} value={forwarderEdit.destinations} spellCheck={false} onChange={e => setForwarderEdit(prev => ({ ...prev, destinations: e.target.value }))} />
+            </label>
+            <p className="hint">{t('One or more addresses, separated by commas.')}</p>
+          </div>
+          <div className="modal-actions">
+            <button className="secondary-light" onClick={() => setForwarderEdit(null)}>{t('Cancel')}</button>
+            <button disabled={!!loading || splitAddresses(forwarderEdit.destinations).length === 0} onClick={saveForwarderEdit}><Save size={14}/> {t('Save')}</button>
+          </div>
+        </div>
+      </div>}
+    </>;
+  }
+
+  function renderMail() {
+    const info = mailInfo;
+    if (!info) return <section className="section"><h2>{t('Email')}</h2><p className="hint">{t('Loading…')}</p></section>;
+    if (mailDns) return <>{renderMailDns()}{renderMailModals()}</>;
+    const domains = info.domains || [];
+    const limit = info.mailbox_limit;
+    const tabs = [
+      ['mailboxes', 'Mailboxes', Inbox], ['forwarders', 'Forwarders', Forward], ['domains', 'Domains', Globe],
+      // Server-wide: relays, the spam filter and the mail server itself.
+      ...(isAdmin ? [['relay', 'Relays', Send], ['rspamd', 'Rspamd', ShieldCheck], ['server', 'Server', Server]] : []),
+    ];
+    const serverTabs = ['relay', 'rspamd', 'server'];
+    const activeTab = domains.length || serverTabs.includes(mailTab) ? mailTab : 'domains';
+    return <>
+      <section className="section mail-page">
+        <div className="section-title">
+          <div><h2>{t('Email')}</h2>
+            <p className="hint">{isAdmin
+              ? t('Mailboxes, forwarders and DNS records of every mail domain on this server.')
+              : limit ? t('{used} of {limit} mailboxes used.', { used: info.mailbox_count, limit }) : t('{n} mailboxes.', { n: info.mailbox_count })}</p></div>
+          <div className="actions">
+            <button type="button" className="secondary-light" onClick={() => window.open(info.webmail_url, '_blank', 'noopener,noreferrer')}><ExternalLink size={14}/> {t('Webmail')}</button>
+            <button type="button" className="secondary-light" disabled={!!loading} onClick={refreshMail}><RefreshCw size={14}/> {t('Refresh')}</button>
+          </div>
+        </div>
+        <div className="segmented-control backup-tabs mail-tabs" role="tablist" aria-label={t('Email sections')}>
+          {tabs.map(([id, label, Icon]) => <button key={id} type="button" role="tab" aria-selected={activeTab === id}
+            className={activeTab === id ? 'active' : ''} disabled={!domains.length && !['domains', ...serverTabs].includes(id)}
+            onClick={() => { setMailTab(id); setMailPage(1); }}><Icon size={14}/>{t(label)}</button>)}
+        </div>
+        {activeTab === 'mailboxes' && renderMailboxes()}
+        {activeTab === 'forwarders' && renderForwarders()}
+        {activeTab === 'domains' && renderMailDomains()}
+        {activeTab === 'relay' && renderMailRelays()}
+        {activeTab === 'rspamd' && renderMailRspamd()}
+        {activeTab === 'server' && renderMailServer()}
+      </section>
+      {domains.length > 0 && !serverTabs.includes(activeTab) && renderMailClientHelp()}
+      {renderMailModals()}
+    </>;
   }
 
   function renderDemoAccounts() {

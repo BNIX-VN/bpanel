@@ -199,15 +199,11 @@ def settings() -> dict:
 
 
 def spf_record() -> str:
-    """The SPF record every domain here should publish.
-
-    The server itself sends ("a mx"), and when mail goes out through a
-    smarthost, so does the smarthost: its include goes in before "~all".
-    """
+    """The SPF record a new zone gets: this server by name and address, and the
+    Email addon's default relay when there is one (mail.default_spf)."""
     from app.services import mail
 
-    include = mail.spf_include()
-    return f"v=spf1 a mx {include} ~all" if include else "v=spf1 a mx ~all"
+    return mail.default_spf()
 
 
 def template_records(template: str, zone: str, zone_ip: str, ttl: int) -> list[dict]:
@@ -280,6 +276,36 @@ def save_settings(nameservers: list[str], zone_ip: str, ttl: int, auto_zone: boo
                             "template": template}
     panel_settings._write_raw(stored)
     return settings()
+
+
+def follow_nameservers(db: Session) -> list[str]:
+    """Every zone the panel made takes the nameservers of the settings: the NS
+    records of its apex and the primary name in its SOA. Returns the zones
+    changed; one PowerDNS refuses is logged and skipped."""
+    config = settings()
+    if len(config["nameservers"]) < 2:
+        return []
+    wanted = [_absolute(ns) for ns in config["nameservers"]]
+    changed = []
+    for row in db.query(DnsZone).order_by(DnsZone.name).all():
+        try:
+            data = _zone_data(row.name)
+            apex = _absolute(row.name)
+            changes = {}
+            ns = _rrset(data, apex, "NS")
+            if sorted(_contents(ns)) != sorted(wanted):
+                changes[(apex, "NS")] = ((ns or {}).get("ttl", config["ttl"]), wanted)
+            soa = _rrset(data, apex, "SOA")
+            parts = (_contents(soa) or [""])[0].split()
+            if len(parts) == 7 and parts[0] != wanted[0]:
+                changes[(apex, "SOA")] = (soa.get("ttl", config["ttl"]), [" ".join([wanted[0], *parts[1:]])])
+            if changes:
+                _serial_follows_edits(row.name, data)
+                _patch(row.name, changes)
+                changed.append(row.name)
+        except DnsError as exc:
+            logger.warning("Nameservers not updated in %s: %s", row.name, exc)
+    return changed
 
 
 # --- names -----------------------------------------------------------------------
@@ -536,6 +562,10 @@ def create_zone(db: Session, name: str, owner_id: int | None, *, claim_existing:
             raise
     db.add(DnsZone(name=zone, owner_id=owner_id))
     db.commit()
+    # A mail domain in it gets its mail records now, not at its next change.
+    from app.services import mail
+
+    mail.publish_all_quietly(db, zone)
     return zone
 
 
@@ -731,6 +761,167 @@ def zone_for_new_domain(db: Session, domain: str, owner_id: int | None) -> tuple
         return None
 
 
+# --- the DNS page (laid out like OPanel's) --------------------------------------------------
+
+def _panel_names(db: Session) -> set[str]:
+    """Every name the panel serves: websites, their aliases, mail domains."""
+    from app.models.entities import MailDomain
+
+    names = {row.domain.lower() for row in db.query(Website).all()}
+    names |= {row.domain.lower() for row in db.query(WebsiteAlias).all()}
+    names |= {row.domain.lower() for row in db.query(MailDomain).all()}
+    return names
+
+
+def zones_page(db: Session, user: User, q: str = "", page: int = 1, per_page: int = 50) -> dict:
+    """One page of the zones a user sees, searched by name. A zone that no
+    longer holds anything of the panel's is said so: only that one may go."""
+    zones = list_zones(db, user)
+    term = (q or "").strip().lower()
+    if term:
+        zones = [zone for zone in zones if term in zone["name"]]
+    page, per_page = max(1, int(page or 1)), max(1, min(int(per_page or 50), 200))
+    rows = {row.name: row for row in db.query(DnsZone).all()}
+    names = _panel_names(db)
+    items = []
+    for zone in zones[(page - 1) * per_page: page * per_page]:
+        row = rows.get(zone["name"])
+        items.append({
+            **zone,
+            "created_at": row.created_at.isoformat() if row is not None and row.created_at else None,
+            "managed": row is not None,
+            "on_panel": any(name == zone["name"] or name.endswith("." + zone["name"]) for name in names),
+        })
+    return {"items": items, "total": len(zones), "page": page, "per_page": per_page}
+
+
+def _mail_marks(db: Session, zone: str) -> dict[tuple[str, str, str], str]:
+    """The records the Email addon keeps in a zone, and for which mail domain."""
+    from app.models.entities import MailDomain
+    from app.services import mail
+
+    if not mail.active():
+        return {}
+    marks = {}
+    for row in db.query(MailDomain).all():
+        if row.domain != zone and not row.domain.endswith("." + zone):
+            continue
+        for record in mail.dns_records(row):
+            name = record["name"].rstrip(".").lower()
+            value = "spf" if record["key"] == "spf" else record["value"].rstrip(".").lower()
+            marks[(name, record["type"], value)] = row.domain
+    return marks
+
+
+def zone_records(db: Session, zone: str) -> list[dict]:
+    """Every record of a zone as the DNS page lists it: SOA and the zone's own
+    NS are locked (DNS settings write them); mail marks the Email addon's."""
+    data = _zone_data(zone)
+    apex = _absolute(zone)
+    marks = _mail_marks(db, zone)
+    rows = []
+    for rrset in data.get("rrsets", []):
+        rtype = rrset.get("type")
+        fqdn = str(rrset.get("name", "")).rstrip(".").lower()
+        for item in rrset.get("records", []):
+            row = to_form(zone, rrset["name"], rtype, rrset.get("ttl", DEFAULT_TTL), item["content"])
+            row["value"] = row["content"]
+            row["fqdn"] = fqdn
+            row["locked"] = rtype == "SOA" or (rtype == "NS" and rrset["name"] == apex)
+            probe = "spf" if rtype == "TXT" and row["content"].lower().startswith("v=spf1") else row["content"].rstrip(".").lower()
+            row["mail"] = marks.get((fqdn, rtype, probe), "")
+            rows.append(row)
+    order = {**TYPE_ORDER, "SOA": -1}
+    rows.sort(key=lambda row: (row["name"] != "@", row["name"], order.get(row["type"], 99), row["content"]))
+    return rows
+
+
+def _lookup_ns(zone: str) -> list[str] | None:
+    """The zone's NS records as public DNS answers; [] for none, None when DNS
+    could not be asked."""
+    try:
+        import dns.exception
+        import dns.resolver
+    except ImportError:
+        return None
+    resolver = dns.resolver.Resolver()
+    resolver.timeout = 3
+    resolver.lifetime = 5
+    try:
+        return sorted(str(item.target).rstrip(".").lower() for item in resolver.resolve(zone, "NS"))
+    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
+        return []
+    except (dns.exception.DNSException, OSError):
+        return None
+
+
+def delegation(zone: str) -> dict:
+    """Whether public DNS asks this server's nameservers about the zone."""
+    want = sorted(name.rstrip(".").lower() for name in settings()["nameservers"])
+    found = _lookup_ns(zone)
+    if found is None:
+        return {"status": "unknown", "expected": want, "found": []}
+    status = "ok" if found and set(want) <= set(found) else ("different" if found else "missing")
+    return {"status": status, "expected": want, "found": found}
+
+
+def restore_defaults(db: Session, zone: str) -> None:
+    """Put back what the panel writes into a zone: its nameservers, the records
+    for new zones where the name has none of that type, an address for each
+    website inside it, and the Email addon's records. Records the owner added
+    stay."""
+    config = settings()
+    data = _zone_data(zone)
+    apex = _absolute(zone)
+    ttl = config["ttl"]
+    changes: dict[tuple[str, str], tuple[int, list[str]]] = {}
+    if len(config["nameservers"]) >= 2:
+        wanted = [_absolute(ns) for ns in config["nameservers"]]
+        if sorted(_contents(_rrset(data, apex, "NS"))) != sorted(wanted):
+            changes[(apex, "NS")] = (ttl, wanted)
+
+    def taken(name: str, rtype: str) -> bool:
+        if (name, rtype) in changes:
+            return True
+        if _rrset(data, name, "CNAME") and rtype != "CNAME":
+            return True
+        if rtype == "TXT":
+            # The template's {spf}: only an apex without an SPF record gets it.
+            return any(_untxt(item).lower().startswith("v=spf1") for item in _contents(_rrset(data, name, "TXT")))
+        return bool(_rrset(data, name, rtype))
+
+    for record in template_records(config["template"], zone, config["zone_ip"], ttl):
+        name, rtype, _, content = to_pdns(zone, record)
+        if rtype == "TXT" and not _untxt(content).lower().startswith("v=spf1"):
+            if content in _contents(_rrset(data, name, "TXT")):
+                continue
+            changes[(name, rtype)] = (ttl, _contents(_rrset(data, name, "TXT")) + [content])
+            continue
+        if not taken(name, rtype):
+            changes[(name, rtype)] = (ttl, [content])
+    if config["zone_ip"]:
+        for host in sorted(_panel_names(db)):
+            if not host.endswith("." + zone):
+                continue
+            name = _absolute(host)
+            if not any(_rrset(data, name, rtype) or (name, rtype) in changes for rtype in ("A", "AAAA", "CNAME")):
+                changes[(name, "A")] = (ttl, [config["zone_ip"]])
+    if changes:
+        _serial_follows_edits(zone, data)
+        _patch(zone, changes)
+    # The Email addon's records, as its DNS page shows them.
+    from app.models.entities import MailDomain
+    from app.services import mail
+
+    if mail.active():
+        for row in db.query(MailDomain).all():
+            if row.domain == zone or row.domain.endswith("." + zone):
+                try:
+                    mail.publish_dns(db, row, replace=True)
+                except mail.MailError as exc:
+                    logger.warning("Mail records not restored for %s: %s", row.domain, exc)
+
+
 def zone_for_new_website(db: Session, website) -> str | None:
     done = zone_for_new_domain(db, website.domain, website.owner_id)
     return done[1] if done else None
@@ -794,14 +985,25 @@ def sync_quietly(db: Session) -> dict | None:
 
 # --- mail (Email addon) -------------------------------------------------------------
 
-def replace_spf(db: Session, old: str, new: str) -> list[str]:
-    """Move every zone still publishing the old SPF record to the new one.
+def _spf_terms(text: str) -> set[str]:
+    return {term.lower() for term in (text or "").split()[1:] if term.lower() not in ("~all", "-all", "?all", "+all", "all")}
 
-    Only an apex SPF equal to the old one changes: a customer who wrote
-    their own keeps it. Returns the zones changed.
+
+# What a zone got before the SPF record named the server's addresses.
+LEGACY_SPF_TERMS = {"a", "mx"}
+
+
+def replace_spf(db: Session, old: str, new: str) -> list[str]:
+    """Move every zone still publishing the panel's previous SPF record to the
+    new one.
+
+    A zone's SPF counts as the panel's when it has the same mechanisms as the
+    old record (in any order), or the plain "a mx" zones got before. A
+    customer who wrote their own keeps it. Returns the zones changed.
     """
     if not active() or old == new:
         return []
+    old_terms = _spf_terms(old)
     changed = []
     for row in db.query(DnsZone).order_by(DnsZone.name).all():
         try:
@@ -811,51 +1013,15 @@ def replace_spf(db: Session, old: str, new: str) -> list[str]:
         apex = _absolute(row.name)
         rrset = _rrset(data, apex, "TXT")
         contents = _contents(rrset)
-        if not any(_untxt(content) == old for content in contents):
+
+        def panels(content: str) -> bool:
+            text = _untxt(content)
+            return text.lower().startswith("v=spf1") and _spf_terms(text) in (old_terms, LEGACY_SPF_TERMS)
+
+        if not any(panels(content) for content in contents):
             continue
-        updated = [_txt(new) if _untxt(content) == old else content for content in contents]
+        updated = [_txt(new) if panels(content) else content for content in contents]
         _serial_follows_edits(row.name, data)
         _patch(row.name, {(apex, "TXT"): ((rrset or {}).get("ttl", DEFAULT_TTL), updated)})
         changed.append(row.name)
     return changed
-
-
-DKIM_SELECTOR = "bpanel"
-
-
-def mail_records(db: Session, domain: str, dkim_key: str) -> list[str]:
-    """DKIM, DMARC and webmail.<domain> for a domain with mailboxes here.
-
-    Written into the zone that holds the domain, when this server has one. The
-    DKIM record is the mail server's own and always follows its key. DMARC
-    and the webmail name are only added where the zone has nothing by that
-    name, so a customer's own policy or record is never overwritten. Returns
-    the names written.
-    """
-    if not active():
-        return []
-    domain = normalize_zone(domain)
-    containing = [row for row in db.query(DnsZone).all()
-                  if domain == row.name or domain.endswith("." + row.name)]
-    parent = max(containing, key=lambda row: len(row.name), default=None)
-    if parent is None:
-        return []
-    config = settings()
-    data = _zone_data(parent.name)
-    names = {rrset.get("name") for rrset in data.get("rrsets", [])}
-    changes: dict = {}
-    dkim_name = _absolute(f"{DKIM_SELECTOR}._domainkey.{domain}")
-    dkim_text = f"v=DKIM1; k=rsa; p={dkim_key}"
-    if [_untxt(content) for content in _contents(_rrset(data, dkim_name, "TXT"))] != [dkim_text]:
-        changes[(dkim_name, "TXT")] = (config["ttl"], [_txt(dkim_text)])
-    dmarc_name = _absolute(f"_dmarc.{domain}")
-    if dmarc_name not in names:
-        changes[(dmarc_name, "TXT")] = (config["ttl"], [_txt("v=DMARC1; p=none")])
-    webmail_name = _absolute(f"webmail.{domain}")
-    if config["zone_ip"] and webmail_name not in names:
-        changes[(webmail_name, "A")] = (config["ttl"], [config["zone_ip"]])
-    if not changes:
-        return []
-    _serial_follows_edits(parent.name, data)
-    _patch(parent.name, changes)
-    return sorted(name.rstrip(".") for name, _ in changes)

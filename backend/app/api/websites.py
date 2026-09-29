@@ -358,6 +358,11 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
         ensure_role(current_user.role, Role.admin)
     if _hostname_conflicts(db, payload.domain) or nginx.vhost_exists(payload.domain):
         raise HTTPException(status_code=409, detail="Domain already exists")
+    from app.services import mail
+
+    if mail.webmail_host_taken(db, payload.domain):
+        # The Email addon serves webmail.<domain> for that mail domain already.
+        raise HTTPException(status_code=409, detail="That name is the webmail address of a mail domain here.")
 
     if requested_owner_id is not None:
         owner = db.query(User).filter(User.id == requested_owner_id).first()

@@ -547,8 +547,61 @@ class MailAccount(Base):
     password_hash: Mapped[str] = mapped_column(String(255))
     # 0 is no limit of its own; the account's disk space still counts it.
     quota_mb: Mapped[int] = mapped_column(Integer, default=1024)
+    # A suspended mailbox still receives mail but cannot sign in or send.
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     @property
     def address(self) -> str:
         return f"{self.local_part}@{self.domain}"
+
+
+class MailDomain(Base):
+    """A domain this server receives mail for (Email addon), as in OPanel.
+
+    It belongs to the account that owns the website or alias of that name
+    when email was turned on, and stays if the website goes: rebuilding a
+    site never costs anyone their mailboxes. Its mailboxes and forwarders
+    name it by domain.
+    """
+
+    __tablename__ = "mail_domains"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    domain: Mapped[str] = mapped_column(String(253), unique=True, index=True)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    # Where mail for an address with no mailbox or forwarder goes; "" refuses it.
+    catch_all: Mapped[str] = mapped_column(String(255), default="")
+    # The DKIM public key (base64) for bpanel._domainkey; the private key never
+    # leaves /etc/exim4/bpanel/dkim.
+    dkim_public: Mapped[str] = mapped_column(Text, default="")
+    # webmail.<domain> is served with its own certificate.
+    webmail_host: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Outgoing mail: "" follows the server's default relay, "direct" sends
+    # without one, anything else is the id of a relay.
+    relay: Mapped[str] = mapped_column(String(40), default="")
+    # An administrator's own DNS values for it, JSON: {"spf", "dmarc", "records"}.
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class MailForwarder(Base):
+    """An address that passes its mail on. It may share its name with a
+    mailbox, which then keeps a copy."""
+
+    __tablename__ = "mail_forwarders"
+    __table_args__ = (UniqueConstraint("domain", "local_part", name="uq_mail_forwarder_address"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    domain: Mapped[str] = mapped_column(String(253), index=True)
+    local_part: Mapped[str] = mapped_column(String(64))
+    # One destination address per line.
+    destinations: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    @property
+    def address(self) -> str:
+        return f"{self.local_part}@{self.domain}"
+
+    @property
+    def destination_list(self) -> list[str]:
+        return [line.strip() for line in (self.destinations or "").splitlines() if line.strip()]
