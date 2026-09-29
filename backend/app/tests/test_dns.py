@@ -173,11 +173,14 @@ def test_a_vietnamese_domain_becomes_its_punycode():
 
 # --- zones and records -------------------------------------------------------------
 
-def test_a_new_zone_has_its_soa_nameservers_and_the_server_address(env):
+def test_a_new_zone_is_a_full_zone(env):
     dns.create_zone(env.db, "example.com", env.user("khach").id)
     assert env.fake.rrset("example.com", "example.com.", "NS") == ["ns1.bnix.vn.", "ns2.bnix.vn."]
     assert env.fake.rrset("example.com", "example.com.", "A") == ["203.0.113.10"]
     assert env.fake.rrset("example.com", "www.example.com.", "A") == ["203.0.113.10"]
+    assert env.fake.rrset("example.com", "mail.example.com.", "A") == ["203.0.113.10"]
+    assert env.fake.rrset("example.com", "example.com.", "MX") == ["10 mail.example.com."]
+    assert env.fake.rrset("example.com", "example.com.", "TXT") == ['"v=spf1 a mx ~all"']
     assert env.fake.rrset("example.com", "example.com.", "SOA")[0].startswith("ns1.bnix.vn. hostmaster.example.com.")
     assert env.db.query(DnsZone).filter_by(name="example.com").one().owner_id == env.user("khach").id
     assert "SOA" not in {record["type"] for record in dns.records("example.com")}
@@ -297,6 +300,82 @@ def test_settings_need_two_nameservers_and_an_ipv4_address(env):
                            json={"nameservers": ["NS1.A.VN.", "ns2.a.vn"], "zone_ip": "203.0.113.20", "ttl": 600, "auto_zone": False})
     assert saved.status_code == 200
     assert saved.json()["nameservers"] == ["ns1.a.vn", "ns2.a.vn"] and saved.json()["auto_zone"] is False
+
+
+# --- every domain on the server (operator, 2026-09-29) ----------------------------------
+
+def _website(env, domain, owner, aliases=()):
+    from app.models.entities import Website, WebsiteAlias
+
+    site = Website(domain=domain, owner_id=env.user(owner).id, root_path=f"/home/{owner}/{domain}",
+                   linux_user=owner, status="active")
+    env.db.add(site)
+    env.db.flush()
+    for alias in aliases:
+        env.db.add(WebsiteAlias(website_id=site.id, domain=alias, mode="alias"))
+    env.db.commit()
+    return site
+
+
+def test_installing_the_addon_gives_every_domain_already_here_its_zone(env):
+    _website(env, "shop.vn", "khach", aliases=["shop-alias.vn"])
+    _website(env, "blog.shop.vn", "khach")
+    _website(env, "other.vn", "other")
+    summary = dns.sync(env.db)
+    assert sorted(summary["zones"]) == ["other.vn", "shop-alias.vn", "shop.vn"]
+    assert summary["records"] == ["blog.shop.vn"], "a subdomain of its owner's zone is a record in it"
+    assert env.fake.rrset("shop.vn", "blog.shop.vn.", "A") == ["203.0.113.10"]
+    owners = {row.name: row.owner_id for row in env.db.query(DnsZone)}
+    assert owners["shop.vn"] == owners["shop-alias.vn"] == env.user("khach").id
+    assert owners["other.vn"] == env.user("other").id
+    again = dns.sync(env.db)
+    assert again["zones"] == [] and again["records"] == [] and again["owners"] == []
+
+
+def test_a_zone_belongs_to_whoever_owns_the_website(env):
+    dns.create_zone(env.db, "shop.vn", None)
+    _website(env, "shop.vn", "khach")
+    assert dns.sync(env.db)["owners"] == ["shop.vn"]
+    assert env.db.query(DnsZone).filter_by(name="shop.vn").one().owner_id == env.user("khach").id
+
+
+def test_a_customer_edits_the_dns_of_every_domain_in_their_account(env):
+    dns.create_zone(env.db, "shop.vn", env.user("other").id)
+    _website(env, "shop.vn", "khach")
+    assert dns.may_edit(env.db, env.user("khach"), "shop.vn") == "shop.vn"
+
+
+def test_nothing_is_made_until_the_nameservers_and_address_are_set(env):
+    _website(env, "shop.vn", "khach")
+    env.stored["dns"] = {"nameservers": [], "zone_ip": "203.0.113.10"}
+    summary = dns.sync(env.db)
+    assert summary["ready"] is False and not env.fake.zones
+
+
+def test_only_an_administrator_deletes_a_zone(env):
+    dns.create_zone(env.db, "mine.vn", env.user("khach").id)
+    assert env.client.delete("/api/dns/zones/mine.vn", headers=env.as_("khach")).status_code == 403
+    assert env.client.delete("/api/dns/zones/mine.vn", headers=env.as_("owner")).status_code == 200
+
+
+def test_the_sync_route_reports_what_it_did(env):
+    _website(env, "shop.vn", "khach")
+    done = env.client.post("/api/dns/sync", headers=env.as_("owner"))
+    assert done.status_code == 200 and done.json()["zones"] == ["shop.vn"]
+    assert env.client.post("/api/dns/sync", headers=env.as_("khach")).status_code == 403
+
+
+@pytest.mark.parametrize("path, call", [
+    ("backend/app/api/websites.py", "dns.zone_for_new_website(db, website)"),
+    ("backend/app/api/websites.py", "dns.zone_for_new_domain(db, payload.domain, website.owner_id)"),
+    ("backend/app/api/provisioning.py", "dns.zone_for_new_domain(db, payload.domain, user.id)"),
+    ("backend/app/services/backup.py", "dns.sync_quietly(db)"),
+    ("backend/app/services/da_import.py", "dns.sync_quietly(dns_db)"),
+    ("backend/app/main.py", "dns.sync_quietly(db)"),
+    ("backend/app/api/addons.py", "dns.sync_quietly(db)"),
+])
+def test_every_way_a_domain_arrives_gives_it_dns(path, call):
+    assert call in (PROJECT_ROOT / path).read_text(encoding="utf-8")
 
 
 # --- websites -------------------------------------------------------------------------

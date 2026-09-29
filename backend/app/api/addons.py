@@ -91,6 +91,9 @@ def install_addon(slug: str, db: Session = Depends(get_db), current_user: User =
         except RuntimeError as exc:
             raise HTTPException(status_code=400, detail=_install_failure(exc)) from exc
     record = addons.install(slug)
+    if slug == addons.DNS:
+        # Every domain already on the server gets its zone now.
+        dns.sync_quietly(db)
     if slug == addons.DEMO:
         # Accounts chosen before the addon was last removed get their public
         # passwords back; see demo_mode.switch_off for why they lost them.
@@ -114,7 +117,7 @@ def install_addon(slug: str, db: Session = Depends(get_db), current_user: User =
                     if slug == addons.MALWARE else (
                         "Choose the demo accounts on the Addons page. Until you do, the sign-in page offers none."
                         if slug == addons.DEMO else (
-                            "Open DNS to check the nameservers, then point your domains at them."
+                            "Every domain on the server now has its DNS zone. Open DNS to check the nameservers, then point your domains at them."
                             if slug == addons.DNS else ""
                         )
                     )

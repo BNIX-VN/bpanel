@@ -347,18 +347,12 @@ PART13 = {
         "Chạy DNS cho tên miền của bạn ngay trên server này, và cho sửa bản ghi của chúng trong panel.",
     "Installs PowerDNS and opens port 53. Point a domain's nameservers at this server and its records are served from here.":
         "Cài PowerDNS và mở cổng 53. Trỏ nameserver của một tên miền về server này là bản ghi của nó được phục vụ từ đây.",
-    "A website created while the addon is on gets its zone, with the domain and www pointing at this server.":
-        "Website tạo khi tiện ích đang bật sẽ có zone riêng, với tên miền và www trỏ về server này.",
-    "Administrators edit every zone; a customer edits the zones of their own websites. A, AAAA, CNAME, MX, TXT, NS, SRV and CAA records.":
-        "Quản trị viên sửa mọi zone; khách hàng sửa zone của các website của mình. Hỗ trợ bản ghi A, AAAA, CNAME, MX, TXT, NS, SRV và CAA.",
     "Set the nameservers on the DNS page, then create glue records for them at the registrar, pointing to this server's IP address.":
         "Đặt nameserver ở trang DNS, rồi tạo glue record cho chúng ở nhà đăng ký tên miền, trỏ về IP của server này.",
     "Both nameservers are this one server, so the domains it serves are only as reachable as the server itself.":
         "Cả hai nameserver đều là server này, nên các tên miền nó phục vụ chỉ truy cập được khi server còn chạy.",
     "If the server's IP address changes, remove the addon and install it again so PowerDNS listens on the new address.":
         "Nếu IP của server thay đổi, hãy gỡ rồi cài lại tiện ích để PowerDNS lắng nghe trên địa chỉ mới.",
-    "Deleting a website keeps its zone. Removing the addon stops PowerDNS and closes port 53; every zone is kept and is served again when you install it again.":
-        "Xoá website vẫn giữ zone của nó. Gỡ tiện ích sẽ dừng PowerDNS và đóng cổng 53; mọi zone được giữ nguyên và được phục vụ lại khi bạn cài lại.",
     "Open DNS to check the nameservers, then point your domains at them.":
         "Mở trang DNS để kiểm tra nameserver, rồi trỏ các tên miền của bạn về đó.",
     "Every zone is kept in PowerDNS's database and is served again when you install the addon again.":
@@ -370,7 +364,6 @@ PART13 = {
         "Đặt các nameserver này cho từng tên miền, ở nhà đăng ký tên miền.",
     "Zones": "Zone",
     "No zones yet. Add one below, or create a website.": "Chưa có zone nào. Thêm ở bên dưới, hoặc tạo một website.",
-    "No zones yet. Each new website gets its zone.": "Chưa có zone nào. Mỗi website mới sẽ có zone riêng.",
     "No owner": "Không có chủ",
     "Delete zone": "Xoá zone",
     "Owner": "Chủ sở hữu",
@@ -398,7 +391,6 @@ PART13 = {
     "Nameserver 2": "Nameserver 2",
     "IP address for new zones": "Địa chỉ IP cho zone mới",
     "Default TTL (seconds)": "TTL mặc định (giây)",
-    "Create a zone for each new website": "Tự tạo zone cho mỗi website mới",
     "If the nameservers are names under your own domain, create glue records for them at that domain's registrar, pointing to this server's IP address.":
         "Nếu nameserver là tên thuộc tên miền của bạn, hãy tạo glue record cho chúng ở nhà đăng ký của tên miền đó, trỏ về IP của server này.",
     "Zone created.": "Đã tạo zone.",
@@ -446,4 +438,24 @@ PART13 = {
     "The DNS server gave an answer the panel could not read.": "DNS server trả về dữ liệu panel không đọc được.",
     "The DNS server's API key is missing. Remove the DNS Manager addon and install it again.":
         "Thiếu API key của DNS server. Hãy gỡ tiện ích Quản lý DNS rồi cài lại.",
+    "Every domain on the server gets a full zone by itself: the websites already here when the addon is installed, new websites and their aliases. The domain, www and mail point at this server, with an MX and an SPF record.":
+        "Mọi tên miền trên server tự có zone đầy đủ: các website đã có lúc cài tiện ích, website mới và tên miền phụ của chúng. Tên miền, www và mail trỏ về server này, kèm bản ghi MX và SPF.",
+    "Administrators edit every zone; a customer edits the DNS of every domain in their account. A, AAAA, CNAME, MX, TXT, NS, SRV and CAA records.":
+        "Quản trị viên sửa mọi zone; khách hàng sửa DNS của mọi tên miền trong tài khoản mình. Hỗ trợ bản ghi A, AAAA, CNAME, MX, TXT, NS, SRV và CAA.",
+    "Deleting a website keeps its zone. Only administrators delete zones, and a zone whose website is still here comes back at the next sync.":
+        "Xoá website vẫn giữ zone của nó. Chỉ quản trị viên được xoá zone, và zone của một website vẫn còn trên server sẽ được tạo lại ở lần đồng bộ tiếp theo.",
+    "Removing the addon stops PowerDNS and closes port 53; every zone is kept and is served again when you install it again.":
+        "Gỡ tiện ích sẽ dừng PowerDNS và đóng cổng 53; mọi zone được giữ nguyên và được phục vụ lại khi bạn cài lại.",
+    "Every domain on the server now has its DNS zone. Open DNS to check the nameservers, then point your domains at them.":
+        "Mọi tên miền trên server đã có zone DNS. Mở trang DNS để kiểm tra nameserver, rồi trỏ các tên miền của bạn về đó.",
+    "Every domain on the server has its DNS zone.": "Mọi tên miền trên server đã có zone DNS.",
+    "Every domain on the server has its DNS zone. New zones: {zones}, new records: {records}, owners corrected: {owners}.":
+        "Mọi tên miền trên server đã có zone DNS. Zone mới: {zones}, bản ghi mới: {records}, sửa chủ sở hữu: {owners}.",
+    "Set two nameservers and the IP address for new zones, and turn on the automatic zones, first.":
+        "Hãy đặt hai nameserver, địa chỉ IP cho zone mới và bật tự tạo zone trước.",
+    "Give every domain on the server a DNS zone": "Tự cấp zone DNS cho mọi tên miền trên server",
+    "Sync zones now": "Đồng bộ zone ngay",
+    "Syncing...": "Đang đồng bộ...",
+    "No zones yet. Every domain in your account gets its zone.":
+        "Chưa có zone nào. Mỗi tên miền trong tài khoản của bạn sẽ có zone riêng.",
 }

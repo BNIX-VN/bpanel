@@ -730,6 +730,10 @@ def restore_user_backup(backup_file: str, db) -> dict:
         restored_apps = _restore_applications(manifest, user, db, archive, tmp_dir)
 
     db.commit()
+    # DNS Manager: the restored domains get their zones, owned by the account.
+    from app.services import dns
+
+    dns.sync_quietly(db)
     return {
         "created_user": created_user,
         "username": username,

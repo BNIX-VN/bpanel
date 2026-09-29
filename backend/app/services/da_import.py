@@ -1710,6 +1710,12 @@ def import_da_backup(archive_path: str, force: bool = False) -> dict:
         # Cleanup staging
         shutil.rmtree(stage_dir, ignore_errors=True)
 
+    # DNS Manager: the imported domains get their zones.
+    from app.services import dns
+
+    with SessionLocal() as dns_db:
+        dns.sync_quietly(dns_db)
+
     errors = [w for item in summary for w in item.get("warnings", []) if "failed" in w.lower() or "error" in w.lower()]
     return {
         "summary": summary,
