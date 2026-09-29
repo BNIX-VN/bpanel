@@ -503,3 +503,20 @@ class LoginSource(Base):
     ip: Mapped[str] = mapped_column(String(64))
     first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class DnsZone(Base):
+    """Who owns a zone this server's DNS answers for (DNS Manager addon).
+
+    PowerDNS holds the zone and its records; it has no idea of customers. This
+    row is what lets a customer edit the zones of their own websites and no
+    others. A zone with no row is one the panel did not make - an administrator
+    sees it, a customer never does.
+    """
+
+    __tablename__ = "dns_zones"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(253), unique=True, index=True)
+    owner_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

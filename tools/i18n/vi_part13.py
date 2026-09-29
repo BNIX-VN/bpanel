@@ -341,4 +341,109 @@ PART13 = {
     "Docker image and volume size is not counted against a customer's disk quota.":
         "Dung lượng image và volume của Docker không tính vào hạn mức ổ đĩa của khách hàng.",
     "The install failed and said nothing about why.": "Cài đặt thất bại mà không báo lý do.",
+    "DNS": "DNS",
+    "DNS Manager": "Quản lý DNS",
+    "Runs the DNS for your domains on this server, and lets you edit their records in the panel.":
+        "Chạy DNS cho tên miền của bạn ngay trên server này, và cho sửa bản ghi của chúng trong panel.",
+    "Installs PowerDNS and opens port 53. Point a domain's nameservers at this server and its records are served from here.":
+        "Cài PowerDNS và mở cổng 53. Trỏ nameserver của một tên miền về server này là bản ghi của nó được phục vụ từ đây.",
+    "A website created while the addon is on gets its zone, with the domain and www pointing at this server.":
+        "Website tạo khi tiện ích đang bật sẽ có zone riêng, với tên miền và www trỏ về server này.",
+    "Administrators edit every zone; a customer edits the zones of their own websites. A, AAAA, CNAME, MX, TXT, NS, SRV and CAA records.":
+        "Quản trị viên sửa mọi zone; khách hàng sửa zone của các website của mình. Hỗ trợ bản ghi A, AAAA, CNAME, MX, TXT, NS, SRV và CAA.",
+    "Set the nameservers on the DNS page, then create glue records for them at the registrar, pointing to this server's IP address.":
+        "Đặt nameserver ở trang DNS, rồi tạo glue record cho chúng ở nhà đăng ký tên miền, trỏ về IP của server này.",
+    "Both nameservers are this one server, so the domains it serves are only as reachable as the server itself.":
+        "Cả hai nameserver đều là server này, nên các tên miền nó phục vụ chỉ truy cập được khi server còn chạy.",
+    "If the server's IP address changes, remove the addon and install it again so PowerDNS listens on the new address.":
+        "Nếu IP của server thay đổi, hãy gỡ rồi cài lại tiện ích để PowerDNS lắng nghe trên địa chỉ mới.",
+    "Deleting a website keeps its zone. Removing the addon stops PowerDNS and closes port 53; every zone is kept and is served again when you install it again.":
+        "Xoá website vẫn giữ zone của nó. Gỡ tiện ích sẽ dừng PowerDNS và đóng cổng 53; mọi zone được giữ nguyên và được phục vụ lại khi bạn cài lại.",
+    "Open DNS to check the nameservers, then point your domains at them.":
+        "Mở trang DNS để kiểm tra nameserver, rồi trỏ các tên miền của bạn về đó.",
+    "Every zone is kept in PowerDNS's database and is served again when you install the addon again.":
+        "Mọi zone được giữ trong cơ sở dữ liệu của PowerDNS và được phục vụ lại khi bạn cài lại tiện ích.",
+    "The zones this server answers for. Point a domain at the nameservers below and its records are served from here.":
+        "Các zone server này trả lời. Trỏ một tên miền về các nameserver bên dưới là bản ghi của nó được phục vụ từ đây.",
+    "Nameservers": "Nameserver",
+    "Set these as the nameservers of each domain, at its registrar.":
+        "Đặt các nameserver này cho từng tên miền, ở nhà đăng ký tên miền.",
+    "Zones": "Zone",
+    "No zones yet. Add one below, or create a website.": "Chưa có zone nào. Thêm ở bên dưới, hoặc tạo một website.",
+    "No zones yet. Each new website gets its zone.": "Chưa có zone nào. Mỗi website mới sẽ có zone riêng.",
+    "No owner": "Không có chủ",
+    "Delete zone": "Xoá zone",
+    "Owner": "Chủ sở hữu",
+    "Add zone": "Thêm zone",
+    "Choose a zone to see its records.": "Chọn một zone để xem bản ghi.",
+    "Priority": "Độ ưu tiên",
+    "Value": "Giá trị",
+    "Save record": "Lưu bản ghi",
+    "Add record": "Thêm bản ghi",
+    "The name is relative to the zone: @ is {zone} itself, www is www.{zone}.":
+        "Tên tính theo zone: @ là chính {zone}, www là www.{zone}.",
+    "No records.": "Chưa có bản ghi.",
+    "Delete the {type} record {name}?": "Xoá bản ghi {type} {name}?",
+    "Delete the zone {zone} and every record in it? The domain stops resolving from this server.":
+        "Xoá zone {zone} và mọi bản ghi trong đó? Tên miền sẽ không còn được phân giải từ server này.",
+    "DNS settings": "Cài đặt DNS",
+    "Used for each new zone. Changing them does not rewrite the zones that already exist.":
+        "Dùng cho mỗi zone mới. Thay đổi ở đây không sửa lại các zone đã có.",
+    "PowerDNS is running": "PowerDNS đang chạy",
+    "PowerDNS is not running": "PowerDNS không chạy",
+    "Port 53 open": "Cổng 53 đang mở",
+    "Port 53 closed": "Cổng 53 đang đóng",
+    "Listening on": "Đang lắng nghe trên",
+    "Nameserver 1": "Nameserver 1",
+    "Nameserver 2": "Nameserver 2",
+    "IP address for new zones": "Địa chỉ IP cho zone mới",
+    "Default TTL (seconds)": "TTL mặc định (giây)",
+    "Create a zone for each new website": "Tự tạo zone cho mỗi website mới",
+    "If the nameservers are names under your own domain, create glue records for them at that domain's registrar, pointing to this server's IP address.":
+        "Nếu nameserver là tên thuộc tên miền của bạn, hãy tạo glue record cho chúng ở nhà đăng ký của tên miền đó, trỏ về IP của server này.",
+    "Zone created.": "Đã tạo zone.",
+    "Zone deleted.": "Đã xoá zone.",
+    "Record added.": "Đã thêm bản ghi.",
+    "Record saved.": "Đã lưu bản ghi.",
+    "Record deleted.": "Đã xoá bản ghi.",
+    "DNS settings saved.": "Đã lưu cài đặt DNS.",
+    "There is no such zone.": "Không có zone này.",
+    "That zone already exists.": "Zone này đã có.",
+    "That record already exists.": "Bản ghi này đã có.",
+    "That record is no longer there. Refresh the page.": "Bản ghi này không còn nữa. Hãy tải lại trang.",
+    "That is not a valid domain name.": "Đây không phải tên miền hợp lệ.",
+    "That record name is too long.": "Tên bản ghi quá dài.",
+    "The record name may use letters, digits, hyphens and dots, such as www or mail.":
+        "Tên bản ghi chỉ dùng chữ, số, gạch ngang và dấu chấm, ví dụ www hoặc mail.",
+    "Enter a hostname, such as mail.example.com.": "Nhập một hostname, ví dụ mail.example.com.",
+    "Choose a record type: A, AAAA, CNAME, MX, TXT, NS, SRV or CAA.":
+        "Chọn loại bản ghi: A, AAAA, CNAME, MX, TXT, NS, SRV hoặc CAA.",
+    "TTL must be between 60 seconds and 7 days.": "TTL phải từ 60 giây đến 7 ngày.",
+    "An A record points at an IPv4 address, such as 203.0.113.10.":
+        "Bản ghi A trỏ tới một địa chỉ IPv4, ví dụ 203.0.113.10.",
+    "An AAAA record points at an IPv6 address.": "Bản ghi AAAA trỏ tới một địa chỉ IPv6.",
+    "A TXT record needs some text.": "Bản ghi TXT cần có nội dung.",
+    "An SRV value is weight, port and target, such as 5 5060 sip.example.com.":
+        "Giá trị SRV gồm weight, cổng và đích, ví dụ 5 5060 sip.example.com.",
+    "A CAA value is flags, tag and value, such as 0 issue letsencrypt.org.":
+        "Giá trị CAA gồm flags, tag và giá trị, ví dụ 0 issue letsencrypt.org.",
+    "Priority must be a number from 0 to 65535.": "Độ ưu tiên phải là số từ 0 đến 65535.",
+    "The zone's own name cannot be a CNAME; use an A record.":
+        "Chính tên của zone không thể là CNAME; hãy dùng bản ghi A.",
+    "A name with a CNAME record can have no other records.":
+        "Tên đã có bản ghi CNAME thì không được có bản ghi nào khác.",
+    "A name can have only one CNAME record.": "Mỗi tên chỉ có được một bản ghi CNAME.",
+    "Only an administrator can change the zone's own nameservers.":
+        "Chỉ quản trị viên mới đổi được nameserver của zone.",
+    "Set the nameservers on the DNS page first.": "Hãy đặt nameserver ở trang DNS trước.",
+    "A nameserver must be a full hostname, such as ns1.example.com.":
+        "Nameserver phải là hostname đầy đủ, ví dụ ns1.example.com.",
+    "Give two nameservers: registrars ask for at least two.":
+        "Hãy nhập hai nameserver: nhà đăng ký tên miền yêu cầu ít nhất hai.",
+    "The address for new zones must be an IPv4 address.": "Địa chỉ cho zone mới phải là địa chỉ IPv4.",
+    "The DNS server is not answering. Check that PowerDNS is running.":
+        "DNS server không trả lời. Hãy kiểm tra PowerDNS có đang chạy không.",
+    "The DNS server gave an answer the panel could not read.": "DNS server trả về dữ liệu panel không đọc được.",
+    "The DNS server's API key is missing. Remove the DNS Manager addon and install it again.":
+        "Thiếu API key của DNS server. Hãy gỡ tiện ích Quản lý DNS rồi cài lại.",
 }

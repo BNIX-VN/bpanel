@@ -32,6 +32,8 @@ REVIEWED_READS = {
     "/api/addons", "/api/auth/2fa/status", "/api/auth/csrf", "/api/auth/passkey/status",
     "/api/auth/session", "/api/auth/sso/{token}", "/api/dashboard/summary", "/api/databases",
     "/api/demo-mode", "/api/demo-mode/public",
+    # DNS Manager (2026-09-29): zones, records and settings; no key or secret.
+    "/api/dns/zones", "/api/dns/zones/{zone}/records", "/api/dns/settings",
     "/api/fail2ban/banned", "/api/fail2ban/status", "/api/firewall/blocklists", "/api/firewall/status",
     "/api/health", "/api/maintenance/app-files/{app_id}", "/api/maintenance/backup-jobs",
     "/api/maintenance/backup-jobs/{job_id}", "/api/maintenance/backup-schedules",

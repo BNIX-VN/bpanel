@@ -12,7 +12,7 @@ from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.permissions import Role, ensure_role, is_admin_role
 from app.models.entities import SiteApp, User
-from app.services import addons, demo_mode, fail2ban, panel_settings, site_apps
+from app.services import addons, demo_mode, dns, fail2ban, panel_settings, site_apps
 from app.services.audit import log_action
 
 router = APIRouter(prefix="/addons", tags=["addons"])
@@ -28,6 +28,11 @@ def _install_failure(exc: Exception) -> str:
     text = str(exc).strip()
     _, separator, stderr = text.partition(chr(10))
     message = (stderr if separator else text).strip()
+    # When a tool said something before the helper gave up (apt, systemctl),
+    # the helper's own line is the last one, and it is the one worth reading.
+    helper_lines = [line for line in message.splitlines() if line.startswith("bpanel-helper: ")]
+    if helper_lines:
+        message = helper_lines[-1]
     for prefix in ("bpanel-helper: ", "ERROR: "):
         if message.startswith(prefix):
             message = message[len(prefix):]
@@ -71,6 +76,13 @@ def install_addon(slug: str, db: Session = Depends(get_db), current_user: User =
             fail2ban.install()
         except (RuntimeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=_install_failure(exc)) from exc
+    if slug == addons.DNS:
+        # PowerDNS, port 53 and a probe query: the helper refuses to call it
+        # installed unless the server really answers DNS.
+        try:
+            dns.install()
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=_install_failure(exc)) from exc
     if slug == addons.MALWARE:
         # The scanner's own switch: installs LMD and the ClamAV engine in the
         # background when they are missing, and returns at once.
@@ -101,7 +113,10 @@ def install_addon(slug: str, db: Session = Depends(get_db), current_user: User =
                     "Open Malware scanner under Settings. If LMD and ClamAV were not installed, they are installing now (1-3 minutes)."
                     if slug == addons.MALWARE else (
                         "Choose the demo accounts on the Addons page. Until you do, the sign-in page offers none."
-                        if slug == addons.DEMO else ""
+                        if slug == addons.DEMO else (
+                            "Open DNS to check the nameservers, then point your domains at them."
+                            if slug == addons.DNS else ""
+                        )
                     )
                 )
             )
@@ -152,6 +167,12 @@ def uninstall_addon(slug: str, db: Session = Depends(get_db), current_user: User
         # answers again the moment someone reinstalls is not "keeping data".
         from app.api import mcp as mcp_api
         revoked = mcp_api.revoke_all(db)
+    if slug == addons.DNS:
+        try:
+            dns.stop()
+            stopped.append("PowerDNS")
+        except RuntimeError:
+            failed.append("PowerDNS")
     retired: list[str] = []
     if slug == addons.DEMO:
         # Before the flag goes: once it has, these are ordinary accounts, and
@@ -169,6 +190,8 @@ def uninstall_addon(slug: str, db: Session = Depends(get_db), current_user: User
         "kept": ("The demo accounts now have random passwords, so the public ones no longer work. Installing the addon again restores them."  # noqa: E501
                  if retired else "No demo accounts were set.")
         if slug == addons.DEMO
+        else "Every zone is kept in PowerDNS's database and is served again when you install the addon again."
+        if slug == addons.DNS
         else "The package, the jail configuration and the ban history are all kept."
         if slug == addons.FAIL2BAN
         else "LMD, ClamAV, the scan history and the schedule settings are all kept."

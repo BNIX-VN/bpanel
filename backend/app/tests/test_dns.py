@@ -1,0 +1,371 @@
+"""DNS Manager addon (operator, 2026-09-29: "Phát triển thêm addon DNS Manager").
+
+Chosen with the operator: PowerDNS on the server itself, as DirectAdmin does;
+administrators edit every zone and a customer the zones of their own websites;
+a new website gets a zone, and the zone stays when the website goes.
+
+PowerDNS is replaced here by a small fake that keeps RRsets the way its HTTP
+API does, so what is tested is what the panel sends it.
+"""
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from app.core.database import Base, get_db
+from app.core.security import create_access_token, hash_password
+from app.models.entities import DnsZone, User
+from app.services import addons, dns, panel_settings, server_network
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+HELPER = (PROJECT_ROOT / "installer" / "files" / "bpanel-helper.sh").read_text(encoding="utf-8")
+
+
+class FakePowerDNS:
+    """Just enough of PowerDNS's API: zones of RRsets, REPLACE and DELETE."""
+
+    def __init__(self):
+        self.zones: dict[str, list[dict]] = {}
+
+    def __call__(self, method, path, body=None):
+        if path == "/zones" and method == "GET":
+            return [{"name": name} for name in self.zones]
+        if path == "/zones" and method == "POST":
+            if body["name"] in self.zones:
+                raise dns.DnsError("Conflict", status=409)
+            self.zones[body["name"]] = [dict(rrset) for rrset in body["rrsets"]]
+            return {}
+        name = path.removeprefix("/zones/")
+        if name not in self.zones:
+            raise dns.DnsError("Could not find domain", status=404)
+        if method == "GET":
+            return {"name": name, "rrsets": self.zones[name]}
+        if method == "DELETE":
+            del self.zones[name]
+            return {}
+        if method == "PATCH":
+            for change in body["rrsets"]:
+                kept = [r for r in self.zones[name] if (r["name"], r["type"]) != (change["name"], change["type"])]
+                if change["changetype"] == "REPLACE":
+                    kept.append({"name": change["name"], "type": change["type"], "ttl": change["ttl"],
+                                 "records": change["records"]})
+                self.zones[name] = kept
+            return {}
+        raise AssertionError(f"unexpected {method} {path}")
+
+    def rrset(self, zone, name, rtype):
+        for rrset in self.zones[zone + "."]:
+            if rrset["name"] == name and rrset["type"] == rtype:
+                return [record["content"] for record in rrset["records"]]
+        return None
+
+
+@pytest.fixture
+def env(monkeypatch, tmp_path):
+    stored: dict = {"dns": {"nameservers": ["ns1.bnix.vn", "ns2.bnix.vn"], "zone_ip": "203.0.113.10",
+                            "ttl": 3600, "auto_zone": True}}
+    monkeypatch.setattr(panel_settings, "_read_raw", lambda: dict(stored))
+    monkeypatch.setattr(panel_settings, "_read_raw_lenient", lambda: dict(stored))
+    monkeypatch.setattr(panel_settings, "_write_raw", lambda data: stored.update(data))
+    monkeypatch.setattr(addons, "ADDONS_DIR", tmp_path)
+    monkeypatch.setattr(addons, "ADDONS_FILE", tmp_path / "addons.json")
+    monkeypatch.setattr(server_network, "ipv4_addresses", lambda: ["203.0.113.10"])
+    fake = FakePowerDNS()
+    monkeypatch.setattr(dns, "_request", fake)
+    monkeypatch.setattr(dns, "server_status", lambda: {"installed": True, "running": True, "api": True,
+                                                          "port_open": True, "listen": ["127.0.0.1"]})
+    addons.install(addons.DNS)
+
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    db = Session()
+    for name, role in (("owner", "admin"), ("khach", "end_user"), ("other", "end_user")):
+        db.add(User(username=name, email=f"{name}@example.test", hashed_password=hash_password("pw-" + name),
+                    role=role, is_active=True, token_version=0))
+    db.commit()
+
+    from app.main import app
+
+    def get_test_db():
+        session = Session()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    app.dependency_overrides[get_db] = get_test_db
+
+    def user(name):
+        db.expire_all()
+        return db.query(User).filter(User.username == name).one()
+
+    def as_(name):
+        token = create_access_token(name, {"role": user(name).role, "tv": 0})
+        return {"Authorization": f"Bearer {token}"}
+
+    yield SimpleNamespace(client=TestClient(app), db=db, fake=fake, user=user, as_=as_, stored=stored)
+    app.dependency_overrides.pop(get_db, None)
+    db.close()
+
+
+# --- what a record becomes ---------------------------------------------------------
+
+@pytest.mark.parametrize("record, expected", [
+    ({"type": "A", "name": "@", "content": "203.0.113.5"}, ("example.com.", "A", "203.0.113.5")),
+    ({"type": "AAAA", "name": "www", "content": "2001:0db8::0010"}, ("www.example.com.", "AAAA", "2001:db8::10")),
+    ({"type": "CNAME", "name": "blog", "content": "example.com"}, ("blog.example.com.", "CNAME", "example.com.")),
+    ({"type": "CNAME", "name": "shop", "content": "@"}, ("shop.example.com.", "CNAME", "example.com.")),
+    ({"type": "MX", "name": "@", "content": "mail", "priority": 10}, ("example.com.", "MX", "10 mail.example.com.")),
+    ({"type": "TXT", "name": "@", "content": 'v=spf1 a "x" ~all'}, ("example.com.", "TXT", '"v=spf1 a \\"x\\" ~all"')),
+    ({"type": "SRV", "name": "_sip._tcp", "content": "5 5060 sip.example.net", "priority": 10},
+     ("_sip._tcp.example.com.", "SRV", "10 5 5060 sip.example.net.")),
+    ({"type": "CAA", "name": "@", "content": "0 issue letsencrypt.org"}, ("example.com.", "CAA", '0 issue "letsencrypt.org"')),
+    ({"type": "A", "name": "*.shop", "content": "203.0.113.5"}, ("*.shop.example.com.", "A", "203.0.113.5")),
+    ({"type": "A", "name": "www.example.com", "content": "203.0.113.5"}, ("www.example.com.", "A", "203.0.113.5")),
+])
+def test_a_record_as_typed_becomes_what_powerdns_stores(record, expected):
+    name, rtype, _, content = dns.to_pdns("example.com", {"ttl": 3600, **record})
+    assert (name, rtype, content) == expected
+
+
+def test_a_long_txt_record_is_split_into_strings_of_255():
+    key = "v=DKIM1; k=rsa; p=" + "A" * 400
+    _, _, _, content = dns.to_pdns("example.com", {"type": "TXT", "name": "sel._domainkey", "content": key})
+    assert content.count('"') == 4
+    assert dns.to_form("example.com", "sel._domainkey.example.com.", "TXT", 3600, content)["content"] == key
+
+
+@pytest.mark.parametrize("record, message", [
+    ({"type": "A", "content": "300.1.1.1"}, "IPv4"),
+    ({"type": "AAAA", "content": "203.0.113.5"}, "IPv6"),
+    ({"type": "MX", "content": "mail.example.com", "priority": 70000}, "Priority"),
+    ({"type": "SRV", "content": "sip.example.com", "priority": 1}, "weight, port and target"),
+    ({"type": "CAA", "content": "0 steal example"}, "flags, tag and value"),
+    ({"type": "TXT", "content": ""}, "some text"),
+    ({"type": "PTR", "content": "x"}, "Choose a record type"),
+    ({"type": "A", "name": "bad name", "content": "203.0.113.5"}, "record name"),
+    ({"type": "A", "content": "203.0.113.5", "ttl": 5}, "TTL"),
+])
+def test_what_is_not_a_record_is_refused(record, message):
+    with pytest.raises(dns.DnsInputError, match=message):
+        dns.to_pdns("example.com", {"name": "@", "ttl": 3600, **record})
+
+
+@pytest.mark.parametrize("zone", ["", "localhost", "-bad.com", "a..com", "exa mple.com"])
+def test_a_zone_must_be_a_domain(zone):
+    with pytest.raises(dns.DnsInputError):
+        dns.normalize_zone(zone)
+
+
+def test_a_vietnamese_domain_becomes_its_punycode():
+    assert dns.normalize_zone("Tênmiền.VN").startswith("xn--")
+
+
+# --- zones and records -------------------------------------------------------------
+
+def test_a_new_zone_has_its_soa_nameservers_and_the_server_address(env):
+    dns.create_zone(env.db, "example.com", env.user("khach").id)
+    assert env.fake.rrset("example.com", "example.com.", "NS") == ["ns1.bnix.vn.", "ns2.bnix.vn."]
+    assert env.fake.rrset("example.com", "example.com.", "A") == ["203.0.113.10"]
+    assert env.fake.rrset("example.com", "www.example.com.", "A") == ["203.0.113.10"]
+    assert env.fake.rrset("example.com", "example.com.", "SOA")[0].startswith("ns1.bnix.vn. hostmaster.example.com.")
+    assert env.db.query(DnsZone).filter_by(name="example.com").one().owner_id == env.user("khach").id
+    assert "SOA" not in {record["type"] for record in dns.records("example.com")}
+
+
+def test_no_zone_before_the_nameservers_are_set(env):
+    env.stored["dns"] = {"nameservers": [], "zone_ip": "203.0.113.10"}
+    with pytest.raises(dns.DnsInputError, match="nameservers"):
+        dns.create_zone(env.db, "example.com", None)
+
+
+def test_records_are_added_changed_and_deleted_within_their_rrset(env):
+    dns.create_zone(env.db, "example.com", None)
+    dns.add_record("example.com", {"name": "@", "type": "A", "ttl": 3600, "content": "203.0.113.11"}, admin=True)
+    assert env.fake.rrset("example.com", "example.com.", "A") == ["203.0.113.10", "203.0.113.11"]
+    dns.update_record("example.com",
+                      {"name": "@", "type": "A", "ttl": 3600, "content": "203.0.113.11"},
+                      {"name": "@", "type": "A", "ttl": 600, "content": "203.0.113.12"}, admin=True)
+    assert env.fake.rrset("example.com", "example.com.", "A") == ["203.0.113.10", "203.0.113.12"]
+    dns.update_record("example.com",
+                      {"name": "@", "type": "A", "ttl": 600, "content": "203.0.113.12"},
+                      {"name": "api", "type": "A", "ttl": 600, "content": "203.0.113.12"}, admin=True)
+    assert env.fake.rrset("example.com", "api.example.com.", "A") == ["203.0.113.12"]
+    dns.delete_record("example.com", {"name": "api", "type": "A", "ttl": 600, "content": "203.0.113.12"}, admin=True)
+    assert env.fake.rrset("example.com", "api.example.com.", "A") is None
+    with pytest.raises(dns.DnsError):
+        dns.delete_record("example.com", {"name": "api", "type": "A", "ttl": 600, "content": "203.0.113.12"}, admin=True)
+
+
+def test_a_duplicate_is_refused(env):
+    dns.create_zone(env.db, "example.com", None)
+    with pytest.raises(dns.DnsInputError, match="already exists"):
+        dns.add_record("example.com", {"name": "www", "type": "A", "ttl": 3600, "content": "203.0.113.10"}, admin=True)
+
+
+def test_a_cname_stands_alone(env):
+    dns.create_zone(env.db, "example.com", None)
+    with pytest.raises(dns.DnsInputError, match="own name cannot be a CNAME"):
+        dns.add_record("example.com", {"name": "@", "type": "CNAME", "content": "other.net"}, admin=True)
+    with pytest.raises(dns.DnsInputError, match="no other records"):
+        dns.add_record("example.com", {"name": "www", "type": "CNAME", "content": "other.net"}, admin=True)
+    dns.add_record("example.com", {"name": "blog", "type": "CNAME", "content": "other.net"}, admin=True)
+    with pytest.raises(dns.DnsInputError, match="no other records"):
+        dns.add_record("example.com", {"name": "blog", "type": "TXT", "content": "hello"}, admin=True)
+    dns.update_record("example.com", {"name": "blog", "type": "CNAME", "content": "other.net"},
+                      {"name": "blog", "type": "CNAME", "content": "third.net"}, admin=True)
+    assert env.fake.rrset("example.com", "blog.example.com.", "CNAME") == ["third.net."]
+
+
+def test_a_customer_cannot_change_the_zones_own_nameservers(env):
+    dns.create_zone(env.db, "example.com", None)
+    with pytest.raises(dns.DnsInputError, match="administrator"):
+        dns.add_record("example.com", {"name": "@", "type": "NS", "content": "ns.evil.net"}, admin=False)
+    dns.add_record("example.com", {"name": "sub", "type": "NS", "content": "ns.other.net"}, admin=False)
+
+
+# --- who sees what (through the real sign-in path) -----------------------------------
+
+def test_the_routes_need_the_addon(env):
+    addons.uninstall(addons.DNS)
+    assert env.client.get("/api/dns/zones", headers=env.as_("owner")).status_code == 409
+
+
+def test_a_customer_sees_and_edits_only_their_own_zones(env):
+    dns.create_zone(env.db, "mine.vn", env.user("khach").id)
+    dns.create_zone(env.db, "theirs.vn", env.user("other").id)
+    listed = env.client.get("/api/dns/zones", headers=env.as_("khach")).json()
+    assert [zone["name"] for zone in listed["zones"]] == ["mine.vn"]
+    assert listed["can_manage"] is False
+    assert env.client.get("/api/dns/zones/theirs.vn/records", headers=env.as_("khach")).status_code == 404
+    refused = env.client.post("/api/dns/zones/theirs.vn/records", headers=env.as_("khach"),
+                              json={"name": "x", "type": "A", "content": "203.0.113.9"})
+    assert refused.status_code == 404
+    added = env.client.post("/api/dns/zones/mine.vn/records", headers=env.as_("khach"),
+                            json={"name": "x", "type": "A", "content": "203.0.113.9"})
+    assert added.status_code == 200
+    assert {"name": "x", "type": "A", "ttl": 3600, "content": "203.0.113.9", "priority": None} in added.json()["records"]
+
+
+def test_only_an_administrator_creates_zones_and_changes_settings(env):
+    assert env.client.post("/api/dns/zones", headers=env.as_("khach"), json={"name": "new.vn"}).status_code == 403
+    assert env.client.get("/api/dns/settings", headers=env.as_("khach")).status_code == 403
+    made = env.client.post("/api/dns/zones", headers=env.as_("owner"),
+                           json={"name": "new.vn", "owner_id": env.user("khach").id})
+    assert made.status_code == 200
+    assert [zone["name"] for zone in env.client.get("/api/dns/zones", headers=env.as_("khach")).json()["zones"]] == ["new.vn"]
+
+
+def test_a_zone_powerdns_serves_but_the_panel_did_not_make_is_shown_to_administrators_only(env):
+    env.fake.zones["legacy.vn."] = []
+    admin = [zone["name"] for zone in env.client.get("/api/dns/zones", headers=env.as_("owner")).json()["zones"]]
+    customer = [zone["name"] for zone in env.client.get("/api/dns/zones", headers=env.as_("khach")).json()["zones"]]
+    assert "legacy.vn" in admin and "legacy.vn" not in customer
+
+
+def test_settings_need_two_nameservers_and_an_ipv4_address(env):
+    headers = env.as_("owner")
+    one = env.client.put("/api/dns/settings", headers=headers, json={"nameservers": ["ns1.bnix.vn"], "zone_ip": "203.0.113.10"})
+    assert one.status_code == 400 and "two nameservers" in one.json()["detail"]
+    v6 = env.client.put("/api/dns/settings", headers=headers, json={"nameservers": ["ns1.a.vn", "ns2.a.vn"], "zone_ip": "2001:db8::1"})
+    assert v6.status_code == 400
+    saved = env.client.put("/api/dns/settings", headers=headers,
+                           json={"nameservers": ["NS1.A.VN.", "ns2.a.vn"], "zone_ip": "203.0.113.20", "ttl": 600, "auto_zone": False})
+    assert saved.status_code == 200
+    assert saved.json()["nameservers"] == ["ns1.a.vn", "ns2.a.vn"] and saved.json()["auto_zone"] is False
+
+
+# --- websites -------------------------------------------------------------------------
+
+def _site(domain, owner):
+    return SimpleNamespace(domain=domain, owner_id=owner.id)
+
+
+def test_a_new_website_gets_its_zone(env):
+    assert dns.zone_for_new_website(env.db, _site("shop.vn", env.user("khach"))) == "shop.vn"
+    assert env.fake.rrset("shop.vn", "shop.vn.", "A") == ["203.0.113.10"]
+    assert env.db.query(DnsZone).filter_by(name="shop.vn").one().owner_id == env.user("khach").id
+
+
+def test_a_subdomain_of_your_own_zone_is_a_record_in_it(env):
+    dns.zone_for_new_website(env.db, _site("shop.vn", env.user("khach")))
+    assert dns.zone_for_new_website(env.db, _site("blog.shop.vn", env.user("khach"))) == "shop.vn"
+    assert env.fake.rrset("shop.vn", "blog.shop.vn.", "A") == ["203.0.113.10"]
+    assert "blog.shop.vn." not in env.fake.zones
+
+
+def test_a_subdomain_of_someone_elses_zone_gets_its_own(env):
+    dns.zone_for_new_website(env.db, _site("shop.vn", env.user("khach")))
+    assert dns.zone_for_new_website(env.db, _site("blog.shop.vn", env.user("other"))) == "blog.shop.vn"
+    assert env.fake.rrset("shop.vn", "blog.shop.vn.", "A") is None
+
+
+def test_no_zone_while_the_addon_is_off_or_told_not_to(env):
+    addons.uninstall(addons.DNS)
+    assert dns.zone_for_new_website(env.db, _site("a.vn", env.user("khach"))) is None
+    addons.install(addons.DNS)
+    env.stored["dns"]["auto_zone"] = False
+    assert dns.zone_for_new_website(env.db, _site("a.vn", env.user("khach"))) is None
+    assert not env.fake.zones
+
+
+def test_a_zone_powerdns_already_serves_is_not_claimed_by_a_website(env):
+    env.fake.zones["taken.vn."] = []
+    assert dns.zone_for_new_website(env.db, _site("taken.vn", env.user("khach"))) is None
+    assert env.db.query(DnsZone).filter_by(name="taken.vn").first() is None
+
+
+def test_a_broken_dns_server_never_stops_a_website(env, monkeypatch):
+    def down(*args, **kwargs):
+        raise dns.DnsError("The DNS server is not answering.")
+    monkeypatch.setattr(dns, "_request", down)
+    assert dns.zone_for_new_website(env.db, _site("a.vn", env.user("khach"))) is None
+
+
+def test_the_website_route_asks_for_a_zone():
+    source = (PROJECT_ROOT / "backend" / "app" / "api" / "websites.py").read_text(encoding="utf-8")
+    assert "dns.zone_for_new_website(db, website)" in source
+
+
+# --- the helper -------------------------------------------------------------------------
+
+def test_the_helper_installs_proves_and_removes_powerdns():
+    install = HELPER.split("install_dns() {")[1].split("\n}\n")[0]
+    assert "policy-rc.d" in install, "apt must not start PowerDNS on its stock settings"
+    assert 'status: REFUSED' in install, "installed means it answers DNS, not just that it runs"
+    assert "local-address=${listen}" in install and "0.0.0.0" not in install.split("cat >")[1]  # noqa: S104
+    assert "webserver-address=127.0.0.1" in install
+    remove = HELPER.split("remove_dns() {")[1].split("\n}\n")[0]
+    assert "PDNS_DB" not in remove.replace("${PDNS_DB}.", ""), "removing the addon deletes no zone"
+    for verb in ("dns-install)", "dns-remove)", "dns-status)"):
+        assert verb in HELPER
+
+
+def test_powerdns_is_installed_without_the_bind_backend_and_never_taken_over():
+    """Seen on the demo server: apt added the recommended pdns-backend-bind,
+    whose pdns.d/bind.conf stopped PowerDNS with 'unknown setting bind-config'."""
+    install = HELPER.split("install_dns() {")[1].split("\n}\n")[0]
+    assert "apt-get install -y --no-install-recommends pdns-server pdns-backend-sqlite3" in install
+    assert "mv -f /etc/powerdns/pdns.d/bind.conf /etc/powerdns/pdns.d/bind.conf.bpanel-disabled" in install
+    assert 'systemctl is-active --quiet pdns 2>/dev/null && [[ ! -f "$PDNS_CONF" ]]' in install
+
+
+def test_an_install_failure_reads_as_the_helpers_sentence():
+    from app.api.addons import _install_failure
+
+    failure = RuntimeError("Command failed: sudo -n bpanel-helper dns-install\nRestarting services...\n"
+                           "Job for pdns.service failed.\nbpanel-helper: PowerDNS did not start")
+    assert _install_failure(failure) == "PowerDNS did not start"
+
+
+def test_port_53_opens_with_the_addon_and_closes_without_it():
+    assert "done < <(cat \"$FIREWALL_ADDON_PORTS_DIR\"/*.ports 2>/dev/null || true)" in HELPER
+    install = HELPER.split("install_dns() {")[1].split("\n}\n")[0]
+    remove = HELPER.split("remove_dns() {")[1].split("\n}\n")[0]
+    assert "printf '53 tcp\\n53 udp\\n' >\"$FIREWALL_ADDON_PORTS_DIR/dns.ports\"" in install
+    assert 'rm -f "$FIREWALL_ADDON_PORTS_DIR/dns.ports"' in remove
