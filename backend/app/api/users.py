@@ -11,7 +11,7 @@ from app.core.database import get_db
 from app.core.permissions import Role, ensure_role
 from app.core.security import hash_password
 from app.core.step_up import require_sensitive_action_step_up
-from app.models.entities import AuditLog, BackupSchedule, DatabaseAccount, MailAccount, McpToken, User, UserPackage, Website
+from app.models.entities import AuditLog, BackupSchedule, DatabaseAccount, McpToken, User, UserPackage, Website
 from app.schemas.schemas import (
     AuditLogOut,
     UserCreate,
@@ -273,7 +273,7 @@ def delete_user(user_id: int, request: Request, db: Session = Depends(get_db), c
         # nobody can see or revoke.
         db.query(McpToken).filter(McpToken.user_id == user.id).delete(synchronize_session=False)
         # Their mail is in the home that goes next; the rows go with it.
-        db.query(MailAccount).filter(MailAccount.owner_id == user.id).delete(synchronize_session=False)
+        mail.delete_for_owner(db, user)
         site_users.delete_panel_user(user.username)
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

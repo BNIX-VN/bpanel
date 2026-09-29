@@ -23,3 +23,5 @@ maxminddb==3.2.0
 # Chosen over boto3, which pulls botocore and roughly 100 MB of AWS service
 # definitions onto every customer machine for one feature.
 minio==7.2.10
+# The Email addon checks a mail domain's DNS records (also pulled in by email-validator).
+dnspython>=2.4

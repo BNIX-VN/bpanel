@@ -64,7 +64,9 @@ BLOCKED_READS = frozenset({
     # Asks Telegram, with the stored bot token, who has written to the bot.
     "/api/notifications/telegram/chats",
     # Who wrote to whom, and about what: real people's mail, not the panel's.
-    "/api/mail/spam/log",
+    "/api/mail/log",
+    "/api/mail/rspamd/history",
+    "/api/mail/rspamd/log",
 })
 
 _READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})

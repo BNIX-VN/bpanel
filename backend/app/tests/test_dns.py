@@ -79,6 +79,7 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setattr(addons, "ADDONS_DIR", tmp_path)
     monkeypatch.setattr(addons, "ADDONS_FILE", tmp_path / "addons.json")
     monkeypatch.setattr(server_network, "ipv4_addresses", lambda: ["203.0.113.10"])
+    monkeypatch.setattr(server_network, "ipv6_addresses", lambda: [])
     fake = FakePowerDNS()
     monkeypatch.setattr(dns, "_request", fake)
     monkeypatch.setattr(dns, "server_status", lambda: {"installed": True, "running": True, "api": True,
@@ -180,7 +181,8 @@ def test_a_new_zone_is_a_full_zone(env):
     assert env.fake.rrset("example.com", "www.example.com.", "A") == ["203.0.113.10"]
     assert env.fake.rrset("example.com", "mail.example.com.", "A") == ["203.0.113.10"]
     assert env.fake.rrset("example.com", "example.com.", "MX") == ["10 mail.example.com."]
-    assert env.fake.rrset("example.com", "example.com.", "TXT") == ['"v=spf1 a mx ~all"']
+    # This server by name and by address (the same SPF the Email addon suggests).
+    assert env.fake.rrset("example.com", "example.com.", "TXT") == ['"v=spf1 mx a ip4:203.0.113.10 ~all"']
     assert env.fake.rrset("example.com", "example.com.", "SOA")[0].startswith("ns1.bnix.vn. hostmaster.example.com.")
     assert env.db.query(DnsZone).filter_by(name="example.com").one().owner_id == env.user("khach").id
     assert "SOA" not in {record["type"] for record in dns.records("example.com")}
@@ -477,7 +479,7 @@ def test_the_default_template_makes_the_zone_directadmin_would(env):
     assert env.fake.rrset(zone, "www.mau.vn.", "A") == ["203.0.113.10"]
     assert env.fake.rrset(zone, "mail.mau.vn.", "A") == ["203.0.113.10"]
     assert env.fake.rrset(zone, "mau.vn.", "MX") == ["10 mail.mau.vn."]
-    assert env.fake.rrset(zone, "mau.vn.", "TXT") == ['"v=spf1 a mx ~all"']
+    assert env.fake.rrset(zone, "mau.vn.", "TXT") == ['"v=spf1 mx a ip4:203.0.113.10 ~all"']
 
 
 def test_a_template_of_ones_own_is_used_for_new_zones(env):

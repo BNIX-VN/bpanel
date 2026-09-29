@@ -199,15 +199,11 @@ def settings() -> dict:
 
 
 def spf_record() -> str:
-    """The SPF record every domain here should publish.
-
-    The server itself sends ("a mx"), and when mail goes out through a
-    smarthost, so does the smarthost: its include goes in before "~all".
-    """
+    """The SPF record a new zone gets: this server by name and address, and the
+    Email addon's default relay when there is one (mail.default_spf)."""
     from app.services import mail
 
-    include = mail.spf_include()
-    return f"v=spf1 a mx {include} ~all" if include else "v=spf1 a mx ~all"
+    return mail.default_spf()
 
 
 def template_records(template: str, zone: str, zone_ip: str, ttl: int) -> list[dict]:
@@ -794,14 +790,25 @@ def sync_quietly(db: Session) -> dict | None:
 
 # --- mail (Email addon) -------------------------------------------------------------
 
-def replace_spf(db: Session, old: str, new: str) -> list[str]:
-    """Move every zone still publishing the old SPF record to the new one.
+def _spf_terms(text: str) -> set[str]:
+    return {term.lower() for term in (text or "").split()[1:] if term.lower() not in ("~all", "-all", "?all", "+all", "all")}
 
-    Only an apex SPF equal to the old one changes: a customer who wrote
-    their own keeps it. Returns the zones changed.
+
+# What a zone got before the SPF record named the server's addresses.
+LEGACY_SPF_TERMS = {"a", "mx"}
+
+
+def replace_spf(db: Session, old: str, new: str) -> list[str]:
+    """Move every zone still publishing the panel's previous SPF record to the
+    new one.
+
+    A zone's SPF counts as the panel's when it has the same mechanisms as the
+    old record (in any order), or the plain "a mx" zones got before. A
+    customer who wrote their own keeps it. Returns the zones changed.
     """
     if not active() or old == new:
         return []
+    old_terms = _spf_terms(old)
     changed = []
     for row in db.query(DnsZone).order_by(DnsZone.name).all():
         try:
@@ -811,51 +818,15 @@ def replace_spf(db: Session, old: str, new: str) -> list[str]:
         apex = _absolute(row.name)
         rrset = _rrset(data, apex, "TXT")
         contents = _contents(rrset)
-        if not any(_untxt(content) == old for content in contents):
+
+        def panels(content: str) -> bool:
+            text = _untxt(content)
+            return text.lower().startswith("v=spf1") and _spf_terms(text) in (old_terms, LEGACY_SPF_TERMS)
+
+        if not any(panels(content) for content in contents):
             continue
-        updated = [_txt(new) if _untxt(content) == old else content for content in contents]
+        updated = [_txt(new) if panels(content) else content for content in contents]
         _serial_follows_edits(row.name, data)
         _patch(row.name, {(apex, "TXT"): ((rrset or {}).get("ttl", DEFAULT_TTL), updated)})
         changed.append(row.name)
     return changed
-
-
-DKIM_SELECTOR = "bpanel"
-
-
-def mail_records(db: Session, domain: str, dkim_key: str) -> list[str]:
-    """DKIM, DMARC and webmail.<domain> for a domain with mailboxes here.
-
-    Written into the zone that holds the domain, when this server has one. The
-    DKIM record is the mail server's own and always follows its key. DMARC
-    and the webmail name are only added where the zone has nothing by that
-    name, so a customer's own policy or record is never overwritten. Returns
-    the names written.
-    """
-    if not active():
-        return []
-    domain = normalize_zone(domain)
-    containing = [row for row in db.query(DnsZone).all()
-                  if domain == row.name or domain.endswith("." + row.name)]
-    parent = max(containing, key=lambda row: len(row.name), default=None)
-    if parent is None:
-        return []
-    config = settings()
-    data = _zone_data(parent.name)
-    names = {rrset.get("name") for rrset in data.get("rrsets", [])}
-    changes: dict = {}
-    dkim_name = _absolute(f"{DKIM_SELECTOR}._domainkey.{domain}")
-    dkim_text = f"v=DKIM1; k=rsa; p={dkim_key}"
-    if [_untxt(content) for content in _contents(_rrset(data, dkim_name, "TXT"))] != [dkim_text]:
-        changes[(dkim_name, "TXT")] = (config["ttl"], [_txt(dkim_text)])
-    dmarc_name = _absolute(f"_dmarc.{domain}")
-    if dmarc_name not in names:
-        changes[(dmarc_name, "TXT")] = (config["ttl"], [_txt("v=DMARC1; p=none")])
-    webmail_name = _absolute(f"webmail.{domain}")
-    if config["zone_ip"] and webmail_name not in names:
-        changes[(webmail_name, "A")] = (config["ttl"], [config["zone_ip"]])
-    if not changes:
-        return []
-    _serial_follows_edits(parent.name, data)
-    _patch(parent.name, changes)
-    return sorted(name.rstrip(".") for name, _ in changes)
