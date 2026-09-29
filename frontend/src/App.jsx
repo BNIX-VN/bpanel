@@ -977,6 +977,7 @@ function App() {
   const [panelFaviconFile, setPanelFaviconFile] = useState(null);
   const [adminAccountForm, setAdminAccountForm] = useState({ email: '', current_password: '', password: '', confirm_password: '', code: '' });
   const [showProfileModal, setShowProfileModal] = useState(false);
+  const [panelSettingsTab, setPanelSettingsTab] = useState(() => (/^\/api-tokens?\/?$/i.test(window.location.pathname) ? 'api' : 'general'));
   const [updatesStatus, setUpdatesStatus] = useState(null);
   const [showUpdateLog, setShowUpdateLog] = useState(false);
   const [osUpdating, setOsUpdating] = useState(false);
@@ -9773,10 +9774,22 @@ function App() {
     if (!isAdmin) return <section className="section"><h2>{t('Settings')}</h2><p className="hint">{t('No permission.')}</p></section>;
     const ipv4 = panelSettings.server_ipv4 || [];
     const ipv6 = panelSettings.ipv6 || {};
-    return <>
-      <section className="section">
-        <div className="section-title">
-          <div><h2>{t('Panel settings')}</h2><p className="hint">{t('Branding and hostname.')}</p></div>
+    // OPanel's tabs, one form at a time (operator, 2026-09-30). The admin's
+    // own email and password are in Profile, in the account menu.
+    const tabs = [
+      ['general', 'General', SettingsIcon],
+      ['brand', 'Brand assets', Image],
+      ['api', 'API Tokens', KeyRound],
+    ];
+    const activeTab = tabs.some(([id]) => id === panelSettingsTab) ? panelSettingsTab : 'general';
+    return <section className="section panel-settings-page">
+      <div className="segmented-control backup-tabs" role="tablist" aria-label={t('Panel settings sections')}>
+        {tabs.map(([id, label, Icon]) => <button key={id} type="button" role="tab" aria-selected={activeTab === id}
+          className={activeTab === id ? 'active' : ''} onClick={() => setPanelSettingsTab(id)}><Icon size={14}/>{t(label)}</button>)}
+      </div>
+      {activeTab === 'general' && <div className="backup-tab-panel" role="tabpanel">
+        <div className="backup-panel-title">
+          <div><h3>{t('General')}</h3><p className="hint">{t("Panel name, hostname and the server's addresses.")}</p></div>
           <button className="secondary" disabled={!!loading} onClick={loadPanelSettings}><RefreshCw size={14}/> {t('Refresh')}</button>
         </div>
         <div className="panel-settings-grid panel-settings-compact">
@@ -9785,14 +9798,9 @@ function App() {
           <label className="check-line panel-ssl-status"><input type="checkbox" checked={!!panelSettingsForm.ssl_enabled} onChange={e => setPanelSettingsForm(prev => ({ ...prev, ssl_enabled: e.target.checked }))} /> {t('Panel SSL')}</label>
           <button disabled={!!loading || !panelSettingsForm.app_name || !panelSettingsForm.panel_hostname} onClick={savePanelSettings}><SettingsIcon size={14}/> {t('Save settings')}</button>
         </div>
-      </section>
-      <section className="section">
-        <div className="section-title">
-          <div>
-            <h2>{t('Server network')}</h2>
-            <p className="hint">{t('Addresses this server answers on. Detected live, so an IPv6 block added later shows up here.')}</p>
-          </div>
-          <button className="secondary" disabled={!!loading} onClick={loadPanelSettings}><RefreshCw size={14}/> {t('Refresh')}</button>
+        <div className="backup-subtitle">
+          <h3>{t('Server network')}</h3>
+          <p className="hint">{t('Addresses this server answers on. Detected live, so an IPv6 block added later shows up here.')}</p>
         </div>
         <div className="info-box">
           <div className="network-address-row">
@@ -9817,10 +9825,10 @@ function App() {
               : t('No global IPv6 address is configured on this server yet. Add one at your provider, then refresh.')}
           </p>
         </div>
-      </section>
-      <section className="section">
-        <div className="section-title">
-          <div><h2>{t('Brand assets')}</h2><p className="hint">{t('Upload PNG, JPG, WEBP, or ICO files up to 1 MB.')}</p></div>
+      </div>}
+      {activeTab === 'brand' && <div className="backup-tab-panel" role="tabpanel">
+        <div className="backup-panel-title">
+          <div><h3>{t('Brand assets')}</h3><p className="hint">{t('Upload PNG, JPG, WEBP, or ICO files up to 1 MB.')}</p></div>
         </div>
         <div className="brand-asset-grid">
           <div className="brand-asset-card">
@@ -9834,10 +9842,10 @@ function App() {
             <button className="secondary" disabled={!!loading || !panelFaviconFile} onClick={() => uploadPanelAsset('favicon')}><Upload size={14}/> {t('Upload favicon')}</button>
           </div>
         </div>
-      </section>
-      <section className="section">
-        <div className="section-title">
-          <div><h2>{t('API Tokens')}</h2><p className="hint">{t('Provisioning tokens for WHMCS or external billing systems.')}</p></div>
+      </div>}
+      {activeTab === 'api' && <div className="backup-tab-panel" role="tabpanel">
+        <div className="backup-panel-title">
+          <div><h3>{t('API Tokens')}</h3><p className="hint">{t('Provisioning tokens for WHMCS or external billing systems.')}</p></div>
           <button className="secondary" disabled={!!loading} onClick={loadApiTokens}><RefreshCw size={14}/> {t('Refresh')}</button>
         </div>
         {createdApiToken && <div className="token-created-notice">
@@ -9865,8 +9873,8 @@ function App() {
             <button className="mini danger" disabled={!!loading} onClick={() => revokeApiToken(token)}><Trash2 size={14}/> {t('Delete')}</button>
           </div>)}
         </div>}
-      </section>
-    </>;
+      </div>}
+    </section>;
   }
 
   function renderUsers() {

@@ -109,14 +109,20 @@ def test_a_settings_page_keeps_its_own_name_and_lights_up_settings():
     # As in OPanel, its title is a crumb back to the Settings page.
     assert '<h1 className="page-crumbs"><button type="button" onClick={() => navigateToPage(\'settings\')}>' in APP
 
-def test_panel_settings_is_opanels_stacked_sections():
-    """OPanel's page (operator, 2026-09-29): the forms one under the other,
-    no tabs; the admin's own email and password moved to Profile."""
+def test_panel_settings_is_opanels_tabs():
+    """OPanel's page (operator, 2026-09-30: tabs as BPanel had them): General,
+    Brand assets, API Tokens, one at a time; the admin's own email and
+    password live in Profile."""
     page = APP.split("  function renderPanelSettings() {")[1].split("  function renderUsers() {")[0]
-    titles = re.findall(r"<h2>\{t\('([^']+)'\)\}</h2>", page)
-    assert titles == ["Settings", "Panel settings", "Server network", "Brand assets", "API Tokens"]
-    assert "role=\"tablist\"" not in page and "panelSettingsTab" not in APP
+    tabs = re.findall(r"\['([a-z]+)', '([^']+)', \w+\],", page.split("const tabs = [")[1].split("];")[0])
+    assert tabs == [("general", "General"), ("brand", "Brand assets"), ("api", "API Tokens")]
+    assert 'className="segmented-control backup-tabs" role="tablist"' in page
+    for key, _label in tabs:
+        assert f"activeTab === '{key}' && <div className=\"backup-tab-panel\"" in page, key
     assert "Admin account" not in page
+    # The tokens used to be their own page; an old link still opens their tab.
+    assert "/^\\/api-tokens?\\/?$/i.test(window.location.pathname) ? 'api' : 'general'" in APP
+
 
 def test_sign_out_lives_in_the_account_menu():
     """The top bar is the page title and one account menu, as in OPanel:
