@@ -555,8 +555,8 @@ button:disabled,.upload-button.disabled{background:var(--disabled-bg);color:var(
 .mail-catchall-input input{flex:1;min-width:0;height:34px;min-height:34px}
 .mail-webmail-host{font-size:12.5px;color:var(--text-secondary);white-space:nowrap}
 .mail-webmail-host span{overflow:hidden;text-overflow:ellipsis;max-width:220px}
-.mail-dns-page .waf-detail-title{display:flex;align-items:center;gap:12px;min-width:0}
-.mail-dns-page .waf-detail-title h2{margin:0;overflow-wrap:anywhere}
+.waf-detail-title{display:flex;align-items:center;gap:12px;min-width:0}
+.waf-detail-title h2{margin:0;overflow-wrap:anywhere}
 .mail-dns-list{display:grid;gap:12px}
 .mail-dns-record{display:grid;gap:10px;padding:14px;background:var(--surface-alt);border:1px solid var(--border);border-radius:var(--radius-md);min-width:0}
 .mail-dns-head{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
@@ -699,7 +699,7 @@ button:disabled,.upload-button.disabled{background:var(--disabled-bg);color:var(
   .mail-address-input{flex-wrap:wrap}
   .mail-filter{grid-template-columns:1fr;width:100%}
   .mail-webmail-host span{max-width:none}
-  .mail-dns-page .waf-detail-title{flex-wrap:wrap}
+  .waf-detail-title{flex-wrap:wrap}
 }
 /* The DNS addon's template for new zones. */
 .dns-template{grid-column:1 / -1;display:grid;gap:5px}
