@@ -39,7 +39,7 @@ def upgrade() -> None:
         )
         op.execute(
             "INSERT INTO mail_domains (domain, owner_id, catch_all, dkim_public, webmail_host, relay, created_at) "
-            "SELECT domain, MIN(owner_id), '', '', 0, '', '', CURRENT_TIMESTAMP FROM mail_accounts GROUP BY domain"
+            "SELECT domain, MIN(owner_id), '', '', 0, '', CURRENT_TIMESTAMP FROM mail_accounts GROUP BY domain"
         )
     if not inspector.has_table("mail_forwarders"):
         op.create_table(
