@@ -37,14 +37,6 @@ const CRON_PRESETS = [
   ['0 0 1 * *', 'Monthly, day 1 at 00:00'],
 ];
 const normalizeCron = value => String(value || '').trim().split(/\s+/).join(' ');
-const BACKUP_SCHEDULE_PRESETS = [
-  ['0 2 * * *', 'Every day at 02:00'],
-  ['0 3 * * *', 'Every day at 03:00'],
-  ['0 */12 * * *', 'Every 12 hours'],
-  ['0 2 * * 0', 'Every Sunday at 02:00'],
-  ['0 2 1 * *', 'On the 1st of every month at 02:00'],
-];
-const isPresetSchedule = (presets, value) => presets.some(([preset]) => preset === value);
 // How a site's app_type is written wherever a person reads it.
 const APP_TYPE_LABELS = { wordpress: 'WordPress', php: 'PHP', static: 'Static', application: 'App' };
 const DEFAULT_SERVICE_NAMES = ['bpanel-api', 'nginx', 'php8.3-fpm', 'php8.4-fpm', 'mariadb', 'redis-server'];
@@ -297,7 +289,7 @@ const MAIL_SPF_INCLUDES = ['include:spf.smtp2go.com', 'include:mailgun.org', 'in
 const SITE_APP_KINDS = [
   ['node', 'Node.js', 'BPanel installs dependencies and keeps the process running under systemd.'],
   ['docker', 'Container', 'BPanel pulls the image and runs it, published on loopback only.'],
-  ['compose', 'Docker Compose', 'Paste your project\u2019s docker-compose.yml. BPanel checks it and runs a file it generates from what it accepted.'],
+  ['compose', 'Docker Compose', 'Paste your project’s docker-compose.yml. BPanel checks it and runs a file it generates from what it accepted.'],
 ];
 const WEBSITE_MODES = [
   ['wordpress', 'WordPress'],
@@ -807,7 +799,6 @@ function App() {
   const [cronSchedule, setCronSchedule] = useState('*/15 * * * *');
   // Which schedule pickers are on "Custom…", by picker key.
   const [customSchedules, setCustomSchedules] = useState({});
-  const [backupScheduleCustom, setBackupScheduleCustom] = useState(false);
   const [cronCommand, setCronCommand] = useState('');
   const [cronItems, setCronItems] = useState([]);
   const [cronUser, setCronUser] = useState('');
@@ -818,8 +809,10 @@ function App() {
   // echoed back by the API, so this only ever holds a generated one.
   const [createdSftpInfo, setCreatedSftpInfo] = useState(null);
   const [sftpLimits, setSftpLimits] = useState({ limit: 0, used: 0, unlimited: false });
-  // The main account's own SFTP password, shown once after it is set.
-  const [ownSftpPassword, setOwnSftpPassword] = useState(null);
+  // The password dialog: an extra account's (account set), or the main
+  // login's (account null), which the panel password and 2FA code confirm.
+  const [sftpPasswordFor, setSftpPasswordFor] = useState(null);
+  const [showCreateSftp, setShowCreateSftp] = useState(false);
   const [siteApps, setSiteApps] = useState({ items: [], limit: 0, used: 0, memory_ceiling_mb: 512, port_range: [21000, 21999] });
   // Optional features. Until this has loaded nothing addon-owned is offered, so
   // a slow first request cannot flash a section that turns out not to be there.
@@ -891,6 +884,9 @@ function App() {
   const [siteAppEdit, setSiteAppEdit] = useState(null);
   const [siteAppEditPlan, setSiteAppEditPlan] = useState(null);
   const [siteRuntimes, setSiteRuntimes] = useState({ docker: { installed: false }, node_majors: [], allowed_registries: [] });
+  const [showCreateApp, setShowCreateApp] = useState(false);
+  // The "Add Node version" dialog: null when closed, else the major typed.
+  const [nodeMajorDraft, setNodeMajorDraft] = useState(null);
   const [chmodTarget, setChmodTarget] = useState(null);
   const [chmodMode, setChmodMode] = useState('644');
   const [filePath, setFilePath] = useState(() => standaloneEditor?.path || 'public_html/index.html');
@@ -1801,6 +1797,11 @@ function App() {
       setError(t('Storage limit must be between 0 and 1048576 MB.'));
       return;
     }
+    // A new password is optional; when one is typed it is checked before
+    // anything is saved, so a typo does not leave half the change applied.
+    const newPassword = editingUserForm.new_password || '';
+    if (newPassword && newPassword.length < 12) { setError(t('Password must be at least 12 characters.')); return; }
+    if (newPassword && newPassword !== editingUserForm.confirm_password) { setError(t('Passwords do not match.')); return; }
     const payload = {
       email: editingUserForm.email.trim(),
       package_id: editingUserForm.package_id ? Number(editingUserForm.package_id) : null,
@@ -1815,34 +1816,35 @@ function App() {
       body: JSON.stringify(payload),
     }, `Updating ${editingUser.username}...`);
     if (data) {
-      setNotice(`Updated user ${data.username}.`);
       if (data.id === currentUser?.id) setCurrentUser(prev => ({ ...prev, ...data }));
+      if (newPassword && !(await submitPasswordChange(editingUser, newPassword))) {
+        setNotice(t('User updated but password was not changed.'));
+        cancelEditingUser();
+        await loadUsers();
+        return;
+      }
+      setNotice(`Updated user ${data.username}.`);
       cancelEditingUser();
       await loadUsers();
     }
   }
 
-  async function submitPasswordChange(user) {
-    if (!user) return;
-    const pw = editingUserForm.new_password;
-    if (pw.length < 12) { setError(t('Password must be at least 12 characters.')); return; }
-    if (pw !== editingUserForm.confirm_password) { setError(t('Passwords do not match.')); return; }
-    const payload = { password: pw };
+  // Changing your own password asks for the current one (and the 2FA code);
+  // an administrator sets anyone else's directly. True when it was changed.
+  async function submitPasswordChange(user, password) {
+    const payload = { password };
     if (user.id === currentUser?.id) {
-      const currentPassword = prompt('Enter your current password to confirm this change:');
-      if (!currentPassword) return;
+      const currentPassword = prompt(t('Enter your current password to confirm:'));
+      if (!currentPassword) return false;
       payload.current_password = currentPassword;
       if (currentUser?.totp_enabled) {
-        const code = prompt('Enter the 6-digit code from your authenticator:');
-        if (!code) return;
+        const code = prompt(t('Enter your 2FA code:'));
+        if (!code) return false;
         payload.code = code.trim();
       }
     }
-    const data = await request(`/users/${user.id}/password`, { method: 'POST', body: JSON.stringify(payload) }, `Changing password for ${user.username}...`);
-    if (data?.message) {
-      setNotice(data.message);
-      setEditingUserForm(prev => ({ ...prev, new_password: '', confirm_password: '' }));
-    }
+    const data = await request(`/users/${user.id}/password`, { method: 'POST', body: JSON.stringify(payload) }, t('Changing password for {name}...', { name: user.username }));
+    return !!data;
   }
 
   async function createPackage() {
@@ -2992,6 +2994,9 @@ function App() {
     setSiteAppEdit({
       id: app.id,
       kind: app.kind,
+      port: app.port ?? '',
+      memory_limit_mb: app.memory_limit_mb ?? '',
+      cpu_limit: app.cpu_limit || '',
       compose_source: app.compose_source || '',
       web_service: app.web_service || '',
       container_port: app.container_port || '',
@@ -3018,6 +3023,14 @@ function App() {
           container_port: Number(siteAppEdit.container_port) || null,
         }
       : { env: siteAppEdit.env };
+    // Port, memory and CPU are sent only when they changed: a port that is
+    // sent is allocated again, and an unchanged one has nothing to move.
+    const port = Number(siteAppEdit.port);
+    if (port && port !== app.port) patch.port = port;
+    const memory = Number(siteAppEdit.memory_limit_mb);
+    if (memory && memory !== app.memory_limit_mb) patch.memory_limit_mb = memory;
+    const cpu = String(siteAppEdit.cpu_limit || '').trim();
+    if (app.kind === 'docker' && cpu && cpu !== app.cpu_limit) patch.cpu_limit = cpu;
     const data = await request(`/site-apps/${app.id}`, { method: 'PUT', body: JSON.stringify(patch) }, t('Saving configuration...'));
     if (data) {
       setSiteAppEdit(null);
@@ -3109,14 +3122,7 @@ function App() {
       setNotice(`Application ${data.name} created. Upload your files to ${data.directory} and press Deploy.`);
       setSiteAppDraft(EMPTY_SITE_APP_DRAFT);
       setComposePlan(null);
-      await loadSiteApps();
-    }
-  }
-
-  async function updateSiteApp(app, patch, label = 'Updating application...') {
-    const data = await request(`/site-apps/${app.id}`, { method: 'PUT', body: JSON.stringify(patch) }, label);
-    if (data) {
-      setNotice(`Updated ${data.name}.`);
+      setShowCreateApp(false);
       await loadSiteApps();
     }
   }
@@ -3422,31 +3428,35 @@ function App() {
     if (data?.php_binary) setCronPhpInfo({ php_binary: data.php_binary, php_version: data.php_version || '' });
   }
 
+  // Every extra login on the account, each with the website it reaches.
   async function loadSftpAccounts() {
-    if (!selectedWebsiteId) { setSftpAccounts([]); return; }
-    const data = await request(`/sftp-accounts?website_id=${Number(selectedWebsiteId)}`, {}, t('Loading SFTP accounts...'));
+    const data = await request('/sftp-accounts', {}, t('Loading SFTP accounts...'));
     if (Array.isArray(data)) setSftpAccounts(data);
     const limits = await request('/sftp-accounts/limits', {}, null);
     if (limits) setSftpLimits(limits);
   }
 
-  async function changeOwnSftpPassword() {
-    const typed = prompt(
-      'New SFTP password for your own account (leave empty to generate a strong one):',
-      ''
-    );
-    if (typed === null) return;
-    const data = await request(`/users/${currentUser.id}/sftp-password`, {
-      method: 'POST',
-      body: JSON.stringify({ password: typed ? typed : null }),
-    }, t('Setting SFTP password...'));
-    if (data) {
-      if (data.password) setOwnSftpPassword(data.password);
-      // The session carries sftp_password_set_at, so refresh it to clear the
-      // "same as your panel password" warning.
-      await loadCurrentUser();
-      await loadSftpAccounts();
-    }
+  // One dialog for both passwords. The main login's is confirmed with the
+  // panel password (and the 2FA code): the API asks for them.
+  async function saveSftpPassword() {
+    if (!sftpPasswordFor) return;
+    const { account, password, current_password: currentPassword, code } = sftpPasswordFor;
+    const data = account
+      ? await request(`/sftp-accounts/${account.id}/password`, {
+        method: 'POST',
+        body: JSON.stringify({ password }),
+      }, t('Updating SFTP password...'))
+      : await request(`/users/${currentUser.id}/sftp-password`, {
+        method: 'POST',
+        body: JSON.stringify({ password, current_password: currentPassword, ...(code.trim() ? { code: code.trim() } : {}) }),
+      }, t('Setting SFTP password...'));
+    if (!data) return;
+    setSftpPasswordFor(null);
+    setNotice(t('Password of {name} changed.', { name: account ? account.username : (currentUser?.sftp_username || currentUser?.username) }));
+    // The session carries sftp_password_set_at, so refresh it to clear the
+    // "same as your panel password" warning.
+    if (!account) await loadCurrentUser();
+    await loadSftpAccounts();
   }
 
   async function createSftpAccount() {
@@ -3460,25 +3470,13 @@ function App() {
     if (data?.id) {
       setCreatedSftpInfo(data);
       setNewSftpAccount({ label: '', password: '' });
-      await loadSftpAccounts();
-    }
-  }
-
-  async function resetSftpPassword(account) {
-    const typed = prompt(`New password for ${account.username} (leave empty to generate one):`, '');
-    if (typed === null) return;
-    const data = await request(`/sftp-accounts/${account.id}/password`, {
-      method: 'POST',
-      body: JSON.stringify({ password: typed ? typed : null }),
-    }, t('Updating SFTP password...'));
-    if (data) {
-      if (data.password) setCreatedSftpInfo({ ...account, password: data.password });
+      setShowCreateSftp(false);
       await loadSftpAccounts();
     }
   }
 
   async function deleteSftpAccount(account) {
-    if (!confirm(`Delete SFTP account ${account.username}? The login stops working immediately. Site files are not touched.`)) return;
+    if (!confirm(t('Delete SFTP account {name}? Files in its folder are kept.', { name: account.username }))) return;
     await request(`/sftp-accounts/${account.id}`, { method: 'DELETE' }, t('Removing SFTP account...'));
     if (createdSftpInfo?.id === account.id) setCreatedSftpInfo(null);
     await loadSftpAccounts();
@@ -3794,10 +3792,9 @@ function App() {
     if (data?.items) setBackups(data.items);
   }
 
-  async function loadBackupJobs() {
-    const data = await request('/maintenance/backup-jobs');
+  async function loadBackupJobs(showLoading = false) {
+    const data = await request('/maintenance/backup-jobs', {}, showLoading ? t('Loading backup logs...') : '');
     if (data?.jobs) {
-      const visibleJobs = data.jobs.filter(job => job.status !== 'done');
       const hasActive = data.jobs.some(job => ['queued', 'running'].includes(job.status));
       setBackupJobs(prev => {
         const hadActive = prev.some(job => ['queued', 'running'].includes(job.status));
@@ -3807,7 +3804,7 @@ function App() {
             if (selectedBackupUserId) listUserBackups(selectedBackupUserId);
           }, 0);
         }
-        return visibleJobs;
+        return data.jobs;
       });
     }
   }
@@ -3887,9 +3884,9 @@ function App() {
   // runBackupScheduleNow names the schedule in its confirmation with them.
   const userNameById = id => users.find(user => String(user.id) === String(id))?.username || `User #${id}`;
   const scheduleUserLabel = item => {
-    if (item.all_users) return 'All users';
+    if (item.all_users) return t('All users');
     const ids = (item.user_ids && item.user_ids.length > 0) ? item.user_ids : (item.user_id ? [item.user_id] : []);
-    return ids.length ? ids.map(userNameById).join(', ') : 'No users';
+    return ids.length ? ids.map(userNameById).join(', ') : t('No users');
   };
 
   async function runBackupScheduleNow(item) {
@@ -6787,6 +6784,38 @@ function App() {
     const atLimit = !isAdmin && siteApps.limit > 0 && siteApps.used >= siteApps.limit;
     const dockerReady = !!siteRuntimes.docker?.installed;
     const kindHint = (SITE_APP_KINDS.find(([value]) => value === siteAppDraft.kind) || [])[2];
+    // Making one is occasional; the list is why the page is opened. With no
+    // application yet the form is the only thing to do, so it starts open.
+    const createOpen = !atLimit && (showCreateApp || siteApps.items.length === 0);
+    const statusBadge = app => app.status === 'running'
+      ? <span className="badge ok">{t('Running')}</span>
+      : app.status === 'error' ? <span className="badge bad">{t('Failed')}</span> : <span className="badge">{t('Stopped')}</span>;
+    const appDetail = app => [
+      app.kind === 'node' ? `${app.start_kind} ${app.start_arg} · Node v${app.node_major || '22'}` : '',
+      app.kind === 'docker' ? `${app.image} · ${t('port {port}', { port: app.container_port })} · ${app.cpu_limit} CPU` : '',
+      app.kind === 'compose' && app.web_service ? `${t('Serves domain')}: ${app.web_service}` : '',
+      app.websites?.length ? app.websites.join(', ') : '',
+    ].filter(Boolean).join(' · ');
+    const renderComposeReport = (plan, fixLabel) => plan && <div className={`compose-report ${plan.ok ? 'ok' : 'bad'}`}>
+      {plan.ok
+        ? <p><Check size={14}/> {t('{n} service(s) will run.', { n: plan.services.length })} <strong>{plan.web_service}</strong> {t('serves the domain.')}</p>
+        : <p><AlertCircle size={14}/> {fixLabel}</p>}
+      {plan.issues.length > 0 && <ul>
+        {plan.issues.map((issue, index) => <li key={index}>
+          {issue.service && <code>{issue.service}</code>} {issue.message}
+        </li>)}
+      </ul>}
+      {plan.notes?.length > 0 && <ul className="compose-notes">
+        {plan.notes.map((note, index) => <li key={index}>{note}</li>)}
+      </ul>}
+      {plan.ok && plan === composePlan && <ul className="compose-services">
+        {plan.services.map(service => <li key={service.name}>
+          <code>{service.name}</code> {service.image}
+          {service.web ? ` · ${t('serves the domain')}` : ` · ${t('internal only')}`}
+          {service.container_port ? ` · ${t('port {port}', { port: service.container_port })}` : ''}
+        </li>)}
+      </ul>}
+    </div>;
     return <>
       <section className="section">
         <div className="section-title">
@@ -6797,301 +6826,242 @@ function App() {
               {siteApps.limit > 0 && <> {t('Using {used} of {limit} allowed.', { used: siteApps.used, limit: siteApps.limit })}</>}
             </p>
           </div>
-          <button className="secondary-light" disabled={!!loading} onClick={() => { loadSiteApps(); loadSiteRuntimes(); }}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <div className="actions">
+            <button className="secondary" disabled={!!loading} onClick={() => { loadSiteApps(); loadSiteRuntimes(); }}><RefreshCw size={14}/> {t('Refresh')}</button>
+            {!createOpen && !atLimit && <button type="button" onClick={() => setShowCreateApp(true)}><Plus size={15}/> {t('New application')}</button>}
+          </div>
         </div>
         <div className="site-runtime-strip">
-          <span>{t('Docker:')}{' '}<strong>{dockerReady ? (siteRuntimes.docker.version || 'installed') : 'not installed'}</strong></span>
-          <span>{t('Node:')}{' '}<strong>{siteRuntimes.node_majors?.length ? siteRuntimes.node_majors.map(major => `v${major}`).join(', ') : 'system version only'}</strong></span>
-          {isAdmin && !dockerReady && <button className="mini secondary-light" disabled={!!loading} onClick={installDockerEngine}>{t('Install Docker')}</button>}
-          {isAdmin && <button className="mini secondary-light" disabled={!!loading} onClick={() => { const major = prompt('Install which Node major version?', '22'); if (major) installNodeMajor(major.trim()); }}>{t('Add Node version')}</button>}
+          <span>{t('Docker:')} <strong>{dockerReady ? (siteRuntimes.docker.version || t('installed')) : t('not installed')}</strong></span>
+          <span>{t('Node:')} <strong>{siteRuntimes.node_majors?.length ? siteRuntimes.node_majors.map(major => `v${major}`).join(', ') : t('system version only')}</strong></span>
+          {isAdmin && !dockerReady && <button className="mini secondary" disabled={!!loading} onClick={installDockerEngine}><Download size={13}/> {t('Install Docker')}</button>}
+          {isAdmin && <button className="mini secondary" disabled={!!loading} onClick={() => setNodeMajorDraft('22')}><Plus size={13}/> {t('Add Node version')}</button>}
         </div>
         {isAdmin && dockerReady && siteRuntimes.docker?.disk?.length > 0 && <div className="site-runtime-strip">
           <span>{t('Docker disk (whole server, not counted against customer quotas):')}</span>
           {siteRuntimes.docker.disk.map(row => <span key={row.type}>
-            {row.type}: <strong>{row.size}</strong>{row.reclaimable && !row.reclaimable.startsWith('0B') ? <> · {row.reclaimable} reclaimable</> : null}
+            {row.type}: <strong>{row.size}</strong>{row.reclaimable && !row.reclaimable.startsWith('0B') ? <> · {t('{size} reclaimable', { size: row.reclaimable })}</> : null}
           </span>)}
-          <button className="mini secondary-light" disabled={!!loading} onClick={pruneDocker}>{t('Prune unused layers')}</button>
-        </div>}
-        {!atLimit && <div className="site-app-form">
-          <label><span>{t('Name')}</span>
-            <input value={siteAppDraft.name} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, name: e.target.value }))} />
-          </label>
-          <label><span>{t('Runtime')}</span>
-            <select value={siteAppDraft.kind} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, kind: e.target.value }))}>
-              {SITE_APP_KINDS.map(([value, label]) => <option key={value} value={value} disabled={value === 'docker' && !dockerReady}>{t(label)}</option>)}
-            </select>
-          </label>
-          <label><span>{t('Port')}</span>
-            <input
-              type="number"
-              value={siteAppDraft.port}
-              min={portFrom}
-              max={portTo}
-              disabled={!!loading}
-              placeholder={`auto (${portFrom}-${portTo})`}
-              onChange={e => setSiteAppDraft(prev => ({ ...prev, port: e.target.value }))}
-            />
-          </label>
-          <label><span>{t('Memory (MB)')}</span>
-            <input
-              type="number"
-              value={siteAppDraft.memory_limit_mb}
-              min={64}
-              max={siteApps.memory_ceiling_mb || 512}
-              disabled={!!loading}
-              placeholder={String(siteApps.memory_ceiling_mb || 512)}
-              onChange={e => setSiteAppDraft(prev => ({ ...prev, memory_limit_mb: e.target.value }))}
-            />
-          </label>
-          {siteAppDraft.kind === 'node' && <>
-            <label><span>{t('Start with')}</span>
-              <select value={siteAppDraft.start_kind} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, start_kind: e.target.value }))}>
-                <option value="npm">npm run</option>
-                <option value="npx">npx</option>
-                <option value="yarn">yarn</option>
-                <option value="node">node</option>
-              </select>
-            </label>
-            <label><span>{siteAppDraft.start_kind === 'node' ? 'Entry file' : 'Script or package'}</span>
-              <input value={siteAppDraft.start_arg} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, start_arg: e.target.value }))} placeholder={siteAppDraft.start_kind === 'node' ? 'server.js' : 'start'} />
-            </label>
-            <label><span>{t('Node version')}</span>
-              <select value={siteAppDraft.node_major} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, node_major: e.target.value }))}>
-                {(siteRuntimes.node_majors?.length ? siteRuntimes.node_majors : ['22']).map(major => <option key={major} value={major}>Node {major}</option>)}
-              </select>
-            </label>
-          </>}
-          {siteAppDraft.kind === 'compose' && <>
-            <label className="site-app-env"><span>docker-compose.yml</span>
-              <textarea
-                className="code-editor"
-                rows={12}
-                value={siteAppDraft.compose_source}
-                disabled={!!loading}
-                onChange={e => { setSiteAppDraft(prev => ({ ...prev, compose_source: e.target.value })); setComposePlan(null); }}
-                placeholder={'services:\n  app:\n    image: myorg/app:1.0\n    ports: ["3000:3000"]\n  db:\n    image: postgres:16\n    volumes: ["pgdata:/var/lib/postgresql/data"]\nvolumes:\n  pgdata:'}
-              />
-            </label>
-            {composePlan?.services?.length > 0 && <label><span>{t('Service behind the domain')}</span>
-              <select value={siteAppDraft.web_service} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, web_service: e.target.value }))}>
-                <option value="">{t('Choose for me')}</option>
-                {composePlan.services.map(service => <option key={service.name} value={service.name}>{service.name}{service.container_port ? ` · :${service.container_port}` : ''}</option>)}
-              </select>
-            </label>}
-            {composeWebPorts(composePlan, siteAppDraft.web_service).length > 1 && <label><span>{t('Port behind the domain')}</span>
-              <select value={siteAppDraft.container_port} disabled={!!loading} onChange={e => { setSiteAppDraft(prev => ({ ...prev, container_port: e.target.value })); setComposePlan(null); }}>
-                {composeWebPorts(composePlan, siteAppDraft.web_service).map(port => <option key={port} value={port}>{port}</option>)}
-              </select>
-            </label>}
-            <label><span>{t('CPU per service')}</span>
-              <input value={siteAppDraft.cpu_limit} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, cpu_limit: e.target.value }))} placeholder="1" />
-            </label>
-            <p className="compose-hint">{t('Where the file refers to')}{' '}<code>{'${VAR}'}</code>, set the value in the <strong>.env</strong> box below,
-              exactly as an <code>.env</code> file beside <code>docker-compose.yml</code> would. For a public address
-              (an OAuth callback, a webhook) use <code>{'${BPANEL_URL}'}</code> / <code>{'${BPANEL_DOMAIN}'}</code>:
-              the app only ever sees its internal port, and the panel fills in the domain of the website pointing at it.</p>
-          </>}
-          {siteAppDraft.kind === 'docker' && <>
-            <label><span>{t('Image')}</span>
-              <input value={siteAppDraft.image} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, image: e.target.value }))} placeholder="n8nio/n8n:latest" />
-            </label>
-            <label><span>{t('Port in container')}</span>
-              <input type="number" value={siteAppDraft.container_port} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, container_port: e.target.value }))} placeholder="3000" />
-            </label>
-            <label><span>CPU</span>
-              <input value={siteAppDraft.cpu_limit} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, cpu_limit: e.target.value }))} placeholder="1" />
-            </label>
-          </>}
-          <label className="site-app-env"><span>{siteAppDraft.kind === 'compose' ? '.env (KEY=value, one per line)' : 'Environment (KEY=value, one per line)'}</span>
-            <textarea
-              className="code-editor"
-              rows={4}
-              value={siteAppDraft.env}
-              disabled={!!loading}
-              onChange={e => setSiteAppDraft(prev => ({ ...prev, env: e.target.value }))}
-              placeholder={'N8N_ENCRYPTION_KEY=...\nGENERIC_TIMEZONE=Asia/Ho_Chi_Minh'}
-            />
-          </label>
-          <div className="site-app-form-actions">
-            {siteAppDraft.kind === 'compose' && <button className="secondary-light" disabled={!!loading || !siteAppDraft.compose_source.trim()} onClick={checkComposeFile}>{t('Check file')}</button>}
-            <button className="secondary-light" disabled={!!loading} onClick={suggestSiteAppPort}>{t('Pick free port')}</button>
-            <button disabled={!!loading || !siteAppDraft.name.trim()} onClick={createSiteApp}><Plus size={14}/>{t('Install application')}</button>
-          </div>
-          {composePlan && <div className={`compose-report ${composePlan.ok ? 'ok' : 'bad'}`}>
-            {composePlan.ok
-              ? <p><Check size={14}/> {t('{n} service(s) will run.', { n: composePlan.services.length })} <strong>{composePlan.web_service}</strong> {t('serves the domain.')}</p>
-              : <p><AlertCircle size={14}/> {t('{n} thing(s) to fix before importing:', { n: composePlan.issues.length })}</p>}
-            {composePlan.issues.length > 0 && <ul>
-              {composePlan.issues.map((issue, index) => <li key={index}>
-                {issue.service && <code>{issue.service}</code>} {issue.message}
-              </li>)}
-            </ul>}
-            {composePlan.notes?.length > 0 && <ul className="compose-notes">
-              {composePlan.notes.map((note, index) => <li key={index}>{note}</li>)}
-            </ul>}
-            {composePlan.ok && <ul className="compose-services">
-              {composePlan.services.map(service => <li key={service.name}>
-                <code>{service.name}</code> {service.image}
-                {service.web ? ' · serves the domain' : ' · internal only'}
-                {service.container_port ? ` · port ${service.container_port}` : ''}
-              </li>)}
-            </ul>}
-          </div>}
+          <button className="mini secondary" disabled={!!loading} onClick={pruneDocker}><Trash2 size={13}/> {t('Prune unused layers')}</button>
         </div>}
         {atLimit && <p className="hint">{t('This package allows {n} application(s). Delete one to install another.', { n: siteApps.limit })}</p>}
-        {kindHint && <p className="hint site-apps-note">{kindHint} {t('Containers publish on 127.0.0.1 only, run as your own user with no capabilities, and are capped at the memory shown.')} {t('Images come from {list}.', { list: (siteRuntimes.allowed_registries || []).join(', ') || t('the allowed registries') })}</p>}
-      </section>
 
-      <section className="section">
-        <div className="section-title">
-          <div><h2>{t('Installed')}</h2><p className="hint">{t('{n} application(s)', { n: siteApps.items.length })}</p></div>
-        </div>
-        {siteApps.items.length === 0 && <EmptyState icon={Server} message={t('No applications yet. Install one above.')} />}
-        <div className="site-app-list">
-          {siteApps.items.map(app => <div className="site-app-item" key={app.id}>
-            <div className="site-app-head">
+        {createOpen && <div className="create-inline">
+          <div className="create-inline-head">
+            <strong>{t('New application')}</strong>
+            {siteApps.items.length > 0 && <button type="button" className="secondary icon-only mini" onClick={() => { setShowCreateApp(false); setComposePlan(null); }} aria-label={t('Close')} title={t('Close')}><X size={15}/></button>}
+          </div>
+          <div className="site-app-form">
+            <label className="field"><span className="field-label">{t('Name')}</span>
+              <input value={siteAppDraft.name} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, name: e.target.value }))} />
+            </label>
+            <label className="field"><span className="field-label">{t('Runtime')}</span>
+              <select value={siteAppDraft.kind} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, kind: e.target.value }))}>
+                {SITE_APP_KINDS.map(([value, label]) => <option key={value} value={value} disabled={value === 'docker' && !dockerReady}>{t(label)}</option>)}
+              </select>
+            </label>
+            <label className="field"><span className="field-label">{t('Port')}</span>
+              <input type="number" value={siteAppDraft.port} min={portFrom} max={portTo} disabled={!!loading}
+                placeholder={t('auto ({from}-{to})', { from: portFrom, to: portTo })}
+                onChange={e => setSiteAppDraft(prev => ({ ...prev, port: e.target.value }))} />
+            </label>
+            <label className="field"><span className="field-label">{t('Memory (MB)')}</span>
+              <input type="number" value={siteAppDraft.memory_limit_mb} min={64} max={siteApps.memory_ceiling_mb || 512} disabled={!!loading}
+                placeholder={String(siteApps.memory_ceiling_mb || 512)}
+                onChange={e => setSiteAppDraft(prev => ({ ...prev, memory_limit_mb: e.target.value }))} />
+            </label>
+            {siteAppDraft.kind === 'node' && <>
+              <label className="field"><span className="field-label">{t('Start with')}</span>
+                <select value={siteAppDraft.start_kind} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, start_kind: e.target.value }))}>
+                  <option value="npm">npm run</option>
+                  <option value="npx">npx</option>
+                  <option value="yarn">yarn</option>
+                  <option value="node">node</option>
+                </select>
+              </label>
+              <label className="field"><span className="field-label">{siteAppDraft.start_kind === 'node' ? t('Entry file') : t('Script or package')}</span>
+                <input value={siteAppDraft.start_arg} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, start_arg: e.target.value }))} placeholder={siteAppDraft.start_kind === 'node' ? 'server.js' : 'start'} />
+              </label>
+              <label className="field"><span className="field-label">{t('Node version')}</span>
+                <select value={siteAppDraft.node_major} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, node_major: e.target.value }))}>
+                  {(siteRuntimes.node_majors?.length ? siteRuntimes.node_majors : ['22']).map(major => <option key={major} value={major}>Node {major}</option>)}
+                </select>
+              </label>
+            </>}
+            {siteAppDraft.kind === 'compose' && <>
+              <label className="field site-app-env"><span className="field-label">docker-compose.yml</span>
+                <textarea
+                  className="code-editor"
+                  rows={12}
+                  value={siteAppDraft.compose_source}
+                  disabled={!!loading}
+                  spellCheck={false}
+                  onChange={e => { setSiteAppDraft(prev => ({ ...prev, compose_source: e.target.value })); setComposePlan(null); }}
+                  placeholder={'services:\n  app:\n    image: myorg/app:1.0\n    ports: ["3000:3000"]\n  db:\n    image: postgres:16\n    volumes: ["pgdata:/var/lib/postgresql/data"]\nvolumes:\n  pgdata:'}
+                />
+              </label>
+              {composePlan?.services?.length > 0 && <label className="field"><span className="field-label">{t('Service behind the domain')}</span>
+                <select value={siteAppDraft.web_service} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, web_service: e.target.value }))}>
+                  <option value="">{t('Choose for me')}</option>
+                  {composePlan.services.map(service => <option key={service.name} value={service.name}>{service.name}{service.container_port ? ` · :${service.container_port}` : ''}</option>)}
+                </select>
+              </label>}
+              {composeWebPorts(composePlan, siteAppDraft.web_service).length > 1 && <label className="field"><span className="field-label">{t('Port behind the domain')}</span>
+                <select value={siteAppDraft.container_port} disabled={!!loading} onChange={e => { setSiteAppDraft(prev => ({ ...prev, container_port: e.target.value })); setComposePlan(null); }}>
+                  {composeWebPorts(composePlan, siteAppDraft.web_service).map(port => <option key={port} value={port}>{port}</option>)}
+                </select>
+              </label>}
+              <label className="field"><span className="field-label">{t('CPU per service')}</span>
+                <input value={siteAppDraft.cpu_limit} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, cpu_limit: e.target.value }))} placeholder="1" />
+              </label>
+              <p className="compose-hint">{t('Where the file refers to')} <code>{'${VAR}'}</code>, set the value in the <strong>.env</strong> box below,
+                exactly as an <code>.env</code> file beside <code>docker-compose.yml</code> would. For a public address
+                (an OAuth callback, a webhook) use <code>{'${BPANEL_URL}'}</code> / <code>{'${BPANEL_DOMAIN}'}</code>:
+                the app only ever sees its internal port, and the panel fills in the domain of the website pointing at it.</p>
+            </>}
+            {siteAppDraft.kind === 'docker' && <>
+              <label className="field"><span className="field-label">{t('Image')}</span>
+                <input value={siteAppDraft.image} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, image: e.target.value }))} placeholder="n8nio/n8n:latest" />
+              </label>
+              <label className="field"><span className="field-label">{t('Port in container')}</span>
+                <input type="number" value={siteAppDraft.container_port} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, container_port: e.target.value }))} placeholder="3000" />
+              </label>
+              <label className="field"><span className="field-label">CPU</span>
+                <input value={siteAppDraft.cpu_limit} disabled={!!loading} onChange={e => setSiteAppDraft(prev => ({ ...prev, cpu_limit: e.target.value }))} placeholder="1" />
+              </label>
+            </>}
+            <label className="field site-app-env"><span className="field-label">{siteAppDraft.kind === 'compose' ? t('.env (KEY=value, one per line)') : t('Environment (KEY=value, one per line)')}</span>
+              <textarea
+                className="code-editor"
+                rows={4}
+                value={siteAppDraft.env}
+                disabled={!!loading}
+                spellCheck={false}
+                onChange={e => setSiteAppDraft(prev => ({ ...prev, env: e.target.value }))}
+                placeholder={'N8N_ENCRYPTION_KEY=...\nGENERIC_TIMEZONE=Asia/Ho_Chi_Minh'}
+              />
+            </label>
+            <div className="site-app-form-actions">
+              {siteAppDraft.kind === 'compose' && <button className="secondary" disabled={!!loading || !siteAppDraft.compose_source.trim()} onClick={checkComposeFile}><Check size={14}/> {t('Check file')}</button>}
+              <button className="secondary" disabled={!!loading} onClick={suggestSiteAppPort}>{t('Pick free port')}</button>
+              <button disabled={!!loading || !siteAppDraft.name.trim()} onClick={createSiteApp}><Plus size={14}/> {t('Install application')}</button>
+            </div>
+            {renderComposeReport(composePlan, t('{n} thing(s) to fix before importing:', { n: composePlan?.issues?.length || 0 }))}
+          </div>
+          {kindHint && <p className="hint">{t(kindHint)} {t('Containers publish on 127.0.0.1 only, run as your own user with no capabilities, and are capped at the memory shown.')} {t('Images come from {list}.', { list: (siteRuntimes.allowed_registries || []).join(', ') || t('the allowed registries') })}</p>}
+        </div>}
+
+        {siteApps.items.length === 0 && !createOpen && <EmptyState icon={Server} message={t('No applications yet.')} action={atLimit ? undefined : { label: t('New application'), icon: Plus, onClick: () => setShowCreateApp(true) }} />}
+        {siteApps.items.length > 0 && <div className="table">
+          {siteApps.items.map(app => <div className="row site-app-row" key={app.id}>
+            <div className="user-main">
               <strong>{app.name}</strong>
-              <span className="badge">{SITE_APP_KIND_LABELS[app.kind] || app.kind}</span>
-              <code>127.0.0.1:{app.port}</code>
-              <span className={`badge ${app.status === 'running' ? 'ok' : app.status === 'error' ? 'bad' : ''}`}>
-                {app.status === 'running' ? 'Running' : app.status === 'error' ? 'Failed' : 'Stopped'}
-              </span>
-              {app.websites?.length > 0 && <span className="site-app-domains">{app.websites.join(', ')}</span>}
+              <small><code>127.0.0.1:{app.port}</code> · {app.directory}</small>
+              {appDetail(app) && <small>{appDetail(app)}</small>}
+            </div>
+            <span className="badge">{SITE_APP_KIND_LABELS[app.kind] || app.kind}</span>
+            {statusBadge(app)}
+            <div className="row-actions">
+              <button className="mini secondary-light" disabled={!!loading} onClick={() => openAppFileManager(app)}><FolderOpen size={13}/> {t('Files')}</button>
+              <button className="mini" disabled={!!loading} onClick={() => deploySiteApp(app)}><Play size={13}/> {t('Deploy')}</button>
+              <button className="mini secondary-light" disabled={!!loading} onClick={() => controlSiteApp(app, 'restart')}><RotateCcw size={13}/> {t('Restart')}</button>
+              <button className="mini secondary-light" disabled={!!loading} onClick={() => controlSiteApp(app, 'stop')}><Square size={13}/> {t('Stop')}</button>
+              <button className="mini secondary-light" disabled={!!loading} onClick={() => openSiteAppLog(app)}><FileText size={13}/> {t('Log')}</button>
+              <button className="mini secondary-light" disabled={!!loading} onClick={() => openSiteAppEdit(app)}><Pencil size={13}/> {t('Edit')}</button>
+              <button className="mini danger" disabled={!!loading} onClick={() => deleteSiteApp(app)} aria-label={t('Delete {name}', { name: app.name })} title={t('Delete')}><Trash2 size={13}/></button>
             </div>
             {app.last_error && <p className="site-app-error">{app.last_error}</p>}
-            <dl className="site-app-meta">
-              <div><dt>{t('Upload code to')}</dt><dd><code>{app.directory}</code></dd></div>
-              {app.kind === 'node' && <div><dt>{t('Start')}</dt><dd><code>{app.start_kind} {app.start_arg}</code></dd></div>}
-              {app.kind === 'node' && <div><dt>Node</dt><dd>v{app.node_major || '22'}</dd></div>}
-              {app.kind === 'compose' && <div><dt>{t('Serves domain')}</dt><dd><code>{app.web_service}</code></dd></div>}
-              {app.kind === 'docker' && <div><dt>{t('Image')}</dt><dd><code>{app.image}</code></dd></div>}
-              {app.kind === 'docker' && <div><dt>{t('In container')}</dt><dd>port {app.container_port} · {app.cpu_limit} CPU</dd></div>}
-              <div><dt>{t('Unit')}</dt><dd><code>{app.unit}</code></dd></div>
-            </dl>
-            <div className="site-app-actions">
-              <div className="site-app-fields">
-                <label className="site-app-port">
-                  <span>{t('Port')}</span>
-                  <input
-                    type="number"
-                    defaultValue={app.port}
-                    min={portFrom}
-                    max={portTo}
-                    disabled={!!loading}
-                    onBlur={e => {
-                      const next = Number(e.target.value);
-                      if (next && next !== app.port) updateSiteApp(app, { port: next }, t('Moving application port...'));
-                    }}
-                  />
+            {siteAppEdit?.id === app.id && <div className="user-edit-panel">
+              <div className="user-edit-heading">
+                <div><strong>{t('Edit')} {app.name}</strong><small>{t('Unit')}: {app.unit}</small></div>
+                <button className="user-edit-close secondary-light" onClick={() => { setSiteAppEdit(null); setSiteAppEditPlan(null); }} aria-label={t('Close')} title={t('Close')}><X size={16}/></button>
+              </div>
+              <div className="user-edit-grid">
+                <label><span>{t('Port')}</span>
+                  <input type="number" value={siteAppEdit.port} min={portFrom} max={portTo} disabled={!!loading}
+                    onChange={e => setSiteAppEdit(prev => ({ ...prev, port: e.target.value }))} />
                 </label>
-                <label className="site-app-port">
-                  <span>{t('Memory (MB)')}</span>
-                  <input
-                    type="number"
-                    defaultValue={app.memory_limit_mb}
-                    min={64}
-                    max={isAdmin ? 16384 : (siteApps.memory_ceiling_mb || 512)}
-                    disabled={!!loading}
-                    onBlur={e => {
-                      const next = Number(e.target.value);
-                      if (next && next !== app.memory_limit_mb) updateSiteApp(app, { memory_limit_mb: next }, t('Applying the new memory limit...'));
-                    }}
-                  />
+                <label><span>{t('Memory (MB)')}</span>
+                  <input type="number" value={siteAppEdit.memory_limit_mb} min={64} max={isAdmin ? 16384 : (siteApps.memory_ceiling_mb || 512)} disabled={!!loading}
+                    onChange={e => setSiteAppEdit(prev => ({ ...prev, memory_limit_mb: e.target.value }))} />
                 </label>
-                {app.kind === 'docker' && <label className="site-app-port">
-                  <span>CPU</span>
-                  <input
-                    defaultValue={app.cpu_limit}
-                    disabled={!!loading}
-                    onBlur={e => {
-                      const next = e.target.value.trim();
-                      if (next && next !== app.cpu_limit) updateSiteApp(app, { cpu_limit: next }, t('Applying the new CPU limit...'));
-                    }}
-                  />
+                {app.kind === 'docker' && <label><span>CPU</span>
+                  <input value={siteAppEdit.cpu_limit} disabled={!!loading} onChange={e => setSiteAppEdit(prev => ({ ...prev, cpu_limit: e.target.value }))} />
                 </label>}
-              </div>
-              <div className="site-app-buttons">
-                <button className="mini secondary-light" disabled={!!loading} onClick={() => openSiteAppEdit(app)}><Pencil size={13}/> {app.kind === 'compose' ? 'Compose' : 'Environment'}</button>
-                <button className="mini secondary-light" disabled={!!loading} onClick={() => openAppFileManager(app)}><FolderOpen size={13}/>{t('Files')}</button>
-                <button className="mini" disabled={!!loading} onClick={() => deploySiteApp(app)}><Play size={13}/>{t('Deploy')}</button>
-                <button className="mini secondary-light" disabled={!!loading} onClick={() => controlSiteApp(app, 'restart')}><RotateCcw size={13}/>{t('Restart')}</button>
-                <button className="mini secondary-light" disabled={!!loading} onClick={() => controlSiteApp(app, 'stop')}><Square size={13}/>{t('Stop')}</button>
-                <button className="mini secondary-light" disabled={!!loading} onClick={() => openSiteAppLog(app)}><FileText size={13}/>{t('Log')}</button>
-                <button className="mini danger" disabled={!!loading} onClick={() => deleteSiteApp(app)}><Trash2 size={13}/>{t('Delete')}</button>
-              </div>
-            </div>
-            {siteAppEdit?.id === app.id && <div className="site-app-editor">
-              {app.kind === 'compose' ? <>
-                <label className="site-app-env"><span>docker-compose.yml</span>
-                  <textarea
-                    className="code-editor"
-                    rows={14}
-                    value={siteAppEdit.compose_source}
-                    disabled={!!loading}
-                    onChange={e => { setSiteAppEdit(prev => ({ ...prev, compose_source: e.target.value })); setSiteAppEditPlan(null); }}
-                  />
-                </label>
-                <p className="compose-hint">{t('The panel reads this file and generates the one it actually runs.')}{' '}<code>{'${VAR}'}</code> comes
-                  from the .env box; for a public address use <code>{'${BPANEL_URL}'}</code> / <code>{'${BPANEL_DOMAIN}'}</code>
-                  {app.websites?.length > 0 ? ` (currently ${app.websites[0]})` : ' (point a website at this app first)'}.</p>
-                <label className="site-app-env"><span>.env (KEY=value, one per line)</span>
-                  <textarea
-                    className="code-editor"
-                    rows={6}
-                    value={siteAppEdit.env}
-                    disabled={!!loading}
-                    onChange={e => { setSiteAppEdit(prev => ({ ...prev, env: e.target.value })); setSiteAppEditPlan(null); }}
-                  />
-                </label>
-                {siteAppEditPlan?.services?.length > 0 && <label><span>{t('Service behind the domain')}</span>
+                {app.kind === 'compose' && siteAppEditPlan?.services?.length > 0 && <label><span>{t('Service behind the domain')}</span>
                   <select value={siteAppEdit.web_service} disabled={!!loading} onChange={e => setSiteAppEdit(prev => ({ ...prev, web_service: e.target.value }))}>
                     <option value="">{t('Choose for me')}</option>
                     {siteAppEditPlan.services.map(service => <option key={service.name} value={service.name}>{service.name}{service.container_port ? ` · :${service.container_port}` : ''}</option>)}
                   </select>
                 </label>}
-                {composeWebPorts(siteAppEditPlan, siteAppEdit.web_service).length > 1 && <label><span>{t('Port behind the domain')}</span>
+                {app.kind === 'compose' && composeWebPorts(siteAppEditPlan, siteAppEdit.web_service).length > 1 && <label><span>{t('Port behind the domain')}</span>
                   <select value={siteAppEdit.container_port} disabled={!!loading} onChange={e => { setSiteAppEdit(prev => ({ ...prev, container_port: e.target.value })); setSiteAppEditPlan(null); }}>
                     {composeWebPorts(siteAppEditPlan, siteAppEdit.web_service).map(port => <option key={port} value={port}>{port}</option>)}
                   </select>
                 </label>}
-              </> : <label className="site-app-env"><span>{t('Environment (KEY=value, one per line)')}</span>
+              </div>
+              {app.kind === 'compose' && <>
+                <label className="field"><span className="field-label">docker-compose.yml</span>
+                  <textarea
+                    className="code-editor"
+                    rows={14}
+                    value={siteAppEdit.compose_source}
+                    disabled={!!loading}
+                    spellCheck={false}
+                    onChange={e => { setSiteAppEdit(prev => ({ ...prev, compose_source: e.target.value })); setSiteAppEditPlan(null); }}
+                  />
+                </label>
+                <p className="compose-hint">{t('The panel reads this file and generates the one it actually runs.')} <code>{'${VAR}'}</code> comes
+                  from the .env box; for a public address use <code>{'${BPANEL_URL}'}</code> / <code>{'${BPANEL_DOMAIN}'}</code>
+                  {app.websites?.length > 0 ? ` (currently ${app.websites[0]})` : ' (point a website at this app first)'}.</p>
+              </>}
+              <label className="field"><span className="field-label">{app.kind === 'compose' ? t('.env (KEY=value, one per line)') : t('Environment (KEY=value, one per line)')}</span>
                 <textarea
                   className="code-editor"
-                  rows={8}
+                  rows={app.kind === 'compose' ? 6 : 8}
                   value={siteAppEdit.env}
                   disabled={!!loading}
-                  onChange={e => setSiteAppEdit(prev => ({ ...prev, env: e.target.value }))}
+                  spellCheck={false}
+                  onChange={e => { setSiteAppEdit(prev => ({ ...prev, env: e.target.value })); if (app.kind === 'compose') setSiteAppEditPlan(null); }}
                 />
-              </label>}
-              <div className="site-app-form-actions">
-                {app.kind === 'compose' && <button className="secondary-light" disabled={!!loading || !siteAppEdit.compose_source.trim()} onClick={checkSiteAppEdit}>{t('Check file')}</button>}
-                <button disabled={!!loading} onClick={() => saveSiteAppEdit(app)}><Save size={14}/>{t('Save')}</button>
-                <button className="secondary-light" disabled={!!loading} onClick={() => { setSiteAppEdit(null); setSiteAppEditPlan(null); }}><X size={14}/>{t('Cancel')}</button>
+              </label>
+              {renderComposeReport(siteAppEditPlan, t('{n} thing(s) to fix:', { n: siteAppEditPlan?.issues?.length || 0 }))}
+              <div className="user-edit-actions">
+                {app.kind === 'compose' && <button className="secondary" disabled={!!loading || !siteAppEdit.compose_source.trim()} onClick={checkSiteAppEdit}><Check size={14}/> {t('Check file')}</button>}
+                <button className="secondary-light" onClick={() => { setSiteAppEdit(null); setSiteAppEditPlan(null); }}>{t('Cancel')}</button>
+                <button disabled={!!loading} onClick={() => saveSiteAppEdit(app)}><Save size={14}/> {t('Save')}</button>
               </div>
-              {siteAppEditPlan && <div className={`compose-report ${siteAppEditPlan.ok ? 'ok' : 'bad'}`}>
-                {siteAppEditPlan.ok
-                  ? <p><Check size={14}/> {t('{n} service(s) will run.', { n: siteAppEditPlan.services.length })} <strong>{siteAppEditPlan.web_service}</strong> {t('serves the domain.')}</p>
-                  : <p><AlertCircle size={14}/> {t('{n} thing(s) to fix:', { n: siteAppEditPlan.issues.length })}</p>}
-                {siteAppEditPlan.issues.length > 0 && <ul>
-                  {siteAppEditPlan.issues.map((issue, index) => <li key={index}>
-                    {issue.service && <code>{issue.service}</code>} {issue.message}
-                  </li>)}
-                </ul>}
-                {siteAppEditPlan.notes?.length > 0 && <ul className="compose-notes">
-                  {siteAppEditPlan.notes.map((note, index) => <li key={index}>{note}</li>)}
-                </ul>}
-              </div>}
             </div>}
           </div>)}
-        </div>
-        {siteAppLog && <div className="site-app-log">
-          <div className="site-app-log-head">
-            <h4>{siteAppLog.name} log</h4>
-            <button className="mini secondary-light" onClick={() => setSiteAppLog(null)}><X size={13}/>{t('Close')}</button>
-          </div>
-          <pre>{siteAppLog.log}</pre>
         </div>}
       </section>
+
+      {siteAppLog && <section className="section log-viewer">
+        <div className="section-title">
+          <div className="nginx-config-title"><h2>{t('Log')} - {siteAppLog.name}</h2></div>
+          <button className="secondary-light" onClick={() => setSiteAppLog(null)}><X size={14}/> {t('Close')}</button>
+        </div>
+        <pre className="log-output">{siteAppLog.log}</pre>
+      </section>}
+
+      {nodeMajorDraft !== null && <div className="modal-overlay" onClick={() => setNodeMajorDraft(null)}>
+        <div className="modal-card" onClick={e => e.stopPropagation()}>
+          <div className="modal-header">
+            <h3>{t('Add Node version')}</h3>
+            <button className="secondary-light" onClick={() => setNodeMajorDraft(null)} aria-label={t('Close')}><X size={16}/></button>
+          </div>
+          <div className="modal-body">
+            <label className="field"><span className="field-label">{t('Node major version')}</span>
+              <input value={nodeMajorDraft} inputMode="numeric" placeholder="22" onChange={e => setNodeMajorDraft(e.target.value.replace(/[^0-9]/g, ''))} />
+            </label>
+            {siteRuntimes.node_majors?.length > 0 && <p className="hint">{t('Installed:')} {siteRuntimes.node_majors.map(major => `v${major}`).join(', ')}</p>}
+          </div>
+          <div className="modal-actions">
+            <button className="secondary-light" onClick={() => setNodeMajorDraft(null)}>{t('Cancel')}</button>
+            <button disabled={!!loading || !nodeMajorDraft.trim()} onClick={() => { const major = nodeMajorDraft.trim(); setNodeMajorDraft(null); installNodeMajor(major); }}><Download size={14}/> {t('Install')}</button>
+          </div>
+        </div>
+      </div>}
     </>;
   }
 
@@ -7613,94 +7583,136 @@ function App() {
   }
 
   function renderSftp() {
-    function copySftp(text, field) {
-      const doCopy = navigator.clipboard ? navigator.clipboard.writeText(text) : new Promise((resolve, reject) => {
-        try { const ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); resolve(); } catch(e) { reject(e); }
-      });
-      doCopy.then(() => { setCopiedField(field); setTimeout(() => setCopiedField(null), 2000); }).catch(() => setError(t('Copy failed.')));
-    }
+    const host = sftpAccounts.find(account => account.host)?.host || window.location.hostname;
+    const port = 22;
+    const mainUsername = currentUser?.sftp_username || currentUser?.username || '';
     const atLimit = !sftpLimits.unlimited && Number(sftpLimits.limit || 0) > 0
       && Number(sftpLimits.used || 0) >= Number(sftpLimits.limit || 0);
     const noAllowance = !sftpLimits.unlimited && Number(sftpLimits.limit || 0) <= 0;
-    return <section className="section">
-      <div className="section-title">
-        <div><h2>{t('SFTP accounts')}</h2></div>
-        <button className="secondary-light" disabled={!selectedWebsiteId || !!loading} onClick={loadSftpAccounts}><RefreshCw size={14}/>{t('Refresh')}</button>
-      </div>
-
-      <div className="info-box">
-        <div className="db-created-head">
-          <strong>{t('Your own SFTP login')}</strong>
-          <button className="mini" onClick={changeOwnSftpPassword}><KeyRound size={13}/>{t('Set password')}</button>
+    const createOpen = showCreateSftp && !atLimit && !noAllowance;
+    const canCreate = !!selectedWebsiteId && newSftpAccount.label.trim().length >= 2;
+    const editing = sftpPasswordFor;
+    const editingOwn = !!editing && !editing.account;
+    const canSavePassword = !!editing && editing.password.length >= 12
+      && (!editingOwn || (!!editing.current_password && (!currentUser?.totp_enabled || editing.code.trim().length >= 6)));
+    return <>
+      <section className="section">
+        <div className="section-title">
+          <div><h2>{t('SFTP connection')}</h2>
+            <p className="hint">{t('Use FileZilla, WinSCP, Cyberduck or any SFTP client. SSH shells are not available; each login only sees its own folder.')}</p></div>
+          <button className="secondary" disabled={!!loading} onClick={loadSftpAccounts}><RefreshCw size={14}/> {t('Refresh')}</button>
         </div>
-        <div className="db-created-grid">
-          <label>{t('Username')}</label><span>{currentUser?.sftp_username || currentUser?.username}</span>
-          <label>{t('Port')}</label><span>22 (SFTP)</span>
-          <label>{t('Reaches')}</label><span>every website on this account</span>
+        <div className="sftp-connect-grid">
+          {renderCopyBlock(t('Host'), host)}
+          {renderCopyBlock(t('Port'), String(port))}
+          {mainUsername && renderCopyBlock(t('Username'), mainUsername)}
         </div>
-        {!currentUser?.sftp_password_set_at && <p className="hint" style={{color:'var(--red)'}}>
-          {t('This login still uses your panel password. Anyone who guesses it over SFTP is also in the panel. Set a separate password — your panel password will stop working for SFTP the moment you do.')}
-        </p>}
-        {currentUser?.sftp_password_set_at && <p className="hint">{t('Separate from your panel password. Changing one does not change the other.')}</p>}
-        {ownSftpPassword && <div className="db-created-grid" style={{marginTop:'0.5rem'}}>
-          <label>{t('New password')}</label>
-          <span><code>{ownSftpPassword}</code> <button className="mini secondary-light" onClick={() => { copySftp(ownSftpPassword, 'own_sftp'); }}>{copiedField === 'own_sftp' ? <Check size={12} style={{color:'var(--green)'}}/> : <Copy size={12}/>}</button></span>
+        {mainUsername && <div className="info-box sftp-primary">
+          <strong>{t('Your main login')}</strong>
+          {currentUser?.sftp_password_set_at
+            ? <p className="hint">{t('Separate from your panel password. Changing one does not change the other.')} {t('It reaches every website on this account.')}</p>
+            : <p className="hint alarm">{t('This login still uses your panel password. Anyone who guesses it over SFTP is also in the panel. Set a separate password — your panel password will stop working for SFTP the moment you do.')}</p>}
+          <div className="actions"><button className="mini secondary" onClick={() => setSftpPasswordFor({ account: null, password: generateRandomPassword(), current_password: '', code: '' })}><KeyRound size={13}/> {t('Change password')}</button></div>
         </div>}
-        {ownSftpPassword && <p className="hint">{t('Shown once. It is not stored anywhere the panel can read back.')}</p>}
-      </div>
-      <div className="sftp-form">
-        <WebsiteSelect />
-        <input
-          value={newSftpAccount.label}
-          onChange={e => setNewSftpAccount(prev => ({ ...prev, label: e.target.value }))}
-          placeholder={t('Name, e.g. designer')}
-          aria-label={t('SFTP account name')}
-        />
-        <input
-          value={newSftpAccount.password}
-          onChange={e => setNewSftpAccount(prev => ({ ...prev, password: e.target.value }))}
-          placeholder={t('password (empty = generate)')}
-          aria-label={t('SFTP password')}
-        />
-        <button className="mini secondary-light" title={t('Generate random password')} onClick={() => setNewSftpAccount(prev => ({ ...prev, password: generateRandomPassword() }))}><Dices size={13}/></button>
-        <button disabled={!selectedWebsiteId || !!loading || !newSftpAccount.label.trim() || atLimit || noAllowance} onClick={createSftpAccount}><Plus size={14}/>{t('Create account')}</button>
-      </div>
+        {mainUsername && renderCopyBlock(t('Command line'), `sftp -P ${port} ${mainUsername}@${host}`)}
+      </section>
 
-      {noAllowance && <p className="hint">{t('Your hosting package does not include SFTP accounts.')}</p>}
-      {atLimit && <p className="hint">{t('You have used all {n} SFTP accounts in your package.', { n: sftpLimits.limit })}</p>}
-      {!noAllowance && !sftpLimits.unlimited && !atLimit &&
-        <p className="hint">{t('{used} of {limit} SFTP accounts used.', { used: sftpLimits.used, limit: sftpLimits.limit })}</p>}
-
-      {createdSftpInfo && <div className="info-box db-created-box">
-        <div className="db-created-head"><strong>{t('SFTP account ready')}</strong><button className="mini secondary-light" onClick={() => setCreatedSftpInfo(null)}><X size={13}/></button></div>
-        <div className="db-created-grid">
-          <label>Host</label><span>{createdSftpInfo.host} <button className="mini secondary-light" title={copiedField === 'sftp_host' ? 'Copied!' : 'Copy'} onClick={() => copySftp(createdSftpInfo.host, 'sftp_host')}>{copiedField === 'sftp_host' ? <Check size={12} style={{color:'var(--green)'}}/> : <Copy size={12}/>}</button></span>
-          <label>{t('Port')}</label><span>{createdSftpInfo.port} (SFTP)</span>
-          <label>{t('Username')}</label><span>{createdSftpInfo.username} <button className="mini secondary-light" title={copiedField === 'sftp_user' ? 'Copied!' : 'Copy'} onClick={() => copySftp(createdSftpInfo.username, 'sftp_user')}>{copiedField === 'sftp_user' ? <Check size={12} style={{color:'var(--green)'}}/> : <Copy size={12}/>}</button></span>
-          {createdSftpInfo.password && <><label>{t('Password')}</label><span><code>{createdSftpInfo.password}</code> <button className="mini secondary-light" title={copiedField === 'sftp_pass' ? 'Copied!' : 'Copy'} onClick={() => copySftp(createdSftpInfo.password, 'sftp_pass')}>{copiedField === 'sftp_pass' ? <Check size={12} style={{color:'var(--green)'}}/> : <Copy size={12}/>}</button></span></>}
-          <label>{t('Folder')}</label><span><code>{createdSftpInfo.path}</code></span>
+      <section className="section">
+        <div className="section-title">
+          <div><h2>{t('Extra SFTP accounts')}</h2>
+            <p className="hint">{t('A separate login and password for one website — for a developer or designer who should see that website and nothing else.')}</p></div>
+          <div className="actions">
+            {!createOpen && !atLimit && !noAllowance && <button type="button" onClick={() => setShowCreateSftp(true)}><Plus size={15}/> {t('New SFTP account')}</button>}
+          </div>
         </div>
-        {createdSftpInfo.password && <p className="hint">{t('This password is shown once. It is not stored anywhere the panel can read it back.')}</p>}
+        {noAllowance && <p className="hint">{t('Your hosting package does not include SFTP accounts.')}</p>}
+        {atLimit && <p className="hint">{t('You have used all {n} SFTP accounts in your package.', { n: sftpLimits.limit })}</p>}
+        {!noAllowance && !sftpLimits.unlimited && !atLimit &&
+          <p className="hint">{t('{used} of {limit} SFTP accounts used.', { used: sftpLimits.used, limit: sftpLimits.limit })}</p>}
+
+        {createOpen && <div className="create-inline">
+          <div className="create-inline-head">
+            <strong>{t('New SFTP account')}</strong>
+            <button type="button" className="secondary icon-only mini" onClick={() => setShowCreateSftp(false)} aria-label={t('Close')} title={t('Close')}><X size={15}/></button>
+          </div>
+          <div className="sftp-create-grid">
+            <div className="field"><span className="field-label">{t('Website')}</span><WebsiteSelect /></div>
+            <div className="field"><span className="field-label">{t('Name')}</span>
+              <input value={newSftpAccount.label} maxLength={32} placeholder={t('Name, e.g. designer')} aria-label={t('SFTP account name')}
+                onChange={e => setNewSftpAccount(prev => ({ ...prev, label: e.target.value }))} />
+            </div>
+            <div className="field"><span className="field-label">{t('Password')}</span>
+              <div className="password-with-generate">
+                <input value={newSftpAccount.password} placeholder={t('password (empty = generate)')} aria-label={t('SFTP password')}
+                  onChange={e => setNewSftpAccount(prev => ({ ...prev, password: e.target.value }))} />
+                <button type="button" className="secondary icon-only" title={t('Generate random password')} aria-label={t('Generate random password')} onClick={() => setNewSftpAccount(prev => ({ ...prev, password: generateRandomPassword() }))}><Dices size={15}/></button>
+              </div>
+            </div>
+            <button className="sftp-create-submit" disabled={!canCreate || !!loading} onClick={createSftpAccount}><Plus size={14}/> {t('Create')}</button>
+          </div>
+          <p className="hint">{t('Each account reaches one website and nothing else — not your other sites, and not the server. It signs in over SFTP on port 22 with its own password, which is separate from your panel password.')}</p>
+        </div>}
+
+        {createdSftpInfo && <div className="info-box">
+          <div className="create-inline-head">
+            <strong>{t('SFTP account ready')}</strong>
+            <button type="button" className="secondary icon-only mini" onClick={() => setCreatedSftpInfo(null)} aria-label={t('Close')} title={t('Close')}><X size={15}/></button>
+          </div>
+          <div className="sftp-connect-grid">
+            {renderCopyBlock(t('Host'), createdSftpInfo.host)}
+            {renderCopyBlock(t('Port'), String(createdSftpInfo.port))}
+            {renderCopyBlock(t('Username'), createdSftpInfo.username)}
+            {createdSftpInfo.password && renderCopyBlock(t('Password'), createdSftpInfo.password)}
+          </div>
+          <p className="hint">{t('Folder')}: <code>{createdSftpInfo.path}</code></p>
+          {createdSftpInfo.password && <p className="hint">{t('This password is shown once. It is not stored anywhere the panel can read it back.')}</p>}
+        </div>}
+
+        {sftpAccounts.length === 0 && !createOpen && !createdSftpInfo && <EmptyState icon={KeyRound} message={t('No extra SFTP accounts yet.')} />}
+        {sftpAccounts.length > 0 && <div className="table">
+          {sftpAccounts.map(account => <div className="row sftp-row" key={account.id}>
+            <span className="sftp-row-name"><strong>{account.username}</strong><small>{account.label}{account.is_active ? '' : ` · ${t('Suspended')}`}</small></span>
+            <span className="sftp-row-folder"><code>{account.path}</code>{account.domain && <small>{account.domain}</small>}</span>
+            <span className="row-actions">
+              <button className="mini secondary" disabled={!!loading} onClick={() => setSftpPasswordFor({ account, password: generateRandomPassword(), current_password: '', code: '' })}><KeyRound size={13}/> {t('Change password')}</button>
+              <button className="mini danger" disabled={!!loading} onClick={() => deleteSftpAccount(account)} aria-label={t('Delete {name}', { name: account.username })} title={t('Delete')}><Trash2 size={13}/></button>
+            </span>
+          </div>)}
+        </div>}
+      </section>
+
+      {editing && <div className="modal-overlay" onClick={() => setSftpPasswordFor(null)}>
+        <div className="modal-card" onClick={e => e.stopPropagation()}>
+          <div className="modal-header">
+            <h3>{t('New password')} — {editing.account ? editing.account.username : mainUsername}</h3>
+            <button className="secondary-light" onClick={() => setSftpPasswordFor(null)} aria-label={t('Close')}><X size={16}/></button>
+          </div>
+          <div className="modal-body">
+            <div className="password-with-generate">
+              <input value={editing.password} onChange={e => setSftpPasswordFor(prev => ({ ...prev, password: e.target.value }))} aria-label={t('New password')} />
+              <button type="button" className="secondary icon-only" title={t('Generate random password')} aria-label={t('Generate random password')} onClick={() => setSftpPasswordFor(prev => ({ ...prev, password: generateRandomPassword() }))}><Dices size={15}/></button>
+              <button type="button" className="secondary icon-only" title={t('Copy')} aria-label={t('Copy')} onClick={() => copyText(editing.password, t('Copied to clipboard.'))}><Copy size={15}/></button>
+            </div>
+            {editingOwn && <>
+              <label className="field"><span className="field-label">{t('Current password')}</span>
+                <input type="password" value={editing.current_password} autoComplete="current-password" placeholder={t('Required to confirm')}
+                  onChange={e => setSftpPasswordFor(prev => ({ ...prev, current_password: e.target.value }))} />
+              </label>
+              {currentUser?.totp_enabled && <label className="field"><span className="field-label">{t('2FA code')}</span>
+                <input value={editing.code} maxLength={12} inputMode="numeric" placeholder={t('6-digit code')}
+                  onChange={e => setSftpPasswordFor(prev => ({ ...prev, code: e.target.value }))} />
+              </label>}
+            </>}
+            <p className="hint">{t('Copy it before saving — it is not shown again. Open sessions of this login keep running until they disconnect.')}</p>
+            {editingOwn && <p className="hint">{t('Separate from your panel password. Changing one does not change the other.')}</p>}
+          </div>
+          <div className="modal-actions">
+            <button className="secondary-light" onClick={() => setSftpPasswordFor(null)}>{t('Cancel')}</button>
+            <button disabled={!!loading || !canSavePassword} onClick={saveSftpPassword}><Save size={14}/> {t('Save')}</button>
+          </div>
+        </div>
       </div>}
-
-      {selectedWebsiteId && sftpAccounts.length === 0 && !createdSftpInfo &&
-        <EmptyState icon={Upload} message={t('No SFTP accounts for this website yet.')} />}
-
-      <div className="table">
-        {sftpAccounts.map(account => <div className="row db-row" key={account.id}>
-          <span><strong>{account.label}</strong></span>
-          <span style={{color:'var(--text-muted)'}}>{account.username}</span>
-          <span style={{color:'var(--text-muted)'}}><code>{account.path}</code></span>
-          {!account.is_active && <span style={{color:'var(--red)'}}>suspended</span>}
-          <button disabled={!!loading} onClick={() => resetSftpPassword(account)}><KeyRound size={14}/>{t('Password')}</button>
-          <button className="danger" disabled={!!loading} onClick={() => deleteSftpAccount(account)}><Trash2 size={14}/></button>
-        </div>)}
-      </div>
-
-      <p className="hint">
-        {t('Each account reaches one website and nothing else — not your other sites, and not the server. It signs in over SFTP on port 22 with its own password, which is separate from your panel password.')}
-      </p>
-    </section>;
+    </>;
   }
 
   function cronScheduleLabel(expr) {
@@ -7787,7 +7799,11 @@ function App() {
   function renderChmodDialog() {
     const targets = chmodTarget || [];
     if (targets.length === 0) return null;
+    // The octal mode edited as a grid of checkboxes. Any combination is
+    // allowed; setgid on a folder is the one special bit the panel sets, and a
+    // world-writable mode is warned about rather than refused.
     const bits = octalToPermissionBits(chmodMode);
+    const valid = /^[0-7]{3,4}$/.test(chmodMode);
     const onlyDirs = targets.every(item => item.is_dir);
     const hasFiles = targets.some(item => !item.is_dir);
     const worldWritable = !!(bits.other & 2);
@@ -7795,68 +7811,48 @@ function App() {
       ...bits,
       [classKey]: bits[classKey] ^ bitValue,
     }));
-    const title = targets.length === 1 ? targets[0].name : `${targets.length} selected items`;
-    return <div className="chmod-backdrop" role="presentation" onClick={() => setChmodTarget(null)}>
-      <div className="chmod-dialog" role="dialog" aria-modal="true" aria-label={t('Change permissions')} onClick={e => e.stopPropagation()}>
-        <div className="chmod-head">
-          <div>
-            <h3><Lock size={15}/>{t('Permissions')}</h3>
-            <p>{title}</p>
+    const title = targets.length === 1 ? targets[0].name : t('{n} selected items', { n: targets.length });
+    return <div className="modal-overlay" onClick={() => setChmodTarget(null)}>
+      <div className="modal-card chmod-card" role="dialog" aria-modal="true" aria-label={t('Change permissions')} onClick={e => e.stopPropagation()}>
+        <div className="modal-header">
+          <h3>{t('Permissions')} — {title}</h3>
+          <button className="secondary-light" onClick={() => setChmodTarget(null)} aria-label={t('Close')}><X size={16}/></button>
+        </div>
+        <div className="modal-body">
+          <table className="chmod-grid">
+            <thead><tr><th></th>{PERMISSION_BITS.map(bit => <th key={bit.key}>{t(bit.label)}</th>)}</tr></thead>
+            <tbody>
+              {PERMISSION_CLASSES.map(group => <tr key={group.key}>
+                <th scope="row">{t(group.label)}</th>
+                {PERMISSION_BITS.map(bit => <td key={bit.key}>
+                  <input type="checkbox" checked={!!(bits[group.key] & bit.value)}
+                    onChange={() => setBit(group.key, bit.value)} aria-label={`${t(group.label)} ${t(bit.label)}`} />
+                </td>)}
+              </tr>)}
+            </tbody>
+          </table>
+          <div className="chmod-mode-row">
+            <label><span>{t('Numeric mode')}</span>
+              <input value={chmodMode} maxLength={4} inputMode="numeric" onChange={e => setChmodMode(e.target.value.replace(/[^0-7]/g, '').slice(0, 4))} />
+            </label>
+            <div className="chmod-presets">
+              {(onlyDirs ? PERMISSION_PRESETS.dir : PERMISSION_PRESETS.file).map(([mode, label]) => <button key={mode} type="button" title={t(label)}
+                className={`mini ${chmodMode === mode ? 'toggle-on' : 'secondary'}`} onClick={() => setChmodMode(mode)}>{mode}</button>)}
+            </div>
           </div>
-          <button className="mini secondary-light" onClick={() => setChmodTarget(null)} aria-label={t('Close')}><X size={14}/></button>
-        </div>
-        <table className="chmod-grid">
-          <thead>
-            <tr><th scope="col"></th>{PERMISSION_BITS.map(bit => <th scope="col" key={bit.key}>{bit.label}</th>)}</tr>
-          </thead>
-          <tbody>
-            {PERMISSION_CLASSES.map(group => <tr key={group.key}>
-              <th scope="row">{group.label}</th>
-              {PERMISSION_BITS.map(bit => <td key={bit.key}>
-                <input
-                  type="checkbox"
-                  aria-label={`${group.label} ${bit.label}`}
-                  checked={!!(bits[group.key] & bit.value)}
-                  onChange={() => setBit(group.key, bit.value)}
-                />
-              </td>)}
-            </tr>)}
-          </tbody>
-        </table>
-        <div className="chmod-value">
-          <label>
-            <span>{t('Octal')}</span>
-            <input value={chmodMode} inputMode="numeric" maxLength={4} onChange={e => setChmodMode(e.target.value.replace(/[^0-7]/g, '').slice(0, 4))} />
-          </label>
-          <code>{permissionSymbols(chmodMode)}</code>
-        </div>
-        <div className="chmod-presets">
-          {(onlyDirs ? PERMISSION_PRESETS.dir : PERMISSION_PRESETS.file).map(([preset, label]) => <button
-            key={preset}
-            type="button"
-            className={`mini ${chmodMode === preset ? '' : 'secondary-light'}`}
-            onClick={() => setChmodMode(preset)}
-          >{preset} <small>{t(label)}</small></button>)}
-        </div>
-        {onlyDirs && <label className="chmod-setgid">
-          <input
-            type="checkbox"
-            checked={bits.special === 2}
-            onChange={() => setChmodMode(permissionBitsToOctal({ ...bits, special: bits.special === 2 ? 0 : 2 }))}
-          />
-          <span>{t('Setgid — new files inside keep the folder\'s group. BPanel sets this on site folders; leave it on unless you know otherwise.')}</span>
-        </label>}
-        {worldWritable && <p className="chmod-note warn">
-          <AlertCircle size={13}/> {hasFiles
+          {onlyDirs && <label className="check-line">
+            <input type="checkbox" checked={bits.special === 2}
+              onChange={() => setChmodMode(permissionBitsToOctal({ ...bits, special: bits.special === 2 ? 0 : 2 }))} />
+            <span>{t('Setgid — new files inside keep the folder\'s group. BPanel sets this on site folders; leave it on unless you know otherwise.')}</span>
+          </label>}
+          {worldWritable && <p className="hint alarm"><AlertCircle size={13}/> {hasFiles
             ? t('World-writable: anyone with an account on the server can change these files. Use 755 unless something really needs it.')
-            : t('World-writable: anyone with an account on the server can change what is inside these folders. Use 755 unless something really needs it.')}
-        </p>}
-        <p className="chmod-note">
-          {t('Any permission combination is allowed. The setuid and sticky bits are not — setgid on a folder is the only special bit the panel sets.')}
-        </p>
-        <div className="chmod-actions">
-          <button className="secondary-light" disabled={!!loading} onClick={() => setChmodTarget(null)}>{t('Cancel')}</button>
-          <button disabled={!!loading} onClick={applyChmod}><Check size={14}/> Apply {chmodMode}</button>
+            : t('World-writable: anyone with an account on the server can change what is inside these folders. Use 755 unless something really needs it.')}</p>}
+          <p className="hint">{t('Any permission combination is allowed. The setuid and sticky bits are not — setgid on a folder is the only special bit the panel sets.')}</p>
+        </div>
+        <div className="modal-actions">
+          <button className="secondary-light" onClick={() => setChmodTarget(null)}>{t('Cancel')}</button>
+          <button disabled={!!loading || !valid} onClick={applyChmod}><Save size={14}/> {t('Apply')}</button>
         </div>
       </div>
     </div>;
@@ -7864,20 +7860,22 @@ function App() {
 
   function renderFiles() {
     const allSelected = files.length > 0 && selectedFilePaths.length === files.length;
-    const selectedArchiveFile = selectedFilePaths.length === 1
-      ? files.find(item => item.path === selectedFilePaths[0] && isArchiveFile(item))
-      : null;
     const activeFileApp = currentFileApp();
     const targetKey = fileTargetKey();
+    // A finished extraction leaves the list on its own; a failed one stays
+    // until it is dismissed.
     const visibleFileJobs = fileJobs
       .filter(job => (job.target_key || `site:${job.website_id}`) === targetKey && job.status !== 'done')
       .slice(0, 4);
+    const selectedArchive = selectedFilePaths.length === 1
+      ? files.find(item => item.path === selectedFilePaths[0] && isArchiveFile(item))
+      : null;
     const selectedChmodItems = files.filter(item => selectedFilePaths.includes(item.path));
     return <section className="section">
       {renderChmodDialog()}
       <div className="section-title">
         <div><h2>{t('File manager')}</h2></div>
-        <button className="secondary-light" disabled={!hasFileTarget() || !!loading} onClick={() => listFiles(fileListPath)}><RefreshCw size={14}/>{t('Refresh')}</button>
+        <button className="secondary" disabled={!hasFileTarget() || !!loading} onClick={() => listFiles(fileListPath)}><RefreshCw size={14}/> {t('Refresh')}</button>
       </div>
       <div className="file-manager">
         <div className="file-panel">
@@ -7885,53 +7883,50 @@ function App() {
             <FileTargetSelect />
             {activeFileApp
               ? <div className="file-meta">
-                <span>{t('Application:')}{' '}<strong>{activeFileApp.name}</strong></span>
-                <span>{t('Root:')}{' '}<strong>{activeFileApp.directory}{fileListPath ? `/${fileListPath}` : ''}</strong></span>
-                {currentUser && !isAdmin && <span>{t('Storage:')}{' '}<strong>{storageUsageText(currentUser)}</strong></span>}
+                <span>{t('Application:')} <strong>{activeFileApp.name}</strong></span>
+                <span>{t('Root:')} <strong>{activeFileApp.directory}{fileListPath ? `/${fileListPath}` : ''}</strong></span>
+                {currentUser && !isAdmin && <span>{t('Storage:')} <strong>{storageUsageText(currentUser)}</strong></span>}
               </div>
               : currentSite && <div className="file-meta">
-                <span>{t('Website:')}{' '}<strong>{currentSite.domain}</strong></span>
-                <span>{t('Root:')}{' '}<strong>{currentSite.root_path}{fileListPath ? `/${fileListPath}` : ''}</strong></span>
-                {currentUser && !isAdmin && <span>{t('Storage:')}{' '}<strong>{storageUsageText(currentUser)}</strong></span>}
+                <span>{t('Website:')} <strong>{currentSite.domain}</strong></span>
+                <span>{t('Root:')} <strong>{currentSite.root_path}{fileListPath ? `/${fileListPath}` : ''}</strong></span>
+                {currentUser && !isAdmin && <span>{t('Storage:')} <strong>{storageUsageText(currentUser)}</strong></span>}
               </div>}
             <div className="path-pill breadcrumb-line">
-              <button className="crumb" disabled={!hasFileTarget() || fileListPath === ''} onClick={() => listFiles('')}>root</button>
+              <button className="crumb" disabled={!hasFileTarget() || fileListPath === ''} onClick={() => listFiles('')}>{t('root')}</button>
               {fileBreadcrumbs(fileListPath).map(crumb => <button className="crumb" key={crumb.path} onClick={() => listFiles(crumb.path)}>{crumb.label}</button>)}
             </div>
             <div className="file-toolbar">
               <button className="secondary" disabled={!hasFileTarget() || fileListPath === '' || !!loading} onClick={() => listFiles(parentFilePath(fileListPath))}>{t('Up')}</button>
-              <button className="secondary" disabled={!hasFileTarget() || !!loading} onClick={makeFileDirectory}><Plus size={14}/>{t('Folder')}</button>
-              <button className="secondary" disabled={!hasFileTarget() || !!loading} onClick={makeFile}><FileText size={14}/>{t('File')}</button>
+              <button className="secondary" disabled={!hasFileTarget() || !!loading} onClick={makeFileDirectory}><Plus size={14}/> {t('Folder')}</button>
+              <button className="secondary" disabled={!hasFileTarget() || !!loading} onClick={makeFile}><FileText size={14}/> {t('File')}</button>
               <label className={`upload-button ${(!hasFileTarget() || !!loading) ? 'disabled' : ''}`}>
-                <Upload size={14}/>{t('Upload')}<input type="file" disabled={!hasFileTarget() || !!loading} onChange={e => { uploadSiteFile(e.target.files?.[0]); e.target.value = ''; }} />
+                <Upload size={14}/> {t('Upload')}
+                <input type="file" disabled={!hasFileTarget() || !!loading} onChange={e => { uploadSiteFile(e.target.files?.[0]); e.target.value = ''; }} />
               </label>
               <select value={archiveFormat} onChange={e => setArchiveFormat(e.target.value)} disabled={!hasFileTarget() || !!loading}>
                 <option value="zip">zip</option>
                 <option value="tar.gz">tar.gz</option>
               </select>
-              <button className="secondary" disabled={selectedFilePaths.length === 0 || !!loading} onClick={copySelectedFiles}><Copy size={14}/>{t('Copy')}</button>
-              <button className="secondary" disabled={selectedFilePaths.length === 0 || !!loading} onClick={moveSelectedFiles}><MoveRight size={14}/>{t('Move')}</button>
-              <button className="secondary" disabled={selectedFilePaths.length === 0 || !!loading} onClick={archiveSelectedFiles}><Archive size={14}/>{t('Archive')}</button>
-              <button className="secondary" disabled={!selectedArchiveFile || !!loading} onClick={() => extractArchiveFile(selectedArchiveFile.path)}><ArchiveRestore size={14}/>{t('Extract')}</button>
-              <button disabled={selectedChmodItems.length === 0 || !!loading} onClick={() => openChmodDialog(selectedChmodItems)}><Lock size={14}/>{t('Permissions')}</button>
-              <button className="danger" disabled={selectedFilePaths.length === 0 || !!loading} onClick={deleteSelectedFiles}><Trash2 size={14}/>{t('Delete')}</button>
+              <button className="secondary" disabled={selectedFilePaths.length === 0 || !!loading} onClick={copySelectedFiles}><Copy size={14}/> {t('Copy')}</button>
+              <button className="secondary" disabled={selectedFilePaths.length === 0 || !!loading} onClick={moveSelectedFiles}><MoveRight size={14}/> {t('Move')}</button>
+              <button className="secondary" disabled={selectedFilePaths.length === 0 || !!loading} onClick={archiveSelectedFiles}><Archive size={14}/> {t('Archive')}</button>
+              <button className="secondary" disabled={!selectedArchive || !!loading} onClick={() => extractArchiveFile(selectedArchive.path)}><PackageOpen size={14}/> {t('Extract')}</button>
+              <button className="secondary" disabled={selectedChmodItems.length === 0 || !!loading} onClick={() => openChmodDialog(selectedChmodItems)}><Lock size={14}/> {t('Permissions')}</button>
+              <button className="danger" disabled={selectedFilePaths.length === 0 || !!loading} onClick={deleteSelectedFiles}><Trash2 size={14}/> {t('Delete')}</button>
             </div>
             {visibleFileJobs.length > 0 && <div className="file-job-list">
               {visibleFileJobs.map(job => <div className={`file-job ${job.status}`} key={job.job_id}>
                 <Clock size={14}/>
-                <span><strong>{job.archive_path?.split('/').pop() || 'Archive'}</strong> {job.status === 'error' ? 'failed' : job.status}</span>
+                <span><strong>{job.archive_path?.split('/').pop() || t('Archive')}</strong> {job.status === 'done' ? t('completed') : job.status === 'error' ? t('failed') : job.status}</span>
                 {job.error && <small>{job.error}</small>}
-                <button className="file-job-dismiss" onClick={() => dismissFileJob(job.job_id)} aria-label={t('Dismiss')}><X size={13}/></button>
+                <button className="file-job-dismiss" onClick={() => dismissFileJob(job.job_id)} aria-label={t('Dismiss')} title={t('Dismiss')}><X size={13}/></button>
               </div>)}
             </div>}
           </div>
           <div className="file-list-header">
-            <label><input type="checkbox" checked={allSelected} onChange={toggleAllFiles} disabled={files.length === 0} /><span className="sr-only">{t('Select')}</span></label>
-            <span>{t('Name')}</span>
-            <span>{t('Mode')}</span>
-            <span>{t('Size')}</span>
-            <span>{t('Modified')}</span>
-            <span className="file-list-count">{t('{n} item(s)', { n: files.length })}</span>
+            <label><input type="checkbox" checked={allSelected} onChange={toggleAllFiles} disabled={files.length === 0} /> {t('Select')}</label>
+            <span>{t('{n} item(s)', { n: files.length })}</span>
           </div>
           <div className="file-list">
             {files.length === 0 && <div className="empty-box">{t('No files in this folder.')}</div>}
@@ -7940,19 +7935,13 @@ function App() {
               <button className="file-name" onClick={() => item.is_dir ? listFiles(item.path) : (isTextEditable(item) ? openFileEditorTab(item.path) : downloadFile(item.path))}>
                 {item.is_dir ? <FolderOpen size={16}/> : <FileText size={16}/>} <strong>{item.name}</strong>
               </button>
-              <button
-                className="file-mode"
-                type="button"
-                disabled={!!loading}
-                title={`Permissions ${item.mode || '---'} (${permissionSymbols(item.mode)}) - click to change`}
-                onClick={() => openChmodDialog(item)}
-              >{item.mode || '---'}</button>
-              <span className="file-size">{item.is_dir ? t('Folder') : formatBytes(item.size)}</span>
-              <span className="file-modified" title={formatFileTime(item.modified, true)}>{formatFileTime(item.modified)}</span>
+              <button type="button" className="file-mode" disabled={!!loading} title={t('Change permissions')} aria-label={t('Change permissions of {name}', { name: item.name })}
+                onClick={() => openChmodDialog(item)}>{item.mode || '---'}</button>
+              <span className="file-size">{item.is_dir ? t('Folder') : formatBytes(item.size)}{item.modified ? <span className="file-date-inline"> · {formatFileTime(item.modified)}</span> : null}</span>
+              <span className="file-date" title={formatFileTime(item.modified, true)}>{formatFileTime(item.modified)}</span>
               <div className="file-row-actions">
-                {!item.is_dir && <button className="mini secondary-light" disabled={!!loading} onClick={() => downloadFile(item.path)}><Download size={13}/></button>}
-                {isArchiveFile(item) && <button className="mini secondary-light" disabled={!!loading} onClick={() => extractArchiveFile(item.path)}><ArchiveRestore size={13}/>{t('Extract')}</button>}
-                <button className="mini secondary-light" disabled={!!loading} onClick={() => openChmodDialog(item)}><Lock size={13}/>{t('Perms')}</button>
+                {!item.is_dir && <button className="mini secondary-light" disabled={!!loading} onClick={() => downloadFile(item.path)} aria-label={t('Download')} title={t('Download')}><Download size={13}/></button>}
+                {isArchiveFile(item) && <button className="mini secondary-light" disabled={!!loading} onClick={() => extractArchiveFile(item.path)}><PackageOpen size={13}/> {t('Extract')}</button>}
                 <button className="mini secondary-light" disabled={!!loading} onClick={() => renameFileItem(item)}>{t('Rename')}</button>
               </div>
             </div>)}
@@ -7962,49 +7951,244 @@ function App() {
     </section>;
   }
 
+  // ISO time from the server as the file manager shows times.
+  function formatIsoTime(value) {
+    const ms = Date.parse(value || '');
+    return Number.isFinite(ms) ? formatFileTime(ms / 1000) : '';
+  }
+
+  // DirectAdmin's restore, step by step: where the backups are, what it takes
+  // to reach them, which accounts, go. Upload backups puts archives into the
+  // source picked in step 1; the list in step 3 then shows them.
+  function renderRestoreWizard() {
+    const allGroups = restoreGroupsOf(restoreListing);
+    const needle = restoreFilter.trim().toLowerCase();
+    const groups = needle
+      ? allGroups.filter(group => `${group.username} ${group.backups.map(item => item.name).join(' ')}`.toLowerCase().includes(needle))
+      : allGroups;
+    const pickedGroups = allGroups.filter(group => restorePicks.includes(group.id));
+    const allPicked = groups.length > 0 && groups.every(group => restorePicks.includes(group.id));
+    const somePicked = groups.some(group => restorePicks.includes(group.id));
+    const job = restoreJob;
+    const jobActive = !!job && ['queued', 'running'].includes(job.status);
+    const remote = restoreRemote;
+    const targets = sftpTargets.filter(target => target.is_active !== false);
+    const sources = [
+      ['local', HardDrive, 'This server', 'Backups the panel made, and archives uploaded for restore.'],
+      ['target', Network, 'Backup Destination', 'An S3 or SFTP destination saved under Backup Destination.'],
+      ['remote', Server, 'Another server', 'Pull backups from another server over SFTP, FTP or FTPS.'],
+    ];
+    const restoreStepTwo = { local: 'Backups on this server', target: 'Destination', remote: 'Connection' }[restoreSource];
+    const remoteReady = !!remote.host.trim() && !!remote.username.trim() && !!remote.password;
+    const canUse = !loading && !jobActive && (restoreSource !== 'target' || !!restoreTargetId) && (restoreSource !== 'remote' || remoteReady);
+    const restoreUpload = <label className={`upload-button secondary${canUse ? '' : ' disabled'}`} aria-disabled={!canUse}>
+      <Upload size={14}/> {t('Upload backups')}
+      <input type="file" multiple accept=".tar.gz,application/gzip" disabled={!canUse}
+        onChange={e => { uploadRestoreBackups(e.target.files); e.target.value = ''; }} />
+    </label>;
+    const restoreRefresh = <button className="secondary" disabled={!canUse} onClick={() => listRestoreSource(currentRestoreSource())}><RefreshCw size={14}/> {t('Refresh')}</button>;
+    const rowStatus = { queued: ['Waiting', 'badge'], fetching: ['Downloading', 'badge warn'], restoring: ['Restoring', 'badge warn'], done: ['Restored', 'badge ok'], failed: ['Failed', 'badge bad'] };
+    const restoredCount = (job?.results || []).filter(row => row.status === 'done').length;
+
+    return <div className="backup-tab-panel restore-wizard">
+      <div className="backup-panel-title">
+        <div><h3>{t('Restore')}</h3><p className="hint">{t('Where the backups are, what that needs, which users - then restore. The same steps as DirectAdmin.')}</p></div>
+      </div>
+
+      <section className="restore-step">
+        <h4><span className="restore-step-no">1</span>{t('Source')}</h4>
+        <div className="restore-sources" role="radiogroup" aria-label={t('Source')}>
+          {sources.map(([id, Icon, label, hint]) => <button
+            key={id}
+            type="button"
+            role="radio"
+            aria-checked={restoreSource === id}
+            disabled={!!loading || jobActive}
+            className={`restore-source${restoreSource === id ? ' active' : ''}`}
+            onClick={() => chooseRestoreSource(id)}
+          >
+            <span className="settings-tile-icon"><Icon size={18}/></span>
+            <span className="settings-tile-text"><strong>{t(label)}</strong><small>{t(hint)}</small></span>
+          </button>)}
+        </div>
+      </section>
+
+      <section className="restore-step">
+        <h4><span className="restore-step-no">2</span>{t(restoreStepTwo)}</h4>
+        {restoreSource === 'local' && <>
+          <p className="hint">
+            {t('Scheduled and manual backups kept on this server, and the ones uploaded here.')}{restoreListing?.location && <> <code>{restoreListing.location}</code></>}
+          </p>
+          <div className="actions restore-local-actions">{restoreUpload}{restoreRefresh}</div>
+        </>}
+        {restoreSource === 'target' && <>
+          <div className="restore-form-row">
+            <select value={restoreTargetId} disabled={!!loading || jobActive} aria-label={t('Destination')}
+              onChange={e => { setRestoreTargetId(e.target.value); if (e.target.value) listRestoreSource(`target:${e.target.value}`); }}>
+              {!restoreTargetId && <option value="">{t('Choose a destination')}</option>}
+              {targets.map(target => <option key={target.id} value={target.id}>{target.name} ({target.kind === 's3' ? 'S3' : 'SFTP'})</option>)}
+            </select>
+            <div className="actions restore-local-actions">{restoreRefresh}{restoreUpload}</div>
+          </div>
+          {targets.length === 0 && <p className="hint">{t('No destination saved yet. Add one under Backup Destination.')}</p>}
+          {restoreListing?.location && <p className="hint"><code>{restoreListing.location}</code></p>}
+        </>}
+        {restoreSource === 'remote' && <form className="restore-remote" onSubmit={e => { e.preventDefault(); if (canUse) listRestoreSource('remote'); }} autoComplete="off">
+          <label className="field"><span className="field-label">{t('Protocol')}</span>
+            <select value={remote.protocol} disabled={jobActive} onChange={e => editRestoreRemote({ protocol: e.target.value })}>
+              <option value="sftp">SFTP</option>
+              <option value="ftp">FTP</option>
+              <option value="ftps">{t('FTPS (FTP over TLS)')}</option>
+            </select>
+          </label>
+          <label className="field"><span className="field-label">{t('Host')}</span><input value={remote.host} placeholder="203.0.113.10" spellCheck={false} disabled={jobActive} onChange={e => editRestoreRemote({ host: e.target.value })} /></label>
+          <label className="field"><span className="field-label">{t('Port')}</span><input value={remote.port} inputMode="numeric" placeholder={remote.protocol === 'sftp' ? '22' : '21'} disabled={jobActive} onChange={e => editRestoreRemote({ port: e.target.value.replace(/[^0-9]/g, '') })} /></label>
+          <label className="field"><span className="field-label">{t('Username')}</span><input value={remote.username} spellCheck={false} disabled={jobActive} onChange={e => editRestoreRemote({ username: e.target.value })} /></label>
+          <label className="field"><span className="field-label">{t('Password')}</span><input type="password" value={remote.password} autoComplete="new-password" disabled={jobActive} onChange={e => editRestoreRemote({ password: e.target.value })} /></label>
+          <label className="field restore-remote-wide"><span className="field-label">{t('Folder')}</span><input value={remote.path} placeholder="/backups" spellCheck={false} disabled={jobActive} onChange={e => editRestoreRemote({ path: e.target.value })} /></label>
+          {remote.protocol === 'ftp' && <p className="hint restore-remote-wide">{t('Plain FTP sends the password unencrypted. Use SFTP or FTPS if the server offers it.')}</p>}
+          <div className="actions restore-remote-wide">
+            <button type="submit" disabled={!canUse}><Search size={14}/> {t('Connect and list backups')}</button>
+            {restoreUpload}
+            <span className="hint">{t('Used for this restore only; nothing here is saved.')}</span>
+          </div>
+        </form>}
+        {restoreListing?.host_key && <p className="hint">{t('Server key:')} <code>{restoreListing.host_key.type} {restoreListing.host_key.fingerprint}</code></p>}
+      </section>
+
+      <section className="restore-step">
+        <h4><span className="restore-step-no">3</span>{t('Accounts to restore')}</h4>
+        {!restoreListing && <p className="hint">{loading ? t('Reading backups...') : t('The accounts appear here once the source has been read.')}</p>}
+        {restoreListing && allGroups.length === 0 && <EmptyState icon={Archive} message={t('No backups found here.')} />}
+        {restoreListing && allGroups.length > 0 && <>
+          <div className="restore-toolbar">
+            <label className="schedule-toggle">
+              <input
+                type="checkbox"
+                checked={allPicked}
+                disabled={!!loading || jobActive}
+                ref={box => { if (box) box.indeterminate = somePicked && !allPicked; }}
+                onChange={e => {
+                  const ids = groups.map(group => group.id);
+                  setRestorePicks(prev => e.target.checked ? [...new Set([...prev, ...ids])] : prev.filter(id => !ids.includes(id)));
+                }}
+              />
+              <span>{t('Select all')}</span>
+            </label>
+            {allGroups.length > 6 && <input className="restore-filter" value={restoreFilter} onChange={e => setRestoreFilter(e.target.value)} placeholder={t('Filter accounts')} aria-label={t('Filter accounts')} />}
+            <span className="hint">{pickedGroups.length ? t('{n} selected', { n: pickedGroups.length }) : t('{n} account(s)', { n: allGroups.length })}</span>
+          </div>
+          <div className="restore-accounts">
+            {groups.map(group => {
+              const chosen = chosenRestoreBackup(group);
+              const picked = restorePicks.includes(group.id);
+              const exists = !!group.username && (restoreListing.existing || []).includes(group.username);
+              const toggle = () => { if (!loading && !jobActive) toggleRestorePick(group.id); };
+              const detail = [formatBytes(chosen.size), formatIsoTime(chosen.modified),
+                group.username ? '' : t('The user is read from the backup when it is restored')].filter(Boolean).join(' · ');
+              return <div
+                key={group.id}
+                className={`restore-account${picked ? ' picked' : ''}`}
+                role="checkbox"
+                aria-checked={picked}
+                tabIndex={0}
+                onClick={toggle}
+                onKeyDown={e => { if (e.target === e.currentTarget && (e.key === ' ' || e.key === 'Enter')) { e.preventDefault(); toggle(); } }}
+              >
+                <input type="checkbox" checked={picked} disabled={!!loading || jobActive} tabIndex={-1} onChange={toggle} onClick={e => e.stopPropagation()} aria-hidden="true" />
+                <span className="restore-account-main">
+                  <strong>{group.username || chosen.name}</strong>
+                  <small>{detail}</small>
+                </span>
+                {group.username
+                  ? <span className={exists ? 'badge warn' : 'badge ok'} title={exists ? t('Exists on this server - will be overwritten') : t('New on this server')}>{exists ? t('Overwrite') : t('New')}</span>
+                  : <span />}
+                {group.backups.length > 1
+                  ? <select className="restore-version" value={chosen.key} disabled={!!loading || jobActive} aria-label={t('Backup to restore')}
+                      onClick={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}
+                      onChange={e => setRestoreChoice(prev => ({ ...prev, [group.id]: e.target.value }))}>
+                      {group.backups.map(item => <option key={item.key} value={item.key}>{item.name}{item.modified ? ` · ${formatIsoTime(item.modified)}` : ''}</option>)}
+                    </select>
+                  : group.username
+                    ? <span className="restore-version-name" title={chosen.key}>{chosen.name}</span>
+                    : <span />}
+                <span className="restore-delete-spacer" />
+              </div>;
+            })}
+            {groups.length === 0 && <p className="hint">{t('No account matches this filter.')}</p>}
+          </div>
+        </>}
+      </section>
+
+      <section className="restore-step">
+        <h4><span className="restore-step-no">4</span>{t('Restore')}</h4>
+        <div className="actions">
+          <button disabled={!!loading || jobActive || pickedGroups.length === 0} onClick={runRestore}>
+            <RotateCcw size={14}/> {pickedGroups.length ? t('Restore {n} account(s)', { n: pickedGroups.length }) : t('Restore')}
+          </button>
+          {!pickedGroups.length && !jobActive && <span className="hint">{t('Pick at least one account above.')}</span>}
+        </div>
+        {job && <div className={`backup-job ${job.status}`} aria-live="polite">
+          <Clock size={14}/>
+          <span>
+            <strong>{jobActive ? t('Restoring') : job.status === 'done' ? t('Restore finished') : t('Restore finished with errors')}</strong>
+            <small className="restore-job-message">{jobActive
+              ? t('Restoring: {done} of {total} done', { done: restoredCount, total: (job.results || []).length })
+              : t('Finished: {done} of {total} restored', { done: restoredCount, total: (job.results || []).length })}</small>
+            {jobActive && <span className="job-progress">
+              <span className="progress-bar indeterminate"><span className="progress-bar-fill" /></span>
+            </span>}
+          </span>
+          <span className={job.status === 'done' ? 'badge ok' : job.status === 'error' ? 'badge bad' : 'badge'}>{job.status}</span>
+        </div>}
+        {(job?.results || []).length > 0 && <div className="backup-list">
+          {job.results.map((row, index) => {
+            const [label, badge] = rowStatus[row.status] || rowStatus.queued;
+            return <div className="backup-item" key={`${row.name}-${index}`}>
+              <span>{row.username || row.name}{row.status === 'failed' && row.detail && <small>{row.detail}</small>}</span>
+              <span className={badge}>{t(label)}</span>
+            </div>;
+          })}
+        </div>}
+      </section>
+    </div>;
+  }
+
   function renderBackups() {
     const selectedBackupUser = users.find(user => String(user.id) === String(selectedBackupUserId));
-    const jobTitle = job => ({ site_backup: 'Website backup', user_backup: 'Full user backup', sftp_backup: 'SFTP backup', user_restore: 'Restore' }[job.kind] || 'Backup task');
-    const restoreGroups = restoreGroupsOf(restoreListing);
-    const restoreNeedle = restoreFilter.trim().toLowerCase();
-    const shownRestoreGroups = restoreGroups.filter(group => !restoreNeedle
-      || `${group.username} ${group.backups.map(item => item.name).join(' ')}`.toLowerCase().includes(restoreNeedle));
-    const allRestoreShownPicked = shownRestoreGroups.length > 0 && shownRestoreGroups.every(group => restorePicks.includes(group.id));
-    const restoreRunning = !!restoreJob && ['queued', 'running'].includes(restoreJob.status);
-    const restoreDate = value => { const d = new Date(value); return value && !Number.isNaN(d.getTime()) ? d.toLocaleString('vi-VN', { hour12: false }) : '—'; };
-    const restoreTargets = sftpTargets.filter(target => target.is_active !== false);
-    const restoreSourceOptions = [
-      { id: 'local', Icon: HardDrive, label: t('This server'), hint: t('The panel\'s backup folder') },
-      { id: 'target', Icon: Cloud, label: t('Backup Destination'), hint: t('S3 or SFTP') },
-      { id: 'remote', Icon: Server, label: t('Another server'), hint: t('SFTP, FTP or FTPS') },
-    ];
-    const restoreStepTwo = { local: 'Backups on this server', target: 'Backup Destination', remote: 'Connection' }[restoreSource];
-    const restoreRemoteReady = !!restoreRemote.host.trim() && !!restoreRemote.username.trim() && !!restoreRemote.password;
-    const restoreCanUse = !loading && !restoreRunning && (restoreSource !== 'target' || !!restoreTargetId) && (restoreSource !== 'remote' || restoreRemoteReady);
-    const restoreTools = <div className="restore-go">
-      <label className={`upload-button secondary${restoreCanUse ? '' : ' disabled'}`} aria-disabled={!restoreCanUse}>
-        <Upload size={14}/>{t('Upload backup')}
-        <input type="file" multiple accept=".tar.gz,application/gzip" disabled={!restoreCanUse}
-          onChange={e => { uploadRestoreBackups(e.target.files); e.target.value = ''; }} />
-      </label>
-      <button type="button" className="secondary" disabled={!restoreCanUse} onClick={() => listRestoreSource(currentRestoreSource())}>
-        <RefreshCw size={14}/>{t('Refresh')}</button>
-    </div>;
-    const restoreStatus = { queued: ['Waiting', 'badge'], fetching: ['Downloading', 'badge warn'], restoring: ['Restoring', 'badge warn'], done: ['Restored', 'badge ok'], failed: ['Failed', 'badge bad'] };
-    const restoreDone = (restoreJob?.results || []).filter(row => row.status === 'done').length;
+    const jobTitle = job => ({ site_backup: t('Website backup'), user_backup: t('Full user backup'), sftp_backup: t('SFTP backup'), user_restore: t('Restore') }[job.kind] || t('Backup task'));
     const jobDetail = job => job.error || job.remote_file || job.backup_file || job.message || job.status;
+    const jobTimestamp = job => {
+      const stamp = job.finished_at || job.started_at || job.created_at || '';
+      if (!stamp) return t('No timestamp');
+      const date = new Date(stamp);
+      return Number.isNaN(date.getTime()) ? stamp : new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Asia/Ho_Chi_Minh',
+        hour12: false,
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+      }).format(date).replace(',', '');
+    };
+    const nameSuffixLabels = { none: 'Append: nothing', day_of_week: 'Append: day of week', week_of_month: 'Append: week of month', full_date: 'Append: full date' };
     const backupTabs = isAdmin
       ? [
         ['website', 'Backup website', Globe],
         ['user', 'Backup user', Users],
-        ['schedule', 'Scheduled backups', Clock],
         ['restore', 'Restore', RotateCcw],
+        ['schedule', 'Scheduled backups', Clock],
         ['destination', 'Backup Destination', Network],
+        ['logs', 'Backup logs', FileText],
         ['da-import', 'DA Import', ArchiveRestore],
       ]
-      : [['website', 'Backup website', Globe]];
+      : [
+        ['website', 'Backup website', Globe],
+        ['logs', 'Backup logs', FileText],
+      ];
     const activeBackupTab = backupTabs.some(([id]) => id === backupTab) ? backupTab : 'website';
-    const visibleBackupJobs = backupJobs.filter(job => job.status !== 'done');
 
     return <section className="section backups-page">
       <h2>{t('Backups')}</h2>
@@ -8018,12 +8202,29 @@ function App() {
           onClick={() => setBackupTab(id)}
         ><Icon size={14}/>{t(label)}</button>)}
       </div>
-      {visibleBackupJobs.length > 0 && <div className="backup-job-list">
-        {visibleBackupJobs.map(job => <div className={`backup-job ${job.status}`} key={job.job_id}>
-          <Clock size={14}/>
-          <span><strong>{jobTitle(job)}</strong><small>{jobDetail(job)}</small></span>
-          <span className={job.status === 'done' ? 'badge ok' : job.status === 'error' ? 'badge bad' : 'badge'}>{job.status}</span>
-        </div>)}
+
+      {activeBackupTab === 'logs' && <div className="backup-tab-panel backup-logs-panel">
+        <div className="backup-panel-title">
+          <div><h3>{t('Backup logs')}</h3><p className="hint">{t('Recent queued, running, completed, and failed backup tasks.')}</p></div>
+          <button className="secondary" disabled={!!loading} onClick={() => loadBackupJobs(true)}><RefreshCw size={14}/> {t('Refresh')}</button>
+        </div>
+        {backupJobs.length === 0 && <EmptyState icon={FileText} message={t('No backup logs found.')} />}
+        {backupJobs.length > 0 && <div className="backup-job-list">
+          {backupJobs.map(job => <div className={`backup-job ${job.status}`} key={job.job_id}>
+            <Clock size={14}/>
+            <span>
+              <strong>{jobTitle(job)}</strong>
+              <small>{jobDetail(job)}</small>
+              {/* No percentage: the server reports a task as queued, running
+                  or finished, nothing in between. */}
+              {(job.status === 'running' || job.status === 'queued') && <span className="job-progress">
+                <span className="progress-bar indeterminate"><span className="progress-bar-fill" /></span>
+              </span>}
+              <small className="backup-job-time">{jobTimestamp(job)}</small>
+            </span>
+            <span className={job.status === 'done' ? 'badge ok' : job.status === 'error' ? 'badge bad' : 'badge'}>{job.status}</span>
+          </div>)}
+        </div>}
       </div>}
 
       {activeBackupTab === 'website' && <div className="backup-tab-panel">
@@ -8032,20 +8233,21 @@ function App() {
         </div>
         <WebsiteSelect />
         <div className="actions backup-toolbar">
-          <button disabled={!selectedWebsiteId || !!loading} onClick={createBackup}><Plus size={14}/>{t('Create backup')}</button>
-          <button className="secondary-light" disabled={!selectedWebsiteId || !!loading} onClick={refreshBackupArea}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <button disabled={!selectedWebsiteId || !!loading} onClick={createBackup}><Plus size={14}/> {t('Create backup')}</button>
+          <button className="secondary" disabled={!selectedWebsiteId || !!loading} onClick={refreshBackupArea}><RefreshCw size={14}/> {t('Refresh')}</button>
           <label className="upload-button secondary">
-            <Upload size={14}/>{t('Upload backup')}<input type="file" accept=".tar.gz,application/gzip" onChange={e => { uploadBackup(e.target.files?.[0]); e.target.value = ''; }} />
+            <Upload size={14}/> {t('Upload backup')}
+            <input type="file" accept=".tar.gz,application/gzip" onChange={e => { uploadBackup(e.target.files?.[0]); e.target.value = ''; }} />
           </label>
         </div>
-        {backups.length === 0 && selectedWebsiteId && <EmptyState icon={Archive} message={t('No backups found for this website.')} />}
+        {backups.length === 0 && selectedWebsiteId && <EmptyState icon={Archive} message={t('No backups found for this website.')} action={{ label: t('Create backup'), icon: Plus, onClick: () => { if (!loading) createBackup(); } }} />}
         <div className="backup-list">
           {backups.map(file => <div className="backup-item" key={file}>
             <span>{file.split('/').pop()}</span>
             <div className="actions">
-              <button className="secondary" disabled={!!loading} onClick={() => downloadBackup(file)}><Download size={14}/>{t('Download')}</button>
-              <button className="secondary" disabled={!!loading} onClick={() => restoreBackup(file)}><RotateCcw size={14}/>{t('Restore')}</button>
-              <button className="danger" disabled={!!loading} onClick={() => deleteBackup(file)}><Trash2 size={14}/></button>
+              <button className="secondary" disabled={!!loading} onClick={() => downloadBackup(file)}><Download size={14}/> {t('Download')}</button>
+              <button className="secondary" disabled={!!loading} onClick={() => restoreBackup(file)}><RotateCcw size={14}/> {t('Restore')}</button>
+              <button className="danger" disabled={!!loading} onClick={() => deleteBackup(file)} aria-label={t('Delete')} title={t('Delete')}><Trash2 size={14}/></button>
             </div>
           </div>)}
         </div>
@@ -8054,7 +8256,7 @@ function App() {
       {isAdmin && activeBackupTab === 'user' && <div className="backup-tab-panel">
         <div className="backup-panel-title">
           <div><h3>{t('Backup user')}</h3><p className="hint">{t('Includes the panel user, all owned websites, source files, database dumps, and restore metadata.')}</p></div>
-          <button className="secondary" disabled={!!loading} onClick={refreshUserBackupArea}><RefreshCw size={14}/>{t('Reload')}</button>
+          <button className="secondary" disabled={!!loading} onClick={refreshUserBackupArea}><RefreshCw size={14}/> {t('Reload')}</button>
         </div>
         <div className="sftp-run-row user-backup-row backup-run-row">
           <select value={selectedBackupUserId} onChange={e => setSelectedBackupUserId(e.target.value)}>
@@ -8065,280 +8267,157 @@ function App() {
             <option value="">{t('Local only')}</option>
             {sftpTargets.map(target => <option key={target.id} value={target.id}>{target.name}</option>)}
           </select>
-          <button disabled={!selectedBackupUserId || !!loading} onClick={createUserBackup}><Archive size={14}/>{t('Create backup')}</button>
+          <button disabled={!selectedBackupUserId || !!loading} onClick={createUserBackup}><Archive size={14}/> {t('Create backup')}</button>
         </div>
-        {selectedBackupUser && <p className="hint">{t('Current user:')}{' '}<strong>{selectedBackupUser.username}</strong></p>}
+        {selectedBackupUser && <p className="hint">{t('Current user:')} <strong>{selectedBackupUser.username}</strong></p>}
         <div className="actions backup-subactions">
-          <button className="secondary" disabled={!selectedBackupUserId || !!loading} onClick={() => listUserBackups()}><RefreshCw size={14}/>{t('Refresh list')}</button>
+          <button className="secondary" disabled={!selectedBackupUserId || !!loading} onClick={() => listUserBackups()}><RefreshCw size={14}/> {t('Refresh list')}</button>
         </div>
         {selectedBackupUserId && userBackups.length === 0 && <EmptyState icon={Archive} message={t('No user backups found.')} />}
         <div className="backup-list">
           {userBackups.map(file => <div className="backup-item" key={file}>
             <span>{file.split('/').pop()}</span>
             <div className="actions">
-              <button className="secondary" disabled={!!loading} onClick={() => downloadUserBackup(file)}><Download size={14}/>{t('Download')}</button>
-              <button className="secondary" disabled={!!loading} onClick={() => restoreUserBackup(file)}><RotateCcw size={14}/>{t('Restore user')}</button>
-              <button className="danger" disabled={!!loading} onClick={() => deleteUserBackup(file)}><Trash2 size={14}/></button>
+              <button className="secondary" disabled={!!loading} onClick={() => downloadUserBackup(file)}><Download size={14}/> {t('Download')}</button>
+              <button className="secondary" disabled={!!loading} onClick={() => restoreUserBackup(file)}><RotateCcw size={14}/> {t('Restore user')}</button>
+              <button className="danger" disabled={!!loading} onClick={() => deleteUserBackup(file)} aria-label={t('Delete')} title={t('Delete')}><Trash2 size={14}/></button>
             </div>
           </div>)}
         </div>
 
-        <div className="section-title restore-title backup-panel-heading backup-subtitle">
+        <div className="backup-panel-title backup-subtitle">
           <div><h3>{t('Restore folder')}</h3><p className="hint">{restoreBackupDir || '/var/backups/bpanel/users/restore'}</p></div>
           <div className="actions">
-            <button className="secondary-light" disabled={!!loading} onClick={loadRestoreBackups}><RefreshCw size={14}/>{t('Refresh')}</button>
+            <button className="secondary" disabled={!!loading} onClick={loadRestoreBackups}><RefreshCw size={14}/> {t('Refresh')}</button>
             <label className="upload-button secondary">
-              <Upload size={14}/>{t('Upload backups')}<input type="file" multiple accept=".tar.gz,application/gzip" onChange={e => { uploadUserBackups(e.target.files); e.target.value = ''; }} />
+              <Upload size={14}/> {t('Upload backups')}
+              <input type="file" multiple accept=".tar.gz,application/gzip" onChange={e => { uploadUserBackups(e.target.files); e.target.value = ''; }} />
             </label>
           </div>
         </div>
+        {restoreBackups.length === 0 && <EmptyState icon={ArchiveRestore} message={t('No backups found here.')} />}
         <div className="backup-list">
           {restoreBackups.map(item => <div className="backup-item" key={item.backup_file}>
-            <span>{item.filename || item.backup_file.split('/').pop()}<small>{item.valid ? `${item.source === 'opanel' ? 'opanel · ' : ''}` + t('{user} - {n} website(s)', { user: item.username || t('unknown user'), n: item.websites || 0 }) : (item.error || 'Invalid backup')}</small></span>
+            <span>{item.filename || item.backup_file.split('/').pop()}<small>{item.valid ? `${item.source === 'opanel' ? 'OPanel · ' : ''}` + t('{user} - {n} website(s)', { user: item.username || t('unknown user'), n: item.websites || 0 }) : (item.error || t('Invalid backup'))}</small></span>
             <div className="actions">
-              <button className="secondary" disabled={!!loading} onClick={() => downloadUserBackup(item.backup_file)}><Download size={14}/>{t('Download')}</button>
-              <button className="secondary" disabled={!!loading || !item.valid} onClick={() => restoreUserBackup(item.backup_file)}><RotateCcw size={14}/>{t('Restore user')}</button>
-              <button className="danger" disabled={!!loading} onClick={() => deleteRestoreBackup(item.backup_file)}><Trash2 size={14}/></button>
+              <button className="secondary" disabled={!!loading} onClick={() => downloadUserBackup(item.backup_file)}><Download size={14}/> {t('Download')}</button>
+              <button className="secondary" disabled={!!loading || !item.valid} onClick={() => restoreUserBackup(item.backup_file)}><RotateCcw size={14}/> {t('Restore user')}</button>
+              <button className="danger" disabled={!!loading} onClick={() => deleteRestoreBackup(item.backup_file)} aria-label={t('Delete')} title={t('Delete')}><Trash2 size={14}/></button>
             </div>
           </div>)}
         </div>
-
       </div>}
+
+      {isAdmin && activeBackupTab === 'restore' && renderRestoreWizard()}
 
       {isAdmin && activeBackupTab === 'schedule' && <div className="backup-tab-panel">
         <div className="backup-panel-title">
-          <div><h3>{t('Scheduled backups')}</h3><p className="hint">{t('Run full user backups automatically with optional off-server destination.')}{' '}{t('With a destination, the backups are kept there only: each one is removed from this server once it has uploaded, and stays here only if the upload fails.')}</p></div>
-          <button className="secondary-light" disabled={!!loading} onClick={refreshScheduledBackupArea}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <div><h3>{t('Scheduled backups')}</h3><p className="hint">{t('Runs a full user backup on a schedule, with an optional off-server destination.')} {t('With a destination, the backups are kept there only: each one is removed from this server once it has uploaded, and stays here only if the upload fails.')}</p></div>
+          <button className="secondary" disabled={!!loading} onClick={refreshScheduledBackupArea}><RefreshCw size={14}/> {t('Refresh')}</button>
         </div>
-        {/* Who, then when, where and under what name - each field labelled,
-            and one per line on a phone. It was six unlabelled controls in one
-            row of 130px cells. */}
-        <div className="backup-schedule-builder">
-          <div className="schedule-users">
-          <label className="schedule-toggle">
-            <input type="checkbox" checked={!!newBackupSchedule.all_users} onChange={e => setNewBackupSchedule(prev => ({ ...prev, all_users: e.target.checked }))} />
-            <span>{t('All users')}</span>
-          </label>
-          <select multiple size={6} value={newBackupSchedule.user_ids || []} disabled={!!newBackupSchedule.all_users} onChange={e => setNewBackupSchedule(prev => ({ ...prev, user_ids: Array.from(e.target.selectedOptions, option => option.value) }))}>
-            {users.map(user => <option key={user.id} value={String(user.id)}>{user.username}</option>)}
-          </select>
+        <div className="backup-schedule-builder with-name">
+          <div className="field"><span className="field-label">{t('Accounts')}</span>
+            <label className="check-line">
+              <input type="checkbox" checked={!!newBackupSchedule.all_users} onChange={e => setNewBackupSchedule(prev => ({ ...prev, all_users: e.target.checked }))} />
+              {t('All users')}
+            </label>
+            {!newBackupSchedule.all_users && <select multiple value={newBackupSchedule.user_ids || []} onChange={e => setNewBackupSchedule(prev => ({ ...prev, user_ids: Array.from(e.target.selectedOptions, option => option.value) }))}>
+              {users.map(user => <option key={user.id} value={String(user.id)}>{user.username}</option>)}
+            </select>}
           </div>
-          <div className="schedule-fields">
-          <label><span>{t('Schedule')}</span>
-            <select value={backupScheduleCustom || !isPresetSchedule(BACKUP_SCHEDULE_PRESETS, newBackupSchedule.schedule) ? 'custom' : newBackupSchedule.schedule}
-              onChange={e => {
-                if (e.target.value === 'custom') { setBackupScheduleCustom(true); return; }
-                setBackupScheduleCustom(false);
-                setNewBackupSchedule(prev => ({ ...prev, schedule: e.target.value }));
-              }}>
-              {BACKUP_SCHEDULE_PRESETS.map(([value, label]) => <option key={value} value={value}>{t(label)}</option>)}
-              <option value="custom">{t('Custom...')}</option>
+          <div className="field"><span className="field-label">{t('Schedule')}</span>{renderSchedulePicker('backup', newBackupSchedule.schedule, value => setNewBackupSchedule(prev => ({ ...prev, schedule: value })), 'backup-schedule-input')}</div>
+          <div className="field"><span className="field-label">{t('Destination')}</span>
+            <select value={newBackupSchedule.target_id} onChange={e => setNewBackupSchedule(prev => ({ ...prev, target_id: e.target.value }))}>
+              <option value="">{t('Local only')}</option>
+              {sftpTargets.map(target => <option key={target.id} value={target.id}>{target.name}</option>)}
             </select>
-          </label>
-          {(backupScheduleCustom || !isPresetSchedule(BACKUP_SCHEDULE_PRESETS, newBackupSchedule.schedule)) && <label><span>{t('Cron expression')}</span>
-            <input value={newBackupSchedule.schedule} onChange={e => setNewBackupSchedule(prev => ({ ...prev, schedule: e.target.value }))} placeholder="0 2 * * *" /></label>}
-          <label><span>{t('Destination')}</span>
-          <select value={newBackupSchedule.target_id} onChange={e => setNewBackupSchedule(prev => ({ ...prev, target_id: e.target.value }))}>
-            <option value="">{t('Local only')}</option>
-            {sftpTargets.map(target => <option key={target.id} value={target.id}>{target.name} ({target.kind === 's3' ? 'S3' : 'SFTP'})</option>)}
-          </select>
-          </label>
-          <label><span>{t('Stored file name')}</span>
-          <select value={newBackupSchedule.name_suffix} aria-label={t('Stored file name')}
-            onChange={e => setNewBackupSchedule(prev => ({ ...prev, name_suffix: e.target.value }))}>
-            <option value="none">{t('Append: nothing')}</option>
-            <option value="day_of_week">{t('Append: day of week')}</option>
-            <option value="week_of_month">{t('Append: week of month')}</option>
-            <option value="full_date">{t('Append: full date')}</option>
-          </select>
-          </label>
-          <button className="schedule-submit" disabled={(!newBackupSchedule.all_users && (!newBackupSchedule.user_ids || newBackupSchedule.user_ids.length === 0)) || !!loading} onClick={createBackupSchedule}><Clock size={14}/>{t('Schedule')}</button>
           </div>
+          <div className="field"><span className="field-label">{t('Stored file name')}</span>
+            <select value={newBackupSchedule.name_suffix} aria-label={t('Stored file name')}
+              onChange={e => setNewBackupSchedule(prev => ({ ...prev, name_suffix: e.target.value }))}>
+              <option value="none">{t('Append: nothing')}</option>
+              <option value="day_of_week">{t('Append: day of week')}</option>
+              <option value="week_of_month">{t('Append: week of month')}</option>
+              <option value="full_date">{t('Append: full date')}</option>
+            </select>
+          </div>
+          <button className="backup-schedule-add" disabled={(!newBackupSchedule.all_users && (!newBackupSchedule.user_ids || newBackupSchedule.user_ids.length === 0)) || !!loading} onClick={createBackupSchedule}><Clock size={14}/> {t('Schedule')}</button>
         </div>
         <p className="hint">{t('The name suffix decides how many copies are kept: nothing keeps one per account, day of week keeps seven, week of month five, and full date one a day until retention removes it.')}</p>
         <div className="backup-list">
           {backupSchedules.map(item => {
             const scheduleTarget = sftpTargets.find(target => target.id === item.target_id);
+            const suffix = item.name_suffix && item.name_suffix !== 'full_date' && nameSuffixLabels[item.name_suffix];
             return <div className="backup-item" key={item.id}>
-              <span>
-                {scheduleUserLabel(item)} - {item.schedule}{scheduleTarget ? ` - ${scheduleTarget.name}` : ''}{item.name_suffix && item.name_suffix !== 'full_date' ? ` - ${item.name_suffix.replace(/_/g, ' ')}` : ''}
-                {item.last_status === 'running' && <span className="badge"> running</span>}
-                <small>{item.last_status}: {item.last_message || 'not run yet'}</small>
+              <span>{scheduleUserLabel(item)} - {cronScheduleLabel(item.schedule)}{scheduleTarget ? ` - ${scheduleTarget.name}` : ''}{suffix ? ` - ${t(suffix)}` : ''}
+                {item.last_status === 'running'
+                  ? <>
+                    <small>{item.last_message || t('Running')}</small>
+                    <span className="job-progress">
+                      <span className="progress-bar indeterminate"><span className="progress-bar-fill" /></span>
+                    </span>
+                  </>
+                  : <small>{item.last_status}: {item.last_message || t('not run yet')}</small>}
               </span>
-              <div className="actions schedule-actions">
-                <button className="mini secondary-light" disabled={!!loading || item.last_status === 'running'} onClick={() => runBackupScheduleNow(item)}><Play size={14}/>{t('Run now')}</button>
-                <button className="mini danger" disabled={!!loading} onClick={() => deleteBackupSchedule(item.id)}><Trash2 size={14}/>{t('Delete')}</button>
+              <div className="actions">
+                <button className="secondary" disabled={!!loading || item.last_status === 'running'} onClick={() => runBackupScheduleNow(item)}><Play size={14}/> {t('Run now')}</button>
+                <button className="danger" disabled={!!loading} onClick={() => deleteBackupSchedule(item.id)} aria-label={t('Delete')} title={t('Delete')}><Trash2 size={14}/></button>
               </div>
             </div>;
           })}
         </div>
       </div>}
 
-      {isAdmin && activeBackupTab === 'restore' && <div className="backup-tab-panel restore-flow">
-        <div className="backup-panel-title">
-          <div>
-            <h3>{t('Restore')}</h3>
-            <p className="hint">{t('Where the backups are, what that needs, which users - then restore. The same steps as DirectAdmin.')}</p>
-          </div>
-        </div>
-
-        <section className="restore-step">
-          <h4><span className="restore-step-no">1</span>{t('Source')}</h4>
-          <div className="restore-sources" role="radiogroup" aria-label={t('Source')}>
-            {restoreSourceOptions.map(option => <button type="button" role="radio" key={option.id}
-              aria-checked={restoreSource === option.id} disabled={!!loading || restoreRunning}
-              className={`restore-source${restoreSource === option.id ? ' active' : ''}`} onClick={() => chooseRestoreSource(option.id)}>
-              <option.Icon size={18}/>
-              <span><strong>{option.label}</strong><small>{option.hint}</small></span>
-            </button>)}
-          </div>
-        </section>
-
-        <section className="restore-step">
-          <h4><span className="restore-step-no">2</span>{t(restoreStepTwo)}</h4>
-          {restoreSource === 'local' && <>
-            <p className="hint">{t('Scheduled and manual backups kept on this server, and the ones uploaded here.')}{restoreListing?.location && <>{' '}<code>{restoreListing.location}</code></>}</p>
-            {restoreTools}
-          </>}
-          {restoreSource === 'target' && (restoreTargets.length === 0
-            ? <p className="hint">{t('No backup destination yet. Add one in the Backup Destination tab.')}</p>
-            : <>
-                <label className="restore-target-pick"><span>{t('Destination')}</span>
-                  <select value={restoreTargetId} disabled={!!loading || restoreRunning}
-                    onChange={e => { setRestoreTargetId(e.target.value); if (e.target.value) listRestoreSource(`target:${e.target.value}`); }}>
-                    {restoreTargets.map(target => <option key={target.id} value={target.id}>{target.name} · {target.kind === 's3' ? 'S3' : 'SFTP'}</option>)}
-                  </select>
-                </label>
-                {restoreListing?.location && <p className="hint"><code>{restoreListing.location}</code></p>}
-                {restoreTools}
-              </>)}
-          {restoreSource === 'remote' && <>
-                <div className="restore-remote">
-                  <label><span>{t('Protocol')}</span><select value={restoreRemote.protocol} disabled={restoreRunning} onChange={e => editRestoreRemote({ protocol: e.target.value })}>
-                    <option value="sftp">SFTP</option><option value="ftp">FTP</option><option value="ftps">FTPS (FTP + TLS)</option>
-                  </select></label>
-                  <label><span>{t('Server')}</span><input value={restoreRemote.host} placeholder="backup.example.com" disabled={restoreRunning} onChange={e => editRestoreRemote({ host: e.target.value })} /></label>
-                  <label><span>{t('Port')}</span><input value={restoreRemote.port} inputMode="numeric" placeholder={restoreRemote.protocol === 'sftp' ? '22' : '21'} disabled={restoreRunning} onChange={e => editRestoreRemote({ port: e.target.value.replace(/[^0-9]/g, '') })} /></label>
-                  <label><span>{t('Username')}</span><input value={restoreRemote.username} autoComplete="off" disabled={restoreRunning} onChange={e => editRestoreRemote({ username: e.target.value })} /></label>
-                  <label><span>{t('Password')}</span><input type="password" value={restoreRemote.password} autoComplete="new-password" disabled={restoreRunning} onChange={e => editRestoreRemote({ password: e.target.value })} /></label>
-                  <label><span>{t('Folder')}</span><input value={restoreRemote.path} placeholder="/backups" disabled={restoreRunning} onChange={e => editRestoreRemote({ path: e.target.value })} /></label>
-                </div>
-                {restoreTools}
-                <p className="hint">{t('Used for this restore only and never saved. To keep a server, add it under Backup Destination.')}</p>
-                {restoreListing?.host_key && <p className="hint">{t('Server key')}: <code>{restoreListing.host_key.type} {restoreListing.host_key.fingerprint}</code></p>}
-              </>}
-        </section>
-
-        <section className="restore-step">
-          <h4><span className="restore-step-no">3</span>{t('Accounts to restore')}</h4>
-          {!restoreListing
-            ? <p className="hint">{restoreSource === 'local' ? t('Looking for backups...') : restoreSource === 'target' && restoreTargets.length === 0 ? '—' : t('Press Refresh in step 2 to list the backups.')}</p>
-            : restoreGroups.length === 0
-              ? <EmptyState icon={ArchiveRestore} message={t('No backups found in this source.')} />
-              : <>
-                  <div className="restore-toolbar">
-                    <label className="check-line"><input type="checkbox" checked={allRestoreShownPicked} disabled={!!loading || restoreRunning}
-                      onChange={() => setRestorePicks(prev => allRestoreShownPicked
-                        ? prev.filter(id => !shownRestoreGroups.some(group => group.id === id))
-                        : [...new Set([...prev, ...shownRestoreGroups.map(group => group.id)])])} />{t('Select all')}</label>
-                    <input id="restore-filter" value={restoreFilter} onChange={e => setRestoreFilter(e.target.value)} placeholder={t('Filter by user...')} aria-label={t('Filter by user...')} />
-                    <span className="hint">{t('{n} selected', { n: restorePicks.length })}</span>
-                  </div>
-                  <div className="restore-users">
-                    {shownRestoreGroups.map(group => {
-                      const chosen = chosenRestoreBackup(group);
-                      const picked = restorePicks.includes(group.id);
-                      const exists = !!group.username && (restoreListing.existing || []).includes(group.username);
-                      return <div className={`restore-user${picked ? ' picked' : ''}`} key={group.id}>
-                        <label className="restore-user-main">
-                          <input type="checkbox" checked={picked} disabled={!!loading || restoreRunning} onChange={() => toggleRestorePick(group.id)} />
-                          <span className="restore-main">
-                            <strong>{group.username || chosen.name}</strong>
-                            <small>{!group.username ? t('The user is read from the backup when it is restored') : exists ? t('Exists on this server - will be overwritten') : t('New on this server')}</small>
-                          </span>
-                          {group.username && <span className={exists ? 'badge warn' : 'badge ok'}>{exists ? t('Overwrite') : t('New')}</span>}
-                        </label>
-                        {group.backups.length > 1
-                          ? <select value={chosen.key} disabled={!!loading || restoreRunning} aria-label={t('Backup to restore')}
-                              onChange={e => setRestoreChoice(prev => ({ ...prev, [group.id]: e.target.value }))}>
-                              {group.backups.map(item => <option key={item.key} value={item.key}>{restoreDate(item.modified)} · {formatBytes(item.size)}</option>)}
-                            </select>
-                          : <span className="hint restore-when">{restoreDate(chosen.modified)} · {formatBytes(chosen.size)}</span>}
-                      </div>;
-                    })}
-                  </div>
-                </>}
-        </section>
-
-        <section className="restore-step">
-          <h4><span className="restore-step-no">4</span>{t('Restore')}</h4>
-          <div className="restore-go">
-            <button type="button" className="danger" disabled={!!loading || restoreRunning || restorePicks.length === 0} onClick={runRestore}>
-              <RotateCcw size={14}/>{t('Restore {n} account(s)', { n: restorePicks.length })}</button>
-            <span className="hint">{t('One user after another, in the background. A user that already exists is overwritten with its backup.')}</span>
-          </div>
-          {restoreJob && <div className="restore-progress" aria-live="polite">
-            <strong>{restoreRunning
-              ? t('Restoring: {done} of {total} done', { done: restoreDone, total: (restoreJob.results || []).length })
-              : t('Finished: {done} of {total} restored', { done: restoreDone, total: (restoreJob.results || []).length })}</strong>
-            {(restoreJob.results || []).map((row, index) => {
-              const [label, badge] = restoreStatus[row.status] || restoreStatus.queued;
-              return <div className="restore-progress-row" key={`${row.name}-${index}`}>
-                <span>{row.username || row.name}</span>
-                <span className={badge}>{t(label)}</span>
-                {row.status === 'failed' && row.detail && <small className="restore-progress-error">{row.detail}</small>}
-              </div>;
-            })}
-          </div>}
-        </section>
-      </div>}
-
       {isAdmin && activeBackupTab === 'destination' && <div className="backup-tab-panel">
         <div className="backup-panel-title">
-          <div><h3>{t('Backup Destination')}</h3><p className="hint">{t('Somewhere off this machine to keep a copy. A backup that lives on the server it backs up is not a backup.')}</p></div>
-          <button className="secondary-light" disabled={!!loading} onClick={loadSftpTargets}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <div><h3>{t('Backup Destination')}</h3><p className="hint">{t('Where off-server backup copies are sent. SFTP, or any S3-compatible object storage.')}</p></div>
+          <button className="secondary" disabled={!!loading} onClick={loadSftpTargets}><RefreshCw size={14}/> {t('Refresh')}</button>
         </div>
-        <div className="segmented" role="tablist" aria-label={t('Destination type')}>
-          <button className={newSftpTarget.kind === 'sftp' ? 'active' : ''} disabled={!!loading}
-            onClick={() => setNewSftpTarget(prev => ({ ...prev, kind: 'sftp' }))}>{t('SFTP server')}</button>
-          <button className={newSftpTarget.kind === 's3' ? 'active' : ''} disabled={!!loading}
-            onClick={() => setNewSftpTarget(prev => ({ ...prev, kind: 's3' }))}>{t('S3 storage')}</button>
+        <div className="sftp-form sftp-target-form">
+          <input value={newSftpTarget.name} onChange={e => setNewSftpTarget(prev => ({ ...prev, name: e.target.value }))} placeholder={t('Destination name')} />
+          <select value={newSftpTarget.kind} onChange={e => setNewSftpTarget(prev => ({ ...prev, kind: e.target.value }))} aria-label={t('Destination type')}>
+            <option value="sftp">SFTP</option>
+            <option value="s3">{t('S3 compatible')}</option>
+          </select>
+
+          {newSftpTarget.kind === 'sftp' ? <>
+            <input value={newSftpTarget.host} onChange={e => setNewSftpTarget(prev => ({ ...prev, host: e.target.value }))} placeholder={t('Host')} />
+            <input value={newSftpTarget.port} onChange={e => setNewSftpTarget(prev => ({ ...prev, port: e.target.value }))} placeholder="22" inputMode="numeric" />
+            <input value={newSftpTarget.username} onChange={e => setNewSftpTarget(prev => ({ ...prev, username: e.target.value }))} placeholder={t('Username')} />
+            <input value={newSftpTarget.password} onChange={e => setNewSftpTarget(prev => ({ ...prev, password: e.target.value }))} placeholder={t('Password')} type="password" />
+            <input value={newSftpTarget.remote_path} onChange={e => setNewSftpTarget(prev => ({ ...prev, remote_path: e.target.value }))} placeholder="/backups/bpanel" />
+            <textarea value={newSftpTarget.private_key} onChange={e => setNewSftpTarget(prev => ({ ...prev, private_key: e.target.value }))} placeholder={t('Private key (optional)')} rows={4} />
+          </> : <>
+            <input id="s3-bucket" value={newSftpTarget.bucket} onChange={e => setNewSftpTarget(prev => ({ ...prev, bucket: e.target.value }))} placeholder={t('Bucket')} />
+            <input id="s3-endpoint" value={newSftpTarget.endpoint} onChange={e => setNewSftpTarget(prev => ({ ...prev, endpoint: e.target.value }))} placeholder="s3.wasabisys.com" />
+            <input id="s3-region" value={newSftpTarget.region} onChange={e => setNewSftpTarget(prev => ({ ...prev, region: e.target.value }))} placeholder={t('Region (optional)')} />
+            <input id="s3-access" value={newSftpTarget.access_key} onChange={e => setNewSftpTarget(prev => ({ ...prev, access_key: e.target.value }))} placeholder={t('Access key')} />
+            <input id="s3-secret" value={newSftpTarget.secret_key} onChange={e => setNewSftpTarget(prev => ({ ...prev, secret_key: e.target.value }))} placeholder={t('Secret key')} type="password" />
+            <input id="s3-prefix" value={newSftpTarget.prefix} onChange={e => setNewSftpTarget(prev => ({ ...prev, prefix: e.target.value }))} placeholder={t('Prefix, e.g. bpanel/nightly (optional)')} />
+            <label className="check-line">
+              <input id="s3-secure" type="checkbox" checked={!!newSftpTarget.secure} onChange={e => setNewSftpTarget(prev => ({ ...prev, secure: e.target.checked }))} />
+              {t('Use HTTPS')}
+            </label>
+          </>}
+
+          <button disabled={!!loading || !newSftpTarget.name || (newSftpTarget.kind === 's3'
+            ? (!newSftpTarget.endpoint || !newSftpTarget.bucket || !newSftpTarget.access_key || !newSftpTarget.secret_key)
+            : (!newSftpTarget.host || !newSftpTarget.username || (!newSftpTarget.password && !newSftpTarget.private_key)))}
+            onClick={createSftpTarget}><Plus size={14}/> {t('Save destination')}</button>
         </div>
-        {newSftpTarget.kind === 's3'
-          ? <>
-              <p className="hint">{t('Works with S3 and anything that speaks its API: Wasabi, Backblaze B2, DigitalOcean Spaces, Cloudflare R2, MinIO. The bucket is checked before the target is saved, so a destination that cannot be reached never gets attached to a schedule.')}</p>
-              <div className="sftp-form sftp-target-form">
-                <input id="s3-name" value={newSftpTarget.name} onChange={e => setNewSftpTarget(prev => ({ ...prev, name: e.target.value }))} placeholder={t('Target name')} />
-                <input id="s3-endpoint" value={newSftpTarget.endpoint} onChange={e => setNewSftpTarget(prev => ({ ...prev, endpoint: e.target.value }))} placeholder="s3.wasabisys.com" />
-                <input id="s3-bucket" value={newSftpTarget.bucket} onChange={e => setNewSftpTarget(prev => ({ ...prev, bucket: e.target.value }))} placeholder={t('Bucket')} />
-                <input id="s3-region" value={newSftpTarget.region} onChange={e => setNewSftpTarget(prev => ({ ...prev, region: e.target.value }))} placeholder={t('Region (optional)')} />
-                <input id="s3-access" value={newSftpTarget.access_key} onChange={e => setNewSftpTarget(prev => ({ ...prev, access_key: e.target.value }))} placeholder={t('Access key')} />
-                <input id="s3-secret" value={newSftpTarget.secret_key} onChange={e => setNewSftpTarget(prev => ({ ...prev, secret_key: e.target.value }))} placeholder={t('Secret key')} type="password" />
-                <input id="s3-prefix" value={newSftpTarget.prefix} onChange={e => setNewSftpTarget(prev => ({ ...prev, prefix: e.target.value }))} placeholder={t('Prefix, e.g. bpanel/nightly (optional)')} />
-                <label className="check-line"><input id="s3-secure" type="checkbox" checked={!!newSftpTarget.secure} onChange={e => setNewSftpTarget(prev => ({ ...prev, secure: e.target.checked }))} /><span>{t('Use HTTPS')}</span></label>
-                <button disabled={!!loading || !newSftpTarget.name || !newSftpTarget.endpoint || !newSftpTarget.bucket || !newSftpTarget.access_key || !newSftpTarget.secret_key} onClick={createSftpTarget}><Plus size={14}/>{t('Check and save')}</button>
-              </div>
-            </>
-          : <div className="sftp-form sftp-target-form">
-              <input value={newSftpTarget.name} onChange={e => setNewSftpTarget(prev => ({ ...prev, name: e.target.value }))} placeholder={t('Target name')} />
-              <input value={newSftpTarget.host} onChange={e => setNewSftpTarget(prev => ({ ...prev, host: e.target.value }))} placeholder="Host" />
-              <input value={newSftpTarget.port} onChange={e => setNewSftpTarget(prev => ({ ...prev, port: e.target.value }))} placeholder="22" inputMode="numeric" />
-              <input value={newSftpTarget.username} onChange={e => setNewSftpTarget(prev => ({ ...prev, username: e.target.value }))} placeholder={t('Username')} />
-              <input value={newSftpTarget.password} onChange={e => setNewSftpTarget(prev => ({ ...prev, password: e.target.value }))} placeholder={t('Password')} type="password" />
-              <input value={newSftpTarget.remote_path} onChange={e => setNewSftpTarget(prev => ({ ...prev, remote_path: e.target.value }))} placeholder="/backups/bpanel" />
-              <textarea value={newSftpTarget.private_key} onChange={e => setNewSftpTarget(prev => ({ ...prev, private_key: e.target.value }))} placeholder={t('Private key (optional)')} rows={4} />
-              <button disabled={!!loading || !newSftpTarget.name || !newSftpTarget.host || !newSftpTarget.username || (!newSftpTarget.password && !newSftpTarget.private_key)} onClick={createSftpTarget}><Plus size={14}/>{t('Save target')}</button>
-            </div>}
+        {newSftpTarget.kind === 's3' && <p className="hint">{t('Works with S3 and anything that speaks its API: Wasabi, Backblaze B2, DigitalOcean Spaces, Cloudflare R2, MinIO. The bucket is checked before the target is saved, so a destination that cannot be reached never gets attached to a schedule.')}</p>}
         {sftpTargets.length === 0 && <EmptyState icon={Network} message={t('No backup destinations found.')} />}
         <div className="backup-list">
           {sftpTargets.map(target => <div className="backup-item" key={target.id}>
             <span>
-              <span className="badge">{target.kind === 's3' ? 'S3' : 'SFTP'}</span> {target.name}
-              <small>{target.kind === 's3'
+              <span className="badge">{target.kind === 's3' ? 'S3' : 'SFTP'}</span>{' '}
+              {target.name} &mdash; {target.kind === 's3'
                 ? `${target.endpoint}/${target.bucket}${target.prefix ? '/' + target.prefix : ''}`
-                : `${target.username}@${target.host}:${target.remote_path}`}</small>
+                : `${target.username}@${target.host}:${target.remote_path}`}
             </span>
-            <button className="danger" disabled={!!loading} onClick={() => deleteSftpTarget(target.id)}><Trash2 size={14}/></button>
+            <span className="backup-item-actions">
+              <button className="danger" disabled={!!loading} onClick={() => deleteSftpTarget(target.id)} aria-label={t('Delete')} title={t('Delete')}><Trash2 size={14}/></button>
+            </span>
           </div>)}
         </div>
       </div>}
@@ -8346,40 +8425,55 @@ function App() {
       {isAdmin && activeBackupTab === 'da-import' && <div className="backup-tab-panel">
         <div className="backup-panel-title">
           <div><h3>{t('DirectAdmin Import')}</h3><p className="hint">{t('Import websites, databases, and users from a DirectAdmin backup archive.')}</p></div>
-          <button className="secondary-light" disabled={!!loading} onClick={() => listDaBackups()}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <button className="secondary" disabled={!!loading} onClick={() => listDaBackups()}><RefreshCw size={14}/> {t('Refresh')}</button>
         </div>
-        <div className="da-toolbar">
+        <div className="actions backup-toolbar">
           <label className="upload-button">
-            <Upload size={14}/>{t('Upload DA backup')}<input ref={daFileInputRef} type="file" accept=".tar.zst,.tzst,.tar.gz,.tgz,.tar.bz2,.tbz2,.tar.xz,.txz,.tar" onChange={e => { uploadDaBackup(e.target.files?.[0]); e.target.value = ''; }} />
+            <Upload size={14}/> {t('Upload DA backup')}
+            <input ref={daFileInputRef} type="file" accept=".tar.zst,.tzst,.tar.gz,.tgz,.tar.bz2,.tbz2,.tar.xz,.txz,.tar" onChange={e => { uploadDaBackup(e.target.files?.[0]); e.target.value = ''; }} />
           </label>
-          <label className="da-toggle">
-            <input type="checkbox" checked={daReplaceExisting} onChange={e => setDaReplaceExisting(e.target.checked)} />{t('Replace existing users/websites')}</label>
+          <label className="check-line">
+            <input type="checkbox" checked={daReplaceExisting} onChange={e => setDaReplaceExisting(e.target.checked)} />
+            {t('Replace existing users/websites')}
+          </label>
         </div>
-        {daReplaceExisting && <p className="hint da-warn">{t('Imports will delete any existing panel user, website, files and databases that share a name with the backup. Leave this off to have conflicting imports stop instead.')}</p>}
+        {daReplaceExisting && <p className="hint alarm">{t('Imports will delete any existing panel user, website, files and databases that share a name with the backup. Leave this off to have conflicting imports stop instead.')}</p>}
         {daBackups.length === 0 && <EmptyState icon={ArchiveRestore} message={t('No DirectAdmin backups uploaded. Upload a DA backup archive to get started.')} />}
         {daBackups.length > 0 && <>
-          <div className="da-list-head">
-            <label className="da-toggle">
+          <div className="restore-toolbar">
+            <label className="schedule-toggle">
               <input type="checkbox" checked={selectedDaBackups.length === daBackups.length && daBackups.length > 0} onChange={toggleSelectAllDaBackups} />
-              {t('Select all ({n})', { n: daBackups.length })}
+              <span>{t('Select all ({n})', { n: daBackups.length })}</span>
             </label>
-            {selectedDaBackups.length > 0 && <div className="da-actions">
-              <button disabled={!!loading} onClick={() => bulkImportDaBackups()} className="primary"><ArchiveRestore size={14}/> {t('Restore selected ({n})', { n: selectedDaBackups.length })}</button>
-              <button disabled={!!loading} onClick={bulkDeleteDaBackups} className="danger"><Trash2 size={14}/> {t('Delete selected ({n})', { n: selectedDaBackups.length })}</button>
+            {selectedDaBackups.length > 0 && <div className="actions">
+              <button disabled={!!loading} onClick={() => bulkImportDaBackups()}><ArchiveRestore size={14}/> {t('Restore selected ({n})', { n: selectedDaBackups.length })}</button>
+              <button className="danger" disabled={!!loading} onClick={bulkDeleteDaBackups}><Trash2 size={14}/> {t('Delete selected ({n})', { n: selectedDaBackups.length })}</button>
             </div>}
           </div>
-          <div className="backup-list">
-            {daBackups.map(file => <div className={`backup-item da-backup-row${selectedDaBackups.includes(file.path) ? ' selected' : ''}`} key={file.path}>
-              <label className="da-backup-pick">
-                <input type="checkbox" checked={selectedDaBackups.includes(file.path)} onChange={() => toggleDaBackupSelect(file.path)} />
-                <span>{file.filename}<small>{(file.size / (1024 * 1024)).toFixed(1)} MB</small></span>
-              </label>
-              <div className="da-actions">
-                <button disabled={!!loading} onClick={() => scanDaBackup(file.path)}><Search size={14}/>{t('Scan')}</button>
-                <button disabled={!!loading} onClick={() => importDaBackup(file.path)}><ArchiveRestore size={14}/>{t('Import')}</button>
-                <button className="danger" disabled={!!loading} onClick={() => deleteDaBackup(file.path)}><Trash2 size={14}/></button>
-              </div>
-            </div>)}
+          <div className="restore-accounts">
+            {daBackups.map(file => {
+              const picked = selectedDaBackups.includes(file.path);
+              const toggle = () => toggleDaBackupSelect(file.path);
+              return <div
+                key={file.path}
+                className={`restore-account${picked ? ' picked' : ''}`}
+                role="checkbox"
+                aria-checked={picked}
+                tabIndex={0}
+                onClick={toggle}
+                onKeyDown={e => { if (e.target === e.currentTarget && (e.key === ' ' || e.key === 'Enter')) { e.preventDefault(); toggle(); } }}
+              >
+                <input type="checkbox" checked={picked} tabIndex={-1} onChange={toggle} onClick={e => e.stopPropagation()} aria-hidden="true" />
+                <span className="restore-account-main"><strong>{file.filename}</strong><small>{formatBytes(file.size)}</small></span>
+                <span className="badge">DirectAdmin</span>
+                <span className="actions" onClick={e => e.stopPropagation()}>
+                  <button className="mini secondary" disabled={!!loading} onClick={() => scanDaBackup(file.path)}><Search size={13}/> {t('Scan')}</button>
+                  <button className="mini secondary" disabled={!!loading} onClick={() => importDaBackup(file.path)}><ArchiveRestore size={13}/> {t('Import')}</button>
+                </span>
+                <button type="button" className="danger restore-delete" disabled={!!loading} aria-label={t('Delete')} title={t('Delete')}
+                  onClick={e => { e.stopPropagation(); deleteDaBackup(file.path); }}><Trash2 size={14}/></button>
+              </div>;
+            })}
           </div>
         </>}
 
@@ -8420,7 +8514,7 @@ function App() {
           </div>)}
         </div>}
 
-        {daImportJob && <div className={`backup-job da-job ${daImportJob.status}`}>
+        {daImportJob && <div className={`backup-job ${daImportJob.status}`}>
           <Clock size={14}/>
           <span><strong>{t('DA Import')}</strong><small>{daImportJob.archive || ''}</small></span>
           <span className={daImportJob.status === 'completed' ? 'badge ok' : daImportJob.status === 'failed' ? 'badge bad' : 'badge'}>{daImportJob.status}</span>
@@ -8431,7 +8525,7 @@ function App() {
             <p className="da-user-head"><strong>{item.username}</strong> <span className="badge ok">{t('{n} domain(s)', { n: item.imported_domains?.length || 0 })}</span> <span className="badge">{t('{n} database(s)', { n: item.databases?.length || 0 })}</span></p>
             {item.aliases?.length > 0 && <p className="hint">{t('Pointers:')} {item.aliases.join(', ')}</p>}
             {item.ssl_enabled_domains?.length > 0 && <p className="hint">{t('SSL enabled:')} {item.ssl_enabled_domains.join(', ')}</p>}
-            {item.warnings?.length > 0 && <p className="hint da-warn">{t('Warnings:')} {item.warnings.join('; ')}</p>}
+            {item.warnings?.length > 0 && <p className="hint alarm">{t('Warnings:')} {item.warnings.join('; ')}</p>}
           </div>)}
           {daImportJob.result.credentials && <details className="da-creds-details">
             <summary>{t('Generated credentials (click to show)')}</summary>
@@ -8439,9 +8533,9 @@ function App() {
           </details>}
         </div>}
 
-        {daBulkImportJob && <div className={`backup-job da-job ${daBulkImportJob.status}`}>
+        {daBulkImportJob && <div className={`backup-job ${daBulkImportJob.status}`}>
           <Clock size={14}/>
-          <span><strong>{t('Bulk restore')}</strong><small>{daBulkImportJob.status === 'running' ? `Processing ${daBulkImportJob.current + 1}/${daBulkImportJob.total}: ${daBulkImportJob.current_archive}` : `${daBulkImportJob.total} backup(s)`}</small></span>
+          <span><strong>{t('Bulk restore')}</strong><small>{daBulkImportJob.status === 'running' ? `${daBulkImportJob.current + 1}/${daBulkImportJob.total}: ${daBulkImportJob.current_archive}` : t('{n} backup(s)', { n: daBulkImportJob.total })}</small></span>
           <span className={daBulkImportJob.status === 'completed' ? 'badge ok' : 'badge'}>{daBulkImportJob.status === 'running' ? `${daBulkImportJob.current}/${daBulkImportJob.total}` : daBulkImportJob.status}</span>
         </div>}
         {daBulkImportJob?.status === 'completed' && daBulkImportJob.results && <div className="da-scan-result">
@@ -9778,155 +9872,159 @@ function App() {
   function renderUsers() {
     if (!isAdmin) return <section className="section"><h2>{t('Users')}</h2><p className="hint">{t('No permission.')}</p></section>;
     const activeUserTab = userTab || 'list';
-    const userTabButton = (key, Icon, label) => (
-      <button
-        type="button"
-        className={activeUserTab === key ? 'active' : ''}
-        role="tab"
-        aria-selected={activeUserTab === key}
-        aria-controls={`users-tab-${key}`}
-        id={`users-tab-button-${key}`}
-        onClick={() => setUserTab(key)}
-      >
-        <Icon size={14}/>{t(label)}
-      </button>
-    );
-
-    return <section className="section users-page">
-      <div className="section-title">
-        <div><h2>{t('Panel users')}</h2><p className="hint">{t('Manage users, packages, and domain ownership.')}</p></div>
-      </div>
-      {/* One underlined row, like the backup tabs and OPanel's. */}
-      <div className="segmented-control backup-tabs user-tabs" role="tablist" aria-label={t('Panel user sections')}>
-        {userTabButton('list', Users, 'List user')}
-        {userTabButton('packages', HardDrive, 'Package')}
-        {userTabButton('add', Plus, 'Add User')}
-      </div>
-
-      {activeUserTab === 'list' && <div className="user-tab-panel" id="users-tab-list" role="tabpanel" aria-labelledby="users-tab-button-list">
-        <div className="section-title user-panel-title">
-          <div><h2>{t('Panel user list')}</h2><p className="hint">{t('Current panel users and service limits.')}</p></div>
-          <button className="secondary-light" disabled={!!loading} onClick={loadUsers}><RefreshCw size={14}/>{t('Refresh')}</button>
+    return <>
+      <section className="section">
+        <div className="section-title">
+          <div><h2>{t('Panel Users')}</h2><p className="hint">{t('Manage panel accounts, hosting packages, and create new users.')}</p></div>
+          <button className="secondary" disabled={!!loading} onClick={() => { loadUsers(); loadPackages(); }}><RefreshCw size={14}/> {t('Refresh')}</button>
         </div>
-        {users.length === 0 && <EmptyState icon={Users} message={t('No users found.')} />}
-        <div className="table">
-          {users.map(user => <div className="row user-row" key={user.id}>
-            <div className="user-main"><strong>{user.username}</strong><small>{user.email}</small></div>
-            <div className="user-badges">
-              <span className={user.is_active ? 'badge ok' : 'badge danger'}>{user.is_active ? t('Active') : t('Suspended')}</span>
-              <span className="badge">{t(roleLabel(user.role))}</span>
-              <span className="badge">{user.package_name || t('Custom')}</span>
-              {user.totp_enabled && <span className="badge ok">2FA</span>}
+        <div className="tab-bar" role="tablist" aria-label={t('Panel user sections')}>
+          <button type="button" role="tab" aria-selected={activeUserTab === 'list'} className={activeUserTab === 'list' ? 'tab active' : 'tab'} onClick={() => setUserTab('list')}><Users size={14}/> {t('List Users')}</button>
+          <button type="button" role="tab" aria-selected={activeUserTab === 'packages'} className={activeUserTab === 'packages' ? 'tab active' : 'tab'} onClick={() => setUserTab('packages')}><PackageOpen size={14}/> {t('Packages')}</button>
+          <button type="button" role="tab" aria-selected={activeUserTab === 'add'} className={activeUserTab === 'add' ? 'tab active' : 'tab'} onClick={() => setUserTab('add')}><Plus size={14}/> {t('Add User')}</button>
+        </div>
+      </section>
+      {activeUserTab === 'list' && renderUsersListTab()}
+      {activeUserTab === 'packages' && renderUsersPackagesTab()}
+      {activeUserTab === 'add' && renderUsersAddTab()}
+    </>;
+  }
+
+  // "Starter (5 website(s), 1 GB)": what picking a package fills in.
+  function packageOptionLabel(item) {
+    return `${item.name} (${t('{n} website(s)', { n: item.website_limit })}, ${formatBytes(Number(item.storage_limit_mb || 0) * 1024 * 1024)})`;
+  }
+
+  function renderUsersListTab() {
+    // A package decides the limits: the server applies its values over any
+    // typed here, so the fields are locked while one is chosen.
+    const packaged = !!editingUserForm.package_id;
+    return <section className="section">
+      {users.length === 0 && <EmptyState icon={Users} message={t('No users found.')} />}
+      <div className="table">
+        {users.map(user => <div className="row user-row" key={user.id}>
+          <div className="user-main"><strong>{user.username}</strong><small>{user.email}</small></div>
+          <span className="badge">{t(roleLabel(user.role))}</span>
+          <span className={`badge ${user.is_active ? 'ok' : 'warn'}`}>{user.is_active ? t('Active') : t('Suspended')}</span>
+          <span className="user-badges">
+            <span className="badge">{user.package_name || t('Custom')}</span>
+            {user.totp_enabled && <span className="badge ok">2FA</span>}
+          </span>
+          <span className={`user-metric${user.storage_used_bytes == null || Number(user.storage_used_bytes) < 0 ? ' pending' : ''}`}><HardDrive size={13}/>{storageUsageText(user)}</span>
+          <div className="row-actions">
+            <button className="mini secondary-light" disabled={!!loading} onClick={() => startEditingUser(user)}><Pencil size={14}/> {t('Edit')}</button>
+            <button className="mini secondary-light" disabled={!!loading} onClick={() => quickLoginUser(user)}><LogIn size={14}/> {t('Login as')}</button>
+            {user.id !== currentUser?.id && (user.is_active
+              ? <button className="mini danger" disabled={!!loading} onClick={() => suspendUser(user)}><Ban size={14}/> {t('Suspend')}</button>
+              : <button className="mini secondary-light" disabled={!!loading} onClick={() => unsuspendUser(user)}><CheckCircle size={14}/> {t('Unsuspend')}</button>)}
+            {user.totp_enabled && user.id !== currentUser?.id && <button className="mini secondary-light" disabled={!!loading} onClick={() => resetUserTwoFactor(user)}>{t('Reset 2FA')}</button>}
+            {user.id !== currentUser?.id && <button className="mini danger" disabled={!!loading} onClick={() => deletePanelUser(user)} aria-label={t('Delete {name}', { name: user.username })} title={t('Delete')}><Trash2 size={14}/></button>}
+          </div>
+          {editingUser?.id === user.id && <div className="user-edit-panel">
+            <div className="user-edit-heading">
+              <div><strong>{t('Edit')} {user.username}</strong><small>
+                {user.id === currentUser?.id ? t('Role is locked for the active admin session.') : t('Role changes sign the user out of existing sessions.')}
+                {editingUserForm.role === 'admin' ? ` ${t('Admin accounts bypass website and storage limits.')}` : ''}
+              </small></div>
+              <button className="user-edit-close secondary-light" onClick={cancelEditingUser} aria-label={t('Close user editor')} title={t('Close user editor')}><X size={16}/></button>
             </div>
-            <span className="user-metric"><HardDrive size={13}/>{storageUsageText(user)}</span>
+            <div className="user-edit-grid">
+              <label><span>{t('Email')}</span><input type="email" value={editingUserForm.email} onChange={e => setEditingUserForm(prev => ({ ...prev, email: e.target.value }))} /></label>
+              <label><span>{t('Role')}</span><select value={editingUserForm.role} disabled={user.id === currentUser?.id} onChange={e => setEditingUserForm(prev => ({ ...prev, role: e.target.value }))}>
+                <option value="end_user">{t('End user')}</option><option value="admin">{t('Admin')}</option>
+              </select></label>
+              <label><span>{t('Package')}</span><select value={editingUserForm.package_id} onChange={e => applyPackageToEditingUser(e.target.value)}>
+                <option value="">{t('Custom')}</option>
+                {packages.map(item => <option key={item.id} value={item.id}>{packageOptionLabel(item)}</option>)}
+              </select></label>
+              <label><span>{t('Site limit')}</span><input type="number" min="0" max="1000" disabled={packaged} value={editingUserForm.website_limit} onChange={e => setEditingUserForm(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
+              <label><span>{t('Disk limit (MB)')}</span><input type="number" min="0" max="1048576" disabled={packaged} value={editingUserForm.storage_limit_mb} onChange={e => setEditingUserForm(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
+              <label><span>{t('SFTP accounts')}</span><input type="number" min="0" max="100" disabled={packaged} value={editingUserForm.sftp_accounts_limit} onChange={e => setEditingUserForm(prev => ({ ...prev, sftp_accounts_limit: e.target.value }))} /></label>
+              {mailAddonInstalled && <label><span>{t('Mailbox limit')}</span><input type="number" min="0" max="1000" disabled={packaged} value={editingUserForm.mail_accounts_limit} onChange={e => setEditingUserForm(prev => ({ ...prev, mail_accounts_limit: e.target.value }))} /></label>}
+              <label><span>{t('New password')} <small>{t('(leave empty to keep)')}</small></span><input type="password" autoComplete="new-password" value={editingUserForm.new_password} onChange={e => setEditingUserForm(prev => ({ ...prev, new_password: e.target.value }))} placeholder={t('Min 12 characters')} /></label>
+              {!!editingUserForm.new_password && <label><span>{t('Confirm password')}</span><input type="password" autoComplete="new-password" value={editingUserForm.confirm_password} onChange={e => setEditingUserForm(prev => ({ ...prev, confirm_password: e.target.value }))} placeholder={t('Repeat password')} /></label>}
+            </div>
+            <div className="user-edit-actions">
+              <button className="secondary-light" onClick={cancelEditingUser}>{t('Cancel')}</button>
+              <button disabled={!!loading || !editingUserForm.email.trim()} onClick={updatePanelUser}><Save size={14}/> {t('Save changes')}</button>
+            </div>
+          </div>}
+        </div>)}
+      </div>
+      <div className="section" style={{marginTop:16}}>
+        <h2>{t('Assign domain to user')}</h2>
+        <div className="assign-row">
+          <select value={assignWebsiteId} onChange={e => setAssignWebsiteId(e.target.value)}>
+            <option value="">{t('Select domain')}</option>
+            {websites.map(site => <option key={site.id} value={site.id}>{site.domain}</option>)}
+          </select>
+          <select value={assignUserId} onChange={e => setAssignUserId(e.target.value)}>
+            <option value="">{t('Select user')}</option>
+            {users.map(user => <option key={user.id} value={user.id}>{user.username} ({t(roleLabel(user.role))})</option>)}
+          </select>
+          <button disabled={!assignWebsiteId || !assignUserId || !!loading} onClick={assignDomainToUser}>{t('Assign')}</button>
+        </div>
+      </div>
+    </section>;
+  }
+
+  function renderUsersPackagesTab() {
+    const packageInUse = item => users.some(user => user.package_id === item.id);
+    return <>
+      <section className="section">
+        <div className="section-title">
+          <div><h2>{t('Hosting Packages')}</h2><p className="hint">{t('Manage provisioning plans for WHMCS and billing systems.')}</p></div>
+          <button className="secondary" disabled={!!loading} onClick={loadPackages}><RefreshCw size={14}/> {t('Refresh')}</button>
+        </div>
+        <div className="token-create-form package-form" style={{ '--package-limit-cols': mailAddonInstalled ? 4 : 3 }}>
+          <label><span>{t('Name')}</span><input value={newPackage.name} onChange={e => setNewPackage(prev => ({ ...prev, name: e.target.value }))} placeholder={t('Starter')} /></label>
+          <label><span>{t('Sites')}</span><input type="number" min="0" max="1000" value={newPackage.website_limit} onChange={e => setNewPackage(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
+          <label><span>{t('Disk (MB)')}</span><input type="number" min="0" max="1048576" value={newPackage.storage_limit_mb} onChange={e => setNewPackage(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
+          <label><span>{t('SFTP accounts')}</span><input type="number" min="0" max="100" value={newPackage.sftp_accounts_limit} onChange={e => setNewPackage(prev => ({ ...prev, sftp_accounts_limit: e.target.value }))} /></label>
+          {mailAddonInstalled && <label><span>{t('Mailboxes')}</span><input type="number" min="0" max="1000" value={newPackage.mail_accounts_limit} onChange={e => setNewPackage(prev => ({ ...prev, mail_accounts_limit: e.target.value }))} /></label>}
+          <button disabled={!!loading || !newPackage.name.trim()} onClick={createPackage}><Plus size={14}/> {t('Add')}</button>
+        </div>
+        {packages.length === 0 && <p className="hint">{t('No packages yet. Create one above.')}</p>}
+        {packages.length > 0 && <div className="table">
+          {packages.map(item => <div className="row" key={item.id}>
+            <div className="token-info">
+              <strong>{item.name}</strong>
+              <small>{t('{n} website(s)', { n: item.website_limit })} | {formatBytes(Number(item.storage_limit_mb || 0) * 1024 * 1024)} | {t('{n} SFTP account(s)', { n: item.sftp_accounts_limit ?? 0 })}{mailAddonInstalled ? ` | ${t('{n} mailboxes', { n: item.mail_accounts_limit ?? 10 })}` : ''}</small>
+            </div>
             <div className="row-actions">
-              <button className="mini secondary-light" disabled={!!loading} onClick={() => startEditingUser(user)}><Pencil size={14}/>{t('Edit')}</button>
-              <button className="mini secondary-light" disabled={!!loading} onClick={() => quickLoginUser(user)}><LogIn size={14}/>{t('Login as')}</button>
-              {user.totp_enabled && user.id !== currentUser?.id && <button className="mini secondary-light" disabled={!!loading} onClick={() => resetUserTwoFactor(user)}>{t('Reset 2FA')}</button>}
-              {user.id !== currentUser?.id && (user.is_active
-                ? <button className="mini secondary-light" disabled={!!loading} onClick={() => suspendUser(user)}><Ban size={14}/>{t('Suspend')}</button>
-                : <button className="mini secondary-light" disabled={!!loading} onClick={() => unsuspendUser(user)}><Play size={14}/>{t('Unsuspend')}</button>
-              )}
-              {user.id !== currentUser?.id && <button className="mini danger" disabled={!!loading} onClick={() => deletePanelUser(user)}><Trash2 size={14}/></button>}
+              <button className="mini secondary-light" disabled={!!loading} onClick={() => startEditingPackage(item)}><Pencil size={14}/> {t('Edit')}</button>
+              <button className="mini danger" disabled={!!loading || packageInUse(item)} onClick={() => deletePackage(item)}
+                aria-label={t('Delete {name}', { name: item.name })} title={packageInUse(item) ? t('Package is in use') : t('Delete')}><Trash2 size={14}/></button>
             </div>
-            {editingUser?.id === user.id && <div className="user-edit-panel">
+            {String(editingPackageId) === String(item.id) && <div className="user-edit-panel">
               <div className="user-edit-heading">
-                <div><strong>Edit {user.username}</strong><small>
-                  {user.id === currentUser?.id ? 'Role is locked for the active admin session.' : 'Role changes sign the user out of existing sessions.'}
-                  {editingUserForm.role === 'admin' ? ' Admin accounts bypass website and storage limits.' : ''}
-                </small></div>
-                <button className="user-edit-close secondary-light" onClick={cancelEditingUser} aria-label={t('Close user editor')} title={t('Close user editor')}><X size={16}/></button>
+                <strong>{t('Edit')} {item.name}</strong>
+                <button className="user-edit-close secondary-light" onClick={cancelEditingPackage} aria-label={t('Close')} title={t('Close')}><X size={16}/></button>
               </div>
               <div className="user-edit-grid">
-                <label><span>{t('Email')}</span><input type="email" value={editingUserForm.email} onChange={e => setEditingUserForm(prev => ({ ...prev, email: e.target.value }))} /></label>
-                <label><span>{t('Role')}</span><select value={editingUserForm.role} disabled={user.id === currentUser?.id} onChange={e => setEditingUserForm(prev => ({ ...prev, role: e.target.value }))}>
-                  <option value="end_user">{t('End user')}</option><option value="admin">{t('Admin')}</option>
-                </select></label>
-                <label><span>{t('Package')}</span><select value={editingUserForm.package_id} onChange={e => applyPackageToEditingUser(e.target.value)}>
-                  <option value="">{t('Custom limits')}</option>
-                  {packages.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
-                </select></label>
-                <label><span>{t('Website limit')}</span><input type="number" min="0" max="1000" disabled={!!editingUserForm.package_id} value={editingUserForm.website_limit} onChange={e => setEditingUserForm(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
-                <label><span>{t('Storage limit (MB)')}</span><input type="number" min="0" max="1048576" disabled={!!editingUserForm.package_id} value={editingUserForm.storage_limit_mb} onChange={e => setEditingUserForm(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
-                <label><span>{t('SFTP accounts')}</span><input type="number" min="0" max="100" disabled={!!editingUserForm.package_id} value={editingUserForm.sftp_accounts_limit} onChange={e => setEditingUserForm(prev => ({ ...prev, sftp_accounts_limit: e.target.value }))} /></label>
-                {mailAddonInstalled && <label><span>{t('Mailboxes')}</span><input type="number" min="0" max="1000" disabled={!!editingUserForm.package_id} value={editingUserForm.mail_accounts_limit} onChange={e => setEditingUserForm(prev => ({ ...prev, mail_accounts_limit: e.target.value }))} /></label>}
-              </div>
-              <div className="user-edit-section">
-                <div className="user-edit-heading"><div><strong>{t('Change password')}</strong><small>{t('Minimum 12 characters.')} {t(user.id === currentUser?.id ? 'Requires current password + 2FA.' : 'Admin can set directly.')}</small></div></div>
-                <div className="user-edit-grid">
-                  <label><span>{t('New password')}</span><input type="password" placeholder={t('Min 12 characters')} value={editingUserForm.new_password} onChange={e => setEditingUserForm(prev => ({ ...prev, new_password: e.target.value }))} /></label>
-                  <label><span>{t('Confirm password')}</span><input type="password" placeholder={t('Repeat password')} value={editingUserForm.confirm_password} onChange={e => setEditingUserForm(prev => ({ ...prev, confirm_password: e.target.value }))} /></label>
-                </div>
-                <div className="user-edit-actions">
-                  <button disabled={!!loading || !editingUserForm.new_password || editingUserForm.new_password.length < 12} onClick={() => submitPasswordChange(user)}>{t('Set password')}</button>
-                </div>
+                <label><span>{t('Name')}</span><input value={editingPackageForm.name} onChange={e => setEditingPackageForm(prev => ({ ...prev, name: e.target.value }))} /></label>
+                <label><span>{t('Sites')}</span><input type="number" min="0" max="1000" value={editingPackageForm.website_limit} onChange={e => setEditingPackageForm(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
+                <label><span>{t('Disk (MB)')}</span><input type="number" min="0" max="1048576" value={editingPackageForm.storage_limit_mb} onChange={e => setEditingPackageForm(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
+                <label><span>{t('SFTP accounts')}</span><input type="number" min="0" max="100" value={editingPackageForm.sftp_accounts_limit} onChange={e => setEditingPackageForm(prev => ({ ...prev, sftp_accounts_limit: e.target.value }))} /></label>
+                {mailAddonInstalled && <label><span>{t('Mailboxes')}</span><input type="number" min="0" max="1000" value={editingPackageForm.mail_accounts_limit} onChange={e => setEditingPackageForm(prev => ({ ...prev, mail_accounts_limit: e.target.value }))} /></label>}
               </div>
               <div className="user-edit-actions">
-                <button className="secondary-light" onClick={cancelEditingUser}>{t('Cancel')}</button>
-                <button disabled={!!loading || !editingUserForm.email.trim()} onClick={updatePanelUser}><Save size={14}/>{t('Save changes')}</button>
+                <button className="secondary-light" onClick={cancelEditingPackage}>{t('Cancel')}</button>
+                <button disabled={!!loading || !editingPackageForm.name.trim()} onClick={() => updatePackage(item.id)}><Save size={14}/> {t('Save')}</button>
               </div>
             </div>}
           </div>)}
-        </div>
-        <div className="user-action-panel">
-          <div><h3>{t('Assign domain to user')}</h3><p className="hint">{t('Move an existing domain under a selected panel user.')}</p></div>
-          <div className="assign-row">
-            <select value={assignWebsiteId} onChange={e => setAssignWebsiteId(e.target.value)}>
-              <option value="">{t('Select domain')}</option>
-              {websites.map(site => <option key={site.id} value={site.id}>{site.domain}</option>)}
-            </select>
-            <select value={assignUserId} onChange={e => setAssignUserId(e.target.value)}>
-              <option value="">{t('Select user')}</option>
-              {users.map(user => <option key={user.id} value={user.id}>{user.username} ({roleLabel(user.role)})</option>)}
-            </select>
-            <button disabled={!assignWebsiteId || !assignUserId || !!loading} onClick={assignDomainToUser}>{t('Assign')}</button>
-          </div>
-        </div>
-      </div>}
+        </div>}
+      </section>
+    </>;
+  }
 
-      {activeUserTab === 'packages' && <div className="user-tab-panel" id="users-tab-packages" role="tabpanel" aria-labelledby="users-tab-button-packages">
-        <div className="section-title user-panel-title">
-          <div><h2>{t('Package')}</h2><p className="hint">{t('Create, edit, delete, and review reusable user limits.')}</p></div>
-          <button className="secondary-light" disabled={!!loading} onClick={loadPackages}><RefreshCw size={14}/>{t('Refresh')}</button>
-        </div>
-        <div className="user-create-card package-create-card">
-          <label><span>{t('Package name')}</span><input value={newPackage.name} onChange={e => setNewPackage(prev => ({ ...prev, name: e.target.value }))} placeholder={t('Starter')} /></label>
-          <label><span>{t('Site limit')}</span><input type="number" min="0" max="1000" value={newPackage.website_limit} onChange={e => setNewPackage(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
-          <label><span>{t('Storage MB')}</span><input type="number" min="0" max="1048576" value={newPackage.storage_limit_mb} onChange={e => setNewPackage(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
-          <label><span>{t('SFTP accounts')}</span><input type="number" min="0" max="100" value={newPackage.sftp_accounts_limit} onChange={e => setNewPackage(prev => ({ ...prev, sftp_accounts_limit: e.target.value }))} /></label>
-          {mailAddonInstalled && <label><span>{t('Mailboxes')}</span><input type="number" min="0" max="1000" value={newPackage.mail_accounts_limit} onChange={e => setNewPackage(prev => ({ ...prev, mail_accounts_limit: e.target.value }))} /></label>}
-          <button disabled={!!loading || !newPackage.name.trim()} onClick={createPackage}><Plus size={14}/>{t('Create package')}</button>
-        </div>
-        <div className="package-list">
-          {packages.length === 0 && <EmptyState icon={HardDrive} message={t('No packages found.')} />}
-          {packages.map(item => <div className="package-row" key={item.id}>
-            {String(editingPackageId) === String(item.id) ? <>
-              <label><span>{t('Name')}</span><input value={editingPackageForm.name} onChange={e => setEditingPackageForm(prev => ({ ...prev, name: e.target.value }))} /></label>
-              <label><span>{t('Site limit')}</span><input type="number" min="0" max="1000" value={editingPackageForm.website_limit} onChange={e => setEditingPackageForm(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
-              <label><span>{t('Storage MB')}</span><input type="number" min="0" max="1048576" value={editingPackageForm.storage_limit_mb} onChange={e => setEditingPackageForm(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
-              <label><span>{t('SFTP accounts')}</span><input type="number" min="0" max="100" value={editingPackageForm.sftp_accounts_limit} onChange={e => setEditingPackageForm(prev => ({ ...prev, sftp_accounts_limit: e.target.value }))} /></label>
-              {mailAddonInstalled && <label><span>{t('Mailboxes')}</span><input type="number" min="0" max="1000" value={editingPackageForm.mail_accounts_limit} onChange={e => setEditingPackageForm(prev => ({ ...prev, mail_accounts_limit: e.target.value }))} /></label>}
-              <div className="row-actions">
-                <button className="mini secondary-light" onClick={cancelEditingPackage}>{t('Cancel')}</button>
-                <button className="mini" disabled={!!loading || !editingPackageForm.name.trim()} onClick={() => updatePackage(item.id)}><Save size={14}/>{t('Save')}</button>
-              </div>
-            </> : <>
-              <div className="user-main"><strong>{item.name}</strong><small>{item.website_limit} sites - {item.storage_limit_mb} MB</small></div>
-              <span className="user-metric"><Globe size={13}/>{item.website_limit} sites</span>
-              <span className="user-metric"><HardDrive size={13}/>{item.storage_limit_mb} MB</span>
-              {mailAddonInstalled && <span className="user-metric"><Mail size={13}/>{t('{n} mailboxes', { n: item.mail_accounts_limit ?? 10 })}</span>}
-              <div className="row-actions">
-                <button className="mini secondary-light" disabled={!!loading} onClick={() => startEditingPackage(item)}><Pencil size={14}/>{t('Edit')}</button>
-                <button className="mini danger" disabled={!!loading || users.some(user => user.package_id === item.id)} onClick={() => deletePackage(item)}><Trash2 size={14}/></button>
-              </div>
-            </>}
-          </div>)}
-        </div>
-      </div>}
-
-      {activeUserTab === 'add' && <div className="user-tab-panel" id="users-tab-add" role="tabpanel" aria-labelledby="users-tab-button-add">
-        <div className="section-title user-panel-title">
-          <div><h2>{t('Add User')}</h2><p className="hint">{t('Panel username is also the Linux user. Login as a user before creating websites for that account.')}</p></div>
+  function renderUsersAddTab() {
+    const packaged = !!newUser.package_id;
+    return <>
+      <section className="section">
+        <div className="section-title">
+          <div><h2>{t('Add panel user')}</h2><p className="hint">{t('Panel username is also the Linux user. Select a package to auto-fill limits.')}</p></div>
         </div>
         <div className="user-create-card">
           <label><span>{t('Username')}</span><input value={newUser.username} onChange={e => setNewUser(prev => ({ ...prev, username: e.target.value.toLowerCase() }))} placeholder="johndoe" /></label>
@@ -9936,17 +10034,17 @@ function App() {
             <option value="end_user">{t('End user')}</option><option value="admin">{t('Admin')}</option>
           </select></label>
           <label><span>{t('Package')}</span><select value={newUser.package_id} onChange={e => applyPackageToNewUser(e.target.value)}>
-            <option value="">{t('Custom limits')}</option>
-            {packages.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+            <option value="">{t('Custom')}</option>
+            {packages.map(item => <option key={item.id} value={item.id}>{packageOptionLabel(item)}</option>)}
           </select></label>
-          <label><span>{t('Site limit')}</span><input type="number" disabled={!!newUser.package_id} value={newUser.website_limit} onChange={e => setNewUser(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
-          <label><span>{t('Storage MB')}</span><input type="number" disabled={!!newUser.package_id} value={newUser.storage_limit_mb} onChange={e => setNewUser(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
-          <label><span>{t('SFTP accounts')}</span><input type="number" min="0" max="100" disabled={!!newUser.package_id} value={newUser.sftp_accounts_limit} onChange={e => setNewUser(prev => ({ ...prev, sftp_accounts_limit: e.target.value }))} /></label>
-          {mailAddonInstalled && <label><span>{t('Mailboxes')}</span><input type="number" min="0" max="1000" disabled={!!newUser.package_id} value={newUser.mail_accounts_limit} onChange={e => setNewUser(prev => ({ ...prev, mail_accounts_limit: e.target.value }))} /></label>}
-          <button disabled={!!loading || !newUser.username || !newUser.password} onClick={createUser}><Plus size={14}/>{t('Create user')}</button>
+          <label><span>{t('Site limit')}</span><input type="number" min="0" max="1000" disabled={packaged} value={newUser.website_limit} onChange={e => setNewUser(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
+          <label><span>{t('Disk (MB)')}</span><input type="number" min="0" max="1048576" disabled={packaged} value={newUser.storage_limit_mb} onChange={e => setNewUser(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
+          <label><span>{t('SFTP accounts')}</span><input type="number" min="0" max="100" disabled={packaged} value={newUser.sftp_accounts_limit} onChange={e => setNewUser(prev => ({ ...prev, sftp_accounts_limit: e.target.value }))} /></label>
+          {mailAddonInstalled && <label><span>{t('Mailbox limit')}</span><input type="number" min="0" max="1000" disabled={packaged} value={newUser.mail_accounts_limit} onChange={e => setNewUser(prev => ({ ...prev, mail_accounts_limit: e.target.value }))} /></label>}
+          <button disabled={!!loading || !newUser.username || !newUser.password} onClick={createUser}><Plus size={14}/> {t('Create user')}</button>
         </div>
-      </div>}
-    </section>;
+      </section>
+    </>;
   }
 
   function renderStandaloneEditor() {

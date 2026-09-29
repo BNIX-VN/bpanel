@@ -249,14 +249,20 @@ def test_the_routes_are_admin_only_and_the_password_stays_out_of_the_job():
 
 
 def test_the_restore_tab_asks_source_details_users_then_the_button():
-    tab = APP.split("activeBackupTab === 'restore' &&")[1].split("activeBackupTab === 'destination' &&")[0]
-    steps = ["Source", "restoreStepTwo", "Accounts to restore", "restore-step-no\">4</span>{t('Restore')}"]
+    """OPanel's restore wizard: the source tiles, what that source needs, the
+    accounts, then the button. Upload backups sits in step 2 of every source
+    and puts the archives into the source picked in step 1."""
+    assert "{isAdmin && activeBackupTab === 'restore' && renderRestoreWizard()}" in APP
+    tab = APP.split("  function renderRestoreWizard() {")[1].split("\n  function ")[0]
+    steps = ["{t('Source')}", "{t(restoreStepTwo)}", "{t('Accounts to restore')}", "restore-step-no\">4</span>{t('Restore')}"]
     positions = [tab.index(step) for step in steps]
     assert positions == sorted(positions), "the four steps, in the operator's order"
-    assert "{ local: 'Backups on this server', target: 'Backup Destination', remote: 'Connection' }" in APP
+    assert "{ local: 'Backups on this server', target: 'Destination', remote: 'Connection' }" in tab
     for kind in ("local", "target", "remote"):
         block = tab.split(f"{{restoreSource === '{kind}' && ")[1][:4000]
-        assert "{restoreTools}" in block, f"step 2 of {kind} has Upload backup + Refresh"
+        assert "{restoreUpload}" in block, f"step 2 of {kind} has Upload backups"
+    assert "{restoreRefresh}" in tab.split("{restoreSource === 'local' && ")[1][:1500]
+    assert "listRestoreSource('remote')" in tab, "the remote form lists the backups on submit"
     assert "'/maintenance/restore/list'" in APP and "'/maintenance/restore/run'" in APP
     assert "restore-catalogue" not in APP and "restore-bulk" not in APP
 
