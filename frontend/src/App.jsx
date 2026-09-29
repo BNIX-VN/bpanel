@@ -838,6 +838,8 @@ function App() {
   // Optional features. Until this has loaded nothing addon-owned is offered, so
   // a slow first request cannot flash a section that turns out not to be there.
   const [addons, setAddons] = useState({ items: [], can_manage: false, loaded: false });
+  // The addon card whose details and panel are open on the Addons page.
+  const [addonOpen, setAddonOpen] = useState('');
   // Demo mode addon: the accounts the login page offers, and the form that picks them.
   const [demoAccess, setDemoAccess] = useState({ enabled: false, accounts: [] });
   const [demoSettings, setDemoSettings] = useState(null);
@@ -2947,7 +2949,16 @@ function App() {
   async function setAddonInstalled(slug, install) {
     const addon = addons.items.find(item => item.slug === slug);
     const label = addon?.name || slug;
-    if (!install && !confirm(t('Remove the {name} addon? Anything it runs is stopped; its data stays where it is, and installing it again picks up from there.', { name: t(label) }))) return;
+    if (!install) {
+      // Removing an addon takes what it does away, so the admin types its
+      // name rather than clicking through a generic confirm. The name shown
+      // (in either language) or the slug is accepted.
+      const typed = window.prompt(t('Remove {name} and stop what it is doing?\n\nType the addon name to confirm:', { name: t(label) }));
+      if (typed === null) return;
+      const answer = typed.trim().toLowerCase();
+      const accepted = [label, t(label), slug].map(name => String(name || '').trim().toLowerCase());
+      if (!accepted.includes(answer)) { setError(t('Name did not match; nothing was removed.')); return; }
+    }
     const data = await request(`/addons/${slug}/${install ? 'install' : 'uninstall'}`, { method: 'POST' },
       install ? t('Installing {name}...', { name: t(label) }) : t('Removing {name}...', { name: t(label) }));
     if (data) {
@@ -5355,10 +5366,7 @@ function App() {
 
   function ResourceCard({ icon: Icon, label, value, detail, percent }) {
     const safePercent = percent == null ? null : clampPercent(percent);
-    // Amber from 80%, red from 90%: a disk at 93% should not look like one at
-    // 30%. Named level-* because .danger and .warn are a button and a badge.
-    const level = safePercent == null ? '' : safePercent >= 90 ? ' level-critical' : safePercent >= 80 ? ' level-warn' : '';
-    return <article className={`resource-card${level}`}>
+    return <article className="resource-card">
       <div className="resource-head"><span className="resource-icon"><Icon size={16}/></span><span>{label}</span></div>
       <strong>{value}</strong>
       {/* A meter without a percentage keeps an empty track, so every card's
@@ -5407,7 +5415,7 @@ function App() {
       const backups = sum.backups;
       cards.push({ key: 'backups', icon: Archive, label: t('Backups'),
         value: backups?.last_run_at ? shortDate(backups.last_run_at) : '—',
-        detail: !backups ? t('Checking...') : !backups.schedules ? t('No schedule') : backups.failed ? t('Last run failed') : t('{n} schedule(s)', { n: backups.schedules }),
+        detail: !backups ? t('Checking…') : !backups.schedules ? t('No schedule') : backups.failed ? t('Last run failed') : t('{n} schedule(s)', { n: backups.schedules }),
         tone: !backups ? 'neutral' : !backups.schedules ? 'warn' : backups.failed ? 'bad' : 'ok' });
       const firewallOn = sum.firewall?.enabled;
       cards.push({ key: 'firewall', icon: BrickWall, label: t('Firewall'),
@@ -5415,18 +5423,18 @@ function App() {
         tone: firewallOn === true ? 'ok' : firewallOn === false ? 'bad' : 'neutral' });
       const engine = sum.waf?.engine;
       cards.push({ key: 'waf', icon: ShieldAlert, label: 'WAF',
-        value: engine === 'on' ? t('On') : engine === 'off' ? t('Not installed') : '—', detail: t('ModSecurity engine'),
+        value: engine === 'on' ? t('On') : engine === 'off' ? t('Off') : '—', detail: t('ModSecurity engine'),
         tone: engine === 'on' ? 'ok' : engine === 'off' ? 'warn' : 'neutral' });
       const scanner = sum.malware;
       const lastScan = scanner?.last_scan;
       cards.push({ key: 'malware', icon: Bug, label: t('Malware scanner'),
-        value: !scanner ? '—' : scanner.addon === false ? t('Addon off') : !scanner.installed ? t('Not installed') : lastScan?.infected ? t('{n} threat(s)', { n: lastScan.infected }) : lastScan ? t('Clean') : t('No scan yet'),
-        detail: scanner?.addon === false ? t('Install it on the Addons page') : scanner?.running ? t('Scanning...') : lastScan ? t('Last scan {when}', { when: shortDate(lastScan.finished_at) }) : t('Last scan'),
+        value: !scanner ? '—' : scanner.addon === false ? t('Off') : !scanner.installed ? t('Not installed') : lastScan?.infected ? t('{n} threat(s)', { n: lastScan.infected }) : lastScan ? t('Clean') : t('No scan yet'),
+        detail: scanner?.addon === false ? t('Not installed') : scanner?.running ? t('Scanning...') : lastScan ? shortDate(lastScan.finished_at) : t('Last scan'),
         tone: !scanner || scanner.addon === false ? 'neutral' : !scanner.installed ? 'warn' : lastScan?.infected ? 'bad' : lastScan ? 'ok' : 'neutral' });
       const services = sum.services;
       cards.push({ key: 'services', icon: Activity, label: t('Services'),
         value: services ? `${services.running}/${services.total}` : '—',
-        detail: services?.stopped?.length ? t('Stopped: {names}', { names: services.stopped.join(', ') }) : services ? t('All running') : t('Checking...'),
+        detail: services?.stopped?.length ? t('Stopped: {names}', { names: services.stopped.join(', ') }) : services ? t('All running') : t('Checking…'),
         tone: !services ? 'neutral' : services.stopped?.length ? 'bad' : 'ok' });
     } else {
       cards.push(sslCard);
@@ -5435,38 +5443,39 @@ function App() {
         detail: !sites.total ? t('No websites yet') : wafOn === sites.total ? t('On for every website') : t('{n} website(s) without WAF', { n: sites.total - wafOn }),
         tone: !sites.total ? 'neutral' : wafOn === sites.total ? 'ok' : 'warn' });
       const twoFactor = !!currentUser?.totp_enabled;
-      cards.push({ key: 'security', icon: LockKeyhole, label: t('Two-factor sign-in'),
-        value: twoFactor ? t('On') : t('Off'), detail: t('Account security'), tone: twoFactor ? 'ok' : 'warn' });
+      cards.push({ key: 'security', icon: LockKeyhole, label: t('Account security'),
+        value: twoFactor ? t('On') : t('Off'), detail: t('Two-factor sign-in'), tone: twoFactor ? 'ok' : 'warn' });
     }
 
-    // Only what is actually wrong, worst first, each with a way to the page
-    // that fixes it.
+    // Things that want a look, most urgent first.
     const attention = [];
-    const flag = (tone, text, target, action = t('Open'), icon = AlertCircle) => attention.push({ tone, text, target, action, icon });
-    if (isAdmin && sum.services?.stopped?.length) flag('bad', t('Stopped: {names}', { names: sum.services.stopped.join(', ') }), 'services');
-    if (isAdmin && sum.firewall?.enabled === false) flag('bad', t('The firewall is off.'), 'firewall');
-    if (isAdmin && sum.malware?.last_scan?.infected) flag('bad', t('The last malware scan found {n} threat(s).', { n: sum.malware.last_scan.infected }), 'malware');
-    if (isAdmin && sum.backups?.failed) flag('bad', t('{n} scheduled backup(s) failed on their last run.', { n: sum.backups.failed }), 'backups');
-    if (ssl.unsecured_count) flag('warn', t('{n} website(s) without SSL: {domains}', {
-      n: ssl.unsecured_count, domains: ssl.unsecured.join(', ') + (ssl.unsecured_count > ssl.unsecured.length ? ', ...' : ''),
-    }), 'ssl', t('Install SSL'));
-    if (sites.suspended) flag('warn', t('{n} website(s) suspended.', { n: sites.suspended }), 'websites');
-    if (isAdmin && sum.backups && !sum.backups.schedules) flag('warn', t('No scheduled backup is set up.'), 'backups', t('Set up'));
-    if (isAdmin && sum.waf?.engine === 'off') flag('warn', t('The WAF engine is not installed.'), 'waf');
-    if (isAdmin && sum.malware?.addon && !sum.malware.installed) flag('warn', t('The malware scanner is not installed.'), 'malware');
-    if (!isAdmin && currentUser && !currentUser.totp_enabled) flag('info', t('Two-factor sign-in is off for your account.'), 'security', t('Turn on'), LockKeyhole);
-    if (isAdmin && sum.updates?.update_available) flag('info', t('Panel update {version} is available.', { version: sum.updates.latest_version }), 'updates', t('Open'), RefreshCw);
+    if (isAdmin && sum.services?.stopped?.length) attention.push({ tone: 'bad', text: t('Stopped: {names}', { names: sum.services.stopped.join(', ') }), action: t('Open'), target: 'services' });
+    if (isAdmin && sum.firewall?.enabled === false) attention.push({ tone: 'bad', text: t('The firewall is off.'), action: t('Open'), target: 'firewall' });
+    if (isAdmin && sum.malware?.last_scan?.infected) attention.push({ tone: 'bad', text: t('The last malware scan found {n} threat(s).', { n: sum.malware.last_scan.infected }), action: t('Open'), target: 'malware' });
+    if (isAdmin && sum.backups?.failed) attention.push({ tone: 'bad', text: t('{n} scheduled backup(s) failed on their last run.', { n: sum.backups.failed }), action: t('Open'), target: 'backups' });
+    if (ssl.unsecured_count) attention.push({ tone: 'warn', text: t('{n} website(s) without SSL: {domains}', {
+      n: ssl.unsecured_count, domains: ssl.unsecured.join(', ') + (ssl.unsecured_count > ssl.unsecured.length ? '…' : ''),
+    }), action: t('Set up SSL'), target: 'ssl' });
+    if (sites.suspended) attention.push({ tone: 'warn', text: t('{n} website(s) suspended.', { n: sites.suspended }), action: t('Open'), target: 'websites' });
+    if (isAdmin && sum.backups && !sum.backups.schedules) attention.push({ tone: 'warn', text: t('No scheduled backup is set up.'), action: t('Set up'), target: 'backups' });
+    if (isAdmin && sum.waf?.engine === 'off') attention.push({ tone: 'warn', text: t('The WAF engine is not installed.'), action: t('Open'), target: 'waf' });
+    // An addon that is off is not a fault: only the scanner's addon being on
+    // while LMD and ClamAV are missing wants a look.
+    if (isAdmin && sum.malware?.addon && !sum.malware.installed) attention.push({ tone: 'warn', text: t('The malware scanner is not installed.'), action: t('Open'), target: 'malware' });
+    if (!isAdmin && currentUser && !currentUser.totp_enabled) attention.push({ tone: 'info', text: t('Two-factor sign-in is off for your account.'), action: t('Turn on'), target: 'security' });
+    if (isAdmin && sum.updates?.update_available) attention.push({ tone: 'info', text: t('Panel update {version} is available.', { version: sum.updates.latest_version }), action: t('Open'), target: 'updates' });
 
     // The create forms open with the page, so "New website" is one click.
     const quickActions = [
       { key: 'site', icon: Plus, label: t('New website'), primary: true, run: () => { setCreateFormOpen(true); navigateToPage('websites'); } },
       { key: 'db', icon: Database, label: t('New database'), run: () => { setDbCreateOpen(true); navigateToPage('databases'); } },
-      { key: 'ssl', icon: Lock, label: t('Install SSL'), run: () => navigateToPage('ssl') },
+      { key: 'ssl', icon: Lock, label: t('Set up SSL'), run: () => navigateToPage('ssl') },
       { key: 'backup', icon: Archive, label: t('Back up a website'), run: () => navigateToPage('backups') },
       { key: 'sftp', icon: KeyRound, label: t('New SFTP account'), run: () => {
         navigateToPage('sftp');
         window.setTimeout(() => document.querySelector('.sftp-form input')?.focus(), 150);
       } },
+      ...(mailAddonInstalled ? [{ key: 'mail', icon: Mail, label: t('New mailbox'), run: () => { setMailTab('mailboxes'); navigateToPage('mail'); } }] : []),
       ...(isAdmin ? [{ key: 'users', icon: Users, label: t('Panel users'), run: () => navigateToPage('users') }] : []),
     ];
 
@@ -5477,7 +5486,7 @@ function App() {
           <ResourceCard icon={Cpu} label="CPU" value={formatPercent(cpu.percent)} percent={cpu.percent} detail={cpu.load?.length ? t('Load {load}', { load: cpu.load.join(' / ') }) : t('{count} cores', { count: cpu.cores || '--' })} />
           <ResourceCard icon={MemoryStick} label="RAM" value={formatPercent(memory.percent)} percent={memory.percent} detail={`${formatBytes(memory.used)} / ${formatBytes(memory.total)}`} />
           <ResourceCard icon={HardDrive} label={t('Disk')} value={formatPercent(disk.percent)} percent={disk.percent} detail={`${formatBytes(disk.used)} / ${formatBytes(disk.total)}`} />
-          <ResourceCard icon={Network} label={t('Network')} value={`${formatBytes(networkTotal)}/s`} detail={t('Down {down}/s · Up {up}/s', { down: formatBytes(network.rx_per_sec), up: formatBytes(network.tx_per_sec) })} />
+          <ResourceCard icon={Network} label={t('Network')} value={`${formatBytes(networkTotal)}/s`} detail={t('Down {down}/s / Up {up}/s', { down: formatBytes(network.rx_per_sec), up: formatBytes(network.tx_per_sec) })} />
         </div>
       </section>}
       {/* A customer never sees the server's meters; their counterpart is how
@@ -5511,10 +5520,10 @@ function App() {
         <section className="section dash-card">
           <div className="dash-card-head"><span className="dash-card-icon"><AlertCircle size={16}/></span><h2>{t('Needs attention')}</h2></div>
           {attention.length === 0
-            ? <div className="attention-ok"><CheckCircle size={16}/>{dashSummary ? t('Everything looks fine.') : t('Checking...')}</div>
+            ? <div className="attention-ok"><CheckCircle size={16}/> {dashSummary ? t('Everything looks fine.') : t('Checking…')}</div>
             : <div className="attention-list">
                 {attention.map(item => <div className={`attention-item tone-${item.tone}`} key={item.text}>
-                  <item.icon size={15}/>
+                  {item.tone === 'info' ? <RefreshCw size={15}/> : <AlertCircle size={15}/>}
                   <span>{item.text}</span>
                   <button type="button" className="mini secondary" onClick={() => navigateToPage(item.target)}>{item.action}</button>
                 </div>)}
@@ -5523,7 +5532,7 @@ function App() {
         <section className="section dash-card">
           <div className="dash-card-head"><span className="dash-card-icon"><Zap size={16}/></span><h2>{t('Quick actions')}</h2></div>
           <div className="quick-actions">
-            {quickActions.map(action => <button type="button" key={action.key} className={action.primary ? '' : 'secondary'} onClick={action.run}><action.icon size={15}/>{action.label}</button>)}
+            {quickActions.map(action => <button type="button" key={action.key} className={action.primary ? '' : 'secondary'} onClick={action.run}><action.icon size={15}/> {action.label}</button>)}
           </div>
         </section>
       </div>
@@ -5535,11 +5544,8 @@ function App() {
     // They stay reachable by URL, so they say so plainly instead of rendering
     // and firing a page full of requests the server will refuse.
     return <section className="section">
-      <div className="section-title"><div><h2>{t('Administrators only')}</h2></div></div>
-      <EmptyState
-        icon={Server}
-        message={t('This page reports on the server itself, so only administrators can see it.')}
-      />
+      <h2>{t('Administrators only')}</h2>
+      <div className="info-box"><AlertCircle size={14}/> {t('This page reports on the server itself, so only administrators can see it.')}</div>
     </section>;
   }
 
@@ -5716,17 +5722,15 @@ function App() {
     const addon = addons.items.find(item => item.slug === slug);
     const name = addon?.name || 'Application';
     const installed = !!addon?.installed;
+    // Until the list is in, which addon is missing is not known yet.
+    if (!addons.loaded) return <section className="section"><p className="hint">{t('Loading…')}</p></section>;
     return <section className="section">
-      <div className="section-title"><div><h2>{t(name)}</h2></div></div>
-      <EmptyState
-        icon={Boxes}
-        message={slug === 'application' && installed
-          ? t('Your package does not include Applications. Contact an administrator to upgrade.')
-          : t('The {name} addon is not installed on this server.', { name: t(name) })}
-      />
-      {isAdmin && !installed && <div className="site-app-form-actions">
-        <button disabled={!!loading} onClick={() => navigateToPage('addons')}><Boxes size={14}/>{t('Go to Addons')}</button>
-      </div>}
+      <h2>{t(name)}</h2>
+      <div className="info-box"><AlertCircle size={14}/> {slug === 'application' && installed
+        ? t('Your package does not include Applications. Contact an administrator to upgrade.')
+        : isAdmin ? t('The {name} addon is not installed. Install it on the Addons page.', { name: t(name) })
+          : t('{name} is not available on this server.', { name: t(name) })}</div>
+      {isAdmin && !installed && <div className="actions"><button onClick={() => navigateToPage('addons')}><PackageOpen size={14}/> {t('Open Addons')}</button></div>}
     </section>;
   }
 
@@ -6638,72 +6642,125 @@ function App() {
   function renderDemoAccounts() {
     const candidates = demoSettings?.candidates || { admin: [], customer: [] };
     const setSlot = (slot, field, value) => setDemoDraft(prev => ({ ...prev, [slot]: { ...prev[slot], [field]: value } }));
-    return <div className="demo-accounts">
-      <strong>{t('Demo accounts')}</strong>
-      <p className="hint">{t('Visitors sign in with these from the login page. The passwords are shown to everyone, so pick accounts that exist only for the demo.')}</p>
-      {[['admin', 'Administrator'], ['customer', 'Customer']].map(([slot, label]) => <div className="demo-account-row" key={slot}>
-        <label><span>{t(label)}</span>
-          <select value={demoDraft[slot].username} disabled={!!loading} onChange={e => setSlot(slot, 'username', e.target.value)}>
-            <option value="">{t('Not offered')}</option>
-            {/* Not yourself - the server refuses it - unless you are looking at it from the
-                demo account itself, which must still show what is chosen. */}
-            {(candidates[slot] || []).filter(name => name !== currentUser?.username || name === demoDraft[slot].username).map(name => <option key={name} value={name}>{name}</option>)}
-          </select>
-        </label>
-        <label><span>{t('Password shown on the login page')}</span>
-          <input value={demoDraft[slot].password} disabled={!!loading || !demoDraft[slot].username} onChange={e => setSlot(slot, 'password', e.target.value)} placeholder={t('At least 6 characters')} autoComplete="off" spellCheck={false} data-lpignore="true" data-1p-ignore="true"/>
-        </label>
+    // BPanel offers two fixed places, an administrator and a customer; each is
+    // left empty or given an account and the password the login page shows.
+    const slots = [['admin', 'Administrator'], ['customer', 'Customer']];
+    const tooShort = slots.some(([slot]) => demoDraft[slot].username && demoDraft[slot].password.length < 6);
+    return <div className="addon-panel demo-settings">
+      <div className="addon-panel-head"><strong>{t('Demo accounts')}</strong></div>
+      <p className="hint">{t('Each demo account can open every page its role allows and change nothing. Use accounts made for the demo, on a server with sample data only.')}</p>
+      {slots.map(([slot, label]) => <div className="demo-account-row" key={slot}>
+        <select value={demoDraft[slot].username} disabled={!!loading} onChange={e => setSlot(slot, 'username', e.target.value)} aria-label={t(label)}>
+          <option value="">{t('{role}: not offered', { role: t(label) })}</option>
+          {/* Not yourself - the server refuses it - unless you are looking at it from the
+              demo account itself, which must still show what is chosen. */}
+          {(candidates[slot] || []).filter(name => name !== currentUser?.username || name === demoDraft[slot].username).map(name => <option key={name} value={name}>{name} ({t(label)})</option>)}
+        </select>
+        <input value={demoDraft[slot].password} disabled={!!loading || !demoDraft[slot].username} onChange={e => setSlot(slot, 'password', e.target.value)}
+          placeholder={t('Public password (6+ characters)')} aria-label={t('Public password')} autoComplete="off" spellCheck={false} data-lpignore="true" data-1p-ignore="true"/>
+        <button type="button" className="mini secondary-light icon-only" aria-label={t('Generate')} title={t('Generate')} disabled={!!loading || !demoDraft[slot].username}
+          onClick={() => setSlot(slot, 'password', generateRandomPassword(16))}><Dices size={14}/></button>
       </div>)}
-      <div className="addon-actions">
-        <button disabled={!!loading} onClick={saveDemoAccounts}><Save size={14}/>{t('Save demo accounts')}</button>
+      <p className="hint">{t('The login page shows these accounts and their passwords to everyone, with a one-click sign-in.')}</p>
+      <div className="actions">
+        <button type="button" disabled={!!loading || tooShort} onClick={saveDemoAccounts}>
+          <Save size={14}/> {t('Save demo accounts')}</button>
       </div>
     </div>;
   }
 
   function renderAddons() {
+    if (!isAdmin) return <section className="section"><h2>{t('Addons')}</h2><p className="hint">{t('No permission.')}</p></section>;
+    const openMail = tab => { setMailTab(tab); navigateToPage('mail'); };
     return <section className="section">
       <div className="section-title">
         <div>
           <h2>{t('Addons')}</h2>
-          <p className="hint">
-            {t('The parts that are not in a default install. Add what you need, remove what you do not — removing turns the feature off and deletes nothing it created.')}
-          </p>
+          <p className="hint">{t('Optional components this panel release can install for you. Each one ships with the panel, so a new addon arrives with a panel update.')}</p>
         </div>
-        <button className="secondary-light" disabled={!!loading} onClick={loadAddons}><RefreshCw size={14}/>{t('Refresh')}</button>
+        <button className="secondary-light" disabled={!!loading} onClick={loadAddons}><RefreshCw size={14}/> {t('Refresh')}</button>
       </div>
-      <div className="addon-list">
-        {addons.items.map(addon => <div className={`addon-card ${addon.installed ? 'installed' : ''}`} key={addon.slug}>
-          <div className="addon-head">
-            <strong>{t(addon.name)}</strong>
-            <code>v{addon.installed ? (addon.installed_version || addon.version) : addon.version}</code>
-            <span className={`badge ${addon.installed ? 'ok' : ''}`}>{addon.installed ? t('Installed') : t('Not installed')}</span>
-            {addon.installed && addon.installed_version && addon.installed_version !== addon.version
-              && <span className="badge">v{addon.version} available</span>}
-          </div>
-          <p className="addon-summary">{t(addon.summary)}</p>
-          {/* The card is the summary and the button; what it installs and
-              what to know first are one click away rather than a page. */}
-          {(addon.details?.length > 0 || addon.notes?.length > 0) && <details className="addon-more">
-            <summary>{t('Details')}</summary>
-            {addon.details?.length > 0 && <ul className="addon-details">
-              {addon.details.map((line, index) => <li key={index}>{t(line)}</li>)}
-            </ul>}
-            {addon.notes?.length > 0 && <div className="addon-notes">
-              <strong><AlertCircle size={13}/>{t('Worth knowing first')}</strong>
-              <ul>{addon.notes.map((line, index) => <li key={index}>{t(line)}</li>)}</ul>
+
+      {addons.loaded && addons.items.length === 0 && <p className="hint">{t('No addons in this release.')}</p>}
+
+      <div className="addon-grid">
+        {addons.items.map(addon => {
+          const open = addonOpen === addon.slug;
+          // BPanel installs and removes within the request and has no
+          // start/stop, so an addon is installed or it is not.
+          const stateBadge = addon.installed
+            ? <span className="badge ok">{t('Installed')}</span>
+            : <span className="badge">{t('Not installed')}</span>;
+          const version = addon.installed ? (addon.installed_version || addon.version) : addon.version;
+          const installedAt = addon.installed_at ? new Date(addon.installed_at) : null;
+          return <div className="addon-card" key={addon.slug}>
+            <div className="addon-card-head">
+              <div className="addon-card-title">
+                <PackageOpen size={16}/>
+                <strong>{t(addon.name)}</strong>
+                {version && <span className="hint addon-version">v{version}</span>}
+              </div>
+              {stateBadge}
+            </div>
+            <p className="addon-summary">{t(addon.summary)}</p>
+            {addon.installed && addon.installed_version && addon.installed_version !== addon.version &&
+              <p className="hint">{t('v{version} available', { version: addon.version })}</p>}
+            {addon.installed && installedAt && <p className="hint">{t('Installed')} {Number.isNaN(installedAt.getTime()) ? addon.installed_at : installedAt.toLocaleString()}</p>}
+
+            <div className="actions addon-actions">
+              {!addon.installed && <button disabled={!!loading} onClick={() => setAddonInstalled(addon.slug, true)}>
+                <Download size={14}/> {t('Install')}</button>}
+              {/* What an addon installs and what to know first can be read
+                  before installing it, not only in Manage afterwards. */}
+              <button className="secondary-light" disabled={!!loading} onClick={() => setAddonOpen(open ? '' : addon.slug)}>
+                {addon.installed ? <SettingsIcon size={14}/> : <FileText size={14}/>} {open ? t('Hide') : addon.installed ? t('Manage') : t('Details')}</button>
+              {addon.installed && <button className="danger-light" disabled={!!loading}
+                onClick={() => setAddonInstalled(addon.slug, false)}><Trash2 size={14}/> {t('Remove')}</button>}
+            </div>
+
+            {open && <div className="addon-detail">
+              {addon.details?.length > 0 && <p className="addon-description">{addon.details.map(line => t(line)).join(' ')}</p>}
+              {addon.notes?.length > 0 && <ul className="addon-notes">
+                {addon.notes.map((note, idx) => <li key={idx}>{t(note)}</li>)}
+              </ul>}
+              {addon.slug === 'application' && addon.installed && <div className="addon-panel">
+                <div className="addon-panel-head"><strong>{t('Node.js apps, containers and Docker Compose')}</strong>
+                  <button className="mini" onClick={() => navigateToPage('applications')}><Boxes size={13}/> {t('Open Applications')}</button></div>
+              </div>}
+              {addon.slug === 'fail2ban' && addon.installed && <div className="addon-panel">
+                <div className="addon-panel-head"><strong>{t('Status and banned addresses')}</strong>
+                  <button className="mini" onClick={() => navigateToPage('firewall')}><Shield size={13}/> {t('Open Firewall')}</button></div>
+              </div>}
+              {addon.slug === 'mcp' && addon.installed && <div className="addon-panel">
+                <div className="addon-panel-head"><strong>{t('Tokens and client setup')}</strong>
+                  <button className="mini" onClick={() => navigateToPage('mcp')}><Bot size={13}/> {t('Open AI assistants (MCP)')}</button></div>
+                <p className="hint">{t('Endpoint:')} <code>{`${window.location.origin}/api/mcp`}</code></p>
+              </div>}
+              {addon.slug === 'demo' && addon.installed && renderDemoAccounts()}
+              {addon.slug === 'mail' && addon.installed && <div className="addon-panel">
+                <div className="addon-panel-head"><strong>{t('Mailboxes, relays, the spam filter and server settings')}</strong></div>
+                <div className="actions">
+                  <button type="button" className="mini" onClick={() => openMail('mailboxes')}><Mail size={13}/> {t('Open Email')}</button>
+                  <button type="button" className="mini secondary" onClick={() => openMail('relay')}><Send size={13}/> {t('Relays')}</button>
+                  <button type="button" className="mini secondary" onClick={() => openMail('rspamd')}><ShieldCheck size={13}/> Rspamd</button>
+                  <button type="button" className="mini secondary" onClick={() => openMail('server')}><Server size={13}/> {t('Server')}</button>
+                </div>
+              </div>}
+              {addon.slug === 'dns' && addon.installed && <div className="addon-panel">
+                <div className="addon-panel-head"><strong>{t('Zones, records and nameservers')}</strong>
+                  <button className="mini" onClick={() => navigateToPage('dns')}><Network size={13}/> {t('Open DNS Manager')}</button></div>
+              </div>}
+              {addon.slug === 'malware' && addon.installed && <div className="addon-panel">
+                <div className="addon-panel-head"><strong>{t('Scans, schedules and real-time protection')}</strong>
+                  <button className="mini" onClick={() => navigateToPage('malware')}><Bug size={13}/> {t('Open Malware Scanner')}</button></div>
+              </div>}
+              {addon.slug === 'notifications' && addon.installed && <div className="addon-panel">
+                <div className="addon-panel-head"><strong>{t('Channels, recipients and events')}</strong>
+                  <button className="mini" onClick={() => navigateToPage('notifications')}><Bell size={13}/> {t('Open Notifications')}</button></div>
+              </div>}
             </div>}
-          </details>}
-          {addons.can_manage && <div className="addon-actions">
-            {addon.installed
-              ? <>
-                  {addon.slug === 'application' && <button className="secondary-light" disabled={!!loading} onClick={() => navigateToPage('applications')}>{t('Open')} {t(addon.name)}</button>}
-                  <button className="danger" disabled={!!loading} onClick={() => setAddonInstalled(addon.slug, false)}><Trash2 size={14}/>{t('Remove')}</button>
-                </>
-              : <button disabled={!!loading} onClick={() => setAddonInstalled(addon.slug, true)}><Download size={14}/>{t('Install')}</button>}
-          </div>}
-          {addon.slug === 'demo' && addon.installed && addons.can_manage && renderDemoAccounts()}
-        </div>)}
-        {addons.loaded && addons.items.length === 0 && <EmptyState icon={Boxes} message={t('No addons yet.')} />}
+          </div>;
+        })}
       </div>
     </section>;
   }
@@ -8360,11 +8417,8 @@ function App() {
   function renderServices() {
     return <section className="section">
       <div className="section-title">
-        <div>
-          <h2>{t('Services')}</h2>
-          <p className="hint">{t('Auto-refreshes every 10s')}</p>
-        </div>
-        <button className="secondary" disabled={!!loading} onClick={checkAllServices}><RefreshCw size={15}/>{t('Refresh')}</button>
+        <div><h2>{t('Services')}</h2><p className="hint">{t('Auto-refreshes every 10s')}</p></div>
+        <button className="secondary" disabled={!!loading} onClick={checkAllServices}><RefreshCw size={15}/> {t('Refresh')}</button>
       </div>
       {/* A running service's Start and a stopped one's Stop are disabled, so
           the enabled button is the obvious next step. */}
@@ -8378,9 +8432,9 @@ function App() {
           return <div className="service-card" key={name}>
             <div><strong>{name}</strong><span className={active ? 'badge ok' : inactive ? 'badge bad' : 'badge'}>{active ? t('Running') : inactive ? t('Stopped') : '...'}</span></div>
             {isAdmin && <div className="service-actions">
-              <button className="secondary" disabled={active} onClick={() => runServiceAction(name, 'start')}><Play size={13}/>{t('Start')}</button>
-              {canStop && <button className="danger-light" disabled={inactive} onClick={() => runServiceAction(name, 'stop')}><Square size={13}/>{t('Stop')}</button>}
-              <button className="secondary" onClick={() => runServiceAction(name, 'restart')}><RotateCcw size={13}/>{t('Restart')}</button>
+              <button className="secondary" disabled={active} onClick={() => runServiceAction(name, 'start')}><Play size={13}/> {t('Start')}</button>
+              {canStop && <button className="danger-light" disabled={inactive} onClick={() => runServiceAction(name, 'stop')}><Square size={13}/> {t('Stop')}</button>}
+              <button className="secondary" onClick={() => runServiceAction(name, 'restart')}><RotateCcw size={13}/> {t('Restart')}</button>
             </div>}
           </div>;
         })}
@@ -9102,38 +9156,42 @@ function App() {
 
   function renderUpdates() {
     if (!isAdmin) return <section className="section"><h2>{t('Updates')}</h2><p className="hint">{t('No permission.')}</p></section>;
-    const statusText = updatesStatus?.stdout || updatesStatus?.stderr || 'Click View logs to load update logs.';
+    const statusText = updatesStatus?.stdout || updatesStatus?.stderr || t('Click View logs to load update logs.');
     const panelUpdate = updatesStatus?.panel || {};
-    const updateKnown = typeof panelUpdate.update_available === 'boolean';
-    const updateAvailable = panelUpdate.update_available === true;
-    const panelBadge = updateAvailable ? 'Update available' : updateKnown ? 'Up to date' : 'Unknown';
-    const panelBadgeClass = updateAvailable ? 'badge bad' : updateKnown ? 'badge ok' : 'badge';
-    const currentPanelVersion = panelUpdate.current_version || appVersion || 'unknown';
-    const latestPanelVersion = panelUpdate.latest_version || 'unknown';
+    // Three states, not two. `update_available` is null when the release check
+    // could not tell, and "unknown" must not be dressed up as "up to date".
+    const hasUpdate = panelUpdate.update_available;
+    const panelBadge = hasUpdate === true ? t('Update available')
+      : hasUpdate === false ? t('Up to date') : t('Unknown');
+    const panelBadgeClass = hasUpdate === true ? 'badge warn'
+      : hasUpdate === false ? 'badge ok' : 'badge';
+    const currentPanelVersion = panelUpdate.current_version || appVersion || '';
+    const latestPanelVersion = panelUpdate.latest_version || '';
     return <>
       <section className="section">
         <div className="section-title">
-          <div><h2>{t('Updates')}</h2><p className="hint">{t('OS packages use apt; panel updates use')}{' '}<code>bpanel-update</code>.</p></div>
-          <button className="secondary-light" disabled={!!loading} onClick={toggleUpdateLog}>{showUpdateLog ? <X size={14}/> : <FileText size={14}/>} {showUpdateLog ? 'Hide logs' : 'View logs'}</button>
+          <div><h2>{t('Updates')}</h2><p className="hint">{t('OS packages use apt; panel updates use')} <code>bpanel-update</code>.</p></div>
+          <button className="secondary-light" disabled={!!loading} onClick={toggleUpdateLog}>{showUpdateLog ? <X size={14}/> : <FileText size={14}/>} {showUpdateLog ? t('Hide logs') : t('View logs')}</button>
         </div>
         <div className="info-box update-version-box">
           <div className="update-version-head"><strong>{t('Panel release')}</strong><span className={panelBadgeClass}>{panelBadge}</span></div>
           <div className="update-version-grid">
-            <span>{t('Current')}{' '}<strong>v{currentPanelVersion}</strong></span>
-            <span>{t('Latest')}{' '}<strong>{latestPanelVersion === 'unknown' ? 'unknown' : `v${latestPanelVersion}`}</strong></span>
-            <span>{t('Checked')}{' '}<strong>{panelUpdate.last_checked_at || 'never'}</strong></span>
-            <span>{t('State file')}{' '}<strong>{panelUpdate.state_file || '/var/lib/bpanel/update-status.json'}</strong></span>
+            <span>{t('Current')} <strong>{currentPanelVersion ? `v${currentPanelVersion}` : t('unknown')}</strong></span>
+            <span>{t('Latest')} <strong>{latestPanelVersion ? `v${latestPanelVersion}` : t('unknown')}</strong></span>
+            <span>{t('Checked')} <strong>{panelUpdate.last_checked_at || t('never')}</strong></span>
+            <span>{t('State file')} <strong>{panelUpdate.state_file || '/var/lib/bpanel/update-status.json'}</strong></span>
           </div>
           {panelUpdate.check_error && <p className="hint">{t('Release check failed:')} {panelUpdate.check_error}</p>}
-          {panelUpdate.last_update_status && <p className="hint">{t('Last update:')} {panelUpdate.last_update_status}{panelUpdate.last_update_ref ? ` (${panelUpdate.last_update_ref})` : ''}{panelUpdate.last_update_finished_at ? ` at ${panelUpdate.last_update_finished_at}` : ''}</p>}
+          {panelUpdate.last_update_status && <p className="hint">{t('Last update:')} {panelUpdate.last_update_status}{panelUpdate.last_update_ref ? ` (${panelUpdate.last_update_ref})` : ''}{panelUpdate.last_update_finished_at ? t(' at {when}', { when: panelUpdate.last_update_finished_at }) : ''}</p>}
         </div>
         <div className="actions">
-          <button className="secondary-light" disabled={!!loading} onClick={() => loadUpdates(true)}><RefreshCw size={14}/>{t('Check releases')}</button>
-          <button disabled={!!loading || osUpdating} onClick={runOsUpdate}><RefreshCw size={14} className={osUpdating ? 'spin' : ''}/> {osUpdating ? 'Updating OS...' : 'Update OS now'}</button>
-          <button disabled={!!loading || panelUpdating || !updateAvailable} onClick={runPanelUpdate}><RotateCcw size={14} className={panelUpdating ? 'spin' : ''}/> {panelUpdating ? 'Updating panel...' : 'Update panel now'}</button>
+          <button className="secondary-light" disabled={!!loading} onClick={() => loadUpdates(true)}><RefreshCw size={14}/> {t('Refresh status')}</button>
+          <button className="secondary" disabled={!!loading || osUpdating} onClick={runOsUpdate}><RefreshCw size={14} className={osUpdating ? 'spin' : ''}/> {osUpdating ? t('Updating OS...') : t('Update OS now')}</button>
+          {/* Releases, not a branch: until a newer one is out there is nothing to install. */}
+          <button disabled={!!loading || panelUpdating || hasUpdate !== true} onClick={runPanelUpdate}><RotateCcw size={14} className={panelUpdating ? 'spin' : ''}/> {panelUpdating ? t('Updating panel...') : t('Update panel now')}</button>
         </div>
         {showUpdateLog && <div className="info-box firewall-status update-log-box">
-          <div className="update-log-head"><strong>{t('Update logs')}</strong><button className="secondary-light" disabled={!!loading} onClick={() => loadUpdates(true)}><RefreshCw size={13}/>{t('Refresh')}</button></div>
+          <div className="update-log-head"><strong>{t('Update logs')}</strong><button className="secondary-light" disabled={!!loading} onClick={() => loadUpdates(true)}><RefreshCw size={13}/> {t('Refresh')}</button></div>
           <pre>{statusText}</pre>
         </div>}
         {/* Number(...) > 0, not the bare value: a progress of 0 made this
@@ -9142,7 +9200,7 @@ function App() {
           <div className="info-box firewall-status update-progress-box">
             <div className="update-progress-row">
               <span className={panelUpdate.last_update_status === 'failed' ? 'badge bad' : 'badge ok'}>
-                {panelUpdating ? 'Running' : (panelUpdate.last_update_status === 'failed' ? 'Failed' : (panelUpdate.last_update_status || 'Idle'))}
+                {panelUpdating ? t('Running') : (panelUpdate.last_update_status === 'failed' ? t('Failed') : (panelUpdate.last_update_status || t('Idle')))}
               </span>
               <span className="update-progress-phase">{panelUpdate.progress_phase || ''}</span>
               <span className="update-progress-pct">{Number(panelUpdate.progress_percent) || 0}%</span>
