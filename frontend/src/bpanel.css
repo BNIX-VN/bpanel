@@ -20,14 +20,6 @@
 /* from style.css */
 .login-remember{display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;user-select:none}
 .login-remember input{width:auto;margin:0}
-.ssl-sub-form{display:grid;gap:10px;margin-top:10px;justify-items:start}
-.ssl-sub-form input,.ssl-sub-form select{width:100%;max-width:460px}
-.ssl-sub-form .hint{margin:0}
-.create-ssl-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:2px}
-.create-ssl-label{font-weight:600;font-size:14px;color:var(--text-secondary)}
-.create-ssl-row .ssl-mode-tabs{margin-top:0}
-.create-ssl-row .segmented button{font-size:13px;padding:6px 10px;gap:5px}
-.create-ssl-sub{margin-top:8px}
 .users-page{display:grid;gap:14px}
 .user-tabs{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));width:100%}
 .user-tabs button{justify-content:center;gap:7px;white-space:nowrap}
@@ -321,8 +313,6 @@
 @media(min-width:951px){
   .user-row .user-badges{display:flex;flex-wrap:wrap;gap:6px}
 }
-.ssl-install{justify-self:start;margin-top:4px}
-.cron-builder .cron-command{grid-column:1 / -1}
 .schedule-users{display:grid;gap:8px;align-content:start}
 .schedule-users select[multiple]{min-height:150px}
 .schedule-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;align-content:start;align-items:end}
@@ -379,7 +369,7 @@
 .notify-own-chat{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}
 @media(max-width:760px){
   .schedule-fields,.passkey-form{grid-template-columns:minmax(0,1fr)}
-  .schedule-fields .schedule-submit,.ssl-install{justify-self:stretch}
+  .schedule-fields .schedule-submit{justify-self:stretch}
   .waf-switch-row{grid-template-columns:minmax(0,1fr) auto}
   .waf-switch-row > button{grid-column:1 / -1;width:100%}
   .php-ext-row{grid-template-columns:minmax(64px,1fr) repeat(var(--php-cols,1),48px);gap:4px;padding:6px}

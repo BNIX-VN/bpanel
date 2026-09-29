@@ -23,20 +23,20 @@ import './shared/file-manager.css';
 import './bpanel.css';
 
 const API = import.meta.env.VITE_API_URL || '/api';
-// Schedules offered by name; anything else is "Custom". A cron expression is
-// the one field most people get wrong, so it is picked rather than typed.
-const CRON_SCHEDULE_PRESETS = [
+// Common cron schedules, offered as a dropdown next to the raw expression.
+const CRON_PRESETS = [
   ['* * * * *', 'Every minute'],
   ['*/5 * * * *', 'Every 5 minutes'],
   ['*/15 * * * *', 'Every 15 minutes'],
   ['*/30 * * * *', 'Every 30 minutes'],
   ['0 * * * *', 'Every hour'],
   ['0 */6 * * *', 'Every 6 hours'],
-  ['0 0 * * *', 'Every day at 00:00'],
-  ['0 2 * * *', 'Every day at 02:00'],
-  ['0 0 * * 0', 'Every Sunday at 00:00'],
-  ['0 0 1 * *', 'On the 1st of every month'],
+  ['0 0 * * *', 'Daily at 00:00'],
+  ['0 2 * * *', 'Daily at 02:00'],
+  ['0 0 * * 0', 'Weekly, Sunday 00:00'],
+  ['0 0 1 * *', 'Monthly, day 1 at 00:00'],
 ];
+const normalizeCron = value => String(value || '').trim().split(/\s+/).join(' ');
 const BACKUP_SCHEDULE_PRESETS = [
   ['0 2 * * *', 'Every day at 02:00'],
   ['0 3 * * *', 'Every day at 03:00'],
@@ -210,14 +210,6 @@ function LanguageToggle({ language, onChange, className = '' }) {
   </button>;
 }
 
-function WordPressIcon({ size = 14 }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" focusable="false" className="lucide">
-      <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="2" />
-      <text x="12" y="16" textAnchor="middle" fontSize="11" fontWeight="700" fontFamily="Georgia, serif" fill="currentColor">W</text>
-    </svg>
-  );
-}
 const EDITOR_FONT_FAMILY = "Consolas, 'SFMono-Regular', 'Liberation Mono', Menlo, monospace";
 const WAF_ACCESS_LOG_DEFAULTS = {
   websiteId: '',
@@ -735,6 +727,7 @@ function App() {
   const [siteType, setSiteType] = useState('wordpress');
   const [createSslMode, setCreateSslMode] = useState('none'); // none|letsencrypt|wildcard|shared|manual
   const [createSslToken, setCreateSslToken] = useState(''); // Cloudflare token for the wildcard mode
+  const [createSslManual, setCreateSslManual] = useState({ certificate: '', private_key: '', ca_bundle: '' }); // the Manual tab's paste-in
   const [installWordPress, setInstallWordPress] = useState(true);
   /* The create form starts folded away. Making a website is something an
      operator does now and then; looking one up is what they came for, and
@@ -756,7 +749,6 @@ function App() {
   const [databases, setDatabases] = useState([]);
   const [dbCreateOpen, setDbCreateOpen] = useState(false);
   const [dbSearch, setDbSearch] = useState('');
-  const [dbSearching, setDbSearching] = useState(false);
   const [newDatabase, setNewDatabase] = useState({ db_name: '', db_user: '', db_password: '' });
   const [createdDbInfo, setCreatedDbInfo] = useState(null);
   const [copiedField, setCopiedField] = useState(null);
@@ -820,7 +812,8 @@ function App() {
   const [sslSources, setSslSources] = useState([]);
   const [sharedSource, setSharedSource] = useState('');
   const [cronSchedule, setCronSchedule] = useState('*/15 * * * *');
-  const [cronScheduleCustom, setCronScheduleCustom] = useState(false);
+  // Which schedule pickers are on "Custom…", by picker key.
+  const [customSchedules, setCustomSchedules] = useState({});
   const [backupScheduleCustom, setBackupScheduleCustom] = useState(false);
   const [cronCommand, setCronCommand] = useState('');
   const [cronItems, setCronItems] = useState([]);
@@ -1539,13 +1532,12 @@ function App() {
       if (!websiteSearch.trim()) setWebsiteList(siteData);
       if (!selectedWebsiteId && siteData[0]) setSelectedWebsiteId(String(siteData[0].id));
     }
-    const dbData = await request(dbSearch.trim() ? `/databases?q=${encodeURIComponent(dbSearch.trim())}` : '/databases');
+    const dbData = await request('/databases');
     if (dbData) setDatabases(dbData);
     if (refreshedUser?.role === 'admin') {
       await loadPhpVersions();
       await loadPackages();
     }
-    if (page === 'websites' && websiteSearch.trim()) await loadWebsiteList(websiteSearch, false);
   }
 
   async function loadWebsiteList(search = websiteSearch, showLoading = false) {
@@ -1561,12 +1553,9 @@ function App() {
     }
   }
 
-  async function loadDatabases(search = dbSearch, showLoading = false) {
-    const query = String(search || '').trim();
-    const suffix = query ? `?q=${encodeURIComponent(query)}` : '';
-    setDbSearching(true);
-    const data = await request(`/databases${suffix}`, {}, showLoading ? 'Loading databases...' : '');
-    setDbSearching(false);
+  // The whole list: the page filters it as you type, as OPanel's does.
+  async function loadDatabases(showLoading = false) {
+    const data = await request('/databases', {}, showLoading ? 'Loading databases...' : '');
     if (data) setDatabases(data);
   }
 
@@ -2345,8 +2334,18 @@ function App() {
       return;
     }
     if (createSslMode === 'manual') {
-      // Manual SSL needs the cert and key pasted in; send the operator to the
-      // SSL page for this site to finish it there.
+      // Pasted into the form: installed on the new site straight away.
+      if (createSslManual.certificate.trim() && createSslManual.private_key.trim()) {
+        const form = new FormData();
+        form.append('certificate_text', createSslManual.certificate);
+        form.append('private_key_text', createSslManual.private_key);
+        if (createSslManual.ca_bundle.trim()) form.append('ca_bundle_text', createSslManual.ca_bundle);
+        const data = await request(`/websites/${id}/ssl/manual`, { method: 'POST', body: form }, t('Installing manual SSL...'));
+        if (data) setCreateSslManual({ certificate: '', private_key: '', ca_bundle: '' });
+        return;
+      }
+      // Left empty: send the operator to the SSL page for this site to
+      // finish it there.
       setSelectedWebsiteId(String(id));
       setNotice(`Created ${siteDomain}. Open the Manual tab on the SSL page to paste its certificate.`);
       navigateToPage('ssl');
@@ -3263,6 +3262,7 @@ function App() {
     setLogViewer(null);
     setTerminalViewer(null);
     setWordpressInstaller({
+      mode: 'install',
       website_id: site.id,
       domain: site.domain,
       php_version: site.php_version || phpVersion,
@@ -3271,6 +3271,14 @@ function App() {
       admin_email: `admin@${site.domain}`,
       admin_password: generateRandomPassword(20),
     });
+  }
+
+  // The same panel, asking before core, plugins and themes are updated.
+  function openWordPressUpdate(site) {
+    setNginxCustomEditing(null);
+    setLogViewer(null);
+    setTerminalViewer(null);
+    setWordpressInstaller({ mode: 'update', website_id: site.id, domain: site.domain });
   }
 
   async function installWordPressOnSite() {
@@ -3335,6 +3343,7 @@ function App() {
     }
     setLoading('');
     setNotice(`Updated WordPress core, plugins, and themes for ${site.domain}.`);
+    setWordpressInstaller(null);
   }
 
   async function toggleWebsiteWaf(site) {
@@ -4944,21 +4953,17 @@ function App() {
     return () => clearInterval(timer);
   }, [isAuthenticated, page, isAdmin]);
 
+  // Both lists are read whole when their page opens; the search box on each
+  // filters what is already here, as OPanel's does.
   useEffect(() => {
-    if (!isAuthenticated || page !== 'websites') return undefined;
-    const timer = window.setTimeout(() => {
-      loadWebsiteList(websiteSearch, false);
-    }, 300);
-    return () => window.clearTimeout(timer);
-  }, [isAuthenticated, page, websiteSearch]);
+    if (!isAuthenticated || page !== 'websites') return;
+    loadWebsiteList('', false);
+  }, [isAuthenticated, page]);
 
   useEffect(() => {
-    if (!isAuthenticated || page !== 'databases') return undefined;
-    const timer = window.setTimeout(() => {
-      loadDatabases(dbSearch, false);
-    }, 300);
-    return () => window.clearTimeout(timer);
-  }, [isAuthenticated, page, dbSearch]);
+    if (!isAuthenticated || page !== 'databases') return;
+    loadDatabases(false);
+  }, [isAuthenticated, page]);
 
   useEffect(() => {
     if (!isAuthenticated || page !== 'security') return;
@@ -7090,15 +7095,15 @@ function App() {
     return <section className="section nginx-modal inline-nginx-editor">
       <div className="section-title">
         <div className="nginx-config-title">
-          <h2>{fullConfig ? 'Full Nginx config' : 'Website settings'} - {nginxCustomEditing.domain}</h2>
+          <h2>{fullConfig ? t('Full Nginx config') : t('Website settings')} - {nginxCustomEditing.domain}</h2>
           <p className="hint">{fullConfig
-            ? 'This is read-only. BPanel manages the main vhost template.'
-            : 'Managed settings rewrite the main vhost safely. Custom Nginx is still stored as a separate include.'}</p>
+            ? t('This is read-only. BPanel manages the main vhost template.')
+            : t('Managed settings rewrite the main vhost safely. Custom Nginx is still stored as a separate include.')}</p>
         </div>
         <div className="actions">
-          {!fullConfig && isAdmin && <button className="secondary-light" disabled={!!loading} onClick={viewFullNginxConfig}><FileText size={14}/>{t('View all')}</button>}
-          {fullConfig && <button className="secondary-light" disabled={!!loading} onClick={() => setNginxCustomEditing(prev => ({ ...prev, mode: 'custom', content: prev?.customContent ?? prev?.content ?? '' }))}><SettingsIcon size={14}/>{t('Settings')}</button>}
-          <button className="secondary-light" onClick={() => setNginxCustomEditing(null)}><X size={14}/>{t('Close')}</button>
+          {!fullConfig && isAdmin && <button className="secondary-light" disabled={!!loading} onClick={viewFullNginxConfig}><FileText size={14}/> {t('View all')}</button>}
+          {fullConfig && <button className="secondary-light" disabled={!!loading} onClick={() => setNginxCustomEditing(prev => ({ ...prev, mode: 'custom', content: prev?.customContent ?? prev?.content ?? '' }))}><SettingsIcon size={14}/> {t('Settings')}</button>}
+          <button className="secondary-light" onClick={() => setNginxCustomEditing(null)}><X size={14}/> {t('Close')}</button>
         </div>
       </div>
       {!fullConfig && <div className="website-settings-grid">
@@ -7137,10 +7142,10 @@ function App() {
           onChange={e => setWebsiteSettingsForm(prev => ({ ...prev, nginx_rewrite_mode: e.target.value }))}
           disabled={!!loading || rewriteDisabled}
         >
-          {NGINX_REWRITE_MODES.map(mode => <option key={mode.value} value={mode.value}>{mode.label}</option>)}
+          {NGINX_REWRITE_MODES.map(mode => <option key={mode.value} value={mode.value}>{t(mode.label)}</option>)}
         </select></label>
         <div className="website-settings-actions">
-          <button disabled={!!loading} onClick={saveWebsiteSettings}><Save size={14}/>{t('Save settings')}</button>
+          <button disabled={!!loading} onClick={saveWebsiteSettings}><Save size={14}/> {t('Save settings')}</button>
         </div>
       </div>}
       {!fullConfig && <div className="site-aliases settings-domain-manager">
@@ -7153,8 +7158,8 @@ function App() {
           {siteDomains.length === 0
             ? <span className="alias-empty">{t('No extra domains')}</span>
             : siteDomains.map(alias => <span className="alias-chip" key={alias.id}>
-              <Globe size={12}/>{alias.domain}<span>{alias.mode === 'redirect' ? 'Redirect' : 'Alias'}</span>
-              <button type="button" disabled={!!loading} title={`Remove ${alias.domain}`} aria-label={`Remove ${alias.domain}`} onClick={() => deleteWebsiteAlias(settingsSite, alias)}><X size={12}/></button>
+              <Globe size={12}/>{alias.domain}<span>{alias.mode === 'redirect' ? t('Redirect') : t('Alias')}</span>
+              <button type="button" disabled={!!loading} title={t('Remove {domain}', { domain: alias.domain })} aria-label={t('Remove {domain}', { domain: alias.domain })} onClick={() => deleteWebsiteAlias(settingsSite, alias)}><X size={12}/></button>
             </span>)}
         </div>
         <div className="alias-form settings-domain-form">
@@ -7173,9 +7178,10 @@ function App() {
             <option value="alias">{t('Alias')}</option>
             <option value="redirect">{t('Redirect')}</option>
           </select>
-          <button className="secondary-light" disabled={!!loading || !(aliasDrafts[nginxCustomEditing.id] || '').trim()} onClick={() => addWebsiteAlias(settingsSite)}><Plus size={14}/>{t('Add domain')}</button>
+          <button className="secondary-light" disabled={!!loading || !(aliasDrafts[nginxCustomEditing.id] || '').trim()} onClick={() => addWebsiteAlias(settingsSite)}><Plus size={14}/> {t('Add domain')}</button>
         </div>
       </div>}
+      {/* BPanel's own: extra Nginx directives, kept as a separate include. */}
       <div className="custom-nginx-block">
         {!fullConfig && <h3>{t('Custom Nginx')}</h3>}
         <textarea
@@ -7191,48 +7197,9 @@ function App() {
         />
       </div>
       <div className="actions">
-        {!fullConfig && <button disabled={!!loading} onClick={saveNginxCustom}>{t('Save and reload Nginx')}</button>}
-        {!fullConfig && <button className="secondary-light" disabled={!!loading} onClick={resetNginxDefault}><RotateCcw size={14}/>{t('Reset custom')}</button>}
-        <button className="secondary-light" disabled={!!loading} onClick={() => setNginxCustomEditing(null)}>{fullConfig ? 'Close' : 'Cancel'}</button>
-      </div>
-    </section>;
-  }
-
-  function renderWordPressInstaller() {
-    if (!wordpressInstaller) return null;
-    return <section className="section nginx-modal inline-nginx-editor wordpress-install-modal">
-      <div className="section-title">
-        <div className="nginx-config-title">
-          <h2>{t('Install WordPress -')} {wordpressInstaller.domain}</h2>
-          <p className="hint">PHP {wordpressInstaller.php_version || '8.4'}</p>
-        </div>
-        <button className="secondary-light" onClick={() => setWordpressInstaller(null)}><X size={14}/>{t('Close')}</button>
-      </div>
-      <div className="website-settings-grid">
-        <label><span>{t('Site title')}</span><input
-          value={wordpressInstaller.title}
-          onChange={e => setWordpressInstaller(prev => ({ ...prev, title: e.target.value }))}
-          disabled={!!loading}
-        /></label>
-        <label><span>{t('Admin user')}</span><input
-          value={wordpressInstaller.admin_user}
-          onChange={e => setWordpressInstaller(prev => ({ ...prev, admin_user: e.target.value }))}
-          disabled={!!loading}
-        /></label>
-        <label><span>{t('Admin email')}</span><input
-          value={wordpressInstaller.admin_email}
-          onChange={e => setWordpressInstaller(prev => ({ ...prev, admin_email: e.target.value }))}
-          disabled={!!loading}
-        /></label>
-        <label><span>{t('Admin password')}</span><input
-          value={wordpressInstaller.admin_password}
-          onChange={e => setWordpressInstaller(prev => ({ ...prev, admin_password: e.target.value }))}
-          disabled={!!loading}
-        /></label>
-        <div className="website-settings-actions">
-          <button className="secondary-light" disabled={!!loading} onClick={() => setWordpressInstaller(prev => prev ? ({ ...prev, admin_password: generateRandomPassword(20) }) : prev)}><Dices size={14}/>{t('Generate')}</button>
-          <button disabled={!!loading || !wordpressInstaller.admin_user || !wordpressInstaller.admin_email || !wordpressInstaller.admin_password} onClick={installWordPressOnSite}><WordPressIcon size={14}/>{t('Install')}</button>
-        </div>
+        {!fullConfig && <button disabled={!!loading} onClick={saveNginxCustom}><Save size={14}/> {t('Save and reload Nginx')}</button>}
+        {!fullConfig && <button className="secondary-light" disabled={!!loading} onClick={resetNginxDefault}><RotateCcw size={14}/> {t('Reset custom')}</button>}
+        <button className="secondary-light" disabled={!!loading} onClick={() => setNginxCustomEditing(null)}>{fullConfig ? t('Close') : t('Cancel')}</button>
       </div>
     </section>;
   }
@@ -7243,7 +7210,7 @@ function App() {
     return <section className="section nginx-modal terminal-modal">
       <div className="section-title">
         <h2>{t('Terminal -')} {terminalViewer.domain}</h2>
-        <button className="secondary-light" onClick={() => setTerminalViewer(null)}><X size={14}/>{t('Close')}</button>
+        <button className="secondary-light" onClick={() => setTerminalViewer(null)}><X size={14}/> {t('Close')}</button>
       </div>
       <div style={{ height: '500px', marginTop: '8px' }}>
         <Terminal websiteId={terminalViewer.id} apiBase={API} />
@@ -7256,59 +7223,62 @@ function App() {
     return <section className="section nginx-modal log-viewer">
       <div className="section-title">
         <div className="nginx-config-title">
-          <h2>{t('Nginx logs -')} {logViewer.domain}</h2>
+          <h2>{t('Webserver logs -')} {logViewer.domain}</h2>
           <p className="hint">{logViewer.path || `/var/log/nginx/${logViewer.domain}.${logViewer.kind}.log`}</p>
         </div>
-        <button className="secondary-light" onClick={() => setLogViewer(null)}><X size={14}/>{t('Close')}</button>
+        <button className="secondary-light" onClick={() => setLogViewer(null)}><X size={14}/> {t('Close')}</button>
       </div>
       <div className="log-toolbar">
         <div className="segmented-control">
           <button className={logViewer.kind === 'access' ? 'active' : ''} disabled={!!loading} onClick={() => loadWebsiteLog(logViewer.id, 'access', logViewer.lines, logViewer.domain)}>{t('Access')}</button>
-          <button className={logViewer.kind === 'error' ? 'active' : ''} disabled={!!loading} onClick={() => loadWebsiteLog(logViewer.id, 'error', logViewer.lines, logViewer.domain)}>{t('Error')}</button>
+          <button className={logViewer.kind === 'error' ? 'active' : ''} disabled={!!loading} onClick={() => loadWebsiteLog(logViewer.id, 'error', logViewer.lines, logViewer.domain)}>{t('Errors (PHP + server)')}</button>
         </div>
         <select value={logViewer.lines} onChange={e => loadWebsiteLog(logViewer.id, logViewer.kind, Number(e.target.value), logViewer.domain)} disabled={!!loading}>
-          <option value={100}>100 lines</option>
-          <option value={200}>200 lines</option>
-          <option value={500}>500 lines</option>
-          <option value={1000}>1000 lines</option>
-          <option value={2000}>2000 lines</option>
+          <option value={100}>{t('100 lines')}</option>
+          <option value={200}>{t('200 lines')}</option>
+          <option value={500}>{t('500 lines')}</option>
+          <option value={1000}>{t('1000 lines')}</option>
+          <option value={2000}>{t('2000 lines')}</option>
         </select>
-        <button className="secondary-light" disabled={!!loading} onClick={() => loadWebsiteLog(logViewer.id, logViewer.kind, logViewer.lines, logViewer.domain)}><RefreshCw size={14}/>{t('Refresh')}</button>
+        <button className="secondary" disabled={!!loading} onClick={() => loadWebsiteLog(logViewer.id, logViewer.kind, logViewer.lines, logViewer.domain)}><RefreshCw size={14}/> {t('Refresh')}</button>
       </div>
-      <pre className="log-output">{logViewer.exists ? (logViewer.content || 'Log is empty.') : 'Log file has not been created yet.'}</pre>
+      <pre className="log-output">{logViewer.exists
+        ? (logViewer.content || t('Log is empty.'))
+        : (logViewer.kind === 'error' ? t('No errors logged yet.') : t('Log file has not been created yet.'))}</pre>
     </section>;
   }
 
   function renderWebsites() {
     const wpFieldsEnabled = siteType === 'wordpress' && installWordPress;
-    const searchActive = !!websiteSearch.trim();
-    const visibleWebsites = searchActive ? websiteList : (websiteList.length ? websiteList : websites);
-    const createTitle = websites.length ? 'Create website' : 'Attach first domain';
-    const createHint = websites.length
-      ? null
-      : 'This creates the first hosted site for the current account.';
+    // Filtered here, as OPanel's list is: the page already holds every site.
+    // The path and the Linux user still match, as BPanel's search always did.
+    const wsQuery = websiteSearch.trim().toLowerCase();
+    const filteredWebsites = wsQuery
+      ? websites.filter(s => (s.domain || '').toLowerCase().includes(wsQuery)
+          || (s.aliases || []).some(a => (a.domain || '').toLowerCase().includes(wsQuery))
+          || (s.root_path || '').toLowerCase().includes(wsQuery)
+          || (s.linux_user || '').toLowerCase().includes(wsQuery))
+      : websites;
     const createOpen = createFormOpen || websites.length === 0;
+    const openCreate = () => {
+      setCreateFormOpen(true);
+      setTimeout(() => { const el = document.getElementById('create-website-domain'); el?.scrollIntoView({ behavior: 'smooth', block: 'center' }); el?.focus(); }, 0);
+    };
+    const sslAfterCreate = createSslMode !== 'none';
     // What secures a site, in OPanel's words: a wildcard, a certificate
-    // borrowed from another site, one uploaded by hand, or Let's Encrypt.
+    // borrowed from another site, or its own.
     const sslBadge = site => !site.ssl_enabled ? t('No SSL')
       : site.ssl_mode === 'cloudflare' ? t('Wildcard')
-        : site.ssl_mode === 'shared' ? t('Shared cert')
-          : site.ssl_mode === 'manual' ? t('Manual SSL') : 'SSL OK';
+        : site.ssl_mode === 'shared' ? t('Shared cert') : t('SSL OK');
+    const wpPanel = wordpressInstaller;
     return <>
-      {createOpen && <section className="section create-site-section">
+      {createOpen && <section className="section create-panel">
         <div className="section-title">
-          <div>
-            <h2>{t(createTitle)}</h2>
-            {createHint && <p className="hint">{t(createHint)}</p>}
-          </div>
-          {websites.length > 0 && <button
-            type="button"
-            className="secondary-light"
-            onClick={() => setCreateFormOpen(false)}
-          ><X size={15}/>{t('Close')}</button>}
+          <h2>{t('Create website')}</h2>
+          {websites.length > 0 && <button type="button" className="secondary icon-only mini" onClick={() => setCreateFormOpen(false)} aria-label={t('Close')} title={t('Close')}><X size={15}/></button>}
         </div>
         <div className="form-row create-site-row">
-          <input value={domain} onChange={e => setDomain(e.target.value)} placeholder="domain.com" />
+          <input id="create-website-domain" value={domain} onChange={e => setDomain(e.target.value)} placeholder="domain.com" />
           <select value={siteType} onChange={e => setSiteType(e.target.value)}>
             {WEBSITE_MODES.map(([value, label]) => <option
               key={value}
@@ -7327,62 +7297,64 @@ function App() {
           {wpFieldsEnabled && <input value={adminEmail} onChange={e => setAdminEmail(e.target.value)} placeholder="admin@domain.com" />}
           {wpFieldsEnabled && <input value={wpAdminUser} onChange={e => setWpAdminUser(e.target.value)} placeholder={t('WP admin user')} />}
           {wpFieldsEnabled && <input value={wpAdminPassword} onChange={e => setWpAdminPassword(e.target.value)} placeholder={t('WP admin password')} type="password" />}
-          <button disabled={!!loading || !domain} onClick={createWordPress}><Plus size={15}/>{t('Create')}</button>
+          <button disabled={!!loading || !domain} onClick={createWordPress}><Plus size={15}/> {t('Create')}</button>
         </div>
         {siteType === 'application' && siteApps.items.length === 0 && <p className="hint">{t('No applications installed yet. Install one on the')}<button type="button" className="link-button" onClick={() => navigateToPage('applications')}>{t('Applications')}</button> page first.
         </p>}
         {siteType === 'wordpress' && <label className="check-line">
-          <input type="checkbox" checked={installWordPress} onChange={e => setInstallWordPress(e.target.checked)} />{t('Install WordPress (creates database, downloads WP, configures vhost)')}</label>}
-        <div className="create-ssl-row">
-          <span className="create-ssl-label">{t('SSL after creating')}</span>
+          <input type="checkbox" checked={installWordPress} onChange={e => setInstallWordPress(e.target.checked)} />
+          {t('Install WordPress (creates database, downloads WP, configures vhost)')}
+        </label>}
+        <label className="check-line">
+          <input type="checkbox" checked={sslAfterCreate} onChange={e => setCreateSslMode(e.target.checked ? 'letsencrypt' : 'none')} />
+          {t('Set up SSL after creating')}
+        </label>
+        {sslAfterCreate && <div className="create-ssl-box">
           <div className="segmented ssl-mode-tabs">
-            <button type="button" className={createSslMode === 'none' ? 'active' : ''} onClick={() => setCreateSslMode('none')}>{t('Off')}</button>
-            <button type="button" className={createSslMode === 'letsencrypt' ? 'active' : ''} onClick={() => setCreateSslMode('letsencrypt')}><Lock size={13}/> Let's Encrypt</button>
-            <button type="button" className={createSslMode === 'wildcard' ? 'active' : ''} onClick={() => setCreateSslMode('wildcard')}><Globe size={13}/>{t('Wildcard')}</button>
-            <button type="button" className={createSslMode === 'shared' ? 'active' : ''} onClick={() => setCreateSslMode('shared')}><Copy size={13}/>{t('Existing cert')}</button>
-            <button type="button" className={createSslMode === 'manual' ? 'active' : ''} onClick={() => setCreateSslMode('manual')}><KeyRound size={13}/>{t('Manual')}</button>
+            <button className={createSslMode === 'letsencrypt' ? 'active' : ''} onClick={() => setCreateSslMode('letsencrypt')}><Lock size={13}/> Let's Encrypt</button>
+            <button className={createSslMode === 'wildcard' ? 'active' : ''} onClick={() => setCreateSslMode('wildcard')}><Globe size={13}/> {t('Wildcard (Cloudflare)')}</button>
+            <button className={createSslMode === 'shared' ? 'active' : ''} onClick={() => setCreateSslMode('shared')}><RefreshCw size={13}/> {t('Use existing')}</button>
+            <button className={createSslMode === 'manual' ? 'active' : ''} onClick={() => setCreateSslMode('manual')}><KeyRound size={13}/> {t('Manual')}</button>
           </div>
-        </div>
-        {createSslMode !== 'none' && <div className="ssl-sub-form create-ssl-sub">
-          {createSslMode === 'letsencrypt' && <p className="hint">{t('A certificate is issued right after the site is created — the domain must already point to this server.')}</p>}
-          {createSslMode === 'wildcard' && <>
-            <p className="hint">{t('Issues')}{' '}<code>zone + *.zone</code> over Cloudflare DNS. Leave the token blank to reuse one already saved for the zone.</p>
-            <input type="password" autoComplete="off" placeholder={t('Cloudflare API token (Zone → DNS → Edit)')}
-              value={createSslToken} onChange={e => setCreateSslToken(e.target.value)} />
-          </>}
+          {createSslMode === 'letsencrypt' && <p className="hint">{t("certbot HTTP-01 — the domain must point to this server's IP first.")}</p>}
+          {createSslMode === 'wildcard' && <div className="create-ssl-fields">
+            <input type="password" autoComplete="off" placeholder={t('Cloudflare API Token')} value={createSslToken} onChange={e => setCreateSslToken(e.target.value)} />
+            <p className="hint">{t('A scoped')} <strong>{t('API Token')}</strong> {t('(My Profile → API Tokens → Create Token),')} <strong>{t('not')}</strong> {t('the Global API Key. Permission')} <code>Zone → DNS → Edit</code> {t('for the zone(s) you issue certs for. Stored encrypted for renewal. Issues one cert for the zone and *.zone — no DNS record or port 80 needed. Leave the token blank to reuse one already saved for the zone.')}</p>
+          </div>}
           {createSslMode === 'shared' && <p className="hint">{t('After the site is created the panel points it at an existing certificate that covers this domain (a wildcard first). If none does, the site is created without SSL.')}</p>}
-          {createSslMode === 'manual' && <p className="hint">{t('The site is created, then the panel opens the SSL page so you can paste the certificate and key.')}</p>}
+          {createSslMode === 'manual' && <div className="create-ssl-fields">
+            <textarea rows={4} placeholder="-----BEGIN CERTIFICATE-----" value={createSslManual.certificate} onChange={e => setCreateSslManual(p => ({ ...p, certificate: e.target.value }))} />
+            <textarea rows={4} placeholder="-----BEGIN PRIVATE KEY-----" value={createSslManual.private_key} onChange={e => setCreateSslManual(p => ({ ...p, private_key: e.target.value }))} />
+            <textarea rows={3} placeholder={t('CA bundle (optional)')} value={createSslManual.ca_bundle} onChange={e => setCreateSslManual(p => ({ ...p, ca_bundle: e.target.value }))} />
+            <p className="hint">{t('Left empty, the SSL page opens after the site is created so you can paste them there.')}</p>
+          </div>}
         </div>}
         <p className="hint">{t(wpFieldsEnabled
           ? 'WordPress will be installed and the panel will show the URL, admin account, and password after creation.'
           : siteType === 'application'
             ? 'Nginx will forward this domain to the selected application on 127.0.0.1, including WebSocket upgrades.'
-            : 'A PHP-FPM vhost will be created with public_html/ folder. Upload your PHP, HTML, or static files via File Manager.')}</p>
+            : 'A virtual host will be created with public_html/ folder. Upload your PHP, HTML, or static files via File Manager.')}</p>
       </section>}
       <section className="section">
         <div className="section-title">
-          <div><h2>{t('Website list')}</h2></div>
+          <h2>{t('Website list')}</h2>
           <div className="actions">
-            <button className="secondary" disabled={!!loading || websiteSearching} onClick={() => loadWebsiteList(websiteSearch, true)}><RefreshCw size={15} className={websiteSearching ? 'spin' : ''}/>{t('Refresh')}</button>
-            {!createOpen && <button type="button" onClick={() => setCreateFormOpen(true)}><Plus size={15}/>{t('New website')}</button>}
+            <button className="secondary" disabled={!!loading} onClick={() => loadWebsiteList('', true)}><RefreshCw size={15}/> {t('Refresh')}</button>
+            {!createOpen && <button type="button" onClick={openCreate}><Plus size={15}/> {t('New website')}</button>}
           </div>
         </div>
-        <div className="website-search">
+        {websites.length > 0 && <div className="website-search">
           <Search size={15}/>
-          <NoAutofillInput
-            type="search"
-            name="website-search"
-            value={websiteSearch}
-            onChange={e => setWebsiteSearch(e.target.value)}
-            placeholder={t('Search domain, alias, path, or Linux user')}
-            aria-label={t('Search websites')}
-          />
-          {websiteSearch && <button className="mini secondary-light" type="button" onClick={() => setWebsiteSearch('')} aria-label={t('Clear website search')} title={t('Clear search')}><X size={13}/></button>}
-          <span className="hint">{searchActive ? t('{n} result(s)', { n: visibleWebsites.length }) : t('{n} website(s)', { n: visibleWebsites.length })}</span>
-        </div>
-        {visibleWebsites.length === 0 && <EmptyState icon={Globe} message={searchActive ? "No websites match this search." : "No websites yet."} />}
+          <NoAutofillInput name="website-search" value={websiteSearch} onChange={e => setWebsiteSearch(e.target.value)} placeholder={t('Filter domains…')} />
+          {websiteSearch && <button className="mini secondary-light" aria-label={t('Clear search')} onClick={() => setWebsiteSearch('')}><X size={13}/></button>}
+          <span className="hint">{wsQuery
+            ? t('{shown} of {total}', { shown: filteredWebsites.length, total: websites.length })
+            : (websites.length === 1 ? t('{n} website', { n: websites.length }) : t('{n} websites', { n: websites.length }))}</span>
+        </div>}
+        {websites.length === 0 && <EmptyState icon={Globe} message="No websites yet." action={{ label: t('New website'), icon: Plus, onClick: openCreate }} />}
+        {websites.length > 0 && filteredWebsites.length === 0 && <EmptyState icon={Globe} message={t('No domain matches “{query}”.', { query: websiteSearch })} />}
         <div className="site-grid">
-          {visibleWebsites.map(site => <div className="site-stack" key={site.id}>
+          {filteredWebsites.map(site => <div className="site-stack" key={site.id}>
           <article className="site-card">
             <div className="site-head">
               <div>
@@ -7391,32 +7363,53 @@ function App() {
               </div>
             </div>
             <div className="site-meta">
-              <span className={`badge site-ssl-badge ${site.ssl_enabled ? 'ok' : 'warn'}`}>{sslBadge(site)}</span>
-              <span>{APP_TYPE_LABELS[site.app_type || 'wordpress'] || site.app_type}</span>
-              {site.app_type !== 'static' && <span>PHP{' '}<strong>{site.php_version}</strong></span>}
-              {site.app_type === 'php' && site.nginx_rewrite_mode && site.nginx_rewrite_mode !== 'none' && <span>{t('Rewrite')}{' '}<strong>{site.nginx_rewrite_mode}</strong></span>}
+              <span className={`badge site-ssl-badge ${site.ssl_enabled ? 'ok' : ''}`}>{sslBadge(site)}</span>
+              <span>{t(APP_TYPE_LABELS[site.app_type || 'wordpress'] || site.app_type)}</span>
+              {site.app_type !== 'static' && <span>PHP <strong>{site.php_version}</strong></span>}
+              {site.app_type === 'php' && site.nginx_rewrite_mode && site.nginx_rewrite_mode !== 'none' && <span>{t('Rewrite')} <strong>{site.nginx_rewrite_mode}</strong></span>}
               {site.nginx_custom && <span className="badge ok">{t('Custom Nginx')}</span>}
               {site.waf_enabled && <span className="badge ok">WAF</span>}
               {site.http_flood_enabled && <span className="badge ok">{t('HTTP Flood')}</span>}
-              {(site.aliases || []).length > 0 && <span>{t('Domains')}{' '}<strong>{(site.aliases || []).length + 1}</strong></span>}
+              {(site.aliases || []).length > 0 && <span>{t('Domains')} <strong>{(site.aliases || []).length + 1}</strong></span>}
             </div>
-            <div className="site-actions" aria-label={`Website actions for ${site.domain}`}>
+            <div className="site-actions" aria-label={t('Website actions for {domain}', { domain: site.domain })}>
               <div className="site-feature-actions">
-                <button className="site-icon-button secondary-light" data-tooltip="Files" title={t('Files')} aria-label={`Open file manager for ${site.domain}`} disabled={!!loading} onClick={() => openWebsiteFileManager(site)}><FolderOpen size={15}/></button>
-                <button className="site-icon-button secondary-light" data-tooltip="Logs" title={t('Logs')} aria-label={`View logs for ${site.domain}`} disabled={!!loading} onClick={() => openWebsiteLogs(site)}><FileText size={15}/></button>
-                <button className="site-icon-button secondary-light" data-tooltip="Terminal" title={t('Terminal')} aria-label={`Open terminal for ${site.domain}`} disabled={!!loading} onClick={() => openWebsiteTerminal(site)}><TerminalIcon size={15}/></button>
-                {site.wordpress_installed ? <>
-                  <button className="site-icon-button secondary-light" data-tooltip="Update WordPress" title={t('Update WordPress (core + plugins + themes)')} aria-label={`Update WordPress for ${site.domain}`} disabled={!!loading} onClick={() => updateWordPressAll(site)}><RefreshCw size={15}/></button>
-                </> : <button className="site-icon-button secondary-light" data-tooltip="Install WP" title={t('Install WordPress')} aria-label={`Install WordPress for ${site.domain}`} disabled={!!loading} onClick={() => openWordPressInstaller(site)}><WordPressIcon size={15}/></button>}
-                <button className="site-icon-button secondary-light" data-tooltip="Settings" title={t('Settings')} aria-label={`Edit settings for ${site.domain}`} disabled={!!loading} onClick={() => openNginxCustom(site)}><SettingsIcon size={15}/></button>
-                <button className="site-icon-button danger" data-tooltip="Delete" title={t('Delete')} aria-label={`Delete ${site.domain}`} disabled={!!loading} onClick={() => deleteWebsite(site.id)}><Trash2 size={15}/></button>
+                <button className="site-icon-button secondary-light" data-tooltip="Files" title={t('Files')} aria-label={t('Open file manager for {domain}', { domain: site.domain })} disabled={!!loading} onClick={() => openWebsiteFileManager(site)}><FolderOpen size={15}/></button>
+                <button className="site-icon-button secondary-light" data-tooltip="Logs" title={t('Logs')} aria-label={t('View logs for {domain}', { domain: site.domain })} disabled={!!loading} onClick={() => openWebsiteLogs(site)}><FileText size={15}/></button>
+                <button className="site-icon-button secondary-light" data-tooltip="Terminal" title={t('Terminal')} aria-label={t('Open terminal for {domain}', { domain: site.domain })} disabled={!!loading} onClick={() => openWebsiteTerminal(site)}><TerminalIcon size={15}/></button>
+                <button className="site-icon-button secondary-light" data-tooltip="Settings" title={t('Settings')} aria-label={t('Edit settings for {domain}', { domain: site.domain })} disabled={!!loading} onClick={() => openNginxCustom(site)}><SettingsIcon size={15}/></button>
+                {!site.wordpress_installed && <button className="site-icon-button secondary-light" data-tooltip={t('Install WP')} title={t('Install WordPress')} aria-label={t('Install WordPress on {domain}', { domain: site.domain })} disabled={!!loading} onClick={() => openWordPressInstaller(site)}><Download size={15}/></button>}
+                {site.wordpress_installed && <button className="site-icon-button secondary-light" data-tooltip={t('Update WP')} title={t('Update WordPress')} aria-label={t('Update WordPress on {domain}', { domain: site.domain })} disabled={!!loading} onClick={() => openWordPressUpdate(site)}><RefreshCw size={15}/></button>}
+                <button className="site-icon-button danger" data-tooltip="Delete" title={t('Delete')} aria-label={t('Delete {name}', { name: site.domain })} disabled={!!loading} onClick={() => deleteWebsite(site.id)}><Trash2 size={15}/></button>
               </div>
             </div>
           </article>
-          {String(wordpressInstaller?.website_id || '') === String(site.id) && renderWordPressInstaller()}
           {nginxCustomEditing?.id === site.id && renderNginxEditor()}
           {logViewer?.id === site.id && renderWebsiteLogViewer()}
           {terminalViewer?.id === site.id && renderWebsiteTerminal()}
+          {wpPanel && String(wpPanel.website_id) === String(site.id) && <div className="wp-manager-panel">
+            <div className="user-edit-heading">
+              <strong>{wpPanel.mode === 'update' ? t('Update WordPress on {domain}', { domain: site.domain }) : t('Install WordPress on {domain}', { domain: site.domain })}</strong>
+              <button className="user-edit-close secondary-light" aria-label={t('Close')} onClick={() => setWordpressInstaller(null)}><X size={16}/></button>
+            </div>
+            {wpPanel.mode !== 'update' ? <div className="user-edit-grid">
+              <p className="hint">{t('Creates a database, downloads WordPress, configures vhost.')}</p>
+              <label><span>{t('Site title')}</span><input value={wpPanel.title} onChange={e => setWordpressInstaller(prev => ({ ...prev, title: e.target.value }))} /></label>
+              <label><span>{t('Admin username')}</span><input value={wpPanel.admin_user} onChange={e => setWordpressInstaller(prev => ({ ...prev, admin_user: e.target.value }))} /></label>
+              <label><span>{t('Admin email')}</span><input type="email" value={wpPanel.admin_email} onChange={e => setWordpressInstaller(prev => ({ ...prev, admin_email: e.target.value }))} /></label>
+              <label><span>{t('Admin password')}</span><input type="password" autoComplete="new-password" value={wpPanel.admin_password} onChange={e => setWordpressInstaller(prev => ({ ...prev, admin_password: e.target.value }))} placeholder={t('Min 10 characters')} /></label>
+              <div className="user-edit-actions">
+                <button className="secondary-light" onClick={() => setWordpressInstaller(null)}>{t('Cancel')}</button>
+                <button disabled={!!loading || !wpPanel.admin_user || !wpPanel.admin_email || String(wpPanel.admin_password || '').length < 10} onClick={installWordPressOnSite}><Download size={14}/> {t('Install WordPress')}</button>
+              </div>
+            </div> : <div>
+              <p className="hint">{t('Updates WordPress core, all plugins, and all themes to the latest version.')}</p>
+              <div className="user-edit-actions">
+                <button className="secondary-light" onClick={() => setWordpressInstaller(null)}>{t('Cancel')}</button>
+                <button disabled={!!loading} onClick={() => updateWordPressAll(site)}><RefreshCw size={14}/> {t('Update All')}</button>
+              </div>
+            </div>}
+          </div>}
           </div>)}
         </div>
       </section>
@@ -7424,14 +7417,18 @@ function App() {
   }
 
   function renderSsl() {
-    const sslLabels = {
-      manual: 'Manual SSL', cloudflare: 'Wildcard (Cloudflare)', shared: `Using ${currentSite?.ssl_source_domain || ''}`,
-    };
-    const sslLabel = currentSite?.ssl_enabled
-      ? (sslLabels[currentSite?.ssl_mode] || 'SSL Enabled')
-      : 'SSL Disabled';
+    // Named as OPanel names them. BPanel's modes: a Cloudflare wildcard, a
+    // certificate borrowed from another site ("shared"), one uploaded by hand,
+    // or Let's Encrypt.
+    const sslLabel = !currentSite?.ssl_enabled ? t('SSL Disabled')
+      : currentSite.ssl_mode === 'manual' ? t('Manual SSL')
+        : currentSite.ssl_mode === 'shared' ? t('Existing certificate')
+          : currentSite.ssl_mode === 'cloudflare' ? t('Wildcard SSL')
+            : t('SSL Enabled');
     const locale = language === 'vi' ? 'vi-VN' : 'en-GB';
     const sslUpdated = currentSite?.ssl_updated_at ? new Date(currentSite.ssl_updated_at).toLocaleString(locale) : '';
+    const wildcardActive = currentSite?.ssl_enabled && currentSite?.ssl_mode === 'cloudflare';
+    const wildcardZone = cfZone.zone || currentSite?.domain;
     // Every site on one list, as OPanel has it: the unsecured first, then the
     // rest by name, each a click from the form above.
     const sslSites = [...websites].sort((a, b) => (a.ssl_enabled === b.ssl_enabled
@@ -7440,65 +7437,67 @@ function App() {
     const siteSslLabel = site => !site.ssl_enabled ? t('No SSL')
       : site.ssl_mode === 'manual' ? t('Manual SSL')
         : site.ssl_mode === 'shared' ? t('Shared cert')
-          : site.ssl_mode === 'cloudflare' ? t('Wildcard') : 'SSL OK';
+          : site.ssl_mode === 'cloudflare' ? t('Wildcard') : t('SSL OK');
     return <>
     <section className="section" id="ssl-manage">
       <h2>{t('SSL Certificate')}</h2>
       <WebsiteSelect />
       {currentSite && <div className="info-box" style={{marginTop:8}}>
         <strong>{currentSite.domain}</strong>
-        <span className={currentSite.ssl_enabled ? 'badge ok' : 'badge'} style={{justifySelf:'start'}}>{t(sslLabel)}</span>
+        <span className={currentSite.ssl_enabled ? 'badge ok' : 'badge'} style={{justifySelf:'start'}}>{sslLabel}</span>
+        {wildcardActive && currentSite.ssl_source_domain && <span className="badge ok" style={{justifySelf:'start'}}>*.{currentSite.ssl_source_domain}</span>}
+        {currentSite.ssl_enabled && currentSite.ssl_mode === 'shared' && currentSite.ssl_source_domain && <span className="hint">{currentSite.ssl_source_domain}</span>}
         {sslUpdated && <span className="hint">{t('Updated')} {sslUpdated}</span>}
         {currentSite.ssl_mode === 'manual' && currentSite.ssl_has_ca && <span className="badge ok" style={{justifySelf:'start'}}>{t('CA Bundle')}</span>}
       </div>}
       <div className="segmented ssl-mode-tabs">
         <button className={sslMode === 'letsencrypt' ? 'active' : ''} onClick={() => setSslMode('letsencrypt')}><Lock size={14}/> Let's Encrypt</button>
-        <button className={sslMode === 'manual' ? 'active' : ''} onClick={() => setSslMode('manual')}><KeyRound size={14}/>{t('Manual')}</button>
-        <button className={sslMode === 'wildcard' ? 'active' : ''} onClick={() => setSslMode('wildcard')}><Globe size={14}/>{t('Wildcard (Cloudflare)')}</button>
-        <button className={sslMode === 'shared' ? 'active' : ''} onClick={() => setSslMode('shared')}><Copy size={14}/>{t('Use existing')}</button>
+        <button className={sslMode === 'wildcard' ? 'active' : ''} onClick={() => setSslMode('wildcard')}><Globe size={14}/> {t('Wildcard (Cloudflare)')}</button>
+        <button className={sslMode === 'shared' ? 'active' : ''} onClick={() => { setSslMode('shared'); if (selectedWebsiteId) loadSslSources(selectedWebsiteId); }}><RefreshCw size={14}/> {t('Use existing')}</button>
+        <button className={sslMode === 'manual' ? 'active' : ''} onClick={() => setSslMode('manual')}><KeyRound size={14}/> {t('Manual SSL')}</button>
       </div>
-      {sslMode === 'letsencrypt' && <>
-        <button className="ssl-install" disabled={!selectedWebsiteId || !!loading} onClick={() => enableSsl(selectedWebsiteId)}><Lock size={15}/>{t('Install / Renew SSL')}</button>
-        <p className="hint">{t('The domain must point to the correct VPS IP before issuing SSL.')}</p>
-      </>}
-      {sslMode === 'wildcard' && <div className="ssl-sub-form">
-        <p className="hint">{t('Issues')}{' '}<code>{cfZone.zone ? `${cfZone.zone} + *.${cfZone.zone}` : 'zone + *.zone'}</code> over
-          Cloudflare DNS. Needs an API token with <strong>{t('Zone → DNS → Edit')}</strong> for the zone.
-        </p>
-        {cfZone.has_token
-          ? <p className="hint">✓ Token saved for <strong>{cfZone.zone}</strong>. Leave the field blank to reuse it.</p>
-          : null}
-        <input type="password" autoComplete="off" placeholder={t('Cloudflare API token')}
-          value={wildcardToken} onChange={e => setWildcardToken(e.target.value)} />
-        <button disabled={!selectedWebsiteId || !!loading} onClick={installWildcardSsl}>
-          <Globe size={15}/>{t('Issue wildcard certificate')}</button>
-      </div>}
-      {sslMode === 'shared' && <div className="ssl-sub-form">
-        <p className="hint">{t('Point this site at another BPanel website\'s certificate (e.g. a wildcard). No new certificate is issued.')}</p>
-        {sslSources.length === 0
-          ? <p className="hint">{t('No other website has a certificate that covers')}{' '}<strong>{currentSite?.domain}</strong>.</p>
-          : <>
-            <select value={sharedSource} onChange={e => setSharedSource(e.target.value)}>
-              <option value="">{t('Select a source website…')}</option>
-              {sslSources.map(s => <option key={s.domain} value={s.domain}>
-                {s.domain}{s.wildcard ? ' (wildcard)' : ''}{s.not_after ? ` — expires ${s.not_after}` : ''}
-              </option>)}
-            </select>
-            <button disabled={!selectedWebsiteId || !sharedSource || !!loading} onClick={installSharedSsl}>
-              <Copy size={15}/>{t('Use this certificate')}</button>
-          </>}
-      </div>}
-      {sslMode === 'manual' && <div className="manual-ssl-grid">
-        <label>{t('Certificate (.crt/.pem)')}<input type="file" accept=".crt,.pem" onChange={e => setManualSslFiles(prev => ({ ...prev, certificate: e.target.files?.[0] || null }))} />
+      {sslMode === 'letsencrypt' ? <>
+        <button className="manual-ssl-submit" disabled={!selectedWebsiteId || !!loading} onClick={() => enableSsl(selectedWebsiteId)}><Lock size={15}/> {t('Install / Renew SSL')}</button>
+        <p className="hint">{t("certbot HTTP-01 — the domain must point to this server's IP before issuing.")}</p>
+      </> : sslMode === 'wildcard' ? <div className="manual-ssl-grid">
+        <label style={{gridColumn:'1 / -1'}}>{t('Cloudflare API Token')}
+          <input type="password" autoComplete="off" value={wildcardToken} onChange={e => setWildcardToken(e.target.value)} placeholder={cfZone.has_token ? t('Stored — leave blank to reuse') : t('Scoped API Token (not the Global API Key)')} />
         </label>
-        <label>{t('Private key (.key/.pem)')}<input type="file" accept=".key,.pem" onChange={e => setManualSslFiles(prev => ({ ...prev, private_key: e.target.files?.[0] || null }))} />
+        <button className="manual-ssl-submit" disabled={!selectedWebsiteId || !!loading} onClick={installWildcardSsl}><Globe size={15}/> {wildcardActive ? t('Renew / re-issue wildcard') : t('Issue wildcard certificate')}</button>
+        <p className="hint" style={{gridColumn:'1 / -1'}}>{t('Use a')} <strong>{t('scoped API Token')}</strong> {t('from Cloudflare (My Profile → API Tokens → Create Token → permission')} <code>Zone → DNS → Edit</code> {t('for the zone),')} <strong>{t('not')}</strong> {t('the account Global API Key. It is stored encrypted and re-used for automatic renewal. Issues one cert for')} <strong>{wildcardZone || t('the domain')}</strong> {t('and')} <strong>*.{wildcardZone || t('domain')}</strong> {t('via a Cloudflare DNS challenge — no DNS record or port 80 needed. Other websites can then pick this cert under "Use existing".')}</p>
+      </div> : sslMode === 'shared' ? <div className="manual-ssl-grid">
+        {/* BPanel borrows the certificate of another website that covers
+            this one; the list holds only those. */}
+        <div className="form-row" style={{gridColumn:'1 / -1'}}>
+          <select value={sharedSource} onChange={e => setSharedSource(e.target.value)}>
+            <option value="">{t('— pick a certificate on this server —')}</option>
+            {sslSources.map(s => <option key={s.domain} value={s.domain}>
+              {s.domain}{s.wildcard ? ` · ${t('Wildcard')}` : ''}{s.not_after ? ` · ${t('Expires')} ${s.not_after}` : ''}
+            </option>)}
+          </select>
+          <button className="secondary-light" type="button" disabled={!selectedWebsiteId || !!loading} onClick={() => loadSslSources(selectedWebsiteId)}><RefreshCw size={13}/> {t('Refresh')}</button>
+        </div>
+        <button className="manual-ssl-submit" disabled={!selectedWebsiteId || !sharedSource || !!loading} onClick={installSharedSsl}><Lock size={15}/> {t('Use this certificate')}</button>
+        <p className="hint" style={{gridColumn:'1 / -1'}}>{sslSources.length === 0
+          ? t("No certificate on this server covers {domain}. Note a *.example.com wildcard covers x.example.com but not example.com itself. Issue a Let's Encrypt or wildcard cert first.", { domain: currentSite?.domain || '' })
+          : t('A *.example.com wildcard covers every x.example.com — issue it once, reuse it everywhere.')}</p>
+      </div> : <div className="manual-ssl-grid">
+        <label>
+          {t('Certificate (.crt/.pem)')}
+          <input type="file" accept=".crt,.pem" onChange={e => setManualSslFiles(prev => ({ ...prev, certificate: e.target.files?.[0] || null }))} />
         </label>
-        <label>{t('CA bundle (.ca/.crt/.pem)')}<input type="file" accept=".ca,.crt,.pem" onChange={e => setManualSslFiles(prev => ({ ...prev, ca_bundle: e.target.files?.[0] || null }))} />
+        <label>
+          {t('Private key (.key/.pem)')}
+          <input type="file" accept=".key,.pem" onChange={e => setManualSslFiles(prev => ({ ...prev, private_key: e.target.files?.[0] || null }))} />
+        </label>
+        <label>
+          {t('CA bundle (.ca/.crt/.pem)')}
+          <input type="file" accept=".ca,.crt,.pem" onChange={e => setManualSslFiles(prev => ({ ...prev, ca_bundle: e.target.files?.[0] || null }))} />
         </label>
         <textarea rows={7} disabled={!!manualSslFiles.certificate} value={manualSslForm.certificate} onChange={e => setManualSslForm(prev => ({ ...prev, certificate: e.target.value }))} placeholder="-----BEGIN CERTIFICATE-----" />
         <textarea rows={7} disabled={!!manualSslFiles.private_key} value={manualSslForm.private_key} onChange={e => setManualSslForm(prev => ({ ...prev, private_key: e.target.value }))} placeholder="-----BEGIN PRIVATE KEY-----" />
         <textarea rows={7} disabled={!!manualSslFiles.ca_bundle} value={manualSslForm.ca_bundle} onChange={e => setManualSslForm(prev => ({ ...prev, ca_bundle: e.target.value }))} placeholder={t('Optional CA bundle')} />
-        <button className="manual-ssl-submit" disabled={!selectedWebsiteId || !!loading} onClick={installManualSsl}><Upload size={15}/>{t('Install Manual SSL')}</button>
+        <button className="manual-ssl-submit" disabled={!selectedWebsiteId || !!loading} onClick={installManualSsl}><Upload size={15}/> {t('Install Manual SSL')}</button>
       </div>}
     </section>
     {websites.length > 0 && <section className="section">
@@ -7517,73 +7516,83 @@ function App() {
   }
 
   function renderDatabases() {
+    // Filtered here, as OPanel's list is: the page already holds them all.
+    const dbQuery = dbSearch.trim().toLowerCase();
+    const siteById = new Map(websites.map(site => [String(site.id), site.domain]));
+    const filteredDatabases = dbQuery
+      ? databases.filter(db => (db.db_name || '').toLowerCase().includes(dbQuery)
+          || (db.db_user || '').toLowerCase().includes(dbQuery)
+          || (siteById.get(String(db.website_id)) || '').toLowerCase().includes(dbQuery))
+      : databases;
     function copyToClipboard(text, field) {
       const doCopy = navigator.clipboard ? navigator.clipboard.writeText(text) : new Promise((resolve, reject) => {
         try { const ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); resolve(); } catch(e) { reject(e); }
       });
       doCopy.then(() => { setCopiedField(field); setTimeout(() => setCopiedField(null), 2000); }).catch(() => setError(t('Copy failed.')));
     }
-    const dbSearchActive = !!dbSearch.trim();
-    // Like the website form: making one is occasional, finding one is why
-    // the page is open. Open by itself only when there is nothing to find.
-    const dbCreateVisible = dbCreateOpen || (databases.length === 0 && !dbSearchActive);
+    const createOpen = dbCreateOpen || databases.length === 0;
+    const openCreate = () => {
+      setDbCreateOpen(true);
+      setTimeout(() => { const el = document.getElementById('create-database-name'); el?.scrollIntoView({ behavior: 'smooth', block: 'center' }); el?.focus(); }, 0);
+    };
     return <section className="section">
       <div className="section-title">
         <h2>{t('Databases')}</h2>
         <div className="actions">
-          <button className="secondary" disabled={!!loading || dbSearching} onClick={() => loadDatabases(dbSearch, true)}><RefreshCw size={15} className={dbSearching ? 'spin' : ''}/>{t('Refresh')}</button>
-          {!dbCreateVisible && <button type="button" onClick={() => setDbCreateOpen(true)}><Plus size={15}/>{t('New database')}</button>}
+          <button className="secondary" disabled={!!loading} onClick={() => loadDatabases(true)}><RefreshCw size={15}/> {t('Refresh')}</button>
+          {!createOpen && <button type="button" onClick={openCreate}><Plus size={15}/> {t('New database')}</button>}
         </div>
       </div>
-      {dbCreateVisible && <div className="create-inline">
+      {createOpen && <div className="create-inline">
         <div className="create-inline-head">
           <strong>{t('Create database')}</strong>
           {databases.length > 0 && <button type="button" className="secondary icon-only mini" onClick={() => setDbCreateOpen(false)} aria-label={t('Close')} title={t('Close')}><X size={15}/></button>}
         </div>
-        <div className="form-row">
-          <input name="new-db-name" autoComplete="off" value={newDatabase.db_name} onChange={e => setNewDatabase(prev => ({ ...prev, db_name: e.target.value }))} placeholder="database_name" />
-          <input name="new-db-user" autoComplete="off" value={newDatabase.db_user} onChange={e => setNewDatabase(prev => ({ ...prev, db_user: e.target.value }))} placeholder={t('db_user (default = db_name)')} />
-          {/* new-password, or the browser offers the panel's own password here. */}
-          <input name="new-db-password" autoComplete="new-password" value={newDatabase.db_password} onChange={e => setNewDatabase(prev => ({ ...prev, db_password: e.target.value }))} placeholder={t('password (min 12 chars)')} />
-          <button type="button" className="mini secondary-light" title={t('Generate random password')} onClick={() => setNewDatabase(prev => ({ ...prev, db_password: generateRandomPassword() }))}><Dices size={13}/></button>
-          <button disabled={!!loading || !newDatabase.db_name.trim()} onClick={createDatabase}><Plus size={15}/>{t('Create database')}</button>
-        </div>
-      </div>}
-      <div className="list-search">
-        <Search size={15}/>
-        <NoAutofillInput
-          type="search"
-          name="database-search"
-          value={dbSearch}
-          onChange={e => setDbSearch(e.target.value)}
-          placeholder={t('Search by database or user name')}
-          aria-label={t('Search databases')}
-        />
-        {dbSearch && <button className="mini secondary-light" type="button" onClick={() => setDbSearch('')} aria-label={t('Clear database search')} title={t('Clear search')}><X size={13}/></button>}
-        <span className="hint">{t('{count} databases', { count: databases.length })}</span>
+      <div className="form-row">
+        <input id="create-database-name" name="new-db-name" autoComplete="off" value={newDatabase.db_name} onChange={e => setNewDatabase(prev => ({ ...prev, db_name: e.target.value }))} placeholder="database_name" />
+        <input name="new-db-user" autoComplete="off" value={newDatabase.db_user} onChange={e => setNewDatabase(prev => ({ ...prev, db_user: e.target.value }))} placeholder={t('db_user (default = db_name)')} />
+        {/* new-password, or the browser offers the panel's own password here. */}
+        <input name="new-db-password" autoComplete="new-password" value={newDatabase.db_password} onChange={e => setNewDatabase(prev => ({ ...prev, db_password: e.target.value }))} placeholder={t('password (min 12 chars)')} />
+        <button type="button" className="mini secondary-light" title={t('Generate random password')} onClick={() => setNewDatabase(prev => ({ ...prev, db_password: generateRandomPassword() }))}><Dices size={13}/></button>
+        <button disabled={!!loading || !newDatabase.db_name.trim()} onClick={createDatabase}><Plus size={15}/> {t('Create database')}</button>
       </div>
+      </div>}
       {createdDbInfo && <div className="info-box db-created-box">
         <div className="db-created-head"><strong>{t('Database created successfully')}</strong><button className="mini secondary-light" onClick={() => setCreatedDbInfo(null)}><X size={13}/></button></div>
         <div className="db-created-grid">
-          <label>{t('Database')}</label><span>{createdDbInfo.db_name} <button className="mini secondary-light" title={copiedField === 'db_name' ? 'Copied!' : 'Copy'} onClick={() => copyToClipboard(createdDbInfo.db_name, 'db_name')}>{copiedField === 'db_name' ? <Check size={12} style={{color:'var(--green)'}}/> : <Copy size={12}/>}</button></span>
-          <label>{t('User')}</label><span>{createdDbInfo.db_user} <button className="mini secondary-light" title={copiedField === 'db_user' ? 'Copied!' : 'Copy'} onClick={() => copyToClipboard(createdDbInfo.db_user, 'db_user')}>{copiedField === 'db_user' ? <Check size={12} style={{color:'var(--green)'}}/> : <Copy size={12}/>}</button></span>
-          <label>{t('Password')}</label><span><code>{createdDbInfo.db_password}</code> <button className="mini secondary-light" title={copiedField === 'db_password' ? 'Copied!' : 'Copy'} onClick={() => copyToClipboard(createdDbInfo.db_password, 'db_password')}>{copiedField === 'db_password' ? <Check size={12} style={{color:'var(--green)'}}/> : <Copy size={12}/>}</button></span>
+          <label>{t('Database')}</label><span>{createdDbInfo.db_name} <button className="mini secondary-light" title={copiedField === 'db_name' ? t('Copied!') : t('Copy')} onClick={() => copyToClipboard(createdDbInfo.db_name, 'db_name')}>{copiedField === 'db_name' ? <Check size={12} style={{color:'var(--success)'}}/> : <Copy size={12}/>}</button></span>
+          <label>{t('User')}</label><span>{createdDbInfo.db_user} <button className="mini secondary-light" title={copiedField === 'db_user' ? t('Copied!') : t('Copy')} onClick={() => copyToClipboard(createdDbInfo.db_user, 'db_user')}>{copiedField === 'db_user' ? <Check size={12} style={{color:'var(--success)'}}/> : <Copy size={12}/>}</button></span>
+          <label>{t('Password')}</label><span><code>{createdDbInfo.db_password}</code> <button className="mini secondary-light" title={copiedField === 'db_password' ? t('Copied!') : t('Copy')} onClick={() => copyToClipboard(createdDbInfo.db_password, 'db_password')}>{copiedField === 'db_password' ? <Check size={12} style={{color:'var(--success)'}}/> : <Copy size={12}/>}</button></span>
         </div>
       </div>}
-      {databases.length === 0 && !createdDbInfo && <EmptyState icon={Database} message={dbSearchActive ? 'No databases match this search.' : 'No databases found.'} />}
+      {databases.length === 0 && !createdDbInfo && <EmptyState icon={Database} message="No databases found." action={{ label: t('New database'), icon: Plus, onClick: openCreate }} />}
+      {databases.length > 0 && <div className="list-search">
+        <Search size={15}/>
+        <NoAutofillInput name="database-search" value={dbSearch} onChange={e => setDbSearch(e.target.value)} placeholder={t('Filter databases…')} />
+        {dbSearch && <button className="mini secondary-light" aria-label={t('Clear search')} onClick={() => setDbSearch('')}><X size={13}/></button>}
+        <span className="hint">{dbQuery
+          ? t('{shown} of {total}', { shown: filteredDatabases.length, total: databases.length })
+          : (databases.length === 1 ? t('{n} database', { n: databases.length }) : t('{n} databases', { n: databases.length }))}</span>
+      </div>}
+      {databases.length > 0 && filteredDatabases.length === 0 && <EmptyState icon={Database} message={t('No database matches “{query}”.', { query: dbSearch })} />}
       <div className="table">
-        {databases.map(db => {
-          // Name and the site it belongs to, the login user, then the actions:
-          // phpMyAdmin as the one labelled button, the rest as glyphs.
-          const dbSite = websites.find(site => String(site.id) === String(db.website_id));
+        {filteredDatabases.map(db => {
+          // The site a database belongs to, where it belongs to one.
+          const dbSite = siteById.get(String(db.website_id));
           return <div className="row db-row" key={db.id}>
-          <span><strong>{db.db_name}</strong>{dbSite && <small className="db-owner">{dbSite.domain}</small>}</span>
+          <span><strong>{db.db_name}</strong>{dbSite && <small className="db-owner">{dbSite}</small>}</span>
           <span className="db-user"><small>{t('User')}</small> {db.db_user}</span>
           <span className="db-actions">
             <button className="mini secondary" disabled={!!loading} onClick={() => openPhpMyAdmin(db.id)}>phpMyAdmin</button>
-            <button className="mini secondary-light icon-only" disabled={!!loading} onClick={() => downloadDatabase(db.id, db.db_name)} title={t('Download SQL dump')} aria-label={`${t('Download SQL dump')} ${db.db_name}`}><Download size={14}/></button>
-            <button className="mini secondary-light icon-only" disabled={!!loading} onClick={() => changeDbPassword(db.id)} title={t('Change password')} aria-label={`${t('Change password')} ${db.db_name}`}><KeyRound size={14}/></button>
-            <button className="mini danger icon-only" disabled={!!loading} onClick={() => deleteDatabase(db.id, db.db_name)} title={t('Delete')} aria-label={`${t('Delete')} ${db.db_name}`}><Trash2 size={14}/></button>
+            <button className="mini secondary-light" disabled={!!loading} title={t('Download SQL dump')}
+                    aria-label={t('Download SQL dump of {name}', { name: db.db_name })}
+                    onClick={() => downloadDatabase(db.id, db.db_name)}><Download size={14}/></button>
+            <button className="mini secondary-light" disabled={!!loading} title={t('Change database password')}
+                    aria-label={t('Change the password for {name}', { name: db.db_name })}
+                    onClick={() => changeDbPassword(db.id)}><KeyRound size={14}/></button>
+            <button className="mini danger" disabled={!!loading} title={t('Delete database')}
+                    aria-label={t('Delete {name}', { name: db.db_name })}
+                    onClick={() => deleteDatabase(db.id, db.db_name)}><Trash2 size={14}/></button>
           </span>
         </div>})}
       </div>
@@ -7682,57 +7691,82 @@ function App() {
     </section>;
   }
 
+  function cronScheduleLabel(expr) {
+    const preset = CRON_PRESETS.find(([value]) => value === normalizeCron(expr));
+    return preset ? t(preset[1]) : expr;
+  }
+
+  // A preset dropdown beside the raw expression. Picking a preset fills the
+  // expression; typing in it (or choosing "Custom") switches to custom.
+  function renderSchedulePicker(key, value, onChange, inputId) {
+    const preset = CRON_PRESETS.find(([expr]) => expr === normalizeCron(value));
+    const custom = customSchedules[key] || !preset;
+    return <div className="schedule-picker">
+      <select value={custom ? 'custom' : preset[0]} onChange={e => {
+        const next = e.target.value;
+        if (next === 'custom') {
+          setCustomSchedules(prev => ({ ...prev, [key]: true }));
+          setTimeout(() => document.getElementById(inputId)?.focus(), 0);
+          return;
+        }
+        setCustomSchedules(prev => ({ ...prev, [key]: false }));
+        onChange(next);
+      }}>
+        {CRON_PRESETS.map(([expr, label]) => <option key={expr} value={expr}>{t(label)}</option>)}
+        <option value="custom">{t('Custom…')}</option>
+      </select>
+      <input id={inputId} value={value} spellCheck={false} placeholder="*/15 * * * *" aria-label={t('Cron expression')}
+        onChange={e => { setCustomSchedules(prev => ({ ...prev, [key]: true })); onChange(e.target.value); }} />
+    </div>;
+  }
+
+  // Named starting points for a cron command, as [key, label, command]. Only
+  // what BPanel's cron accepts: the WP-CLI maintenance commands, and a PHP
+  // script inside the website with its output discarded or kept in a log.
+  function cronCommandTemplates(site) {
+    const wordpress = !site || (site.app_type || 'wordpress') === 'wordpress';
+    return [
+      ...(wordpress ? [['wp-due', 'WP-CLI: run due cron events', 'wp cron event run --due-now']] : []),
+      ...(wordpress ? [['wp-plugins', 'WP-CLI: update all plugins', 'wp plugin update --all']] : []),
+      ...(wordpress ? [['wp-themes', 'WP-CLI: update all themes', 'wp theme update --all']] : []),
+      ...(wordpress ? [['wp-core', 'WP-CLI: update WordPress core', 'wp core update']] : []),
+      ['php', 'Run a PHP script', 'php -q cron.php'],
+      ['php-quiet', 'Run a PHP script, discard its output', 'php cron.php >/dev/null 2>&1'],
+      ['php-log', 'Run a PHP script, keep its output in a log', 'php cron.php >> ../logs/cron.log 2>&1'],
+    ];
+  }
+
   function renderCron() {
     const sitePhpVersion = cronPhpInfo.php_version || currentSite?.php_version || '';
     const sitePhpBinary = cronPhpInfo.php_binary || (sitePhpVersion ? `/usr/bin/php${sitePhpVersion}` : 'php');
-    const cronExamples = [
-      ['php -q cron.php', 'Path is relative to public_html.'],
-      ['php cron.php >/dev/null 2>&1', 'Discard output so cron does not try to mail it.'],
-      ['php cron.php >> ../logs/cron.log 2>&1', 'Keep output in a log file inside this website.'],
-      ['wp cron event run --due-now', 'WP-CLI, for WordPress sites.'],
-    ];
-    const cronScheduleValue = cronScheduleCustom || !isPresetSchedule(CRON_SCHEDULE_PRESETS, cronSchedule) ? 'custom' : cronSchedule;
+    const templates = cronCommandTemplates(currentSite);
+    const template = templates.find(([, , command]) => command === cronCommand.trim());
     return <section className="section">
       <div className="section-title">
         <div><h2>{t('Cron manager')}</h2></div>
-        <button className="secondary-light" disabled={!selectedWebsiteId || !!loading} onClick={listCron}><RefreshCw size={14}/>{t('Refresh')}</button>
+        <button className="secondary" disabled={!selectedWebsiteId || !!loading} onClick={listCron}><RefreshCw size={14}/> {t('Refresh')}</button>
       </div>
-      {/* The schedule is picked, not typed; "Custom" keeps the expression for
-          whoever wants it. The command starts from a template and stays
-          editable. */}
       <div className="cron-builder">
-        <label><span>{t('Website')}</span><WebsiteSelect /></label>
-        <label><span>{t('Schedule')}</span>
-          <select value={cronScheduleValue} onChange={e => {
-            if (e.target.value === 'custom') { setCronScheduleCustom(true); return; }
-            setCronScheduleCustom(false);
-            setCronSchedule(e.target.value);
-          }}>
-            {CRON_SCHEDULE_PRESETS.map(([value, label]) => <option key={value} value={value}>{t(label)}</option>)}
-            <option value="custom">{t('Custom...')}</option>
+        <div className="field"><span className="field-label">{t('Website')}</span><WebsiteSelect /></div>
+        <div className="field"><span className="field-label">{t('Schedule')}</span>{renderSchedulePicker('cron', cronSchedule, setCronSchedule, 'cron-schedule-input')}</div>
+        <div className="field"><span className="field-label">{t('Command template')}</span>
+          <select value={template ? template[0] : 'custom'} onChange={e => { const picked = templates.find(([key]) => key === e.target.value); if (picked) setCronCommand(picked[2]); }}>
+            {templates.map(([key, label]) => <option key={key} value={key}>{t(label)}</option>)}
+            <option value="custom">{t('Custom command')}</option>
           </select>
-        </label>
-        {cronScheduleValue === 'custom' && <label><span>{t('Cron expression')}</span><input value={cronSchedule} onChange={e => setCronSchedule(e.target.value)} placeholder="*/15 * * * *" /></label>}
-        <label><span>{t('Command template')}</span>
-          <select value="" onChange={e => { if (e.target.value) setCronCommand(e.target.value); }}>
-            <option value="">{t('Pick a template...')}</option>
-            {cronExamples.map(([example, note]) => <option key={example} value={example}>{example} - {t(note)}</option>)}
-          </select>
-        </label>
-        <label className="cron-command"><span>{t('Command')}</span><input value={cronCommand} onChange={e => setCronCommand(e.target.value)} placeholder="php -q cron.php >/dev/null 2>&1" /></label>
-        <button className="cron-add" disabled={!selectedWebsiteId || !!loading} onClick={addCron}><Plus size={14}/>{t('Add cron')}</button>
+        </div>
+        <div className="field"><span className="field-label">{t('Command')}</span>
+          <input value={cronCommand} spellCheck={false} onChange={e => setCronCommand(e.target.value)} placeholder="php -q cron.php >/dev/null 2>&1" />
+        </div>
+        <button className="cron-add" disabled={!selectedWebsiteId || !cronCommand.trim() || !!loading} onClick={addCron}><Plus size={14}/> {t('Add cron')}</button>
       </div>
-      {selectedWebsiteId && <p className="hint">
-        {t('Cron runs as')}{' '}<strong>{cronUser || currentSite?.linux_user || 'www-data'}</strong>{' '}{t('for this website.')}{' '}
-        {t('Write')} <code>php</code> {t('and BPanel rewrites it to')} <code>{sitePhpBinary}</code>.{' '}
-        {t('Only PHP scripts inside public_html and the safe WP-CLI commands are allowed.')}
-      </p>}
+      {selectedWebsiteId && <p className="hint">{t('Cron runs as')} <strong>{cronUser || currentSite?.linux_user || 'www-data'}</strong> {t('for the selected website. Accepted commands:')} {t('WP-CLI maintenance commands, or a')} <code>.php</code> {t('file inside public_html.')} {t('Write')} <code>php</code> {t('and BPanel rewrites it to')} <code>{sitePhpBinary}</code>.</p>}
       <div className="cron-list">
-        {selectedWebsiteId && cronItems.length === 0 && <EmptyState icon={Clock} message={t('No cron jobs found for this website.')} />}
+        {selectedWebsiteId && cronItems.length === 0 && <EmptyState icon={Clock} message="No cron jobs found for this website." />}
         {cronItems.map(item => <div className="cron-item" key={`${item.index}-${item.line}`}>
           <span className="badge">#{item.index}</span>
-          <span><strong>{item.schedule}</strong><small>{item.command || item.line}</small></span>
-          <button className="mini danger" disabled={!!loading} onClick={() => deleteCron(item.index)}><Trash2 size={13}/></button>
+          <span><strong>{cronScheduleLabel(item.schedule)} <code className="cron-expr">{item.schedule}</code></strong><small>{item.command || item.line}</small></span>
+          <button className="mini danger" disabled={!!loading} onClick={() => deleteCron(item.index)} aria-label={t('Delete')} title={t('Delete')}><Trash2 size={13}/></button>
         </div>)}
       </div>
     </section>;
