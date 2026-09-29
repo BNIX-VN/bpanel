@@ -1483,6 +1483,1061 @@ dns_status() {
   echo "listen=${listen}"
 }
 
+# ---- Email (Exim + Dovecot + webmail, optional) --------------------------------
+# Mail for the domains that have mailboxes. Exim receives and sends, Dovecot
+# stores mail and serves IMAP/POP3, and the BNIX webmail runs behind nginx on
+# port 2096. A mailbox lives in its owner's home, /home/<user>/mail/<domain>/
+# <name>, so it counts toward the account's disk space and goes into its
+# backups. The panel decides which mailboxes exist and sends the whole list to
+# mail-sync; nothing here is edited by hand.
+#
+# Turning the addon off stops the three services and closes the ports. The
+# mail, the mailbox list, the DKIM keys and the packages all stay.
+
+MAIL_EXIM_CONF="/etc/exim4/exim4.conf"
+MAIL_EXIM_DIR="/etc/exim4/bpanel"
+MAIL_DOVECOT_CONF="/etc/dovecot/dovecot.conf"
+MAIL_DOVECOT_DIR="/etc/dovecot/bpanel"
+MAIL_TLS_DIR="/etc/bpanel-mail-tls"
+MAIL_TLS_SCRIPT="/usr/local/sbin/bpanel-mail-tls"
+MAIL_INSTALL_LOG="/var/log/bpanel-mail-install.log"
+MAIL_MARKER="# Managed by BPanel (Email addon)."
+WEBMAIL_HOME="/opt/bnix-webmail"
+WEBMAIL_REPO="https://github.com/bnixvn/webmail.git"
+WEBMAIL_ENV="/etc/bnix-webmail.env"
+WEBMAIL_UNIT="/etc/systemd/system/bpanel-webmail.service"
+WEBMAIL_PORT="8096"
+WEBMAIL_PUBLIC_PORT="2096"
+WEBMAIL_NGINX="/etc/nginx/conf.d/00-bpanel-webmail.conf"
+WEBMAIL_SSO_KEY_FILE="/etc/bpanel/webmail-sso.key"
+WEBMAIL_MASTER_USER="bpanel-webmail"
+
+mail_port_taken() {
+  # "<port> (<program>)" for each mail port some other program already holds.
+  local port owner
+  for port in 25 465 587 143 993 110 995 "$WEBMAIL_PUBLIC_PORT" "$WEBMAIL_PORT"; do
+    owner="$(ss -H -lntp "sport = :${port}" 2>/dev/null | grep -o 'users:(("[^"]*"' | head -n1 | sed 's/^users:(("//; s/"$//' || true)"
+    [[ -n "$owner" ]] || continue
+    case "${port}:${owner}" in
+      25:exim4|465:exim4|587:exim4|143:dovecot|993:dovecot|110:dovecot|995:dovecot) continue ;;
+      "${WEBMAIL_PUBLIC_PORT}:nginx") continue ;;
+      "${WEBMAIL_PORT}:python"*) systemctl is-active --quiet bpanel-webmail && continue ;;
+    esac
+    printf '%s (%s) ' "$port" "$owner"
+  done
+}
+
+mail_install_packages() {
+  local missing=() pkg
+  for pkg in exim4-daemon-heavy dovecot-core dovecot-imapd dovecot-pop3d dovecot-lmtpd git python3-venv; do
+    pkg_installed "$pkg" || missing+=("$pkg")
+  done
+  [[ ${#missing[@]} -gt 0 ]] || return 0
+  export DEBIAN_FRONTEND=noninteractive
+  # Keep apt from starting Exim and Dovecot on their stock settings while they
+  # install: this addon writes their whole configuration before either runs.
+  local policy="/usr/sbin/policy-rc.d" saved="" status=0
+  if [[ -e "$policy" ]]; then
+    saved="${policy}.bpanel-mail"
+    mv -f "$policy" "$saved"
+  fi
+  printf '#!/bin/sh\nexit 101\n' >"$policy"
+  chmod 0755 "$policy"
+  apt-get update --allow-releaseinfo-change >>"$MAIL_INSTALL_LOG" 2>&1 || true
+  apt-get install -y --no-install-recommends "${missing[@]}" >>"$MAIL_INSTALL_LOG" 2>&1 || status=$?
+  rm -f "$policy"
+  if [[ -n "$saved" ]]; then
+    mv -f "$saved" "$policy"
+  fi
+  [[ $status -eq 0 ]] || deny "could not install Exim and Dovecot (apt-get exited ${status}; see ${MAIL_INSTALL_LOG})"
+}
+
+mail_write_tls_script() {
+  cat >"$MAIL_TLS_SCRIPT" <<'SCRIPT'
+#!/usr/bin/env bash
+# Installed by BPanel (Email addon). Copies the panel's certificate to where
+# Exim, Dovecot and the webmail port read it, and reloads them when it changed.
+set -euo pipefail
+env_file="/opt/bpanel/backend/.env"
+tls_dir="/etc/bpanel-mail-tls"
+value() { sed -nE "s/^$1=//p" "$env_file" 2>/dev/null | tail -n1 | tr -d '"'; }
+cert="$(value PANEL_SSL_CERT)"
+key="$(value PANEL_SSL_KEY)"
+if [[ "$cert" != /* || "$key" != /* || ! -f "$cert" || ! -f "$key" ]]; then
+  echo "bpanel-mail-tls: the panel has no certificate configured" >&2
+  exit 1
+fi
+if cmp -s "$cert" "$tls_dir/fullchain.pem" && cmp -s "$key" "$tls_dir/privkey.pem"; then
+  exit 0
+fi
+# The panel replaces the certificate and then the key. Caught between the two,
+# the pair does not match: wait for the key rather than break TLS.
+cert_pub="$(openssl x509 -in "$cert" -noout -pubkey 2>/dev/null || true)"
+key_pub="$(openssl pkey -in "$key" -pubout 2>/dev/null || true)"
+if [[ -z "$cert_pub" || "$cert_pub" != "$key_pub" ]]; then
+  echo "bpanel-mail-tls: certificate and key do not match yet; leaving the current pair" >&2
+  exit 0
+fi
+install -d -o root -g Debian-exim -m 0750 "$tls_dir"
+install -m 0640 -o root -g Debian-exim "$cert" "$tls_dir/fullchain.pem.new"
+install -m 0640 -o root -g Debian-exim "$key" "$tls_dir/privkey.pem.new"
+mv -f "$tls_dir/fullchain.pem.new" "$tls_dir/fullchain.pem"
+mv -f "$tls_dir/privkey.pem.new" "$tls_dir/privkey.pem"
+# Exim reads the files for each connection; Dovecot and nginx need a reload.
+if systemctl is-active --quiet dovecot; then systemctl reload dovecot || true; fi
+if systemctl is-active --quiet nginx && nginx -t >/dev/null 2>&1; then systemctl reload nginx || true; fi
+echo "bpanel-mail-tls: now using ${cert}"
+SCRIPT
+  chmod 0755 "$MAIL_TLS_SCRIPT"
+
+  cat >/etc/systemd/system/bpanel-mail-tls.service <<UNIT
+[Unit]
+Description=BPanel: give Exim, Dovecot and the webmail the panel's certificate
+# The panel's .env changes for many reasons; each is a cheap no-op here, and a
+# burst of them must not trip the start limit and stop the watching.
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+ExecStart=${MAIL_TLS_SCRIPT}
+UNIT
+  cat >/etc/systemd/system/bpanel-mail-tls.path <<'UNIT'
+[Unit]
+Description=BPanel: watch the panel's certificate for the mail services
+
+[Path]
+PathChanged=/etc/bpanel/panel-fullchain.pem
+PathChanged=/etc/bpanel/panel-privkey.pem
+PathChanged=/etc/bpanel/panel-selfsigned-fullchain.pem
+PathChanged=/opt/bpanel/backend/.env
+Unit=bpanel-mail-tls.service
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  systemctl daemon-reload
+}
+
+mail_write_exim_conf() {
+  local hostname="$1" tmp
+  tmp="$(mktemp "${MAIL_EXIM_CONF}.XXXXXX")"
+  cat >"$tmp" <<EOF
+${MAIL_MARKER} Rewritten each time the addon is installed:
+# edits here are lost. Which domains and mailboxes exist is in ${MAIL_EXIM_DIR}.
+
+primary_hostname = ${hostname}
+qualify_domain = ${hostname}
+
+domainlist bpanel_domains = lsearch;${MAIL_EXIM_DIR}/domains
+domainlist local_domains = @ : localhost : +bpanel_domains
+domainlist relay_to_domains =
+hostlist   relay_from_hosts = <; 127.0.0.1 ; ::1
+
+acl_smtp_mail = acl_check_mail
+acl_smtp_rcpt = acl_check_rcpt
+acl_smtp_data = acl_check_data
+
+daemon_smtp_ports = 25 : 465 : 587
+tls_on_connect_ports = 465
+tls_advertise_hosts = *
+tls_certificate = ${MAIL_TLS_DIR}/fullchain.pem
+tls_privatekey = ${MAIL_TLS_DIR}/privkey.pem
+
+never_users = root
+host_lookup =
+smtp_banner = \$smtp_active_hostname ESMTP
+message_size_limit = 50M
+smtp_accept_max = 100
+smtp_accept_max_per_host = 20
+ignore_bounce_errors_after = 2d
+timeout_frozen_after = 7d
+log_file_path = /var/log/exim4/%slog
+log_selector = +smtp_protocol_error +smtp_syntax_error +tls_cipher +tls_sni
+spool_directory = /var/spool/exim4
+keep_environment =
+add_environment = <; PATH=/bin:/usr/bin
+
+begin acl
+
+acl_check_mail:
+  deny    message = A HELO or EHLO greeting is required
+          condition = \${if def:sender_helo_name {no}{yes}}
+  accept
+
+acl_check_rcpt:
+  # Mail handed over locally (sendmail, PHP's mail()) does not come through here.
+  accept  hosts = :
+          control = dkim_disable_verify
+
+  deny    message = Restricted characters in address
+          domains = +local_domains
+          local_parts = ^[.] : ^.*[@%!/|]
+
+  deny    message = Restricted characters in address
+          domains = !+local_domains
+          local_parts = ^[./|] : ^.*[@%!] : ^.*/\\\\.\\\\./
+
+  accept  local_parts = postmaster
+          domains = +local_domains
+
+  # A signed-in mailbox sends as its own domain. Without this, one customer
+  # could send - and have DKIM-signed - mail as another customer's domain.
+  deny    message = This mailbox can only send as addresses on \${domain:\$authenticated_id}
+          authenticated = *
+          condition = \${if eqi{\$sender_address_domain}{\${domain:\$authenticated_id}}{no}{yes}}
+
+  deny    message = Sending limit reached: at most 300 recipients an hour for each mailbox
+          authenticated = *
+          ratelimit = 300 / 1h / per_rcpt / \$authenticated_id
+
+  accept  authenticated = *
+          control = submission/domain=
+          control = dkim_disable_verify
+
+  # Anyone else - loopback included - only delivers to mailboxes here.
+  require message = Relay not permitted
+          domains = +local_domains
+
+  require verify = recipient
+
+  accept
+
+acl_check_data:
+  deny    message = The From address must be on \${domain:\$authenticated_id}
+          authenticated = *
+          condition = \${if eqi{\${domain:\$h_from:}}{\${domain:\$authenticated_id}}{no}{yes}}
+  accept
+
+begin routers
+
+dnslookup:
+  driver = dnslookup
+  domains = ! +local_domains
+  transport = remote_smtp
+  ignore_target_hosts = 0.0.0.0 : 127.0.0.0/8 : ::1
+  no_more
+
+bpanel_mailbox:
+  driver = accept
+  domains = +bpanel_domains
+  local_part_suffix = +*
+  local_part_suffix_optional
+  condition = \${lookup{\${lc:\$local_part}@\${lc:\$domain}}lsearch{${MAIL_EXIM_DIR}/mailboxes}{yes}{no}}
+  transport = dovecot_lmtp
+
+bpanel_unknown:
+  driver = redirect
+  domains = +bpanel_domains
+  allow_fail
+  data = :fail: No such mailbox here
+
+system_aliases:
+  driver = redirect
+  domains = @ : localhost
+  allow_fail
+  allow_defer
+  data = \${lookup{\$local_part}lsearch{/etc/aliases}}
+
+root_mail:
+  driver = accept
+  domains = @ : localhost
+  local_parts = root
+  transport = root_spool
+
+local_user:
+  driver = accept
+  domains = @ : localhost
+  check_local_user
+  transport = local_spool
+  cannot_route_message = Unknown user
+
+begin transports
+
+remote_smtp:
+  driver = smtp
+  # Only mail from a signed-in mailbox is signed, with its own domain's key:
+  # the ACLs above have already made sure that domain is the mailbox's.
+  dkim_domain = \${if def:authenticated_id {\${lookup{\$sender_address_domain}lsearch{${MAIL_EXIM_DIR}/dkim_domains}}}}
+  dkim_selector = bpanel
+  dkim_private_key = \${if eq{\$dkim_domain}{}{0}{${MAIL_EXIM_DIR}/dkim/\$dkim_domain.pem}}
+  dkim_canon = relaxed
+  dkim_strict = false
+
+dovecot_lmtp:
+  driver = lmtp
+  socket = /run/dovecot/lmtp-exim
+  batch_max = 200
+
+local_spool:
+  driver = appendfile
+  file = /var/mail/\$local_part_data
+  delivery_date_add
+  envelope_to_add
+  return_path_add
+  group = mail
+  mode = 0660
+  mode_fail_narrower = false
+
+root_spool:
+  driver = appendfile
+  file = /var/mail/root
+  user = mail
+  group = mail
+  mode = 0600
+  delivery_date_add
+  envelope_to_add
+  return_path_add
+
+begin retry
+
+*   *   F,2h,15m; G,16h,1h,1.5; F,4d,6h
+
+begin rewrite
+
+begin authenticators
+
+# Dovecot checks the password. Only offered over TLS, or on loopback where the
+# webmail talks to it. A webmail single sign-on logs in as "mailbox*master";
+# what counts as the sender is the mailbox.
+dovecot_plain:
+  driver = dovecot
+  public_name = PLAIN
+  server_socket = /run/dovecot/auth-client
+  server_set_id = \${sg{\$auth1}{\\N\\*.*\$\\N}{}}
+  server_advertise_condition = \${if or{{def:tls_in_cipher}{match_ip{\$sender_host_address}{<; 127.0.0.1 ; ::1}}}}
+
+dovecot_login:
+  driver = dovecot
+  public_name = LOGIN
+  server_socket = /run/dovecot/auth-client
+  server_set_id = \${sg{\$auth1}{\\N\\*.*\$\\N}{}}
+  server_advertise_condition = \${if or{{def:tls_in_cipher}{match_ip{\$sender_host_address}{<; 127.0.0.1 ; ::1}}}}
+EOF
+  chmod 0644 "$tmp"
+  if ! exim4 -C "$tmp" -bV >/dev/null 2>>"$MAIL_INSTALL_LOG"; then
+    rm -f "$tmp"
+    deny "the Exim configuration BPanel wrote does not load (see ${MAIL_INSTALL_LOG})"
+  fi
+  mv -f "$tmp" "$MAIL_EXIM_CONF"
+  printf '%s\n' "$hostname" >/etc/mailname
+}
+
+mail_write_dovecot_conf() {
+  local tmp listen="*"
+  # "::" on a machine without IPv6 stops Dovecot from starting at all.
+  if [[ -s /proc/net/if_inet6 ]]; then listen="*, ::"; fi
+  if [[ -f "$MAIL_DOVECOT_CONF" && ! -f "${MAIL_DOVECOT_CONF}.bpanel-orig" ]] \
+     && ! grep -qF "$MAIL_MARKER" "$MAIL_DOVECOT_CONF"; then
+    cp -a "$MAIL_DOVECOT_CONF" "${MAIL_DOVECOT_CONF}.bpanel-orig"
+  fi
+  tmp="$(mktemp "${MAIL_DOVECOT_CONF}.XXXXXX")"
+  cat >"$tmp" <<EOF
+${MAIL_MARKER} Rewritten each time the addon is installed:
+# edits here are lost. The mailboxes are in ${MAIL_DOVECOT_DIR}/users.
+# The distribution's own file is kept as dovecot.conf.bpanel-orig.
+
+protocols = imap pop3 lmtp
+listen = ${listen}
+login_greeting = Ready.
+
+# Passwords only over TLS; loopback (the webmail) counts as secure.
+disable_plaintext_auth = yes
+auth_mechanisms = plain login
+auth_username_format = %Lu
+# The webmail's single sign-on: "mailbox*${WEBMAIL_MASTER_USER}" with the master password.
+auth_master_user_separator = *
+
+ssl = required
+ssl_cert = <${MAIL_TLS_DIR}/fullchain.pem
+ssl_key = <${MAIL_TLS_DIR}/privkey.pem
+ssl_dh = </usr/share/dovecot/dh.pem
+ssl_min_protocol = TLSv1.2
+ssl_prefer_server_ciphers = yes
+
+# Each mailbox is stored as the Linux user that owns it, in that user's home.
+mail_location = maildir:~/Maildir
+first_valid_uid = 1000
+mail_plugins = \$mail_plugins quota
+
+namespace inbox {
+  inbox = yes
+  mailbox Drafts {
+    auto = subscribe
+    special_use = \\Drafts
+  }
+  mailbox Sent {
+    auto = subscribe
+    special_use = \\Sent
+  }
+  mailbox Junk {
+    auto = subscribe
+    special_use = \\Junk
+  }
+  mailbox Trash {
+    auto = subscribe
+    special_use = \\Trash
+  }
+}
+
+passdb {
+  driver = passwd-file
+  args = ${MAIL_DOVECOT_DIR}/masters
+  master = yes
+  pass = yes
+}
+passdb {
+  driver = passwd-file
+  args = scheme=SHA512-CRYPT ${MAIL_DOVECOT_DIR}/users
+}
+userdb {
+  driver = passwd-file
+  args = ${MAIL_DOVECOT_DIR}/users
+}
+
+plugin {
+  quota = count:Mailbox
+  quota_vsizes = yes
+  quota_grace = 10%%
+}
+
+protocol imap {
+  mail_plugins = \$mail_plugins imap_quota
+  mail_max_userip_connections = 20
+}
+protocol lmtp {
+  postmaster_address = postmaster@%d
+}
+
+service auth {
+  unix_listener auth-client {
+    mode = 0660
+    group = Debian-exim
+  }
+}
+service lmtp {
+  unix_listener lmtp-exim {
+    mode = 0660
+    group = Debian-exim
+  }
+}
+service imap-login {
+  inet_listener imap {
+    port = 143
+  }
+  inet_listener imaps {
+    port = 993
+    ssl = yes
+  }
+}
+service pop3-login {
+  inet_listener pop3 {
+    port = 110
+  }
+  inet_listener pop3s {
+    port = 995
+    ssl = yes
+  }
+}
+EOF
+  chmod 0644 "$tmp"
+  if ! doveconf -c "$tmp" -n >/dev/null 2>>"$MAIL_INSTALL_LOG"; then
+    rm -f "$tmp"
+    deny "the Dovecot configuration BPanel wrote does not load (see ${MAIL_INSTALL_LOG})"
+  fi
+  mv -f "$tmp" "$MAIL_DOVECOT_CONF"
+}
+
+mail_env_value() {
+  [[ -f "$WEBMAIL_ENV" ]] || return 0
+  sed -nE "s/^$1=//p" "$WEBMAIL_ENV" | tail -n1
+}
+
+mail_install_webmail() {
+  local ref auth_secret sso_secret master_password
+  ref="$(env_get WEBMAIL_REF)"
+  ref="${ref:-main}"
+  [[ "$ref" =~ ^[A-Za-z0-9._/-]{1,100}$ ]] || deny "invalid WEBMAIL_REF: $ref"
+  if [[ -d "$WEBMAIL_HOME" && ! -f "$WEBMAIL_HOME/.bpanel" ]]; then
+    deny "${WEBMAIL_HOME} already exists and was not set up by BPanel - the Email addon will not take it over"
+  fi
+  id -u bnix-webmail >/dev/null 2>&1 \
+    || useradd --system --home-dir "$WEBMAIL_HOME" --no-create-home --shell /usr/sbin/nologin --user-group bnix-webmail
+  install -d -o root -g root -m 0755 "$WEBMAIL_HOME"
+  touch "$WEBMAIL_HOME/.bpanel"
+  if [[ -d "$WEBMAIL_HOME/src/.git" ]]; then
+    git -C "$WEBMAIL_HOME/src" fetch --quiet --depth 1 origin "$ref" >>"$MAIL_INSTALL_LOG" 2>&1 \
+      || deny "could not fetch the webmail from ${WEBMAIL_REPO} (see ${MAIL_INSTALL_LOG})"
+    git -C "$WEBMAIL_HOME/src" reset --quiet --hard FETCH_HEAD >>"$MAIL_INSTALL_LOG" 2>&1 \
+      || deny "could not update the webmail checkout (see ${MAIL_INSTALL_LOG})"
+  else
+    rm -rf "$WEBMAIL_HOME/src"
+    git clone --quiet --depth 1 --branch "$ref" "$WEBMAIL_REPO" "$WEBMAIL_HOME/src" >>"$MAIL_INSTALL_LOG" 2>&1 \
+      || deny "could not download the webmail from ${WEBMAIL_REPO} (see ${MAIL_INSTALL_LOG})"
+  fi
+  if [[ ! -x "$WEBMAIL_HOME/venv/bin/python" ]]; then
+    python3 -m venv "$WEBMAIL_HOME/venv" >>"$MAIL_INSTALL_LOG" 2>&1 \
+      || deny "could not create the webmail's Python environment (see ${MAIL_INSTALL_LOG})"
+  fi
+  "$WEBMAIL_HOME/venv/bin/pip" install --quiet --disable-pip-version-check \
+    -r "$WEBMAIL_HOME/src/backend/requirements.txt" >>"$MAIL_INSTALL_LOG" 2>&1 \
+    || deny "could not install the webmail's Python packages (see ${MAIL_INSTALL_LOG})"
+  install -d -o bnix-webmail -g bnix-webmail -m 0750 "$WEBMAIL_HOME/data"
+
+  # Secrets survive a reinstall: a new AUTH_SECRET would sign everybody out,
+  # and a new master password must reach Dovecot and the webmail together.
+  auth_secret="$(mail_env_value AUTH_SECRET)"
+  [[ -n "$auth_secret" ]] || auth_secret="$(openssl rand -hex 32)"
+  sso_secret="$(mail_env_value SSO_SECRET)"
+  [[ -n "$sso_secret" ]] || sso_secret="$(openssl rand -hex 32)"
+  master_password="$(mail_env_value SSO_MASTER_PASSWORD)"
+  [[ -n "$master_password" ]] || master_password="$(openssl rand -hex 24)"
+
+  # Each file is made with its final mode while still empty, then filled.
+  install -m 0640 -o root -g bnix-webmail /dev/null "${WEBMAIL_ENV}.new"
+  cat >"${WEBMAIL_ENV}.new" <<EOF
+${MAIL_MARKER} Rewritten each time the addon is installed.
+AUTH_SECRET=${auth_secret}
+# Dovecot and Exim on this server, over loopback.
+IMAP_HOST=127.0.0.1
+IMAP_PORT=143
+IMAP_SECURE=false
+SMTP_HOST=127.0.0.1
+SMTP_PORT=587
+SMTP_SECURE=false
+ENABLE_CADDY_AUTOMATION=false
+# Single sign-on from BPanel.
+SSO_SECRET=${sso_secret}
+SSO_MASTER_USER=${WEBMAIL_MASTER_USER}
+SSO_MASTER_PASSWORD=${master_password}
+SSO_MASTER_SEPARATOR=*
+EOF
+  mv -f "${WEBMAIL_ENV}.new" "$WEBMAIL_ENV"
+
+  install -d -o root -g bpanel -m 0750 /etc/bpanel
+  install -m 0640 -o root -g bpanel /dev/null "${WEBMAIL_SSO_KEY_FILE}.new"
+  printf '%s\n' "$sso_secret" >"${WEBMAIL_SSO_KEY_FILE}.new"
+  mv -f "${WEBMAIL_SSO_KEY_FILE}.new" "$WEBMAIL_SSO_KEY_FILE"
+
+  install -m 0640 -o root -g dovecot /dev/null "${MAIL_DOVECOT_DIR}/masters.new"
+  printf '%s:{SHA512-CRYPT}%s\n' "$WEBMAIL_MASTER_USER" \
+    "$(printf '%s\n' "$master_password" | openssl passwd -6 -stdin)" >"${MAIL_DOVECOT_DIR}/masters.new"
+  mv -f "${MAIL_DOVECOT_DIR}/masters.new" "${MAIL_DOVECOT_DIR}/masters"
+
+  cat >"$WEBMAIL_UNIT" <<UNIT
+[Unit]
+Description=BNIX Webmail for BPanel (Email addon)
+After=network-online.target dovecot.service exim4.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bnix-webmail
+Group=bnix-webmail
+WorkingDirectory=${WEBMAIL_HOME}/src/backend
+EnvironmentFile=${WEBMAIL_ENV}
+Environment=DATA_DIR=${WEBMAIL_HOME}/data
+Environment=HOST=127.0.0.1
+Environment=PORT=${WEBMAIL_PORT}
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=${WEBMAIL_HOME}/venv/bin/python ${WEBMAIL_HOME}/src/backend/main.py
+Restart=always
+RestartSec=5
+PrivateTmp=true
+ProtectSystem=full
+NoNewPrivileges=true
+ReadWritePaths=${WEBMAIL_HOME}/data
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  systemctl daemon-reload
+}
+
+mail_webmail_proxy_block() {
+  # The location blocks every webmail server block shares.
+  cat <<'NGINX'
+    client_max_body_size 50m;
+
+    # The webmail's own administration (domains, S3, a separate password) is
+    # not for customers: BPanel manages all of it.
+    location ^~ /admin { return 404; }
+    location ^~ /api/admin/ { return 404; }
+
+    location / {
+        proxy_pass http://127.0.0.1:8096;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        # Overwritten, not appended: the webmail reads the last address.
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+NGINX
+}
+
+mail_write_webmail_nginx() {
+  local conf off
+  # Server blocks set aside when the addon was last turned off come back.
+  for off in /etc/nginx/conf.d/00-bpanel-webmail*.conf.off; do
+    [[ -f "$off" ]] || continue
+    mv -f "$off" "${off%.off}"
+  done
+  conf="$WEBMAIL_NGINX"
+  {
+    printf '%s Rewritten each time the addon is installed.\n' "$MAIL_MARKER"
+    printf '# The webmail on the panel'"'"'s own name and certificate.\n'
+    printf 'server {\n'
+    printf '    listen %s ssl;\n' "$WEBMAIL_PUBLIC_PORT"
+    printf '    server_name _;\n'
+    printf '    ssl_certificate %s/fullchain.pem;\n' "$MAIL_TLS_DIR"
+    printf '    ssl_certificate_key %s/privkey.pem;\n' "$MAIL_TLS_DIR"
+    printf '    ssl_protocols TLSv1.2 TLSv1.3;\n'
+    mail_webmail_proxy_block
+    printf '}\n'
+  } >"$conf"
+  nginx_ipv6_apply >/dev/null 2>&1 || true
+  if ! nginx -t >>"$MAIL_INSTALL_LOG" 2>&1; then
+    rm -f "$conf"
+    deny "nginx refused the webmail's server block on port ${WEBMAIL_PUBLIC_PORT} (see ${MAIL_INSTALL_LOG})"
+  fi
+  systemctl reload nginx
+}
+
+mail_first_line() {
+  # The greeting a TCP service on loopback sends first, or nothing.
+  timeout 5 bash -c "exec 3<>/dev/tcp/127.0.0.1/$1; head -n1 <&3" 2>/dev/null | tr -d '\r' || true
+}
+
+install_mail() {
+  local hostname="$1" other taken greeting waited
+  require_domain "$hostname"
+  for other in postfix sendmail opensmtpd; do
+    if systemctl is-active --quiet "$other" 2>/dev/null; then
+      deny "${other} is already running here - stop it before installing the Email addon"
+    fi
+  done
+  taken="$(mail_port_taken)"
+  if [[ -n "${taken// /}" ]]; then
+    deny "these mail ports are already in use: ${taken% } - stop what holds them before installing the Email addon"
+  fi
+
+  mail_install_packages
+
+  install -d -o root -g Debian-exim -m 0750 "$MAIL_EXIM_DIR" "$MAIL_EXIM_DIR/dkim"
+  install -d -o root -g dovecot -m 0750 "$MAIL_DOVECOT_DIR"
+  local list
+  for list in domains mailboxes dkim_domains; do
+    [[ -f "$MAIL_EXIM_DIR/$list" ]] || install -m 0640 -o root -g Debian-exim /dev/null "$MAIL_EXIM_DIR/$list"
+  done
+  [[ -f "$MAIL_DOVECOT_DIR/users" ]] || install -m 0640 -o root -g dovecot /dev/null "$MAIL_DOVECOT_DIR/users"
+
+  mail_write_tls_script
+  "$MAIL_TLS_SCRIPT" >>"$MAIL_INSTALL_LOG" 2>&1 \
+    || deny "the panel has no certificate the mail server could use - set up the panel's HTTPS first"
+  systemctl enable --now bpanel-mail-tls.path >/dev/null 2>&1 || true
+
+  mail_write_exim_conf "$hostname"
+  mail_write_dovecot_conf
+  mail_install_webmail
+
+  systemctl enable dovecot exim4 bpanel-webmail >/dev/null 2>&1 || true
+  systemctl restart dovecot 2>>"$MAIL_INSTALL_LOG" || deny "Dovecot did not start - journalctl -u dovecot -n 50 says why"
+  systemctl restart exim4 2>>"$MAIL_INSTALL_LOG" || deny "Exim did not start - journalctl -u exim4 -n 50 says why"
+  systemctl restart bpanel-webmail 2>>"$MAIL_INSTALL_LOG" || deny "the webmail did not start - journalctl -u bpanel-webmail -n 50 says why"
+
+  # Proof, not process lists: each service has to answer.
+  waited=0
+  greeting=""
+  while (( waited < 20 )); do
+    greeting="$(mail_first_line 25)"
+    [[ "$greeting" == 220* ]] && break
+    sleep 1
+    waited=$((waited + 1))
+  done
+  [[ "$greeting" == 220* ]] || deny "Exim is running but does not answer SMTP on port 25"
+  greeting="$(mail_first_line 143)"
+  [[ "$greeting" == "* OK"* ]] || deny "Dovecot is running but does not answer IMAP on port 143"
+  [[ -S /run/dovecot/lmtp-exim ]] || deny "Dovecot is running but Exim's delivery socket /run/dovecot/lmtp-exim is missing"
+  waited=0
+  while (( waited < 40 )); do
+    curl -fsS -m 3 "http://127.0.0.1:${WEBMAIL_PORT}/api/auth/me" >/dev/null 2>&1 && break
+    sleep 1
+    waited=$((waited + 1))
+  done
+  curl -fsS -m 3 "http://127.0.0.1:${WEBMAIL_PORT}/api/auth/me" >/dev/null 2>&1 \
+    || deny "the webmail is running but does not answer on 127.0.0.1:${WEBMAIL_PORT} - journalctl -u bpanel-webmail -n 50 says why"
+
+  mail_write_webmail_nginx
+
+  install -d -m 0750 "$FIREWALL_ADDON_PORTS_DIR"
+  printf '25 tcp\n465 tcp\n587 tcp\n143 tcp\n993 tcp\n110 tcp\n995 tcp\n%s tcp\n' "$WEBMAIL_PUBLIC_PORT" \
+    >"$FIREWALL_ADDON_PORTS_DIR/mail.ports"
+  firewall_apply >/dev/null
+  echo "Email installed: Exim answers on 25/465/587, Dovecot on 143/993/110/995, and the webmail on port ${WEBMAIL_PUBLIC_PORT}. Mail server name: ${hostname}."
+}
+
+remove_mail() {
+  local conf
+  systemctl disable --now bpanel-webmail >/dev/null 2>&1 || true
+  systemctl disable --now exim4 >/dev/null 2>&1 || true
+  systemctl disable --now dovecot >/dev/null 2>&1 || true
+  systemctl disable --now bpanel-mail-tls.path >/dev/null 2>&1 || true
+  for conf in /etc/nginx/conf.d/00-bpanel-webmail*.conf; do
+    [[ -f "$conf" ]] || continue
+    mv -f "$conf" "${conf}.off"
+  done
+  if nginx -t >/dev/null 2>&1; then systemctl reload nginx >/dev/null 2>&1 || true; fi
+  rm -f "$FIREWALL_ADDON_PORTS_DIR/mail.ports"
+  firewall_apply >/dev/null
+  echo "Email stopped: Exim, Dovecot and the webmail are off and the mail ports are closed. Mail, mailboxes and DKIM keys are kept."
+}
+
+mail_status() {
+  local installed=no exim=no dovecot=no webmail=no port_open=no hostname=""
+  if pkg_installed exim4-daemon-heavy && pkg_installed dovecot-imapd && [[ -x "$WEBMAIL_HOME/venv/bin/python" ]]; then
+    installed=yes
+  fi
+  if systemctl is-active --quiet exim4 2>/dev/null; then exim=yes; fi
+  if systemctl is-active --quiet dovecot 2>/dev/null; then dovecot=yes; fi
+  if systemctl is-active --quiet bpanel-webmail 2>/dev/null; then webmail=yes; fi
+  if [[ -f "$FIREWALL_ADDON_PORTS_DIR/mail.ports" ]]; then port_open=yes; fi
+  if [[ -f "$MAIL_EXIM_CONF" ]]; then
+    hostname="$(awk -F' = ' '$1 == "primary_hostname" { print $2; exit }' "$MAIL_EXIM_CONF")"
+  fi
+  echo "installed=${installed}"
+  echo "exim=${exim}"
+  echo "dovecot=${dovecot}"
+  echo "webmail=${webmail}"
+  echo "port_open=${port_open}"
+  echo "hostname=${hostname}"
+}
+
+mail_sync() {
+  # The whole list of mailboxes, as JSON on stdin, from the panel. Writes what
+  # Exim and Dovecot read, makes missing mail directories and DKIM keys, and
+  # prints each domain's DKIM public key. Neither service needs a reload: both
+  # notice a changed file on the next lookup.
+  [[ -f "$MAIL_EXIM_CONF" ]] || deny "the Email addon is not installed"
+  local payload status=0
+  payload="$(mktemp)"
+  head -c 8000000 >"$payload"
+  python3 - "$payload" "$MAIL_EXIM_DIR" "$MAIL_DOVECOT_DIR" <<'PY' || status=$?
+import base64
+import grp
+import json
+import os
+import pwd
+import re
+import subprocess
+import sys
+
+payload_path, exim_dir, dovecot_dir = sys.argv[1:4]
+
+DOMAIN_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$")
+LOCAL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$")
+USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{2,31}$")
+HASH_RE = re.compile(r"^\{SHA512-CRYPT\}\$6\$(rounds=[0-9]{4,9}\$)?[./A-Za-z0-9]{1,16}\$[./A-Za-z0-9]{86}$")
+RESERVED = {
+    "root", "daemon", "bin", "sys", "sync", "games", "man", "lp", "mail", "news", "uucp", "proxy",
+    "www-data", "backup", "list", "irc", "_apt", "nobody", "bpanel", "bpanel-sites", "bpanel-sftp",
+    "bpanel-sftp-site", "mysql", "redis", "nginx",
+}
+
+
+def fail(message):
+    print(f"bpanel-helper: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+try:
+    with open(payload_path, encoding="utf-8") as handle:
+        data = json.load(handle)
+except (OSError, ValueError):
+    fail("mail-sync expects the mailbox list as JSON on stdin")
+
+exim_gid = grp.getgrnam("Debian-exim").gr_gid
+dovecot_gid = grp.getgrnam("dovecot").gr_gid
+bpanel_gid = grp.getgrnam("bpanel").gr_gid
+
+boxes = []
+seen = set()
+for item in data.get("mailboxes") or []:
+    local = str(item.get("local") or "")
+    domain = str(item.get("domain") or "")
+    user = str(item.get("user") or "")
+    secret = str(item.get("hash") or "")
+    if not LOCAL_RE.fullmatch(local) or ".." in local:
+        fail(f"invalid mailbox name: {local!r}")
+    if not DOMAIN_RE.fullmatch(domain):
+        fail(f"invalid mailbox domain: {domain!r}")
+    if not USER_RE.fullmatch(user) or user in RESERVED or user.startswith("sftp_"):
+        fail(f"invalid mailbox owner: {user!r}")
+    if not HASH_RE.fullmatch(secret):
+        fail(f"invalid password hash for {local}@{domain}")
+    try:
+        account = pwd.getpwnam(user)
+    except KeyError:
+        fail(f"no Linux user {user} for {local}@{domain}")
+    if account.pw_uid < 1000 or account.pw_dir != f"/home/{user}":
+        fail(f"{user} is not a panel account")
+    quota = item.get("quota_mb") or 0
+    if not isinstance(quota, int) or not 0 <= quota <= 1048576:
+        fail(f"invalid quota for {local}@{domain}")
+    address = f"{local}@{domain}"
+    if address in seen:
+        fail(f"{address} is listed twice")
+    seen.add(address)
+    boxes.append({
+        "address": address, "local": local, "domain": domain, "user": user,
+        "uid": account.pw_uid, "gid": account.pw_gid, "hash": secret, "quota": quota,
+        "active": bool(item.get("active", True)),
+    })
+
+
+def open_dir(parent_fd, name, uid, gid, mode):
+    """A directory under parent_fd, made if missing, never through a symlink.
+
+    Levels below a mailbox belong to its owner, who could swap one for a link
+    to anywhere; opening relative to the parent with O_NOFOLLOW, then changing
+    ownership through the descriptor, means root only ever touches what it
+    opened.
+    """
+    try:
+        os.mkdir(name, 0o700, dir_fd=parent_fd)
+    except FileExistsError:
+        pass
+    fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+    os.fchown(fd, uid, gid)
+    os.fchmod(fd, mode)
+    return fd
+
+
+for box in boxes:
+    # /home/<user> is root's (the SFTP chroot); mail/ and mail/<domain>/ are
+    # root's too, so the customer cannot rearrange them. From the mailbox down
+    # the directories are the owner's, with group bpanel (setgid) so the panel
+    # can read them for backups and disk usage.
+    home_fd = os.open(f"/home/{box['user']}", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    fds = [home_fd]
+    try:
+        fds.append(open_dir(fds[-1], "mail", 0, bpanel_gid, 0o751))
+        fds.append(open_dir(fds[-1], box["domain"], 0, bpanel_gid, 0o751))
+        fds.append(open_dir(fds[-1], box["local"], box["uid"], bpanel_gid, 0o2750))
+        fds.append(open_dir(fds[-1], "Maildir", box["uid"], bpanel_gid, 0o2750))
+        for part in ("cur", "new", "tmp"):
+            os.close(open_dir(fds[-1], part, box["uid"], bpanel_gid, 0o2750))
+    finally:
+        for fd in reversed(fds):
+            os.close(fd)
+
+domains = sorted({box["domain"] for box in boxes})
+dkim = {}
+for domain in domains:
+    key_path = os.path.join(exim_dir, "dkim", f"{domain}.pem")
+    if not os.path.exists(key_path):
+        fd = os.open(key_path + ".new", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640)
+        os.fchown(fd, 0, exim_gid)
+        os.close(fd)
+        subprocess.run(["openssl", "genrsa", "-out", key_path + ".new", "2048"],
+                       check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        os.chown(key_path + ".new", 0, exim_gid)
+        os.chmod(key_path + ".new", 0o640)
+        os.replace(key_path + ".new", key_path)
+    der = subprocess.run(["openssl", "rsa", "-in", key_path, "-pubout", "-outform", "DER"],
+                         check=True, capture_output=True).stdout
+    dkim[domain] = base64.b64encode(der).decode()
+
+
+def write(path, lines, gid):
+    try:
+        before = os.stat(path).st_mtime_ns // 1_000_000_000
+    except FileNotFoundError:
+        before = None
+    tmp = path + ".new"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640)
+    try:
+        os.fchown(fd, 0, gid)
+        os.fchmod(fd, 0o640)
+        os.write(fd, "".join(line + "\n" for line in lines).encode())
+    finally:
+        os.close(fd)
+    os.replace(tmp, path)
+    # Dovecot reloads its passwd-file when the mtime (in whole seconds) or
+    # the size changed. A new password is a hash of the same length, so a
+    # rewrite in the same second as the last one would never be seen.
+    if before is not None and os.stat(path).st_mtime_ns // 1_000_000_000 <= before:
+        bumped = (before + 1) * 1_000_000_000
+        os.utime(path, ns=(bumped, bumped))
+
+
+write(os.path.join(exim_dir, "domains"), [f"{d}: {d}" for d in domains], exim_gid)
+write(os.path.join(exim_dir, "mailboxes"), [f"{b['address']}: {b['user']}" for b in sorted(boxes, key=lambda b: b["address"])], exim_gid)
+write(os.path.join(exim_dir, "dkim_domains"), [f"{d}: {d}" for d in sorted(dkim)], exim_gid)
+users = []
+for box in sorted(boxes, key=lambda b: b["address"]):
+    home = f"/home/{box['user']}/mail/{box['domain']}/{box['local']}"
+    extra = f"userdb_quota_rule=*:storage={box['quota']}M"
+    if not box["active"]:
+        extra += " nologin reason=Suspended"
+    users.append(f"{box['address']}:{box['hash']}:{box['uid']}:{box['gid']}::{home}::{extra}")
+write(os.path.join(dovecot_dir, "users"), users, dovecot_gid)
+
+print(json.dumps({"mailboxes": len(boxes), "domains": domains, "dkim": dkim}))
+PY
+  rm -f "$payload"
+  [[ $status -eq 0 ]] || exit "$status"
+  # Cheap, and a second chance if the path unit missed a certificate change.
+  "$MAIL_TLS_SCRIPT" >/dev/null 2>&1 || true
+}
+
+mail_box_path() {
+  # /home/<user>/mail/<domain>/<name>, checked piece by piece.
+  local user="$1" domain="$2" name="$3"
+  require_linux_user "$user"
+  require_domain "$domain"
+  [[ "$name" =~ ^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$ && "$name" != *..* ]] || deny "invalid mailbox name: $name"
+  printf '/home/%s/mail/%s/%s' "$user" "$domain" "$name"
+}
+
+mail_delete_box() {
+  # The mailbox's mail goes with it. Its parents are root's, so the path
+  # cannot be redirected; rm does not follow links inside it.
+  local box
+  box="$(mail_box_path "$1" "$2" "$3")"
+  if [[ -L "$box" ]]; then
+    rm -f -- "$box"
+  elif [[ -d "$box" ]]; then
+    rm -rf --one-file-system -- "$box"
+  fi
+  rmdir -- "/home/$1/mail/$2" 2>/dev/null || true
+  echo "deleted ${3}@${2}"
+}
+
+mail_import() {
+  # Put a mailbox's mail back from a backup, replacing what it holds now.
+  # The staged copy is the panel's; it is copied into a directory only root
+  # can enter, made the owner's there, and only then renamed into place, so
+  # the owner never gets a directory root is still writing into.
+  local user="$1" domain="$2" name="$3" src_arg="$4" box src parent work
+  box="$(mail_box_path "$user" "$domain" "$name")"
+  case "$src_arg" in
+    /var/lib/bpanel/import-stage/*) : ;;
+    *) deny "staged source must be under /var/lib/bpanel/import-stage" ;;
+  esac
+  [[ ! -L "$src_arg" ]] || deny "staged source cannot be a symlink"
+  src=$(readlink -e -- "$src_arg") || deny "staged source not found"
+  case "$src/" in
+    /var/lib/bpanel/import-stage/*/) : ;;
+    *) deny "staged source escaped the import staging area" ;;
+  esac
+  [[ -d "$src" ]] || deny "staged source is not a directory"
+  [[ "$(stat -c '%U' -- "$src")" == "bpanel" ]] || deny "staged source must be owned by bpanel"
+  id -u "$user" >/dev/null 2>&1 || deny "no Linux user $user"
+  parent="$(dirname "$box")"
+  install -d -o root -g bpanel -m 0751 "/home/${user}/mail" "$parent"
+  work="$(mktemp -d "${parent}/.restore-XXXXXX")"
+  chmod 0700 "$work"
+  cp -a --no-preserve=ownership -- "$src/." "$work/"
+  find "$work" \( -type l -o -type b -o -type c -o -type p -o -type s \) -delete 2>/dev/null || true
+  # Modes first and the top directory's owner last: until then only root can
+  # enter, so nothing inside can be swapped for a link while root works on it.
+  find "$work" -mindepth 1 -type d -exec chmod 2750 {} +
+  find "$work" -type f -exec chmod 0640 {} +
+  find "$work" -mindepth 1 -exec chown -h "${user}:bpanel" {} +
+  chown "${user}:bpanel" "$work"
+  chmod 2750 "$work"
+  if [[ -e "$box" || -L "$box" ]]; then
+    rm -rf --one-file-system -- "$box"
+  fi
+  mv -T -- "$work" "$box"
+  echo "restored ${name}@${domain}"
+}
+
+mail_webmail_host() {
+  # webmail.<domain> on ports 80/443, with its own Let's Encrypt certificate.
+  local domain="$1" email="${2:-}" name conf args rc=0
+  require_domain "$domain"
+  name="webmail.${domain}"
+  conf="/etc/nginx/conf.d/00-bpanel-webmail-${domain}.conf"
+  [[ -f "$WEBMAIL_NGINX" ]] || deny "the Email addon is not installed"
+  install -d -o root -g bpanel -m 0755 /var/www/bpanel-acme/.well-known/acme-challenge
+  if [[ ! -f "/etc/letsencrypt/live/${name}/fullchain.pem" ]]; then
+    cat >"$conf" <<NGINX
+${MAIL_MARKER} webmail.${domain}, waiting for its certificate.
+server {
+    listen 80;
+    server_name ${name};
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/bpanel-acme;
+        default_type text/plain;
+        try_files \$uri =404;
+    }
+    location / { return 404; }
+}
+NGINX
+    nginx_ipv6_apply >/dev/null 2>&1 || true
+    if ! nginx -t >/dev/null 2>&1; then
+      rm -f "$conf"
+      deny "nginx refused the server block for ${name}"
+    fi
+    systemctl reload nginx
+    args=(certonly --webroot -w /var/www/bpanel-acme --cert-name "$name" -d "$name"
+          --non-interactive --agree-tos --keep-until-expiring --deploy-hook "systemctl reload nginx")
+    if [[ -n "$email" ]]; then
+      require_email "$email"
+      args+=(--email "$email")
+    else
+      args+=(--register-unsafely-without-email)
+    fi
+    certbot "${args[@]}" >>"$MAIL_INSTALL_LOG" 2>&1 || rc=$?
+    if [[ ! -f "/etc/letsencrypt/live/${name}/fullchain.pem" ]]; then
+      rm -f "$conf"
+      nginx -t >/dev/null 2>&1 && systemctl reload nginx
+      deny "no certificate for ${name} (certbot exited ${rc}) - point ${name} at this server first"
+    fi
+  fi
+  {
+    printf '%s webmail.%s\n' "$MAIL_MARKER" "$domain"
+    printf 'server {\n    listen 80;\n    server_name %s;\n' "$name"
+    printf '    location ^~ /.well-known/acme-challenge/ {\n        root /var/www/bpanel-acme;\n        default_type text/plain;\n        try_files $uri =404;\n    }\n'
+    printf '    location / { return 301 https://$host$request_uri; }\n}\n'
+    printf 'server {\n    listen 443 ssl;\n    server_name %s;\n' "$name"
+    printf '    ssl_certificate /etc/letsencrypt/live/%s/fullchain.pem;\n' "$name"
+    printf '    ssl_certificate_key /etc/letsencrypt/live/%s/privkey.pem;\n' "$name"
+    printf '    ssl_protocols TLSv1.2 TLSv1.3;\n'
+    mail_webmail_proxy_block
+    printf '}\n'
+  } >"$conf"
+  nginx_ipv6_apply >/dev/null 2>&1 || true
+  if ! nginx -t >/dev/null 2>&1; then
+    rm -f "$conf"
+    nginx -t >/dev/null 2>&1 && systemctl reload nginx
+    deny "nginx refused the server block for ${name}"
+  fi
+  systemctl reload nginx
+  echo "https://${name}"
+}
+
+mail_webmail_host_remove() {
+  local domain="$1"
+  require_domain "$domain"
+  rm -f "/etc/nginx/conf.d/00-bpanel-webmail-${domain}.conf" "/etc/nginx/conf.d/00-bpanel-webmail-${domain}.conf.off"
+  if nginx -t >/dev/null 2>&1; then systemctl reload nginx; fi
+  echo "removed webmail.${domain}"
+}
+
+mail_webmail_hosts() {
+  # The domains whose webmail.<domain> is served, one per line.
+  local conf domain
+  for conf in /etc/nginx/conf.d/00-bpanel-webmail-*.conf; do
+    [[ -f "$conf" ]] || continue
+    grep -q "listen 443 ssl" "$conf" || continue
+    domain="${conf#/etc/nginx/conf.d/00-bpanel-webmail-}"
+    printf '%s\n' "${domain%.conf}"
+  done
+}
+
 fail2ban_status() {
   if ! pkg_installed fail2ban; then
     echo "installed=no"; echo "running=no"; echo "jails="; echo "banned=0"; echo "banaction="
@@ -5296,6 +6351,52 @@ case "$cmd" in
   dns-status)
     [[ $# -eq 0 ]] || deny "usage: dns-status"
     dns_status
+    ;;
+
+  # ---- Email (Exim + Dovecot + webmail, optional) -------------------------
+  mail-install)
+    [[ $# -eq 1 ]] || deny "usage: mail-install <mail-hostname>"
+    install_mail "$1"
+    ;;
+
+  mail-remove)
+    [[ $# -eq 0 ]] || deny "usage: mail-remove"
+    remove_mail
+    ;;
+
+  mail-status)
+    [[ $# -eq 0 ]] || deny "usage: mail-status"
+    mail_status
+    ;;
+
+  mail-sync)
+    [[ $# -eq 0 ]] || deny "usage: mail-sync < mailboxes.json"
+    mail_sync
+    ;;
+
+  mail-delete-box)
+    [[ $# -eq 3 ]] || deny "usage: mail-delete-box <site-user> <domain> <name>"
+    mail_delete_box "$1" "$2" "$3"
+    ;;
+
+  mail-import)
+    [[ $# -eq 4 ]] || deny "usage: mail-import <site-user> <domain> <name> <staged-dir>"
+    mail_import "$1" "$2" "$3" "$4"
+    ;;
+
+  mail-webmail-host)
+    [[ $# -ge 1 && $# -le 2 ]] || deny "usage: mail-webmail-host <domain> [email]"
+    mail_webmail_host "$1" "${2:-}"
+    ;;
+
+  mail-webmail-host-remove)
+    [[ $# -eq 1 ]] || deny "usage: mail-webmail-host-remove <domain>"
+    mail_webmail_host_remove "$1"
+    ;;
+
+  mail-webmail-hosts)
+    [[ $# -eq 0 ]] || deny "usage: mail-webmail-hosts"
+    mail_webmail_hosts
     ;;
 
   fail2ban-banned)

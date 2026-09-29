@@ -56,6 +56,7 @@ def create_package(
         wordpress_enabled=payload.wordpress_enabled,
         node_apps_limit=payload.node_apps_limit,
         sftp_accounts_limit=payload.sftp_accounts_limit,
+        mail_accounts_limit=payload.mail_accounts_limit,
         node_app_memory_mb=payload.node_app_memory_mb,
     )
     db.add(package)
@@ -100,6 +101,8 @@ def update_package(
         package.node_apps_limit = payload.node_apps_limit
     if payload.sftp_accounts_limit is not None:
         package.sftp_accounts_limit = payload.sftp_accounts_limit
+    if payload.mail_accounts_limit is not None:
+        package.mail_accounts_limit = payload.mail_accounts_limit
     if payload.node_app_memory_mb is not None:
         package.node_app_memory_mb = payload.node_app_memory_mb
     for user in db.query(User).filter(User.package_id == package.id).all():

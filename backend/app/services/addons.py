@@ -24,6 +24,7 @@ APPLICATION = "application"
 DEMO = "demo"
 DNS = "dns"
 FAIL2BAN = "fail2ban"
+MAIL = "mail"
 MALWARE = "malware"
 MCP = "mcp"
 NOTIFICATIONS = "notifications"
@@ -112,6 +113,26 @@ CATALOGUE: dict[str, dict] = {
             "If the server's IP address changes, remove the addon and install it again so PowerDNS listens on the new address.",
             "Deleting a website keeps its zone. Only administrators delete zones, and a zone whose website is still here comes back at the next sync.",
             "Removing the addon stops PowerDNS and closes port 53; every zone is kept and is served again when you install it again.",
+        ],
+        "keeps_data_on_uninstall": True,
+    },
+    MAIL: {
+        "name": "Email",
+        "version": "1.0.0",
+        "summary": "Mailboxes on your domains, with a webmail your customers open from the panel without a password.",
+        "details": [
+            "Installs Exim to send and receive, Dovecot for IMAP and POP3, and the BNIX webmail on port 2096.",
+            "Customers make mailboxes on the domains of their own websites, up to the number in their package. Administrators make them on any domain.",
+            "One click in the panel opens a mailbox in the webmail, with no password to type. Once webmail.<domain> points here, it can have its own address and certificate.",
+            "Mail is kept in the customer's home directory: it counts toward their disk space and is in their account backups.",
+            "Outgoing mail is signed with DKIM. With DNS Manager on, the DKIM, DMARC and webmail records are added to the domain's zone by themselves.",
+        ],
+        "notes": [
+            "Needs the panel on a domain with a real certificate: mail clients connect to that name.",
+            "Opens ports 25, 465, 587, 143, 993, 110, 995 and 2096. Many VPS providers block outgoing port 25 until asked; the Email page says whether this server can send.",
+            "Refuses to install next to another mail server (Postfix, Sendmail). Once installed, websites' PHP mail() is sent through Exim as well.",
+            "There is no spam filter in this version.",
+            "Removing the addon stops Exim, Dovecot and the webmail and closes the ports. The mail, the mailboxes and the DKIM keys are kept.",
         ],
         "keeps_data_on_uninstall": True,
     },
@@ -269,6 +290,11 @@ def require_application() -> None:
 def require_dns() -> None:
     """FastAPI dependency for every route the DNS Manager addon owns."""
     require(DNS)
+
+
+def require_mail() -> None:
+    """FastAPI dependency for every route the Email addon owns."""
+    require(MAIL)
 
 
 def require_demo() -> None:

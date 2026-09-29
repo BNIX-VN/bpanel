@@ -548,6 +548,45 @@ button:disabled,.upload-button.disabled{background:var(--disabled-bg);color:var(
   .dns-actions{grid-column:2;justify-self:end}
 }
 
+/* Email addon: the new-mailbox form, the mailbox list with its usage bar,
+   each mail domain's webmail address and DNS records, and the app settings. */
+.mail-form{align-items:end}
+.mail-address{grid-column:span 2}
+.mail-address-input,.mail-password-input{display:flex;align-items:center;gap:6px;min-width:0}
+.mail-address-input input{flex:1 1 120px;min-width:0}
+.mail-address-input select{flex:1 1 160px;min-width:0}
+.mail-address-input > span{font-weight:700;color:var(--text-muted)}
+.mail-password-input input{flex:1;min-width:0}
+.mail-list{display:grid;gap:8px;margin-top:12px}
+.mail-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px 12px;align-items:center;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface)}
+.mail-row.editing{border-color:var(--primary);box-shadow:inset 0 0 0 1px var(--primary)}
+.mail-main{display:grid;gap:4px;min-width:0}
+.mail-main strong{font-size:14px;color:var(--text);overflow-wrap:anywhere}
+.mail-main small{font-size:12px;color:var(--text-muted)}
+.mail-usage{height:6px;max-width:320px}
+.mail-usage .progress-bar-fill.danger{background:var(--danger)}
+.mail-row .row-actions{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end}
+.mail-edit{grid-column:1 / -1;margin:4px 0 0;padding-top:10px;border-top:1px dashed var(--border)}
+.mail-domain{display:grid;gap:8px;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface)}
+.mail-domain + .mail-domain{margin-top:8px}
+.mail-domain-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.mail-domain-head strong{font-size:14px;color:var(--text);overflow-wrap:anywhere}
+.mail-webmail{display:inline-flex;align-items:center;gap:6px;margin-left:auto}
+.mail-webmail a{display:inline-flex;align-items:center;gap:5px;font-size:13px;font-weight:600;overflow-wrap:anywhere}
+.mail-domain-head > button{margin-left:auto}
+.mail-records > summary{cursor:pointer;font-size:13px;font-weight:600;color:var(--text-secondary);min-height:32px;display:flex;align-items:center}
+.mail-records .dns-list{margin-top:6px}
+.mail-client{grid-template-columns:minmax(140px,auto) minmax(0,1fr)}
+.mail-client span{overflow-wrap:anywhere}
+@media (max-width:640px){
+  .mail-address{grid-column:auto}
+  .mail-address-input{flex-wrap:wrap}
+  .mail-row{grid-template-columns:minmax(0,1fr)}
+  .mail-row .row-actions{justify-content:flex-start}
+  .mail-webmail,.mail-domain-head > button{margin-left:0}
+  .mail-client{grid-template-columns:minmax(0,1fr)}
+}
+
 /* Demo mode addon: the accounts form on its card, the login page's buttons and
    the strip a demo visitor sees on every page. */
 .demo-accounts{display:grid;gap:10px;margin-top:4px;padding:11px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-alt)}

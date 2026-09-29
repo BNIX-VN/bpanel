@@ -135,6 +135,7 @@ tính năng, không xoá dữ liệu nó đã tạo.
 | **Quét mã độc** | LMD + ClamAV: quét theo yêu cầu, theo lịch, giám sát thời gian thực (Lớp 2), quét file tải lên. |
 | **Trợ lý AI (MCP)** | Cho Claude Code, Cursor, VS Code đọc và thao tác panel bằng token cá nhân. |
 | **Quản lý DNS** | Chạy DNS cho tên miền ngay trên server bằng PowerDNS (mở cổng 53). Quản trị viên sửa mọi zone, khách hàng sửa zone của website mình; bản ghi A, AAAA, CNAME, MX, TXT, NS, SRV, CAA. Website mới tự có zone. |
+| **Email** | Mail server trên VPS: Exim gửi/nhận, Dovecot cho IMAP/POP3, và [BNIX Webmail](https://github.com/bnixvn/webmail) trên cổng 2096. Khách hàng tạo hộp thư trên tên miền của mình trong số lượng gói cho phép, mở webmail từ panel không cần mật khẩu (SSO). Thư lưu trong home của khách, tính vào dung lượng và có trong backup. Ký DKIM; có Quản lý DNS thì bản ghi DKIM, DMARC, webmail tự được thêm. |
 | **Chế độ demo** | Tài khoản demo công khai cho quản trị và khách hàng, có nút đăng nhập nhanh trên trang đăng nhập. Xem mọi trang, mọi thay đổi bị từ chối; không mở được nội dung file, tải xuống, phpMyAdmin hay terminal. |
 | **Thông báo** | Gửi cảnh báo cho quản trị viên qua email (SMTP) và Telegram: dịch vụ dừng, ổ đĩa đầy, backup lỗi, mã độc, chứng chỉ sắp hết hạn, có bản cập nhật... |
 

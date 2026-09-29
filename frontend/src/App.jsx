@@ -106,6 +106,7 @@ const PAGE_ROUTES = {
   mcp: '/ai-assistants',
   notifications: '/notifications',
   dns: '/dns',
+  mail: '/email',
 };
 
 /* ---------------------------------------------------------------
@@ -322,6 +323,7 @@ const DNS_VALUE_HINTS = {
   CAA: '0 issue letsencrypt.org',
 };
 const DNS_EMPTY_RECORD = { name: '@', type: 'A', ttl: 3600, content: '', priority: 10 };
+const MAIL_EMPTY_DRAFT = { local_part: '', domain: '', password: '', quota_mb: 1024 };
 
 const SITE_APP_KINDS = [
   ['node', 'Node.js', 'BPanel installs dependencies and keeps the process running under systemd.'],
@@ -868,6 +870,11 @@ function App() {
   const [dnsEditing, setDnsEditing] = useState(null);
   const [dnsSettings, setDnsSettings] = useState(null);
   const [dnsNewZone, setDnsNewZone] = useState({ name: '', owner_id: '' });
+  const [mailData, setMailData] = useState({ accounts: [], domains: [], limit: {}, mail_domains: [], client: null, loaded: false });
+  const [mailDraft, setMailDraft] = useState(MAIL_EMPTY_DRAFT);
+  const [mailEditing, setMailEditing] = useState(null);
+  const [mailCreated, setMailCreated] = useState(null);
+  const [mailStatus, setMailStatus] = useState(null);
   const [demoDraft, setDemoDraft] = useState({ admin: { username: '', password: '' }, customer: { username: '', password: '' } });
   const [f2b, setF2b] = useState(null);
   // Which list the operator asked to see. Null keeps the page one screen tall
@@ -896,12 +903,12 @@ function App() {
   const [selectedFilePaths, setSelectedFilePaths] = useState([]);
   const [archiveFormat, setArchiveFormat] = useState('zip');
   const [editorCursor, setEditorCursor] = useState({ line: 1, column: 1 });
-  const [newUser, setNewUser] = useState({ username: '', email: '', password: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024, sftp_accounts_limit: 0 });
+  const [newUser, setNewUser] = useState({ username: '', email: '', password: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024, sftp_accounts_limit: 0, mail_accounts_limit: 10 });
   const [editingUser, setEditingUser] = useState(null);
-  const [editingUserForm, setEditingUserForm] = useState({ email: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024, sftp_accounts_limit: 0, new_password: '', confirm_password: '' });
-  const [newPackage, setNewPackage] = useState({ name: '', website_limit: 5, storage_limit_mb: 1024, sftp_accounts_limit: 0 });
+  const [editingUserForm, setEditingUserForm] = useState({ email: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024, sftp_accounts_limit: 0, mail_accounts_limit: 10, new_password: '', confirm_password: '' });
+  const [newPackage, setNewPackage] = useState({ name: '', website_limit: 5, storage_limit_mb: 1024, sftp_accounts_limit: 0, mail_accounts_limit: 10 });
   const [editingPackageId, setEditingPackageId] = useState('');
-  const [editingPackageForm, setEditingPackageForm] = useState({ name: '', website_limit: 5, storage_limit_mb: 1024, sftp_accounts_limit: 0 });
+  const [editingPackageForm, setEditingPackageForm] = useState({ name: '', website_limit: 5, storage_limit_mb: 1024, sftp_accounts_limit: 0, mail_accounts_limit: 10 });
   const [phpConfig, setPhpConfig] = useState({ php_version: '8.4', display_errors: 'Off', max_execution_time: 300, max_input_time: 600, max_input_vars: 10000, memory_limit: '1024M', post_max_size: '1024M', upload_max_filesize: '1024M' });
   const [phpExtensions, setPhpExtensions] = useState({ versions: [], extensions: [] });
   const [phpVersions, setPhpVersions] = useState({ installed: ['8.4'], supported: ['5.6', '7.4', '8.0', '8.1', '8.2', '8.3', '8.4', '8.5'] });
@@ -988,6 +995,7 @@ function App() {
   const notificationsAddonInstalled = !!addons.items.find(item => item.slug === 'notifications')?.installed;
   const malwareAddonInstalled = !!addons.items.find(item => item.slug === 'malware')?.installed;
   const dnsAddonInstalled = !!addons.items.find(item => item.slug === 'dns')?.installed;
+  const mailAddonInstalled = !!addons.items.find(item => item.slug === 'mail')?.installed;
   const [mcpTokens, setMcpTokens] = useState([]);
   const [mcpDraft, setMcpDraft] = useState({ name: '', expires_in_days: 90, can_write: false });
   // Held until dismissed rather than cleared on the next render: the server
@@ -1753,11 +1761,12 @@ function App() {
       website_limit: Number(newUser.website_limit),
       storage_limit_mb: Number(newUser.storage_limit_mb),
       sftp_accounts_limit: Number(newUser.sftp_accounts_limit || 0),
+      mail_accounts_limit: Number(newUser.mail_accounts_limit || 0),
     };
     const data = await request('/users', { method: 'POST', body: JSON.stringify(payload) }, t('Creating user...'));
     if (data) {
       setNotice(`Created user ${data.username}`);
-      setNewUser({ username: '', email: '', password: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024, sftp_accounts_limit: 0 });
+      setNewUser({ username: '', email: '', password: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024, sftp_accounts_limit: 0, mail_accounts_limit: 10 });
       await loadUsers();
       setUserTab('list');
     }
@@ -1771,6 +1780,7 @@ function App() {
       website_limit: selected ? selected.website_limit : 5,
       storage_limit_mb: selected ? selected.storage_limit_mb : 1024,
       sftp_accounts_limit: selected ? (selected.sftp_accounts_limit || 0) : 0,
+      mail_accounts_limit: selected ? (selected.mail_accounts_limit ?? 10) : 10,
     }));
   }
 
@@ -1782,6 +1792,7 @@ function App() {
       website_limit: selected ? selected.website_limit : 5,
       storage_limit_mb: selected ? selected.storage_limit_mb : 1024,
       sftp_accounts_limit: selected ? (selected.sftp_accounts_limit || 0) : 0,
+      mail_accounts_limit: selected ? (selected.mail_accounts_limit ?? 10) : 10,
     }));
   }
 
@@ -1794,6 +1805,7 @@ function App() {
       website_limit: user.website_limit ?? 5,
       storage_limit_mb: user.storage_limit_mb ?? 1024,
       sftp_accounts_limit: user.sftp_accounts_limit ?? 0,
+      mail_accounts_limit: user.mail_accounts_limit ?? 10,
       new_password: '',
       confirm_password: '',
     });
@@ -1804,7 +1816,7 @@ function App() {
     setEditingUserForm({ email: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024, new_password: '', confirm_password: '' });
     setNewPackage({ name: '', website_limit: 5, storage_limit_mb: 1024 });
     setEditingPackageId('');
-    setEditingPackageForm({ name: '', website_limit: 5, storage_limit_mb: 1024, sftp_accounts_limit: 0 });
+    setEditingPackageForm({ name: '', website_limit: 5, storage_limit_mb: 1024, sftp_accounts_limit: 0, mail_accounts_limit: 10 });
   }
 
   async function updatePanelUser() {
@@ -1826,6 +1838,7 @@ function App() {
       website_limit: websiteLimit,
       storage_limit_mb: storageLimitMb,
       sftp_accounts_limit: Number(editingUserForm.sftp_accounts_limit || 0),
+      mail_accounts_limit: Number(editingUserForm.mail_accounts_limit || 0),
     };
     if (editingUser.id !== currentUser?.id) payload.role = editingUserForm.role;
     const data = await request(`/users/${editingUser.id}`, {
@@ -1877,11 +1890,11 @@ function App() {
     }
     const data = await request('/packages', {
       method: 'POST',
-      body: JSON.stringify({ name: newPackage.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, sftp_accounts_limit: Number(newPackage.sftp_accounts_limit || 0) }),
+      body: JSON.stringify({ name: newPackage.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, sftp_accounts_limit: Number(newPackage.sftp_accounts_limit || 0), mail_accounts_limit: Number(newPackage.mail_accounts_limit || 0) }),
     }, t('Creating package...'));
     if (data) {
       setNotice(`Created package ${data.name}.`);
-      setNewPackage({ name: '', website_limit: 5, storage_limit_mb: 1024 });
+      setNewPackage({ name: '', website_limit: 5, storage_limit_mb: 1024, sftp_accounts_limit: 0, mail_accounts_limit: 10 });
       await loadPackages();
     }
   }
@@ -1893,12 +1906,13 @@ function App() {
       website_limit: item.website_limit ?? 5,
       storage_limit_mb: item.storage_limit_mb ?? 1024,
       sftp_accounts_limit: item.sftp_accounts_limit ?? 0,
+      mail_accounts_limit: item.mail_accounts_limit ?? 10,
     });
   }
 
   function cancelEditingPackage() {
     setEditingPackageId('');
-    setEditingPackageForm({ name: '', website_limit: 5, storage_limit_mb: 1024, sftp_accounts_limit: 0 });
+    setEditingPackageForm({ name: '', website_limit: 5, storage_limit_mb: 1024, sftp_accounts_limit: 0, mail_accounts_limit: 10 });
   }
 
   async function updatePackage(packageId) {
@@ -1915,7 +1929,7 @@ function App() {
     }
     const data = await request(`/packages/${packageId}`, {
       method: 'PATCH',
-      body: JSON.stringify({ name: editingPackageForm.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, sftp_accounts_limit: Number(editingPackageForm.sftp_accounts_limit || 0) }),
+      body: JSON.stringify({ name: editingPackageForm.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, sftp_accounts_limit: Number(editingPackageForm.sftp_accounts_limit || 0), mail_accounts_limit: Number(editingPackageForm.mail_accounts_limit || 0) }),
     }, t('Updating package...'));
     if (data) {
       setNotice(`Updated package ${data.name}.`);
@@ -2604,6 +2618,88 @@ function App() {
     if (!data) return;
     await loadDnsSettings();
     loadDnsZones();
+  }
+
+  async function loadMail() {
+    const data = await request('/mail/overview', { silent: true });
+    if (!data) return;
+    setMailData({ ...data, loaded: true });
+    const domains = data.domains || [];
+    setMailDraft(prev => ({ ...prev, domain: domains.includes(prev.domain) ? prev.domain : (domains[0] || '') }));
+  }
+
+  async function loadMailStatus() {
+    const data = await request('/mail/status', { silent: true });
+    if (data) setMailStatus(data);
+  }
+
+  async function createMailbox() {
+    const body = {
+      local_part: mailDraft.local_part.trim(),
+      domain: mailDraft.domain,
+      password: mailDraft.password,
+      quota_mb: mailDraft.quota_mb === '' ? 1024 : Number(mailDraft.quota_mb) || 0,
+    };
+    const data = await request('/mail/accounts', { method: 'POST', body: JSON.stringify(body) }, t('Creating mailbox...'));
+    if (!data) return;
+    setMailCreated({ address: data.address, password: mailDraft.password });
+    setMailDraft(prev => ({ ...MAIL_EMPTY_DRAFT, domain: prev.domain, quota_mb: prev.quota_mb }));
+    loadMail();
+  }
+
+  async function saveMailbox() {
+    if (!mailEditing) return;
+    const body = { quota_mb: Number(mailEditing.quota_mb) || 0 };
+    if (mailEditing.password) body.password = mailEditing.password;
+    const data = await request(`/mail/accounts/${mailEditing.id}`, { method: 'PUT', body: JSON.stringify(body) }, t('Saving...'));
+    if (!data) return;
+    setNotice(mailEditing.password ? t('Saved. The new password works from now on.') : t('Saved.'));
+    setMailEditing(null);
+    loadMail();
+  }
+
+  async function deleteMailbox(account) {
+    if (!confirm(t('Delete {address} and all the mail in it? This cannot be undone.', { address: account.address }))) return;
+    const data = await request(`/mail/accounts/${account.id}`, { method: 'DELETE' }, t('Deleting...'));
+    if (!data) return;
+    if (mailEditing?.id === account.id) setMailEditing(null);
+    loadMail();
+  }
+
+  async function openWebmail(account) {
+    // The tab opens on the click itself; opened after the request, a browser
+    // would take it for a pop-up.
+    const tab = window.open('', '_blank');
+    const data = await request(`/mail/accounts/${account.id}/webmail`, { method: 'POST' }, t('Opening webmail...'));
+    if (!data?.url) { tab?.close(); return; }
+    if (tab) {
+      tab.opener = null;
+      tab.location.href = data.url;
+    } else {
+      window.open(data.url, '_blank', 'noopener,noreferrer');
+    }
+  }
+
+  async function enableWebmailHost(domain) {
+    if (!confirm(t('webmail.{domain} has to point to this server first. Get a certificate for it now?', { domain }))) return;
+    const data = await request(`/mail/domains/${encodeURIComponent(domain)}/webmail`, { method: 'POST' }, t('Getting a certificate...'));
+    if (!data) return;
+    setNotice(t('The webmail is ready at {url}', { url: data.url }));
+    loadMail();
+  }
+
+  async function disableWebmailHost(domain) {
+    if (!confirm(t('Stop serving the webmail on webmail.{domain}?', { domain }))) return;
+    const data = await request(`/mail/domains/${encodeURIComponent(domain)}/webmail`, { method: 'DELETE' }, t('Saving...'));
+    if (data) loadMail();
+  }
+
+  async function syncMail() {
+    const data = await request('/mail/sync', { method: 'POST' }, t('Syncing...'));
+    if (!data) return;
+    setNotice(t('The mail server has every mailbox: {n}.', { n: data.mailboxes }));
+    loadMail();
+    loadMailStatus();
   }
 
   async function saveDemoAccounts() {
@@ -4684,6 +4780,11 @@ function App() {
     loadDnsZones();
     if (isAdmin) { loadDnsSettings(); loadUsers(); }
   }, [isAuthenticated, page, dnsAddonInstalled, isAdmin]);
+  useEffect(() => {
+    if (!isAuthenticated || page !== 'mail' || !mailAddonInstalled) return;
+    loadMail();
+    if (isAdmin) loadMailStatus();
+  }, [isAuthenticated, page, mailAddonInstalled, isAdmin]);
 
   // The websites page needs the list too, for the Application picker on create.
   useEffect(() => {
@@ -4792,6 +4893,7 @@ function App() {
     ] },
     { key: 'addons', items: [
       ...(dnsAddonInstalled ? [['dns', 'DNS', Network]] : []),
+      ...(mailAddonInstalled ? [['mail', 'Email', Mail]] : []),
       ...(mcpAddonInstalled ? [['mcp', 'AI assistants', Bot]] : []),
       ...(notificationsAddonInstalled && isAdmin ? [['notifications', 'Notifications', Bell]] : []),
       ...(malwareAddonInstalled && isAdmin ? [['malware', 'Malware scanner', Bug]] : []),
@@ -5490,6 +5592,187 @@ function App() {
         </div>
       </div>
       <p className="hint">{t('If the nameservers are names under your own domain, create glue records for them at that domain\'s registrar, pointing to this server\'s IP address.')}</p>
+    </section>;
+  }
+
+  function renderMail() {
+    const accounts = mailData.accounts || [];
+    const domains = mailData.domains || [];
+    const limit = mailData.limit || {};
+    const unlimited = limit.limit === null || limit.limit === undefined;
+    const atLimit = !unlimited && Number(limit.used || 0) >= Number(limit.limit || 0);
+    const setDraft = (field, value) => setMailDraft(prev => ({ ...prev, [field]: value }));
+    return <>
+      <section className="section">
+        <div className="section-title">
+          <div>
+            <h2>{t('Email')}</h2>
+            <p className="hint">{t('Mailboxes on the domains of your websites. The mail is kept in your account and counts toward its disk space.')}</p>
+          </div>
+          <button className="secondary-light" disabled={!!loading} onClick={loadMail}><RefreshCw size={14}/>{t('Refresh')}</button>
+        </div>
+        {mailData.loaded && domains.length === 0
+          ? <EmptyState icon={Mail} message={t('Create a website first: mailboxes are made on the domains of your websites.')} />
+          : <div className="cron-builder mail-form">
+            <label className="mail-address"><span>{t('Address')}</span>
+              <div className="mail-address-input">
+                <input value={mailDraft.local_part} onChange={e => setDraft('local_part', e.target.value.toLowerCase())} placeholder="info" spellCheck={false} autoComplete="off" aria-label={t('Mailbox name')} />
+                <span aria-hidden="true">@</span>
+                <select value={mailDraft.domain} onChange={e => setDraft('domain', e.target.value)} aria-label={t('Domain')}>
+                  {domains.map(domain => <option key={domain} value={domain}>{domain}</option>)}
+                </select>
+              </div>
+            </label>
+            <label><span>{t('Password')}</span>
+              <div className="mail-password-input">
+                <input value={mailDraft.password} onChange={e => setDraft('password', e.target.value)} placeholder={t('At least 8 characters')} autoComplete="new-password" spellCheck={false} data-lpignore="true" data-1p-ignore="true" />
+                <button type="button" className="mini secondary-light" title={t('Generate random password')} aria-label={t('Generate random password')} onClick={() => setDraft('password', generateRandomPassword(16))}><Dices size={13}/></button>
+              </div>
+            </label>
+            <label><span>{t('Size (MB, 0 = no limit)')}</span><input type="number" min={0} max={1048576} value={mailDraft.quota_mb} onChange={e => setDraft('quota_mb', e.target.value)} /></label>
+            <div className="dns-form-actions">
+              <button disabled={!!loading || atLimit || !mailDraft.local_part.trim() || !mailDraft.domain || (mailDraft.password || '').length < 8} onClick={createMailbox}><Plus size={14}/>{t('Create mailbox')}</button>
+            </div>
+          </div>}
+        {!unlimited && mailData.loaded && <p className="hint">{atLimit
+          ? t('You have used all {n} mailboxes in your package.', { n: limit.limit })
+          : t('{used} of {limit} mailboxes used.', { used: limit.used || 0, limit: limit.limit })}</p>}
+        {mailCreated && <div className="info-box db-created-box">
+          <div className="db-created-head"><strong>{t('Mailbox ready')}</strong><button className="mini secondary-light" onClick={() => setMailCreated(null)} aria-label={t('Close')} title={t('Close')}><X size={13}/></button></div>
+          <div className="db-created-grid">
+            <label>{t('Address')}</label><span><code>{mailCreated.address}</code> <button className="mini secondary-light" onClick={() => copyText(mailCreated.address, t('Copied.'))} aria-label={t('Copy')} title={t('Copy')}><Copy size={12}/></button></span>
+            <label>{t('Password')}</label><span><code>{mailCreated.password}</code> <button className="mini secondary-light" onClick={() => copyText(mailCreated.password, t('Copied.'))} aria-label={t('Copy')} title={t('Copy')}><Copy size={12}/></button></span>
+          </div>
+          <p className="hint">{t('This password is shown once. It is not stored anywhere the panel can read it back.')}</p>
+        </div>}
+        <div className="mail-list">
+          {mailData.loaded && accounts.length === 0 && <EmptyState icon={Mail} message={t('No mailboxes yet.')} />}
+          {accounts.map(account => renderMailbox(account))}
+        </div>
+      </section>
+      {renderMailDomains()}
+      {renderMailClient()}
+      {isAdmin && renderMailServer()}
+    </>;
+  }
+
+  function renderMailbox(account) {
+    const quotaBytes = Number(account.quota_mb || 0) * 1024 * 1024;
+    const percent = quotaBytes ? Math.min(100, Math.round(Number(account.used_bytes || 0) * 100 / quotaBytes)) : 0;
+    const editing = mailEditing?.id === account.id;
+    const setEdit = (field, value) => setMailEditing(prev => ({ ...prev, [field]: value }));
+    return <div className={`mail-row ${editing ? 'editing' : ''}`} key={account.id}>
+      <div className="mail-main">
+        <strong>{account.address}</strong>
+        <small>
+          {quotaBytes
+            ? t('{used} of {size}', { used: formatBytes(account.used_bytes), size: formatBytes(quotaBytes) })
+            : t('{used}, no limit of its own', { used: formatBytes(account.used_bytes) })}
+          {isAdmin && account.owner ? ` · ${account.owner}` : ''}
+        </small>
+        {quotaBytes > 0 && <div className="progress-bar mail-usage" role="progressbar" aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100} aria-label={t('Mailbox size used')}>
+          <div className={`progress-bar-fill ${percent >= 90 ? 'danger' : ''}`} style={{ width: `${percent}%` }} />
+        </div>}
+      </div>
+      <div className="row-actions">
+        <button className="mini" disabled={!!loading} onClick={() => openWebmail(account)}><ExternalLink size={13}/>{t('Webmail')}</button>
+        <button className="mini secondary-light" disabled={!!loading} onClick={() => setMailEditing(editing ? null : { id: account.id, password: '', quota_mb: account.quota_mb })} aria-label={t('Edit')} title={t('Edit')}><Pencil size={13}/></button>
+        <button className="mini danger" disabled={!!loading} onClick={() => deleteMailbox(account)} aria-label={t('Delete')} title={t('Delete')}><Trash2 size={13}/></button>
+      </div>
+      {editing && <div className="cron-builder mail-edit">
+        <label><span>{t('New password')}</span>
+          <div className="mail-password-input">
+            <input value={mailEditing.password} onChange={e => setEdit('password', e.target.value)} placeholder={t('Leave empty to keep it')} autoComplete="new-password" spellCheck={false} data-lpignore="true" data-1p-ignore="true" />
+            <button type="button" className="mini secondary-light" title={t('Generate random password')} aria-label={t('Generate random password')} onClick={() => setEdit('password', generateRandomPassword(16))}><Dices size={13}/></button>
+          </div>
+        </label>
+        <label><span>{t('Size (MB, 0 = no limit)')}</span><input type="number" min={0} max={1048576} value={mailEditing.quota_mb} onChange={e => setEdit('quota_mb', e.target.value)} /></label>
+        <div className="dns-form-actions">
+          <button disabled={!!loading || (mailEditing.password && mailEditing.password.length < 8)} onClick={saveMailbox}><Save size={14}/>{t('Save')}</button>
+          <button className="secondary-light" disabled={!!loading} onClick={() => setMailEditing(null)}>{t('Cancel')}</button>
+        </div>
+      </div>}
+    </div>;
+  }
+
+  function renderMailDomains() {
+    const domains = mailData.mail_domains || [];
+    if (!domains.length) return null;
+    return <section className="section">
+      <div className="section-title">
+        <div>
+          <h2>{t('Mail domains')}</h2>
+          <p className="hint">{dnsAddonInstalled
+            ? t('This server serves these records itself for the domains in DNS. For a domain whose DNS is elsewhere, add them there.')
+            : t('Add these records where each domain\'s DNS is managed, so mail reaches this server and is not taken for spam.')}</p>
+        </div>
+      </div>
+      {domains.map(item => <div className="mail-domain" key={item.domain}>
+        <div className="mail-domain-head">
+          <strong>{item.domain}</strong>
+          <span className="badge">{t('{n} mailboxes', { n: item.mailboxes })}</span>
+          {item.webmail
+            ? <span className="mail-webmail">
+                <a href={item.webmail} target="_blank" rel="noopener noreferrer"><ExternalLink size={13}/>{item.webmail.replace('https://', '')}</a>
+                <button className="mini secondary-light" disabled={!!loading} onClick={() => disableWebmailHost(item.domain)} aria-label={t('Remove')} title={t('Remove')}><X size={13}/></button>
+              </span>
+            : <button className="mini secondary-light" disabled={!!loading} onClick={() => enableWebmailHost(item.domain)}><Globe size={13}/>{t('Set up webmail.{domain}', { domain: item.domain })}</button>}
+        </div>
+        <details className="mail-records">
+          <summary>{t('DNS records for mail')}</summary>
+          <div className="dns-list">
+            {item.records.map(record => <div className="dns-record" key={`${record.name}|${record.type}`}>
+              <span className="dns-name">{record.name}</span>
+              <span className="badge">{record.type}</span>
+              <span className="dns-value">{record.value}</span>
+              <span className="dns-ttl" />
+              <span className="dns-actions">
+                <button className="mini secondary-light" onClick={() => copyText(record.value, t('Copied.'))} aria-label={t('Copy')} title={t('Copy')}><Copy size={13}/></button>
+              </span>
+            </div>)}
+          </div>
+        </details>
+      </div>)}
+    </section>;
+  }
+
+  function renderMailClient() {
+    const client = mailData.client;
+    if (!client) return null;
+    return <section className="section">
+      <div className="section-title">
+        <div>
+          <h2>{t('Mail app settings')}</h2>
+          <p className="hint">{t('For Outlook, Thunderbird or a phone. The user name is the full email address, and the password is the mailbox\'s.')}</p>
+        </div>
+      </div>
+      <div className="db-created-grid mail-client">
+        <label>{t('Incoming mail (IMAP)')}</label><span><code>{client.imap.host}</code> · {client.imap.port} · SSL/TLS</span>
+        <label>{t('Incoming mail (POP3)')}</label><span><code>{client.pop3.host}</code> · {client.pop3.port} · SSL/TLS</span>
+        <label>{t('Outgoing mail (SMTP)')}</label><span><code>{client.smtp.host}</code> · {client.smtp.port} · SSL/TLS, {t('or')} {client.submission.port} · STARTTLS</span>
+        <label>{t('Webmail')}</label><span><a href={client.webmail} target="_blank" rel="noopener noreferrer">{client.webmail}</a></span>
+      </div>
+    </section>;
+  }
+
+  function renderMailServer() {
+    const status = mailStatus;
+    if (!status) return null;
+    return <section className="section">
+      <div className="section-title">
+        <div>
+          <h2>{t('Mail server')}</h2>
+          <p className="hint">{t('Mail server name: {name}', { name: status.hostname || '--' })}</p>
+        </div>
+        <button className="secondary-light" disabled={!!loading} onClick={syncMail}><RefreshCw size={14}/>{t('Sync mailboxes now')}</button>
+      </div>
+      <div className="dns-server">
+        {[['exim', 'Exim'], ['dovecot', 'Dovecot'], ['webmail', 'Webmail']].map(([key, label]) =>
+          <span key={key} className={`badge ${status[key] ? 'ok' : 'bad'}`}>{status[key] ? t('{name} is running', { name: label }) : t('{name} is not running', { name: label })}</span>)}
+        <span className={`badge ${status.port_open ? 'ok' : 'warn'}`}>{status.port_open ? t('Mail ports open') : t('Mail ports closed')}</span>
+        <span className={`badge ${status.outbound_smtp ? 'ok' : 'warn'}`}>{status.outbound_smtp ? t('Can send to other mail servers') : t('Outgoing port 25 is blocked')}</span>
+      </div>
+      {!status.outbound_smtp && <p className="hint">{t('This server cannot reach other mail servers on port 25, so mail to outside addresses waits in the queue and comes back after a few days. Most VPS providers open it on request.')}</p>}
     </section>;
   }
 
@@ -8582,6 +8865,7 @@ function App() {
                 <label><span>{t('Website limit')}</span><input type="number" min="0" max="1000" disabled={!!editingUserForm.package_id} value={editingUserForm.website_limit} onChange={e => setEditingUserForm(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
                 <label><span>{t('Storage limit (MB)')}</span><input type="number" min="0" max="1048576" disabled={!!editingUserForm.package_id} value={editingUserForm.storage_limit_mb} onChange={e => setEditingUserForm(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
                 <label><span>{t('SFTP accounts')}</span><input type="number" min="0" max="100" disabled={!!editingUserForm.package_id} value={editingUserForm.sftp_accounts_limit} onChange={e => setEditingUserForm(prev => ({ ...prev, sftp_accounts_limit: e.target.value }))} /></label>
+                {mailAddonInstalled && <label><span>{t('Mailboxes')}</span><input type="number" min="0" max="1000" disabled={!!editingUserForm.package_id} value={editingUserForm.mail_accounts_limit} onChange={e => setEditingUserForm(prev => ({ ...prev, mail_accounts_limit: e.target.value }))} /></label>}
               </div>
               <div className="user-edit-section">
                 <div className="user-edit-heading"><div><strong>{t('Change password')}</strong><small>{t('Minimum 12 characters.')} {t(user.id === currentUser?.id ? 'Requires current password + 2FA.' : 'Admin can set directly.')}</small></div></div>
@@ -8626,6 +8910,7 @@ function App() {
           <label><span>{t('Site limit')}</span><input type="number" min="0" max="1000" value={newPackage.website_limit} onChange={e => setNewPackage(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
           <label><span>{t('Storage MB')}</span><input type="number" min="0" max="1048576" value={newPackage.storage_limit_mb} onChange={e => setNewPackage(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
           <label><span>{t('SFTP accounts')}</span><input type="number" min="0" max="100" value={newPackage.sftp_accounts_limit} onChange={e => setNewPackage(prev => ({ ...prev, sftp_accounts_limit: e.target.value }))} /></label>
+          {mailAddonInstalled && <label><span>{t('Mailboxes')}</span><input type="number" min="0" max="1000" value={newPackage.mail_accounts_limit} onChange={e => setNewPackage(prev => ({ ...prev, mail_accounts_limit: e.target.value }))} /></label>}
           <button disabled={!!loading || !newPackage.name.trim()} onClick={createPackage}><Plus size={14}/>{t('Create package')}</button>
         </div>
         <div className="package-list">
@@ -8636,6 +8921,7 @@ function App() {
               <label><span>{t('Site limit')}</span><input type="number" min="0" max="1000" value={editingPackageForm.website_limit} onChange={e => setEditingPackageForm(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
               <label><span>{t('Storage MB')}</span><input type="number" min="0" max="1048576" value={editingPackageForm.storage_limit_mb} onChange={e => setEditingPackageForm(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
               <label><span>{t('SFTP accounts')}</span><input type="number" min="0" max="100" value={editingPackageForm.sftp_accounts_limit} onChange={e => setEditingPackageForm(prev => ({ ...prev, sftp_accounts_limit: e.target.value }))} /></label>
+              {mailAddonInstalled && <label><span>{t('Mailboxes')}</span><input type="number" min="0" max="1000" value={editingPackageForm.mail_accounts_limit} onChange={e => setEditingPackageForm(prev => ({ ...prev, mail_accounts_limit: e.target.value }))} /></label>}
               <div className="row-actions">
                 <button className="mini secondary-light" onClick={cancelEditingPackage}>{t('Cancel')}</button>
                 <button className="mini" disabled={!!loading || !editingPackageForm.name.trim()} onClick={() => updatePackage(item.id)}><Save size={14}/>{t('Save')}</button>
@@ -8644,6 +8930,7 @@ function App() {
               <div className="user-main"><strong>{item.name}</strong><small>{item.website_limit} sites - {item.storage_limit_mb} MB</small></div>
               <span className="user-metric"><Globe size={13}/>{item.website_limit} sites</span>
               <span className="user-metric"><HardDrive size={13}/>{item.storage_limit_mb} MB</span>
+              {mailAddonInstalled && <span className="user-metric"><Mail size={13}/>{t('{n} mailboxes', { n: item.mail_accounts_limit ?? 10 })}</span>}
               <div className="row-actions">
                 <button className="mini secondary-light" disabled={!!loading} onClick={() => startEditingPackage(item)}><Pencil size={14}/>{t('Edit')}</button>
                 <button className="mini danger" disabled={!!loading || users.some(user => user.package_id === item.id)} onClick={() => deletePackage(item)}><Trash2 size={14}/></button>
@@ -8671,6 +8958,7 @@ function App() {
           <label><span>{t('Site limit')}</span><input type="number" disabled={!!newUser.package_id} value={newUser.website_limit} onChange={e => setNewUser(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
           <label><span>{t('Storage MB')}</span><input type="number" disabled={!!newUser.package_id} value={newUser.storage_limit_mb} onChange={e => setNewUser(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
           <label><span>{t('SFTP accounts')}</span><input type="number" min="0" max="100" disabled={!!newUser.package_id} value={newUser.sftp_accounts_limit} onChange={e => setNewUser(prev => ({ ...prev, sftp_accounts_limit: e.target.value }))} /></label>
+          {mailAddonInstalled && <label><span>{t('Mailboxes')}</span><input type="number" min="0" max="1000" disabled={!!newUser.package_id} value={newUser.mail_accounts_limit} onChange={e => setNewUser(prev => ({ ...prev, mail_accounts_limit: e.target.value }))} /></label>}
           <button disabled={!!loading || !newUser.username || !newUser.password} onClick={createUser}><Plus size={14}/>{t('Create user')}</button>
         </div>
       </div>}
@@ -8940,6 +9228,7 @@ function App() {
     if (page === 'addons') return renderAddons();
     // DNS Manager (2026-09-29): administrators and customers, once installed.
     if (page === 'dns') return dnsAddonInstalled ? renderDns() : renderAddonMissing('dns');
+    if (page === 'mail') return mailAddonInstalled ? renderMail() : renderAddonMissing('mail');
     // Reachable by URL after the addon is removed, so it answers for itself
     // rather than rendering a page whose every request would be refused.
     if (page === 'applications') return appsFeatureEnabled ? renderApplications() : renderAddonMissing('application');

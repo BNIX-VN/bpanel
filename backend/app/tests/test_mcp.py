@@ -1184,6 +1184,8 @@ def test_every_addon_has_a_way_in_from_the_sidebar():
                   "demo": "isAdmin && ['addons', 'Addons', PackageOpen,",
                   # Administrators and customers alike (2026-09-29).
                   "dns": "dnsAddonInstalled ? [['dns', 'DNS', Network]]",
+                  # Administrators and customers alike (2026-09-29).
+                  "mail": "mailAddonInstalled ? [['mail', 'Email', Mail]]",
                   # Administrators only (operator, 2026-09-27).
                   "notifications": "notificationsAddonInstalled && isAdmin ? [['notifications',"}.get(slug)
         assert way_in, f"addon {slug} has no sidebar entry named in this test"

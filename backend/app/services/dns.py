@@ -715,3 +715,46 @@ def sync_quietly(db: Session) -> dict | None:
         logger.warning("DNS sync failed", exc_info=True)
         db.rollback()
         return None
+
+
+# --- mail (Email addon) -------------------------------------------------------------
+
+DKIM_SELECTOR = "bpanel"
+
+
+def mail_records(db: Session, domain: str, dkim_key: str) -> list[str]:
+    """DKIM, DMARC and webmail.<domain> for a domain with mailboxes here.
+
+    Written into the zone that holds the domain, when this server has one. The
+    DKIM record is the mail server's own and always follows its key. DMARC
+    and the webmail name are only added where the zone has nothing by that
+    name, so a customer's own policy or record is never overwritten. Returns
+    the names written.
+    """
+    if not active():
+        return []
+    domain = normalize_zone(domain)
+    containing = [row for row in db.query(DnsZone).all()
+                  if domain == row.name or domain.endswith("." + row.name)]
+    parent = max(containing, key=lambda row: len(row.name), default=None)
+    if parent is None:
+        return []
+    config = settings()
+    data = _zone_data(parent.name)
+    names = {rrset.get("name") for rrset in data.get("rrsets", [])}
+    changes: dict = {}
+    dkim_name = _absolute(f"{DKIM_SELECTOR}._domainkey.{domain}")
+    dkim_text = f"v=DKIM1; k=rsa; p={dkim_key}"
+    if [_untxt(content) for content in _contents(_rrset(data, dkim_name, "TXT"))] != [dkim_text]:
+        changes[(dkim_name, "TXT")] = (config["ttl"], [_txt(dkim_text)])
+    dmarc_name = _absolute(f"_dmarc.{domain}")
+    if dmarc_name not in names:
+        changes[(dmarc_name, "TXT")] = (config["ttl"], [_txt("v=DMARC1; p=none")])
+    webmail_name = _absolute(f"webmail.{domain}")
+    if config["zone_ip"] and webmail_name not in names:
+        changes[(webmail_name, "A")] = (config["ttl"], [config["zone_ip"]])
+    if not changes:
+        return []
+    _serial_follows_edits(parent.name, data)
+    _patch(parent.name, changes)
+    return sorted(name.rstrip(".") for name, _ in changes)

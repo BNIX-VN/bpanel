@@ -11,7 +11,7 @@ from app.core.database import get_db
 from app.core.permissions import Role, ensure_role
 from app.core.security import hash_password
 from app.core.step_up import require_sensitive_action_step_up
-from app.models.entities import AuditLog, BackupSchedule, DatabaseAccount, McpToken, User, UserPackage, Website
+from app.models.entities import AuditLog, BackupSchedule, DatabaseAccount, MailAccount, McpToken, User, UserPackage, Website
 from app.schemas.schemas import (
     AuditLogOut,
     UserCreate,
@@ -21,7 +21,7 @@ from app.schemas.schemas import (
     UserUpdate,
 )
 from app.services.audit import log_action
-from app.services import demo_mode, mariadb, nginx, site_users, ssl, storage_quota, teardown, waf, wordpress
+from app.services import demo_mode, mail, mariadb, nginx, site_users, ssl, storage_quota, teardown, waf, wordpress
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -51,6 +51,7 @@ def _apply_package_limits(user: User, package: UserPackage | None) -> None:
         # before this the flag was settable and displayed but never read.
         user.terminal_enabled = package.terminal_enabled
         user.sftp_accounts_limit = package.sftp_accounts_limit
+        user.mail_accounts_limit = package.mail_accounts_limit
 
 
 def _decode_schedule_user_ids(raw: str | None) -> list[int]:
@@ -121,6 +122,7 @@ def create_user(payload: UserCreate, request: Request, db: Session = Depends(get
         website_limit=payload.website_limit,
         storage_limit_mb=payload.storage_limit_mb,
         sftp_accounts_limit=payload.sftp_accounts_limit,
+        mail_accounts_limit=payload.mail_accounts_limit,
         sftp_password_set_at=datetime.utcnow(),
     )
     # After the explicit value, so a package still wins when one is assigned.
@@ -201,12 +203,14 @@ def update_user(user_id: int, payload: UserUpdate, request: Request, db: Session
         role_changed = True
     if payload.email is not None and payload.email != user.email:
         user.email = payload.email  # emails need not be unique across panel users
+    active_changed = False
     if payload.is_active is not None:
         if user_id == current_user.id and payload.is_active is False:
             raise HTTPException(status_code=400, detail="Cannot deactivate yourself")
         if user.is_active != payload.is_active:
             user.is_active = payload.is_active
             user.token_version = (user.token_version or 0) + 1
+            active_changed = True
     package = None
     if "package_id" in payload.model_fields_set:
         package = _package_for_payload(db, payload.package_id)
@@ -217,6 +221,8 @@ def update_user(user_id: int, payload: UserUpdate, request: Request, db: Session
         user.storage_limit_mb = payload.storage_limit_mb
     if payload.sftp_accounts_limit is not None:
         user.sftp_accounts_limit = payload.sftp_accounts_limit
+    if payload.mail_accounts_limit is not None:
+        user.mail_accounts_limit = payload.mail_accounts_limit
     if package:
         _apply_package_limits(user, package)
 
@@ -226,6 +232,9 @@ def update_user(user_id: int, payload: UserUpdate, request: Request, db: Session
 
     db.commit()
     db.refresh(user)
+    if active_changed:
+        # A suspended account's mailboxes keep receiving but cannot sign in.
+        mail.sync_quietly(db)
     log_action(db, current_user.id, "update_user", user.username, request=request)
     return _user_out(user, db)
 
@@ -263,12 +272,15 @@ def delete_user(user_id: int, request: Request, db: Session = Depends(get_db), c
         # refuses a token whose owner is gone), but it would still be a row
         # nobody can see or revoke.
         db.query(McpToken).filter(McpToken.user_id == user.id).delete(synchronize_session=False)
+        # Their mail is in the home that goes next; the rows go with it.
+        db.query(MailAccount).filter(MailAccount.owner_id == user.id).delete(synchronize_session=False)
         site_users.delete_panel_user(user.username)
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     username = user.username
     db.delete(user)
     db.commit()
+    mail.sync_quietly(db)
     detail = ",".join(deleted_domains)
     if purged["databases"] or purged["applications"]:
         # Worth recording separately: these are resources the website loop never

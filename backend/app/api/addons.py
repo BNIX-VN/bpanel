@@ -12,7 +12,7 @@ from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.permissions import Role, ensure_role, is_admin_role
 from app.models.entities import SiteApp, User
-from app.services import addons, demo_mode, dns, fail2ban, panel_settings, site_apps
+from app.services import addons, demo_mode, dns, fail2ban, mail, panel_settings, site_apps
 from app.services.audit import log_action
 
 router = APIRouter(prefix="/addons", tags=["addons"])
@@ -83,6 +83,15 @@ def install_addon(slug: str, db: Session = Depends(get_db), current_user: User =
             dns.install()
         except (RuntimeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=_install_failure(exc)) from exc
+    if slug == addons.MAIL:
+        # Exim, Dovecot and the webmail, each proved to answer before the
+        # addon is recorded as installed.
+        try:
+            mail.install()
+        except mail.MailError as exc:
+            raise HTTPException(status_code=400, detail=exc.message) from exc
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=_install_failure(exc)) from exc
     if slug == addons.MALWARE:
         # The scanner's own switch: installs LMD and the ClamAV engine in the
         # background when they are missing, and returns at once.
@@ -94,6 +103,10 @@ def install_addon(slug: str, db: Session = Depends(get_db), current_user: User =
     if slug == addons.DNS:
         # Every domain already on the server gets its zone now.
         dns.sync_quietly(db)
+    if slug in (addons.MAIL, addons.DNS):
+        # Mailboxes made before the addon was last removed come back; with DNS
+        # on as well, their domains' DKIM records are published.
+        mail.sync_quietly(db)
     if slug == addons.DEMO:
         # Accounts chosen before the addon was last removed get their public
         # passwords back; see demo_mode.switch_off for why they lost them.
@@ -118,7 +131,10 @@ def install_addon(slug: str, db: Session = Depends(get_db), current_user: User =
                         "Choose the demo accounts on the Addons page. Until you do, the sign-in page offers none."
                         if slug == addons.DEMO else (
                             "Every domain on the server now has its DNS zone. Open DNS to check the nameservers, then point your domains at them."
-                            if slug == addons.DNS else ""
+                            if slug == addons.DNS else (
+                                "Open Email to make the first mailbox. The webmail is on port 2096 of the panel's address."
+                                if slug == addons.MAIL else ""
+                            )
                         )
                     )
                 )
@@ -176,6 +192,12 @@ def uninstall_addon(slug: str, db: Session = Depends(get_db), current_user: User
             stopped.append("PowerDNS")
         except RuntimeError:
             failed.append("PowerDNS")
+    if slug == addons.MAIL:
+        try:
+            mail.stop()
+            stopped.append("Exim, Dovecot, webmail")
+        except RuntimeError:
+            failed.append("Exim, Dovecot, webmail")
     retired: list[str] = []
     if slug == addons.DEMO:
         # Before the flag goes: once it has, these are ordinary accounts, and
@@ -195,6 +217,8 @@ def uninstall_addon(slug: str, db: Session = Depends(get_db), current_user: User
         if slug == addons.DEMO
         else "Every zone is kept in PowerDNS's database and is served again when you install the addon again."
         if slug == addons.DNS
+        else "The mail, the mailboxes and the DKIM keys are kept, and work again when you install the addon again."
+        if slug == addons.MAIL
         else "The package, the jail configuration and the ban history are all kept."
         if slug == addons.FAIL2BAN
         else "LMD, ClamAV, the scan history and the schedule settings are all kept."
