@@ -613,8 +613,9 @@ button:disabled,.upload-button.disabled{background:var(--disabled-bg);color:var(
 .dns-editor-row input{font-family:var(--font-mono);font-size:12.5px}
 .dns-editor-actions{justify-content:flex-start}
 .dns-editor .hint{margin:0}
-.mail-dns-custom{margin-top:14px}
-.mail-dns-custom .field input{width:100%;font-family:var(--font-mono);font-size:12.5px}
+.mail-dns-note{margin:0 0 14px;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius-md);font-size:13px}
+.mail-dns-note.warn{border-color:var(--warning-border);background:var(--warning-bg);color:var(--warning-text)}
+.mail-dns-note.ok{border-color:var(--success-border);background:var(--success-bg);color:var(--success-text)}
 .mail-relay-card{display:grid;gap:8px;margin-bottom:14px;padding:14px;background:var(--surface-alt);border:1px solid var(--border);border-radius:var(--radius-md)}
 .mail-relay-card-head{display:flex;align-items:center;gap:8px;color:var(--text)}
 .mail-relay-card-head svg{color:var(--primary-ink)}

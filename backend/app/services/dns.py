@@ -532,6 +532,10 @@ def create_zone(db: Session, name: str, owner_id: int | None, *, claim_existing:
             raise
     db.add(DnsZone(name=zone, owner_id=owner_id))
     db.commit()
+    # A mail domain in it gets its mail records now, not at its next change.
+    from app.services import mail
+
+    mail.publish_all_quietly(db, zone)
     return zone
 
 

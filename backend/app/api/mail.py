@@ -71,12 +71,6 @@ class DnsRecordIn(BaseModel):
     priority: int | None = Field(default=None, ge=0, le=65535)
 
 
-class DomainDnsIn(BaseModel):
-    spf: str = Field(default="", max_length=450)
-    dmarc: str = Field(default="", max_length=450)
-    records: list[DnsRecordIn] = Field(default_factory=list, max_length=mail.MAX_CUSTOM_RECORDS)
-
-
 class DomainRelayIn(BaseModel):
     relay: str = Field(default="", max_length=40)
 
@@ -161,15 +155,6 @@ def delete_domain(domain_id: int, request: Request, confirm: str = "", db: Sessi
 def get_domain_dns(domain_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.end_user)
     row = _answer(lambda: mail.get_domain(db, current_user, domain_id))
-    return mail.dns_view(db, row, current_user)
-
-
-@router.put("/domains/{domain_id}/dns")
-def put_domain_dns(domain_id: int, payload: DomainDnsIn, request: Request, db: Session = Depends(get_db),
-                   current_user: User = Depends(get_current_user)):
-    ensure_role(current_user.role, Role.end_user)
-    row = _answer(lambda: mail.set_dns_custom(db, current_user, domain_id, payload.model_dump()))
-    log_action(db, current_user.id, "mail_dns_custom", row.domain, f"{len(payload.records)} extra records", request=request)
     return mail.dns_view(db, row, current_user)
 
 

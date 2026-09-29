@@ -429,7 +429,7 @@ def add_domain(db: Session, actor: User, domain: str, owner_id: int | None = Non
             owner = actor
     elif owner is None or owner.id != actor.id:
         raise MailError("You can only turn on email for the domains of your own websites.", status=403)
-    row = MailDomain(domain=name, owner_id=owner.id, catch_all="", webmail_host=False, relay="", dns_custom="",
+    row = MailDomain(domain=name, owner_id=owner.id, catch_all="", webmail_host=False, relay="",
                      dkim_public=_dkim_public(name))
     db.add(row)
     db.commit()
@@ -815,20 +815,11 @@ def overview(db: Session, actor: User) -> dict:
 # --- DNS --------------------------------------------------------------------------------------
 
 DNS_TYPES = ("TXT", "CNAME", "MX", "A", "AAAA")
-MAX_CUSTOM_RECORDS = 20
 MAX_RELAY_RECORDS = 10
 DEFAULT_DMARC = "v=DMARC1; p=quarantine; adkim=r; aspf=r"
 _LABEL_RE = re.compile(r"^(?:@|[A-Za-z0-9_](?:[A-Za-z0-9_.-]{0,200}[A-Za-z0-9_])?)$")
 _SPF_TOKEN_RE = re.compile(r"^[+~?-]?(?:include|ip4|ip6|a|mx|exists|ptr)(?::[A-Za-z0-9.:/_%{}-]{1,253})?(?:/\d{1,3})?$")
 _SPF_ALL = ("~all", "-all", "?all", "+all", "all")
-
-
-def _dns_custom(row: MailDomain) -> dict:
-    try:
-        data = json.loads(row.dns_custom or "{}")
-    except ValueError:
-        data = {}
-    return data if isinstance(data, dict) else {}
 
 
 def _fqdn(label: str, domain: str) -> str:
@@ -842,33 +833,23 @@ def _fqdn(label: str, domain: str) -> str:
     return f"{label}.{domain}"
 
 
-def _relative(name: str, domain: str) -> str:
-    name = (name or "").strip().rstrip(".").lower()
-    if name in ("", "@", domain):
-        return "@"
-    if name.endswith("." + domain):
-        return name[: -len(domain) - 1]
-    return name
-
-
-def normalize_dns_record(item: dict, domain: str = "", template: bool = False) -> dict:
-    """One extra record, as an administrator or a relay's template gives it. A
-    template may say {domain} in its value; the name is always inside the domain."""
+def normalize_dns_record(item: dict) -> dict:
+    """One record of a relay's DNS template. The name is relative to each
+    domain that uses the relay; {domain} in the value becomes that domain."""
     if not isinstance(item, dict):
         raise MailError("A DNS record has a type, a name and a value.")
     rtype = str(item.get("type") or "").strip().upper()
     if rtype not in DNS_TYPES:
         raise MailError("The record type is TXT, CNAME, MX, A or AAAA.")
-    raw_name = str(item.get("name") or "@").strip()
-    if template and "{domain}" in raw_name:
+    label = str(item.get("name") or "@").strip()
+    if "{domain}" in label:
         raise MailError("{domain} goes in the value; the name is relative to the domain already.")
-    label = _relative(raw_name, domain) if domain else raw_name
     if not _LABEL_RE.fullmatch(label):
         raise MailError("A record name is @ for the domain itself, or a name under it such as mail or s1._domainkey.")
     value = str(item.get("value") or "").strip()
     if not value or len(value) > 2048 or any(char in value for char in "\r\n\0"):
         raise MailError("Every record needs a value, on one line, of at most 2048 characters.")
-    check = value.replace("{domain}", domain or "example.com")
+    check = value.replace("{domain}", "example.com")
     if rtype in ("CNAME", "MX"):
         check = check.rstrip(".").lower()
         if not DOMAIN_RE.fullmatch(check):
@@ -893,21 +874,6 @@ def normalize_dns_record(item: dict, domain: str = "", template: bool = False) -
     return record
 
 
-def normalize_spf(value: str) -> str:
-    text = " ".join((value or "").split())
-    if not text:
-        return ""
-    tokens = text.split(" ")
-    if tokens[0].lower() != "v=spf1" or len(text) > 450:
-        raise MailError("An SPF record starts with v=spf1 and has at most 450 characters.")
-    for token in tokens[1:]:
-        if token.lower() in _SPF_ALL or token.lower().startswith("redirect="):
-            continue
-        if not _SPF_TOKEN_RE.fullmatch(token):
-            raise MailError("That SPF record has a part that is not an SPF mechanism.")
-    return text
-
-
 def normalize_spf_include(value: str) -> str:
     text = " ".join((value or "").split())
     if len(text) > 200:
@@ -918,13 +884,21 @@ def normalize_spf_include(value: str) -> str:
     return text
 
 
-def normalize_dmarc(value: str) -> str:
-    text = " ".join((value or "").split())
-    if not text:
-        return ""
-    if not text.upper().startswith("V=DMARC1") or len(text) > 450:
-        raise MailError("A DMARC record starts with v=DMARC1 and has at most 450 characters.")
-    return text
+def server_ip() -> str:
+    """The address mail.<domain> and webmail.<domain> point at. With DNS
+    Manager on it is its address for new zones, so its zones and the Email
+    page say the same."""
+    from app.services import dns
+
+    if dns.active():
+        try:
+            address = str(dns.settings().get("zone_ip") or "")
+        except Exception:  # noqa: BLE001 - the interfaces will do
+            address = ""
+        if address:
+            return address
+    ipv4, _ = server_addresses()
+    return ipv4[0] if ipv4 else ""
 
 
 def suggested_spf(relay: dict | None) -> str:
@@ -947,25 +921,36 @@ def default_spf() -> str:
     return suggested_spf(relay)
 
 
-def set_dns_custom(db: Session, actor: User, domain_id: int, payload: dict) -> MailDomain:
-    """A domain's own SPF and DMARC and extra records, set by an administrator.
-    Empty SPF or DMARC goes back to what the panel suggests. Customers see
-    these records and publish them; they do not change them."""
-    if not _is_admin(actor):
-        raise MailError("Only an administrator changes a domain's mail DNS records.", status=403)
-    row = get_domain(db, actor, domain_id)
-    records = payload.get("records") or []
-    if not isinstance(records, list) or len(records) > MAX_CUSTOM_RECORDS:
-        raise MailError("A domain can have at most 20 extra records.")
-    custom = {
-        "spf": normalize_spf(payload.get("spf") or ""),
-        "dmarc": normalize_dmarc(payload.get("dmarc") or ""),
-        "records": [normalize_dns_record(item, row.domain) for item in records],
-    }
-    row.dns_custom = json.dumps(custom, separators=(",", ":")) if any(custom.values()) else ""
-    db.commit()
-    publish_dns_quietly(db, row)
-    return row
+def _spf_mechanisms(text: str) -> set[str]:
+    return {token.lower() for token in (text or "").split()[1:] if token.lower() not in _SPF_ALL}
+
+
+def _server_spf_terms() -> set[str]:
+    ipv4, ipv6 = server_addresses()
+    own = server_ip()
+    return ({"a", "mx", "+a", "+mx"} | {f"ip4:{ip}" for ip in ipv4 + ([own] if own else [])}
+            | {f"ip6:{ip}" for ip in ipv6})
+
+
+def _relay_spf_terms(relay: dict | None) -> set[str]:
+    return {token.lower() for token in ((relay or {}).get("spf_include") or "").split()}
+
+
+def spf_covers(text: str, relay: dict | None) -> bool:
+    """Whether an SPF record lets this server send, and the domain's relay
+    too. More of the owner's own (Google, a newsletter service) is fine."""
+    terms = _spf_mechanisms(text)
+    return bool(terms & _server_spf_terms()) and _relay_spf_terms(relay) <= terms
+
+
+def spf_is_panels(text: str) -> bool:
+    """An SPF record the panel wrote - this server and relay includes, nothing
+    else - which it may rewrite. Anything more makes it the owner's."""
+    terms = _spf_mechanisms(text)
+    known = _server_spf_terms()
+    for relay in _relays():
+        known |= _relay_spf_terms(relay)
+    return bool(terms) and terms <= known
 
 
 def effective_relay(row: MailDomain) -> dict | None:
@@ -980,34 +965,35 @@ def effective_relay(row: MailDomain) -> dict | None:
 
 
 def dns_records(row: MailDomain) -> list[dict]:
-    host = _hostname_or_blank()
-    ipv4, _ = server_addresses()
+    """What the domain publishes for mail. MX goes to mail.<domain>, which
+    points here - DNS Manager's zones are made that way - then SPF, DKIM,
+    DMARC, the records the domain's relay asks for, and the webmail address."""
+    domain = row.domain
+    ip = server_ip()
     relay = effective_relay(row)
-    suggested = suggested_spf(relay)
-    custom = _dns_custom(row)
-    records = [
-        {"key": "mx", "type": "MX", "name": row.domain, "value": host, "priority": 10},
-        {"key": "spf", "type": "TXT", "name": row.domain, "value": custom.get("spf") or suggested,
-         "suggested": suggested, "custom": bool(custom.get("spf"))},
-        {"key": "dkim", "type": "TXT", "name": f"{DKIM_SELECTOR}._domainkey.{row.domain}",
+    records = []
+    if ip:
+        records += [
+            {"key": "mx", "type": "MX", "name": domain, "value": f"mail.{domain}", "priority": 10},
+            {"key": "mail", "type": "A", "name": f"mail.{domain}", "value": ip},
+        ]
+    else:
+        records.append({"key": "mx", "type": "MX", "name": domain, "value": _hostname_or_blank(), "priority": 10})
+    records += [
+        {"key": "spf", "type": "TXT", "name": domain, "value": suggested_spf(relay)},
+        {"key": "dkim", "type": "TXT", "name": f"{DKIM_SELECTOR}._domainkey.{domain}",
          "value": f"v=DKIM1; k=rsa; p={row.dkim_public}"},
-        {"key": "dmarc", "type": "TXT", "name": f"_dmarc.{row.domain}", "value": custom.get("dmarc") or DEFAULT_DMARC,
-         "suggested": DEFAULT_DMARC, "custom": bool(custom.get("dmarc"))},
+        {"key": "dmarc", "type": "TXT", "name": f"_dmarc.{domain}", "value": DEFAULT_DMARC},
     ]
     if relay:
         for index, item in enumerate(relay.get("dns_records") or []):
             records.append({
-                "key": f"relay-{index}", "type": item["type"], "name": _fqdn(item["name"], row.domain),
-                "value": item["value"].replace("{domain}", row.domain), "priority": item.get("priority"),
+                "key": f"relay-{index}", "type": item["type"], "name": _fqdn(item["name"], domain).lower(),
+                "value": item["value"].replace("{domain}", domain), "priority": item.get("priority"),
                 "source": "relay", "relay": relay.get("name") or relay["id"],
             })
-    for index, item in enumerate(custom.get("records") or []):
-        records.append({
-            "key": f"custom-{index}", "type": item["type"], "name": _fqdn(item["name"], row.domain),
-            "value": item["value"], "priority": item.get("priority"), "source": "custom",
-        })
-    if ipv4:
-        records.append({"key": "webmail", "type": "A", "name": f"webmail.{row.domain}", "value": ipv4[0], "optional": True})
+    if ip:
+        records.append({"key": "webmail", "type": "A", "name": f"webmail.{domain}", "value": ip, "optional": True})
     return records
 
 
@@ -1033,53 +1019,75 @@ def _resolve(name: str, rtype: str) -> list[str] | None:
             out.append(b"".join(item.strings).decode("utf-8", "replace"))
         elif rtype == "MX":
             out.append(str(item.exchange).rstrip(".").lower())
-        elif rtype == "CNAME":
+        elif rtype in ("CNAME", "NS"):
             out.append(str(item.target).rstrip(".").lower())
         else:
             out.append(item.to_text())
     return out
 
 
+def _zone_lookup(zone_name: str):
+    """A resolver that answers from this server's zone, as _resolve does."""
+    from app.services import dns
+
+    data = dns._zone_data(zone_name)
+
+    def lookup(name: str, rtype: str) -> list[str]:
+        contents = dns._contents(dns._rrset(data, dns._absolute(name.lower()), rtype))
+        if rtype == "TXT":
+            return [dns._untxt(content) for content in contents]
+        if rtype == "MX":
+            return [content.split()[-1].rstrip(".").lower() for content in contents if content.split()]
+        if rtype == "CNAME":
+            return [content.rstrip(".").lower() for content in contents]
+        return list(contents)
+
+    return lookup
+
+
 def _squash(text: str) -> str:
     return "".join((text or "").split()).strip('"').lower()
 
 
-def _spf_mechanisms(text: str) -> set[str]:
-    return {token.lower() for token in (text or "").split()[1:] if token.lower() not in _SPF_ALL}
-
-
-def check_dns(row: MailDomain) -> list[dict]:
+def check_dns(row: MailDomain, lookup=None, zone_name: str = "") -> list[dict]:
+    """Each record with its status: ok, different, missing, or unknown when
+    DNS could not be asked. Asked of public DNS, or with lookup of this
+    server's zone (zone_name) - the one DNS Manager shows."""
+    lookup = lookup or _resolve
     records = dns_records(row)
-    ipv4, _ = server_addresses()
+    relay = effective_relay(row)
+    own = server_ip()
+    ips = set(server_addresses()[0]) | ({own} if own else set())
+
+    def points_here(target: str) -> bool:
+        inside = bool(zone_name) and (target == zone_name or target.endswith("." + zone_name))
+        return bool(set((lookup(target, "A") if inside else _resolve(target, "A")) or []) & ips)
+
     for record in records:
-        key, rtype, want = record["key"], record["type"], record["value"]
+        key, rtype, want, name = record["key"], record["type"], record["value"], record["name"]
         if key == "spf":
-            txt = _resolve(record["name"], "TXT")
+            txt = lookup(name, "TXT")
             found = None if txt is None else [t for t in txt if t.lower().startswith("v=spf1")]
-            # Every mechanism the panel asks for must be there; the owner may
-            # have more of their own.
-            ok = bool(found) and len(found) == 1 and _spf_mechanisms(want) <= _spf_mechanisms(found[0])
+            ok = bool(found) and len(found) == 1 and spf_covers(found[0], relay)
         elif key == "dkim":
-            found = _resolve(record["name"], "TXT")
+            found = lookup(name, "TXT")
             ok = found is not None and any(row.dkim_public and row.dkim_public in t.replace(" ", "") for t in found)
         elif key == "dmarc":
-            txt = _resolve(record["name"], "TXT")
+            txt = lookup(name, "TXT")
             found = None if txt is None else [t for t in txt if t.upper().startswith("V=DMARC1")]
-            ok = bool(found) and (not record.get("custom") or any(_squash(t) == _squash(want) for t in found))
+            ok = bool(found)
         elif key == "mx":
-            found = _resolve(record["name"], "MX")
-            # This server by name, or any name that points here (mail.<domain>
-            # in a DNS Manager zone, say).
-            ok = found is not None and (want in found or any(
-                set(_resolve(target, "A") or []) & set(ipv4) for target in found[:3]))
+            found = lookup(name, "MX")
+            # mail.<domain>, the server's own name, or any name that points here.
+            ok = found is not None and (want in found or any(points_here(target) for target in found[:3]))
         elif rtype == "TXT":
-            found = _resolve(record["name"], "TXT")
+            found = lookup(name, "TXT")
             ok = found is not None and any(_squash(t) == _squash(want) for t in found)
         elif rtype in ("MX", "CNAME"):
-            found = _resolve(record["name"], rtype)
+            found = lookup(name, rtype)
             ok = found is not None and want.rstrip(".").lower() in found
         else:
-            found = _resolve(record["name"], rtype)
+            found = lookup(name, rtype)
             ok = found is not None and want in found
         if found is None:
             record["status"] = "unknown"
@@ -1103,17 +1111,41 @@ def _hosted_zone(db: Session, row: MailDomain):
     return max(containing, key=lambda zone: len(zone.name), default=None)
 
 
+def _delegated(zone_name: str, nameservers: list[str]) -> bool | None:
+    """Whether public DNS asks this server's nameservers about the zone; None
+    when that could not be found out."""
+    found = _resolve(zone_name, "NS")
+    if found is None:
+        return None
+    ours = {name.rstrip(".").lower() for name in nameservers}
+    return bool({name.rstrip(".").lower() for name in found} & ours)
+
+
 def dns_view(db: Session, row: MailDomain, actor: User, check: bool = True) -> dict:
-    custom = _dns_custom(row)
+    """The domain's DNS records page. When DNS Manager serves the domain, the
+    records are checked in its zone - what the DNS page shows - and whether
+    the world asks this server about it is said beside them."""
+    from app.services import dns
+
     relay = effective_relay(row)
     zone = _hosted_zone(db, row)
+    records = dns_records(row)
+    delegated, nameservers = None, []
+    if check and zone is not None:
+        try:
+            records = check_dns(row, _zone_lookup(zone.name), zone.name)
+        except dns.DnsError:
+            records = check_dns(row, lambda name, rtype: None)
+        nameservers = dns.settings()["nameservers"]
+        delegated = _delegated(zone.name, nameservers)
+    elif check:
+        records = check_dns(row)
     return {
         "domain": row.domain,
-        "records": check_dns(row) if check else dns_records(row),
-        "custom": {"spf": custom.get("spf") or "", "dmarc": custom.get("dmarc") or "",
-                   "records": custom.get("records") or []},
-        "can_customize": _is_admin(actor),
+        "records": records,
         "hosted_zone": zone.name if zone else "",
+        "delegated": delegated,
+        "nameservers": nameservers,
         "relay": {
             "choice": row.relay or "",
             "effective": relay["id"] if relay else "",
@@ -1126,11 +1158,12 @@ def dns_view(db: Session, row: MailDomain, actor: User, check: bool = True) -> d
 
 
 def publish_dns(db: Session, row: MailDomain, *, replace: bool) -> list[str]:
-    """Put the domain's mail records into its zone, when DNS Manager serves it.
+    """Keep the domain's mail records in its zone, when DNS Manager serves it.
 
-    DKIM, the relay's records and the administrator's extras always follow the
-    panel. SPF, DMARC, MX and webmail are added where the zone has none; with
-    replace they are set to what the page shows (the button on the DNS page).
+    DKIM and the relay's records always follow the panel, and so does an SPF
+    record the panel wrote (spf_is_panels). What is missing is added. An MX,
+    address, DMARC or SPF of the owner's own stays - the records page shows it
+    as different - unless replace is set, which is the page's button.
     Returns the names written.
     """
     from app.services import dns
@@ -1149,8 +1182,15 @@ def publish_dns(db: Session, row: MailDomain, *, replace: bool) -> list[str]:
             return list(changes[(name, rtype)][1])
         return dns._contents(dns._rrset(data, name, rtype))
 
+    def same(existing: list[str], content: str, rtype: str) -> bool:
+        if rtype == "TXT":
+            return [dns._untxt(item) for item in existing] == [dns._untxt(content)]
+        return [item.rstrip(".").lower() for item in existing] == [content.rstrip(".").lower()]
+
     for record in dns_records(row):
         key, rtype = record["key"], record["type"]
+        if not record["value"]:
+            continue
         name = dns._absolute(record["name"])
         if rtype == "MX":
             content = f"{record.get('priority') if record.get('priority') is not None else 10} {dns._absolute(record['value'])}"
@@ -1161,33 +1201,34 @@ def publish_dns(db: Session, row: MailDomain, *, replace: bool) -> list[str]:
         else:
             content = record["value"]
         existing = current(name, rtype)
-        if key in ("dkim",) or record.get("source") in ("relay", "custom"):
+        if key == "dkim" or record.get("source") == "relay":
             if rtype == "TXT" and key != "dkim":
                 # Another TXT of the same name (a verification string, say) stays.
                 wanted = [item for item in existing if dns._untxt(item) != record["value"]] + [content]
                 if sorted(wanted) != sorted(existing):
                     changes[(name, rtype)] = (ttl, wanted)
-            elif existing != [content]:
+            elif not same(existing, content, rtype):
                 changes[(name, rtype)] = (ttl, [content])
         elif key == "spf":
             others = [item for item in existing if not dns._untxt(item).lower().startswith("v=spf1")]
-            spf_now = [item for item in existing if dns._untxt(item).lower().startswith("v=spf1")]
-            if not spf_now or (replace and [dns._untxt(item) for item in spf_now] != [record["value"]]):
-                changes[(name, rtype)] = (ttl, others + [content])
-        elif key == "dmarc":
-            if not existing or (replace and [dns._untxt(item) for item in existing] != [record["value"]]):
-                changes[(name, rtype)] = (ttl, [content])
-        elif key in ("mx", "webmail"):
-            if key == "mx" and not record["value"]:
+            spf_now = [dns._untxt(item) for item in existing if dns._untxt(item).lower().startswith("v=spf1")]
+            if spf_now == [record["value"]]:
                 continue
-            if not existing or (replace and existing != [content]):
-                changes[(name, rtype)] = (ttl, [content])
+            if not spf_now or replace or (len(spf_now) == 1 and spf_is_panels(spf_now[0])):
+                changes[(name, rtype)] = (ttl, others + [content])
+        elif not existing or (replace and not same(existing, content, rtype)):
+            # mx, mail, dmarc, webmail
+            changes[(name, rtype)] = (ttl, [content])
+    # A name that is a CNAME cannot hold another record. The button says so;
+    # keeping the zone in step quietly leaves that name as it is.
+    blocked = [key for key in changes if key[1] != "CNAME" and (key[0], "CNAME") not in changes
+               and dns._rrset(data, key[0], "CNAME")]
+    if blocked and replace:
+        raise MailError("A name in this zone is a CNAME and cannot also hold the mail record. Change it on the DNS page.")
+    for key in blocked:
+        changes.pop(key)
     if not changes:
         return []
-    for name, _ in changes:
-        if any(rrset.get("name") == name and rrset.get("type") == "CNAME" for rrset in data.get("rrsets", [])) \
-                and (name, "CNAME") not in changes:
-            raise MailError("A name in this zone is a CNAME and cannot also hold the mail record. Change it on the DNS page.")
     dns._serial_follows_edits(zone.name, data)
     dns._patch(zone.name, changes)
     return sorted({name.rstrip(".") for name, _ in changes})
@@ -1201,6 +1242,21 @@ def publish_dns_quietly(db: Session, row: MailDomain) -> list[str]:
     except (MailError, dns.DnsError, dns.DnsInputError) as exc:
         logger.warning("Mail records not published for %s: %s", row.domain, exc)
         return []
+
+
+def publish_all_quietly(db: Session, zone_name: str = "") -> list[str]:
+    """Every mail domain's records into its zone - or only those in zone_name:
+    when a zone is made, DNS Manager is installed, or the panel starts."""
+    from app.services import dns
+
+    if not active() or not dns.active():
+        return []
+    written = []
+    for row in db.query(MailDomain).order_by(MailDomain.domain).all():
+        if zone_name and not (row.domain == zone_name or row.domain.endswith("." + zone_name)):
+            continue
+        written += publish_dns_quietly(db, row)
+    return written
 
 
 def set_domain_relay(db: Session, actor: User, domain_id: int, choice: str) -> MailDomain:
@@ -1299,6 +1355,7 @@ def sync_quietly(db: Session) -> dict | None:
             return None
         report = sync(db)
         db.commit()
+        publish_all_quietly(db)
         return report
     except Exception:  # noqa: BLE001 - mail is never the reason something else fails
         logger.warning("Mail sync failed", exc_info=True)
@@ -1480,7 +1537,7 @@ def save_relay(db: Session, payload: dict, relay_id: str | None = None) -> dict:
     records = payload.get("dns_records") or []
     if not isinstance(records, list) or len(records) > MAX_RELAY_RECORDS:
         raise MailError("A relay's DNS template has at most 10 records.")
-    relay["dns_records"] = [normalize_dns_record(item, template=True) for item in records]
+    relay["dns_records"] = [normalize_dns_record(item) for item in records]
     password = payload.get("password")
     if not username:
         relay.pop("password", None)
@@ -1767,8 +1824,8 @@ def backup_manifest(db: Session, user: User) -> dict:
     domains = db.query(MailDomain).filter(MailDomain.owner_id == user.id).order_by(MailDomain.domain).all()
     names = [row.domain for row in domains]
     return {
-        "domains": [{"domain": row.domain, "catch_all": row.catch_all or "", "relay": row.relay or "",
-                     "dns_custom": row.dns_custom or ""} for row in domains],
+        "domains": [{"domain": row.domain, "catch_all": row.catch_all or "", "relay": row.relay or ""}
+                    for row in domains],
         "mailboxes": [{"local_part": account.local_part, "domain": account.domain, "password_hash": account.password_hash,
                        "quota_mb": account.quota_mb, "enabled": bool(account.enabled)}
                       for account in db.query(MailAccount).filter(MailAccount.owner_id == user.id)
@@ -1805,13 +1862,12 @@ def restore_manifest(db: Session, user: User, section, stage_mail) -> list[str]:
             raise ValueError(f"Mail domain already belongs to another user: {name}")
         if row is None:
             row = MailDomain(domain=name, owner_id=user.id, catch_all="", dkim_public="", webmail_host=False,
-                             relay="", dns_custom="")
+                             relay="")
             db.add(row)
         catch_all = str(entry.get("catch_all") or "")
         row.catch_all = normalize_destination(catch_all) if catch_all else ""
         relay = str(entry.get("relay") or "")
         row.relay = relay if relay == "direct" or relay in {item["id"] for item in _relays()} else ""
-        row.dns_custom = str(entry.get("dns_custom") or "")[:20000]
         db.flush()
     for entry in section.get("mailboxes") or []:
         try:

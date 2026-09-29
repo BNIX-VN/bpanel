@@ -893,7 +893,6 @@ function App() {
   const [mailDomainForm, setMailDomainForm] = useState({ domain: '', owner_id: '' });
   const [catchAllDraft, setCatchAllDraft] = useState({});
   const [mailDns, setMailDns] = useState(null);
-  const [dnsCustomForm, setDnsCustomForm] = useState(null);
   const [mailRelays, setMailRelays] = useState(null);
   const [relayForm, setRelayForm] = useState(null);
   const [relayTestTo, setRelayTestTo] = useState('');
@@ -2821,12 +2820,9 @@ function App() {
   }
 
   function applyMailDnsView(domain, data) {
-    const custom = data?.custom || {};
-    setMailDns({ domain, records: data?.records || [], relay: data?.relay || null, canCustomize: !!data?.can_customize, hostedZone: data?.hosted_zone || '' });
-    setDnsCustomForm({
-      spf: custom.spf || '',
-      dmarc: custom.dmarc || '',
-      records: (custom.records || []).map(r => ({ ...r, priority: r.priority ?? '' })),
+    setMailDns({
+      domain, records: data?.records || [], relay: data?.relay || null, hostedZone: data?.hosted_zone || '',
+      delegated: data?.delegated ?? null, nameservers: data?.nameservers || [],
     });
   }
 
@@ -2847,18 +2843,11 @@ function App() {
       }));
   }
 
-  async function saveDnsCustom() {
-    const f = dnsCustomForm;
-    const body = { spf: f.spf.trim(), dmarc: f.dmarc.trim(), records: dnsRecordsBody(f.records) };
-    const data = await request(`/mail/domains/${mailDns.domain.id}/dns`, { method: 'PUT', body: JSON.stringify(body) }, t('Saving...'));
-    if (data) { setNotice(t('Saved. Publish the records at the DNS provider of {domain}.', { domain: mailDns.domain.domain })); applyMailDnsView(mailDns.domain, data); }
-  }
-
   async function publishMailDns() {
-    if (!confirm(t("Put these records in this server's DNS zone for {domain}? Its MX, SPF and DMARC become the ones shown here.", { domain: mailDns.domain.domain }))) return;
+    if (!confirm(t('Update the zone {zone}? The records of {domain} that differ from this page are replaced by the ones shown here.', { zone: mailDns.hostedZone, domain: mailDns.domain.domain }))) return;
     const data = await request(`/mail/domains/${mailDns.domain.id}/dns/publish`, { method: 'POST' }, t('Saving...'));
     if (data) {
-      setNotice(data.published?.length ? t('Added to the zone {zone}: {names}.', { zone: data.hosted_zone, names: data.published.join(', ') }) : t('The zone already has these records.'));
+      setNotice(data.published?.length ? t('Updated in the zone {zone}: {names}.', { zone: data.hosted_zone, names: data.published.join(', ') }) : t('The zone already has these records.'));
       applyMailDnsView(mailDns.domain, data);
     }
   }
@@ -6087,7 +6076,7 @@ function App() {
           <button disabled={!mailDomainForm.domain.trim() || !!loading} onClick={addMailDomain}><Plus size={14}/> {t('Turn on email')}</button>
         </div>
         {!isAdmin && candidates.length === 0 && <p className="hint">{t('Every domain of your websites already has email. Add a website or a domain alias to use another one.')}</p>}
-        <p className="hint">{t('Mail for a domain arrives here once its MX record points at {host}; the DNS records to add are shown next.', { host: info.hostname || '—' })}</p>
+        <p className="hint">{t('Mail for a domain arrives here once its MX record points at this server; the DNS records to add are shown next.')}</p>
       </div>
       {domains.length === 0 && <EmptyState icon={Mail} message={t('No mail domains yet.')} />}
       {domains.length > 0 && <div className="table">
@@ -6120,7 +6109,8 @@ function App() {
     </div>;
   }
 
-  function renderDnsRecordEditor(rows, onChange, { domain = '', template = false } = {}) {
+  // A relay's DNS template: what every domain sending through it publishes.
+  function renderDnsRecordEditor(rows, onChange) {
     const setRow = (index, patch) => onChange(rows.map((row, i) => i === index ? { ...row, ...patch } : row));
     return <div className="dns-editor">
       {rows.map((row, index) => <div className={`dns-editor-row${row.type === 'MX' ? ' with-priority' : ''}`} key={index}>
@@ -6129,48 +6119,49 @@ function App() {
         </select>
         <input value={row.name} placeholder="@" aria-label={t('Name')} spellCheck={false} onChange={e => setRow(index, { name: e.target.value })} />
         {row.type === 'MX' && <input type="number" min="0" max="65535" value={row.priority ?? ''} placeholder="10" aria-label={t('Priority')} onChange={e => setRow(index, { priority: e.target.value })} />}
-        <input className="dns-editor-value" value={row.value} placeholder={template ? t('Value ({domain} = the domain)') : t('Value')} aria-label={t('Value')} spellCheck={false} onChange={e => setRow(index, { value: e.target.value })} />
+        <input className="dns-editor-value" value={row.value} placeholder={t('Value ({domain} = the domain)')} aria-label={t('Value')} spellCheck={false} onChange={e => setRow(index, { value: e.target.value })} />
         <button type="button" className="mini danger icon-only" aria-label={t('Remove')} title={t('Remove')} onClick={() => onChange(rows.filter((_, i) => i !== index))}><Trash2 size={13}/></button>
       </div>)}
       <div className="actions dns-editor-actions">
-        <button type="button" className="mini secondary-light" disabled={rows.length >= (template ? 10 : 20)} onClick={() => onChange([...rows, { type: 'TXT', name: '@', value: '', priority: '' }])}><Plus size={13}/> {t('Add a record')}</button>
+        <button type="button" className="mini secondary-light" disabled={rows.length >= 10} onClick={() => onChange([...rows, { type: 'TXT', name: '@', value: '', priority: '' }])}><Plus size={13}/> {t('Add a record')}</button>
       </div>
-      <p className="hint">{template
-        ? t('Names are relative to each domain that uses the relay: @ is the domain itself, brevo1._domainkey a name under it. {domain} in a value becomes the domain name.')
-        : t('Names are relative to {domain}: @ is the domain itself.', { domain })}</p>
+      <p className="hint">{t('Names are relative to each domain that uses the relay: @ is the domain itself, brevo1._domainkey a name under it. {domain} in a value becomes the domain name.')}</p>
     </div>;
   }
 
   function renderMailDns() {
-    const { domain, records, relay, canCustomize, hostedZone } = mailDns;
-    const form = dnsCustomForm;
+    const { domain, records, relay, hostedZone, delegated, nameservers } = mailDns;
     const statusLabel = { ok: t('Found'), missing: t('Missing'), different: t('Different'), unknown: t('Not checked') };
     const statusClass = { ok: 'ok', missing: 'bad', different: 'warn', unknown: '' };
     const titles = {
       mx: t('Receiving mail (MX)'),
+      mail: t('Mail server address (A)'),
       spf: t('Allowed senders (SPF)'),
       dkim: t('Signature key (DKIM)'),
       dmarc: t('Policy (DMARC)'),
       webmail: t('Webmail address (optional)'),
     };
-    const titleFor = record => titles[record.key]
-      || (record.source === 'relay' ? t('Asked for by the relay {relay}', { relay: record.relay }) : t('Extra record'));
-    const suggested = key => (records || []).find(r => r.key === key)?.suggested || '';
+    const titleFor = record => titles[record.key] || t('Asked for by the relay {relay}', { relay: record.relay });
+    // The panel keeps a served zone in step by itself; the button is for
+    // records the owner changed on the DNS page.
+    const zoneBehind = !!hostedZone && (records || []).some(record => !record.optional && record.status !== 'ok' && record.status !== 'unknown');
     return <section className="section mail-dns-page">
       <div className="section-title">
         <div className="waf-detail-title">
           <button className="secondary-light" onClick={() => setMailDns(null)}><ArrowLeft size={14}/> {t('Email')}</button>
           <div><h2>{t('DNS records for {domain}', { domain: domain.domain })}</h2>
             <p className="hint">{hostedZone
-              ? t("This server runs the DNS of {domain} (zone {zone}): the panel keeps these records in it.", { domain: domain.domain, zone: hostedZone })
+              ? t('This server runs the DNS of {domain}: the records below are checked in the zone {zone} on the DNS page, and the panel keeps them there.', { domain: domain.domain, zone: hostedZone })
               : t('Add these at the DNS provider of {domain}. A change can take a few hours to be seen everywhere.', { domain: domain.domain })}</p></div>
         </div>
         <div className="actions">
-          {hostedZone && <button className="secondary-light" disabled={!!loading || records === null} onClick={publishMailDns}><Upload size={14}/> {t("Put them in this server's DNS")}</button>}
+          {zoneBehind && <button className="secondary-light" disabled={!!loading || records === null} onClick={publishMailDns}><Upload size={14}/> {t('Update the zone')}</button>}
           <button className="secondary-light" disabled={!!loading || records === null} onClick={() => openMailDns(domain)}><RefreshCw size={14}/> {t('Check again')}</button>
           <button className="secondary-light" disabled={!!loading} onClick={() => rotateMailDkim(domain)}><KeyRound size={14}/> {t('New DKIM key')}</button>
         </div>
       </div>
+      {hostedZone && delegated === false && <p className="mail-dns-note warn">{t("Public DNS does not ask this server about {zone} yet, so these records are not seen outside it. Set the domain's nameservers to {nameservers} at its registrar.", { zone: hostedZone, nameservers: (nameservers || []).join(', ') })}</p>}
+      {hostedZone && delegated === true && <p className="mail-dns-note ok">{t("{zone} uses this server's nameservers: what is in the zone is what everyone sees.", { zone: hostedZone })}</p>}
       {relay && <div className="mail-relay-card">
         <div className="mail-relay-card-head"><Send size={15}/><strong>{t('Outgoing mail')}</strong></div>
         {isAdmin && <select value={relay.choice} disabled={!!loading} aria-label={t('Outgoing mail')} onChange={e => saveDomainRelay(e.target.value)}>
@@ -6188,7 +6179,6 @@ function App() {
           <div className="mail-dns-head">
             <strong>{titleFor(record)}</strong>
             <span className="mail-dns-type"><code>{record.type}</code>{record.priority != null && <small>{t('priority {n}', { n: record.priority })}</small>}</span>
-            {isAdmin && (record.custom || record.source === 'custom') && <span className="badge">{t('Custom')}</span>}
             <span className={`badge mail-dns-status ${statusClass[record.status] || ''}`}>{statusLabel[record.status] || record.status}</span>
           </div>
           {renderCopyBlock(t('Name'), record.name)}
@@ -6196,17 +6186,6 @@ function App() {
           {record.status === 'different' && (record.found || []).length > 0 && <p className="hint">{t('Found now:')} <code>{record.found.join(' | ')}</code></p>}
           {record.key === 'webmail' && <p className="hint">{t('Only needed for webmail.{domain}; turn that on in the Domains tab once this record is in place.', { domain: domain.domain })}</p>}
         </div>)}
-      </div>}
-      {records && form && canCustomize && <div className="create-inline mail-dns-custom">
-        <div className="create-inline-head"><strong>{t('Customize the mail records')}</strong></div>
-        <p className="hint">{t("For this domain only: its own SPF and DMARC, and records another service asks for. Records every domain on a relay needs belong in that relay's DNS template (Relays tab). Customers see these records and publish them; they cannot change them.")}</p>
-        <label className="field"><span className="field-label">SPF</span>
-          <input value={form.spf} placeholder={suggested('spf')} spellCheck={false} onChange={e => setDnsCustomForm(prev => ({ ...prev, spf: e.target.value }))} /></label>
-        <label className="field"><span className="field-label">DMARC</span>
-          <input value={form.dmarc} placeholder={suggested('dmarc')} spellCheck={false} onChange={e => setDnsCustomForm(prev => ({ ...prev, dmarc: e.target.value }))} /></label>
-        <div className="field"><span className="field-label">{t('Extra records')}</span>
-          {renderDnsRecordEditor(form.records, rows => setDnsCustomForm(prev => ({ ...prev, records: rows })), { domain: domain.domain })}</div>
-        <div className="actions"><button type="button" disabled={!!loading} onClick={saveDnsCustom}><Save size={14}/> {t('Save records')}</button></div>
       </div>}
     </section>;
   }
@@ -6247,7 +6226,7 @@ function App() {
             <input value={f.spf_include} placeholder="include:spf.brevo.com" spellCheck={false} list="mail-spf-includes" onChange={e => set({ spf_include: e.target.value })} />
             <datalist id="mail-spf-includes">{MAIL_SPF_INCLUDES.map(item => <option key={item} value={item} />)}</datalist></label>
           <div className="field"><span className="field-label">{t('DNS records the relay asks for')}</span>
-            {renderDnsRecordEditor(f.dns_records, rows => set({ dns_records: rows }), { template: true })}</div>
+            {renderDnsRecordEditor(f.dns_records, rows => set({ dns_records: rows }))}</div>
         </div>
         {!f.id && <label className="check-line"><input type="checkbox" checked={!!f.make_default} onChange={e => set({ make_default: e.target.checked })} /> {t('Use it as the default relay')}</label>}
         <p className="hint">{t("587 uses STARTTLS and 465 SSL/TLS, and the relay's certificate must be valid. Leave the username empty for a relay that knows this server by its address.")}</p>

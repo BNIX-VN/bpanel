@@ -190,8 +190,6 @@ PART14 = {
         "Đã bật email cho {domain}. Tiếp theo hãy thêm các bản ghi DNS của nó.",
     "Every domain of your websites already has email. Add a website or a domain alias to use another one.":
         "Mọi tên miền website của bạn đều đã có email. Hãy thêm website hoặc tên miền phụ để dùng tên miền khác.",
-    "Mail for a domain arrives here once its MX record points at {host}; the DNS records to add are shown next.":
-        "Thư của một tên miền sẽ về server này khi bản ghi MX trỏ tới {host}; các bản ghi DNS cần thêm sẽ hiện ở bước tiếp theo.",
     "No mail domains yet.": "Chưa có tên miền email nào.",
     "{mailboxes} mailboxes · {forwarders} forwarders": "{mailboxes} hộp thư · {forwarders} chuyển tiếp",
     "Catch-all": "Nhận thư mọi địa chỉ (catch-all)",
@@ -219,14 +217,8 @@ PART14 = {
 
     # One domain's DNS records (2026-09-29, laid out like OPanel's)
     "DNS records for {domain}": "Bản ghi DNS cho {domain}",
-    "This server runs the DNS of {domain} (zone {zone}): the panel keeps these records in it.":
-        "Server này đang chạy DNS cho {domain} (zone {zone}): panel giữ các bản ghi này trong đó.",
     "Add these at the DNS provider of {domain}. A change can take a few hours to be seen everywhere.":
         "Hãy thêm các bản ghi này ở nhà cung cấp DNS của {domain}. Thay đổi có thể mất vài giờ để cập nhật khắp nơi.",
-    "Put them in this server's DNS": "Đưa vào DNS của server này",
-    "Put these records in this server's DNS zone for {domain}? Its MX, SPF and DMARC become the ones shown here.":
-        "Đưa các bản ghi này vào zone DNS của {domain} trên server này? MX, SPF và DMARC của nó sẽ thành các bản ghi hiện ở đây.",
-    "Added to the zone {zone}: {names}.": "Đã thêm vào zone {zone}: {names}.",
     "The zone already has these records.": "Zone đã có sẵn các bản ghi này.",
     "Check again": "Kiểm tra lại",
     "Checking DNS…": "Đang kiểm tra DNS…",
@@ -252,23 +244,14 @@ PART14 = {
     "Policy (DMARC)": "Chính sách (DMARC)",
     "Webmail address (optional)": "Địa chỉ webmail (không bắt buộc)",
     "Asked for by the relay {relay}": "Relay {relay} yêu cầu",
-    "Extra record": "Bản ghi thêm",
     "priority {n}": "độ ưu tiên {n}",
     "Found now:": "Hiện đang có:",
     "Only needed for webmail.{domain}; turn that on in the Domains tab once this record is in place.":
         "Chỉ cần cho webmail.{domain}; hãy bật nó ở thẻ Tên miền khi bản ghi này đã có.",
-    "Customize the mail records": "Tuỳ chỉnh bản ghi email",
-    "For this domain only: its own SPF and DMARC, and records another service asks for. Records every domain on a relay needs belong in that relay's DNS template (Relays tab). Customers see these records and publish them; they cannot change them.":
-        "Chỉ cho tên miền này: SPF và DMARC riêng, và các bản ghi mà dịch vụ khác yêu cầu. Bản ghi mà mọi tên miền dùng một relay đều cần thì đặt trong mẫu DNS của relay đó (thẻ Relay). Khách hàng thấy và thêm các bản ghi này nhưng không sửa được.",
-    "Extra records": "Bản ghi thêm",
-    "Save records": "Lưu bản ghi",
-    "Saved. Publish the records at the DNS provider of {domain}.":
-        "Đã lưu. Hãy thêm các bản ghi ở nhà cung cấp DNS của {domain}.",
     "Value ({domain} = the domain)": "Giá trị ({domain} = tên miền)",
     "Add a record": "Thêm bản ghi",
     "Names are relative to each domain that uses the relay: @ is the domain itself, brevo1._domainkey a name under it. {domain} in a value becomes the domain name.":
         "Tên được tính theo từng tên miền dùng relay: @ là chính tên miền, brevo1._domainkey là một tên bên dưới nó. {domain} trong giá trị sẽ thành tên miền.",
-    "Names are relative to {domain}: @ is the domain itself.": "Tên được tính theo {domain}: @ là chính tên miền.",
 
     # Relays and their DNS template (2026-09-29, laid out like OPanel's)
     "A relay (smarthost) sends this server's outgoing mail for it: needed where the provider blocks port 25, and it can help mail reach the inbox. Each domain uses the default relay unless its DNS page picks another one or direct delivery.":
@@ -397,17 +380,9 @@ PART14 = {
     "An A record points at an IPv4 address, an AAAA record at an IPv6 one.":
         "Bản ghi A trỏ tới địa chỉ IPv4, bản ghi AAAA trỏ tới địa chỉ IPv6.",
     "The MX priority is a number from 0 to 65535.": "Độ ưu tiên MX là một số từ 0 đến 65535.",
-    "An SPF record starts with v=spf1 and has at most 450 characters.":
-        "Bản ghi SPF bắt đầu bằng v=spf1 và dài tối đa 450 ký tự.",
-    "That SPF record has a part that is not an SPF mechanism.": "Bản ghi SPF này có phần không phải cơ chế SPF.",
     "The relay's SPF part is at most 200 characters.": "Phần SPF của relay dài tối đa 200 ký tự.",
     "The relay's SPF part is one or more mechanisms, such as include:spf.brevo.com.":
         "Phần SPF của relay gồm một hoặc nhiều cơ chế, ví dụ include:spf.brevo.com.",
-    "A DMARC record starts with v=DMARC1 and has at most 450 characters.":
-        "Bản ghi DMARC bắt đầu bằng v=DMARC1 và dài tối đa 450 ký tự.",
-    "Only an administrator changes a domain's mail DNS records.":
-        "Chỉ quản trị viên mới sửa được bản ghi DNS email của tên miền.",
-    "A domain can have at most 20 extra records.": "Một tên miền có tối đa 20 bản ghi thêm.",
     "A name in this zone is a CNAME and cannot also hold the mail record. Change it on the DNS page.":
         "Một tên trong zone này là CNAME nên không chứa thêm bản ghi email được. Hãy sửa nó ở trang DNS.",
     "Only an administrator chooses the relay a domain sends through.":
@@ -431,4 +406,19 @@ PART14 = {
     "Another relay already signs in to that host.": "Đã có relay khác đăng nhập vào máy chủ này.",
     "This mailbox is suspended.": "Hộp thư này đang bị tạm khoá.",
     "Type the domain name to confirm.": "Hãy gõ tên miền để xác nhận.",
+
+    # The DNS records page and DNS Manager (2026-09-29, one with DNS Manager)
+    "Mail for a domain arrives here once its MX record points at this server; the DNS records to add are shown next.":
+        "Thư của một tên miền sẽ về server này khi bản ghi MX trỏ về đây; các bản ghi DNS cần thêm sẽ hiện ở bước tiếp theo.",
+    "This server runs the DNS of {domain}: the records below are checked in the zone {zone} on the DNS page, and the panel keeps them there.":
+        "Server này đang chạy DNS cho {domain}: các bản ghi bên dưới được kiểm tra trong zone {zone} ở trang DNS, và panel tự giữ chúng trong đó.",
+    "Update the zone": "Cập nhật zone",
+    "Update the zone {zone}? The records of {domain} that differ from this page are replaced by the ones shown here.":
+        "Cập nhật zone {zone}? Các bản ghi của {domain} khác với trang này sẽ được thay bằng bản ghi hiện ở đây.",
+    "Updated in the zone {zone}: {names}.": "Đã cập nhật trong zone {zone}: {names}.",
+    "Mail server address (A)": "Địa chỉ mail server (A)",
+    "Public DNS does not ask this server about {zone} yet, so these records are not seen outside it. Set the domain's nameservers to {nameservers} at its registrar.":
+        "DNS công khai chưa hỏi server này về {zone}, nên bên ngoài chưa thấy các bản ghi này. Hãy đặt nameserver của tên miền thành {nameservers} tại nơi đăng ký tên miền.",
+    "{zone} uses this server's nameservers: what is in the zone is what everyone sees.":
+        "{zone} đang dùng nameserver của server này: bản ghi trong zone chính là bản ghi mọi nơi nhìn thấy.",
 }

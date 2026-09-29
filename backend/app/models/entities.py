@@ -581,7 +581,6 @@ class MailDomain(Base):
     # without one, anything else is the id of a relay.
     relay: Mapped[str] = mapped_column(String(40), default="")
     # An administrator's own DNS values for it, JSON: {"spf", "dmarc", "records"}.
-    dns_custom: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 

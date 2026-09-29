@@ -35,11 +35,10 @@ def upgrade() -> None:
             sa.Column("dkim_public", sa.Text(), nullable=False, server_default=""),
             sa.Column("webmail_host", sa.Boolean(), nullable=False, server_default=sa.false()),
             sa.Column("relay", sa.String(length=40), nullable=False, server_default=""),
-            sa.Column("dns_custom", sa.Text(), nullable=False, server_default=""),
             sa.Column("created_at", sa.DateTime(), nullable=False, server_default=sa.func.now()),
         )
         op.execute(
-            "INSERT INTO mail_domains (domain, owner_id, catch_all, dkim_public, webmail_host, relay, dns_custom, created_at) "
+            "INSERT INTO mail_domains (domain, owner_id, catch_all, dkim_public, webmail_host, relay, created_at) "
             "SELECT domain, MIN(owner_id), '', '', 0, '', '', CURRENT_TIMESTAMP FROM mail_accounts GROUP BY domain"
         )
     if not inspector.has_table("mail_forwarders"):

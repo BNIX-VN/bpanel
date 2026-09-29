@@ -373,7 +373,9 @@ def test_the_dns_page_lists_every_record_the_domain_needs(env):
     domain_id = _domain(env, "khach", "khach.vn").json()["id"]
     view = env.client.get(f"/api/mail/domains/{domain_id}/dns", headers=env.as_("khach")).json()
     records = {r["key"]: r for r in view["records"]}
-    assert records["mx"]["value"] == "panel.example.vn" and records["mx"]["priority"] == 10
+    # MX goes to mail.<domain>, pointing here: what DNS Manager's zones have.
+    assert records["mx"]["value"] == "mail.khach.vn" and records["mx"]["priority"] == 10
+    assert (records["mail"]["type"], records["mail"]["name"], records["mail"]["value"]) == ("A", "mail.khach.vn", "203.0.113.10")
     assert records["spf"]["value"] == "v=spf1 mx a ip4:203.0.113.10 include:spf.smtp2go.com ~all"
     assert records["dkim"]["name"] == "bpanel._domainkey.khach.vn" and records["dkim"]["value"].startswith("v=DKIM1; k=rsa; p=")
     assert records["dmarc"]["value"] == "v=DMARC1; p=quarantine; adkim=r; aspf=r"
@@ -385,7 +387,7 @@ def test_the_dns_page_lists_every_record_the_domain_needs(env):
     ]
     assert records["webmail"]["value"] == "203.0.113.10" and records["webmail"]["optional"] is True
     assert view["relay"]["effective_name"] == "SMTP2GO" and view["relay"]["options"] == []
-    assert view["can_customize"] is False
+    assert view["hosted_zone"] == "" and view["delegated"] is None
 
 
 def test_spf_names_only_addresses_the_internet_sees(env, monkeypatch):
@@ -397,16 +399,13 @@ def test_spf_names_only_addresses_the_internet_sees(env, monkeypatch):
     assert mail.suggested_spf(None) == "v=spf1 mx a ip4:163.61.72.88 ip6:2001:db8::5 ~all"
 
 
-def test_only_an_administrator_customises_a_domains_mail_records(env):
+def test_a_domains_records_are_not_edited_one_by_one(env):
+    """As in OPanel: what a domain publishes beyond the panel's own records
+    comes from its relay's DNS template, nothing else."""
     domain_id = _domain(env, "khach", "khach.vn").json()["id"]
-    body = {"spf": "v=spf1 mx include:_spf.google.com ~all", "dmarc": "v=DMARC1; p=reject",
-            "records": [{"type": "TXT", "name": "google", "value": "google-site-verification=abc"}]}
-    assert env.client.put(f"/api/mail/domains/{domain_id}/dns", headers=env.as_("khach"), json=body).status_code == 403
-    view = env.client.put(f"/api/mail/domains/{domain_id}/dns", headers=env.as_("owner"), json=body).json()
-    records = {r["key"]: r for r in view["records"]}
-    assert records["spf"]["value"] == body["spf"] and records["spf"]["custom"] is True
-    assert records["dmarc"]["value"] == "v=DMARC1; p=reject"
-    assert records["custom-0"]["name"] == "google.khach.vn"
+    body = {"spf": "v=spf1 mx ~all", "dmarc": "v=DMARC1; p=reject", "records": []}
+    assert env.client.put(f"/api/mail/domains/{domain_id}/dns", headers=env.as_("owner"), json=body).status_code == 405
+    assert not hasattr(MailDomain, "dns_custom")
 
 
 def test_records_are_checked_against_live_dns(env, monkeypatch):
@@ -422,30 +421,90 @@ def test_records_are_checked_against_live_dns(env, monkeypatch):
     monkeypatch.setattr(mail, "_resolve", lambda name, rtype: answers.get((name, rtype), None))
     view = env.client.get(f"/api/mail/domains/{domain_id}/dns", headers=env.as_("khach")).json()
     status = {r["key"]: r["status"] for r in view["records"]}
-    # MX through mail.khach.vn still points here; an extra SPF include is the owner's own.
-    assert status["mx"] == "ok" and status["spf"] == "ok" and status["dkim"] == "ok"
+    # An extra SPF include is the owner's own.
+    assert status["mx"] == "ok" and status["mail"] == "ok" and status["spf"] == "ok" and status["dkim"] == "ok"
     assert status["dmarc"] == "missing" and status["webmail"] == "unknown"
 
 
-def test_with_dns_manager_the_records_go_into_the_zone(env):
+def test_with_dns_manager_the_zone_and_the_page_agree(env):
     addons.install(addons.DNS)
     zone = dns.create_zone(env.db, "khach.vn", env.user("khach").id)
     env.client.post("/api/mail/relays", headers=env.as_("owner"), json=RELAY)
     domain_id = _domain(env, "khach", "khach.vn").json()["id"]
     fake = env.dns
+    # In the zone at once, no button pressed: DKIM, DMARC, the relay's records,
+    # and the SPF the zone's template wrote, now with the relay's include.
     assert dns._untxt(fake.rrset(zone, "bpanel._domainkey.khach.vn.", "TXT")[0]).startswith("v=DKIM1; k=rsa; p=")
     assert fake.rrset(zone, "s123._domainkey.khach.vn.", "CNAME") == ["dkim.smtp2go.net."]
-    assert fake.rrset(zone, "_dmarc.khach.vn.", "TXT") is not None
-    # The zone had its own MX (mail.khach.vn): left alone until asked.
+    assert [dns._untxt(c) for c in fake.rrset(zone, "_dmarc.khach.vn.", "TXT")] == [mail.DEFAULT_DMARC]
     assert fake.rrset(zone, "khach.vn.", "MX") == ["10 mail.khach.vn."]
-    txt = [dns._untxt(c) for c in fake.rrset(zone, "khach.vn.", "TXT")]
-    assert "smtp2go-verification=khach.vn" in txt
-    published = env.client.post(f"/api/mail/domains/{domain_id}/dns/publish", headers=env.as_("khach")).json()
-    assert published["hosted_zone"] == "khach.vn"
-    assert fake.rrset(zone, "khach.vn.", "MX") == ["10 panel.example.vn."]
-    txt = [dns._untxt(c) for c in fake.rrset(zone, "khach.vn.", "TXT")]
-    assert "v=spf1 mx a ip4:203.0.113.10 include:spf.smtp2go.com ~all" in txt
-    assert "smtp2go-verification=khach.vn" in txt and len([t for t in txt if t.startswith("v=spf1")]) == 1
+    assert fake.rrset(zone, "mail.khach.vn.", "A") == ["203.0.113.10"]
+    txt = sorted(dns._untxt(c) for c in fake.rrset(zone, "khach.vn.", "TXT"))
+    assert txt == ["smtp2go-verification=khach.vn", "v=spf1 mx a ip4:203.0.113.10 include:spf.smtp2go.com ~all"]
+    # The page checks the zone - what the DNS page shows - not the world.
+    view = env.client.get(f"/api/mail/domains/{domain_id}/dns", headers=env.as_("khach")).json()
+    assert view["hosted_zone"] == "khach.vn"
+    assert {r["key"]: r["status"] for r in view["records"]} == {
+        "mx": "ok", "mail": "ok", "spf": "ok", "dkim": "ok", "dmarc": "ok",
+        "relay-0": "ok", "relay-1": "ok", "relay-2": "ok", "webmail": "ok"}
+
+
+def test_the_owners_own_records_stay_until_the_zone_is_updated(env):
+    addons.install(addons.DNS)
+    zone = dns.create_zone(env.db, "khach.vn", env.user("khach").id)
+    domain_id = _domain(env, "khach", "khach.vn").json()["id"]
+    # On the DNS page the owner sends mail elsewhere and adds Google to SPF.
+    dns.delete_record(zone, {"name": "@", "type": "MX", "content": "mail.khach.vn", "priority": 10}, admin=False)
+    dns.add_record(zone, {"name": "@", "type": "MX", "content": "mx.google.com", "priority": 1}, admin=False)
+    dns.delete_record(zone, {"name": "@", "type": "TXT", "content": "v=spf1 mx a ip4:203.0.113.10 ~all"}, admin=False)
+    dns.add_record(zone, {"name": "@", "type": "TXT", "content": "v=spf1 mx a include:_spf.google.com ~all"}, admin=False)
+    row = env.db.query(MailDomain).one()
+    mail.publish_all_quietly(env.db)
+    assert env.dns.rrset(zone, "khach.vn.", "MX") == ["1 mx.google.com."]
+    view = env.client.get(f"/api/mail/domains/{domain_id}/dns", headers=env.as_("khach")).json()
+    records = {r["key"]: r for r in view["records"]}
+    assert records["mx"]["status"] == "different" and records["mx"]["found"] == ["mx.google.com"]
+    # Their SPF still lets this server send: kept, and fine.
+    assert records["spf"]["status"] == "ok"
+    env.client.post(f"/api/mail/domains/{domain_id}/dns/publish", headers=env.as_("khach"))
+    assert env.dns.rrset(zone, "khach.vn.", "MX") == ["10 mail.khach.vn."]
+    assert [dns._untxt(c) for c in env.dns.rrset(zone, "khach.vn.", "TXT")] == ["v=spf1 mx a ip4:203.0.113.10 ~all"]
+    assert row.domain == "khach.vn"
+
+
+def test_the_spf_zones_got_before_follows_the_panel_by_itself(env):
+    """v1.0.170's zones say "v=spf1 a mx ~all": the panel's own, so it moves."""
+    addons.install(addons.DNS)
+    zone = dns.create_zone(env.db, "khach.vn", env.user("khach").id)
+    apex = "khach.vn."
+    dns._patch(zone, {(apex, "TXT"): (3600, [dns._txt("v=spf1 a mx ~all")])})
+    _domain(env, "khach", "khach.vn")
+    assert [dns._untxt(c) for c in env.dns.rrset(zone, apex, "TXT")] == ["v=spf1 mx a ip4:203.0.113.10 ~all"]
+    assert mail.spf_is_panels("v=spf1 a mx ~all") and not mail.spf_is_panels("v=spf1 a mx include:_spf.google.com ~all")
+
+
+def test_a_zone_made_after_the_mail_domain_gets_its_records(env):
+    domain_id = _domain(env, "khach", "khach.vn").json()["id"]
+    addons.install(addons.DNS)
+    zone = dns.create_zone(env.db, "khach.vn", env.user("khach").id)
+    assert dns._untxt(env.dns.rrset(zone, "bpanel._domainkey.khach.vn.", "TXT")[0]).startswith("v=DKIM1")
+    assert env.dns.rrset(zone, "_dmarc.khach.vn.", "TXT")
+    assert env.client.get(f"/api/mail/domains/{domain_id}/dns", headers=env.as_("khach")).json()["hosted_zone"] == "khach.vn"
+
+
+def test_the_page_says_whether_the_world_asks_this_server(env, monkeypatch):
+    addons.install(addons.DNS)
+    dns.create_zone(env.db, "khach.vn", env.user("khach").id)
+    domain_id = _domain(env, "khach", "khach.vn").json()["id"]
+    answers = {("khach.vn", "NS"): ["ns1.bnix.vn", "ns2.bnix.vn"]}
+    monkeypatch.setattr(mail, "_resolve", lambda name, rtype: answers.get((name, rtype), None))
+    view = env.client.get(f"/api/mail/domains/{domain_id}/dns", headers=env.as_("khach")).json()
+    assert view["delegated"] is True and view["nameservers"] == ["ns1.bnix.vn", "ns2.bnix.vn"]
+    answers[("khach.vn", "NS")] = ["ashley.ns.cloudflare.com", "rob.ns.cloudflare.com"]
+    view = env.client.get(f"/api/mail/domains/{domain_id}/dns", headers=env.as_("khach")).json()
+    assert view["delegated"] is False
+    # The zone is still what the records are checked in.
+    assert {r["status"] for r in view["records"] if not r.get("optional")} == {"ok"}
 
 
 def test_a_new_default_relay_moves_zones_still_on_the_servers_spf(env):
