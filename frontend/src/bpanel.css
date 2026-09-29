@@ -112,17 +112,6 @@
 @media (max-width:640px){
   .restore-row>span:not(.restore-main){grid-column:2}
 }
-.mcp-endpoint{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px; padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius-sm); background:var(--surface-alt)}
-.mcp-endpoint span{font-weight:700;color:var(--text-secondary);font-size:12px; text-transform:uppercase;letter-spacing:.03em}
-.mcp-endpoint code{flex:1 1 260px;min-width:0;word-break:break-all;font-size:13px}
-.mcp-secret{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap; margin-top:12px;padding:12px 14px;border:1px solid var(--success-border); border-radius:var(--radius-sm);background:var(--success-bg)}
-.mcp-secret strong{display:block;font-size:12px;margin-bottom:6px}
-.mcp-secret code{word-break:break-all;font-size:13px;font-weight:700}
-.mcp-secret .actions{display:flex;gap:8px;flex:0 0 auto}
-.mcp-snippet-head{display:flex;align-items:center;justify-content:space-between;gap:10px; margin-bottom:6px}
-@media (max-width:640px){
-  .mcp-secret{flex-direction:column;align-items:flex-start}
-}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden; clip:rect(0 0 0 0);white-space:nowrap;border:0}
 .output-details{padding:0}
 .output-details>summary{display:flex;align-items:center;gap:10px;cursor:pointer; padding:10px 12px;list-style:none;border-radius:inherit;}
@@ -221,27 +210,11 @@
 .compose-report code{font-family:var(--font-mono);font-size:12px;overflow-wrap:anywhere}
 .compose-report .compose-services{list-style:none;padding-left:0}
 .compose-report .compose-notes{list-style:none;padding-left:0;font-weight:600;opacity:.85}
-.malware-schedule{margin-top:12px;padding:11px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-alt)}
-.malware-schedule > .hint{margin:9px 0 0}
-.malware-sched-list{display:grid;gap:8px;margin-top:10px}
-.malware-sched-row{display:grid;grid-template-columns:minmax(150px,auto) max-content 1fr;align-items:center;gap:12px;padding:9px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface)}
-.malware-sched-row.on{border-color:var(--primary);background:var(--surface-alt)}
-.malware-sched-toggle{display:flex;align-items:center;gap:8px;font-weight:600;font-size:13px;cursor:pointer;user-select:none}
-.malware-sched-toggle input{width:16px;height:16px;flex:none;accent-color:var(--primary)}
-.malware-sched-when{display:flex;gap:8px}
-.malware-sched-when select{min-width:112px}
-.malware-sched-when select:disabled{opacity:.5}
-.malware-sched-meta{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12px;color:var(--text-secondary);justify-self:end}
-@media(max-width:760px){
-  .malware-sched-row{grid-template-columns:1fr}
-  .malware-sched-meta{justify-self:start}
-}
-.malware-realtime{margin-top:12px;padding:11px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-alt)}
-.switch-line{display:flex;align-items:center;gap:8px;font-weight:600;font-size:13px;white-space:nowrap}
-.switch-line input{width:16px;height:16px;flex:none;accent-color:var(--primary)}
 .malware-ram-warning{border-color:var(--warning-border);background:var(--warning-bg)}
 .malware-ram-warning strong{display:flex;align-items:center;gap:7px;color:var(--warning-text)}
 .malware-ram-warning .hint{margin:7px 0 0;color:var(--warning-text)}
+/* A long hint beside a Turn on / Turn off button must not squeeze the button. */
+.malware-scan-head>button{flex:none}
 .addon-list{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
 .php-tune-diff{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:10px 13px;border-radius:var(--radius-sm);font-size:12.5px;line-height:1.5}
 .php-tune-diff:not(.notice){border:1px solid var(--warning-border);background:var(--warning-bg);color:var(--warning-text)}
@@ -264,8 +237,6 @@
 .addon-head code{font-family:var(--font-mono);font-size:12px;color:var(--text-muted)}
 .addon-details{margin:0;padding-left:18px;display:grid;gap:4px;font-size:12.5px;line-height:1.5;color:var(--text-secondary)}
 .dns-server{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 12px}
-.mail-tabs{flex-wrap:wrap}
-.mail-tabs button{display:inline-flex;align-items:center;gap:6px}
 .mail-allow{width:100%;min-height:140px;font-family:var(--font-mono);font-size:12.5px;resize:vertical}
 .dns-new-zone{margin-top:6px}
 .mail-relay-test{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
@@ -357,53 +328,19 @@
 .php-ext-row > code{font-size:13px;color:var(--text)}
 .php-ext-row .badge{display:inline-flex;align-items:center;justify-content:center;min-width:28px}
 .php-ext-none{color:var(--text-muted)}
-.notify-channels{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
-.notify-channel{display:grid;gap:10px;align-content:start;min-width:0;padding:14px 16px;border:1px solid var(--border);border-radius:var(--radius-lg);background:var(--surface)}
-.notify-channel-head{display:flex;align-items:center;gap:8px}
-.notify-channel-head .badge{margin-left:auto}
-.notify-channel .hint{margin:0}
-.notify-link ol{margin:0;padding-left:18px;display:grid;gap:6px;font-size:13.5px;line-height:1.5}
-.notify-link code{overflow-wrap:anywhere}
-.notify-event-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
-.notify-event{display:grid;grid-template-columns:18px minmax(0,1fr);gap:10px;align-items:start;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius-md);background:var(--surface);cursor:pointer}
-.notify-event:hover{background:var(--surface-hover)}
-.notify-event input{width:16px;height:16px;min-height:0;margin:2px 0 0;padding:0;accent-color:var(--primary)}
-.notify-event > span{display:grid;gap:2px;font-size:inherit;font-weight:400;color:var(--text)}
-.notify-event strong{font-size:13.5px;font-weight:600}
-.notify-event small{font-size:12.5px;line-height:1.4;color:var(--text-muted)}
-.notify-settings{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;align-items:start}
-.notify-form-pair{display:grid;grid-template-columns:minmax(0,1fr) 96px;gap:10px}
-.notify-bot{margin:0}
-.notify-log{display:grid;border:1px solid var(--border);border-radius:var(--radius-md);overflow:hidden}
-.notify-log-row{display:grid;grid-template-columns:150px 110px minmax(0,1fr) 80px 90px;gap:10px;align-items:center;padding:8px 12px;font-size:13px}
-.notify-log-row + .notify-log-row{border-top:1px solid var(--border)}
-.notify-log-row > .badge{justify-self:start}
-.notify-log-time,.notify-log-user,.notify-log-channel{color:var(--text-muted);font-size:12.5px}
-.notify-log-title{min-width:0;overflow-wrap:anywhere}
-.notify-log-detail{grid-column:3 / -1;color:var(--danger-text);overflow-wrap:anywhere}
-@media(max-width:1240px){
-  .notify-settings{grid-template-columns:repeat(2,minmax(0,1fr))}
-}
-@media(max-width:1000px){
-  .notify-settings,.notify-event-list{grid-template-columns:minmax(0,1fr)}
-}
 .notify-chats{display:flex;flex-wrap:wrap;gap:6px}
 .notify-chats .mini{height:auto;min-height:30px;gap:6px}
 .notify-chats code{font-size:11.5px}
-.notify-own-chat{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}
+/* An event of the Notifications page with its one-line hint under it. */
+.notify-event-text{display:grid;gap:2px}
+.notify-event-text small{font-size:12.5px;font-weight:400;line-height:1.4;color:var(--text-muted)}
+.notify-events .field-label{margin-top:6px}
 @media(max-width:760px){
   .schedule-fields,.passkey-form{grid-template-columns:minmax(0,1fr)}
   .schedule-fields .schedule-submit,.ssl-install{justify-self:stretch}
   .waf-switch-row{grid-template-columns:minmax(0,1fr) auto}
   .waf-switch-row > button{grid-column:1 / -1;width:100%}
   .php-ext-row{grid-template-columns:minmax(64px,1fr) repeat(var(--php-cols,1),48px);gap:4px;padding:6px}
-  .notify-channels{grid-template-columns:minmax(0,1fr)}
-  .notify-log-row{grid-template-columns:minmax(0,1fr) auto;gap:4px 10px}
-  .notify-log-title{grid-column:1;grid-row:1}
-  .notify-log-row > .badge{grid-column:2;grid-row:1}
-  .notify-log-time,.notify-log-user,.notify-log-channel{grid-row:2;grid-column:auto}
-  .notify-log-row{grid-auto-flow:row dense}
-  .notify-log-detail{grid-column:1 / -1}
   .detail-head input{flex:0 0 auto}
 }
 @media(max-width:1240px){

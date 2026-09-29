@@ -480,10 +480,6 @@ const MALWARE_SCHEDULES_DEFAULT = {
   websites: { enabled: false, weekday: 6, hour: 3, weekday_label: '', next_run_at: '', last_run_at: '', last_status: '' },
   server: { enabled: false, weekday: 6, hour: 4, weekday_label: '', next_run_at: '', last_run_at: '', last_status: '' },
 };
-const MALWARE_SCHEDULE_LABELS = {
-  websites: 'All websites',
-  server: 'Whole server',
-};
 // The malware scan schedule is stored and sent to the API as UTC weekday/hour
 // (matching datetime.weekday() on the server) - nobody running a Vietnamese
 // host should have to do +7 math to pick a quiet hour. These convert only
@@ -769,6 +765,9 @@ function App() {
   const [notifyMe, setNotifyMe] = useState(null);
   const [notifySettings, setNotifySettings] = useState(null);
   const [notifyLog, setNotifyLog] = useState([]);
+  const [showNotifyLog, setShowNotifyLog] = useState(false);
+  const [notifyLogStatus, setNotifyLogStatus] = useState('');
+  const [notifyLogPage, setNotifyLogPage] = useState(1);
   const [telegramLink, setTelegramLink] = useState(null);
   const [smtpForm, setSmtpForm] = useState({ host: '', port: 587, security: 'starttls', username: '', password: '', from_email: '', from_name: 'BPanel' });
   const [botTokenInput, setBotTokenInput] = useState('');
@@ -971,6 +970,8 @@ function App() {
   const [malwareSchedulesForm, setMalwareSchedulesForm] = useState(MALWARE_SCHEDULES_DEFAULT);
   const [scanLoading, setScanLoading] = useState(false);
   const [incrementalDays, setIncrementalDays] = useState(2);
+  // A run from the history, read as a sub-page of the scanner.
+  const [malwareDetailJob, setMalwareDetailJob] = useState(null);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState('');
@@ -2120,22 +2121,19 @@ function App() {
     }
   }
 
-  async function saveMalwareSchedule() {
-    const f = malwareSchedulesForm;
-    if (f.server?.enabled && malwareScanStatus?.memory_warning) {
+  // One schedule at a time, as each has its own section and Save button; the
+  // other keeps whatever is being edited in it.
+  async function saveMalwareSchedule(scope) {
+    const entry = malwareSchedulesForm[scope] || {};
+    if (scope === 'server' && entry.enabled && malwareScanStatus?.memory_warning) {
       if (!confirm(`${malwareScanStatus.memory_warning}\n\nSchedule the whole-server scan anyway?`)) return;
     }
-    const body = {};
-    for (const name of ['websites', 'server']) {
-      const e = f[name] || {};
-      body[name] = { enabled: !!e.enabled, weekday: Number(e.weekday ?? 6), hour: Number(e.hour ?? 3) };
-    }
+    const body = { [scope]: { enabled: !!entry.enabled, weekday: Number(entry.weekday ?? 6), hour: Number(entry.hour ?? 3) } };
     const data = await request('/malware/schedule', { method: 'PUT', body: JSON.stringify(body) }, t('Saving scan schedule...'));
     if (data) {
       setMalwareSchedules(data);
-      setMalwareSchedulesForm(data);
-      const on = ['websites', 'server'].filter(n => data[n]?.enabled).map(n => MALWARE_SCHEDULE_LABELS[n]);
-      setNotice(on.length ? `Schedule saved: ${on.join(', ')}.` : 'All scan schedules turned off.');
+      setMalwareSchedulesForm(prev => ({ ...prev, [scope]: data[scope] }));
+      setNotice(data[scope]?.enabled ? t('Scheduled scan saved.') : t('Scheduled scan disabled.'));
     }
   }
 
@@ -2147,7 +2145,7 @@ function App() {
   }
 
   async function toggleMalwareScanOnUpload(enabled) {
-    if (enabled && !mw.clamd_running && !confirm(
+    if (enabled && !malwareScanStatus?.clamd_running && !confirm(
       'This server has no resident clamd, so every uploaded file reloads the whole signature database: '
       + 'measured at 28 seconds and over 1 GB of RAM for a 20 MB file. The scan runs in the background so nobody waits on it, '
       + 'but the server pays that for every file. Turn it on anyway?')) return;
@@ -2223,10 +2221,11 @@ function App() {
     return data?.jobs || [];
   }
 
-  function showMalwareScanJob(job) {
-    setScanJob(job);
-    setScanResults(job);
-    setScanLoading(['queued', 'running'].includes(job?.status));
+  async function openMalwareScanDetail(job) {
+    setMalwareDetailJob(job);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    const data = await request(`/malware/jobs/${job.job_id}`, { silent: true }, '');
+    if (data) setMalwareDetailJob(data);
   }
 
   async function loadLatestMalwareScanJob() {
@@ -4904,7 +4903,9 @@ function App() {
   }, [isAuthenticated, page]);
 
   useEffect(() => {
-    if (!isAuthenticated || page !== 'malware' || !isAdmin || !malwareAddonInstalled) return;
+    // 'malware-scan' is the address a scan used to open at; a scan is now a
+    // sub-page of the scanner, and the old address shows the scanner.
+    if (!isAuthenticated || !['malware', 'malware-scan'].includes(page) || !isAdmin || !malwareAddonInstalled) return;
     loadMalwareScanStatus();
     loadMalwareScanJobs();
     loadLatestMalwareScanJob();
@@ -5543,153 +5544,197 @@ function App() {
     </section>;
   }
 
+  // The API sends naive UTC; without the Z the browser would read it as local.
+  function notifyTime(value) {
+    if (!value) return '';
+    const date = new Date(value.endsWith('Z') ? value : `${value}Z`);
+    return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+  }
+
+  // The send log, a page of its own. The server keeps the last 100 messages,
+  // so the status filter and the pages are worked out here.
+  function renderNotifyLog() {
+    const size = 50;
+    const rows = notifyLog.filter(row => !notifyLogStatus || (notifyLogStatus === 'sent' ? row.status === 'sent' : row.status !== 'sent'));
+    const pages = Math.max(1, Math.ceil(rows.length / size));
+    const current = Math.min(notifyLogPage, pages);
+    const shown = rows.slice((current - 1) * size, current * size);
+    return <section className="section notify-log-page">
+      <div className="section-title">
+        <div className="waf-detail-title">
+          <button className="secondary" onClick={() => setShowNotifyLog(false)}><ArrowLeft size={14}/> {t('Notifications')}</button>
+          <div><h2>{t('Send log')}</h2><p className="hint">{t('The last 100 messages sent, and the ones that failed.')}</p></div>
+        </div>
+        <select value={notifyLogStatus} aria-label={t('Show')} onChange={e => { setNotifyLogStatus(e.target.value); setNotifyLogPage(1); }}>
+          <option value="">{t('All')}</option><option value="sent">{t('Sent')}</option>
+          <option value="failed">{t('Failed')}</option>
+        </select>
+      </div>
+      {shown.length > 0 ? <ul className="notify-log-list">
+        {shown.map(row => <li key={row.id}>
+          <span className={`badge ${row.status === 'sent' ? 'ok' : 'bad'}`}>{row.status === 'sent' ? t('Sent') : t('Failed')}</span>
+          <small>{notifyTime(row.created_at)}</small>
+          <span className="notify-log-subject" title={row.title}>{row.title}</span>
+          <small className="notify-log-to" title={row.username || ''}>{row.channel === 'email' ? '✉' : '✈'} {row.username || '—'}</small>
+          {row.status !== 'sent' && row.detail && <small className="notify-log-error" title={row.detail}>{row.detail}</small>}
+        </li>)}
+      </ul> : <p className="hint">{t('Nothing has been sent yet.')}</p>}
+      {pages > 1 && <div className="firewall-ip-pager">
+        <button className="mini secondary" disabled={current <= 1} onClick={() => setNotifyLogPage(Math.max(1, current - 1))}>{t('Previous')}</button>
+        <span className="hint">{t('Page {page} of {pages}', { page: current, pages })}</span>
+        <button className="mini secondary" disabled={current >= pages} onClick={() => setNotifyLogPage(current + 1)}>{t('Next')}</button>
+      </div>}
+    </section>;
+  }
+
   function renderNotificationsPage() {
+    if (showNotifyLog) return renderNotifyLog();
     const me = notifyMe;
     const s = notifySettings;
     const events = me?.events || [];
     const muted = new Set(me?.muted || []);
-    const eventRow = ev => <label className="notify-event" key={ev.key}>
+    const eventRow = ev => <label key={ev.key}>
       <input type="checkbox" checked={!muted.has(ev.key)} disabled={!!loading} onChange={e => toggleNotifyEvent(ev.key, e.target.checked)} />
-      <span><strong>{t(ev.label)}</strong><small>{t(ev.hint)}</small></span>
+      <span className="notify-event-text">{t(ev.label)}<small>{t(ev.hint)}</small></span>
     </label>;
-    const fmtTime = value => { const d = new Date(value.endsWith('Z') ? value : `${value}Z`); return Number.isNaN(d.getTime()) ? value : d.toLocaleString('vi-VN', { hour12: false }); };
     return <>
       <section className="section">
-        <div className="section-title"><div>
-          <h2>{t('My notifications')}</h2>
-          <p className="hint">{t('Where the panel reaches you, and about what.')}</p>
-        </div></div>
-        {!me ? <p className="hint">{t('Loading...')}</p> : <>
-          <div className="notify-channels">
-            <div className="notify-channel">
-              <div className="notify-channel-head"><Mail size={16}/><strong>Email</strong>
-                <span className={me.channels.email && me.email_enabled ? 'badge ok' : 'badge'}>{me.channels.email ? (me.email_enabled ? t('On') : t('Off')) : t('Not set up')}</span>
-              </div>
-              <p className="hint">{me.channels.email
-                ? t('Sent to {email}, the address on your account.', { email: me.email || '—' })
-                : t('Email is not set up on this server yet.')}</p>
-              {me.channels.email && <label className="switch-line"><input type="checkbox" checked={me.email_enabled} disabled={!!loading} onChange={e => saveNotifyMe({ email_enabled: e.target.checked })} />{t('Send me email')}</label>}
-            </div>
-            <div className="notify-channel">
-              <div className="notify-channel-head"><Send size={16}/><strong>Telegram</strong>
-                <span className={me.telegram_linked && me.telegram_enabled ? 'badge ok' : 'badge'}>{!me.channels.telegram ? t('Not set up') : me.telegram_linked ? (me.telegram_enabled ? t('On') : t('Off')) : t('Not connected')}</span>
-              </div>
-              {!me.channels.telegram && <p className="hint">{t('Telegram is not set up on this server yet.')}</p>}
-              {me.channels.telegram && me.telegram_linked && <>
-                <p className="hint">Chat ID: <code>{me.telegram_chat_id}</code></p>
-                <label className="switch-line"><input type="checkbox" checked={me.telegram_enabled} disabled={!!loading} onChange={e => saveNotifyMe({ telegram_enabled: e.target.checked })} />{t('Send me Telegram messages')}</label>
-                <div className="notify-actions">
-                  <button type="button" className="secondary" disabled={!!loading} onClick={() => sendNotifyTest('telegram')}><Send size={14}/>{t('Send a test')}</button>
-                  <button type="button" className="secondary-light" disabled={!!loading} onClick={unlinkTelegram}>{t('Disconnect')}</button>
-                </div>
-              </>}
-              {me.channels.telegram && !me.telegram_linked && me.telegram_admin_chat && <p className="hint">{t('You hear in the admin chat ({chat}). Connect a chat of your own to hear there instead.', { chat: me.telegram_admin_chat })}</p>}
-              {me.channels.telegram && !me.telegram_linked && <div className="notify-own-chat">
-                <input value={myChatInput} placeholder={t('Your chat ID')} aria-label={t('Your chat ID')} onChange={e => setMyChatInput(e.target.value)} />
-                <button type="button" className="secondary" disabled={!!loading || !myChatInput.trim()} onClick={() => saveNotifyMe({ telegram_chat_id: myChatInput.trim() })}>{t('Save')}</button>
-              </div>}
-              {me.channels.telegram && !me.telegram_linked && (telegramLink
-                ? <div className="notify-link">
-                    <ol>
-                      <li>{t('Open the bot and press Start:')}{' '}{telegramLink.link ? <a href={telegramLink.link} target="_blank" rel="noreferrer">@{telegramLink.bot_username}</a> : <code>@{telegramLink.bot_username}</code>}</li>
-                      <li>{t('Or send the bot this message:')}{' '}<code>/start {telegramLink.code}</code></li>
-                      <li>{t('Then press Check. The code works for {n} minutes.', { n: telegramLink.expires_minutes })}</li>
-                    </ol>
-                    <div className="notify-actions"><button type="button" disabled={!!loading} onClick={verifyTelegramLink}><Check size={14}/>{t('Check')}</button></div>
-                  </div>
-                : <div className="notify-actions"><button type="button" className="secondary" disabled={!!loading} onClick={startTelegramLink}><Send size={14}/>{t('Find my chat ID for me')}</button></div>)}
-            </div>
+        <div className="section-title">
+          <div>
+            <h2>{t('Notifications')}</h2>
+            <p className="hint">{t('Email and Telegram alerts for administrators. Hosting customers are not notified.')}</p>
           </div>
-          <div className="notify-events">
-            <h3>{t('About the server')}</h3>
-            <div className="notify-event-list">{events.filter(ev => ev.audience === 'admin').map(eventRow)}</div>
-            <h3>{t('About your account')}</h3>
-            <div className="notify-event-list">{events.filter(ev => ev.audience === 'user').map(eventRow)}</div>
-          </div>
-        </>}
+          <button className="secondary" disabled={!!loading} onClick={() => { loadNotifyMe(); loadNotifySettings(); }}><RefreshCw size={14}/> {t('Refresh')}</button>
+        </div>
+        {!me && !s && <p className="hint">{t('Loading…')}</p>}
       </section>
 
       {s && <section className="section">
-        <div className="section-title"><div>
-          <h2>{t('Server channels')}</h2>
-          <p className="hint">{t('What every notification on this server goes out through.')}</p>
-        </div></div>
-        <div className="notify-settings">
+        <div className="section-title">
+          <div><h2>{t('Channels')}</h2><p className="hint">{t("Server-wide. Your own account's alerts go out through these too.")}</p></div>
+          <button className="secondary" onClick={() => { setNotifyLogPage(1); setShowNotifyLog(true); loadNotifyLog(); }}><ScrollText size={14}/> {t('Send log')}</button>
+        </div>
+        <div className="notify-grid">
           <div className="notify-card">
-            <h3><Mail size={16}/>{t('Email (SMTP)')}</h3>
+            <div className="notify-card-head">
+              <h3>{t('Email (SMTP)')}</h3>
+            </div>
             <div className="notify-form">
-              <label><span>{t('SMTP server')}</span><input value={smtpForm.host} placeholder="smtp.example.com" onChange={e => setSmtpForm(f => ({ ...f, host: e.target.value }))} /></label>
-              <div className="notify-form-pair">
-                <label><span>{t('Encryption')}</span><select value={smtpForm.security} onChange={e => setSmtpForm(f => ({ ...f, security: e.target.value, port: { starttls: 587, ssl: 465, none: 25 }[e.target.value] }))}>
-                  <option value="starttls">STARTTLS</option><option value="ssl">SSL/TLS</option><option value="none">{t('None')}</option>
-                </select></label>
-                <label><span>{t('Port')}</span><input type="number" value={smtpForm.port} onChange={e => setSmtpForm(f => ({ ...f, port: e.target.value }))} /></label>
-              </div>
+              <label className="wide"><span>{t('SMTP host')}</span><input value={smtpForm.host} placeholder="smtp.gmail.com" onChange={e => setSmtpForm(f => ({ ...f, host: e.target.value }))} /></label>
+              <label><span>{t('Port')}</span><input type="number" value={smtpForm.port} onChange={e => setSmtpForm(f => ({ ...f, port: e.target.value }))} /></label>
+              <label><span>{t('Security')}</span><select value={smtpForm.security} onChange={e => setSmtpForm(f => ({ ...f, security: e.target.value, port: { starttls: 587, ssl: 465, none: 25 }[e.target.value] }))}>
+                <option value="starttls">STARTTLS (587)</option><option value="ssl">SSL/TLS (465)</option><option value="none">{t('None')}</option>
+              </select></label>
               <label><span>{t('Username')}</span><input value={smtpForm.username} autoComplete="off" onChange={e => setSmtpForm(f => ({ ...f, username: e.target.value }))} /></label>
-              <label><span>{t('Password')}</span><input type="password" value={smtpForm.password} autoComplete="new-password" placeholder={s.smtp.password_set ? t('Saved - leave empty to keep it') : ''} onChange={e => setSmtpForm(f => ({ ...f, password: e.target.value }))} /></label>
-              <label><span>{t('Sender address')}</span><input value={smtpForm.from_email} placeholder="noreply@example.com" onChange={e => setSmtpForm(f => ({ ...f, from_email: e.target.value }))} /></label>
-              <label><span>{t('Sender name')}</span><input value={smtpForm.from_name} onChange={e => setSmtpForm(f => ({ ...f, from_name: e.target.value }))} /></label>
+              <label><span>{t('Password')}</span><input type="password" value={smtpForm.password} autoComplete="new-password"
+                placeholder={s.smtp.password_set ? t('Saved — leave blank to keep') : ''} onChange={e => setSmtpForm(f => ({ ...f, password: e.target.value }))} /></label>
+              <label><span>{t('From address')}</span><input value={smtpForm.from_email} placeholder="panel@example.com" onChange={e => setSmtpForm(f => ({ ...f, from_email: e.target.value }))} /></label>
+              <label><span>{t('From name')}</span><input value={smtpForm.from_name} onChange={e => setSmtpForm(f => ({ ...f, from_name: e.target.value }))} /></label>
             </div>
-            <div className="notify-actions">
-              <button type="button" disabled={!!loading} onClick={() => saveNotifySettings({ smtp: { ...smtpForm, port: Number(smtpForm.port) || 587, password: smtpForm.password || null } }, t('Email settings saved.'))}>{t('Save')}</button>
-              <button type="button" className="secondary" disabled={!!loading || !s.smtp_ready} onClick={() => sendNotifyTest('email')}><Mail size={14}/>{t('Send me a test email')}</button>
+            <div className="notify-test">
+              <button className="secondary" disabled={!!loading || !s.smtp_ready} onClick={() => sendNotifyTest('email')}><Mail size={14}/> {t('Send me a test email')}</button>
             </div>
+            <p className="hint">{t('Uses the saved settings. Many VPS providers block port 25; use 587 or 465.')}</p>
           </div>
+
           <div className="notify-card">
-            <h3><Send size={16}/>{t('Telegram bot')}</h3>
-            <p className="hint">{t('Create a bot with @BotFather (/newbot) and paste its token. Then send the bot any message - or add it to a group - press Find chat ID and pick the chat.')}</p>
-            {s.telegram.token_set && <p className="notify-bot"><span className="badge ok">@{s.telegram.bot_username}</span></p>}
-            <label className="notify-form"><span>{t('Bot token')}</span><input type="password" value={botTokenInput} autoComplete="off" placeholder={s.telegram.token_set ? t('Saved - paste a new one to replace it') : '123456789:AA...'} onChange={e => setBotTokenInput(e.target.value)} /></label>
+            <div className="notify-card-head">
+              <h3>{t('Telegram')}</h3>
+            </div>
             <div className="notify-form">
-              <label><span>Chat ID</span><input value={adminChatInput} placeholder="-1001234567890" onChange={e => setAdminChatInput(e.target.value)} /></label>
-              <div className="notify-actions"><button type="button" className="secondary" disabled={!!loading || !s.telegram.token_set} onClick={findTelegramChats}><Search size={14}/>{t('Find chat ID')}</button></div>
-              {telegramChats && (telegramChats.length > 0
-                ? <div className="notify-chats">{telegramChats.map(chat => <button type="button" key={chat.id} className={adminChatInput === chat.id ? 'mini' : 'mini secondary'} onClick={() => setAdminChatInput(chat.id)}>{chat.name || chat.type}<code>{chat.id}</code></button>)}</div>
-                : <p className="hint">{t('No messages yet. Send the bot a message first, then press Find chat ID again.')}</p>)}
+              <label className="wide"><span>{t('Bot token (from @BotFather)')}</span><input type="password" value={botTokenInput} autoComplete="off"
+                placeholder={s.telegram.token_set ? t('Saved — leave blank to keep') : '123456789:AA…'} onChange={e => setBotTokenInput(e.target.value)} /></label>
+              {s.telegram.bot_username && <p className="hint wide">{t('Bot:')} <a href={`https://t.me/${s.telegram.bot_username}`} target="_blank" rel="noopener noreferrer">@{s.telegram.bot_username}</a></p>}
+              <label className="wide"><span>{t('Admin chat ID')}</span><input value={adminChatInput} placeholder="-1001234567890" onChange={e => setAdminChatInput(e.target.value)} /></label>
             </div>
+            <p className="hint">{t('Create a bot with @BotFather (/newbot) and paste its token. Then send the bot any message - or add it to a group - press Find chat ID and pick the chat.')}</p>
+            <div className="notify-test">
+              <button className="secondary" disabled={!!loading || !s.telegram.token_set} onClick={findTelegramChats}><Search size={14}/> {t('Find chat ID')}</button>
+              <button className="secondary" disabled={!!loading || !s.telegram.token_set || !s.telegram.chat_id} onClick={() => sendNotifyTest('telegram_admin')}><Send size={14}/> {t('Send test')}</button>
+            </div>
+            {telegramChats && (telegramChats.length > 0
+              ? <div className="notify-chats">{telegramChats.map(chat => <button type="button" key={chat.id} className={adminChatInput === chat.id ? 'mini' : 'mini secondary'} onClick={() => setAdminChatInput(chat.id)}>{chat.name || chat.type}<code>{chat.id}</code></button>)}</div>
+              : <p className="hint">{t('No messages yet. Send the bot a message first, then press Find chat ID again.')}</p>)}
             <p className="hint">{t('Server events go to this chat once. An administrator with no chat of their own hears about their account here too.')}</p>
-            <div className="notify-actions">
-              <button type="button" disabled={!!loading || (!s.telegram.token_set && !botTokenInput.trim())} onClick={() => saveNotifySettings({ telegram: { bot_token: botTokenInput.trim() || null, chat_id: adminChatInput.trim() } }, t('Telegram bot saved.'))}>{t('Save')}</button>
-              <button type="button" className="secondary" disabled={!!loading || !s.telegram.token_set || !s.telegram.chat_id} onClick={() => sendNotifyTest('telegram_admin')}><Send size={14}/>{t('Send a test')}</button>
-              {s.telegram.token_set && <button type="button" className="secondary-light" disabled={!!loading} onClick={() => saveNotifySettings({ telegram: { clear_bot_token: true } }, t('Telegram bot removed.'))}>{t('Remove the bot')}</button>}
-            </div>
           </div>
+        </div>
+
+        <div className="notify-grid">
           <div className="notify-card">
-            <h3><AlertCircle size={16}/>{t('When to warn')}</h3>
+            <h3>{t('When to warn')}</h3>
             <div className="notify-form">
               <label><span>{t('Disk usage (%)')}</span><input type="number" min="50" max="99" value={notifyLimits.disk_percent} onChange={e => setNotifyLimits(v => ({ ...v, disk_percent: e.target.value }))} /></label>
               <label><span>{t('Certificate expiry (days)')}</span><input type="number" min="1" max="60" value={notifyLimits.ssl_days} onChange={e => setNotifyLimits(v => ({ ...v, ssl_days: e.target.value }))} /></label>
-              <label><span>{t('Language of the messages')}</span><select value={notifyLimits.language} onChange={e => setNotifyLimits(v => ({ ...v, language: e.target.value }))}>
-                <option value="vi">Tiếng Việt</option><option value="en">English</option>
-              </select></label>
-            </div>
-            <div className="notify-actions">
-              <button type="button" disabled={!!loading} onClick={() => saveNotifySettings({ language: notifyLimits.language, thresholds: {
-                disk_percent: Number(notifyLimits.disk_percent), ssl_days: Number(notifyLimits.ssl_days),
-              } }, t('Saved.'))}>{t('Save')}</button>
+              <label><span>{t('Message language')}</span><select value={notifyLimits.language} onChange={e => setNotifyLimits(v => ({ ...v, language: e.target.value }))}>
+                <option value="vi">Tiếng Việt</option><option value="en">English</option></select></label>
             </div>
           </div>
         </div>
+        <div className="notify-actions">
+          <button disabled={!!loading} onClick={() => saveNotifySettings({
+            language: notifyLimits.language,
+            smtp: { ...smtpForm, port: Number(smtpForm.port) || 587, password: smtpForm.password || null },
+            telegram: { bot_token: botTokenInput.trim() || null, chat_id: adminChatInput.trim() },
+            thresholds: { disk_percent: Number(notifyLimits.disk_percent), ssl_days: Number(notifyLimits.ssl_days) },
+          }, t('Saved.'))}><Save size={14}/> {t('Save')}</button>
+          {s.smtp.password_set && <button className="secondary-light" disabled={!!loading} onClick={() => saveNotifySettings({ smtp: { clear_password: true } }, t('Saved.'))}>{t('Forget SMTP password')}</button>}
+          {s.telegram.token_set && <button className="secondary-light" disabled={!!loading} onClick={() => saveNotifySettings({ telegram: { clear_bot_token: true } }, t('Telegram bot removed.'))}>{t('Remove the bot')}</button>}
+        </div>
       </section>}
 
-      <section className="section">
+      {me && <section className="section">
         <div className="section-title">
-          <div><h2>{t('Delivery log')}</h2><p className="hint">{t('The last 100 messages sent, and the ones that failed.')}</p></div>
-          <div className="actions"><button type="button" className="secondary" disabled={!!loading} onClick={loadNotifyLog}><RefreshCw size={14}/>{t('Refresh')}</button></div>
+          <div><h2>{t('My notifications')}</h2><p className="hint">{t('Where the panel reaches you, and about what.')}</p></div>
         </div>
-        {notifyLog.length === 0
-          ? <EmptyState icon={Bell} message="Nothing sent yet." />
-          : <div className="notify-log">
-              {notifyLog.map(row => <div className="notify-log-row" key={row.id}>
-                <span className="notify-log-time">{fmtTime(row.created_at)}</span>
-                <span className="notify-log-user">{row.username || '—'}</span>
-                <span className="notify-log-title">{row.title}</span>
-                <span className="notify-log-channel">{row.channel === 'email' ? 'Email' : 'Telegram'}</span>
-                <span className={row.status === 'sent' ? 'badge ok' : 'badge danger'}>{row.status === 'sent' ? t('Sent') : t('Failed')}</span>
-                {row.status !== 'sent' && row.detail && <small className="notify-log-detail">{row.detail}</small>}
-              </div>)}
-            </div>}
-      </section>
+        <div className="notify-grid">
+          <div className="notify-card">
+            <div className="notify-card-head">
+              <h3>{t('Email')}</h3>
+              <label className="notify-switch"><input type="checkbox" disabled={!me.channels.email || !!loading} checked={!!me.email_enabled && !!me.channels.email}
+                onChange={e => saveNotifyMe({ email_enabled: e.target.checked })} /> {t('On')}</label>
+            </div>
+            {me.channels.email
+              ? <p className="hint">{t('Sent to {email}, the address on your account.', { email: me.email || '—' })}</p>
+              : <p className="hint">{t('Email is not set up on this panel.')}</p>}
+          </div>
+          <div className="notify-card">
+            <div className="notify-card-head">
+              <h3>{t('Telegram')}</h3>
+              {me.telegram_linked && <label className="notify-switch"><input type="checkbox" checked={!!me.telegram_enabled} disabled={!!loading}
+                onChange={e => saveNotifyMe({ telegram_enabled: e.target.checked })} /> {t('On')}</label>}
+            </div>
+            {!me.channels.telegram ? <p className="hint">{t('Telegram is not set up on this panel.')}</p>
+              : me.telegram_linked ? <div className="notify-test"><span className="badge ok">{t('Linked')}</span> <code>{me.telegram_chat_id}</code>
+                  <button className="mini secondary" disabled={!!loading} onClick={() => sendNotifyTest('telegram')}>{t('Send test')}</button>
+                  <button className="mini secondary-light" disabled={!!loading} onClick={unlinkTelegram}>{t('Unlink')}</button></div>
+              : <>
+                  {me.telegram_admin_chat && <p className="hint">{t('You hear in the admin chat ({chat}). Connect a chat of your own to hear there instead.', { chat: me.telegram_admin_chat })}</p>}
+                  {telegramLink ? <>
+                      <p className="hint">{t('In Telegram, press Start in the chat with @{bot}, then come back and check.', { bot: telegramLink.bot_username })}</p>
+                      <p className="hint">{t('Or send the bot this message:')} <code>/start {telegramLink.code}</code> {t('The code works for {n} minutes.', { n: telegramLink.expires_minutes })}</p>
+                      <div className="notify-test">
+                        {telegramLink.link && <button className="secondary" onClick={() => window.open(telegramLink.link, '_blank', 'noopener')}>{t('Open Telegram')}</button>}
+                        <button disabled={!!loading} onClick={verifyTelegramLink}>{t('I pressed Start — check')}</button>
+                      </div>
+                    </>
+                    : <button className="secondary" disabled={!!loading} onClick={startTelegramLink}>{t('Link Telegram')}</button>}
+                  <div className="notify-test">
+                    <input value={myChatInput} placeholder={t('Your chat ID')} aria-label={t('Your chat ID')} onChange={e => setMyChatInput(e.target.value)} />
+                    <button className="secondary" disabled={!!loading || !myChatInput.trim()} onClick={() => saveNotifyMe({ telegram_chat_id: myChatInput.trim() })}>{t('Save')}</button>
+                  </div>
+                </>}
+          </div>
+        </div>
+        <div className="notify-card">
+          <h3>{t('What to send me')}</h3>
+          <div className="notify-events">
+            <span className="field-label">{t('About the server')}</span>
+            {events.filter(ev => ev.audience === 'admin').map(eventRow)}
+            <span className="field-label">{t('About your account')}</span>
+            {events.filter(ev => ev.audience === 'user').map(eventRow)}
+          </div>
+        </div>
+      </section>}
     </>;
   }
 
@@ -5786,8 +5831,8 @@ function App() {
       {names.length > 0
         ? <>
           {names.map(name => <code key={name}>{name}</code>)}
-          <button type="button" className="mini secondary-light icon-only" aria-label={t('Copy')} title={t('Copy')}
-            onClick={() => copyText(names.join('\n'), t('Copied.'))}><Copy size={13}/></button>
+          <button type="button" className="mini secondary icon-only" aria-label={t('Copy')} title={t('Copy')}
+            onClick={() => copyText(names.join('\n'), t('Copied to clipboard.'))}><Copy size={13}/></button>
         </>
         : <span className="hint">{isAdmin ? t('Not set yet: open Settings.') : t('The administrator has not set the nameservers yet.')}</span>}
     </div>;
@@ -5798,9 +5843,9 @@ function App() {
     const pages = Math.max(1, Math.ceil((list?.total || 0) / (list?.per_page || 50)));
     if (pages <= 1) return null;
     return <div className="firewall-ip-pager">
-      <button className="mini secondary-light" disabled={dnsPage <= 1} onClick={() => setDnsPage(p => Math.max(1, p - 1))}>{t('Previous')}</button>
+      <button className="mini secondary" disabled={dnsPage <= 1} onClick={() => setDnsPage(p => Math.max(1, p - 1))}>{t('Previous')}</button>
       <span className="hint">{t('Page {page} of {pages}', { page: dnsPage, pages })}</span>
-      <button className="mini secondary-light" disabled={dnsPage >= pages} onClick={() => setDnsPage(p => p + 1)}>{t('Next')}</button>
+      <button className="mini secondary" disabled={dnsPage >= pages} onClick={() => setDnsPage(p => p + 1)}>{t('Next')}</button>
     </div>;
   }
 
@@ -5811,37 +5856,22 @@ function App() {
       {renderDnsNameservers()}
       <form className="mail-search dns-search" onSubmit={e => { e.preventDefault(); setDnsPage(1); loadDnsZones(1); }}>
         <input value={dnsQuery} placeholder={t('Search domains')} aria-label={t('Search domains')} onChange={e => setDnsQuery(e.target.value)} />
-        <button type="submit" className="secondary-light icon-only" aria-label={t('Search')} title={t('Search')}><Search size={14}/></button>
+        <button type="submit" className="secondary icon-only" aria-label={t('Search')} title={t('Search')}><Search size={14}/></button>
       </form>
       {list === null && <p className="hint">{t('Loading…')}</p>}
-      {list && items.length === 0 && <EmptyState icon={Network} message={dnsQuery.trim() ? 'No domain matches the search.' : 'No domains yet.'} />}
+      {list && items.length === 0 && <EmptyState icon={Network} message={dnsQuery.trim() ? t('No domain matches the search.') : t('No domains yet.')} />}
       {items.length > 0 && <div className="table">
         {items.map(zone => <div className="row dns-zone-row" key={zone.name}>
           <span className="mail-row-name">
             <strong>{zone.name}</strong>
-            <small>{[isAdmin && zone.owner ? `${t('Account')}: ${zone.owner}` : '',
-              zone.created_at ? `${t('Added')} ${new Date(zone.created_at).toLocaleDateString()}` : '',
-              zone.on_panel === false ? t('No longer on the panel') : ''].filter(Boolean).join(' · ')}</small>
+            <small>{[isAdmin && zone.owner ? `${t('Account')}: ${zone.owner}` : '', zone.created_at ? `${t('Added')} ${new Date(zone.created_at).toLocaleDateString()}` : '', zone.on_panel === false ? t('No longer on the panel') : ''].filter(Boolean).join(' · ')}</small>
           </span>
           <span className="row-actions">
-            <button className="mini secondary-light" disabled={!!loading} onClick={() => openDnsZone(zone)}><Pencil size={13}/> {t('Records')}</button>
+            <button className="mini secondary" disabled={!!loading} onClick={() => openDnsZone(zone)}><Pencil size={13}/> {t('Records')}</button>
           </span>
         </div>)}
       </div>}
       {renderDnsPager()}
-      {isAdmin && <div className="create-inline dns-new-zone">
-        <div className="create-inline-head"><strong>{t('A zone for a domain that is not on the panel')}</strong></div>
-        <div className="mail-create-grid">
-          <label className="field"><span className="field-label">{t('Domain')}</span>
-            <input value={dnsNewZone.name} placeholder="example.com" spellCheck={false} onChange={e => setDnsNewZone(prev => ({ ...prev, name: e.target.value.trim().toLowerCase() }))} /></label>
-          <label className="field"><span className="field-label">{t('Account')}</span>
-            <select value={dnsNewZone.owner_id} onChange={e => setDnsNewZone(prev => ({ ...prev, owner_id: e.target.value }))}>
-              <option value="">{t('No owner')}</option>
-              {users.map(user => <option key={user.id} value={user.id}>{user.username}</option>)}
-            </select></label>
-          <button disabled={!dnsNewZone.name.trim() || !!loading} onClick={addDnsZone}><Plus size={14}/> {t('Add zone')}</button>
-        </div>
-      </div>}
     </div>;
   }
 
@@ -5856,7 +5886,7 @@ function App() {
     return <section className="section dns-page">
       <div className="section-title">
         <div className="waf-detail-title">
-          <button className="secondary-light" onClick={() => setDnsTab('zones')}><ArrowLeft size={14}/> {t('DNS Manager')}</button>
+          <button className="secondary" onClick={() => setDnsTab('zones')}><ArrowLeft size={14}/> {t('DNS Manager')}</button>
           <div><h2>{t('DNS settings')}</h2>
             <p className="hint">{t('The nameservers and default TTL of every zone on this server, and what a new zone holds.')}</p></div>
         </div>
@@ -5887,9 +5917,23 @@ function App() {
         <p className="hint">{t('A changed nameserver is written into the NS and SOA records of every zone. Register both names as glue (child nameserver) records at the registrar of their domain, pointing at this server.')} {address && t('This server: {address}.', { address })}</p>
         <div className="actions">
           <button type="button" disabled={!String(f.ns1 || '').trim() || !String(f.ns2 || '').trim() || !!loading} onClick={saveDnsSettings}><Save size={14}/> {t('Save settings')}</button>
-          <button type="button" className="secondary-light" disabled={!!loading || !f.auto_zone} onClick={syncDnsZones}><RefreshCw size={14}/> {t('Sync zones now')}</button>
+          <button type="button" className="secondary" disabled={!!loading || !f.auto_zone} onClick={syncDnsZones}><RefreshCw size={14}/> {t('Sync zones now')}</button>
         </div>
       </div>}
+      {/* BPanel only: a zone for a name no website or mail domain holds. */}
+      <div className="create-inline dns-new-zone">
+        <div className="create-inline-head"><strong>{t('A zone for a domain that is not on the panel')}</strong></div>
+        <div className="mail-create-grid">
+          <label className="field"><span className="field-label">{t('Domain')}</span>
+            <input value={dnsNewZone.name} placeholder="example.com" spellCheck={false} onChange={e => setDnsNewZone(prev => ({ ...prev, name: e.target.value.trim().toLowerCase() }))} /></label>
+          <label className="field"><span className="field-label">{t('Account')}</span>
+            <select value={dnsNewZone.owner_id} onChange={e => setDnsNewZone(prev => ({ ...prev, owner_id: e.target.value }))}>
+              <option value="">{t('No owner')}</option>
+              {users.map(user => <option key={user.id} value={user.id}>{user.username}</option>)}
+            </select></label>
+          <button disabled={!dnsNewZone.name.trim() || !!loading} onClick={addDnsZone}><Plus size={14}/> {t('Add zone')}</button>
+        </div>
+      </div>
     </section>;
   }
 
@@ -5911,12 +5955,12 @@ function App() {
     return <section className="section dns-zone-page">
       <div className="section-title">
         <div className="waf-detail-title">
-          <button className="secondary-light" onClick={() => { setDnsZone(null); loadDnsZones(); }}><ArrowLeft size={14}/> {t('DNS Manager')}</button>
+          <button className="secondary" onClick={() => { setDnsZone(null); loadDnsZones(); }}><ArrowLeft size={14}/> {t('DNS Manager')}</button>
           <div><h2>{zone.name}</h2>
             <p className="hint">{[isAdmin && zone.owner ? `${t('Account')}: ${zone.owner}` : '', records ? t('{n} records', { n: records.length }) : ''].filter(Boolean).join(' · ')}</p></div>
         </div>
         <div className="actions">
-          <button className="secondary-light" disabled={!!loading} onClick={() => openDnsZone(zone)}><RefreshCw size={14}/> {t('Refresh')}</button>
+          <button className="secondary" disabled={!!loading} onClick={() => openDnsZone(zone)}><RefreshCw size={14}/> {t('Refresh')}</button>
           <button className="secondary-light" disabled={!!loading || records === null} onClick={restoreDnsDefaults}><RotateCcw size={14}/> {t('Restore panel records')}</button>
           {isAdmin && zone.on_panel === false && <button className="danger" disabled={!!loading} onClick={() => deleteDnsZone(zone)}><Trash2 size={14}/> {t('Delete zone')}</button>}
         </div>
@@ -5958,9 +6002,9 @@ function App() {
                 {record.locked
                   ? <span className="dns-locked" title={t("Follows DNS Manager's nameserver settings")}><Lock size={13}/></span>
                   : <>
-                    <button type="button" className="mini secondary-light icon-only" disabled={!!loading} aria-label={t('Edit')} title={t('Edit')}
+                    <button type="button" className="mini secondary icon-only" disabled={!!loading} aria-label={t('Edit')} title={t('Edit')}
                       onClick={() => setDnsRecordEdit({ old: record, form: { type: record.type, name: record.name, value: record.value, priority: record.priority ?? '', ttl: String(record.ttl || '') } })}><Pencil size={13}/></button>
-                    <button type="button" className="mini danger icon-only" disabled={!!loading} aria-label={t('Delete')} title={t('Delete')} onClick={() => deleteDnsRecord(record)}><Trash2 size={13}/></button>
+                    <button type="button" className="mini danger-light icon-only" disabled={!!loading} aria-label={t('Delete')} title={t('Delete')} onClick={() => deleteDnsRecord(record)}><Trash2 size={13}/></button>
                   </>}
               </span>
             </div>)}
@@ -5977,8 +6021,8 @@ function App() {
         <div><h2>{t('DNS Manager')}</h2>
           <p className="hint">{isAdmin ? t('Every domain on the panel, answered by this server.') : t('The DNS records of your domains, answered by this server.')}</p></div>
         <div className="actions">
-          {isAdmin && <button type="button" className="secondary-light" onClick={() => setDnsTab('settings')}><SettingsIcon size={14}/> {t('Settings')}</button>}
-          <button type="button" className="secondary-light" disabled={!!loading} onClick={() => { loadDnsInfo(); loadDnsZones(); }}><RefreshCw size={14}/> {t('Refresh')}</button>
+          {isAdmin && <button type="button" className="secondary" onClick={() => setDnsTab('settings')}><SettingsIcon size={14}/> {t('Settings')}</button>}
+          <button type="button" className="secondary" disabled={!!loading} onClick={() => { loadDnsInfo(); loadDnsZones(); }}><RefreshCw size={14}/> {t('Refresh')}</button>
         </div>
       </div>
       {renderDnsZones()}
@@ -6009,7 +6053,7 @@ function App() {
       </select>
       <form className="mail-search" onSubmit={e => { e.preventDefault(); setMailPage(1); onSearch(); }}>
         <input value={mailFilter.q} placeholder={t('Search')} aria-label={t('Search')} onChange={e => setMailFilter(prev => ({ ...prev, q: e.target.value }))} />
-        <button type="submit" className="secondary-light icon-only" aria-label={t('Search')} title={t('Search')}><Search size={14}/></button>
+        <button type="submit" className="secondary icon-only" aria-label={t('Search')} title={t('Search')}><Search size={14}/></button>
       </form>
     </div>;
   }
@@ -6018,9 +6062,9 @@ function App() {
     const pages = Math.max(1, Math.ceil((list?.total || 0) / (list?.per_page || 50)));
     if (pages <= 1) return null;
     return <div className="firewall-ip-pager">
-      <button className="mini secondary-light" disabled={mailPage <= 1} onClick={() => setMailPage(p => Math.max(1, p - 1))}>{t('Previous')}</button>
+      <button className="mini secondary" disabled={mailPage <= 1} onClick={() => setMailPage(p => Math.max(1, p - 1))}>{t('Previous')}</button>
       <span className="hint">{t('Page {page} of {pages}', { page: mailPage, pages })}</span>
-      <button className="mini secondary-light" disabled={mailPage >= pages} onClick={() => setMailPage(p => p + 1)}>{t('Next')}</button>
+      <button className="mini secondary" disabled={mailPage >= pages} onClick={() => setMailPage(p => p + 1)}>{t('Next')}</button>
     </div>;
   }
 
@@ -6053,7 +6097,7 @@ function App() {
       {showCreateMailbox && <div className="create-inline">
         <div className="create-inline-head">
           <strong>{t('New mailbox')}</strong>
-          <button type="button" className="secondary-light icon-only mini" onClick={() => setShowCreateMailbox(false)} aria-label={t('Close')} title={t('Close')}><X size={15}/></button>
+          <button type="button" className="secondary icon-only mini" onClick={() => setShowCreateMailbox(false)} aria-label={t('Close')} title={t('Close')}><X size={15}/></button>
         </div>
         <div className="mail-create-grid">
           <div className="field mail-address-field"><span className="field-label">{t('Address')}</span>
@@ -6067,8 +6111,8 @@ function App() {
           <div className="field"><span className="field-label">{t('Password')}</span>
             <div className="password-with-generate">
               <input value={mailboxForm.password} autoComplete="new-password" spellCheck={false} placeholder={t('8+ characters, letters and digits')} onChange={e => setMailboxForm(prev => ({ ...prev, password: e.target.value }))} data-lpignore="true" data-1p-ignore="true" />
-              <button type="button" className="secondary-light icon-only" title={t('Generate random password')} aria-label={t('Generate random password')} onClick={() => setMailboxForm(prev => ({ ...prev, password: mailPassword() }))}><Dices size={15}/></button>
-              <button type="button" className="secondary-light icon-only" title={t('Copy')} aria-label={t('Copy')} onClick={() => copyText(mailboxForm.password, t('Copied.'))}><Copy size={15}/></button>
+              <button type="button" className="secondary icon-only" title={t('Generate random password')} aria-label={t('Generate random password')} onClick={() => setMailboxForm(prev => ({ ...prev, password: mailPassword() }))}><Dices size={15}/></button>
+              <button type="button" className="secondary icon-only" title={t('Copy')} aria-label={t('Copy')} onClick={() => copyText(mailboxForm.password, t('Copied to clipboard.'))}><Copy size={15}/></button>
             </div>
           </div>
           <div className="field mail-quota-field"><span className="field-label">{t('Size (MB)')}{isAdmin && <em> {t('0 = unlimited')}</em>}</span>
@@ -6097,8 +6141,8 @@ function App() {
             </span>
             <span className="row-actions">
               <button className="mini" disabled={!!loading || !box.enabled} onClick={() => openWebmail(box)} title={t('Open this mailbox in webmail, no password needed')}><Mail size={13}/> {t('Webmail')}</button>
-              <button className="mini secondary-light" disabled={!!loading} onClick={() => setMailboxEdit({ box, password: '', quota_mb: String(box.quota_mb) })}><Pencil size={13}/> {t('Edit')}</button>
-              <button className="mini secondary-light" disabled={!!loading} onClick={() => setMailboxEnabled(box, !box.enabled)}>{box.enabled ? <><Ban size={13}/> {t('Suspend')}</> : <><Play size={13}/> {t('Resume')}</>}</button>
+              <button className="mini secondary" disabled={!!loading} onClick={() => setMailboxEdit({ box, password: '', quota_mb: String(box.quota_mb) })}><Pencil size={13}/> {t('Edit')}</button>
+              <button className="mini secondary" disabled={!!loading} onClick={() => setMailboxEnabled(box, !box.enabled)}>{box.enabled ? <><Ban size={13}/> {t('Suspend')}</> : <><Play size={13}/> {t('Resume')}</>}</button>
               <button className="mini danger" disabled={!!loading} onClick={() => deleteMailbox(box)} aria-label={t('Delete {name}', { name: box.address })} title={t('Delete')}><Trash2 size={13}/></button>
             </span>
           </div>;
@@ -6122,7 +6166,7 @@ function App() {
       {showCreateForwarder && <div className="create-inline">
         <div className="create-inline-head">
           <strong>{t('New forwarder')}</strong>
-          <button type="button" className="secondary-light icon-only mini" onClick={() => setShowCreateForwarder(false)} aria-label={t('Close')} title={t('Close')}><X size={15}/></button>
+          <button type="button" className="secondary icon-only mini" onClick={() => setShowCreateForwarder(false)} aria-label={t('Close')} title={t('Close')}><X size={15}/></button>
         </div>
         <div className="mail-create-grid">
           <div className="field mail-address-field"><span className="field-label">{t('Address')}</span>
@@ -6147,7 +6191,7 @@ function App() {
           <span className="mail-row-name"><strong>{item.address}</strong>{item.keeps_copy && <small><span className="badge">{t('Keeps a copy')}</span></small>}</span>
           <span className="mail-row-destinations"><MoveRight size={13}/> <span>{item.destinations.join(', ')}</span></span>
           <span className="row-actions">
-            <button className="mini secondary-light" disabled={!!loading} onClick={() => setForwarderEdit({ item, destinations: item.destinations.join(', ') })}><Pencil size={13}/> {t('Edit')}</button>
+            <button className="mini secondary" disabled={!!loading} onClick={() => setForwarderEdit({ item, destinations: item.destinations.join(', ') })}><Pencil size={13}/> {t('Edit')}</button>
             <button className="mini danger" disabled={!!loading} onClick={() => deleteForwarder(item)} aria-label={t('Delete {name}', { name: item.address })} title={t('Delete')}><Trash2 size={13}/></button>
           </span>
         </div>)}
@@ -6209,7 +6253,7 @@ function App() {
               <span>webmail.{d.domain}</span>
             </label>
             <span className="row-actions">
-              <button className="mini secondary-light" disabled={!!loading} onClick={() => openMailDns(d)}><Globe size={13}/> {t('DNS records')}</button>
+              <button className="mini secondary" disabled={!!loading} onClick={() => openMailDns(d)}><Globe size={13}/> {t('DNS records')}</button>
               <button className="mini danger" disabled={!!loading} onClick={() => deleteMailDomain(d)} aria-label={t('Delete {name}', { name: d.domain })} title={t('Delete')}><Trash2 size={13}/></button>
             </span>
           </div>;
@@ -6229,10 +6273,10 @@ function App() {
         <input value={row.name} placeholder="@" aria-label={t('Name')} spellCheck={false} onChange={e => setRow(index, { name: e.target.value })} />
         {row.type === 'MX' && <input type="number" min="0" max="65535" value={row.priority ?? ''} placeholder="10" aria-label={t('Priority')} onChange={e => setRow(index, { priority: e.target.value })} />}
         <input className="dns-editor-value" value={row.value} placeholder={t('Value ({domain} = the domain)')} aria-label={t('Value')} spellCheck={false} onChange={e => setRow(index, { value: e.target.value })} />
-        <button type="button" className="mini danger icon-only" aria-label={t('Remove')} title={t('Remove')} onClick={() => onChange(rows.filter((_, i) => i !== index))}><Trash2 size={13}/></button>
+        <button type="button" className="mini danger-light icon-only" aria-label={t('Remove')} title={t('Remove')} onClick={() => onChange(rows.filter((_, i) => i !== index))}><Trash2 size={13}/></button>
       </div>)}
       <div className="actions dns-editor-actions">
-        <button type="button" className="mini secondary-light" disabled={rows.length >= 10} onClick={() => onChange([...rows, { type: 'TXT', name: '@', value: '', priority: '' }])}><Plus size={13}/> {t('Add a record')}</button>
+        <button type="button" className="mini secondary" disabled={rows.length >= 10} onClick={() => onChange([...rows, { type: 'TXT', name: '@', value: '', priority: '' }])}><Plus size={13}/> {t('Add a record')}</button>
       </div>
       <p className="hint">{t('Names are relative to each domain that uses the relay: @ is the domain itself, brevo1._domainkey a name under it. {domain} in a value becomes the domain name.')}</p>
     </div>;
@@ -6254,12 +6298,12 @@ function App() {
     return <section className="section mail-dns-page">
       <div className="section-title">
         <div className="waf-detail-title">
-          <button className="secondary-light" onClick={() => setMailDns(null)}><ArrowLeft size={14}/> {t('Email')}</button>
+          <button className="secondary" onClick={() => setMailDns(null)}><ArrowLeft size={14}/> {t('Email')}</button>
           <div><h2>{t('DNS records for {domain}', { domain: domain.domain })}</h2>
             <p className="hint">{t('Add these at the DNS provider of {domain}. A change can take a few hours to be seen everywhere.', { domain: domain.domain })}</p></div>
         </div>
         <div className="actions">
-          <button className="secondary-light" disabled={!!loading || records === null} onClick={() => openMailDns(domain)}><RefreshCw size={14}/> {t('Check again')}</button>
+          <button className="secondary" disabled={!!loading || records === null} onClick={() => openMailDns(domain)}><RefreshCw size={14}/> {t('Check again')}</button>
           <button className="secondary-light" disabled={!!loading} onClick={() => rotateMailDkim(domain)}><KeyRound size={14}/> {t('New DKIM key')}</button>
         </div>
       </div>
@@ -6277,7 +6321,7 @@ function App() {
       {hostedZone && <div className="info-box dns-managed-box">
         <Network size={14}/>
         <span>{t('DNS Manager on this server holds the zone {zone} and keeps these records in it, taking back the ones email no longer needs. "In the zone" is what the zone holds; the other badge is what public DNS answers, which matches once the domain\'s nameservers point here.', { zone: hostedZone })}</span>
-        <button type="button" className="mini secondary-light" onClick={() => openDnsZone({ name: hostedZone })}>{t('Open zone')}</button>
+        <button type="button" className="mini secondary" onClick={() => openDnsZone({ name: hostedZone })}>{t('Open zone')}</button>
       </div>}
       {records === null && <p className="hint">{t('Checking DNS…')}</p>}
       {records && <div className="mail-dns-list">
@@ -6310,7 +6354,7 @@ function App() {
       <div className="create-inline mail-relay-form">
         <div className="create-inline-head">
           <strong>{f.id ? t('Edit relay {name}', { name: f.name }) : t('New relay')}</strong>
-          <button type="button" className="secondary-light icon-only mini" onClick={() => setRelayForm(null)} aria-label={t('Close')} title={t('Close')}><X size={15}/></button>
+          <button type="button" className="secondary icon-only mini" onClick={() => setRelayForm(null)} aria-label={t('Close')} title={t('Close')}><X size={15}/></button>
         </div>
         <div className="mail-settings-grid">
           <label className="field"><span className="field-label">{t('Name')}</span><input value={f.name} placeholder="Brevo" onChange={e => set({ name: e.target.value })} /></label>
@@ -6374,7 +6418,7 @@ function App() {
             {(relay.domains || []).length > 0 && <small>{t('Chosen by {domains}', { domains: relay.domains.join(', ') })}</small>}
           </span>
           <span className="row-actions">
-            <button className="mini secondary-light" disabled={!!loading} onClick={() => editRelay(relay)}><Pencil size={13}/> {t('Edit')}</button>
+            <button className="mini secondary" disabled={!!loading} onClick={() => editRelay(relay)}><Pencil size={13}/> {t('Edit')}</button>
             <button className="mini danger" disabled={!!loading} onClick={() => deleteRelay(relay)} aria-label={t('Delete {name}', { name: relay.name })} title={t('Delete')}><Trash2 size={13}/></button>
           </span>
         </div>)}
@@ -6382,7 +6426,7 @@ function App() {
       <h3 className="mail-subhead">{t('Send a test message')}</h3>
       <div className="mail-relay-test">
         <input type="email" value={relayTestTo} onChange={e => setRelayTestTo(e.target.value)} placeholder="you@gmail.com" aria-label={t('Send a test message to')} />
-        <button className="secondary-light" disabled={!!loading || !relayTestTo.includes('@')} onClick={testRelay}><Send size={14}/> {t('Send a test message')}</button>
+        <button className="secondary" disabled={!!loading || !relayTestTo.includes('@')} onClick={testRelay}><Send size={14}/> {t('Send a test message')}</button>
       </div>
       <p className="hint">{t('Sent from postmaster at the server name, through the relay the default route uses. What Exim logged for it is shown, the receiving server\'s answer included.')}</p>
       {relayTestLines && <pre className="mail-log">{relayTestLines.length ? relayTestLines.join('\n') : t('Exim logged nothing more about it.')}</pre>}
@@ -6405,12 +6449,12 @@ function App() {
       <div className="mail-toolbar mail-log-toolbar">
         <form className="mail-search" onSubmit={e => { e.preventDefault(); reload(query); }}>
           <input value={query.q} placeholder={t('Filter, e.g. an address or a message ID')} aria-label={t('Filter')} onChange={e => setQuery(prev => ({ ...prev, q: e.target.value }))} />
-          <button type="submit" className="secondary-light icon-only" aria-label={t('Search')} title={t('Search')}><Search size={14}/></button>
+          <button type="submit" className="secondary icon-only" aria-label={t('Search')} title={t('Search')}><Search size={14}/></button>
         </form>
         <select value={query.lines} aria-label={t('Lines')} onChange={e => { const next = { ...query, lines: Number(e.target.value) }; setQuery(next); reload(next); }}>
           {[200, 500, 1000, 3000].map(n => <option key={n} value={n}>{t('Last {n} lines', { n })}</option>)}
         </select>
-        <button type="button" className="secondary-light" disabled={!!loading} onClick={() => reload(query)}><RefreshCw size={14}/> {t('Refresh')}</button>
+        <button type="button" className="secondary" disabled={!!loading} onClick={() => reload(query)}><RefreshCw size={14}/> {t('Refresh')}</button>
       </div>
       {lines === null ? <p className="hint">{t('Loading…')}</p>
         : lines.length ? <pre className="mail-log">{lines.join('\n')}</pre>
@@ -6440,13 +6484,13 @@ function App() {
         <div className="mail-toolbar">
           <form className="mail-search" onSubmit={e => { e.preventDefault(); loadRspamdHistory(1); }}>
             <input value={rspamdFilter.q} placeholder={t('Sender, recipient, subject or IP')} aria-label={t('Search')} onChange={e => setRspamdFilter(prev => ({ ...prev, q: e.target.value }))} />
-            <button type="submit" className="secondary-light icon-only" aria-label={t('Search')} title={t('Search')}><Search size={14}/></button>
+            <button type="submit" className="secondary icon-only" aria-label={t('Search')} title={t('Search')}><Search size={14}/></button>
           </form>
           <select value={rspamdFilter.action} aria-label={t('Result')} onChange={e => loadRspamdHistory(1, e.target.value)}>
             <option value="">{t('Every result')}</option>
             {['no action', 'add header', 'rewrite subject', 'greylist', 'soft reject', 'reject'].map(action => <option key={action} value={action}>{rspamdActionLabel(action)}</option>)}
           </select>
-          <button type="button" className="secondary-light" disabled={!!loading} onClick={() => { loadRspamdStat(); loadRspamdHistory(rspamdFilter.page); }}><RefreshCw size={14}/> {t('Refresh')}</button>
+          <button type="button" className="secondary" disabled={!!loading} onClick={() => { loadRspamdStat(); loadRspamdHistory(rspamdFilter.page); }}><RefreshCw size={14}/> {t('Refresh')}</button>
         </div>
         {list === null && <p className="hint">{t('Loading…')}</p>}
         {list && list.items.length === 0 && <EmptyState icon={ShieldCheck} message={rspamdFilter.q || rspamdFilter.action ? t('No scanned message matches.') : t('No message has been scanned yet.')} />}
@@ -6466,8 +6510,8 @@ function App() {
                 {item.allowed
                   ? <small className="rspamd-allowed">{t('This sender is on the allowlist.')}</small>
                   : sender && item.action !== 'no action' && <span className="rspamd-allow">
-                      <button className="mini secondary-light" disabled={!!loading} onClick={() => allowMailSender(sender)}><Check size={12}/> {t('Allow {sender}', { sender })}</button>
-                      {senderDomain && <button className="mini secondary-light" disabled={!!loading} onClick={() => allowMailSender(senderDomain)}><Check size={12}/> {t('Allow everyone at {domain}', { domain: senderDomain })}</button>}
+                      <button className="mini secondary" disabled={!!loading} onClick={() => allowMailSender(sender)}><Check size={12}/> {t('Allow {sender}', { sender })}</button>
+                      {senderDomain && <button className="mini secondary" disabled={!!loading} onClick={() => allowMailSender(senderDomain)}><Check size={12}/> {t('Allow everyone at {domain}', { domain: senderDomain })}</button>}
                     </span>}
               </span>
               <span className="rspamd-score"><strong>{item.score}</strong><small>/ {item.required}</small></span>
@@ -6477,9 +6521,9 @@ function App() {
           })}
         </div>}
         {pages > 1 && <div className="firewall-ip-pager">
-          <button className="mini secondary-light" disabled={rspamdFilter.page <= 1} onClick={() => loadRspamdHistory(rspamdFilter.page - 1)}>{t('Previous')}</button>
+          <button className="mini secondary" disabled={rspamdFilter.page <= 1} onClick={() => loadRspamdHistory(rspamdFilter.page - 1)}>{t('Previous')}</button>
           <span className="hint">{t('Page {page} of {pages}', { page: rspamdFilter.page, pages })}</span>
-          <button className="mini secondary-light" disabled={rspamdFilter.page >= pages} onClick={() => loadRspamdHistory(rspamdFilter.page + 1)}>{t('Next')}</button>
+          <button className="mini secondary" disabled={rspamdFilter.page >= pages} onClick={() => loadRspamdHistory(rspamdFilter.page + 1)}>{t('Next')}</button>
         </div>}
         <p className="hint">{t('Rspamd keeps the last 2000 scans. A message sent by a signed-in mailbox is not scanned. A message stopped by a test pattern (GTUBE) is not kept.')}</p>
       </>}
@@ -6557,8 +6601,8 @@ function App() {
             <label className="field"><span className="field-label">{t('New password')} <small>{t('(leave empty to keep)')}</small></span>
               <div className="password-with-generate">
                 <input value={mailboxEdit.password} autoComplete="new-password" spellCheck={false} onChange={e => setMailboxEdit(prev => ({ ...prev, password: e.target.value }))} data-lpignore="true" data-1p-ignore="true" />
-                <button type="button" className="secondary-light icon-only" title={t('Generate random password')} aria-label={t('Generate random password')} onClick={() => setMailboxEdit(prev => ({ ...prev, password: mailPassword() }))}><Dices size={15}/></button>
-                <button type="button" className="secondary-light icon-only" title={t('Copy')} aria-label={t('Copy')} onClick={() => copyText(mailboxEdit.password, t('Copied.'))}><Copy size={15}/></button>
+                <button type="button" className="secondary icon-only" title={t('Generate random password')} aria-label={t('Generate random password')} onClick={() => setMailboxEdit(prev => ({ ...prev, password: mailPassword() }))}><Dices size={15}/></button>
+                <button type="button" className="secondary icon-only" title={t('Copy')} aria-label={t('Copy')} onClick={() => copyText(mailboxEdit.password, t('Copied to clipboard.'))}><Copy size={15}/></button>
               </div>
             </label>
             <label className="field"><span className="field-label">{t('Size (MB)')}{isAdmin && <em> {t('0 = unlimited')}</em>}</span>
@@ -6614,11 +6658,11 @@ function App() {
               ? t('Mailboxes, forwarders and DNS records of every mail domain on this server.')
               : limit ? t('{used} of {limit} mailboxes used.', { used: info.mailbox_count, limit }) : t('{n} mailboxes.', { n: info.mailbox_count })}</p></div>
           <div className="actions">
-            <button type="button" className="secondary-light" onClick={() => window.open(info.webmail_url, '_blank', 'noopener,noreferrer')}><ExternalLink size={14}/> {t('Webmail')}</button>
-            <button type="button" className="secondary-light" disabled={!!loading} onClick={refreshMail}><RefreshCw size={14}/> {t('Refresh')}</button>
+            <button type="button" className="secondary" onClick={() => window.open(info.webmail_url, '_blank', 'noopener,noreferrer')}><ExternalLink size={14}/> {t('Webmail')}</button>
+            <button type="button" className="secondary" disabled={!!loading} onClick={refreshMail}><RefreshCw size={14}/> {t('Refresh')}</button>
           </div>
         </div>
-        <div className="segmented-control backup-tabs mail-tabs" role="tablist" aria-label={t('Email sections')}>
+        <div className="segmented-control backup-tabs" role="tablist" aria-label={t('Email sections')}>
           {tabs.map(([id, label, Icon]) => <button key={id} type="button" role="tab" aria-selected={activeTab === id}
             className={activeTab === id ? 'active' : ''} disabled={!domains.length && !['domains', ...serverTabs].includes(id)}
             onClick={() => { setMailTab(id); setMailPage(1); }}><Icon size={14}/>{t(label)}</button>)}
@@ -9272,13 +9316,13 @@ function App() {
     const activeScanJob = scanJob || scanResults || {};
     const scanRunning = ['queued', 'running'].includes(scanJob?.status);
     const scanJobTitle = job => job.scope === 'server'
-      ? t('Whole server')
+      ? t('Full server (/)')
       : (job.domains && job.domains.length > 0)
         ? (job.domains.length === 1 ? job.domains[0] : t('{count} websites', { count: job.domains.length }))
-        : (job.scope === 'all' ? t('All websites') : t('Scan'));
+        : (job.scope === 'all' ? t('All websites') : t('Scan job'));
     const scanJobStamp = job => {
       const stamp = job.finished_at || job.updated_at || job.started_at || job.created_at || '';
-      if (!stamp) return 'No time recorded';
+      if (!stamp) return t('No timestamp');
       const date = new Date(stamp);
       return Number.isNaN(date.getTime()) ? stamp : new Intl.DateTimeFormat('en-GB', {
         timeZone: 'Asia/Ho_Chi_Minh',
@@ -9315,45 +9359,6 @@ function App() {
         day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
       }).format(d);
     };
-    const scheduleDirty = ['websites', 'server'].some(n =>
-      JSON.stringify(malwareSchedulesForm[n] || {}) !== JSON.stringify(malwareSchedules[n] || {}));
-    const setSched = (name, patch) =>
-      setMalwareSchedulesForm(p => ({ ...p, [name]: { ...p[name], ...patch } }));
-    const renderScheduleRow = name => {
-      const form = malwareSchedulesForm[name] || {};
-      const saved = malwareSchedules[name] || {};
-      // form.weekday/hour are UTC on the wire; show and edit them as VN time.
-      const vn = utcScheduleToVn(form.weekday ?? 6, form.hour ?? 3);
-      const setSchedVn = (patch) => {
-        const merged = { weekday: patch.weekday ?? vn.weekday, hour: patch.hour ?? vn.hour };
-        setSched(name, vnScheduleToUtc(merged.weekday, merged.hour));
-      };
-      return <div className={`malware-sched-row${form.enabled ? ' on' : ''}`} key={name}>
-        <label className="malware-sched-toggle">
-          <input type="checkbox" checked={!!form.enabled} onChange={e => setSched(name, { enabled: e.target.checked })} />
-          <span>{MALWARE_SCHEDULE_LABELS[name]}</span>
-        </label>
-        <div className="malware-sched-when">
-          <select value={vn.weekday} disabled={!form.enabled} aria-label={t('Day')}
-            onChange={e => setSchedVn({ weekday: Number(e.target.value) })}>
-            {WEEKDAY_LABELS.map((l, i) => <option key={i} value={i}>{l}</option>)}
-          </select>
-          <select value={vn.hour} disabled={!form.enabled} aria-label={t('Hour')}
-            onChange={e => setSchedVn({ hour: Number(e.target.value) })}>
-            {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>)}
-          </select>
-        </div>
-        <div className="malware-sched-meta">
-          {saved.enabled && saved.next_run_at && <span>{t('Next:')}{' '}<strong>{fmtStamp(saved.next_run_at)}</strong></span>}
-          {saved.last_run_at && <span className={`badge ${saved.last_status === 'done' ? 'ok' : saved.last_status === 'infected' ? 'danger' : 'warn'}`}>
-            {fmtStamp(saved.last_run_at)} · {scanStatusLabel(saved.last_status)}
-          </span>}
-        </div>
-      </div>;
-    };
-
-    // One view of a scan, used for the run in progress on this page and for a
-    // finished run opened from the history on a page of its own.
     // A /home scan is 180,000 files or more, so a whole percent takes a minute
     // or two to tick over and the figure looked stuck. While a scan runs it is
     // worked out from the counts, with a decimal below 10%.
@@ -9363,49 +9368,49 @@ function App() {
       const exact = Math.min(99, (Number(job.scanned) || 0) * 100 / total);
       return exact > 0 && exact < 10 ? exact.toFixed(1) : String(Math.floor(exact));
     };
-    const renderScanStatus = job => <div className="scan-status-panel">
-      <div className="progress-bar">
-        <div className="progress-bar-fill" style={{width: `${scanPercent(job)}%`}} />
-      </div>
-      <div className="scan-status-summary">
-        <span><strong>{t('Progress')}</strong>{scanPercent(job)}%</span>
-        <span><strong>{t('Files scanned')}</strong>{job.scanned || 0}/{job.total_files || job.scanned || 0}</span>
-        <span><strong>{t('Threats')}</strong>{job.infected > 0
-          ? <span className="badge danger">{job.infected}</span>
-          : <span className="badge ok">0</span>}
-        </span>
-        <span><strong>{t('Errors')}</strong>{job.errors || 0}</span>
-      </div>
-      {/* The scanner's stage messages are fixed sentences in the dictionary;
-          one that is not (an older job's) shows as it was written. */}
-      {job.message && <p className="hint">{t(job.message)}</p>}
-      {job.threats && job.threats.length > 0 && <div className="scan-threat-list">
-        <p className="hint">{t('These are the scanner\'s own family names (php.base64..., for instance), not common virus names — there is nowhere else to look them up.')}</p>
+    // The scanner's stage messages are fixed sentences in the dictionary; one
+    // that is not (an older job's) shows as it was written.
+    const renderThreats = job => <>
+      <p className="hint">{t('These are the scanner\'s own family names (php.base64..., for instance), not common virus names — there is nowhere else to look them up.')}</p>
+      <div className="scan-threat-list">
         {job.threats.map((threat, i) => <div key={i} className="scan-threat-item">
           <strong>{threat.signature}</strong>
           <span>{threat.domain ? `${threat.domain}: ` : ''}{threat.path}</span>
         </div>)}
-      </div>}
-      {job.log && job.log.length > 0 && <pre className="malware-scan-log">{job.log.join('\n')}</pre>}
-    </div>;
+      </div>
+    </>;
 
-    // A run from the history, on a page of its own: the list stays short and
-    // the one being read gets the width. Reloading the address with nothing
-    // chosen points back at the history instead of showing an empty panel.
-    if (page === 'malware-scan') {
-      const job = activeScanJob;
+    // A run from the history, as a page of its own inside this one.
+    if (malwareDetailJob) {
+      const job = malwareDetailJob;
+      const started = job.started_at ? new Date(job.started_at) : null;
+      const finished = job.finished_at ? new Date(job.finished_at) : null;
+      const seconds = started && finished ? Math.max(0, Math.round((finished - started) / 1000)) : null;
+      const duration = seconds == null ? '—' : seconds >= 3600 ? `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m` : seconds >= 60 ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : `${seconds}s`;
       return <section className="section scan-detail">
         <div className="section-title">
-          <div>
-            <h2>{job.job_id ? scanJobTitle(job) : t('Scan details')}</h2>
-            {job.job_id && <p className="hint">{scanJobMeta(job)}</p>}
+          <div className="waf-detail-title">
+            <button className="secondary" onClick={() => setMalwareDetailJob(null)}><ArrowLeft size={14}/> {t('Malware scanner')}</button>
+            <div><h2>{scanJobTitle(job)}</h2><p className="hint">{scanJobStamp(job)}</p></div>
           </div>
-          <div className="actions">
-            {job.job_id && <span className={scanJobBadgeClass(job)}>{scanStatusLabel(job.status)}</span>}
-            <button type="button" className="secondary" onClick={() => navigateToPage('malware')}><ArrowLeft size={14}/>{t('Scan history')}</button>
-          </div>
+          <span className={scanJobBadgeClass(job)}>{scanStatusLabel(job.status)}</span>
         </div>
-        {job.job_id ? renderScanStatus(job) : <EmptyState icon={Search} message={t('Pick a scan from the history.')} />}
+        <div className="scan-detail-stats">
+          <div><small>{t('Files scanned')}</small><strong>{job.scanned || 0}{job.total_files ? ` / ${job.total_files}` : ''}</strong></div>
+          <div><small>{t('Threats found')}</small><strong className={job.infected > 0 ? 'text-danger' : ''}>{job.infected || 0}</strong></div>
+          <div><small>{t('Errors')}</small><strong>{job.errors || 0}</strong></div>
+          <div><small>{t('Duration')}</small><strong>{duration}</strong></div>
+        </div>
+        {job.message && <p className="hint">{t(job.message)}</p>}
+        {job.error && <p className="hint" style={{ color: 'var(--danger)' }}>{job.error}</p>}
+        <h3>{t('Threats')}</h3>
+        {job.threats && job.threats.length > 0
+          ? renderThreats(job)
+          : <div className="quarantine-empty"><CheckCircle size={16}/> {t('No threats in this scan.')}</div>}
+        {job.log && job.log.length > 0 && <details className="raw-output" open={job.infected > 0 || job.status === 'error'}>
+          <summary>{t('Scan log')}</summary>
+          <pre className="malware-scan-log">{job.log.join('\n')}</pre>
+        </details>}
       </section>;
     }
 
@@ -9414,109 +9419,110 @@ function App() {
         <div className="section-title">
           <div>
             <h2>{t('Malware Scanner')}</h2>
-            <p className="hint">
-              {mwActive ? <span className="badge ok">{t('On')}</span>
+            <p className="hint badge-row">
+              {mwActive ? <span className="badge ok">{t('Active')}</span>
                 : mwEnabled && !mwInstalled ? <span className="badge warn">{t('Installing...')}</span>
-                : mwInstalled && !mwEnabled ? <span className="badge">{t('Installed · off')}</span>
+                : mwInstalled && !mwEnabled ? <span className="badge">{t('Installed — scanning disabled')}</span>
                 : <span className="badge">{t('Not installed')}</span>}
-              {mw.realtime_enabled && <span className={mw.monitor_running ? 'badge ok' : 'badge warn'} style={{marginLeft:6}}>
+              {mwInstalled && <span className="badge">{t('Engine:')} {mw.engine === 'lmd+clamav' ? 'LMD + ClamAV' : mw.engine === 'clamav' ? 'ClamAV' : mw.engine}</span>}
+              {mw.realtime_enabled && <span className={mw.monitor_running ? 'badge ok' : 'badge warn'}>
                 {t(mw.monitor_running ? 'Level 2 running' : 'Level 2 not running')}
               </span>}
             </p>
           </div>
-          <button className="secondary-light" disabled={!!loading} onClick={loadMalwareScanStatus}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <button className="secondary" disabled={!!loading} onClick={loadMalwareScanStatus}><RefreshCw size={14}/> {t('Refresh')}</button>
         </div>
         {mw.memory_warning && <div className="info-box malware-ram-warning">
           <strong><AlertCircle size={15}/>{t('Memory warning')}</strong>
           <p className="hint">{mw.memory_warning}</p>
         </div>}
         <div className="info-box">
-          <p className="hint">{mw.detail || 'Checking...'}</p>
+          <p className="hint">{mw.detail ? t(mw.detail) : t('Checking status...')}</p>
           {mw.memory_total_mb > 0 && <p className="hint">{t('Server memory:')}{' '}<strong>{mw.memory_total_mb} MB</strong> {t('({n} MB free)', { n: mw.memory_available_mb })}</p>}
           {mw.lmd_installed && <p className="hint">{t('Malware signatures:')}{' '}<strong>{mw.lmd_sig_version || '—'}</strong>{mw.lmd_updated_at ? ` (updated ${mw.lmd_updated_at})` : ''}</p>}
-          {!mwInstalled && <p className="hint" style={{marginTop:8}}>{t('LMD and ClamAV are installing (1-3 minutes). Press Refresh to see when they are ready.')}</p>}
-          <p className="hint" style={{marginTop:8}}>{t('To turn the scanner off, remove the Malware Scanner addon on the Addons page. The history and the settings are kept.')}</p>
+          {mwEnabled
+            ? <p className="hint" style={{marginTop:8}}>{t('To turn the scanner off, remove the Malware Scanner addon on the Addons page. The history and the settings are kept.')}</p>
+            : <p className="hint" style={{marginTop:8}}>{t('The Malware Scanner is an addon. Install or start it on the Addons page; stopping or removing it there frees the memory ClamAV uses.')}</p>}
           <div className="actions" style={{marginTop:12}}>
-            {!mw.lmd_installed && <button disabled={!!loading} onClick={installLmd}>{t('Install the scanner')}</button>}
-            {mw.lmd_installed && <button className="secondary" disabled={!!loading} onClick={updateMalwareSignatures}><RefreshCw size={13}/>{t('Update signatures')}</button>}
+            {!mwEnabled && <button disabled={!!loading} onClick={() => navigateToPage('addons')}><PackageOpen size={14}/> {t('Open Addons')}</button>}
+            {mw.lmd_installed && <button className="secondary" disabled={!!loading} onClick={updateMalwareSignatures}><RefreshCw size={14}/> {t('Update signatures')}</button>}
           </div>
         </div>
+
+        {!mw.lmd_installed && <div className="info-box">
+          <div className="malware-scan-head">
+            <div>
+              <strong>{t('Linux Malware Detect')} <span className="badge">{t('Not installed')}</span></strong>
+              <p className="hint">{mwEnabled && !mwInstalled
+                ? t('LMD and ClamAV are installing (1-3 minutes). Press Refresh to see when they are ready.')
+                : t('This server has no Linux Malware Detect yet. Install it for its web-focused signatures (PHP shells, injected malware ClamAV misses) and the incremental /home scan.')}</p>
+            </div>
+            <button disabled={!!loading} onClick={installLmd}><Shield size={14}/> {t('Install the scanner')}</button>
+          </div>
+        </div>}
+
+        {mwInstalled && <div className="info-box">
+          <div className="malware-scan-head">
+            <div>
+              <strong>{t('Level 2 — Real-time protection')} {mw.realtime_enabled && !mw.monitor_running
+                ? <span className="badge danger">{t('Not running')}</span>
+                : <span className={mw.realtime_enabled ? 'badge ok' : 'badge'}>{mw.realtime_enabled ? t('On') : t('Off')}</span>}</strong>
+              <p className="hint">{t('Watches the website directories continuously and checks new files in short batches (~15 seconds). Catches something arriving over SFTP or through a plugin at once, instead of waiting for the next Level 1 scheduled scan.')}</p>
+            </div>
+            {mw.realtime_enabled
+              ? <button className="danger" disabled={!!loading} onClick={() => toggleMalwareRealtime(false)}>{t('Turn off')}</button>
+              : <button disabled={!!loading} onClick={() => toggleMalwareRealtime(true)}><Shield size={14}/> {t('Turn on')}</button>}
+          </div>
+        </div>}
+
+        {mwInstalled && <div className="info-box">
+          <div className="malware-scan-head">
+            <div>
+              <strong>{t('Scan uploaded files')} <span className={mw.scan_on_upload ? 'badge ok' : 'badge'}>{mw.scan_on_upload ? t('On') : t('Off')}</span></strong>
+              <p className="hint">{t('Scans each file uploaded through the file manager, in the background after the upload finishes, so nobody waits on it. Off by default: without a resident clamd, every file reloads the whole signature database (measured at 28 seconds and over 1 GB of RAM for a 20 MB file). The Level 1 scheduled scan covers these files either way.')}</p>
+              {!mw.scan_on_upload_is_cheap && <p className="hint">{t('This server has no resident clamd — start one first and each scan drops to milliseconds.')}</p>}
+            </div>
+            {mw.scan_on_upload
+              ? <button className="danger" disabled={!!loading} onClick={() => toggleMalwareScanOnUpload(false)}>{t('Turn off')}</button>
+              : <button disabled={!!loading} onClick={() => toggleMalwareScanOnUpload(true)}><Shield size={14}/> {t('Turn on')}</button>}
+          </div>
+        </div>}
 
         {mwInstalled && <div className="info-box malware-scan-panel">
           <div className="malware-scan-runner">
             <div className="malware-scan-head">
               <div>
-                <strong>{t('Level 1 — Scheduled scans')}</strong>
+                <strong>{t('Run a scan now')}</strong>
                 <p className="hint">{t('Scan the website directories (fast), the whole server, or incrementally (only recently changed files — run by hand when you want it, never on the schedule).')}</p>
               </div>
-              <button className="secondary" disabled={!!loading} onClick={loadMalwareScanJobs}><RefreshCw size={14}/>{t('History')}</button>
+              <button className="secondary" disabled={!!loading} onClick={loadMalwareScanJobs}><RefreshCw size={14}/> {t('History')}</button>
             </div>
             <div className="malware-scan-controls">
               <select value={scanTargetWebsiteId} onChange={e => { setScanTargetWebsiteId(e.target.value); setScanResults(null); setScanJob(null); }}>
-                <option value="">-- Scan now: pick a target --</option>
-                <option value="all">{t('All websites')}</option>
+                <option value="">{t('-- Select target --')}</option>
+                <option value="all">{t('All websites (/home)')}</option>
                 <option value="incremental">{t('Incremental scan')}</option>
-                <option value="server">{t('Whole server')}</option>
+                <option value="server">{t('Full server (/)')}</option>
                 {websites.map(w => <option key={w.id} value={w.id}>{w.domain}</option>)}
               </select>
               {scanTargetWebsiteId === 'incremental' && <select value={incrementalDays} onChange={e => setIncrementalDays(Number(e.target.value))}>
-                {[1, 2, 3, 7, 14].map(d => <option key={d} value={d}>{d} days</option>)}
+                {[1, 2, 3, 7, 14].map(d => <option key={d} value={d}>{t('{n} days', { n: d })}</option>)}
               </select>}
               <button disabled={!!loading || scanRunning || !scanTargetWebsiteId} onClick={runMalwareScan}>
-                {scanRunning || scanLoading ? <><RefreshCw size={14} className="spin"/>{t('Scanning...')}</> : <><Search size={14}/>{t('Scan now')}</>}
+                {scanRunning || scanLoading ? <><RefreshCw size={14} className="spin"/> {t('Scanning...')}</> : <><Search size={14}/> {t('Scan Now')}</>}
               </button>
-            </div>
-          </div>
-          <div className="malware-schedule">
-            <div className="malware-scan-head">
-              <div><strong>{t('Automatic schedule')}</strong><p className="hint">{t('The panel scans on its own, with nobody pressing anything. Pick an hour when few visitors are around.')}</p></div>
-              <button disabled={!!loading || !scheduleDirty} onClick={saveMalwareSchedule}><Clock size={14}/>{t('Save schedule')}</button>
-            </div>
-            <div className="malware-sched-list">
-              {['websites', 'server'].map(renderScheduleRow)}
-            </div>
-          </div>
-          <div className="malware-realtime">
-            <div className="malware-scan-head">
-              <div>
-                <strong>{t('Level 2 — Real-time protection')}</strong>
-                <p className="hint">{t('Watches the website directories continuously and checks new files in short batches (~15 seconds). Catches something arriving over SFTP or through a plugin at once, instead of waiting for the next Level 1 scheduled scan.')}</p>
-              </div>
-              <label className="switch-line">
-                <input type="checkbox" checked={!!mw.realtime_enabled} disabled={!!loading}
-                  onChange={e => toggleMalwareRealtime(e.target.checked)} />
-                <span>{mw.realtime_enabled ? 'On' : 'Off'}</span>
-              </label>
-            </div>
-          </div>
-          <div className="malware-realtime">
-            <div className="malware-scan-head">
-              <div>
-                <strong>{t('Scan uploaded files')}</strong>
-                <p className="hint">
-                  Scans each file uploaded through the file manager, in the background after the upload finishes, so nobody waits on it.
-                  Off by default: without a resident clamd, every file reloads the whole signature database
-                  (measured at 28 seconds and over 1 GB of RAM for a 20 MB file). The Level 1 scheduled scan covers these files either way.
-                </p>
-                {!mw.scan_on_upload_is_cheap && <p className="hint">{t('This server has no resident clamd — start one first and each scan drops to milliseconds.')}</p>}
-              </div>
-              <label className="switch-line">
-                <input type="checkbox" checked={!!mw.scan_on_upload} disabled={!!loading}
-                  onChange={e => toggleMalwareScanOnUpload(e.target.checked)} />
-                <span>{mw.scan_on_upload ? 'On' : 'Off'}</span>
-              </label>
             </div>
           </div>
           {scanJobs.length > 0 && <div className="scan-history-wrap">
             <div className="scan-history-head">
               <strong>{t('Scan history')}</strong>
-              <span>{scanJobs.length} runs</span>
+              <span>{scanJobs.length} {t('saved')}</span>
             </div>
             <div className="scan-history-list">
               {scanJobs.slice(0, 8).map(job => <button
                 key={job.job_id}
                 className={`scan-history-item ${job.status}${activeScanJob.job_id === job.job_id ? ' active' : ''}`}
-                onClick={() => { showMalwareScanJob(job); navigateToPage('malware-scan'); }}
+                onClick={() => openMalwareScanDetail(job)}
                 disabled={!!loading}
                 type="button"
               >
@@ -9530,10 +9536,84 @@ function App() {
             </div>
           </div>}
           {/* The live run stays here while it is running; a finished one is
-              read on its own page from the history above. */}
-          {(scanRunning || scanLoading) && (scanJob || scanResults) && renderScanStatus(activeScanJob)}
+              read from the history above. */}
+          {(scanRunning || scanLoading) && (scanJob || scanResults) && <div className="scan-status-panel">
+            <div className="progress-bar">
+              <div className="progress-bar-fill" style={{width: `${scanPercent(activeScanJob)}%`}} />
+            </div>
+            <div className="scan-status-summary">
+              <span><strong>{t('Progress')}</strong>{scanPercent(activeScanJob)}%</span>
+              <span><strong>{t('Files scanned')}</strong>{activeScanJob.scanned || 0}/{activeScanJob.total_files || activeScanJob.scanned || 0}</span>
+              <span><strong>{t('Threats found')}</strong>{activeScanJob.infected > 0
+                ? <span className="badge danger">{activeScanJob.infected}</span>
+                : <span className="badge ok">0</span>}
+              </span>
+              <span><strong>{t('Errors')}</strong>{activeScanJob.errors || 0}</span>
+            </div>
+            {activeScanJob.message && <p className="hint">{t(activeScanJob.message)}</p>}
+            {activeScanJob.threats && activeScanJob.threats.length > 0 && renderThreats(activeScanJob)}
+            {activeScanJob.log && activeScanJob.log.length > 0 && <pre className="malware-scan-log">{activeScanJob.log.join('\n')}</pre>}
+          </div>}
         </div>}
       </section>
+
+      {/* Weekly, and shown in Vietnam time: the API holds weekday and hour in
+          UTC, and utcScheduleToVn / vnScheduleToUtc convert at the form. */}
+      {mwEnabled && [
+        {
+          scope: 'server',
+          title: t('Full server scan'),
+          root: '/',
+          intro: t('Walks the whole VPS as root, so malware parked in /tmp, /root or a home folder outside public_html is found too. Heavier than a website scan and hungry for memory: best run weekly, at a quiet hour.'),
+        },
+        {
+          scope: 'websites',
+          title: t('Website scan (/home)'),
+          root: '/home',
+          intro: t('Scans every website’s files under /home. Each run is a full scan; the incremental scan of recently changed files is run by hand above.'),
+        },
+      ].map(({ scope, title, root, intro }) => {
+        const form = malwareSchedulesForm[scope] || {};
+        const saved = malwareSchedules[scope] || {};
+        // form.weekday/hour are UTC on the wire; show and edit them as VN time.
+        const vn = utcScheduleToVn(form.weekday ?? 6, form.hour ?? 3);
+        const setField = patch => setMalwareSchedulesForm(prev => ({ ...prev, [scope]: { ...prev[scope], ...patch } }));
+        const setVn = patch => setField(vnScheduleToUtc(patch.weekday ?? vn.weekday, patch.hour ?? vn.hour));
+        return <section className="section" key={scope}>
+          <div className="section-title">
+            <div>
+              <h2>{title}</h2>
+              <p className="hint">{intro}</p>
+            </div>
+            <button className="secondary" disabled={!!loading} onClick={loadMalwareSchedule}><RefreshCw size={14}/> {t('Refresh')}</button>
+          </div>
+          <div className="info-box">
+            <strong>{t('Scheduled scan')} <code>{root}</code></strong>
+            <p className="hint">{t('The panel scans on its own, with nobody pressing anything. Pick an hour when few visitors are around.')}</p>
+            <div className="scan-schedule-form">
+              <label><span>{t('Enabled')}</span>
+                <select value={form.enabled ? 'on' : 'off'} onChange={e => setField({ enabled: e.target.value === 'on' })}>
+                  <option value="off">{t('Off')}</option>
+                  <option value="on">{t('On')}</option>
+                </select>
+              </label>
+              <label><span>{t('Day of week')}</span>
+                <select value={vn.weekday} disabled={!form.enabled} onChange={e => setVn({ weekday: Number(e.target.value) })}>
+                  {WEEKDAY_LABELS.map((label, index) => <option key={label} value={index}>{t(label)}</option>)}
+                </select>
+              </label>
+              <label><span>{t('Hour')}</span>
+                <input type="number" min="0" max="23" value={vn.hour} disabled={!form.enabled} onChange={e => setVn({ hour: Math.min(23, Math.max(0, Number(e.target.value) || 0)) })} />
+              </label>
+              <button disabled={!!loading} onClick={() => saveMalwareSchedule(scope)}><Clock size={14}/> {t('Save schedule')}</button>
+            </div>
+            {saved.enabled && saved.next_run_at && <p className="hint" style={{marginTop:8}}>{t('Next:')} <strong>{fmtStamp(saved.next_run_at)}</strong></p>}
+            {saved.last_run_at && <p className="hint" style={{marginTop:8}}>
+              {t('Last scheduled run:')} {fmtStamp(saved.last_run_at)} — <span className={saved.last_status === 'infected' ? 'badge danger' : saved.last_status === 'error' ? 'badge bad' : 'badge ok'}>{scanStatusLabel(saved.last_status)}</span> {saved.last_message || ''}
+            </p>}
+          </div>
+        </section>;
+      })}
     </>;
   }
 
@@ -9896,7 +9976,8 @@ function App() {
   }
 
   async function revokeMcpToken(token) {
-    if (!window.confirm(`Revoke "${token.name}"? Any assistant using it stops working immediately.`)) return;
+    const owner = token.username && token.username !== currentUser?.username ? ` (${token.username})` : '';
+    if (!window.confirm(t('Revoke MCP token "{name}"{owner}? Anything using it stops working at once.', { name: token.name, owner }))) return;
     const data = await request(`/mcp/tokens/${token.id}`, { method: 'DELETE' }, t('Revoking...'));
     if (data) {
       setNotice(t('Token revoked.'));
@@ -9904,166 +9985,115 @@ function App() {
     }
   }
 
+  // Each client's setup, ready to paste. While a token that was just created
+  // is still on screen it is filled in: the server keeps only a hash, so that
+  // is the one moment a finished command can be offered.
+  function mcpClientSnippets(token) {
+    const endpoint = `${window.location.origin}/api/mcp`;
+    const bearer = `Bearer ${token || '<your-token>'}`;
+    return [
+      ['Claude Code', `claude mcp add --transport http bpanel ${endpoint} --header "Authorization: ${bearer}"`],
+      ['Cursor (~/.cursor/mcp.json)', JSON.stringify({ mcpServers: { bpanel: { url: endpoint, headers: { Authorization: bearer } } } }, null, 2)],
+      ['VS Code (.vscode/mcp.json)', JSON.stringify({ servers: { bpanel: { type: 'http', url: endpoint, headers: { Authorization: bearer } } } }, null, 2)],
+    ];
+  }
+
   function renderMcp() {
+    const enabled = mcpAddonInstalled;
     const endpoint = `${window.location.origin}/api/mcp`;
     const mine = mcpTokens.filter(token => token.user_id === currentUser?.id);
     const others = mcpTokens.filter(token => token.user_id !== currentUser?.id);
-    const selfSigned = !window.location.protocol.startsWith('https');
-
-    // The real token while it is still on screen, the placeholder once it has
-    // been dismissed. Somebody who has just made a token wants to paste a
-    // finished command, not paste one and then go hunting for the value to
-    // substitute - and since the panel can never show the token again, the
-    // window in which this can help is exactly the window in which it is up.
-    const bearer = mcpNewToken || 'YOUR_TOKEN';
-    const claudeCode = `claude mcp add --transport http bpanel ${endpoint} \\\n  --header "Authorization: Bearer ${bearer}"`;
-    const cursor = JSON.stringify({
-      mcpServers: {
-        bpanel: { url: endpoint, headers: { Authorization: `Bearer ${bearer}` } },
-      },
-    }, null, 2);
-    const vscode = JSON.stringify({
-      servers: {
-        bpanel: { type: 'http', url: endpoint, headers: { Authorization: `Bearer ${bearer}` } },
-      },
-    }, null, 2);
-
     return <>
       <section className="section">
         <div className="section-title">
           <div>
             <h2>{t('AI assistants (MCP)')}</h2>
-            <p className="hint">
-              {t('Give Claude Code, Cursor or VS Code a token and it can read and operate the panel with exactly your own permissions - nothing more.')}
-            </p>
+            <p className="hint">{t('Connect Claude Code, Cursor, VS Code or another MCP client to this panel. A token acts as your account: it sees your websites, databases and backups')}{isAdmin ? t(' (as an administrator, every account’s)') : ''} {t('and nothing else. With actions allowed it can also edit your websites’ files, so an assistant can build and fix your sites; deleting a file always asks you first in the client.')}</p>
           </div>
-          <button className="secondary-light" disabled={!!loading} onClick={loadMcpTokens}>
-            <RefreshCw size={14}/>{t('Refresh')}</button>
+          <button className="secondary" disabled={!!loading} onClick={loadMcpTokens}><RefreshCw size={14}/> {t('Refresh')}</button>
         </div>
-
-        {!mcpAddonInstalled && <div className="addon-notes">
-          <strong><AlertCircle size={13}/>{t('The addon is off')}</strong>
-          <ul><li>{t('Nothing answers on this address until an administrator installs')}{' '}<strong>{t('AI assistants (MCP)')}</strong> on the Addons page. Existing tokens are kept
-            while it is off.</li></ul>
-        </div>}
-
-        {selfSigned && <div className="addon-notes">
-          <strong><AlertCircle size={13}/>{t('This panel needs a real certificate')}</strong>
-          <ul><li>{t('MCP clients refuse a self-signed certificate, so no assistant will connect until the panel has one. Install it under Panel settings → SSL.')}</li></ul>
-        </div>}
-
-        <div className="mcp-endpoint">
-          <span>{t('Endpoint')}</span>
-          <code>{endpoint}</code>
-          <button className="mini secondary-light" onClick={() => copyText(endpoint, 'Endpoint copied.')}>
-            <Copy size={13}/>{t('Copy')}</button>
-        </div>
+        {/* An administrator reaches the page while the addon is off; nothing
+            answers on the endpoint until it is installed. */}
+        {!enabled && <div className="info-box"><AlertCircle size={14}/> {t('MCP is not running on this panel. Install or start the')} <strong>{t('AI assistants (MCP)')}</strong> {t('addon on the Addons page first.')}
+          {' '}<button className="mini" onClick={() => navigateToPage('addons')}><PackageOpen size={13}/> {t('Open Addons')}</button></div>}
+        {enabled && !window.location.protocol.startsWith('https') && <div className="info-box"><AlertCircle size={14}/> {t('MCP clients refuse a self-signed certificate, so no assistant will connect until the panel has one. Install it under Panel settings → SSL.')}</div>}
+        {enabled && renderCopyBlock(t('Endpoint'), endpoint)}
       </section>
 
-      <section className="section">
-        <div className="section-title"><div><h2>{t('New token')}</h2><p className="hint">{t('A token acts as you. It is shown once, when you create it.')}</p></div></div>
-        <div className="form-row">
-          <input
-            placeholder={t('What is it for - laptop, work desktop')}
-            value={mcpDraft.name}
-            maxLength={100}
-            onChange={event => setMcpDraft(prev => ({ ...prev, name: event.target.value }))}
-          />
-          <select
-            value={mcpDraft.expires_in_days}
-            aria-label={t('Expires in')}
-            onChange={event => setMcpDraft(prev => ({ ...prev, expires_in_days: event.target.value }))}>
-            <option value="7">{t('Expires in 7 days')}</option>
-            <option value="30">{t('Expires in 30 days')}</option>
-            <option value="90">{t('Expires in 90 days')}</option>
-            <option value="365">{t('Expires in a year')}</option>
-          </select>
-          <label className="check-line">
-            <input
-              type="checkbox"
-              checked={!!mcpDraft.can_write}
-              onChange={event => setMcpDraft(prev => ({ ...prev, can_write: event.target.checked }))}
-            />
-            <span>{t('Allow actions')}</span>
-          </label>
-          <button disabled={!mcpDraft.name.trim() || !!loading} onClick={createMcpToken}>
-            <KeyRound size={14}/>{t('Create')}</button>
+      {enabled && mcpNewToken && <section className="section token-created-notice">
+        <div className="section-title">
+          <div><h2>{t('Token created.')}</h2><p className="hint">{t('Copy it now — it is shown only once.')}</p></div>
+          <button className="secondary" onClick={() => setMcpNewToken('')}>{t('Dismiss')}</button>
         </div>
-        <p className="hint">{t('Without')}{' '}<strong>{t('Allow actions')}</strong> the token can only read, and the assistant is not
-          even shown the tools that change anything. Leave it off unless you want the assistant to
-          act.
-        </p>
-
-        {mcpNewToken && <div className="mcp-secret">
-          <div>
-            <strong>{t('Copy this now. It is not shown again.')}</strong>
-            <code>{mcpNewToken}</code>
-          </div>
-          <div className="actions">
-            <button className="mini" onClick={() => copyText(mcpNewToken, 'Token copied. It is not shown again.')}><Copy size={13}/>{t('Copy')}</button>
-            <button className="mini secondary-light" onClick={() => setMcpNewToken('')}>{t('Done')}</button>
-          </div>
-        </div>}
-      </section>
-
-      <section className="section">
-        <div className="section-title"><div><h2>{t('Your tokens')}</h2></div></div>
-        {mine.length === 0
-          ? <EmptyState icon={KeyRound} message={t('No tokens yet.')} />
-          : <div className="backup-list">{mine.map(token => renderMcpTokenRow(token))}</div>}
-      </section>
-
-      {isAdmin && others.length > 0 && <section className="section">
-        <div className="section-title"><div><h2>{t('Everyone else\'s tokens')}</h2><p className="hint">{t('Every key to this server, and who holds it. You can revoke any of them.')}</p></div></div>
-        <div className="backup-list">{others.map(token => renderMcpTokenRow(token, true))}</div>
+        {renderCopyBlock(t('Token'), mcpNewToken)}
+        {mcpClientSnippets(mcpNewToken).map(([label, text]) => <React.Fragment key={label}>
+          {renderCopyBlock(label, text, { multiline: true, copiedMessage: t('{name} setup copied.', { name: label }) })}
+        </React.Fragment>)}
       </section>}
 
-      <section className="section">
-        <div className="section-title"><div><h2>{t('Connecting a client')}</h2><p className="hint">
-          {mcpNewToken
-            ? <>Your new token is already filled in below - copy one and paste it straight in.
-                {t('Once you dismiss the token above these go back to saying YOUR_TOKEN, because the panel cannot show it to you a second time.')}</>
-            : <>{t('Create a token above and it appears in these ready to copy. Otherwise replace YOUR_TOKEN yourself.')}</>}
-        </p></div></div>
-        {[['Claude Code', claudeCode], ['Cursor - .cursor/mcp.json', cursor],
-          ['VS Code - .vscode/mcp.json', vscode]].map(([label, snippet]) => (
-          <div className="mcp-snippet" key={label}>
-            <div className="mcp-snippet-head">
-              <strong>{label}</strong>
-              <button className="mini secondary-light" onClick={() => copyText(snippet, 'Configuration copied.')}>
-                <Copy size={13}/>{t('Copy')}</button>
-            </div>
-            <pre>{snippet}</pre>
-          </div>
-        ))}
-      </section>
+      {enabled && <section className="section">
+        <h2>{t('New token')}</h2>
+        <div className="token-create-form mcp-token-form">
+          <label><span>{t('Name')}</span><input value={mcpDraft.name} maxLength={100} placeholder={t('Claude Code on my laptop')}
+            onChange={e => setMcpDraft(prev => ({ ...prev, name: e.target.value }))} /></label>
+          <label><span>{t('Expires')}</span><select value={mcpDraft.expires_in_days}
+            onChange={e => setMcpDraft(prev => ({ ...prev, expires_in_days: Number(e.target.value) }))}>
+            {[30, 90, 180, 365].map(days => <option key={days} value={days}>{days} {t('days')}</option>)}
+          </select></label>
+          <button disabled={!!loading || !mcpDraft.name.trim()} onClick={createMcpToken}><Plus size={14}/> {t('Create token')}</button>
+        </div>
+        <label className="option-card">
+          <input type="checkbox" checked={!!mcpDraft.can_write}
+            onChange={e => setMcpDraft(prev => ({ ...prev, can_write: e.target.checked }))} />
+          <span>
+            <strong>{t('Allow actions')}</strong>
+            <small>{t('Write and delete files, run backups, issue certificates, switch the WAF')}{isAdmin ? t(', restart services, block and unblock IPs, add WAF rules') : ''}. {t('Without it the token can only read.')}</small>
+          </span>
+        </label>
+        {/* The server's limit, MAX_TOKENS_PER_USER in services/mcp.py. */}
+        <p className="hint">{t('Up to')} 10 {t('tokens per account.')}</p>
+      </section>}
+
+      {enabled && <section className="section">
+        <h2>{t('Your tokens')}</h2>
+        {mine.length === 0 ? <p className="hint">{t('No MCP tokens yet.')}</p> : renderMcpTokenRows(mine)}
+      </section>}
+
+      {enabled && isAdmin && others.length > 0 && <section className="section">
+        <div className="section-title"><div><h2>{t('Everyone else\'s tokens')}</h2><p className="hint">{t('Every key to this server, and who holds it. You can revoke any of them.')}</p></div></div>
+        {renderMcpTokenRows(others, { showOwner: true })}
+      </section>}
+
+      {enabled && !mcpNewToken && <section className="section">
+        <div><h2>{t('Connecting a client')}</h2>
+          <p className="hint">{t('Replace <your-token> with a token from above. The client must trust this panel’s HTTPS certificate; a self-signed one is refused.')}</p></div>
+        {mcpClientSnippets('').map(([label, text]) => <React.Fragment key={label}>
+          {renderCopyBlock(label, text, { multiline: true, copiedMessage: t('{name} setup copied.', { name: label }) })}
+        </React.Fragment>)}
+      </section>}
     </>;
   }
 
-  function renderMcpTokenRow(token, showOwner = false) {
-    const revoked = !!token.revoked_at;
-    const dead = revoked || token.expired;
-    return <div className="backup-item" key={token.id}>
-      <span>
-        {token.name}
-        {showOwner && <> - <strong>{token.username}</strong></>}
-        <span className={`badge ${token.can_write ? '' : 'ok'}`}>
-          {token.can_write ? 'can act' : 'read only'}
-        </span>
-        {revoked && <span className="badge">revoked</span>}
-        {!revoked && token.expired && <span className="badge">expired</span>}
-        <small>
-          <code>{token.prefix}…</code>
-          {dead ? '' : ` · expires ${new Date(token.expires_at).toLocaleDateString()}`}
-          {token.last_used_at
-            ? ` · last used ${new Date(token.last_used_at).toLocaleString()}`
-            : ' · never used'}
-        </small>
-      </span>
-      <div className="actions">
-        {!revoked && <button className="mini danger" disabled={!!loading}
-          onClick={() => revokeMcpToken(token)}><Trash2 size={14}/>{t('Revoke')}</button>}
-      </div>
+  // A revoked token stays listed, for the record of who held a key.
+  function renderMcpTokenRows(tokens, { showOwner = false } = {}) {
+    return <div className="table">
+      {tokens.map(token => {
+        const revoked = !!token.revoked_at;
+        return <div className="row" key={token.id}>
+          <div className="token-info">
+            <strong>{token.name}{showOwner && token.username ? ` — ${token.username}` : ''}</strong>
+            <small>{t('Prefix:')} {token.prefix}{t('… | Created:')} {token.created_at ? new Date(token.created_at).toLocaleDateString() : '—'}
+              {' | '}{t('Expires:')} {token.expires_at ? new Date(token.expires_at).toLocaleDateString() : t('never')}
+              {' | '}{t('Last used:')} {token.last_used_at ? new Date(token.last_used_at).toLocaleString() : t('never')}</small>
+          </div>
+          {revoked
+            ? <span className="badge">{t('Revoked')}</span>
+            : token.expired
+              ? <span className="badge warn">{t('Expired')}</span>
+              : <span className={token.can_write ? 'badge warn' : 'badge ok'}>{token.can_write ? t('Read + actions') : t('Read-only')}</span>}
+          {!revoked && <button className="mini danger" disabled={!!loading} onClick={() => revokeMcpToken(token)}><Trash2 size={14}/> {t('Revoke')}</button>}
+        </div>;
+      })}
     </div>;
   }
 
