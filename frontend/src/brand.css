@@ -520,7 +520,7 @@ button:disabled,.upload-button.disabled{background:var(--disabled-bg);color:var(
 .dns-zones{display:grid;gap:6px;align-content:start;min-width:0}
 .dns-zones-title{font-size:11.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--text-muted)}
 .dns-zone{display:flex;align-items:center;gap:6px;min-width:0}
-.dns-zone-open{flex:1;min-width:0;display:grid;gap:1px;min-height:40px;padding:7px 10px;text-align:left;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text);cursor:pointer;font:inherit}
+.dns-zone-open{flex:1;min-width:0;display:grid;gap:1px;justify-content:stretch;justify-items:start;min-height:40px;padding:7px 10px;text-align:left;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text);cursor:pointer;font:inherit}
 .dns-zone-open strong{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dns-zone-open small{font-size:11.5px;color:var(--text-muted)}
 .dns-zone.active .dns-zone-open{border-color:var(--primary);background:var(--primary-light)}
@@ -536,6 +536,7 @@ button:disabled,.upload-button.disabled{background:var(--disabled-bg);color:var(
 .dns-value{min-width:0;font-family:var(--font-mono);font-size:12.5px;color:var(--text-secondary);overflow-wrap:anywhere}
 .dns-ttl{font-size:12px;color:var(--text-muted);white-space:nowrap}
 .dns-actions{display:flex;gap:6px}
+.dns-locked{justify-content:center;min-width:66px;color:var(--text-muted)}
 .dns-server{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 12px}
 .dns-auto{align-self:center}
 @media (min-width:1000px){.dns-layout{grid-template-columns:260px minmax(0,1fr)}}

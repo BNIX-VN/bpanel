@@ -5427,10 +5427,14 @@ function App() {
                   <span className="badge">{record.type}</span>
                   <span className="dns-value">{record.priority != null && <b>{record.priority} </b>}{record.content}</span>
                   <span className="dns-ttl">{record.ttl}s</span>
-                  <span className="dns-actions">
-                    <button className="mini secondary-light" disabled={!!loading} onClick={() => editDnsRecord(record)} aria-label={t('Edit')} title={t('Edit')}><Pencil size={13}/></button>
-                    <button className="mini danger" disabled={!!loading} onClick={() => deleteDnsRecord(record)} aria-label={t('Delete')} title={t('Delete')}><Trash2 size={13}/></button>
-                  </span>
+                  {/* The zone's own nameservers are an administrator's to change;
+                      the server refuses a customer, so the page does not offer it. */}
+                  {!isAdmin && record.type === 'NS' && record.name === '@'
+                    ? <span className="dns-actions dns-locked" title={t("Only an administrator can change the zone's own nameservers.")}><Lock size={13}/></span>
+                    : <span className="dns-actions">
+                      <button className="mini secondary-light" disabled={!!loading} onClick={() => editDnsRecord(record)} aria-label={t('Edit')} title={t('Edit')}><Pencil size={13}/></button>
+                      <button className="mini danger" disabled={!!loading} onClick={() => deleteDnsRecord(record)} aria-label={t('Delete')} title={t('Delete')}><Trash2 size={13}/></button>
+                    </span>}
                 </div>)}
               </div>
             </>}
