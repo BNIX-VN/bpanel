@@ -85,52 +85,48 @@ def test_a_customer_is_not_shown_the_server():
 
 
 def test_the_sidebar_holds_what_is_used_every_day():
-    """The operator's list (2026-09-27): Dashboard, Website, Application, SSL,
-    Database, Cron, File manager, SFTP, Backups, Panel users - then the addons
-    that are on, then Settings. Everything else is one click further, on the
-    Settings page, which is a page and not a collapsed submenu: a folded
-    Settings once hid the MCP page from the operator."""
+    """OPanel's sidebar (operator, 2026-09-29: BPanel follows OPanel exactly):
+    one plain list - the everyday pages, the addons that are on in OPanel's
+    order, then Settings. Everything else is one click further, on the
+    Settings page, which is a page and not a collapsed submenu."""
     sidebar = APP.split("const navSections = [")[1].split("].filter(section")[0]
     keys = re.findall(r"\['([a-z-]+)', '", sidebar)
     assert keys == ["dashboard", "websites", "applications", "ssl", "databases", "cron", "files",
-                    "sftp", "backups", "users", "dns", "mail", "mcp", "notifications", "malware", "settings"]
+                    "sftp", "backups", "users", "mail", "dns", "mcp", "notifications", "malware", "settings"]
+    assert sidebar.count("{ key: ") == 1, "one list, no groups"
     assert "sidebar-subnav" not in APP and "settingsMenuOpen" not in APP
     hub = APP.split("const settingsGroups = [")[1].split("const settingsItems = ")[0]
     hub_keys = re.findall(r"\['([a-z-]+)', '", hub)
-    # Panel settings heads its group (operator, 2026-09-27); the malware
-    # scanner is an addon now and sits in the sidebar once it is on.
     assert hub_keys == ["firewall", "waf", "access-logs", "security",
                         "panel-settings", "services", "php", "updates", "addons"]
     assert not set(keys) & set(hub_keys), "a page in both places"
     assert "if (page === 'settings') return renderSettingsHub();" in APP
-
+    assert 'className="section settings-hub"' in APP and 'className="settings-tile"' in APP
 
 def test_a_settings_page_keeps_its_own_name_and_lights_up_settings():
     assert "const navPage = settingsItems.some(([key]) => key === basePage) ? 'settings' : basePage;" in APP
     assert "<h1>{pageItem?.[1] ? t(pageItem[1])" in APP
+    # As in OPanel, its title is a crumb back to the Settings page.
+    assert '<h1 className="page-crumbs"><button type="button" onClick={() => navigateToPage(\'settings\')}>' in APP
 
-
-def test_panel_settings_is_four_tabs():
-    """Operator, 2026-09-27: "Phần panel setting: Chia làm 4 tab nhé". One
-    underlined row, like Backups and Panel users, one form showing at a time."""
+def test_panel_settings_is_opanels_stacked_sections():
+    """OPanel's page (operator, 2026-09-29): the forms one under the other,
+    no tabs; the admin's own email and password moved to Profile."""
     page = APP.split("  function renderPanelSettings() {")[1].split("  function renderUsers() {")[0]
-    tabs = re.findall(r"\['([a-z]+)', '([^']+)', \w+\],", page.split("const tabs = [")[1].split("];")[0])
-    assert tabs == [("general", "General"), ("brand", "Brand assets"), ("account", "Admin account"), ("api", "API Tokens")]
-    assert 'className="segmented-control backup-tabs" role="tablist"' in page
-    for key, _label in tabs:
-        assert f"{{tabPanel('{key}', <>" in page, key
-    assert page.count('<section className="section') == 2, "the no-permission answer and the page: the tabs are not separate sections"
-    # The tokens used to be their own page; an old link still opens their tab.
-    assert "/^\\/api-tokens?\\/?$/i.test(window.location.pathname) ? 'api' : 'general'" in APP
-
+    titles = re.findall(r"<h2>\{t\('([^']+)'\)\}</h2>", page)
+    assert titles == ["Settings", "Panel settings", "Server network", "Brand assets", "API Tokens"]
+    assert "role=\"tablist\"" not in page and "panelSettingsTab" not in APP
+    assert "Admin account" not in page
 
 def test_sign_out_lives_in_the_account_menu():
-    """The top bar is the page title and one account menu, as in OPanel."""
+    """The top bar is the page title and one account menu, as in OPanel:
+    Profile, Account security, Logout."""
     assert 'className="user-menu-panel"' in APP
     menu = APP.split('className="user-menu-panel"')[1].split("</div>}")[0]
-    assert "logout()" in menu and "navigateToPage('security')" in menu
+    assert menu.index("openProfileModal()") < menu.index("navigateToPage('security')") < menu.index("logout()")
     assert "account-pill" not in APP
-
+    modal = APP.split("{showProfileModal && ")[1].split("{renderNotifications()}")[0]
+    assert "saveProfileEmail" in modal and "changeMyPassword" in modal
 
 def test_the_create_website_form_is_not_in_front_of_the_list():
     """Making a site is occasional; finding one is why the page gets opened.

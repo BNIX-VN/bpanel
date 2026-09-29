@@ -176,33 +176,28 @@ def test_the_switch_exists_and_offers_both_languages():
 
 
 def test_the_switch_is_one_button_not_a_menu():
-    """Two languages need one button, not a list to open and choose from. It
-    says where it goes - EN or VI - rather than where you are, so there is
-    nothing to read twice."""
+    """Two languages need one button, not a list. As in OPanel it shows the
+    language in use, and its label names the other one in that language's
+    own words, so a reader who cannot read the current one still finds it."""
     toggle = APP.split("function LanguageToggle(")[1].split("\nfunction ")[0]
     assert "<select" not in toggle and "LANGUAGES.map(" not in toggle
     assert "const next = language === 'vi' ? 'en' : 'vi';" in toggle
-    # Labelled in the language it switches to, so a Vietnamese reader who has
-    # the panel in English can still recognise it.
-    assert "'Chuyển sang Tiếng Việt' : 'Switch to English'" in toggle
-
+    assert "t('Switch to {language}', { language: LANGUAGES.find(([code]) => code === next)?.[1] || next })" in toggle
 
 def test_the_switch_is_two_letters_and_no_icon():
     """EN and VI are already the picture. A globe or a speech bubble beside them
     says nothing the letters do not, and a flag would name a country."""
     toggle = APP.split("function LanguageToggle(")[1].split("\nfunction ")[0]
     assert "<Languages" not in toggle and "<svg" not in toggle
-    assert "{next === 'vi' ? 'VI' : 'EN'}" in toggle
-    # The icon import left with it rather than sitting unused in the bundle.
+    assert "<span className=\"lang-code\">{language === 'vi' ? 'VI' : 'EN'}</span>" in toggle
     assert "Languages," not in APP
 
-
 def test_the_switch_sits_with_the_theme_toggle():
-    """Two controls that do the same kind of thing belong together; a person
-    who found one will look for the other in the same place."""
-    assert APP.count("<LanguageToggle language={language} onChange={changeLanguage}/>") == 3
-    assert APP.count("<ThemeToggle theme={theme} onToggle={toggleTheme}/>") == 3
-
+    """Where OPanel has them: the corners of the sign-in page, and the top bar."""
+    assert '<ThemeToggle theme={theme} onToggle={toggleTheme} className="theme-toggle-btn"/>' in APP
+    assert '<LanguageToggle language={language} onChange={changeLanguage} className="lang-toggle-btn"/>' in APP
+    assert '<LanguageToggle language={language} onChange={changeLanguage} className="secondary compact-btn top-lang"/>' in APP
+    assert '<ThemeToggle theme={theme} onToggle={toggleTheme} className="secondary compact-btn icon-only" size={15}/>' in APP
 
 def test_changing_the_language_re_renders():
     """t() is read during render, so the tree has to render again. The hook
@@ -321,7 +316,8 @@ def test_every_settings_page_entry_reads_in_vietnamese():
     """The Settings page's names and one-line hints live in an array, like the
     sidebar's, and are translated where they are drawn."""
     hub = APP.split("const settingsGroups = [")[1].split("const settingsItems = ")[0]
-    rows = re.findall(r"\['[a-z-]+', '([^']+)', \w+, '([^']+)'\]", hub)
+    rows = [(label, single or double) for label, single, double in
+            re.findall(r"\['[a-z-]+', '([^']+)', \w+, (?:'([^']+)'|\"([^\"]+)\")\]", hub)]
     # Nine since the malware scanner became an addon with a sidebar entry.
     assert len(rows) >= 9, rows
     texts = [text for row in rows for text in row] + re.findall(r"title: '([^']+)'", hub)

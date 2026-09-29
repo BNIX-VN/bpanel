@@ -176,17 +176,11 @@ function useTheme() {
   return [theme, toggleTheme];
 }
 
-function ThemeToggle({ theme, onToggle, className = '' }) {
-  const isDark = theme === 'dark';
-  const label = isDark ? 'Switch to light mode' : 'Switch to dark mode';
-  return <button
-    type="button"
-    className={`theme-toggle ${className}`.trim()}
-    onClick={onToggle}
-    title={label}
-    aria-label={label}
-    aria-pressed={isDark}
-  >{isDark ? <Sun size={16}/> : <Moon size={16}/>}</button>;
+function ThemeToggle({ theme, onToggle, className = '', size = 16 }) {
+  const label = t('Toggle dark mode');
+  return <button type="button" className={className} onClick={onToggle} aria-label={label} title={label}>
+    {theme === 'dark' ? <Sun size={size}/> : <Moon size={size}/>}
+  </button>;
 }
 
 // Chrome's password manager writes the saved panel username into text fields
@@ -207,26 +201,12 @@ function NoAutofillInput({ onFocus, onPointerDown, ...props }) {
 }
 
 function LanguageToggle({ language, onChange, className = '' }) {
-  /* A button, not a select. There are two languages and English is the one the
-   * panel is written in, so the only thing anybody wants is to flip to the
-   * other - a dropdown asks them to open a list to choose between two items.
-   *
-   * It shows the language you get by pressing it, which is how the theme
-   * toggle next to it behaves: in dark mode that button shows a sun.
-   *
-   * Two letters and no icon. EN and VI already are the picture - a globe or
-   * a speech bubble beside them says nothing the letters do not, and any
-   * flag would name a country instead of a language. */
+  // As in OPanel: one button showing the language in use; a click switches
+  // to the other one.
   const next = language === 'vi' ? 'en' : 'vi';
-  const label = next === 'vi' ? 'Chuyển sang Tiếng Việt' : 'Switch to English';
-  return <button
-    type="button"
-    className={`language-toggle ${className}`.trim()}
-    onClick={() => onChange(next)}
-    title={label}
-    aria-label={label}
-  >
-    {next === 'vi' ? 'VI' : 'EN'}
+  const label = t('Switch to {language}', { language: LANGUAGES.find(([code]) => code === next)?.[1] || next });
+  return <button type="button" className={className} onClick={() => onChange(next)} aria-label={label} title={label}>
+    <span className="lang-code">{language === 'vi' ? 'VI' : 'EN'}</span>
   </button>;
 }
 
@@ -800,7 +780,6 @@ function App() {
   const [serviceNames, setServiceNames] = useState(DEFAULT_SERVICE_NAMES);
   const [backupTab, setBackupTab] = useState('website');
   // An old /api-tokens link opens the tab the tokens now live on.
-  const [panelSettingsTab, setPanelSettingsTab] = useState(() => (/^\/api-tokens?\/?$/i.test(window.location.pathname) ? 'api' : 'general'));
   const [backups, setBackups] = useState([]);
   const [backupJobs, setBackupJobs] = useState([]);
   const [userBackups, setUserBackups] = useState([]);
@@ -1013,6 +992,7 @@ function App() {
   const [panelLogoFile, setPanelLogoFile] = useState(null);
   const [panelFaviconFile, setPanelFaviconFile] = useState(null);
   const [adminAccountForm, setAdminAccountForm] = useState({ email: '', current_password: '', password: '', confirm_password: '', code: '' });
+  const [showProfileModal, setShowProfileModal] = useState(false);
   const [updatesStatus, setUpdatesStatus] = useState(null);
   const [showUpdateLog, setShowUpdateLog] = useState(false);
   const [osUpdating, setOsUpdating] = useState(false);
@@ -1457,55 +1437,27 @@ function App() {
     }
   }
 
-  async function saveAdminAccount() {
+  function openProfileModal() {
+    setAdminAccountForm({ email: currentUser?.email || '', current_password: '', password: '', confirm_password: '', code: '' });
+    setShowProfileModal(true);
+  }
+
+  async function saveProfileEmail() {
     const email = String(adminAccountForm.email || '').trim();
-    const password = String(adminAccountForm.password || '');
-    const confirmPassword = String(adminAccountForm.confirm_password || '');
-    const currentPassword = String(adminAccountForm.current_password || '');
-    const code = String(adminAccountForm.code || '').trim();
-
-    if (!email) {
-      setError(t('Email is required.'));
-      return;
-    }
-    if (password && password.length < 12) {
-      setError(t('Password must be at least 12 characters.'));
-      return;
-    }
-    if (password && password !== confirmPassword) {
-      setError(t('Passwords do not match.'));
-      return;
-    }
-
-    const payload = { email };
-    if (password) {
-      if (!currentPassword) {
-        setError(t('Current password is required to change password.'));
-        return;
-      }
-      payload.password = password;
-      payload.current_password = currentPassword;
-      if (currentUser?.totp_enabled) {
-        if (!code) {
-          setError(t('Authentication code is required.'));
-          return;
-        }
-        payload.code = code;
-      }
-    }
-
-    const data = await request('/panel-settings/admin-account', {
-      method: 'PATCH',
-      body: JSON.stringify(payload),
-    }, t('Saving admin account...'));
+    const data = await request('/panel-settings/admin-account', { method: 'PATCH', body: JSON.stringify({ email }) }, t('Saving admin account...'));
     if (!data) return;
-    if (data.password_changed) {
-      clearSession('Password changed. Please log in again.');
-      return;
-    }
-    setAdminAccountForm(prev => ({ ...prev, current_password: '', password: '', confirm_password: '', code: '' }));
     await loadCurrentUser({ clearOnUnauthorized: false });
-    setNotice(data.message || 'Admin account updated.');
+    setNotice(data.message || t('Email updated.'));
+  }
+
+  async function changeMyPassword() {
+    const payload = { password: adminAccountForm.password, current_password: adminAccountForm.current_password };
+    if (currentUser?.totp_enabled) payload.code = String(adminAccountForm.code || '').trim();
+    const data = await request(`/users/${currentUser.id}/password`, { method: 'POST', body: JSON.stringify(payload) }, t('Changing password...'));
+    if (!data) return;
+    setAdminAccountForm(prev => ({ ...prev, current_password: '', password: '', confirm_password: '', code: '' }));
+    setShowProfileModal(false);
+    setNotice(data.message || t('Password changed.'));
   }
 
   async function uploadPanelAsset(kind) {
@@ -5179,6 +5131,8 @@ function App() {
   // The sidebar holds what is used every day (operator, 2026-09-27); the rest
   // is one click further, on the Settings page. An addon shows only once it
   // is on - Application, AI assistants, Notifications.
+  // One plain list, top to bottom, as in OPanel: the everyday pages, the
+  // addons that are on, then Settings.
   const navSections = [
     { key: 'main', items: [
       ['dashboard', 'Dashboard', Home],
@@ -5188,34 +5142,32 @@ function App() {
       ['databases', 'Databases', Database],
       ['cron', 'Cron', Clock],
       ['files', 'File manager', FolderOpen],
-      ['sftp', 'SFTP accounts', Upload],
+      ['sftp', 'SFTP accounts', KeyRound],
       ['backups', 'Backups', Archive],
       ...(isAdmin ? [['users', 'Panel users', Users]] : []),
-    ] },
-    { key: 'addons', items: [
-      ...(dnsAddonInstalled ? [['dns', 'DNS Manager', Network]] : []),
       ...(mailAddonInstalled ? [['mail', 'Email', Mail]] : []),
-      ...(mcpAddonInstalled ? [['mcp', 'AI assistants', Bot]] : []),
+      ...(dnsAddonInstalled ? [['dns', 'DNS Manager', Network]] : []),
+      ...(mcpAddonInstalled ? [['mcp', 'AI assistants (MCP)', Bot]] : []),
       ...(notificationsAddonInstalled && isAdmin ? [['notifications', 'Notifications', Bell]] : []),
-      ...(malwareAddonInstalled && isAdmin ? [['malware', 'Malware scanner', Bug]] : []),
+      ...(malwareAddonInstalled && isAdmin ? [['malware', 'Malware Scanner', Bug]] : []),
+      ['settings', 'Settings', SettingsIcon],
     ] },
-    { key: 'settings', items: [['settings', 'Settings', SettingsIcon]] },
   ].filter(section => section.items.length > 0);
 
-  // Everything else, on the Settings page: [page, label, icon, hint].
+  // Everything else, on the Settings page: [page, label, icon, summary].
   const settingsGroups = [
     { title: 'Security', items: [
-      isAdmin && ['firewall', 'Firewall', BrickWall, 'Ports, IP rules, blocklists and Fail2ban'],
-      ['waf', 'WAF', ShieldAlert, 'Request filtering for each website'],
-      isAdmin && ['access-logs', 'Access logs', ScrollText, 'Requests and blocks'],
-      ['security', 'Account security', LockKeyhole, 'Password, two-factor sign-in and passkeys'],
+      isAdmin && ['firewall', 'Firewall', BrickWall, 'Open ports, blocked addresses and blocklists'],
+      ['waf', 'WAF', ShieldAlert, 'Web application firewall for each website'],
+      isAdmin && ['access-logs', 'Access logs', ScrollText, 'Visitors and what the WAF blocked'],
+      ['security', 'Account security', LockKeyhole, 'Password, two-factor authentication and passkeys'],
     ] },
     { title: 'System', items: [
-      isAdmin && ['panel-settings', 'Panel settings', SettingsIcon, 'Hostname, branding and API tokens'],
-      isAdmin && ['services', 'Services', Activity, 'Start, stop and restart'],
-      isAdmin && ['php', 'PHP config', Code2, 'Versions, limits and extensions'],
-      isAdmin && ['updates', 'Updates', RefreshCw, 'Panel version'],
-      isAdmin && ['addons', 'Addons', PackageOpen, 'Optional features'],
+      isAdmin && ['panel-settings', 'Panel settings', SettingsIcon, 'Branding, panel address and certificate'],
+      isAdmin && ['services', 'Services', Activity, "Start, stop and check the server's daemons"],
+      isAdmin && ['php', 'PHP config', Code2, 'PHP versions, limits and extensions'],
+      isAdmin && ['updates', 'Updates', RefreshCw, 'Panel and system updates'],
+      isAdmin && ['addons', 'Addons', PackageOpen, 'Install and turn on optional features'],
     ] },
   ].map(group => ({ ...group, items: group.items.filter(Boolean) })).filter(group => group.items.length > 0);
   const settingsItems = settingsGroups.flatMap(group => group.items);
@@ -5227,6 +5179,8 @@ function App() {
   const activeNavItem = navItems.find(([key]) => key === navPage) || navItems[0];
   // ...and is still called by its own name at the top: "Firewall", not "Settings".
   const pageItem = [...navItems, ...settingsItems].find(([key]) => key === basePage) || activeNavItem;
+  // Its title is a crumb back to Settings, as in OPanel.
+  const settingsPageItem = settingsItems.find(([key]) => key === basePage);
 
   function renderNotifications() {
     const errorMessage = formatApiError(error, '').trim();
@@ -5736,17 +5690,20 @@ function App() {
   }
 
   function renderSettingsHub() {
-    return <div className="settings-hub">
-      {settingsGroups.map(group => <section className="section settings-group" key={group.title}>
-        <h2>{t(group.title)}</h2>
-        <div className="settings-links">
-          {group.items.map(([key, label, Icon, hint]) => <button type="button" className="settings-link" key={key} onClick={() => navigateToPage(key)}>
-            <span className="settings-link-icon"><Icon size={18}/></span>
-            <span className="settings-link-text"><strong>{t(label)}</strong><small>{t(hint)}</small></span>
+    return <section className="section settings-hub">
+      <div className="section-title">
+        <div><h2>{t('Settings')}</h2><p className="hint">{t('Security, server and panel configuration.')}</p></div>
+      </div>
+      {settingsGroups.map(group => <div className="settings-hub-group" key={group.title}>
+        <h3>{t(group.title)}</h3>
+        <div className="settings-hub-grid">
+          {group.items.map(([key, label, Icon, summary]) => <button key={key} type="button" className="settings-tile" onClick={() => navigateToPage(key)}>
+            <span className="settings-tile-icon"><Icon size={18}/></span>
+            <span className="settings-tile-text"><strong>{t(label)}</strong><small>{t(summary)}</small></span>
           </button>)}
         </div>
-      </section>)}
-    </div>;
+      </div>)}
+    </section>;
   }
 
   // Which addon a page belongs to decides the words: this said
@@ -9578,125 +9535,102 @@ function App() {
 
   function renderPanelSettings() {
     if (!isAdmin) return <section className="section"><h2>{t('Settings')}</h2><p className="hint">{t('No permission.')}</p></section>;
-    // Four tabs, one underlined row like Backups and Panel users (operator,
-    // 2026-09-27): the page had grown into four unrelated forms stacked up.
-    const tabs = [
-      ['general', 'General', SettingsIcon],
-      ['brand', 'Brand assets', Image],
-      ['account', 'Admin account', Lock],
-      ['api', 'API Tokens', KeyRound],
-    ];
-    const activeTab = tabs.some(([id]) => id === panelSettingsTab) ? panelSettingsTab : 'general';
-    const tabPanel = (id, content) => activeTab === id && <div className="backup-tab-panel" id={`panel-settings-tab-${id}`} role="tabpanel" aria-labelledby={`panel-settings-tab-button-${id}`}>{content}</div>;
-    return <section className="section panel-settings-page">
-      <div className="segmented-control backup-tabs" role="tablist" aria-label={t('Panel settings sections')}>
-        {tabs.map(([id, label, Icon]) => <button
-          key={id}
-          type="button"
-          role="tab"
-          id={`panel-settings-tab-button-${id}`}
-          aria-controls={`panel-settings-tab-${id}`}
-          aria-selected={activeTab === id}
-          className={activeTab === id ? 'active' : ''}
-          onClick={() => setPanelSettingsTab(id)}
-        ><Icon size={14}/>{t(label)}</button>)}
-      </div>
-      {tabPanel('general', <>
-        <div className="backup-panel-title">
-          <div><h3>{t('General')}</h3><p className="hint">{t('Panel name, hostname and the server\'s addresses.')}</p></div>
-          <button className="secondary-light" disabled={!!loading} onClick={loadPanelSettings}><RefreshCw size={14}/>{t('Refresh')}</button>
+    const ipv4 = panelSettings.server_ipv4 || [];
+    const ipv6 = panelSettings.ipv6 || {};
+    return <>
+      <section className="section">
+        <div className="section-title">
+          <div><h2>{t('Panel settings')}</h2><p className="hint">{t('Branding and hostname.')}</p></div>
+          <button className="secondary" disabled={!!loading} onClick={loadPanelSettings}><RefreshCw size={14}/> {t('Refresh')}</button>
         </div>
         <div className="panel-settings-grid panel-settings-compact">
           <label><span>{t('Panel name')}</span><input value={panelSettingsForm.app_name} onChange={e => setPanelSettingsForm(prev => ({ ...prev, app_name: e.target.value }))} placeholder="BPanel" /></label>
           <label><span>{t('Panel hostname')}</span><input value={panelSettingsForm.panel_hostname} onChange={e => setPanelSettingsForm(prev => ({ ...prev, panel_hostname: e.target.value }))} placeholder="panel.domain.com" /></label>
-          <label className="check-line panel-ssl-status"><input type="checkbox" checked={!!panelSettingsForm.ssl_enabled} onChange={e => setPanelSettingsForm(prev => ({ ...prev, ssl_enabled: e.target.checked }))} />{t('Panel SSL')}</label>
-          <button disabled={!!loading || !panelSettingsForm.app_name || !panelSettingsForm.panel_hostname} onClick={savePanelSettings}><SettingsIcon size={14}/>{t('Save settings')}</button>
+          <label className="check-line panel-ssl-status"><input type="checkbox" checked={!!panelSettingsForm.ssl_enabled} onChange={e => setPanelSettingsForm(prev => ({ ...prev, ssl_enabled: e.target.checked }))} /> {t('Panel SSL')}</label>
+          <button disabled={!!loading || !panelSettingsForm.app_name || !panelSettingsForm.panel_hostname} onClick={savePanelSettings}><SettingsIcon size={14}/> {t('Save settings')}</button>
         </div>
-        <div className="panel-net-strip">
-          <div className="panel-net-row">
-            <span className="panel-net-label">IPv4</span>
-            <div className="panel-net-value">
-              {panelSettings.server_ipv4?.length > 0
-                ? panelSettings.server_ipv4.map(address => <span key={address} className="badge">{address}</span>)
-                : <span className="hint">{t('Could not read the server\'s IPv4 address.')}</span>}
-            </div>
+      </section>
+      <section className="section">
+        <div className="section-title">
+          <div>
+            <h2>{t('Server network')}</h2>
+            <p className="hint">{t('Addresses this server answers on. Detected live, so an IPv6 block added later shows up here.')}</p>
           </div>
-          <div className="panel-net-row">
-            <span className="panel-net-label">IPv6</span>
-            <div className="panel-net-value">
-              {panelSettings.ipv6?.addresses?.length > 0
-                ? panelSettings.ipv6.addresses.map(address => <span key={address} className="badge">{address}</span>)
-                : <span className="badge">{t('None')}</span>}
-              <span className={`badge ${panelSettings.ipv6?.enabled ? 'ok' : ''}`}>
-                {panelSettings.ipv6?.enabled ? 'On' : 'Off'}
-              </span>
-            </div>
-            {panelSettings.ipv6?.enabled
-              ? <button className="secondary-light" disabled={!!loading} onClick={() => toggleIpv6(false)}>{t('Disable IPv6')}</button>
-              : <button className="secondary-light" disabled={!!loading || !panelSettings.ipv6?.available} onClick={() => toggleIpv6(true)}>{t('Enable IPv6')}</button>}
-          </div>
-          <span className="hint">{panelSettings.ipv6?.detail}</span>
+          <button className="secondary" disabled={!!loading} onClick={loadPanelSettings}><RefreshCw size={14}/> {t('Refresh')}</button>
         </div>
-      </>)}
-      {tabPanel('brand', <>
-        <div className="backup-panel-title">
-          <div><h3>{t('Brand assets')}</h3><p className="hint">{t('Upload PNG, JPG, WEBP, or ICO files up to 1 MB.')}</p></div>
+        <div className="info-box">
+          <div className="network-address-row">
+            <strong>IPv4</strong>
+            {ipv4.length > 0 ? ipv4.map(address => <code key={address}>{address}</code>) : <span className="hint">{t('None detected')}</span>}
+          </div>
+          <div className="network-address-row">
+            <strong>IPv6</strong>
+            {(ipv6.addresses || []).length > 0 ? ipv6.addresses.map(address => <code key={address}>{address}</code>) : <span className="hint">{t('None detected')}</span>}
+            {ipv6.available
+              ? (ipv6.enabled ? <span className="badge ok">{t('Enabled')}</span> : <span className="badge">{t('Disabled')}</span>)
+              : <span className="badge warn">{t('Not available')}</span>}
+          </div>
+          <div className="actions" style={{marginTop:12}}>
+            {ipv6.enabled
+              ? <button className="danger" disabled={!!loading} onClick={() => toggleIpv6(false)}>{t('Disable IPv6')}</button>
+              : <button className="secondary" disabled={!!loading || !ipv6.available} onClick={() => toggleIpv6(true)}><Network size={14}/> {t('Enable IPv6')}</button>}
+          </div>
+          <p className="hint" style={{marginTop:8}}>
+            {ipv6.available
+              ? t('Websites and the panel listen on both protocols while this is on. Point an AAAA record at the address above.')
+              : t('No global IPv6 address is configured on this server yet. Add one at your provider, then refresh.')}
+          </p>
+        </div>
+      </section>
+      <section className="section">
+        <div className="section-title">
+          <div><h2>{t('Brand assets')}</h2><p className="hint">{t('Upload PNG, JPG, WEBP, or ICO files up to 1 MB.')}</p></div>
         </div>
         <div className="brand-asset-grid">
           <div className="brand-asset-card">
             <div className="brand-preview">{renderBrandMark('settings-brand-mark')}</div>
             <label><span>{t('Logo')}</span><input type="file" accept="image/png,image/jpeg,image/webp,image/x-icon" onChange={e => setPanelLogoFile(e.target.files?.[0] || null)} /></label>
-            <button disabled={!!loading || !panelLogoFile} onClick={() => uploadPanelAsset('logo')}><Upload size={14}/>{t('Upload logo')}</button>
+            <button className="secondary" disabled={!!loading || !panelLogoFile} onClick={() => uploadPanelAsset('logo')}><Upload size={14}/> {t('Upload logo')}</button>
           </div>
           <div className="brand-asset-card">
             <div className="brand-preview favicon-preview">{panelSettings.favicon_url ? <img src={panelSettings.favicon_url} alt="" /> : <Image size={28}/>}</div>
             <label><span>{t('Favicon')}</span><input type="file" accept="image/png,image/jpeg,image/webp,image/x-icon" onChange={e => setPanelFaviconFile(e.target.files?.[0] || null)} /></label>
-            <button disabled={!!loading || !panelFaviconFile} onClick={() => uploadPanelAsset('favicon')}><Upload size={14}/>{t('Upload favicon')}</button>
+            <button className="secondary" disabled={!!loading || !panelFaviconFile} onClick={() => uploadPanelAsset('favicon')}><Upload size={14}/> {t('Upload favicon')}</button>
           </div>
         </div>
-      </>)}
-      {tabPanel('account', <>
-        <div className="backup-panel-title">
-          <div><h3>{t('Admin account')}</h3><p className="hint">{t('A new password needs the current one, and the authenticator code when two-factor sign-in is on.')}</p></div>
+      </section>
+      <section className="section">
+        <div className="section-title">
+          <div><h2>{t('API Tokens')}</h2><p className="hint">{t('Provisioning tokens for WHMCS or external billing systems.')}</p></div>
+          <button className="secondary" disabled={!!loading} onClick={loadApiTokens}><RefreshCw size={14}/> {t('Refresh')}</button>
         </div>
-        <div className="panel-settings-grid admin-account-grid">
-          <label><span>{t('Email')}</span><input type="email" value={adminAccountForm.email} onChange={e => setAdminAccountForm(prev => ({ ...prev, email: e.target.value }))} placeholder="admin@domain.com" /></label>
-          <label><span>{t('Current password')}</span><input type="password" value={adminAccountForm.current_password} onChange={e => setAdminAccountForm(prev => ({ ...prev, current_password: e.target.value }))} placeholder={t('Current password')} autoComplete="current-password" /></label>
-          <label><span>{t('New password')}</span><input type="password" value={adminAccountForm.password} onChange={e => setAdminAccountForm(prev => ({ ...prev, password: e.target.value }))} placeholder={t('New password')} autoComplete="new-password" /></label>
-          <label><span>{t('Confirm password')}</span><input type="password" value={adminAccountForm.confirm_password} onChange={e => setAdminAccountForm(prev => ({ ...prev, confirm_password: e.target.value }))} placeholder={t('Repeat new password')} autoComplete="new-password" /></label>
-          <label><span>{t('Authenticator code')}</span><input value={adminAccountForm.code} onChange={e => setAdminAccountForm(prev => ({ ...prev, code: e.target.value }))} placeholder="123456" inputMode="numeric" autoComplete="one-time-code" /></label>
-          <button disabled={!!loading || !adminAccountForm.email.trim() || (!!adminAccountForm.password && adminAccountForm.password !== adminAccountForm.confirm_password)} onClick={saveAdminAccount}><Lock size={14}/>{t('Save account')}</button>
-        </div>
-      </>)}
-      {tabPanel('api', <>
-        <div className="backup-panel-title">
-          <div><h3>{t('API Tokens')}</h3><p className="hint">{t('Create one token for WHMCS. Paste it into WHMCS Server → Access Hash.')}</p></div>
-          <button className="secondary-light" disabled={!!loading} onClick={loadApiTokens}><RefreshCw size={14}/>{t('Refresh')}</button>
-        </div>
-        {createdApiToken && <div className="user-create-card">
-          <label><span>{t('New token (copy now)')}</span><input id="created-api-token" readOnly value={createdApiToken} onFocus={e => e.target.select()} /></label>
-          <button className="secondary" disabled={!!loading} onClick={copyApiToken}><Copy size={14}/>{t('Copy token')}</button>
-          <button className="secondary-light" onClick={() => setCreatedApiToken('')}>{t('Hide')}</button>
+        {createdApiToken && <div className="token-created-notice">
+          <p><strong>{t('Token created!')}</strong> {t('Copy it now — it will not be shown again.')}</p>
+          <div className="token-copy-row">
+            <code>{createdApiToken}</code>
+            <button className="mini" onClick={copyApiToken}><Copy size={14}/> {t('Copy')}</button>
+          </div>
+          <button className="mini secondary-light" onClick={() => setCreatedApiToken('')}>{t('Dismiss')}</button>
         </div>}
-        <div className="user-create-card">
-          <label><span>{t('Name')}</span><input value={newApiToken.name} onChange={e => setNewApiToken(prev => ({ ...prev, name: e.target.value }))} placeholder="WHMCS" /></label>
-          <label><span>{t('WHMCS server IP')}</span><input value={newApiToken.allowed_ips} onChange={e => setNewApiToken(prev => ({ ...prev, allowed_ips: e.target.value }))} placeholder={t('optional: 1.2.3.4 or 1.2.3.4, 5.6.7.8')} /></label>
-          <button disabled={!!loading || !newApiToken.name.trim()} onClick={createApiToken}><Plus size={14}/>{t('Create token')}</button>
+        <div className="token-create-form">
+          <label><span>{t('Name')}</span><input value={newApiToken.name} onChange={e => setNewApiToken(prev => ({ ...prev, name: e.target.value }))} placeholder={t('WHMCS Production')} /></label>
+          <label><span>{t('IP allowlist')}</span><input value={newApiToken.allowed_ips} onChange={e => setNewApiToken(prev => ({ ...prev, allowed_ips: e.target.value }))} placeholder={t('Optional, comma-separated')} /></label>
+          <button disabled={!!loading || !newApiToken.name.trim()} onClick={createApiToken}><Plus size={14}/> {t('Create token')}</button>
         </div>
-        <p className="hint">{t('Leave WHMCS server IP empty to allow all IPs. Multiple IPs: separate with comma.')}</p>
-        <div className="package-list">
-          {apiTokens.length === 0 && <EmptyState icon={KeyRound} message={t('No API tokens found.')} />}
-          {apiTokens.map(token => <div className="package-row" key={token.id}>
-            <div className="user-main"><strong>{token.name}</strong><small>{token.allowed_ips ? `Allowed IPs: ${token.allowed_ips}` : 'Allowed IPs: all'}</small></div>
-            <span className="user-metric"><KeyRound size={13}/>{token.is_active ? 'Active' : 'Revoked'}</span>
-            <span className="user-metric"><Clock size={13}/>{token.last_used_at ? new Date(token.last_used_at).toLocaleString() : 'Never used'}</span>
-            <div className="row-actions">
-              <button className="mini danger" disabled={!!loading || !token.is_active} onClick={() => revokeApiToken(token)}><Trash2 size={14}/>{t('Revoke')}</button>
+        {apiTokens.length === 0 && <p className="hint">{t('No API tokens yet.')}</p>}
+        {apiTokens.length > 0 && <div className="table">
+          {apiTokens.map(token => <div className="row" key={token.id}>
+            <div className="token-info">
+              <strong>{token.name}</strong>
+              <small>{token.allowed_ips ? t('IP allowlist: {ips}', { ips: token.allowed_ips }) : t('Any IP address')}</small>
+              <small>{token.last_used_at ? t('Last used: {when}', { when: new Date(token.last_used_at).toLocaleDateString() }) : t('Never used')}</small>
             </div>
+            <span className={`badge ${token.is_active ? 'ok' : ''}`}>{token.is_active ? t('Active') : t('Revoked')}</span>
+            <button className="mini danger" disabled={!!loading || !token.is_active} onClick={() => revokeApiToken(token)}><Trash2 size={14}/> {t('Revoke')}</button>
           </div>)}
-        </div>
-      </>)}
-    </section>;
+        </div>}
+      </section>
+    </>;
   }
 
   function renderUsers() {
@@ -9890,8 +9824,6 @@ function App() {
           <button className="secondary" disabled={!selectedWebsiteId || !!loading} onClick={() => readFile(filePath)}><RefreshCw size={14}/>{t('Reload')}</button>
           <button disabled={!selectedWebsiteId || !!loading} onClick={writeFile}>{t('Save')}</button>
           <button disabled={!selectedWebsiteId || !filePath || !!loading} onClick={() => downloadFile(filePath)}><Download size={14}/></button>
-          <LanguageToggle language={language} onChange={changeLanguage}/>
-          <ThemeToggle theme={theme} onToggle={toggleTheme}/>
           <button className="secondary-light" onClick={() => window.close()}><X size={14}/>{t('Close')}</button>
         </div>
       </header>
@@ -10178,17 +10110,15 @@ function App() {
 
   if (!isAuthenticated) {
     return <main className="login-page">
+      <ThemeToggle theme={theme} onToggle={toggleTheme} className="theme-toggle-btn"/>
+      <LanguageToggle language={language} onChange={changeLanguage} className="lang-toggle-btn"/>
       <section className="login-card">
-        <div className="login-card-head">
-          <div className="login-brand">
-            {renderBrandMark('login-brand-mark')}
-            <div>
-              <p className="eyebrow">{t('Server Management Panel')}</p>
-              <h1>{panelSettings.app_name || 'BPanel'}</h1>
-            </div>
+        <div className="login-brand">
+          {renderBrandMark('login-brand-mark')}
+          <div>
+            <p className="eyebrow">{t('Server Management Panel')}</p>
+            <h1>{panelSettings.app_name || 'BPanel'}</h1>
           </div>
-          <LanguageToggle language={language} onChange={changeLanguage}/>
-          <ThemeToggle theme={theme} onToggle={toggleTheme}/>
         </div>
         <div className="login-form">
           <input value={username} onChange={e => setUsername(e.target.value)} placeholder={t('Username')} autoComplete="username" />
@@ -10212,13 +10142,15 @@ function App() {
           <button disabled={!!loading || !username || !password} onClick={() => login()}>{loading ? t('Logging in...') : t('Login')}</button>
         </div>
         {demoAccess.enabled && <div className="demo-login">
-          <p className="demo-login-title"><Eye size={15}/><strong>{t('Demo')}</strong><span>{t('Look around without changing anything.')}</span></p>
+          <div className="demo-login-head"><Eye size={15}/><strong>{t('Demo')}</strong></div>
+          <p className="hint">{t('Read-only: look around freely, nothing you change is saved.')}</p>
           {demoAccess.accounts.map(account => <div className="demo-login-row" key={account.slot}>
-            <div className="demo-login-account">
-              <strong>{t(account.slot === 'admin' ? 'Administrator' : 'Customer')}</strong>
-              <code>{account.username} / {account.password}</code>
-            </div>
-            <button className="secondary-light" disabled={!!loading} onClick={() => login('', { username: account.username, password: account.password })}><LogIn size={14}/>{t('Sign in')}</button>
+            <span className="demo-login-cred">
+              <small>{account.slot === 'admin' ? t('Administrator') : t('Hosting customer')}</small>
+              <code>{account.username}</code><span aria-hidden="true">/</span><code>{account.password}</code>
+            </span>
+            <button type="button" className="secondary" disabled={!!loading} onClick={() => login('', { username: account.username, password: account.password })}>
+              <LogIn size={14}/> {t('Sign in')}</button>
           </div>)}
         </div>}
       </section>
@@ -10260,13 +10192,15 @@ function App() {
             <Menu size={20}/><span><ActiveIcon size={17}/>{t(pageItem?.[1] || 'Menu')}</span>
           </button>
           <div className="page-title">
-            <h1>{pageItem?.[1] ? t(pageItem[1]) : (panelSettings.app_name || 'BPanel')}</h1>
+            {settingsPageItem
+              ? <h1 className="page-crumbs"><button type="button" onClick={() => navigateToPage('settings')}>{t('Settings')}</button><span aria-hidden="true">›</span>{t(settingsPageItem[1])}</h1>
+              : <h1>{pageItem?.[1] ? t(pageItem[1]) : (panelSettings.app_name || 'BPanel')}</h1>}
           </div>
           {/* The page title, then one account menu - profile, account security
               and sign out live in it, as they do in OPanel. */}
           <div className="top-actions">
-            <LanguageToggle language={language} onChange={changeLanguage}/>
-            <ThemeToggle theme={theme} onToggle={toggleTheme}/>
+            <LanguageToggle language={language} onChange={changeLanguage} className="secondary compact-btn top-lang"/>
+            <ThemeToggle theme={theme} onToggle={toggleTheme} className="secondary compact-btn icon-only" size={15}/>
             <div className="user-menu" ref={userMenuRef}>
               <button type="button" className="user-menu-trigger" onClick={() => setUserMenuOpen(open => !open)} aria-haspopup="menu" aria-expanded={userMenuOpen} title={t('Logged in as')}>
                 <span className="user-avatar" aria-hidden="true">{(currentUser?.username || username || '?').slice(0, 1).toUpperCase()}</span>
@@ -10278,19 +10212,45 @@ function App() {
                   <strong>{accountLabel}</strong>
                   <small>{currentUser?.email || t(roleLabel(currentUser?.role))}</small>
                 </div>
+                <button type="button" role="menuitem" onClick={() => { setUserMenuOpen(false); openProfileModal(); }}><KeyRound size={15}/>{t('Profile')}</button>
                 <button type="button" role="menuitem" onClick={() => { setUserMenuOpen(false); navigateToPage('security'); }}><LockKeyhole size={15}/>{t('Account security')}</button>
                 <button type="button" role="menuitem" className="user-menu-logout" onClick={() => { setUserMenuOpen(false); logout(); }}><LogOut size={15}/>{t('Logout')}</button>
               </div>}
             </div>
           </div>
         </section>
-        {currentUser?.demo && <div className="demo-strip" role="status"><Eye size={15}/><span>{t('This is a demo: you can look at everything, but changes are not saved.')}</span></div>}
         <div className="content-body">
+          {currentUser?.demo && <div className="demo-banner" role="status"><Eye size={15}/> <span>{t('You are viewing a read-only demo: you can open every page, and nothing you change is saved.')}</span></div>}
           {renderPage()}
           {loading && <div className="loading"><span></span>{t(loading)}</div>}
         </div>
       </div>
     </section>
+    {showProfileModal && <div className="modal-overlay" onClick={() => setShowProfileModal(false)}>
+      <div className="modal-card" onClick={e => e.stopPropagation()}>
+        <div className="modal-header">
+          <h3>{t('Profile Settings')}</h3>
+          <button className="secondary-light" onClick={() => setShowProfileModal(false)} aria-label={t('Close')}><X size={16}/></button>
+        </div>
+        <div className="modal-body">
+          {isAdmin && <div className="modal-section">
+            <h4>{t('Email')}</h4>
+            <div className="profile-email-row">
+              <input type="email" value={adminAccountForm.email} onChange={e => setAdminAccountForm(prev => ({ ...prev, email: e.target.value }))} placeholder="admin@domain.com" />
+              <button disabled={!!loading || !adminAccountForm.email.trim() || adminAccountForm.email === currentUser?.email} onClick={saveProfileEmail}><Save size={14}/> {t('Save')}</button>
+            </div>
+            <p className="hint">{t("Used for Let's Encrypt SSL notifications and panel communication.")}</p>
+          </div>}
+          <div className="modal-section">
+            <h4>{t('Change Password')}</h4>
+            <label><span>{t('New password')}</span><input type="password" value={adminAccountForm.password} onChange={e => setAdminAccountForm(prev => ({ ...prev, password: e.target.value }))} placeholder={t('Min 12 characters')} autoComplete="new-password" /></label>
+            <label><span>{t('Current password')}</span><input type="password" value={adminAccountForm.current_password} onChange={e => setAdminAccountForm(prev => ({ ...prev, current_password: e.target.value }))} placeholder={t('Required to confirm')} autoComplete="current-password" /></label>
+            {currentUser?.totp_enabled && <label><span>{t('2FA code')}</span><input value={adminAccountForm.code} onChange={e => setAdminAccountForm(prev => ({ ...prev, code: e.target.value }))} placeholder={t('6-digit code')} maxLength={6} inputMode="numeric" autoComplete="one-time-code" /></label>}
+            <button disabled={!!loading || !adminAccountForm.password || adminAccountForm.password.length < 12 || !adminAccountForm.current_password} onClick={changeMyPassword}><KeyRound size={14}/> {t('Change password')}</button>
+          </div>
+        </div>
+      </div>
+    </div>}
     {renderNotifications()}
   </main>;
 }
