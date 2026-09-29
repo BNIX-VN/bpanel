@@ -229,11 +229,24 @@ def webmail_url(row: MailDomain | None = None) -> str:
     return f"https://{host}:{WEBMAIL_PORT}"
 
 
+# Docker's bridge (172.17.0.1) and a provider's private LAN are "scope global"
+# too, but no receiving mail server ever sees them: they have no place in SPF.
+_PRIVATE_NETWORKS = tuple(ipaddress.ip_network(net) for net in (
+    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "fc00::/7"))
+
+
 def server_addresses() -> tuple[list[str], list[str]]:
+    """The addresses other mail servers see this one send from."""
     try:
-        return server_network.ipv4_addresses(), server_network.ipv6_addresses()
+        ipv4, ipv6 = server_network.ipv4_addresses(), server_network.ipv6_addresses()
     except Exception:  # noqa: BLE001 - informational
         return [], []
+
+    def public(values: list[str]) -> list[str]:
+        return [value for value in values
+                if not any(ipaddress.ip_address(value) in network for network in _PRIVATE_NETWORKS)]
+
+    return public(ipv4), public(ipv6)
 
 
 # --- validation ----------------------------------------------------------------------

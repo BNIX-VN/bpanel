@@ -388,6 +388,15 @@ def test_the_dns_page_lists_every_record_the_domain_needs(env):
     assert view["can_customize"] is False
 
 
+def test_spf_names_only_addresses_the_internet_sees(env, monkeypatch):
+    """.88 has Docker: its bridge, 172.17.0.1, is "scope global" and went
+    into every domain's suggested SPF next to the real address."""
+    monkeypatch.setattr(server_network, "ipv4_addresses", lambda: ["163.61.72.88", "172.17.0.1", "10.0.0.5", "100.64.1.1"])
+    monkeypatch.setattr(server_network, "ipv6_addresses", lambda: ["fd00::1", "2001:db8::5"])
+    assert mail.server_addresses() == (["163.61.72.88"], ["2001:db8::5"])
+    assert mail.suggested_spf(None) == "v=spf1 mx a ip4:163.61.72.88 ip6:2001:db8::5 ~all"
+
+
 def test_only_an_administrator_customises_a_domains_mail_records(env):
     domain_id = _domain(env, "khach", "khach.vn").json()["id"]
     body = {"spf": "v=spf1 mx include:_spf.google.com ~all", "dmarc": "v=DMARC1; p=reject",
