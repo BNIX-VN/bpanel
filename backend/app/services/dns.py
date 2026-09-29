@@ -40,6 +40,12 @@ API_ROOT = "http://127.0.0.1:8053/api/v1/servers/localhost"
 API_KEY_FILE = Path("/etc/bpanel/pdns-api.key")
 SETTINGS_KEY = "dns"
 TIMEOUT = 10
+# How PowerDNS moves the SOA serial when a zone is edited through its API:
+# DEFAULT makes it YYYYMMDDnn and counts up with every change. The first
+# version of this addon set INCEPTION-INCREMENT, a SOA-EDIT value that
+# SOA-EDIT-API accepts without complaint and never applies - the serial sat at
+# 1 through every edit (seen on .88, 2026-09-29).
+SOA_EDIT_API = "DEFAULT"
 
 RECORD_TYPES = ("A", "AAAA", "CNAME", "MX", "TXT", "NS", "SRV", "CAA")
 TYPE_ORDER = {name: index for index, name in enumerate(("NS", "A", "AAAA", "CNAME", "MX", "TXT", "SRV", "CAA"))}
@@ -423,7 +429,7 @@ def create_zone(db: Session, name: str, owner_id: int | None, *, claim_existing:
                            "records": [{"content": config["zone_ip"], "disabled": False}]})
     try:
         _request("POST", "/zones", {
-            "name": apex, "kind": "Native", "soa_edit_api": "INCEPTION-INCREMENT",
+            "name": apex, "kind": "Native", "soa_edit_api": SOA_EDIT_API,
             "nameservers": [], "rrsets": rrsets,
         })
     except DnsError as exc:
@@ -505,6 +511,12 @@ def _check_cname(data: dict, zone: str, name: str, rtype: str, ignore: tuple[str
         raise DnsInputError("A name with a CNAME record can have no other records.")
 
 
+def _serial_follows_edits(zone: str, data: dict) -> None:
+    """Put right a zone made before SOA_EDIT_API was, so its serial moves."""
+    if data.get("soa_edit_api") not in (None, SOA_EDIT_API):
+        _request("PUT", f"/zones/{_absolute(zone)}", {"soa_edit_api": SOA_EDIT_API})
+
+
 def _patch(zone: str, changes: dict[tuple[str, str], tuple[int, list[str]]]) -> None:
     rrsets = []
     for (name, rtype), (ttl, contents) in changes.items():
@@ -524,6 +536,7 @@ def add_record(zone: str, record: dict, *, admin: bool) -> None:
     existing = _contents(_rrset(data, name, rtype))
     if any(_same(content, item) for item in existing):
         raise DnsInputError("That record already exists.")
+    _serial_follows_edits(zone, data)
     _patch(zone, {(name, rtype): (ttl, existing + [content])})
 
 
@@ -557,6 +570,7 @@ def update_record(zone: str, original: dict, record: dict, *, admin: bool) -> No
     if any(_same(content, item) for item in current):
         raise DnsInputError("That record already exists.")
     changes[key] = (ttl, current + [content])
+    _serial_follows_edits(zone, data)
     _patch(zone, changes)
 
 
@@ -564,7 +578,9 @@ def delete_record(zone: str, record: dict, *, admin: bool) -> None:
     name, rtype, _, _ = to_pdns(zone, record)
     _guard(zone, name, rtype, admin)
     changes: dict = {}
-    _remove(_zone_data(zone), zone, record, changes)
+    data = _zone_data(zone)
+    _remove(data, zone, record, changes)
+    _serial_follows_edits(zone, data)
     _patch(zone, changes)
 
 

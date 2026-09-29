@@ -30,6 +30,7 @@ class FakePowerDNS:
 
     def __init__(self):
         self.zones: dict[str, list[dict]] = {}
+        self.soa_edit_api: dict[str, str] = {}
 
     def __call__(self, method, path, body=None):
         if path == "/zones" and method == "GET":
@@ -38,12 +39,16 @@ class FakePowerDNS:
             if body["name"] in self.zones:
                 raise dns.DnsError("Conflict", status=409)
             self.zones[body["name"]] = [dict(rrset) for rrset in body["rrsets"]]
+            self.soa_edit_api[body["name"]] = body.get("soa_edit_api", "")
             return {}
         name = path.removeprefix("/zones/")
         if name not in self.zones:
             raise dns.DnsError("Could not find domain", status=404)
         if method == "GET":
-            return {"name": name, "rrsets": self.zones[name]}
+            return {"name": name, "rrsets": self.zones[name], "soa_edit_api": self.soa_edit_api.get(name, "")}
+        if method == "PUT":
+            self.soa_edit_api[name] = body["soa_edit_api"]
+            return {}
         if method == "DELETE":
             del self.zones[name]
             return {}
@@ -176,6 +181,20 @@ def test_a_new_zone_has_its_soa_nameservers_and_the_server_address(env):
     assert env.fake.rrset("example.com", "example.com.", "SOA")[0].startswith("ns1.bnix.vn. hostmaster.example.com.")
     assert env.db.query(DnsZone).filter_by(name="example.com").one().owner_id == env.user("khach").id
     assert "SOA" not in {record["type"] for record in dns.records("example.com")}
+
+
+def test_the_serial_counts_up_with_every_edit(env):
+    """Seen on .88: INCEPTION-INCREMENT is accepted as SOA-EDIT-API and never
+    applied, so the serial sat at 1. DEFAULT makes it YYYYMMDDnn and moves."""
+    dns.create_zone(env.db, "example.com", None)
+    assert env.fake.soa_edit_api["example.com."] == "DEFAULT"
+
+
+def test_a_zone_made_before_the_fix_is_put_right_on_its_next_edit(env):
+    dns.create_zone(env.db, "example.com", None)
+    env.fake.soa_edit_api["example.com."] = "INCEPTION-INCREMENT"
+    dns.add_record("example.com", {"name": "x", "type": "A", "content": "203.0.113.7"}, admin=True)
+    assert env.fake.soa_edit_api["example.com."] == "DEFAULT"
 
 
 def test_no_zone_before_the_nameservers_are_set(env):
