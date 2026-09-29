@@ -2384,7 +2384,7 @@ mail_rspamd_answers() {
   key="$(tr -d '[:space:]' <"$MAIL_RSPAMD_KEY_FILE" 2>/dev/null)"
   [[ -n "$key" ]] || return 1
   [[ "$(curl -fsS -m 3 -H "Password: ${key}" http://127.0.0.1:11334/ping 2>/dev/null)" == pong* ]] \
-    && ss -H -lnt 'sport = :11333' 2>/dev/null | grep -q .
+    && [[ -n "$(ss -H -lnt 'sport = :11333' 2>/dev/null)" ]]
 }
 
 mail_exim_reload() {
