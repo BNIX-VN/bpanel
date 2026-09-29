@@ -345,12 +345,6 @@ function formatAccessLogTime(value = '') {
   });
 }
 
-function accessLogBadgeClass(verdict = '') {
-  if (verdict === 'allow') return 'access-log-verdict allow';
-  if (verdict === 'error') return 'access-log-verdict error';
-  return 'access-log-verdict block';
-}
-
 function accessLogVerdictLabel(verdict = '') {
   if (verdict === 'allow') return 'Allow';
   if (verdict === 'error') return 'Error';
@@ -887,12 +881,13 @@ function App() {
   const [mailSettingsForm, setMailSettingsForm] = useState(null);
   const [demoDraft, setDemoDraft] = useState({ admin: { username: '', password: '' }, customer: { username: '', password: '' } });
   const [f2b, setF2b] = useState(null);
-  // Which list the operator asked to see. Null keeps the page one screen tall
-  // however many rules, banned addresses or blocklist URLs there are.
-  const [fwDetail, setFwDetail] = useState(null);
-  const [fwFilter, setFwFilter] = useState('');
   const [f2bBanned, setF2bBanned] = useState({ items: [], total: 0, offset: 0, limit: 50 });
-  const [fwAction, setFwAction] = useState('block');
+  // Firewall > View list: the blocked and allowed addresses on a sub-page of
+  // their own, so the page stays one screen tall however many there are.
+  const [showFirewallIpList, setShowFirewallIpList] = useState(false);
+  const [firewallIpQuery, setFirewallIpQuery] = useState('');
+  const [firewallIpAction, setFirewallIpAction] = useState('');
+  const [firewallIpPage, setFirewallIpPage] = useState(1);
   const [siteAppDraft, setSiteAppDraft] = useState(EMPTY_SITE_APP_DRAFT);
   const [createSiteAppId, setCreateSiteAppId] = useState('');
   // File manager target: empty means the selected website, otherwise an app.
@@ -944,16 +939,11 @@ function App() {
   // one go; the backend splits and cleans it. Targets are the websites the
   // paste is applied to - it is normally the same list on many sites.
   const [botBlocks, setBotBlocks] = useState(null);
-  const [bulkBotOpen, setBulkBotOpen] = useState(false);
-  // The global list as an array so each entry can be removed on its own; the
-  // paste box is only for adding several at once.
-  const [globalBots, setGlobalBots] = useState([]);
+  // The global list as typed, one bot per line; the backend splits and
+  // cleans it.
+  const [globalBotText, setGlobalBotText] = useState('');
   const [crs, setCrs] = useState(null);
-  const [newBotName, setNewBotName] = useState('');
-  const [globalBotPaste, setGlobalBotPaste] = useState('');
-  const [globalBotFilter, setGlobalBotFilter] = useState('');
-  // The list for the one site being configured, kept apart from the bulk
-  // import above so editing one site cannot disturb a pending bulk paste.
+  // The list for the one site being configured.
   const [siteBotText, setSiteBotText] = useState('');
   const [wafAccessLogFilters, setWafAccessLogFilters] = useState(WAF_ACCESS_LOG_DEFAULTS);
   const [wafAccessLogs, setWafAccessLogs] = useState({ items: [], total: 0, scanned: 0, missing: [], generated_at: '' });
@@ -984,6 +974,8 @@ function App() {
   const [panelSettings, setPanelSettings] = useState({ app_name: 'BPanel', panel_url: '', panel_hostname: '', panel_port: 2222, logo_url: '', favicon_url: '/favicon.png', ssl_enabled: false });
   const [phpTune, setPhpTune] = useState(null);
   const [phpTuneApplied, setPhpTuneApplied] = useState(false);
+  // The Auto-tune recommendation card, opened by its button as in OPanel.
+  const [phpTuneOpen, setPhpTuneOpen] = useState(false);
   const [panelSettingsForm, setPanelSettingsForm] = useState({ app_name: 'BPanel', panel_hostname: '', panel_port: 2222, ssl_enabled: false });
   const [apiTokens, setApiTokens] = useState([]);
   const [newApiToken, setNewApiToken] = useState({ name: 'WHMCS', allowed_ips: '' });
@@ -4498,19 +4490,6 @@ function App() {
     }
   }
 
-  function openFwDetail(which) {
-    const next = fwDetail === which ? null : which;
-    setFwDetail(next);
-    setFwFilter('');
-    if (next === 'banned') loadBannedPage(0);
-  }
-
-  async function submitFirewallRule() {
-    if (fwAction === 'port') return openFirewallPort();
-    if (fwAction === 'allow') return allowFirewallIp();
-    return blockFirewallIp();
-  }
-
   async function runFirewallAction(path, options = {}, label = 'Updating firewall...') {
     const data = await request(path, options, label);
     if (data) { setNotice((data.stdout || data.stderr || 'Firewall updated.').trim()); await loadFirewall(); }
@@ -4651,17 +4630,17 @@ function App() {
     const data = await request('/waf/bots', {}, t('Loading blocked bots...'));
     if (data) {
       setBotBlocks(data);
-      setGlobalBots(data.global_blocked_bots || []);
+      setGlobalBotText((data.global_blocked_bots || []).join('\n'));
     }
   }
 
-  async function saveGlobalBots(nextList) {
+  async function saveGlobalBots(text) {
     const data = await request('/waf/bots/global', {
       method: 'PUT',
-      body: JSON.stringify({ blocked_bots: nextList.join('\n') }),
+      body: JSON.stringify({ blocked_bots: text }),
     }, t('Saving global bad bots...'));
     if (data) {
-      setGlobalBots(data.global_blocked_bots || []);
+      setGlobalBotText((data.global_blocked_bots || []).join('\n'));
       setNotice(data.failed?.length
         ? `${data.message} Failed: ${data.failed.map(f => `${f.domain} (${f.error})`).join('; ')}`
         : (data.message || 'Global bad bots saved.'));
@@ -4704,17 +4683,6 @@ function App() {
       await loadWebsiteWafConfig(config.website_id, false);
       if (isAdmin) await loadCrs();
     }
-  }
-
-  function addGlobalBots(text) {
-    const incoming = String(text || '').split(/[\n,;]+/).map(s => s.trim()).filter(Boolean);
-    if (incoming.length === 0) return;
-    const seen = new Set(globalBots.map(s => s.toLowerCase()));
-    const merged = [...globalBots];
-    for (const name of incoming) {
-      if (!seen.has(name.toLowerCase())) { seen.add(name.toLowerCase()); merged.push(name); }
-    }
-    setGlobalBots(merged);
   }
 
   async function saveWebsiteWafRules() {
@@ -5064,7 +5032,7 @@ function App() {
   useEffect(() => {
     if (isAuthenticated && page === 'users') { loadUsers(); loadPackages(); }
     if (isAuthenticated && page === 'php') { loadPhpConfig(); loadPhpTune(phpConfig.php_version); loadPhpExtensions(); }
-    if (isAuthenticated && page === 'firewall') { loadFirewall(); loadFirewallBlocklists(); loadFail2ban(); }
+    if (isAuthenticated && page === 'firewall') { setShowFirewallIpList(false); loadFirewall(); loadFirewallBlocklists(); loadFail2ban(); loadBannedPage(0); }
     if (isAuthenticated && ['waf', 'waf-site'].includes(page)) {
       loadBotBlocks();
       // /waf/rules and /waf/crs describe the whole server and stay admin-only.
@@ -8388,19 +8356,61 @@ function App() {
     </section>;
   }
 
+  function renderPhpExtensions() {
+    const versions = phpExtensions.versions || [];
+    // Nothing to draw until the table has loaded: an empty list here is the
+    // request still on its way, not a server without PHP.
+    if (versions.length === 0) return null;
+    return <div className="user-create-card php-ext-card" style={{ marginTop: 16 }}>
+      <div className="php-ext-head">
+        <h3>{t('PHP extensions')}</h3>
+        <p className="hint">{t('Server-wide: every website on a PHP version gets its extensions. Installing one reloads PHP-FPM; removing is not offered here, since a website may depend on it.')}</p>
+      </div>
+      <div className="php-ext-table-wrap">
+        <table className="php-ext-table">
+          <thead><tr>
+            <th>{t('Extension')}</th>
+            {versions.map(v => <th key={v}>PHP {v}</th>)}
+            <th aria-label={t('Install all')}></th>
+          </tr></thead>
+          <tbody>
+            {phpExtensions.extensions.map(ext => {
+              const missingOn = versions.filter(v => ext.versions[v] === 'available');
+              return <tr key={ext.name}>
+                <td><code>{ext.name}</code></td>
+                {versions.map(v => {
+                  const state = ext.versions[v];
+                  if (state === 'installed' || state === 'builtin') {
+                    return <td key={v}><span className="php-ext-installed" title={state === 'builtin' ? t('Built into PHP') : ''}>{t('Installed')}</span></td>;
+                  }
+                  if (state === 'available') {
+                    return <td key={v}><button className="mini secondary-light php-ext-install" disabled={!!loading}
+                      title={t('Install on PHP {version}', { version: v })} aria-label={t('Install {extension} on PHP {version}', { extension: ext.name, version: v })}
+                      onClick={() => installPhpExtension(ext.name, [v])}><Download size={14}/></button></td>;
+                  }
+                  return <td key={v}><span className="php-ext-na" title={t('Not in repository')}>—</span></td>;
+                })}
+                <td className="php-ext-all">{missingOn.length > 0 && <button className="mini secondary" disabled={!!loading}
+                  onClick={() => installPhpExtension(ext.name, missingOn)}>{t('Install all')}</button>}</td>
+              </tr>;
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>;
+  }
+
   function renderPhpConfig() {
     if (!isAdmin) return <section className="section"><h2>{t('PHP config')}</h2><p className="hint">{t('You do not have permission to edit PHP config.')}</p></section>;
     const notInstalled = sortPhpVersions(phpVersions.supported.filter(v => !phpVersions.installed.includes(v)));
-    // The only thing worth an administrator's attention: settings Auto tune
-    // would actually change. A row that already matches, or one pinned by the
-    // form below (it always wins - PHP reads it last), is not a decision to
-    // make, so it does not belong in a list someone has to read every time.
+    const opcacheOn = !!phpTune?.opcache_enabled;
+    // The settings Auto-tune would actually change. A row that already
+    // matches, or one pinned by the form above (it always wins - PHP reads it
+    // last), is not a decision to make.
     const tuneChanges = (phpTune?.settings || []).filter(row => row.changes && !row.overridden_value);
     // Every pool on a server is sized from the same CPU/RAM/pool-count budget,
-    // so they normally all carry identical numbers - a row per pool (this test
-    // box alone has 49) is a wall of the same four numbers repeated. Collapse
-    // to "N/N pools run X", and only list the ones that do not match: those are
-    // the only ones worth an administrator's attention.
+    // so they normally all carry identical numbers. Collapse to "N/N pools
+    // run X" and list only the ones that do not match.
     const poolKey = p => `${p.max_children}|${p.idle_timeout}|${p.max_requests}|${p.request_terminate_timeout}`;
     const poolGroups = {};
     (phpTune?.pools || []).forEach(p => { (poolGroups[poolKey(p)] ||= []).push(p); });
@@ -8417,92 +8427,195 @@ function App() {
         <label><span>display_errors</span><select value={phpConfig.display_errors} onChange={e => setPhpConfig(prev => ({ ...prev, display_errors: e.target.value }))}>
           <option value="Off">{t('Off (production)')}</option><option value="On">{t('On (debug)')}</option>
         </select></label>
+        {/* Switched straight away through its own endpoint, not saved with the
+            form: Auto-tune must not turn it back on behind the admin's back. */}
+        <label className="php-opcache-toggle"><span>{t('OPcache')}</span>
+          <button
+            type="button"
+            className={opcacheOn ? 'toggle-on' : 'secondary'}
+            aria-pressed={opcacheOn}
+            disabled={!!loading || !phpTune}
+            onClick={toggleOpcache}
+            title={t('OPcache is {state} for PHP {version}. Press to switch it.', { state: opcacheOn ? t('on') : t('off'), version: phpTune?.php_version || phpConfig.php_version })}
+          >
+            <Zap size={14}/> {opcacheOn ? t('Enabled') : t('Disabled')}
+          </button>
+        </label>
         <label><span>max_execution_time</span><input type="number" value={phpConfig.max_execution_time} onChange={e => setPhpConfig(prev => ({ ...prev, max_execution_time: e.target.value }))} /></label>
         <label><span>max_input_time</span><input type="number" value={phpConfig.max_input_time} onChange={e => setPhpConfig(prev => ({ ...prev, max_input_time: e.target.value }))} /></label>
         <label><span>max_input_vars</span><input type="number" value={phpConfig.max_input_vars} onChange={e => setPhpConfig(prev => ({ ...prev, max_input_vars: e.target.value }))} /></label>
         <label><span>memory_limit</span><input value={phpConfig.memory_limit} onChange={e => setPhpConfig(prev => ({ ...prev, memory_limit: e.target.value }))} placeholder="1024M" /></label>
         <label><span>post_max_size</span><input value={phpConfig.post_max_size} onChange={e => setPhpConfig(prev => ({ ...prev, post_max_size: e.target.value }))} placeholder="1024M" /></label>
         <label><span>upload_max_filesize</span><input value={phpConfig.upload_max_filesize} onChange={e => setPhpConfig(prev => ({ ...prev, upload_max_filesize: e.target.value }))} placeholder="1024M" /></label>
-        <button className="secondary-light" disabled={!!loading} onClick={restorePhpDefaults}><RotateCcw size={14}/>{t('Restore defaults')}</button>
+        <button className="secondary-light" disabled={!!loading} onClick={restorePhpDefaults}><RotateCcw size={14}/> {t('Restore defaults')}</button>
+        <button className="secondary-light" disabled={!!loading} onClick={() => { setPhpTuneOpen(true); loadPhpTune(phpConfig.php_version); }}><Zap size={14}/> {t('Auto-tune')}</button>
         <button disabled={!!loading} onClick={updatePhpConfig}>{t('Save')}</button>
-        {phpTune && tuneChanges.length > 0 && <div className="php-tune-diff">
-          <strong><AlertCircle size={14}/> {t('Auto tune will change {n} setting(s) for PHP {version}', { n: tuneChanges.length, version: phpTune.php_version })}</strong>
-          <span>{tuneChanges.map(row => `${row.key} ${row.current || 'unset'} → ${row.value}`).join(', ')}.</span>
-          <button className="mini" disabled={!!loading} onClick={applyPhpTune}>{t('Auto tune PHP')}</button>
-        </div>}
-        {phpTune && tuneChanges.length === 0 && <div className="notice php-tune-diff">
-          <Check size={14}/> PHP {phpTune.php_version} already matches what auto tune recommends for this machine ({phpTune.facts.cpu_count} CPU, {phpTune.facts.total_memory_mb} MB RAM).
-        </div>}
       </div>
-      {phpTune && <div className="php-tune" style={{ marginTop: 16 }}>
-        <div className="php-tune-actions">
-          <button disabled={!!loading} onClick={applyPhpTune}><Cpu size={14}/>{t('Auto tune PHP')}</button>
-          <button className="secondary-light" disabled={!!loading} onClick={toggleOpcache}>
-            {phpTune.opcache_enabled
-              ? <><Ban size={14}/> {t('Disable OPcache (PHP {version})', { version: phpTune.php_version })}</>
-              : <><Play size={14}/> {t('Enable OPcache (PHP {version})', { version: phpTune.php_version })}</>}
-          </button>
+      {phpTuneOpen && phpTune && <div className="user-create-card php-tune-card" style={{ marginTop: 16, borderColor: 'var(--accent)' }}>
+        <h3>{t('⚡ Auto-tune Recommendation')}</h3>
+        <p className="hint">{t('Based on {ram} MB RAM, {cores} CPU cores and {pools} PHP pool(s).', { ram: phpTune.facts?.total_memory_mb, cores: phpTune.facts?.cpu_count, pools: phpTune.facts?.pool_count ?? 0 })}</p>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 24px', margin: '12px 0', fontSize: '0.9em' }}>
+          {(phpTune.settings || []).map(row => <div key={row.key}>
+            <strong>{row.key}:</strong> {row.value}
+            {row.changes && !row.overridden_value ? <small> ({t('now {value}', { value: row.current || t('unset') })})</small> : null}
+          </div>)}
         </div>
-        {phpTuneApplied && <div className="notice php-tune-result">
-          <strong><Check size={14}/> PHP {phpTune.php_version} tuned.</strong>
-        </div>}
-        {commonPools && <p className="hint">{t('PHP-FPM pools:')} {commonPools.length}/{phpTune.pools.length} running pm.max_children={commonPools[0].max_children || '—'},
-          idle {commonPools[0].idle_timeout || '—'}, up to {commonPools[0].max_requests || '—'} requests per process.
-          {poolOutliers.length > 0 && ` ${poolOutliers.length} other pool(s) run different settings:`}
-        </p>}
+        <p className="hint">{tuneChanges.length > 0
+          ? t('Auto tune will change {n} setting(s) for PHP {version}', { n: tuneChanges.length, version: phpTune.php_version })
+          : t('PHP {version} already matches what auto tune recommends for this machine.', { version: phpTune.php_version })}</p>
+        {commonPools && <p className="hint">{t('PHP-FPM pools: {n}/{total} run pm.max_children={children}, idle {idle}, up to {requests} requests per process.', {
+          n: commonPools.length, total: phpTune.pools.length, children: commonPools[0].max_children || '—',
+          idle: commonPools[0].idle_timeout || '—', requests: commonPools[0].max_requests || '—',
+        })}{poolOutliers.length > 0 ? ' ' + t('{n} other pool(s) run different settings:', { n: poolOutliers.length }) : ''}</p>}
         {poolOutliers.length > 0 && <ul className="php-tune-pool-outliers">
           {poolOutliers.map(p => <li key={p.pool}>
             <code>{p.pool}</code>
-            <span>pm.max_children={p.max_children || '—'}, idle {p.idle_timeout || '—'}, up to {p.max_requests || '—'} requests</span>
+            <span>pm.max_children={p.max_children || '—'}, {t('idle {idle}, up to {requests} requests', { idle: p.idle_timeout || '—', requests: p.max_requests || '—' })}</span>
           </li>)}
         </ul>}
+        {phpTuneApplied && <p className="hint"><Check size={14}/> {t('PHP {version} tuned.', { version: phpTune.php_version })}</p>}
+        <button disabled={!!loading} onClick={applyPhpTune}><Zap size={14}/> {t('Apply Auto-tune to PHP')} {phpTune.php_version}</button>
+        <button className="secondary-light" style={{ marginLeft: 8 }} onClick={() => setPhpTuneOpen(false)}>{t('Dismiss')}</button>
       </div>}
-      {phpExtensions.versions.length > 0 && <div className="php-ext-card">
-        <h3>{t('PHP extensions')}</h3>
-        <p className="hint">{t('Installed from the system packages; PHP-FPM reloads so websites can use it straight away. Removing is not offered here, since a website may depend on it.')}</p>
-        <div className="php-ext-table" role="table" style={{ '--php-cols': phpExtensions.versions.length }}>
-          <div className="php-ext-row php-ext-head" role="row">
-            <span role="columnheader">{t('Name')}</span>
-            {phpExtensions.versions.map(v => <span role="columnheader" key={v}>PHP {v}</span>)}
-            <span role="columnheader" className="php-ext-all" aria-hidden="true"></span>
-          </div>
-          {phpExtensions.extensions.map(ext => {
-            const missing = phpExtensions.versions.filter(v => ext.versions[v] === 'available');
-            return <div className="php-ext-row" role="row" key={ext.name}>
-              <code role="cell">{ext.name}</code>
-              {phpExtensions.versions.map(v => {
-                const state = ext.versions[v];
-                return <span role="cell" key={v}>
-                  {(state === 'installed' || state === 'builtin') && <span className="badge ok" title={state === 'builtin' ? t('Built into PHP') : t('Installed')}><Check size={12}/></span>}
-                  {state === 'available' && <button className="mini secondary php-ext-install" disabled={!!loading} aria-label={`${t('Install')} php${v}-${ext.name}`} title={`${t('Install')} php${v}-${ext.name}`} onClick={() => installPhpExtension(ext.name, [v])}><Plus size={14}/></button>}
-                  {state === 'unavailable' && <span className="php-ext-none" title={t('Not in the package repository for this version')}>—</span>}
-                </span>;
-              })}
-              <span role="cell" className="php-ext-all">
-                {missing.length > 1 && <button className="mini secondary" disabled={!!loading} onClick={() => installPhpExtension(ext.name, missing)}>{t('All versions')}</button>}
-              </span>
-            </div>;
-          })}
-        </div>
-      </div>}
+      {renderPhpExtensions()}
       {notInstalled.length > 0 && <div className="user-create-card" style={{ marginTop: 16 }}>
         <h3>{t('Install PHP')}</h3>
         <div className="php-install-grid">
-          {notInstalled.map(v => <button key={v} disabled={!!loading} onClick={() => installPhpVersion(v)}>+ PHP {v}</button>)}
+          {notInstalled.map(v => <button key={v} className="secondary" disabled={!!loading} onClick={() => installPhpVersion(v)}>+ PHP {v}</button>)}
         </div>
+      </div>}
+    </section>;
+  }
+
+  // Fail2ban is managed where the rest of the firewall is: its bans are
+  // firewall rules. Turning it on and off is the Addons page's job.
+  function renderFirewallFail2ban() {
+    const installed = addons.items.find(item => item.slug === 'fail2ban')?.installed;
+    const badge = !addons.loaded ? null
+      : !installed ? <span className="badge">{t('Not installed')}</span>
+        : !f2b ? null
+          : f2b.running ? <span className="badge ok">{t('Running')}</span>
+            : <span className="badge warn">{t('Stopped')}</span>;
+    const bannedPages = Math.max(1, Math.ceil((f2bBanned.total || 0) / (f2bBanned.limit || 50)));
+    const bannedPage = Math.floor((f2bBanned.offset || 0) / (f2bBanned.limit || 50)) + 1;
+    return <section className="section firewall-fail2ban">
+      <div className="section-title">
+        <div><h2 className="firewall-fail2ban-title">Fail2ban {badge}</h2>
+          <p className="hint">{t('Bans an address at the firewall after repeated failed logins.')}</p></div>
+        <div className="actions">
+          <button className="secondary" disabled={!!loading} onClick={() => { loadFail2ban(); if (installed) loadBannedPage(0); }}><RefreshCw size={14}/> {t('Refresh')}</button>
+        </div>
+      </div>
+      {addons.loaded && !installed && <div className="info-box firewall-fail2ban-missing">
+        <AlertCircle size={14}/> <span>{t('Fail2ban is not installed. Install it on the Addons page to ban addresses that keep failing to sign in.')}</span>
+        <button type="button" className="mini" onClick={() => navigateToPage('addons')}><PackageOpen size={13}/> {t('Open Addons')}</button>
+      </div>}
+      {installed && !f2b && <p className="hint">{t('Status not loaded. Press Refresh.')}</p>}
+      {installed && f2b && <>
+        {f2b.warning && <p className="hint addon-error"><AlertCircle size={13}/> {f2b.warning}</p>}
+        {!f2b.running && <p className="hint">{t('Fail2ban is stopped: nothing is being banned.')}</p>}
+        <div className="addon-panel">
+          <div className="addon-panel-head">
+            <strong>{t('Ban rules')}</strong>
+            {(f2b.ssh_unit || f2b.banaction) && <span className="hint">{f2b.ssh_unit || '—'} · {f2b.banaction || '—'}</span>}
+          </div>
+          <p className="hint">{t('Five failed attempts within an hour bans an address for an hour, and longer each time it comes back, up to a week. The server never bans its own addresses.')}</p>
+          <div className="chip-row">
+            <span className={f2b.bans_reach_kernel ? 'badge ok' : 'badge warn'}>{f2b.bans_reach_kernel ? t('Bans take effect') : t('Bans NOT reaching iptables')}</span>
+            <span className={f2b.filter_sees_journal ? 'badge ok' : 'badge warn'}>{f2b.filter_sees_journal ? t('Reading the log') : t('Seeing NO log')}</span>
+            <span className="badge">{t('{n} failures seen', { n: f2b.total_failed ?? 0 })}</span>
+          </div>
+        </div>
+
+        <div className="addon-panel">
+          <div className="addon-panel-head">
+            <strong>{t('Banned right now')} <span className="badge">{f2b.banned ?? f2bBanned.total ?? 0}</span></strong>
+            <button className="secondary-light" disabled={!!loading} onClick={() => loadBannedPage(f2bBanned.offset || 0)}><RefreshCw size={13}/> {t('Refresh')}</button>
+          </div>
+          {(f2bBanned.items || []).length === 0
+            ? <p className="hint">{t('Nothing is banned.')}</p>
+            : <table className="table addon-ban-table"><thead><tr><th>{t('Address')}</th><th></th></tr></thead>
+                <tbody>{f2bBanned.items.map(ip => <tr key={ip}>
+                  <td><code>{ip}</code></td>
+                  <td className="row-actions"><button className="secondary-light" disabled={!!loading}
+                    onClick={() => unbanAddress(ip)}><Check size={13}/> {t('Unban')}</button></td>
+                </tr>)}</tbody></table>}
+          {bannedPages > 1 && <div className="firewall-ip-pager">
+            <button className="mini secondary" disabled={!!loading || f2bBanned.offset <= 0}
+              onClick={() => loadBannedPage(Math.max(0, f2bBanned.offset - f2bBanned.limit))}>{t('Previous')}</button>
+            <span className="hint">{t('Page {page} of {pages} · {total} addresses', { page: bannedPage, pages: bannedPages, total: f2bBanned.total })}</span>
+            <button className="mini secondary" disabled={!!loading || f2bBanned.offset + f2bBanned.limit >= f2bBanned.total}
+              onClick={() => loadBannedPage(f2bBanned.offset + f2bBanned.limit)}>{t('Next')}</button>
+          </div>}
+        </div>
+      </>}
+    </section>;
+  }
+
+  // A sub-page of Firewall, like a malware scan's detail: same URL, a back
+  // button. The status already carries every rule, so it is filtered and
+  // paged here rather than asked for again.
+  function renderFirewallAddresses() {
+    const rules = (firewallStatus?.rules || []).filter(rule => !rule.protected && rule.ip);
+    const counts = {
+      blocked: rules.filter(rule => rule.action === 'DENY').length,
+      allowed: rules.filter(rule => rule.action !== 'DENY').length,
+    };
+    const query = firewallIpQuery.trim().toLowerCase();
+    const matching = rules.filter(rule => (!firewallIpAction || (firewallIpAction === 'deny') === (rule.action === 'DENY'))
+      && (!query || `${rule.ip} ${rule.port || ''} ${rule.protocol || ''} #${rule.id}`.toLowerCase().includes(query)));
+    const size = 50;
+    const pages = Math.max(1, Math.ceil(matching.length / size));
+    const page = Math.min(firewallIpPage, pages);
+    const items = matching.slice((page - 1) * size, page * size);
+    return <section className="section firewall-ip-page">
+      <div className="section-title">
+        <div className="waf-detail-title">
+          <button className="secondary" onClick={() => setShowFirewallIpList(false)}><ArrowLeft size={14}/> {t('Firewall')}</button>
+          <div><h2>{t('Blocked and allowed addresses')}</h2><p className="hint">{t('{blocked} blocked · {allowed} allowed', counts)}</p></div>
+        </div>
+      </div>
+      <div className="firewall-ip-toolbar">
+        <input value={firewallIpQuery} autoFocus aria-label={t('Search addresses')} placeholder={t('Search an IP or network')}
+               onChange={e => { setFirewallIpQuery(e.target.value); setFirewallIpPage(1); }} />
+        <select value={firewallIpAction} aria-label={t('Show')} onChange={e => { setFirewallIpAction(e.target.value); setFirewallIpPage(1); }}>
+          <option value="">{t('All ({n})', { n: counts.blocked + counts.allowed })}</option>
+          <option value="deny">{t('Blocked ({n})', { n: counts.blocked })}</option>
+          <option value="allow">{t('Allowed ({n})', { n: counts.allowed })}</option>
+        </select>
+      </div>
+      {items.length > 0 ? <ul className="firewall-ip-list">
+        {items.map(rule => <li key={rule.id}>
+          <span className={`badge ${rule.action === 'DENY' ? 'bad' : 'ok'}`}>{rule.action === 'DENY' ? t('Blocked') : t('Allowed')}</span>
+          <code>{rule.ip}{rule.port ? ` :${rule.port}/${String(rule.protocol || 'tcp').toUpperCase()}` : ''}</code>
+          <span className="firewall-ip-note">{rule.port ? '' : t('All ports')}</span>
+          <small>#{rule.id}</small>
+          <button className="mini secondary-light" disabled={!!loading} onClick={() => deleteFirewallRule(rule.id)}>{rule.action === 'DENY' ? t('Unblock') : t('Remove')}</button>
+        </li>)}
+      </ul> : <p className="hint">{!firewallStatus ? t('Loading…') : query ? t('No address matches “{query}”.', { query: firewallIpQuery.trim() }) : t('No address is blocked or allowed by a panel rule. Blocklists and Fail2ban bans are listed on their own.')}</p>}
+      {pages > 1 && <div className="firewall-ip-pager">
+        <button className="mini secondary" disabled={page <= 1} onClick={() => setFirewallIpPage(Math.max(1, page - 1))}>{t('Previous')}</button>
+        <span className="hint">{t('Page {page} of {pages} · {total} addresses', { page, pages, total: matching.length })}</span>
+        <button className="mini secondary" disabled={page >= pages} onClick={() => setFirewallIpPage(page + 1)}>{t('Next')}</button>
       </div>}
     </section>;
   }
 
   function renderFirewall() {
     if (!isAdmin) return <section className="section"><h2>{t('Firewall')}</h2><p className="hint">{t('No permission.')}</p></section>;
-    const firewallText = firewallStatus?.stdout || firewallStatus?.stderr || 'Press Refresh to load the status.';
-    const blocklistText = firewallBlocklists?.stdout || firewallBlocklists?.stderr || 'Blocklist status not loaded yet.';
+    if (showFirewallIpList) return renderFirewallAddresses();
+    const firewallText = firewallStatus?.stdout || firewallStatus?.stderr || t('Click Refresh to load status.');
+    const blocklistText = firewallBlocklists?.stdout || firewallBlocklists?.stderr || t('No blocklist status loaded.');
     const blocklistUrls = parseFirewallBlocklistUrls(blocklistText);
     const allRules = firewallStatus?.rules || [];
-    const userRules = allRules.filter(rule => !rule.protected);
-    const panelRules = allRules.filter(rule => rule.protected);
-    const f2bInstalled = addons.items.find(item => item.slug === 'fail2ban')?.installed;
+    // A port rule has no address: the ports the panel always keeps open, then
+    // the ones opened here, which can be closed again from their chip.
+    const openPorts = allRules.filter(rule => rule.action === 'ALLOW' && !rule.ip && rule.port);
+    const ipRules = allRules.filter(rule => !rule.protected && rule.ip);
+    const ipCounts = {
+      blocked: ipRules.filter(rule => rule.action === 'DENY').length,
+      allowed: ipRules.filter(rule => rule.action !== 'DENY').length,
+    };
     // The helper prints `Status: enabled|disabled` as its first line. Read that
     // rather than pattern-matching the whole dump, which carries the word
     // "disabled" in other contexts too.
@@ -8514,207 +8627,163 @@ function App() {
     // call that off, so the page must not call it on.
     const chainLine = (firewallText.split('\n').find(line => line.startsWith('Chain active:')) || '').toLowerCase();
     const notApplied = enabled && chainLine.includes('no');
-    const keep = value => !fwFilter.trim() || String(value).toLowerCase().includes(fwFilter.trim().toLowerCase());
-    const shownRules = userRules.filter(rule => keep(`${rule.id} ${rule.action} ${rule.to} ${rule.from}`));
-    const shownUrls = blocklistUrls.filter(keep);
-    const shownBanned = (f2bBanned.items || []).filter(keep);
-
     return <>
       <section className="section">
         <div className="section-title">
           <div>
-            <h2>{t('Firewall')}</h2>
-            <p className="hint">iptables + ipset. SSH, the panel port and 80/443/465/587 are always kept open.</p>
+            <h2>{t('Firewall (iptables)')}{' '}
+              {stateKnown && <span className={notApplied ? 'badge bad' : enabled ? 'badge ok' : 'badge warn'}>{notApplied ? t('On, not applied') : enabled ? t('On') : t('Off')}</span>}
+            </h2>
+            <p className="hint">{t('SSH, the panel port and 80/443/465/587 are always kept open.')}</p>
           </div>
           <div className="actions">
-            <button className="secondary-light" disabled={!!loading} onClick={loadFirewall}><RefreshCw size={14}/>{t('Refresh')}</button>
-            {/* One of these, never both: the other is not an action available now. */}
-            {stateKnown && (enabled
-              ? <button className="danger" disabled={!!loading} onClick={disableFirewall}>{t('Turn off')}</button>
-              : <button disabled={!!loading} onClick={enableFirewall}><Shield size={14}/>{t('Turn on')}</button>)}
-            {enabled && <button className="secondary" disabled={!!loading} onClick={reloadFirewall}>{t('Reload')}</button>}
+            <button className="secondary" disabled={!!loading} onClick={loadFirewall}><RefreshCw size={14}/> {t('Refresh')}</button>
+            <button className="secondary" disabled={!!loading || (stateKnown && !enabled)} onClick={reloadFirewall}>{t('Reload')}</button>
+            <button className="danger-light" disabled={!!loading || (stateKnown && !enabled)} onClick={disableFirewall}>{t('Disable')}</button>
+            <button disabled={!!loading || (stateKnown && enabled)} onClick={enableFirewall}><Shield size={14}/> {t('Enable')}</button>
           </div>
         </div>
-
-        <div className="chip-row">
-          <span className={notApplied ? 'badge bad' : enabled ? 'badge ok' : 'badge warn'}>{notApplied ? t('On, not applied') : enabled ? 'On' : 'Off'}</span>
-          {panelRules.length > 0 && <span className="hint">protected ports: {panelRules.map(rule => rule.to).join(', ')}</span>}
-        </div>
-
         {notApplied && <div className="firewall-not-applied">
           <p>{t('The firewall is turned on, but its rules are not in force: this server still filters with UFW, or iptables and ipset are missing. An update from an older release can leave it so.')}</p>
-          <button disabled={!!loading} onClick={repairFirewall}><Shield size={14}/>{t('Repair the firewall')}</button>
+          <button disabled={!!loading} onClick={repairFirewall}><Shield size={14}/> {t('Repair the firewall')}</button>
         </div>}
-
-        <div className="detail-tabs">
-          <button className={fwDetail === 'rules' ? 'chip on' : 'chip'} disabled={!!loading}
-            onClick={() => openFwDetail('rules')}>{t('Your rules')}{' '}<b>{userRules.length}</b></button>
-          <button className={fwDetail === 'urls' ? 'chip on' : 'chip'} disabled={!!loading}
-            onClick={() => openFwDetail('urls')}>{t('Blocklist URL')}{' '}<b>{blocklistUrls.length}</b></button>
-          <button className={fwDetail === 'raw' ? 'chip on' : 'chip'} disabled={!!loading}
-            onClick={() => openFwDetail('raw')}>{t('Raw status')}</button>
+        <div className="info-box firewall-open-ports">
+          <strong>{t('Open ports')}</strong>
+          {openPorts.length > 0 ? <div className="firewall-port-list">
+            {openPorts.map(item => <span className="firewall-port-chip" key={`${item.protocol}-${item.port}-${item.zone}-${item.id}`}>
+              <code>{item.port}/{String(item.protocol || 'tcp').toUpperCase()}</code>
+              <small>{item.zone || 'UserZone'}</small>
+              {!item.protected && <button type="button" className="firewall-port-remove" disabled={!!loading}
+                title={t('Close port {port}', { port: `${item.port}/${String(item.protocol || 'tcp').toUpperCase()}` })}
+                aria-label={t('Close port {port}', { port: `${item.port}/${String(item.protocol || 'tcp').toUpperCase()}` })}
+                onClick={() => deleteFirewallRule(item.id)}><X size={12}/></button>}
+            </span>)}
+          </div> : <p className="hint">{firewallStatus ? t('No open port rules found.') : t('Loading…')}</p>}
         </div>
-
-        {fwDetail && <div className="detail-panel">
-          {fwDetail !== 'raw' && <div className="detail-head">
-            <input id="fw-filter" value={fwFilter} onChange={e => setFwFilter(e.target.value)}
-              placeholder={t('Filter this list...')} aria-label={t('Filter list')} />
-            <button className="secondary-light" onClick={() => setFwDetail(null)}><X size={14}/>{t('Close')}</button>
-          </div>}
-
-          {fwDetail === 'rules' && <div className="detail-body">
-            {shownRules.length === 0 && <p className="hint">{userRules.length === 0
-              ? 'No rules yet. Only the protected ports are open.'
-              : 'No rules match that filter.'}</p>}
-            {shownRules.map(rule => <div className="firewall-rule" key={rule.id}>
-              <span>
-                <strong>#{rule.id}</strong>{' '}
-                <span className={rule.action === 'DENY' ? 'badge danger' : 'badge ok'}>{rule.action}</span>{' '}
-                {rule.to} from {rule.from}
-              </span>
-              <div className="firewall-rule-actions">
-                <button className="danger" disabled={!!loading} onClick={() => deleteFirewallRule(rule.id)}><Trash2 size={14}/>{t('Delete')}</button>
-              </div>
-            </div>)}
-          </div>}
-
-          {fwDetail === 'urls' && <div className="detail-body">
-            <div className="firewall-form firewall-blocklist-form">
-              <label><span>TXT URL</span><input id="fw-blocklist-url" value={firewallBlocklistUrl}
-                onChange={e => setFirewallBlocklistUrl(e.target.value)} placeholder="https://example.com/blocklist.txt" /></label>
-              <button disabled={!!loading || !firewallBlocklistUrl.trim()} onClick={addFirewallBlocklistUrl}><Plus size={14}/>{t('Add')}</button>
-              <button className="secondary-light" disabled={!!loading} onClick={updateFirewallBlocklistsNow}><RefreshCw size={14}/>{t('Update now')}</button>
-            </div>
-            <p className="hint">{t('Fetched daily at 01:00 into an ipset, so even a million-entry list costs one kernel lookup per packet.')}</p>
-            {shownUrls.length === 0 && <p className="hint">{t('No URLs yet.')}</p>}
-            {shownUrls.map(url => <div className="firewall-rule" key={url}>
-              <span className="wrap-any">{url}</span>
-              <div className="firewall-rule-actions"><button className="danger" disabled={!!loading} onClick={() => deleteFirewallBlocklistUrl(url)}><Trash2 size={14}/>{t('Delete')}</button></div>
-            </div>)}
-          </div>}
-
-          {fwDetail === 'raw' && <div className="detail-body">
-            <div className="detail-head">
-              <strong>{t('Firewall status')}</strong>
-              <button className="secondary-light" onClick={() => setFwDetail(null)}><X size={14}/>{t('Close')}</button>
-            </div>
-            <pre>{firewallText}</pre>
-            <strong>{t('Blocklist status')}</strong>
-            <pre>{blocklistText}</pre>
-            <div className="firewall-delete-inline">
-              <label><span>{t('Delete rule #')}</span><input id="fw-delete-number" value={firewallDeleteNumber}
-                onChange={e => setFirewallDeleteNumber(e.target.value)} placeholder="12" inputMode="numeric" /></label>
-              <button className="danger" disabled={!!loading || !firewallDeleteNumber} onClick={() => deleteFirewallRule()}>{t('Delete')}</button>
-            </div>
-          </div>}
-        </div>}
-
-        <div className="firewall-form rule-form">
-          <label><span>{t('Action')}</span>
-            <select id="fw-action" value={fwAction} onChange={e => setFwAction(e.target.value)}>
-              <option value="block">{t('Block IP')}</option>
-              <option value="allow">{t('Allow IP')}</option>
-              <option value="port">{t('Open port')}</option>
-            </select>
-          </label>
-          {fwAction === 'block' && <label><span>{t('IP / CIDR')}</span><input id="fw-block-ip" value={firewallBlockIp}
-            onChange={e => setFirewallBlockIp(e.target.value)} placeholder="5.6.7.8" /></label>}
-          {fwAction === 'allow' && <label><span>{t('IP / CIDR')}</span><input id="fw-allow-ip" value={firewallAllowIp}
-            onChange={e => setFirewallAllowIp(e.target.value)} placeholder="1.2.3.4" /></label>}
-          <label><span>Port{fwAction === 'port' ? '' : ' (optional)'}</span>
-            {fwAction === 'block' && <input id="fw-block-port" value={firewallBlockPort} onChange={e => setFirewallBlockPort(e.target.value)} placeholder={t('All ports')} inputMode="numeric" />}
-            {fwAction === 'allow' && <input id="fw-allow-port" value={firewallAllowPort} onChange={e => setFirewallAllowPort(e.target.value)} placeholder="22" inputMode="numeric" />}
-            {fwAction === 'port' && <input id="fw-port" value={firewallPort} onChange={e => setFirewallPort(e.target.value)} placeholder="80" inputMode="numeric" />}
-          </label>
-          <label><span>{t('Protocol')}</span>
-            {fwAction === 'block' && <select id="fw-block-proto" value={firewallBlockProtocol} onChange={e => setFirewallBlockProtocol(e.target.value)}><option value="tcp">TCP</option><option value="udp">UDP</option></select>}
-            {fwAction === 'allow' && <select id="fw-allow-proto" value={firewallAllowProtocol} onChange={e => setFirewallAllowProtocol(e.target.value)}><option value="tcp">TCP</option><option value="udp">UDP</option></select>}
-            {fwAction === 'port' && <select id="fw-proto" value={firewallProtocol} onChange={e => setFirewallProtocol(e.target.value)}><option value="tcp">TCP</option><option value="udp">UDP</option></select>}
-          </label>
-          <button className={fwAction === 'block' ? 'danger' : ''} disabled={!!loading
-            || (fwAction === 'block' && !firewallBlockIp)
-            || (fwAction === 'allow' && !firewallAllowIp)
-            || (fwAction === 'port' && !firewallPort)} onClick={submitFirewallRule}>
-            {fwAction === 'block' ? 'Block' : fwAction === 'allow' ? 'Allow' : 'Open port'}
-          </button>
+        <div className="firewall-ip-summary">
+          <span><strong>{t('Addresses')}</strong> {t('{blocked} blocked · {allowed} allowed', ipCounts)}</span>
+          <button className="secondary" disabled={!firewallStatus} onClick={() => { setFirewallIpQuery(''); setFirewallIpAction(''); setFirewallIpPage(1); setShowFirewallIpList(true); }}><Ban size={14}/> {t('View list')}</button>
+        </div>
+        <details className="raw-output firewall-status">
+          <summary>{t('iptables status')}</summary>
+          <div className="raw-output-body">
+          <pre>{firewallText}</pre>
+          <div className="firewall-delete-inline">
+            <label><span>{t('Delete rule #')}</span><input value={firewallDeleteNumber} onChange={e => setFirewallDeleteNumber(e.target.value)} placeholder="12" inputMode="numeric" /></label>
+            <button className="danger" disabled={!!loading || !firewallDeleteNumber} onClick={() => deleteFirewallRule()}>{t('Delete')}</button>
+          </div>
+          </div>
+        </details>
+      </section>
+      <div className="firewall-rule-forms">
+      <section className="section">
+        <h2>{t('Open port')}</h2>
+        <div className="firewall-form">
+          <label><span>{t('Port')}</span><input value={firewallPort} onChange={e => setFirewallPort(e.target.value)} placeholder="80" inputMode="numeric" /></label>
+          <label><span>{t('Protocol')}</span><select value={firewallProtocol} onChange={e => setFirewallProtocol(e.target.value)}><option value="tcp">TCP</option><option value="udp">UDP</option></select></label>
+          <button disabled={!!loading || !firewallPort} onClick={openFirewallPort}>{t('Open port')}</button>
         </div>
       </section>
-
-      {f2bInstalled && <section className="section">
-        <div className="section-title">
-          <div>
-            <h2>Fail2ban</h2>
-            <p className="hint">{t('Five failed attempts within an hour bans an address for an hour, and longer each time it comes back, up to a week. The server never bans its own addresses.')}</p>
-          </div>
-          <button className="secondary-light" disabled={!!loading} onClick={loadFail2ban}><RefreshCw size={14}/>{t('Refresh')}</button>
+      <section className="section">
+        <h2>{t('Allow IP')}</h2>
+        <div className="firewall-form">
+          <label><span>{t('IP / CIDR')}</span><input value={firewallAllowIp} onChange={e => setFirewallAllowIp(e.target.value)} placeholder="1.2.3.4" /></label>
+          <label><span>{t('Port (optional)')}</span><input value={firewallAllowPort} onChange={e => setFirewallAllowPort(e.target.value)} placeholder="22" inputMode="numeric" /></label>
+          <label><span>{t('Protocol')}</span><select value={firewallAllowProtocol} onChange={e => setFirewallAllowProtocol(e.target.value)}><option value="tcp">TCP</option><option value="udp">UDP</option></select></label>
+          <button disabled={!!loading || !firewallAllowIp} onClick={allowFirewallIp}>{t('Allow')}</button>
         </div>
-        {!f2b && <p className="hint">{t('Status not loaded. Press Refresh.')}</p>}
-        {f2b && <>
-          {f2b.warning && <p className="hint alarm">{f2b.warning}</p>}
-          <div className="chip-row">
-            <span className={f2b.running ? 'badge ok' : 'badge warn'}>{f2b.running ? 'Running' : 'Not running'}</span>
-            <span className={f2b.bans_reach_kernel ? 'badge ok' : 'badge warn'}>{f2b.bans_reach_kernel ? 'Bans take effect' : 'Bans NOT reaching iptables'}</span>
-            <span className={f2b.filter_sees_journal ? 'badge ok' : 'badge warn'}>{f2b.filter_sees_journal ? 'Reading the log' : 'Seeing NO log'}</span>
-            <span className="hint">{f2b.ssh_unit || '—'} · {f2b.banaction || '—'} · {t('{n} failures seen', { n: f2b.total_failed ?? 0 })}</span>
-          </div>
-          <div className="detail-tabs">
-            <button className={fwDetail === 'banned' ? 'chip on' : 'chip'} disabled={!!loading}
-              onClick={() => openFwDetail('banned')}>{t('Banned addresses')}{' '}<b>{f2b.banned ?? 0}</b></button>
-          </div>
-          {fwDetail === 'banned' && <div className="detail-panel">
-            <div className="detail-head">
-              <input id="f2b-filter" value={fwFilter} onChange={e => setFwFilter(e.target.value)}
-                placeholder={t('Filter by address...')} aria-label={t('Filter banned addresses')} />
-              <button className="secondary-light" onClick={() => setFwDetail(null)}><X size={14}/>{t('Close')}</button>
-            </div>
-            <div className="detail-body">
-              {shownBanned.length === 0 && <p className="hint">{f2bBanned.total === 0
-                ? 'No addresses are banned right now.' : 'No addresses match that filter.'}</p>}
-              {shownBanned.map(ip => <div className="firewall-rule" key={ip}>
-                <span><code>{ip}</code></span>
-                <div className="firewall-rule-actions">
-                  <button className="danger" disabled={!!loading} onClick={() => unbanAddress(ip)}>{t('Unban')}</button>
-                </div>
-              </div>)}
-            </div>
-            {f2bBanned.total > f2bBanned.limit && <div className="detail-foot">
-              <button className="secondary-light" disabled={!!loading || f2bBanned.offset === 0}
-                onClick={() => loadBannedPage(Math.max(0, f2bBanned.offset - f2bBanned.limit))}>{t('Previous')}</button>
-              <span className="hint">{f2bBanned.offset + 1}–{Math.min(f2bBanned.offset + f2bBanned.limit, f2bBanned.total)} trong {f2bBanned.total}</span>
-              <button className="secondary-light" disabled={!!loading || f2bBanned.offset + f2bBanned.limit >= f2bBanned.total}
-                onClick={() => loadBannedPage(f2bBanned.offset + f2bBanned.limit)}>{t('Next')}</button>
-            </div>}
-          </div>}
-        </>}
-      </section>}
+      </section>
+      <section className="section">
+        <h2>{t('Block IP')}</h2>
+        <div className="firewall-form">
+          <label><span>{t('IP / CIDR')}</span><input value={firewallBlockIp} onChange={e => setFirewallBlockIp(e.target.value)} placeholder="5.6.7.8" /></label>
+          <label><span>{t('Port (optional)')}</span><input value={firewallBlockPort} onChange={e => setFirewallBlockPort(e.target.value)} placeholder={t('All ports')} inputMode="numeric" /></label>
+          <label><span>{t('Protocol')}</span><select value={firewallBlockProtocol} onChange={e => setFirewallBlockProtocol(e.target.value)}><option value="tcp">TCP</option><option value="udp">UDP</option></select></label>
+          <button className="danger" disabled={!!loading || !firewallBlockIp} onClick={blockFirewallIp}>{t('Block')}</button>
+        </div>
+      </section>
+      </div>
+      {renderFirewallFail2ban()}
+      <section className="section">
+        <div className="section-title">
+          <div><h2>{t('Blocklist URLs')}</h2><p className="hint">{t('TXT files are fetched daily at 01:00 and enforced by ipset, so large lists do not create thousands of firewall rules.')}</p></div>
+          <button className="secondary" disabled={!!loading} onClick={loadFirewallBlocklists}><RefreshCw size={14}/> {t('Refresh')}</button>
+        </div>
+        <div className="firewall-form firewall-blocklist-form">
+          <label><span>{t('TXT URL')}</span><input value={firewallBlocklistUrl} onChange={e => setFirewallBlocklistUrl(e.target.value)} placeholder="https://example.com/blocklist.txt" /></label>
+          <button disabled={!!loading || !firewallBlocklistUrl.trim()} onClick={addFirewallBlocklistUrl}><Plus size={14}/> {t('Add URL')}</button>
+          <button className="secondary-light" disabled={!!loading} onClick={updateFirewallBlocklistsNow}><RefreshCw size={14}/> {t('Update now')}</button>
+        </div>
+        {blocklistUrls.length > 0 && <div className="table firewall-blocklist-table">
+          {blocklistUrls.map(url => <div className="firewall-rule" key={url}>
+            <span>{url}</span>
+            <div className="firewall-rule-actions"><button className="danger" disabled={!!loading} onClick={() => deleteFirewallBlocklistUrl(url)}><Trash2 size={14}/> {t('Delete')}</button></div>
+          </div>)}
+        </div>}
+        <details className="raw-output firewall-status"><summary>{t('Blocklist status')}</summary><pre>{blocklistText}</pre></details>
+      </section>
     </>;
   }
 
   function renderWaf() {
-    const statusText = wafRules.status?.stdout || wafRules.status?.stderr || 'Click Refresh to load WAF status.';
+    // The status probe prints whether the ModSecurity module is there; that is
+    // all the list needs to say. The full dump stays folded below it.
+    const wafProbe = `${wafRules.status?.stdout || ''}`;
+    const wafEngine = /ModSecurity module:\s*not installed/.test(wafProbe) ? 'off' : /ModSecurity module:\s*installed/.test(wafProbe) ? 'on' : 'unknown';
+    const statusText = wafRules.status?.stdout || wafRules.status?.stderr || t('Click Refresh to load WAF status.');
     // The effective list, not the site's own: a site with nothing of its own
     // still enforces the global list, and reporting "No bots" for it was a lie.
     const rowFor = id => botBlocks?.websites?.find(w => w.website_id === id);
     const botCountFor = id => (rowFor(id)?.effective_blocked_bots || []).length;
     const ownCountFor = id => (rowFor(id)?.blocked_bots || []).length;
+    const savedGlobalRules = wafRules.custom_rules || '';
     return <>
+      {isAdmin && <section className="section">
+        <div className="section-title">
+          <div>
+            <h2>{t('Global bad bot')} <span className="badge">{(botBlocks?.global_blocked_bots || []).length}</span></h2>
+            <p className="hint">{t('One bot per line, applied to every website. A request whose User-Agent contains the text gets 403 — plain text, no regex.')}</p>
+          </div>
+          <button className="secondary" disabled={!!loading} onClick={loadBotBlocks}><RefreshCw size={14}/> {t('Refresh')}</button>
+        </div>
+        <textarea className="code-editor badbot-input" value={globalBotText} onChange={e => setGlobalBotText(e.target.value)}
+          spellCheck={false}
+          placeholder={'AhrefsBot\nSemrushBot\nMJ12bot\nGPTBot\nBytespider'} />
+        {botBlocks?.max_bots ? <p className="hint">{t('Up to {n} bots.', { n: botBlocks.max_bots })}</p> : null}
+        <div className="actions"><button disabled={!!loading} onClick={() => saveGlobalBots(globalBotText)}><Shield size={14}/> {t('Save and apply to all websites')}</button></div>
+      </section>}
+
       <section className="section">
         <div className="section-title">
           <div>
-            <h2>WAF</h2>
-            <p className="hint">{isAdmin
-              ? t('Protection for each website. Open one to set its rules, flood limit and blocked bots.')
-              : t('Protection for your websites. Open one to set its rules and blocked bots.')}</p>
+            <h2>{isAdmin ? t('Websites') : t('Your websites')} {isAdmin && <span className={wafEngine === 'on' ? 'badge ok' : wafEngine === 'off' ? 'badge warn' : 'badge'}>{wafEngine === 'on' ? t('WAF engine on') : wafEngine === 'off' ? t('WAF engine off') : t('WAF engine: checking…')}</span>}</h2>
+            <p className="hint">{t('Open a website to configure its rules and bad bots.')}</p>
           </div>
-          <button className="secondary-light" disabled={!!loading} onClick={() => { loadBotBlocks(); if (isAdmin) { loadWafRules(); loadCrs(); } }}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <button className="secondary" disabled={!!loading} onClick={() => { loadBotBlocks(); if (isAdmin) { loadWafRules(); loadCrs(); } }}><RefreshCw size={14}/> {t('Refresh')}</button>
         </div>
-        {/* Folded. This is systemctl and timer output - the first thing on the
-            page was eleven lines of paths and a timer table, above the
-            controls somebody came to use. What the WAF is actually doing is
-            said by the badges below in words; this is here for the operator
-            who is diagnosing, and they know to open it. */}
-        {isAdmin && <details className="info-box firewall-status output-details">
-          <summary><strong>{t('Status')}</strong><span>{t('Module, rule files and timers')}</span></summary>
+        {websites.length === 0
+          ? <EmptyState icon={Globe} message={t('No websites yet.')} />
+          : <div className="waf-site-table">
+              {websites.map(site => {
+                const bots = botCountFor(site.id);
+                // No CRS here: "WAF on" beside "CRS block" read as two things
+                // to worry about. CRS is switched on the site's own page.
+                return <button key={site.id} type="button" className="waf-site-row"
+                  disabled={!!loading} onClick={() => openWafSite(site.id)}>
+                  <span className="waf-site-domain">{site.domain}</span>
+                  <span className="waf-site-badges">
+                    <span className={site.waf_enabled ? 'badge ok' : 'badge'}>{site.waf_enabled ? t('WAF on') : t('WAF off')}</span>
+                    <span className={site.http_flood_enabled ? 'badge ok' : 'badge'}>{site.http_flood_enabled ? t('Flood on') : t('Flood off')}</span>
+                    <span className={bots > 0 ? 'badge ok' : 'badge'}
+                      title={ownCountFor(site.id) > 0 ? t('{n} set on this website, the rest from the global list', { n: ownCountFor(site.id) }) : t('All from the global list')}
+                    >{bots > 0 ? t('{n} bot(s)', { n: bots }) : t('No bots')}</span>
+                  </span>
+                  <span className="waf-site-open">{t('Configure')}</span>
+                </button>;
+              })}
+            </div>}
+        {isAdmin && <details className="raw-output firewall-status">
+          <summary>{t('WAF status')}</summary>
           <pre>{statusText}</pre>
         </details>}
       </section>
@@ -8722,23 +8791,24 @@ function App() {
       {isAdmin && <section className="section">
         <div className="section-title">
           <div>
-            <h2>{t('OWASP Core Rule Set')}</h2>
+            <h2>{t('OWASP Core Rule Set')}{' '}
+              {crs && <span className={crs.mode === 'block' ? 'badge ok' : 'badge'}>
+                {crs.mode === 'off' ? t('Off') : (crs.mode === 'detect' ? t('Detect only') : t('Blocking'))}
+              </span>}
+            </h2>
             <p className="hint">{t('Inspects each request for SQL injection, XSS and similar attacks. Each website turns it on from its own page.')}</p>
           </div>
-          <button className="secondary" disabled={!!loading} onClick={loadCrs}><RefreshCw size={14}/>{t('Check')}</button>
+          <button className="secondary" disabled={!!loading} onClick={loadCrs}><RefreshCw size={14}/> {t('Refresh')}</button>
         </div>
-        {!crs && <p className="hint">{t('Click Check to read the current state.')}</p>}
+        {!crs && <p className="hint">{t('Click Refresh to load status.')}</p>}
         {crs && <>
-          <div className="waf-overview-badges" style={{ marginBottom: 12 }}>
-            <span className={crs.mode === 'block' ? 'badge ok' : 'badge'}>
-              {crs.mode === 'off' ? t('Off') : (crs.mode === 'detect' ? t('Detect only') : t('Blocking'))}
-            </span>
+          <div className="chip-row">
             <span className={crs.installed ? 'badge ok' : 'badge'}>
               {crs.installed ? t('{n} rule file(s) installed', { n: crs.rule_files }) : t('Not installed')}
             </span>
             <span className="badge">{t('{n} website(s) with CRS on', { n: crs.sites_opted_in ?? 0 })}</span>
-            {/* The memory essay is gone; a low-RAM warning is what is left of
-                it, because every site that turns CRS on carries it (~50 MB). */}
+            {/* Every site that turns CRS on carries it (~50 MB), so a box
+                short of memory is worth saying out loud. */}
             {(crs.ram_available_mb || 0) > 0 && crs.ram_available_mb < 1024 && <span className="badge danger">
               {t('{n} MB RAM free', { n: crs.ram_available_mb })}
             </span>}
@@ -8753,7 +8823,7 @@ function App() {
               >{t(label)}</button>
             ))}
           </div>
-          <p className="hint" style={{ marginTop: 10 }}>
+          <p className="hint">
             {crs.mode === 'off' && t('Off: requests are not inspected.')}
             {crs.mode === 'detect' && t('Detect only: attacks are logged, nothing is blocked.')}
             {crs.mode === 'block' && t('Block: attacks are refused on websites with CRS on.')}
@@ -8764,30 +8834,6 @@ function App() {
         </>}
       </section>}
 
-      <section className="section">
-        <div className="section-title"><h2>{t('Websites')}</h2></div>
-        {websites.length === 0 && <EmptyState icon={Globe} message={t('No websites yet.')} />}
-        <div className="table waf-overview-list">
-          {websites.map(site => {
-            const bots = botCountFor(site.id);
-            // No CRS here: "WAF on" beside "CRS block" read as two things to
-            // worry about. CRS is switched on the site's own page.
-            return <div className="waf-overview-row" key={site.id}>
-              <span className="waf-overview-domain"><strong>{site.domain}</strong></span>
-              <div className="waf-overview-badges">
-                <span className={site.waf_enabled ? 'badge ok' : 'badge'}>{site.waf_enabled ? t('WAF on') : t('WAF off')}</span>
-                <span className={site.http_flood_enabled ? 'badge ok' : 'badge'}>{site.http_flood_enabled ? t('Flood on') : t('Flood off')}</span>
-                <span
-                  className={bots > 0 ? 'badge ok' : 'badge'}
-                  title={ownCountFor(site.id) > 0 ? `${ownCountFor(site.id)} set on this site, the rest from the global list` : 'All from the global list'}
-                >{bots > 0 ? t('{n} bot(s)', { n: bots }) : t('No bots')}</span>
-              </div>
-              <button className="secondary" disabled={!!loading} onClick={() => openWafSite(site.id)}><SettingsIcon size={14}/>{t('Configure')}</button>
-            </div>;
-          })}
-        </div>
-      </section>
-
       {isAdmin && <section className="section">
         <div className="section-title">
           <div>
@@ -8796,91 +8842,18 @@ function App() {
           </div>
           <span className="badge">{t('{n} rule(s)', { n: (wafGlobalRules.match(/^\s*SecRule/gm) || []).length })}</span>
         </div>
-        <textarea className="code-editor" rows={12} spellCheck={false} value={wafGlobalRules} onChange={e => setWafGlobalRules(e.target.value)} />
-        <div className="notify-actions" style={{ marginTop: 10 }}>
-          <button type="button" disabled={!!loading || wafGlobalRules === (wafRules.custom_rules || '')} onClick={saveWafGlobalRules}>{t('Save')}</button>
-          <button type="button" className="secondary-light" disabled={!!loading || wafGlobalRules === (wafRules.custom_rules || '')} onClick={() => setWafGlobalRules(wafRules.custom_rules || '')}>{t('Reset')}</button>
+        <textarea className="code-editor" rows={12} spellCheck={false} value={wafGlobalRules} onChange={e => setWafGlobalRules(e.target.value)} placeholder={'SecRule ...'} />
+        <div className="actions">
+          <button type="button" disabled={!!loading || wafGlobalRules === savedGlobalRules} onClick={saveWafGlobalRules}>{t('Save')}</button>
+          <button type="button" className="secondary-light" disabled={!!loading || wafGlobalRules === savedGlobalRules} onClick={() => setWafGlobalRules(savedGlobalRules)}>{t('Reset')}</button>
         </div>
-      </section>}
-
-      {isAdmin && <section className="section">
-        <div className="section-title">
-          <div>
-            <h2>{t('Global bad bots')}</h2>
-            <p className="hint">
-              Blocked on every website on this server. A site can add more of its own from its page.
-              {globalBots.length > 0 ? ` Currently ${globalBots.length} bot(s).` : ' Nothing blocked globally yet.'}
-            </p>
-          </div>
-          <button disabled={!!loading} onClick={() => setBulkBotOpen(open => !open)}>{bulkBotOpen ? 'Hide' : 'Edit'}</button>
-        </div>
-
-        {bulkBotOpen && <div className="global-bots">
-          <div className="global-bots-add">
-            <input
-              value={newBotName}
-              placeholder={t('Add one bot, e.g. Amazonbot')}
-              onChange={e => setNewBotName(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') { addGlobalBots(newBotName); setNewBotName(''); } }}
-            />
-            <button type="button" disabled={!newBotName.trim()} onClick={() => { addGlobalBots(newBotName); setNewBotName(''); }}>
-              <Plus size={14}/>{t('Add')}</button>
-            <input
-              className="global-bots-filter"
-              value={globalBotFilter}
-              placeholder={t('Filter the list')}
-              onChange={e => setGlobalBotFilter(e.target.value)}
-            />
-          </div>
-
-          <div className="global-bots-list">
-            {globalBots.length === 0 && <p className="hint">{t('No bots yet. Add one above, or paste a list below.')}</p>}
-            {globalBots
-              .filter(name => !globalBotFilter.trim() || name.toLowerCase().includes(globalBotFilter.trim().toLowerCase()))
-              .map(name => <span className="global-bot-chip" key={name}>
-                <code>{name}</code>
-                <button
-                  type="button"
-                  title={`Remove ${name}`}
-                  onClick={() => setGlobalBots(prev => prev.filter(n => n !== name))}
-                ><X size={12}/></button>
-              </span>)}
-          </div>
-
-          <details className="global-bots-paste">
-            <summary>{t('Paste a list')}</summary>
-            <textarea
-              className="code-editor"
-              rows={6}
-              spellCheck={false}
-              value={globalBotPaste}
-              onChange={e => setGlobalBotPaste(e.target.value)}
-              placeholder={'AhrefsBot\nSemrushBot\nMJ12bot'}
-            />
-            <button type="button" disabled={!globalBotPaste.trim()} onClick={() => { addGlobalBots(globalBotPaste); setGlobalBotPaste(''); }}>
-              <Plus size={14}/>{t('Add to list')}</button>
-          </details>
-
-          <div className="global-bots-actions">
-            <button disabled={!!loading} onClick={() => saveGlobalBots(globalBots)}>
-              <Shield size={14}/> {t('Save and apply to all {n} website(s)', { n: websites.length })}
-            </button>
-            <button
-              className="secondary-light"
-              disabled={!!loading}
-              onClick={() => setGlobalBots(botBlocks?.global_blocked_bots || [])}
-            >{t('Reset')}</button>
-            <span className="hint">
-              {globalBots.length} bot(s)
-              {botBlocks?.max_bots ? ` - max ${botBlocks.max_bots}` : ''}
-              {JSON.stringify(globalBots) !== JSON.stringify(botBlocks?.global_blocked_bots || []) ? ' - unsaved changes' : ''}
-            </span>
-          </div>
-        </div>}
       </section>}
     </>;
   }
 
+  // Its own route (/waf-site), so a reload or a shared link comes back to the
+  // same website; drawn as OPanel draws its in-page site view, the way back
+  // first.
   function renderWafSite() {
     const selectedSite = websites.find(site => String(site.id) === String(selectedWafWebsiteId));
     const groupedRules = (wafSiteConfig?.default_rules || wafRules.default_rule_definitions || []).reduce((groups, rule) => {
@@ -8891,99 +8864,90 @@ function App() {
     }, {});
     const siteBotNames = siteBotText.split(/[\n,;]+/).map(s => s.trim()).filter(Boolean);
     const siteBotUnique = new Set(siteBotNames.map(s => s.toLowerCase()));
+    const globalBotCount = (wafSiteConfig?.global_blocked_bots || botBlocks?.global_blocked_bots || []).length;
+    // Custom rules are arbitrary ModSecurity directives: the server says
+    // whether this account may write them.
+    const mayEditCustomRules = wafSiteConfig?.may_edit_custom_rules !== false;
     return <>
       <section className="section">
-        <div className="section-title waf-site-header">
-          <div>
-            <h2>{wafSiteConfig?.domain || selectedSite?.domain || 'Website'}</h2>
-            <p className="hint">{t('WAF rules, flood limits and blocked bots for this website.')}</p>
+        <div className="section-title waf-detail-head">
+          <div className="waf-detail-title">
+            <button className="secondary-light" onClick={() => navigateToPage('waf')}><ArrowLeft size={14}/> {t('All websites')}</button>
+            <div><h2>{wafSiteConfig?.domain || selectedSite?.domain || t('Website')}</h2><p className="hint">{t('WAF configuration for this website.')}</p></div>
           </div>
-          <div className="waf-site-header-actions">
-            <select value={selectedWafWebsiteId} onChange={e => loadWebsiteWafConfig(e.target.value)}>
-              {websites.map(site => <option key={site.id} value={site.id}>{site.domain}</option>)}
-            </select>
-            <button className="secondary-light" onClick={() => navigateToPage('waf')}><ArrowLeft size={14}/>{t('All websites')}</button>
-          </div>
-        </div>
-        {/* One row per protection: what it does, its state, its switch. CRS
-            is here and not in the list - whether a site carries it, and its
-            memory, is for whoever manages this site to decide. */}
-        <div className="waf-switches">
-          <div className="waf-switch-row">
-            <div className="waf-switch-text">
-              <strong>WAF</strong>
-              <span className="hint">{t('Blocks known bad paths.')}</span>
-            </div>
+          <div className="waf-detail-actions">
             <span className={selectedSite?.waf_enabled ? 'badge ok' : 'badge'}>{selectedSite?.waf_enabled ? t('WAF on') : t('WAF off')}</span>
-            <button
-              className={selectedSite?.waf_enabled ? 'secondary' : ''}
-              disabled={!selectedWafWebsiteId || !!loading}
-              onClick={() => selectedSite && toggleWebsiteWaf(selectedSite)}
-            ><Shield size={14}/>{selectedSite?.waf_enabled ? t('Turn WAF off') : t('Turn WAF on')}</button>
+            <button disabled={!selectedWafWebsiteId || !!loading} onClick={() => selectedSite && toggleWebsiteWaf(selectedSite)}>
+              <Shield size={14}/> {selectedSite?.waf_enabled ? t('Disable WAF') : t('Enable WAF')}
+            </button>
           </div>
-          {wafSiteConfig && <div className="waf-switch-row">
-            <div className="waf-switch-text">
-              <strong>OWASP CRS</strong>
-              <span className="hint">
-                {t('Inspects each request for SQL injection, XSS and similar attacks. Uses about {n} MB of server RAM.', { n: crs?.rss_mb_per_site || 50 })}
-                {wafSiteConfig.crs_enabled && !selectedSite?.waf_enabled ? ' ' + t('It loads when the WAF is on.') : ''}
-                {wafSiteConfig.crs_enabled && selectedSite?.waf_enabled && wafSiteConfig.crs_mode === 'off' ? ' ' + t('CRS is off for the whole server, so nothing is loaded yet.') : ''}
-                {wafSiteConfig?.crs_active && wafSiteConfig.crs_mode === 'detect' ? ' ' + t('Detect only: attacks are logged, nothing is blocked.') : ''}
-                {wafSiteConfig?.crs_active && wafSiteConfig.may_edit_custom_rules ? ' ' + t('Add SecRuleRemoveById <id> to the custom rules below to excuse this site from one rule.') : ''}
-              </span>
-            </div>
-            <span className={wafSiteConfig?.crs_active ? 'badge ok' : 'badge'}>{wafSiteConfig.crs_enabled ? t('CRS on') : t('CRS off')}</span>
-            <button
-              className={wafSiteConfig.crs_enabled ? 'secondary' : ''}
-              disabled={!!loading || (!wafSiteConfig.crs_enabled && !selectedSite?.waf_enabled)}
-              title={!wafSiteConfig.crs_enabled && !selectedSite?.waf_enabled ? t('Turn the WAF on first') : ''}
-              onClick={() => toggleSiteCrs(wafSiteConfig)}
-            ><Shield size={14}/>{wafSiteConfig.crs_enabled ? t('Turn CRS off') : t('Turn CRS on')}</button>
-          </div>}
         </div>
       </section>
 
       {!wafSiteConfig && websites.length === 0 && <section className="section"><EmptyState icon={Globe} message={t('No websites yet.')} /></section>}
 
-      {wafSiteConfig && <section className="section bot-block-panel">
+      {wafSiteConfig && <section className="section">
         <div className="section-title">
           <div>
-            <h2>{t('Blocked bots')}</h2>
-            <p className="hint">{t('One name per line, matched anywhere in User-Agent. Matched literally, so')}{' '}<code>bingbot/2.0</code> will not also match <code>bingbotX2Y0</code>. Blocked requests get 403 before WAF and rate limiting run.</p>
+            <h2>{t('Bad bot')}</h2>
+            <p className="hint">{t('Global list ({n}) plus anything below.', { n: globalBotCount })}</p>
           </div>
         </div>
-        <textarea
-          className="code-editor"
-          value={siteBotText}
-          onChange={e => setSiteBotText(e.target.value)}
-          rows={10}
-          spellCheck={false}
-          placeholder={'AhrefsBot\nSemrushBot\nMJ12bot'}
-        />
+        <label className="badbot-site-extra"><span>{t('Extra bots, this website only')}</span>
+          <textarea className="code-editor badbot-input" value={siteBotText} onChange={e => setSiteBotText(e.target.value)}
+            spellCheck={false} placeholder={'ScrapyBot\nSomeOtherBot'} />
+        </label>
         <p className="hint">
-          {`${siteBotUnique.size} bot(s)`}
-          {siteBotNames.length !== siteBotUnique.size ? ` (${siteBotNames.length - siteBotUnique.size} duplicate(s) will be dropped)` : ''}
-          {botBlocks?.max_bots ? ` - max ${botBlocks.max_bots}` : ''}
+          {t('{n} bot(s)', { n: siteBotUnique.size })}
+          {siteBotNames.length !== siteBotUnique.size ? ' ' + t('({n} duplicate(s) will be dropped)', { n: siteBotNames.length - siteBotUnique.size }) : ''}
+          {botBlocks?.max_bots ? ' · ' + t('Up to {n} bots.', { n: botBlocks.max_bots }) : ''}
         </p>
         <div className="actions">
-          <button disabled={!!loading} onClick={saveSiteBots}><Shield size={14}/>{t('Save blocked bots')}</button>
+          <button disabled={!!loading} onClick={saveSiteBots}><Shield size={14}/> {t('Save bad bot config')}</button>
           <button className="secondary-light" disabled={!!loading || siteBotNames.length === 0} onClick={() => setSiteBotText('')}>{t('Clear list')}</button>
         </div>
       </section>}
 
-      {wafSiteConfig && <section className="section http-flood-panel">
+      {wafSiteConfig && <section className="section">
         <div className="section-title">
           <h2>{t('HTTP Flood')}</h2>
-          <span className={httpFloodForm.http_flood_enabled ? 'badge ok' : 'badge'}>{httpFloodForm.http_flood_enabled ? 'Enabled' : 'Disabled'}</span>
+          <span className={httpFloodForm.http_flood_enabled ? 'badge ok' : 'badge'}>{httpFloodForm.http_flood_enabled ? t('On') : t('Off')}</span>
         </div>
-        <label className="schedule-toggle http-flood-toggle">
-          <input type="checkbox" checked={!!httpFloodForm.http_flood_enabled} onChange={e => setHttpFloodForm(prev => ({ ...prev, http_flood_enabled: e.target.checked }))} />{t('Enabled')}</label>
-        <div className="http-flood-grid">
+        <label className="check-line">
+          <input type="checkbox" checked={!!httpFloodForm.http_flood_enabled}
+            onChange={e => setHttpFloodForm(prev => ({ ...prev, http_flood_enabled: e.target.checked }))} />
+          {t('Enabled')}
+        </label>
+        <div className="firewall-form addon-form">
           <label><span>{t('Requests')}</span><input type="number" min="1" max="100000" value={httpFloodForm.access_limit_requests} onChange={e => setHttpFloodForm(prev => ({ ...prev, access_limit_requests: e.target.value }))} /></label>
           <label><span>{t('Window (sec)')}</span><input type="number" min="1" max="3600" value={httpFloodForm.access_limit_window} onChange={e => setHttpFloodForm(prev => ({ ...prev, access_limit_window: e.target.value }))} /></label>
           <label><span>{t('Burst')}</span><input type="number" min="0" max="100000" value={httpFloodForm.access_limit_burst} onChange={e => setHttpFloodForm(prev => ({ ...prev, access_limit_burst: e.target.value }))} /></label>
           <label><span>{t('Connections/IP')}</span><input type="number" min="1" max="10000" value={httpFloodForm.connection_limit} onChange={e => setHttpFloodForm(prev => ({ ...prev, connection_limit: e.target.value }))} /></label>
-          <button disabled={!!loading} onClick={saveWebsiteHttpFlood}><Shield size={14}/>{t('Save HTTP Flood')}</button>
+        </div>
+        <div className="actions"><button disabled={!!loading} onClick={saveWebsiteHttpFlood}><Shield size={14}/> {t('Save HTTP Flood')}</button></div>
+      </section>}
+
+      {wafSiteConfig && <section className="section">
+        <div className="section-title">
+          <div>
+            <h2>OWASP CRS</h2>
+            <p className="hint">
+              {t('Inspects each request for SQL injection, XSS and similar attacks. Uses about {n} MB of server RAM.', { n: crs?.rss_mb_per_site || 50 })}
+              {wafSiteConfig.crs_enabled && !selectedSite?.waf_enabled ? ' ' + t('It loads when the WAF is on.') : ''}
+              {wafSiteConfig.crs_enabled && selectedSite?.waf_enabled && wafSiteConfig.crs_mode === 'off' ? ' ' + t('CRS is off for the whole server, so nothing is loaded yet.') : ''}
+              {wafSiteConfig?.crs_active && wafSiteConfig.crs_mode === 'detect' ? ' ' + t('Detect only: attacks are logged, nothing is blocked.') : ''}
+              {wafSiteConfig?.crs_active && mayEditCustomRules ? ' ' + t('Add SecRuleRemoveById <id> to the custom rules below to excuse this site from one rule.') : ''}
+            </p>
+          </div>
+          <span className={wafSiteConfig?.crs_active ? 'badge ok' : 'badge'}>{wafSiteConfig.crs_enabled ? t('CRS on') : t('CRS off')}</span>
+        </div>
+        <div className="actions">
+          <button
+            className={wafSiteConfig.crs_enabled ? 'secondary' : ''}
+            disabled={!!loading || (!wafSiteConfig.crs_enabled && !selectedSite?.waf_enabled)}
+            title={!wafSiteConfig.crs_enabled && !selectedSite?.waf_enabled ? t('Turn the WAF on first') : ''}
+            onClick={() => toggleSiteCrs(wafSiteConfig)}
+          ><Shield size={14}/> {wafSiteConfig.crs_enabled ? t('Turn CRS off') : t('Turn CRS on')}</button>
         </div>
       </section>}
 
@@ -9002,20 +8966,17 @@ function App() {
         </div>
         <div className="waf-rule-panel">
           <div className="section-title"><h2>{t('Custom rules')}</h2></div>
-          <textarea
-            className="code-editor"
-            value={wafCustomRules}
-            onChange={e => setWafCustomRules(e.target.value)}
-            rows={14}
-            spellCheck={false}
-            placeholder="SecRule ..."
-            readOnly={wafSiteConfig.may_edit_custom_rules === false}
-          />
-          <p className="hint">
-            {wafSiteConfig.may_edit_custom_rules === false
-              ? 'Custom rules are arbitrary ModSecurity directives, so only an administrator can change them. Ask your provider if you need a rule added or excluded.'
-              : `Saved into ${wafSiteConfig.rules_file}`}
-          </p>
+          {mayEditCustomRules
+            ? <>
+                <textarea className="code-editor" value={wafCustomRules} onChange={e => setWafCustomRules(e.target.value)} rows={14} spellCheck={false} placeholder="SecRule ..." />
+                <p className="hint">{t('Saved into')} {wafSiteConfig.rules_file}</p>
+              </>
+            : <>
+                {wafCustomRules
+                  ? <pre className="code-editor waf-custom-readonly">{wafCustomRules}</pre>
+                  : <p className="hint">{t('No custom rules on this website.')}</p>}
+                <p className="hint">{t('Custom rules are written by an administrator. Everything else on this page is yours to change.')}</p>
+              </>}
           <div className="actions"><button disabled={!!loading} onClick={saveWebsiteWafRules}>{t('Save website WAF rules')}</button></div>
         </div>
       </section>}
@@ -9024,45 +8985,50 @@ function App() {
 
   function renderWafAccessLogs() {
     const rows = wafAccessLogs.items || [];
-    const selectedSite = websites.find(site => String(site.id) === String(wafAccessLogFilters.websiteId));
-    const entryLabel = wafAccessLogs.total >= 1000 ? `${(wafAccessLogs.total / 1000).toFixed(1)}k entries` : `${wafAccessLogs.total || 0} entries`;
-    return <section className="section access-logs-section">
-      <div className="section-title access-logs-title">
-        <div><h2>{t('Access Logs')}</h2><p className="hint">{t('Protected Nginx traffic across all websites.')}</p></div>
-        <div className="access-log-icon-actions">
-          <button className="secondary-light icon-button" disabled={!!loading} onClick={() => loadWafAccessLogs(wafAccessLogFilters, true)} aria-label={t('Refresh access logs')} title={t('Refresh access logs')}><RefreshCw size={15}/></button>
-          <button className="secondary-light icon-button" onClick={() => selectedSite && window.open(websiteUrl(selectedSite), '_blank', 'noopener,noreferrer')} disabled={!selectedSite} aria-label={t('Open website')} title={t('Open website')}><ExternalLink size={15}/></button>
+    const total = Number(wafAccessLogs.total || 0);
+    const entryCount = total >= 1000 ? `${(total / 1000).toFixed(1)}k` : String(total);
+    return <>
+      <section className="access-log-hero">
+        <div>
+          <p className="eyebrow">{t('Protected Traffic')}</p>
+          <h1>{t('Access Logs')}</h1>
         </div>
-      </div>
-      <div className="access-log-panel">
+        <div className="access-log-hero-actions">
+          <button className="secondary-light icon-only" onClick={() => loadWafAccessLogs(wafAccessLogFilters, true)} disabled={!!loading} aria-label={t('Refresh logs')} title={t('Refresh logs')}><RefreshCw size={16}/></button>
+          <button className="secondary-light icon-only" onClick={() => navigateToPage('waf')} aria-label={t('Open WAF settings')} title={t('Open WAF settings')}><ExternalLink size={16}/></button>
+        </div>
+      </section>
+      <section className="section access-log-section">
         <div className="access-log-toolbar">
-          <div className="access-log-toolbar-label"><strong>{t('Access Logs')}</strong><span>{entryLabel}</span></div>
-          <button className="secondary-light" disabled={rows.length === 0} onClick={exportWafAccessLogs}><Download size={14}/>{t('Export')}</button>
-          <button className="danger light" disabled={!!loading || websites.length === 0} onClick={clearWafAccessLogs}><Trash2 size={14}/>{t('Clear')}</button>
-          <select value={wafAccessLogFilters.websiteId} onChange={e => updateWafAccessLogFilters({ websiteId: e.target.value }, true)}>
-            <option value="">{t('All websites')}</option>
-            {websites.map(site => <option key={site.id} value={site.id}>{site.domain}</option>)}
-          </select>
-          <select value={wafAccessLogFilters.verdict} onChange={e => updateWafAccessLogFilters({ verdict: e.target.value }, true)}>
-            <option value="all">{t('All verdicts')}</option>
-            <option value="block">{t('Blocked')}</option>
-            <option value="allow">{t('Allowed')}</option>
-            <option value="error">{t('Errors')}</option>
-          </select>
-          <input value={wafAccessLogFilters.query} onChange={e => updateWafAccessLogFilters({ query: e.target.value })} onKeyDown={e => { if (e.key === 'Enter') applyWafAccessLogFilters(); }} placeholder={t('Filter logs')} />
-          <select value={wafAccessLogFilters.limit} onChange={e => updateWafAccessLogFilters({ limit: Number(e.target.value) }, true)}>
-            <option value={50}>50 / page</option>
-            <option value={100}>100 / page</option>
-            <option value={200}>200 / page</option>
-            <option value={500}>500 / page</option>
-          </select>
-          <select value={wafAccessLogFilters.refresh} onChange={e => updateWafAccessLogFilters({ refresh: Number(e.target.value) })}>
-            <option value={0}>{t('Manual refresh')}</option>
-            <option value={5}>{t('Refresh 5s')}</option>
-            <option value={10}>{t('Refresh 10s')}</option>
-            <option value={30}>{t('Refresh 30s')}</option>
-          </select>
-          <button disabled={!!loading} onClick={applyWafAccessLogFilters}><Search size={14}/>{t('Apply')}</button>
+          <div className="access-log-title">
+            <strong>{t('Access Logs')}</strong>
+            <span>{entryCount} {t('entries')}</span>
+            <button className="secondary-light" onClick={exportWafAccessLogs} disabled={!rows.length}><Download size={14}/> {t('Export')}</button>
+            <button className="danger-light" onClick={clearWafAccessLogs} disabled={!!loading || websites.length === 0}><Trash2 size={14}/> {t('Clear')}</button>
+          </div>
+          <div className="access-log-filters">
+            <select value={wafAccessLogFilters.websiteId} onChange={e => updateWafAccessLogFilters({ websiteId: e.target.value }, true)}>
+              <option value="">{t('All websites')}</option>
+              {websites.map(site => <option key={site.id} value={site.id}>{site.domain}</option>)}
+            </select>
+            <select value={wafAccessLogFilters.verdict} onChange={e => updateWafAccessLogFilters({ verdict: e.target.value }, true)}>
+              <option value="all">{t('All verdicts')}</option>
+              <option value="block">{t('Block')}</option>
+              <option value="allow">{t('Allow')}</option>
+              <option value="error">{t('Error')}</option>
+            </select>
+            {/* The search runs on Enter: every request reads the logs afresh. */}
+            <input value={wafAccessLogFilters.query} onChange={e => updateWafAccessLogFilters({ query: e.target.value })} onKeyDown={e => { if (e.key === 'Enter') applyWafAccessLogFilters(); }} placeholder={t('Filter logs')} />
+            <select value={wafAccessLogFilters.limit} onChange={e => updateWafAccessLogFilters({ limit: Number(e.target.value) }, true)}>
+              {[50, 100, 200, 500].map(size => <option key={size} value={size}>{size} {t('/ page')}</option>)}
+            </select>
+            <select value={wafAccessLogFilters.refresh} onChange={e => updateWafAccessLogFilters({ refresh: Number(e.target.value) })} title={t('Auto refresh')}>
+              <option value={0}>{t('Auto refresh off')}</option>
+              <option value={5}>{t('Refresh 5s')}</option>
+              <option value={10}>{t('Refresh 10s')}</option>
+              <option value={30}>{t('Refresh 30s')}</option>
+            </select>
+          </div>
         </div>
         <div className="access-log-table-wrap">
           <table className="access-log-table">
@@ -9074,30 +9040,30 @@ function App() {
                 <th>{t('Method')}</th>
                 <th>{t('Path')}</th>
                 <th>IP</th>
-                <th>{t('Country')}</th>
                 <th>{t('Reason')}</th>
                 <th>{t('Status')}</th>
               </tr>
             </thead>
             <tbody>
               {rows.map(item => <tr key={item.id}>
-                <td data-label={t('Verdict')}><span className={accessLogBadgeClass(item.verdict)}>{accessLogVerdictLabel(item.verdict)}</span></td>
-                <td data-label={t('Time')}><span className="access-log-time">{formatAccessLogTime(item.timestamp)}</span><small>{item.duration_ms || 0} ms</small></td>
-                <td data-label={t('Site')}><span className="access-log-site">{item.domain}</span></td>
-                <td data-label={t('Method')}>{item.method || '-'}</td>
-                <td data-label={t('Path')}><code>{item.path || '-'}</code></td>
-                <td data-label="IP"><span className="access-log-ip">{item.ip || '-'}</span></td>
-                <td data-label={t('Country')}>{accessLogCountryLabel(item)}</td>
-                <td data-label={t('Reason')}>{item.reason || '-'}</td>
-                <td data-label={t('Status')}>{item.status || '-'}</td>
+                <td><span className={`verdict-pill ${item.verdict === 'allow' ? 'allow' : item.verdict === 'error' ? 'error' : 'block'}`}>{t(accessLogVerdictLabel(item.verdict))}</span></td>
+                <td><span>{formatAccessLogTime(item.timestamp) || '-'}</span><small>{item.duration_ms || 0} ms</small></td>
+                <td><span>{item.domain}</span></td>
+                <td>{item.method || '-'}</td>
+                <td><span className="access-log-path">{item.path || '-'}</span></td>
+                <td><span>{item.ip || '-'}</span><small>{accessLogCountryLabel(item) === '-' ? '' : accessLogCountryLabel(item)}</small></td>
+                <td>{item.reason || (item.verdict === 'block' ? t('Blocked') : item.verdict === 'error' ? t('Error') : t('Allowed'))}</td>
+                <td>{item.status || '-'}</td>
               </tr>)}
             </tbody>
           </table>
-          {rows.length === 0 && <EmptyState icon={FileText} message={t('No access log entries match these filters.')} />}
+          {rows.length === 0 && <EmptyState icon={Shield} message={t('No access log entries match the current filters.')} />}
         </div>
-        {(wafAccessLogs.missing || []).length > 0 && <p className="hint">{t('Missing log files:')} {wafAccessLogs.missing.join(', ')}</p>}
-      </div>
-    </section>;
+        {(wafAccessLogs.missing || []).length > 0 && <div className="access-log-footer">
+          <span>{t('Missing log files:')} {wafAccessLogs.missing.join(', ')}</span>
+        </div>}
+      </section>
+    </>;
   }
 
   function renderUpdates() {
@@ -9169,34 +9135,52 @@ function App() {
 
   function renderSecurity() {
     const enabled = Boolean(twoFactorStatus?.enabled || currentUser?.totp_enabled);
-    const pk = passkeyStatus;
+    const pk = passkeyStatus || {};
+    const keys = pk.credentials || [];
     return <>
       <section className="section">
         <div className="section-title">
           <div>
             <h2>{t('Passkey')}</h2>
-            <p className="hint">{t('Sign in with a fingerprint, Face ID or a security key instead of typing a code.')}</p>
+            <p className="hint">
+              {keys.length
+                ? <>{t('Tried first when you sign in.')} <strong>{keys.length}</strong> {t('registered')}
+                    {enabled ? t(', with your authenticator code as the fallback.') : '.'}</>
+                : t('Sign in with a fingerprint, face, screen lock, or security key.')}
+            </p>
           </div>
-          <button className="secondary-light" disabled={!!loading} onClick={loadPasskeyStatus}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <button className="secondary" disabled={!!loading} onClick={loadPasskeyStatus}><RefreshCw size={14}/> {t('Refresh')}</button>
         </div>
-
-        {pk && !pk.supported && <div className="info-box">
-          <p className="hint" style={{color:'var(--red)'}}>
-            {t('You are reaching the panel by IP address ({host}). Browsers only create passkeys for domain names, so open the panel by its domain and add one there.', { host: pk.hostname })}
-          </p>
+        {passkeyStatus && !pk.supported && <p className="hint">
+          {t('You are reaching the panel by IP address ({host}). Browsers only create passkeys for domain names, so open the panel by its domain and add one there.', { host: pk.hostname })}
+        </p>}
+        {pk.supported && <p className="hint">{t('A passkey is tied to the domain')} <strong>{pk.rp_id}</strong>.{' '}
+          {t('Reach the panel by any other name and it will not be offered — use Google Authenticator below for that.')}
+        </p>}
+        {keys.length > 0 && <div className="table">
+          {keys.map(item => <div className="row passkey-row" key={item.id}>
+            <span>
+              <strong>{item.name}</strong>{' '}
+              <span className={item.usable_here ? 'badge ok' : 'badge'}>{item.usable_here ? t('Works here') : t('Another domain')}</span>
+              <small className="db-owner">
+                {item.rp_id} · {t('Added')} {item.created_at ? new Date(item.created_at).toLocaleDateString() : t('recently')}
+                {item.last_used_at ? t(' · last used {date}', { date: new Date(item.last_used_at).toLocaleDateString() }) : t(' · not used yet')}
+              </small>
+            </span>
+            <button className="mini danger" disabled={!!loading}
+                    title={t('Remove this passkey')} aria-label={t('Remove the passkey {name}', { name: item.name })}
+                    onClick={() => removePasskey(item)}><Trash2 size={14}/></button>
+          </div>)}
         </div>}
-
-        {pk?.supported && <>
-          <p className="hint">{t('A passkey is tied to the domain')}{' '}<strong>{pk.rp_id}</strong>.{' '}
-            {t('Reach the panel by any other name and it will not be offered — use Google Authenticator below for that.')}
-          </p>
-          <div className="passkey-form">
+        {pk.supported && <>
+          <div className="passkey-add">
             <NoAutofillInput
               name="passkey-name"
               value={passkeyName}
               onChange={e => setPasskeyName(e.target.value)}
-              placeholder={t('Device name, e.g. MacBook')}
+              placeholder={t('Name this passkey (e.g. Work laptop)')}
               aria-label={t('Passkey name')}
+              maxLength={64}
             />
             <input
               type="password"
@@ -9206,49 +9190,32 @@ function App() {
               autoComplete="current-password"
               aria-label={t('Current password')}
             />
-            <button disabled={!!loading || !passkeyPassword} onClick={addPasskey}>
-              <KeyRound size={14}/>{t('Add passkey')}</button>
+            <button disabled={!!loading || !passkeyPassword} onClick={addPasskey}><Shield size={14}/> {t('Add passkey')}</button>
           </div>
           <p className="hint">{t('Your current password confirms it is you, the same as when turning on Google Authenticator.')}</p>
         </>}
-
-        {pk?.credentials?.length > 0 && <div className="table">
-          {pk.credentials.map(c => <div className="row db-row" key={c.id}>
-            <span><strong>{c.name}</strong></span>
-            <span style={{color:'var(--text-muted)'}}>{c.rp_id}</span>
-            <span className={c.usable_here ? 'badge ok' : 'badge'}>
-              {c.usable_here ? 'Works here' : 'Another domain'}
-            </span>
-            <button className="danger" disabled={!!loading} onClick={() => removePasskey(c)}><Trash2 size={14}/></button>
-          </div>)}
-        </div>}
-
-        {pk?.supported && (pk?.credentials?.length || 0) === 0 &&
-          <EmptyState icon={KeyRound} message={t('No passkeys yet.')} />}
-
-        {(pk?.credentials?.length || 0) > 0 && !enabled && <p className="hint" style={{color:'var(--red)'}}>
-          {t('A passkey is your only second factor. Reach the panel by a different domain and there is no second factor at all — turn on Google Authenticator below as well.')}
-        </p>}
+        {keys.length > 0 && !enabled &&
+          <p className="hint">{t('A passkey is your only second factor. Reach the panel by a different domain and there is no second factor at all — turn on Google Authenticator below as well.')}</p>}
       </section>
-
       <section className="section">
         <div className="section-title">
-          <div><h2>{t('Google Authenticator 2FA')}</h2><p className="hint">{t('Current status:')}{' '}<strong>{enabled ? 'Enabled' : 'Disabled'}</strong></p></div>
-          <button className="secondary-light" disabled={!!loading} onClick={loadTwoFactorStatus}><RefreshCw size={14}/>{t('Refresh')}</button>
+          <div><h2>{t('Google Authenticator 2FA')}</h2><p className="hint">{t('Current status:')} <strong>{enabled ? t('Enabled') : t('Disabled')}</strong></p></div>
+          <button className="secondary" disabled={!!loading} onClick={loadTwoFactorStatus}><RefreshCw size={14}/> {t('Refresh')}</button>
         </div>
+        {!enabled && keys.length > 0 && <p className="hint">{t('Used when a passkey is not available on the device you are signing in from.')}</p>}
         {!enabled && <div className="security-grid">
           <div className="info-box">
             <strong>{t('Setup')}</strong>
-            {twoFactorSetup?.qr_data_url ? <img className="qr-code" src={twoFactorSetup.qr_data_url} alt="2FA QR code" /> : <p className="hint">{t('No setup code generated.')}</p>}
+            {twoFactorSetup?.qr_data_url ? <img className="qr-code" src={twoFactorSetup.qr_data_url} alt={t('2FA QR code')} /> : <p className="hint">{t('No setup code generated.')}</p>}
             {twoFactorSetup?.secret && <code className="secret-text">{twoFactorSetup.secret}</code>}
             <div className="actions">
-              <button disabled={!!loading} onClick={setupTwoFactorAuth}><Shield size={14}/>{t('Generate QR')}</button>
+              <button disabled={!!loading} onClick={setupTwoFactorAuth}><Shield size={14}/> {t('Generate QR')}</button>
             </div>
           </div>
           <div className="info-box">
             <strong>{t('Verify')}</strong>
             <input value={twoFactorCode} onChange={e => setTwoFactorCode(e.target.value)} placeholder="123456" inputMode="numeric" />
-            <button disabled={!!loading || !twoFactorSetup || !twoFactorCode} onClick={enableTwoFactorAuth}><Lock size={14}/>{t('Enable 2FA')}</button>
+            <button disabled={!!loading || !twoFactorSetup || !twoFactorCode} onClick={enableTwoFactorAuth}><Lock size={14}/> {t('Enable 2FA')}</button>
           </div>
         </div>}
         {enabled && <div className="security-grid one">
@@ -9259,7 +9226,6 @@ function App() {
           </div>
         </div>}
       </section>
-
     </>;
   }
 
