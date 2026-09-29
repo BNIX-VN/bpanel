@@ -422,8 +422,9 @@ def revoke_token(token_id: int, request: Request, db: Session = Depends(get_db),
     token = db.query(ApiToken).filter(ApiToken.id == token_id).first()
     if not token:
         raise HTTPException(status_code=404, detail="Token not found")
-    token.is_active = False
-    token.revoked_at = datetime.now(timezone.utc)
+    # Deleted outright (operator, 2026-09-30): no "Revoked" row left behind.
+    name = token.name
+    db.delete(token)
     db.commit()
-    log_action(db, current_user.id, "revoke_api_token", token.name, request=request)
+    log_action(db, current_user.id, "revoke_api_token", name, request=request)
     return {"ok": True}

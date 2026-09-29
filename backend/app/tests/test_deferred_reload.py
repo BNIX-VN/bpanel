@@ -143,3 +143,55 @@ def test_the_updater_actually_uses_it():
     assert "with nginx.deferred_reload():" in update
     block = update.split("with nginx.deferred_reload():", 1)[1]
     assert "nginx.rewrite_vhost(" in block.split("\nPY\n", 1)[0]
+
+
+# --- the global bad-bot list --------------------------------------------------
+
+@pytest.fixture
+def vhosts(tmp_path, monkeypatch):
+    from app.services import waf
+
+    monkeypatch.setattr(nginx.settings, "command_dry_run", False)
+    monkeypatch.setattr(nginx, "_vhost_path", lambda domain: tmp_path / f"{domain}.conf")
+    monkeypatch.setattr(waf, "effective_blocked_bots", lambda site: ["BadBot"])
+    sites = []
+    for i in range(23):
+        domain = f"site{i}.test"
+        (tmp_path / f"{domain}.conf").write_text("server {\n    server_name %s;\n}\n" % domain, encoding="utf-8")
+        sites.append(type("Site", (), {"domain": domain})())
+    return tmp_path, sites
+
+
+def test_saving_the_global_bot_list_tests_nginx_once(vhosts, calls):
+    """23 sites used to mean 23 tests and 23 reloads - minutes of "Saving
+    global bad bots..." on a server with CRS on."""
+    from app.services import waf
+
+    tmp_path, sites = vhosts
+    seen, _ = calls
+    done, failed = waf.resync_bot_blocks(sites)
+    assert len(done) == 23 and not failed
+    assert seen.count("nginx-test") == 1 and seen.count("nginx-reload") == 1
+    assert "BadBot" in (tmp_path / "site7.test.conf").read_text(encoding="utf-8")
+
+
+def test_a_refused_bot_list_puts_every_vhost_back(vhosts, calls):
+    from app.services import waf
+
+    tmp_path, sites = vhosts
+    seen, fake = calls
+    fake.test_rc = 1
+    fake.test_err = "unknown directive"
+    with pytest.raises(RuntimeError):
+        waf.resync_bot_blocks(sites)
+    assert "BadBot" not in (tmp_path / "site7.test.conf").read_text(encoding="utf-8")
+    assert "nginx-reload" not in seen
+
+
+def test_the_endpoint_restores_the_stored_list_when_nginx_refuses():
+    from pathlib import Path
+
+    api = (Path(__file__).resolve().parents[1] / "api" / "waf.py").read_text(encoding="utf-8")
+    body = api.split("def save_global_bots(", 1)[1].split("\n@router", 1)[0]
+    assert "previous = panel_settings.global_blocked_bots()" in body
+    assert 'panel_settings.save_global_blocked_bots("\\n".join(previous))' in body

@@ -20,8 +20,6 @@
 /* from style.css */
 .login-remember{display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;user-select:none}
 .login-remember input{width:auto;margin:0}
-.user-badges{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
-.user-badges{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .da-scan-result{margin-top:16px;padding:16px;background:var(--surface-alt);border:1px solid var(--border);border-radius:var(--radius-lg)}
 .da-scan-result h4{margin:0 0 12px 0;font-size:15px}
 .da-user-block{margin-bottom:12px;padding:12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-md)}
@@ -49,9 +47,6 @@
 /* from brand.css */
 .file-row .danger.icon-button,.row .danger.icon-button{background:var(--surface);color:var(--danger);border:1px solid var(--border);}
 .hint.alarm{font-weight:600;color:var(--danger-text)}
-@media(max-width:950px){
-  .user-row .user-badges{grid-column:1 / -1}
-}
 .site-app-form{display:grid;grid-template-columns:repeat(3,minmax(140px,1fr)) auto;gap:10px;align-items:end}
 .site-app-form label{display:grid;gap:6px;min-width:0;font-weight:700;color:var(--text-secondary)}
 .site-app-form label span{font-size:12px;color:var(--text-muted)}
@@ -118,9 +113,6 @@
 .theme-toggle,.language-toggle{display:inline-grid;place-items:center; width:36px;height:34px;min-height:34px;padding:0;flex:none; background:var(--surface);color:var(--text-secondary); border:1px solid var(--border);border-radius:var(--radius-sm); cursor:pointer;transition:background-color .18s ease,color .18s ease,border-color .18s ease;}
 /* from ui.css */
 .top-actions .theme-toggle,.top-actions .language-toggle{width:36px;height:36px;min-height:36px;padding:0;border-radius:var(--radius-sm)}
-@media(min-width:951px){
-  .user-row .user-badges{display:flex;flex-wrap:wrap;gap:6px}
-}
 .scan-detail .scan-status-panel{margin-top:0}
 .notify-chats{display:flex;flex-wrap:wrap;gap:6px}
 .notify-chats .mini{height:auto;min-height:30px;gap:6px}

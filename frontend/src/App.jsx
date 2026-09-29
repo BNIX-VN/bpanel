@@ -1597,10 +1597,10 @@ function App() {
   }
 
   async function revokeApiToken(token) {
-    if (!confirm(`Revoke API token ${token.name}? WHMCS using it will stop working.`)) return;
-    const data = await request(`/provisioning/v1/tokens/${token.id}`, { method: 'DELETE' }, `Revoking ${token.name}...`);
+    if (!confirm(t('Delete API token {name}? WHMCS using it stops working at once.', { name: token.name }))) return;
+    const data = await request(`/provisioning/v1/tokens/${token.id}`, { method: 'DELETE' }, t('Deleting token...'));
     if (data) {
-      setNotice(`Revoked API token ${token.name}.`);
+      setNotice(t('API token {name} deleted.', { name: token.name }));
       await loadApiTokens();
     }
   }
@@ -9861,8 +9861,8 @@ function App() {
               <small>{token.allowed_ips ? t('IP allowlist: {ips}', { ips: token.allowed_ips }) : t('Any IP address')}</small>
               <small>{token.last_used_at ? t('Last used: {when}', { when: new Date(token.last_used_at).toLocaleDateString() }) : t('Never used')}</small>
             </div>
-            <span className={`badge ${token.is_active ? 'ok' : ''}`}>{token.is_active ? t('Active') : t('Revoked')}</span>
-            <button className="mini danger" disabled={!!loading || !token.is_active} onClick={() => revokeApiToken(token)}><Trash2 size={14}/> {t('Revoke')}</button>
+            <span className="badge ok">{t('Active')}</span>
+            <button className="mini danger" disabled={!!loading} onClick={() => revokeApiToken(token)}><Trash2 size={14}/> {t('Delete')}</button>
           </div>)}
         </div>}
       </section>
@@ -9903,13 +9903,12 @@ function App() {
       {users.length === 0 && <EmptyState icon={Users} message={t('No users found.')} />}
       <div className="table">
         {users.map(user => <div className="row user-row" key={user.id}>
-          <div className="user-main"><strong>{user.username}</strong><small>{user.email}</small></div>
+          {/* OPanel's five cells (a sixth pushed the buttons onto a line of
+              their own); BPanel's package and 2FA go under the name. */}
+          <div className="user-main"><strong>{user.username}</strong>
+            <small>{[user.email, user.package_name || t('Custom'), user.totp_enabled ? '2FA' : ''].filter(Boolean).join(' · ')}</small></div>
           <span className="badge">{t(roleLabel(user.role))}</span>
           <span className={`badge ${user.is_active ? 'ok' : 'warn'}`}>{user.is_active ? t('Active') : t('Suspended')}</span>
-          <span className="user-badges">
-            <span className="badge">{user.package_name || t('Custom')}</span>
-            {user.totp_enabled && <span className="badge ok">2FA</span>}
-          </span>
           <span className={`user-metric${user.storage_used_bytes == null || Number(user.storage_used_bytes) < 0 ? ' pending' : ''}`}><HardDrive size={13}/>{storageUsageText(user)}</span>
           <div className="row-actions">
             <button className="mini secondary-light" disabled={!!loading} onClick={() => startEditingUser(user)}><Pencil size={14}/> {t('Edit')}</button>
@@ -10230,11 +10229,9 @@ function App() {
     </>;
   }
 
-  // A revoked token stays listed, for the record of who held a key.
   function renderMcpTokenRows(tokens, { showOwner = false } = {}) {
     return <div className="table">
       {tokens.map(token => {
-        const revoked = !!token.revoked_at;
         return <div className="row" key={token.id}>
           <div className="token-info">
             <strong>{token.name}{showOwner && token.username ? ` — ${token.username}` : ''}</strong>
@@ -10242,12 +10239,10 @@ function App() {
               {' | '}{t('Expires:')} {token.expires_at ? new Date(token.expires_at).toLocaleDateString() : t('never')}
               {' | '}{t('Last used:')} {token.last_used_at ? new Date(token.last_used_at).toLocaleString() : t('never')}</small>
           </div>
-          {revoked
-            ? <span className="badge">{t('Revoked')}</span>
-            : token.expired
-              ? <span className="badge warn">{t('Expired')}</span>
-              : <span className={token.can_write ? 'badge warn' : 'badge ok'}>{token.can_write ? t('Read + actions') : t('Read-only')}</span>}
-          {!revoked && <button className="mini danger" disabled={!!loading} onClick={() => revokeMcpToken(token)}><Trash2 size={14}/> {t('Revoke')}</button>}
+          {token.expired
+            ? <span className="badge warn">{t('Expired')}</span>
+            : <span className={token.can_write ? 'badge warn' : 'badge ok'}>{token.can_write ? t('Read + actions') : t('Read-only')}</span>}
+          <button className="mini danger" disabled={!!loading} onClick={() => revokeMcpToken(token)}><Trash2 size={14}/> {t('Revoke')}</button>
         </div>;
       })}
     </div>;

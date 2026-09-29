@@ -1141,11 +1141,11 @@ def test_the_page_offers_a_config_for_each_client_that_can_use_it():
 
 def test_a_token_row_says_whether_it_can_act():
     """Read-only against can-act is the whole permission model; it belongs in
-    the list rather than only on the form that created it. OPanel's badges,
-    and a revoked token - which BPanel keeps listed - says so."""
+    the list rather than only on the form that created it. OPanel's badges;
+    a revoked token is deleted, so there is no "Revoked" row (2026-09-30)."""
     block = APP_JSX.split("function renderMcpTokenRows")[1].split("\n  function ")[0]
     assert "t('Read-only')" in block and "t('Read + actions')" in block
-    assert "t('Revoked')" in block and "t('Expired')" in block
+    assert "t('Expired')" in block and "Revoked" not in block
 
 
 def test_revoking_asks_first():
@@ -1363,3 +1363,18 @@ def test_the_kill_step_skips_loopback():
     # peers against sets is the cheap direction.
     assert body.index("127.*") < body.index('if ipset test "$set"')
 
+
+def test_revoking_deletes_the_token_outright():
+    """Operator, 2026-09-30: "Cái nào xóa thì xóa hẳn đi" - no "Revoked" row
+    left in the list; the same for the WHMCS API tokens."""
+    api = (Path(__file__).resolve().parents[1] / "api" / "mcp.py").read_text(encoding="utf-8")
+    revoke = api.split("def revoke_token(", 1)[1].split("\ndef ", 1)[0]
+    assert "db.delete(row)" in revoke and "revoked_at =" not in revoke
+    for name in ("def revoke_all(", "def revoke_for_user("):
+        body = api.split(name, 1)[1].split("\ndef ", 1)[0]
+        assert ".delete(synchronize_session=False)" in body and "revoked_at =" not in body
+    provisioning = (Path(__file__).resolve().parents[1] / "api" / "provisioning.py").read_text(encoding="utf-8")
+    body = provisioning.split("def revoke_token(", 1)[1].split("\n@router", 1)[0]
+    assert "db.delete(token)" in body and "is_active = False" not in body
+    migration = (Path(__file__).resolve().parents[2] / "alembic" / "versions" / "0042_delete_revoked_tokens.py").read_text(encoding="utf-8")
+    assert "DELETE FROM mcp_tokens WHERE revoked_at IS NOT NULL" in migration
