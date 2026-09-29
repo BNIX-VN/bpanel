@@ -24,4 +24,4 @@ maxminddb==3.2.0
 # definitions onto every customer machine for one feature.
 minio==7.2.10
 # The Email addon checks a mail domain's DNS records (also pulled in by email-validator).
-dnspython>=2.4
+dnspython>=2.8.0
