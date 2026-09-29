@@ -134,6 +134,7 @@ tính năng, không xoá dữ liệu nó đã tạo.
 | **Fail2ban** | Chặn địa chỉ dò mật khẩu SSH. |
 | **Quét mã độc** | LMD + ClamAV: quét theo yêu cầu, theo lịch, giám sát thời gian thực (Lớp 2), quét file tải lên. |
 | **Trợ lý AI (MCP)** | Cho Claude Code, Cursor, VS Code đọc và thao tác panel bằng token cá nhân. |
+| **Quản lý DNS** | Chạy DNS cho tên miền ngay trên server bằng PowerDNS (mở cổng 53). Quản trị viên sửa mọi zone, khách hàng sửa zone của website mình; bản ghi A, AAAA, CNAME, MX, TXT, NS, SRV, CAA. Website mới tự có zone. |
 | **Chế độ demo** | Tài khoản demo công khai cho quản trị và khách hàng, có nút đăng nhập nhanh trên trang đăng nhập. Xem mọi trang, mọi thay đổi bị từ chối; không mở được nội dung file, tải xuống, phpMyAdmin hay terminal. |
 | **Thông báo** | Gửi cảnh báo cho quản trị viên qua email (SMTP) và Telegram: dịch vụ dừng, ổ đĩa đầy, backup lỗi, mã độc, chứng chỉ sắp hết hạn, có bản cập nhật... |
 

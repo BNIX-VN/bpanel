@@ -538,7 +538,7 @@ button:disabled,.upload-button.disabled{background:var(--disabled-bg);color:var(
 .dns-actions{display:flex;gap:6px}
 .dns-locked{justify-content:center;min-width:66px;color:var(--text-muted)}
 .dns-server{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 12px}
-.dns-auto{align-self:center}
+.cron-builder .dns-auto{display:flex;align-items:center;gap:8px;align-self:center;font-weight:600;color:var(--text-secondary)}
 @media (min-width:1000px){.dns-layout{grid-template-columns:260px minmax(0,1fr)}}
 @media (max-width:640px){
   .dns-record{grid-template-columns:minmax(0,1fr) auto}
