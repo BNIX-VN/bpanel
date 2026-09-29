@@ -512,41 +512,8 @@ button:disabled,.upload-button.disabled{background:var(--disabled-bg);color:var(
 .addon-notes strong{display:flex;align-items:center;gap:5px;font-size:11px;letter-spacing:.03em;text-transform:uppercase}
 .addon-notes ul{margin:0;padding-left:16px;display:grid;gap:3px;font-weight:600}
 .addon-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:2px}
-/* DNS Manager addon: zones on the left, the chosen zone's records on the right. */
-.dns-ns{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;margin:0 0 12px;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-alt);font-size:13px}
-.dns-ns code{font-family:var(--font-mono);font-size:12.5px;padding:2px 7px;border-radius:5px;background:var(--surface);border:1px solid var(--border);color:var(--text)}
-.dns-ns span{color:var(--text-muted)}
-.dns-layout{display:grid;grid-template-columns:minmax(0,1fr);gap:14px}
-.dns-zones{display:grid;gap:6px;align-content:start;min-width:0}
-.dns-zones-title{font-size:11.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--text-muted)}
-.dns-zone{display:flex;align-items:center;gap:6px;min-width:0}
-.dns-zone-open{flex:1;min-width:0;display:grid;gap:1px;justify-content:stretch;justify-items:start;min-height:40px;padding:7px 10px;text-align:left;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text);cursor:pointer;font:inherit}
-.dns-zone-open strong{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.dns-zone-open small{font-size:11.5px;color:var(--text-muted)}
-.dns-zone.active .dns-zone-open{border-color:var(--primary);background:var(--primary-light)}
-.dns-zone-add{display:grid;gap:6px;margin-top:8px;padding-top:10px;border-top:1px dashed var(--border)}
-.dns-records{display:grid;gap:10px;align-content:start;min-width:0}
-.dns-records-title{margin:0;font-size:15px;color:var(--text);overflow-wrap:anywhere}
-.dns-form-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:end}
-.dns-list{display:grid;gap:6px}
-.dns-record{display:grid;grid-template-columns:minmax(70px,.7fr) 64px minmax(0,2fr) auto auto;gap:10px;align-items:center;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);font-size:13px}
-.dns-record .badge{justify-self:start}
-.dns-record.editing{border-color:var(--primary);box-shadow:inset 0 0 0 1px var(--primary)}
-.dns-name{font-weight:700;color:var(--text);overflow-wrap:anywhere}
-.dns-value{min-width:0;font-family:var(--font-mono);font-size:12.5px;color:var(--text-secondary);overflow-wrap:anywhere}
-.dns-ttl{font-size:12px;color:var(--text-muted);white-space:nowrap}
-.dns-actions{display:flex;gap:6px}
-.dns-locked{justify-content:center;min-width:66px;color:var(--text-muted)}
+/* DNS Manager addon: PowerDNS and port 53 on the settings page. */
 .dns-server{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 12px}
-.cron-builder .dns-auto{display:flex;align-items:center;gap:8px;align-self:center;font-weight:600;color:var(--text-secondary)}
-@media (min-width:1000px){.dns-layout{grid-template-columns:260px minmax(0,1fr)}}
-@media (max-width:640px){
-  .dns-record{grid-template-columns:minmax(0,1fr) auto}
-  .dns-record .badge{grid-column:2;grid-row:1;justify-self:end}
-  .dns-value{grid-column:1 / -1}
-  .dns-ttl{grid-column:1}
-  .dns-actions{grid-column:2;justify-self:end}
-}
 
 /* Email addon, laid out like OPanel's: tabs for mailboxes, forwarders and
    domains (and, for administrators, relays, Rspamd and the server), one
@@ -613,9 +580,50 @@ button:disabled,.upload-button.disabled{background:var(--disabled-bg);color:var(
 .dns-editor-row input{font-family:var(--font-mono);font-size:12.5px}
 .dns-editor-actions{justify-content:flex-start}
 .dns-editor .hint{margin:0}
-.mail-dns-note{margin:0 0 14px;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius-md);font-size:13px}
-.mail-dns-note.warn{border-color:var(--warning-border);background:var(--warning-bg);color:var(--warning-text)}
-.mail-dns-note.ok{border-color:var(--success-border);background:var(--success-bg);color:var(--success-text)}
+/* DNS Manager, laid out like OPanel's. */
+.dns-ns-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 12px;background:var(--surface-alt);border:1px solid var(--border);border-radius:var(--radius-md);min-width:0}
+.dns-ns-label{display:inline-flex;align-items:center;gap:6px;font-weight:600;color:var(--text);margin-right:4px}
+.dns-ns-label svg{color:var(--primary-ink)}
+.dns-ns-line code{font-family:var(--font-mono);font-size:12.5px;padding:3px 8px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);overflow-wrap:anywhere}
+.dns-ns-line .hint{margin:0}
+.dns-search{width:100%}
+.row.dns-zone-row{grid-template-columns:minmax(0,1fr) auto}
+.dns-new-zone{margin-top:6px}
+.dns-delegation{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:4px 0 14px}
+.dns-delegation .hint{margin:0;flex:1 1 280px}
+.dns-record-form{margin-bottom:14px}
+.dns-record-fields{display:grid;grid-template-columns:96px minmax(120px,1fr) minmax(200px,2.4fr) 130px;gap:10px;align-items:end;min-width:0}
+.dns-record-fields.with-priority{grid-template-columns:96px minmax(120px,1fr) 90px minmax(200px,2.4fr) 130px}
+.dns-record-fields .field{display:grid;gap:4px;min-width:0}
+.dns-record-fields input,.dns-record-fields select,.dns-record-fields textarea{width:100%;min-width:0}
+.dns-record-fields input,.dns-record-fields textarea{font-family:var(--font-mono);font-size:12.5px}
+.dns-record-fields textarea{min-height:40px;resize:vertical}
+.table.dns-records{gap:6px}
+.row.dns-record-row{grid-template-columns:minmax(90px,1fr) 70px 70px minmax(0,3fr) auto;padding:8px 12px}
+.row.dns-record-head{background:transparent;border-color:transparent;padding-top:0;padding-bottom:0;font-size:12px;font-weight:600;color:var(--text-secondary)}
+.dns-record-name{font-family:var(--font-mono);font-size:12.5px;overflow-wrap:anywhere;min-width:0}
+.dns-type{font-family:var(--font-mono);font-size:12px;font-weight:600;padding:2px 6px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-alt)}
+.dns-record-ttl{font-size:12.5px;color:var(--text-secondary)}
+.dns-record-value{display:flex;align-items:baseline;gap:8px;min-width:0}
+.dns-record-value code{font-family:var(--font-mono);font-size:12.5px;overflow-wrap:anywhere;word-break:break-all;min-width:0}
+.dns-record-value small{font-size:12px;font-weight:600;color:var(--text-secondary)}
+.dns-record-row .row-actions{justify-content:flex-end;min-width:64px}
+.dns-locked{display:inline-flex;align-items:center;justify-content:center;width:28px;color:var(--text-secondary)}
+.row.dns-record-edit{grid-template-columns:1fr;gap:10px;border-color:var(--primary-ink)}
+.dns-record-edit .actions{justify-content:flex-end}
+.dns-managed-box{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.dns-managed-box span{flex:1 1 280px}
+.dns-managed-box svg{color:var(--primary-ink)}
+.dns-mail-badge{display:inline-flex;align-items:center;gap:3px;flex:none;font-size:11px}
+.mail-dns-head .mail-dns-zone{margin-left:auto}
+.mail-dns-head .mail-dns-zone + .mail-dns-status{margin-left:0}
+@media (max-width:760px){
+  .dns-record-fields,.dns-record-fields.with-priority{grid-template-columns:1fr 1fr}
+  .dns-record-fields .dns-value-field{grid-column:1 / -1}
+  .row.dns-record-row{grid-template-columns:minmax(0,1fr) auto;gap:4px 10px}
+  .row.dns-record-head{display:none}
+  .dns-record-row .dns-record-value{grid-column:1 / -1}
+}
 .mail-relay-card{display:grid;gap:8px;margin-bottom:14px;padding:14px;background:var(--surface-alt);border:1px solid var(--border);border-radius:var(--radius-md)}
 .mail-relay-card-head{display:flex;align-items:center;gap:8px;color:var(--text)}
 .mail-relay-card-head svg{color:var(--primary-ink)}

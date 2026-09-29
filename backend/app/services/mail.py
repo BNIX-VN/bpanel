@@ -1111,41 +1111,27 @@ def _hosted_zone(db: Session, row: MailDomain):
     return max(containing, key=lambda zone: len(zone.name), default=None)
 
 
-def _delegated(zone_name: str, nameservers: list[str]) -> bool | None:
-    """Whether public DNS asks this server's nameservers about the zone; None
-    when that could not be found out."""
-    found = _resolve(zone_name, "NS")
-    if found is None:
-        return None
-    ours = {name.rstrip(".").lower() for name in nameservers}
-    return bool({name.rstrip(".").lower() for name in found} & ours)
-
-
 def dns_view(db: Session, row: MailDomain, actor: User, check: bool = True) -> dict:
-    """The domain's DNS records page. When DNS Manager serves the domain, the
-    records are checked in its zone - what the DNS page shows - and whether
-    the world asks this server about it is said beside them."""
+    """The domain's DNS records page, as OPanel's: each record's status is what
+    public DNS answers; when DNS Manager serves the domain, in_zone also says
+    whether this server's zone - the one the DNS page shows - holds it."""
     from app.services import dns
 
     relay = effective_relay(row)
     zone = _hosted_zone(db, row)
-    records = dns_records(row)
-    delegated, nameservers = None, []
+    records = check_dns(row) if check else dns_records(row)
     if check and zone is not None:
         try:
-            records = check_dns(row, _zone_lookup(zone.name), zone.name)
+            in_zone = {record["key"]: record["status"] == "ok"
+                       for record in check_dns(row, _zone_lookup(zone.name), zone.name)}
         except dns.DnsError:
-            records = check_dns(row, lambda name, rtype: None)
-        nameservers = dns.settings()["nameservers"]
-        delegated = _delegated(zone.name, nameservers)
-    elif check:
-        records = check_dns(row)
+            in_zone = {}
+        for record in records:
+            record["in_zone"] = in_zone.get(record["key"])
     return {
         "domain": row.domain,
         "records": records,
         "hosted_zone": zone.name if zone else "",
-        "delegated": delegated,
-        "nameservers": nameservers,
         "relay": {
             "choice": row.relay or "",
             "effective": relay["id"] if relay else "",

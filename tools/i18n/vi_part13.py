@@ -357,31 +357,16 @@ PART13 = {
         "Mở trang DNS để kiểm tra nameserver, rồi trỏ các tên miền của bạn về đó.",
     "Every zone is kept in PowerDNS's database and is served again when you install the addon again.":
         "Mọi zone được giữ trong cơ sở dữ liệu của PowerDNS và được phục vụ lại khi bạn cài lại tiện ích.",
-    "The zones this server answers for. Point a domain at the nameservers below and its records are served from here.":
-        "Các zone server này trả lời. Trỏ một tên miền về các nameserver bên dưới là bản ghi của nó được phục vụ từ đây.",
     "Nameservers": "Nameserver",
-    "Set these as the nameservers of each domain, at its registrar.":
-        "Đặt các nameserver này cho từng tên miền, ở nhà đăng ký tên miền.",
     "Zones": "Zone",
-    "No zones yet. Add one below, or create a website.": "Chưa có zone nào. Thêm ở bên dưới, hoặc tạo một website.",
     "No owner": "Không có chủ",
     "Delete zone": "Xoá zone",
     "Owner": "Chủ sở hữu",
     "Add zone": "Thêm zone",
-    "Choose a zone to see its records.": "Chọn một zone để xem bản ghi.",
     "Priority": "Độ ưu tiên",
     "Value": "Giá trị",
-    "Save record": "Lưu bản ghi",
     "Add record": "Thêm bản ghi",
-    "The name is relative to the zone: @ is {zone} itself, www is www.{zone}.":
-        "Tên tính theo zone: @ là chính {zone}, www là www.{zone}.",
-    "No records.": "Chưa có bản ghi.",
-    "Delete the {type} record {name}?": "Xoá bản ghi {type} {name}?",
-    "Delete the zone {zone} and every record in it? The domain stops resolving from this server.":
-        "Xoá zone {zone} và mọi bản ghi trong đó? Tên miền sẽ không còn được phân giải từ server này.",
     "DNS settings": "Cài đặt DNS",
-    "Used for each new zone. Changing them does not rewrite the zones that already exist.":
-        "Dùng cho mỗi zone mới. Thay đổi ở đây không sửa lại các zone đã có.",
     "PowerDNS is running": "PowerDNS đang chạy",
     "PowerDNS is not running": "PowerDNS không chạy",
     "Port 53 open": "Cổng 53 đang mở",
@@ -390,9 +375,6 @@ PART13 = {
     "Nameserver 1": "Nameserver 1",
     "Nameserver 2": "Nameserver 2",
     "IP address for new zones": "Địa chỉ IP cho zone mới",
-    "Default TTL (seconds)": "TTL mặc định (giây)",
-    "If the nameservers are names under your own domain, create glue records for them at that domain's registrar, pointing to this server's IP address.":
-        "Nếu nameserver là tên thuộc tên miền của bạn, hãy tạo glue record cho chúng ở nhà đăng ký của tên miền đó, trỏ về IP của server này.",
     "Zone created.": "Đã tạo zone.",
     "Zone deleted.": "Đã xoá zone.",
     "Record added.": "Đã thêm bản ghi.",
@@ -456,6 +438,4 @@ PART13 = {
     "Give every domain on the server a DNS zone": "Tự cấp zone DNS cho mọi tên miền trên server",
     "Sync zones now": "Đồng bộ zone ngay",
     "Syncing...": "Đang đồng bộ...",
-    "No zones yet. Every domain in your account gets its zone.":
-        "Chưa có zone nào. Mỗi tên miền trong tài khoản của bạn sẽ có zone riêng.",
 }

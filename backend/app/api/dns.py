@@ -5,7 +5,7 @@ the settings; a customer sees and edits the zones of their own websites, and
 cannot create zones - a zone comes with a website, or from an administrator.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -56,11 +56,32 @@ def _answer(action):
         raise HTTPException(status_code=404 if exc.status == 404 else 502, detail=str(exc)) from exc
 
 
-@router.get("/zones")
-def list_zones(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+@router.get("/overview")
+def overview(current_user: User = Depends(get_current_user)):
+    """What every account's DNS page needs first: the nameservers a registrar
+    is given, the default TTL, and this server's addresses."""
     ensure_role(current_user.role, Role.end_user)
+    config = dns.settings()
+    ipv4 = [config["zone_ip"]] if config["zone_ip"] else []
+    ipv4 += [ip for ip in server_network.ipv4_addresses() if ip not in ipv4]
     return {
-        "zones": _answer(lambda: dns.list_zones(db, current_user)),
+        "installed": dns.active(),
+        "is_admin": is_admin_role(current_user.role),
+        "nameservers": config["nameservers"],
+        "default_ttl": config["ttl"],
+        "addresses": {"ipv4": ipv4, "ipv6": server_network.ipv6_addresses()},
+    }
+
+
+@router.get("/zones")
+def list_zones(q: str = Query(default="", max_length=253), page: int = Query(default=1, ge=1),
+               per_page: int = Query(default=50, ge=1, le=200),
+               db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.end_user)
+    listed = _answer(lambda: dns.zones_page(db, current_user, q, page, per_page))
+    return {
+        **listed,
+        "zones": listed["items"],
         "nameservers": dns.settings()["nameservers"],
         "can_manage": is_admin_role(current_user.role),
     }
@@ -92,7 +113,23 @@ def delete_zone(zone: str, request: Request, db: Session = Depends(get_db),
 @router.get("/zones/{zone}/records")
 def list_records(zone: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     name = _answer(lambda: dns.may_edit(db, current_user, zone))
-    return {"zone": name, "records": _answer(lambda: dns.records(name))}
+    return {"zone": name, "records": _answer(lambda: dns.zone_records(db, name))}
+
+
+@router.get("/zones/{zone}/delegation")
+def zone_delegation(zone: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    name = _answer(lambda: dns.may_edit(db, current_user, zone))
+    return dns.delegation(name)
+
+
+@router.post("/zones/{zone}/defaults")
+def restore_zone_defaults(zone: str, request: Request, db: Session = Depends(get_db),
+                          current_user: User = Depends(get_current_user)):
+    """Put back the records the panel manages in a zone; the owner's stay."""
+    name = _answer(lambda: dns.may_edit(db, current_user, zone))
+    _answer(lambda: dns.restore_defaults(db, name))
+    log_action(db, current_user.id, "dns_restore_defaults", name, request=request)
+    return {"zone": name, "records": _answer(lambda: dns.zone_records(db, name)), "message": "The panel's records are back."}
 
 
 @router.post("/zones/{zone}/records")
@@ -102,7 +139,7 @@ def add_record(zone: str, payload: RecordIn, request: Request, db: Session = Dep
     admin = is_admin_role(current_user.role)
     _answer(lambda: dns.add_record(name, payload.model_dump(), admin=admin))
     log_action(db, current_user.id, "dns_add_record", name, f"{payload.type} {payload.name}", request=request)
-    return {"zone": name, "records": _answer(lambda: dns.records(name)), "message": "Record added."}
+    return {"zone": name, "records": _answer(lambda: dns.zone_records(db, name)), "message": "Record added."}
 
 
 @router.put("/zones/{zone}/records")
@@ -112,7 +149,7 @@ def update_record(zone: str, payload: RecordChange, request: Request, db: Sessio
     admin = is_admin_role(current_user.role)
     _answer(lambda: dns.update_record(name, payload.original.model_dump(), payload.record.model_dump(), admin=admin))
     log_action(db, current_user.id, "dns_update_record", name, f"{payload.record.type} {payload.record.name}", request=request)
-    return {"zone": name, "records": _answer(lambda: dns.records(name)), "message": "Record saved."}
+    return {"zone": name, "records": _answer(lambda: dns.zone_records(db, name)), "message": "Record saved."}
 
 
 @router.post("/zones/{zone}/records/delete")
@@ -122,7 +159,7 @@ def delete_record(zone: str, payload: RecordIn, request: Request, db: Session = 
     admin = is_admin_role(current_user.role)
     _answer(lambda: dns.delete_record(name, payload.model_dump(), admin=admin))
     log_action(db, current_user.id, "dns_delete_record", name, f"{payload.type} {payload.name}", request=request)
-    return {"zone": name, "records": _answer(lambda: dns.records(name)), "message": "Record deleted."}
+    return {"zone": name, "records": _answer(lambda: dns.zone_records(db, name)), "message": "Record deleted."}
 
 
 @router.get("/settings")
@@ -135,9 +172,13 @@ def read_settings(current_user: User = Depends(get_current_user)):
 def save_settings(payload: SettingsIn, request: Request, db: Session = Depends(get_db),
                   current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.admin)
+    before = dns.settings()["nameservers"]
     saved = _answer(lambda: dns.save_settings(payload.nameservers, payload.zone_ip, payload.ttl, payload.auto_zone,
                                               payload.template))
     log_action(db, current_user.id, "dns_settings", ", ".join(saved["nameservers"]), request=request)
+    # New nameservers go into the NS and SOA records of every zone.
+    if saved["nameservers"] != before:
+        dns.follow_nameservers(db)
     # Nameservers set for the first time, or the automatic zones switched
     # back on: the domains still without a zone get one now.
     dns.sync_quietly(db)

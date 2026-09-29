@@ -310,19 +310,15 @@ const EMPTY_SITE_APP_DRAFT = {
   env: '',
 };
 const SITE_APP_KIND_LABELS = { node: 'Node.js', docker: 'Container', compose: 'Compose' };
-// DNS Manager addon: the record types it edits, and an example value for each.
-const DNS_RECORD_TYPES = ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'SRV', 'CAA'];
-const DNS_VALUE_HINTS = {
-  A: '203.0.113.10',
-  AAAA: '2001:db8::10',
-  CNAME: 'example.com',
-  MX: 'mail.example.com',
-  TXT: 'v=spf1 a mx ~all',
-  NS: 'ns1.example.com',
-  SRV: '5 5060 sip.example.com',
-  CAA: '0 issue letsencrypt.org',
+// DNS Manager addon, laid out like OPanel's: the record types, the TTLs the
+// form offers, and an example value for each type.
+const DNS_TYPES = ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'SRV', 'CAA'];
+const DNS_TTLS = [60, 300, 900, 1800, 3600, 14400, 43200, 86400];
+const DNS_PLACEHOLDERS = {
+  A: '203.0.113.10', AAAA: '2001:db8::10', CNAME: 'target.example.com', MX: 'mail.example.com',
+  TXT: 'v=spf1 mx -all', NS: 'ns1.example.net', SRV: '5 5060 sip.example.com', CAA: '0 issue letsencrypt.org',
 };
-const DNS_EMPTY_RECORD = { name: '@', type: 'A', ttl: 3600, content: '', priority: 10 };
+const emptyDnsRecord = () => ({ type: 'A', name: '', value: '', priority: '', ttl: '' });
 // The SPF part of the smarthosts customers use most.
 const MAIL_SPF_INCLUDES = ['include:spf.smtp2go.com', 'include:mailgun.org', 'include:sendgrid.net', 'include:amazonses.com',
   'include:spf.brevo.com', 'include:spf.mandrillapp.com', 'include:_spf.google.com', 'include:spf.protection.outlook.com'];
@@ -868,12 +864,17 @@ function App() {
   // Demo mode addon: the accounts the login page offers, and the form that picks them.
   const [demoAccess, setDemoAccess] = useState({ enabled: false, accounts: [] });
   const [demoSettings, setDemoSettings] = useState(null);
-  // DNS Manager addon.
-  const [dnsZones, setDnsZones] = useState({ zones: [], nameservers: [], can_manage: false, loaded: false });
-  const [dnsZone, setDnsZone] = useState('');
-  const [dnsRecords, setDnsRecords] = useState([]);
-  const [dnsDraft, setDnsDraft] = useState(DNS_EMPTY_RECORD);
-  const [dnsEditing, setDnsEditing] = useState(null);
+  // DNS Manager addon: the zones, one zone's records, the settings.
+  const [dnsInfo, setDnsInfo] = useState(null);
+  const [dnsTab, setDnsTab] = useState('zones');
+  const [dnsZones, setDnsZones] = useState(null);
+  const [dnsQuery, setDnsQuery] = useState('');
+  const [dnsPage, setDnsPage] = useState(1);
+  const [dnsZone, setDnsZone] = useState(null);
+  const [dnsDelegation, setDnsDelegation] = useState(null);
+  const [dnsRecordForm, setDnsRecordForm] = useState(emptyDnsRecord);
+  const [dnsRecordEdit, setDnsRecordEdit] = useState(null);
+  const [dnsRecordFilter, setDnsRecordFilter] = useState('');
   const [dnsSettings, setDnsSettings] = useState(null);
   const [dnsNewZone, setDnsNewZone] = useState({ name: '', owner_id: '' });
   // Email: domains, mailboxes and forwarders, and for administrators the
@@ -1053,6 +1054,8 @@ function App() {
     } else if (options.replace && window.location.pathname !== route) {
       window.history.replaceState({}, '', nextUrl);
     }
+    // The sidebar's DNS Manager opens the list, not the zone last looked at.
+    if (nextPage === 'dns') { setDnsZone(null); setDnsTab('zones'); }
     setPage(nextPage);
   }, []);
 
@@ -2544,67 +2547,109 @@ function App() {
     });
   }
 
-  function sameDnsRecord(a, b) {
-    return a.name === b.name && a.type === b.type && a.content === b.content && (a.priority ?? null) === (b.priority ?? null);
+  // --- DNS Manager, laid out like OPanel's: the zones, one zone, the settings ---
+  const dnsPath = zone => `/dns/zones/${encodeURIComponent(zone.name)}`;
+
+  async function loadDnsInfo() {
+    const data = await request('/dns/overview', { silent: true });
+    if (data) setDnsInfo(data);
+    return data;
   }
 
-  function dnsRecordBody(record) {
-    const withPriority = record.type === 'MX' || record.type === 'SRV';
+  async function loadDnsZones(page = dnsPage) {
+    const params = new URLSearchParams({ page: String(page), per_page: '50' });
+    if (dnsQuery.trim()) params.set('q', dnsQuery.trim());
+    const data = await request(`/dns/zones?${params}`, { silent: true });
+    if (data) setDnsZones(data);
+  }
+
+  async function loadDnsSettings() {
+    const data = await request('/dns/settings', { silent: true });
+    if (data) setDnsSettings({ ...data, ns1: data.nameservers?.[0] || '', ns2: data.nameservers?.[1] || '' });
+  }
+
+  async function openDnsZone(zone) {
+    if (page !== 'dns') navigateToPage('dns');
+    setDnsTab('zones');
+    setDnsZone({ zone, records: null });
+    setDnsDelegation(null);
+    setDnsRecordEdit(null);
+    setDnsRecordFilter('');
+    setDnsRecordForm(emptyDnsRecord());
+    const data = await request(`${dnsPath(zone)}/records`);
+    if (!data) { setDnsZone(null); return; }
+    setDnsZone({ zone, records: data.records || [] });
+    const check = await request(`${dnsPath(zone)}/delegation`, { silent: true });
+    setDnsDelegation(check || { status: 'unknown', expected: [], found: [] });
+  }
+
+  function dnsRecordBody(form) {
+    const withPriority = ['MX', 'SRV'].includes(form.type);
     return {
-      name: (record.name || '@').trim(),
-      type: record.type,
-      ttl: Number(record.ttl) || 3600,
-      content: (record.content || '').trim(),
-      priority: withPriority ? Number(record.priority) : null,
+      name: String(form.name || '').trim() || '@',
+      type: form.type,
+      ttl: Number(form.ttl) || Number(dnsInfo?.default_ttl) || 3600,
+      content: String(form.value ?? '').trim(),
+      priority: withPriority ? (String(form.priority ?? '').trim() === '' ? 10 : Number(form.priority)) : null,
     };
   }
 
-  async function loadDnsZones() {
-    const data = await request('/dns/zones', { silent: true });
+  // A record as the server listed it: how the server finds it again.
+  function dnsRecordKey(record) {
+    return { name: record.name, type: record.type, ttl: Number(record.ttl) || 3600, content: record.content, priority: record.priority ?? null };
+  }
+
+  function applyDnsRecords(data) {
+    setDnsZone(prev => (prev ? { ...prev, records: data.records || [] } : prev));
+  }
+
+  async function addDnsRecord() {
+    const data = await request(`${dnsPath(dnsZone.zone)}/records`, { method: 'POST', body: JSON.stringify(dnsRecordBody(dnsRecordForm)) }, t('Saving the record...'));
     if (!data) return;
-    setDnsZones({ ...data, loaded: true });
-    const names = (data.zones || []).map(zone => zone.name);
-    if (!names.length) { setDnsZone(''); setDnsRecords([]); return; }
-    if (!names.includes(dnsZone)) selectDnsZone(names[0]);
+    applyDnsRecords(data);
+    setDnsRecordForm(prev => ({ ...prev, name: '', value: '', priority: '' }));
+    setNotice(t('Record added.'));
   }
 
-  async function selectDnsZone(name) {
-    setDnsZone(name);
-    setDnsEditing(null);
-    setDnsDraft(prev => ({ ...DNS_EMPTY_RECORD, ttl: prev.ttl }));
-    const data = await request(`/dns/zones/${encodeURIComponent(name)}/records`);
-    setDnsRecords(data?.records || []);
-  }
-
-  async function saveDnsRecord() {
-    const path = `/dns/zones/${encodeURIComponent(dnsZone)}/records`;
-    const body = dnsRecordBody(dnsDraft);
-    const data = dnsEditing
-      ? await request(path, { method: 'PUT', body: JSON.stringify({ original: dnsRecordBody(dnsEditing), record: body }) }, t('Saving...'))
-      : await request(path, { method: 'POST', body: JSON.stringify(body) }, t('Saving...'));
+  async function saveDnsRecordEdit() {
+    const { old, form } = dnsRecordEdit;
+    const body = { original: dnsRecordKey(old), record: dnsRecordBody(form) };
+    const data = await request(`${dnsPath(dnsZone.zone)}/records`, { method: 'PUT', body: JSON.stringify(body) }, t('Saving the record...'));
     if (!data) return;
-    setDnsRecords(data.records || []);
-    setDnsEditing(null);
-    setDnsDraft(prev => ({ ...DNS_EMPTY_RECORD, type: prev.type, ttl: prev.ttl }));
-  }
-
-  function editDnsRecord(record) {
-    setDnsEditing(record);
-    setDnsDraft({ ...record, priority: record.priority ?? 10 });
-  }
-
-  function cancelDnsEdit() {
-    setDnsEditing(null);
-    setDnsDraft(prev => ({ ...DNS_EMPTY_RECORD, ttl: prev.ttl }));
+    applyDnsRecords(data);
+    setDnsRecordEdit(null);
+    setNotice(t('Record saved.'));
   }
 
   async function deleteDnsRecord(record) {
-    if (!confirm(t('Delete the {type} record {name}?', { type: record.type, name: record.name }))) return;
-    const data = await request(`/dns/zones/${encodeURIComponent(dnsZone)}/records/delete`,
-      { method: 'POST', body: JSON.stringify(dnsRecordBody(record)) }, t('Deleting...'));
+    const question = record.mail
+      ? t('The Email addon keeps this record for {domain} and writes it again when the email settings of {domain} change. Delete the {type} record of {name} anyway?', { domain: record.mail, type: record.type, name: record.name })
+      : t('Delete the {type} record of {name}: {value}?', { type: record.type, name: record.name, value: record.value });
+    if (!confirm(question)) return;
+    const data = await request(`${dnsPath(dnsZone.zone)}/records/delete`, { method: 'POST', body: JSON.stringify(dnsRecordKey(record)) }, t('Deleting the record...'));
     if (!data) return;
-    setDnsRecords(data.records || []);
-    if (dnsEditing && sameDnsRecord(dnsEditing, record)) cancelDnsEdit();
+    applyDnsRecords(data);
+    if (dnsRecordEdit?.old?.content === record.content) setDnsRecordEdit(null);
+    setNotice(t('Record deleted.'));
+  }
+
+  async function restoreDnsDefaults() {
+    if (!confirm(t('Put back the records the panel manages for {zone}: nameservers, websites and email. Records you added are kept.', { zone: dnsZone.zone.name }))) return;
+    const data = await request(`${dnsPath(dnsZone.zone)}/defaults`, { method: 'POST' }, t("Restoring the panel's records..."));
+    if (!data) return;
+    applyDnsRecords(data);
+    setNotice(t("The panel's records are back in {zone}.", { zone: dnsZone.zone.name }));
+  }
+
+  async function deleteDnsZone(zone) {
+    const typed = prompt(t('Every record of {zone} is deleted, and the domain stops resolving once its nameservers point here. Type the domain name to confirm.', { zone: zone.name }));
+    if (typed === null) return;
+    if (typed.trim().toLowerCase().replace(/\.$/, '') !== zone.name) { setError(t('The name did not match; nothing was deleted.')); return; }
+    const data = await request(dnsPath(zone), { method: 'DELETE' }, t('Deleting the zone...'));
+    if (!data) return;
+    setNotice(t('Zone {zone} deleted.', { zone: zone.name }));
+    setDnsZone(null);
+    loadDnsZones();
   }
 
   async function addDnsZone() {
@@ -2612,23 +2657,8 @@ function App() {
     const data = await request('/dns/zones', { method: 'POST', body: JSON.stringify(body) }, t('Saving...'));
     if (!data) return;
     setDnsNewZone({ name: '', owner_id: '' });
-    await loadDnsZones();
-    selectDnsZone(data.zone);
-  }
-
-  async function deleteDnsZone(name) {
-    if (!confirm(t('Delete the zone {zone} and every record in it? The domain stops resolving from this server.', { zone: name }))) return;
-    const data = await request(`/dns/zones/${encodeURIComponent(name)}`, { method: 'DELETE' }, t('Deleting...'));
-    if (!data) return;
-    if (name === dnsZone) { setDnsZone(''); setDnsRecords([]); }
     loadDnsZones();
-  }
-
-  async function loadDnsSettings() {
-    const data = await request('/dns/settings', { silent: true });
-    if (!data) return;
-    setDnsSettings(data);
-    setDnsDraft(prev => ({ ...prev, ttl: data.ttl || 3600 }));
+    openDnsZone({ name: data.zone });
   }
 
   async function syncDnsZones() {
@@ -2640,16 +2670,19 @@ function App() {
   }
 
   async function saveDnsSettings() {
+    const f = dnsSettings;
     const body = {
-      nameservers: (dnsSettings.nameservers || []).map(name => (name || '').trim()).filter(Boolean),
-      zone_ip: (dnsSettings.zone_ip || '').trim(),
-      ttl: Number(dnsSettings.ttl) || 3600,
-      auto_zone: !!dnsSettings.auto_zone,
-      template: dnsSettings.template || '',
+      nameservers: [f.ns1, f.ns2].map(name => String(name || '').trim()).filter(Boolean),
+      zone_ip: String(f.zone_ip || '').trim(),
+      ttl: Number(f.ttl) || 3600,
+      auto_zone: !!f.auto_zone,
+      template: f.template || '',
     };
-    const data = await request('/dns/settings', { method: 'PUT', body: JSON.stringify(body) }, t('Saving...'));
+    const data = await request('/dns/settings', { method: 'PUT', body: JSON.stringify(body) }, t('Saving DNS settings...'));
     if (!data) return;
-    await loadDnsSettings();
+    setNotice(t('DNS settings saved.'));
+    loadDnsSettings();
+    loadDnsInfo();
     loadDnsZones();
   }
 
@@ -2820,10 +2853,7 @@ function App() {
   }
 
   function applyMailDnsView(domain, data) {
-    setMailDns({
-      domain, records: data?.records || [], relay: data?.relay || null, hostedZone: data?.hosted_zone || '',
-      delegated: data?.delegated ?? null, nameservers: data?.nameservers || [],
-    });
+    setMailDns({ domain, records: data?.records || [], relay: data?.relay || null, hostedZone: data?.hosted_zone || '' });
   }
 
   async function openMailDns(domain) {
@@ -2841,15 +2871,6 @@ function App() {
         value: String(r.value).trim(),
         ...(r.type === 'MX' && String(r.priority ?? '').trim() !== '' ? { priority: Number(r.priority) } : {}),
       }));
-  }
-
-  async function publishMailDns() {
-    if (!confirm(t('Update the zone {zone}? The records of {domain} that differ from this page are replaced by the ones shown here.', { zone: mailDns.hostedZone, domain: mailDns.domain.domain }))) return;
-    const data = await request(`/mail/domains/${mailDns.domain.id}/dns/publish`, { method: 'POST' }, t('Saving...'));
-    if (data) {
-      setNotice(data.published?.length ? t('Updated in the zone {zone}: {names}.', { zone: data.hosted_zone, names: data.published.join(', ') }) : t('The zone already has these records.'));
-      applyMailDnsView(mailDns.domain, data);
-    }
   }
 
   async function saveDomainRelay(value) {
@@ -5039,9 +5060,13 @@ function App() {
   useEffect(() => { if (isAdmin && demoAddonInstalled) loadDemoSettings(); }, [isAdmin, demoAddonInstalled]);
   useEffect(() => {
     if (!isAuthenticated || page !== 'dns' || !dnsAddonInstalled) return;
-    loadDnsZones();
+    loadDnsInfo();
     if (isAdmin) { loadDnsSettings(); loadUsers(); }
   }, [isAuthenticated, page, dnsAddonInstalled, isAdmin]);
+  useEffect(() => {
+    if (!isAuthenticated || page !== 'dns' || !dnsAddonInstalled) return;
+    loadDnsZones(dnsPage);
+  }, [isAuthenticated, page, dnsAddonInstalled, dnsPage]);
   useEffect(() => {
     if (!isAuthenticated || page !== 'mail' || !mailAddonInstalled) return;
     setMailDns(null);
@@ -5169,7 +5194,7 @@ function App() {
       ...(isAdmin ? [['users', 'Panel users', Users]] : []),
     ] },
     { key: 'addons', items: [
-      ...(dnsAddonInstalled ? [['dns', 'DNS', Network]] : []),
+      ...(dnsAddonInstalled ? [['dns', 'DNS Manager', Network]] : []),
       ...(mailAddonInstalled ? [['mail', 'Email', Mail]] : []),
       ...(mcpAddonInstalled ? [['mcp', 'AI assistants', Bot]] : []),
       ...(notificationsAddonInstalled && isAdmin ? [['notifications', 'Notifications', Bell]] : []),
@@ -5745,134 +5770,258 @@ function App() {
     </section>;
   }
 
-  function renderDns() {
-    const zones = dnsZones.zones || [];
-    const needsPriority = dnsDraft.type === 'MX' || dnsDraft.type === 'SRV';
-    const setDraft = (field, value) => setDnsDraft(prev => ({ ...prev, [field]: value }));
-    return <>
-      <section className="section">
-        <div className="section-title">
-          <div>
-            <h2>{t('DNS')}</h2>
-            <p className="hint">{t('The zones this server answers for. Point a domain at the nameservers below and its records are served from here.')}</p>
-          </div>
-          <button className="secondary-light" disabled={!!loading} onClick={() => { loadDnsZones(); if (dnsZone) selectDnsZone(dnsZone); }}><RefreshCw size={14}/>{t('Refresh')}</button>
+  function dnsTtlLabel(seconds) {
+    const n = Number(seconds) || 0;
+    if (n >= 86400 && n % 86400 === 0) return t('{n} d', { n: n / 86400 });
+    if (n >= 3600 && n % 3600 === 0) return t('{n} h', { n: n / 3600 });
+    if (n >= 60 && n % 60 === 0) return t('{n} min', { n: n / 60 });
+    return t('{n} s', { n });
+  }
+
+  function dnsTypeHint(type) {
+    const ip4 = dnsInfo?.addresses?.ipv4?.[0];
+    const ip6 = dnsInfo?.addresses?.ipv6?.[0];
+    return {
+      A: ip4 ? t('The IPv4 address the name points to. This server: {ip}.', { ip: ip4 }) : t('The IPv4 address the name points to.'),
+      AAAA: ip6 ? t('The IPv6 address the name points to. This server: {ip}.', { ip: ip6 }) : t('The IPv6 address the name points to.'),
+      CNAME: t('Makes the name an alias of another host. A name with a CNAME can have no other record.'),
+      MX: t('A mail server for the domain; the lowest priority is tried first.'),
+      TXT: t('Text such as SPF, DKIM or a site verification. A long value is split into strings for you.'),
+      NS: t('Hands a subdomain to other nameservers.'),
+      SRV: t('Where a service runs: weight port target, with the priority in its own field. The name is like _sip._tcp.'),
+      CAA: t('Which certificate authorities may issue for the domain, for example 0 issue letsencrypt.org.'),
+    }[type] || '';
+  }
+
+  function renderDnsRecordFields(form, set, { lockType = false } = {}) {
+    const hasPriority = ['MX', 'SRV'].includes(form.type);
+    const current = Number(form.ttl) || 0;
+    const ttls = !current || DNS_TTLS.includes(current) ? DNS_TTLS : [...DNS_TTLS, current].sort((a, b) => a - b);
+    return <div className={`dns-record-fields${hasPriority ? ' with-priority' : ''}`}>
+      <label className="field"><span className="field-label">{t('Type')}</span>
+        <select value={form.type} disabled={lockType} onChange={e => set({ type: e.target.value })}>
+          {DNS_TYPES.map(type => <option key={type} value={type}>{type}</option>)}
+        </select></label>
+      <label className="field"><span className="field-label">{t('Name')}</span>
+        <input value={form.name} placeholder="@" spellCheck={false} autoCapitalize="off" onChange={e => set({ name: e.target.value })} /></label>
+      {hasPriority && <label className="field"><span className="field-label">{t('Priority')}</span>
+        <input type="number" min="0" max="65535" value={form.priority} placeholder="10" onChange={e => set({ priority: e.target.value })} /></label>}
+      <label className="field dns-value-field"><span className="field-label">{t('Value')}</span>
+        {form.type === 'TXT'
+          ? <textarea rows={2} value={form.value} placeholder={DNS_PLACEHOLDERS.TXT} spellCheck={false} onChange={e => set({ value: e.target.value.replace(/[\r\n]+/g, ' ') })} />
+          : <input value={form.value} placeholder={DNS_PLACEHOLDERS[form.type]} spellCheck={false} autoCapitalize="off" onChange={e => set({ value: e.target.value })} />}</label>
+      <label className="field"><span className="field-label">TTL</span>
+        <select value={form.ttl} onChange={e => set({ ttl: e.target.value })}>
+          <option value="">{t('Default ({ttl})', { ttl: dnsTtlLabel(dnsInfo?.default_ttl || 3600) })}</option>
+          {ttls.map(ttl => <option key={ttl} value={String(ttl)}>{dnsTtlLabel(ttl)}</option>)}
+        </select></label>
+    </div>;
+  }
+
+  // One line: the nameservers a domain's registrar is given.
+  function renderDnsNameservers() {
+    const names = dnsInfo?.nameservers || [];
+    return <div className="dns-ns-line">
+      <span className="dns-ns-label"><Network size={14}/> {t('Nameservers')}</span>
+      {names.length > 0
+        ? <>
+          {names.map(name => <code key={name}>{name}</code>)}
+          <button type="button" className="mini secondary-light icon-only" aria-label={t('Copy')} title={t('Copy')}
+            onClick={() => copyText(names.join('\n'), t('Copied.'))}><Copy size={13}/></button>
+        </>
+        : <span className="hint">{isAdmin ? t('Not set yet: open Settings.') : t('The administrator has not set the nameservers yet.')}</span>}
+    </div>;
+  }
+
+  function renderDnsPager() {
+    const list = dnsZones;
+    const pages = Math.max(1, Math.ceil((list?.total || 0) / (list?.per_page || 50)));
+    if (pages <= 1) return null;
+    return <div className="firewall-ip-pager">
+      <button className="mini secondary-light" disabled={dnsPage <= 1} onClick={() => setDnsPage(p => Math.max(1, p - 1))}>{t('Previous')}</button>
+      <span className="hint">{t('Page {page} of {pages}', { page: dnsPage, pages })}</span>
+      <button className="mini secondary-light" disabled={dnsPage >= pages} onClick={() => setDnsPage(p => p + 1)}>{t('Next')}</button>
+    </div>;
+  }
+
+  function renderDnsZones() {
+    const list = dnsZones;
+    const items = list?.items || [];
+    return <div className="mail-tab">
+      {renderDnsNameservers()}
+      <form className="mail-search dns-search" onSubmit={e => { e.preventDefault(); setDnsPage(1); loadDnsZones(1); }}>
+        <input value={dnsQuery} placeholder={t('Search domains')} aria-label={t('Search domains')} onChange={e => setDnsQuery(e.target.value)} />
+        <button type="submit" className="secondary-light icon-only" aria-label={t('Search')} title={t('Search')}><Search size={14}/></button>
+      </form>
+      {list === null && <p className="hint">{t('Loading…')}</p>}
+      {list && items.length === 0 && <EmptyState icon={Network} message={dnsQuery.trim() ? 'No domain matches the search.' : 'No domains yet.'} />}
+      {items.length > 0 && <div className="table">
+        {items.map(zone => <div className="row dns-zone-row" key={zone.name}>
+          <span className="mail-row-name">
+            <strong>{zone.name}</strong>
+            <small>{[isAdmin && zone.owner ? `${t('Account')}: ${zone.owner}` : '',
+              zone.created_at ? `${t('Added')} ${new Date(zone.created_at).toLocaleDateString()}` : '',
+              zone.on_panel === false ? t('No longer on the panel') : ''].filter(Boolean).join(' · ')}</small>
+          </span>
+          <span className="row-actions">
+            <button className="mini secondary-light" disabled={!!loading} onClick={() => openDnsZone(zone)}><Pencil size={13}/> {t('Records')}</button>
+          </span>
+        </div>)}
+      </div>}
+      {renderDnsPager()}
+      {isAdmin && <div className="create-inline dns-new-zone">
+        <div className="create-inline-head"><strong>{t('A zone for a domain that is not on the panel')}</strong></div>
+        <div className="mail-create-grid">
+          <label className="field"><span className="field-label">{t('Domain')}</span>
+            <input value={dnsNewZone.name} placeholder="example.com" spellCheck={false} onChange={e => setDnsNewZone(prev => ({ ...prev, name: e.target.value.trim().toLowerCase() }))} /></label>
+          <label className="field"><span className="field-label">{t('Account')}</span>
+            <select value={dnsNewZone.owner_id} onChange={e => setDnsNewZone(prev => ({ ...prev, owner_id: e.target.value }))}>
+              <option value="">{t('No owner')}</option>
+              {users.map(user => <option key={user.id} value={user.id}>{user.username}</option>)}
+            </select></label>
+          <button disabled={!dnsNewZone.name.trim() || !!loading} onClick={addDnsZone}><Plus size={14}/> {t('Add zone')}</button>
         </div>
-        {dnsZones.nameservers?.length > 0 && <div className="dns-ns">
-          <strong>{t('Nameservers')}</strong>
-          {dnsZones.nameservers.map(name => <code key={name}>{name}</code>)}
-          <span>{t('Set these as the nameservers of each domain, at its registrar.')}</span>
-        </div>}
-        <div className="dns-layout">
-          <div className="dns-zones">
-            <strong className="dns-zones-title">{t('Zones')}</strong>
-            {dnsZones.loaded && zones.length === 0 && <p className="hint">{isAdmin
-              ? t('No zones yet. Add one below, or create a website.')
-              : t('No zones yet. Every domain in your account gets its zone.')}</p>}
-            {zones.map(zone => <div key={zone.name} className={`dns-zone ${zone.name === dnsZone ? 'active' : ''}`}>
-              <button type="button" className="dns-zone-open" onClick={() => selectDnsZone(zone.name)} aria-current={zone.name === dnsZone ? 'true' : undefined}>
-                <strong>{zone.name}</strong>
-                {isAdmin && <small>{zone.owner || t('No owner')}</small>}
-              </button>
-              {isAdmin && <button type="button" className="mini danger" disabled={!!loading} onClick={() => deleteDnsZone(zone.name)} aria-label={t('Delete zone')} title={t('Delete zone')}><Trash2 size={13}/></button>}
-            </div>)}
-            {isAdmin && <div className="dns-zone-add">
-              <input value={dnsNewZone.name} onChange={e => setDnsNewZone(prev => ({ ...prev, name: e.target.value }))} placeholder="example.com" aria-label={t('Domain')} />
-              <select value={dnsNewZone.owner_id} onChange={e => setDnsNewZone(prev => ({ ...prev, owner_id: e.target.value }))} aria-label={t('Owner')}>
-                <option value="">{t('No owner')}</option>
-                {users.map(user => <option key={user.id} value={user.id}>{user.username}</option>)}
-              </select>
-              <button disabled={!!loading || !dnsNewZone.name.trim()} onClick={addDnsZone}><Plus size={14}/>{t('Add zone')}</button>
-            </div>}
-          </div>
-          <div className="dns-records">
-            {!dnsZone ? <EmptyState icon={Network} message={t('Choose a zone to see its records.')} /> : <>
-              <h3 className="dns-records-title">{dnsZone}</h3>
-              <div className="cron-builder dns-form">
-                <label><span>{t('Name')}</span><input value={dnsDraft.name} onChange={e => setDraft('name', e.target.value)} placeholder="@" spellCheck={false} /></label>
-                <label><span>{t('Type')}</span>
-                  <select value={dnsDraft.type} onChange={e => setDraft('type', e.target.value)}>
-                    {DNS_RECORD_TYPES.map(type => <option key={type} value={type}>{type}</option>)}
-                  </select>
-                </label>
-                <label><span>TTL</span><input type="number" min={60} max={604800} value={dnsDraft.ttl} onChange={e => setDraft('ttl', e.target.value)} /></label>
-                {needsPriority && <label><span>{t('Priority')}</span><input type="number" min={0} max={65535} value={dnsDraft.priority ?? ''} onChange={e => setDraft('priority', e.target.value)} /></label>}
-                <label className="cron-command"><span>{t('Value')}</span><input value={dnsDraft.content} onChange={e => setDraft('content', e.target.value)} placeholder={DNS_VALUE_HINTS[dnsDraft.type] || ''} spellCheck={false} /></label>
-                <div className="dns-form-actions">
-                  <button disabled={!!loading || !(dnsDraft.content || '').trim()} onClick={saveDnsRecord}>
-                    {dnsEditing ? <><Save size={14}/>{t('Save record')}</> : <><Plus size={14}/>{t('Add record')}</>}
-                  </button>
-                  {dnsEditing && <button className="secondary-light" disabled={!!loading} onClick={cancelDnsEdit}>{t('Cancel')}</button>}
-                </div>
-              </div>
-              <p className="hint">{t('The name is relative to the zone: @ is {zone} itself, www is www.{zone}.', { zone: dnsZone })}</p>
-              <div className="dns-list">
-                {dnsRecords.length === 0 && <EmptyState icon={Network} message={t('No records.')} />}
-                {dnsRecords.map(record => <div key={`${record.name}|${record.type}|${record.priority}|${record.content}`}
-                  className={`dns-record ${dnsEditing && sameDnsRecord(dnsEditing, record) ? 'editing' : ''}`}>
-                  <span className="dns-name">{record.name}</span>
-                  <span className="badge">{record.type}</span>
-                  <span className="dns-value">{record.priority != null && <b>{record.priority} </b>}{record.content}</span>
-                  <span className="dns-ttl">{record.ttl}s</span>
-                  {/* The zone's own nameservers are an administrator's to change;
-                      the server refuses a customer, so the page does not offer it. */}
-                  {!isAdmin && record.type === 'NS' && record.name === '@'
-                    ? <span className="dns-actions dns-locked" title={t("Only an administrator can change the zone's own nameservers.")}><Lock size={13}/></span>
-                    : <span className="dns-actions">
-                      <button className="mini secondary-light" disabled={!!loading} onClick={() => editDnsRecord(record)} aria-label={t('Edit')} title={t('Edit')}><Pencil size={13}/></button>
-                      <button className="mini danger" disabled={!!loading} onClick={() => deleteDnsRecord(record)} aria-label={t('Delete')} title={t('Delete')}><Trash2 size={13}/></button>
-                    </span>}
-                </div>)}
-              </div>
-            </>}
-          </div>
-        </div>
-      </section>
-      {isAdmin && renderDnsSettings()}
-    </>;
+      </div>}
+    </div>;
   }
 
   function renderDnsSettings() {
-    if (!dnsSettings) return null;
-    const server = dnsSettings.server || {};
+    const f = dnsSettings;
+    const set = patch => setDnsSettings(prev => ({ ...prev, ...patch }));
+    const server = f?.server || {};
     const serving = server.running && server.api;
-    const setField = (field, value) => setDnsSettings(prev => ({ ...prev, [field]: value }));
-    const setNameserver = (index, value) => setDnsSettings(prev => {
-      const next = [...(prev.nameservers || [])];
-      next[index] = value;
-      return { ...prev, nameservers: next };
-    });
-    return <section className="section">
+    const address = [dnsInfo?.addresses?.ipv4?.[0], dnsInfo?.addresses?.ipv6?.[0]].filter(Boolean).join(' / ');
+    const ttl = Number(f?.ttl) || 3600;
+    const ttls = DNS_TTLS.includes(ttl) ? DNS_TTLS : [...DNS_TTLS, ttl].sort((a, b) => a - b);
+    return <section className="section dns-page">
       <div className="section-title">
-        <div>
-          <h2>{t('DNS settings')}</h2>
-          <p className="hint">{t('Used for each new zone. Changing them does not rewrite the zones that already exist.')}</p>
+        <div className="waf-detail-title">
+          <button className="secondary-light" onClick={() => setDnsTab('zones')}><ArrowLeft size={14}/> {t('DNS Manager')}</button>
+          <div><h2>{t('DNS settings')}</h2>
+            <p className="hint">{t('The nameservers and default TTL of every zone on this server, and what a new zone holds.')}</p></div>
         </div>
       </div>
-      <div className="dns-server">
-        <span className={`badge ${serving ? 'ok' : 'bad'}`}>{serving ? t('PowerDNS is running') : t('PowerDNS is not running')}</span>
-        <span className={`badge ${server.port_open ? 'ok' : 'warn'}`}>{server.port_open ? t('Port 53 open') : t('Port 53 closed')}</span>
-        {server.listen?.length > 0 && <span className="hint">{t('Listening on')} {server.listen.join(', ')}</span>}
-      </div>
-      <div className="cron-builder">
-        <label><span>{t('Nameserver 1')}</span><input value={dnsSettings.nameservers?.[0] || ''} onChange={e => setNameserver(0, e.target.value)} placeholder="ns1.example.com" spellCheck={false} /></label>
-        <label><span>{t('Nameserver 2')}</span><input value={dnsSettings.nameservers?.[1] || ''} onChange={e => setNameserver(1, e.target.value)} placeholder="ns2.example.com" spellCheck={false} /></label>
-        <label><span>{t('IP address for new zones')}</span>
-          <input value={dnsSettings.zone_ip || ''} onChange={e => setField('zone_ip', e.target.value)} list="dns-server-ipv4" spellCheck={false} />
-          <datalist id="dns-server-ipv4">{(dnsSettings.server_ipv4 || []).map(ip => <option key={ip} value={ip} />)}</datalist>
-        </label>
-        <label><span>{t('Default TTL (seconds)')}</span><input type="number" min={60} max={604800} value={dnsSettings.ttl || 3600} onChange={e => setField('ttl', e.target.value)} /></label>
-        <label className="login-remember dns-auto"><input type="checkbox" checked={!!dnsSettings.auto_zone} onChange={e => setField('auto_zone', e.target.checked)} />{t('Give every domain on the server a DNS zone')}</label>
-        <label className="dns-template"><span>{t('Records for new zones')}</span>
-          <textarea rows={7} value={dnsSettings.template || ''} onChange={e => setField('template', e.target.value)} spellCheck={false} />
-        </label>
-        <p className="hint dns-template-hint">{t('One record per line: name, type, then the value; an MX value starts with its priority. {ip} is the address for new zones, {domain} the zone, and {spf} the SPF record:')} <code>{dnsSettings.spf}</code>. {t('Zones that already exist are not changed.')}</p>
-        <div className="dns-form-actions">
-          <button disabled={!!loading} onClick={saveDnsSettings}><Save size={14}/>{t('Save settings')}</button>
-          <button className="secondary-light" disabled={!!loading || !dnsSettings.auto_zone} onClick={syncDnsZones}><RefreshCw size={14}/>{t('Sync zones now')}</button>
+      {!f ? <p className="hint">{t('Loading…')}</p> : <div className="create-inline">
+        <div className="dns-server">
+          <span className={`badge ${serving ? 'ok' : 'bad'}`}>{serving ? t('PowerDNS is running') : t('PowerDNS is not running')}</span>
+          <span className={`badge ${server.port_open ? 'ok' : 'warn'}`}>{server.port_open ? t('Port 53 open') : t('Port 53 closed')}</span>
+          {server.listen?.length > 0 && <span className="hint">{t('Listening on')} {server.listen.join(', ')}</span>}
+        </div>
+        <div className="mail-settings-grid">
+          <label className="field"><span className="field-label">{t('Nameserver 1')}</span>
+            <input value={f.ns1} placeholder="ns1.example.com" spellCheck={false} onChange={e => set({ ns1: e.target.value })} /></label>
+          <label className="field"><span className="field-label">{t('Nameserver 2')}</span>
+            <input value={f.ns2} placeholder="ns2.example.com" spellCheck={false} onChange={e => set({ ns2: e.target.value })} /></label>
+          <label className="field"><span className="field-label">{t('IP address for new zones')}</span>
+            <input value={f.zone_ip || ''} list="dns-server-ipv4" spellCheck={false} onChange={e => set({ zone_ip: e.target.value })} />
+            <datalist id="dns-server-ipv4">{(f.server_ipv4 || []).map(ip => <option key={ip} value={ip} />)}</datalist></label>
+          <label className="field"><span className="field-label">{t('Default TTL')}</span>
+            <select value={String(ttl)} onChange={e => set({ ttl: e.target.value })}>
+              {ttls.map(value => <option key={value} value={String(value)}>{dnsTtlLabel(value)}</option>)}
+            </select></label>
+        </div>
+        <label className="check-line"><input type="checkbox" checked={!!f.auto_zone} onChange={e => set({ auto_zone: e.target.checked })} /> {t('Give every domain on the server a DNS zone')}</label>
+        <label className="field dns-template"><span className="field-label">{t('Records for new zones')}</span>
+          <textarea rows={6} value={f.template || ''} spellCheck={false} onChange={e => set({ template: e.target.value })} /></label>
+        <p className="hint dns-template-hint">{t('One record per line: name, type, then the value; an MX value starts with its priority. {ip} is the address for new zones, {domain} the zone, and {spf} the SPF record:')} <code>{f.spf}</code>. {t('Zones that already exist are not changed.')}</p>
+        <p className="hint">{t('A changed nameserver is written into the NS and SOA records of every zone. Register both names as glue (child nameserver) records at the registrar of their domain, pointing at this server.')} {address && t('This server: {address}.', { address })}</p>
+        <div className="actions">
+          <button type="button" disabled={!String(f.ns1 || '').trim() || !String(f.ns2 || '').trim() || !!loading} onClick={saveDnsSettings}><Save size={14}/> {t('Save settings')}</button>
+          <button type="button" className="secondary-light" disabled={!!loading || !f.auto_zone} onClick={syncDnsZones}><RefreshCw size={14}/> {t('Sync zones now')}</button>
+        </div>
+      </div>}
+    </section>;
+  }
+
+  function renderDnsZone() {
+    const { zone, records } = dnsZone;
+    const delegation = dnsDelegation;
+    const statusLabel = { ok: t('Served from here'), missing: t('Not delegated'), different: t('Other nameservers'), unknown: t('Not checked') };
+    const statusClass = { ok: 'ok', missing: 'bad', different: 'warn', unknown: '' };
+    const term = dnsRecordFilter.trim().toLowerCase();
+    const shown = (records || []).filter(r => !term || `${r.name} ${r.type} ${r.value}`.toLowerCase().includes(term));
+    const form = dnsRecordForm;
+    const edit = dnsRecordEdit;
+    const isEditing = record => edit && edit.old.name === record.name && edit.old.type === record.type && edit.old.content === record.content;
+    const delegationText = !delegation ? t('Checking the nameservers…')
+      : delegation.status === 'ok' ? t('{zone} is answered by this server.', { zone: zone.name })
+      : delegation.status === 'different' ? t('{zone} uses other nameservers now ({found}). Set {expected} at its registrar.', { zone: zone.name, found: delegation.found.join(', '), expected: delegation.expected.join(', ') })
+      : delegation.status === 'missing' ? t('Set {expected} as the nameservers of {zone} at its registrar. Until then these records are not used.', { expected: delegation.expected.join(', '), zone: zone.name })
+      : t('The nameservers of {zone} could not be looked up.', { zone: zone.name });
+    return <section className="section dns-zone-page">
+      <div className="section-title">
+        <div className="waf-detail-title">
+          <button className="secondary-light" onClick={() => { setDnsZone(null); loadDnsZones(); }}><ArrowLeft size={14}/> {t('DNS Manager')}</button>
+          <div><h2>{zone.name}</h2>
+            <p className="hint">{[isAdmin && zone.owner ? `${t('Account')}: ${zone.owner}` : '', records ? t('{n} records', { n: records.length }) : ''].filter(Boolean).join(' · ')}</p></div>
+        </div>
+        <div className="actions">
+          <button className="secondary-light" disabled={!!loading} onClick={() => openDnsZone(zone)}><RefreshCw size={14}/> {t('Refresh')}</button>
+          <button className="secondary-light" disabled={!!loading || records === null} onClick={restoreDnsDefaults}><RotateCcw size={14}/> {t('Restore panel records')}</button>
+          {isAdmin && zone.on_panel === false && <button className="danger" disabled={!!loading} onClick={() => deleteDnsZone(zone)}><Trash2 size={14}/> {t('Delete zone')}</button>}
         </div>
       </div>
-      <p className="hint">{t('If the nameservers are names under your own domain, create glue records for them at that domain\'s registrar, pointing to this server\'s IP address.')}</p>
+      <div className="dns-delegation">
+        <span className={`badge ${statusClass[delegation?.status] || ''}`}>{delegation ? statusLabel[delegation.status] || delegation.status : '…'}</span>
+        <span className="hint">{delegationText}</span>
+      </div>
+      <div className="create-inline dns-record-form">
+        <div className="create-inline-head"><strong>{t('Add a record')}</strong></div>
+        {renderDnsRecordFields(form, patch => setDnsRecordForm(prev => ({ ...prev, ...patch })))}
+        <p className="hint">{dnsTypeHint(form.type)} {t('Names are relative to {zone}: @ is the domain itself.', { zone: zone.name })}</p>
+        <div className="actions"><button type="button" disabled={!String(form.value).trim() || !!loading || records === null} onClick={addDnsRecord}><Plus size={14}/> {t('Add record')}</button></div>
+      </div>
+      <div className="mail-toolbar">
+        <strong>{t('Records')}</strong>
+        <div className="mail-search"><input value={dnsRecordFilter} placeholder={t('Filter records')} aria-label={t('Filter records')} onChange={e => setDnsRecordFilter(e.target.value)} /></div>
+      </div>
+      {records === null && <p className="hint">{t('Loading…')}</p>}
+      {records && <div className="table dns-records">
+        <div className="row dns-record-row dns-record-head" aria-hidden="true">
+          <span>{t('Name')}</span><span>{t('Type')}</span><span>TTL</span><span>{t('Value')}</span><span/>
+        </div>
+        {shown.map(record => isEditing(record)
+          ? <div className="row dns-record-edit" key={`${record.name}|${record.type}|${record.content}`}>
+              {renderDnsRecordFields(edit.form, patch => setDnsRecordEdit(prev => ({ ...prev, form: { ...prev.form, ...patch } })), { lockType: true })}
+              <div className="actions">
+                <button type="button" className="secondary-light" onClick={() => setDnsRecordEdit(null)}>{t('Cancel')}</button>
+                <button type="button" disabled={!String(edit.form.value).trim() || !!loading} onClick={saveDnsRecordEdit}><Save size={14}/> {t('Save')}</button>
+              </div>
+            </div>
+          : <div className="row dns-record-row" key={`${record.name}|${record.type}|${record.content}`}>
+              <span className="dns-record-name" title={record.fqdn}>{record.name}</span>
+              <span><code className="dns-type">{record.type}</code></span>
+              <span className="dns-record-ttl">{dnsTtlLabel(record.ttl)}</span>
+              <span className="dns-record-value">{record.priority != null && <small title={t('Priority')}>{record.priority}</small>}<code>{record.value}</code>
+                {record.mail && <span className="badge dns-mail-badge" title={t('Kept in step with the email of {domain}', { domain: record.mail })}><Mail size={11}/> {t('Email')}</span>}</span>
+              <span className="row-actions">
+                {record.locked
+                  ? <span className="dns-locked" title={t("Follows DNS Manager's nameserver settings")}><Lock size={13}/></span>
+                  : <>
+                    <button type="button" className="mini secondary-light icon-only" disabled={!!loading} aria-label={t('Edit')} title={t('Edit')}
+                      onClick={() => setDnsRecordEdit({ old: record, form: { type: record.type, name: record.name, value: record.value, priority: record.priority ?? '', ttl: String(record.ttl || '') } })}><Pencil size={13}/></button>
+                    <button type="button" className="mini danger icon-only" disabled={!!loading} aria-label={t('Delete')} title={t('Delete')} onClick={() => deleteDnsRecord(record)}><Trash2 size={13}/></button>
+                  </>}
+              </span>
+            </div>)}
+        {shown.length === 0 && <p className="hint">{t('No record matches the filter.')}</p>}
+      </div>}
+    </section>;
+  }
+
+  function renderDns() {
+    if (dnsZone) return renderDnsZone();
+    if (isAdmin && dnsTab === 'settings') return renderDnsSettings();
+    return <section className="section dns-page">
+      <div className="section-title">
+        <div><h2>{t('DNS Manager')}</h2>
+          <p className="hint">{isAdmin ? t('Every domain on the panel, answered by this server.') : t('The DNS records of your domains, answered by this server.')}</p></div>
+        <div className="actions">
+          {isAdmin && <button type="button" className="secondary-light" onClick={() => setDnsTab('settings')}><SettingsIcon size={14}/> {t('Settings')}</button>}
+          <button type="button" className="secondary-light" disabled={!!loading} onClick={() => { loadDnsInfo(); loadDnsZones(); }}><RefreshCw size={14}/> {t('Refresh')}</button>
+        </div>
+      </div>
+      {renderDnsZones()}
     </section>;
   }
 
@@ -6130,7 +6279,7 @@ function App() {
   }
 
   function renderMailDns() {
-    const { domain, records, relay, hostedZone, delegated, nameservers } = mailDns;
+    const { domain, records, relay, hostedZone } = mailDns;
     const statusLabel = { ok: t('Found'), missing: t('Missing'), different: t('Different'), unknown: t('Not checked') };
     const statusClass = { ok: 'ok', missing: 'bad', different: 'warn', unknown: '' };
     const titles = {
@@ -6142,26 +6291,18 @@ function App() {
       webmail: t('Webmail address (optional)'),
     };
     const titleFor = record => titles[record.key] || t('Asked for by the relay {relay}', { relay: record.relay });
-    // The panel keeps a served zone in step by itself; the button is for
-    // records the owner changed on the DNS page.
-    const zoneBehind = !!hostedZone && (records || []).some(record => !record.optional && record.status !== 'ok' && record.status !== 'unknown');
     return <section className="section mail-dns-page">
       <div className="section-title">
         <div className="waf-detail-title">
           <button className="secondary-light" onClick={() => setMailDns(null)}><ArrowLeft size={14}/> {t('Email')}</button>
           <div><h2>{t('DNS records for {domain}', { domain: domain.domain })}</h2>
-            <p className="hint">{hostedZone
-              ? t('This server runs the DNS of {domain}: the records below are checked in the zone {zone} on the DNS page, and the panel keeps them there.', { domain: domain.domain, zone: hostedZone })
-              : t('Add these at the DNS provider of {domain}. A change can take a few hours to be seen everywhere.', { domain: domain.domain })}</p></div>
+            <p className="hint">{t('Add these at the DNS provider of {domain}. A change can take a few hours to be seen everywhere.', { domain: domain.domain })}</p></div>
         </div>
         <div className="actions">
-          {zoneBehind && <button className="secondary-light" disabled={!!loading || records === null} onClick={publishMailDns}><Upload size={14}/> {t('Update the zone')}</button>}
           <button className="secondary-light" disabled={!!loading || records === null} onClick={() => openMailDns(domain)}><RefreshCw size={14}/> {t('Check again')}</button>
           <button className="secondary-light" disabled={!!loading} onClick={() => rotateMailDkim(domain)}><KeyRound size={14}/> {t('New DKIM key')}</button>
         </div>
       </div>
-      {hostedZone && delegated === false && <p className="mail-dns-note warn">{t("Public DNS does not ask this server about {zone} yet, so these records are not seen outside it. Set the domain's nameservers to {nameservers} at its registrar.", { zone: hostedZone, nameservers: (nameservers || []).join(', ') })}</p>}
-      {hostedZone && delegated === true && <p className="mail-dns-note ok">{t("{zone} uses this server's nameservers: what is in the zone is what everyone sees.", { zone: hostedZone })}</p>}
       {relay && <div className="mail-relay-card">
         <div className="mail-relay-card-head"><Send size={15}/><strong>{t('Outgoing mail')}</strong></div>
         {isAdmin && <select value={relay.choice} disabled={!!loading} aria-label={t('Outgoing mail')} onChange={e => saveDomainRelay(e.target.value)}>
@@ -6173,13 +6314,20 @@ function App() {
           ? t('Mail from {domain} leaves through the relay {relay}; the records it asks for are listed below.', { domain: domain.domain, relay: relay.effective_name })
           : t('Mail from {domain} is delivered directly from this server.', { domain: domain.domain })}</p>
       </div>}
+      {hostedZone && <div className="info-box dns-managed-box">
+        <Network size={14}/>
+        <span>{t('DNS Manager on this server holds the zone {zone} and keeps these records in it, taking back the ones email no longer needs. "In the zone" is what the zone holds; the other badge is what public DNS answers, which matches once the domain\'s nameservers point here.', { zone: hostedZone })}</span>
+        <button type="button" className="mini secondary-light" onClick={() => openDnsZone({ name: hostedZone })}>{t('Open zone')}</button>
+      </div>}
       {records === null && <p className="hint">{t('Checking DNS…')}</p>}
       {records && <div className="mail-dns-list">
         {records.map(record => <div className="mail-dns-record" key={record.key}>
           <div className="mail-dns-head">
             <strong>{titleFor(record)}</strong>
             <span className="mail-dns-type"><code>{record.type}</code>{record.priority != null && <small>{t('priority {n}', { n: record.priority })}</small>}</span>
-            <span className={`badge mail-dns-status ${statusClass[record.status] || ''}`}>{statusLabel[record.status] || record.status}</span>
+            {hostedZone && record.in_zone != null && <span className={`badge mail-dns-zone ${record.in_zone ? 'ok' : 'warn'}`}
+              title={t("DNS Manager's zone on this server")}>{record.in_zone ? t('In the zone') : t('Not in the zone')}</span>}
+            <span className={`badge mail-dns-status ${statusClass[record.status] || ''}`} title={t('What public DNS answers now')}>{statusLabel[record.status] || record.status}</span>
           </div>
           {renderCopyBlock(t('Name'), record.name)}
           {renderCopyBlock(t('Value'), record.value, { multiline: record.key === 'dkim' })}
@@ -6510,7 +6658,7 @@ function App() {
             <button type="button" className="secondary-light" disabled={!!loading} onClick={refreshMail}><RefreshCw size={14}/> {t('Refresh')}</button>
           </div>
         </div>
-        <div className="segmented-control mail-tabs" role="tablist" aria-label={t('Email sections')}>
+        <div className="segmented-control backup-tabs mail-tabs" role="tablist" aria-label={t('Email sections')}>
           {tabs.map(([id, label, Icon]) => <button key={id} type="button" role="tab" aria-selected={activeTab === id}
             className={activeTab === id ? 'active' : ''} disabled={!domains.length && !['domains', ...serverTabs].includes(id)}
             onClick={() => { setMailTab(id); setMailPage(1); }}><Icon size={14}/>{t(label)}</button>)}

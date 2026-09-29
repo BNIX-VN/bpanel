@@ -219,7 +219,6 @@ PART14 = {
     "DNS records for {domain}": "Bản ghi DNS cho {domain}",
     "Add these at the DNS provider of {domain}. A change can take a few hours to be seen everywhere.":
         "Hãy thêm các bản ghi này ở nhà cung cấp DNS của {domain}. Thay đổi có thể mất vài giờ để cập nhật khắp nơi.",
-    "The zone already has these records.": "Zone đã có sẵn các bản ghi này.",
     "Check again": "Kiểm tra lại",
     "Checking DNS…": "Đang kiểm tra DNS…",
     "New DKIM key": "Tạo khoá DKIM mới",
@@ -410,15 +409,5 @@ PART14 = {
     # The DNS records page and DNS Manager (2026-09-29, one with DNS Manager)
     "Mail for a domain arrives here once its MX record points at this server; the DNS records to add are shown next.":
         "Thư của một tên miền sẽ về server này khi bản ghi MX trỏ về đây; các bản ghi DNS cần thêm sẽ hiện ở bước tiếp theo.",
-    "This server runs the DNS of {domain}: the records below are checked in the zone {zone} on the DNS page, and the panel keeps them there.":
-        "Server này đang chạy DNS cho {domain}: các bản ghi bên dưới được kiểm tra trong zone {zone} ở trang DNS, và panel tự giữ chúng trong đó.",
-    "Update the zone": "Cập nhật zone",
-    "Update the zone {zone}? The records of {domain} that differ from this page are replaced by the ones shown here.":
-        "Cập nhật zone {zone}? Các bản ghi của {domain} khác với trang này sẽ được thay bằng bản ghi hiện ở đây.",
-    "Updated in the zone {zone}: {names}.": "Đã cập nhật trong zone {zone}: {names}.",
     "Mail server address (A)": "Địa chỉ mail server (A)",
-    "Public DNS does not ask this server about {zone} yet, so these records are not seen outside it. Set the domain's nameservers to {nameservers} at its registrar.":
-        "DNS công khai chưa hỏi server này về {zone}, nên bên ngoài chưa thấy các bản ghi này. Hãy đặt nameserver của tên miền thành {nameservers} tại nơi đăng ký tên miền.",
-    "{zone} uses this server's nameservers: what is in the zone is what everyone sees.":
-        "{zone} đang dùng nameserver của server này: bản ghi trong zone chính là bản ghi mọi nơi nhìn thấy.",
 }

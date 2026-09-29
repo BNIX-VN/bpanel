@@ -33,7 +33,10 @@ REVIEWED_READS = {
     "/api/auth/session", "/api/auth/sso/{token}", "/api/dashboard/summary", "/api/databases",
     "/api/demo-mode", "/api/demo-mode/public",
     # DNS Manager (2026-09-29): zones, records and settings; no key or secret.
+    # The overview is the nameservers, default TTL and server addresses; the
+    # delegation check is what public DNS already answers.
     "/api/dns/zones", "/api/dns/zones/{zone}/records", "/api/dns/settings",
+    "/api/dns/overview", "/api/dns/zones/{zone}/delegation",
     # Email (2026-09-29): mail domains, mailboxes, forwarders, a domain's DNS
     # records (the DKIM key is public) and client settings. No password or
     # hash; the webmail link is a POST.
