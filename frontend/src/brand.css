@@ -512,6 +512,41 @@ button:disabled,.upload-button.disabled{background:var(--disabled-bg);color:var(
 .addon-notes strong{display:flex;align-items:center;gap:5px;font-size:11px;letter-spacing:.03em;text-transform:uppercase}
 .addon-notes ul{margin:0;padding-left:16px;display:grid;gap:3px;font-weight:600}
 .addon-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:2px}
+/* DNS Manager addon: zones on the left, the chosen zone's records on the right. */
+.dns-ns{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;margin:0 0 12px;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-alt);font-size:13px}
+.dns-ns code{font-family:var(--font-mono);font-size:12.5px;padding:2px 7px;border-radius:5px;background:var(--surface);border:1px solid var(--border);color:var(--text)}
+.dns-ns span{color:var(--text-muted)}
+.dns-layout{display:grid;grid-template-columns:minmax(0,1fr);gap:14px}
+.dns-zones{display:grid;gap:6px;align-content:start;min-width:0}
+.dns-zones-title{font-size:11.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--text-muted)}
+.dns-zone{display:flex;align-items:center;gap:6px;min-width:0}
+.dns-zone-open{flex:1;min-width:0;display:grid;gap:1px;min-height:40px;padding:7px 10px;text-align:left;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text);cursor:pointer;font:inherit}
+.dns-zone-open strong{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dns-zone-open small{font-size:11.5px;color:var(--text-muted)}
+.dns-zone.active .dns-zone-open{border-color:var(--primary);background:var(--primary-light)}
+.dns-zone-add{display:grid;gap:6px;margin-top:8px;padding-top:10px;border-top:1px dashed var(--border)}
+.dns-records{display:grid;gap:10px;align-content:start;min-width:0}
+.dns-records-title{margin:0;font-size:15px;color:var(--text);overflow-wrap:anywhere}
+.dns-form-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:end}
+.dns-list{display:grid;gap:6px}
+.dns-record{display:grid;grid-template-columns:minmax(70px,.7fr) 64px minmax(0,2fr) auto auto;gap:10px;align-items:center;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);font-size:13px}
+.dns-record .badge{justify-self:start}
+.dns-record.editing{border-color:var(--primary);box-shadow:inset 0 0 0 1px var(--primary)}
+.dns-name{font-weight:700;color:var(--text);overflow-wrap:anywhere}
+.dns-value{min-width:0;font-family:var(--font-mono);font-size:12.5px;color:var(--text-secondary);overflow-wrap:anywhere}
+.dns-ttl{font-size:12px;color:var(--text-muted);white-space:nowrap}
+.dns-actions{display:flex;gap:6px}
+.dns-server{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 12px}
+.dns-auto{align-self:center}
+@media (min-width:1000px){.dns-layout{grid-template-columns:260px minmax(0,1fr)}}
+@media (max-width:640px){
+  .dns-record{grid-template-columns:minmax(0,1fr) auto}
+  .dns-record .badge{grid-column:2;grid-row:1;justify-self:end}
+  .dns-value{grid-column:1 / -1}
+  .dns-ttl{grid-column:1}
+  .dns-actions{grid-column:2;justify-self:end}
+}
+
 /* Demo mode addon: the accounts form on its card, the login page's buttons and
    the strip a demo visitor sees on every page. */
 .demo-accounts{display:grid;gap:10px;margin-top:4px;padding:11px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-alt)}

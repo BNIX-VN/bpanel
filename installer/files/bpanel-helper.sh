@@ -72,6 +72,14 @@ FIREWALL_RULES_FILE="${FIREWALL_DIR}/rules.tsv"
 FIREWALL_STATE_FILE="${FIREWALL_DIR}/state"
 FIREWALL_CHAIN="BPANEL-INPUT"
 FIREWALL_PROTECTED_PORTS=(22 80 443 465 587)
+# Ports an addon opens while it is on: one file per addon, "<port> <tcp|udp>" a line.
+FIREWALL_ADDON_PORTS_DIR="${FIREWALL_DIR}/addon-ports"
+# DNS Manager (PowerDNS). The zones live in PDNS_DB, which nothing here removes.
+PDNS_CONF="/etc/powerdns/pdns.d/zz-bpanel.conf"
+PDNS_DB="/var/lib/powerdns/pdns.sqlite3"
+PDNS_SCHEMA="/usr/share/pdns-backend-sqlite3/schema/schema.sqlite3.sql"
+PDNS_API_KEY_FILE="/etc/bpanel/pdns-api.key"
+PDNS_API_PORT="8053"
 NGINX_BPANEL_DIR="/etc/nginx/bpanel"
 NGINX_BLOCKLIST_DIR="$NGINX_BPANEL_DIR"
 NGINX_BLOCKLIST_CONF="/etc/nginx/conf.d/bpanel-ip-blocklist.conf"
@@ -1301,6 +1309,164 @@ remove_fail2ban() {
   echo "fail2ban stopped and disabled. Config and ban history kept."
 }
 
+# ---- DNS Manager (PowerDNS, optional) -----------------------------------------
+# The panel edits zones through PowerDNS's HTTP API on loopback, with the key in
+# PDNS_API_KEY_FILE (root:bpanel 0640): no call to this helper per record.
+# Turning the addon off stops the service and closes port 53; the zone database,
+# the key and the package all stay, so turning it on again serves every zone.
+
+dns_listen_addresses() {
+  # Loopback for the panel's own checks, then every global address. Never the
+  # wildcard: systemd-resolved holds 127.0.0.53:53 and a 0.0.0.0 bind collides.
+  local list="127.0.0.1" addr
+  while read -r addr; do
+    [[ -n "$addr" ]] && list+=", ${addr}"
+  done < <(ip -o addr show scope global 2>/dev/null | awk '{ split($4, a, "/"); print a[1] }')
+  printf '%s\n' "$list"
+}
+
+dns_port_53_users() {
+  # Whatever listens on port 53 apart from PowerDNS and resolved's stub.
+  local listing
+  listing="$( { ss -H -lnup 'sport = :53'; ss -H -lntp 'sport = :53'; } 2>/dev/null || true)"
+  printf '%s\n' "$listing" | grep -o 'users:(("[^"]*"' | sed 's/^users:(("//; s/"$//' \
+    | grep -v -x -e 'systemd-resolve' -e 'pdns_server' | sort -u | tr '\n' ' ' || true
+}
+
+dns_api_answers() {
+  curl -fsS -m 3 -H "X-API-Key: $1" "http://127.0.0.1:${PDNS_API_PORT}/api/v1/servers/localhost" >/dev/null 2>&1
+}
+
+install_dns() {
+  export DEBIAN_FRONTEND=noninteractive
+  local others
+  others="$(dns_port_53_users)"
+  if [[ -n "${others// /}" ]]; then
+    deny "port 53 is already in use by: ${others% } - stop it before installing DNS Manager"
+  fi
+
+  if ! pkg_installed pdns-server || ! pkg_installed pdns-backend-sqlite3; then
+    # Keep apt from starting PowerDNS on its stock settings while it installs:
+    # those bind 0.0.0.0:53, collide with systemd-resolved, and the failed start
+    # in the package script fails the whole install.
+    local policy="/usr/sbin/policy-rc.d" saved="" status=0
+    if [[ -e "$policy" ]]; then
+      saved="${policy}.bpanel-dns"
+      mv -f "$policy" "$saved"
+    fi
+    printf '#!/bin/sh\nexit 101\n' >"$policy"
+    chmod 0755 "$policy"
+    apt-get update --allow-releaseinfo-change || true
+    apt-get install -y pdns-server pdns-backend-sqlite3 || status=$?
+    rm -f "$policy"
+    if [[ -n "$saved" ]]; then
+      mv -f "$saved" "$policy"
+    fi
+    if [[ $status -ne 0 ]]; then
+      deny "could not install PowerDNS (apt-get exited ${status})"
+    fi
+  fi
+
+  # The zone database: made once, never replaced.
+  install -d -o pdns -g pdns -m 0750 /var/lib/powerdns
+  if [[ ! -s "$PDNS_DB" ]]; then
+    [[ -f "$PDNS_SCHEMA" ]] || deny "the PowerDNS SQLite schema is missing: ${PDNS_SCHEMA}"
+    python3 - "$PDNS_DB" "$PDNS_SCHEMA" <<'PY' || deny "could not create the PowerDNS database"
+import sqlite3
+import sys
+
+connection = sqlite3.connect(sys.argv[1])
+with open(sys.argv[2], encoding="utf-8") as schema:
+    connection.executescript(schema.read())
+connection.commit()
+connection.close()
+PY
+  fi
+  chown pdns:pdns "$PDNS_DB"
+  chmod 0640 "$PDNS_DB"
+
+  install -d -o root -g bpanel -m 0750 /etc/bpanel
+  if [[ ! -s "$PDNS_API_KEY_FILE" ]]; then
+    # Made 0640 while still empty, then filled: the key is never readable by
+    # anyone else, even for a moment.
+    install -m 0640 -o root -g bpanel /dev/null "$PDNS_API_KEY_FILE"
+    openssl rand -hex 32 >"$PDNS_API_KEY_FILE"
+  fi
+  chown root:bpanel "$PDNS_API_KEY_FILE"
+  chmod 0640 "$PDNS_API_KEY_FILE"
+
+  local key listen
+  key="$(tr -d '[:space:]' <"$PDNS_API_KEY_FILE")"
+  listen="$(dns_listen_addresses)"
+  install -d -m 0755 /etc/powerdns/pdns.d
+  cat >"$PDNS_CONF" <<EOF
+# Managed by BPanel (DNS Manager addon); rewritten each time the addon is installed.
+launch=gsqlite3
+gsqlite3-database=${PDNS_DB}
+# Loopback and this server's own addresses. One that has gone after an IP
+# change is skipped rather than stopping the whole server.
+local-address=${listen}
+local-address-nonexist-fail=no
+local-port=53
+# The panel edits zones through this API, on loopback only.
+api=yes
+api-key=${key}
+webserver=yes
+webserver-address=127.0.0.1
+webserver-port=${PDNS_API_PORT}
+webserver-allow-from=127.0.0.1/32
+# Authoritative only: no zone transfers and no version string.
+disable-axfr=yes
+version-string=anonymous
+EOF
+  chown root:pdns "$PDNS_CONF"
+  chmod 0640 "$PDNS_CONF"
+
+  systemctl enable pdns >/dev/null 2>&1 || true
+  systemctl restart pdns || deny "PowerDNS did not start - journalctl -u pdns -n 50 says why"
+  local waited=0
+  while (( waited < 20 )); do
+    dns_api_answers "$key" && break
+    sleep 1
+    waited=$((waited + 1))
+  done
+  dns_api_answers "$key" || deny "PowerDNS is running but its API does not answer on 127.0.0.1:${PDNS_API_PORT}"
+
+  # REFUSED is an answer: it proves PowerDNS itself holds port 53, not merely
+  # that the process is alive.
+  local reply
+  reply="$(dig +time=2 +tries=1 @127.0.0.1 bpanel-probe.invalid SOA 2>/dev/null || true)"
+  [[ "$reply" == *"status: REFUSED"* ]] || deny "PowerDNS is running but does not answer DNS queries on port 53"
+
+  install -d -m 0750 "$FIREWALL_ADDON_PORTS_DIR"
+  printf '53 tcp\n53 udp\n' >"$FIREWALL_ADDON_PORTS_DIR/dns.ports"
+  firewall_apply >/dev/null
+  echo "DNS Manager installed: PowerDNS answers on ${listen}, and port 53 is open over TCP and UDP."
+}
+
+remove_dns() {
+  systemctl disable --now pdns >/dev/null 2>&1 || true
+  rm -f "$FIREWALL_ADDON_PORTS_DIR/dns.ports"
+  firewall_apply >/dev/null
+  echo "DNS Manager stopped: PowerDNS is off and port 53 is closed. The zones are kept in ${PDNS_DB}."
+}
+
+dns_status() {
+  local installed=no running=no api=no port_open=no listen=""
+  if pkg_installed pdns-server; then installed=yes; fi
+  if systemctl is-active --quiet pdns 2>/dev/null; then running=yes; fi
+  if [[ -s "$PDNS_API_KEY_FILE" ]] && dns_api_answers "$(tr -d '[:space:]' <"$PDNS_API_KEY_FILE")"; then api=yes; fi
+  if [[ -f "$FIREWALL_ADDON_PORTS_DIR/dns.ports" ]]; then port_open=yes; fi
+  if [[ -f "$PDNS_CONF" ]]; then
+    listen="$(awk -F= '$1 == "local-address" { print $2; exit }' "$PDNS_CONF")"
+  fi
+  echo "installed=${installed}"
+  echo "running=${running}"
+  echo "api=${api}"
+  echo "port_open=${port_open}"
+  echo "listen=${listen}"
+}
+
 fail2ban_status() {
   if ! pkg_installed fail2ban; then
     echo "installed=no"; echo "running=no"; echo "jails="; echo "banned=0"; echo "banaction="
@@ -2171,6 +2337,15 @@ firewall_apply_family() {
     [[ -n "$port" ]] || continue
     "$ipt" -A "$FIREWALL_CHAIN" -p tcp --dport "$port" -j RETURN
   done < <(firewall_protected_ports)
+
+  # Ports an addon opens while it is on - DNS Manager's 53, over TCP and UDP.
+  # The addon writes its file when installed and deletes it when removed, so
+  # turning it off closes the port and the operator's own rules never change.
+  local addon_port addon_proto
+  while read -r addon_port addon_proto; do
+    [[ "$addon_port" =~ ^[0-9]+$ && "$addon_proto" =~ ^(tcp|udp)$ ]] || continue
+    "$ipt" -A "$FIREWALL_CHAIN" -p "$addon_proto" --dport "$addon_port" -j RETURN
+  done < <(cat "$FIREWALL_ADDON_PORTS_DIR"/*.ports 2>/dev/null || true)
 
   local _id action ip proto
   while IFS=$'\t' read -r _id action ip port proto; do
@@ -5089,6 +5264,22 @@ case "$cmd" in
   fail2ban-status)
     [[ $# -eq 0 ]] || deny "usage: fail2ban-status"
     fail2ban_status
+    ;;
+
+  # ---- DNS Manager (PowerDNS, optional) ---------------------------------
+  dns-install)
+    [[ $# -eq 0 ]] || deny "usage: dns-install"
+    install_dns
+    ;;
+
+  dns-remove)
+    [[ $# -eq 0 ]] || deny "usage: dns-remove"
+    remove_dns
+    ;;
+
+  dns-status)
+    [[ $# -eq 0 ]] || deny "usage: dns-status"
+    dns_status
     ;;
 
   fail2ban-banned)

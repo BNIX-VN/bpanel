@@ -1,0 +1,604 @@
+"""DNS Manager addon: authoritative DNS on this server, through PowerDNS.
+
+Operator, 2026-09-29: "Phát triển thêm addon DNS Manager". Chosen with them:
+a DNS server on the VPS itself, as DirectAdmin does; administrators edit every
+zone and a customer the zones of their own websites; a website made while the
+addon is on gets a zone, and the zone stays when the website goes.
+
+PowerDNS (gsqlite3 backend) holds the zones. The panel edits them through
+PowerDNS's HTTP API on 127.0.0.1:8053 with a key only root and the panel can
+read - no helper call per record, no zone files to rewrite and reload. What
+PowerDNS cannot know is who owns a zone: that is the panel's dns_zones table.
+
+Records are shown one per line, but PowerDNS stores RRsets: every record that
+shares a name and a type, with one TTL between them. Adding, changing and
+deleting a record therefore rewrite its whole RRset, and a record's TTL is its
+RRset's.
+"""
+
+from __future__ import annotations
+
+import ipaddress
+import json
+import logging
+import re
+import urllib.error
+import urllib.request
+from pathlib import Path
+from urllib.parse import urlparse
+
+from sqlalchemy.orm import Session
+
+from app.core.permissions import is_admin_role
+from app.models.entities import DnsZone, User
+from app.services import addons, panel_settings, server_network
+from app.services.shell import shell
+
+logger = logging.getLogger("bpanel.dns")
+
+API_ROOT = "http://127.0.0.1:8053/api/v1/servers/localhost"
+API_KEY_FILE = Path("/etc/bpanel/pdns-api.key")
+SETTINGS_KEY = "dns"
+TIMEOUT = 10
+
+RECORD_TYPES = ("A", "AAAA", "CNAME", "MX", "TXT", "NS", "SRV", "CAA")
+TYPE_ORDER = {name: index for index, name in enumerate(("NS", "A", "AAAA", "CNAME", "MX", "TXT", "SRV", "CAA"))}
+DEFAULT_TTL = 3600
+MIN_TTL = 60
+MAX_TTL = 604800
+CAA_TAGS = ("issue", "issuewild", "iodef")
+
+# A zone is a domain: letters, digits and hyphens, a dot between labels, a
+# top-level label of letters (or an IDN one, which arrives as xn--).
+ZONE_RE = re.compile(r"^(?!-)([a-z0-9-]{1,63}\.)+([a-z]{2,63}|xn--[a-z0-9-]{1,59})$")
+# A label inside a record name may start with an underscore (_dmarc, _sip._tcp)
+# and the first may be a wildcard.
+LABEL_RE = re.compile(r"^_?[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
+
+
+class DnsError(RuntimeError):
+    """PowerDNS refused, or could not be reached."""
+
+    def __init__(self, message: str, status: int = 502):
+        super().__init__(message)
+        self.status = status
+
+
+class DnsInputError(ValueError):
+    """What was typed is not a record or zone that can exist."""
+
+
+# --- PowerDNS API ------------------------------------------------------------
+
+def _api_key() -> str:
+    try:
+        key = API_KEY_FILE.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise DnsError("The DNS server's API key is missing. Remove the DNS Manager addon and install it again.") from exc
+    if not key:
+        raise DnsError("The DNS server's API key is missing. Remove the DNS Manager addon and install it again.")
+    return key
+
+
+def _request(method: str, path: str, body: dict | None = None):
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    request = urllib.request.Request(  # noqa: S310 - fixed http://127.0.0.1 address
+        API_ROOT + path,
+        data=data,
+        method=method,
+        headers={"X-API-Key": _api_key(), "Content-Type": "application/json", "Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=TIMEOUT) as response:  # noqa: S310 - fixed http://127.0.0.1 address
+            raw = response.read()
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = json.loads(exc.read().decode("utf-8") or "{}").get("error", "")
+        except (ValueError, AttributeError):
+            pass
+        raise DnsError(detail or f"The DNS server answered HTTP {exc.code}.", status=exc.code) from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise DnsError("The DNS server is not answering. Check that PowerDNS is running.") from exc
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except ValueError as exc:
+        raise DnsError("The DNS server gave an answer the panel could not read.") from exc
+
+
+# --- the machine (through the helper) ------------------------------------------
+
+def install() -> dict:
+    """Install PowerDNS, open port 53 and prove it answers. Raises if it does not."""
+    shell.privileged("dns-install", fallback=["true"], timeout=900)
+    return server_status()
+
+
+def stop() -> dict:
+    """Stop answering and close port 53. The zones stay in PowerDNS's database."""
+    shell.privileged("dns-remove", fallback=["true"])
+    return server_status()
+
+
+def server_status() -> dict:
+    result = shell.privileged(
+        "dns-status",
+        check=False,
+        fallback=["bash", "-lc", "echo installed=no; echo running=no; echo api=no; echo port_open=no"],
+    )
+    info = {"installed": False, "running": False, "api": False, "port_open": False, "listen": []}
+    for line in (result.stdout or "").splitlines():
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.strip()
+        if key in {"installed", "running", "api", "port_open"}:
+            info[key] = value == "yes"
+        elif key == "listen":
+            info["listen"] = [part.strip() for part in value.split(",") if part.strip()]
+    return info
+
+
+# --- settings ------------------------------------------------------------------
+
+def _panel_hostname() -> str:
+    host = (urlparse(panel_settings.configured_panel_url() or "").hostname or "").lower()
+    try:
+        ipaddress.ip_address(host)
+        return ""
+    except ValueError:
+        return host if ZONE_RE.match(host) else ""
+
+
+def default_nameservers() -> list[str]:
+    host = _panel_hostname()
+    return [f"ns1.{host}", f"ns2.{host}"] if host else []
+
+
+def default_zone_ip() -> str:
+    addresses = server_network.ipv4_addresses()
+    return addresses[0] if addresses else ""
+
+
+def settings() -> dict:
+    stored = panel_settings._read_raw_lenient().get(SETTINGS_KEY)
+    stored = stored if isinstance(stored, dict) else {}
+    nameservers = [str(name) for name in (stored.get("nameservers") or []) if str(name).strip()]
+    ttl = stored.get("ttl")
+    return {
+        "nameservers": nameservers or default_nameservers(),
+        "zone_ip": str(stored.get("zone_ip") or "") or default_zone_ip(),
+        "ttl": ttl if isinstance(ttl, int) and MIN_TTL <= ttl <= MAX_TTL else DEFAULT_TTL,
+        "auto_zone": stored.get("auto_zone", True) is not False,
+    }
+
+
+def save_settings(nameservers: list[str], zone_ip: str, ttl: int, auto_zone: bool) -> dict:
+    names = []
+    for name in nameservers:
+        name = (name or "").strip().lower().rstrip(".")
+        if not name:
+            continue
+        if not ZONE_RE.match(name):
+            raise DnsInputError("A nameserver must be a full hostname, such as ns1.example.com.")
+        if name not in names:
+            names.append(name)
+    if len(names) < 2:
+        raise DnsInputError("Give two nameservers: registrars ask for at least two.")
+    zone_ip = (zone_ip or "").strip()
+    try:
+        if ipaddress.ip_address(zone_ip).version != 4:
+            raise ValueError
+    except ValueError as exc:
+        raise DnsInputError("The address for new zones must be an IPv4 address.") from exc
+    if not MIN_TTL <= int(ttl) <= MAX_TTL:
+        raise DnsInputError("TTL must be between 60 seconds and 7 days.")
+    stored = panel_settings._read_raw()
+    stored[SETTINGS_KEY] = {"nameservers": names, "zone_ip": zone_ip, "ttl": int(ttl), "auto_zone": bool(auto_zone)}
+    panel_settings._write_raw(stored)
+    return settings()
+
+
+# --- names -----------------------------------------------------------------------
+
+def _absolute(name: str) -> str:
+    return name.rstrip(".") + "."
+
+
+def normalize_zone(name: str) -> str:
+    name = (name or "").strip().lower().rstrip(".")
+    try:
+        name = name.encode("idna").decode("ascii")
+    except UnicodeError as exc:
+        raise DnsInputError("That is not a valid domain name.") from exc
+    if not ZONE_RE.match(name) or len(name) > 253:
+        raise DnsInputError("That is not a valid domain name.")
+    return name
+
+
+def _record_name(zone: str, name: str) -> str:
+    """'@', 'www', 'www.example.com' or '*.shop' -> the absolute owner name."""
+    name = (name or "").strip().lower().rstrip(".")
+    if name in {"", "@"} or name == zone:
+        return _absolute(zone)
+    if name.endswith("." + zone):
+        name = name[: -len(zone) - 1]
+    labels = name.split(".")
+    for index, label in enumerate(labels):
+        if label == "*" and index == 0:
+            continue
+        if not LABEL_RE.match(label):
+            raise DnsInputError("The record name may use letters, digits, hyphens and dots, such as www or mail.")
+    full = f"{name}.{zone}"
+    if len(full) > 253:
+        raise DnsInputError("That record name is too long.")
+    return _absolute(full)
+
+
+def _relative(zone: str, absolute: str) -> str:
+    name = absolute.rstrip(".")
+    if name == zone:
+        return "@"
+    return name[: -len(zone) - 1] if name.endswith("." + zone) else name
+
+
+def _hostname(zone: str, value: str) -> str:
+    """A target hostname. '@' is the zone itself, and a bare label ('mail') is a
+    name inside the zone, as in a zone file - not the top-level domain 'mail'."""
+    value = (value or "").strip().lower()
+    if not value:
+        raise DnsInputError("Enter a hostname, such as mail.example.com.")
+    if value == "@":
+        return _absolute(zone)
+    value = value.rstrip(".")
+    if not all(LABEL_RE.match(label) for label in value.split(".")) or len(value) > 253:
+        raise DnsInputError("Enter a hostname, such as mail.example.com.")
+    if "." not in value:
+        return _absolute(f"{value}.{zone}")
+    return _absolute(value)
+
+
+def _txt(value: str) -> str:
+    text = (value or "").strip()
+    if len(text) >= 2 and text.startswith('"') and text.endswith('"'):
+        text = text[1:-1]
+    if not text:
+        raise DnsInputError("A TXT record needs some text.")
+    escaped = text.replace("\\", "\\\\").replace('"', '\\"')
+    # One TXT string holds 255 bytes; longer text (a DKIM key) is split.
+    chunks = [escaped[index:index + 255] for index in range(0, len(escaped), 255)]
+    return " ".join(f'"{chunk}"' for chunk in chunks)
+
+
+def _untxt(content: str) -> str:
+    parts = re.findall(r'"((?:[^"\\]|\\.)*)"', content)
+    joined = "".join(parts) if parts else content
+    return joined.replace('\\"', '"').replace("\\\\", "\\")
+
+
+# --- records: the form's fields <-> PowerDNS content ------------------------------
+
+def to_pdns(zone: str, record: dict) -> tuple[str, str, int, str]:
+    """A record as typed -> (absolute name, type, ttl, PowerDNS content)."""
+    rtype = str(record.get("type") or "").upper()
+    if rtype not in RECORD_TYPES:
+        raise DnsInputError("Choose a record type: A, AAAA, CNAME, MX, TXT, NS, SRV or CAA.")
+    name = _record_name(zone, str(record.get("name") or "@"))
+    try:
+        ttl = int(record.get("ttl") or DEFAULT_TTL)
+    except (TypeError, ValueError) as exc:
+        raise DnsInputError("TTL must be between 60 seconds and 7 days.") from exc
+    if not MIN_TTL <= ttl <= MAX_TTL:
+        raise DnsInputError("TTL must be between 60 seconds and 7 days.")
+    value = str(record.get("content") or "").strip()
+    priority = record.get("priority")
+
+    if rtype == "A":
+        try:
+            content = str(ipaddress.IPv4Address(value))
+        except ValueError as exc:
+            raise DnsInputError("An A record points at an IPv4 address, such as 203.0.113.10.") from exc
+    elif rtype == "AAAA":
+        try:
+            content = ipaddress.IPv6Address(value).compressed
+        except ValueError as exc:
+            raise DnsInputError("An AAAA record points at an IPv6 address.") from exc
+    elif rtype in {"CNAME", "NS"}:
+        content = _hostname(zone, value)
+    elif rtype == "MX":
+        content = f"{_priority(priority)} {_hostname(zone, value)}"
+    elif rtype == "TXT":
+        content = _txt(value)
+    elif rtype == "SRV":
+        parts = value.split()
+        if len(parts) != 3 or not all(part.isdigit() for part in parts[:2]):
+            raise DnsInputError("An SRV value is weight, port and target, such as 5 5060 sip.example.com.")
+        weight, port = int(parts[0]), int(parts[1])
+        if weight > 65535 or not 0 < port <= 65535:
+            raise DnsInputError("An SRV value is weight, port and target, such as 5 5060 sip.example.com.")
+        content = f"{_priority(priority)} {weight} {port} {_hostname(zone, parts[2])}"
+    else:  # CAA
+        parts = value.split(None, 2)
+        if len(parts) != 3 or not parts[0].isdigit() or int(parts[0]) > 255 or parts[1].lower() not in CAA_TAGS:
+            raise DnsInputError("A CAA value is flags, tag and value, such as 0 issue letsencrypt.org.")
+        caa_value = parts[2].strip().strip('"')
+        if not caa_value or '"' in caa_value:
+            raise DnsInputError("A CAA value is flags, tag and value, such as 0 issue letsencrypt.org.")
+        content = f'{int(parts[0])} {parts[1].lower()} "{caa_value}"'
+    return name, rtype, ttl, content
+
+
+def _priority(value) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError) as exc:
+        raise DnsInputError("Priority must be a number from 0 to 65535.") from exc
+    if not 0 <= number <= 65535:
+        raise DnsInputError("Priority must be a number from 0 to 65535.")
+    return number
+
+
+def to_form(zone: str, name: str, rtype: str, ttl: int, content: str) -> dict:
+    """A PowerDNS record -> what the page shows and sends back to identify it."""
+    record = {"name": _relative(zone, name), "type": rtype, "ttl": ttl, "content": content, "priority": None}
+    if rtype in {"CNAME", "NS"}:
+        record["content"] = content.rstrip(".")
+    elif rtype == "MX":
+        priority, _, host = content.partition(" ")
+        record.update(priority=int(priority) if priority.isdigit() else None, content=host.rstrip("."))
+    elif rtype == "SRV":
+        parts = content.split()
+        if len(parts) == 4 and parts[0].isdigit():
+            record.update(priority=int(parts[0]), content=f"{parts[1]} {parts[2]} {parts[3].rstrip('.')}")
+    elif rtype == "TXT":
+        record["content"] = _untxt(content)
+    elif rtype == "CAA":
+        parts = content.split(None, 2)
+        if len(parts) == 3:
+            record["content"] = f"{parts[0]} {parts[1]} {parts[2].strip(chr(34))}"
+    return record
+
+
+# --- zones --------------------------------------------------------------------------
+
+def active() -> bool:
+    return addons.is_installed(addons.DNS)
+
+
+def _row(db: Session, zone: str) -> DnsZone | None:
+    return db.query(DnsZone).filter(DnsZone.name == zone).first()
+
+
+def may_edit(db: Session, user: User, zone_name: str) -> str:
+    """The zone, if this person may edit it. A customer who may not is told
+    it does not exist, so they learn nothing about other people's zones."""
+    zone = normalize_zone(zone_name)
+    if is_admin_role(user.role):
+        return zone
+    row = _row(db, zone)
+    if row is None or row.owner_id != user.id:
+        raise DnsError("There is no such zone.", status=404)
+    return zone
+
+
+def list_zones(db: Session, user: User) -> list[dict]:
+    query = db.query(DnsZone)
+    admin = is_admin_role(user.role)
+    if not admin:
+        query = query.filter(DnsZone.owner_id == user.id)
+    rows = query.order_by(DnsZone.name).all()
+    owners = {row.id: row.username for row in db.query(User).all()} if admin else {}
+    zones = [{"name": row.name, "owner_id": row.owner_id, "owner": owners.get(row.owner_id, "")} for row in rows]
+    if admin:
+        # Zones PowerDNS serves that the panel did not make: shown, owned by nobody.
+        known = {row.name for row in rows}
+        for item in _request("GET", "/zones"):
+            name = str(item.get("name", "")).rstrip(".")
+            if name and name not in known:
+                zones.append({"name": name, "owner_id": None, "owner": ""})
+        zones.sort(key=lambda zone: zone["name"])
+    return zones
+
+
+def create_zone(db: Session, name: str, owner_id: int | None, *, claim_existing: bool = True) -> str:
+    zone = normalize_zone(name)
+    config = settings()
+    if len(config["nameservers"]) < 2:
+        raise DnsInputError("Set the nameservers on the DNS page first.")
+    if _row(db, zone):
+        raise DnsInputError("That zone already exists.")
+    apex = _absolute(zone)
+    ttl = config["ttl"]
+    rrsets = [
+        {"name": apex, "type": "SOA", "ttl": ttl, "records": [{
+            "content": f"{_absolute(config['nameservers'][0])} hostmaster.{apex} 1 10800 3600 604800 3600",
+            "disabled": False,
+        }]},
+        {"name": apex, "type": "NS", "ttl": ttl,
+         "records": [{"content": _absolute(ns), "disabled": False} for ns in config["nameservers"]]},
+    ]
+    if config["zone_ip"]:
+        for host in (apex, f"www.{apex}"):
+            rrsets.append({"name": host, "type": "A", "ttl": ttl,
+                           "records": [{"content": config["zone_ip"], "disabled": False}]})
+    try:
+        _request("POST", "/zones", {
+            "name": apex, "kind": "Native", "soa_edit_api": "INCEPTION-INCREMENT",
+            "nameservers": [], "rrsets": rrsets,
+        })
+    except DnsError as exc:
+        # Served already but not the panel's: an administrator may take it
+        # over; a website being created may not.
+        if exc.status != 409 or not claim_existing:
+            raise
+    db.add(DnsZone(name=zone, owner_id=owner_id))
+    db.commit()
+    return zone
+
+
+def delete_zone(db: Session, zone: str) -> None:
+    try:
+        _request("DELETE", f"/zones/{_absolute(zone)}")
+    except DnsError as exc:
+        if exc.status != 404:
+            raise
+    row = _row(db, zone)
+    if row is not None:
+        db.delete(row)
+        db.commit()
+
+
+def _zone_data(zone: str) -> dict:
+    return _request("GET", f"/zones/{_absolute(zone)}")
+
+
+def records(zone: str) -> list[dict]:
+    data = _zone_data(zone)
+    rows = []
+    for rrset in data.get("rrsets", []):
+        if rrset.get("type") == "SOA":
+            continue
+        for item in rrset.get("records", []):
+            rows.append(to_form(zone, rrset["name"], rrset["type"], rrset.get("ttl", DEFAULT_TTL), item["content"]))
+    rows.sort(key=lambda row: (row["name"] != "@", row["name"], TYPE_ORDER.get(row["type"], 99), row["content"]))
+    return rows
+
+
+def _rrset(data: dict, name: str, rtype: str) -> dict | None:
+    for rrset in data.get("rrsets", []):
+        if rrset.get("name") == name and rrset.get("type") == rtype:
+            return rrset
+    return None
+
+
+def _contents(rrset: dict | None) -> list[str]:
+    return [item["content"] for item in (rrset or {}).get("records", [])]
+
+
+def _same(a: str, b: str) -> bool:
+    return a.rstrip(".").lower() == b.rstrip(".").lower()
+
+
+def _guard(zone: str, name: str, rtype: str, admin: bool) -> None:
+    if not admin and rtype == "NS" and name == _absolute(zone):
+        raise DnsInputError("Only an administrator can change the zone's own nameservers.")
+
+
+def _check_cname(data: dict, zone: str, name: str, rtype: str, ignore: tuple[str, str, str] | None = None) -> None:
+    """A CNAME stands alone: not at the zone's apex, not beside other records."""
+    others = []
+    for rrset in data.get("rrsets", []):
+        if rrset.get("name") != name:
+            continue
+        for content in _contents(rrset):
+            if ignore and (rrset["name"], rrset["type"]) == ignore[:2] and _same(content, ignore[2]):
+                continue
+            others.append(rrset["type"])
+    if rtype == "CNAME":
+        if name == _absolute(zone):
+            raise DnsInputError("The zone's own name cannot be a CNAME; use an A record.")
+        if [kind for kind in others if kind != "CNAME"]:
+            raise DnsInputError("A name with a CNAME record can have no other records.")
+        if "CNAME" in others:
+            raise DnsInputError("A name can have only one CNAME record.")
+    elif "CNAME" in others:
+        raise DnsInputError("A name with a CNAME record can have no other records.")
+
+
+def _patch(zone: str, changes: dict[tuple[str, str], tuple[int, list[str]]]) -> None:
+    rrsets = []
+    for (name, rtype), (ttl, contents) in changes.items():
+        if contents:
+            rrsets.append({"name": name, "type": rtype, "ttl": ttl, "changetype": "REPLACE",
+                           "records": [{"content": content, "disabled": False} for content in contents]})
+        else:
+            rrsets.append({"name": name, "type": rtype, "changetype": "DELETE"})
+    _request("PATCH", f"/zones/{_absolute(zone)}", {"rrsets": rrsets})
+
+
+def add_record(zone: str, record: dict, *, admin: bool) -> None:
+    name, rtype, ttl, content = to_pdns(zone, record)
+    _guard(zone, name, rtype, admin)
+    data = _zone_data(zone)
+    _check_cname(data, zone, name, rtype)
+    existing = _contents(_rrset(data, name, rtype))
+    if any(_same(content, item) for item in existing):
+        raise DnsInputError("That record already exists.")
+    _patch(zone, {(name, rtype): (ttl, existing + [content])})
+
+
+def _remove(data: dict, zone: str, record: dict, changes: dict) -> tuple[str, str, str]:
+    """Take one record out of its RRset in `changes`; returns what it matched."""
+    name, rtype, _, content = to_pdns(zone, record)
+    key = (name, rtype)
+    if key in changes:
+        ttl, current = changes[key]
+    else:
+        rrset = _rrset(data, name, rtype)
+        ttl, current = (rrset or {}).get("ttl", DEFAULT_TTL), _contents(rrset)
+    kept = [item for item in current if not _same(item, content)]
+    if len(kept) == len(current):
+        raise DnsError("That record is no longer there. Refresh the page.", status=404)
+    changes[key] = (ttl, kept)
+    return name, rtype, content
+
+
+def update_record(zone: str, original: dict, record: dict, *, admin: bool) -> None:
+    name, rtype, ttl, content = to_pdns(zone, record)
+    _guard(zone, name, rtype, admin)
+    old_name, old_type, _, _ = to_pdns(zone, original)
+    _guard(zone, old_name, old_type, admin)
+    data = _zone_data(zone)
+    changes: dict = {}
+    removed = _remove(data, zone, original, changes)
+    _check_cname(data, zone, name, rtype, ignore=removed)
+    key = (name, rtype)
+    _, current = changes.get(key, (ttl, _contents(_rrset(data, name, rtype))))
+    if any(_same(content, item) for item in current):
+        raise DnsInputError("That record already exists.")
+    changes[key] = (ttl, current + [content])
+    _patch(zone, changes)
+
+
+def delete_record(zone: str, record: dict, *, admin: bool) -> None:
+    name, rtype, _, _ = to_pdns(zone, record)
+    _guard(zone, name, rtype, admin)
+    changes: dict = {}
+    _remove(_zone_data(zone), zone, record, changes)
+    _patch(zone, changes)
+
+
+# --- websites ------------------------------------------------------------------------
+
+def zone_for_new_website(db: Session, website) -> str | None:
+    """A zone for a website just created, when the addon is on and set to.
+
+    Inside a zone the same person already has on this server (a subdomain of
+    their own domain), the website becomes a record there. Anywhere else it
+    gets a zone of its own. Never the reason a website fails to be created.
+    """
+    try:
+        if not active():
+            return None
+        config = settings()
+        if not config["auto_zone"] or len(config["nameservers"]) < 2 or not config["zone_ip"]:
+            return None
+        domain = normalize_zone(website.domain)
+        containing = [row for row in db.query(DnsZone).all()
+                      if domain == row.name or domain.endswith("." + row.name)]
+        parent = max(containing, key=lambda row: len(row.name), default=None)
+        if parent is not None and parent.name == domain:
+            return None
+        if parent is not None and parent.owner_id == website.owner_id:
+            label = domain[: -len(parent.name) - 1]
+            try:
+                add_record(parent.name, {"name": label, "type": "A", "ttl": config["ttl"],
+                                         "content": config["zone_ip"]}, admin=True)
+            except DnsInputError:
+                pass  # already there, or a CNAME holds the name
+            return parent.name
+        return create_zone(db, domain, website.owner_id, claim_existing=False)
+    except (DnsError, DnsInputError) as exc:
+        logger.warning("No DNS zone for new website %s: %s", getattr(website, "domain", "?"), exc)
+        db.rollback()
+        return None

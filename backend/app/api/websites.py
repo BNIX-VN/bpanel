@@ -31,7 +31,7 @@ from app.schemas.schemas import (
     WebsiteWordPressInstall,
     WildcardSslRequest,
 )
-from app.services import addons, cloudflare, cron, file_manager, mariadb, nginx, site_apps, site_users, ssl, storage_quota, teardown, waf, wordpress
+from app.services import addons, cloudflare, cron, dns, file_manager, mariadb, nginx, site_apps, site_users, ssl, storage_quota, teardown, waf, wordpress
 from app.services.audit import log_action
 
 _PLACEHOLDER_TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates" / "nginx"
@@ -482,6 +482,9 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
         request=request,
     )
     storage_quota.forget_user_storage(owner_id)
+    # DNS Manager (operator, 2026-09-29): the new website gets its zone. Quiet
+    # when the addon is off, and never the reason a website is not created.
+    dns.zone_for_new_website(db, website)
     website.wordpress_installed = install_wp
     return website
 

@@ -105,6 +105,7 @@ const PAGE_ROUTES = {
   addons: '/addons',
   mcp: '/ai-assistants',
   notifications: '/notifications',
+  dns: '/dns',
 };
 
 /* ---------------------------------------------------------------
@@ -308,6 +309,20 @@ const EMPTY_SITE_APP_DRAFT = {
   env: '',
 };
 const SITE_APP_KIND_LABELS = { node: 'Node.js', docker: 'Container', compose: 'Compose' };
+// DNS Manager addon: the record types it edits, and an example value for each.
+const DNS_RECORD_TYPES = ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'SRV', 'CAA'];
+const DNS_VALUE_HINTS = {
+  A: '203.0.113.10',
+  AAAA: '2001:db8::10',
+  CNAME: 'example.com',
+  MX: 'mail.example.com',
+  TXT: 'v=spf1 a mx ~all',
+  NS: 'ns1.example.com',
+  SRV: '5 5060 sip.example.com',
+  CAA: '0 issue letsencrypt.org',
+};
+const DNS_EMPTY_RECORD = { name: '@', type: 'A', ttl: 3600, content: '', priority: 10 };
+
 const SITE_APP_KINDS = [
   ['node', 'Node.js', 'BPanel installs dependencies and keeps the process running under systemd.'],
   ['docker', 'Container', 'BPanel pulls the image and runs it, published on loopback only.'],
@@ -845,6 +860,14 @@ function App() {
   // Demo mode addon: the accounts the login page offers, and the form that picks them.
   const [demoAccess, setDemoAccess] = useState({ enabled: false, accounts: [] });
   const [demoSettings, setDemoSettings] = useState(null);
+  // DNS Manager addon.
+  const [dnsZones, setDnsZones] = useState({ zones: [], nameservers: [], can_manage: false, loaded: false });
+  const [dnsZone, setDnsZone] = useState('');
+  const [dnsRecords, setDnsRecords] = useState([]);
+  const [dnsDraft, setDnsDraft] = useState(DNS_EMPTY_RECORD);
+  const [dnsEditing, setDnsEditing] = useState(null);
+  const [dnsSettings, setDnsSettings] = useState(null);
+  const [dnsNewZone, setDnsNewZone] = useState({ name: '', owner_id: '' });
   const [demoDraft, setDemoDraft] = useState({ admin: { username: '', password: '' }, customer: { username: '', password: '' } });
   const [f2b, setF2b] = useState(null);
   // Which list the operator asked to see. Null keeps the page one screen tall
@@ -964,6 +987,7 @@ function App() {
   const mcpAddonInstalled = !!addons.items.find(item => item.slug === 'mcp')?.installed;
   const notificationsAddonInstalled = !!addons.items.find(item => item.slug === 'notifications')?.installed;
   const malwareAddonInstalled = !!addons.items.find(item => item.slug === 'malware')?.installed;
+  const dnsAddonInstalled = !!addons.items.find(item => item.slug === 'dns')?.installed;
   const [mcpTokens, setMcpTokens] = useState([]);
   const [mcpDraft, setMcpDraft] = useState({ name: '', expires_in_days: 90, can_write: false });
   // Held until dismissed rather than cleared on the next render: the server
@@ -2472,6 +2496,106 @@ function App() {
       admin: data.accounts?.admin || { username: '', password: '' },
       customer: data.accounts?.customer || { username: '', password: '' },
     });
+  }
+
+  function sameDnsRecord(a, b) {
+    return a.name === b.name && a.type === b.type && a.content === b.content && (a.priority ?? null) === (b.priority ?? null);
+  }
+
+  function dnsRecordBody(record) {
+    const withPriority = record.type === 'MX' || record.type === 'SRV';
+    return {
+      name: (record.name || '@').trim(),
+      type: record.type,
+      ttl: Number(record.ttl) || 3600,
+      content: (record.content || '').trim(),
+      priority: withPriority ? Number(record.priority) : null,
+    };
+  }
+
+  async function loadDnsZones() {
+    const data = await request('/dns/zones', { silent: true });
+    if (!data) return;
+    setDnsZones({ ...data, loaded: true });
+    const names = (data.zones || []).map(zone => zone.name);
+    if (!names.length) { setDnsZone(''); setDnsRecords([]); return; }
+    if (!names.includes(dnsZone)) selectDnsZone(names[0]);
+  }
+
+  async function selectDnsZone(name) {
+    setDnsZone(name);
+    setDnsEditing(null);
+    setDnsDraft(prev => ({ ...DNS_EMPTY_RECORD, ttl: prev.ttl }));
+    const data = await request(`/dns/zones/${encodeURIComponent(name)}/records`);
+    setDnsRecords(data?.records || []);
+  }
+
+  async function saveDnsRecord() {
+    const path = `/dns/zones/${encodeURIComponent(dnsZone)}/records`;
+    const body = dnsRecordBody(dnsDraft);
+    const data = dnsEditing
+      ? await request(path, { method: 'PUT', body: JSON.stringify({ original: dnsRecordBody(dnsEditing), record: body }) }, t('Saving...'))
+      : await request(path, { method: 'POST', body: JSON.stringify(body) }, t('Saving...'));
+    if (!data) return;
+    setDnsRecords(data.records || []);
+    setDnsEditing(null);
+    setDnsDraft(prev => ({ ...DNS_EMPTY_RECORD, type: prev.type, ttl: prev.ttl }));
+  }
+
+  function editDnsRecord(record) {
+    setDnsEditing(record);
+    setDnsDraft({ ...record, priority: record.priority ?? 10 });
+  }
+
+  function cancelDnsEdit() {
+    setDnsEditing(null);
+    setDnsDraft(prev => ({ ...DNS_EMPTY_RECORD, ttl: prev.ttl }));
+  }
+
+  async function deleteDnsRecord(record) {
+    if (!confirm(t('Delete the {type} record {name}?', { type: record.type, name: record.name }))) return;
+    const data = await request(`/dns/zones/${encodeURIComponent(dnsZone)}/records/delete`,
+      { method: 'POST', body: JSON.stringify(dnsRecordBody(record)) }, t('Deleting...'));
+    if (!data) return;
+    setDnsRecords(data.records || []);
+    if (dnsEditing && sameDnsRecord(dnsEditing, record)) cancelDnsEdit();
+  }
+
+  async function addDnsZone() {
+    const body = { name: dnsNewZone.name.trim(), owner_id: dnsNewZone.owner_id ? Number(dnsNewZone.owner_id) : null };
+    const data = await request('/dns/zones', { method: 'POST', body: JSON.stringify(body) }, t('Saving...'));
+    if (!data) return;
+    setDnsNewZone({ name: '', owner_id: '' });
+    await loadDnsZones();
+    selectDnsZone(data.zone);
+  }
+
+  async function deleteDnsZone(name) {
+    if (!confirm(t('Delete the zone {zone} and every record in it? The domain stops resolving from this server.', { zone: name }))) return;
+    const data = await request(`/dns/zones/${encodeURIComponent(name)}`, { method: 'DELETE' }, t('Deleting...'));
+    if (!data) return;
+    if (name === dnsZone) { setDnsZone(''); setDnsRecords([]); }
+    loadDnsZones();
+  }
+
+  async function loadDnsSettings() {
+    const data = await request('/dns/settings', { silent: true });
+    if (!data) return;
+    setDnsSettings(data);
+    setDnsDraft(prev => ({ ...prev, ttl: data.ttl || 3600 }));
+  }
+
+  async function saveDnsSettings() {
+    const body = {
+      nameservers: (dnsSettings.nameservers || []).map(name => (name || '').trim()).filter(Boolean),
+      zone_ip: (dnsSettings.zone_ip || '').trim(),
+      ttl: Number(dnsSettings.ttl) || 3600,
+      auto_zone: !!dnsSettings.auto_zone,
+    };
+    const data = await request('/dns/settings', { method: 'PUT', body: JSON.stringify(body) }, t('Saving...'));
+    if (!data) return;
+    await loadDnsSettings();
+    loadDnsZones();
   }
 
   async function saveDemoAccounts() {
@@ -4547,6 +4671,11 @@ function App() {
   useEffect(() => { if (!isAuthenticated) loadDemoAccess(); }, [isAuthenticated]);
   const demoAddonInstalled = addons.items.some(item => item.slug === 'demo' && item.installed);
   useEffect(() => { if (isAdmin && demoAddonInstalled) loadDemoSettings(); }, [isAdmin, demoAddonInstalled]);
+  useEffect(() => {
+    if (!isAuthenticated || page !== 'dns' || !dnsAddonInstalled) return;
+    loadDnsZones();
+    if (isAdmin) { loadDnsSettings(); loadUsers(); }
+  }, [isAuthenticated, page, dnsAddonInstalled, isAdmin]);
 
   // The websites page needs the list too, for the Application picker on create.
   useEffect(() => {
@@ -4654,6 +4783,7 @@ function App() {
       ...(isAdmin ? [['users', 'Panel users', Users]] : []),
     ] },
     { key: 'addons', items: [
+      ...(dnsAddonInstalled ? [['dns', 'DNS', Network]] : []),
       ...(mcpAddonInstalled ? [['mcp', 'AI assistants', Bot]] : []),
       ...(notificationsAddonInstalled && isAdmin ? [['notifications', 'Notifications', Bell]] : []),
       ...(malwareAddonInstalled && isAdmin ? [['malware', 'Malware scanner', Bug]] : []),
@@ -5225,6 +5355,126 @@ function App() {
       {isAdmin && !installed && <div className="site-app-form-actions">
         <button disabled={!!loading} onClick={() => navigateToPage('addons')}><Boxes size={14}/>{t('Go to Addons')}</button>
       </div>}
+    </section>;
+  }
+
+  function renderDns() {
+    const zones = dnsZones.zones || [];
+    const needsPriority = dnsDraft.type === 'MX' || dnsDraft.type === 'SRV';
+    const setDraft = (field, value) => setDnsDraft(prev => ({ ...prev, [field]: value }));
+    return <>
+      <section className="section">
+        <div className="section-title">
+          <div>
+            <h2>{t('DNS')}</h2>
+            <p className="hint">{t('The zones this server answers for. Point a domain at the nameservers below and its records are served from here.')}</p>
+          </div>
+          <button className="secondary-light" disabled={!!loading} onClick={() => { loadDnsZones(); if (dnsZone) selectDnsZone(dnsZone); }}><RefreshCw size={14}/>{t('Refresh')}</button>
+        </div>
+        {dnsZones.nameservers?.length > 0 && <div className="dns-ns">
+          <strong>{t('Nameservers')}</strong>
+          {dnsZones.nameservers.map(name => <code key={name}>{name}</code>)}
+          <span>{t('Set these as the nameservers of each domain, at its registrar.')}</span>
+        </div>}
+        <div className="dns-layout">
+          <div className="dns-zones">
+            <strong className="dns-zones-title">{t('Zones')}</strong>
+            {dnsZones.loaded && zones.length === 0 && <p className="hint">{isAdmin
+              ? t('No zones yet. Add one below, or create a website.')
+              : t('No zones yet. Each new website gets its zone.')}</p>}
+            {zones.map(zone => <div key={zone.name} className={`dns-zone ${zone.name === dnsZone ? 'active' : ''}`}>
+              <button type="button" className="dns-zone-open" onClick={() => selectDnsZone(zone.name)} aria-current={zone.name === dnsZone ? 'true' : undefined}>
+                <strong>{zone.name}</strong>
+                {isAdmin && <small>{zone.owner || t('No owner')}</small>}
+              </button>
+              <button type="button" className="mini danger" disabled={!!loading} onClick={() => deleteDnsZone(zone.name)} aria-label={t('Delete zone')} title={t('Delete zone')}><Trash2 size={13}/></button>
+            </div>)}
+            {isAdmin && <div className="dns-zone-add">
+              <input value={dnsNewZone.name} onChange={e => setDnsNewZone(prev => ({ ...prev, name: e.target.value }))} placeholder="example.com" aria-label={t('Domain')} />
+              <select value={dnsNewZone.owner_id} onChange={e => setDnsNewZone(prev => ({ ...prev, owner_id: e.target.value }))} aria-label={t('Owner')}>
+                <option value="">{t('No owner')}</option>
+                {users.map(user => <option key={user.id} value={user.id}>{user.username}</option>)}
+              </select>
+              <button disabled={!!loading || !dnsNewZone.name.trim()} onClick={addDnsZone}><Plus size={14}/>{t('Add zone')}</button>
+            </div>}
+          </div>
+          <div className="dns-records">
+            {!dnsZone ? <EmptyState icon={Network} message={t('Choose a zone to see its records.')} /> : <>
+              <h3 className="dns-records-title">{dnsZone}</h3>
+              <div className="cron-builder dns-form">
+                <label><span>{t('Name')}</span><input value={dnsDraft.name} onChange={e => setDraft('name', e.target.value)} placeholder="@" spellCheck={false} /></label>
+                <label><span>{t('Type')}</span>
+                  <select value={dnsDraft.type} onChange={e => setDraft('type', e.target.value)}>
+                    {DNS_RECORD_TYPES.map(type => <option key={type} value={type}>{type}</option>)}
+                  </select>
+                </label>
+                <label><span>TTL</span><input type="number" min={60} max={604800} value={dnsDraft.ttl} onChange={e => setDraft('ttl', e.target.value)} /></label>
+                {needsPriority && <label><span>{t('Priority')}</span><input type="number" min={0} max={65535} value={dnsDraft.priority ?? ''} onChange={e => setDraft('priority', e.target.value)} /></label>}
+                <label className="cron-command"><span>{t('Value')}</span><input value={dnsDraft.content} onChange={e => setDraft('content', e.target.value)} placeholder={DNS_VALUE_HINTS[dnsDraft.type] || ''} spellCheck={false} /></label>
+                <div className="dns-form-actions">
+                  <button disabled={!!loading || !(dnsDraft.content || '').trim()} onClick={saveDnsRecord}>
+                    {dnsEditing ? <><Save size={14}/>{t('Save record')}</> : <><Plus size={14}/>{t('Add record')}</>}
+                  </button>
+                  {dnsEditing && <button className="secondary-light" disabled={!!loading} onClick={cancelDnsEdit}>{t('Cancel')}</button>}
+                </div>
+              </div>
+              <p className="hint">{t('The name is relative to the zone: @ is {zone} itself, www is www.{zone}.', { zone: dnsZone })}</p>
+              <div className="dns-list">
+                {dnsRecords.length === 0 && <EmptyState icon={Network} message={t('No records.')} />}
+                {dnsRecords.map(record => <div key={`${record.name}|${record.type}|${record.priority}|${record.content}`}
+                  className={`dns-record ${dnsEditing && sameDnsRecord(dnsEditing, record) ? 'editing' : ''}`}>
+                  <span className="dns-name">{record.name}</span>
+                  <span className="badge">{record.type}</span>
+                  <span className="dns-value">{record.priority != null && <b>{record.priority} </b>}{record.content}</span>
+                  <span className="dns-ttl">{record.ttl}s</span>
+                  <span className="dns-actions">
+                    <button className="mini secondary-light" disabled={!!loading} onClick={() => editDnsRecord(record)} aria-label={t('Edit')} title={t('Edit')}><Pencil size={13}/></button>
+                    <button className="mini danger" disabled={!!loading} onClick={() => deleteDnsRecord(record)} aria-label={t('Delete')} title={t('Delete')}><Trash2 size={13}/></button>
+                  </span>
+                </div>)}
+              </div>
+            </>}
+          </div>
+        </div>
+      </section>
+      {isAdmin && renderDnsSettings()}
+    </>;
+  }
+
+  function renderDnsSettings() {
+    if (!dnsSettings) return null;
+    const server = dnsSettings.server || {};
+    const serving = server.running && server.api;
+    const setField = (field, value) => setDnsSettings(prev => ({ ...prev, [field]: value }));
+    const setNameserver = (index, value) => setDnsSettings(prev => {
+      const next = [...(prev.nameservers || [])];
+      next[index] = value;
+      return { ...prev, nameservers: next };
+    });
+    return <section className="section">
+      <div className="section-title">
+        <div>
+          <h2>{t('DNS settings')}</h2>
+          <p className="hint">{t('Used for each new zone. Changing them does not rewrite the zones that already exist.')}</p>
+        </div>
+      </div>
+      <div className="dns-server">
+        <span className={`badge ${serving ? 'ok' : 'bad'}`}>{serving ? t('PowerDNS is running') : t('PowerDNS is not running')}</span>
+        <span className={`badge ${server.port_open ? 'ok' : 'warn'}`}>{server.port_open ? t('Port 53 open') : t('Port 53 closed')}</span>
+        {server.listen?.length > 0 && <span className="hint">{t('Listening on')} {server.listen.join(', ')}</span>}
+      </div>
+      <div className="cron-builder">
+        <label><span>{t('Nameserver 1')}</span><input value={dnsSettings.nameservers?.[0] || ''} onChange={e => setNameserver(0, e.target.value)} placeholder="ns1.example.com" spellCheck={false} /></label>
+        <label><span>{t('Nameserver 2')}</span><input value={dnsSettings.nameservers?.[1] || ''} onChange={e => setNameserver(1, e.target.value)} placeholder="ns2.example.com" spellCheck={false} /></label>
+        <label><span>{t('IP address for new zones')}</span>
+          <input value={dnsSettings.zone_ip || ''} onChange={e => setField('zone_ip', e.target.value)} list="dns-server-ipv4" spellCheck={false} />
+          <datalist id="dns-server-ipv4">{(dnsSettings.server_ipv4 || []).map(ip => <option key={ip} value={ip} />)}</datalist>
+        </label>
+        <label><span>{t('Default TTL (seconds)')}</span><input type="number" min={60} max={604800} value={dnsSettings.ttl || 3600} onChange={e => setField('ttl', e.target.value)} /></label>
+        <label className="login-remember dns-auto"><input type="checkbox" checked={!!dnsSettings.auto_zone} onChange={e => setField('auto_zone', e.target.checked)} />{t('Create a zone for each new website')}</label>
+        <button className="cron-add" disabled={!!loading} onClick={saveDnsSettings}><Save size={14}/>{t('Save settings')}</button>
+      </div>
+      <p className="hint">{t('If the nameservers are names under your own domain, create glue records for them at that domain\'s registrar, pointing to this server\'s IP address.')}</p>
     </section>;
   }
 
@@ -8673,6 +8923,8 @@ function App() {
   function renderPage() {
     if (page === 'websites') return renderWebsites();
     if (page === 'addons') return renderAddons();
+    // DNS Manager (2026-09-29): administrators and customers, once installed.
+    if (page === 'dns') return dnsAddonInstalled ? renderDns() : renderAddonMissing('dns');
     // Reachable by URL after the addon is removed, so it answers for itself
     // rather than rendering a page whose every request would be refused.
     if (page === 'applications') return appsFeatureEnabled ? renderApplications() : renderAddonMissing('application');

@@ -22,6 +22,7 @@ ADDONS_FILE = ADDONS_DIR / "addons.json"
 
 APPLICATION = "application"
 DEMO = "demo"
+DNS = "dns"
 FAIL2BAN = "fail2ban"
 MALWARE = "malware"
 MCP = "mcp"
@@ -93,6 +94,23 @@ CATALOGUE: dict[str, dict] = {
             "Installing it installs LMD and the ClamAV engine if they are not there yet (1-3 minutes).",
             "A scan uses about 1.3 GB of memory while it runs and releases it afterwards; nothing stays resident unless Level 2 is on.",
             "Removing it stops the schedule, the scan of uploads and the real-time monitor, which stays off until you turn Level 2 on again. LMD, ClamAV, the history and the schedule are kept.",
+        ],
+        "keeps_data_on_uninstall": True,
+    },
+    DNS: {
+        "name": "DNS Manager",
+        "version": "1.0.0",
+        "summary": "Runs the DNS for your domains on this server, and lets you edit their records in the panel.",
+        "details": [
+            "Installs PowerDNS and opens port 53. Point a domain's nameservers at this server and its records are served from here.",
+            "A website created while the addon is on gets its zone, with the domain and www pointing at this server.",
+            "Administrators edit every zone; a customer edits the zones of their own websites. A, AAAA, CNAME, MX, TXT, NS, SRV and CAA records.",
+        ],
+        "notes": [
+            "Set the nameservers on the DNS page, then create glue records for them at the registrar, pointing to this server's IP address.",
+            "Both nameservers are this one server, so the domains it serves are only as reachable as the server itself.",
+            "If the server's IP address changes, remove the addon and install it again so PowerDNS listens on the new address.",
+            "Deleting a website keeps its zone. Removing the addon stops PowerDNS and closes port 53; every zone is kept and is served again when you install it again.",
         ],
         "keeps_data_on_uninstall": True,
     },
@@ -245,6 +263,11 @@ def require(slug: str) -> None:
 def require_application() -> None:
     """FastAPI dependency for every route the Application addon owns."""
     require(APPLICATION)
+
+
+def require_dns() -> None:
+    """FastAPI dependency for every route the DNS Manager addon owns."""
+    require(DNS)
 
 
 def require_demo() -> None:
