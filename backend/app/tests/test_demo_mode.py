@@ -294,5 +294,6 @@ def test_every_get_route_has_been_looked_at():
 
 def test_the_panel_offers_the_accounts_and_says_it_is_a_demo():
     assert "/demo-mode/public" in APP
-    assert "demo-strip" in APP
+    # OPanel's notice, at the top of the page body (BPanel follows OPanel, 2026-09-29).
+    assert '<div className="demo-banner" role="status">' in APP
     assert "addon.slug === 'demo'" in APP
