@@ -28,6 +28,11 @@ def _install_failure(exc: Exception) -> str:
     text = str(exc).strip()
     _, separator, stderr = text.partition(chr(10))
     message = (stderr if separator else text).strip()
+    # When a tool said something before the helper gave up (apt, systemctl),
+    # the helper's own line is the last one, and it is the one worth reading.
+    helper_lines = [line for line in message.splitlines() if line.startswith("bpanel-helper: ")]
+    if helper_lines:
+        message = helper_lines[-1]
     for prefix in ("bpanel-helper: ", "ERROR: "):
         if message.startswith(prefix):
             message = message[len(prefix):]

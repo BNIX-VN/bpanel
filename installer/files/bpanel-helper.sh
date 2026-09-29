@@ -80,6 +80,7 @@ PDNS_DB="/var/lib/powerdns/pdns.sqlite3"
 PDNS_SCHEMA="/usr/share/pdns-backend-sqlite3/schema/schema.sqlite3.sql"
 PDNS_API_KEY_FILE="/etc/bpanel/pdns-api.key"
 PDNS_API_PORT="8053"
+PDNS_INSTALL_LOG="/var/log/bpanel-dns-install.log"
 NGINX_BPANEL_DIR="/etc/nginx/bpanel"
 NGINX_BLOCKLIST_DIR="$NGINX_BPANEL_DIR"
 NGINX_BLOCKLIST_CONF="/etc/nginx/conf.d/bpanel-ip-blocklist.conf"
@@ -1344,6 +1345,11 @@ install_dns() {
   if [[ -n "${others// /}" ]]; then
     deny "port 53 is already in use by: ${others% } - stop it before installing DNS Manager"
   fi
+  # PowerDNS already running on a setup BPanel did not write is somebody's
+  # DNS: rewriting its configuration would take their zones off the air.
+  if systemctl is-active --quiet pdns 2>/dev/null && [[ ! -f "$PDNS_CONF" ]]; then
+    deny "PowerDNS is already running here with its own configuration - DNS Manager will not take it over"
+  fi
 
   if ! pkg_installed pdns-server || ! pkg_installed pdns-backend-sqlite3; then
     # Keep apt from starting PowerDNS on its stock settings while it installs:
@@ -1356,15 +1362,25 @@ install_dns() {
     fi
     printf '#!/bin/sh\nexit 101\n' >"$policy"
     chmod 0755 "$policy"
-    apt-get update --allow-releaseinfo-change || true
-    apt-get install -y pdns-server pdns-backend-sqlite3 || status=$?
+    # apt's output goes to a log, so a failure below reads as one sentence
+    # in the panel instead of a screen of "Restarting services...".
+    apt-get update --allow-releaseinfo-change >>"$PDNS_INSTALL_LOG" 2>&1 || true
+    # Without the recommended pdns-backend-bind: its pdns.d/bind.conf carries
+    # bind-* settings that are fatal to a server not loading that backend.
+    apt-get install -y --no-install-recommends pdns-server pdns-backend-sqlite3 >>"$PDNS_INSTALL_LOG" 2>&1 || status=$?
     rm -f "$policy"
     if [[ -n "$saved" ]]; then
       mv -f "$saved" "$policy"
     fi
     if [[ $status -ne 0 ]]; then
-      deny "could not install PowerDNS (apt-get exited ${status})"
+      deny "could not install PowerDNS (apt-get exited ${status}; see ${PDNS_INSTALL_LOG})"
     fi
+  fi
+  # Installed some other way (by hand, or by an earlier version of this addon
+  # that let apt add its recommendations): set its bind.conf aside. PowerDNS
+  # only reads *.conf there, so the renamed file is kept but inert.
+  if [[ -f /etc/powerdns/pdns.d/bind.conf ]]; then
+    mv -f /etc/powerdns/pdns.d/bind.conf /etc/powerdns/pdns.d/bind.conf.bpanel-disabled
   fi
 
   # The zone database: made once, never replaced.
@@ -1423,7 +1439,7 @@ EOF
   chmod 0640 "$PDNS_CONF"
 
   systemctl enable pdns >/dev/null 2>&1 || true
-  systemctl restart pdns || deny "PowerDNS did not start - journalctl -u pdns -n 50 says why"
+  systemctl restart pdns 2>/dev/null || deny "PowerDNS did not start - journalctl -u pdns -n 50 says why"
   local waited=0
   while (( waited < 20 )); do
     dns_api_answers "$key" && break

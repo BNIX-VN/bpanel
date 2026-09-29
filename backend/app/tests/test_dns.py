@@ -346,6 +346,23 @@ def test_the_helper_installs_proves_and_removes_powerdns():
         assert verb in HELPER
 
 
+def test_powerdns_is_installed_without_the_bind_backend_and_never_taken_over():
+    """Seen on the demo server: apt added the recommended pdns-backend-bind,
+    whose pdns.d/bind.conf stopped PowerDNS with 'unknown setting bind-config'."""
+    install = HELPER.split("install_dns() {")[1].split("\n}\n")[0]
+    assert "apt-get install -y --no-install-recommends pdns-server pdns-backend-sqlite3" in install
+    assert "mv -f /etc/powerdns/pdns.d/bind.conf /etc/powerdns/pdns.d/bind.conf.bpanel-disabled" in install
+    assert 'systemctl is-active --quiet pdns 2>/dev/null && [[ ! -f "$PDNS_CONF" ]]' in install
+
+
+def test_an_install_failure_reads_as_the_helpers_sentence():
+    from app.api.addons import _install_failure
+
+    failure = RuntimeError("Command failed: sudo -n bpanel-helper dns-install\nRestarting services...\n"
+                           "Job for pdns.service failed.\nbpanel-helper: PowerDNS did not start")
+    assert _install_failure(failure) == "PowerDNS did not start"
+
+
 def test_port_53_opens_with_the_addon_and_closes_without_it():
     assert "done < <(cat \"$FIREWALL_ADDON_PORTS_DIR\"/*.ports 2>/dev/null || true)" in HELPER
     install = HELPER.split("install_dns() {")[1].split("\n}\n")[0]
