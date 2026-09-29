@@ -1511,6 +1511,13 @@ WEBMAIL_PUBLIC_PORT="2096"
 WEBMAIL_NGINX="/etc/nginx/conf.d/00-bpanel-webmail.conf"
 WEBMAIL_SSO_KEY_FILE="/etc/bpanel/webmail-sso.key"
 WEBMAIL_MASTER_USER="bpanel-webmail"
+# Rspamd, the spam filter. The panel reads its history through the controller
+# on loopback with the key in MAIL_RSPAMD_KEY_FILE (root:bpanel 0640).
+MAIL_RSPAMD_LOCAL="/etc/rspamd/local.d"
+MAIL_RSPAMD_OVERRIDE="/etc/rspamd/override.d"
+MAIL_RSPAMD_KEY_FILE="/etc/bpanel/rspamd-controller.key"
+MAIL_RSPAMD_REDIS_DB="14"
+MAIL_SIEVE_DIR="/etc/dovecot/bpanel-sieve"
 
 mail_port_taken() {
   # "<port> (<program>)" for each mail port some other program already holds.
@@ -1529,13 +1536,13 @@ mail_port_taken() {
 
 mail_install_packages() {
   local missing=() pkg
-  for pkg in exim4-daemon-heavy dovecot-core dovecot-imapd dovecot-pop3d dovecot-lmtpd git python3-venv; do
+  for pkg in exim4-daemon-heavy dovecot-core dovecot-imapd dovecot-pop3d dovecot-lmtpd dovecot-sieve rspamd git python3-venv; do
     pkg_installed "$pkg" || missing+=("$pkg")
   done
   [[ ${#missing[@]} -gt 0 ]] || return 0
   export DEBIAN_FRONTEND=noninteractive
-  # Keep apt from starting Exim and Dovecot on their stock settings while they
-  # install: this addon writes their whole configuration before either runs.
+  # Keep apt from starting Exim, Dovecot and Rspamd on their stock settings
+  # while they install: this addon writes their configuration before any runs.
   local policy="/usr/sbin/policy-rc.d" saved="" status=0
   if [[ -e "$policy" ]]; then
     saved="${policy}.bpanel-mail"
@@ -1549,7 +1556,7 @@ mail_install_packages() {
   if [[ -n "$saved" ]]; then
     mv -f "$saved" "$policy"
   fi
-  [[ $status -eq 0 ]] || deny "could not install Exim and Dovecot (apt-get exited ${status}; see ${MAIL_INSTALL_LOG})"
+  [[ $status -eq 0 ]] || deny "could not install Exim, Dovecot and Rspamd (apt-get exited ${status}; see ${MAIL_INSTALL_LOG})"
 }
 
 mail_write_tls_script() {
@@ -1643,6 +1650,9 @@ tls_advertise_hosts = *
 tls_certificate = ${MAIL_TLS_DIR}/fullchain.pem
 tls_privatekey = ${MAIL_TLS_DIR}/privkey.pem
 
+# The spam filter; only asked while ${MAIL_EXIM_DIR}/spam-acl exists.
+spamd_address = 127.0.0.1 11333 variant=rspamd
+
 never_users = root
 host_lookup =
 smtp_banner = \$smtp_active_hostname ESMTP
@@ -1706,9 +1716,14 @@ acl_check_data:
   deny    message = The From address must be on \${domain:\$authenticated_id}
           authenticated = *
           condition = \${if eqi{\${domain:\$h_from:}}{\${domain:\$authenticated_id}}{no}{yes}}
+  # Rspamd, while the spam filter is on (written by mail-spam-set).
+.include_if_exists ${MAIL_EXIM_DIR}/spam-acl
   accept
 
 begin routers
+
+# A smarthost, when one is set (written by mail-relay-set).
+.include_if_exists ${MAIL_EXIM_DIR}/relay-router
 
 dnslookup:
   driver = dnslookup
@@ -1752,6 +1767,8 @@ local_user:
   cannot_route_message = Unknown user
 
 begin transports
+
+.include_if_exists ${MAIL_EXIM_DIR}/relay-transport
 
 remote_smtp:
   driver = smtp
@@ -1812,6 +1829,9 @@ dovecot_login:
   server_socket = /run/dovecot/auth-client
   server_set_id = \${sg{\$auth1}{\\N\\*.*\$\\N}{}}
   server_advertise_condition = \${if or{{def:tls_in_cipher}{match_ip{\$sender_host_address}{<; 127.0.0.1 ; ::1}}}}
+
+# Signing in to the smarthost, when one is set.
+.include_if_exists ${MAIL_EXIM_DIR}/relay-auth
 EOF
   chmod 0644 "$tmp"
   if ! exim4 -C "$tmp" -bV >/dev/null 2>>"$MAIL_INSTALL_LOG"; then
@@ -1898,6 +1918,8 @@ plugin {
   quota = count:Mailbox
   quota_vsizes = yes
   quota_grace = 10%%
+  # Mail the spam filter marked goes to Junk, before anything of the mailbox's own.
+  sieve_before = ${MAIL_SIEVE_DIR}/spam-to-junk.sieve
 }
 
 protocol imap {
@@ -1906,6 +1928,7 @@ protocol imap {
 }
 protocol lmtp {
   postmaster_address = postmaster@%d
+  mail_plugins = \$mail_plugins sieve
 }
 
 service auth {
@@ -2138,7 +2161,9 @@ install_mail() {
   systemctl enable --now bpanel-mail-tls.path >/dev/null 2>&1 || true
 
   mail_write_exim_conf "$hostname"
+  mail_write_sieve
   mail_write_dovecot_conf
+  mail_write_rspamd_conf
   mail_install_webmail
 
   systemctl enable dovecot exim4 bpanel-webmail >/dev/null 2>&1 || true
@@ -2179,6 +2204,7 @@ install_mail() {
 
 remove_mail() {
   local conf
+  systemctl disable --now rspamd >/dev/null 2>&1 || true
   systemctl disable --now bpanel-webmail >/dev/null 2>&1 || true
   systemctl disable --now exim4 >/dev/null 2>&1 || true
   systemctl disable --now dovecot >/dev/null 2>&1 || true
@@ -2190,11 +2216,11 @@ remove_mail() {
   if nginx -t >/dev/null 2>&1; then systemctl reload nginx >/dev/null 2>&1 || true; fi
   rm -f "$FIREWALL_ADDON_PORTS_DIR/mail.ports"
   firewall_apply >/dev/null
-  echo "Email stopped: Exim, Dovecot and the webmail are off and the mail ports are closed. Mail, mailboxes and DKIM keys are kept."
+  echo "Email stopped: Exim, Dovecot, Rspamd and the webmail are off and the mail ports are closed. Mail, mailboxes, DKIM keys and settings are kept."
 }
 
 mail_status() {
-  local installed=no exim=no dovecot=no webmail=no port_open=no hostname=""
+  local installed=no exim=no dovecot=no webmail=no port_open=no hostname="" rspamd=no spam_filter=no relay=""
   if pkg_installed exim4-daemon-heavy && pkg_installed dovecot-imapd && [[ -x "$WEBMAIL_HOME/venv/bin/python" ]]; then
     installed=yes
   fi
@@ -2205,12 +2231,470 @@ mail_status() {
   if [[ -f "$MAIL_EXIM_CONF" ]]; then
     hostname="$(awk -F' = ' '$1 == "primary_hostname" { print $2; exit }' "$MAIL_EXIM_CONF")"
   fi
+  if systemctl is-active --quiet rspamd 2>/dev/null; then rspamd=yes; fi
+  if [[ -f "$MAIL_EXIM_DIR/spam-acl" ]]; then spam_filter=yes; fi
+  if [[ -f "$MAIL_EXIM_DIR/relay-info" ]]; then relay="$(head -n1 "$MAIL_EXIM_DIR/relay-info")"; fi
   echo "installed=${installed}"
   echo "exim=${exim}"
   echo "dovecot=${dovecot}"
   echo "webmail=${webmail}"
   echo "port_open=${port_open}"
   echo "hostname=${hostname}"
+  echo "rspamd=${rspamd}"
+  echo "spam_filter=${spam_filter}"
+  echo "relay=${relay}"
+}
+
+mail_write_sieve() {
+  # Readable by every mailbox owner: Sieve runs as the mail's Linux user.
+  install -d -o root -g root -m 0755 "$MAIL_SIEVE_DIR"
+  cat >"$MAIL_SIEVE_DIR/spam-to-junk.sieve" <<'SIEVE'
+# Managed by BPanel (Email addon). Mail the spam filter marked goes to Junk.
+require ["fileinto", "mailbox"];
+if header :contains "X-Spam-Status" "Yes" {
+  fileinto :create "Junk";
+  stop;
+}
+SIEVE
+  chmod 0644 "$MAIL_SIEVE_DIR/spam-to-junk.sieve"
+  # Compiled here, as root: the mailbox owners could not write the result.
+  sievec "$MAIL_SIEVE_DIR/spam-to-junk.sieve" >>"$MAIL_INSTALL_LOG" 2>&1 \
+    || deny "could not compile the spam Sieve script (see ${MAIL_INSTALL_LOG})"
+  chmod 0644 "$MAIL_SIEVE_DIR"/spam-to-junk.svbin
+}
+
+mail_rspamd_group() {
+  if getent group _rspamd >/dev/null; then printf '_rspamd'; else printf 'root'; fi
+}
+
+mail_write_rspamd_conf() {
+  local key group
+  group="$(mail_rspamd_group)"
+  install -d -o root -g bpanel -m 0750 /etc/bpanel
+  if [[ ! -s "$MAIL_RSPAMD_KEY_FILE" ]]; then
+    # Made 0640 while still empty, then filled.
+    install -m 0640 -o root -g bpanel /dev/null "$MAIL_RSPAMD_KEY_FILE"
+    openssl rand -hex 24 >"$MAIL_RSPAMD_KEY_FILE"
+  fi
+  chown root:bpanel "$MAIL_RSPAMD_KEY_FILE"
+  chmod 0640 "$MAIL_RSPAMD_KEY_FILE"
+  key="$(tr -d '[:space:]' <"$MAIL_RSPAMD_KEY_FILE")"
+  install -d -m 0755 "$MAIL_RSPAMD_LOCAL" "$MAIL_RSPAMD_OVERRIDE"
+
+  # override.d, not local.d: local.d would merge with the stock secure_ip list,
+  # which lets anything on loopback - customers' PHP included - in without a
+  # password.
+  install -m 0640 -o root -g "$group" /dev/null "$MAIL_RSPAMD_OVERRIDE/worker-controller.inc"
+  cat >"$MAIL_RSPAMD_OVERRIDE/worker-controller.inc" <<EOF
+${MAIL_MARKER}
+# The panel reads the filtering history here with the key in ${MAIL_RSPAMD_KEY_FILE}.
+bind_socket = "127.0.0.1:11334";
+password = "${key}";
+enable_password = "${key}";
+secure_ip = [];
+EOF
+  cat >"$MAIL_RSPAMD_LOCAL/worker-normal.inc" <<EOF
+${MAIL_MARKER}
+# Exim asks this worker about each message from outside.
+bind_socket = "127.0.0.1:11333";
+count = 1;
+EOF
+  # Exim talks to the normal worker directly; the milter proxy is not needed.
+  cat >"$MAIL_RSPAMD_OVERRIDE/worker-proxy.inc" <<EOF
+${MAIL_MARKER}
+enabled = false;
+EOF
+  cat >"$MAIL_RSPAMD_LOCAL/redis.conf" <<EOF
+${MAIL_MARKER}
+# The server's own Redis, in a database of Rspamd's own (the panel uses 0).
+servers = "127.0.0.1:6379";
+db = "${MAIL_RSPAMD_REDIS_DB}";
+EOF
+  cat >"$MAIL_RSPAMD_LOCAL/history_redis.conf" <<EOF
+${MAIL_MARKER}
+# The filtering log the panel shows.
+nrows = 2000;
+EOF
+  # No greylisting: it holds back a new sender's first message for minutes,
+  # which customers take for lost mail.
+  cat >"$MAIL_RSPAMD_LOCAL/greylist.conf" <<EOF
+${MAIL_MARKER}
+enabled = false;
+EOF
+  # The thresholds: Rspamd's defaults until the panel sets its own (mail-spam-set).
+  if [[ ! -f "$MAIL_RSPAMD_LOCAL/actions.conf" ]]; then
+    cat >"$MAIL_RSPAMD_LOCAL/actions.conf" <<EOF
+${MAIL_MARKER}
+reject = 15;
+add_header = 6;
+greylist = null;
+rewrite_subject = null;
+EOF
+  fi
+  local list
+  for list in bpanel-allow-senders bpanel-allow-domains; do
+    [[ -f "$MAIL_RSPAMD_LOCAL/${list}.map" ]] || install -m 0644 -o root -g root /dev/null "$MAIL_RSPAMD_LOCAL/${list}.map"
+  done
+  # The allowlist: envelope sender or From header, as an address or a domain.
+  # A score rather than an early "accept": Rspamd leaves early verdicts out of
+  # its history, and an allowed message must still show in the log.
+  cat >"$MAIL_RSPAMD_LOCAL/multimap.conf" <<EOF
+${MAIL_MARKER}
+BPANEL_ALLOW_SENDER {
+  type = "from";
+  filter = "email:addr";
+  map = "file://${MAIL_RSPAMD_LOCAL}/bpanel-allow-senders.map";
+  score = -50.0;
+  description = "Sender on the BPanel allowlist";
+}
+BPANEL_ALLOW_SENDER_MIME {
+  type = "header";
+  header = "From";
+  filter = "email:addr";
+  map = "file://${MAIL_RSPAMD_LOCAL}/bpanel-allow-senders.map";
+  score = -50.0;
+  description = "From address on the BPanel allowlist";
+}
+BPANEL_ALLOW_DOMAIN {
+  type = "from";
+  filter = "email:domain";
+  map = "file://${MAIL_RSPAMD_LOCAL}/bpanel-allow-domains.map";
+  score = -50.0;
+  description = "Sender domain on the BPanel allowlist";
+}
+BPANEL_ALLOW_DOMAIN_MIME {
+  type = "header";
+  header = "From";
+  filter = "email:domain";
+  map = "file://${MAIL_RSPAMD_LOCAL}/bpanel-allow-domains.map";
+  score = -50.0;
+  description = "From domain on the BPanel allowlist";
+}
+EOF
+  chmod 0644 "$MAIL_RSPAMD_LOCAL"/worker-normal.inc "$MAIL_RSPAMD_OVERRIDE"/worker-proxy.inc \
+    "$MAIL_RSPAMD_LOCAL"/redis.conf "$MAIL_RSPAMD_LOCAL"/history_redis.conf "$MAIL_RSPAMD_LOCAL"/greylist.conf \
+    "$MAIL_RSPAMD_LOCAL"/actions.conf "$MAIL_RSPAMD_LOCAL"/multimap.conf
+  if ! rspamadm configtest >>"$MAIL_INSTALL_LOG" 2>&1; then
+    deny "the Rspamd configuration BPanel wrote does not load (see ${MAIL_INSTALL_LOG})"
+  fi
+}
+
+mail_rspamd_answers() {
+  local key
+  key="$(tr -d '[:space:]' <"$MAIL_RSPAMD_KEY_FILE" 2>/dev/null)"
+  [[ -n "$key" ]] || return 1
+  [[ "$(curl -fsS -m 3 -H "Password: ${key}" http://127.0.0.1:11334/ping 2>/dev/null)" == pong* ]] \
+    && ss -H -lnt 'sport = :11333' 2>/dev/null | grep -q .
+}
+
+mail_exim_reload() {
+  exim4 -bV >/dev/null 2>>"$MAIL_INSTALL_LOG" || return 1
+  if systemctl is-active --quiet exim4; then
+    systemctl reload exim4 2>/dev/null || systemctl restart exim4
+  fi
+}
+
+mail_spam_set() {
+  # {"enabled": bool, "senders": [...], "domains": [...], "reject_score": n,
+  # "junk_score": n} on stdin. Writes the allowlists and the thresholds, then
+  # turns the filter on (Rspamd first, then Exim asks it) or off (Exim stops
+  # asking, then Rspamd stops).
+  [[ -f "$MAIL_EXIM_CONF" ]] || deny "the Email addon is not installed"
+  local payload status=0 enabled waited
+  payload="$(mktemp)"
+  head -c 2000000 >"$payload"
+  enabled="$(python3 - "$payload" "$MAIL_RSPAMD_LOCAL" <<'PY'
+import json
+import os
+import re
+import sys
+
+payload_path, local_dir = sys.argv[1:3]
+ADDRESS_RE = re.compile(r"^[A-Za-z0-9._%+=-]{1,64}@[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$")
+DOMAIN_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$")
+
+
+def fail(message):
+    print(f"bpanel-helper: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+try:
+    with open(payload_path, encoding="utf-8") as handle:
+        data = json.load(handle)
+except (OSError, ValueError):
+    fail("mail-spam-set expects its settings as JSON on stdin")
+senders = [str(item).strip().lower() for item in data.get("senders") or []]
+domains = [str(item).strip().lower() for item in data.get("domains") or []]
+if len(senders) > 5000 or len(domains) > 5000:
+    fail("the allowlist is limited to 5000 senders and 5000 domains")
+for item in senders:
+    if not ADDRESS_RE.fullmatch(item):
+        fail(f"invalid sender address on the allowlist: {item!r}")
+for item in domains:
+    if not DOMAIN_RE.fullmatch(item):
+        fail(f"invalid domain on the allowlist: {item!r}")
+try:
+    reject = float(data.get("reject_score", 15))
+    junk = float(data.get("junk_score", 6))
+except (TypeError, ValueError):
+    fail("the spam scores must be numbers")
+if not (0 < junk < reject <= 100):
+    fail("the Junk score must be above 0 and below the reject score, which is at most 100")
+for name, items in (("bpanel-allow-senders.map", senders), ("bpanel-allow-domains.map", domains)):
+    path = os.path.join(local_dir, name)
+    with open(path + ".new", "w", encoding="utf-8") as handle:
+        handle.write("".join(f"{item}\n" for item in sorted(set(items))))
+    os.chmod(path + ".new", 0o644)
+    os.replace(path + ".new", path)
+path = os.path.join(local_dir, "actions.conf")
+with open(path + ".new", "w", encoding="utf-8") as handle:
+    handle.write("# Managed by BPanel (Email addon).\n"
+                 f"reject = {reject:g};\nadd_header = {junk:g};\ngreylist = null;\nrewrite_subject = null;\n")
+os.chmod(path + ".new", 0o644)
+os.replace(path + ".new", path)
+print("yes" if data.get("enabled") else "no")
+PY
+)" || status=$?
+  rm -f "$payload"
+  [[ $status -eq 0 ]] || exit "$status"
+
+  if [[ "$enabled" == "yes" ]]; then
+    systemctl enable rspamd >/dev/null 2>&1 || true
+    if systemctl is-active --quiet rspamd; then
+      # New thresholds; the allowlists are files Rspamd watches by itself.
+      systemctl reload rspamd 2>>"$MAIL_INSTALL_LOG" || systemctl restart rspamd
+    else
+      systemctl restart rspamd 2>>"$MAIL_INSTALL_LOG" \
+        || deny "Rspamd did not start - journalctl -u rspamd -n 50 says why"
+    fi
+    waited=0
+    while (( waited < 60 )); do
+      mail_rspamd_answers && break
+      sleep 1
+      waited=$((waited + 1))
+    done
+    mail_rspamd_answers || deny "Rspamd is running but does not answer on 127.0.0.1:11333 and 11334"
+    install -m 0640 -o root -g Debian-exim /dev/null "$MAIL_EXIM_DIR/spam-acl.new"
+    cat >"$MAIL_EXIM_DIR/spam-acl.new" <<'ACL'
+  # Written by BPanel (Email addon): the spam filter is on.
+  # Mail from a signed-in mailbox is the customer's own and is not scanned.
+  accept  authenticated = *
+  warn    remove_header = X-Spam-Status : X-Spam-Score : X-Spam-Flag : X-Spam-Bar : X-Spam-Report
+  # ":true" - if Rspamd does not answer, mail is delivered unscanned.
+  warn    spam = nobody:true
+  defer   message = Please try again later
+          condition = ${if eq{$spam_action}{soft reject}}
+  deny    message = This message was rejected as spam (score $spam_score)
+          condition = ${if eq{$spam_action}{reject}}
+  warn    condition = ${if def:spam_score}
+          add_header = X-Spam-Score: $spam_score
+  warn    condition = ${if eq{$spam_action}{add header}}
+          add_header = X-Spam-Status: Yes, score=$spam_score
+ACL
+    mv -f "$MAIL_EXIM_DIR/spam-acl.new" "$MAIL_EXIM_DIR/spam-acl"
+    if ! mail_exim_reload; then
+      rm -f "$MAIL_EXIM_DIR/spam-acl"
+      mail_exim_reload || true
+      deny "Exim refused the spam filter's configuration (see ${MAIL_INSTALL_LOG})"
+    fi
+    echo "Spam filter on: Rspamd scans mail from outside."
+  else
+    rm -f "$MAIL_EXIM_DIR/spam-acl"
+    mail_exim_reload || true
+    systemctl disable --now rspamd >/dev/null 2>&1 || true
+    echo "Spam filter off: mail from outside is delivered unscanned."
+  fi
+}
+
+mail_relay_set() {
+  # {"enabled": bool, "host", "port", "security": "starttls"|"ssl", "username",
+  # "password"} on stdin. The credentials go to a file only root and Exim can
+  # read, base64-encoded so no character in a password needs escaping.
+  [[ -f "$MAIL_EXIM_CONF" ]] || deny "the Email addon is not installed"
+  local payload status=0 result
+  payload="$(mktemp)"
+  head -c 100000 >"$payload"
+  result="$(python3 - "$payload" "$MAIL_EXIM_DIR" <<'PY'
+import base64
+import grp
+import ipaddress
+import json
+import os
+import re
+import sys
+
+payload_path, exim_dir = sys.argv[1:3]
+HOST_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$")
+FILES = ("relay-router", "relay-transport", "relay-auth", "relay-credentials", "relay-info")
+
+
+def fail(message):
+    print(f"bpanel-helper: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+try:
+    with open(payload_path, encoding="utf-8") as handle:
+        data = json.load(handle)
+except (OSError, ValueError):
+    fail("mail-relay-set expects its settings as JSON on stdin")
+
+if not data.get("enabled"):
+    for name in FILES:
+        try:
+            os.remove(os.path.join(exim_dir, name))
+        except FileNotFoundError:
+            pass
+    print("off")
+    sys.exit(0)
+
+host = str(data.get("host") or "").strip().lower()
+try:
+    ipaddress.ip_address(host)
+    fail("give the smarthost by name: its certificate is checked against it")
+except ValueError:
+    pass
+if not HOST_RE.fullmatch(host):
+    fail(f"invalid smarthost: {host!r}")
+port = data.get("port")
+if not isinstance(port, int) or not 1 <= port <= 65535:
+    fail("invalid smarthost port")
+security = data.get("security")
+if security not in ("starttls", "ssl"):
+    fail("the smarthost connection must be STARTTLS or SSL")
+username = str(data.get("username") or "")
+password = str(data.get("password") or "")
+for label, value, limit in (("user name", username, 256), ("password", password, 512)):
+    if not value or len(value) > limit or any(ord(char) < 32 or ord(char) == 127 for char in value):
+        fail(f"invalid smarthost {label}")
+    if value != value.strip():
+        fail(f"the smarthost {label} cannot start or end with a space")
+
+gid = grp.getgrnam("Debian-exim").gr_gid
+credentials = os.path.join(exim_dir, "relay-credentials")
+
+
+def write(name, text):
+    path = os.path.join(exim_dir, name)
+    fd = os.open(path + ".new", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640)
+    try:
+        os.fchown(fd, 0, gid)
+        os.fchmod(fd, 0o640)
+        os.write(fd, text.encode())
+    finally:
+        os.close(fd)
+    os.replace(path + ".new", path)
+
+
+def b64(value):
+    return base64.b64encode(value.encode()).decode()
+
+
+def secret(key, escape):
+    return "${sg{${base64d:${lookup{%s}lsearch{%s}}}}%s}" % (key, credentials, escape)
+
+
+marker = "# Written by BPanel (Email addon): mail to other servers goes through the smarthost."
+write("relay-credentials", f"username: {b64(username)}\npassword: {b64(password)}\n")
+write("relay-router", "\n".join([
+    marker,
+    "bpanel_smarthost:",
+    "  driver = manualroute",
+    "  domains = ! +local_domains",
+    "  transport = bpanel_smarthost_smtp",
+    f"  route_list = * {host}::{port} byname",
+    "  host_find_failed = defer",
+    "  same_domain_copy_routing = yes",
+    "  no_more",
+    "",
+]))
+transport = [
+    marker,
+    "bpanel_smarthost_smtp:",
+    "  driver = smtp",
+    f"  port = {port}",
+    # The password only ever travels over TLS to the host it was meant for.
+    "  hosts_require_auth = *",
+    "  hosts_require_tls = *",
+    "  tls_verify_hosts = *",
+    "  tls_verify_certificates = system",
+    f"  tls_sni = {host}",
+]
+if security == "ssl":
+    transport.append("  protocol = smtps")
+transport += [
+    "  dkim_domain = ${if def:authenticated_id {${lookup{$sender_address_domain}lsearch{%s/dkim_domains}}}}" % exim_dir,
+    "  dkim_selector = bpanel",
+    "  dkim_private_key = ${if eq{$dkim_domain}{}{0}{%s/dkim/$dkim_domain.pem}}" % exim_dir,
+    "  dkim_canon = relaxed",
+    "  dkim_strict = false",
+    "",
+]
+write("relay-transport", "\n".join(transport))
+# client_send is a list split before each item is expanded, and ":" - its
+# usual separator - is inside the expansion itself, so the list uses ";".
+# A literal ^ is doubled: Exim turns a single one into the NUL of PLAIN.
+user = secret("username", r"{\N\^\N}{^^}")
+secret_ = secret("password", r"{\N\^\N}{^^}")
+write("relay-auth", "\n".join([
+    marker,
+    "bpanel_smarthost_plain:",
+    "  driver = plaintext",
+    "  public_name = PLAIN",
+    "  client_send = <; ^%s^%s" % (user, secret_),
+    "",
+    "bpanel_smarthost_login:",
+    "  driver = plaintext",
+    "  public_name = LOGIN",
+    "  client_send = <; ; %s ; %s" % (user, secret_),
+    "",
+]))
+write("relay-info", f"{host}:{port} {security}\n")
+print(f"{host}:{port}")
+PY
+)" || status=$?
+  rm -f "$payload"
+  [[ $status -eq 0 ]] || exit "$status"
+  if ! mail_exim_reload; then
+    rm -f "$MAIL_EXIM_DIR"/relay-router "$MAIL_EXIM_DIR"/relay-transport "$MAIL_EXIM_DIR"/relay-auth \
+      "$MAIL_EXIM_DIR"/relay-credentials "$MAIL_EXIM_DIR"/relay-info
+    mail_exim_reload || true
+    deny "Exim refused the smarthost configuration (see ${MAIL_INSTALL_LOG})"
+  fi
+  # Mail that waited under the old settings is tried again now, not at its
+  # next retry time.
+  if systemctl is-active --quiet exim4; then
+    setsid exim4 -qf >/dev/null 2>&1 < /dev/null &
+  fi
+  if [[ "$result" == "off" ]]; then
+    echo "Smarthost off: mail goes straight to each recipient's server."
+  else
+    echo "Smarthost on: mail to other servers goes through ${result}."
+  fi
+}
+
+mail_relay_test() {
+  # Send one message to the given address now, and print what Exim logged
+  # for it: delivered, deferred with the remote server's answer, or failed.
+  # The log never holds the smarthost password.
+  local to="$1" hostname msgid qid
+  require_email "$to"
+  [[ -f "$MAIL_EXIM_CONF" ]] || deny "the Email addon is not installed"
+  hostname="$(awk -F' = ' '$1 == "primary_hostname" { print $2; exit }' "$MAIL_EXIM_CONF")"
+  msgid="bpanel-test-$(date +%s)-$(openssl rand -hex 4)@${hostname}"
+  printf 'From: BPanel <postmaster@%s>\nTo: <%s>\nSubject: BPanel mail test\nDate: %s\nMessage-ID: <%s>\n\nThis is a test message sent from the BPanel on %s.\n' \
+    "$hostname" "$to" "$(date -R)" "$msgid" "$hostname" \
+    | exim4 -odq -oi -f "postmaster@${hostname}" -- "$to" >/dev/null 2>&1 || true
+  qid="$(grep -a "id=${msgid}" /var/log/exim4/mainlog | tail -n1 | awk '{ print $3 }')"
+  [[ -n "$qid" ]] || deny "Exim did not accept the test message"
+  # -M delivers now even if an earlier failure set a retry time: a test after
+  # fixing a password must try again, not report the old failure.
+  timeout 90 exim4 -M "$qid" >/dev/null 2>&1 || true
+  # Everything Exim said about it after accepting it: the remote server's own
+  # answer ("535 ... not accepted") is on the authenticator lines, not the
+  # delivery line.
+  grep -a " ${qid} " /var/log/exim4/mainlog | grep -avE " (<=|Completed|removed by)" | tail -n 8 | cut -c1-600
 }
 
 mail_sync() {
@@ -6397,6 +6881,21 @@ case "$cmd" in
   mail-webmail-hosts)
     [[ $# -eq 0 ]] || deny "usage: mail-webmail-hosts"
     mail_webmail_hosts
+    ;;
+
+  mail-spam-set)
+    [[ $# -eq 0 ]] || deny "usage: mail-spam-set < settings.json"
+    mail_spam_set
+    ;;
+
+  mail-relay-set)
+    [[ $# -eq 0 ]] || deny "usage: mail-relay-set < settings.json"
+    mail_relay_set
+    ;;
+
+  mail-relay-test)
+    [[ $# -eq 1 ]] || deny "usage: mail-relay-test <address>"
+    mail_relay_test "$1"
     ;;
 
   fail2ban-banned)
