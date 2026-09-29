@@ -4575,6 +4575,7 @@ function App() {
     await runFirewallAction('/firewall/disable', { method: 'POST' }, t('Disabling firewall...'));
   }
   async function reloadFirewall() { await runFirewallAction('/firewall/reload', { method: 'POST' }, t('Reloading firewall...')); }
+  async function repairFirewall() { await runFirewallAction('/firewall/repair', { method: 'POST' }, t('Repairing the firewall...')); }
   async function openFirewallPort() { await runFirewallAction('/firewall/allow-port', { method: 'POST', body: JSON.stringify({ port: firewallPort, protocol: firewallProtocol }) }, t('Opening port...')); }
   async function allowFirewallIp() { await runFirewallAction('/firewall/allow-ip', { method: 'POST', body: JSON.stringify({ ip: firewallAllowIp, port: firewallAllowPort || null, protocol: firewallAllowProtocol }) }, t('Allowing IP...')); }
   async function blockFirewallIp() {
@@ -8549,6 +8550,11 @@ function App() {
     const statusLine = (firewallText.split('\n').find(line => line.startsWith('Status:')) || '').toLowerCase();
     const enabled = statusLine.includes('enabled');
     const stateKnown = statusLine !== '';
+    // "Chain active: no" is a firewall turned on whose rules are not in force
+    // (UFW still in charge, or ipset missing): the dashboard and the alert
+    // call that off, so the page must not call it on.
+    const chainLine = (firewallText.split('\n').find(line => line.startsWith('Chain active:')) || '').toLowerCase();
+    const notApplied = enabled && chainLine.includes('no');
     const keep = value => !fwFilter.trim() || String(value).toLowerCase().includes(fwFilter.trim().toLowerCase());
     const shownRules = userRules.filter(rule => keep(`${rule.id} ${rule.action} ${rule.to} ${rule.from}`));
     const shownUrls = blocklistUrls.filter(keep);
@@ -8572,9 +8578,14 @@ function App() {
         </div>
 
         <div className="chip-row">
-          <span className={enabled ? 'badge ok' : 'badge warn'}>{enabled ? 'On' : 'Off'}</span>
+          <span className={notApplied ? 'badge bad' : enabled ? 'badge ok' : 'badge warn'}>{notApplied ? t('On, not applied') : enabled ? 'On' : 'Off'}</span>
           {panelRules.length > 0 && <span className="hint">protected ports: {panelRules.map(rule => rule.to).join(', ')}</span>}
         </div>
+
+        {notApplied && <div className="firewall-not-applied">
+          <p>{t('The firewall is turned on, but its rules are not in force: this server still filters with UFW, or iptables and ipset are missing. An update from an older release can leave it so.')}</p>
+          <button disabled={!!loading} onClick={repairFirewall}><Shield size={14}/>{t('Repair the firewall')}</button>
+        </div>}
 
         <div className="detail-tabs">
           <button className={fwDetail === 'rules' ? 'chip on' : 'chip'} disabled={!!loading}

@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+# bpanel-update: fetch the updater from GitHub, then run it.
+#
+# This command deliberately does nothing else. It works out which release (or
+# branch) is being installed, downloads that ref's installer/update.sh, checks
+# it, and runs it with the same arguments. The steps of an update therefore
+# always come from the code being installed, never from the release the server
+# is leaving: what an update installs or removes is decided in the repository.
+#
+# (It used to be a full copy of update.sh. A server built from a July image
+# updated with its July steps, which knew nothing of the iptables firewall:
+# UFW stayed in charge and the panel's chain was never applied.)
+#
+# Usage, as update.sh:
+#   bpanel-update [--release]         newest release (default)
+#   bpanel-update --tag v1.0.171      one release
+#   bpanel-update --branch main       a branch
+# Environment, as update.sh: REPO_URL, UPDATE_CHANNEL, BRANCH, RELEASE_TAG,
+# RELEASE_PATTERN, UPDATE_STATE_FILE. BPANEL_UPDATER_URL overrides where the
+# updater is fetched from, with {ref} for the ref (a mirror, a fork).
+
+set -euo pipefail
+
+main() {
+  local repo_url="${REPO_URL:-https://github.com/BNIX-VN/bpanel.git}"
+  local channel="${UPDATE_CHANNEL:-release}" branch="${BRANCH:-main}" tag="${RELEASE_TAG:-}"
+  local pattern="${RELEASE_PATTERN:-v[0-9]*.[0-9]*.[0-9]*}"
+  local state_file="${UPDATE_STATE_FILE:-/var/lib/bpanel/update-status.json}"
+  local args=("$@") ref url url_ref work script
+
+  fail() {
+    echo "ERROR: $1" >&2
+    # The panel's Update page reads this file: say why, rather than leave it
+    # showing an update that never started.
+    if command -v python3 >/dev/null 2>&1 && [[ -d "$(dirname "$state_file")" ]]; then
+      python3 - "$state_file" "$1" <<'PY' || true
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+path, message = Path(sys.argv[1]), sys.argv[2]
+try:
+    state = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+except Exception:
+    state = {}
+state.update(last_update_status="failed", last_update_message=message, progress_phase="failed",
+             progress_message=message,
+             last_update_finished_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+    fi
+    exit 1
+  }
+
+  [[ $EUID -eq 0 ]] || fail "Please run as root"
+
+  # The channel options only; everything is handed to update.sh as it came.
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --release) channel=release; shift ;;
+      --tag) [[ $# -ge 2 && "$2" != --* ]] || fail "--tag requires a value"; channel=tag; tag="$2"; shift 2 ;;
+      --branch) [[ $# -ge 2 && "$2" != --* ]] || fail "--branch requires a value"; channel=branch; branch="$2"; shift 2 ;;
+      --channel) [[ $# -ge 2 ]] || fail "--channel requires a value"; channel="$2"; shift 2 ;;
+      --remote|--app-dir) shift 2 || shift ;;
+      *) shift ;;
+    esac
+  done
+
+  case "$channel" in
+    release)
+      command -v git >/dev/null 2>&1 || fail "git is not installed (apt-get install -y git)"
+      ref="$(git ls-remote --tags --refs "$repo_url" "refs/tags/${pattern}" 2>/dev/null \
+        | awk '{ sub("refs/tags/", "", $2); print $2 }' | sort -V | tail -n 1)"
+      [[ -n "$ref" ]] || fail "Could not read the releases of ${repo_url}. Check this server's network."
+      url_ref="refs/tags/${ref}"
+      ;;
+    tag) ref="$tag"; url_ref="refs/tags/${tag}" ;;
+    branch) ref="$branch"; url_ref="refs/heads/${branch}" ;;
+    *) fail "UPDATE_CHANNEL must be release|branch|tag (got: ${channel})" ;;
+  esac
+  [[ "$ref" =~ ^[A-Za-z0-9._/-]+$ && "$ref" != -* && "$ref" != *..* ]] || fail "Not a ref name: ${ref}"
+
+  if [[ -n "${BPANEL_UPDATER_URL:-}" ]]; then
+    url="${BPANEL_UPDATER_URL//\{ref\}/$ref}"
+  else
+    case "$repo_url" in
+      https://github.com/*) url="${repo_url%.git}" ;;
+      git@github.com:*) url="https://github.com/${repo_url#git@github.com:}"; url="${url%.git}" ;;
+      *) fail "Cannot tell where the updater of ${repo_url} is; set BPANEL_UPDATER_URL." ;;
+    esac
+    url="https://raw.githubusercontent.com/${url#https://github.com/}/${url_ref}/installer/update.sh"
+  fi
+
+  work="$(mktemp -d /tmp/bpanel-updater.XXXXXX)"
+  # Laid out as in the repository, so update.sh finds nothing of a checkout
+  # next to itself and works from the release it downloads.
+  mkdir -p "$work/installer"
+  script="$work/installer/update.sh"
+  echo "==> Fetching the updater of ${ref}"
+  if ! curl -fsSL --retry 3 --retry-delay 2 --max-time 120 -o "$script" "$url"; then
+    rm -rf "$work"
+    fail "Could not download the updater from ${url}"
+  fi
+  # A proxy's error page or a truncated file must not be run as root.
+  if [[ "$(head -n 1 "$script")" != "#!/usr/bin/env bash" ]] \
+     || ! grep -q 'BPANEL_UPDATE_STABLE_COPY' "$script" \
+     || ! bash -n "$script"; then
+    rm -rf "$work"
+    fail "The file at ${url} is not BPanel's updater; nothing was run."
+  fi
+  chmod 0700 "$script"
+
+  local rc=0
+  /bin/bash "$script" "${args[@]}" || rc=$?
+  rm -rf "$work"
+  return "$rc"
+}
+
+# One line: bash has read all of it before main runs, so the file can be
+# replaced by the update it starts.
+main "$@"; exit $?
