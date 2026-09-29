@@ -656,3 +656,7 @@ button:disabled,.upload-button.disabled{background:var(--disabled-bg);color:var(
 
 .site-app-fields{display:flex;gap:14px;flex-wrap:wrap;align-items:end}
 .site-app-actions{align-items:flex-end}
+
+/* Firewall: turned on, but its rules are not in force. */
+.firewall-not-applied{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;margin:12px 0;padding:12px 14px;border:1px solid var(--danger-border);border-radius:var(--radius-md);background:var(--danger-bg);color:var(--danger-text)}
+.firewall-not-applied p{flex:1 1 320px;margin:0;font-size:13.5px}

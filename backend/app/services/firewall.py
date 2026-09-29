@@ -144,6 +144,12 @@ def reload() -> CommandResult:
     return shell.privileged("firewall-reload", fallback=["true"])
 
 
+def repair() -> CommandResult:
+    """Installs iptables/ipset if missing, takes over from UFW and applies the
+    rules: for a firewall that is on as a setting but not in force."""
+    return shell.privileged("firewall-repair", fallback=["true"], timeout=600)
+
+
 def allow_port(port: str | int, protocol: str = "tcp") -> CommandResult:
     clean_port = _validate_port(port)
     clean_protocol = _validate_protocol(protocol)

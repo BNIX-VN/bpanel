@@ -4244,6 +4244,20 @@ CONF
   return 0
 }
 
+# A server that updated straight from a release older than the iptables
+# firewall ran that release's updater, which knew nothing of it: UFW still
+# filters, ipset may be missing, and the panel's chain was never applied -
+# "on" as a setting, off in fact. This does what the missing update step
+# would have: install the tools, take over from UFW, apply.
+firewall_repair() {
+  if ! command -v ipset >/dev/null 2>&1 || ! command -v iptables >/dev/null 2>&1; then
+    DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=120 update --allow-releaseinfo-change >/dev/null 2>&1 || true
+    DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=120 install -y iptables ipset >/dev/null 2>&1 \
+      || deny "could not install iptables and ipset (apt-get install -y iptables ipset)"
+  fi
+  firewall_migrate
+}
+
 firewall_migrate() {
   firewall_require_tools
   local first_run=0
@@ -7577,6 +7591,9 @@ PY
     firewall_list_json
     ;;
   firewall-enable|ufw-enable)
+    # Saved as on only when it can be applied: without ipset the setting said
+    # on while nothing filtered.
+    firewall_require_tools
     firewall_set_state enabled
     firewall_apply
     ;;
@@ -7595,6 +7612,9 @@ PY
     ;;
   firewall-migrate)
     firewall_migrate
+    ;;
+  firewall-repair)
+    firewall_repair
     ;;
   firewall-allow-port|ufw-allow-port)
     [[ $# -ge 1 && $# -le 2 ]] || deny "usage: firewall-allow-port <port> [proto]"
