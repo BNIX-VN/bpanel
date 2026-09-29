@@ -128,3 +128,77 @@ def sync(request: Request, db: Session = Depends(get_db), current_user: User = D
     result = _answer(lambda: mail.sync(db))
     log_action(db, current_user.id, "mail_sync", "", f"{result['mailboxes']} mailboxes", request=request)
     return result
+
+
+# --- the spam filter, its log, and the smarthost ----------------------------------------
+
+class SpamIn(BaseModel):
+    enabled: bool = True
+    # One address or domain per entry; mail from them is never blocked.
+    allow: list[str] = Field(default_factory=list, max_length=mail.MAX_ALLOW)
+    reject_score: float = Field(default=15, gt=0, le=100)
+    junk_score: float = Field(default=6, gt=0, le=100)
+
+
+class RelayIn(BaseModel):
+    enabled: bool = False
+    host: str = Field(default="", max_length=253)
+    port: int = Field(default=587, ge=1, le=65535)
+    security: str = Field(default="starttls", max_length=10)
+    username: str = Field(default="", max_length=256)
+    # Empty keeps the saved password.
+    password: str | None = Field(default=None, max_length=512)
+    spf_include: str = Field(default="", max_length=255)
+
+
+class RelayTestIn(BaseModel):
+    to: str = Field(max_length=254)
+
+
+@router.get("/settings")
+def get_settings(current_user: User = Depends(get_current_user)):
+    """The spam filter and the smarthost. The smarthost password never leaves."""
+    ensure_role(current_user.role, Role.admin)
+    return mail.admin_settings()
+
+
+@router.put("/settings/spam")
+def save_spam(payload: SpamIn, request: Request, db: Session = Depends(get_db),
+              current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.admin)
+    saved = _answer(lambda: mail.save_spam(payload.enabled, payload.allow, payload.reject_score, payload.junk_score))
+    log_action(db, current_user.id, "mail_spam_settings", "on" if saved["enabled"] else "off",
+               f"reject {saved['reject_score']} junk {saved['junk_score']} allow {len(saved['allow'])}", request=request)
+    return saved
+
+
+@router.put("/settings/relay")
+def save_relay(payload: RelayIn, request: Request, db: Session = Depends(get_db),
+               current_user: User = Depends(get_current_user)):
+    ensure_role(current_user.role, Role.admin)
+    result = _answer(lambda: mail.save_relay(
+        db, enabled=payload.enabled, host=payload.host, port=payload.port, security=payload.security,
+        username=payload.username, password=payload.password, spf_include_value=payload.spf_include))
+    # Logged from the request's own host and port, never from what came back
+    # out of the function the password went into.
+    log_action(db, current_user.id, "mail_relay_settings",
+               f"{payload.host.strip().lower()}:{payload.port}" if payload.enabled else "off", "", request=request)
+    return result
+
+
+@router.post("/relay/test")
+def relay_test(payload: RelayTestIn, request: Request, db: Session = Depends(get_db),
+               current_user: User = Depends(get_current_user)):
+    """Send one message now, and say what happened to it."""
+    ensure_role(current_user.role, Role.admin)
+    lines = _answer(lambda: mail.relay_test(payload.to))
+    log_action(db, current_user.id, "mail_relay_test", payload.to, "", request=request)
+    return {"lines": lines}
+
+
+@router.get("/spam/log")
+def spam_log(view: str = "blocked", limit: int = 200, db: Session = Depends(get_db),
+             current_user: User = Depends(get_current_user)):
+    """What the spam filter decided. A customer sees mail to their own domains."""
+    ensure_role(current_user.role, Role.end_user)
+    return _answer(lambda: mail.spam_log(db, current_user, view, limit))

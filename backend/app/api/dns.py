@@ -42,6 +42,8 @@ class SettingsIn(BaseModel):
     zone_ip: str = Field(default="", max_length=45)
     ttl: int = Field(default=dns.DEFAULT_TTL, ge=dns.MIN_TTL, le=dns.MAX_TTL)
     auto_zone: bool = True
+    # Records for new zones; None keeps the one saved (an older page sends none).
+    template: str | None = Field(default=None, max_length=10000)
 
 
 def _answer(action):
@@ -133,7 +135,8 @@ def read_settings(current_user: User = Depends(get_current_user)):
 def save_settings(payload: SettingsIn, request: Request, db: Session = Depends(get_db),
                   current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.admin)
-    saved = _answer(lambda: dns.save_settings(payload.nameservers, payload.zone_ip, payload.ttl, payload.auto_zone))
+    saved = _answer(lambda: dns.save_settings(payload.nameservers, payload.zone_ip, payload.ttl, payload.auto_zone,
+                                              payload.template))
     log_action(db, current_user.id, "dns_settings", ", ".join(saved["nameservers"]), request=request)
     # Nameservers set for the first time, or the automatic zones switched
     # back on: the domains still without a zone get one now.

@@ -47,11 +47,22 @@ class FakeHelper:
         self.synced: dict = {"mailboxes": []}
         self.webmail_hosts: set[str] = set()
         self.fail_sync = ""
+        self.spam: dict | None = None
+        self.relay: dict | None = None
+        self.sensitive: set[str] = set()
 
     def privileged(self, command, helper_args=None, check=True, input=None, sensitive=False, fallback=None, timeout=None):
         args = list(helper_args or [])
         self.calls.append((command, args, input))
+        if sensitive:
+            self.sensitive.add(command)
         stdout, stderr, code = "", "", 0
+        if command == "mail-spam-set":
+            self.spam = json.loads(input)
+        elif command == "mail-relay-set":
+            self.relay = json.loads(input)
+        elif command == "mail-relay-test":
+            stdout = f"2026-09-29 11:00:00 1xAAAA-00000000aaa-0000 => {args[0]} R=bpanel_smarthost T=bpanel_smarthost_smtp C=\"250 OK\"\n"
         if command == "mail-sync":
             if self.fail_sync:
                 if check:
@@ -411,3 +422,198 @@ def test_the_email_page_opens_the_webmail_tab_on_the_click_itself():
     block = APP_JSX.split("async function openWebmail(account)")[1].split("async function enableWebmailHost")[0]
     assert block.index("window.open('', '_blank')") < block.index("await request(")
     assert "tab.opener = null" in block
+
+
+# --- the spam filter (operator, 2026-09-29: "xem log chặn mail xem có nhầm không") ---------
+
+def _spam(env, who="owner", **body):
+    payload = {"enabled": True, "allow": [], "reject_score": 15, "junk_score": 6, **body}
+    return env.client.put("/api/mail/settings/spam", headers=env.as_(who), json=payload)
+
+
+def test_the_allowlist_is_split_into_addresses_and_domains_for_the_mail_server(env):
+    response = _spam(env, allow=["Friend@Example.com", "partner.vn", "friend@example.com", ""], reject_score=20, junk_score=8)
+    assert response.status_code == 200
+    assert response.json()["allow"] == ["friend@example.com", "partner.vn"]
+    assert env.helper.spam == {"enabled": True, "senders": ["friend@example.com"], "domains": ["partner.vn"],
+                               "reject_score": 20.0, "junk_score": 8.0}
+
+
+@pytest.mark.parametrize("body", [
+    {"allow": ["not an address@"]},
+    {"allow": ["bad domain"]},
+    {"reject_score": 5, "junk_score": 6},
+    {"reject_score": 5, "junk_score": 5},
+])
+def test_spam_settings_the_mail_server_would_refuse_are_refused_first(env, body):
+    assert _spam(env, **body).status_code == 400
+    assert env.helper.spam is None
+
+
+def test_only_an_administrator_sets_the_spam_filter_or_the_smarthost(env):
+    assert _spam(env, who="khach").status_code == 403
+    assert env.client.get("/api/mail/settings", headers=env.as_("khach")).status_code == 403
+    assert env.client.put("/api/mail/settings/relay", headers=env.as_("khach"), json={"enabled": False}).status_code == 403
+    assert env.client.post("/api/mail/relay/test", headers=env.as_("khach"), json={"to": "a@b.vn"}).status_code == 403
+
+
+ROWS = [
+    {"unix_time": 1700000300, "action": "reject", "score": 16.2, "required_score": 15, "sender_smtp": "x@spam.test",
+     "sender_mime": "x@spam.test", "rcpt_smtp": ["info@khach.vn", "info@other.vn"], "subject": "Win a prize",
+     "ip": "198.51.100.7", "size": 2048,
+     "symbols": {"RBL_SPAMHAUS": {"score": 4.0, "options": ["zen"]}, "BAYES_SPAM": {"score": 5.1}, "ARC_NA": {"score": 0}}},
+    {"unix_time": 1700000200, "action": "add header", "score": 7.0, "required_score": 15, "sender_smtp": "news@shop.test",
+     "rcpt_smtp": ["sales@khach.vn"], "subject": "Sale", "symbols": {}},
+    {"unix_time": 1700000100, "action": "no action", "score": -99.0, "required_score": 15, "sender_smtp": "friend@example.com",
+     "rcpt_smtp": ["info@other.vn"], "subject": "Hi", "symbols": {"BPANEL_ALLOW_SENDER": {"score": -50}}},
+]
+
+
+def test_a_customer_sees_the_log_of_mail_to_their_own_domains_only(env, monkeypatch):
+    monkeypatch.setattr(mail, "_controller", lambda path: {"rows": ROWS})
+    blocked = env.client.get("/api/mail/spam/log?view=blocked", headers=env.as_("khach")).json()
+    assert [row["subject"] for row in blocked["rows"]] == ["Win a prize"]
+    # The other customer's recipient on the same message is not shown.
+    assert blocked["rows"][0]["to"] == ["info@khach.vn"]
+    reasons = blocked["rows"][0]["reasons"]
+    assert [reason["name"] for reason in reasons] == ["BAYES_SPAM", "RBL_SPAMHAUS"]
+    everything = env.client.get("/api/mail/spam/log?view=all", headers=env.as_("khach")).json()
+    assert [row["subject"] for row in everything["rows"]] == ["Win a prize", "Sale"]
+
+
+def test_an_administrator_sees_every_decision_and_what_the_allowlist_let_through(env, monkeypatch):
+    monkeypatch.setattr(mail, "_controller", lambda path: {"rows": ROWS})
+    rows = env.client.get("/api/mail/spam/log?view=all", headers=env.as_("owner")).json()["rows"]
+    assert [row["subject"] for row in rows] == ["Win a prize", "Sale", "Hi"]
+    assert rows[0]["to"] == ["info@khach.vn", "info@other.vn"]
+    assert rows[2]["allowed"] is True and rows[0]["allowed"] is False
+    junk = env.client.get("/api/mail/spam/log?view=spam", headers=env.as_("owner")).json()["rows"]
+    assert [row["subject"] for row in junk] == ["Sale"]
+
+
+def test_with_the_filter_off_there_is_no_log_to_ask_for(env, monkeypatch):
+    _spam(env, enabled=False)
+    monkeypatch.setattr(mail, "_controller", lambda path: pytest.fail("asked a stopped Rspamd"))
+    assert env.client.get("/api/mail/spam/log", headers=env.as_("owner")).json() == {"enabled": False, "rows": []}
+
+
+# --- the smarthost (operator: "Thêm config relay smarthost cho exim -> Custom spf/dns mẫu") ---
+
+def _relay(env, **body):
+    payload = {"enabled": True, "host": "mail.smtp2go.com", "port": 587, "security": "starttls",
+               "username": "bnix", "password": "s3cret^:;pw", "spf_include": "include:spf.smtp2go.com", **body}
+    return env.client.put("/api/mail/settings/relay", headers=env.as_("owner"), json=payload)
+
+
+def test_the_smarthost_password_reaches_the_mail_server_and_nowhere_else(env):
+    response = _relay(env)
+    assert response.status_code == 200
+    assert env.helper.relay["password"] == "s3cret^:;pw"
+    # Its command line is not logged, the settings file holds it encrypted,
+    # and no answer carries it back.
+    assert "mail-relay-set" in env.helper.sensitive
+    assert "s3cret" not in json.dumps(env.stored)
+    assert "s3cret" not in response.text
+    settings = env.client.get("/api/mail/settings", headers=env.as_("owner")).json()
+    assert settings["relay"]["has_password"] is True and "password" not in settings["relay"]
+
+
+def test_an_empty_password_keeps_the_saved_one(env):
+    _relay(env)
+    assert _relay(env, password=None, port=2525).status_code == 200
+    assert env.helper.relay["password"] == "s3cret^:;pw" and env.helper.relay["port"] == 2525
+
+
+def test_turning_the_smarthost_off_keeps_its_settings_for_next_time(env):
+    _relay(env)
+    assert _relay(env, enabled=False, password=None).status_code == 200
+    assert env.helper.relay["enabled"] is False
+    saved = env.client.get("/api/mail/settings", headers=env.as_("owner")).json()["relay"]
+    assert (saved["host"], saved["username"], saved["has_password"]) == ("mail.smtp2go.com", "bnix", True)
+
+
+@pytest.mark.parametrize("body", [
+    {"host": "203.0.113.5"},
+    {"host": "not a host"},
+    {"security": "none"},
+    {"password": " padded"},
+    {"username": ""},
+    {"spf_include": "v=spf1 include:x.com ~all"},
+    {"spf_include": "include:x.com; rm -rf /"},
+])
+def test_smarthost_settings_the_mail_server_would_refuse_are_refused_first(env, body):
+    assert _relay(env, **body).status_code == 400
+    assert env.helper.relay is None
+
+
+def test_the_smarthosts_spf_goes_into_every_zone_still_on_the_old_record(env):
+    addons.install(addons.DNS)
+    dns.create_zone(env.db, "khach.vn", env.user("khach").id)
+    zone = dns.create_zone(env.db, "other.vn", env.user("other").id)
+    # This customer wrote their own SPF; it stays theirs.
+    dns.delete_record(zone, {"name": "@", "type": "TXT", "content": "v=spf1 a mx ~all"}, admin=True)
+    dns.add_record(zone, {"name": "@", "type": "TXT", "content": "v=spf1 include:_spf.google.com ~all"}, admin=True)
+    response = _relay(env)
+    assert response.json()["spf"] == "v=spf1 a mx include:spf.smtp2go.com ~all"
+    assert response.json()["zones_updated"] == ["khach.vn"]
+    assert [dns._untxt(c) for c in env.dns.rrset("khach.vn", "khach.vn.", "TXT")] == ["v=spf1 a mx include:spf.smtp2go.com ~all"]
+    assert [dns._untxt(c) for c in env.dns.rrset("other.vn", "other.vn.", "TXT")] == ["v=spf1 include:_spf.google.com ~all"]
+    # A zone made from now on has it too.
+    dns.create_zone(env.db, "admin.vn", env.user("owner").id)
+    assert [dns._untxt(c) for c in env.dns.rrset("admin.vn", "admin.vn.", "TXT")] == ["v=spf1 a mx include:spf.smtp2go.com ~all"]
+    # And back when the smarthost goes.
+    assert _relay(env, enabled=False, password=None).json()["zones_updated"] == ["admin.vn", "khach.vn"]
+    assert [dns._untxt(c) for c in env.dns.rrset("khach.vn", "khach.vn.", "TXT")] == ["v=spf1 a mx ~all"]
+
+
+def test_the_mail_domains_list_shows_the_spf_with_the_smarthost(env):
+    _relay(env)
+    _create(env, "khach", "info", "khach.vn")
+    overview = env.client.get("/api/mail/overview", headers=env.as_("khach")).json()
+    records = {(r["name"], r["type"]): r["value"] for r in overview["mail_domains"][0]["records"]}
+    assert records[("khach.vn", "TXT")] == "v=spf1 a mx include:spf.smtp2go.com ~all"
+
+
+def test_the_test_message_reports_what_exim_logged(env):
+    response = env.client.post("/api/mail/relay/test", headers=env.as_("owner"), json={"to": "me@gmail.com"})
+    assert response.status_code == 200
+    assert "=> me@gmail.com R=bpanel_smarthost" in response.json()["lines"][0]
+    assert env.client.post("/api/mail/relay/test", headers=env.as_("owner"), json={"to": "nobody"}).status_code == 400
+
+
+def test_a_fresh_install_gets_the_saved_spam_filter_and_smarthost(env):
+    _spam(env, allow=["partner.vn"], reject_score=12, junk_score=5)
+    _relay(env)
+    env.helper.spam = env.helper.relay = None
+    mail.install()
+    assert env.helper.spam["domains"] == ["partner.vn"] and env.helper.spam["reject_score"] == 12
+    assert env.helper.relay["host"] == "mail.smtp2go.com" and env.helper.relay["password"] == "s3cret^:;pw"
+
+
+# --- the helper's side of it, read as text ---------------------------------------------------------
+
+def _rspamd_conf() -> str:
+    # Rspamd's own config blocks end in a bare "}", so up to the next function.
+    return HELPER.split("mail_write_rspamd_conf() {", 1)[1].split("mail_rspamd_answers() {", 1)[0]
+
+
+def test_the_rspamd_controller_asks_everyone_for_its_key():
+    conf = _rspamd_conf()
+    # override.d, so the stock secure_ip list (loopback without a password) is replaced, not merged.
+    assert '"$MAIL_RSPAMD_OVERRIDE/worker-controller.inc"' in conf and "secure_ip = [];" in conf
+    assert 'bind_socket = "127.0.0.1:11334";' in conf and 'bind_socket = "127.0.0.1:11333";' in conf
+
+
+def test_the_allowlist_is_a_score_so_allowed_mail_stays_in_the_log():
+    conf = _rspamd_conf()
+    assert conf.count("score = -50.0;") == 4
+    assert 'action = "accept"' not in conf and "prefilter = true" not in conf
+
+
+def test_the_smarthost_only_gets_the_password_over_verified_tls():
+    relay = HELPER.split("mail_relay_set() {", 1)[1].split("\nmail_relay_test() {", 1)[0]
+    for line in ('"  hosts_require_auth = *"', '"  hosts_require_tls = *"', '"  tls_verify_hosts = *"'):
+        assert line in relay
+    # A list split before expansion: ";" as separator, since ":" is inside it.
+    assert '"  client_send = <; ^%s^%s"' in relay and '"  client_send = <; ; %s ; %s"' in relay
+    assert "base64d" in relay

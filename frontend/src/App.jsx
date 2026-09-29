@@ -324,6 +324,14 @@ const DNS_VALUE_HINTS = {
 };
 const DNS_EMPTY_RECORD = { name: '@', type: 'A', ttl: 3600, content: '', priority: 10 };
 const MAIL_EMPTY_DRAFT = { local_part: '', domain: '', password: '', quota_mb: 1024 };
+// The SPF part of the smarthosts customers use most.
+const MAIL_SPF_INCLUDES = ['include:spf.smtp2go.com', 'include:mailgun.org', 'include:sendgrid.net', 'include:amazonses.com',
+  'include:spf.brevo.com', 'include:spf.mandrillapp.com', 'include:_spf.google.com', 'include:spf.protection.outlook.com'];
+// Rspamd's action -> what the log calls it, and its badge colour.
+const MAIL_LOG_ACTIONS = {
+  reject: ['Blocked', 'bad'], 'soft reject': ['Deferred', 'warn'], 'add header': ['Sent to Junk', 'warn'],
+  'rewrite subject': ['Sent to Junk', 'warn'], 'no action': ['Delivered', 'ok'], greylist: ['Delivered', 'ok'],
+};
 
 const SITE_APP_KINDS = [
   ['node', 'Node.js', 'BPanel installs dependencies and keeps the process running under systemd.'],
@@ -577,6 +585,9 @@ function formatApiError(detail, fallback = 'Request failed.') {
   if (detail === null || detail === undefined || detail === '') return t(fallback);
   if (typeof detail === 'string') {
     const cleaned = detail.replace(/^Value error,\s*/i, '');
+    // "Line 3: <a sentence the dictionary knows>" - the DNS template's check.
+    const line = cleaned.match(/^Line (\d+): (.+)$/s);
+    if (line) return t('Line {n}: {reason}', { n: line[1], reason: t(line[2]) });
     return cleaned ? t(cleaned) : t(fallback);
   }
   if (typeof detail === 'number' || typeof detail === 'boolean') return String(detail);
@@ -875,6 +886,13 @@ function App() {
   const [mailEditing, setMailEditing] = useState(null);
   const [mailCreated, setMailCreated] = useState(null);
   const [mailStatus, setMailStatus] = useState(null);
+  const [mailSettings, setMailSettings] = useState(null);
+  const [spamDraft, setSpamDraft] = useState(null);
+  const [relayDraft, setRelayDraft] = useState(null);
+  const [relayTestTo, setRelayTestTo] = useState('');
+  const [relayTestLines, setRelayTestLines] = useState(null);
+  const [mailLog, setMailLog] = useState({ view: 'blocked', rows: [], enabled: true, loaded: false });
+  const [mailLogOpen, setMailLogOpen] = useState('');
   const [demoDraft, setDemoDraft] = useState({ admin: { username: '', password: '' }, customer: { username: '', password: '' } });
   const [f2b, setF2b] = useState(null);
   // Which list the operator asked to see. Null keeps the page one screen tall
@@ -2613,6 +2631,7 @@ function App() {
       zone_ip: (dnsSettings.zone_ip || '').trim(),
       ttl: Number(dnsSettings.ttl) || 3600,
       auto_zone: !!dnsSettings.auto_zone,
+      template: dnsSettings.template || '',
     };
     const data = await request('/dns/settings', { method: 'PUT', body: JSON.stringify(body) }, t('Saving...'));
     if (!data) return;
@@ -2692,6 +2711,77 @@ function App() {
     if (!confirm(t('Stop serving the webmail on webmail.{domain}?', { domain }))) return;
     const data = await request(`/mail/domains/${encodeURIComponent(domain)}/webmail`, { method: 'DELETE' }, t('Saving...'));
     if (data) loadMail();
+  }
+
+  async function loadMailSettings() {
+    const data = await request('/mail/settings', { silent: true });
+    if (!data) return;
+    setMailSettings(data);
+    setSpamDraft({ ...data.spam, allow: (data.spam.allow || []).join('\n') });
+    setRelayDraft({ ...data.relay, password: '' });
+  }
+
+  async function loadMailLog(view = mailLog.view) {
+    setMailLog(prev => ({ ...prev, view }));
+    const data = await request(`/mail/spam/log?view=${encodeURIComponent(view)}&limit=200`, { silent: true });
+    if (!data) { setMailLog(prev => ({ ...prev, loaded: true, rows: [] })); return; }
+    setMailLog({ view, rows: data.rows || [], enabled: data.enabled !== false, loaded: true });
+  }
+
+  function spamBody(draft) {
+    return {
+      enabled: !!draft.enabled,
+      allow: String(draft.allow || '').split(/[\s,]+/).map(item => item.trim()).filter(Boolean),
+      reject_score: Number(draft.reject_score) || 15,
+      junk_score: Number(draft.junk_score) || 6,
+    };
+  }
+
+  async function saveSpam() {
+    const data = await request('/mail/settings/spam', { method: 'PUT', body: JSON.stringify(spamBody(spamDraft)) }, t('Saving...'));
+    if (!data) return;
+    setNotice(data.enabled ? t('Spam filter saved.') : t('Spam filter turned off. Mail from outside is delivered unscanned.'));
+    await loadMailSettings();
+    loadMailStatus();
+    loadMailLog();
+  }
+
+  async function allowSender(value) {
+    if (!mailSettings) return;
+    if (!confirm(t('Never block mail from {sender}?', { sender: value }))) return;
+    const allow = [...(mailSettings.spam.allow || []), value];
+    const body = spamBody({ ...mailSettings.spam, allow: allow.join('\n') });
+    const data = await request('/mail/settings/spam', { method: 'PUT', body: JSON.stringify(body) }, t('Saving...'));
+    if (!data) return;
+    setNotice(t('{sender} is on the allowlist. Ask the sender to send the message again.', { sender: value }));
+    await loadMailSettings();
+    loadMailLog();
+  }
+
+  async function saveRelay() {
+    const body = {
+      enabled: !!relayDraft.enabled,
+      host: (relayDraft.host || '').trim(),
+      port: Number(relayDraft.port) || 587,
+      security: relayDraft.security || 'starttls',
+      username: (relayDraft.username || '').trim(),
+      password: relayDraft.password || null,
+      spf_include: (relayDraft.spf_include || '').trim(),
+    };
+    const data = await request('/mail/settings/relay', { method: 'PUT', body: JSON.stringify(body) }, t('Saving...'));
+    if (!data) return;
+    setNotice(data.zones_updated?.length
+      ? t('Saved. The SPF record is now {spf}, and {n} zones were updated to it.', { spf: data.spf, n: data.zones_updated.length })
+      : t('Saved. The SPF record is now {spf}.', { spf: data.spf }));
+    await loadMailSettings();
+    loadMailStatus();
+    loadMail();
+  }
+
+  async function testRelay() {
+    setRelayTestLines(null);
+    const data = await request('/mail/relay/test', { method: 'POST', body: JSON.stringify({ to: relayTestTo.trim() }) }, t('Sending a test message...'));
+    if (data) setRelayTestLines(data.lines || []);
   }
 
   async function syncMail() {
@@ -4783,7 +4873,8 @@ function App() {
   useEffect(() => {
     if (!isAuthenticated || page !== 'mail' || !mailAddonInstalled) return;
     loadMail();
-    if (isAdmin) loadMailStatus();
+    loadMailLog('blocked');
+    if (isAdmin) { loadMailStatus(); loadMailSettings(); }
   }, [isAuthenticated, page, mailAddonInstalled, isAdmin]);
 
   // The websites page needs the list too, for the Application picker on create.
@@ -5586,6 +5677,10 @@ function App() {
         </label>
         <label><span>{t('Default TTL (seconds)')}</span><input type="number" min={60} max={604800} value={dnsSettings.ttl || 3600} onChange={e => setField('ttl', e.target.value)} /></label>
         <label className="login-remember dns-auto"><input type="checkbox" checked={!!dnsSettings.auto_zone} onChange={e => setField('auto_zone', e.target.checked)} />{t('Give every domain on the server a DNS zone')}</label>
+        <label className="dns-template"><span>{t('Records for new zones')}</span>
+          <textarea rows={7} value={dnsSettings.template || ''} onChange={e => setField('template', e.target.value)} spellCheck={false} />
+        </label>
+        <p className="hint dns-template-hint">{t('One record per line: name, type, then the value; an MX value starts with its priority. {ip} is the address for new zones, {domain} the zone, and {spf} the SPF record:')} <code>{dnsSettings.spf}</code>. {t('Zones that already exist are not changed.')}</p>
         <div className="dns-form-actions">
           <button disabled={!!loading} onClick={saveDnsSettings}><Save size={14}/>{t('Save settings')}</button>
           <button className="secondary-light" disabled={!!loading || !dnsSettings.auto_zone} onClick={syncDnsZones}><RefreshCw size={14}/>{t('Sync zones now')}</button>
@@ -5652,8 +5747,136 @@ function App() {
       </section>
       {renderMailDomains()}
       {renderMailClient()}
+      {renderMailLog()}
+      {isAdmin && renderMailSpam()}
+      {isAdmin && renderMailRelay()}
       {isAdmin && renderMailServer()}
     </>;
+  }
+
+  function renderMailLog() {
+    const rows = mailLog.rows || [];
+    const views = [['blocked', 'Blocked'], ['spam', 'Sent to Junk'], ['all', 'All mail']];
+    const addressOf = text => (String(text || '').match(/[^\s<>"]+@[^\s<>"]+/) || [''])[0].toLowerCase();
+    return <section className="section">
+      <div className="section-title">
+        <div>
+          <h2>{t('Spam filter log')}</h2>
+          <p className="hint">{t('What the spam filter decided about mail from outside, newest first, and why. Look here when someone says their message never arrived.')}</p>
+        </div>
+        <button className="secondary-light" disabled={!!loading} onClick={() => loadMailLog()}><RefreshCw size={14}/>{t('Refresh')}</button>
+      </div>
+      <div className="mail-log-views" role="group" aria-label={t('Show')}>
+        {views.map(([key, label]) => <button key={key} type="button" aria-pressed={mailLog.view === key}
+          className={`mini ${mailLog.view === key ? '' : 'secondary-light'}`} disabled={!!loading} onClick={() => loadMailLog(key)}>{t(label)}</button>)}
+      </div>
+      {mailLog.loaded && !mailLog.enabled && <EmptyState icon={ShieldAlert} message={t('The spam filter is off: mail from outside is delivered unscanned.')} />}
+      {mailLog.loaded && mailLog.enabled && rows.length === 0 && <EmptyState icon={Mail} message={t('Nothing in the log for this view yet.')} />}
+      <div className="mail-log">
+        {rows.map((row, index) => {
+          const key = `${row.time}-${index}`;
+          const open = mailLogOpen === key;
+          const [label, tone] = MAIL_LOG_ACTIONS[row.action] || [row.action, ''];
+          const sender = addressOf(row.from) || addressOf(row.envelope_from);
+          const senderDomain = sender.split('@')[1] || '';
+          return <div className={`mail-log-row ${open ? 'open' : ''}`} key={key}>
+            <button type="button" className="mail-log-head" onClick={() => setMailLogOpen(open ? '' : key)} aria-expanded={open}>
+              <span className={`badge ${tone}`}>{t(label)}</span>
+              <span className="mail-log-subject">{row.subject || t('(no subject)')}</span>
+              <span className="mail-log-meta">{row.from || row.envelope_from || '<>'} → {(row.to || []).join(', ')}</span>
+              <span className="mail-log-score" title={t('Score, and the score at which mail is refused')}>{row.score} / {row.required}</span>
+              <span className="mail-log-time">{formatFileTime(row.time)}</span>
+            </button>
+            {open && <div className="mail-log-detail">
+              <div className="db-created-grid">
+                <label>{t('From')}</label><span>{row.from}{row.envelope_from && addressOf(row.envelope_from) !== sender ? ` (${row.envelope_from})` : ''}</span>
+                <label>{t('To')}</label><span>{(row.to || []).join(', ')}</span>
+                <label>{t('Sending server')}</label><span>{row.ip || '--'}</span>
+                <label>{t('Size')}</label><span>{formatBytes(row.size)}</span>
+              </div>
+              <strong className="mail-log-why">{t('Why')}</strong>
+              <div className="mail-log-reasons">
+                {(row.reasons || []).length === 0 && <span className="hint">{t('No rule scored this message.')}</span>}
+                {(row.reasons || []).map(reason => <span key={reason.name} className={`mail-log-reason ${reason.score > 0 ? 'bad' : 'good'}`}
+                  title={(reason.options || []).join(', ')}>{reason.name} <b>{reason.score > 0 ? '+' : ''}{reason.score}</b></span>)}
+              </div>
+              {row.allowed && <p className="hint">{t('This sender is on the allowlist.')}</p>}
+              {isAdmin && !row.allowed && sender && <div className="dns-form-actions">
+                <button className="mini secondary-light" disabled={!!loading} onClick={() => allowSender(sender)}><Check size={13}/>{t('Allow {sender}', { sender })}</button>
+                {senderDomain && <button className="mini secondary-light" disabled={!!loading} onClick={() => allowSender(senderDomain)}><Check size={13}/>{t('Allow everyone at {domain}', { domain: senderDomain })}</button>}
+              </div>}
+            </div>}
+          </div>;
+        })}
+      </div>
+    </section>;
+  }
+
+  function renderMailSpam() {
+    if (!spamDraft) return null;
+    const set = (field, value) => setSpamDraft(prev => ({ ...prev, [field]: value }));
+    return <section className="section">
+      <div className="section-title">
+        <div>
+          <h2>{t('Spam filter')}</h2>
+          <p className="hint">{t('Rspamd scores each message from outside. Above the Junk score it goes to the Junk folder; above the reject score it is refused and the sender is told. Mail sent from mailboxes here is not scanned.')}</p>
+        </div>
+      </div>
+      <div className="cron-builder mail-spam-form">
+        <label className="login-remember dns-auto"><input type="checkbox" checked={!!spamDraft.enabled} onChange={e => set('enabled', e.target.checked)} />{t('Filter mail from outside')}</label>
+        <label><span>{t('Junk score')}</span><input type="number" min={0.5} max={100} step={0.5} value={spamDraft.junk_score} onChange={e => set('junk_score', e.target.value)} disabled={!spamDraft.enabled} /></label>
+        <label><span>{t('Reject score')}</span><input type="number" min={1} max={100} step={0.5} value={spamDraft.reject_score} onChange={e => set('reject_score', e.target.value)} disabled={!spamDraft.enabled} /></label>
+        <label className="mail-allow"><span>{t('Allowlist')}</span>
+          <textarea rows={5} value={spamDraft.allow} onChange={e => set('allow', e.target.value)} placeholder={'friend@example.com\nexample.org'} spellCheck={false} disabled={!spamDraft.enabled} />
+        </label>
+        <div className="dns-form-actions">
+          <button disabled={!!loading} onClick={saveSpam}><Save size={14}/>{t('Save spam filter')}</button>
+        </div>
+      </div>
+      <p className="hint">{t('One email address or domain per line. Mail from them is never blocked or sent to Junk. Higher scores block less; Rspamd uses 6 and 15.')}</p>
+    </section>;
+  }
+
+  function renderMailRelay() {
+    if (!relayDraft) return null;
+    const set = (field, value) => setRelayDraft(prev => ({ ...prev, [field]: value }));
+    return <section className="section">
+      <div className="section-title">
+        <div>
+          <h2>{t('Smarthost')}</h2>
+          <p className="hint">{t('Send outgoing mail through another mail service - SMTP2GO, Mailgun, SendGrid, Amazon SES... - when the provider blocks port 25 on this server, or for better delivery.')}</p>
+        </div>
+      </div>
+      <div className="cron-builder mail-relay-form">
+        <label className="login-remember dns-auto"><input type="checkbox" checked={!!relayDraft.enabled} onChange={e => set('enabled', e.target.checked)} />{t('Send outgoing mail through a smarthost')}</label>
+        <label><span>{t('Server')}</span><input value={relayDraft.host} onChange={e => set('host', e.target.value)} placeholder="mail.smtp2go.com" spellCheck={false} autoComplete="off" /></label>
+        <label><span>{t('Port')}</span><input type="number" min={1} max={65535} value={relayDraft.port} onChange={e => set('port', e.target.value)} /></label>
+        <label><span>{t('Security')}</span>
+          <select value={relayDraft.security} onChange={e => { const security = e.target.value; setRelayDraft(prev => ({ ...prev, security, port: security === 'ssl' ? 465 : (Number(prev.port) === 465 ? 587 : prev.port) })); }}>
+            <option value="starttls">STARTTLS</option>
+            <option value="ssl">SSL/TLS</option>
+          </select>
+        </label>
+        <label><span>{t('User name')}</span><input value={relayDraft.username} onChange={e => set('username', e.target.value)} autoComplete="off" spellCheck={false} data-lpignore="true" data-1p-ignore="true" /></label>
+        <label><span>{t('Password')}</span><input type="password" value={relayDraft.password} onChange={e => set('password', e.target.value)} autoComplete="new-password"
+          placeholder={mailSettings?.relay?.has_password ? t('Saved - leave empty to keep it') : ''} data-lpignore="true" data-1p-ignore="true" /></label>
+        <label className="mail-spf"><span>{t('SPF of the smarthost')}</span>
+          <input value={relayDraft.spf_include} onChange={e => set('spf_include', e.target.value)} list="mail-spf-includes" placeholder="include:spf.smtp2go.com" spellCheck={false} />
+          <datalist id="mail-spf-includes">{MAIL_SPF_INCLUDES.map(item => <option key={item} value={item} />)}</datalist>
+        </label>
+        <div className="dns-form-actions">
+          <button disabled={!!loading} onClick={saveRelay}><Save size={14}/>{t('Save smarthost')}</button>
+        </div>
+      </div>
+      <p className="hint">{t('The SPF record for every domain here:')} <code>{mailSettings?.spf}</code>. {dnsAddonInstalled
+        ? t('Zones still using the previous SPF record follow it by themselves.')
+        : t('Update it wherever each domain\'s DNS is managed.')}</p>
+      <div className="mail-relay-test">
+        <input type="email" value={relayTestTo} onChange={e => setRelayTestTo(e.target.value)} placeholder="you@gmail.com" aria-label={t('Send a test message to')} />
+        <button className="secondary-light" disabled={!!loading || !relayTestTo.includes('@')} onClick={testRelay}><Send size={14}/>{t('Send a test message')}</button>
+      </div>
+      {relayTestLines && <pre className="mail-relay-log">{relayTestLines.length ? relayTestLines.join('\n') : t('Exim logged nothing more about it.')}</pre>}
+    </section>;
   }
 
   function renderMailbox(account) {
@@ -5771,8 +5994,10 @@ function App() {
           <span key={key} className={`badge ${status[key] ? 'ok' : 'bad'}`}>{status[key] ? t('{name} is running', { name: label }) : t('{name} is not running', { name: label })}</span>)}
         <span className={`badge ${status.port_open ? 'ok' : 'warn'}`}>{status.port_open ? t('Mail ports open') : t('Mail ports closed')}</span>
         <span className={`badge ${status.outbound_smtp ? 'ok' : 'warn'}`}>{status.outbound_smtp ? t('Can send to other mail servers') : t('Outgoing port 25 is blocked')}</span>
+        <span className={`badge ${status.spam_filter && status.rspamd ? 'ok' : 'warn'}`}>{status.spam_filter && status.rspamd ? t('Spam filter on') : t('Spam filter off')}</span>
+        {status.relay && <span className="badge ok">{t('Smarthost: {host}', { host: status.relay.split(' ')[0] })}</span>}
       </div>
-      {!status.outbound_smtp && <p className="hint">{t('This server cannot reach other mail servers on port 25, so mail to outside addresses waits in the queue and comes back after a few days. Most VPS providers open it on request.')}</p>}
+      {!status.outbound_smtp && !status.relay && <p className="hint">{t('This server cannot reach other mail servers on port 25, so mail to outside addresses waits in the queue and comes back after a few days. Ask the provider to open it, or send through a smarthost below.')}</p>}
     </section>;
   }
 
