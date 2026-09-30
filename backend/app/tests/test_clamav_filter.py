@@ -85,24 +85,74 @@ def test_the_totals_are_read_from_clam_juices_report():
     assert out.stdout.split() == ["3286543", "88356"]
 
 
-def test_maldet_hands_clamscan_the_filtered_set_and_no_full_one():
+def _run_lmd_switch(tmp_path, *steps):
+    """Runs the helper's lmd_use_filtered_set on a copy of maldet's files."""
+    maldet = tmp_path / "maldetect"
+    (maldet / "internals").mkdir(parents=True, exist_ok=True)
+    clamav = tmp_path / "clamav"
+    clamav.mkdir(exist_ok=True)
+    script = "\n".join([
+        "set -euo pipefail",
+        f"MALDET_HOME={maldet.as_posix()}",
+        f"MALDET_CONF={maldet.as_posix()}/conf.maldet",
+        f"CLAMAV_DB_DIR={clamav.as_posix()}",
+        f"CLAMAV_FILTERED_DIR={clamav.as_posix()}/bpanel-filtered",
+        f"CLAMAV_FILTERED_CURRENT={clamav.as_posix()}/bpanel-filtered/current",
+        f"CLAMAV_FILTERED_LMD_DIR={clamav.as_posix()}/bpanel-filtered/lmd",
+        f"mkdir -p {clamav.as_posix()}/bpanel-filtered",
+        "install() { mkdir -p \"${@: -1}\"; }",
+        "lmd_internals_set() {" + _function("lmd_internals_set") + "\n}",
+        "lmd_use_filtered_set() {" + _function("lmd_use_filtered_set") + "\n}",
+        *[f"if lmd_use_filtered_set {step}; then echo changed; else echo same; fi" for step in steps],
+    ])
+    out = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    return out.stdout.split(), maldet / "internals" / "internals.conf", clamav
+
+
+def test_maldet_hands_clamscan_the_filtered_set_and_no_full_one(tmp_path):
     """maldet adds -d for the last clamav_paths directory holding main.cvd -- the
     full set. Pointing clamav_paths at a directory without one drops that, and
-    clamscan_extraopts adds the filtered set; conf.maldet is read after maldet's
-    own defaults."""
-    lmd = _function("lmd_use_filtered_set")
-    on, off = lmd.split("  else\n", 1)
-    assert 'maldet_set_conf clamav_paths "${CLAMAV_FILTERED_LMD_DIR}/"' in on
-    assert 'maldet_set_conf clamscan_extraopts "-d ${CLAMAV_FILTERED_CURRENT}"' in on
-    # maldet's own copies move with it, and back.
-    assert 'mv -f -- "$f" "$CLAMAV_FILTERED_LMD_DIR/"' in on
-    assert "/^(clamav_paths|clamscan_extraopts)=/d" in off and 'mv -f -- "$f" "$CLAMAV_DB_DIR/"' in off
-    # Its copies are part of the set, compared by content: maldet rewrites them
+    clamscan_extraopts adds the filtered set. In internals.conf, not
+    conf.maldet: the Level 2 monitor re-reads internals.conf last every hour."""
+    stock_paths = ('clamav_paths="/usr/local/cpanel/3rdparty/share/clamav/ /var/lib/clamav/ '
+                   '/var/clamav/ /usr/share/clamav/ /usr/local/share/clamav"')
+    internals = tmp_path / "maldetect" / "internals" / "internals.conf"
+    internals.parent.mkdir(parents=True)
+    internals.write_text(f'inspath=/usr/local/maldetect\nclamscan_extraopts=""\n{stock_paths}\n', encoding="utf-8")
+    (tmp_path / "maldetect" / "conf.maldet").write_text(
+        'scan_clamscan="1"\nclamav_paths="/old/"\n', encoding="utf-8")
+    clamav = tmp_path / "clamav"
+    clamav.mkdir()
+    (clamav / "rfxn.yara").write_text("rule x {}", encoding="utf-8")
+
+    results, internals, clamav = _run_lmd_switch(tmp_path, "on", "on")
+    assert results == ["changed", "same"]  # the monitor restarts once, not every run
+    text = internals.read_text(encoding="utf-8")
+    assert f'clamav_paths="{clamav.as_posix()}/bpanel-filtered/lmd/"' in text
+    assert f'clamscan_extraopts="-d {clamav.as_posix()}/bpanel-filtered/current"' in text
+    # maldet's own copy moved with it; the first version's conf.maldet key is gone.
+    assert (clamav / "bpanel-filtered" / "lmd" / "rfxn.yara").is_file() and not (clamav / "rfxn.yara").exists()
+    assert "clamav_paths" not in (tmp_path / "maldetect" / "conf.maldet").read_text(encoding="utf-8")
+
+    results, internals, clamav = _run_lmd_switch(tmp_path, "off", "off")
+    assert results == ["changed", "same"]
+    text = internals.read_text(encoding="utf-8")
+    assert stock_paths in text and 'clamscan_extraopts=""' in text
+    assert (clamav / "rfxn.yara").is_file()
+
+
+def test_the_monitor_restarts_onto_the_set_and_reloads_off_it():
+    # maldet never clears the -d it chose at start: a reload alone would load both.
+    run = _function("clamav_filter_run")
+    assert "if lmd_use_filtered_set on && systemctl is-active --quiet maldet" in run
+    assert "systemctl restart maldet" in run
+    use_full = _function("clamav_filter_use_full")
+    assert 'touch "${MALDET_HOME}/reload_monitor"' in use_full
+    # maldet's copies are part of the set, compared by content: it rewrites them
     # before every scan.
     assert '"$CLAMAV_FILTERED_LMD_DIR"/*' in _function("clamav_extra_dbs")
     assert 'sha256sum <"$f"' in _function("clamav_filter_fingerprint")
-    # Written only when it differs: the Level 2 monitor reloads a changed file.
-    assert 'grep -qxF "${key}=\\"${val}\\"" "$MALDET_CONF" && return 0' in _function("maldet_set_conf")
 
 
 def test_maldet_signature_updates_reach_the_set():

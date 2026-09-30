@@ -1370,47 +1370,66 @@ clamav_filter_build() {
   echo "Signatures filtered: ${kept} of ${total} kept (${known} loaded with bytecode and maldet's)"
 }
 
-# One conf.maldet key, rewritten only when it differs: the Level 2 monitor
-# reloads the file when it changes.
-maldet_set_conf() {
-  local key="$1" val="$2"
-  grep -qxF "${key}=\"${val}\"" "$MALDET_CONF" && return 0
-  if grep -qE "^${key}=" "$MALDET_CONF"; then
-    sed -i -E "s#^${key}=.*#${key}=\"${val}\"#" "$MALDET_CONF"
-  else
-    printf '%s="%s"\n' "$key" "$val" >>"$MALDET_CONF"
-  fi
+# One key of maldet's internals.conf. Returns 0 when the file changed; a key
+# the file does not have is left alone (a layout this was not written for).
+lmd_internals_set() {
+  local file="$1" key="$2" val="$3"
+  grep -qxF "${key}=\"${val}\"" "$file" && return 1
+  grep -qE "^${key}=" "$file" || return 1
+  sed -i -E "s#^${key}=.*#${key}=\"${val}\"#" "$file"
+  return 0
 }
 
 # maldet picks the ClamAV database it hands clamscan itself: the last
 # directory in clamav_paths that holds main.cvd or main.cld -- always the full
-# set in /var/lib/clamav. conf.maldet is read after maldet's own defaults, so
-# two keys there point it elsewhere: clamav_paths at a directory with no
-# main.cvd (maldet then adds no -d of its own and copies its signatures there
-# before each scan) and clamscan_extraopts at the filtered set. With clamd
-# running maldet uses clamdscan instead, and clamd has its own setting.
+# set in /var/lib/clamav. Two of its settings point it elsewhere: clamav_paths
+# at a directory without main.cvd (maldet then adds no -d of its own and
+# copies its signatures there before each scan) and clamscan_extraopts at the
+# filtered set. They are changed in internals.conf, where maldet keeps them:
+# the Level 2 monitor re-reads conf.maldet and then internals.conf every hour,
+# so a value in conf.maldet lasted until the first reload (.88, 2026-09-30).
+# With clamd running maldet uses clamdscan, and clamd has its own setting.
+# Returns 0 when internals.conf changed.
 lmd_use_filtered_set() {
-  local f
-  [[ -f "$MALDET_CONF" ]] || return 0
+  local internals="${MALDET_HOME}/internals/internals.conf"
+  local saved="${CLAMAV_FILTERED_DIR}/lmd-internals.orig" f line key changed=1
+  [[ -f "$internals" ]] || return 1
+  # A first version kept them in conf.maldet (only ever on .88).
+  if grep -qE '^(clamav_paths|clamscan_extraopts)=' "$MALDET_CONF" 2>/dev/null; then
+    sed -i -E '/^(clamav_paths|clamscan_extraopts)=/d' "$MALDET_CONF"
+  fi
   if [[ "$1" == "on" ]]; then
     if [[ ! -d "$CLAMAV_FILTERED_LMD_DIR" ]]; then
       install -d -o root -g root -m 0755 "$CLAMAV_FILTERED_LMD_DIR"
+    fi
+    # What maldet shipped, for `off`.
+    if [[ ! -f "$saved" ]]; then
+      grep -E '^(clamav_paths|clamscan_extraopts)=' "$internals" >"$saved" || true
     fi
     # maldet's copies move with it, so nothing loads a stale set.
     for f in "$CLAMAV_DB_DIR"/rfxn.* "$CLAMAV_DB_DIR"/lmd.user.*; do
       if [[ -f "$f" ]]; then mv -f -- "$f" "$CLAMAV_FILTERED_LMD_DIR/"; fi
     done
-    maldet_set_conf clamav_paths "${CLAMAV_FILTERED_LMD_DIR}/"
-    maldet_set_conf clamscan_extraopts "-d ${CLAMAV_FILTERED_CURRENT}"
+    if lmd_internals_set "$internals" clamav_paths "${CLAMAV_FILTERED_LMD_DIR}/"; then changed=0; fi
+    if lmd_internals_set "$internals" clamscan_extraopts "-d ${CLAMAV_FILTERED_CURRENT}"; then changed=0; fi
   else
-    if grep -qE '^(clamav_paths|clamscan_extraopts)=' "$MALDET_CONF"; then
-      sed -i -E '/^(clamav_paths|clamscan_extraopts)=/d' "$MALDET_CONF"
+    if [[ -f "$saved" ]]; then
+      while IFS= read -r line; do
+        key="${line%%=*}"
+        line="${line#*=\"}"
+        if lmd_internals_set "$internals" "$key" "${line%\"}"; then changed=0; fi
+      done <"$saved"
+      rm -f "$saved"
+    elif grep -qF "$CLAMAV_FILTERED_DIR" "$internals"; then
+      # The saved copy is gone; maldet's own defaults (1.6.6 and 2.x agree).
+      if lmd_internals_set "$internals" clamav_paths "/usr/local/cpanel/3rdparty/share/clamav/ /var/lib/clamav/ /var/clamav/ /usr/share/clamav/ /usr/local/share/clamav"; then changed=0; fi
+      if lmd_internals_set "$internals" clamscan_extraopts ""; then changed=0; fi
     fi
     for f in "$CLAMAV_FILTERED_LMD_DIR"/*; do
       if [[ -f "$f" ]]; then mv -f -- "$f" "$CLAMAV_DB_DIR/"; fi
     done
   fi
-  return 0
+  return "$changed"
 }
 
 # Returns 0 when clamd.conf changed. Only on a server with clamd.
@@ -1466,7 +1485,11 @@ clamd_apply() {
 
 # Everything back on the full databases.
 clamav_filter_use_full() {
-  lmd_use_filtered_set off
+  # A running monitor reloads at its next cycle when this file is there;
+  # maldet's defaults bring its own -d for the full set back.
+  if lmd_use_filtered_set off; then
+    touch "${MALDET_HOME}/reload_monitor"
+  fi
   rm -f "$CLAMAV_FILTER_IN_USE"
   if clamd_set_database_dir "$CLAMAV_DB_DIR"; then
     systemctl reset-failed clamav-daemon >/dev/null 2>&1 || true
@@ -1493,8 +1516,12 @@ clamav_filter_run() {
     echo "clamd refused this filtered set; the full databases stay in use until the next one"
     return 0
   fi
-  # clamscan reads the current set on its next run; clamd needs telling.
-  lmd_use_filtered_set on
+  # clamscan reads the current set on its next run; clamd needs telling. A
+  # running Level 2 monitor does not: maldet never clears the -d it chose
+  # for the full set at start, so after a reload it would load both.
+  if lmd_use_filtered_set on && systemctl is-active --quiet maldet 2>/dev/null; then
+    systemctl restart maldet >/dev/null 2>&1 || true
+  fi
   touch "$CLAMAV_FILTER_IN_USE"
   # A new directory needs a restart; new files in it, a reload (clamd builds
   # the new engine beside the old one and swaps).
