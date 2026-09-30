@@ -59,9 +59,10 @@ def test_the_admin_only_endpoint_is_still_admin_only():
 def test_the_list_leaves_crs_to_the_site_page():
     """"WAF on" beside "CRS block" in the list confused customers (operator,
     2026-09-25). The list shows the WAF alone; CRS lives on each site's page.
+    Each row is OPanel's whole-row button into the site's page.
     """
     src = APP_JSX.read_text(encoding="utf-8")
-    row = src.split('className="waf-overview-row"', 1)[1].split("</div>;", 1)[0]
+    row = src.split('className="waf-site-row"', 1)[1].split("</button>;", 1)[0]
     assert "site.waf_enabled ? 'badge ok' : 'badge'" in row
     assert "crs" not in row.lower(), "CRS is back in the WAF list"
 

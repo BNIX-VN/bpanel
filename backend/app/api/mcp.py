@@ -196,17 +196,19 @@ def create_token(payload: McpTokenCreate, request: Request,
 def revoke_token(token_id: int, request: Request,
                  db: Session = Depends(get_db),
                  current_user: User = Depends(get_current_user)):
-    """Revoke a token. Yours always; anyone's if you administer the server."""
+    """Revoke a token: it is deleted outright, as in OPanel (operator,
+    2026-09-30: what is deleted is gone, not listed as "Revoked"). Yours
+    always; anyone's if you administer the server."""
     ensure_role(current_user.role, Role.end_user)
     row = db.query(McpToken).filter(McpToken.id == token_id).first()
     # Somebody else's token is reported as missing rather than forbidden, the
     # same way a website belonging to another account is.
     if row is None or (row.user_id != current_user.id and not is_admin_role(current_user.role)):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Token not found")
-    if row.revoked_at is None:
-        row.revoked_at = datetime.utcnow()
-        db.commit()
-    log_action(db, current_user.id, "revoke_mcp_token", row.name, row.prefix, request=request)
+    name, prefix = row.name, row.prefix
+    db.delete(row)
+    db.commit()
+    log_action(db, current_user.id, "revoke_mcp_token", name, prefix, request=request)
     return {"ok": True, "id": token_id}
 
 
@@ -217,23 +219,13 @@ def revoke_all(db: Session, reason: str = "") -> int:
     the difference: stop closes the endpoint and leaves the keys alone, remove
     takes the keys back. Anyone who reinstalls makes new ones.
     """
-    now = datetime.utcnow()
-    rows = db.query(McpToken).filter(McpToken.revoked_at.is_(None)).all()
-    for row in rows:
-        row.revoked_at = now
-    if rows:
-        db.commit()
-    return len(rows)
+    count = db.query(McpToken).delete(synchronize_session=False)
+    db.commit()
+    return count
 
 
 def revoke_for_user(db: Session, user_id: int) -> int:
     """Take an account's tokens with the account."""
-    now = datetime.utcnow()
-    rows = db.query(McpToken).filter(
-        McpToken.user_id == user_id, McpToken.revoked_at.is_(None)
-    ).all()
-    for row in rows:
-        row.revoked_at = now
-    if rows:
-        db.commit()
-    return len(rows)
+    count = db.query(McpToken).filter(McpToken.user_id == user_id).delete(synchronize_session=False)
+    db.commit()
+    return count

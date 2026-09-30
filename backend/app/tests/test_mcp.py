@@ -1106,7 +1106,7 @@ def test_nobody_sees_the_menu_until_the_addon_is_on():
     """An addon shows in the sidebar only once it is on - for administrators
     too, who reach a switched-off addon from the Addons page (operator,
     2026-09-27)."""
-    assert "...(mcpAddonInstalled ? [['mcp', 'AI assistants', Bot]] : [])," in APP_JSX
+    assert "...(mcpAddonInstalled ? [['mcp', 'AI assistants (MCP)', Bot]] : [])," in APP_JSX
 
 
 def test_the_page_says_a_self_signed_certificate_will_not_work():
@@ -1128,18 +1128,24 @@ def test_the_new_token_is_not_cleared_by_the_next_render():
 
 
 def test_the_page_offers_a_config_for_each_client_that_can_use_it():
-    block = APP_JSX.split("function renderMcp()")[1].split("function renderMcpTokenRow")[0]
+    """One setup per client, drawn by OPanel's copy block; with no token on
+    screen they carry the <your-token> placeholder."""
+    block = APP_JSX.split("function mcpClientSnippets(")[1].split("function renderMcp()")[0]
     for client in ("Claude Code", "Cursor", "VS Code"):
         assert client in block, f"{client} has no copy-ready configuration"
-    assert "YOUR_TOKEN" in block
+    assert "<your-token>" in block
+    page = APP_JSX.split("function renderMcp()")[1].split("function renderMcpTokenRows")[0]
+    assert "{mcpClientSnippets('').map(([label, text]) =>" in page
+    assert "renderCopyBlock(label, text, { multiline: true," in page
 
 
 def test_a_token_row_says_whether_it_can_act():
     """Read-only against can-act is the whole permission model; it belongs in
-    the list rather than only on the form that created it."""
-    block = APP_JSX.split("function renderMcpTokenRow")[1]
-    assert "read only" in block and "can act" in block
-    assert "revoked" in block and "expired" in block
+    the list rather than only on the form that created it. OPanel's badges;
+    a revoked token is deleted, so there is no "Revoked" row (2026-09-30)."""
+    block = APP_JSX.split("function renderMcpTokenRows")[1].split("\n  function ")[0]
+    assert "t('Read-only')" in block and "t('Read + actions')" in block
+    assert "t('Expired')" in block and "Revoked" not in block
 
 
 def test_revoking_asks_first():
@@ -1157,7 +1163,7 @@ def test_the_page_is_in_the_sidebar_and_the_sidebar_is_not_folded():
     submenu that can be left folded (operator, 2026-09-27).
     """
     sidebar = APP_JSX.split("const navSections = [")[1].split("].filter(section")[0]
-    assert "['mcp', 'AI assistants', Bot]" in sidebar
+    assert "['mcp', 'AI assistants (MCP)', Bot]" in sidebar
     assert "sidebar-subnav" not in APP_JSX and "settingsMenuOpen" not in APP_JSX
 
 
@@ -1177,7 +1183,7 @@ def test_every_addon_has_a_way_in_from_the_sidebar():
         way_in = {"application": "appsFeatureEnabled ? [['applications',",
                   "fail2ban": "isAdmin && ['firewall', 'Firewall', BrickWall,",
                   # An addon since 2026-09-27, in the sidebar once it is on.
-                  "malware": "malwareAddonInstalled && isAdmin ? [['malware', 'Malware scanner', Bug]]",
+                  "malware": "malwareAddonInstalled && isAdmin ? [['malware', 'Malware Scanner', Bug]]",
                   "mcp": "mcpAddonInstalled ? [['mcp',",
                   # No page of its own: its accounts are set on its card in
                   # Settings, then Addons (2026-09-28).
@@ -1198,11 +1204,15 @@ def test_the_client_snippets_carry_the_token_that_was_just_created():
     The token cannot be shown again, so the only moment this can help is while
     it is still on screen - which is exactly when it is substituted.
     """
-    block = APP_JSX.split("function renderMcp()")[1].split("function renderMcpTokenRow")[0]
-    assert "const bearer = mcpNewToken || 'YOUR_TOKEN';" in block
-    # All three snippets use it; none of them still hard-codes the placeholder.
-    assert block.count("${bearer}") == 3
-    assert "'Bearer YOUR_TOKEN'" not in block
+    # OPanel's notice for a new token repeats each setup with it filled in.
+    page = APP_JSX.split("function renderMcp()")[1].split("function renderMcpTokenRows")[0]
+    assert "{mcpClientSnippets(mcpNewToken).map(([label, text]) =>" in page
+    block = APP_JSX.split("function mcpClientSnippets(")[1].split("function renderMcp()")[0]
+    assert "const bearer = `Bearer ${token || '<your-token>'}`;" in block
+    # All three snippets use it; none of them hard-codes the placeholder.
+    assert block.count('Authorization: ${bearer}') == 1
+    assert block.count("Authorization: bearer") == 2
+    assert "Bearer <your-token>" not in block
 
 
 # --- the request an endpoint is handed ---------------------------------------
@@ -1353,3 +1363,18 @@ def test_the_kill_step_skips_loopback():
     # peers against sets is the cheap direction.
     assert body.index("127.*") < body.index('if ipset test "$set"')
 
+
+def test_revoking_deletes_the_token_outright():
+    """Operator, 2026-09-30: "Cái nào xóa thì xóa hẳn đi" - no "Revoked" row
+    left in the list; the same for the WHMCS API tokens."""
+    api = (Path(__file__).resolve().parents[1] / "api" / "mcp.py").read_text(encoding="utf-8")
+    revoke = api.split("def revoke_token(", 1)[1].split("\ndef ", 1)[0]
+    assert "db.delete(row)" in revoke and "revoked_at =" not in revoke
+    for name in ("def revoke_all(", "def revoke_for_user("):
+        body = api.split(name, 1)[1].split("\ndef ", 1)[0]
+        assert ".delete(synchronize_session=False)" in body and "revoked_at =" not in body
+    provisioning = (Path(__file__).resolve().parents[1] / "api" / "provisioning.py").read_text(encoding="utf-8")
+    body = provisioning.split("def revoke_token(", 1)[1].split("\n@router", 1)[0]
+    assert "db.delete(token)" in body and "is_active = False" not in body
+    migration = (Path(__file__).resolve().parents[2] / "alembic" / "versions" / "0042_delete_revoked_tokens.py").read_text(encoding="utf-8")
+    assert "DELETE FROM mcp_tokens WHERE revoked_at IS NOT NULL" in migration

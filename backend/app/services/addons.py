@@ -93,7 +93,7 @@ CATALOGUE: dict[str, dict] = {
         ],
         "notes": [
             "Installing it installs LMD and the ClamAV engine if they are not there yet (1-3 minutes).",
-            "A scan uses about 1.3 GB of memory while it runs and releases it afterwards; nothing stays resident unless Level 2 is on.",
+            "ClamAV's signatures are filtered with clam-juice to what a Linux web server needs (Windows, macOS and Office malware dropped): a scan loads about 200 MB instead of 1.3 GB and releases it afterwards.",
             "Removing it stops the schedule, the scan of uploads and the real-time monitor, which stays off until you turn Level 2 on again. LMD, ClamAV, the history and the schedule are kept.",
         ],
         "keeps_data_on_uninstall": True,

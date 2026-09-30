@@ -625,17 +625,24 @@ def resync_bot_blocks(websites) -> tuple[list[str], list[dict]]:
     Each site is written independently and a failure on one does not abandon
     the rest: changing the global list touches every vhost on the server, and
     the operator needs to know exactly which ones took it.
+
+    All of them are written first and nginx is tested and reloaded once
+    (nginx.deferred_reload). A test per vhost re-parses every ModSecurity rule
+    each time - 3 s and 350 MB a time on .88 with CRS on - so saving the list
+    on a server of 23 sites sat on "Saving global bad bots..." for minutes. If
+    the one test fails, every vhost goes back and this raises RuntimeError.
     """
     from app.services import nginx
 
     done, failed = [], []
-    for site in websites:
-        try:
-            nginx.update_bot_block(site.domain, effective_blocked_bots(site))
-        except (ValueError, RuntimeError, FileNotFoundError) as exc:
-            failed.append({"domain": site.domain, "error": str(exc)})
-            continue
-        done.append(site.domain)
+    with nginx.deferred_reload():
+        for site in websites:
+            try:
+                nginx.update_bot_block(site.domain, effective_blocked_bots(site))
+            except (ValueError, RuntimeError, FileNotFoundError) as exc:
+                failed.append({"domain": site.domain, "error": str(exc)})
+                continue
+            done.append(site.domain)
     return done, failed
 
 

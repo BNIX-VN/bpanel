@@ -224,13 +224,20 @@ def save_global_bots(
     then drift apart.
     """
     _require_admin(current_user)
+    previous = panel_settings.global_blocked_bots()
     try:
         bots = panel_settings.save_global_blocked_bots(payload.blocked_bots)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     websites = db.query(Website).order_by(Website.domain).all()
-    applied, failed = waf.resync_bot_blocks(websites)
+    try:
+        applied, failed = waf.resync_bot_blocks(websites)
+    except RuntimeError as exc:
+        # nginx refused the vhosts as a whole and they were all put back:
+        # the stored list goes back too, so the page and the vhosts agree.
+        panel_settings.save_global_blocked_bots("\n".join(previous))
+        raise HTTPException(status_code=400, detail=f"nginx refused the new list; nothing was changed. {exc}") from exc
 
     message = f"{len(bots)} bot(s) blocked globally; {len(applied)} website(s) updated."
     if failed:

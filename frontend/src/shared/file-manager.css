@@ -6,14 +6,17 @@
 }
 
 .file-panel {
-  display: grid;
-  gap: 0;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 10px;
   min-width: 0;
   box-shadow: none;
+}
+
+.file-panel {
+  display: grid;
+  gap: 0;
 }
 
 .file-controls {
@@ -76,7 +79,7 @@
 
 .file-job svg {
   flex: none;
-  color: var(--primary);
+  color: var(--primary-ink);
 }
 
 .file-job span {
@@ -141,14 +144,14 @@
 
 .crumb:hover:not(:disabled) {
   background: var(--primary-light);
-  border-color: var(--primary-border);
-  color: var(--primary-text);
+  border-color: var(--border-hover);
+  color: var(--brand-ink);
 }
 
 .crumb:disabled {
   background: var(--primary-light);
-  border-color: var(--primary-border);
-  color: var(--primary-text);
+  border-color: var(--primary-soft);
+  color: var(--primary-ink);
   opacity: 1;
 }
 
@@ -175,21 +178,9 @@
   color: var(--text);
 }
 
-/* The same grid as a row, so "755" and "4.1 KB" sit under words that say what
-   they are. They were two unlabelled columns floating between the file name
-   and the buttons, and a number with no heading is a number you have to work
-   out. */
 .file-list-header {
-  /* Every row is a grid of its own. With an auto last column each one
-     sized it to its own buttons - two for a folder, four for an archive -
-     so mode, size and date sat up to 120px apart from row to row and under
-     no heading. A fixed actions column (four buttons, right-aligned) puts
-     every row's columns where the header's are; the scrollbar gutter is
-     reserved on both so a long, scrolling list does not shift them 10px. */
-  overflow: hidden;
-  scrollbar-gutter: stable;
-  display: grid;
-  grid-template-columns: 20px minmax(200px, 1fr) 62px 82px 112px 264px;
+  display: flex;
+  justify-content: space-between;
   align-items: center;
   gap: 8px;
   margin: 8px 0 0;
@@ -208,22 +199,6 @@
   align-items: center;
   gap: 6px;
 }
-.file-list-count { text-align: right; }
-/* Perms and Rename on twenty-one rows is forty-two bordered boxes down the
-   middle of the page. They keep their labels - a file manager is not the place
-   to make people hover to find out what a control does - and lose the box
-   until the pointer is on the row. */
-.file-row-actions .mini:not(.danger) {
-  background: transparent;
-  border-color: transparent;
-  color: var(--text-secondary);
-}
-.file-item:hover .file-row-actions .mini:not(.danger),
-.file-row-actions .mini:not(.danger):focus-visible {
-  background: var(--surface);
-  border-color: var(--border);
-  color: var(--text);
-}
 
 .file-list-header input,
 .file-item > input[type="checkbox"] {
@@ -237,7 +212,6 @@
 .file-list {
   display: grid;
   grid-template-columns: 1fr;
-  scrollbar-gutter: stable;
   gap: 0;
   max-height: min(68vh, 760px);
   overflow: auto;
@@ -249,7 +223,7 @@
 
 .file-item {
   display: grid;
-  grid-template-columns: 20px minmax(200px, 1fr) 62px 82px 112px 264px;
+  grid-template-columns: 20px minmax(200px, 1fr) 52px 72px 112px auto;
   gap: 8px;
   align-items: center;
   background: var(--surface);
@@ -269,11 +243,13 @@
 }
 
 .file-item:hover {
-  background: var(--surface);
+  background: var(--surface-hover);
 }
 
 .file-item.selected {
-  background: var(--surface);
+  /* Stronger than --surface-hover so a selected row still reads as selected
+     while the pointer is over it. */
+  background: var(--primary-light);
 }
 
 .file-list button.file-name {
@@ -296,13 +272,13 @@
 
 .file-list button.file-name:hover {
   background: transparent !important;
-  color: var(--primary) !important;
+  color: var(--primary-ink) !important;
 }
 
 .file-list button.file-name:focus,
 .file-list button.file-name:active {
   background: transparent !important;
-  color: var(--primary) !important;
+  color: var(--primary-ink) !important;
   box-shadow: none !important;
 }
 
@@ -314,22 +290,30 @@
 }
 
 .file-list button.file-name svg {
-  color: var(--primary);
+  color: var(--primary-ink);
   flex: 0 0 auto;
   width: 15px;
   height: 15px;
 }
 
-.file-size,
-.file-modified {
+.file-size {
   font-size: 11px;
   color: var(--text-muted);
   font-weight: 700;
   white-space: nowrap;
 }
 
-.file-modified {
+.file-date {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 700;
+  white-space: nowrap;
   font-variant-numeric: tabular-nums;
+}
+
+/* The date sits beside the size once the columns stack (narrow screens). */
+.file-date-inline {
+  display: none;
 }
 
 .file-mode {
@@ -338,29 +322,6 @@
   font-family: var(--font-mono);
   font-weight: 700;
   white-space: nowrap;
-}
-
-button.file-mode {
-  justify-self: start;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  padding: 2px 6px;
-  min-height: 0;
-  height: auto;
-  cursor: pointer;
-}
-
-button.file-mode:hover:not(:disabled) {
-  background: var(--surface-sunken);
-  border-color: var(--border-hover);
-  color: var(--text);
-}
-
-button.file-mode:disabled {
-  cursor: default;
-  min-height: 0;
-  height: auto;
 }
 
 .file-delete {
@@ -413,74 +374,86 @@ button.file-mode:disabled {
   font-weight: 700;
 }
 
-/* The host div is turned into the Ace editor itself, so it carries .ace_editor.
-   Ace scrolls virtually through .ace_scrollbar-v/-h: never give .ace_scroller
-   its own overflow, or a second (native) scrollbar appears and the last lines
-   become unreachable. */
+/* The editor fills its container — Ace takes the height from here and scrolls
+   the document itself through .ace_scrollbar-v/-h. Never give .ace_scroller an
+   overflow of its own: Ace renders only the visible rows, so a native scrollbar
+   there both doubles up with Ace's and desyncs the renderer from the row a
+   click lands on, which leaves the end of a long file uneditable. */
+.code-editor-host {
+  height: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+/* Colours hang off .ace_editor (the class Ace adds to this host) so they
+   out-specify Ace's own theme class .ace-tomorrow-night — hardcoding light
+   values here is what used to leave the editor light in dark mode. Line height
+   belongs here too: Ace measures it off this element. */
 .code-editor-host.ace_editor {
-  background: var(--editor-bg);
-  color: var(--editor-fg);
-  font: 13px/22px var(--font-mono);
+  background: var(--surface);
+  color: var(--text);
+  line-height: 22px;
 }
 
 .code-editor-host .ace_gutter {
-  background: var(--editor-gutter-bg);
-  color: var(--editor-gutter-fg);
-  border-right: 1px solid var(--editor-border);
+  background: var(--surface-alt);
+  color: var(--text-muted);
+  border-right: 1px solid var(--border);
 }
 
 .code-editor-host .ace_marker-layer .ace_active-line,
 .code-editor-host .ace_gutter-active-line {
-  background: var(--editor-active-line);
+  background: var(--primary-light);
 }
 
-/* Selected text keeps its syntax colours; only the background changes. Do not
-   try to repaint the selected text on top of Ace: a flat copy of the line has
-   no tab expansion and no token styling, so it drifts out of alignment. */
+/* Selection sits behind the text layer, so it has to stay light enough to read
+   through — an opaque --primary here is what forced the old white-text overlay. */
 .code-editor-host .ace_marker-layer .ace_selection {
-  background: var(--editor-selection) !important;
-  opacity: 1;
+  background: var(--primary-soft);
 }
 
 .code-editor-host .ace_marker-layer .ace_selected-word {
-  border: 1px solid var(--editor-selection);
+  border: 1px solid var(--primary);
 }
 
 /* Search match highlighting for ext-searchbox */
 .code-editor-host .ace_search {
-  background: var(--editor-gutter-bg);
-  border: 1px solid var(--editor-border);
-  border-radius: 4px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
   padding: 4px 8px;
 }
 .code-editor-host .ace_search_field {
-  background: var(--editor-bg);
-  border: 1px solid var(--editor-border);
-  border-radius: 3px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
   padding: 2px 6px;
 }
 .code-editor-host .ace_searchbtn {
   background: transparent;
   border: none;
-  color: var(--editor-gutter-fg);
+  color: var(--text-muted);
   cursor: pointer;
   padding: 0 4px;
 }
 .code-editor-host .ace_searchbtn:hover {
-  color: var(--editor-fg);
+  color: var(--text);
 }
 .code-editor-host .ace_replace {
-  background: var(--editor-bg);
-  border: 1px solid var(--editor-border);
-  border-radius: 3px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
   padding: 2px 6px;
 }
 
+/* Exactly one viewport tall, never more: the page must not scroll, only the
+   editor inside it. min-height overrides the global main{min-height:100vh},
+   which would otherwise re-add a page scrollbar wherever dvh < vh (mobile). */
 .standalone-editor-page {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  height: 100dvh; /* beats the global `main { min-height: 100vh }` on mobile */
+  height: 100dvh;
   min-height: 0;
   overflow: hidden;
   background: var(--surface-alt);
@@ -550,18 +523,12 @@ button.file-mode:disabled {
   white-space: nowrap;
 }
 
+/* The editor fills whatever is left under the toolbar; min-height:0 lets this
+   flex item shrink so the page itself never grows past 100vh and scrolls. */
 .standalone-editor-body {
-  display: flex;
   flex: 1 1 auto;
   min-height: 0;
   padding: 10px;
-}
-
-.standalone-editor-body .code-editor-host {
-  flex: 1 1 auto;
-  min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
 }
 
 @media (max-width: 1100px) {
@@ -579,19 +546,21 @@ button.file-mode:disabled {
     gap: 6px 8px;
   }
 
-  .file-list-header {
-    display: flex;
-    justify-content: space-between;
-  }
-
-  .file-list-header span:not(.file-list-count) { display: none; }
-
   .file-size,
   .file-mode,
   .file-row-actions {
     grid-column: 2;
     justify-content: flex-start;
     flex-wrap: wrap;
+  }
+
+  .file-date {
+    display: none;
+  }
+
+  .file-date-inline {
+    display: inline;
+    font-variant-numeric: tabular-nums;
   }
 }
 
@@ -759,225 +728,4 @@ button.file-mode:disabled {
   .standalone-editor-actions {
     justify-content: flex-start;
   }
-}
-
-/* --- Permissions (chmod) dialog ------------------------------------------ */
-.chmod-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-  display: grid;
-  place-items: center;
-  padding: 16px;
-  background: var(--overlay);
-  backdrop-filter: blur(2px);
-}
-
-.chmod-dialog {
-  display: grid;
-  gap: 12px;
-  width: min(380px, 100%);
-  max-height: calc(100vh - 32px);
-  overflow: auto;
-  padding: 16px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: 0 18px 48px rgba(15, 23, 42, .28);
-}
-
-.chmod-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.chmod-head h3 {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0;
-  font-size: 15px;
-  color: var(--text);
-}
-
-.chmod-head p {
-  margin: 3px 0 0;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-muted);
-  overflow-wrap: anywhere;
-}
-
-.chmod-grid {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12px;
-}
-
-.chmod-grid th {
-  padding: 4px 6px;
-  font-size: 11.5px;
-  font-weight: 700;
-  color: var(--text-secondary);
-}
-
-.chmod-grid thead th {
-  text-align: center;
-}
-
-.chmod-grid tbody th {
-  text-align: left;
-  color: var(--text);
-}
-
-.chmod-grid td {
-  padding: 4px 6px;
-  text-align: center;
-}
-
-.chmod-grid tbody tr + tr th,
-.chmod-grid tbody tr + tr td {
-  border-top: 1px solid var(--border);
-}
-
-.chmod-grid input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
-  accent-color: var(--primary);
-  cursor: pointer;
-}
-
-.chmod-grid input[type="checkbox"]:disabled {
-  cursor: not-allowed;
-  opacity: .4;
-}
-
-.chmod-value {
-  display: flex;
-  align-items: end;
-  gap: 10px;
-}
-
-.chmod-value label {
-  display: grid;
-  gap: 4px;
-  font-size: 11.5px;
-  font-weight: 700;
-  color: var(--text-secondary);
-}
-
-.chmod-value input {
-  width: 84px;
-  font-family: var(--font-mono);
-  font-weight: 700;
-  letter-spacing: .08em;
-}
-
-.chmod-value code {
-  padding-bottom: 8px;
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  font-weight: 700;
-  letter-spacing: .12em;
-  color: var(--text-muted);
-}
-
-.chmod-presets {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.chmod-presets .mini {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-family: var(--font-mono);
-  font-weight: 700;
-}
-
-.chmod-presets .mini small {
-  font-family: inherit;
-  font-size: 10.5px;
-  font-weight: 600;
-  opacity: .75;
-}
-
-.chmod-setgid {
-  display: flex;
-  gap: 8px;
-  align-items: flex-start;
-  font-size: 11.5px;
-  font-weight: 600;
-  line-height: 1.45;
-  color: var(--text-secondary);
-}
-
-.chmod-setgid input[type="checkbox"] {
-  margin-top: 2px;
-  width: 15px;
-  height: 15px;
-  accent-color: var(--primary);
-  flex: none;
-}
-
-.chmod-note {
-  margin: 0;
-  font-size: 11.5px;
-  font-weight: 600;
-  line-height: 1.45;
-  color: var(--text-muted);
-}
-
-.chmod-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.chmod-note.warn {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  padding: 7px 9px;
-  background: var(--warning-bg);
-  border: 1px solid var(--warning-border);
-  border-radius: var(--radius-sm);
-  color: var(--warning-text);
-}
-
-.chmod-note.warn svg {
-  flex: none;
-  margin-top: 1px;
-}
-
-/* Job cards keep a dismiss control, so a failure can be cleared by hand the
-   same way a completed one clears itself. */
-.file-job > span {
-  flex: 1 1 auto;
-}
-
-.file-job-dismiss {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  min-height: 0;
-  padding: 0;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: transparent;
-  color: inherit;
-  opacity: .6;
-  cursor: pointer;
-}
-
-.file-job-dismiss:hover:not(:disabled) {
-  background: var(--surface);
-  border-color: var(--border-hover);
-  opacity: 1;
 }

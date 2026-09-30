@@ -1,0 +1,140 @@
+/* BPanel's own layer, loaded after the shared BNIX interface (./shared).
+   Only what the shared layer lacks: tokens and rules for pages and
+   controls OPanel does not have. Anything both panels share belongs in
+   ./shared, which is edited in OPanel and synced here. */
+
+:root{
+  --code-bg:var(--console-bg);
+  --code-fg:var(--console-text);
+  --overlay:rgba(15,23,42,.45);
+  --primary-border:var(--primary-soft);
+  --primary-text:var(--primary-ink);
+  --surface-sunken:#e9edf2;
+  --text-sm:12px;
+}
+:root[data-theme="dark"]{
+  --overlay:rgba(0,0,0,.62);
+  --surface-sunken:#0e141d;
+}
+
+/* from style.css */
+.login-remember{display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;user-select:none}
+.login-remember input{width:auto;margin:0}
+.da-scan-result{margin-top:16px;padding:16px;background:var(--surface-alt);border:1px solid var(--border);border-radius:var(--radius-lg)}
+.da-scan-result h4{margin:0 0 12px 0;font-size:15px}
+.da-user-block{margin-bottom:12px;padding:12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-md)}
+.da-user-block:last-child{margin-bottom:0}
+.da-user-block.ok{border-left:3px solid var(--green,#16a34a)}
+.da-user-block.bad{border-left:3px solid var(--color-danger,#dc2626)}
+.da-user-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 10px}
+.da-user-head small{color:var(--text-muted)}
+.da-table-wrap{overflow-x:auto;margin-top:8px}
+.da-table-wrap .hint{margin:0 0 6px}
+.da-scan-table{width:100%;border-collapse:collapse;font-size:13px}
+.da-scan-table th{text-align:left;font-weight:700;color:var(--text-secondary);padding:6px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
+.da-scan-table td{padding:6px 10px;border-bottom:1px solid var(--border);vertical-align:middle}
+.da-scan-table tr:last-child td{border-bottom:0}
+.da-scan-table td svg{vertical-align:-2px;margin-right:4px}
+.da-yes{color:var(--green,#16a34a)}
+.da-no{color:var(--text-muted)}
+.da-muted{color:var(--text-muted)}
+.da-creds-details{margin-top:8px}
+.da-creds-details summary{cursor:pointer;font-weight:600;font-size:13px}
+.error-list{margin:8px 0;padding:8px;background:var(--danger-bg);border-radius:4px}
+.error-text{color:var(--color-danger);font-size:13px;margin:4px 0}
+.da-credentials{background:var(--surface);padding:12px;border-radius:6px;font-size:12px;white-space:pre-wrap;word-break:break-all;max-height:300px;overflow-y:auto;margin-top:8px}
+.chip-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:10px 0 0}
+/* from brand.css */
+.file-row .danger.icon-button,.row .danger.icon-button{background:var(--surface);color:var(--danger);border:1px solid var(--border);}
+.hint.alarm{font-weight:600;color:var(--danger-text)}
+.site-app-form{display:grid;grid-template-columns:repeat(3,minmax(140px,1fr)) auto;gap:10px;align-items:end}
+.site-app-form label{display:grid;gap:6px;min-width:0;font-weight:700;color:var(--text-secondary)}
+.site-app-form label span{font-size:12px;color:var(--text-muted)}
+.site-app-form input{width:100%;min-width:0}
+.site-app-form-actions{display:flex;align-items:end;gap:8px}
+.site-app-form-actions button{white-space:nowrap}
+/* Access logs: nginx's own errors, a verdict OPanel's log does not have. */
+.verdict-pill.error{background:var(--warning-bg);color:var(--warning-text);border:1px solid var(--warning-border)}
+@media(max-width:950px){
+  .site-app-form{grid-template-columns:1fr}
+}
+.site-app-error{margin:0;padding:7px 9px;background:var(--danger-bg);border:1px solid var(--danger-border);border-radius:var(--radius-sm);color:var(--danger-text);font-size:12px;font-weight:600;line-height:1.45;overflow-wrap:anywhere}
+.site-app-env{grid-column:1 / -1}
+.site-app-env textarea{min-height:88px;font-family:var(--font-mono);font-size:12.5px;line-height:1.5}
+.compose-report{grid-column:1 / -1;display:grid;gap:6px;padding:9px 11px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-alt);font-size:12.5px;line-height:1.5}
+.compose-report.ok{background:var(--success-bg);border-color:var(--success-border);color:var(--success-text)}
+.compose-report.bad{background:var(--danger-bg);border-color:var(--danger-border);color:var(--danger-text)}
+.compose-report p{display:flex;align-items:center;gap:6px;margin:0;font-weight:700}
+.compose-report ul{margin:0;padding-left:18px;display:grid;gap:3px;font-weight:600}
+.compose-report code{font-family:var(--font-mono);font-size:12px;overflow-wrap:anywhere}
+.compose-report .compose-services{list-style:none;padding-left:0}
+.compose-report .compose-notes{list-style:none;padding-left:0;font-weight:600;opacity:.85}
+.malware-ram-warning{border-color:var(--warning-border);background:var(--warning-bg)}
+.malware-ram-warning strong{display:flex;align-items:center;gap:7px;color:var(--warning-text)}
+.malware-ram-warning .hint{margin:7px 0 0;color:var(--warning-text)}
+/* A long hint beside a Turn on / Turn off button must not squeeze the button. */
+.malware-scan-head>button{flex:none}
+.php-tune-pool-outliers{margin:4px 0 0;padding-left:0;list-style:none;display:grid;gap:3px;font-size:12.5px}
+.php-tune-pool-outliers li{display:flex;gap:7px;align-items:baseline;flex-wrap:wrap}
+.php-tune-pool-outliers code{font-family:var(--font-mono);font-size:12px;opacity:.85}
+/* PHP config: the Auto-tune card reads top to bottom, not in the form's four columns. */
+.user-create-card.php-tune-card{display:block}
+.dns-server{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 12px}
+.mail-allow{width:100%;min-height:140px;font-family:var(--font-mono);font-size:12.5px;resize:vertical}
+.dns-new-zone{margin-top:6px}
+.mail-relay-test{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.mail-relay-test input{flex:1 1 240px;min-width:0;max-width:420px}
+.rspamd-allow{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+.rspamd-allowed{color:var(--success-text) !important}
+.dns-template{grid-column:1 / -1;display:grid;gap:5px}
+.dns-template textarea{width:100%;min-height:110px;font-family:var(--font-mono);font-size:12.5px;resize:vertical}
+.dns-template-hint code{overflow-wrap:anywhere}
+.compose-hint{grid-column:1 / -1;margin:0;font-size:12px;line-height:1.55;color:var(--text-muted);font-weight:600}
+.compose-hint code{font-family:var(--font-mono);font-size:11.5px;padding:1px 4px;border-radius:4px;background:var(--surface);color:var(--text-secondary)}
+.site-runtime-strip{display:flex;align-items:center;gap:8px 16px;flex-wrap:wrap;padding:9px 12px;background:var(--surface-alt);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;font-weight:600;color:var(--text-secondary)}
+.site-runtime-strip strong{color:var(--text)}
+.link-button{background:none;border:0;padding:0;min-height:0;height:auto;color:var(--primary);font-weight:700;text-decoration:underline;text-underline-offset:2px;cursor:pointer}
+.link-button:hover:not(:disabled){background:none;color:var(--primary-hover)}
+.firewall-not-applied{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;margin:12px 0;padding:12px 14px;border:1px solid var(--danger-border);border-radius:var(--radius-md);background:var(--danger-bg);color:var(--danger-text)}
+.firewall-not-applied p{flex:1 1 320px;margin:0;font-size:13.5px}
+/* Firewall: a port opened from the panel is closed from its own chip. */
+.firewall-port-chip .firewall-port-remove{height:20px;min-height:0;width:20px;padding:0;background:transparent;border:0;color:var(--text-muted)}
+.firewall-port-chip .firewall-port-remove:hover:not(:disabled){background:var(--danger-bg);color:var(--danger-text)}
+/* WAF list: a BPanel row carries three badges (WAF, flood, bots); on a phone they get a line of their own. */
+@media(max-width:720px){
+  .waf-site-row{grid-template-columns:minmax(0,1fr) auto}
+  .waf-site-row .waf-site-badges{grid-column:1 / -1;grid-row:2}
+}
+/* from file-manager.css */
+.file-list-count{text-align: right;}
+.file-job-dismiss{flex: none; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; min-height: 0; padding: 0; border: 1px solid transparent; border-radius: 6px; background: transparent; color: inherit; opacity: .6; cursor: pointer;}
+.file-job-dismiss:hover:not(:disabled){background: var(--surface); border-color: var(--border-hover); opacity: 1;}
+/* from theme.css */
+.theme-toggle,.language-toggle{display:inline-grid;place-items:center; width:36px;height:34px;min-height:34px;padding:0;flex:none; background:var(--surface);color:var(--text-secondary); border:1px solid var(--border);border-radius:var(--radius-sm); cursor:pointer;transition:background-color .18s ease,color .18s ease,border-color .18s ease;}
+/* from ui.css */
+.top-actions .theme-toggle,.top-actions .language-toggle{width:36px;height:36px;min-height:36px;padding:0;border-radius:var(--radius-sm)}
+.scan-detail .scan-status-panel{margin-top:0}
+.notify-chats{display:flex;flex-wrap:wrap;gap:6px}
+.notify-chats .mini{height:auto;min-height:30px;gap:6px}
+.notify-chats code{font-size:11.5px}
+/* An event of the Notifications page with its one-line hint under it. */
+.notify-event-text{display:grid;gap:2px}
+.notify-event-text small{font-size:12.5px;font-weight:400;line-height:1.4;color:var(--text-muted)}
+.notify-events .field-label{margin-top:6px}
+/* Scheduled backups: BPanel adds the stored file name, a fifth field. */
+@media(min-width:721px){
+  .backup-schedule-builder.with-name{grid-template-columns:minmax(180px,1fr) minmax(260px,1.4fr) minmax(160px,1fr) minmax(170px,1fr) auto}
+}
+/* Hosting packages: BPanel's SFTP (and mailbox) limits beside OPanel's sites and disk. */
+.token-create-form.package-form{grid-template-columns:minmax(160px,1.4fr) repeat(var(--package-limit-cols,3),minmax(90px,.7fr)) auto}
+/* Applications: name, runtime, status, actions; the error and the editor span the row. */
+.row.site-app-row{grid-template-columns:minmax(0,1fr) auto auto auto}
+.site-app-row .user-main small{white-space:normal;overflow-wrap:anywhere}
+.site-app-row .site-app-error{grid-column:1 / -1}
+@media(max-width:950px){
+  .row.site-app-row{grid-template-columns:1fr}
+  .site-app-row .row-actions{justify-content:flex-start}
+}
+@media(max-width:768px){
+  .token-create-form.package-form{grid-template-columns:1fr}
+}

@@ -16,90 +16,16 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SRC = PROJECT_ROOT / "frontend" / "src"
-THEME = (SRC / "theme.css").read_text(encoding="utf-8")
-STYLE = (SRC / "style.css").read_text(encoding="utf-8")
-BRAND = (SRC / "brand.css").read_text(encoding="utf-8")
-FILES = (SRC / "file-manager.css").read_text(encoding="utf-8")
+# The look itself is OPanel's shared layer (frontend/src/shared, synced from
+# OPanel and checked by test_shared_ui.py); BPanel's own sheet holds only what
+# OPanel does not have. Tests of BPanel's former look were dropped on
+# 2026-09-29, when the operator chose OPanel's interface as it is.
 APP = (SRC / "App.jsx").read_text(encoding="utf-8")
-ALL_CSS = {"theme.css": THEME, "style.css": STYLE, "brand.css": BRAND,
-           "file-manager.css": FILES}
 
 
 # --- the two dark themes have to stay one theme ------------------------------
 
-def _dark_blocks():
-    """The dark tokens as they are written twice: once for the explicit choice,
-    once for the OS preference."""
-    chosen = THEME.split(':root[data-theme="dark"]{')[1].split("\n}")[0]
-    preferred = THEME.split(':root:not([data-theme="light"]){')[1].split("\n  }")[0]
-    parse = lambda block: {  # noqa: E731
-        name.strip(): value.strip()
-        for name, _, value in (line.partition(":") for line in block.split(";"))
-        if name.strip().startswith("--")
-    }
-    return parse(chosen), parse(preferred)
-
-
-def test_dark_mode_is_defined_identically_in_both_places():
-    """One block applies when the reader picked dark, the other when their
-    system did. They are the same theme, and CSS has no way to say so, so a
-    token retuned in one and forgotten in the other gives two different dark
-    modes depending on how the reader got there - which nobody would think to
-    check.
-    """
-    chosen, preferred = _dark_blocks()
-    assert chosen, "no explicit dark block found"
-    differences = {
-        name: (chosen.get(name), preferred.get(name))
-        for name in set(chosen) | set(preferred)
-        if chosen.get(name) != preferred.get(name)
-    }
-    assert not differences, f"dark tokens that differ between the two blocks: {differences}"
-
-
-def test_dark_surfaces_are_far_enough_apart_to_see():
-    """A card on the page background, and a shaded box inside the card, were
-    seven points of luminance apart in dark mode - so the structure of a page
-    read as a vague grid of rectangles."""
-    chosen, _ = _dark_blocks()
-
-    def luminance(token):
-        value = chosen[token].lstrip("#")
-        r, g, b = (int(value[i:i + 2], 16) for i in (0, 2, 4))
-        return 0.2126 * r + 0.7152 * g + 0.0722 * b
-
-    assert luminance("--surface") - luminance("--bg") >= 6
-    assert luminance("--surface-alt") - luminance("--surface") >= 6
-
-
 # --- type and the mono stack -------------------------------------------------
-
-def test_the_type_scale_is_declared_once_and_used():
-    for token in ("--text-xs", "--text-sm", "--text-hint", "--text-base",
-                  "--text-lg", "--text-xl", "--font-sans", "--font-mono", "--measure"):
-        assert token in THEME, token
-    assert "font-size:var(--text-base)" in THEME.replace(" ", "")
-
-
-@pytest.mark.parametrize("name", ["style.css", "brand.css", "file-manager.css"])
-def test_no_stylesheet_spells_out_its_own_monospace_stack(name):
-    """There were fourteen copies of it in three different orders, so a path
-    and the command beside it could render in different faces."""
-    body = re.sub(r"/\*.*?\*/", "", ALL_CSS[name], flags=re.S)
-    hardcoded = [line.strip()[:90] for line in body.splitlines()
-                 if "monospace" in line and "var(--font-mono)" not in line]
-    assert not hardcoded, hardcoded[:5]
-
-
-def test_numbers_line_up():
-    """Columns of sizes, ports and percentages, with a figure that changes in
-    place every few seconds. Proportional digits make those jump."""
-    assert "font-variant-numeric:tabular-nums" in THEME.replace(" ", "")
-
-
-def test_prose_is_capped_at_a_readable_measure():
-    assert "max-width:var(--measure)" in STYLE.replace(" ", "")
-
 
 # --- hierarchy ---------------------------------------------------------------
 
@@ -120,17 +46,7 @@ def test_refresh_is_never_the_loudest_button_on_a_page():
     assert not loud, f"{len(loud)} primary Refresh buttons: {loud[:3]}"
 
 
-def test_delete_in_a_list_row_is_a_glyph_not_a_block():
-    """Twenty-two sites meant twenty-two filled red squares down the page, each
-    at the end of a row of five identical ones - which is where a cursor
-    overshoots. Pointing at it still turns it fully red."""
-    quiet = BRAND.split(".site-icon-button.danger,")[1].split("}")[0]
-    assert "background:var(--surface)" in quiet
-    assert "color:var(--danger)" in quiet
-    assert ".site-icon-button.danger:hover:not(:disabled)" in BRAND
-
-
-UI = (SRC / "ui.css").read_text(encoding="utf-8")
+UI = (SRC / "shared" / "ui.css").read_text(encoding="utf-8")
 
 
 def _dashboard():
@@ -154,11 +70,6 @@ def test_the_dashboard_says_how_things_stand_not_the_sidebar_again():
     assert "setDbCreateOpen(true); navigateToPage('databases');" in dashboard
 
 
-def test_the_card_rail_says_how_bad_it_is():
-    for tone, colour in (("ok", "success"), ("warn", "warning"), ("bad", "danger")):
-        assert f".status-card.tone-{tone},.status-card.tone-{tone}:hover:not(:disabled){{border-left-color:var(--{colour})}}" in UI
-
-
 def test_a_customer_is_not_shown_the_server():
     """Server state is an administrator's: the endpoint leaves it out for a
     customer, and the cards that read it sit in the admin branch."""
@@ -174,89 +85,67 @@ def test_a_customer_is_not_shown_the_server():
 
 
 def test_the_sidebar_holds_what_is_used_every_day():
-    """The operator's list (2026-09-27): Dashboard, Website, Application, SSL,
-    Database, Cron, File manager, SFTP, Backups, Panel users - then the addons
-    that are on, then Settings. Everything else is one click further, on the
-    Settings page, which is a page and not a collapsed submenu: a folded
-    Settings once hid the MCP page from the operator."""
+    """OPanel's sidebar (operator, 2026-09-29: BPanel follows OPanel exactly):
+    one plain list - the everyday pages, the addons that are on in OPanel's
+    order, then Settings. Everything else is one click further, on the
+    Settings page, which is a page and not a collapsed submenu."""
     sidebar = APP.split("const navSections = [")[1].split("].filter(section")[0]
     keys = re.findall(r"\['([a-z-]+)', '", sidebar)
     assert keys == ["dashboard", "websites", "applications", "ssl", "databases", "cron", "files",
-                    "sftp", "backups", "users", "dns", "mail", "mcp", "notifications", "malware", "settings"]
+                    "sftp", "backups", "users", "mail", "dns", "mcp", "notifications", "malware", "settings"]
+    assert sidebar.count("{ key: ") == 1, "one list, no groups"
     assert "sidebar-subnav" not in APP and "settingsMenuOpen" not in APP
     hub = APP.split("const settingsGroups = [")[1].split("const settingsItems = ")[0]
     hub_keys = re.findall(r"\['([a-z-]+)', '", hub)
-    # Panel settings heads its group (operator, 2026-09-27); the malware
-    # scanner is an addon now and sits in the sidebar once it is on.
     assert hub_keys == ["firewall", "waf", "access-logs", "security",
                         "panel-settings", "services", "php", "updates", "addons"]
     assert not set(keys) & set(hub_keys), "a page in both places"
     assert "if (page === 'settings') return renderSettingsHub();" in APP
-
+    assert 'className="section settings-hub"' in APP and 'className="settings-tile"' in APP
 
 def test_a_settings_page_keeps_its_own_name_and_lights_up_settings():
     assert "const navPage = settingsItems.some(([key]) => key === basePage) ? 'settings' : basePage;" in APP
     assert "<h1>{pageItem?.[1] ? t(pageItem[1])" in APP
+    # As in OPanel, its title is a crumb back to the Settings page.
+    assert '<h1 className="page-crumbs"><button type="button" onClick={() => navigateToPage(\'settings\')}>' in APP
 
-
-def test_panel_settings_is_four_tabs():
-    """Operator, 2026-09-27: "Phần panel setting: Chia làm 4 tab nhé". One
-    underlined row, like Backups and Panel users, one form showing at a time."""
+def test_panel_settings_is_opanels_tabs():
+    """OPanel's page (operator, 2026-09-30: tabs as BPanel had them): General,
+    Brand assets, API Tokens, one at a time; the admin's own email and
+    password live in Profile."""
     page = APP.split("  function renderPanelSettings() {")[1].split("  function renderUsers() {")[0]
     tabs = re.findall(r"\['([a-z]+)', '([^']+)', \w+\],", page.split("const tabs = [")[1].split("];")[0])
-    assert tabs == [("general", "General"), ("brand", "Brand assets"), ("account", "Admin account"), ("api", "API Tokens")]
+    assert tabs == [("general", "General"), ("brand", "Brand assets"), ("api", "API Tokens")]
     assert 'className="segmented-control backup-tabs" role="tablist"' in page
     for key, _label in tabs:
-        assert f"{{tabPanel('{key}', <>" in page, key
-    assert page.count('<section className="section') == 2, "the no-permission answer and the page: the tabs are not separate sections"
+        assert f"activeTab === '{key}' && <div className=\"backup-tab-panel\"" in page, key
+    assert "Admin account" not in page
     # The tokens used to be their own page; an old link still opens their tab.
     assert "/^\\/api-tokens?\\/?$/i.test(window.location.pathname) ? 'api' : 'general'" in APP
 
 
 def test_sign_out_lives_in_the_account_menu():
-    """The top bar is the page title and one account menu, as in OPanel."""
+    """The top bar is the page title and one account menu, as in OPanel:
+    Profile, Account security, Logout."""
     assert 'className="user-menu-panel"' in APP
     menu = APP.split('className="user-menu-panel"')[1].split("</div>}")[0]
-    assert "logout()" in menu and "navigateToPage('security')" in menu
+    assert menu.index("openProfileModal()") < menu.index("navigateToPage('security')") < menu.index("logout()")
     assert "account-pill" not in APP
-
-
-def test_a_full_disk_does_not_look_like_an_empty_one():
-    """The bar changes colour before anyone reads the number."""
-    card = APP.split("function ResourceCard(")[1].split("function renderDashboard()")[0]
-    assert "safePercent >= 90 ? ' level-critical' : safePercent >= 80 ? ' level-warn'" in card
-    assert ".resource-card.level-warn .resource-track span{background:var(--warning)}" in UI
-    assert ".resource-card.level-critical .resource-track span{background:var(--danger)}" in UI
-    # .danger is the delete button: on a card it painted the whole box red.
-    assert "' danger'" not in card and "' warn'" not in card
-
-
-def test_eight_cards_never_leave_two_over():
-    """Four and four, then two columns - never 3 + 3 + 2."""
-    assert "@media(max-width:1100px){.status-grid.many{grid-template-columns:repeat(2,minmax(0,1fr))}}" in UI
-    phone = UI.split("/* ---------- Phones ---------- */")[1]
-    assert ".status-grid,.status-grid.many{grid-template-columns:repeat(2,minmax(0,1fr));" in phone
-
+    modal = APP.split("{showProfileModal && ")[1].split("{renderNotifications()}")[0]
+    assert "saveProfileEmail" in modal and "changeMyPassword" in modal
 
 def test_the_create_website_form_is_not_in_front_of_the_list():
     """Making a site is occasional; finding one is why the page gets opened.
-    The form was four hundred pixels of it above the list."""
+    The form was four hundred pixels of it above the list. As in OPanel it is
+    a create-panel section, closed by an icon-only X, and "New website" on
+    the list (or its empty state) opens it."""
     assert "const [createFormOpen, setCreateFormOpen] = useState(false);" in APP
     assert "const createOpen = createFormOpen || websites.length === 0;" in APP
     # An empty panel is the exception: there the form is the only thing to do.
-    assert "{createOpen && <section className=\"section create-site-section\">" in APP
-
-
-def test_the_file_list_says_what_its_columns_are():
-    """755 and 4.1 KB floated between the name and the buttons under no
-    heading at all."""
-    header = APP.split('<div className="file-list-header">')[1].split("</div>")[0]
-    for column in ("t('Name')", "t('Mode')", "t('Size')", "t('Modified')"):
-        assert column in header, column
-    grid = FILES.split(".file-list-header {")[1].split("}")[0]
-    row = FILES.split(".file-item {")[1].split("}")[0]
-    columns = lambda block: re.search(r"grid-template-columns:([^;]+);", block).group(1).strip()  # noqa: E731
-    assert columns(grid) == columns(row), "header and row columns must line up"
+    assert "{createOpen && <section className=\"section create-panel\">" in APP
+    page = APP.split("  function renderWebsites() {")[1].split("  function renderSsl() {")[0]
+    assert 'className="secondary icon-only mini" onClick={() => setCreateFormOpen(false)}' in page
+    assert "action={{ label: t('New website'), icon: Plus, onClick: openCreate }}" in page
 
 
 def test_a_label_from_an_array_goes_through_the_dictionary():
@@ -305,42 +194,63 @@ def test_the_dashboard_headings_are_translated_where_they_are_drawn():
 
 # --- the operator's list, 2026-09-25 -----------------------------------------
 
-def test_a_filter_box_does_not_grow_tall_on_a_phone():
-    """flex-basis 200px was the filter's width in a row; when the list head
-    stacked on a phone it became its height - a 200px-tall text box. The raw
-    firewall output beside it was squeezed to a single 20px line."""
-    phone = UI.split("/* ---------- Phones ---------- */")[1]
-    assert ".detail-head input{flex:0 0 auto}" in phone
-    assert ".detail-body > pre{flex:0 0 auto;" in UI
-
-
-def test_mode_size_and_date_have_cells_of_their_own_when_narrow():
-    """Mode and size were placed in grid column 2, row 2, and drew over each
-    other on a phone; the date shares their line, in a column of its own."""
-    narrow = UI.split("/* ---------- File list, below the six-column width ----------")[1]
-    assert narrow.split("*/", 1)[1].lstrip().startswith("@media(max-width:1240px){")
-    assert ".file-item > .file-mode{grid-column:2;grid-row:2;" in narrow
-    assert ".file-item > .file-size{grid-column:3;grid-row:2}" in narrow
-    assert ".file-item > .file-modified{grid-column:4;grid-row:2;" in narrow
-
-
 def test_the_file_list_says_when_each_file_was_changed():
-    """The API has sent every entry's mtime all along; nothing drew it."""
+    """The API has sent every entry's mtime all along; nothing drew it. As in
+    OPanel the date has a column of its own, and moves beside the size once
+    the columns stack on a narrow screen."""
     row = APP.split('<div className="file-list">')[1].split("</div>)}")[0]
-    assert '<span className="file-modified" title={formatFileTime(item.modified, true)}>{formatFileTime(item.modified)}</span>' in row
+    assert '<span className="file-date" title={formatFileTime(item.modified, true)}>{formatFileTime(item.modified)}</span>' in row
+    assert '<span className="file-date-inline"> · {formatFileTime(item.modified)}</span>' in row
+
+
+def test_permissions_open_in_opanels_dialog_and_keep_what_bpanel_adds():
+    """OPanel's permissions dialog (a modal card with the grid, the numeric
+    mode and presets), with BPanel's own additions still in it: setgid on
+    folders, and the toolbar's Permissions for every selected item at once."""
+    dialog = APP.split("  function renderChmodDialog() {")[1].split("\n  }\n")[0]
+    assert '<div className="modal-card chmod-card"' in dialog and '<div className="chmod-mode-row">' in dialog
+    assert "special: bits.special === 2 ? 0 : 2" in dialog, "setgid on folders"
+    files = APP.split("  function renderFiles() {")[1].split("\n  }\n")[0]
+    assert "onClick={() => openChmodDialog(selectedChmodItems)}" in files
+    assert "chmod-backdrop" not in APP and "file-modified" not in APP
 
 
 def test_a_scan_from_the_history_opens_its_own_page():
-    """Clicking a past run used to unfold its details at the foot of a long page."""
+    """Clicking a past run used to unfold its details at the foot of a long page.
+
+    As in OPanel it opens as a sub-page of the scanner, with a back button on
+    the left; the address it used to have (/malware-scan) shows the scanner.
+    """
+    malware = APP.split("  function renderMalware() {")[1].split("\n  function ")[0]
+    assert "onClick={() => openMalwareScanDetail(job)}" in malware
+    assert "if (malwareDetailJob) {" in malware
+    assert "<button className=\"secondary\" onClick={() => setMalwareDetailJob(null)}><ArrowLeft size={14}/> {t('Malware scanner')}</button>" in malware
     assert "'malware-scan': '/malware-scan'" in APP
-    assert "onClick={() => { showMalwareScanJob(job); navigateToPage('malware-scan'); }}" in APP
-    assert "if (page === 'malware-scan') {" in APP
+    assert "!['malware', 'malware-scan'].includes(page)" in APP
+
+
+def test_updating_wordpress_asks_first():
+    """The card's Update button ran core, plugins and themes at once. As in
+    OPanel it opens the inline WordPress panel, and "Update All" there runs it."""
+    page = APP.split("  function renderWebsites() {")[1].split("  function renderSsl() {")[0]
+    card = page.split('<div className="site-feature-actions">')[1].split("</article>")[0]
+    assert "onClick={() => openWordPressUpdate(site)}" in card and "updateWordPressAll" not in card
+    panel = page.split('<div className="wp-manager-panel">')[1]
+    assert "onClick={() => updateWordPressAll(site)}><RefreshCw size={14}/> {t('Update All')}" in panel
 
 
 def test_a_cron_schedule_is_picked_rather_than_typed():
-    assert "const CRON_SCHEDULE_PRESETS = [" in APP
-    assert "{CRON_SCHEDULE_PRESETS.map(([value, label]) => <option key={value} value={value}>{t(label)}</option>)}" in APP
-    assert "<option value=\"custom\">{t('Custom...')}</option>" in APP
+    """OPanel's schedule picker: a preset dropdown beside the raw expression,
+    both always there; typing in the expression switches it to "Custom…".
+    The list names each schedule and shows the expression beside it."""
+    assert "const CRON_PRESETS = [" in APP
+    picker = APP.split("  function renderSchedulePicker(key, value, onChange, inputId) {")[1].split("\n  }\n")[0]
+    assert '<div className="schedule-picker">' in picker
+    assert "{CRON_PRESETS.map(([expr, label]) => <option key={expr} value={expr}>{t(label)}</option>)}" in picker
+    assert "<option value=\"custom\">{t('Custom…')}</option>" in picker
+    cron = APP.split("  function renderCron() {")[1].split("\n  }\n")[0]
+    assert "renderSchedulePicker('cron', cronSchedule, setCronSchedule, 'cron-schedule-input')" in cron
+    assert '<code className="cron-expr">{item.schedule}</code>' in cron
 
 
 def test_a_new_page_opens_at_its_top():
@@ -350,26 +260,6 @@ def test_a_new_page_opens_at_its_top():
     effect = APP.split("useLayoutEffect(() => {", 1)[1].split("}, [page]);", 1)[0]
     assert "window.scrollTo({ top: 0, left: 0, behavior: 'instant' })" in effect
     assert "window.history.scrollRestoration = 'manual'" in APP
-
-
-def test_scan_history_rows_are_as_tall_as_their_content():
-    """The list's max-height was shared out among auto rows and cut each run to
-    its 50px minimum; the wrapped title and badge spilled over the next one."""
-    assert ".scan-history-list{grid-auto-rows:max-content}" in UI
-    phone = UI.split("/* ---------- Phones ---------- */")[1]
-    assert ".scan-history-list{max-height:none;overflow:visible;" in phone
-
-
-def test_every_row_puts_its_columns_where_the_header_does():
-    """Each row is a grid of its own. With an auto actions column every row
-    sized it to its own buttons - two for a folder, four for an archive - and
-    mode, size and date moved up to 120px from row to row, under no heading."""
-    row = FILES.split(".file-item {")[1].split("}")[0]
-    assert re.search(r"grid-template-columns:[^;]* 264px;", row), "the actions column is not a fixed width"
-    for block in (".file-list {", ".file-list-header {"):
-        assert "scrollbar-gutter: stable;" in FILES.split(block)[1].split("}")[0], block
-    # A three-line row was cut to ~40px by the list's max-height otherwise.
-    assert ".file-list{grid-auto-rows:max-content}" in UI
 
 
 def test_no_function_in_the_app_is_declared_twice():
@@ -389,3 +279,13 @@ def test_the_updates_page_prints_no_stray_zero():
     page = APP.split("  function renderUpdates() {")[1].split("\n  function ")[0]
     assert "(panelUpdate.progress_percent &&" not in page
     assert "Number(panelUpdate.progress_percent) > 0 &&" in page
+
+
+def test_a_panel_user_row_keeps_opanels_five_cells():
+    """The shared .row grid has five columns. A sixth cell (package and 2FA
+    badges) pushed the buttons onto a line of their own (operator, 2026-09-30);
+    they now sit under the name."""
+    row = APP.split('<div className="row user-row" key={user.id}>')[1].split('<div className="row-actions">')[0]
+    cells = re.findall(r"^          <(div|span)\b", row, flags=re.M)
+    assert len(cells) == 4, cells  # name, role, status, disk; the buttons are the fifth
+    assert "user.package_name" in row and "user.totp_enabled" in row
