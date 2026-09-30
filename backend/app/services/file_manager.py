@@ -487,9 +487,6 @@ def read_text_file(website: Website, relative_path: str, allow_sensitive: bool =
         raise ValueError(
             f"File is too large to open as text ({size / 1048576:.1f} MB; "
             f"the limit is {MAX_TEXT_FILE_BYTES // 1048576} MB)")
-    # An image, a font or an archive does not decode as UTF-8. That used to
-    # escape as a UnicodeDecodeError -- a 500 in the file manager and a codec
-    # traceback for an assistant reading through a plugin (.88, 2026-10-01).
     try:
         if website.linux_user:
             root = Path(website.root_path).resolve()
