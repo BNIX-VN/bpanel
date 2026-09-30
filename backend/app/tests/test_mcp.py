@@ -623,9 +623,29 @@ def test_a_binary_file_is_refused_as_not_text(tmp_path):
     (tmp_path / "ok.php").write_text("<?php echo 1;\n", encoding="utf-8")
     site = type("W", (), {"root_path": str(tmp_path), "linux_user": ""})()
     assert file_manager.read_text_file(site, "ok.php") == "<?php echo 1;\n"
-    with pytest.raises(ValueError) as exc:
-        file_manager.read_text_file(site, "logo.png")
-    assert "not a text file" in str(exc.value)
+    for lossy in (False, True):
+        with pytest.raises(ValueError) as exc:
+            file_manager.read_text_file(site, "logo.png", lossy=lossy)
+        assert "not a text file" in str(exc.value)
+
+
+def test_php_with_embedded_binary_is_readable_for_an_assistant_not_the_editor(tmp_path):
+    """Protobuf descriptors inside PHP: 22 of one site's plugin files, eight
+    with NUL bytes. Source an assistant needs; the editor must not save it back."""
+    from app.services import file_manager
+
+    (tmp_path / "Timestamp.php").write_bytes(b"<?php\n$pool->internalAddGeneratedFile(\n  '\n\x1fgoogle/\xef\x00\x9d',\n);\n")
+    site = type("W", (), {"root_path": str(tmp_path), "linux_user": ""})()
+    with pytest.raises(ValueError):
+        file_manager.read_text_file(site, "Timestamp.php")
+    text = file_manager.read_text_file(site, "Timestamp.php", lossy=True)
+    assert text.startswith("<?php\n$pool->internalAddGeneratedFile(") and "�" in text
+
+
+def test_the_assistant_is_told_which_bytes_it_cannot_see(monkeypatch):
+    page = _read(monkeypatch, "<?php\n$x = '��';\n")
+    assert "not UTF-8" in page["note"] and "write_file" in page["note"]
+    assert "note" not in _read(monkeypatch, "<?php echo 1;\n")
 
 
 # --- whoami -----------------------------------------------------------------

@@ -460,7 +460,21 @@ def chmod_entry(website: Website, relative_path: str, mode: str) -> str:
     return str(target)
 
 
-def read_text_file(website: Website, relative_path: str, allow_sensitive: bool = False) -> str:
+# Source files that carry a few raw bytes are still source: protobuf
+# descriptors inside PHP (22 of one site's plugin files, eight of them with NUL
+# bytes), a Latin-1 comment. An image, a font or a .mo catalogue is not.
+SOURCE_SUFFIXES = {
+    ".php", ".phtml", ".inc", ".js", ".mjs", ".cjs", ".ts", ".css", ".scss", ".less",
+    ".html", ".htm", ".xml", ".svg", ".json", ".txt", ".md", ".ini", ".conf", ".yml",
+    ".yaml", ".sql", ".sh", ".py", ".po", ".pot", ".csv", ".twig", ".tpl", ".vue",
+}
+
+
+def read_text_file(website: Website, relative_path: str, allow_sensitive: bool = False,
+                   lossy: bool = False) -> str:
+    """A site file as text. Not UTF-8 is refused, unless ``lossy``: then a
+    source file comes back with the bytes that are not shown as U+FFFD. The
+    editor never asks for that -- saving such a text back would replace them."""
     target = _safe_path(website, relative_path)
     if not target.is_file():
         raise ValueError("File not found")
@@ -476,22 +490,24 @@ def read_text_file(website: Website, relative_path: str, allow_sensitive: bool =
     # An image, a font or an archive does not decode as UTF-8. That used to
     # escape as a UnicodeDecodeError -- a 500 in the file manager and a codec
     # traceback for an assistant reading through a plugin (.88, 2026-10-01).
-    not_text = f"{target.name} is not a text file (binary, or not UTF-8)"
-    if website.linux_user:
-        root = Path(website.root_path).resolve()
-        try:
-            result = shell.privileged(
+    try:
+        if website.linux_user:
+            root = Path(website.root_path).resolve()
+            return shell.privileged(
                 "terminal-exec",
                 helper_args=[website.linux_user, str(root), "cat", _helper_relative_path(website, target)],
                 fallback=["cat", str(target)],
-            )
-        except UnicodeDecodeError as exc:
-            raise ValueError(not_text) from exc
-        return result.stdout
-    try:
+            ).stdout
         return target.read_text(encoding="utf-8")
     except UnicodeDecodeError as exc:
-        raise ValueError(not_text) from exc
+        # This used to escape: a 500 in the file manager and a codec traceback
+        # for an assistant reading through a plugin (.88, 2026-10-01).
+        # The error carries every byte it was decoding: the whole file.
+        raw = bytes(exc.object) if isinstance(exc.object, (bytes, bytearray)) else b""
+        source = b"\x00" not in raw[:8192] or target.suffix.lower() in SOURCE_SUFFIXES
+        if lossy and raw and source:
+            return raw.decode("utf-8", errors="replace")
+        raise ValueError(f"{target.name} is not a text file (binary, or not UTF-8)") from exc
 
 
 QuotaCheck = Callable[[int, int], None]

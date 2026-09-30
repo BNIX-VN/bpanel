@@ -368,8 +368,9 @@ def _list_files(ctx: Context, args: dict):
       f"or {MAX_READ_CHARS // 1000} KB, whichever comes first. The answer says "
       "total_lines, and next_start_line when there is more: call again with "
       "start_line set to it to read on. Check that before concluding something "
-      "is missing from the end. Binary files (images, fonts, archives) are not "
-      "text and are refused.",
+      "is missing from the end. Source files with a few bytes that are not "
+      "UTF-8 come back with those shown as � and a note; images, fonts and "
+      "other binary files are refused.",
       {"domain": DOMAIN_ARG,
        "path": {"type": "string", "maxLength": 1024,
                 "description": "File relative to the website root."},
@@ -385,7 +386,7 @@ def _read_file(ctx: Context, args: dict):
     path = args["path"]
     try:
         result = maintenance_api.read_file(
-            website_id=website.id, path=path, db=ctx.db, current_user=ctx.user)
+            website_id=website.id, path=path, lossy=True, db=ctx.db, current_user=ctx.user)
     except HTTPException as exc:
         # "File not found", "is not a text file": the reason, not a stack trace.
         raise ToolError(f"{path}: {exc.detail}") from exc
@@ -414,9 +415,16 @@ def _read_file(ctx: Context, args: dict):
            "truncated": end < total, "content": "".join(chunk)}
     if end < total:
         out["next_start_line"] = end + 1
+    notes = []
     if cut:
-        out["note"] = (f"Line {start} alone is longer than {MAX_READ_CHARS} characters "
-                       "(minified code?) and is cut here. search_files finds text inside it.")
+        notes.append(f"Line {start} alone is longer than {MAX_READ_CHARS} characters "
+                     "(minified code?) and is cut here. search_files finds text inside it.")
+    if "�" in content:
+        notes.append("Some bytes of this file are not UTF-8 text (embedded binary data, "
+                     "or another encoding) and show as �. Do not write this file back "
+                     "with write_file: that would replace them.")
+    if notes:
+        out["note"] = " ".join(notes)
     return out
 
 
