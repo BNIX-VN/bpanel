@@ -1563,6 +1563,14 @@ if id -u bpanel >/dev/null 2>&1 && [[ -x /usr/local/sbin/maldet ]]; then
     systemctl disable --now maldet >/dev/null 2>&1 || true
   fi
 fi
+# --- Malware scanner: ClamAV loads signatures filtered by clam-juice ---------
+# Windows, macOS and Office malware out of what clamscan and clamd load: about
+# 180 MB and 2 s instead of 1 GB and 24 s. Servers without the ClamAV engine
+# are left alone; `bpanel-helper clamav-filter off` keeps the full databases.
+if id -u bpanel >/dev/null 2>&1 && pkg_installed clamav; then
+  sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper clamav-filter ensure || \
+    echo "  (signature filter not set up; ClamAV keeps the full databases)"
+fi
 
 # --- Firewall: move IP blocking from UFW/Nginx to iptables + ipset ---------
 log "Migrating firewall to iptables + ipset"

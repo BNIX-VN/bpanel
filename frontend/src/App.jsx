@@ -9578,6 +9578,9 @@ function App() {
                 : mwInstalled && !mwEnabled ? <span className="badge">{t('Installed — scanning disabled')}</span>
                 : <span className="badge">{t('Not installed')}</span>}
               {mwInstalled && <span className="badge">{t('Engine:')} {mw.engine === 'lmd+clamav' ? 'LMD + ClamAV' : mw.engine === 'clamav' ? 'ClamAV' : mw.engine}</span>}
+              {mwInstalled && mw.signature_filter === 'on' && mw.signatures_total > 0 && <span className="badge" title={t('clam-juice keeps the signatures a Linux web server needs and drops Windows, macOS and Office malware, so a scan loads far less into memory.')}>{t('Signatures: {kept} of {total} (clam-juice)', { kept: Number(mw.signatures_kept).toLocaleString(), total: Number(mw.signatures_total).toLocaleString() })}</span>}
+              {mwInstalled && mw.signature_filter === 'pending' && <span className="badge">{t('Filtering signatures...')}</span>}
+              {mwInstalled && mw.signature_filter === 'failed' && <span className="badge warn">{t('Signature filter failed: full databases in use')}</span>}
               {mw.realtime_enabled && <span className={mw.monitor_running ? 'badge ok' : 'badge warn'}>
                 {t(mw.monitor_running ? 'Level 2 running' : 'Level 2 not running')}
               </span>}
@@ -9633,6 +9636,7 @@ function App() {
             <div>
               <strong>{t('Scan uploaded files')} <span className={mw.scan_on_upload ? 'badge ok' : 'badge'}>{mw.scan_on_upload ? t('On') : t('Off')}</span></strong>
               <p className="hint">{t('Scans each file uploaded through the file manager, in the background after the upload finishes, so nobody waits on it. Off by default: without a resident clamd, every file reloads the whole signature database (measured at 28 seconds and over 1 GB of RAM for a 20 MB file). The Level 1 scheduled scan covers these files either way.')}</p>
+              {mw.signature_filter === 'on' && !mw.clamd_running && <p className="hint">{t('With the filtered signatures a scan loads in about 2 seconds and 200 MB.')}</p>}
               {!mw.scan_on_upload_is_cheap && <p className="hint">{t('This server has no resident clamd — start one first and each scan drops to milliseconds.')}</p>}
             </div>
             {mw.scan_on_upload

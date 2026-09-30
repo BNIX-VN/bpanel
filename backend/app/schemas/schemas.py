@@ -938,6 +938,12 @@ class MalwareScanStatus(BaseModel):
     realtime_enabled: bool = False
     scan_on_upload: bool = False
     scan_on_upload_is_cheap: bool = False
+    # The clam-juice filter: "on" while clamscan and clamd load the filtered
+    # signatures, "pending" before the first set is built, "failed" when clamd
+    # refused a set and everything went back to the full databases.
+    signature_filter: str = "off"
+    signatures_kept: int = 0
+    signatures_total: int = 0
     monitor_running: bool = False
     socket: str = "/run/clamav/clamd.sock"
     detail: Optional[str] = None
