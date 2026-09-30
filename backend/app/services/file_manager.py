@@ -468,17 +468,30 @@ def read_text_file(website: Website, relative_path: str, allow_sensitive: bool =
         raise ValueError("Symlinks are not allowed")
     if target.name.lower() in SENSITIVE_READ_NAMES and not allow_sensitive:
         raise ValueError(f"Reading {target.name} requires admin permissions")
-    if target.stat().st_size > MAX_TEXT_FILE_BYTES:
-        raise ValueError("File is too large")
+    size = target.stat().st_size
+    if size > MAX_TEXT_FILE_BYTES:
+        raise ValueError(
+            f"File is too large to open as text ({size / 1048576:.1f} MB; "
+            f"the limit is {MAX_TEXT_FILE_BYTES // 1048576} MB)")
+    # An image, a font or an archive does not decode as UTF-8. That used to
+    # escape as a UnicodeDecodeError -- a 500 in the file manager and a codec
+    # traceback for an assistant reading through a plugin (.88, 2026-10-01).
+    not_text = f"{target.name} is not a text file (binary, or not UTF-8)"
     if website.linux_user:
         root = Path(website.root_path).resolve()
-        result = shell.privileged(
-            "terminal-exec",
-            helper_args=[website.linux_user, str(root), "cat", _helper_relative_path(website, target)],
-            fallback=["cat", str(target)],
-        )
+        try:
+            result = shell.privileged(
+                "terminal-exec",
+                helper_args=[website.linux_user, str(root), "cat", _helper_relative_path(website, target)],
+                fallback=["cat", str(target)],
+            )
+        except UnicodeDecodeError as exc:
+            raise ValueError(not_text) from exc
         return result.stdout
-    return target.read_text(encoding="utf-8")
+    try:
+        return target.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(not_text) from exc
 
 
 QuotaCheck = Callable[[int, int], None]

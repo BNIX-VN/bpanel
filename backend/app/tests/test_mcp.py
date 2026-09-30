@@ -549,33 +549,83 @@ def test_an_empty_domain_says_so_rather_than_searching():
 
 # --- reading a file ---------------------------------------------------------
 
-def test_a_long_file_is_truncated_and_admits_it(monkeypatch):
-    """A 40 MB log would otherwise fill the assistant's context and end the session."""
+def _read(monkeypatch, content, **args):
     from app.api import maintenance as maintenance_api
-    content = "\n".join(f"line {n}" for n in range(5000))
     monkeypatch.setattr(mcp_tools, "_website",
                         lambda ctx, domain: type("W", (), {"id": 1})())
     monkeypatch.setattr(maintenance_api, "read_file",
                         lambda **kwargs: {"content": content})
+    args = mcp.validate_arguments(mcp.REGISTRY["read_file"],
+                                  {"domain": "a.test", "path": "big.php", **args})
+    return mcp.REGISTRY["read_file"].handler(_ctx(), args)
 
-    result = mcp.REGISTRY["read_file"].handler(
-        _ctx(), {"domain": "a.test", "path": "wp-config.php"})
-    assert result["truncated"] is True
-    assert result["total_lines"] == 5000
-    assert result["lines"] == mcp_tools.MAX_READ_LINES
-    assert result["content"].count("\n") == mcp_tools.MAX_READ_LINES - 1
-    assert "2000 of 5000" in result["note"]
+
+def test_a_long_file_is_read_a_page_at_a_time_and_says_where_to_go_on(monkeypatch):
+    """A 40 MB log would otherwise fill the assistant's context and end the
+    session -- and a first page used to be all there was of a long plugin file."""
+    content = "".join(f"line {n}\n" for n in range(1, 5001))
+    first = _read(monkeypatch, content)
+    assert first["truncated"] is True and first["total_lines"] == 5000
+    assert (first["start_line"], first["end_line"]) == (1, mcp_tools.MAX_READ_LINES)
+    assert first["next_start_line"] == 2001
+    second = _read(monkeypatch, content, start_line=first["next_start_line"])
+    assert second["content"].startswith("line 2001\n")
+    last = _read(monkeypatch, content, start_line=4001)
+    assert last["end_line"] == 5000 and last["truncated"] is False and "next_start_line" not in last
+    with pytest.raises(mcp.ToolError) as exc:
+        _read(monkeypatch, content, start_line=5001)
+    assert "past the end" in str(exc.value)
+
+
+def test_a_page_stops_before_the_clients_token_limit(monkeypatch):
+    """2000 lines of PHP is ~80 KB, over the 25,000 tokens Claude Code takes
+    from one tool call; the client then dropped the whole answer."""
+    line = "x" * 99 + "\n"
+    page = _read(monkeypatch, line * 2000)
+    assert len(page["content"]) <= mcp_tools.MAX_READ_CHARS
+    assert page["end_line"] == mcp_tools.MAX_READ_CHARS // 100
+    assert page["next_start_line"] == page["end_line"] + 1
+    assert len(_read(monkeypatch, line * 2000, line_count=10)["content"]) == 1000
+
+
+def test_one_minified_line_is_cut_and_says_so(monkeypatch):
+    page = _read(monkeypatch, "a" * 100_000)
+    assert len(page["content"]) == mcp_tools.MAX_READ_CHARS
+    assert "minified" in page["note"] and page["total_lines"] == 1
 
 
 def test_a_short_file_comes_back_whole(monkeypatch):
-    from app.api import maintenance as maintenance_api
-    monkeypatch.setattr(mcp_tools, "_website",
-                        lambda ctx, domain: type("W", (), {"id": 1})())
-    monkeypatch.setattr(maintenance_api, "read_file",
-                        lambda **kwargs: {"content": "one\ntwo\nthree"})
-
-    result = mcp.REGISTRY["read_file"].handler(_ctx(), {"domain": "a.test", "path": "x.txt"})
+    result = _read(monkeypatch, "one\ntwo\nthree")
     assert result["truncated"] is False and result["content"] == "one\ntwo\nthree"
+
+
+def test_a_refused_read_says_why_not_how_it_failed(monkeypatch):
+    from fastapi import HTTPException
+    from app.api import maintenance as maintenance_api
+
+    def refuse(**kwargs):
+        raise HTTPException(status_code=400, detail="logo.png is not a text file (binary, or not UTF-8)")
+
+    monkeypatch.setattr(mcp_tools, "_website", lambda ctx, domain: type("W", (), {"id": 1})())
+    monkeypatch.setattr(maintenance_api, "read_file", refuse)
+    result = mcp.call_tool(_ctx(), "read_file", {"domain": "a.test", "path": "logo.png"})
+    assert result["isError"] is True
+    text = result["content"][0]["text"]
+    assert text == "logo.png: logo.png is not a text file (binary, or not UTF-8)"
+    assert "failed" not in text
+
+
+def test_a_binary_file_is_refused_as_not_text(tmp_path):
+    """It used to escape as a UnicodeDecodeError: a 500 in the file manager."""
+    from app.services import file_manager
+
+    (tmp_path / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\n\x00\xff\xfe")
+    (tmp_path / "ok.php").write_text("<?php echo 1;\n", encoding="utf-8")
+    site = type("W", (), {"root_path": str(tmp_path), "linux_user": ""})()
+    assert file_manager.read_text_file(site, "ok.php") == "<?php echo 1;\n"
+    with pytest.raises(ValueError) as exc:
+        file_manager.read_text_file(site, "logo.png")
+    assert "not a text file" in str(exc.value)
 
 
 # --- whoami -----------------------------------------------------------------

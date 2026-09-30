@@ -25,6 +25,8 @@ import ipaddress
 from datetime import datetime
 from typing import Optional
 
+from fastapi import HTTPException
+
 from app.api import databases as databases_api
 from app.api import firewall as firewall_api
 from app.api import maintenance as maintenance_api
@@ -333,7 +335,17 @@ def _read_waf_access_log(ctx: Context, args: dict):
 # A model asked for "the file" will happily pull a 40 MB log into its own
 # context and then be unable to do anything else. The panel's own endpoint has
 # no such limit because a browser scrolling a file is a different problem.
+#
+# Lines alone are not a limit: 2000 lines of PHP is 80 KB, over the 25,000
+# tokens Claude Code takes from one tool call, and the client then drops the
+# whole answer; minified JS is 2000 lines' worth on one. And a first page was
+# all there was -- nothing past line 2000 could be read. An assistant reading
+# into a site's plugins reported the files unreadable (.88, 2026-10-01): of
+# one site's plugin files, 69 had more than 2000 lines and 439 were over 60 KB.
+# So a read returns a range, stops at whichever limit comes first, and says
+# where to start the next one.
 MAX_READ_LINES = 2000
+MAX_READ_CHARS = 40_000
 
 
 @tool("list_files", "List files in a website",
@@ -352,31 +364,60 @@ def _list_files(ctx: Context, args: dict):
 
 
 @tool("read_file", "Read a file from a website",
-      f"The contents of one file, up to {MAX_READ_LINES} lines. Longer files "
-      "come back truncated and say so, so check that before concluding "
-      "something is missing from the end.",
+      f"A text file, a range of lines at a time: up to {MAX_READ_LINES} lines "
+      f"or {MAX_READ_CHARS // 1000} KB, whichever comes first. The answer says "
+      "total_lines, and next_start_line when there is more: call again with "
+      "start_line set to it to read on. Check that before concluding something "
+      "is missing from the end. Binary files (images, fonts, archives) are not "
+      "text and are refused.",
       {"domain": DOMAIN_ARG,
        "path": {"type": "string", "maxLength": 1024,
-                "description": "File relative to the website root."}},
+                "description": "File relative to the website root."},
+       # A file opened as text has at most as many lines as bytes.
+       "start_line": {"type": "integer", "minimum": 1,
+                      "maximum": file_manager.MAX_TEXT_FILE_BYTES,
+                      "description": "First line to return, 1-based. Defaults to 1."},
+       "line_count": {"type": "integer", "minimum": 1, "maximum": MAX_READ_LINES,
+                      "description": f"How many lines at most. Defaults to {MAX_READ_LINES}."}},
       required=("domain", "path"))
 def _read_file(ctx: Context, args: dict):
     website = _website(ctx, args["domain"])
-    result = maintenance_api.read_file(
-        website_id=website.id, path=args["path"], db=ctx.db, current_user=ctx.user)
+    path = args["path"]
+    try:
+        result = maintenance_api.read_file(
+            website_id=website.id, path=path, db=ctx.db, current_user=ctx.user)
+    except HTTPException as exc:
+        # "File not found", "is not a text file": the reason, not a stack trace.
+        raise ToolError(f"{path}: {exc.detail}") from exc
 
     content = result.get("content", "") if isinstance(result, dict) else str(result)
-    lines = content.splitlines()
-    if len(lines) <= MAX_READ_LINES:
-        return {"path": args["path"], "lines": len(lines), "truncated": False,
-                "content": content}
-    return {
-        "path": args["path"],
-        "lines": MAX_READ_LINES,
-        "total_lines": len(lines),
-        "truncated": True,
-        "note": f"Showing the first {MAX_READ_LINES} of {len(lines)} lines.",
-        "content": "\n".join(lines[:MAX_READ_LINES]),
-    }
+    lines = content.splitlines(keepends=True)
+    total = len(lines)
+    start = args.get("start_line") or 1
+    count = args.get("line_count") or MAX_READ_LINES
+    if total and start > total:
+        raise ToolError(f"{path} has {total} lines; start_line {start} is past the end.")
+
+    chunk, used, cut = [], 0, False
+    for line in lines[start - 1:start - 1 + count]:
+        if used + len(line) > MAX_READ_CHARS:
+            if not chunk:
+                # One line longer than the whole budget: minified code.
+                chunk.append(line[:MAX_READ_CHARS])
+                cut = True
+            break
+        chunk.append(line)
+        used += len(line)
+    end = start - 1 + len(chunk)
+
+    out = {"path": path, "total_lines": total, "start_line": start, "end_line": end,
+           "truncated": end < total, "content": "".join(chunk)}
+    if end < total:
+        out["next_start_line"] = end + 1
+    if cut:
+        out["note"] = (f"Line {start} alone is longer than {MAX_READ_CHARS} characters "
+                       "(minified code?) and is cut here. search_files finds text inside it.")
+    return out
 
 
 # --- the three that needed something BPanel did not have --------------------
