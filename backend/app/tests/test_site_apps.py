@@ -523,6 +523,22 @@ def test_file_target_exposes_what_the_file_manager_reads():
     assert target.app_id == app.id
 
 
+def test_a_website_that_fronts_an_app_keeps_its_own_file_jobs():
+    """Website.app_id names the app a site proxies to. The job key took it for an
+    app target, so every extract on the site ran in the app's directory:
+    "Archive not found" for the archive just uploaded to public_html
+    (160.236.192.120, 2026-10-02)."""
+    from app.api.maintenance import file_target_key
+
+    app = _managed_app("node", name="reviewthammy", id=1)
+    site = Website(id=7, domain="reviewthammy.vn", root_path="/home/siteuser/reviewthammy.vn",
+                   app_id=app.id)
+    assert file_target_key(site) == "site:7"
+    assert file_target_key(site_apps.file_target(app)) == "app:1"
+    plain = Website(id=8, domain="plain.vn", root_path="/home/siteuser/plain.vn")
+    assert file_target_key(plain) == "site:8"
+
+
 def test_unit_name_can_be_asked_about_a_previous_name():
     """A rename moves the unit; the old one still has to be findable."""
     app = _managed_app("node", name="n8n")

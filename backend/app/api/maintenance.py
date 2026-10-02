@@ -150,10 +150,14 @@ def file_target_key(target) -> str:
 
     A website id and an app id are separate sequences, so a bare number would
     let one target's jobs show up under the other.
+
+    Decided by what the target is, not by whether it has an app_id: a website
+    that fronts an application carries one too (Website.app_id). Its extract
+    jobs ran in the application's directory and every archive uploaded to the
+    site came back "Archive not found" (160.236.192.120, 2026-10-02).
     """
-    app_id = getattr(target, "app_id", None)
-    if app_id:
-        return f"app:{app_id}"
+    if isinstance(target, site_apps.AppFileTarget):
+        return f"app:{target.app_id}"
     return f"site:{getattr(target, 'id', '') or ''}"
 
 
