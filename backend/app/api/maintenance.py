@@ -1863,17 +1863,20 @@ def get_da_import_job(job_id: str, current_user: User = Depends(get_current_user
     # A job id from before a restart no longer matches the running unit. Say so
     # rather than 404: the page used to poll a missing id in silence for half an
     # hour and then stop, leaving whatever was on screen.
-    stale = bool(job_id) and info.get("invocation") and job_id != info["invocation"]
+    stale = bool(job_id) and bool(info.get("invocation")) and job_id != info["invocation"]
     return {
         "id": info.get("invocation") or job_id,
         "status": "unknown" if stale else info["status"],
         "stale": stale,
-        "error": "" if not stale else (
+        "archive": info.get("archive", ""),
+        "error": info.get("error", "") if not stale else (
             "This import was started by an earlier session of the panel. "
             "The log below is from the import the server is tracking now."
         ),
         "log": info.get("log", []),
-        "result": None,
+        # The summary and the generated passwords, which the page shows once the
+        # import has completed. Not for another job's id.
+        "result": None if stale else info.get("import_result"),
     }
 
 

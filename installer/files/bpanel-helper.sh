@@ -869,7 +869,10 @@ start_da_import() {
     deny "an import is already running"
   fi
   systemctl reset-failed "${DA_IMPORT_UNIT}.service" >/dev/null 2>&1 || true
-  systemd-run --unit="${DA_IMPORT_UNIT}" --collect \
+  # No --collect: a run that fails stays loaded with its result and exit code
+  # until the next start resets it. With --collect systemd dropped it the
+  # moment it ended, and the page could only say "unknown".
+  systemd-run --unit="${DA_IMPORT_UNIT}" \
     --uid=bpanel --gid=bpanel \
     -p WorkingDirectory="${APP_DIR}/backend" \
     -p EnvironmentFile="${APP_DIR}/backend/.env" \

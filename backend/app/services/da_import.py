@@ -38,6 +38,8 @@ logger = logging.getLogger("bpanel.da_import")
 
 DA_BACKUP_DIR = Path(os.environ.get("BPANEL_DA_BACKUP_DIR", "/home/admin/bpanel_backups/da"))
 STAGE_BASE = Path(os.environ.get("DA_IMPORT_STAGE_BASE", "/var/lib/bpanel/da-import"))
+# What the detached import (da_import_run.py) reports about its last run.
+IMPORT_RESULT_FILE = STAGE_BASE / "last-import.json"
 DEFAULT_PHP_VERSION = os.environ.get("DA_IMPORT_PHP", "8.3")
 
 DEFAULT_STORAGE_MB = int(os.environ.get("DA_IMPORT_STORAGE_MB", "102400"))
@@ -135,11 +137,25 @@ def start_detached_import(archive_path: str, force: bool) -> str:
     return (result.stdout or "").strip()
 
 
+def read_import_record() -> Optional[dict]:
+    """The last run's record from IMPORT_RESULT_FILE, or None."""
+    try:
+        record = json.loads(IMPORT_RESULT_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return record if isinstance(record, dict) else None
+
+
 def detached_import_status() -> dict:
     """What systemd says about the import unit, plus its recent output.
 
     This is deliberately not backed by anything in the API's memory: the whole
     point is that it still answers after bpanel-api has restarted.
+
+    systemd alone cannot say how a run ended: a unit that exits cleanly is
+    unloaded at once, and so was a failed one while it was started with
+    --collect. Every finished import then read "unknown", success and failure
+    alike (.88, 2026-10-02). The runner's own record fills that in.
     """
     result = shell.privileged(
         "da-import-status",
@@ -152,17 +168,56 @@ def detached_import_status() -> dict:
         key, _, value = line.partition("=")
         if key.strip() in info:
             info[key.strip()] = value.strip()
-    info["log"] = [line for line in log.splitlines() if line.strip()]
+    lines = [line for line in log.splitlines() if line.strip()]
+    # The journal holds every run; the page wants the last one, which begins
+    # where systemd says it started it.
+    starts = [i for i, line in enumerate(lines) if line.startswith("Started ")]
+    info["log"] = lines[starts[-1]:] if starts else lines
+    info.update(archive="", error="", import_result=None)
 
-    if info["active"] == "active":
+    record = read_import_record()
+    ours = bool(record) and (not info["invocation"] or record.get("invocation") == info["invocation"])
+    if ours:
+        info["invocation"] = info["invocation"] or str(record.get("invocation") or "")
+        info["archive"] = str(record.get("archive") or "")
+
+    if info["active"] in {"active", "activating", "reloading", "deactivating"}:
         status = "running"
-    elif info["active"] in {"inactive", "failed"} and info["invocation"]:
-        ok = info["result"] == "success" and info["exit"] in {"0", ""}
+    elif info["active"] not in {"inactive", "failed"}:
+        # The helper did not answer; a record that says "running" may be true.
+        status = "unknown"
+    elif ours:
+        status = record.get("status")
+        if status == "completed":
+            info["import_result"] = record.get("result")
+        elif status == "failed":
+            info["error"] = str(record.get("error") or "")
+        else:
+            # The record was never finished: the process was killed or crashed
+            # before it could write one.
+            status = "failed"
+            info["error"] = "The import stopped before it finished. See the log."
+        if status == "completed" and info["result"] not in {"", "success"}:
+            status = "failed"
+            info["error"] = f"The import unit ended with {info['result']}."
+    elif info["invocation"]:
+        ok =info["result"] == "success" and info["exit"] in {"0", ""}
         status = "completed" if ok else "failed"
+        if not ok:
+            info["error"] = _last_error_line(info["log"])
     else:
         status = "unknown"
     info["status"] = status
     return info
+
+
+def _last_error_line(log: list[str]) -> str:
+    """The line of the log that says what went wrong, as near as it can tell."""
+    for line in reversed(log):
+        text = line.strip()
+        if text.startswith("FAILED:") or re.match(r"^[A-Za-z_.]*(Error|Exception)\b", text):
+            return text.removeprefix("FAILED:").strip()
+    return "The import failed. See the log."
 
 
 # ---------------------------------------------------------------------------
