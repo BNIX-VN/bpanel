@@ -10,6 +10,7 @@ and impossible to notice afterwards:
     locked - and that check comes before anything looks at credentials
 """
 
+import json
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -1448,3 +1449,27 @@ def test_revoking_deletes_the_token_outright():
     assert "db.delete(token)" in body and "is_active = False" not in body
     migration = (Path(__file__).resolve().parents[2] / "alembic" / "versions" / "0042_delete_revoked_tokens.py").read_text(encoding="utf-8")
     assert "DELETE FROM mcp_tokens WHERE revoked_at IS NOT NULL" in migration
+
+
+# --- text that survives a client with the wrong idea of the encoding --------
+#
+# On tool.bnix.vn an assistant's MCP client read the panel's answers as
+# Latin-1, and wrote a PHP file back with every Vietnamese string mangled
+# (.88, 2026-10-02).
+
+VIETNAMESE = "'country' => $country ?? 'Việt Nam', // Máy chủ chưa bật cURL\n"
+
+
+def test_the_answer_reads_the_same_whatever_charset_the_client_assumes():
+    from app.api.mcp import McpJSONResponse
+
+    answer = {"jsonrpc": "2.0", "id": 1,
+              "result": {"content": [{"type": "text", "text": mcp._as_text({"content": VIETNAMESE})}]}}
+    response = McpJSONResponse(answer)
+    assert response.headers["content-type"] == "application/json; charset=utf-8"
+    assert max(response.body) < 0x80
+    for charset in ("utf-8", "latin-1", "cp1252"):
+        decoded = json.loads(response.body.decode(charset))
+        inner = json.loads(decoded["result"]["content"][0]["text"])
+        assert inner["content"] == VIETNAMESE
+
