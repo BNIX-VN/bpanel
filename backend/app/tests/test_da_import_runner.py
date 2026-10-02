@@ -66,9 +66,11 @@ def _run(monkeypatch, tmp_path, result):
 
 
 def test_an_import_that_stopped_before_importing_anything_failed(monkeypatch, tmp_path):
-    # Re-running an archive without force on .88: nothing imported, one reason.
+    # Re-running an archive without force on .88: nothing imported, one reason,
+    # and the account listed anyway, with no domain.
     collision = "Already exists: panel user 'e2_da'. Re-run with force to replace."
-    code, record = _run(monkeypatch, tmp_path, {"summary": [], "credentials": [], "errors": [collision]})
+    account = {"username": "e2_da", "imported_domains": [], "warnings": [collision]}
+    code, record = _run(monkeypatch, tmp_path, {"summary": [account], "credentials": [], "errors": [collision]})
     assert code == 1 and record["status"] == "failed" and record["error"] == collision
 
 

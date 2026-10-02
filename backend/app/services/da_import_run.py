@@ -93,9 +93,12 @@ def main(argv: list[str]) -> int:
         return 1
     summary = result.get("summary") or []
     errors = result.get("errors") or []
-    if errors and not summary:
+    domains = sum(len(item.get("imported_domains") or []) for item in summary)
+    if errors and not domains:
         # It stopped before importing anything - an account or a domain that
-        # already exists, without force. That is not a success to report.
+        # already exists, without force, or no domain in the archive. The
+        # account is listed all the same, with no domain. That is not a
+        # success to report.
         print(f"FAILED: {'; '.join(errors)}", flush=True)
         write_record({**record, "status": "failed", "error": "; ".join(errors), "result": result,
                       "finished_at": _now()})
@@ -103,7 +106,6 @@ def main(argv: list[str]) -> int:
     write_record({**record, "status": "completed", "result": result, "finished_at": _now()})
     # The result carries the generated passwords: they go to RESULT_FILE, not
     # to the journal.
-    domains = sum(len(item.get("imported_domains") or []) for item in summary)
     print(f"RESULT: {len(summary)} account(s), {domains} domain(s), {len(errors)} error(s)", flush=True)
     return 0
 
