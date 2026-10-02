@@ -523,6 +523,78 @@ def test_file_target_exposes_what_the_file_manager_reads():
     assert target.app_id == app.id
 
 
+def test_a_website_that_fronts_an_app_keeps_its_own_file_jobs():
+    """Website.app_id names the app a site proxies to. The job key took it for an
+    app target, so every extract on the site ran in the app's directory:
+    "Archive not found" for the archive just uploaded to public_html
+    (160.236.192.120, 2026-10-02)."""
+    from app.api.maintenance import file_target_key
+
+    app = _managed_app("node", name="reviewthammy", id=1)
+    site = Website(id=7, domain="reviewthammy.vn", root_path="/home/siteuser/reviewthammy.vn",
+                   app_id=app.id)
+    assert file_target_key(site) == "site:7"
+    assert file_target_key(site_apps.file_target(app)) == "app:1"
+    plain = Website(id=8, domain="plain.vn", root_path="/home/siteuser/plain.vn")
+    assert file_target_key(plain) == "site:8"
+
+
+def test_a_website_that_fronts_an_app_opens_the_apps_files(monkeypatch):
+    """nginx proxies such a website to its app; what was uploaded to the
+    website's own folder was never served. Its file manager is the app's."""
+    from app.api import maintenance
+    from app.services import addons
+
+    app = _managed_app("node", name="reviewthammy", id=1)
+    linked = Website(id=7, domain="reviewthammy.vn", root_path="/home/siteuser/reviewthammy.vn",
+                     owner_id=1, app_id=1)
+    plain = Website(id=8, domain="plain.vn", root_path="/home/siteuser/plain.vn", owner_id=1)
+    sites = {7: linked, 8: plain}
+    monkeypatch.setattr(maintenance, "get_owned_website", lambda db, user, website_id: sites[website_id])
+    monkeypatch.setattr(maintenance, "get_owned_app", lambda db, user, app_id: app)
+    monkeypatch.setattr(maintenance.os, "access", lambda path, mode: True)
+    monkeypatch.setattr(addons, "require", lambda slug: None)
+    installed = {"on": True}
+    monkeypatch.setattr(addons, "is_installed", lambda slug: installed["on"])
+
+    target = maintenance.get_website_files(None, None, 7)
+    assert isinstance(target, site_apps.AppFileTarget)
+    assert target.root_path.replace("\\", "/").endswith("/home/siteuser/apps/reviewthammy")
+    assert maintenance.file_target_key(target) == "app:1"
+    # Every file call by website id goes the same way, not only the listing.
+    assert isinstance(maintenance.get_file_target(None, None, website_id=7), site_apps.AppFileTarget)
+    assert maintenance.get_website_files(None, None, 8) is plain
+    # The Application addon off: the link does nothing, the site's own folder.
+    installed["on"] = False
+    assert maintenance.get_website_files(None, None, 7) is linked
+
+
+def test_a_dismissed_file_job_does_not_come_back(monkeypatch):
+    """The card's x only hid a failed job in the browser; every reload brought
+    "Archive not found" back from the panel's memory (.120, 2026-10-02)."""
+    from fastapi import HTTPException
+
+    from app.api import maintenance
+
+    owner = User(id=1, username="admin", email="a@example.test", role="end_user")
+    other = User(id=2, username="other", email="o@example.test", role="end_user")
+    monkeypatch.setattr(maintenance, "_file_jobs", {
+        "failed": {"job_id": "failed", "user_id": 1, "status": "error", "kind": "extract_archive"},
+        "running": {"job_id": "running", "user_id": 1, "status": "running", "kind": "extract_archive"},
+    })
+    with pytest.raises(HTTPException) as exc:
+        maintenance.dismiss_file_job("failed", current_user=other)
+    assert exc.value.status_code == 403
+    with pytest.raises(HTTPException) as exc:
+        maintenance.dismiss_file_job("running", current_user=owner)
+    assert exc.value.status_code == 409
+    assert maintenance.dismiss_file_job("failed", current_user=owner) == {"dismissed": "failed"}
+    assert maintenance._list_file_jobs(owner) == [maintenance._public_file_job(maintenance._file_jobs["running"])]
+    with pytest.raises(HTTPException) as exc:
+        maintenance.dismiss_file_job("failed", current_user=owner)
+    assert exc.value.status_code == 404
+
+
 def test_unit_name_can_be_asked_about_a_previous_name():
     """A rename moves the unit; the old one still has to be findable."""
     app = _managed_app("node", name="n8n")

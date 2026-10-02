@@ -150,10 +150,14 @@ def file_target_key(target) -> str:
 
     A website id and an app id are separate sequences, so a bare number would
     let one target's jobs show up under the other.
+
+    Decided by what the target is, not by whether it has an app_id: a website
+    that fronts an application carries one too (Website.app_id). Its extract
+    jobs ran in the application's directory and every archive uploaded to the
+    site came back "Archive not found" (160.236.192.120, 2026-10-02).
     """
-    app_id = getattr(target, "app_id", None)
-    if app_id:
-        return f"app:{app_id}"
+    if isinstance(target, site_apps.AppFileTarget):
+        return f"app:{target.app_id}"
     return f"site:{getattr(target, 'id', '') or ''}"
 
 
@@ -434,8 +438,23 @@ def get_file_target(db: Session, current_user: User, website_id=None, app_id=Non
             site_apps.ensure_directory(get_owned_app(db, current_user, app_id))
         return target
     if website_id:
-        return get_owned_website(db, current_user, website_id)
+        return get_website_files(db, current_user, website_id)
     raise HTTPException(status_code=400, detail="Pick a website or an application to browse")
+
+
+def get_website_files(db: Session, current_user: User, website_id: int):
+    """The tree a website's file manager works in.
+
+    A website that fronts an application serves nothing from its own folder:
+    nginx proxies every request to the app. Uploading and extracting there put
+    files where nothing read them (160.236.192.120, 2026-10-02), so such a
+    website's files are the application's. Without the Application addon the
+    link does nothing, and the website's own folder is what there is.
+    """
+    website = get_owned_website(db, current_user, website_id)
+    if website.app_id and addons.is_installed(addons.APPLICATION):
+        return get_file_target(db, current_user, app_id=website.app_id)
+    return website
 
 
 def get_backup_user(db: Session, current_user: User, user_id: int) -> User:
@@ -1398,6 +1417,26 @@ def get_file_job(job_id: str, current_user: User = Depends(get_current_user)):
     return _public_file_job(job)
 
 
+@router.delete("/files/jobs/{job_id}")
+def dismiss_file_job(job_id: str, current_user: User = Depends(get_current_user)):
+    """Forget a failed or finished job, so its card does not come back.
+
+    The card's x only hid it in the browser. The job stayed in the panel's
+    memory, and every reload showed "Archive not found" again (.120,
+    2026-10-02). A job still queued or running is kept: it is still working.
+    """
+    with _file_jobs_lock:
+        job = _file_jobs.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="File job not found")
+        if job.get("user_id") != current_user.id and not is_admin_role(current_user.role):
+            raise HTTPException(status_code=403, detail="Access denied")
+        if job.get("status") in ("queued", "running"):
+            raise HTTPException(status_code=409, detail="The job is still running")
+        _file_jobs.pop(job_id, None)
+    return {"dismissed": job_id}
+
+
 @router.get("/app-files/{app_id}")
 def list_app_files(app_id: int, path: str = Query(default=""), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Separate prefix on purpose: under /files this would be shadowed by
@@ -1454,7 +1493,7 @@ async def upload_app_file(
 
 @router.get("/files/{website_id}")
 def list_files(website_id: int, path: str = Query(default=""), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    website = get_owned_website(db, current_user, website_id)
+    website = get_website_files(db, current_user, website_id)
     return {"items": file_manager.list_files(website, path)}
 
 
@@ -1463,7 +1502,7 @@ def read_file(website_id: int, path: str, lossy: bool = False, db: Session = Dep
     # lossy: a source file that is not all UTF-8 is shown with U+FFFD for the
     # bytes that are not. For reading only -- MCP's read_file asks for it; the
     # editor does not, since saving the text back would replace those bytes.
-    website = get_owned_website(db, current_user, website_id)
+    website = get_website_files(db, current_user, website_id)
     try:
         content = file_manager.read_text_file(
             website,
@@ -1478,7 +1517,7 @@ def read_file(website_id: int, path: str, lossy: bool = False, db: Session = Dep
 
 @router.get("/files/{website_id}/download")
 def download_file(website_id: int, path: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    website = get_owned_website(db, current_user, website_id)
+    website = get_website_files(db, current_user, website_id)
     try:
         target = file_manager.download_file_path(website, path, allow_sensitive=is_admin_role(current_user.role))
     except ValueError as exc:
@@ -1678,7 +1717,7 @@ def upload_file(
     current_user: User = Depends(get_current_user),
 ):
     ensure_role(current_user.role, Role.end_user)
-    website = get_owned_website(db, current_user, website_id)
+    website = get_website_files(db, current_user, website_id)
     try:
         target = file_manager.upload_file(
             website,
@@ -1699,7 +1738,7 @@ def upload_file(
 @router.delete("/files/{website_id}")
 def delete_file(website_id: int, path: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.end_user)
-    website = get_owned_website(db, current_user, website_id)
+    website = get_website_files(db, current_user, website_id)
     try:
         target = file_manager.delete_file(website, path, is_admin_role(current_user.role))
     except ValueError as exc:

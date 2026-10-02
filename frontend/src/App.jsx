@@ -3674,6 +3674,14 @@ function App() {
 
   function dismissFileJob(jobId) {
     setFileJobs(prev => prev.filter(item => item.job_id !== jobId));
+    // The server forgets it too: hidden only here, a failed job came back on
+    // every reload. Best effort -- a job already gone is what we wanted.
+    const csrf = readCookie('bpanel_csrf');
+    fetch(`${API}/maintenance/files/jobs/${jobId}`, {
+      method: 'DELETE',
+      credentials: 'include',
+      headers: csrf ? { 'X-CSRF-Token': csrf } : {},
+    }).catch(() => {});
   }
 
   async function loadFileJob(jobId) {
@@ -3732,11 +3740,12 @@ function App() {
     setWordpressInstaller(null);
     setLogViewer(null);
     setTerminalViewer(null);
-    setFileAppId('');
+    const appId = linkedAppId(site.id);
+    setFileAppId(appId);
     setSelectedWebsiteId(String(site.id));
     navigateToPage('files');
-    setFileListPath('public_html');
-    setFileUploadDir('public_html');
+    setFileListPath(appId ? '' : 'public_html');
+    setFileUploadDir(appId ? '' : 'public_html');
     setFiles([]);
     setSelectedFilePaths([]);
   }
@@ -5202,14 +5211,24 @@ function App() {
     return siteApps.items.find(app => String(app.id) === String(fileAppId)) || null;
   }
 
+  // A website that fronts an application serves nothing from its own folder:
+  // nginx proxies every request to the app, so files uploaded there were never
+  // read (160.236.192.120, 2026-10-02). Its file manager is the app's.
+  function linkedAppId(siteId) {
+    const site = websites.find(item => String(item.id) === String(siteId));
+    return site?.app_id && applicationAddonInstalled ? String(site.app_id) : '';
+  }
+
   function FileTargetSelect() {
     return <select
       value={fileAppId ? `app:${fileAppId}` : selectedWebsiteId}
       onChange={e => {
         const value = e.target.value;
-        if (value.startsWith('app:')) setFileAppId(value.slice(4));
-        else { setFileAppId(''); setSelectedWebsiteId(value); }
-        setFileListPath(value.startsWith('app:') ? '' : 'public_html');
+        const appId = value.startsWith('app:') ? value.slice(4) : linkedAppId(value);
+        if (!value.startsWith('app:')) setSelectedWebsiteId(value);
+        setFileAppId(appId);
+        setFileListPath(appId ? '' : 'public_html');
+        setFileUploadDir(appId ? '' : 'public_html');
         setFiles([]);
         setSelectedFilePaths([]);
       }}
@@ -7862,6 +7881,10 @@ function App() {
   function renderFiles() {
     const allSelected = files.length > 0 && selectedFilePaths.length === files.length;
     const activeFileApp = currentFileApp();
+    // The websites whose files these are: their own folders are not served.
+    const servedDomains = activeFileApp
+      ? websites.filter(site => String(site.app_id || '') === String(activeFileApp.id)).map(site => site.domain)
+      : [];
     const targetKey = fileTargetKey();
     // A finished extraction leaves the list on its own; a failed one stays
     // until it is dismissed.
@@ -7885,6 +7908,7 @@ function App() {
             {activeFileApp
               ? <div className="file-meta">
                 <span>{t('Application:')} <strong>{activeFileApp.name}</strong></span>
+                {servedDomains.length > 0 && <span>{t('Serves:')} <strong>{servedDomains.join(', ')}</strong></span>}
                 <span>{t('Root:')} <strong>{activeFileApp.directory}{fileListPath ? `/${fileListPath}` : ''}</strong></span>
                 {currentUser && !isAdmin && <span>{t('Storage:')} <strong>{storageUsageText(currentUser)}</strong></span>}
               </div>
