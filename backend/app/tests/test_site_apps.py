@@ -539,6 +539,36 @@ def test_a_website_that_fronts_an_app_keeps_its_own_file_jobs():
     assert file_target_key(plain) == "site:8"
 
 
+def test_a_website_that_fronts_an_app_opens_the_apps_files(monkeypatch):
+    """nginx proxies such a website to its app; what was uploaded to the
+    website's own folder was never served. Its file manager is the app's."""
+    from app.api import maintenance
+    from app.services import addons
+
+    app = _managed_app("node", name="reviewthammy", id=1)
+    linked = Website(id=7, domain="reviewthammy.vn", root_path="/home/siteuser/reviewthammy.vn",
+                     owner_id=1, app_id=1)
+    plain = Website(id=8, domain="plain.vn", root_path="/home/siteuser/plain.vn", owner_id=1)
+    sites = {7: linked, 8: plain}
+    monkeypatch.setattr(maintenance, "get_owned_website", lambda db, user, website_id: sites[website_id])
+    monkeypatch.setattr(maintenance, "get_owned_app", lambda db, user, app_id: app)
+    monkeypatch.setattr(maintenance.os, "access", lambda path, mode: True)
+    monkeypatch.setattr(addons, "require", lambda slug: None)
+    installed = {"on": True}
+    monkeypatch.setattr(addons, "is_installed", lambda slug: installed["on"])
+
+    target = maintenance.get_website_files(None, None, 7)
+    assert isinstance(target, site_apps.AppFileTarget)
+    assert target.root_path.replace("\\", "/").endswith("/home/siteuser/apps/reviewthammy")
+    assert maintenance.file_target_key(target) == "app:1"
+    # Every file call by website id goes the same way, not only the listing.
+    assert isinstance(maintenance.get_file_target(None, None, website_id=7), site_apps.AppFileTarget)
+    assert maintenance.get_website_files(None, None, 8) is plain
+    # The Application addon off: the link does nothing, the site's own folder.
+    installed["on"] = False
+    assert maintenance.get_website_files(None, None, 7) is linked
+
+
 def test_unit_name_can_be_asked_about_a_previous_name():
     """A rename moves the unit; the old one still has to be findable."""
     app = _managed_app("node", name="n8n")

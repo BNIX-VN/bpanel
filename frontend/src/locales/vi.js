@@ -1275,6 +1275,7 @@ export const vi = {
   "Role changes sign the user out of existing sessions.": "Đổi vai trò sẽ đăng xuất người dùng khỏi các phiên đang mở.",
   "Role is locked for the active admin session.": "Vai trò bị khoá với phiên quản trị đang hoạt động.",
   "Root:": "Thư mục gốc:",
+  "Serves:": "Phục vụ:",
   "Rspamd filters incoming mail: clear spam is refused, likely spam goes to the Junk folder. The filtering log shows every decision and its reasons, and a sender blocked by mistake goes on the allowlist in one click.": "Rspamd lọc thư đến: thư rác rõ ràng bị từ chối, thư nghi rác vào thư mục Junk. Nhật ký lọc thư cho thấy mọi quyết định kèm lý do, và người gửi bị chặn nhầm được đưa vào danh sách cho phép chỉ với một cú nhấp.",
   "Rspamd keeps the last 2000 scans. A message sent by a signed-in mailbox is not scanned. A message stopped by a test pattern (GTUBE) is not kept.": "Rspamd lưu 2000 lượt quét gần nhất. Thư gửi từ hộp thư đã đăng nhập không bị quét. Thư bị chặn bởi mẫu thử (GTUBE) không được lưu.",
   "Rspamd uses about 250 MB of memory while the spam filter is on, and keeps its log in the server's Redis.": "Rspamd dùng khoảng 250 MB RAM khi bật lọc thư rác, và lưu nhật ký trong Redis của server.",

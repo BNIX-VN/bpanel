@@ -438,8 +438,23 @@ def get_file_target(db: Session, current_user: User, website_id=None, app_id=Non
             site_apps.ensure_directory(get_owned_app(db, current_user, app_id))
         return target
     if website_id:
-        return get_owned_website(db, current_user, website_id)
+        return get_website_files(db, current_user, website_id)
     raise HTTPException(status_code=400, detail="Pick a website or an application to browse")
+
+
+def get_website_files(db: Session, current_user: User, website_id: int):
+    """The tree a website's file manager works in.
+
+    A website that fronts an application serves nothing from its own folder:
+    nginx proxies every request to the app. Uploading and extracting there put
+    files where nothing read them (160.236.192.120, 2026-10-02), so such a
+    website's files are the application's. Without the Application addon the
+    link does nothing, and the website's own folder is what there is.
+    """
+    website = get_owned_website(db, current_user, website_id)
+    if website.app_id and addons.is_installed(addons.APPLICATION):
+        return get_file_target(db, current_user, app_id=website.app_id)
+    return website
 
 
 def get_backup_user(db: Session, current_user: User, user_id: int) -> User:
@@ -1458,7 +1473,7 @@ async def upload_app_file(
 
 @router.get("/files/{website_id}")
 def list_files(website_id: int, path: str = Query(default=""), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    website = get_owned_website(db, current_user, website_id)
+    website = get_website_files(db, current_user, website_id)
     return {"items": file_manager.list_files(website, path)}
 
 
@@ -1467,7 +1482,7 @@ def read_file(website_id: int, path: str, lossy: bool = False, db: Session = Dep
     # lossy: a source file that is not all UTF-8 is shown with U+FFFD for the
     # bytes that are not. For reading only -- MCP's read_file asks for it; the
     # editor does not, since saving the text back would replace those bytes.
-    website = get_owned_website(db, current_user, website_id)
+    website = get_website_files(db, current_user, website_id)
     try:
         content = file_manager.read_text_file(
             website,
@@ -1482,7 +1497,7 @@ def read_file(website_id: int, path: str, lossy: bool = False, db: Session = Dep
 
 @router.get("/files/{website_id}/download")
 def download_file(website_id: int, path: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    website = get_owned_website(db, current_user, website_id)
+    website = get_website_files(db, current_user, website_id)
     try:
         target = file_manager.download_file_path(website, path, allow_sensitive=is_admin_role(current_user.role))
     except ValueError as exc:
@@ -1682,7 +1697,7 @@ def upload_file(
     current_user: User = Depends(get_current_user),
 ):
     ensure_role(current_user.role, Role.end_user)
-    website = get_owned_website(db, current_user, website_id)
+    website = get_website_files(db, current_user, website_id)
     try:
         target = file_manager.upload_file(
             website,
@@ -1703,7 +1718,7 @@ def upload_file(
 @router.delete("/files/{website_id}")
 def delete_file(website_id: int, path: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_role(current_user.role, Role.end_user)
-    website = get_owned_website(db, current_user, website_id)
+    website = get_website_files(db, current_user, website_id)
     try:
         target = file_manager.delete_file(website, path, is_admin_role(current_user.role))
     except ValueError as exc:
