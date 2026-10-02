@@ -55,6 +55,29 @@ def test_the_runner_and_the_panel_agree_on_the_record_file():
     assert Path(da_import_run.RESULT_FILE) == da_import.IMPORT_RESULT_FILE
 
 
+def _run(monkeypatch, tmp_path, result):
+    from app.services import da_import_run
+
+    monkeypatch.chdir(BACKEND)  # main() changes directory; this puts it back
+    monkeypatch.setattr(da_import_run, "RESULT_FILE", str(tmp_path / "last-import.json"))
+    monkeypatch.setattr(da_import, "import_da_backup", lambda archive, force=False: result)
+    code = da_import_run.main([str(tmp_path / "x.tar.zst"), "noforce"])
+    return code, json.loads((tmp_path / "last-import.json").read_text(encoding="utf-8"))
+
+
+def test_an_import_that_stopped_before_importing_anything_failed(monkeypatch, tmp_path):
+    # Re-running an archive without force on .88: nothing imported, one reason.
+    collision = "Already exists: panel user 'e2_da'. Re-run with force to replace."
+    code, record = _run(monkeypatch, tmp_path, {"summary": [], "credentials": [], "errors": [collision]})
+    assert code == 1 and record["status"] == "failed" and record["error"] == collision
+
+
+def test_an_import_with_accounts_in_it_completed(monkeypatch, tmp_path, capsys):
+    code, record = _run(monkeypatch, tmp_path, SUMMARY)
+    assert code == 0 and record["status"] == "completed" and record["result"] == SUMMARY
+    assert "RESULT: 1 account(s), 1 domain(s), 0 error(s)" in capsys.readouterr().out
+
+
 def test_a_finished_import_does_not_put_its_passwords_in_the_journal():
     source = RUNNER.read_text(encoding="utf-8")
     assert 'print(f"RESULT: {result}' not in source
