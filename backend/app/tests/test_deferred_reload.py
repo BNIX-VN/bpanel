@@ -141,8 +141,48 @@ def test_the_updater_actually_uses_it():
     )
 
     assert "with nginx.deferred_reload():" in update
-    block = update.split("with nginx.deferred_reload():", 1)[1]
-    assert "nginx.rewrite_vhost(" in block.split("\nPY\n", 1)[0]
+    block = update.split("with nginx.deferred_reload():", 1)[1].split("\nPY\n", 1)[0]
+    assert "websites_api._rewrite_website_vhost(website)" in block
+
+
+def test_the_updater_rebuilds_a_vhost_the_way_the_panel_does():
+    """Aliases, redirect domains and an application's port included.
+
+    The refresh used to call nginx.rewrite_vhost with none of them: every
+    update dropped crm.media.io.vn's redirect on .88, and refused reviewthammy.vn
+    on .120 because it fronts an application (2026-10-02).
+    """
+    from pathlib import Path
+
+    update = (Path(__file__).resolve().parents[3] / "installer" / "update.sh").read_text(
+        encoding="utf-8", errors="replace"
+    )
+    refresh = update.split('log "Refreshing managed site configuration"', 1)[1].split("\nPY\n", 1)[0]
+    assert "from app.api import websites as websites_api" in refresh
+    assert "nginx.rewrite_vhost(" not in refresh
+    # Under a new step name, so servers already up to date run it once.
+    assert "SITE_REFRESH_STEP=site-refresh-2" in update
+    assert '"$SOURCE_DIR/backend/app/api/websites.py"' in update.split("SITE_REFRESH_INPUTS=(", 1)[1].split(")", 1)[0]
+
+
+def test_the_panels_rebuild_carries_aliases_redirects_and_the_app_port(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.api import websites as websites_api
+
+    seen = {}
+    monkeypatch.setattr(websites_api.nginx, "rewrite_vhost",
+                        lambda domain, root_path, **kwargs: seen.update(kwargs) or "ok")
+    monkeypatch.setattr(websites_api, "_alias_domains", lambda website: ["alias.test"])
+    monkeypatch.setattr(websites_api, "_redirect_domains", lambda website: ["old.test"])
+    monkeypatch.setattr(websites_api.site_apps, "app_port_for_website", lambda website: 21000)
+    site = SimpleNamespace(domain="reviewthammy.vn", root_path="/home/wow/reviewthammy.vn", linux_user="wow",
+                           app_type="node", php_version=None, nginx_custom="", waf_enabled=True,
+                           http_flood_enabled=False, http_flood_config="", document_root="public_html",
+                           nginx_rewrite_mode="none", ssl_mode="letsencrypt")
+    websites_api._rewrite_website_vhost(site)
+    assert seen["aliases"] == ["alias.test"] and seen["redirects"] == ["old.test"]
+    assert seen["app_port"] == 21000
 
 
 # --- the global bad-bot list --------------------------------------------------
