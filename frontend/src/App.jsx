@@ -4275,6 +4275,9 @@ function App() {
       setDaImportJob(data);
       if (data.status === 'completed') { setNotice(t('DA import completed successfully!')); await listDaBackups(); return; }
       if (data.status === 'failed') { setError(`DA import failed: ${data.error || 'Unknown error'}`); return; }
+      // Another import has replaced this one on the server: polling on cannot
+      // bring it back.
+      if (data.stale) { setError(data.error); return; }
       attempts++;
     }
   }
@@ -8589,8 +8592,16 @@ function App() {
           <span><strong>{t('DA Import')}</strong><small>{daImportJob.archive || ''}</small></span>
           <span className={daImportJob.status === 'completed' ? 'badge ok' : daImportJob.status === 'failed' ? 'badge bad' : 'badge'}>{daImportJob.status}</span>
         </div>}
+        {daImportJob?.status === 'failed' && <div className="da-scan-result">
+          {daImportJob.error && <p className="hint alarm">{daImportJob.error}</p>}
+          {daImportJob.log?.length > 0 && <details className="da-creds-details">
+            <summary>{t('Import log')}</summary>
+            <pre className="da-credentials">{daImportJob.log.join('\n')}</pre>
+          </details>}
+        </div>}
         {daImportJob?.status === 'completed' && daImportJob.result?.summary && <div className="da-scan-result">
           <h4>{t('Import summary')}</h4>
+          {daImportJob.result.errors?.length > 0 && <p className="hint alarm">{t('Errors:')} {daImportJob.result.errors.join('; ')}</p>}
           {daImportJob.result.summary.map((item, i) => <div key={i} className="da-user-block">
             <p className="da-user-head"><strong>{item.username}</strong> <span className="badge ok">{t('{n} domain(s)', { n: item.imported_domains?.length || 0 })}</span> <span className="badge">{t('{n} database(s)', { n: item.databases?.length || 0 })}</span></p>
             {item.aliases?.length > 0 && <p className="hint">{t('Pointers:')} {item.aliases.join(', ')}</p>}
