@@ -668,6 +668,53 @@ def delete_runtime(app: SiteApp, name: str | None = None) -> None:
     )
 
 
+def move_to_owner(app: SiteApp, new_owner: User, check_only: bool = False) -> None:
+    """Hand an application to another account, with its files and its unit.
+
+    A website moved to a customer while the app behind it stayed in the admin's
+    home, where the customer could not reach their own site's code
+    (160.236.192.120, 2026-10-02). The helper moves the directory and refuses an
+    app whose data is in Docker volumes; the unit is rebuilt under the new owner
+    and started again if it was running. *check_only* asks the helper whether
+    the move can happen and changes nothing.
+    """
+    old_user = owner_linux_user(app)
+    new_user = site_users.validate_linux_user(
+        site_users.linux_user_for_panel_username(new_owner.username))
+    if old_user == new_user:
+        return
+    def helper(*extra: str) -> None:
+        result = shell.privileged(
+            "site-app-move", helper_args=[old_user, new_user, validate_name(app.name), *extra],
+            check=False, fallback=["bash", "-lc", "true"])
+        if result.returncode != 0:
+            raise RuntimeError((result.stderr or result.stdout or "Could not move the application").strip())
+
+    helper("--check")
+    if check_only:
+        return
+    deployed = Path(f"/etc/systemd/system/{unit_name(app)}.service").exists()
+    running = deployed and is_running(app)
+    # The old owner's unit and containers go first, while the compose file a
+    # `down` reads is still where it was written.
+    delete_runtime(app)
+    try:
+        helper()
+    except RuntimeError:
+        # Nothing moved: put the app back the way it was running.
+        if deployed:
+            write_runtime(app)
+            if running:
+                control(app, "restart")
+        raise
+    app.owner = new_owner
+    app.owner_id = new_owner.id
+    if deployed:
+        write_runtime(app)
+        if running:
+            control(app, "restart")
+
+
 def install_dependencies(app: SiteApp) -> str:
     if app.kind != "node":
         raise ValueError("Only Node.js applications install dependencies")

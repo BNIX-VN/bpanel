@@ -640,3 +640,124 @@ def test_rename_is_a_no_op_when_the_name_did_not_change(monkeypatch):
     assert site_apps.rename_directory(app, "demoapp") == ""
     assert site_apps.rename_directory(app, "") == ""
     assert calls == []
+
+
+# --- an app changes hands with its website ----------------------------------
+
+HELPER_TEXT = (Path(__file__).resolve().parents[3] / "installer" / "files" / "bpanel-helper.sh").read_text(encoding="utf-8")
+
+
+def _helper_command(name):
+    return HELPER_TEXT.split(f"\n  {name})\n", 1)[1].split("\n    ;;\n", 1)[0]
+
+
+def test_the_helper_moves_an_app_to_its_new_owner_and_refuses_docker_volumes():
+    """A customer could not reach the code of the app behind their own website,
+    which stayed in the admin's home (160.236.192.120, 2026-10-02)."""
+    move = _helper_command("site-app-move")
+    # Volumes carry the old owner's project name: refused, not left behind.
+    assert 'grep -E "^bpanel-${old_user}-${app_name}_"' in move
+    assert move.index("Docker volumes") < move.index('[[ "${4:-}" == "--check" ]] && exit 0')
+    assert move.index('[[ "${4:-}" == "--check" ]] && exit 0') < move.index('mv -T -- "$old_dir" "$new_dir"')
+    assert 'already has an application directory named' in move
+    assert 'own_site_tree "$new_dir" "$new_user"' in move
+    assert '"$(app_env_file "$new_user" "$app_name")"' in move
+    assert '"$(app_compose_file "$new_user" "$app_name")"' in move
+
+
+def _new_owner():
+    return User(id=2, username="wow", email="w@example.test", role="end_user")
+
+
+def test_moving_an_app_rebuilds_its_unit_under_the_new_owner(monkeypatch):
+    app = _managed_app("node", name="reviewthammy", id=1)
+    calls = _capture_privileged(monkeypatch)
+    monkeypatch.setattr(site_apps.Path, "exists", lambda self: True)
+    monkeypatch.setattr(site_apps, "is_running", lambda a: True)
+
+    site_apps.move_to_owner(app, _new_owner())
+
+    commands = [(c["command"], c["args"][:2]) for c in calls]
+    assert commands[0] == ("site-app-move", ["siteuser", "wow"]) and calls[0]["args"][-1] == "--check"
+    # The old unit goes while its compose file is still in place, then the move.
+    assert commands[1] == ("site-app-delete", ["siteuser", "reviewthammy"])
+    assert commands[2] == ("site-app-move", ["siteuser", "wow"]) and calls[2]["args"][-1] == "reviewthammy"
+    assert commands[3] == ("site-app-write", ["wow", "reviewthammy"])
+    assert commands[4] == ("site-app-control", ["wow", "reviewthammy"]) and calls[4]["args"][-1] == "restart"
+    assert app.owner_id == 2 and site_apps.owner_linux_user(app) == "wow"
+
+
+def test_a_move_the_helper_refuses_changes_nothing_and_a_failed_one_puts_the_app_back(monkeypatch):
+    app = _managed_app("node", name="reviewthammy", id=1)
+    monkeypatch.setattr(site_apps.Path, "exists", lambda self: True)
+    monkeypatch.setattr(site_apps, "is_running", lambda a: True)
+    calls = []
+
+    def privileged(command, helper_args=None, **kwargs):
+        calls.append((command, list(helper_args or [])))
+        refused = command == "site-app-move" and fail_at["call"] == ("check" if "--check" in helper_args else "move")
+        return type("R", (), {"returncode": 1 if refused else 0, "stdout": "",
+                              "stderr": "keeps data in Docker volumes" if refused else ""})()
+
+    monkeypatch.setattr(site_apps.shell, "privileged", privileged)
+    fail_at = {"call": "check"}
+    with pytest.raises(RuntimeError, match="Docker volumes"):
+        site_apps.move_to_owner(app, _new_owner())
+    assert [c[0] for c in calls] == ["site-app-move"] and app.owner_id == 1
+
+    calls.clear()
+    fail_at["call"] = "move"
+    with pytest.raises(RuntimeError):
+        site_apps.move_to_owner(app, _new_owner())
+    assert [c[0] for c in calls] == ["site-app-move", "site-app-delete", "site-app-move",
+                                     "site-app-write", "site-app-control"]
+    assert calls[3][1][0] == "siteuser" and app.owner_id == 1  # back under the old owner
+
+
+def test_a_website_changing_hands_takes_its_app_unless_it_cannot(monkeypatch):
+    from fastapi import HTTPException
+
+    from app.api import websites as websites_api
+
+    app = _managed_app("node", name="reviewthammy", id=1)
+    site = Website(id=7, domain="reviewthammy.vn", owner_id=1, app_id=1)
+    app.websites = [site]
+    new_owner = _new_owner()
+
+    class _Db:
+        def query(self, model):
+            return self
+
+        def filter(self, *a):
+            return self
+
+        def first(self):
+            return app
+
+    monkeypatch.setattr(site_apps, "ensure_app_quota", lambda db, user, is_admin=False: None)
+    checks = []
+    monkeypatch.setattr(site_apps, "move_to_owner",
+                        lambda a, owner, check_only=False: checks.append((a.name, owner.username, check_only)))
+    assert websites_api._app_moving_with(_Db(), site, new_owner) is app
+    assert checks == [("reviewthammy", "wow", True)]
+
+    # No app, or one the new owner already has: nothing follows.
+    assert websites_api._app_moving_with(_Db(), Website(id=8, domain="plain.vn", owner_id=1), new_owner) is None
+    app.owner_id = 2
+    assert websites_api._app_moving_with(_Db(), site, new_owner) is None
+    app.owner_id = 1
+
+    # The app also serves someone else's website: refused before anything moves.
+    app.websites = [site, Website(id=9, domain="other.vn", owner_id=1, app_id=1)]
+    with pytest.raises(HTTPException) as exc:
+        websites_api._app_moving_with(_Db(), site, new_owner)
+    assert exc.value.status_code == 409 and "other.vn" in exc.value.detail
+    app.websites = [site]
+
+    def no_room(db, user, is_admin=False):
+        raise ValueError("Your package allows at most 1 application")
+
+    monkeypatch.setattr(site_apps, "ensure_app_quota", no_room)
+    with pytest.raises(HTTPException) as exc:
+        websites_api._app_moving_with(_Db(), site, new_owner)
+    assert exc.value.status_code == 409 and "at most 1" in exc.value.detail

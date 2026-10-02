@@ -251,6 +251,41 @@ def _resolve_app_for_owner(db: Session, owner_id: int, app_id: int | None, curre
     return app
 
 
+def _app_moving_with(db: Session, website: Website, new_owner: User) -> SiteApp | None:
+    """The application that changes hands with this website, if any.
+
+    An app lives in its owner's home. A website moved without the app behind it
+    left the new owner unable to reach their own site's code (160.236.192.120,
+    2026-10-02), so the app follows. Refused before anything moves when the app
+    also serves a website the new owner does not have, when the new owner's
+    package has no room for it, or when the helper cannot move it (data in
+    Docker volumes).
+    """
+    if not website.app_id:
+        return None
+    app = db.query(SiteApp).filter(SiteApp.id == website.app_id).first()
+    if app is None or app.owner_id == new_owner.id:
+        return None
+    others = [site.domain for site in app.websites
+              if site.id != website.id and site.owner_id != new_owner.id]
+    if others:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Application {app.name} also serves {', '.join(others)}, which "
+                   f"{new_owner.username} would not own. Move those websites first, or point "
+                   "them at another application.",
+        )
+    try:
+        site_apps.ensure_app_quota(db, new_owner, is_admin=is_admin_role(new_owner.role))
+        site_apps.move_to_owner(app, new_owner, check_only=True)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Application {app.name} cannot move to {new_owner.username} with this website: {exc}",
+        ) from exc
+    return app
+
+
 def _rewrite_website_vhost(website: Website, **overrides) -> str:
     app_type = overrides.pop("app_type", website.app_type or "wordpress")
     php_version = overrides.pop("php_version", website.php_version)
@@ -791,6 +826,8 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
         if not is_admin_role(owner.role) and assigned_count >= owner.website_limit:
             raise HTTPException(status_code=403, detail="Website limit reached")
         if payload.owner_id != website.owner_id:
+            # Refused here, before anything moves, if its application cannot follow.
+            linked_app = _app_moving_with(db, website, owner)
             try:
                 storage_quota.enforce_user_storage_quota(
                     db,
@@ -819,6 +856,19 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
                 raise HTTPException(status_code=413, detail=str(exc)) from exc
             except (RuntimeError, ValueError) as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if linked_app is not None:
+                try:
+                    site_apps.move_to_owner(linked_app, owner)
+                except (RuntimeError, ValueError) as exc:
+                    # The website has moved; keep that rather than leave its
+                    # record pointing at a folder that is no longer there.
+                    website.owner_id = payload.owner_id
+                    db.commit()
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"The website moved to {owner.username}, but its application "
+                               f"{linked_app.name} did not: {exc}",
+                    ) from exc
         website.owner_id = payload.owner_id
     if payload.nginx_custom is not None:
         try:
