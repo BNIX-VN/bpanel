@@ -939,6 +939,10 @@ function App() {
   const [wafAccessLogs, setWafAccessLogs] = useState({ items: [], total: 0, scanned: 0, missing: [], generated_at: '' });
   const [assignUserId, setAssignUserId] = useState('');
   const [assignWebsiteId, setAssignWebsiteId] = useState('');
+  // What moves with the website being assigned: its app and its databases.
+  const [assignPreview, setAssignPreview] = useState(null);
+  const [assignDbId, setAssignDbId] = useState('');
+  const [assignDbUserId, setAssignDbUserId] = useState('');
   const [twoFactorStatus, setTwoFactorStatus] = useState(null);
   const [twoFactorSetup, setTwoFactorSetup] = useState(null);
   const [twoFactorCode, setTwoFactorCode] = useState('');
@@ -987,6 +991,20 @@ function App() {
   const [osAutoUpdate, setOsAutoUpdate] = useState({ enabled: true, mode: 'security', auto_reboot: false });
   const noticeTimer = useRef(null);
   const isAdmin = currentUser?.role === 'admin';
+
+  useEffect(() => {
+    setAssignPreview(null);
+    if (!assignWebsiteId || !isAdmin) return undefined;
+    let cancelled = false;
+    request(`/websites/${assignWebsiteId}/transfer-preview`, { silent: true })
+      .then(data => { if (!cancelled && data) setAssignPreview(data); });
+    return () => { cancelled = true; };
+  }, [assignWebsiteId, isAdmin]);
+
+  // Assigning a database needs the list of users, which only the Users page loads.
+  useEffect(() => {
+    if (page === 'databases' && isAdmin && users.length === 0) loadUsers();
+  }, [page, isAdmin]);
   const mcpAddonInstalled = !!addons.items.find(item => item.slug === 'mcp')?.installed;
   const notificationsAddonInstalled = !!addons.items.find(item => item.slug === 'notifications')?.installed;
   const malwareAddonInstalled = !!addons.items.find(item => item.slug === 'malware')?.installed;
@@ -2239,6 +2257,17 @@ function App() {
     if (!assignWebsiteId || !assignUserId) return;
     const data = await request(`/websites/${assignWebsiteId}`, { method: 'PATCH', body: JSON.stringify({ owner_id: Number(assignUserId) }) }, t('Assigning domain to user...'));
     if (data) { setNotice(`Assigned domain ${data.domain} to user ID ${assignUserId}`); await refreshAll(); }
+  }
+
+  async function assignDatabaseToUser() {
+    if (!assignDbId || !assignDbUserId) return;
+    const data = await request(`/databases/${assignDbId}/owner`, { method: 'PATCH', body: JSON.stringify({ owner_id: Number(assignDbUserId) }) }, t('Assigning database...'));
+    if (data) {
+      const user = users.find(item => String(item.id) === String(assignDbUserId));
+      setNotice(t('Assigned database {name} to {user}', { name: data.db_name, user: user?.username || assignDbUserId }));
+      setAssignDbId('');
+      await loadDatabases();
+    }
   }
 
   async function createWordPress() {
@@ -7581,8 +7610,9 @@ function App() {
         {filteredDatabases.map(db => {
           // The site a database belongs to, where it belongs to one.
           const dbSite = siteById.get(String(db.website_id));
+          const dbOwner = isAdmin ? (users.find(user => user.id === db.owner_id)?.username || `#${db.owner_id}`) : '';
           return <div className="row db-row" key={db.id}>
-          <span><strong>{db.db_name}</strong>{dbSite && <small className="db-owner">{dbSite}</small>}</span>
+          <span><strong>{db.db_name}</strong>{dbSite && <small className="db-owner">{dbSite}</small>}{dbOwner && <small className="db-owner">{t('Owner:')} {dbOwner}</small>}</span>
           <span className="db-user"><small>{t('User')}</small> {db.db_user}</span>
           <span className="db-actions">
             <button className="mini secondary" disabled={!!loading} onClick={() => openPhpMyAdmin(db.id)}>phpMyAdmin</button>
@@ -7599,6 +7629,21 @@ function App() {
         </div>})}
       </div>
       <p className="hint">{t('Click phpMyAdmin to sign in directly. Token expires after 60s.')}</p>
+      {isAdmin && databases.length > 0 && <div className="section" style={{marginTop:16}}>
+        <h2>{t('Assign database to user')}</h2>
+        <div className="assign-row">
+          <select value={assignDbId} onChange={e => setAssignDbId(e.target.value)}>
+            <option value="">{t('Select database')}</option>
+            {databases.map(db => <option key={db.id} value={db.id}>{db.db_name}</option>)}
+          </select>
+          <select value={assignDbUserId} onChange={e => setAssignDbUserId(e.target.value)}>
+            <option value="">{t('Select user')}</option>
+            {users.map(user => <option key={user.id} value={user.id}>{user.username} ({t(roleLabel(user.role))})</option>)}
+          </select>
+          <button disabled={!assignDbId || !assignDbUserId || !!loading} onClick={assignDatabaseToUser}>{t('Assign')}</button>
+        </div>
+        <p className="hint">{t('The database, its MariaDB user and its password stay as they are; only who manages it in the panel changes. A database linked to a website moves with that website.')}</p>
+      </div>}
     </section>;
   }
 
@@ -10000,11 +10045,14 @@ function App() {
           <button disabled={!assignWebsiteId || !assignUserId || !!loading} onClick={assignDomainToUser}>{t('Assign')}</button>
         </div>
         {(() => {
-          // The app behind the website moves with it: its code sits in the
-          // owner's home, out of reach of anyone else.
-          const site = websites.find(item => String(item.id) === String(assignWebsiteId));
-          const app = site?.app_id ? siteApps.items.find(item => String(item.id) === String(site.app_id)) : null;
-          return site?.app_id ? <p className="hint">{t('The application {name} moves to the new owner with this website, files and all; it restarts once.', { name: app?.name || `#${site.app_id}` })}</p> : null;
+          // The app and the databases behind the website move with it: the
+          // app's code sits in its owner's home, out of anyone else's reach.
+          const moving = [
+            ...(assignPreview?.application ? [t('application {name}', { name: assignPreview.application })] : []),
+            ...(assignPreview?.databases || []).map(name => t('database {name}', { name })),
+          ];
+          return moving.length > 0 && <p className="hint">{t('Moves with this website:')} <strong>{moving.join(', ')}</strong>.
+            {assignPreview?.application ? ` ${t('The application restarts once.')}` : ''}</p>;
         })()}
       </div>
     </section>;
