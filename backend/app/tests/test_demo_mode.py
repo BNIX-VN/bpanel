@@ -73,6 +73,8 @@ REVIEWED_READS = {
     "/api/websites/{website_id}/logs", "/api/websites/{website_id}/nginx-config",
     "/api/websites/{website_id}/nginx-custom", "/api/websites/{website_id}/ssl/cloudflare-zone",
     "/api/websites/{website_id}/ssl/sources",
+    # Admin only; the names of the app and databases that would move, no secrets.
+    "/api/websites/{website_id}/transfer-preview",
 }
 
 

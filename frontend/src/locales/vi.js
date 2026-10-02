@@ -1278,7 +1278,6 @@ export const vi = {
   "Serves:": "Phục vụ:",
   "Moves with this website:": "Chuyển theo website này:",
   "application {name}": "ứng dụng {name}",
-  "database {name}": "database {name}",
   "The application restarts once.": "Ứng dụng khởi động lại một lần.",
   "Assign database to user": "Gán database cho user",
   "Select database": "Chọn database",
