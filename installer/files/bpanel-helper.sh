@@ -4773,7 +4773,12 @@ firewall_sync_sets() {
   # Manual allow/deny rules
   local action ip port protocol entry
   local -a allow4=() allow6=() allowp4=() allowp6=() deny4=() deny6=() denyp4=() denyp6=()
-  while IFS=$'\t' read -r _id action ip port protocol; do
+  # Not IFS=$'\t': tab is whitespace to `read`, so runs of it collapse and the
+  # empty ip column of a port-only rule vanished - "120<TAB>allow<TAB><TAB>8080
+  # <TAB>tcp" read as ip=8080, port=tcp. That made the entry "8080,:tcp",
+  # ipset refused it, and every firewall change failed from then on (opening
+  # port 8080 on .88, 2026-10-03). The unit separator keeps empty fields.
+  while IFS=$'\037' read -r _id action ip port protocol; do
     [[ -n "$ip" ]] || continue
     if [[ -n "$port" ]]; then
       entry="${ip},${protocol}:${port}"
@@ -4789,7 +4794,7 @@ firewall_sync_sets() {
         [[ "$action" == "allow" ]] && allow4+=("$ip") || deny4+=("$ip")
       fi
     fi
-  done <<<"$rules"
+  done < <(tr '\t' '\037' <<<"$rules")
 
   printf '%s\n' "${allow4[@]:-}"  | firewall_load_set bpanel-allow4
   printf '%s\n' "${allowp4[@]:-}" | firewall_load_set bpanel-allowp4
@@ -4872,10 +4877,12 @@ firewall_apply_family() {
   done < <(cat "$FIREWALL_ADDON_PORTS_DIR"/*.ports 2>/dev/null || true)
 
   local _id action ip proto
-  while IFS=$'\t' read -r _id action ip port proto; do
+  # Unit separator, not tab: see firewall_sync_sets. With tab the empty ip
+  # column collapsed, so no port-only rule ever reached this chain.
+  while IFS=$'\037' read -r _id action ip port proto; do
     [[ "$action" == "allow" && -z "$ip" && -n "$port" ]] || continue
     "$ipt" -A "$FIREWALL_CHAIN" -p "${proto:-tcp}" --dport "$port" -j RETURN
-  done <<<"$(firewall_rules)"
+  done < <(firewall_rules | tr '\t' '\037')
 
   if [[ "$state" == "enabled" ]]; then
     "$ipt" -A "$FIREWALL_CHAIN" -j DROP
@@ -5121,7 +5128,8 @@ firewall_import_ufw_rules() {
   command -v ufw >/dev/null 2>&1 || return 0
   local protected imported=0
   protected="$(firewall_protected_ports | tr '\n' ' ')"
-  while IFS=$'\t' read -r action ip port proto; do
+  # Unit separator, not tab: see firewall_sync_sets.
+  while IFS=$'\037' read -r action ip port proto; do
     [[ -n "$action" ]] || continue
     if [[ -z "$ip" && -n "$port" ]]; then
       case " $protected " in *" $port "*) continue ;; esac
@@ -5166,7 +5174,7 @@ for raw in sys.stdin:
     if not port and not source:
         continue
     print("\t".join([action, source, port, proto]))
-')
+' | tr '\t' '\037')
   [[ "$imported" -gt 0 ]] && echo "Imported ${imported} rule(s) from UFW" || true
   return 0
 }
