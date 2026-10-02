@@ -36,6 +36,8 @@ def test_a_venv_from_another_python_is_rebuilt():
     check = UPDATE.split("venv_needs_recreate=false", 1)[1].split("\nfi\n", 1)[0]
     assert 'elif venv_python_mismatch "$APP_DIR/backend/.venv"; then' in check
     webmail = HELPER.split("mail_install_webmail() {", 1)[1].split('python3 -m venv "$WEBMAIL_HOME/venv"', 1)[0]
+    # A first install has no venv: a failing sed must not end the helper.
+    assert '[[ -f "$WEBMAIL_HOME/venv/pyvenv.cfg" ]]' in webmail
     assert '"$venv_pyver" != "$pyver"' in webmail and 'rm -rf "$WEBMAIL_HOME/venv"' in webmail
 
 
