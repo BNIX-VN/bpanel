@@ -1641,12 +1641,19 @@ SITE_REFRESH_INPUTS=(
   "$SOURCE_DIR/installer/files/bpanel-helper.sh"
   "$SOURCE_DIR/backend/app/services"
   "$SOURCE_DIR/backend/app/templates"
+  "$SOURCE_DIR/backend/app/api/websites.py"
 )
-if ! step_inputs_changed site-refresh "${SITE_REFRESH_INPUTS[@]}"; then
+# The step's name is its scheme. It became site-refresh-2 when the rebuild
+# moved to the panel's own _rewrite_website_vhost: a new name has no stored
+# fingerprint, so every server runs the corrected refresh once and gets back
+# the alias and redirect vhosts the old one dropped.
+SITE_REFRESH_STEP=site-refresh-2
+if ! step_inputs_changed "$SITE_REFRESH_STEP" "${SITE_REFRESH_INPUTS[@]}"; then
   log "Managed site config unchanged since last update; skipping the per-site refresh"
 elif id -u bpanel >/dev/null 2>&1; then
   log "Refreshing managed site configuration"
   sudo -u bpanel env HOME="$APP_DIR" BPANEL_USE_HELPER=true "$APP_DIR/backend/.venv/bin/python" - <<'PY'
+from app.api import websites as websites_api
 from app.core.database import SessionLocal
 from app.models.entities import Website
 from app.services import nginx, site_users, waf
@@ -1686,23 +1693,16 @@ with SessionLocal() as db:
                 if getattr(website, "nginx_config_mode", "managed") != "managed":
                     website.nginx_config_mode = "managed"
                     db.commit()
-                app_type = website.app_type or "wordpress"
-                runtime_php_version = website.php_version if app_type in {"wordpress", "php"} else None
-                nginx.rewrite_vhost(
-                    website.domain,
-                    website.root_path,
-                    app_type=app_type,
-                    php_version=website.php_version,
-                    custom_directives=website.nginx_custom or "",
-                    php_fpm_socket_override=site_users.site_php_fpm_socket(website.linux_user, website.root_path, runtime_php_version),
-                    waf_enabled=website.waf_enabled,
-                    http_flood_enabled=website.http_flood_enabled,
-                    http_flood_config=website.http_flood_config or "",
-                    document_root=getattr(website, "document_root", "public_html") or "public_html",
-                    rewrite_mode=getattr(website, "nginx_rewrite_mode", "none") or "none",
-                )
+                # The panel's own rebuild: aliases, redirect domains, SSL mode
+                # and the linked application's port included. The call that
+                # was here passed none of them, so every refresh dropped the
+                # pointer and redirect vhosts (crm.media.io.vn on .88 stopped
+                # redirecting) and refused every site fronting an application
+                # with "Pick an installed application for this website first"
+                # (.120, every update since at least 1.0.173).
+                websites_api._rewrite_website_vhost(website)
             except Exception as exc:
-                print(f"WARNING: could not refresh permissions for {website.domain}: {exc}")
+                print(f"WARNING: could not refresh {website.domain}: {exc}")
     try:
         result = nginx.sync_http_flood_zones(websites)
         if result.returncode != 0:
@@ -1710,7 +1710,7 @@ with SessionLocal() as db:
     except Exception as exc:
         print(f"WARNING: could not refresh HTTP flood zones: {exc}")
 PY
-  step_mark_done site-refresh "${SITE_REFRESH_INPUTS[@]}"
+  step_mark_done "$SITE_REFRESH_STEP" "${SITE_REFRESH_INPUTS[@]}"
 fi
 
 # Clear what deleted websites left on disk. A Let's Encrypt renewal config for a
