@@ -2814,6 +2814,14 @@ mail_install_webmail() {
     git clone --quiet --depth 1 --branch "$ref" "$WEBMAIL_REPO" "$WEBMAIL_HOME/src" >>"$MAIL_INSTALL_LOG" 2>&1 \
       || deny "could not download the webmail from ${WEBMAIL_REPO} (see ${MAIL_INSTALL_LOG})"
   fi
+  # A venv belongs to the Python that made it. After do-release-upgrade to
+  # 26.04 (3.12 -> 3.14) its packages sit where the new Python never looks.
+  local pyver venv_pyver
+  pyver="$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
+  venv_pyver="$(sed -n 's/^version\(_info\)\{0,1\} *= *\([0-9]*\.[0-9]*\).*/\2/p' "$WEBMAIL_HOME/venv/pyvenv.cfg" 2>/dev/null | head -n1)"
+  if [[ -x "$WEBMAIL_HOME/venv/bin/python" && "$venv_pyver" != "$pyver" ]]; then
+    rm -rf "$WEBMAIL_HOME/venv"
+  fi
   if [[ ! -x "$WEBMAIL_HOME/venv/bin/python" ]]; then
     python3 -m venv "$WEBMAIL_HOME/venv" >>"$MAIL_INSTALL_LOG" 2>&1 \
       || deny "could not create the webmail's Python environment (see ${MAIL_INSTALL_LOG})"
@@ -4293,7 +4301,16 @@ install_php_version() {
     echo "PHP $version is already installed; ensuring BPanel extension set..."
   fi
   if ! apt-cache show "php${version}-fpm" >/dev/null 2>&1; then
-    if ! grep -q "ondrej/php" /etc/apt/sources.list.d/*.list 2>/dev/null; then
+    # add-apt-repository writes a .sources file on 24.04 and later, so a
+    # *.list-only check never saw the PPA and added it again every time.
+    if ! grep -qs "ondrej/php" /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; then
+      # The PPA publishes each Ubuntu release some time after it ships (no
+      # resolute build in October 2026). Added anyway, it makes every later
+      # `apt-get update` fail on the missing Release file.
+      local codename
+      codename="$(. /etc/os-release && echo "${VERSION_CODENAME:-}")"
+      curl -fsSI --max-time 20 "https://ppa.launchpadcontent.net/ondrej/php/ubuntu/dists/${codename}/Release" >/dev/null 2>&1 \
+        || deny "PHP $version is not available for Ubuntu ${codename}: ppa:ondrej/php has no build for it yet"
       echo "Adding ondrej/php PPA for PHP $version..."
       apt-get update --allow-releaseinfo-change
       apt-get install -y software-properties-common || true

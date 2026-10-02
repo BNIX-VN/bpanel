@@ -14,8 +14,8 @@ if [[ ! -f /etc/os-release ]]; then
 fi
 
 source /etc/os-release
-if [[ "${ID}" != "ubuntu" || "${VERSION_ID}" != "24.04" ]]; then
-  echo "This installer only supports Ubuntu 24.04"
+if [[ "${ID}" != "ubuntu" || ( "${VERSION_ID}" != "24.04" && "${VERSION_ID}" != "26.04" ) ]]; then
+  echo "This installer only supports Ubuntu 24.04 and 26.04"
   echo "Current OS: ${PRETTY_NAME:-unknown}"
   exit 1
 fi
@@ -98,6 +98,9 @@ SERVER_IP=""
 ENABLE_SSL="${ENABLE_SSL:-auto}"
 SSL_EMAIL="${SSL_EMAIL:-}"
 NODE_MAJOR="${NODE_MAJOR:-22}"
+# Whether the operator chose the PHP versions: when ppa:ondrej/php has no
+# build for this release, the defaults give way to the archive's PHP.
+PHP_VERSIONS_CHOSEN="${PHP_VERSIONS:+yes}${PHP_DEFAULT:+yes}"
 PHP_DEFAULT="${PHP_DEFAULT:-8.4}"
 PHP_VERSIONS="${PHP_VERSIONS:-8.3 8.4}"
 APP_DIR="${APP_DIR:-/opt/bpanel}"
@@ -363,8 +366,31 @@ install_ioncube_loader() {
   echo "ionCube Loader enabled for PHP ${version}"
 }
 
+# ppa:ondrej/php publishes a release some time after Ubuntu does: it had no
+# resolute (26.04) build in October 2026. Adding it anyway makes every later
+# `apt-get update` fail on the missing Release file.
+ondrej_php_available() {
+  curl -fsSI --max-time 20 "https://ppa.launchpadcontent.net/ondrej/php/ubuntu/dists/${VERSION_CODENAME}/Release" >/dev/null 2>&1
+}
+
+# The PHP the Ubuntu archive itself ships: what php-fpm depends on (8.5 on 26.04).
+archive_php_version() {
+  apt-cache show php-fpm 2>/dev/null | sed -n 's/^Depends:.*php\([0-9]*\.[0-9]*\)-fpm.*/\1/p' | head -n1
+}
+
 install_php() {
-  add-apt-repository -y ppa:ondrej/php
+  if ondrej_php_available; then
+    add-apt-repository -y ppa:ondrej/php
+  else
+    local archive_version
+    archive_version="$(archive_php_version)"
+    echo "ppa:ondrej/php has no packages for Ubuntu ${VERSION_ID} (${VERSION_CODENAME}) yet."
+    if [[ -z "$PHP_VERSIONS_CHOSEN" && -n "$archive_version" ]]; then
+      echo "Installing the Ubuntu archive's PHP ${archive_version} instead of PHP ${PHP_VERSIONS}."
+      PHP_VERSIONS="$archive_version"
+      PHP_DEFAULT="$archive_version"
+    fi
+  fi
   apt_get update --allow-releaseinfo-change
 
   if [[ ! " ${PHP_VERSIONS} " =~ " ${PHP_DEFAULT} " ]]; then
@@ -775,6 +801,7 @@ PANEL_PORT=${PANEL_PORT}
 PANEL_SSL_CERT=
 PANEL_SSL_KEY=
 FRONTEND_DIST=${APP_DIR}/frontend/dist
+DEFAULT_PHP_VERSION=${PHP_DEFAULT}
 ENV
 
   # Lock down the env file: contains SECRET_KEY and ALLOWED_ORIGINS.
