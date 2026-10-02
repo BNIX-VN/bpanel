@@ -1459,13 +1459,17 @@ def list_files(website_id: int, path: str = Query(default=""), db: Session = Dep
 
 
 @router.get("/files/{website_id}/read")
-def read_file(website_id: int, path: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def read_file(website_id: int, path: str, lossy: bool = False, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    # lossy: a source file that is not all UTF-8 is shown with U+FFFD for the
+    # bytes that are not. For reading only -- MCP's read_file asks for it; the
+    # editor does not, since saving the text back would replace those bytes.
     website = get_owned_website(db, current_user, website_id)
     try:
         content = file_manager.read_text_file(
             website,
             path,
             allow_sensitive=is_admin_role(current_user.role),
+            lossy=lossy,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
