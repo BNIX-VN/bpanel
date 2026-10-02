@@ -15,7 +15,9 @@ from app.core.database import get_db
 from app.core.permissions import Role, ensure_role, is_admin_role
 from app.core.secrets import decrypt, encrypt
 from app.models.entities import DatabaseAccount, User, Website
-from app.schemas.schemas import DatabaseCreate, DatabaseCreatedOut, DatabaseOut, DatabasePasswordUpdate
+from app.schemas.schemas import (
+    DatabaseCreate, DatabaseCreatedOut, DatabaseOut, DatabaseOwnerUpdate, DatabasePasswordUpdate,
+)
 from app.services import mariadb, panel_urls
 from app.services.audit import log_action
 from app.services.sso_tokens import consume_phpmyadmin_token, create_phpmyadmin_token
@@ -106,6 +108,46 @@ def create_database(payload: DatabaseCreate, db: Session = Depends(get_db), curr
         db_user=item.db_user,
         db_password=db_password,
     )
+
+
+@router.patch("/{database_id}/owner", response_model=DatabaseOut)
+def assign_database(
+    database_id: int,
+    payload: DatabaseOwnerUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Give a database to another panel user (administrators).
+
+    Panel ownership only: the database, its MariaDB user and its password stay
+    as they are, so whatever connects to it keeps working; the new owner sees,
+    backs up and manages it in their panel. Websites and applications could
+    change hands while their database could not (160.236.192.120, 2026-10-02).
+    One linked to a website goes with that website instead.
+    """
+    ensure_role(current_user.role, Role.admin)
+    item = db.query(DatabaseAccount).filter(DatabaseAccount.id == database_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Database not found")
+    owner = db.query(User).filter(User.id == payload.owner_id).first()
+    if not owner:
+        raise HTTPException(status_code=404, detail="User not found")
+    if item.website_id:
+        site = db.query(Website).filter(Website.id == item.website_id).first()
+        if site is not None and site.owner_id != owner.id:
+            raise HTTPException(
+                status_code=409,
+                detail=f"{item.db_name} belongs to the website {site.domain}. Assign the website to "
+                       f"{owner.username} and the database goes with it.",
+            )
+    previous = item.owner.username if item.owner else str(item.owner_id)
+    item.owner_id = owner.id
+    db.commit()
+    db.refresh(item)
+    log_action(db, current_user.id, "assign_database", item.db_name,
+               f"{previous} -> {owner.username}", request=request)
+    return item
 
 
 @router.delete("/{database_id}")

@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -284,6 +285,40 @@ def _app_moving_with(db: Session, website: Website, new_owner: User) -> SiteApp 
             detail=f"Application {app.name} cannot move to {new_owner.username} with this website: {exc}",
         ) from exc
     return app
+
+
+def _databases_moving_with(db: Session, website: Website) -> tuple[list[DatabaseAccount], list[DatabaseAccount]]:
+    """The databases that change hands with this website: (its own, its app's).
+
+    Panel ownership only: the MariaDB database, its user and password stay as
+    they are, so whatever connects keeps working. A website and its app moved
+    without them left the new owner unable to see, back up or manage their own
+    site's data (160.236.192.120, 2026-10-02: reviewthammy's database stayed
+    with admin). Its own are linked to it by website_id. Its app's are owned by
+    the app's owner, linked to no website, and named in the app's configuration:
+    the environment the panel keeps, the compose file, and the .env in the app's
+    directory, where a Node app's DATABASE_URL usually is.
+    """
+    own = db.query(DatabaseAccount).filter(DatabaseAccount.website_id == website.id).all()
+    app = db.query(SiteApp).filter(SiteApp.id == website.app_id).first() if website.app_id else None
+    if app is None:
+        return own, []
+    texts = [app.env or "", getattr(app, "compose_source", "") or ""]
+    try:
+        texts.append(file_manager.read_text_file(site_apps.file_target(app), ".env", allow_sensitive=True))
+    except (ValueError, RuntimeError, OSError):
+        pass
+    config = "\n".join(texts)
+    candidates = db.query(DatabaseAccount).filter(
+        DatabaseAccount.owner_id == app.owner_id,
+        DatabaseAccount.website_id.is_(None),
+    ).all()
+    used = [
+        item for item in candidates
+        if item not in own
+        and re.search(rf"(?<![A-Za-z0-9_]){re.escape(item.db_name)}(?![A-Za-z0-9_])", config)
+    ]
+    return own, used
 
 
 def _rewrite_website_vhost(website: Website, **overrides) -> str:
@@ -717,6 +752,22 @@ def delete_website_alias(
     return {"ok": True}
 
 
+@router.get("/{website_id}/transfer-preview")
+def website_transfer_preview(website_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """What changes hands with a website assigned to another user, for the
+    Assign form to say before the admin presses it."""
+    ensure_role(current_user.role, Role.admin)
+    website = db.query(Website).filter(Website.id == website_id).first()
+    if not website:
+        raise HTTPException(status_code=404, detail="Website not found")
+    app = db.query(SiteApp).filter(SiteApp.id == website.app_id).first() if website.app_id else None
+    own, used = _databases_moving_with(db, website)
+    return {
+        "application": app.name if app else None,
+        "databases": [item.db_name for item in own + used],
+    }
+
+
 @router.patch("/{website_id}", response_model=WebsiteOut)
 def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     website = db.query(Website).filter(Website.id == website_id).first()
@@ -828,6 +879,7 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
         if payload.owner_id != website.owner_id:
             # Refused here, before anything moves, if its application cannot follow.
             linked_app = _app_moving_with(db, website, owner)
+            own_databases, app_databases = _databases_moving_with(db, website)
             try:
                 storage_quota.enforce_user_storage_quota(
                     db,
@@ -861,14 +913,19 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
                     site_apps.move_to_owner(linked_app, owner)
                 except (RuntimeError, ValueError) as exc:
                     # The website has moved; keep that rather than leave its
-                    # record pointing at a folder that is no longer there.
+                    # record pointing at a folder that is no longer there. Its
+                    # own databases go with it; the app's stay with the app.
                     website.owner_id = payload.owner_id
+                    for item in own_databases:
+                        item.owner_id = owner.id
                     db.commit()
                     raise HTTPException(
                         status_code=409,
                         detail=f"The website moved to {owner.username}, but its application "
                                f"{linked_app.name} did not: {exc}",
                     ) from exc
+            for item in own_databases + app_databases:
+                item.owner_id = owner.id
         website.owner_id = payload.owner_id
     if payload.nginx_custom is not None:
         try:
