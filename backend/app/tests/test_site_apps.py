@@ -569,6 +569,32 @@ def test_a_website_that_fronts_an_app_opens_the_apps_files(monkeypatch):
     assert maintenance.get_website_files(None, None, 7) is linked
 
 
+def test_a_dismissed_file_job_does_not_come_back(monkeypatch):
+    """The card's x only hid a failed job in the browser; every reload brought
+    "Archive not found" back from the panel's memory (.120, 2026-10-02)."""
+    from fastapi import HTTPException
+
+    from app.api import maintenance
+
+    owner = User(id=1, username="admin", email="a@example.test", role="end_user")
+    other = User(id=2, username="other", email="o@example.test", role="end_user")
+    monkeypatch.setattr(maintenance, "_file_jobs", {
+        "failed": {"job_id": "failed", "user_id": 1, "status": "error", "kind": "extract_archive"},
+        "running": {"job_id": "running", "user_id": 1, "status": "running", "kind": "extract_archive"},
+    })
+    with pytest.raises(HTTPException) as exc:
+        maintenance.dismiss_file_job("failed", current_user=other)
+    assert exc.value.status_code == 403
+    with pytest.raises(HTTPException) as exc:
+        maintenance.dismiss_file_job("running", current_user=owner)
+    assert exc.value.status_code == 409
+    assert maintenance.dismiss_file_job("failed", current_user=owner) == {"dismissed": "failed"}
+    assert maintenance._list_file_jobs(owner) == [maintenance._public_file_job(maintenance._file_jobs["running"])]
+    with pytest.raises(HTTPException) as exc:
+        maintenance.dismiss_file_job("failed", current_user=owner)
+    assert exc.value.status_code == 404
+
+
 def test_unit_name_can_be_asked_about_a_previous_name():
     """A rename moves the unit; the old one still has to be findable."""
     app = _managed_app("node", name="n8n")

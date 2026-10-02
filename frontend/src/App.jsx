@@ -3674,6 +3674,14 @@ function App() {
 
   function dismissFileJob(jobId) {
     setFileJobs(prev => prev.filter(item => item.job_id !== jobId));
+    // The server forgets it too: hidden only here, a failed job came back on
+    // every reload. Best effort -- a job already gone is what we wanted.
+    const csrf = readCookie('bpanel_csrf');
+    fetch(`${API}/maintenance/files/jobs/${jobId}`, {
+      method: 'DELETE',
+      credentials: 'include',
+      headers: csrf ? { 'X-CSRF-Token': csrf } : {},
+    }).catch(() => {});
   }
 
   async function loadFileJob(jobId) {

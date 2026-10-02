@@ -1417,6 +1417,26 @@ def get_file_job(job_id: str, current_user: User = Depends(get_current_user)):
     return _public_file_job(job)
 
 
+@router.delete("/files/jobs/{job_id}")
+def dismiss_file_job(job_id: str, current_user: User = Depends(get_current_user)):
+    """Forget a failed or finished job, so its card does not come back.
+
+    The card's x only hid it in the browser. The job stayed in the panel's
+    memory, and every reload showed "Archive not found" again (.120,
+    2026-10-02). A job still queued or running is kept: it is still working.
+    """
+    with _file_jobs_lock:
+        job = _file_jobs.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="File job not found")
+        if job.get("user_id") != current_user.id and not is_admin_role(current_user.role):
+            raise HTTPException(status_code=403, detail="Access denied")
+        if job.get("status") in ("queued", "running"):
+            raise HTTPException(status_code=409, detail="The job is still running")
+        _file_jobs.pop(job_id, None)
+    return {"dismissed": job_id}
+
+
 @router.get("/app-files/{app_id}")
 def list_app_files(app_id: int, path: str = Query(default=""), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Separate prefix on purpose: under /files this would be shadowed by
