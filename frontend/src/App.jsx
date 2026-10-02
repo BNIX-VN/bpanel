@@ -9999,6 +9999,13 @@ function App() {
           </select>
           <button disabled={!assignWebsiteId || !assignUserId || !!loading} onClick={assignDomainToUser}>{t('Assign')}</button>
         </div>
+        {(() => {
+          // The app behind the website moves with it: its code sits in the
+          // owner's home, out of reach of anyone else.
+          const site = websites.find(item => String(item.id) === String(assignWebsiteId));
+          const app = site?.app_id ? siteApps.items.find(item => String(item.id) === String(site.app_id)) : null;
+          return site?.app_id ? <p className="hint">{t('The application {name} moves to the new owner with this website, files and all; it restarts once.', { name: app?.name || `#${site.app_id}` })}</p> : null;
+        })()}
       </div>
     </section>;
   }

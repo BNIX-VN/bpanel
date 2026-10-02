@@ -9526,6 +9526,44 @@ PY
     echo "$new_dir"
     ;;
 
+  site-app-move)
+    # An application changes hands with the website it serves: the customer
+    # who owns the website could not reach the code behind it, which still sat
+    # in the admin's home (160.236.192.120, 2026-10-02). Directory, env and
+    # compose files go to the new owner and are re-owned. Named Docker volumes
+    # carry the old owner in their project name and are not moved, so an app
+    # with any is refused rather than started again on empty volumes.
+    # --check validates without moving, so a caller can refuse up front.
+    [[ $# -eq 3 || ( $# -eq 4 && "${4:-}" == "--check" ) ]] || deny "usage: site-app-move <old-user> <new-user> <name> [--check]"
+    old_user="$1"; new_user="$2"; app_name="$3"
+    require_linux_user "$old_user"
+    require_linux_user "$new_user"
+    require_app_name "$app_name"
+    [[ "$old_user" != "$new_user" ]] || exit 0
+    id -u "$new_user" >/dev/null 2>&1 || deny "Linux user does not exist: $new_user"
+    [[ -d "${HOME_ROOT}/${new_user}" ]] || deny "home directory missing for $new_user"
+    old_dir="$(app_directory "$old_user" "$app_name")"
+    new_dir="$(app_directory "$new_user" "$app_name")"
+    [[ -e "$new_dir" ]] && deny "${new_user} already has an application directory named ${app_name}"
+    volumes=""
+    if command -v docker >/dev/null 2>&1; then
+      volumes="$(docker volume ls --format '{{.Name}}' 2>/dev/null | grep -E "^bpanel-${old_user}-${app_name}_" || true)"
+    fi
+    [[ -z "$volumes" ]] || deny "application ${app_name} keeps data in Docker volumes, which cannot move to another owner"
+    [[ "${4:-}" == "--check" ]] && exit 0
+    if [[ -d "$old_dir" ]]; then
+      install -d -m 0750 "$(dirname "$new_dir")"
+      mv -T -- "$old_dir" "$new_dir"
+    fi
+    ensure_app_directory "$new_user" "$app_name" >/dev/null
+    own_site_tree "$new_dir" "$new_user"
+    old_env="$(app_env_file "$old_user" "$app_name")"
+    [[ -f "$old_env" ]] && mv -f -- "$old_env" "$(app_env_file "$new_user" "$app_name")"
+    old_compose="$(app_compose_file "$old_user" "$app_name")"
+    [[ -f "$old_compose" ]] && mv -f -- "$old_compose" "$(app_compose_file "$new_user" "$app_name")"
+    echo "$new_dir"
+    ;;
+
   site-app-dir-ensure)
     [[ $# -eq 2 ]] || deny "usage: site-app-dir-ensure <owner-user> <name>"
     ensure_app_directory "$1" "$2"
