@@ -348,7 +348,9 @@ def _tool_error(message: str) -> dict:
 def _as_text(result: Any) -> str:
     if isinstance(result, str):
         return result
-    return json.dumps(result, ensure_ascii=False, indent=2, default=str)
+    # ASCII, with \u escapes, like the response around it (api/mcp.py): a
+    # file read comes back as JSON inside this text.
+    return json.dumps(result, ensure_ascii=True, indent=2, default=str)
 
 
 # Arguments worth recording, and the ones that must never be. File contents go

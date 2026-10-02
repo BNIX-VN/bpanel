@@ -12,6 +12,7 @@ browser that has been tricked into posting here should be stopped before its
 token is ever examined.
 """
 
+import json
 from datetime import datetime, timedelta
 from typing import Optional
 from urllib.parse import urlparse
@@ -31,6 +32,24 @@ from app.services import mcp_tools  # noqa: F401
 from app.services.audit import log_action
 
 router = APIRouter(prefix="/mcp", tags=["mcp"])
+
+
+class McpJSONResponse(JSONResponse):
+    """JSON in plain ASCII, with the charset said out loud.
+
+    Starlette sends raw UTF-8 under a bare "application/json". That is
+    correct - JSON is UTF-8 by definition - but a customer's MCP client read
+    it as Latin-1: "Máy chủ" reached the assistant as "MÃ¡y chá»§", and the
+    file it then wrote back had every Vietnamese string mangled the same way
+    (tool.bnix.vn, 2026-10-02). The client was at fault; this only takes the
+    chance away. With \\u escapes there is no byte above 0x7f left to misread.
+    """
+
+    media_type = "application/json; charset=utf-8"
+
+    def render(self, content) -> bytes:
+        return json.dumps(content, ensure_ascii=True, allow_nan=False,
+                          separators=(",", ":")).encode("ascii")
 
 
 def _require_addon() -> None:
@@ -92,7 +111,7 @@ async def mcp_endpoint(request: Request, db: Session = Depends(get_db)):
     try:
         payload = await request.json()
     except Exception:  # noqa: BLE001 - any unparseable body is the same answer
-        return JSONResponse(
+        return McpJSONResponse(
             {"jsonrpc": "2.0", "id": None,
              "error": {"code": mcp.PARSE_ERROR, "message": "Invalid JSON"}},
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -109,7 +128,7 @@ async def mcp_endpoint(request: Request, db: Session = Depends(get_db)):
     if answer is None:
         # Nothing but notifications. The specification says send no body.
         return Response(status_code=status.HTTP_202_ACCEPTED)
-    return JSONResponse(answer)
+    return McpJSONResponse(answer)
 
 
 @router.get("")

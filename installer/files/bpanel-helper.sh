@@ -24,6 +24,8 @@ ALLOWED_ACTIONS=(start stop restart reload status is-active is-enabled)
 HOME_ROOT="/home"
 NGINX_CONF_DIR="/etc/nginx/conf.d"
 PHP_CONF_DIRS=(/etc/php/{5.6,7.4,8.0,8.1,8.2,8.3,8.4,8.5}/fpm/conf.d)
+# sys_temp_dir of each site user's PHP-FPM pools: ${PHP_TMP_ROOT}/<user>.
+PHP_TMP_ROOT="/var/lib/php/tmp"
 BPANEL_SITES_GROUP="bpanel-sites"
 # Default permissions for everything inside a site tree. 0644/0755 is what every
 # hosting panel gives a customer, and what PHP applications, SFTP clients and
@@ -6978,6 +6980,7 @@ delete_panel_user_runtime() {
   rm -rf "$HOME_ROOT/$user" 2>/dev/null || true
   rm -rf "/var/lib/php/sessions/$user" 2>/dev/null || true
   rm -rf "/var/lib/php/uploads/$user" 2>/dev/null || true
+  rm -rf "${PHP_TMP_ROOT:?}/$user" 2>/dev/null || true
 }
 
 ensure_sftp_site_group() {
@@ -7562,8 +7565,15 @@ ensure_php_pool() {
   # same uid; uploads land world-writable on tmpfs). Using 0700 dirs owned
   # by the pool's Linux user contains the data inside the site's trust
   # boundary.
+  #
+  # The temp dir is the same idea for everything else PHP writes: tempnam(),
+  # tmpfile(), sys_get_temp_dir(). open_basedir never allowed /tmp, so every
+  # one of those failed with "open_basedir restriction in effect. File(/tmp)"
+  # - tool.bnix.vn's cookie jar logged it on every lookup (2026-10-02). Sites
+  # coming from DirectAdmin are used to having /tmp.
   local sess_dir="/var/lib/php/sessions/${user}"
   local upload_dir="/var/lib/php/uploads/${user}"
+  local tmp_dir="${PHP_TMP_ROOT}/${user}"
   ensure_php_runtime_dirs "$user"
   calculate_php_fpm_pool_tuning "$pool_file"
   cat >"$pool_file" <<POOL
@@ -7584,9 +7594,11 @@ pm.process_idle_timeout = ${PHP_FPM_PROCESS_IDLE_TIMEOUT}s
 pm.max_requests = ${PHP_FPM_MAX_REQUESTS}
 request_terminate_timeout = ${PHP_FPM_REQUEST_TERMINATE_TIMEOUT}s
 chdir = /
-php_admin_value[open_basedir] = ${target}:${sess_dir}:${upload_dir}:/usr/share/php
+php_admin_value[open_basedir] = ${target}:${sess_dir}:${upload_dir}:${tmp_dir}:/usr/share/php
 php_admin_value[upload_tmp_dir] = ${upload_dir}
 php_admin_value[session.save_path] = ${sess_dir}
+php_admin_value[sys_temp_dir] = ${tmp_dir}
+env[TMPDIR] = ${tmp_dir}
 POOL
   systemctl reload "php${php_version}-fpm"
 }
@@ -7603,6 +7615,21 @@ ensure_php_runtime_dirs() {
   # make it setgid bpanel-sites so moved uploads remain readable by nginx.
   install -d -o "$user" -g "$BPANEL_SITES_GROUP" -m 2700 "$upload_dir"
   chmod g+s "$upload_dir" 2>/dev/null || true
+  # The pool's sys_temp_dir: private to the site user like the sessions.
+  install -d -o root -g root -m 0711 "$PHP_TMP_ROOT"
+  install -d -o "$user" -g "$user" -m 0700 "${PHP_TMP_ROOT}/${user}"
+  ensure_php_tmp_cleanup
+}
+
+# Nothing empties these the way a reboot empties /tmp, so systemd-tmpfiles
+# ages them instead: whatever has not been touched for 10 days goes, the
+# per-user directories themselves stay.
+ensure_php_tmp_cleanup() {
+  local conf=/etc/tmpfiles.d/bpanel-php-tmp.conf
+  local wanted="# Managed by BPanel: age out PHP temp files of each site user.
+e ${PHP_TMP_ROOT}/* - - - 10d"
+  [[ "$(cat "$conf" 2>/dev/null)" == "$wanted" ]] && return 0
+  printf '%s\n' "$wanted" >"$conf"
 }
 
 # Ownership and ACLs for a site tree, and nothing else about its modes: they

@@ -264,3 +264,24 @@ def test_the_update_refresh_does_not_reset_modes():
     refresh = update.split('log "Refreshing managed site configuration"')[1].split("\nPY\n")[0]
     assert "site_users.fix_site_permissions(" not in refresh
     assert "site_users.ensure_site_runtime(" in refresh
+
+
+def test_php_has_a_temp_dir_of_its_own_inside_open_basedir():
+    """tempnam(sys_get_temp_dir()) on tool.bnix.vn hit "open_basedir
+    restriction in effect. File(/tmp)": the pools never allowed /tmp and named
+    nothing else, so every temp file a site made failed (2026-10-02)."""
+    helper = HELPER_SCRIPT.read_text(encoding="utf-8")
+    pool = helper.split('cat >"$pool_file" <<POOL', 1)[1].split("\nPOOL\n", 1)[0]
+    basedir = next(line for line in pool.splitlines() if line.startswith("php_admin_value[open_basedir]"))
+    assert "${tmp_dir}" in basedir.split(" = ", 1)[1].split(":")
+    assert "php_admin_value[sys_temp_dir] = ${tmp_dir}" in pool
+    assert "env[TMPDIR] = ${tmp_dir}" in pool
+    assert 'local tmp_dir="${PHP_TMP_ROOT}/${user}"' in helper
+    assert 'PHP_TMP_ROOT="/var/lib/php/tmp"' in helper
+    # Private to the user, created with the other per-user dirs, aged out,
+    # and removed with the account.
+    runtime = helper.split("ensure_php_runtime_dirs() {", 1)[1].split("\n}\n", 1)[0]
+    assert 'install -d -o "$user" -g "$user" -m 0700 "${PHP_TMP_ROOT}/${user}"' in runtime
+    assert "ensure_php_tmp_cleanup" in runtime
+    assert "e ${PHP_TMP_ROOT}/* - - - 10d" in helper
+    assert 'rm -rf "${PHP_TMP_ROOT:?}/$user"' in helper
