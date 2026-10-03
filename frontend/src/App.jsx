@@ -5217,8 +5217,7 @@ function App() {
       ['files', 'File manager', FolderOpen],
       ['sftp', 'SFTP accounts', KeyRound],
       ['backups', 'Backups', Archive],
-      ...(isAdmin ? [['users', 'Panel users', Users]] : []),
-      ...(isReseller ? [['users', 'Customers', Users]] : []),
+      ...(canManageUsers ? [['users', 'Panel users', Users]] : []),
       ...(mailAddonInstalled ? [['mail', 'Email', Mail]] : []),
       ...(dnsAddonInstalled ? [['dns', 'DNS Manager', Network]] : []),
       ...(mcpAddonInstalled ? [['mcp', 'AI assistants (MCP)', Bot]] : []),
@@ -5226,7 +5225,9 @@ function App() {
       ...(malwareAddonInstalled && isAdmin ? [['malware', 'Malware Scanner', Bug]] : []),
       ['settings', 'Settings', SettingsIcon],
     ] },
-  ].filter(section => section.items.length > 0);
+  ].filter(section => section.items.length > 0)
+    // A reseller's "Panel users" are its customers, and the page says so.
+    .map(section => ({ ...section, items: section.items.map(item => (isReseller && item[0] === 'users' ? ['users', 'Customers', item[2]] : item)) }));
 
   // Everything else, on the Settings page: [page, label, icon, summary].
   const settingsGroups = [
@@ -10019,17 +10020,17 @@ function App() {
   function renderResellerPool() {
     if (!isReseller || !resellerPool) return null;
     const rows = [
-      [t('Customers'), resellerPool.customers, resellerPool.pool_user_limit],
-      [t('Websites'), resellerPool.allocated_website_limit, resellerPool.pool_website_limit],
-      [t('Disk (MB)'), resellerPool.allocated_storage_limit_mb, resellerPool.pool_storage_limit_mb],
-      [t('Mailboxes'), resellerPool.allocated_mail_accounts_limit, resellerPool.pool_mail_accounts_limit],
-      [t('Applications'), resellerPool.allocated_app_limit, resellerPool.pool_app_limit],
+      ['Customers', resellerPool.customers, resellerPool.pool_user_limit],
+      ['Websites', resellerPool.allocated_website_limit, resellerPool.pool_website_limit],
+      ['Disk (MB)', resellerPool.allocated_storage_limit_mb, resellerPool.pool_storage_limit_mb],
+      ['Mailboxes', resellerPool.allocated_mail_accounts_limit, resellerPool.pool_mail_accounts_limit],
+      ['Applications', resellerPool.allocated_app_limit, resellerPool.pool_app_limit],
     ];
     return <section className="section">
       <div className="section-title"><div><h2>{t('Your share')}</h2><p className="hint">{t("Your own limits and every customer's together must fit in the share the administrator gave you.")}</p></div></div>
       <div className="reseller-pool">
         {rows.map(([label, used, total]) => <div className="reseller-pool-item" key={label}>
-          <span>{label}</span>
+          <span>{t(label)}</span>
           <strong>{used} / {total ? total : t('unlimited')}</strong>
         </div>)}
       </div>
@@ -10042,15 +10043,15 @@ function App() {
 
   function renderPoolInputs(form, setForm) {
     const fields = [
-      ['pool_user_limit', t('Customers')],
-      ['pool_website_limit', t('Websites')],
-      ['pool_storage_limit_mb', t('Disk (MB)')],
-      ['pool_mail_accounts_limit', t('Mailboxes')],
-      ['pool_app_limit', t('Applications')],
+      ['pool_user_limit', 'Customers'],
+      ['pool_website_limit', 'Websites'],
+      ['pool_storage_limit_mb', 'Disk (MB)'],
+      ['pool_mail_accounts_limit', 'Mailboxes'],
+      ['pool_app_limit', 'Applications'],
     ];
     return <>
       <p className="hint wide">{t("Reseller share: its own limits and all its customers' must fit inside these. 0 = unlimited.")}</p>
-      {fields.map(([field, label]) => <label key={field}><span>{t('Share')}: {label}</span><input type="number" min="0" value={form[field] ?? 0} onChange={e => setForm(prev => ({ ...prev, [field]: e.target.value }))} /></label>)}
+      {fields.map(([field, label]) => <label key={field}><span>{t('Share')}: {t(label)}</span><input type="number" min="0" value={form[field] ?? 0} onChange={e => setForm(prev => ({ ...prev, [field]: e.target.value }))} /></label>)}
     </>;
   }
 
