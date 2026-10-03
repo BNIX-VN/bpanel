@@ -2039,6 +2039,20 @@ function App() {
     }
   }
 
+  // Ends a "Login as" session and restores the admin's own one, which the
+  // server kept aside: no second login.
+  async function returnToImpersonator() {
+    const admin = currentUser?.impersonator;
+    if (!admin) return;
+    const data = await request('/auth/impersonation/return', { method: 'POST' }, t('Going back to {name}...', { name: admin }));
+    if (data?.access_token) {
+      setNotice(t('Back to {name}.', { name: admin }));
+      await loadCurrentUser();
+      navigateToPage('users');
+      await refreshAll();
+    }
+  }
+
   async function loadTwoFactorStatus() {
     const data = await request('/auth/2fa/status');
     if (data) setTwoFactorStatus(data);
@@ -10501,6 +10515,7 @@ function App() {
                 </div>
                 <button type="button" role="menuitem" onClick={() => { setUserMenuOpen(false); openProfileModal(); }}><KeyRound size={15}/>{t('Profile')}</button>
                 <button type="button" role="menuitem" onClick={() => { setUserMenuOpen(false); navigateToPage('security'); }}><LockKeyhole size={15}/>{t('Account security')}</button>
+                {currentUser?.impersonator && <button type="button" role="menuitem" onClick={() => { setUserMenuOpen(false); returnToImpersonator(); }}><ArrowLeft size={15}/>{t('Back to {name}', { name: currentUser.impersonator })}</button>}
                 <button type="button" role="menuitem" className="user-menu-logout" onClick={() => { setUserMenuOpen(false); logout(); }}><LogOut size={15}/>{t('Logout')}</button>
               </div>}
             </div>
@@ -10508,6 +10523,10 @@ function App() {
         </section>
         <div className="content-body">
           {currentUser?.demo && <div className="demo-banner" role="status"><Eye size={15}/> <span>{t('You are viewing a read-only demo: you can open every page, and nothing you change is saved.')}</span></div>}
+          {currentUser?.impersonator && <div className="impersonation-banner" role="status">
+            <LogIn size={15}/> <span>{t('You are logged in as {name}.', { name: currentUser.username })}</span>
+            <button type="button" className="mini" disabled={!!loading} onClick={returnToImpersonator}><ArrowLeft size={14}/> {t('Back to {name}', { name: currentUser.impersonator })}</button>
+          </div>}
           {renderPage()}
           {loading && <div className="loading"><span></span>{t(loading)}</div>}
         </div>
