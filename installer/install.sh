@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BPANEL_INSTALLER_VERSION="${BPANEL_INSTALLER_VERSION:-v1.1.0}"
+BPANEL_INSTALLER_VERSION="${BPANEL_INSTALLER_VERSION:-v1.2.0}"
 
 if [[ $EUID -ne 0 ]]; then
   echo "Please run this installer as root"
