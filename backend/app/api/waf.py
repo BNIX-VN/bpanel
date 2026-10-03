@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
+from app.core.access import can_access_owner, scope_owner
 from app.core.permissions import Role, ensure_role, is_admin_role
 from app.models.entities import User, Website
 from app.schemas.schemas import WafBotBlockApply, WafGlobalBotsUpdate, WebsiteAccessLogsOut, WebsiteBotBlockUpdate
@@ -52,7 +53,7 @@ def _owned_website(db: Session, website_id: int, current_user: User) -> Website:
     if not website:
         raise HTTPException(status_code=404, detail="Website not found")
     if not is_admin_role(current_user.role):
-        if website.owner_id != current_user.id:
+        if not can_access_owner(db, current_user, website.owner_id):
             raise HTTPException(status_code=404, detail="Website not found")
         if not may_manage_waf(current_user):
             raise HTTPException(status_code=403, detail="Your hosting package does not include WAF settings")
@@ -102,7 +103,7 @@ def get_waf_access_logs(
             raise HTTPException(status_code=403, detail="Your hosting package does not include WAF settings")
         # Without this an end user asking for no website_id would be handed
         # every site's access log on the server.
-        query = query.filter(Website.owner_id == current_user.id)
+        query = scope_owner(query, Website.owner_id, db, current_user)
     if website_id is not None:
         query = query.filter(Website.id == website_id)
     websites = query.all()
@@ -124,7 +125,7 @@ def clear_waf_access_logs(
     if not is_admin_role(current_user.role):
         if not may_manage_waf(current_user):
             raise HTTPException(status_code=403, detail="Your hosting package does not include WAF settings")
-        query = query.filter(Website.owner_id == current_user.id)
+        query = scope_owner(query, Website.owner_id, db, current_user)
     if website_id is not None:
         query = query.filter(Website.id == website_id)
     websites = query.all()
@@ -193,7 +194,7 @@ def list_blocked_bots(db: Session = Depends(get_db), current_user: User = Depend
     if not is_admin_role(current_user.role):
         if not may_manage_waf(current_user):
             raise HTTPException(status_code=403, detail="Your hosting package does not include WAF settings")
-        query = query.filter(Website.owner_id == current_user.id)
+        query = scope_owner(query, Website.owner_id, db, current_user)
     websites = query.all()
     return {
         "max_bots": nginx.MAX_BLOCKED_BOTS,

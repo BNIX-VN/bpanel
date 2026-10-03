@@ -240,6 +240,7 @@ class UserPackageOut(BaseModel):
     sftp_accounts_limit: int = 3
     mail_accounts_limit: int = 10
     node_app_memory_mb: int = 512
+    owner_id: Optional[int] = None
     created_at: Optional[datetime] = None
 
     class Config:
@@ -250,8 +251,17 @@ class UserCreate(BaseModel):
     username: str = Field(min_length=3, max_length=32, pattern=r"^[a-z_][a-z0-9_-]{2,31}$")
     email: EmailStr
     password: str = Field(min_length=12, max_length=72)  # bcrypt 72-byte limit
-    role: Literal["admin", "end_user"] = "end_user"
+    role: Literal["admin", "reseller", "end_user"] = "end_user"
     package_id: Optional[int] = Field(default=None, ge=1)
+    # The admin may put a new customer under a reseller; a reseller's own new
+    # accounts are always its customers, whatever is sent here.
+    reseller_id: Optional[int] = Field(default=None, ge=1)
+    # A reseller's share of the server (role "reseller" only; 0 = unlimited).
+    pool_user_limit: int = Field(default=0, ge=0, le=100000)
+    pool_website_limit: int = Field(default=0, ge=0, le=100000)
+    pool_storage_limit_mb: int = Field(default=0, ge=0, le=1024 * 1024 * 1024)
+    pool_mail_accounts_limit: int = Field(default=0, ge=0, le=1000000)
+    pool_app_limit: int = Field(default=0, ge=0, le=100000)
     website_limit: int = Field(default=5, ge=0, le=1000)
     storage_limit_mb: int = Field(default=1024, ge=0, le=1024 * 1024)
     sftp_accounts_limit: int = Field(default=3, ge=0, le=100)
@@ -267,7 +277,16 @@ class UserCreate(BaseModel):
 
 class UserUpdate(BaseModel):
     email: Optional[EmailStr] = None
-    role: Optional[Literal["admin", "end_user"]] = None
+    role: Optional[Literal["admin", "reseller", "end_user"]] = None
+    # Admin only: move an end user under a reseller (an id) or back to the
+    # admin's own accounts (0).
+    reseller_id: Optional[int] = Field(default=None, ge=0)
+    # A reseller's share of the server (role "reseller" only; 0 = unlimited).
+    pool_user_limit: Optional[int] = Field(default=None, ge=0, le=100000)
+    pool_website_limit: Optional[int] = Field(default=None, ge=0, le=100000)
+    pool_storage_limit_mb: Optional[int] = Field(default=None, ge=0, le=1024 * 1024 * 1024)
+    pool_mail_accounts_limit: Optional[int] = Field(default=None, ge=0, le=1000000)
+    pool_app_limit: Optional[int] = Field(default=None, ge=0, le=100000)
     is_active: Optional[bool] = None
     package_id: Optional[int] = Field(default=None, ge=1)
     website_limit: Optional[int] = Field(default=None, ge=0, le=1000)
@@ -320,6 +339,12 @@ class UserOut(BaseModel):
     totp_enabled: bool = False
     sftp_accounts_limit: int = 3
     mail_accounts_limit: int = 10
+    reseller_id: Optional[int] = None
+    pool_user_limit: int = 0
+    pool_website_limit: int = 0
+    pool_storage_limit_mb: int = 0
+    pool_mail_accounts_limit: int = 0
+    pool_app_limit: int = 0
     # NULL means this account's SFTP password has never been set on its own and
     # is still whatever the panel password was. The UI says so.
     sftp_password_set_at: Optional[datetime] = None

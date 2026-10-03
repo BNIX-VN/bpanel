@@ -57,6 +57,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings as app_settings
+from app.core.access import can_access_owner, scope_owner
 from app.core.permissions import is_admin_role
 from app.core.secrets import decrypt, encrypt
 from app.models.entities import MailAccount, MailDomain, MailForwarder, User, Website, WebsiteAlias
@@ -339,7 +340,7 @@ def _is_admin(user: User) -> bool:
 def get_domain(db: Session, actor: User, domain_id: int) -> MailDomain:
     row = db.query(MailDomain).filter(MailDomain.id == domain_id).first()
     # Someone else's domain does not exist, as far as a customer can tell.
-    if row is None or (not _is_admin(actor) and row.owner_id != actor.id):
+    if row is None or not can_access_owner(db, actor, row.owner_id):
         raise MailError("There is no such mail domain.", status=404)
     return row
 
@@ -350,7 +351,7 @@ def _domain_row(db: Session, name: str) -> MailDomain | None:
 
 def get_account(db: Session, actor: User, account_id: int) -> MailAccount:
     account = db.query(MailAccount).filter(MailAccount.id == account_id).first()
-    if account is None or (not _is_admin(actor) and account.owner_id != actor.id):
+    if account is None or not can_access_owner(db, actor, account.owner_id):
         raise MailError("There is no such mailbox.", status=404)
     return account
 
@@ -358,7 +359,7 @@ def get_account(db: Session, actor: User, account_id: int) -> MailAccount:
 def get_forwarder(db: Session, actor: User, forwarder_id: int) -> MailForwarder:
     row = db.query(MailForwarder).filter(MailForwarder.id == forwarder_id).first()
     domain = _domain_row(db, row.domain) if row else None
-    if row is None or domain is None or (not _is_admin(actor) and domain.owner_id != actor.id):
+    if row is None or domain is None or not can_access_owner(db, actor, domain.owner_id):
         raise MailError("There is no such forwarder.", status=404)
     return row
 
@@ -375,9 +376,7 @@ def _website_owner(db: Session, name: str) -> User | None:
 
 def candidate_domains(db: Session, actor: User) -> list[str]:
     """Website and alias names email could be turned on for."""
-    sites = db.query(Website)
-    if not _is_admin(actor):
-        sites = sites.filter(Website.owner_id == actor.id)
+    sites = scope_owner(db.query(Website), Website.owner_id, db, actor)
     names: set[str] = set()
     for site in sites.all():
         names.add((site.domain or "").lower())
@@ -427,7 +426,7 @@ def add_domain(db: Session, actor: User, domain: str, owner_id: int | None = Non
                 raise MailError("That account does not exist.", status=404)
         elif owner is None:
             owner = actor
-    elif owner is None or owner.id != actor.id:
+    elif owner is None or not can_access_owner(db, actor, owner.id):
         raise MailError("You can only turn on email for the domains of your own websites.", status=403)
     row = MailDomain(domain=name, owner_id=owner.id, catch_all="", webmail_host=False, relay="",
                      dkim_public=_dkim_public(name))
@@ -673,9 +672,7 @@ def _page(page, per_page) -> tuple[int, int]:
 
 def list_accounts(db: Session, actor: User, domain_id: int | None = None, q: str = "", page: int = 1,
                   per_page: int = 50) -> dict:
-    query = db.query(MailAccount)
-    if not _is_admin(actor):
-        query = query.filter(MailAccount.owner_id == actor.id)
+    query = scope_owner(db.query(MailAccount), MailAccount.owner_id, db, actor)
     if domain_id:
         row = get_domain(db, actor, domain_id)
         query = query.filter(MailAccount.domain == row.domain)
@@ -766,7 +763,7 @@ def list_forwarders(db: Session, actor: User, domain_id: int | None = None, q: s
                     per_page: int = 50) -> dict:
     query = db.query(MailForwarder)
     if not _is_admin(actor):
-        mine = [row.domain for row in db.query(MailDomain).filter(MailDomain.owner_id == actor.id)]
+        mine = [row.domain for row in scope_owner(db.query(MailDomain), MailDomain.owner_id, db, actor)]
         query = query.filter(MailForwarder.domain.in_(mine or [""]))
     if domain_id:
         row = get_domain(db, actor, domain_id)
@@ -788,9 +785,7 @@ def list_forwarders(db: Session, actor: User, domain_id: int | None = None, q: s
 
 def overview(db: Session, actor: User) -> dict:
     installed = active()
-    query = db.query(MailDomain)
-    if not _is_admin(actor):
-        query = query.filter(MailDomain.owner_id == actor.id)
+    query = scope_owner(db.query(MailDomain), MailDomain.owner_id, db, actor)
     owners = {row.id: row for row in db.query(User).all()}
     limit = _limit(actor)
     count = owner_mailbox_count(db, actor.id)
