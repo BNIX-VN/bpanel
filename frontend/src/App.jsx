@@ -10023,8 +10023,9 @@ function App() {
       ['Customers', resellerPool.customers, resellerPool.pool_user_limit],
       ['Websites', resellerPool.allocated_website_limit, resellerPool.pool_website_limit],
       ['Disk (MB)', resellerPool.allocated_storage_limit_mb, resellerPool.pool_storage_limit_mb],
-      ['Mailboxes', resellerPool.allocated_mail_accounts_limit, resellerPool.pool_mail_accounts_limit],
-      ['Applications', resellerPool.allocated_app_limit, resellerPool.pool_app_limit],
+      // An addon's resource only once the addon is installed, as on the forms.
+      ...(mailAddonInstalled ? [['Mailboxes', resellerPool.allocated_mail_accounts_limit, resellerPool.pool_mail_accounts_limit]] : []),
+      ...(applicationAddonInstalled ? [['Applications', resellerPool.allocated_app_limit, resellerPool.pool_app_limit]] : []),
     ];
     return <section className="section">
       <div className="section-title"><div><h2>{t('Your share')}</h2><p className="hint">{t("Your own limits and every customer's together must fit in the share the administrator gave you.")}</p></div></div>
@@ -10046,8 +10047,8 @@ function App() {
       ['pool_user_limit', 'Customers'],
       ['pool_website_limit', 'Websites'],
       ['pool_storage_limit_mb', 'Disk (MB)'],
-      ['pool_mail_accounts_limit', 'Mailboxes'],
-      ['pool_app_limit', 'Applications'],
+      ...(mailAddonInstalled ? [['pool_mail_accounts_limit', 'Mailboxes']] : []),
+      ...(applicationAddonInstalled ? [['pool_app_limit', 'Applications']] : []),
     ];
     return <>
       <p className="hint wide">{t("Reseller share: its own limits and all its customers' must fit inside these. 0 = unlimited.")}</p>
