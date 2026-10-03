@@ -74,6 +74,9 @@ class User(Base):
     sftp_accounts_limit: Mapped[int] = mapped_column(Integer, default=3)
     # Copied from the package like the limits above.
     mail_accounts_limit: Mapped[int] = mapped_column(Integer, default=10)
+    # Copied from the package like the limits above. 0 = unlimited, as in
+    # OPanel - and what every account had before this column existed.
+    database_limit: Mapped[int] = mapped_column(Integer, default=10, server_default=text("0"))
     # The reseller this account was created by and is managed by; NULL for the
     # admin's own accounts. Only end users have one.
     reseller_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
@@ -85,6 +88,10 @@ class User(Base):
     pool_storage_limit_mb: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     pool_mail_accounts_limit: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     pool_app_limit: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    pool_database_limit: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    # Overselling (admin's choice): the limits above are not added up; what the
+    # accounts actually hold is checked against the pool instead.
+    pool_oversell: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("0"))
     # When this account's Linux/SFTP password was last set on its own.
     #
     # NULL is load-bearing: it means the Linux password has never been set

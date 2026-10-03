@@ -297,3 +297,99 @@ def test_a_reseller_reaches_its_customers_mail_and_zones_only(env):
     with pytest.raises(dns.DnsError):
         dns.may_edit(db, shop, "direct.com")
     assert [zone["name"] for zone in dns.list_zones(db, cust)] == ["cust.com"]
+
+
+def test_an_account_is_held_to_its_database_limit(env, monkeypatch):
+    """Packages carried database_limit long before anything read it (1.2.0)."""
+    from app.services import mariadb
+
+    db, client = env
+    monkeypatch.setattr(mariadb, "create_database_credentials", lambda *a, **k: None)
+    _login(client, "root_admin")
+    package = _call(client, "POST", "/api/packages", json={"name": "Two DBs", "database_limit": 2}).json()
+    made = _call(client, "POST", "/api/users", json={"username": "cust1", **ACCOUNT, "package_id": package["id"]})
+    assert made.status_code == 200 and made.json()["database_limit"] == 2
+    _login(client, "cust1")
+    for name in ("one_db", "two_db"):
+        assert _call(client, "POST", "/api/databases", json={"db_name": name}).status_code == 200
+    refused = _call(client, "POST", "/api/databases", json={"db_name": "three_db"})
+    assert refused.status_code == 403 and "Database limit reached (2/2)" in refused.json()["detail"]
+
+    # Editing the package moves everyone on it; 0 is unlimited.
+    _login(client, "root_admin")
+    assert _call(client, "PATCH", f"/api/packages/{package['id']}", json={"database_limit": 0}).status_code == 200
+    assert _user(db, "cust1").database_limit == 0
+    _login(client, "cust1")
+    assert _call(client, "POST", "/api/databases", json={"db_name": "three_db"}).status_code == 200
+
+
+def test_unlimited_databases_cannot_come_out_of_a_limited_share(env):
+    db, client = env
+    _login(client, "root_admin")
+    created = _call(client, "POST", "/api/users", json={"username": "shop", "role": "reseller", **ACCOUNT, **OWN,
+                                                       "database_limit": 2, **POOL, "pool_database_limit": 5})
+    assert created.status_code == 200, created.text
+    _login(client, "shop")
+    unlimited = _call(client, "POST", "/api/users", json={"username": "cust1", **ACCOUNT, **SMALL, "database_limit": 0})
+    assert unlimited.status_code == 400 and "databases" in unlimited.json()["detail"]
+    over = _call(client, "POST", "/api/users", json={"username": "cust1", **ACCOUNT, **SMALL, "database_limit": 4})
+    assert over.status_code == 400 and "would hold 6 databases" in over.json()["detail"]
+    assert _call(client, "POST", "/api/users", json={"username": "cust1", **ACCOUNT, **SMALL,
+                                                     "database_limit": 3}).status_code == 200
+
+
+def _oversold(client):
+    _login(client, "root_admin")
+    created = _call(client, "POST", "/api/users", json={"username": "shop", "role": "reseller", **ACCOUNT, **OWN,
+                                                       **POOL, "pool_database_limit": 5, "pool_oversell": True})
+    assert created.status_code == 200, created.text
+    assert created.json()["pool_oversell"] is True
+    _login(client, "shop")
+
+
+def test_an_overselling_reseller_hands_out_more_than_its_share(env):
+    """cPanel and DirectAdmin oversell: the limits handed out are not added up
+    (operator, 2026-10-03). Customers are still counted."""
+    db, client = env
+    _oversold(client)
+    big = {"website_limit": 50, "storage_limit_mb": 100000, "mail_accounts_limit": 100, "database_limit": 0}
+    assert _call(client, "POST", "/api/users", json={"username": "cust1", **ACCOUNT, **big}).status_code == 200
+    assert _call(client, "POST", "/api/users", json={"username": "cust2", **ACCOUNT, **big}).status_code == 200
+    third = _call(client, "POST", "/api/users", json={"username": "cust3", **ACCOUNT, **big})
+    assert third.status_code == 400 and "customers" in third.json()["detail"]
+    pool = _call(client, "GET", "/api/users/pool").json()
+    assert pool["pool_oversell"] is True and pool["used_website_limit"] == 0 and pool["used_database_limit"] == 0
+
+    _login(client, "root_admin")
+    shop = _user(db, "shop")
+    assert _call(client, "PATCH", f"/api/users/{shop.id}", json={"pool_oversell": False}).status_code == 400
+    assert _user(db, "shop").pool_oversell is True
+
+
+def test_an_overselling_reseller_is_held_to_what_its_accounts_hold(env, monkeypatch):
+    from app.services import reseller as reseller_pool, storage_quota
+
+    db, client = env
+    _oversold(client)
+    _call(client, "POST", "/api/users", json={"username": "cust1", **ACCOUNT, "website_limit": 9,
+                                             "storage_limit_mb": 100000, "database_limit": 0})
+    shop, cust = _user(db, "shop"), _user(db, "cust1")
+    # Share: 5 websites, 5 databases. Four sites (each with its database) between them.
+    _site(db, shop, "shop0.com")
+    for i in range(3):
+        _site(db, cust, f"cust{i}.com")
+    reseller_pool.ensure_room(db, cust, "website")          # the fifth fits
+    _site(db, cust, "cust9.com")
+    with pytest.raises(ValueError, match="share of websites is used up"):
+        reseller_pool.ensure_room(db, cust, "website")
+    with pytest.raises(ValueError, match="share of databases"):
+        reseller_pool.ensure_room(db, shop, "database")
+    # Somebody else's account is not the reseller's business.
+    reseller_pool.ensure_room(db, _user(db, "direct"), "website")
+
+    # Disk: 3000 MB between them; cust1's own limit is far larger.
+    used = {shop.id: 1000 * 1024 * 1024, cust.id: 1900 * 1024 * 1024}
+    monkeypatch.setattr(storage_quota, "user_storage_used_bytes", lambda db_, user, use_cache=False: used.get(user.id, 0))
+    storage_quota.enforce_user_storage_quota(db, cust, incoming_bytes=50 * 1024 * 1024)
+    with pytest.raises(storage_quota.StorageQuotaExceeded, match="share of disk"):
+        storage_quota.enforce_user_storage_quota(db, cust, incoming_bytes=200 * 1024 * 1024)

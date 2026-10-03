@@ -3,29 +3,45 @@
 The pool is set by the admin (users.pool_*, 0 = unlimited). Out of it come the
 reseller's own account limits and every customer's: the sum of each resource
 across those accounts may not exceed the pool. The per-account limits are
-therefore still what websites, disk, mailboxes and applications are checked
-against day to day; the pool only bounds what the reseller can hand out.
+therefore still what websites, disk, databases, mailboxes and applications are
+checked against day to day; the pool only bounds what the reseller can hand
+out.
 
 In BPanel an account's 0 means none - no websites, no bytes, no mailboxes, no
-applications - so every account limit simply adds up. Applications come from
-the account's package (node_apps_limit), as everywhere else in the panel.
+applications - so those limits simply add up. Databases are the exception:
+an account's database_limit of 0 is unlimited, as in OPanel, so it cannot come
+out of a limited pool. Applications come from the account's package
+(node_apps_limit), as everywhere else in the panel.
+
+An admin may let a reseller oversell (users.pool_oversell), as cPanel and
+DirectAdmin do (operator, 2026-10-03). The limits it hands out are then not
+added up at all; instead what its accounts actually hold - websites,
+databases, mailboxes, applications, disk - is checked against the pool
+whenever one of them creates more (ensure_room, ensure_storage_room).
+Customers are counted the same way either way.
 """
 
 from typing import Optional
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.entities import User, UserPackage
 
-# (account limit, pool limit, label)
+# (account limit, pool limit, 0 means unlimited for an account, label)
 RESOURCES = (
-    ("website_limit", "pool_website_limit", "websites"),
-    ("storage_limit_mb", "pool_storage_limit_mb", "MB of storage"),
-    ("mail_accounts_limit", "pool_mail_accounts_limit", "mailboxes"),
-    ("app_limit", "pool_app_limit", "applications"),
+    ("website_limit", "pool_website_limit", False, "websites"),
+    ("storage_limit_mb", "pool_storage_limit_mb", False, "MB of storage"),
+    ("database_limit", "pool_database_limit", True, "databases"),
+    ("mail_accounts_limit", "pool_mail_accounts_limit", False, "mailboxes"),
+    ("app_limit", "pool_app_limit", False, "applications"),
 )
-POOL_FIELDS = ("pool_user_limit",) + tuple(pool for _, pool, _ in RESOURCES)
-ACCOUNT_FIELDS = ("website_limit", "storage_limit_mb", "mail_accounts_limit")
+POOL_FIELDS = ("pool_user_limit",) + tuple(pool for _, pool, _, _ in RESOURCES)
+OVERSELL = "pool_oversell"
+# Every pool setting, and what an account that is not a reseller holds.
+SETTINGS = POOL_FIELDS + (OVERSELL,)
+NO_POOL = {**{field: 0 for field in POOL_FIELDS}, OVERSELL: False}
+ACCOUNT_FIELDS = ("website_limit", "storage_limit_mb", "mail_accounts_limit", "database_limit")
 
 
 def customers(db: Session, reseller: User) -> list[User]:
@@ -63,6 +79,9 @@ def check_pool(db: Session, reseller: User, *, pool: Optional[dict] = None,
     for field, value in (pool or {}).items():
         if field in pools and value is not None:
             pools[field] = int(value)
+    oversell = bool(getattr(reseller, OVERSELL, False))
+    if (pool or {}).get(OVERSELL) is not None:
+        oversell = bool(pool[OVERSELL])
     changes = changes or {}
     leaving = leaving or set()
 
@@ -78,10 +97,18 @@ def check_pool(db: Session, reseller: User, *, pool: Optional[dict] = None,
         raise ValueError(
             f"This reseller may have {pools['pool_user_limit']} customers; this would make {customer_count}."
         )
-    for field, pool_field, label in RESOURCES:
+    if oversell:
+        # What the accounts hold is checked when they create it, not here.
+        return
+    for field, pool_field, zero_unlimited, label in RESOURCES:
         limit = pools[pool_field]
         if not limit:
             continue
+        if zero_unlimited and any(int(account.get(field) or 0) == 0 for account in accounts):
+            raise ValueError(
+                f"The reseller's {label} are limited to {limit}, so every account under it needs a "
+                f"{label} limit; 0 (unlimited) is not available."
+            )
         total = sum(int(account.get(field) or 0) for account in accounts)
         if total > limit:
             raise ValueError(f"The reseller's accounts would hold {total} {label}; its share is {limit}.")
@@ -94,11 +121,86 @@ def check_package_grants(reseller: User, package: Optional[UserPackage]) -> None
 
 
 def usage(db: Session, reseller: User) -> dict:
-    """The pool and what has been handed out of it, for the panel."""
+    """The pool, what has been handed out of it and what is in use, for the panel."""
     members = customers(db, reseller)
-    accounts = [account_limits(reseller)] + [account_limits(c) for c in members]
-    out = {"customers": len(members), "pool_user_limit": int(reseller.pool_user_limit or 0)}
-    for field, pool_field, _label in RESOURCES:
+    accounts = [reseller] + members
+    limits = [account_limits(account) for account in accounts]
+    out = {"customers": len(members), "pool_user_limit": int(reseller.pool_user_limit or 0),
+           OVERSELL: bool(getattr(reseller, OVERSELL, False))}
+    for field, pool_field, zero_unlimited, _label in RESOURCES:
+        values = [account[field] for account in limits]
         out[pool_field] = int(getattr(reseller, pool_field) or 0)
-        out[f"allocated_{field}"] = sum(account[field] for account in accounts)
+        out[f"allocated_{field}"] = None if zero_unlimited and 0 in values else sum(values)
+    ids = [account.id for account in accounts]
+    for resource in _POOL_OF:
+        out[f"used_{resource}_limit"] = _held(db, resource, ids)
+    out["used_storage_limit_mb"] = _storage_used_bytes(db, accounts) // (1024 * 1024)
     return out
+
+
+# --- overselling: what the accounts actually hold --------------------------------------
+
+_POOL_OF = {"website": ("pool_website_limit", "websites"),
+            "database": ("pool_database_limit", "databases"),
+            "mail_accounts": ("pool_mail_accounts_limit", "mailboxes"),
+            "app": ("pool_app_limit", "applications")}
+
+
+def reseller_of(db: Session, account: User) -> Optional[User]:
+    """The reseller whose share this account's resources come out of."""
+    from app.core.permissions import is_reseller_role
+
+    if is_reseller_role(account.role):
+        return account
+    if not account.reseller_id:
+        return None
+    owner = db.query(User).filter(User.id == account.reseller_id).first()
+    return owner if owner is not None and is_reseller_role(owner.role) else None
+
+
+def _held(db: Session, resource: str, owner_ids: list[int]) -> int:
+    from app.models.entities import DatabaseAccount, MailAccount, SiteApp, Website
+
+    model = {"website": Website, "database": DatabaseAccount, "mail_accounts": MailAccount, "app": SiteApp}[resource]
+    return db.query(func.count(model.id)).filter(model.owner_id.in_(owner_ids)).scalar() or 0
+
+
+def ensure_room(db: Session, account: User, resource: str, adding: int = 1) -> None:
+    """Refuse a new website, database, mailbox or application for an account
+    under an overselling reseller whose accounts already hold its share."""
+    reseller = reseller_of(db, account)
+    if reseller is None or not getattr(reseller, OVERSELL, False):
+        return
+    pool_field, label = _POOL_OF[resource]
+    limit = int(getattr(reseller, pool_field) or 0)
+    if not limit:
+        return
+    held = _held(db, resource, [reseller.id] + [c.id for c in customers(db, reseller)])
+    if held + adding > limit:
+        raise ValueError(f"The reseller's share of {label} is used up ({held}/{limit}).")
+
+
+def _storage_used_bytes(db: Session, accounts: list[User], fresh: Optional[User] = None) -> int:
+    from app.services import storage_quota
+
+    return sum(storage_quota.user_storage_used_bytes(db, account, use_cache=fresh is None or account.id != fresh.id)
+               for account in accounts)
+
+
+def ensure_storage_room(db: Session, account: User, *, incoming_bytes: int = 0, replaced_bytes: int = 0) -> None:
+    """The same for disk. The account writing is measured afresh; the others
+    come from the usage cache, which is minutes old at most."""
+    reseller = reseller_of(db, account)
+    if reseller is None or not getattr(reseller, OVERSELL, False):
+        return
+    limit_mb = int(reseller.pool_storage_limit_mb or 0)
+    if not limit_mb or max(0, incoming_bytes) <= max(0, replaced_bytes):
+        return
+    accounts = [reseller] + customers(db, reseller)
+    used = _storage_used_bytes(db, accounts, fresh=account)
+    projected = max(0, used - max(0, replaced_bytes)) + max(0, incoming_bytes)
+    if projected > limit_mb * 1024 * 1024:
+        raise ValueError(
+            f"The reseller's share of disk is used up: {projected // (1024 * 1024)} MB used/projected, "
+            f"share {limit_mb} MB."
+        )

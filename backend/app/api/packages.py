@@ -138,7 +138,7 @@ def update_package(
             reseller_pool.check_package_grants(current_user, package)
             reseller_pool.check_pool(db, current_user, changes={
                 user.id: {"website_limit": package.website_limit, "storage_limit_mb": package.storage_limit_mb,
-                          "package": package}
+                          "database_limit": package.database_limit, "package": package}
                 for user in assigned
             })
         except ValueError as exc:
@@ -147,6 +147,7 @@ def update_package(
     for user in assigned:
         user.website_limit = package.website_limit
         user.storage_limit_mb = package.storage_limit_mb
+        user.database_limit = package.database_limit
     db.commit()
     db.refresh(package)
     log_action(db, current_user.id, "update_package", package.name, request=request)

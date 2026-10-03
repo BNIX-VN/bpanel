@@ -13,13 +13,13 @@ import logging
 from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.access import ensure_owner_access, scope_owner
-from app.core.permissions import Role, ensure_role
+from app.core.permissions import Role, ensure_role, is_admin_role
 from app.core.secrets import decrypt, encrypt
 from app.models.entities import DatabaseAccount, User, Website
 from app.schemas.schemas import (
     DatabaseCreate, DatabaseCreatedOut, DatabaseOut, DatabaseOwnerUpdate, DatabasePasswordUpdate,
 )
-from app.services import mariadb, panel_urls
+from app.services import mariadb, panel_urls, reseller as reseller_pool
 from app.services.audit import log_action
 from app.services.sso_tokens import consume_phpmyadmin_token, create_phpmyadmin_token
 
@@ -68,11 +68,35 @@ def list_databases(
     return query.order_by(DatabaseAccount.id.desc()).all()
 
 
+def ensure_database_quota(db: Session, owner: User) -> None:
+    """Room for one more database: the owner's own database_limit (0 =
+    unlimited; an administrator has none) and, under an overselling reseller,
+    its share. Every database counts, a WordPress site's included.
+
+    Packages carried database_limit long before anything read it; until 1.2.0
+    an account could make as many databases as it liked.
+    """
+    if not is_admin_role(owner.role):
+        limit = int(owner.database_limit or 0)
+        if limit:
+            owned = db.query(DatabaseAccount).filter(DatabaseAccount.owner_id == owner.id).count()
+            if owned >= limit:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Database limit reached ({owned}/{limit}). Ask your provider to raise it.",
+                )
+    try:
+        reseller_pool.ensure_room(db, owner, "database")
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
 @router.post("", response_model=DatabaseCreatedOut)
 def create_database(payload: DatabaseCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     db_name = payload.db_name
     db_user = payload.db_user or db_name
     db_password = payload.db_password or mariadb.random_password()
+    ensure_database_quota(db, current_user)
 
     if db.query(DatabaseAccount).filter(DatabaseAccount.db_name == db_name).first():
         raise HTTPException(status_code=409, detail="Database name already exists")
