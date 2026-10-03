@@ -570,13 +570,6 @@ def create_account(db: Session, actor: User, domain_id: int, local_part: str, pa
     limit = _limit(owner)
     if not _is_admin(actor) and limit is not None and owner_mailbox_count(db, owner.id) >= limit:
         raise MailError("All the mailboxes in your hosting package are in use.", status=403)
-    if not _is_admin(actor):
-        from app.services import reseller as reseller_pool
-
-        try:
-            reseller_pool.ensure_room(db, owner, "mail_accounts")
-        except ValueError as exc:
-            raise MailError(str(exc), status=403) from exc
     check_password(password, address)
     account = MailAccount(owner_id=owner.id, domain=domain.domain, local_part=local,
                           password_hash=hash_password(password), quota_mb=_quota(actor, quota_mb), enabled=True)

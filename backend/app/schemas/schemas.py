@@ -258,13 +258,9 @@ class UserCreate(BaseModel):
     reseller_id: Optional[int] = Field(default=None, ge=1)
     # A reseller's share of the server (role "reseller" only; 0 = unlimited).
     pool_user_limit: int = Field(default=0, ge=0, le=100000)
-    pool_website_limit: int = Field(default=0, ge=0, le=100000)
     pool_storage_limit_mb: int = Field(default=0, ge=0, le=1024 * 1024 * 1024)
-    pool_mail_accounts_limit: int = Field(default=0, ge=0, le=1000000)
-    pool_app_limit: int = Field(default=0, ge=0, le=100000)
-    pool_database_limit: int = Field(default=0, ge=0, le=100000)
-    # Off: the limits a reseller hands out must fit its share. On: what its
-    # accounts actually hold must, as cPanel and DirectAdmin oversell.
+    # Off: the disk limits a reseller hands out must fit its share. On: the
+    # disk its accounts actually use must, as cPanel and DirectAdmin oversell.
     pool_oversell: bool = False
     website_limit: int = Field(default=5, ge=0, le=1000)
     storage_limit_mb: int = Field(default=1024, ge=0, le=1024 * 1024)
@@ -288,11 +284,7 @@ class UserUpdate(BaseModel):
     reseller_id: Optional[int] = Field(default=None, ge=0)
     # A reseller's share of the server (role "reseller" only; 0 = unlimited).
     pool_user_limit: Optional[int] = Field(default=None, ge=0, le=100000)
-    pool_website_limit: Optional[int] = Field(default=None, ge=0, le=100000)
     pool_storage_limit_mb: Optional[int] = Field(default=None, ge=0, le=1024 * 1024 * 1024)
-    pool_mail_accounts_limit: Optional[int] = Field(default=None, ge=0, le=1000000)
-    pool_app_limit: Optional[int] = Field(default=None, ge=0, le=100000)
-    pool_database_limit: Optional[int] = Field(default=None, ge=0, le=100000)
     pool_oversell: Optional[bool] = None
     is_active: Optional[bool] = None
     package_id: Optional[int] = Field(default=None, ge=1)
@@ -350,11 +342,7 @@ class UserOut(BaseModel):
     database_limit: int = 0
     reseller_id: Optional[int] = None
     pool_user_limit: int = 0
-    pool_website_limit: int = 0
     pool_storage_limit_mb: int = 0
-    pool_mail_accounts_limit: int = 0
-    pool_app_limit: int = 0
-    pool_database_limit: int = 0
     pool_oversell: bool = False
     # NULL means this account's SFTP password has never been set on its own and
     # is still whatever the panel password was. The UI says so.

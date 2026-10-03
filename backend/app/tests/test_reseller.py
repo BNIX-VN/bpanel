@@ -78,8 +78,8 @@ def _user(db, name):
 
 ACCOUNT = {"email": "x@example.com", "password": PASSWORD}
 OWN = {"website_limit": 1, "storage_limit_mb": 1000, "mail_accounts_limit": 2}
-POOL = {"pool_user_limit": 2, "pool_website_limit": 5, "pool_storage_limit_mb": 3000,
-        "pool_mail_accounts_limit": 10, "pool_app_limit": 0}
+# A share is customers and disk, nothing else (operator, 2026-10-03).
+POOL = {"pool_user_limit": 2, "pool_storage_limit_mb": 3000}
 SMALL = {"website_limit": 2, "storage_limit_mb": 1000, "mail_accounts_limit": 4}
 
 
@@ -87,7 +87,7 @@ def _reseller(client):
     _login(client, "root_admin")
     created = _call(client, "POST", "/api/users", json={"username": "shop", "role": "reseller", **ACCOUNT, **OWN, **POOL})
     assert created.status_code == 200, created.text
-    assert created.json()["role"] == "reseller" and created.json()["pool_website_limit"] == 5
+    assert created.json()["role"] == "reseller" and created.json()["pool_storage_limit_mb"] == 3000
     _login(client, "shop")
 
 
@@ -99,21 +99,19 @@ def test_a_reseller_creates_customers_inside_its_share(env):
     # Always its own end user, whatever was asked for.
     assert made.json()["role"] == "end_user" and made.json()["reseller_id"] == _user(db, "shop").id
 
-    # websites: own 1 + 2 + 3 = 6 > 5.
-    over = _call(client, "POST", "/api/users", json={"username": "cust2", **ACCOUNT, **{**SMALL, "website_limit": 3}})
-    assert over.status_code == 400 and "websites" in over.json()["detail"]
-    # storage: 1000 + 1000 + 1001 > 3000.
+    # disk: own 1000 + 1000 + 1001 > 3000.
     big = _call(client, "POST", "/api/users", json={"username": "cust2", **ACCOUNT, **{**SMALL, "storage_limit_mb": 1001}})
-    assert big.status_code == 400 and "storage" in big.json()["detail"]
+    assert big.status_code == 400 and "disk" in big.json()["detail"]
 
-    assert _call(client, "POST", "/api/users", json={"username": "cust2", **ACCOUNT, **{**SMALL, "website_limit": 1,
-                                                                                       "storage_limit_mb": 500}}).status_code == 200
-    third = _call(client, "POST", "/api/users", json={"username": "cust3", **ACCOUNT, "website_limit": 0,
-                                                     "storage_limit_mb": 0, "mail_accounts_limit": 0})
+    # Websites, databases, mailboxes and applications are not part of the share.
+    roomy = {**SMALL, "storage_limit_mb": 500, "website_limit": 500, "mail_accounts_limit": 900, "database_limit": 0}
+    assert _call(client, "POST", "/api/users", json={"username": "cust2", **ACCOUNT, **roomy}).status_code == 200
+    third = _call(client, "POST", "/api/users", json={"username": "cust3", **ACCOUNT, "storage_limit_mb": 0})
     assert third.status_code == 400 and "customers" in third.json()["detail"]
 
     pool = _call(client, "GET", "/api/users/pool").json()
-    assert pool["customers"] == 2 and pool["allocated_website_limit"] == 4 and pool["pool_website_limit"] == 5
+    assert pool["customers"] == 2 and pool["allocated_storage_limit_mb"] == 2500 and pool["pool_storage_limit_mb"] == 3000
+    assert "pool_website_limit" not in pool
 
 
 def test_a_reseller_sees_and_manages_its_customers_only(env):
@@ -131,8 +129,9 @@ def test_a_reseller_sees_and_manages_its_customers_only(env):
     assert _call(client, "POST", f"/api/users/{direct.id}/suspend").status_code == 404
 
     # Its customers: limits within the share, suspend, but no roles.
-    assert _call(client, "PATCH", f"/api/users/{cust['id']}", json={"website_limit": 4}).status_code == 200
-    assert _call(client, "PATCH", f"/api/users/{cust['id']}", json={"website_limit": 5}).status_code == 400
+    assert _call(client, "PATCH", f"/api/users/{cust['id']}", json={"storage_limit_mb": 2000}).status_code == 200
+    assert _call(client, "PATCH", f"/api/users/{cust['id']}", json={"storage_limit_mb": 2001}).status_code == 400
+    assert _call(client, "PATCH", f"/api/users/{cust['id']}", json={"website_limit": 99}).status_code == 200
     assert _call(client, "PATCH", f"/api/users/{cust['id']}", json={"role": "reseller"}).status_code == 403
     assert _call(client, "POST", f"/api/users/{cust['id']}/suspend").status_code == 200
     assert _user(db, "cust1").is_active is False
@@ -179,11 +178,11 @@ def test_a_reseller_keeps_packages_of_its_own(env):
                                                      "package_id": admin_package.id}).status_code == 404
     cust = _call(client, "POST", "/api/users", json={"username": "cust1", **ACCOUNT, "package_id": made.json()["id"]})
     assert cust.status_code == 200, cust.text
-    assert cust.json()["website_limit"] == 2
-    # Growing the package grows every customer on it, so it must still fit.
-    assert _call(client, "PATCH", f"/api/packages/{made.json()['id']}", json={"website_limit": 5}).status_code == 400
-    assert _call(client, "PATCH", f"/api/packages/{made.json()['id']}", json={"website_limit": 4}).status_code == 200
-    assert _user(db, "cust1").website_limit == 4
+    assert cust.json()["website_limit"] == 2 and cust.json()["storage_limit_mb"] == 500
+    # Growing the package's disk grows every customer on it, so it must still fit.
+    assert _call(client, "PATCH", f"/api/packages/{made.json()['id']}", json={"storage_limit_mb": 2001}).status_code == 400
+    assert _call(client, "PATCH", f"/api/packages/{made.json()['id']}", json={"storage_limit_mb": 2000}).status_code == 200
+    assert _user(db, "cust1").storage_limit_mb == 2000
 
     _login(client, "root_admin")
     assert [p["name"] for p in _call(client, "GET", "/api/packages").json()] == ["Basic"]
@@ -197,19 +196,19 @@ def test_the_admin_keeps_the_shares_consistent(env):
     _login(client, "root_admin")
     shop = _user(db, "shop")
     # A share smaller than what is already handed out.
-    assert _call(client, "PATCH", f"/api/users/{shop.id}", json={"pool_website_limit": 2}).status_code == 400
-    assert _call(client, "PATCH", f"/api/users/{shop.id}", json={"pool_website_limit": 3}).status_code == 200
+    assert _call(client, "PATCH", f"/api/users/{shop.id}", json={"pool_storage_limit_mb": 1999}).status_code == 400
+    assert _call(client, "PATCH", f"/api/users/{shop.id}", json={"pool_storage_limit_mb": 2000}).status_code == 200
     # A reseller with customers keeps its role and its account.
     assert _call(client, "PATCH", f"/api/users/{shop.id}", json={"role": "end_user"}).status_code == 400
     assert _call(client, "DELETE", f"/api/users/{shop.id}").status_code == 400
     # Moving the admin's own customer under the reseller must fit its share.
     direct = _user(db, "direct")
     moved = _call(client, "PATCH", f"/api/users/{direct.id}", json={"reseller_id": shop.id})
-    assert moved.status_code == 400  # direct has 5 websites; 1 + 2 + 5 > 3
+    assert moved.status_code == 400  # 1000 + 1000 + direct's 1024 MB > 2000
     assert _call(client, "PATCH", f"/api/users/{cust['id']}", json={"reseller_id": 0}).json()["reseller_id"] is None
     assert _call(client, "GET", f"/api/users/{shop.id}/pool").json()["customers"] == 0
     assert _call(client, "PATCH", f"/api/users/{shop.id}", json={"role": "end_user"}).status_code == 200
-    assert _user(db, "shop").pool_website_limit == 0
+    assert _user(db, "shop").pool_storage_limit_mb == 0
 
 
 def test_an_end_user_has_no_reseller_powers(env):
@@ -323,25 +322,19 @@ def test_an_account_is_held_to_its_database_limit(env, monkeypatch):
     assert _call(client, "POST", "/api/databases", json={"db_name": "three_db"}).status_code == 200
 
 
-def test_unlimited_databases_cannot_come_out_of_a_limited_share(env):
+def test_databases_are_the_resellers_to_set(env):
+    """Not part of the share: a reseller may give a customer unlimited databases."""
     db, client = env
-    _login(client, "root_admin")
-    created = _call(client, "POST", "/api/users", json={"username": "shop", "role": "reseller", **ACCOUNT, **OWN,
-                                                       "database_limit": 2, **POOL, "pool_database_limit": 5})
-    assert created.status_code == 200, created.text
-    _login(client, "shop")
-    unlimited = _call(client, "POST", "/api/users", json={"username": "cust1", **ACCOUNT, **SMALL, "database_limit": 0})
-    assert unlimited.status_code == 400 and "databases" in unlimited.json()["detail"]
-    over = _call(client, "POST", "/api/users", json={"username": "cust1", **ACCOUNT, **SMALL, "database_limit": 4})
-    assert over.status_code == 400 and "would hold 6 databases" in over.json()["detail"]
-    assert _call(client, "POST", "/api/users", json={"username": "cust1", **ACCOUNT, **SMALL,
-                                                     "database_limit": 3}).status_code == 200
+    _reseller(client)
+    made = _call(client, "POST", "/api/users", json={"username": "cust1", **ACCOUNT, **SMALL, "database_limit": 0})
+    assert made.status_code == 200, made.text
+    assert made.json()["database_limit"] == 0
 
 
 def _oversold(client):
     _login(client, "root_admin")
     created = _call(client, "POST", "/api/users", json={"username": "shop", "role": "reseller", **ACCOUNT, **OWN,
-                                                       **POOL, "pool_database_limit": 5, "pool_oversell": True})
+                                                       **POOL, "pool_oversell": True})
     assert created.status_code == 200, created.text
     assert created.json()["pool_oversell"] is True
     _login(client, "shop")
@@ -352,13 +345,13 @@ def test_an_overselling_reseller_hands_out_more_than_its_share(env):
     (operator, 2026-10-03). Customers are still counted."""
     db, client = env
     _oversold(client)
-    big = {"website_limit": 50, "storage_limit_mb": 100000, "mail_accounts_limit": 100, "database_limit": 0}
+    big = {"website_limit": 50, "storage_limit_mb": 100000}
     assert _call(client, "POST", "/api/users", json={"username": "cust1", **ACCOUNT, **big}).status_code == 200
     assert _call(client, "POST", "/api/users", json={"username": "cust2", **ACCOUNT, **big}).status_code == 200
     third = _call(client, "POST", "/api/users", json={"username": "cust3", **ACCOUNT, **big})
     assert third.status_code == 400 and "customers" in third.json()["detail"]
     pool = _call(client, "GET", "/api/users/pool").json()
-    assert pool["pool_oversell"] is True and pool["used_website_limit"] == 0 and pool["used_database_limit"] == 0
+    assert pool["pool_oversell"] is True and pool["used_storage_limit_mb"] == 0 and pool["allocated_storage_limit_mb"] == 201000
 
     _login(client, "root_admin")
     shop = _user(db, "shop")
@@ -366,30 +359,32 @@ def test_an_overselling_reseller_hands_out_more_than_its_share(env):
     assert _user(db, "shop").pool_oversell is True
 
 
-def test_an_overselling_reseller_is_held_to_what_its_accounts_hold(env, monkeypatch):
-    from app.services import reseller as reseller_pool, storage_quota
+def test_an_overselling_reseller_is_held_to_the_disk_its_accounts_use(env, monkeypatch):
+    from app.services import storage_quota
 
     db, client = env
     _oversold(client)
-    _call(client, "POST", "/api/users", json={"username": "cust1", **ACCOUNT, "website_limit": 9,
-                                             "storage_limit_mb": 100000, "database_limit": 0})
+    _call(client, "POST", "/api/users", json={"username": "cust1", **ACCOUNT, "storage_limit_mb": 100000})
     shop, cust = _user(db, "shop"), _user(db, "cust1")
-    # Share: 5 websites, 5 databases. Four sites (each with its database) between them.
-    _site(db, shop, "shop0.com")
-    for i in range(3):
-        _site(db, cust, f"cust{i}.com")
-    reseller_pool.ensure_room(db, cust, "website")          # the fifth fits
-    _site(db, cust, "cust9.com")
-    with pytest.raises(ValueError, match="share of websites is used up"):
-        reseller_pool.ensure_room(db, cust, "website")
-    with pytest.raises(ValueError, match="share of databases"):
-        reseller_pool.ensure_room(db, shop, "database")
-    # Somebody else's account is not the reseller's business.
-    reseller_pool.ensure_room(db, _user(db, "direct"), "website")
-
-    # Disk: 3000 MB between them; cust1's own limit is far larger.
+    # 3000 MB between them; cust1's own limit is far larger.
     used = {shop.id: 1000 * 1024 * 1024, cust.id: 1900 * 1024 * 1024}
     monkeypatch.setattr(storage_quota, "user_storage_used_bytes", lambda db_, user, use_cache=False: used.get(user.id, 0))
     storage_quota.enforce_user_storage_quota(db, cust, incoming_bytes=50 * 1024 * 1024)
     with pytest.raises(storage_quota.StorageQuotaExceeded, match="share of disk"):
         storage_quota.enforce_user_storage_quota(db, cust, incoming_bytes=200 * 1024 * 1024)
+    # Replacing a file with a smaller one is never refused.
+    storage_quota.enforce_user_storage_quota(db, cust, incoming_bytes=10 * 1024 * 1024, replaced_bytes=20 * 1024 * 1024)
+    # Somebody else's account is not the reseller's business.
+    used[_user(db, "direct").id] = 0
+    storage_quota.enforce_user_storage_quota(db, _user(db, "direct"), incoming_bytes=1)
+
+
+def test_without_oversell_disk_in_use_is_the_accounts_own_business(env, monkeypatch):
+    from app.services import reseller as reseller_pool, storage_quota
+
+    db, client = env
+    _reseller(client)
+    _call(client, "POST", "/api/users", json={"username": "cust1", **ACCOUNT, **SMALL})
+    monkeypatch.setattr(storage_quota, "user_storage_used_bytes", lambda db_, user, use_cache=False: 5000 * 1024 * 1024)
+    # Far past the share in use, but the limits handed out fit it: no share check.
+    reseller_pool.ensure_storage_room(db, _user(db, "cust1"), incoming_bytes=1024 * 1024)

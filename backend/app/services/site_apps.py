@@ -207,9 +207,6 @@ def ensure_app_quota(db: Session, user: User, is_admin: bool = False) -> None:
         raise ValueError("Application hosting is not enabled for this package")
     if count_apps_for_owner(db, user.id) >= limit:
         raise ValueError(f"This package allows at most {limit} application(s)")
-    from app.services import reseller as reseller_pool
-
-    reseller_pool.ensure_room(db, user, "app")
 
 
 def app_port_for_website(website: Website) -> Optional[int]:

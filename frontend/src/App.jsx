@@ -898,7 +898,7 @@ function App() {
   const [selectedFilePaths, setSelectedFilePaths] = useState([]);
   const [archiveFormat, setArchiveFormat] = useState('zip');
   const [editorCursor, setEditorCursor] = useState({ line: 1, column: 1 });
-  const [newUser, setNewUser] = useState({ username: '', email: '', password: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024, sftp_accounts_limit: 0, mail_accounts_limit: 10, database_limit: 10, reseller_id: '', pool_user_limit: 0, pool_website_limit: 0, pool_storage_limit_mb: 0, pool_mail_accounts_limit: 0, pool_app_limit: 0, pool_database_limit: 0, pool_oversell: false });
+  const [newUser, setNewUser] = useState({ username: '', email: '', password: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024, sftp_accounts_limit: 0, mail_accounts_limit: 10, database_limit: 10, reseller_id: '', pool_user_limit: 0, pool_storage_limit_mb: 0, pool_oversell: false });
   // A reseller's share of the server and what it has handed out (GET /users/pool).
   const [resellerPool, setResellerPool] = useState(null);
   // Who a new website is for: '' is the account creating it.
@@ -1750,7 +1750,8 @@ function App() {
     if (data) setResourceUsage(data);
   }
 
-  const POOL_FIELDS = ['pool_user_limit', 'pool_website_limit', 'pool_storage_limit_mb', 'pool_mail_accounts_limit', 'pool_app_limit', 'pool_database_limit'];
+  // A reseller's share: customers and disk, nothing else.
+  const POOL_FIELDS = ['pool_user_limit', 'pool_storage_limit_mb'];
 
   async function createUser() {
     const payload = {
@@ -1772,7 +1773,7 @@ function App() {
     const data = await request('/users', { method: 'POST', body: JSON.stringify(payload) }, t('Creating user...'));
     if (data) {
       setNotice(`Created user ${data.username}`);
-      setNewUser({ username: '', email: '', password: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024, sftp_accounts_limit: 0, mail_accounts_limit: 10, database_limit: 10, reseller_id: '', pool_user_limit: 0, pool_website_limit: 0, pool_storage_limit_mb: 0, pool_mail_accounts_limit: 0, pool_app_limit: 0, pool_database_limit: 0, pool_oversell: false });
+      setNewUser({ username: '', email: '', password: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024, sftp_accounts_limit: 0, mail_accounts_limit: 10, database_limit: 10, reseller_id: '', pool_user_limit: 0, pool_storage_limit_mb: 0, pool_oversell: false });
       await loadUsers();
       if (isReseller) await loadResellerPool();
       setUserTab('list');
@@ -1817,11 +1818,7 @@ function App() {
       mail_accounts_limit: user.mail_accounts_limit ?? 10,
       reseller_id: user.reseller_id ? String(user.reseller_id) : '',
       pool_user_limit: user.pool_user_limit ?? 0,
-      pool_website_limit: user.pool_website_limit ?? 0,
       pool_storage_limit_mb: user.pool_storage_limit_mb ?? 0,
-      pool_mail_accounts_limit: user.pool_mail_accounts_limit ?? 0,
-      pool_app_limit: user.pool_app_limit ?? 0,
-      pool_database_limit: user.pool_database_limit ?? 0,
       pool_oversell: !!user.pool_oversell,
       database_limit: user.database_limit ?? 0,
       new_password: '',
@@ -10033,22 +10030,16 @@ function App() {
   // A reseller's share of the server: what is handed out against what it has.
   function renderResellerPool() {
     if (!isReseller || !resellerPool) return null;
-    // Overselling counts what the accounts hold; otherwise what was handed out.
+    // Overselling counts the disk the accounts use; otherwise what was handed out.
     const oversell = !!resellerPool.pool_oversell;
-    const count = (allocated, used) => resellerPool[oversell ? `used_${used}_limit` : `allocated_${allocated}`];
     const rows = [
       ['Customers', resellerPool.customers, resellerPool.pool_user_limit],
-      ['Disk (MB)', count('storage_limit_mb', 'storage'), resellerPool.pool_storage_limit_mb],
-      ['Websites', count('website_limit', 'website'), resellerPool.pool_website_limit],
-      ['Databases', count('database_limit', 'database'), resellerPool.pool_database_limit],
-      // An addon's resource only once the addon is installed, as on the forms.
-      ...(mailAddonInstalled ? [['Mailboxes', count('mail_accounts_limit', 'mail_accounts'), resellerPool.pool_mail_accounts_limit]] : []),
-      ...(applicationAddonInstalled ? [['Applications', count('app_limit', 'app'), resellerPool.pool_app_limit]] : []),
+      ['Disk (MB)', resellerPool[oversell ? 'used_storage_limit_mb' : 'allocated_storage_limit_mb'], resellerPool.pool_storage_limit_mb],
     ];
     return <section className="section">
       <div className="section-title"><div><h2>{t('Your share')}</h2><p className="hint">{oversell
-        ? t("What your account and your customers' accounts use together must stay within the share the administrator gave you. The limits you give customers may add up to more.")
-        : t("Your own limits and every customer's together must fit in the share the administrator gave you.")}</p></div></div>
+        ? t("The disk your account and your customers' accounts use together must stay within the share the administrator gave you. The disk limits you give customers may add up to more.")
+        : t("Your disk limit plus every customer's must fit in the share the administrator gave you. Websites, databases and mailboxes are yours to set for each customer.")}</p></div></div>
       <div className="reseller-pool">
         {rows.map(([label, used, total]) => <div className="reseller-pool-item" key={label}>
           <span>{t(label)}</span>
@@ -10063,19 +10054,16 @@ function App() {
   }
 
   function renderPoolInputs(form, setForm) {
-    // Customers and disk first: what a reseller is usually sold by.
+    // Customers and disk: what a reseller is sold by. Websites, databases,
+    // mailboxes and applications are its own to give its customers.
     const fields = [
       ['pool_user_limit', 'Customers'],
       ['pool_storage_limit_mb', 'Disk (MB)'],
-      ['pool_website_limit', 'Websites'],
-      ['pool_database_limit', 'Databases'],
-      ...(mailAddonInstalled ? [['pool_mail_accounts_limit', 'Mailboxes']] : []),
-      ...(applicationAddonInstalled ? [['pool_app_limit', 'Applications']] : []),
     ];
     return <>
       <p className="hint wide">{form.pool_oversell
-        ? t("Reseller share, overselling: what its accounts use together must stay within these; the limits it gives customers may add up to more. 0 = unlimited.")
-        : t("Reseller share: its own limits and all its customers' must fit inside these. 0 = unlimited.")}</p>
+        ? t("Reseller share, overselling: number of customers and disk. The disk its accounts use together must stay within it; the disk limits it gives customers may add up to more. 0 = unlimited.")
+        : t("Reseller share: number of customers and disk. Its own disk limit and all its customers' must fit inside it. 0 = unlimited.")}</p>
       {fields.map(([field, label]) => <label key={field}><span>{t('Share')}: {t(label)}</span><input type="number" min="0" value={form[field] ?? 0} onChange={e => setForm(prev => ({ ...prev, [field]: e.target.value }))} /></label>)}
       <label className="check-line wide"><input type="checkbox" checked={!!form.pool_oversell} onChange={e => setForm(prev => ({ ...prev, pool_oversell: e.target.checked }))} /> {t('Allow overselling (count what is used, as cPanel and DirectAdmin do)')}</label>
     </>;

@@ -1,4 +1,4 @@
-"""per-account database limit, a reseller's database share, and its oversell switch
+"""per-account database limit, and a reseller's oversell switch
 
 Packages have carried database_limit since they were added, but no account
 had one and nothing counted databases. users.database_limit now holds it
@@ -7,9 +7,11 @@ OPanel). Existing accounts start at 0, so nobody loses a database or the
 ability to make one by updating; assigning or editing a package applies its
 value.
 
-pool_database_limit is a reseller's share of databases; pool_oversell lets
-it oversell, as cPanel and DirectAdmin do: its limits are then not added
-up, and what its accounts actually hold is checked against the share.
+A reseller's share is now customers and disk only. pool_oversell lets it
+oversell, as cPanel and DirectAdmin do: the disk limits it hands out are
+then not added up, and the disk its accounts actually use is checked
+against the share instead. The website, mailbox and application share
+columns 0043 added stay, unread.
 
 Revision ID: 0044_database_limit_oversell
 Revises: 0043_reseller
@@ -30,8 +32,6 @@ def upgrade():
     with op.batch_alter_table("users") as batch:
         if "database_limit" not in users:
             batch.add_column(sa.Column("database_limit", sa.Integer(), nullable=False, server_default="0"))
-        if "pool_database_limit" not in users:
-            batch.add_column(sa.Column("pool_database_limit", sa.Integer(), nullable=False, server_default="0"))
         if "pool_oversell" not in users:
             batch.add_column(sa.Column("pool_oversell", sa.Boolean(), nullable=False, server_default=sa.false()))
 
@@ -39,5 +39,4 @@ def upgrade():
 def downgrade():
     with op.batch_alter_table("users") as batch:
         batch.drop_column("pool_oversell")
-        batch.drop_column("pool_database_limit")
         batch.drop_column("database_limit")
