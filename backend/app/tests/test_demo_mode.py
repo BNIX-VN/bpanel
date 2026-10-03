@@ -68,6 +68,7 @@ REVIEWED_READS = {
     "/api/site-apps/{app_id}/logs", "/api/site-apps/{app_id}/status", "/api/site-runtimes/status",
     "/api/terminal/allowed-commands", "/api/updates/status", "/api/users", "/api/users/audit/log",
     "/api/users/me", "/api/users/storage-usage", "/api/users/pool", "/api/users/{user_id}/pool",
+    "/api/resource-limits", "/api/resource-limits/{user_id}/history",
     "/api/waf/access-logs", "/api/waf/bots",
     "/api/waf/crs", "/api/waf/orphans", "/api/waf/rules", "/api/waf/status",
     "/api/waf/websites/{website_id}", "/api/websites", "/api/websites/{website_id}/aliases",

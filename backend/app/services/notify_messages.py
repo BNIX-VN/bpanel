@@ -35,6 +35,8 @@ EVENTS: dict[str, dict] = {
                             "hint": "Any scan on the server that finds something."},
     "ssl_expiring_admin": {"audience": ADMIN, "label": "Certificates about to expire",
                            "hint": "Every website's certificate, checked once a day."},
+    "resource_limit": {"audience": ADMIN, "label": "An account hit its memory limit",
+                       "hint": "Resource limits addon: processes stopped for going over an account's memory, checked every 5 minutes."},
     # --- an administrator's own account ----------------------------------------
     "login_new_ip": {"audience": USER, "label": "Sign-in from a new address",
                      "hint": "Your account signed in from an IP it has not used before."},
@@ -83,6 +85,21 @@ def _disk_high(p: dict, lang: str) -> tuple[str, list[str]]:
         (f"Disk {p['percent']}% full", [
             f"{p['used']} of {p['total']} used, {p['free']} free.",
             "When it is full, MariaDB, backups and uploads all start failing.",
+        ])
+    )
+
+
+def _resource_limit(p: dict, lang: str) -> tuple[str, list[str]]:
+    vi = lang == "vi"
+    limit = f"{p['memory']} MB" if p.get("memory") else ("không giới hạn" if vi else "unlimited")
+    return (
+        (f"Tài khoản {p['username']} chạm giới hạn RAM", [
+            f"{p['count']} tiến trình của tài khoản {p['username']} bị dừng vì vượt giới hạn RAM ({limit}) trong 5 phút qua.",
+            "Website của tài khoản đó có thể đã báo lỗi. Tăng RAM của tài khoản hoặc kiểm tra website nào đang dùng nhiều bộ nhớ.",
+        ]) if vi else
+        (f"Account {p['username']} hit its memory limit", [
+            f"{p['count']} process(es) of account {p['username']} were stopped for going over its memory limit ({limit}) in the last 5 minutes.",
+            "Its websites may have shown errors. Raise the account's memory or find the website using it.",
         ])
     )
 
@@ -178,6 +195,7 @@ _RENDER: dict[str, Callable[[dict, str], tuple[str, list[str]]]] = {
     "backup_failed_admin": _backup_failed,
     "malware_found_admin": _malware_found,
     "ssl_expiring_admin": _ssl_expiring,
+    "resource_limit": _resource_limit,
     "login_new_ip": _login_new_ip,
     "security_change": _security_change,
 }

@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import addons as addons_api, auth, dashboard, databases, demo_mode as demo_mode_api, dns as dns_api, fail2ban as fail2ban_api, firewall, mail as mail_api, maintenance, malware, mcp as mcp_api, notifications as notifications_api, packages, panel_settings as panel_settings_api, provisioning, services, sftp_accounts as sftp_accounts_api, site_apps as site_apps_api, terminal, updates, users, waf, websites
+from app.api import addons as addons_api, auth, dashboard, databases, demo_mode as demo_mode_api, dns as dns_api, fail2ban as fail2ban_api, firewall, mail as mail_api, maintenance, malware, mcp as mcp_api, notifications as notifications_api, packages, panel_settings as panel_settings_api, provisioning, resource_limits as resource_limits_api, services, sftp_accounts as sftp_accounts_api, site_apps as site_apps_api, terminal, updates, users, waf, websites
 from app.core.config import settings
 from app.core.database import run_migrations
 from app.core.version import APP_VERSION
@@ -66,11 +66,14 @@ def _sync_dns_zones() -> None:
 
     def run() -> None:
         from app.core.database import SessionLocal
-        from app.services import dns, mail
+        from app.services import dns, mail, resource_limits
 
         with SessionLocal() as db:
             dns.sync_quietly(db)
             mail.sync_quietly(db)
+            # Resource limits: a panel update may bring a new agent, and the
+            # accounts it limits are whatever the database says now.
+            resource_limits.sync_quietly(db)
 
     threading.Thread(target=run, name="bpanel-dns-sync", daemon=True).start()
 
@@ -190,6 +193,7 @@ app.include_router(site_apps_api.runtime_router, prefix="/api")
 app.include_router(demo_mode_api.router, prefix="/api")
 app.include_router(dns_api.router, prefix="/api")
 app.include_router(mail_api.router, prefix="/api")
+app.include_router(resource_limits_api.router, prefix="/api")
 
 
 @app.get("/api/health")

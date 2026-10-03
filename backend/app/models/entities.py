@@ -42,6 +42,12 @@ class UserPackage(Base):
     # Mailboxes on the Email addon's server. Only means anything with the
     # addon installed; administrators are not held to it.
     mail_accounts_limit: Mapped[int] = mapped_column(Integer, default=10)
+    # Resource limits addon; copied to the accounts on the package.
+    cpu_percent: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    memory_mb: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    process_limit: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    io_read_mbps: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    io_write_mbps: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     users: Mapped[List["User"]] = relationship(back_populates="package", foreign_keys="User.package_id")
@@ -89,6 +95,20 @@ class User(Base):
     # Off: the disk limits handed out must fit the share. On (overselling, as
     # cPanel and DirectAdmin do): what the accounts hold on disk must.
     pool_oversell: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("0"))
+    # Resource limits addon (0 = unlimited): this account's own CPU (100 = one
+    # core), memory, processes and disk I/O. See services/resource_limits.py.
+    cpu_percent: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    memory_mb: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    process_limit: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    io_read_mbps: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    io_write_mbps: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    # A reseller's caps on its whole group: its own account and every
+    # customer's, together. The administrator's to set.
+    group_cpu_percent: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    group_memory_mb: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    group_process_limit: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    group_io_read_mbps: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    group_io_write_mbps: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     # When this account's Linux/SFTP password was last set on its own.
     #
     # NULL is load-bearing: it means the Linux password has never been set

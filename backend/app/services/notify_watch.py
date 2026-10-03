@@ -102,6 +102,36 @@ def check_disk(state: dict, threshold: int) -> None:
         state["disk_alerted"] = False
 
 
+def check_resource_limits(state: dict) -> None:
+    """Resource limits addon: an account whose processes were stopped for
+    going over its memory limit. The agent keeps the kernel's running count
+    per slice; a rise since the last check is news."""
+    from app.core.database import SessionLocal
+    from app.core.permissions import is_admin_role
+    from app.models.entities import User
+    from app.services import resource_limits
+
+    if not resource_limits.installed():
+        return
+    slices = resource_limits._read_json(resource_limits.USAGE_FILE).get("slices") or {}
+    seen = state.setdefault("resource_oom", {})
+    with SessionLocal() as db:
+        for user in db.query(User).all():
+            if is_admin_role(user.role):
+                continue
+            entry = slices.get(resource_limits.account_slice(user))
+            if not isinstance(entry, dict):
+                continue
+            kills = int(entry.get("oom_kills") or 0)
+            previous = seen.get(str(user.id))
+            seen[str(user.id)] = kills
+            # First sight, or the slice was made again and counts from 0.
+            if previous is None or kills <= int(previous):
+                continue
+            notifications.notify("resource_limit", {"username": user.username, "count": kills - int(previous),
+                                                    "memory": int(user.memory_mb or 0)}, admins=True)
+
+
 def check_firewall(state: dict) -> None:
     from app.services import firewall
 
@@ -195,7 +225,8 @@ def run() -> str:
     done = []
     for name, check in (("services", lambda: check_services(state)),
                         ("disk", lambda: check_disk(state, int(thresholds["disk_percent"]))),
-                        ("firewall", lambda: check_firewall(state))):
+                        ("firewall", lambda: check_firewall(state)),
+                        ("resources", lambda: check_resource_limits(state))):
         try:
             check()
             done.append(name)

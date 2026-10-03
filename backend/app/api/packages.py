@@ -7,8 +7,8 @@ from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.permissions import Role, ensure_role, is_reseller_role
 from app.models.entities import User, UserPackage
-from app.schemas.schemas import UserPackageCreate, UserPackageOut, UserPackageUpdate
-from app.services import reseller as reseller_pool
+from app.schemas.schemas import RESOURCE_LIMIT_FIELDS, UserPackageCreate, UserPackageOut, UserPackageUpdate
+from app.services import reseller as reseller_pool, resource_limits
 from app.services.audit import log_action
 
 router = APIRouter(prefix="/packages", tags=["packages"])
@@ -82,6 +82,9 @@ def create_package(
         sftp_accounts_limit=payload.sftp_accounts_limit,
         mail_accounts_limit=payload.mail_accounts_limit,
         node_app_memory_mb=payload.node_app_memory_mb,
+        # Resource limits addon (cpu_percent, memory_mb, process_limit,
+        # io_read_mbps, io_write_mbps); copied to the accounts on the package.
+        **{field: getattr(payload, field) for field in RESOURCE_LIMIT_FIELDS},
     )
     _check_grants(current_user, package)
     db.add(package)
@@ -130,6 +133,9 @@ def update_package(
         package.mail_accounts_limit = payload.mail_accounts_limit
     if payload.node_app_memory_mb is not None:
         package.node_app_memory_mb = payload.node_app_memory_mb
+    for field in RESOURCE_LIMIT_FIELDS:
+        if getattr(payload, field) is not None:
+            setattr(package, field, getattr(payload, field))
     assigned = db.query(User).filter(User.package_id == package.id).all()
     if owner_id is not None:
         # The customers on this package take its new limits: all of them must
@@ -148,7 +154,11 @@ def update_package(
         user.website_limit = package.website_limit
         user.storage_limit_mb = package.storage_limit_mb
         user.database_limit = package.database_limit
+        for field in RESOURCE_LIMIT_FIELDS:
+            setattr(user, field, int(getattr(package, field) or 0))
     db.commit()
+    if assigned:
+        resource_limits.sync_in_background()
     db.refresh(package)
     log_action(db, current_user.id, "update_package", package.name, request=request)
     return package

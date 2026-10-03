@@ -12,7 +12,7 @@ from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.permissions import Role, ensure_role, is_admin_role
 from app.models.entities import SiteApp, User
-from app.services import addons, demo_mode, dns, fail2ban, mail, panel_settings, site_apps
+from app.services import addons, demo_mode, dns, fail2ban, mail, panel_settings, resource_limits, site_apps
 from app.services.audit import log_action
 
 router = APIRouter(prefix="/addons", tags=["addons"])
@@ -92,6 +92,13 @@ def install_addon(slug: str, db: Session = Depends(get_db), current_user: User =
             raise HTTPException(status_code=400, detail=exc.message) from exc
         except (RuntimeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=_install_failure(exc)) from exc
+    if slug == addons.LIMITS:
+        # The agent (checked against the hash the helper ships with), then its
+        # service. Refused on cgroup v1 or inside a container, with the reason.
+        try:
+            resource_limits.install()
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=_install_failure(exc)) from exc
     if slug == addons.MALWARE:
         # The scanner's own switch: installs LMD and the ClamAV engine in the
         # background when they are missing, and returns at once.
@@ -117,6 +124,9 @@ def install_addon(slug: str, db: Session = Depends(get_db), current_user: User =
         # Accounts chosen before the addon was last removed get their public
         # passwords back; see demo_mode.switch_off for why they lost them.
         demo_mode.switch_on(db)
+    if slug == addons.LIMITS:
+        # Every account into its slice now, with the limits already set.
+        resource_limits.sync_quietly(db)
     log_action(db, current_user.id, "install_addon", slug, record.get("version", ""))
     return {
         "slug": slug,
@@ -204,6 +214,12 @@ def uninstall_addon(slug: str, db: Session = Depends(get_db), current_user: User
             stopped.append("Exim, Dovecot, webmail")
         except RuntimeError:
             failed.append("Exim, Dovecot, webmail")
+    if slug == addons.LIMITS:
+        try:
+            resource_limits.uninstall()
+            stopped.append("bpanel-limits")
+        except RuntimeError:
+            failed.append("bpanel-limits")
     retired: list[str] = []
     if slug == addons.DEMO:
         # Before the flag goes: once it has, these are ordinary accounts, and
@@ -229,6 +245,8 @@ def uninstall_addon(slug: str, db: Session = Depends(get_db), current_user: User
         if slug == addons.FAIL2BAN
         else "LMD, ClamAV, the scan history and the schedule settings are all kept."
         if slug == addons.MALWARE
+        else "Every limit is lifted. The limits set on accounts and packages are kept and apply again when you install the addon again."
+        if slug == addons.LIMITS
         else (f"{revoked} MCP token(s) were revoked. Assistants using them can no longer reach the panel."
               if slug == addons.MCP
               else "Application directories, volumes and panel data are all kept."),

@@ -1264,7 +1264,10 @@ def test_every_addon_has_a_way_in_from_the_sidebar():
                   # Administrators and customers alike (2026-09-29).
                   "mail": "mailAddonInstalled ? [['mail', 'Email', Mail]]",
                   # Administrators only (operator, 2026-09-27).
-                  "notifications": "notificationsAddonInstalled && isAdmin ? [['notifications',"}.get(slug)
+                  "notifications": "notificationsAddonInstalled && isAdmin ? [['notifications',",
+                  # No page of its own: limits are set on accounts and packages,
+                  # and each account's use is shown there (2026-10-04).
+                  "limits": "canManageUsers ? [['users', 'Panel users', Users]]"}.get(slug)
         assert way_in, f"addon {slug} has no sidebar entry named in this test"
         assert way_in in sidebar, f"addon {slug} is installable but has no way in from the sidebar"
 

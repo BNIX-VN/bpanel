@@ -172,7 +172,47 @@ class TwoFactorDisableRequest(BaseModel):
     code: Optional[str] = Field(default=None, min_length=6, max_length=12)
 
 
-class UserPackageCreate(BaseModel):
+# --- Resource limits addon -------------------------------------------------------------
+# 0 is unlimited. Anything else has a floor, because a limit below it does not
+# limit a website, it breaks it: PHP needs a few processes and some memory to
+# answer a single request.
+RESOURCE_LIMIT_RULES = {
+    "cpu_percent": (10, 100000),       # 100 = one core
+    "memory_mb": (128, 16 * 1024 * 1024),
+    "process_limit": (10, 1000000),
+    "io_read_mbps": (1, 1000000),
+    "io_write_mbps": (1, 1000000),
+}
+RESOURCE_LIMIT_FIELDS = tuple(RESOURCE_LIMIT_RULES)
+GROUP_LIMIT_FIELDS = tuple(f"group_{name}" for name in RESOURCE_LIMIT_FIELDS)
+
+
+def check_resource_limit(name: str, value):
+    if value is None or value == 0:
+        return value
+    low, high = RESOURCE_LIMIT_RULES[name.removeprefix("group_")]
+    if not low <= value <= high:
+        raise ValueError(f"must be 0 (unlimited) or from {low} to {high}")
+    return value
+
+
+class ResourceLimitsIn(BaseModel):
+    """Mixed into the account and package models that carry resource limits."""
+
+    @field_validator(*RESOURCE_LIMIT_FIELDS, check_fields=False)
+    @classmethod
+    def _limits_in_range(cls, value, info):
+        return check_resource_limit(info.field_name, value)
+
+
+class GroupLimitsIn(BaseModel):
+    @field_validator(*GROUP_LIMIT_FIELDS, check_fields=False)
+    @classmethod
+    def _group_limits_in_range(cls, value, info):
+        return check_resource_limit(info.field_name, value)
+
+
+class UserPackageCreate(ResourceLimitsIn):
     name: str = Field(min_length=1, max_length=100)
     slug: Optional[str] = Field(default=None, max_length=100)
     website_limit: int = Field(default=5, ge=0, le=1000)
@@ -187,6 +227,12 @@ class UserPackageCreate(BaseModel):
     node_app_memory_mb: int = Field(default=512, ge=64, le=16384)
     sftp_accounts_limit: int = Field(default=3, ge=0, le=100)
     mail_accounts_limit: int = Field(default=10, ge=0, le=1000)
+    # Resource limits addon (0 = unlimited); copied to the accounts on it.
+    cpu_percent: int = 0
+    memory_mb: int = 0
+    process_limit: int = 0
+    io_read_mbps: int = 0
+    io_write_mbps: int = 0
 
     @field_validator("name")
     @classmethod
@@ -197,7 +243,7 @@ class UserPackageCreate(BaseModel):
         return value
 
 
-class UserPackageUpdate(BaseModel):
+class UserPackageUpdate(ResourceLimitsIn):
     name: Optional[str] = Field(default=None, min_length=1, max_length=100)
     slug: Optional[str] = Field(default=None, max_length=100)
     website_limit: Optional[int] = Field(default=None, ge=0, le=1000)
@@ -212,6 +258,11 @@ class UserPackageUpdate(BaseModel):
     node_app_memory_mb: Optional[int] = Field(default=None, ge=64, le=16384)
     sftp_accounts_limit: Optional[int] = Field(default=None, ge=0, le=100)
     mail_accounts_limit: Optional[int] = Field(default=None, ge=0, le=1000)
+    cpu_percent: Optional[int] = None
+    memory_mb: Optional[int] = None
+    process_limit: Optional[int] = None
+    io_read_mbps: Optional[int] = None
+    io_write_mbps: Optional[int] = None
 
     @field_validator("name")
     @classmethod
@@ -239,6 +290,11 @@ class UserPackageOut(BaseModel):
     node_apps_limit: int = 0
     sftp_accounts_limit: int = 3
     mail_accounts_limit: int = 10
+    cpu_percent: int = 0
+    memory_mb: int = 0
+    process_limit: int = 0
+    io_read_mbps: int = 0
+    io_write_mbps: int = 0
     node_app_memory_mb: int = 512
     owner_id: Optional[int] = None
     created_at: Optional[datetime] = None
@@ -247,7 +303,7 @@ class UserPackageOut(BaseModel):
         from_attributes = True
 
 
-class UserCreate(BaseModel):
+class UserCreate(ResourceLimitsIn, GroupLimitsIn):
     username: str = Field(min_length=3, max_length=32, pattern=r"^[a-z_][a-z0-9_-]{2,31}$")
     email: EmailStr
     password: str = Field(min_length=12, max_length=72)  # bcrypt 72-byte limit
@@ -267,6 +323,18 @@ class UserCreate(BaseModel):
     sftp_accounts_limit: int = Field(default=3, ge=0, le=100)
     mail_accounts_limit: int = Field(default=10, ge=0, le=1000)
     database_limit: int = Field(default=10, ge=0, le=10000)  # 0 = unlimited
+    # Resource limits addon (0 = unlimited). group_* are a reseller's caps on
+    # its whole group, the administrator's to set.
+    cpu_percent: int = 0
+    memory_mb: int = 0
+    process_limit: int = 0
+    io_read_mbps: int = 0
+    io_write_mbps: int = 0
+    group_cpu_percent: int = 0
+    group_memory_mb: int = 0
+    group_process_limit: int = 0
+    group_io_read_mbps: int = 0
+    group_io_write_mbps: int = 0
 
     @field_validator("username")
     @classmethod
@@ -276,7 +344,7 @@ class UserCreate(BaseModel):
         return value
 
 
-class UserUpdate(BaseModel):
+class UserUpdate(ResourceLimitsIn, GroupLimitsIn):
     email: Optional[EmailStr] = None
     role: Optional[Literal["admin", "reseller", "end_user"]] = None
     # Admin only: move an end user under a reseller (an id) or back to the
@@ -296,6 +364,16 @@ class UserUpdate(BaseModel):
     sftp_accounts_limit: Optional[int] = Field(default=None, ge=0, le=100)
     mail_accounts_limit: Optional[int] = Field(default=None, ge=0, le=1000)
     database_limit: Optional[int] = Field(default=None, ge=0, le=10000)  # 0 = unlimited
+    cpu_percent: Optional[int] = None
+    memory_mb: Optional[int] = None
+    process_limit: Optional[int] = None
+    io_read_mbps: Optional[int] = None
+    io_write_mbps: Optional[int] = None
+    group_cpu_percent: Optional[int] = None
+    group_memory_mb: Optional[int] = None
+    group_process_limit: Optional[int] = None
+    group_io_read_mbps: Optional[int] = None
+    group_io_write_mbps: Optional[int] = None
 
 
 class UserPasswordUpdate(BaseModel):
@@ -344,6 +422,16 @@ class UserOut(BaseModel):
     pool_user_limit: int = 0
     pool_storage_limit_mb: int = 0
     pool_oversell: bool = False
+    cpu_percent: int = 0
+    memory_mb: int = 0
+    process_limit: int = 0
+    io_read_mbps: int = 0
+    io_write_mbps: int = 0
+    group_cpu_percent: int = 0
+    group_memory_mb: int = 0
+    group_process_limit: int = 0
+    group_io_read_mbps: int = 0
+    group_io_write_mbps: int = 0
     # NULL means this account's SFTP password has never been set on its own and
     # is still whatever the panel password was. The UI says so.
     sftp_password_set_at: Optional[datetime] = None

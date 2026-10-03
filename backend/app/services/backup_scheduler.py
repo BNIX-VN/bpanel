@@ -200,3 +200,13 @@ def run_due_schedules(now: datetime | None = None) -> int:
 if __name__ == "__main__":
     count = run_due_schedules()
     print(f"BPanel backup scheduler ran {count} job(s).")
+    # This timer is also the minute tick for the Resource limits addon: every
+    # account is in its slice, including ones made outside the users page -
+    # WHMCS, a restore, a DirectAdmin import. The helper only rewrites the
+    # agent's configuration when it changed. A no-op without the addon.
+    try:
+        from app.services import resource_limits
+
+        resource_limits.sync_quietly()
+    except Exception as exc:  # noqa: BLE001 - never fail the backup run for it
+        print(f"BPanel resource limits tick failed: {exc}")

@@ -147,7 +147,7 @@ def test_the_panel_password_no_longer_carries_a_linux_restriction():
     """Keeping it would be a lie: the value never reaches a Linux account."""
     src = SCHEMAS.read_text(encoding="utf-8")
     for cls in ("UserCreate", "UserPasswordUpdate", "AdminAccountUpdate"):
-        block = src.split(f"class {cls}(BaseModel):", 1)[1].split("\nclass ", 1)[0]
+        block = src.split(f"class {cls}(", 1)[1].split("\nclass ", 1)[0]
         assert "_validate_linux_login_password" not in block, (
             f"{cls} still applies the Linux login rule to a panel password"
         )
