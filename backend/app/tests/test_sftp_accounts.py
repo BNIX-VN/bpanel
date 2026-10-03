@@ -350,7 +350,9 @@ USERS_PY = PROJECT_ROOT / "backend" / "app" / "api" / "users.py"
 
 def _package_limit_columns() -> list[str]:
     from app.models.entities import UserPackage
-    skip = {"id", "name", "slug", "created_at", "users"}
+    # owner_id is whose package it is (a reseller's own), set from the caller,
+    # not a limit anyone types in.
+    skip = {"id", "name", "slug", "created_at", "users", "owner_id"}
     return [c.name for c in UserPackage.__table__.columns if c.name not in skip]
 
 

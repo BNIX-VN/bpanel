@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
+from app.core.access import can_access_owner, scope_owner
 from app.core.permissions import is_admin_role
 from app.models.entities import SftpAccount, User, Website
 from app.services import panel_settings, sftp_accounts, site_users
@@ -86,7 +87,7 @@ def _owned_website(db: Session, website_id: int, current_user: User) -> Website:
     website = db.query(Website).filter(Website.id == website_id).first()
     if not website:
         raise HTTPException(status_code=404, detail="Website not found")
-    if not is_admin_role(current_user.role) and website.owner_id != current_user.id:
+    if not can_access_owner(db, current_user, website.owner_id):
         raise HTTPException(status_code=404, detail="Website not found")
     return website
 
@@ -95,7 +96,7 @@ def _owned_account(db: Session, account_id: int, current_user: User) -> SftpAcco
     account = db.query(SftpAccount).filter(SftpAccount.id == account_id).first()
     if not account:
         raise HTTPException(status_code=404, detail="SFTP account not found")
-    if not is_admin_role(current_user.role) and account.owner_id != current_user.id:
+    if not can_access_owner(db, current_user, account.owner_id):
         raise HTTPException(status_code=404, detail="SFTP account not found")
     return account
 
@@ -123,9 +124,7 @@ def list_accounts(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    query = db.query(SftpAccount)
-    if not is_admin_role(current_user.role):
-        query = query.filter(SftpAccount.owner_id == current_user.id)
+    query = scope_owner(db.query(SftpAccount), SftpAccount.owner_id, db, current_user)
     if website_id is not None:
         query = query.filter(SftpAccount.website_id == website_id)
     accounts = query.order_by(SftpAccount.id).all()
@@ -152,7 +151,10 @@ def create_account(
     owner_id = website.owner_id
 
     if not is_admin_role(current_user.role):
-        limit = _limit_for(current_user)
+        # The site owner's allowance: a reseller adding a login to a customer's
+        # site spends the customer's, as the customer would.
+        owner = db.query(User).filter(User.id == owner_id).first() or current_user
+        limit = _limit_for(owner)
         if limit <= 0:
             # Name the control. This message used to say only that the package
             # did not include the feature, which was true and useless: the

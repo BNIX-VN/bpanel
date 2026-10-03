@@ -12,6 +12,7 @@ from typing import List
 from app.api.deps import get_current_user
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.access import ensure_owner_access, managed_user_ids, scope_owner
 from app.core.permissions import Role, ensure_role, is_admin_role
 from app.core.secrets import encrypt
 from app.models.entities import CloudflareCredential, DatabaseAccount, SiteApp, User, Website, WebsiteAlias
@@ -151,8 +152,7 @@ def _get_authorized_website(db: Session, website_id: int, current_user: User) ->
     website = db.query(Website).filter(Website.id == website_id).first()
     if not website:
         raise HTTPException(status_code=404, detail="Website not found")
-    if website.owner_id != current_user.id:
-        ensure_role(current_user.role, Role.admin)
+    ensure_owner_access(db, current_user, website.owner_id)
     return website
 
 
@@ -425,7 +425,8 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
     folder + Nginx vhost (no DB, no WordPress files)."""
     requested_owner_id = payload.owner_id
     if requested_owner_id is not None and requested_owner_id != current_user.id:
-        ensure_role(current_user.role, Role.admin)
+        # An admin creates a site for anyone; a reseller for its own customers.
+        ensure_owner_access(db, current_user, requested_owner_id)
     if _hostname_conflicts(db, payload.domain) or nginx.vhost_exists(payload.domain):
         raise HTTPException(status_code=409, detail="Domain already exists")
     from app.services import mail
@@ -582,8 +583,7 @@ def install_wordpress_on_website(
     website = db.query(Website).filter(Website.id == website_id).first()
     if not website:
         raise HTTPException(status_code=404, detail="Website not found")
-    if website.owner_id != current_user.id:
-        ensure_role(current_user.role, Role.admin)
+    ensure_owner_access(db, current_user, website.owner_id)
     if _has_wordpress_install(website):
         raise HTTPException(status_code=400, detail="WordPress is already installed for this website")
 
@@ -655,10 +655,7 @@ def install_wordpress_on_website(
 @router.get("", response_model=List[WebsiteOut])
 def list_websites(q: str = Query(default="", max_length=255), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     search = (q or "").strip().lower()
-    if is_admin_role(current_user.role):
-        query = db.query(Website)
-    else:
-        query = db.query(Website).filter(Website.owner_id == current_user.id)
+    query = scope_owner(db.query(Website), Website.owner_id, db, current_user)
     if search:
         pattern = f"%{search}%"
         query = query.outerjoin(WebsiteAlias).filter(or_(
@@ -773,8 +770,7 @@ def update_website(website_id: int, payload: WebsiteUpdate, db: Session = Depend
     website = db.query(Website).filter(Website.id == website_id).first()
     if not website:
         raise HTTPException(status_code=404, detail="Website not found")
-    if website.owner_id != current_user.id:
-        ensure_role(current_user.role, Role.admin)
+    ensure_owner_access(db, current_user, website.owner_id)
     if payload.php_version is not None:
         try:
             runtime_php_version = payload.php_version if (website.app_type or "wordpress") in {"wordpress", "php"} else None
@@ -998,8 +994,7 @@ def get_website_nginx_custom(website_id: int, db: Session = Depends(get_db), cur
     website = db.query(Website).filter(Website.id == website_id).first()
     if not website:
         raise HTTPException(status_code=404, detail="Website not found")
-    if website.owner_id != current_user.id:
-        ensure_role(current_user.role, Role.admin)
+    ensure_owner_access(db, current_user, website.owner_id)
     return WebsiteNginxCustom(nginx_custom=website.nginx_custom or "")
 
 
@@ -1111,8 +1106,7 @@ def get_website_log(
     website = db.query(Website).filter(Website.id == website_id).first()
     if not website:
         raise HTTPException(status_code=404, detail="Website not found")
-    if website.owner_id != current_user.id:
-        ensure_role(current_user.role, Role.admin)
+    ensure_owner_access(db, current_user, website.owner_id)
     try:
         return nginx.read_site_log(website.domain, kind, lines)
     except (RuntimeError, ValueError) as exc:
@@ -1124,8 +1118,7 @@ def set_website_nginx_custom(website_id: int, payload: WebsiteNginxCustom, reque
     website = db.query(Website).filter(Website.id == website_id).first()
     if not website:
         raise HTTPException(status_code=404, detail="Website not found")
-    if website.owner_id != current_user.id:
-        ensure_role(current_user.role, Role.admin)
+    ensure_owner_access(db, current_user, website.owner_id)
     try:
         nginx.update_custom_block(website.domain, payload.nginx_custom)
     except (RuntimeError, ValueError) as exc:
@@ -1188,8 +1181,7 @@ def fix_nginx_security(website_id: int, db: Session = Depends(get_db), current_u
     website = db.query(Website).filter(Website.id == website_id).first()
     if not website:
         raise HTTPException(status_code=404, detail="Website not found")
-    if website.owner_id != current_user.id:
-        ensure_role(current_user.role, Role.admin)
+    ensure_owner_access(db, current_user, website.owner_id)
     result = waf.sync_website_rules(website)
     if result.returncode != 0:
         raise HTTPException(status_code=400, detail=_command_error(result))
@@ -1208,8 +1200,7 @@ def enable_ssl(website_id: int, db: Session = Depends(get_db), current_user: Use
     website = db.query(Website).filter(Website.id == website_id).first()
     if not website:
         raise HTTPException(status_code=404, detail="Website not found")
-    if website.owner_id != current_user.id:
-        ensure_role(current_user.role, Role.admin)
+    ensure_owner_access(db, current_user, website.owner_id)
     _block_if_source(db, website)
     previous_manual_paths = (website.ssl_cert_path, website.ssl_key_path, website.ssl_ca_path)
     previous_snapshot = ssl.snapshot_manual_ssl_domain(website.domain)
@@ -1275,8 +1266,7 @@ async def install_manual_ssl(
     website = db.query(Website).filter(Website.id == website_id).first()
     if not website:
         raise HTTPException(status_code=404, detail="Website not found")
-    if website.owner_id != current_user.id:
-        ensure_role(current_user.role, Role.admin)
+    ensure_owner_access(db, current_user, website.owner_id)
     _block_if_source(db, website)
 
     try:
@@ -1436,8 +1426,9 @@ def install_wildcard_ssl(
 def ssl_sources(website_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     website = _get_authorized_website(db, website_id, current_user)
     candidates = db.query(Website).filter(Website.id != website.id, Website.ssl_enabled.is_(True)).all()
-    if not is_admin_role(current_user.role):
-        candidates = [c for c in candidates if c.owner_id == current_user.id]
+    managed = managed_user_ids(db, current_user)
+    if managed is not None:
+        candidates = [c for c in candidates if c.owner_id in managed]
     out: list[SslSourceOut] = []
     for candidate in candidates:
         info = ssl.cert_info(candidate.ssl_source_domain or candidate.domain)
@@ -1471,8 +1462,7 @@ def install_shared_ssl(
     source = db.query(Website).filter(Website.domain == payload.source_domain).first()
     if not source:
         raise HTTPException(status_code=404, detail="Source website not found")
-    if source.owner_id != current_user.id:
-        ensure_role(current_user.role, Role.admin)
+    ensure_owner_access(db, current_user, source.owner_id)
 
     cert_name = source.ssl_source_domain or source.domain
     info = ssl.cert_info(cert_name)

@@ -35,7 +35,8 @@ from app.api import updates as updates_api
 from app.api import users as users_api
 from app.api import waf as waf_api
 from app.api import websites as websites_api
-from app.core.permissions import is_admin_role
+from app.core.access import can_manage_user, scope_owner
+from app.core.permissions import is_reseller_role
 from app.models.entities import User, Website
 from app.api.maintenance import FileBulkDelete, FileMkdir, FileTransfer, FileWrite
 from app.api.waf import WafCustomRulesUpdate
@@ -64,9 +65,7 @@ def _website(ctx: Context, domain: str) -> Website:
     wanted = (domain or "").strip().lower().lstrip(".")
     if not wanted:
         raise ToolError("A domain is required")
-    query = ctx.db.query(Website).filter(Website.domain == wanted)
-    if not is_admin_role(ctx.user.role):
-        query = query.filter(Website.owner_id == ctx.user.id)
+    query = scope_owner(ctx.db.query(Website).filter(Website.domain == wanted), Website.owner_id, ctx.db, ctx.user)
     website = query.first()
     if website is None:
         raise ToolError(
@@ -111,12 +110,14 @@ def _thin(row, *fields) -> dict:
 def _whoami(ctx: Context, args: dict):
     return {
         "username": ctx.user.username,
-        "role": "administrator" if ctx.is_admin else "hosting customer",
+        "role": ("administrator" if ctx.is_admin
+                 else "reseller" if is_reseller_role(ctx.user.role) else "hosting customer"),
         "can_make_changes": ctx.can_write,
         "token_name": ctx.token.name,
         "token_expires_at": ctx.token.expires_at,
-        "scope": "every website on this server" if ctx.is_admin
-                 else "only websites owned by this account",
+        "scope": ("every website on this server" if ctx.is_admin
+                  else "websites owned by this account and its customers" if is_reseller_role(ctx.user.role)
+                  else "only websites owned by this account"),
     }
 
 
@@ -205,10 +206,9 @@ def _list_backups(ctx: Context, args: dict):
     owner = ctx.user
     wanted = (args.get("username") or "").strip()
     if wanted and wanted != ctx.user.username:
-        if not ctx.is_admin:
-            raise ToolError(f"No account named {wanted}")
         owner = ctx.db.query(User).filter(User.username == wanted).first()
-        if owner is None:
+        # An admin may name anyone, a reseller its customers.
+        if owner is None or not can_manage_user(ctx.db, ctx.user, owner):
             raise ToolError(f"No account named {wanted}")
     return maintenance_api.list_user_backups(
         user_id=owner.id, db=ctx.db, current_user=ctx.user)
@@ -614,10 +614,9 @@ def _create_backup(ctx: Context, args: dict):
     owner = ctx.user
     wanted = (args.get("username") or "").strip()
     if wanted and wanted != ctx.user.username:
-        if not ctx.is_admin:
-            raise ToolError(f"No account named {wanted}")
         owner = ctx.db.query(User).filter(User.username == wanted).first()
-        if owner is None:
+        # An admin may name anyone, a reseller its customers.
+        if owner is None or not can_manage_user(ctx.db, ctx.user, owner):
             raise ToolError(f"No account named {wanted}")
     return maintenance_api.create_user_backup(
         payload=UserBackupCreate(user_id=owner.id),

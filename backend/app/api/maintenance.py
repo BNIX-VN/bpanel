@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.database import SessionLocal, get_db
+from app.core.access import can_access_owner, ensure_owner_access, managed_user
 from app.core.permissions import Role, ensure_role, is_admin_role
 from app.core.secrets import decrypt, encrypt
 from app.models.entities import BackupSchedule, DatabaseAccount, SftpBackupTarget, SiteApp, User, Website
@@ -326,13 +327,13 @@ def _reload_file_target(db: Session, user: User, target_key: str):
         app = db.query(SiteApp).filter(SiteApp.id == int(raw_id)).first()
         if not app:
             raise ValueError("Application not found")
-        if app.owner_id != user.id and not is_admin_role(user.role):
+        if not can_access_owner(db, user, app.owner_id):
             raise ValueError("Access denied")
         return site_apps.file_target(app)
     website = db.query(Website).filter(Website.id == int(raw_id)).first()
     if not website:
         raise ValueError("Website not found")
-    if website.owner_id != user.id and not is_admin_role(user.role):
+    if not can_access_owner(db, user, website.owner_id):
         raise ValueError("Access denied")
     return website
 
@@ -409,8 +410,7 @@ def get_owned_website(db: Session, current_user: User, website_id: int) -> Websi
     website = db.query(Website).filter(Website.id == website_id).first()
     if not website:
         raise HTTPException(status_code=404, detail="Website not found")
-    if website.owner_id != current_user.id:
-        ensure_role(current_user.role, Role.admin)
+    ensure_owner_access(db, current_user, website.owner_id)
     return website
 
 
@@ -418,8 +418,7 @@ def get_owned_app(db: Session, current_user: User, app_id: int) -> SiteApp:
     app = db.query(SiteApp).filter(SiteApp.id == app_id).first()
     if not app:
         raise HTTPException(status_code=404, detail="Application not found")
-    if app.owner_id != current_user.id:
-        ensure_role(current_user.role, Role.admin)
+    ensure_owner_access(db, current_user, app.owner_id)
     return app
 
 
@@ -458,12 +457,8 @@ def get_website_files(db: Session, current_user: User, website_id: int):
 
 
 def get_backup_user(db: Session, current_user: User, user_id: int) -> User:
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    if user.id != current_user.id:
-        ensure_role(current_user.role, Role.admin)
-    return user
+    # Yourself, any account for an admin, a reseller's customers for a reseller.
+    return managed_user(db, current_user, user_id)
 
 
 def upload_archive_to_target(db: Session, target_id: int, archive: str) -> tuple[str, str]:

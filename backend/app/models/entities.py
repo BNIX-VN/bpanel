@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List, Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -11,7 +11,12 @@ class UserPackage(Base):
     __tablename__ = "user_packages"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    name: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    # Unique per owner, not across the server (api/packages.py checks it): two
+    # resellers may both call a package "Basic".
+    name: Mapped[str] = mapped_column(String(100), index=True)
+    # A reseller's own package, seen and assigned by that reseller only; NULL
+    # for the admin's packages (which provisioning and WHMCS use).
+    owner_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     slug: Mapped[Optional[str]] = mapped_column(String(100), unique=True, nullable=True, index=True)
     website_limit: Mapped[int] = mapped_column(Integer, default=5)
     storage_limit_mb: Mapped[int] = mapped_column(Integer, default=1024)
@@ -39,7 +44,7 @@ class UserPackage(Base):
     mail_accounts_limit: Mapped[int] = mapped_column(Integer, default=10)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
-    users: Mapped[List["User"]] = relationship(back_populates="package")
+    users: Mapped[List["User"]] = relationship(back_populates="package", foreign_keys="User.package_id")
 
 
 class User(Base):
@@ -69,6 +74,17 @@ class User(Base):
     sftp_accounts_limit: Mapped[int] = mapped_column(Integer, default=3)
     # Copied from the package like the limits above.
     mail_accounts_limit: Mapped[int] = mapped_column(Integer, default=10)
+    # The reseller this account was created by and is managed by; NULL for the
+    # admin's own accounts. Only end users have one.
+    reseller_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    # A reseller's share of the server (role "reseller" only; 0 = unlimited).
+    # Its own account limits plus every customer's must fit inside these, so
+    # the per-account limits stay what is enforced day to day.
+    pool_user_limit: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    pool_website_limit: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    pool_storage_limit_mb: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    pool_mail_accounts_limit: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    pool_app_limit: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     # When this account's Linux/SFTP password was last set on its own.
     #
     # NULL is load-bearing: it means the Linux password has never been set
@@ -86,7 +102,7 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     websites: Mapped[List["Website"]] = relationship(back_populates="owner")
-    package: Mapped[Optional[UserPackage]] = relationship(back_populates="users")
+    package: Mapped[Optional[UserPackage]] = relationship(back_populates="users", foreign_keys=[package_id])
     apps: Mapped[List["SiteApp"]] = relationship(back_populates="owner")
 
 

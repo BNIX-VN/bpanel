@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
+from app.core.access import can_access_owner, ensure_owner_access, scope_owner
 from app.core.permissions import Role, ensure_role, is_admin_role
 from app.models.entities import SiteApp, User
 from app.schemas.schemas import (
@@ -48,15 +49,14 @@ def _owned_app(db: Session, current_user: User, app_id: int) -> SiteApp:
     app = db.query(SiteApp).filter(SiteApp.id == app_id).first()
     if not app:
         raise HTTPException(status_code=404, detail="Application not found")
-    if app.owner_id != current_user.id:
-        ensure_role(current_user.role, Role.admin)
+    ensure_owner_access(db, current_user, app.owner_id)
     return app
 
 
 def _resolve_owner(db: Session, current_user: User, owner_id: int | None) -> User:
     if owner_id is None or owner_id == current_user.id:
         return current_user
-    ensure_role(current_user.role, Role.admin)
+    ensure_owner_access(db, current_user, owner_id)
     owner = db.query(User).filter(User.id == owner_id).first()
     if not owner:
         raise HTTPException(status_code=404, detail="Owner not found")
@@ -87,11 +87,10 @@ def list_site_apps(
 ):
     ensure_role(current_user.role, Role.end_user)
     query = db.query(SiteApp)
-    if is_admin_role(current_user.role):
-        if owner_id is not None:
-            query = query.filter(SiteApp.owner_id == owner_id)
+    if owner_id is not None and can_access_owner(db, current_user, owner_id):
+        query = query.filter(SiteApp.owner_id == owner_id)
     else:
-        query = query.filter(SiteApp.owner_id == current_user.id)
+        query = scope_owner(query, SiteApp.owner_id, db, current_user)
     apps = query.order_by(SiteApp.id).all()
     return {
         "items": [_app_out(app) for app in apps],

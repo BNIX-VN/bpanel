@@ -33,7 +33,8 @@ from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
 
-from app.core.permissions import is_admin_role
+from app.core.access import can_access_owner, scope_owner
+from app.core.permissions import is_admin_role, is_reseller_role
 from app.models.entities import DnsZone, User, Website, WebsiteAlias
 from app.services import addons, panel_settings, server_network
 from app.services.shell import shell
@@ -487,7 +488,7 @@ def may_edit(db: Session, user: User, zone_name: str) -> str:
     row = _row(db, zone)
     if row is None:
         raise DnsError("There is no such zone.", status=404)
-    if row.owner_id != user.id and zone not in _domains_of(db, user.id):
+    if not can_access_owner(db, user, row.owner_id) and zone not in _domains_of(db, user.id):
         raise DnsError("There is no such zone.", status=404)
     return zone
 
@@ -501,12 +502,12 @@ def _domains_of(db: Session, user_id: int) -> set[str]:
 
 
 def list_zones(db: Session, user: User) -> list[dict]:
-    query = db.query(DnsZone)
     admin = is_admin_role(user.role)
-    if not admin:
-        query = query.filter(DnsZone.owner_id == user.id)
+    query = scope_owner(db.query(DnsZone), DnsZone.owner_id, db, user)
     rows = query.order_by(DnsZone.name).all()
-    owners = {row.id: row.username for row in db.query(User).all()} if admin else {}
+    # A reseller sees whose zone is whose among its customers, as an admin does.
+    owners = ({row.id: row.username for row in db.query(User).all()}
+              if admin or is_reseller_role(user.role) else {})
     zones = [{"name": row.name, "owner_id": row.owner_id, "owner": owners.get(row.owner_id, "")} for row in rows]
     if admin:
         # Zones PowerDNS serves that the panel did not make: shown, owned by nobody.

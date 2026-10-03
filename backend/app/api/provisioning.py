@@ -82,7 +82,8 @@ def _provisioning_app_type(payload: ProvisioningAccountCreate) -> str:
 def list_plans(request: Request, db: Session = Depends(get_db)):
     token = _get_provisioning_token(request, db)
     _require_scope(token, "provisioning:read")
-    packages = db.query(UserPackage).order_by(UserPackage.id.asc()).all()
+    # A reseller's own packages are not for sale through WHMCS.
+    packages = db.query(UserPackage).filter(UserPackage.owner_id.is_(None)).order_by(UserPackage.id.asc()).all()
     return [
         {
             "id": p.id,
@@ -125,7 +126,7 @@ def create_account(payload: ProvisioningAccountCreate, request: Request, db: Ses
     ):
         raise HTTPException(status_code=409, detail="Domain already exists")
 
-    package = db.query(UserPackage).filter(UserPackage.id == payload.package_id).first()
+    package = db.query(UserPackage).filter(UserPackage.id == payload.package_id, UserPackage.owner_id.is_(None)).first()
     if not package:
         raise HTTPException(status_code=404, detail="Package not found")
 
@@ -366,7 +367,7 @@ def change_package(external_id: str, payload: ProvisioningPackageChange, request
     account = _account_by_external_id(db, external_id)
     if not account.user:
         raise HTTPException(status_code=400, detail="Account has no user")
-    package = db.query(UserPackage).filter(UserPackage.id == payload.package_id).first()
+    package = db.query(UserPackage).filter(UserPackage.id == payload.package_id, UserPackage.owner_id.is_(None)).first()
     if not package:
         raise HTTPException(status_code=404, detail="Package not found")
     account.package_id = package.id

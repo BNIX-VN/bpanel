@@ -5,33 +5,56 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
-from app.core.permissions import Role, ensure_role
+from app.core.permissions import Role, ensure_role, is_reseller_role
 from app.models.entities import User, UserPackage
 from app.schemas.schemas import UserPackageCreate, UserPackageOut, UserPackageUpdate
+from app.services import reseller as reseller_pool
 from app.services.audit import log_action
 
 router = APIRouter(prefix="/packages", tags=["packages"])
 
 
-def _package_by_id(db: Session, package_id: int) -> UserPackage:
-    package = db.query(UserPackage).filter(UserPackage.id == package_id).first()
+def _owner(user: User):
+    """Whose packages this caller manages: a reseller's own, or the admin's (None)."""
+    ensure_role(user.role, Role.reseller)
+    return user.id if is_reseller_role(user.role) else None
+
+
+def _scoped(db: Session, owner_id):
+    # The admin's packages are the ones with no owner: they are what WHMCS and
+    # the provisioning API see. A reseller's own packages never reach them.
+    query = db.query(UserPackage)
+    if owner_id is None:
+        return query.filter(UserPackage.owner_id.is_(None))
+    return query.filter(UserPackage.owner_id == owner_id)
+
+
+def _package_by_id(db: Session, package_id: int, owner_id=None) -> UserPackage:
+    package = _scoped(db, owner_id).filter(UserPackage.id == package_id).first()
     if not package:
         raise HTTPException(status_code=404, detail="Package not found")
     return package
 
 
-def _ensure_unique_name(db: Session, name: str, package_id: int | None = None) -> None:
-    query = db.query(UserPackage).filter(UserPackage.name == name)
+def _ensure_unique_name(db: Session, name: str, package_id: int | None = None, owner_id=None) -> None:
+    query = _scoped(db, owner_id).filter(UserPackage.name == name)
     if package_id is not None:
         query = query.filter(UserPackage.id != package_id)
     if query.first():
         raise HTTPException(status_code=409, detail="Package name already exists")
 
 
+def _check_grants(user: User, package) -> None:
+    if is_reseller_role(user.role):
+        try:
+            reseller_pool.check_package_grants(user, package)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("", response_model=List[UserPackageOut])
 def list_packages(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    ensure_role(current_user.role, Role.admin)
-    return db.query(UserPackage).order_by(UserPackage.id.asc()).all()
+    return _scoped(db, _owner(current_user)).order_by(UserPackage.id.asc()).all()
 
 
 @router.post("", response_model=UserPackageOut)
@@ -41,9 +64,10 @@ def create_package(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    ensure_role(current_user.role, Role.admin)
-    _ensure_unique_name(db, payload.name)
+    owner_id = _owner(current_user)
+    _ensure_unique_name(db, payload.name, owner_id=owner_id)
     package = UserPackage(
+        owner_id=owner_id,
         name=payload.name,
         slug=payload.slug,
         website_limit=payload.website_limit,
@@ -59,6 +83,7 @@ def create_package(
         mail_accounts_limit=payload.mail_accounts_limit,
         node_app_memory_mb=payload.node_app_memory_mb,
     )
+    _check_grants(current_user, package)
     db.add(package)
     db.commit()
     db.refresh(package)
@@ -74,10 +99,10 @@ def update_package(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    ensure_role(current_user.role, Role.admin)
-    package = _package_by_id(db, package_id)
+    owner_id = _owner(current_user)
+    package = _package_by_id(db, package_id, owner_id)
     if payload.name is not None and payload.name != package.name:
-        _ensure_unique_name(db, payload.name, package_id=package.id)
+        _ensure_unique_name(db, payload.name, package_id=package.id, owner_id=owner_id)
         package.name = payload.name
     if payload.slug is not None:
         package.slug = payload.slug
@@ -105,7 +130,21 @@ def update_package(
         package.mail_accounts_limit = payload.mail_accounts_limit
     if payload.node_app_memory_mb is not None:
         package.node_app_memory_mb = payload.node_app_memory_mb
-    for user in db.query(User).filter(User.package_id == package.id).all():
+    assigned = db.query(User).filter(User.package_id == package.id).all()
+    if owner_id is not None:
+        # The customers on this package take its new limits: all of them must
+        # still fit in the reseller's share, and nothing it cannot grant.
+        try:
+            reseller_pool.check_package_grants(current_user, package)
+            reseller_pool.check_pool(db, current_user, changes={
+                user.id: {"website_limit": package.website_limit, "storage_limit_mb": package.storage_limit_mb,
+                          "package": package}
+                for user in assigned
+            })
+        except ValueError as exc:
+            db.rollback()
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    for user in assigned:
         user.website_limit = package.website_limit
         user.storage_limit_mb = package.storage_limit_mb
     db.commit()
@@ -121,8 +160,7 @@ def delete_package(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    ensure_role(current_user.role, Role.admin)
-    package = _package_by_id(db, package_id)
+    package = _package_by_id(db, package_id, _owner(current_user))
     if db.query(User).filter(User.package_id == package.id).first():
         raise HTTPException(status_code=400, detail="Package is in use")
     name = package.name
