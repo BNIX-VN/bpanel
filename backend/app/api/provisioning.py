@@ -157,6 +157,7 @@ def create_account(payload: ProvisioningAccountCreate, request: Request, db: Ses
         package_id=package.id,
         website_limit=package.website_limit,
         storage_limit_mb=package.storage_limit_mb,
+        database_limit=package.database_limit,
         sftp_password_set_at=datetime.utcnow(),
     )
     db.add(user)
@@ -374,6 +375,7 @@ def change_package(external_id: str, payload: ProvisioningPackageChange, request
     account.user.package_id = package.id
     account.user.website_limit = package.website_limit
     account.user.storage_limit_mb = package.storage_limit_mb
+    account.user.database_limit = package.database_limit
     account.last_action = "change_package"
     db.commit()
     log_action(db, None, "provisioning_change_package", external_id, detail=str(package.id), request=request)

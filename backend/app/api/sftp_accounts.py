@@ -20,7 +20,6 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.access import can_access_owner, scope_owner
-from app.core.permissions import is_admin_role
 from app.models.entities import SftpAccount, User, Website
 from app.services import panel_settings, sftp_accounts, site_users
 from app.services.audit import log_action
@@ -77,10 +76,6 @@ def _sftp_host() -> str:
     except Exception:  # noqa: BLE001 - same
         pass
     return ""
-
-
-def _limit_for(user: User) -> int:
-    return int(getattr(user, "sftp_accounts_limit", 0) or 0)
 
 
 def _owned_website(db: Session, website_id: int, current_user: User) -> Website:
@@ -150,30 +145,9 @@ def create_account(
     website = _owned_website(db, payload.website_id, current_user)
     owner_id = website.owner_id
 
-    if not is_admin_role(current_user.role):
-        # The site owner's allowance: a reseller adding a login to a customer's
-        # site spends the customer's, as the customer would.
-        owner = db.query(User).filter(User.id == owner_id).first() or current_user
-        limit = _limit_for(owner)
-        if limit <= 0:
-            # Name the control. This message used to say only that the package
-            # did not include the feature, which was true and useless: the
-            # limit defaults to 0 everywhere, so every account saw it and no
-            # message said where to change it.
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    "Your hosting package does not include SFTP accounts. An "
-                    "administrator can grant them under Panel users, or raise "
-                    "'SFTP accounts' on the hosting package."
-                ),
-            )
-        used = db.query(SftpAccount).filter(SftpAccount.owner_id == owner_id).count()
-        if used >= limit:
-            raise HTTPException(
-                status_code=409,
-                detail=f"SFTP account limit reached ({used}/{limit})",
-            )
+    # Not limited, as in OPanel (operator, 2026-10-03): an extra login reaches
+    # one website as the uid that already owns it, so it grants nothing the
+    # account does not have. The old per-account limit column stays, unread.
 
     try:
         label = sftp_accounts.validate_label(payload.label)
@@ -292,8 +266,7 @@ def account_limits(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """What the UI needs to decide whether to offer the button at all."""
-    if is_admin_role(current_user.role):
-        return {"limit": None, "used": None, "unlimited": True}
+    """Kept for older pages and API callers: extra SFTP accounts are not
+    limited any more, for anyone."""
     used = db.query(SftpAccount).filter(SftpAccount.owner_id == current_user.id).count()
-    return {"limit": _limit_for(current_user), "used": used, "unlimited": False}
+    return {"limit": None, "used": used, "unlimited": True}

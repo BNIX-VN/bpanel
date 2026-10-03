@@ -215,15 +215,22 @@ def enforce_user_storage_quota(
     replaced_bytes: int = 0,
 ) -> None:
     limit_bytes = user_storage_limit_bytes(user)
-    if limit_bytes is None:
-        return
-    used_bytes = user_storage_used_bytes(db, user)
-    projected_bytes = max(0, used_bytes - max(0, replaced_bytes)) + max(0, incoming_bytes)
-    if projected_bytes > limit_bytes:
-        raise StorageQuotaExceeded(
-            f"Storage quota exceeded: {projected_bytes // BYTES_PER_MB} MB used/projected, "
-            f"limit {limit_bytes // BYTES_PER_MB} MB"
-        )
+    if limit_bytes is not None:
+        used_bytes = user_storage_used_bytes(db, user)
+        projected_bytes = max(0, used_bytes - max(0, replaced_bytes)) + max(0, incoming_bytes)
+        if projected_bytes > limit_bytes:
+            raise StorageQuotaExceeded(
+                f"Storage quota exceeded: {projected_bytes // BYTES_PER_MB} MB used/projected, "
+                f"limit {limit_bytes // BYTES_PER_MB} MB"
+            )
+    # Under an overselling reseller the share is also checked against what all
+    # of its accounts hold - an account's own limit may be larger than it.
+    from app.services import reseller as reseller_pool
+
+    try:
+        reseller_pool.ensure_storage_room(db, user, incoming_bytes=incoming_bytes, replaced_bytes=replaced_bytes)
+    except ValueError as exc:
+        raise StorageQuotaExceeded(str(exc)) from exc
 
 
 def source_file_size(source_file) -> int | None:

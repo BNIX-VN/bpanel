@@ -74,17 +74,21 @@ class User(Base):
     sftp_accounts_limit: Mapped[int] = mapped_column(Integer, default=3)
     # Copied from the package like the limits above.
     mail_accounts_limit: Mapped[int] = mapped_column(Integer, default=10)
+    # Copied from the package like the limits above. 0 = unlimited, as in
+    # OPanel - and what every account had before this column existed.
+    database_limit: Mapped[int] = mapped_column(Integer, default=10, server_default=text("0"))
     # The reseller this account was created by and is managed by; NULL for the
     # admin's own accounts. Only end users have one.
     reseller_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
-    # A reseller's share of the server (role "reseller" only; 0 = unlimited).
-    # Its own account limits plus every customer's must fit inside these, so
-    # the per-account limits stay what is enforced day to day.
+    # A reseller's share of the server (role "reseller" only; 0 = unlimited):
+    # how many customers, and how much disk - nothing else (operator,
+    # 2026-10-03). 0043 also added pool_website_limit, pool_mail_accounts_limit
+    # and pool_app_limit; nothing reads them any more. See services/reseller.py.
     pool_user_limit: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
-    pool_website_limit: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     pool_storage_limit_mb: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
-    pool_mail_accounts_limit: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
-    pool_app_limit: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    # Off: the disk limits handed out must fit the share. On (overselling, as
+    # cPanel and DirectAdmin do): what the accounts hold on disk must.
+    pool_oversell: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("0"))
     # When this account's Linux/SFTP password was last set on its own.
     #
     # NULL is load-bearing: it means the Linux password has never been set

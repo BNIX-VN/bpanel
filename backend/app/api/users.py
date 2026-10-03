@@ -86,6 +86,7 @@ def _apply_package_limits(user: User, package: UserPackage | None) -> None:
         user.terminal_enabled = package.terminal_enabled
         user.sftp_accounts_limit = package.sftp_accounts_limit
         user.mail_accounts_limit = package.mail_accounts_limit
+        user.database_limit = package.database_limit
 
 
 def _decode_schedule_user_ids(raw: str | None) -> list[int]:
@@ -136,13 +137,13 @@ def create_user(payload: UserCreate, request: Request, db: Session = Depends(get
     ensure_role(current_user.role, Role.reseller)
     role = payload.role
     reseller_id = payload.reseller_id
-    pools = {field: getattr(payload, field) for field in reseller_pool.POOL_FIELDS}
+    pools = {field: getattr(payload, field) for field in reseller_pool.SETTINGS}
     if is_reseller_role(current_user.role):
         role, reseller_id = "end_user", current_user.id
     elif role != "end_user":
         reseller_id = None
     if role != "reseller":
-        pools = {field: 0 for field in reseller_pool.POOL_FIELDS}
+        pools = dict(reseller_pool.NO_POOL)
     # Only the username has to be unique — several panel users may share one
     # contact email (a reseller managing many accounts, for example).
     if db.query(User.id).filter(User.username == payload.username).first():
@@ -152,7 +153,7 @@ def create_user(payload: UserCreate, request: Request, db: Session = Depends(get
     # the share it comes out of before anything is created.
     draft = User(website_limit=payload.website_limit, storage_limit_mb=payload.storage_limit_mb,
                  sftp_accounts_limit=payload.sftp_accounts_limit, mail_accounts_limit=payload.mail_accounts_limit,
-                 terminal_enabled=False, **pools)
+                 database_limit=payload.database_limit, terminal_enabled=False, **pools)
     _apply_package_limits(draft, package)
     limits = reseller_pool.account_limits(draft, {"package": package})
     if reseller_id:
@@ -182,6 +183,7 @@ def create_user(payload: UserCreate, request: Request, db: Session = Depends(get
         storage_limit_mb=payload.storage_limit_mb,
         sftp_accounts_limit=payload.sftp_accounts_limit,
         mail_accounts_limit=payload.mail_accounts_limit,
+        database_limit=payload.database_limit,
         sftp_password_set_at=datetime.utcnow(),
     )
     # After the explicit value, so a package still wins when one is assigned.
@@ -273,7 +275,7 @@ def update_user(user_id: int, payload: UserUpdate, request: Request, db: Session
         if user.id == current_user.id:
             raise HTTPException(status_code=403, detail="Your own limits are set by the administrator")
         if payload.role is not None or payload.reseller_id is not None or any(
-                getattr(payload, field) is not None for field in reseller_pool.POOL_FIELDS):
+                getattr(payload, field) is not None for field in reseller_pool.SETTINGS):
             raise HTTPException(status_code=403, detail="Only the administrator can change roles or resellers")
     new_role = payload.role if payload.role is not None else user.role
     if new_role != user.role and user_id == current_user.id:
@@ -291,9 +293,10 @@ def update_user(user_id: int, payload: UserUpdate, request: Request, db: Session
         if package is not None:
             # An assigned package wins over the limits sent with it, as below.
             limit_changes.update(website_limit=package.website_limit, storage_limit_mb=package.storage_limit_mb,
-                                 mail_accounts_limit=package.mail_accounts_limit)
+                                 mail_accounts_limit=package.mail_accounts_limit,
+                                 database_limit=package.database_limit)
         limit_changes["package"] = package
-    pool_changes = {field: getattr(payload, field) for field in reseller_pool.POOL_FIELDS
+    pool_changes = {field: getattr(payload, field) for field in reseller_pool.SETTINGS
                     if getattr(payload, field) is not None}
     new_reseller_id = user.reseller_id
     if payload.reseller_id is not None:
@@ -316,8 +319,8 @@ def update_user(user_id: int, payload: UserUpdate, request: Request, db: Session
         for field, value in pool_changes.items():
             setattr(user, field, value)
     else:
-        for field in reseller_pool.POOL_FIELDS:
-            setattr(user, field, 0)
+        for field, value in reseller_pool.NO_POOL.items():
+            setattr(user, field, value)
     role_changed = False
     if new_role != user.role:
         user.role = new_role
@@ -342,6 +345,8 @@ def update_user(user_id: int, payload: UserUpdate, request: Request, db: Session
         user.sftp_accounts_limit = payload.sftp_accounts_limit
     if payload.mail_accounts_limit is not None:
         user.mail_accounts_limit = payload.mail_accounts_limit
+    if payload.database_limit is not None:
+        user.database_limit = payload.database_limit
     if package:
         _apply_package_limits(user, package)
 

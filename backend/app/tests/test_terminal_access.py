@@ -79,6 +79,7 @@ def test_assigning_a_package_copies_its_terminal_flag():
         # this test fails for a reason that has nothing to do with terminals.
         sftp_accounts_limit = 3
         mail_accounts_limit = 10
+        database_limit = 5
 
     class _Target:
         package_id = None

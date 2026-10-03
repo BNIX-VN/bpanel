@@ -9,6 +9,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from typing import List
 
+from app.api.databases import ensure_database_quota
 from app.api.deps import get_current_user
 from app.core.config import settings
 from app.core.database import get_db
@@ -448,6 +449,8 @@ def create_website(payload: WebsiteCreate, request: Request, db: Session = Depen
         raise HTTPException(status_code=403, detail="Website limit reached")
 
     install_wp = payload.install_wordpress and payload.app_type == "wordpress"
+    if install_wp:
+        ensure_database_quota(db, owner)
     create_estimate_bytes = storage_quota.WORDPRESS_SITE_ESTIMATE_BYTES if install_wp else storage_quota.STATIC_SITE_ESTIMATE_BYTES
     try:
         storage_quota.enforce_user_storage_quota(db, owner, incoming_bytes=create_estimate_bytes)
@@ -590,6 +593,7 @@ def install_wordpress_on_website(
     owner = db.query(User).filter(User.id == website.owner_id).first()
     if not owner:
         raise HTTPException(status_code=404, detail="Owner not found")
+    ensure_database_quota(db, owner)
     try:
         storage_quota.enforce_user_storage_quota(
             db,
