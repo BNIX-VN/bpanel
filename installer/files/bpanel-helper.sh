@@ -7705,6 +7705,123 @@ PY
   printf '%s' "$normalized"
 }
 
+# --- Resource limits addon: CPU, memory, processes and disk I/O per account ------
+#
+# A root agent (backend/app/agents/bpanel_limits_agent.py) keeps every hosting
+# account's processes in a systemd slice carrying its limits. The panel hands
+# the agent's source over on stdin and this helper installs it only if it
+# hashes to the value below, which ships with this helper: the copy under
+# /opt/bpanel belongs to the panel user, and root must never run something
+# that user could have edited. test_resource_limits.py keeps the two in step.
+LIMITS_AGENT="/usr/local/sbin/bpanel-limits-agent"
+LIMITS_AGENT_SHA256="668d8a9c3b77f6bf3ce96ebc7278e0b13b723c6054b2f2fbb82614771cb3590a"
+LIMITS_UNIT="/etc/systemd/system/bpanel-limits.service"
+LIMITS_DIR="/etc/bpanel-limits"
+LIMITS_STATE_DIR="/var/lib/bpanel-limits"
+
+limits_agent_install() {
+  local tmp sum
+  tmp="$(mktemp /usr/local/sbin/.bpanel-limits-agent.XXXXXX)"
+  head -c 1048576 >"$tmp"
+  sum="$(sha256sum "$tmp" | cut -d' ' -f1)"
+  if [[ "$sum" != "$LIMITS_AGENT_SHA256" ]]; then
+    rm -f "$tmp"
+    deny "the resource limits agent does not match this panel release"
+  fi
+  chown root:root "$tmp"
+  chmod 0755 "$tmp"
+  mv -f "$tmp" "$LIMITS_AGENT"
+  if systemctl is-active --quiet bpanel-limits 2>/dev/null; then
+    systemctl restart bpanel-limits || true
+  fi
+  echo "resource limits agent installed"
+}
+
+limits_status() {
+  local installed=0 running=0 version=""
+  if [[ -f "$LIMITS_UNIT" ]]; then installed=1; fi
+  if systemctl is-active --quiet bpanel-limits 2>/dev/null; then running=1; fi
+  if [[ -x "$LIMITS_AGENT" ]]; then
+    version="$(python3 "$LIMITS_AGENT" --version 2>/dev/null || true)"
+  fi
+  echo "installed=${installed} running=${running} version=${version}"
+}
+
+limits_install() {
+  [[ "$(stat -fc %T /sys/fs/cgroup 2>/dev/null)" == "cgroup2fs" ]] \
+    || deny "Resource limits need cgroup v2 (Ubuntu 22.04 or later); this server still uses cgroup v1"
+  if systemd-detect-virt --container --quiet 2>/dev/null; then
+    deny "Resource limits need a virtual machine or a dedicated server; this server is a $(systemd-detect-virt --container) container"
+  fi
+  grep -qw memory /sys/fs/cgroup/cgroup.controllers 2>/dev/null \
+    || deny "the kernel's memory controller is not available"
+  command -v busctl >/dev/null 2>&1 || deny "busctl (systemd) is missing"
+  command -v python3 >/dev/null 2>&1 || deny "python3 is missing"
+  [[ -x "$LIMITS_AGENT" ]] || deny "the resource limits agent is not installed"
+  install -d -o root -g root -m 0755 "$LIMITS_DIR" "$LIMITS_STATE_DIR"
+  if [[ ! -f "$LIMITS_DIR/config.json" ]]; then
+    printf '{"version": 1, "groups": [], "accounts": []}\n' >"$LIMITS_DIR/config.json"
+  fi
+  chmod 0644 "$LIMITS_DIR/config.json"
+  cat >"$LIMITS_UNIT" <<'UNIT'
+# Managed by bpanel (Resource limits addon).
+[Unit]
+Description=BPanel resource limits (CPU, memory, processes and disk I/O per hosting account)
+After=systemd-logind.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/sbin/bpanel-limits-agent
+Restart=always
+RestartSec=5
+# A limited account must never starve or OOM-kill the agent that limits it.
+OOMScoreAdjust=-500
+Nice=-5
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  systemctl daemon-reload
+  systemctl enable --now bpanel-limits >/dev/null 2>&1 \
+    || deny "the resource limits agent failed to start -- check: journalctl -u bpanel-limits"
+  echo "Resource limits installed"
+}
+
+limits_uninstall() {
+  # Every limit goes; processes stay where they are, and an unlimited slice is
+  # no different from none.
+  systemctl disable --now bpanel-limits >/dev/null 2>&1 || true
+  if [[ -x "$LIMITS_AGENT" ]]; then
+    python3 "$LIMITS_AGENT" --release >/dev/null 2>&1 || true
+  fi
+  rm -f "$LIMITS_UNIT"
+  systemctl daemon-reload
+  rm -rf "$LIMITS_DIR" "$LIMITS_STATE_DIR" /run/bpanel-limits
+  echo "Resource limits removed"
+}
+
+limits_apply() {
+  # The configuration arrives as JSON on stdin; the agent itself validates it
+  # (slice names, uids, bounds) before it replaces the old one, and the file
+  # is only rewritten when it changed, so the minute tick costs nothing.
+  [[ -f "$LIMITS_UNIT" ]] || deny "Resource limits are not installed"
+  local tmp err
+  tmp="$(mktemp "$LIMITS_DIR/.config.XXXXXX")"
+  head -c 4194304 >"$tmp"
+  if ! err="$(python3 "$LIMITS_AGENT" --check "$tmp" 2>&1)"; then
+    rm -f "$tmp"
+    deny "invalid resource limits configuration: $err"
+  fi
+  if cmp -s "$tmp" "$LIMITS_DIR/config.json"; then
+    rm -f "$tmp"
+    echo "unchanged"
+    return 0
+  fi
+  chmod 0644 "$tmp"
+  mv -f "$tmp" "$LIMITS_DIR/config.json"
+  echo "applied"
+}
+
 cmd="${1:-}"
 shift || true
 audit_log "$@"
@@ -7835,6 +7952,32 @@ case "$cmd" in
   fail2ban-status)
     [[ $# -eq 0 ]] || deny "usage: fail2ban-status"
     fail2ban_status
+    ;;
+
+  # ---- Resource limits (optional) ---------------------------------------
+  limits-agent-install)
+    [[ $# -eq 0 ]] || deny "usage: limits-agent-install < agent"
+    limits_agent_install
+    ;;
+
+  limits-install)
+    [[ $# -eq 0 ]] || deny "usage: limits-install"
+    limits_install
+    ;;
+
+  limits-uninstall)
+    [[ $# -eq 0 ]] || deny "usage: limits-uninstall"
+    limits_uninstall
+    ;;
+
+  limits-status)
+    [[ $# -eq 0 ]] || deny "usage: limits-status"
+    limits_status
+    ;;
+
+  limits-apply)
+    [[ $# -eq 0 ]] || deny "usage: limits-apply < config.json"
+    limits_apply
     ;;
 
   # ---- DNS Manager (PowerDNS, optional) ---------------------------------

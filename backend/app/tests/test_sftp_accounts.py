@@ -359,8 +359,8 @@ def _package_limit_columns() -> list[str]:
 def test_every_package_limit_can_be_set_through_the_api():
     """A column the API reads but nothing can write is a gate with no key."""
     schemas = SCHEMAS_PY.read_text(encoding="utf-8")
-    create = schemas.split("class UserPackageCreate(BaseModel):", 1)[1].split("\nclass ", 1)[0]
-    update = schemas.split("class UserPackageUpdate(BaseModel):", 1)[1].split("\nclass ", 1)[0]
+    create = schemas.split("class UserPackageCreate(", 1)[1].split("\nclass ", 1)[0]
+    update = schemas.split("class UserPackageUpdate(", 1)[1].split("\nclass ", 1)[0]
     missing = [c for c in _package_limit_columns()
                if f"{c}:" not in create or f"{c}:" not in update]
     assert not missing, (
@@ -390,7 +390,7 @@ def test_assigning_a_package_carries_its_sftp_limit_to_the_user():
 def test_an_admin_can_grant_the_limit_to_one_user():
     """Per user as well as per package, like website_limit and storage_limit_mb."""
     schemas = SCHEMAS_PY.read_text(encoding="utf-8")
-    block = schemas.split("class UserUpdate(BaseModel):", 1)[1].split("\nclass ", 1)[0]
+    block = schemas.split("class UserUpdate(", 1)[1].split("\nclass ", 1)[0]
     assert "sftp_accounts_limit:" in block
     users = USERS_PY.read_text(encoding="utf-8")
     assert "user.sftp_accounts_limit = payload.sftp_accounts_limit" in users

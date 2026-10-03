@@ -69,6 +69,7 @@ def test_every_event_reads_in_both_languages():
         "ssl_expiring_admin": {"sites": [{"domain": "a.test", "days": 3, "expires": "30/09/2026"}]},
         "login_new_ip": {"username": "boss", "ip": "203.0.113.9", "when": "now", "agent": "Firefox"},
         "security_change": {"kind": "2fa_off", "username": "boss", "when": "now"},
+        "resource_limit": {"username": "alice", "count": 2, "memory": 512},
     }
     assert set(samples) == set(notify_messages.EVENTS)
     for event, params in samples.items():

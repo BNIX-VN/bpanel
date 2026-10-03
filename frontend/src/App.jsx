@@ -816,6 +816,8 @@ function App() {
   // Optional features. Until this has loaded nothing addon-owned is offered, so
   // a slow first request cannot flash a section that turns out not to be there.
   const [addons, setAddons] = useState({ items: [], can_manage: false, loaded: false });
+  // Resource limits addon: each visible account's limits and current use.
+  const [limitsInfo, setLimitsInfo] = useState(null);
   // The addon card whose details and panel are open on the Addons page.
   const [addonOpen, setAddonOpen] = useState('');
   // Demo mode addon: the accounts the login page offers, and the form that picks them.
@@ -897,7 +899,7 @@ function App() {
   const [selectedFilePaths, setSelectedFilePaths] = useState([]);
   const [archiveFormat, setArchiveFormat] = useState('zip');
   const [editorCursor, setEditorCursor] = useState({ line: 1, column: 1 });
-  const [newUser, setNewUser] = useState({ username: '', email: '', password: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024, mail_accounts_limit: 10, database_limit: 10, reseller_id: '', pool_user_limit: 0, pool_storage_limit_mb: 0, pool_oversell: false });
+  const [newUser, setNewUser] = useState({ username: '', email: '', password: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024, mail_accounts_limit: 10, database_limit: 10, reseller_id: '', pool_user_limit: 0, pool_storage_limit_mb: 0, pool_oversell: false, cpu_percent: 0, memory_mb: 0, process_limit: 0, io_read_mbps: 0, io_write_mbps: 0, group_cpu_percent: 0, group_memory_mb: 0, group_process_limit: 0, group_io_read_mbps: 0, group_io_write_mbps: 0 });
   // A reseller's share of the server and what it has handed out (GET /users/pool).
   const [resellerPool, setResellerPool] = useState(null);
   // Who a new website is for: '' is the account creating it.
@@ -1016,6 +1018,7 @@ function App() {
   const malwareAddonInstalled = !!addons.items.find(item => item.slug === 'malware')?.installed;
   const dnsAddonInstalled = !!addons.items.find(item => item.slug === 'dns')?.installed;
   const mailAddonInstalled = !!addons.items.find(item => item.slug === 'mail')?.installed;
+  const limitsOn = !!addons.items.find(item => item.slug === 'limits')?.installed;
   const [mcpTokens, setMcpTokens] = useState([]);
   const [mcpDraft, setMcpDraft] = useState({ name: '', expires_in_days: 90, can_write: false });
   // Held until dismissed rather than cleared on the next render: the server
@@ -1642,6 +1645,11 @@ function App() {
     }));
   }
 
+  async function loadLimitsInfo() {
+    const data = await request('/resource-limits', { silent: true });
+    if (data) setLimitsInfo(data);
+  }
+
   async function loadResellerPool() {
     const data = await request('/users/pool', { silent: true });
     if (data) setResellerPool(data);
@@ -1751,6 +1759,9 @@ function App() {
 
   // A reseller's share: customers and disk, nothing else.
   const POOL_FIELDS = ['pool_user_limit', 'pool_storage_limit_mb'];
+  // Resource limits addon: an account's own, and a reseller's caps on its group.
+  const RL_FIELDS = ['cpu_percent', 'memory_mb', 'process_limit', 'io_read_mbps', 'io_write_mbps'];
+  const limitValues = (form, prefix = '') => Object.fromEntries(RL_FIELDS.map(field => [prefix + field, Number(form[prefix + field]) || 0]));
 
   async function createUser() {
     const payload = {
@@ -1768,10 +1779,14 @@ function App() {
       POOL_FIELDS.forEach(field => { payload[field] = Number(newUser[field]) || 0; });
       payload.pool_oversell = !!newUser.pool_oversell;
     }
+    if (limitsOn) {
+      Object.assign(payload, limitValues(newUser));
+      if (isAdmin && newUser.role === 'reseller') Object.assign(payload, limitValues(newUser, 'group_'));
+    }
     const data = await request('/users', { method: 'POST', body: JSON.stringify(payload) }, t('Creating user...'));
     if (data) {
       setNotice(`Created user ${data.username}`);
-      setNewUser({ username: '', email: '', password: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024, mail_accounts_limit: 10, database_limit: 10, reseller_id: '', pool_user_limit: 0, pool_storage_limit_mb: 0, pool_oversell: false });
+      setNewUser({ username: '', email: '', password: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024, mail_accounts_limit: 10, database_limit: 10, reseller_id: '', pool_user_limit: 0, pool_storage_limit_mb: 0, pool_oversell: false, cpu_percent: 0, memory_mb: 0, process_limit: 0, io_read_mbps: 0, io_write_mbps: 0, group_cpu_percent: 0, group_memory_mb: 0, group_process_limit: 0, group_io_read_mbps: 0, group_io_write_mbps: 0 });
       await loadUsers();
       if (isReseller) await loadResellerPool();
       setUserTab('list');
@@ -1787,6 +1802,7 @@ function App() {
       storage_limit_mb: selected ? selected.storage_limit_mb : 1024,
       mail_accounts_limit: selected ? (selected.mail_accounts_limit ?? 10) : 10,
       database_limit: selected ? (selected.database_limit ?? 5) : 10,
+      ...(selected ? limitValues(selected) : {}),
     }));
   }
 
@@ -1799,6 +1815,7 @@ function App() {
       storage_limit_mb: selected ? selected.storage_limit_mb : 1024,
       mail_accounts_limit: selected ? (selected.mail_accounts_limit ?? 10) : 10,
       database_limit: selected ? (selected.database_limit ?? 5) : 10,
+      ...(selected ? limitValues(selected) : {}),
     }));
   }
 
@@ -1814,6 +1831,7 @@ function App() {
       reseller_id: user.reseller_id ? String(user.reseller_id) : '',
       pool_user_limit: user.pool_user_limit ?? 0,
       pool_storage_limit_mb: user.pool_storage_limit_mb ?? 0,
+      ...Object.fromEntries(RL_FIELDS.flatMap(field => [[field, user[field] ?? 0], [`group_${field}`, user[`group_${field}`] ?? 0]])),
       pool_oversell: !!user.pool_oversell,
       database_limit: user.database_limit ?? 0,
       new_password: '',
@@ -1862,6 +1880,10 @@ function App() {
         POOL_FIELDS.forEach(field => { payload[field] = Number(editingUserForm[field]) || 0; });
         payload.pool_oversell = !!editingUserForm.pool_oversell;
       }
+    }
+    if (limitsOn) {
+      Object.assign(payload, limitValues(editingUserForm));
+      if (isAdmin && editingUserForm.role === 'reseller') Object.assign(payload, limitValues(editingUserForm, 'group_'));
     }
     const data = await request(`/users/${editingUser.id}`, {
       method: 'PATCH',
@@ -1914,7 +1936,7 @@ function App() {
     }
     const data = await request('/packages', {
       method: 'POST',
-      body: JSON.stringify({ name: newPackage.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, mail_accounts_limit: Number(newPackage.mail_accounts_limit || 0), database_limit: Number(newPackage.database_limit || 0) }),
+      body: JSON.stringify({ name: newPackage.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, mail_accounts_limit: Number(newPackage.mail_accounts_limit || 0), database_limit: Number(newPackage.database_limit || 0), ...(limitsOn ? limitValues(newPackage) : {}) }),
     }, t('Creating package...'));
     if (data) {
       setNotice(`Created package ${data.name}.`);
@@ -1931,6 +1953,7 @@ function App() {
       storage_limit_mb: item.storage_limit_mb ?? 1024,
       mail_accounts_limit: item.mail_accounts_limit ?? 10,
       database_limit: item.database_limit ?? 5,
+      ...limitValues(item),
     });
   }
 
@@ -1953,7 +1976,7 @@ function App() {
     }
     const data = await request(`/packages/${packageId}`, {
       method: 'PATCH',
-      body: JSON.stringify({ name: editingPackageForm.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, mail_accounts_limit: Number(editingPackageForm.mail_accounts_limit || 0), database_limit: Number(editingPackageForm.database_limit || 0) }),
+      body: JSON.stringify({ name: editingPackageForm.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, mail_accounts_limit: Number(editingPackageForm.mail_accounts_limit || 0), database_limit: Number(editingPackageForm.database_limit || 0), ...(limitsOn ? limitValues(editingPackageForm) : {}) }),
     }, t('Updating package...'));
     if (data) {
       setNotice(`Updated package ${data.name}.`);
@@ -5078,6 +5101,13 @@ function App() {
   // Which optional features exist decides what the nav shows, so this is asked
   // once per session rather than per page.
   useEffect(() => { if (currentUser) loadAddons(); }, [currentUser]);
+  // Resource limits: live use while a page shows it.
+  useEffect(() => {
+    if (!isAuthenticated || !limitsOn || !['dashboard', 'users'].includes(page)) return undefined;
+    loadLimitsInfo();
+    const timer = window.setInterval(loadLimitsInfo, 15000);
+    return () => window.clearInterval(timer);
+  }, [isAuthenticated, page, limitsOn]);
   useEffect(() => { if (!isAuthenticated) loadDemoAccess(); }, [isAuthenticated]);
   const demoAddonInstalled = addons.items.some(item => item.slug === 'demo' && item.installed);
   useEffect(() => { if (isAdmin && demoAddonInstalled) loadDemoSettings(); }, [isAdmin, demoAddonInstalled]);
@@ -5580,6 +5610,32 @@ function App() {
             <ResourceCard icon={Database} label={t('Databases')} value={String(databases.length)} percent={null} detail={t('in your account')} />
           </div>
         </section>;
+      })()}
+
+      {!isAdmin && currentUser && limitsOn && limitsInfo?.accounts?.[currentUser.id] && (() => {
+        // The Resource limits addon: what this account (and a reseller's whole group) uses now.
+        const entry = limitsInfo.accounts[currentUser.id];
+        const meters = (usage, limits) => {
+          const u = usage || {};
+          const pct = (used, limit) => limit > 0 ? (used / limit) * 100 : null;
+          return <div className="resource-grid">
+            <ResourceCard icon={Cpu} label="CPU" value={`${u.cpu_percent ?? 0}%`} percent={pct(u.cpu_percent || 0, limits.cpu_percent)} detail={limits.cpu_percent ? t('Limit {value}', { value: `${limits.cpu_percent}%` }) : t('Unlimited')} />
+            <ResourceCard icon={MemoryStick} label="RAM" value={`${u.memory_mb ?? 0} MB`} percent={pct(u.memory_mb || 0, limits.memory_mb)} detail={limits.memory_mb ? t('Limit {value}', { value: `${limits.memory_mb} MB` }) : t('Unlimited')} />
+            <ResourceCard icon={Boxes} label={t('Processes')} value={String(u.processes ?? 0)} percent={pct(u.processes || 0, limits.process_limit)} detail={limits.process_limit ? t('Limit {value}', { value: limits.process_limit }) : t('Unlimited')} />
+            <ResourceCard icon={HardDrive} label={t('Disk I/O')} value={`${u.io_read_mbps ?? 0} / ${u.io_write_mbps ?? 0} MB/s`} detail={t('Read / write')} />
+          </div>;
+        };
+        return <>
+          <section className="section dash-card dash-resources">
+            <div className="dash-card-head"><span className="dash-card-icon"><Cpu size={16}/></span><h2>{t('Your resources')}</h2></div>
+            {meters(entry.usage, entry.limits || {})}
+          </section>
+          {entry.group_limits && <section className="section dash-card dash-resources">
+            <div className="dash-card-head"><span className="dash-card-icon"><Users size={16}/></span><h2>{t('Your group')}</h2></div>
+            <p className="hint">{t('You and all your customers together.')}</p>
+            {meters(entry.group_usage, entry.group_limits)}
+          </section>}
+        </>;
       })()}
 
       {/* Eight cards for an administrator go 4 + 4, three for a customer sit
@@ -10038,6 +10094,31 @@ function App() {
     return users.find(u => u.id === id)?.username || `#${id}`;
   }
 
+  // CPU, RAM, processes and disk speed, for an account (prefix '') or a
+  // reseller's whole group ('group_'). 0 is unlimited.
+  function renderLimitInputs(form, setForm, prefix = '', disabled = false) {
+    const labels = {
+      cpu_percent: 'CPU (%)', memory_mb: 'RAM (MB)', process_limit: 'Processes',
+      io_read_mbps: 'Disk read (MB/s)', io_write_mbps: 'Disk write (MB/s)',
+    };
+    return <>
+      <p className="hint wide">{prefix
+        ? t("Group limits: this reseller's own account and all its customers together. 0 = unlimited.")
+        : t('Resource limits: 0 = unlimited. CPU 100% is one core.')}</p>
+      {RL_FIELDS.map(field => <label key={prefix + field}><span>{prefix ? `${t('Group')}: ${t(labels[field])}` : t(labels[field])}</span>
+        <input type="number" min="0" disabled={disabled} value={form[prefix + field] ?? 0} onChange={e => setForm(prev => ({ ...prev, [prefix + field]: e.target.value }))} /></label>)}
+    </>;
+  }
+
+  // "CPU 12% · RAM 300/1024 MB · 7 processes": one account's use, against its limits.
+  function limitsUsageText(entry) {
+    const usage = entry?.usage;
+    if (!usage) return '';
+    const limits = entry.limits || {};
+    const ram = limits.memory_mb ? `${usage.memory_mb}/${limits.memory_mb} MB` : `${usage.memory_mb} MB`;
+    return `CPU ${usage.cpu_percent}%${limits.cpu_percent ? `/${limits.cpu_percent}%` : ''} · RAM ${ram} · ${t('{n} processes', { n: usage.processes })}`;
+  }
+
   function renderPoolInputs(form, setForm) {
     // Customers and disk: what a reseller is sold by. Websites, databases,
     // mailboxes and applications are its own to give its customers.
@@ -10098,6 +10179,7 @@ function App() {
           <span className="badge" title={isAdmin && user.reseller_id ? t('via {name}', { name: resellerName(user.reseller_id) }) : undefined}>{t(roleLabel(user.role))}</span>
           <span className={`badge ${user.is_active ? 'ok' : 'warn'}`}>{user.is_active ? t('Active') : t('Suspended')}</span>
           <span className={`user-metric${user.storage_used_bytes == null || Number(user.storage_used_bytes) < 0 ? ' pending' : ''}`}><HardDrive size={13}/>{storageUsageText(user)}</span>
+          {limitsOn && limitsInfo?.accounts?.[user.id]?.usage && <span className="user-metric" title={t('Resource use now')}><Cpu size={13}/>{limitsUsageText(limitsInfo.accounts[user.id])}</span>}
           <div className="row-actions">
             {(isAdmin || user.id !== currentUser?.id) && <button className="mini secondary-light" disabled={!!loading} onClick={() => startEditingUser(user)}><Pencil size={14}/> {t('Edit')}</button>}
             {user.id !== currentUser?.id && <button className="mini secondary-light" disabled={!!loading} onClick={() => quickLoginUser(user)}><LogIn size={14}/> {t('Login as')}</button>}
@@ -10131,6 +10213,8 @@ function App() {
               <label><span>{t('Site limit')}</span><input type="number" min="0" max="1000" disabled={packaged} value={editingUserForm.website_limit} onChange={e => setEditingUserForm(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
               <label><span>{t('Disk limit (MB)')}</span><input type="number" min="0" max="1048576" disabled={packaged} value={editingUserForm.storage_limit_mb} onChange={e => setEditingUserForm(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
               <label><span>{t('Databases')} <small>{t('0 = unlimited')}</small></span><input type="number" min="0" max="10000" disabled={packaged} value={editingUserForm.database_limit} onChange={e => setEditingUserForm(prev => ({ ...prev, database_limit: e.target.value }))} /></label>
+              {limitsOn && renderLimitInputs(editingUserForm, setEditingUserForm, '', packaged)}
+              {limitsOn && isAdmin && editingUserForm.role === 'reseller' && renderLimitInputs(editingUserForm, setEditingUserForm, 'group_')}
               {mailAddonInstalled && <label><span>{t('Mailbox limit')}</span><input type="number" min="0" max="1000" disabled={packaged} value={editingUserForm.mail_accounts_limit} onChange={e => setEditingUserForm(prev => ({ ...prev, mail_accounts_limit: e.target.value }))} /></label>}
               <label><span>{t('New password')} <small>{t('(leave empty to keep)')}</small></span><input type="password" autoComplete="new-password" value={editingUserForm.new_password} onChange={e => setEditingUserForm(prev => ({ ...prev, new_password: e.target.value }))} placeholder={t('Min 12 characters')} /></label>
               {!!editingUserForm.new_password && <label><span>{t('Confirm password')}</span><input type="password" autoComplete="new-password" value={editingUserForm.confirm_password} onChange={e => setEditingUserForm(prev => ({ ...prev, confirm_password: e.target.value }))} placeholder={t('Repeat password')} /></label>}
@@ -10186,6 +10270,7 @@ function App() {
           {mailAddonInstalled && <label><span>{t('Mailboxes')}</span><input type="number" min="0" max="1000" value={newPackage.mail_accounts_limit} onChange={e => setNewPackage(prev => ({ ...prev, mail_accounts_limit: e.target.value }))} /></label>}
           <button disabled={!!loading || !newPackage.name.trim()} onClick={createPackage}><Plus size={14}/> {t('Add')}</button>
         </div>
+        {limitsOn && <div className="user-edit-grid package-limits">{renderLimitInputs(newPackage, setNewPackage)}</div>}
         {packages.length === 0 && <p className="hint">{t('No packages yet. Create one above.')}</p>}
         {packages.length > 0 && <div className="table">
           {packages.map(item => <div className="row" key={item.id}>
@@ -10208,6 +10293,7 @@ function App() {
                 <label><span>{t('Sites')}</span><input type="number" min="0" max="1000" value={editingPackageForm.website_limit} onChange={e => setEditingPackageForm(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
                 <label><span>{t('Disk (MB)')}</span><input type="number" min="0" max="1048576" value={editingPackageForm.storage_limit_mb} onChange={e => setEditingPackageForm(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
                 <label><span>{t('Databases')} <small>{t('0 = unlimited')}</small></span><input type="number" min="0" max="10000" value={editingPackageForm.database_limit} onChange={e => setEditingPackageForm(prev => ({ ...prev, database_limit: e.target.value }))} /></label>
+                {limitsOn && renderLimitInputs(editingPackageForm, setEditingPackageForm)}
                 {mailAddonInstalled && <label><span>{t('Mailboxes')}</span><input type="number" min="0" max="1000" value={editingPackageForm.mail_accounts_limit} onChange={e => setEditingPackageForm(prev => ({ ...prev, mail_accounts_limit: e.target.value }))} /></label>}
               </div>
               <div className="user-edit-actions">
@@ -10246,6 +10332,8 @@ function App() {
           <label><span>{t('Site limit')}</span><input type="number" min="0" max="1000" disabled={packaged} value={newUser.website_limit} onChange={e => setNewUser(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
           <label><span>{t('Disk (MB)')}</span><input type="number" min="0" max="1048576" disabled={packaged} value={newUser.storage_limit_mb} onChange={e => setNewUser(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
           <label><span>{t('Databases')} <small>{t('0 = unlimited')}</small></span><input type="number" min="0" max="10000" disabled={packaged} value={newUser.database_limit} onChange={e => setNewUser(prev => ({ ...prev, database_limit: e.target.value }))} /></label>
+          {limitsOn && renderLimitInputs(newUser, setNewUser, '', packaged)}
+          {limitsOn && isAdmin && newUser.role === 'reseller' && renderLimitInputs(newUser, setNewUser, 'group_')}
           {mailAddonInstalled && <label><span>{t('Mailbox limit')}</span><input type="number" min="0" max="1000" disabled={packaged} value={newUser.mail_accounts_limit} onChange={e => setNewUser(prev => ({ ...prev, mail_accounts_limit: e.target.value }))} /></label>}
           {isAdmin && newUser.role === 'reseller' && renderPoolInputs(newUser, setNewUser)}
           <button disabled={!!loading || !newUser.username || !newUser.password} onClick={createUser}><Plus size={14}/> {isReseller ? t('Create customer') : t('Create user')}</button>

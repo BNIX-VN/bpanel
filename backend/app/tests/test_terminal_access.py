@@ -80,6 +80,11 @@ def test_assigning_a_package_copies_its_terminal_flag():
         sftp_accounts_limit = 3
         mail_accounts_limit = 10
         database_limit = 5
+        cpu_percent = 0
+        memory_mb = 0
+        process_limit = 0
+        io_read_mbps = 0
+        io_write_mbps = 0
 
     class _Target:
         package_id = None

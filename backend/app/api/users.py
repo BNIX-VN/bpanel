@@ -14,6 +14,8 @@ from app.core.security import hash_password
 from app.core.step_up import require_sensitive_action_step_up
 from app.models.entities import AuditLog, BackupSchedule, DatabaseAccount, McpToken, User, UserPackage, Website
 from app.schemas.schemas import (
+    GROUP_LIMIT_FIELDS,
+    RESOURCE_LIMIT_FIELDS,
     AuditLogOut,
     UserCreate,
     UserOut,
@@ -22,7 +24,7 @@ from app.schemas.schemas import (
     UserUpdate,
 )
 from app.services.audit import log_action
-from app.services import demo_mode, mail, mariadb, nginx, reseller as reseller_pool, site_users, ssl, storage_quota, teardown, waf, wordpress
+from app.services import demo_mode, mail, mariadb, nginx, reseller as reseller_pool, resource_limits, site_users, ssl, storage_quota, teardown, waf, wordpress
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -87,6 +89,8 @@ def _apply_package_limits(user: User, package: UserPackage | None) -> None:
         user.sftp_accounts_limit = package.sftp_accounts_limit
         user.mail_accounts_limit = package.mail_accounts_limit
         user.database_limit = package.database_limit
+        for field in RESOURCE_LIMIT_FIELDS:
+            setattr(user, field, int(getattr(package, field) or 0))
 
 
 def _decode_schedule_user_ids(raw: str | None) -> list[int]:
@@ -185,6 +189,11 @@ def create_user(payload: UserCreate, request: Request, db: Session = Depends(get
         mail_accounts_limit=payload.mail_accounts_limit,
         database_limit=payload.database_limit,
         sftp_password_set_at=datetime.utcnow(),
+        # Resource limits: the account's own from whoever creates it; a group
+        # cap only on a reseller, and only from the administrator.
+        **{field: getattr(payload, field) for field in RESOURCE_LIMIT_FIELDS},
+        **{field: (getattr(payload, field) if role == "reseller" and is_admin_role(current_user.role) else 0)
+           for field in GROUP_LIMIT_FIELDS},
     )
     # After the explicit value, so a package still wins when one is assigned.
     _apply_package_limits(user, package)
@@ -192,6 +201,7 @@ def create_user(payload: UserCreate, request: Request, db: Session = Depends(get
     db.commit()
     db.refresh(user)
     log_action(db, current_user.id, "create_user", user.username, request=request)
+    resource_limits.sync_in_background()
     body = _user_out(user, db)
     # Returned once, to whoever created the account. Nothing stores it.
     body["sftp_password"] = sftp_password
@@ -277,6 +287,8 @@ def update_user(user_id: int, payload: UserUpdate, request: Request, db: Session
         if payload.role is not None or payload.reseller_id is not None or any(
                 getattr(payload, field) is not None for field in reseller_pool.SETTINGS):
             raise HTTPException(status_code=403, detail="Only the administrator can change roles or resellers")
+        if any(getattr(payload, field) is not None for field in GROUP_LIMIT_FIELDS):
+            raise HTTPException(status_code=403, detail="A reseller's group limits are set by the administrator")
     new_role = payload.role if payload.role is not None else user.role
     if new_role != user.role and user_id == current_user.id:
         raise HTTPException(status_code=400, detail="Cannot change your own role")
@@ -347,6 +359,14 @@ def update_user(user_id: int, payload: UserUpdate, request: Request, db: Session
         user.mail_accounts_limit = payload.mail_accounts_limit
     if payload.database_limit is not None:
         user.database_limit = payload.database_limit
+    for field in RESOURCE_LIMIT_FIELDS:
+        if getattr(payload, field) is not None:
+            setattr(user, field, getattr(payload, field))
+    for field in GROUP_LIMIT_FIELDS:
+        if new_role != "reseller":
+            setattr(user, field, 0)
+        elif getattr(payload, field) is not None:
+            setattr(user, field, getattr(payload, field))
     if package:
         _apply_package_limits(user, package)
 
@@ -360,6 +380,8 @@ def update_user(user_id: int, payload: UserUpdate, request: Request, db: Session
         # A suspended account's mailboxes keep receiving but cannot sign in.
         mail.sync_quietly(db)
     log_action(db, current_user.id, "update_user", user.username, request=request)
+    # Its limits, its reseller or its role may have moved its slice.
+    resource_limits.sync_in_background()
     return _user_out(user, db)
 
 
@@ -416,6 +438,7 @@ def delete_user(user_id: int, request: Request, db: Session = Depends(get_db), c
         # touched, so before this sweep existed they simply stayed behind.
         detail = f"{detail} +db:{len(purged['databases'])} +app:{len(purged['applications'])}"
     log_action(db, current_user.id, "delete_user", username, detail, request=request)
+    resource_limits.sync_in_background()
     return {
         "ok": True,
         "deleted_websites": deleted_domains,

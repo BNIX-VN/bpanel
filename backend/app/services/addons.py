@@ -24,6 +24,7 @@ APPLICATION = "application"
 DEMO = "demo"
 DNS = "dns"
 FAIL2BAN = "fail2ban"
+LIMITS = "limits"
 MAIL = "mail"
 MALWARE = "malware"
 MCP = "mcp"
@@ -65,6 +66,25 @@ CATALOGUE: dict[str, dict] = {
         # Stop is reversible and keeps the tokens; uninstall is the one that
         # revokes them, and the Addons page says so before it happens.
         "keeps_data_on_uninstall": False,
+    },
+    LIMITS: {
+        "name": "Resource limits",
+        "version": "1.0.0",
+        "summary": "CPU, memory, processes and disk I/O limits for each hosting account.",
+        "details": [
+            "Gives every hosting account its own share of the server, the way CloudLinux does but with what Ubuntu's kernel already has (cgroup v2).",
+            "Set CPU (100% = one core), memory, the number of processes and disk read/write speed on a package or an account. One busy website then slows down or fails on its own instead of taking the whole server with it.",
+            "A reseller gets a cap on its whole group and sets each customer's limits within it.",
+            "Every account's current use is shown next to its limits.",
+        ],
+        "notes": [
+            "Needs cgroup v2: Ubuntu 22.04 or later, on a virtual machine or a dedicated server. A container (LXC, OpenVZ) cannot run it.",
+            "Limits cover the account's PHP, cron jobs, SFTP and the panel's work on its files. Database queries run inside MariaDB, and applications in units of their own with their own memory and CPU limits; neither is counted against the account.",
+            "0 means unlimited, and every account starts unlimited: nothing changes until you set a limit.",
+            "A process over its memory limit is stopped, which shows as an error on that website only. Set memory with some room to spare.",
+            "Removing the addon lifts every limit at once; the limits you set stay with the accounts and packages.",
+        ],
+        "keeps_data_on_uninstall": True,
     },
     NOTIFICATIONS: {
         "name": "Notifications",
