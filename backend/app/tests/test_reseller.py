@@ -258,3 +258,42 @@ def test_a_reseller_sees_its_own_and_its_customers_sites_and_nobody_elses(env, m
     # The customer still sees only its own.
     _login(client, "cust1")
     assert [w["domain"] for w in _call(client, "GET", "/api/websites").json()] == ["custsite.com"]
+
+
+def test_a_reseller_reaches_its_customers_mail_and_zones_only(env):
+    """Mail and DNS ask the same rule set, below the API (the addons need not
+    be installed for the services to answer)."""
+    from app.models.entities import DnsZone, MailAccount, MailDomain
+    from app.services import dns, mail
+
+    db, client = env
+    _reseller(client)
+    _call(client, "POST", "/api/users", json={"username": "cust1", **ACCOUNT, **SMALL})
+    shop, cust, direct = _user(db, "shop"), _user(db, "cust1"), _user(db, "direct")
+    rows = {}
+    for owner, name in ((shop, "shop.com"), (cust, "cust.com"), (direct, "direct.com")):
+        rows[name] = MailDomain(domain=name, owner_id=owner.id)
+        db.add(rows[name])
+        db.add(DnsZone(name=name, owner_id=owner.id))
+    db.flush()
+    box = MailAccount(owner_id=direct.id, domain="direct.com", local_part="info", password_hash="x")
+    theirs = MailAccount(owner_id=cust.id, domain="cust.com", local_part="info", password_hash="x")
+    db.add_all([box, theirs])
+    db.commit()
+
+    assert mail.get_domain(db, shop, rows["cust.com"].id).domain == "cust.com"
+    assert mail.get_account(db, shop, theirs.id).domain == "cust.com"
+    with pytest.raises(mail.MailError) as refused:
+        mail.get_domain(db, shop, rows["direct.com"].id)
+    assert refused.value.status == 404
+    with pytest.raises(mail.MailError):
+        mail.get_account(db, shop, box.id)
+    # The customer itself: its own only, not its reseller's.
+    with pytest.raises(mail.MailError):
+        mail.get_domain(db, cust, rows["shop.com"].id)
+
+    assert sorted(zone["name"] for zone in dns.list_zones(db, shop)) == ["cust.com", "shop.com"]
+    assert dns.may_edit(db, shop, "cust.com") == "cust.com"
+    with pytest.raises(dns.DnsError):
+        dns.may_edit(db, shop, "direct.com")
+    assert [zone["name"] for zone in dns.list_zones(db, cust)] == ["cust.com"]
