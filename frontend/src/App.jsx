@@ -808,7 +808,6 @@ function App() {
   // Shown once, right after creation. A password the user typed is never
   // echoed back by the API, so this only ever holds a generated one.
   const [createdSftpInfo, setCreatedSftpInfo] = useState(null);
-  const [sftpLimits, setSftpLimits] = useState({ limit: 0, used: 0, unlimited: false });
   // The password dialog: an extra account's (account set), or the main
   // login's (account null), which the panel password and 2FA code confirm.
   const [sftpPasswordFor, setSftpPasswordFor] = useState(null);
@@ -898,16 +897,16 @@ function App() {
   const [selectedFilePaths, setSelectedFilePaths] = useState([]);
   const [archiveFormat, setArchiveFormat] = useState('zip');
   const [editorCursor, setEditorCursor] = useState({ line: 1, column: 1 });
-  const [newUser, setNewUser] = useState({ username: '', email: '', password: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024, sftp_accounts_limit: 0, mail_accounts_limit: 10, database_limit: 10, reseller_id: '', pool_user_limit: 0, pool_storage_limit_mb: 0, pool_oversell: false });
+  const [newUser, setNewUser] = useState({ username: '', email: '', password: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024, mail_accounts_limit: 10, database_limit: 10, reseller_id: '', pool_user_limit: 0, pool_storage_limit_mb: 0, pool_oversell: false });
   // A reseller's share of the server and what it has handed out (GET /users/pool).
   const [resellerPool, setResellerPool] = useState(null);
   // Who a new website is for: '' is the account creating it.
   const [siteOwnerId, setSiteOwnerId] = useState('');
   const [editingUser, setEditingUser] = useState(null);
-  const [editingUserForm, setEditingUserForm] = useState({ email: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024, sftp_accounts_limit: 0, mail_accounts_limit: 10, new_password: '', confirm_password: '' });
-  const [newPackage, setNewPackage] = useState({ name: '', website_limit: 5, storage_limit_mb: 1024, sftp_accounts_limit: 0, mail_accounts_limit: 10, database_limit: 5 });
+  const [editingUserForm, setEditingUserForm] = useState({ email: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024, mail_accounts_limit: 10, new_password: '', confirm_password: '' });
+  const [newPackage, setNewPackage] = useState({ name: '', website_limit: 5, storage_limit_mb: 1024, mail_accounts_limit: 10, database_limit: 5 });
   const [editingPackageId, setEditingPackageId] = useState('');
-  const [editingPackageForm, setEditingPackageForm] = useState({ name: '', website_limit: 5, storage_limit_mb: 1024, sftp_accounts_limit: 0, mail_accounts_limit: 10, database_limit: 5 });
+  const [editingPackageForm, setEditingPackageForm] = useState({ name: '', website_limit: 5, storage_limit_mb: 1024, mail_accounts_limit: 10, database_limit: 5 });
   const [phpConfig, setPhpConfig] = useState({ php_version: '8.4', display_errors: 'Off', max_execution_time: 300, max_input_time: 600, max_input_vars: 10000, memory_limit: '1024M', post_max_size: '1024M', upload_max_filesize: '1024M' });
   const [phpExtensions, setPhpExtensions] = useState({ versions: [], extensions: [] });
   const [phpVersions, setPhpVersions] = useState({ installed: ['8.4'], supported: ['5.6', '7.4', '8.0', '8.1', '8.2', '8.3', '8.4', '8.5'] });
@@ -1761,7 +1760,6 @@ function App() {
       package_id: newUser.package_id ? Number(newUser.package_id) : null,
       website_limit: Number(newUser.website_limit),
       storage_limit_mb: Number(newUser.storage_limit_mb),
-      sftp_accounts_limit: Number(newUser.sftp_accounts_limit || 0),
       mail_accounts_limit: Number(newUser.mail_accounts_limit || 0),
       database_limit: Number(newUser.database_limit || 0),
     };
@@ -1773,7 +1771,7 @@ function App() {
     const data = await request('/users', { method: 'POST', body: JSON.stringify(payload) }, t('Creating user...'));
     if (data) {
       setNotice(`Created user ${data.username}`);
-      setNewUser({ username: '', email: '', password: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024, sftp_accounts_limit: 0, mail_accounts_limit: 10, database_limit: 10, reseller_id: '', pool_user_limit: 0, pool_storage_limit_mb: 0, pool_oversell: false });
+      setNewUser({ username: '', email: '', password: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024, mail_accounts_limit: 10, database_limit: 10, reseller_id: '', pool_user_limit: 0, pool_storage_limit_mb: 0, pool_oversell: false });
       await loadUsers();
       if (isReseller) await loadResellerPool();
       setUserTab('list');
@@ -1787,7 +1785,6 @@ function App() {
       package_id: packageId,
       website_limit: selected ? selected.website_limit : 5,
       storage_limit_mb: selected ? selected.storage_limit_mb : 1024,
-      sftp_accounts_limit: selected ? (selected.sftp_accounts_limit || 0) : 0,
       mail_accounts_limit: selected ? (selected.mail_accounts_limit ?? 10) : 10,
       database_limit: selected ? (selected.database_limit ?? 5) : 10,
     }));
@@ -1800,7 +1797,6 @@ function App() {
       package_id: packageId,
       website_limit: selected ? selected.website_limit : 5,
       storage_limit_mb: selected ? selected.storage_limit_mb : 1024,
-      sftp_accounts_limit: selected ? (selected.sftp_accounts_limit || 0) : 0,
       mail_accounts_limit: selected ? (selected.mail_accounts_limit ?? 10) : 10,
       database_limit: selected ? (selected.database_limit ?? 5) : 10,
     }));
@@ -1814,7 +1810,6 @@ function App() {
       package_id: user.package_id ? String(user.package_id) : '',
       website_limit: user.website_limit ?? 5,
       storage_limit_mb: user.storage_limit_mb ?? 1024,
-      sftp_accounts_limit: user.sftp_accounts_limit ?? 0,
       mail_accounts_limit: user.mail_accounts_limit ?? 10,
       reseller_id: user.reseller_id ? String(user.reseller_id) : '',
       pool_user_limit: user.pool_user_limit ?? 0,
@@ -1831,7 +1826,7 @@ function App() {
     setEditingUserForm({ email: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024, new_password: '', confirm_password: '' });
     setNewPackage({ name: '', website_limit: 5, storage_limit_mb: 1024 });
     setEditingPackageId('');
-    setEditingPackageForm({ name: '', website_limit: 5, storage_limit_mb: 1024, sftp_accounts_limit: 0, mail_accounts_limit: 10, database_limit: 5 });
+    setEditingPackageForm({ name: '', website_limit: 5, storage_limit_mb: 1024, mail_accounts_limit: 10, database_limit: 5 });
   }
 
   async function updatePanelUser() {
@@ -1857,7 +1852,6 @@ function App() {
       package_id: editingUserForm.package_id ? Number(editingUserForm.package_id) : null,
       website_limit: websiteLimit,
       storage_limit_mb: storageLimitMb,
-      sftp_accounts_limit: Number(editingUserForm.sftp_accounts_limit || 0),
       mail_accounts_limit: Number(editingUserForm.mail_accounts_limit || 0),
       database_limit: Number(editingUserForm.database_limit || 0),
     };
@@ -1920,11 +1914,11 @@ function App() {
     }
     const data = await request('/packages', {
       method: 'POST',
-      body: JSON.stringify({ name: newPackage.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, sftp_accounts_limit: Number(newPackage.sftp_accounts_limit || 0), mail_accounts_limit: Number(newPackage.mail_accounts_limit || 0), database_limit: Number(newPackage.database_limit || 0) }),
+      body: JSON.stringify({ name: newPackage.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, mail_accounts_limit: Number(newPackage.mail_accounts_limit || 0), database_limit: Number(newPackage.database_limit || 0) }),
     }, t('Creating package...'));
     if (data) {
       setNotice(`Created package ${data.name}.`);
-      setNewPackage({ name: '', website_limit: 5, storage_limit_mb: 1024, sftp_accounts_limit: 0, mail_accounts_limit: 10, database_limit: 5 });
+      setNewPackage({ name: '', website_limit: 5, storage_limit_mb: 1024, mail_accounts_limit: 10, database_limit: 5 });
       await loadPackages();
     }
   }
@@ -1935,7 +1929,6 @@ function App() {
       name: item.name || '',
       website_limit: item.website_limit ?? 5,
       storage_limit_mb: item.storage_limit_mb ?? 1024,
-      sftp_accounts_limit: item.sftp_accounts_limit ?? 0,
       mail_accounts_limit: item.mail_accounts_limit ?? 10,
       database_limit: item.database_limit ?? 5,
     });
@@ -1943,7 +1936,7 @@ function App() {
 
   function cancelEditingPackage() {
     setEditingPackageId('');
-    setEditingPackageForm({ name: '', website_limit: 5, storage_limit_mb: 1024, sftp_accounts_limit: 0, mail_accounts_limit: 10, database_limit: 5 });
+    setEditingPackageForm({ name: '', website_limit: 5, storage_limit_mb: 1024, mail_accounts_limit: 10, database_limit: 5 });
   }
 
   async function updatePackage(packageId) {
@@ -1960,7 +1953,7 @@ function App() {
     }
     const data = await request(`/packages/${packageId}`, {
       method: 'PATCH',
-      body: JSON.stringify({ name: editingPackageForm.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, sftp_accounts_limit: Number(editingPackageForm.sftp_accounts_limit || 0), mail_accounts_limit: Number(editingPackageForm.mail_accounts_limit || 0), database_limit: Number(editingPackageForm.database_limit || 0) }),
+      body: JSON.stringify({ name: editingPackageForm.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, mail_accounts_limit: Number(editingPackageForm.mail_accounts_limit || 0), database_limit: Number(editingPackageForm.database_limit || 0) }),
     }, t('Updating package...'));
     if (data) {
       setNotice(`Updated package ${data.name}.`);
@@ -3519,8 +3512,6 @@ function App() {
   async function loadSftpAccounts() {
     const data = await request('/sftp-accounts', {}, t('Loading SFTP accounts...'));
     if (Array.isArray(data)) setSftpAccounts(data);
-    const limits = await request('/sftp-accounts/limits', {}, null);
-    if (limits) setSftpLimits(limits);
   }
 
   // One dialog for both passwords. The main login's is confirmed with the
@@ -7720,10 +7711,8 @@ function App() {
     const host = sftpAccounts.find(account => account.host)?.host || window.location.hostname;
     const port = 22;
     const mainUsername = currentUser?.sftp_username || currentUser?.username || '';
-    const atLimit = !sftpLimits.unlimited && Number(sftpLimits.limit || 0) > 0
-      && Number(sftpLimits.used || 0) >= Number(sftpLimits.limit || 0);
-    const noAllowance = !sftpLimits.unlimited && Number(sftpLimits.limit || 0) <= 0;
-    const createOpen = showCreateSftp && !atLimit && !noAllowance;
+    // Extra SFTP accounts are not limited, as in OPanel.
+    const createOpen = showCreateSftp;
     const canCreate = !!selectedWebsiteId && newSftpAccount.label.trim().length >= 2;
     const editing = sftpPasswordFor;
     const editingOwn = !!editing && !editing.account;
@@ -7756,13 +7745,9 @@ function App() {
           <div><h2>{t('Extra SFTP accounts')}</h2>
             <p className="hint">{t('A separate login and password for one website — for a developer or designer who should see that website and nothing else.')}</p></div>
           <div className="actions">
-            {!createOpen && !atLimit && !noAllowance && <button type="button" onClick={() => setShowCreateSftp(true)}><Plus size={15}/> {t('New SFTP account')}</button>}
+            {!createOpen && <button type="button" onClick={() => setShowCreateSftp(true)}><Plus size={15}/> {t('New SFTP account')}</button>}
           </div>
         </div>
-        {noAllowance && <p className="hint">{t('Your hosting package does not include SFTP accounts.')}</p>}
-        {atLimit && <p className="hint">{t('You have used all {n} SFTP accounts in your package.', { n: sftpLimits.limit })}</p>}
-        {!noAllowance && !sftpLimits.unlimited && !atLimit &&
-          <p className="hint">{t('{used} of {limit} SFTP accounts used.', { used: sftpLimits.used, limit: sftpLimits.limit })}</p>}
 
         {createOpen && <div className="create-inline">
           <div className="create-inline-head">
@@ -10145,7 +10130,6 @@ function App() {
               </select></label>
               <label><span>{t('Site limit')}</span><input type="number" min="0" max="1000" disabled={packaged} value={editingUserForm.website_limit} onChange={e => setEditingUserForm(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
               <label><span>{t('Disk limit (MB)')}</span><input type="number" min="0" max="1048576" disabled={packaged} value={editingUserForm.storage_limit_mb} onChange={e => setEditingUserForm(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
-              <label><span>{t('SFTP accounts')}</span><input type="number" min="0" max="100" disabled={packaged} value={editingUserForm.sftp_accounts_limit} onChange={e => setEditingUserForm(prev => ({ ...prev, sftp_accounts_limit: e.target.value }))} /></label>
               <label><span>{t('Databases')} <small>{t('0 = unlimited')}</small></span><input type="number" min="0" max="10000" disabled={packaged} value={editingUserForm.database_limit} onChange={e => setEditingUserForm(prev => ({ ...prev, database_limit: e.target.value }))} /></label>
               {mailAddonInstalled && <label><span>{t('Mailbox limit')}</span><input type="number" min="0" max="1000" disabled={packaged} value={editingUserForm.mail_accounts_limit} onChange={e => setEditingUserForm(prev => ({ ...prev, mail_accounts_limit: e.target.value }))} /></label>}
               <label><span>{t('New password')} <small>{t('(leave empty to keep)')}</small></span><input type="password" autoComplete="new-password" value={editingUserForm.new_password} onChange={e => setEditingUserForm(prev => ({ ...prev, new_password: e.target.value }))} placeholder={t('Min 12 characters')} /></label>
@@ -10194,11 +10178,10 @@ function App() {
           <div><h2>{t('Hosting Packages')}</h2><p className="hint">{isReseller ? t("Your own packages: only you see them, to fill in your customers' limits.") : t('Manage provisioning plans for WHMCS and billing systems.')}</p></div>
           <button className="secondary" disabled={!!loading} onClick={loadPackages}><RefreshCw size={14}/> {t('Refresh')}</button>
         </div>
-        <div className="token-create-form package-form" style={{ '--package-limit-cols': mailAddonInstalled ? 5 : 4 }}>
+        <div className="token-create-form package-form" style={{ '--package-limit-cols': mailAddonInstalled ? 4 : 3 }}>
           <label><span>{t('Name')}</span><input value={newPackage.name} onChange={e => setNewPackage(prev => ({ ...prev, name: e.target.value }))} placeholder={t('Starter')} /></label>
           <label><span>{t('Sites')}</span><input type="number" min="0" max="1000" value={newPackage.website_limit} onChange={e => setNewPackage(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
           <label><span>{t('Disk (MB)')}</span><input type="number" min="0" max="1048576" value={newPackage.storage_limit_mb} onChange={e => setNewPackage(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
-          <label><span>{t('SFTP accounts')}</span><input type="number" min="0" max="100" value={newPackage.sftp_accounts_limit} onChange={e => setNewPackage(prev => ({ ...prev, sftp_accounts_limit: e.target.value }))} /></label>
           <label><span>{t('Databases')} <small>{t('0 = unlimited')}</small></span><input type="number" min="0" max="10000" value={newPackage.database_limit} onChange={e => setNewPackage(prev => ({ ...prev, database_limit: e.target.value }))} /></label>
           {mailAddonInstalled && <label><span>{t('Mailboxes')}</span><input type="number" min="0" max="1000" value={newPackage.mail_accounts_limit} onChange={e => setNewPackage(prev => ({ ...prev, mail_accounts_limit: e.target.value }))} /></label>}
           <button disabled={!!loading || !newPackage.name.trim()} onClick={createPackage}><Plus size={14}/> {t('Add')}</button>
@@ -10208,7 +10191,7 @@ function App() {
           {packages.map(item => <div className="row" key={item.id}>
             <div className="token-info">
               <strong>{item.name}</strong>
-              <small>{t('{n} website(s)', { n: item.website_limit })} | {formatBytes(Number(item.storage_limit_mb || 0) * 1024 * 1024)} | {t('{n} SFTP account(s)', { n: item.sftp_accounts_limit ?? 0 })} | {item.database_limit ? t('{n} database(s)', { n: item.database_limit }) : t('unlimited databases')}{mailAddonInstalled ? ` | ${t('{n} mailboxes', { n: item.mail_accounts_limit ?? 10 })}` : ''}</small>
+              <small>{t('{n} website(s)', { n: item.website_limit })} | {formatBytes(Number(item.storage_limit_mb || 0) * 1024 * 1024)} | {item.database_limit ? t('{n} database(s)', { n: item.database_limit }) : t('unlimited databases')}{mailAddonInstalled ? ` | ${t('{n} mailboxes', { n: item.mail_accounts_limit ?? 10 })}` : ''}</small>
             </div>
             <div className="row-actions">
               <button className="mini secondary-light" disabled={!!loading} onClick={() => startEditingPackage(item)}><Pencil size={14}/> {t('Edit')}</button>
@@ -10224,7 +10207,6 @@ function App() {
                 <label><span>{t('Name')}</span><input value={editingPackageForm.name} onChange={e => setEditingPackageForm(prev => ({ ...prev, name: e.target.value }))} /></label>
                 <label><span>{t('Sites')}</span><input type="number" min="0" max="1000" value={editingPackageForm.website_limit} onChange={e => setEditingPackageForm(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
                 <label><span>{t('Disk (MB)')}</span><input type="number" min="0" max="1048576" value={editingPackageForm.storage_limit_mb} onChange={e => setEditingPackageForm(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
-                <label><span>{t('SFTP accounts')}</span><input type="number" min="0" max="100" value={editingPackageForm.sftp_accounts_limit} onChange={e => setEditingPackageForm(prev => ({ ...prev, sftp_accounts_limit: e.target.value }))} /></label>
                 <label><span>{t('Databases')} <small>{t('0 = unlimited')}</small></span><input type="number" min="0" max="10000" value={editingPackageForm.database_limit} onChange={e => setEditingPackageForm(prev => ({ ...prev, database_limit: e.target.value }))} /></label>
                 {mailAddonInstalled && <label><span>{t('Mailboxes')}</span><input type="number" min="0" max="1000" value={editingPackageForm.mail_accounts_limit} onChange={e => setEditingPackageForm(prev => ({ ...prev, mail_accounts_limit: e.target.value }))} /></label>}
               </div>
@@ -10263,7 +10245,6 @@ function App() {
           </select></label>
           <label><span>{t('Site limit')}</span><input type="number" min="0" max="1000" disabled={packaged} value={newUser.website_limit} onChange={e => setNewUser(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
           <label><span>{t('Disk (MB)')}</span><input type="number" min="0" max="1048576" disabled={packaged} value={newUser.storage_limit_mb} onChange={e => setNewUser(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
-          <label><span>{t('SFTP accounts')}</span><input type="number" min="0" max="100" disabled={packaged} value={newUser.sftp_accounts_limit} onChange={e => setNewUser(prev => ({ ...prev, sftp_accounts_limit: e.target.value }))} /></label>
           <label><span>{t('Databases')} <small>{t('0 = unlimited')}</small></span><input type="number" min="0" max="10000" disabled={packaged} value={newUser.database_limit} onChange={e => setNewUser(prev => ({ ...prev, database_limit: e.target.value }))} /></label>
           {mailAddonInstalled && <label><span>{t('Mailbox limit')}</span><input type="number" min="0" max="1000" disabled={packaged} value={newUser.mail_accounts_limit} onChange={e => setNewUser(prev => ({ ...prev, mail_accounts_limit: e.target.value }))} /></label>}
           {isAdmin && newUser.role === 'reseller' && renderPoolInputs(newUser, setNewUser)}

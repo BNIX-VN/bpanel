@@ -396,11 +396,15 @@ def test_an_admin_can_grant_the_limit_to_one_user():
     assert "user.sftp_accounts_limit = payload.sftp_accounts_limit" in users
 
 
-def test_the_refusal_says_where_to_change_it():
-    """"Not included in your package" is true and useless on its own."""
+def test_extra_sftp_accounts_are_not_limited():
+    """The operator, 2026-10-03: as in OPanel, nobody is held to a number of
+    extra SFTP logins. Each reaches one website as the uid that already owns
+    it, so it grants nothing the account does not have."""
     src = (PROJECT_ROOT / "backend" / "app" / "api" / "sftp_accounts.py").read_text(encoding="utf-8")
-    block = src.split("does not include SFTP accounts", 1)[1].split(")", 1)[0]
-    assert "administrator" in block.lower()
+    create = src.split("def create_account(", 1)[1].split("\n@router", 1)[0]
+    assert "sftp_accounts_limit" not in create and "limit reached" not in create
+    limits = src.split("def account_limits(", 1)[1].split("\n@router", 1)[0]
+    assert '"unlimited": True' in limits and '"unlimited": False' not in limits
 
 
 def test_the_feature_is_not_dead_on_arrival():
