@@ -53,35 +53,39 @@ def _dashboard():
     return APP.split("function renderDashboard()")[1].split("function renderAdminOnly()")[0]
 
 
-def test_the_dashboard_says_how_things_stand_not_the_sidebar_again():
-    """Its Hosting / Security / System blocks repeated the sidebar item for
-    item (operator, 2026-09-25). What is left is what the sidebar cannot say:
-    the meters, a card per thing that can be wrong, what needs attention and
-    the few things done often - as in OPanel, one brand, one layout."""
+def test_the_dashboard_is_laid_out_as_cpanels_home():
+    """cPanel's home page (operator, 2026-10-04, following OPanel: customers
+    come from cPanel and DirectAdmin). The tools are back, but as cPanel has
+    them - in groups that fold, with a search - rather than the old blocks
+    that repeated the sidebar item for item (2026-09-25). On the right, what
+    the sidebar cannot say: how much is used, and how things stand."""
     dashboard = _dashboard()
     assert "featureGroups" not in APP and "function FeatureTile(" not in APP
-    assert "dash-resources" in dashboard and 'className={`status-card tone-${card.tone}`}' in dashboard
-    for key in ("websites", "ssl", "databases", "backups", "firewall", "waf", "malware", "services"):
+    assert 'className="dashboard cp-layout"' in dashboard and "dash-resources" in dashboard
+    assert 'className={`status-row tone-${card.tone}`}' in dashboard
+    for key in ("services", "ssl", "firewall", "waf", "malware", "backups"):
         assert f"key: '{key}'" in dashboard, key
-    assert "<h2>{t('Needs attention')}</h2>" in dashboard and "<h2>{t('Quick actions')}</h2>" in dashboard
-    assert "t('Everything looks fine.')" in dashboard
-    # "New website" and "New database" arrive with their form open.
-    assert "setCreateFormOpen(true); navigateToPage('websites');" in dashboard
-    assert "setDbCreateOpen(true); navigateToPage('databases');" in dashboard
+    assert "<h2>{t('Needs attention')}</h2>" in dashboard and "t('Everything looks fine.')" in dashboard
+    assert "{t('Statistics')}" in dashboard and "{t('General information')}" in dashboard
+    # The tools: grouped, searchable, and "New website" and "New database"
+    # arrive with their form open.
+    tools = APP.split("function dashboardToolGroups()")[1].split("\n  function ")[0]
+    assert "setCreateFormOpen(true); navigateToPage('websites');" in tools
+    assert "setDbCreateOpen(true); navigateToPage('databases');" in tools
+    assert "t('Search tools (press /)')" in APP and "normalizeSearch(" in APP
 
 
 def test_a_customer_is_not_shown_the_server():
     """Server state is an administrator's: the endpoint leaves it out for a
-    customer, and the cards that read it sit in the admin branch."""
+    customer, and what reads it sits in the administrator's branch."""
     dashboard = _dashboard()
-    index = dashboard.index("cards.push({ key: 'services'")
-    before = dashboard[:index]
-    assert before.rfind("if (isAdmin) {") > before.rfind("} else {"), "the services card is not inside the admin branch"
-    customer = dashboard.split("} else {\n      cards.push(sslCard);", 1)[1].split("\n    }\n", 1)[0]
-    assert "key: 'waf'" in customer and "key: 'security'" in customer
-    assert "key: 'websites'" not in customer and "key: 'databases'" not in customer, (
-        "the plan-usage card above already counts them"
-    )
+    services = dashboard.index("status.push({ key: 'services'")
+    assert dashboard[:services].rfind("if (isAdmin) {") > dashboard[:services].rfind("} else {")
+    admin_page, customer_page = dashboard.split("if (!currentUser) return null;", 1)
+    assert "t('Server information')" in admin_page and "t('Server information')" not in customer_page
+    assert "renderTopAccounts()" in admin_page and "renderTopAccounts()" not in customer_page
+    customer_status = dashboard.split("} else {\n      const wafOn", 1)[1].split("\n    }\n", 1)[0]
+    assert "key: 'waf'" in customer_status and "key: 'security'" in customer_status
 
 
 def test_the_sidebar_holds_what_is_used_every_day():
@@ -104,7 +108,7 @@ def test_the_sidebar_holds_what_is_used_every_day():
     assert 'className="section settings-hub"' in APP and 'className="settings-tile"' in APP
 
 def test_a_settings_page_keeps_its_own_name_and_lights_up_settings():
-    assert "const navPage = settingsItems.some(([key]) => key === basePage) ? 'settings' : basePage;" in APP
+    assert "const navPage = settingsItems.some(([key]) => key === basePage) ? 'settings' : basePage === 'usage' ? 'dashboard' : basePage;" in APP
     assert "<h1>{pageItem?.[1] ? t(pageItem[1])" in APP
     # As in OPanel, its title is a crumb back to the Settings page.
     assert '<h1 className="page-crumbs"><button type="button" onClick={() => navigateToPage(\'settings\')}>' in APP
@@ -169,6 +173,8 @@ def test_a_label_from_an_array_goes_through_the_dictionary():
         "{label}</span></div>",
         # So are the dashboard's limit rows (LimitRow), built with t().
         "{label}</span>",
+        # And its information rows (InfoRow).
+        "{label}</span><strong title",
         # Product and file names: "Claude Code", "Cursor - .cursor/mcp.json".
         "{label}</strong>",
     }
@@ -187,9 +193,9 @@ def test_the_dashboard_headings_are_translated_where_they_are_drawn():
     """
     dashboard = _dashboard()
     assert "<h2>{t('Server resources')}</h2>" in dashboard
-    # Card labels are translated where they are built; the ones left raw are
-    # WAF, CPU and RAM, which read the same in both languages.
-    assert re.findall(r"label: '([^']+)'", dashboard) == ["WAF", "WAF", "CPU", "RAM"]
+    # Card labels are translated where they are built; the one left raw is
+    # WAF, which reads the same in both languages.
+    assert re.findall(r"label: '([^']+)'", dashboard) == ["WAF", "WAF"]
     assert "<p className=\"sidebar-section-title\">{t(section.title)}</p>" in APP
     assert "{pageItem?.[1] ? t(pageItem[1])" in APP
 
