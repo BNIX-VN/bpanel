@@ -104,16 +104,8 @@ def suspend_account(db: Session, account: ProvisioningAccount, reason: str = "")
     for website in websites:
         website.status = "suspended"
         nginx.delete_wordpress_vhost(website.domain)
-        nginx.write_vhost(
-            website.domain,
-            website.root_path,
-            app_type="static",
-            php_version=website.php_version,
-            document_root=website.document_root or "public_html",
-            custom_directives="# SUSPENDED",
-            rewrite_mode="none",
-            preserve_existing_ssl=False,
-        )
+        nginx.write_suspended_vhost(website.domain, website.root_path, php_version=website.php_version,
+                                    document_root=website.document_root or "public_html")
         if website.linux_user:
             try:
                 site_users.lock_linux_user(website.linux_user)

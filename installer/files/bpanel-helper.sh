@@ -9249,6 +9249,28 @@ PY
     delete_panel_user_runtime "$1"
     ;;
 
+  # Suspension. Both were called by the backend from the start but had no case
+  # label, so they fell to the default arm and failed, and the callers ignored
+  # it: a suspended customer kept SFTP and SSH.
+  panel-user-lock)
+    [[ $# -eq 1 ]] || deny "usage: panel-user-lock <panel-user>"
+    require_linux_user "$1"
+    id -u "$1" >/dev/null 2>&1 || deny "panel Linux user does not exist: $1"
+    usermod -L "$1" || deny "could not lock $1"
+    # Locking only stops the next login. An SFTP session already open keeps
+    # its file access until its process dies, so those are ended here.
+    pkill -KILL -u "$1" 2>/dev/null || true
+    echo "locked $1"
+    ;;
+
+  panel-user-unlock)
+    [[ $# -eq 1 ]] || deny "usage: panel-user-unlock <panel-user>"
+    require_linux_user "$1"
+    id -u "$1" >/dev/null 2>&1 || deny "panel Linux user does not exist: $1"
+    usermod -U "$1" || deny "could not unlock $1"
+    echo "unlocked $1"
+    ;;
+
   sftp-account-ensure)
     [[ $# -eq 3 ]] || deny "usage: sftp-account-ensure <panel-user> <sub-account> <site-path>"
     ensure_sftp_account "$1" "$2" "$3"
