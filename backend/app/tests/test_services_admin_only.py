@@ -75,10 +75,10 @@ def test_the_page_is_hidden_and_refuses_rather_than_erroring():
 
 
 def test_the_dashboard_services_card_is_admin_only():
-    """The card sits in the dashboard's admin branch, and the summary endpoint
-    leaves the services out for a customer."""
+    """The status row sits in the dashboard's admin branch, and the summary
+    endpoint leaves the services out for a customer."""
     src = APP_JSX.read_text(encoding="utf-8")
-    index = src.index("cards.push({ key: 'services'")
+    index = src.index("status.push({ key: 'services'")
     before = src[:index]
     assert before.rfind("if (isAdmin) {") > before.rfind("} else {"), "services card is not inside the isAdmin branch"
     api = (PROJECT_ROOT / "backend" / "app" / "api" / "dashboard.py").read_text(encoding="utf-8")

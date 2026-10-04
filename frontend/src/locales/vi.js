@@ -750,7 +750,7 @@ export const vi = {
   "Unlimited websites": "Website không giới hạn",
   "Uptime": "Thời gian chạy",
   "Your group's resource usage": "Mức dùng tài nguyên của cả nhóm",
-  "{days} days, {hours} h": "{days} ngày {hours} giờ",
+  "{days} d {hours} h": "{days} ngày {hours} giờ",
   "{hours} h {minutes} min": "{hours} giờ {minutes} phút",
   "{n} processes": "{n} tiến trình",
   "Your group": "Nhóm của bạn",
