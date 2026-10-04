@@ -6,6 +6,10 @@ stayed in the table, unread. They go now, values and all - nothing has looked
 at them since 1.2.0, and keeping them only invites code to start reading them
 again.
 
+pool_database_limit goes too where it exists: a draft of 0044 added it, and
+the servers that ran that draft before its release (test servers) kept it
+when the released 0044 stopped adding it.
+
 ALTER TABLE ... DROP COLUMN (SQLite 3.35+; Ubuntu 22.04 ships 3.37) rather
 than a batch copy of the users table, which every other table points at.
 
@@ -23,6 +27,8 @@ branch_labels = None
 depends_on = None
 
 UNUSED = ("pool_website_limit", "pool_mail_accounts_limit", "pool_app_limit")
+# Never in a released 0044, so a downgrade does not bring it back.
+DRAFT_ONLY = ("pool_database_limit",)
 
 
 def _columns() -> set[str]:
@@ -31,7 +37,7 @@ def _columns() -> set[str]:
 
 def upgrade() -> None:
     present = _columns()
-    for name in UNUSED:
+    for name in UNUSED + DRAFT_ONLY:
         if name in present:
             op.drop_column("users", name)
 

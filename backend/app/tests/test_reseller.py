@@ -413,10 +413,12 @@ def test_the_share_totals_1_2_0_stopped_reading_are_dropped(tmp_path, monkeypatc
     with sqlite3.connect(db_path) as con:
         con.execute("insert into users (username, email, hashed_password, role, pool_user_limit, "
                     "pool_storage_limit_mb, pool_app_limit) values ('shop', 's@x', 'h', 'reseller', 5, 2048, 9)")
+        # What a draft of 0044 left on the servers that ran it.
+        con.execute("alter table users add column pool_database_limit integer not null default 0")
 
     command.upgrade(cfg, "head")
     with sqlite3.connect(db_path) as con:
         columns = {row[1] for row in con.execute("pragma table_info(users)")}
         row = con.execute("select pool_user_limit, pool_storage_limit_mb from users where username = 'shop'").fetchone()
-    assert not {"pool_website_limit", "pool_mail_accounts_limit", "pool_app_limit"} & columns
+    assert not {"pool_website_limit", "pool_mail_accounts_limit", "pool_app_limit", "pool_database_limit"} & columns
     assert row == (5, 2048)
