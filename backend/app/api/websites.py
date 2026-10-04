@@ -322,6 +322,20 @@ def _databases_moving_with(db: Session, website: Website) -> tuple[list[Database
     return own, used
 
 
+def _unsuspend_website(website: Website) -> str:
+    """Bring a suspended site back. Its runtime first: while it was suspended
+    its vhost named no PHP socket, so the update's sweep of unused pools may
+    have removed its pool, and the old unsuspend then answered 502. Then the
+    full vhost, built like every other rewrite - SSL, aliases, redirects and an
+    application's port included, which the hand-written call here used to
+    leave out."""
+    website.status = "active"
+    if website.linux_user:
+        runtime_php_version = website.php_version if (website.app_type or "wordpress") in {"wordpress", "php"} else None
+        site_users.ensure_site_runtime(website.domain, website.root_path, runtime_php_version, website.linux_user)
+    return _rewrite_website_vhost(website)
+
+
 def _rewrite_website_vhost(website: Website, **overrides) -> str:
     # A suspended site stays suspended whatever rewrites it. The update's
     # per-site refresh rebuilds every vhost through here, and gave every

@@ -4,8 +4,10 @@ The update's per-site refresh rebuilds every vhost through
 _rewrite_website_vhost, which wrote the full vhost whatever the site's status:
 every update that refreshed sites gave every suspended site its PHP back.
 Suspension also never locked the Linux user (the helper had no
-panel-user-lock), so the customer kept SFTP. Found on a 1.2.0 -> 1.3.0 update
-test, 2026-10-04.
+panel-user-lock), so the customer kept SFTP. And unsuspending did not bring the
+site's PHP pool back, which the update's sweep of unused pools removes from a
+suspended site: 502 after unsuspend. Found on a 1.2.0 -> 1.3.0 update test,
+2026-10-04.
 """
 from __future__ import annotations
 
@@ -66,6 +68,8 @@ def env(monkeypatch):
     monkeypatch.setattr(nginx, "rewrite_vhost", lambda domain, root, **kw: events.append(("full", domain, kw)) or "")
     monkeypatch.setattr(site_users.shell, "privileged",
                         lambda name, **kw: events.append(("helper", name, tuple(kw.get("helper_args") or ()))))
+    monkeypatch.setattr(site_users, "ensure_site_runtime",
+                        lambda domain, root, php, user: events.append(("runtime", domain, php)) or user)
     client = TestClient(app)
     try:
         yield db, client, events
@@ -125,6 +129,9 @@ def test_unsuspending_brings_the_full_vhost_back(env):
     assert _site(db).status == "active"
     full = [e for e in events if e[0] == "full" and e[1] == "shop.test"]
     assert full and full[-1][2]["app_type"] == "php" and full[-1][2]["waf_enabled"] is True
+    # The PHP pool first: the update's sweep of unused pools removes a
+    # suspended site's, and the old unsuspend then answered 502.
+    assert events.index(("runtime", "shop.test", "8.4")) < events.index(full[-1])
     assert ("helper", "panel-user-unlock", ("shopper",)) in events
     # And a later rewrite (the next update) leaves it active.
     events.clear()
