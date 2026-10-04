@@ -5527,6 +5527,16 @@ function App() {
     return `${cpu < 10 ? cpu.toFixed(1).replace(/\.0$/, '') : Math.round(cpu)}%`;
   }
 
+  // Disk speed. A quiet site moves a few KB a second, so below 1 MB/s two
+  // significant digits are kept: "0.04 MB/s" rather than a "0" that reads as
+  // "not measured".
+  function formatMbps(value) {
+    const mbps = Number(value) || 0;
+    if (mbps >= 10) return `${Math.round(mbps)} MB/s`;
+    if (mbps >= 1) return `${mbps.toFixed(1).replace(/\.0$/, '')} MB/s`;
+    return `${mbps > 0 ? Number(mbps.toPrecision(2)) : 0} MB/s`;
+  }
+
   function clampPercent(value) {
     const amount = Number(value);
     if (!Number.isFinite(amount)) return 0;
@@ -5908,7 +5918,6 @@ function App() {
     const caps = (groupScope ? limitEntry?.group_limits : limitEntry?.limits) || {};
     const pctOf = (used, limit) => limit > 0 ? ((Number(used) || 0) / limit) * 100 : null;
     const usedOf = (used, limit, format = value => value) => limit ? `${format(used)} / ${format(limit)}` : `${format(used)} / ∞`;
-    const formatMbps = value => `${(Number(value) || 0).toFixed(1).replace(/\.0$/, '')} MB/s`;
     const storageLimit = storageLimitBytes(currentUser);
     const usedBytes = Math.max(0, Number(currentUser.storage_used_bytes) || 0);
     const measuring = currentUser.storage_used_bytes == null || Number(currentUser.storage_used_bytes) < 0;
@@ -5980,7 +5989,11 @@ function App() {
     const limitEntry = limitsInfo?.accounts?.[currentUser.id];
     const groupScope = isReseller && dashScope === 'group' && !!limitEntry?.group_limits;
     const caps = (groupScope ? limitEntry?.group_limits : limitEntry?.limits) || {};
-    const now = (groupScope ? limitEntry?.group_usage : limitEntry?.usage) || {};
+    const reading = groupScope ? limitEntry?.group_usage : limitEntry?.usage;
+    const now = reading || {};
+    // No reading at all (an account the agent has not picked up yet) is "—",
+    // not 0: a 0 means it was measured and nothing was used.
+    const measured = !!reading;
     const stopped = (groupScope ? limitEntry?.group_oom_kills_day : limitEntry?.oom_kills_day) || 0;
     const history = limitsHistory?.[groupScope ? 'group' : 'account'] || {};
     const points = (dashRange === 'week' ? history.week : history.day) || [];
@@ -5990,14 +6003,13 @@ function App() {
       return dashRange === 'week' ? date.toLocaleDateString([], { day: '2-digit', month: '2-digit' }) : date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     };
     const formatCount = value => String(Math.round(Number(value) || 0));
-    const formatMbps = value => `${(Number(value) || 0).toFixed(1).replace(/\.0$/, '')} MB/s`;
     const common = { points, when: formatWhen, emptyText: t('Not enough history yet: a point is added every 5 minutes.'),
       limitText: t('Limit'), unlimitedText: t('Unlimited'), peakText: t('Peak'), averageText: t('Average') };
     // The limits themselves, as cPanel's Resource Usage lists them: what is
     // used now against what is allowed, a reseller's group's when it looks at
     // its group. 0 is unlimited.
-    const pctOf = (used, limit) => limit > 0 ? ((Number(used) || 0) / limit) * 100 : null;
-    const usedOf = (used, limit, format) => `${format(used ?? 0)} / ${limit ? format(limit) : '∞'}`;
+    const pctOf = (used, limit) => measured && limit > 0 ? ((Number(used) || 0) / limit) * 100 : null;
+    const usedOf = (used, limit, format) => `${measured ? format(used ?? 0) : '—'} / ${limit ? format(limit) : '∞'}`;
     const limitRows = [
       ['CPU', usedOf(now.cpu_percent, caps.cpu_percent, formatCpuPercent), pctOf(now.cpu_percent, caps.cpu_percent)],
       ['RAM', usedOf(now.memory_mb, caps.memory_mb, formatMegabytes), pctOf(now.memory_mb, caps.memory_mb)],
@@ -6022,6 +6034,9 @@ function App() {
       </div>
       <h3 className="usage-subtitle">{groupScope ? t("Your group's limits and use now") : t('Limits and use now')}
         {groupScope && <small>{t('You and all your customers together.')}</small>}</h3>
+      {!limitsInfo?.running
+        ? <p className="usage-stale">{t('The resource limits agent is not running, so these figures are not current.')}</p>
+        : !measured && <p className="usage-stale">{t('No reading for this account yet: the first one comes within a minute.')}</p>}
       <div className="usage-summary">
         {limitRows.map(([label, value, percent]) => <div className="usage-summary-item" key={label}>
           <StatRow label={label} value={value} percent={percent} />
@@ -6030,13 +6045,14 @@ function App() {
           <StatRow label={t('Stopped at the RAM limit (24 h)')} value={String(stopped)} tone={stopped ? 'bad' : ''} />
         </div>
       </div>
+      <p className="hint usage-note">{t('Disk read and write count only what actually reaches the disk. Files the server already holds in memory are read without touching it, so 0 is normal for a quiet site.')}</p>
       <h3 className="usage-subtitle">{t('Over time')}</h3>
       <div className="usage-charts">
         <UsageChart {...common} title="CPU" pick={point => point.cpu} limit={caps.cpu_percent} format={formatCpuPercent} floor={10} />
         <UsageChart {...common} title="RAM" pick={point => point.mem} limit={caps.memory_mb} format={formatMegabytes} floor={128} />
         <UsageChart {...common} title={t('Processes')} pick={point => point.procs} limit={caps.process_limit} format={formatCount} floor={10} />
-        <UsageChart {...common} title={t('Disk read')} pick={point => point.io_r} limit={caps.io_read_mbps} format={formatMbps} floor={1} />
-        <UsageChart {...common} title={t('Disk write')} pick={point => point.io_w} limit={caps.io_write_mbps} format={formatMbps} floor={1} />
+        <UsageChart {...common} title={t('Disk read')} pick={point => point.io_r} limit={caps.io_read_mbps} format={formatMbps} floor={0.1} />
+        <UsageChart {...common} title={t('Disk write')} pick={point => point.io_w} limit={caps.io_write_mbps} format={formatMbps} floor={0.1} />
       </div>
     </section>;
   }
