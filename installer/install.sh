@@ -60,7 +60,7 @@ if [[ -z "${BACKEND_SRC}" || ! -d "${BACKEND_SRC}" ]]; then
     BPANEL_VERSION="${BPANEL_INSTALLER_VERSION:-}"
   fi
   if [[ -z "${BPANEL_VERSION:-}" ]]; then
-    BPANEL_VERSION="$(curl -fsSL "https://api.github.com/repos/${BPANEL_REPO_SLUG}/tags?per_page=1" \
+    BPANEL_VERSION="$(curl -fsSL --connect-timeout 10 --max-time 60 "https://api.github.com/repos/${BPANEL_REPO_SLUG}/tags?per_page=1" \
       | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\(v[^"]*\)".*/\1/p' | head -1)" || true
   fi
   if [[ ! "${BPANEL_VERSION:-}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -74,15 +74,41 @@ if [[ -z "${BACKEND_SRC}" || ! -d "${BACKEND_SRC}" ]]; then
   echo ""
   echo "==> Source not found locally - downloading ${BPANEL_VERSION} to ${BPANEL_CLONE_DIR}"
 
-  curl -fsSL "${BPANEL_GITHUB}/archive/refs/tags/${BPANEL_VERSION}.tar.gz" \
+  curl -fsSL --connect-timeout 15 --max-time 600 --retry 2 "${BPANEL_GITHUB}/archive/refs/tags/${BPANEL_VERSION}.tar.gz" \
     | tar xz -C "${BPANEL_CLONE_DIR}" --strip-components=1
 
   PROJECT_ROOT="${BPANEL_CLONE_DIR}"
   SCRIPT_DIR="${PROJECT_ROOT}/installer"
   BACKEND_SRC="${PROJECT_ROOT}/backend"
   FRONTEND_SRC="${PROJECT_ROOT}/frontend"
-  trap 'cd /; rm -rf "${BPANEL_CLONE_DIR}"' EXIT
 fi
+
+# Nothing in an install may stop to ask a question nobody sees (OPanel's
+# installs "hung" this way, 2026-10-04). Ubuntu runs needrestart after every
+# apt install, and dpkg asks before replacing a config file; behind an apt call
+# whose output goes to /dev/null either one waits with nothing on the screen.
+# The installer restarts what it needs itself, so needrestart is suspended and
+# dpkg keeps an existing config file. apt_get below already waits out the dpkg
+# lock; DPkg::Lock::Timeout covers the apt runs it does not wrap (NodeSource's
+# setup script).
+export DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none NEEDRESTART_SUSPEND=1 NEEDRESTART_MODE=l
+BPANEL_APT_CONFIG="$(mktemp /tmp/bpanel-apt.XXXXXX)"
+cat >"$BPANEL_APT_CONFIG" <<'APTCONF'
+Dpkg::Options { "--force-confdef"; "--force-confold"; };
+DPkg::Lock::Timeout "900";
+APTCONF
+export APT_CONFIG="$BPANEL_APT_CONFIG"
+IONCUBE_DIR=""
+IONCUBE_TRIED=0
+cleanup_install_temp() {
+  rm -f "$BPANEL_APT_CONFIG"
+  [[ -z "$IONCUBE_DIR" ]] || rm -rf -- "$IONCUBE_DIR"
+  if [[ -n "${BPANEL_CLONE_DIR:-}" ]]; then
+    cd /
+    rm -rf "$BPANEL_CLONE_DIR"
+  fi
+}
+trap cleanup_install_temp EXIT
 
 PANEL_URL="${PANEL_URL:-}"
 # Filled in by enable_ipv6_when_available: off | on:<address> | failed
@@ -310,33 +336,34 @@ NODE
   npm --version
 }
 
-install_ioncube_loader() {
-  local version="$1" arch url tmp archive loader target_dir target loader_ini_dir
+# ionCube is downloaded once for every PHP version. It is optional, so a slow or
+# unreachable ioncube.com costs one bounded wait and a warning - not a silent
+# wait of up to five minutes per PHP version, and not the whole install.
+fetch_ioncube_loaders() {
+  (( IONCUBE_TRIED )) && { [[ -n "$IONCUBE_DIR" ]]; return; }
+  IONCUBE_TRIED=1
+  local arch url tmp
   arch="$(dpkg --print-architecture 2>/dev/null || uname -m)"
   case "$arch" in
-    amd64|x86_64)
-      url="https://downloads.ioncube.com/loader_downloads/ioncube_loaders_lin_x86-64.tar.gz"
-      ;;
-    *)
-      echo "Skipping ionCube Loader: unsupported architecture ${arch}"
-      return 0
-      ;;
+    amd64|x86_64) url="https://downloads.ioncube.com/loader_downloads/ioncube_loaders_lin_x86-64.tar.gz" ;;
+    *) echo "Skipping ionCube Loader: unsupported architecture ${arch}"; return 1 ;;
   esac
+  echo "Downloading ionCube Loader..."
+  tmp="$(mktemp -d)" || return 1
+  if ! curl -fsSL --connect-timeout 10 --max-time 180 --retry 2 "$url" -o "${tmp}/ioncube_loaders.tar.gz" \
+      || ! tar -xzf "${tmp}/ioncube_loaders.tar.gz" -C "$tmp"; then
+    rm -rf -- "$tmp"
+    echo "WARNING: could not download ionCube Loader; continuing without it."
+    return 1
+  fi
+  IONCUBE_DIR="$tmp"
+}
 
-  apt_get install -y ca-certificates curl tar >/dev/null
-  tmp="$(mktemp -d)" || fail "Cannot create ionCube temporary directory"
-  archive="${tmp}/ioncube_loaders.tar.gz"
-  if ! curl -fsSL --connect-timeout 10 --max-time 300 "$url" -o "$archive"; then
-    rm -rf -- "$tmp"
-    fail "Failed to download ionCube Loader"
-  fi
-  if ! tar -xzf "$archive" -C "$tmp"; then
-    rm -rf -- "$tmp"
-    fail "Failed to unpack ionCube Loader"
-  fi
-  loader="${tmp}/ioncube/ioncube_loader_lin_${version}.so"
+install_ioncube_loader() {
+  local version="$1" loader target_dir target loader_ini_dir
+  fetch_ioncube_loaders || return 0
+  loader="${IONCUBE_DIR}/ioncube/ioncube_loader_lin_${version}.so"
   if [[ ! -f "$loader" ]]; then
-    rm -rf -- "$tmp"
     echo "Skipping ionCube Loader: no loader found for PHP ${version}"
     return 0
   fi
@@ -345,7 +372,6 @@ install_ioncube_loader() {
   target="${target_dir}/ioncube_loader_lin_${version}.so"
   install -d -o root -g root -m 0755 "$target_dir"
   install -m 0644 -o root -g root "$loader" "$target"
-  rm -rf -- "$tmp"
 
   for loader_ini_dir in /etc/php/"$version"/cli/conf.d /etc/php/"$version"/fpm/conf.d; do
     [[ -d "$loader_ini_dir" ]] || continue
@@ -357,7 +383,8 @@ install_ioncube_loader() {
   if command -v "php${version}" >/dev/null 2>&1; then
     if ! "php${version}" -v 2>&1 | grep -qi 'ionCube'; then
       rm -f /etc/php/"$version"/cli/conf.d/00-ioncube.ini /etc/php/"$version"/fpm/conf.d/00-ioncube.ini
-      fail "ionCube Loader failed to load for PHP ${version}"
+      echo "WARNING: ionCube Loader failed to load for PHP ${version}; continuing without it."
+      return 0
     fi
   fi
   echo "ionCube Loader enabled for PHP ${version}"

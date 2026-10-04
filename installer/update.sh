@@ -14,6 +14,10 @@
 
 set -euo pipefail
 
+# As in install.sh: no apt call in an update may stop to ask a question
+# nobody sees (needrestart after an install, a dpkg config-file question).
+export DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none NEEDRESTART_SUSPEND=1 NEEDRESTART_MODE=l
+
 log()  { echo ""; echo "==> $1"; }
 fail() { echo "ERROR: $1" >&2; exit 1; }
 
@@ -131,6 +135,15 @@ done
 if [[ $EUID -ne 0 ]]; then
   echo "Please run as root"
   exit 1
+fi
+
+# The apt options for the environment set at the top of this file: dpkg keeps
+# an existing config file, and apt waits for the dpkg lock instead of failing
+# while unattended-upgrades holds it. /run is cleared at boot.
+if [[ -z "${APT_CONFIG:-}" ]]; then
+  printf '%s\n' 'Dpkg::Options { "--force-confdef"; "--force-confold"; };' 'DPkg::Lock::Timeout "900";' \
+    >/run/bpanel-update-apt.conf
+  export APT_CONFIG=/run/bpanel-update-apt.conf
 fi
 
 if [[ -z "${BPANEL_UPDATE_STABLE_COPY:-}" ]]; then
