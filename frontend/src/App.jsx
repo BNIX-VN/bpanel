@@ -5980,6 +5980,8 @@ function App() {
     const limitEntry = limitsInfo?.accounts?.[currentUser.id];
     const groupScope = isReseller && dashScope === 'group' && !!limitEntry?.group_limits;
     const caps = (groupScope ? limitEntry?.group_limits : limitEntry?.limits) || {};
+    const now = (groupScope ? limitEntry?.group_usage : limitEntry?.usage) || {};
+    const stopped = (groupScope ? limitEntry?.group_oom_kills_day : limitEntry?.oom_kills_day) || 0;
     const history = limitsHistory?.[groupScope ? 'group' : 'account'] || {};
     const points = (dashRange === 'week' ? history.week : history.day) || [];
     const formatWhen = (stamp, full) => {
@@ -5990,7 +5992,19 @@ function App() {
     const formatCount = value => String(Math.round(Number(value) || 0));
     const formatMbps = value => `${(Number(value) || 0).toFixed(1).replace(/\.0$/, '')} MB/s`;
     const common = { points, when: formatWhen, emptyText: t('Not enough history yet: a point is added every 5 minutes.'),
-      limitText: t('Limit'), peakText: t('Peak'), averageText: t('Average') };
+      limitText: t('Limit'), unlimitedText: t('Unlimited'), peakText: t('Peak'), averageText: t('Average') };
+    // The limits themselves, as cPanel's Resource Usage lists them: what is
+    // used now against what is allowed, a reseller's group's when it looks at
+    // its group. 0 is unlimited.
+    const pctOf = (used, limit) => limit > 0 ? ((Number(used) || 0) / limit) * 100 : null;
+    const usedOf = (used, limit, format) => `${format(used ?? 0)} / ${limit ? format(limit) : '∞'}`;
+    const limitRows = [
+      ['CPU', usedOf(now.cpu_percent, caps.cpu_percent, formatCpuPercent), pctOf(now.cpu_percent, caps.cpu_percent)],
+      ['RAM', usedOf(now.memory_mb, caps.memory_mb, formatMegabytes), pctOf(now.memory_mb, caps.memory_mb)],
+      [t('Processes'), usedOf(now.processes, caps.process_limit, formatCount), pctOf(now.processes, caps.process_limit)],
+      [t('Disk read'), usedOf(now.io_read_mbps, caps.io_read_mbps, formatMbps), pctOf(now.io_read_mbps, caps.io_read_mbps)],
+      [t('Disk write'), usedOf(now.io_write_mbps, caps.io_write_mbps, formatMbps), pctOf(now.io_write_mbps, caps.io_write_mbps)],
+    ];
     return <section className="section">
       <div className="section-title">
         <div><h2>{groupScope ? t("Your group's resource usage") : t('Resource usage')}</h2>
@@ -6006,6 +6020,17 @@ function App() {
           </div>
         </div>
       </div>
+      <h3 className="usage-subtitle">{groupScope ? t("Your group's limits and use now") : t('Limits and use now')}
+        {groupScope && <small>{t('You and all your customers together.')}</small>}</h3>
+      <div className="usage-summary">
+        {limitRows.map(([label, value, percent]) => <div className="usage-summary-item" key={label}>
+          <StatRow label={label} value={value} percent={percent} />
+        </div>)}
+        <div className="usage-summary-item">
+          <StatRow label={t('Stopped at the RAM limit (24 h)')} value={String(stopped)} tone={stopped ? 'bad' : ''} />
+        </div>
+      </div>
+      <h3 className="usage-subtitle">{t('Over time')}</h3>
       <div className="usage-charts">
         <UsageChart {...common} title="CPU" pick={point => point.cpu} limit={caps.cpu_percent} format={formatCpuPercent} floor={10} />
         <UsageChart {...common} title="RAM" pick={point => point.mem} limit={caps.memory_mb} format={formatMegabytes} floor={128} />
