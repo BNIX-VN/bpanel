@@ -738,6 +738,7 @@ function App() {
   const [users, setUsers] = useState([]);
   const [packages, setPackages] = useState([]);
   const [userTab, setUserTab] = useState('list');
+  const [userSearch, setUserSearch] = useState('');
   const [resourceUsage, setResourceUsage] = useState(null);
   const [dashSummary, setDashSummary] = useState(null);
   // Notifications addon: my own settings, and (administrators) the server's.
@@ -10305,38 +10306,84 @@ function App() {
       cpu_percent: 'CPU (%)', memory_mb: 'RAM (MB)', process_limit: 'Processes',
       io_read_mbps: 'Disk read (MB/s)', io_write_mbps: 'Disk write (MB/s)',
     };
-    return <>
-      <p className="hint wide">{prefix
+    return <fieldset className="form-section">
+      <legend>{prefix ? t('Group limits') : t('Resource limits')}</legend>
+      <p className="hint">{prefix
         ? t("Group limits: this reseller's own account and all its customers together. 0 = unlimited.")
         : t('Resource limits: 0 = unlimited. CPU 100% is one core.')}</p>
-      {RL_FIELDS.map(field => <label key={prefix + field}><span>{prefix ? `${t('Group')}: ${t(labels[field])}` : t(labels[field])}</span>
-        <input type="number" min="0" disabled={disabled} value={form[prefix + field] ?? 0} onChange={e => setForm(prev => ({ ...prev, [prefix + field]: e.target.value }))} /></label>)}
-    </>;
+      <div className="form-grid five">
+        {RL_FIELDS.map(field => <label key={prefix + field}><span>{t(labels[field])}</span>
+          <input type="number" min="0" disabled={disabled} value={form[prefix + field] ?? 0} onChange={e => setForm(prev => ({ ...prev, [prefix + field]: e.target.value }))} /></label>)}
+      </div>
+    </fieldset>;
   }
 
-  // "CPU 12% · RAM 300/1024 MB · 7 processes": one account's use, against its limits.
-  function limitsUsageText(entry) {
-    const usage = entry?.usage;
-    if (!usage) return '';
-    const limits = entry.limits || {};
-    const ram = limits.memory_mb ? `${usage.memory_mb}/${limits.memory_mb} MB` : `${usage.memory_mb} MB`;
-    return `CPU ${usage.cpu_percent}%${limits.cpu_percent ? `/${limits.cpu_percent}%` : ''} · RAM ${ram} · ${t('{n} processes', { n: usage.processes })}`;
-  }
-
+  // A reseller's share: customers and disk, what a reseller is sold by.
+  // Websites, databases, mailboxes and applications are its own to give its
+  // customers.
   function renderPoolInputs(form, setForm) {
-    // Customers and disk: what a reseller is sold by. Websites, databases,
-    // mailboxes and applications are its own to give its customers.
     const fields = [
       ['pool_user_limit', 'Customers'],
       ['pool_storage_limit_mb', 'Disk (MB)'],
     ];
-    return <>
-      <p className="hint wide">{form.pool_oversell
+    return <fieldset className="form-section">
+      <legend>{t('Reseller share')}</legend>
+      <p className="hint">{form.pool_oversell
         ? t("Reseller share, overselling: number of customers and disk. The disk its accounts use together must stay within it; the disk limits it gives customers may add up to more. 0 = unlimited.")
         : t("Reseller share: number of customers and disk. Its own disk limit and all its customers' must fit inside it. 0 = unlimited.")}</p>
-      {fields.map(([field, label]) => <label key={field}><span>{t('Share')}: {t(label)}</span><input type="number" min="0" value={form[field] ?? 0} onChange={e => setForm(prev => ({ ...prev, [field]: e.target.value }))} /></label>)}
-      <label className="check-line wide"><input type="checkbox" checked={!!form.pool_oversell} onChange={e => setForm(prev => ({ ...prev, pool_oversell: e.target.checked }))} /> {t('Allow overselling (count what is used, as cPanel and DirectAdmin do)')}</label>
-    </>;
+      <div className="form-grid">
+        {fields.map(([field, label]) => <label key={field}><span>{t(label)}</span><input type="number" min="0" value={form[field] ?? 0} onChange={e => setForm(prev => ({ ...prev, [field]: e.target.value }))} /></label>)}
+      </div>
+      <label className="check-line"><input type="checkbox" checked={!!form.pool_oversell} onChange={e => setForm(prev => ({ ...prev, pool_oversell: e.target.checked }))} /> {t('Allow overselling (count what is used, as cPanel and DirectAdmin do)')}</label>
+    </fieldset>;
+  }
+
+  // The account fields an administrator or reseller fills in, shared by the
+  // Add form and the editor so the two cannot drift apart. A package decides
+  // the limits: the server applies its values over any typed here, so the
+  // fields are locked while one is chosen.
+  function renderUserFields(form, setForm, { creating = false, user = null, applyPackage } = {}) {
+    const set = field => e => setForm(prev => ({ ...prev, [field]: e.target.value }));
+    const packaged = !!form.package_id;
+    const resellers = users.filter(u => u.role === 'reseller');
+    const self = !creating && user?.id === currentUser?.id;
+    return <div className="form-sections">
+      <fieldset className="form-section">
+        <legend>{t('Account')}</legend>
+        <div className="form-grid account">
+          {creating && <label><span>{t('Username')}</span><input value={form.username} autoComplete="off" spellCheck={false} onChange={e => setForm(prev => ({ ...prev, username: e.target.value.toLowerCase() }))} placeholder="johndoe" /></label>}
+          <label><span>{t('Email')}</span><input type="email" value={form.email} autoComplete="off" onChange={set('email')} placeholder="user@domain.com" /></label>
+          {creating
+            ? <label><span>{t('Password')}</span><input type="password" value={form.password} autoComplete="new-password" onChange={set('password')} placeholder={t('Min 12 characters')} /></label>
+            : <label><span>{t('New password')} <em>{t('(leave empty to keep)')}</em></span><input type="password" autoComplete="new-password" value={form.new_password} onChange={set('new_password')} placeholder={t('Min 12 characters')} /></label>}
+          {!creating && !!form.new_password && <label><span>{t('Confirm password')}</span><input type="password" autoComplete="new-password" value={form.confirm_password} onChange={set('confirm_password')} placeholder={t('Repeat password')} /></label>}
+          {isAdmin && <label><span>{t('Role')}</span><select value={form.role} disabled={self} onChange={set('role')}>
+            <option value="end_user">{t('End user')}</option><option value="reseller">{t('Reseller')}</option><option value="admin">{t('Admin')}</option>
+          </select></label>}
+          {isAdmin && form.role === 'end_user' && (resellers.length > 0 || form.reseller_id) && <label><span>{t('Reseller')}</span><select value={form.reseller_id || ''} onChange={set('reseller_id')}>
+            <option value="">{t('None (yours)')}</option>
+            {resellers.map(u => <option key={u.id} value={u.id}>{u.username}</option>)}
+          </select></label>}
+          {form.role !== 'admin' && <label><span>{t('Package')}</span><select value={form.package_id} onChange={e => applyPackage(e.target.value)}>
+            <option value="">{t('Custom')}</option>
+            {packages.map(item => <option key={item.id} value={item.id}>{packageOptionLabel(item)}</option>)}
+          </select></label>}
+        </div>
+      </fieldset>
+      {form.role !== 'admin' && <fieldset className="form-section">
+        <legend>{t('Hosting limits')}</legend>
+        <p className="hint">{packaged ? t('Set by the package. Choose Custom to change them.') : t('0 = unlimited. Choosing a package fills these in.')}</p>
+        <div className="form-grid">
+          <label><span>{t('Websites')}</span><input type="number" min="0" max="1000" disabled={packaged} value={form.website_limit} onChange={set('website_limit')} /></label>
+          <label><span>{t('Disk (MB)')}</span><input type="number" min="0" max="1048576" disabled={packaged} value={form.storage_limit_mb} onChange={set('storage_limit_mb')} /></label>
+          <label><span>{t('Databases')}</span><input type="number" min="0" max="10000" disabled={packaged} value={form.database_limit} onChange={set('database_limit')} /></label>
+          {mailAddonInstalled && <label><span>{t('Mailboxes')}</span><input type="number" min="0" max="1000" disabled={packaged} value={form.mail_accounts_limit} onChange={set('mail_accounts_limit')} /></label>}
+        </div>
+      </fieldset>}
+      {isAdmin && form.role === 'reseller' && renderPoolInputs(form, setForm)}
+      {limitsOn && form.role !== 'admin' && renderLimitInputs(form, setForm, '', packaged)}
+      {limitsOn && isAdmin && form.role === 'reseller' && renderLimitInputs(form, setForm, 'group_')}
+    </div>;
   }
 
   function renderUsers() {
@@ -10368,81 +10415,115 @@ function App() {
     return `${item.name} (${t('{n} website(s)', { n: item.website_limit })}, ${formatBytes(Number(item.storage_limit_mb || 0) * 1024 * 1024)})`;
   }
 
+  // Disk used against the account's limit: a figure and, with a limit, a meter.
+  function renderUserDisk(user) {
+    const limit = storageLimitBytes(user);
+    // -1 (or nothing yet) means the panel has not measured this account and
+    // did not hold the list up to do it; saying so beats a zero read as fact.
+    if (user?.storage_used_bytes == null || Number(user.storage_used_bytes) < 0) {
+      return <span className="users-figure is-pending">{t('measuring...')}{limit ? <small> / {formatBytes(limit)}</small> : null}</span>;
+    }
+    const used = Number(user.storage_used_bytes);
+    const pct = limit ? clampPercent((used / limit) * 100) : null;
+    return <>
+      <span className="users-figure">{formatBytes(used)}<small> / {limit ? formatBytes(limit) : t('unlimited')}</small></span>
+      {pct !== null && <span className={`resource-track${pct >= 90 ? ' tone-bad' : pct >= 75 ? ' tone-warn' : ''}`}><span style={{ width: `${pct}%` }}></span></span>}
+    </>;
+  }
+
+  // CPU and RAM now, against the account's limits (Resource limits addon).
+  function renderUserResources(user) {
+    const entry = limitsInfo?.accounts?.[user.id];
+    const usage = entry?.usage;
+    if (!usage) return <span className="users-figure is-pending">—</span>;
+    const limits = entry.limits || {};
+    return <span className="users-figure">
+      {formatCpuPercent(usage.cpu_percent)}{limits.cpu_percent ? <small>/{limits.cpu_percent}%</small> : null}
+      <small> · </small>{formatMegabytes(usage.memory_mb)}{limits.memory_mb ? <small>/{formatMegabytes(limits.memory_mb)}</small> : null}
+      <small className="users-sub">{t('{n} processes', { n: usage.processes ?? 0 })}</small>
+    </span>;
+  }
+
   function renderUsersListTab() {
-    // A package decides the limits: the server applies its values over any
-    // typed here, so the fields are locked while one is chosen.
-    const packaged = !!editingUserForm.package_id;
-    return <section className="section">
-      {users.length === 0 && <EmptyState icon={Users} message={t('No users found.')} />}
-      <div className="table">
-        {users.map(user => <div className="row user-row" key={user.id}>
-          {/* OPanel's five cells (a sixth pushed the buttons onto a line of
-              their own); BPanel's package and 2FA go under the name. */}
-          <div className="user-main"><strong>{user.username}</strong>
-            <small>{[user.email, user.package_name || t('Custom'), user.totp_enabled ? '2FA' : ''].filter(Boolean).join(' · ')}</small></div>
-          <span className="badge" title={isAdmin && user.reseller_id ? t('via {name}', { name: resellerName(user.reseller_id) }) : undefined}>{t(roleLabel(user.role))}</span>
-          <span className={`badge ${user.is_active ? 'ok' : 'warn'}`}>{user.is_active ? t('Active') : t('Suspended')}</span>
-          <span className={`user-metric${user.storage_used_bytes == null || Number(user.storage_used_bytes) < 0 ? ' pending' : ''}`}><HardDrive size={13}/>{storageUsageText(user)}</span>
-          {limitsOn && limitsInfo?.accounts?.[user.id]?.usage && <span className="user-metric" title={t('Resource use now')}><Cpu size={13}/>{limitsUsageText(limitsInfo.accounts[user.id])}</span>}
-          <div className="row-actions">
-            {(isAdmin || user.id !== currentUser?.id) && <button className="mini secondary-light" disabled={!!loading} onClick={() => startEditingUser(user)}><Pencil size={14}/> {t('Edit')}</button>}
-            {user.id !== currentUser?.id && <button className="mini secondary-light" disabled={!!loading} onClick={() => quickLoginUser(user)}><LogIn size={14}/> {t('Login as')}</button>}
-            {user.id !== currentUser?.id && (user.is_active
-              ? <button className="mini danger" disabled={!!loading} onClick={() => suspendUser(user)}><Ban size={14}/> {t('Suspend')}</button>
-              : <button className="mini secondary-light" disabled={!!loading} onClick={() => unsuspendUser(user)}><CheckCircle size={14}/> {t('Unsuspend')}</button>)}
-            {user.totp_enabled && user.id !== currentUser?.id && <button className="mini secondary-light" disabled={!!loading} onClick={() => resetUserTwoFactor(user)}>{t('Reset 2FA')}</button>}
-            {user.id !== currentUser?.id && <button className="mini danger" disabled={!!loading} onClick={() => deletePanelUser(user)} aria-label={t('Delete {name}', { name: user.username })} title={t('Delete')}><Trash2 size={14}/></button>}
+    const query = userSearch.trim().toLowerCase();
+    const shown = query
+      ? users.filter(user => user.username.toLowerCase().includes(query) || (user.email || '').toLowerCase().includes(query))
+      : users;
+    return <>
+      <section className="section">
+        {users.length > 0 && <div className="users-toolbar">
+          <label className="users-search">
+            <Search size={15}/>
+            <input type="search" value={userSearch} onChange={e => setUserSearch(e.target.value)} placeholder={t('Search by username or email')} aria-label={t('Search by username or email')} />
+          </label>
+          <span className="users-count">{t('{shown} of {total}', { shown: shown.length, total: users.length })}</span>
+        </div>}
+        {users.length === 0 && <EmptyState icon={Users} message={t('No users found.')} />}
+        {users.length > 0 && shown.length === 0 && <p className="hint">{t('No account matches your search.')}</p>}
+        {shown.length > 0 && <div className={`users-table${limitsOn ? ' with-resources' : ''}`}>
+          <div className="users-row users-head" aria-hidden="true">
+            <span>{t('Account')}</span><span>{t('Role')}</span><span>{t('Disk')}</span>{limitsOn && <span>{t('CPU / RAM')}</span>}<span></span>
           </div>
-          {editingUser?.id === user.id && <div className="user-edit-panel">
-            <div className="user-edit-heading">
-              <div><strong>{t('Edit')} {user.username}</strong><small>
-                {user.id === currentUser?.id ? t('Role is locked for the active admin session.') : t('Role changes sign the user out of existing sessions.')}
-                {editingUserForm.role === 'admin' ? ` ${t('Admin accounts bypass website and storage limits.')}` : ''}
-              </small></div>
-              <button className="user-edit-close secondary-light" onClick={cancelEditingUser} aria-label={t('Close user editor')} title={t('Close user editor')}><X size={16}/></button>
-            </div>
-            <div className="user-edit-grid">
-              <label><span>{t('Email')}</span><input type="email" value={editingUserForm.email} onChange={e => setEditingUserForm(prev => ({ ...prev, email: e.target.value }))} /></label>
-              {isAdmin && <label><span>{t('Role')}</span><select value={editingUserForm.role} disabled={user.id === currentUser?.id} onChange={e => setEditingUserForm(prev => ({ ...prev, role: e.target.value }))}>
-                <option value="end_user">{t('End user')}</option><option value="reseller">{t('Reseller')}</option><option value="admin">{t('Admin')}</option>
-              </select></label>}
-              {isAdmin && editingUserForm.role === 'end_user' && users.some(u => u.role === 'reseller') && <label><span>{t('Reseller')}</span><select value={editingUserForm.reseller_id || ''} onChange={e => setEditingUserForm(prev => ({ ...prev, reseller_id: e.target.value }))}>
-                <option value="">{t('None (yours)')}</option>
-                {users.filter(u => u.role === 'reseller').map(u => <option key={u.id} value={u.id}>{u.username}</option>)}
-              </select></label>}
-              <label><span>{t('Package')}</span><select value={editingUserForm.package_id} onChange={e => applyPackageToEditingUser(e.target.value)}>
-                <option value="">{t('Custom')}</option>
-                {packages.map(item => <option key={item.id} value={item.id}>{packageOptionLabel(item)}</option>)}
-              </select></label>
-              <label><span>{t('Site limit')}</span><input type="number" min="0" max="1000" disabled={packaged} value={editingUserForm.website_limit} onChange={e => setEditingUserForm(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
-              <label><span>{t('Disk limit (MB)')}</span><input type="number" min="0" max="1048576" disabled={packaged} value={editingUserForm.storage_limit_mb} onChange={e => setEditingUserForm(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
-              <label><span>{t('Databases')} <small>{t('0 = unlimited')}</small></span><input type="number" min="0" max="10000" disabled={packaged} value={editingUserForm.database_limit} onChange={e => setEditingUserForm(prev => ({ ...prev, database_limit: e.target.value }))} /></label>
-              {limitsOn && renderLimitInputs(editingUserForm, setEditingUserForm, '', packaged)}
-              {limitsOn && isAdmin && editingUserForm.role === 'reseller' && renderLimitInputs(editingUserForm, setEditingUserForm, 'group_')}
-              {mailAddonInstalled && <label><span>{t('Mailbox limit')}</span><input type="number" min="0" max="1000" disabled={packaged} value={editingUserForm.mail_accounts_limit} onChange={e => setEditingUserForm(prev => ({ ...prev, mail_accounts_limit: e.target.value }))} /></label>}
-              <label><span>{t('New password')} <small>{t('(leave empty to keep)')}</small></span><input type="password" autoComplete="new-password" value={editingUserForm.new_password} onChange={e => setEditingUserForm(prev => ({ ...prev, new_password: e.target.value }))} placeholder={t('Min 12 characters')} /></label>
-              {!!editingUserForm.new_password && <label><span>{t('Confirm password')}</span><input type="password" autoComplete="new-password" value={editingUserForm.confirm_password} onChange={e => setEditingUserForm(prev => ({ ...prev, confirm_password: e.target.value }))} placeholder={t('Repeat password')} /></label>}
-              {isAdmin && editingUserForm.role === 'reseller' && renderPoolInputs(editingUserForm, setEditingUserForm)}
-            </div>
-            <div className="user-edit-actions">
-              <button className="secondary-light" onClick={cancelEditingUser}>{t('Cancel')}</button>
-              <button disabled={!!loading || !editingUserForm.email.trim()} onClick={updatePanelUser}><Save size={14}/> {t('Save changes')}</button>
-            </div>
-          </div>}
-        </div>)}
-      </div>
-      {isAdmin && <div className="section" style={{marginTop:16}}>
-        <h2>{t('Assign domain to user')}</h2>
+          {shown.map(user => {
+            const self = user.id === currentUser?.id;
+            const editing = editingUser?.id === user.id;
+            return <div className={`users-item${editing ? ' is-editing' : ''}${user.is_active ? '' : ' is-suspended'}`} key={user.id}>
+              <div className="users-row">
+                {/* BPanel's package and 2FA sit under the name, with the email. */}
+                <div className="users-account">
+                  <span className="users-avatar" aria-hidden="true">{(user.username || '?').slice(0, 1).toUpperCase()}</span>
+                  <div><strong>{user.username}</strong>
+                    <small>{[user.email, user.role === 'admin' ? '' : (user.package_name || t('Custom')), user.totp_enabled ? '2FA' : ''].filter(Boolean).join(' · ')}</small></div>
+                </div>
+                <div className="users-meta">
+                  <div className="users-badges" data-label={t('Role')}>
+                    <span className={`badge role-${user.role}`}>{t(roleLabel(user.role))}</span>
+                    <span className={`badge ${user.is_active ? 'ok' : 'warn'}`}>{user.is_active ? t('Active') : t('Suspended')}</span>
+                    {isAdmin && user.reseller_id && <span className="badge" title={t('Reseller')}>{t('via {name}', { name: resellerName(user.reseller_id) })}</span>}
+                  </div>
+                  <div className="users-cell" data-label={t('Disk')}>{renderUserDisk(user)}</div>
+                  {limitsOn && <div className="users-cell" data-label={t('CPU / RAM')} title={t('Resource use now')}>{renderUserResources(user)}</div>}
+                </div>
+                <div className="users-actions">
+                  {(isAdmin || !self) && <button type="button" className={`mini ${editing ? '' : 'secondary-light'}`} disabled={!!loading} onClick={() => editing ? cancelEditingUser() : startEditingUser(user)}><Pencil size={14}/> {t('Edit')}</button>}
+                  {!self && <button type="button" className="mini secondary-light" disabled={!!loading} onClick={() => quickLoginUser(user)}><LogIn size={14}/> {t('Login as')}</button>}
+                  {!self && user.totp_enabled && <button type="button" className="mini secondary-light icon-button" disabled={!!loading} onClick={() => resetUserTwoFactor(user)} title={t('Reset 2FA')} aria-label={t('Reset 2FA')}><KeyRound size={14}/></button>}
+                  {!self && (user.is_active
+                    ? <button type="button" className="mini secondary-light icon-button is-suspend" disabled={!!loading} onClick={() => suspendUser(user)} title={t('Suspend')} aria-label={t('Suspend')}><Ban size={14}/></button>
+                    : <button type="button" className="mini secondary-light icon-button" disabled={!!loading} onClick={() => unsuspendUser(user)} title={t('Unsuspend')} aria-label={t('Unsuspend')}><CheckCircle size={14}/></button>)}
+                  {!self && <button type="button" className="mini danger icon-button" disabled={!!loading} onClick={() => deletePanelUser(user)} aria-label={t('Delete {name}', { name: user.username })} title={t('Delete')}><Trash2 size={14}/></button>}
+                </div>
+              </div>
+              {editing && <div className="user-edit-panel">
+                <div className="user-edit-heading">
+                  <div><strong>{t('Edit')} {user.username}</strong><small>
+                    {self ? t('Role is locked for the active admin session.') : t('Role changes sign the user out of existing sessions.')}
+                    {editingUserForm.role === 'admin' ? ` ${t('Admin accounts bypass website and storage limits.')}` : ''}
+                  </small></div>
+                  <button type="button" className="user-edit-close secondary-light" onClick={cancelEditingUser} aria-label={t('Close user editor')} title={t('Close user editor')}><X size={16}/></button>
+                </div>
+                {renderUserFields(editingUserForm, setEditingUserForm, { user, applyPackage: applyPackageToEditingUser })}
+                <div className="user-edit-actions">
+                  <button type="button" className="secondary-light" onClick={cancelEditingUser}>{t('Cancel')}</button>
+                  <button type="button" disabled={!!loading || !editingUserForm.email.trim()} onClick={updatePanelUser}><Save size={14}/> {t('Save changes')}</button>
+                </div>
+              </div>}
+            </div>;
+          })}
+        </div>}
+      </section>
+      {isAdmin && users.length > 0 && websites.length > 0 && <section className="section">
+        <div className="section-title"><div><h2>{t('Assign domain to user')}</h2><p className="hint">{t('Give a website to another account.')}</p></div></div>
         <div className="assign-row">
-          <select value={assignWebsiteId} onChange={e => setAssignWebsiteId(e.target.value)}>
+          <select value={assignWebsiteId} onChange={e => setAssignWebsiteId(e.target.value)} aria-label={t('Select domain')}>
             <option value="">{t('Select domain')}</option>
             {websites.map(site => <option key={site.id} value={site.id}>{site.domain}</option>)}
           </select>
-          <select value={assignUserId} onChange={e => setAssignUserId(e.target.value)}>
+          <select value={assignUserId} onChange={e => setAssignUserId(e.target.value)} aria-label={t('Select user')}>
             <option value="">{t('Select user')}</option>
             {users.map(user => <option key={user.id} value={user.id}>{user.username} ({t(roleLabel(user.role))})</option>)}
           </select>
-          <button disabled={!assignWebsiteId || !assignUserId || !!loading} onClick={assignDomainToUser}>{t('Assign')}</button>
+          <button type="button" disabled={!assignWebsiteId || !assignUserId || !!loading} onClick={assignDomainToUser}>{t('Assign')}</button>
         </div>
         {(() => {
           // The app and the databases behind the website move with it: the
@@ -10454,8 +10535,39 @@ function App() {
           return moving.length > 0 && <p className="hint">{t('Moves with this website:')} <strong>{moving.join(', ')}</strong>.
             {assignPreview?.application ? ` ${t('The application restarts once.')}` : ''}</p>;
         })()}
-      </div>}
-    </section>;
+      </section>}
+    </>;
+  }
+
+  // A package's limits as short chips: what it gives at a glance.
+  function packageChips(item) {
+    const chips = [
+      [Globe, item.website_limit ? t('{n} website(s)', { n: item.website_limit }) : t('Unlimited websites')],
+      [HardDrive, Number(item.storage_limit_mb) > 0 ? formatBytes(Number(item.storage_limit_mb) * 1024 * 1024) : t('Unlimited disk')],
+      [Database, item.database_limit ? t('{n} database(s)', { n: item.database_limit }) : t('unlimited databases')],
+    ];
+    if (mailAddonInstalled) chips.push([Mail, t('{n} mailboxes', { n: item.mail_accounts_limit ?? 10 })]);
+    if (limitsOn && item.cpu_percent) chips.push([Cpu, `CPU ${item.cpu_percent}%`]);
+    if (limitsOn && item.memory_mb) chips.push([MemoryStick, `RAM ${formatMegabytes(item.memory_mb)}`]);
+    return <div className="plan-chips">{chips.map(([Icon, text]) => <span className="plan-chip" key={text}><Icon size={13}/>{text}</span>)}</div>;
+  }
+
+  function renderPackageFields(form, setForm) {
+    const set = field => e => setForm(prev => ({ ...prev, [field]: e.target.value }));
+    return <div className="form-sections">
+      <fieldset className="form-section">
+        <legend>{t('Package')}</legend>
+        <p className="hint">{t('0 = unlimited.')}</p>
+        <div className="form-grid">
+          <label className="span-all"><span>{t('Name')}</span><input value={form.name} onChange={set('name')} placeholder={t('Starter')} /></label>
+          <label><span>{t('Websites')}</span><input type="number" min="0" max="1000" value={form.website_limit} onChange={set('website_limit')} /></label>
+          <label><span>{t('Disk (MB)')}</span><input type="number" min="0" max="1048576" value={form.storage_limit_mb} onChange={set('storage_limit_mb')} /></label>
+          <label><span>{t('Databases')}</span><input type="number" min="0" max="10000" value={form.database_limit} onChange={set('database_limit')} /></label>
+          {mailAddonInstalled && <label><span>{t('Mailboxes')}</span><input type="number" min="0" max="1000" value={form.mail_accounts_limit} onChange={set('mail_accounts_limit')} /></label>}
+        </div>
+      </fieldset>
+      {limitsOn && renderLimitInputs(form, setForm)}
+    </div>;
   }
 
   function renderUsersPackagesTab() {
@@ -10463,87 +10575,67 @@ function App() {
     return <>
       <section className="section">
         <div className="section-title">
-          <div><h2>{t('Hosting Packages')}</h2><p className="hint">{isReseller ? t("Your own packages: only you see them, to fill in your customers' limits.") : t('Manage provisioning plans for WHMCS and billing systems.')}</p></div>
-          <button className="secondary" disabled={!!loading} onClick={loadPackages}><RefreshCw size={14}/> {t('Refresh')}</button>
+          <div><h2>{t('New package')}</h2><p className="hint">{isReseller ? t("Your own packages: only you see them, to fill in your customers' limits.") : t('Manage provisioning plans for WHMCS and billing systems.')}</p></div>
         </div>
-        <div className="token-create-form package-form" style={{ '--package-limit-cols': mailAddonInstalled ? 4 : 3 }}>
-          <label><span>{t('Name')}</span><input value={newPackage.name} onChange={e => setNewPackage(prev => ({ ...prev, name: e.target.value }))} placeholder={t('Starter')} /></label>
-          <label><span>{t('Sites')}</span><input type="number" min="0" max="1000" value={newPackage.website_limit} onChange={e => setNewPackage(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
-          <label><span>{t('Disk (MB)')}</span><input type="number" min="0" max="1048576" value={newPackage.storage_limit_mb} onChange={e => setNewPackage(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
-          <label><span>{t('Databases')} <small>{t('0 = unlimited')}</small></span><input type="number" min="0" max="10000" value={newPackage.database_limit} onChange={e => setNewPackage(prev => ({ ...prev, database_limit: e.target.value }))} /></label>
-          {mailAddonInstalled && <label><span>{t('Mailboxes')}</span><input type="number" min="0" max="1000" value={newPackage.mail_accounts_limit} onChange={e => setNewPackage(prev => ({ ...prev, mail_accounts_limit: e.target.value }))} /></label>}
-          <button disabled={!!loading || !newPackage.name.trim()} onClick={createPackage}><Plus size={14}/> {t('Add')}</button>
+        <div className="user-edit-panel is-form">
+          {renderPackageFields(newPackage, setNewPackage)}
+          <div className="user-edit-actions">
+            <button type="button" disabled={!!loading || !newPackage.name.trim()} onClick={createPackage}><Plus size={14}/> {t('Add package')}</button>
+          </div>
         </div>
-        {limitsOn && <div className="user-edit-grid package-limits">{renderLimitInputs(newPackage, setNewPackage)}</div>}
+      </section>
+      <section className="section">
+        <div className="section-title">
+          <div><h2>{t('Hosting Packages')}</h2></div>
+          <button type="button" className="secondary" disabled={!!loading} onClick={loadPackages}><RefreshCw size={14}/> {t('Refresh')}</button>
+        </div>
         {packages.length === 0 && <p className="hint">{t('No packages yet. Create one above.')}</p>}
-        {packages.length > 0 && <div className="table">
-          {packages.map(item => <div className="row" key={item.id}>
-            <div className="token-info">
-              <strong>{item.name}</strong>
-              <small>{t('{n} website(s)', { n: item.website_limit })} | {formatBytes(Number(item.storage_limit_mb || 0) * 1024 * 1024)} | {item.database_limit ? t('{n} database(s)', { n: item.database_limit }) : t('unlimited databases')}{mailAddonInstalled ? ` | ${t('{n} mailboxes', { n: item.mail_accounts_limit ?? 10 })}` : ''}</small>
-            </div>
-            <div className="row-actions">
-              <button className="mini secondary-light" disabled={!!loading} onClick={() => startEditingPackage(item)}><Pencil size={14}/> {t('Edit')}</button>
-              <button className="mini danger" disabled={!!loading || packageInUse(item)} onClick={() => deletePackage(item)}
-                aria-label={t('Delete {name}', { name: item.name })} title={packageInUse(item) ? t('Package is in use') : t('Delete')}><Trash2 size={14}/></button>
-            </div>
-            {String(editingPackageId) === String(item.id) && <div className="user-edit-panel">
-              <div className="user-edit-heading">
-                <strong>{t('Edit')} {item.name}</strong>
-                <button className="user-edit-close secondary-light" onClick={cancelEditingPackage} aria-label={t('Close')} title={t('Close')}><X size={16}/></button>
+        {packages.length > 0 && <div className="users-table plans">
+          {packages.map(item => {
+            const editing = String(editingPackageId) === String(item.id);
+            return <div className={`users-item${editing ? ' is-editing' : ''}`} key={item.id}>
+              <div className="users-row plan-row">
+                <div className="users-account">
+                  <span className="users-avatar" aria-hidden="true"><PackageOpen size={16}/></span>
+                  <div><strong>{item.name}</strong>{packageChips(item)}</div>
+                </div>
+                <span className={packageInUse(item) ? 'badge ok' : 'badge'}>{packageInUse(item) ? t('In use') : t('Not in use')}</span>
+                <div className="users-actions">
+                  <button type="button" className={`mini ${editing ? '' : 'secondary-light'}`} disabled={!!loading} onClick={() => editing ? cancelEditingPackage() : startEditingPackage(item)}><Pencil size={14}/> {t('Edit')}</button>
+                  <button type="button" className="mini danger icon-button" disabled={!!loading || packageInUse(item)} onClick={() => deletePackage(item)}
+                    aria-label={t('Delete {name}', { name: item.name })} title={packageInUse(item) ? t('Package is in use') : t('Delete')}><Trash2 size={14}/></button>
+                </div>
               </div>
-              <div className="user-edit-grid">
-                <label><span>{t('Name')}</span><input value={editingPackageForm.name} onChange={e => setEditingPackageForm(prev => ({ ...prev, name: e.target.value }))} /></label>
-                <label><span>{t('Sites')}</span><input type="number" min="0" max="1000" value={editingPackageForm.website_limit} onChange={e => setEditingPackageForm(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
-                <label><span>{t('Disk (MB)')}</span><input type="number" min="0" max="1048576" value={editingPackageForm.storage_limit_mb} onChange={e => setEditingPackageForm(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
-                <label><span>{t('Databases')} <small>{t('0 = unlimited')}</small></span><input type="number" min="0" max="10000" value={editingPackageForm.database_limit} onChange={e => setEditingPackageForm(prev => ({ ...prev, database_limit: e.target.value }))} /></label>
-                {limitsOn && renderLimitInputs(editingPackageForm, setEditingPackageForm)}
-                {mailAddonInstalled && <label><span>{t('Mailboxes')}</span><input type="number" min="0" max="1000" value={editingPackageForm.mail_accounts_limit} onChange={e => setEditingPackageForm(prev => ({ ...prev, mail_accounts_limit: e.target.value }))} /></label>}
-              </div>
-              <div className="user-edit-actions">
-                <button className="secondary-light" onClick={cancelEditingPackage}>{t('Cancel')}</button>
-                <button disabled={!!loading || !editingPackageForm.name.trim()} onClick={() => updatePackage(item.id)}><Save size={14}/> {t('Save')}</button>
-              </div>
-            </div>}
-          </div>)}
+              {editing && <div className="user-edit-panel">
+                <div className="user-edit-heading">
+                  <div><strong>{t('Edit')} {item.name}</strong></div>
+                  <button type="button" className="user-edit-close secondary-light" onClick={cancelEditingPackage} aria-label={t('Close')} title={t('Close')}><X size={16}/></button>
+                </div>
+                {renderPackageFields(editingPackageForm, setEditingPackageForm)}
+                <div className="user-edit-actions">
+                  <button type="button" className="secondary-light" onClick={cancelEditingPackage}>{t('Cancel')}</button>
+                  <button type="button" disabled={!!loading || !editingPackageForm.name.trim()} onClick={() => updatePackage(item.id)}><Save size={14}/> {t('Save')}</button>
+                </div>
+              </div>}
+            </div>;
+          })}
         </div>}
       </section>
     </>;
   }
 
   function renderUsersAddTab() {
-    const packaged = !!newUser.package_id;
-    return <>
-      <section className="section">
-        <div className="section-title">
-          <div><h2>{isReseller ? t('Add customer') : t('Add panel user')}</h2><p className="hint">{t('Panel username is also the Linux user. Select a package to auto-fill limits.')}</p></div>
+    return <section className="section">
+      <div className="section-title">
+        <div><h2>{isReseller ? t('Add customer') : t('Add panel user')}</h2><p className="hint">{t('Panel username is also the Linux user. Select a package to auto-fill limits.')}</p></div>
+      </div>
+      <div className="user-edit-panel is-form">
+        {renderUserFields(newUser, setNewUser, { creating: true, applyPackage: applyPackageToNewUser })}
+        <div className="user-edit-actions">
+          <button type="button" disabled={!!loading || !newUser.username || !newUser.password} onClick={createUser}><Plus size={14}/> {isReseller ? t('Create customer') : t('Create user')}</button>
         </div>
-        <div className="user-create-card">
-          <label><span>{t('Username')}</span><input value={newUser.username} onChange={e => setNewUser(prev => ({ ...prev, username: e.target.value.toLowerCase() }))} placeholder="johndoe" /></label>
-          <label><span>{t('Email')}</span><input value={newUser.email} onChange={e => setNewUser(prev => ({ ...prev, email: e.target.value }))} placeholder="user@domain.com" /></label>
-          <label><span>{t('Password')}</span><input value={newUser.password} onChange={e => setNewUser(prev => ({ ...prev, password: e.target.value }))} placeholder={t('Min 12 characters')} type="password" /></label>
-          {isAdmin && <label><span>{t('Role')}</span><select value={newUser.role} onChange={e => setNewUser(prev => ({ ...prev, role: e.target.value }))}>
-            <option value="end_user">{t('End user')}</option><option value="reseller">{t('Reseller')}</option><option value="admin">{t('Admin')}</option>
-          </select></label>}
-          {isAdmin && newUser.role === 'end_user' && users.some(u => u.role === 'reseller') && <label><span>{t('Reseller')}</span><select value={newUser.reseller_id || ''} onChange={e => setNewUser(prev => ({ ...prev, reseller_id: e.target.value }))}>
-            <option value="">{t('None (yours)')}</option>
-            {users.filter(u => u.role === 'reseller').map(u => <option key={u.id} value={u.id}>{u.username}</option>)}
-          </select></label>}
-          <label><span>{t('Package')}</span><select value={newUser.package_id} onChange={e => applyPackageToNewUser(e.target.value)}>
-            <option value="">{t('Custom')}</option>
-            {packages.map(item => <option key={item.id} value={item.id}>{packageOptionLabel(item)}</option>)}
-          </select></label>
-          <label><span>{t('Site limit')}</span><input type="number" min="0" max="1000" disabled={packaged} value={newUser.website_limit} onChange={e => setNewUser(prev => ({ ...prev, website_limit: e.target.value }))} /></label>
-          <label><span>{t('Disk (MB)')}</span><input type="number" min="0" max="1048576" disabled={packaged} value={newUser.storage_limit_mb} onChange={e => setNewUser(prev => ({ ...prev, storage_limit_mb: e.target.value }))} /></label>
-          <label><span>{t('Databases')} <small>{t('0 = unlimited')}</small></span><input type="number" min="0" max="10000" disabled={packaged} value={newUser.database_limit} onChange={e => setNewUser(prev => ({ ...prev, database_limit: e.target.value }))} /></label>
-          {limitsOn && renderLimitInputs(newUser, setNewUser, '', packaged)}
-          {limitsOn && isAdmin && newUser.role === 'reseller' && renderLimitInputs(newUser, setNewUser, 'group_')}
-          {mailAddonInstalled && <label><span>{t('Mailbox limit')}</span><input type="number" min="0" max="1000" disabled={packaged} value={newUser.mail_accounts_limit} onChange={e => setNewUser(prev => ({ ...prev, mail_accounts_limit: e.target.value }))} /></label>}
-          {isAdmin && newUser.role === 'reseller' && renderPoolInputs(newUser, setNewUser)}
-          <button disabled={!!loading || !newUser.username || !newUser.password} onClick={createUser}><Plus size={14}/> {isReseller ? t('Create customer') : t('Create user')}</button>
-        </div>
-      </section>
-    </>;
+      </div>
+    </section>;
   }
 
   function renderStandaloneEditor() {

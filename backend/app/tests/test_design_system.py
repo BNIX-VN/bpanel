@@ -283,11 +283,14 @@ def test_the_updates_page_prints_no_stray_zero():
     assert "Number(panelUpdate.progress_percent) > 0 &&" in page
 
 
-def test_a_panel_user_row_keeps_opanels_five_cells():
-    """The shared .row grid has five columns. A sixth cell (package and 2FA
-    badges) pushed the buttons onto a line of their own (operator, 2026-09-30);
-    they now sit under the name."""
-    row = APP.split('<div className="row user-row" key={user.id}>')[1].split('<div className="row-actions">')[0]
-    cells = re.findall(r"^          <(div|span)\b", row, flags=re.M)
-    assert len(cells) == 4, cells  # name, role, status, disk; the buttons are the fifth
-    assert "user.package_name" in row and "user.totp_enabled" in row
+def test_a_panel_user_row_keeps_its_columns_in_line():
+    """Every row of the users table is a subgrid of the table's columns, as in
+    OPanel, so role, disk and CPU line up whatever a row holds. A sixth cell
+    once pushed the buttons onto a line of their own (operator, 2026-09-30);
+    BPanel's package and 2FA still sit under the name, not in a column."""
+    row = APP.split('<div className="users-row">', 1)[1].split('<div className="users-actions">', 1)[0]
+    account = row.split('<div className="users-meta">', 1)[0]
+    assert "user.package_name" in account and "user.totp_enabled" in account
+    assert 'className="users-cell" data-label' in row
+    css = (SRC / "shared" / "ui.css").read_text(encoding="utf-8")
+    assert "grid-template-columns:subgrid" in css
