@@ -1375,10 +1375,16 @@ if [[ -z "${BPANEL_UPDATE_STAGE2:-}" && -f "$SOURCE_DIR/installer/update.sh" ]] 
   # The command line was consumed by the argument loop at the top, so the
   # second stage takes its configuration from the environment. exec replaces
   # this process, so the EXIT trap here never runs: the second stage is handed
-  # everything this one would have cleaned up.
+  # everything this one would have cleaned up. This stage's copy is read into
+  # a variable of its own first: bash expands assignments in front of a
+  # command left to right, each seeing the one before, so reading
+  # BPANEL_UPDATE_STABLE_COPY after it is set below gave the new copy's path,
+  # and every update that handed over left the first stage's copy in /tmp
+  # (seen on OPanel's port of this, 2026-10-04).
+  first_stage_copy="${BPANEL_UPDATE_STABLE_COPY:-}"
   BPANEL_UPDATE_STAGE2=1 \
   BPANEL_UPDATE_STABLE_COPY="$stage2_copy" \
-  BPANEL_UPDATE_PREVIOUS_COPY="${BPANEL_UPDATE_STABLE_COPY:-}" \
+  BPANEL_UPDATE_PREVIOUS_COPY="$first_stage_copy" \
   BPANEL_UPDATE_ORIGINAL_SCRIPT="$SOURCE_DIR/installer/update.sh" \
   BPANEL_UPDATE_REF_OVERRIDE="${UPDATE_REF:-}" \
   RELEASE_WORK_DIR="${RELEASE_WORK_DIR:-}" \
