@@ -574,16 +574,8 @@ def suspend_user(user_id: int, request: Request, db: Session = Depends(get_db), 
     for website in websites:
         website.status = "suspended"
         nginx.delete_wordpress_vhost(website.domain)
-        nginx.write_vhost(
-            website.domain,
-            website.root_path,
-            app_type="static",
-            php_version=website.php_version,
-            document_root=website.document_root or "public_html",
-            custom_directives="# SUSPENDED",
-            rewrite_mode="none",
-            preserve_existing_ssl=False,
-        )
+        nginx.write_suspended_vhost(website.domain, website.root_path, php_version=website.php_version,
+                                    document_root=website.document_root or "public_html")
         if website.linux_user:
             try:
                 site_users.lock_linux_user(website.linux_user)
@@ -607,26 +599,11 @@ def unsuspend_user(user_id: int, request: Request, db: Session = Depends(get_db)
 
     user.is_active = True
 
+    from app.api.websites import _unsuspend_website
+
     websites = db.query(Website).filter(Website.owner_id == user.id).all()
     for website in websites:
-        website.status = "active"
-        rewrite_mode = "front_controller" if website.app_type == "wordpress" else (website.nginx_rewrite_mode or "none")
-        php_socket = site_users.site_php_fpm_socket(website.linux_user, website.root_path, website.php_version) if website.app_type in {"wordpress", "php"} else None
-        nginx.rewrite_vhost(
-            website.domain,
-            website.root_path,
-            app_type=website.app_type,
-            php_version=website.php_version,
-            php_fpm_socket_override=php_socket,
-            custom_directives=website.nginx_custom or "",
-            document_root=website.document_root or "public_html",
-            rewrite_mode=rewrite_mode,
-            waf_enabled=website.waf_enabled,
-            http_flood_enabled=website.http_flood_enabled,
-            http_flood_config=website.http_flood_config or "",
-            aliases=[a.domain for a in (website.aliases or []) if a.mode == "alias"],
-            redirects=[a.domain for a in (website.aliases or []) if a.mode == "redirect"],
-        )
+        _unsuspend_website(website)
         if website.linux_user:
             try:
                 site_users.unlock_linux_user(website.linux_user)

@@ -1549,6 +1549,23 @@ def harden_existing_wordpress_vhost(
     )
 
 
+def write_suspended_vhost(domain: str, root_path: str, *, php_version: str | None = None,
+                          document_root: str = "public_html") -> str:
+    """What a suspended site serves: its files as plain static content - no
+    PHP, no application, no certificate. One definition, so suspending a site
+    and every later rewrite of it while suspended write the same thing."""
+    return write_vhost(
+        domain,
+        root_path,
+        app_type="static",
+        php_version=php_version,
+        document_root=document_root or "public_html",
+        custom_directives="# SUSPENDED",
+        rewrite_mode="none",
+        preserve_existing_ssl=False,
+    )
+
+
 def delete_wordpress_vhost(domain: str):
     target = _vhost_path(domain)
     if settings.command_dry_run:

@@ -1723,6 +1723,12 @@ with SessionLocal() as db:
                 # with "Pick an installed application for this website first"
                 # (.120, every update since at least 1.0.173).
                 websites_api._rewrite_website_vhost(website)
+                # Suspending never locked the Linux user before 1.3.0: the
+                # helper had no panel-user-lock, and the call ignored the
+                # error, so a suspended customer kept SFTP. Lock the ones
+                # suspended then; locking a locked user changes nothing.
+                if website.status == "suspended" and website.linux_user:
+                    site_users.lock_linux_user(website.linux_user)
             except Exception as exc:
                 print(f"WARNING: could not refresh {website.domain}: {exc}")
     try:
