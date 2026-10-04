@@ -1544,6 +1544,22 @@ else
   echo "  (bpanel user not found; skipping WAF install - run install.sh first)"
 fi
 
+# --- Resource limits agent -------------------------------------------------
+# Only where the addon is installed: an addon that is off has nothing on disk.
+# The agent runs as root, so it goes through the helper refreshed above, which
+# takes it only if it matches the hash that helper carries. The panel used to
+# compare the copies on its minute tick instead; this updater runs from the
+# release it installs (the handover above), so the update itself does it.
+LIMITS_AGENT_SOURCE="$SOURCE_DIR/backend/app/agents/bpanel_limits_agent.py"
+if [[ -f /etc/systemd/system/bpanel-limits.service && -f "$LIMITS_AGENT_SOURCE" ]] \
+  && id -u bpanel >/dev/null 2>&1 \
+  && ! cmp -s "$LIMITS_AGENT_SOURCE" /usr/local/sbin/bpanel-limits-agent; then
+  log "Updating the resource limits agent"
+  sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper limits-agent-install \
+    <"$LIMITS_AGENT_SOURCE" >/dev/null \
+    || echo "  (warning: could not update the resource limits agent; reinstall the addon on the Addons page)"
+fi
+
 # --- Malware scanner: retrofit LMD on servers that already run the scanner --
 # The scanner is opt-in; only touch a server whose admin turned it on. LMD adds
 # fast site-root scans, a daily incremental scan and named malware families on

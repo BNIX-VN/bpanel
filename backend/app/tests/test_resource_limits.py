@@ -278,13 +278,29 @@ def test_nothing_is_handed_over_until_the_addon_is_installed(env, monkeypatch):
     assert calls == []
 
     monkeypatch.setattr(resource_limits, "installed", lambda: True)
-    monkeypatch.setattr(resource_limits, "agent_current", lambda: False)
     monkeypatch.setattr(resource_limits.shell, "privileged",
                         lambda *a, **k: calls.append((a, k)) or SimpleNamespace(returncode=0, stdout="", stderr=""))
     resource_limits.sync(db)
-    # A new agent first, then the configuration.
-    assert [c[0][0] for c in calls] == ["limits-agent-install", "limits-apply"]
-    assert json.loads(calls[1][1]["input"])["version"] == 1
+    # The configuration only. A new agent arrives with the update that brings
+    # it (update.sh), not from a comparison on every tick.
+    assert [c[0][0] for c in calls] == ["limits-apply"]
+    assert json.loads(calls[0][1]["input"])["version"] == 1
+
+
+def test_an_update_installs_the_new_resource_limits_agent_itself():
+    script = (ROOT / "installer" / "update.sh").read_text(encoding="utf-8")
+    start = script.index("# --- Resource limits agent")
+    block = script[start : script.index("# --- Malware scanner: retrofit LMD", start)]
+    # Only where the addon is installed: an addon that is off has nothing on disk.
+    assert "-f /etc/systemd/system/bpanel-limits.service" in block
+    # Through the helper, which checks the hash it carries, after that helper is in place.
+    assert "bpanel-helper limits-agent-install" in block and '<"$LIMITS_AGENT_SOURCE"' in block
+    assert script.index("Refreshing /usr/local/sbin/bpanel-helper") < start
+    # Run by the updater of the release being installed, not the one before it.
+    assert script.index('exec /bin/bash "$stage2_copy"') < start
+    assert "|| echo" in block, "an update must not stop over an addon"
+    sync = Path(resource_limits.__file__).read_text(encoding="utf-8").split("def sync(db: Session)", 1)[1]
+    assert "install_agent" not in sync.split("\ndef ", 1)[0]
 
 
 def test_each_caller_sees_the_accounts_it_manages(env, monkeypatch, tmp_path):
@@ -353,3 +369,25 @@ def test_administrators_hear_when_an_account_is_stopped_at_its_memory_limit(env,
     counts(0)   # the slice was made again
     notify_watch.check_resource_limits(state)
     assert len(sent) == 1
+
+
+def test_the_dashboard_counts_the_days_memory_stops_across_a_restart():
+    """The agent records each slice's running total; a total that drops means
+    the slice was made again, and the count carries on from there."""
+    day = {"day": [{"t": 1, "oom": 4}, {"t": 2, "oom": 4}, {"t": 3, "oom": 6}, {"t": 4, "oom": 1}, {"t": 5, "oom": 3}]}
+    assert resource_limits.oom_kills_last_day(day) == 2 + 1 + 2
+    assert resource_limits.oom_kills_last_day({}) == 0
+    assert resource_limits.oom_kills_last_day(None) == 0
+
+
+def test_the_overview_names_each_account_for_the_busiest_list(env, monkeypatch, tmp_path):
+    db, client = env
+    direct = _user(db, "direct")
+    monkeypatch.setattr(resource_limits, "USAGE_FILE", tmp_path / "usage.json")
+    monkeypatch.setattr(resource_limits, "HISTORY_FILE", tmp_path / "history.json")
+    (tmp_path / "history.json").write_text(json.dumps(
+        {f"hosting-a{direct.id}.slice": {"day": [{"t": 1, "oom": 0}, {"t": 2, "oom": 3}], "week": []}}), encoding="utf-8")
+    _login(client, "root_admin")
+    entry = _call(client, "GET", "/api/resource-limits").json()["accounts"][str(direct.id)]
+    assert entry["username"] == "direct" and entry["role"] == "end_user"
+    assert entry["oom_kills_day"] == 3

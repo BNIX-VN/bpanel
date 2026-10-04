@@ -6,6 +6,8 @@ divides it between its own account and its customers; it manages its
 customers, logs in as them, keeps packages of its own and hosts sites of its
 own. Nothing server-wide.
 """
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -388,3 +390,33 @@ def test_without_oversell_disk_in_use_is_the_accounts_own_business(env, monkeypa
     monkeypatch.setattr(storage_quota, "user_storage_used_bytes", lambda db_, user, use_cache=False: 5000 * 1024 * 1024)
     # Far past the share in use, but the limits handed out fit it: no share check.
     reseller_pool.ensure_storage_room(db, _user(db, "cust1"), incoming_bytes=1024 * 1024)
+
+
+def test_the_share_totals_1_2_0_stopped_reading_are_dropped(tmp_path, monkeypatch):
+    """0046: the website, mail account and application share columns go, the
+    rest of the account - and every reseller's customers and disk - stays."""
+    import sqlite3
+
+    from alembic import command
+    from alembic.config import Config
+
+    from app.core.config import settings
+
+    backend = Path(__file__).resolve().parents[2]
+    db_path = tmp_path / "panel.db"
+    cfg = Config(str(backend / "alembic.ini"))
+    cfg.set_main_option("script_location", str(backend / "alembic"))
+    # alembic/env.py takes the URL from the settings the app already loaded;
+    # without this it would migrate the test suite's own database.
+    monkeypatch.setattr(settings, "database_url", f"sqlite:///{db_path.as_posix()}")
+    command.upgrade(cfg, "0045_resource_limits")
+    with sqlite3.connect(db_path) as con:
+        con.execute("insert into users (username, email, hashed_password, role, pool_user_limit, "
+                    "pool_storage_limit_mb, pool_app_limit) values ('shop', 's@x', 'h', 'reseller', 5, 2048, 9)")
+
+    command.upgrade(cfg, "head")
+    with sqlite3.connect(db_path) as con:
+        columns = {row[1] for row in con.execute("pragma table_info(users)")}
+        row = con.execute("select pool_user_limit, pool_storage_limit_mb from users where username = 'shop'").fetchone()
+    assert not {"pool_website_limit", "pool_mail_accounts_limit", "pool_app_limit"} & columns
+    assert row == (5, 2048)
