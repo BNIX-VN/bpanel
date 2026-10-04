@@ -7714,7 +7714,7 @@ PY
 # /opt/bpanel belongs to the panel user, and root must never run something
 # that user could have edited. test_resource_limits.py keeps the two in step.
 LIMITS_AGENT="/usr/local/sbin/bpanel-limits-agent"
-LIMITS_AGENT_SHA256="668d8a9c3b77f6bf3ce96ebc7278e0b13b723c6054b2f2fbb82614771cb3590a"
+LIMITS_AGENT_SHA256="499d95cd589595ae5ba9e68a8cb82f185cb1c44b8270a7918aec4cbcb77ea687"
 LIMITS_UNIT="/etc/systemd/system/bpanel-limits.service"
 LIMITS_DIR="/etc/bpanel-limits"
 LIMITS_STATE_DIR="/var/lib/bpanel-limits"
