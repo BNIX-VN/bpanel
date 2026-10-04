@@ -173,3 +173,24 @@ def test_the_update_notice_reads_the_last_check_and_never_waits(monkeypatch):
     monkeypatch.setattr(updates, "_read_update_state", lambda: {"latest_version": "1.0.160", "last_checked_epoch": 1})
     assert updates.cached_release_summary()["update_available"] is False
     assert started == [True], "a stale check is refreshed in the background"
+
+
+def test_the_cpanel_style_columns_get_what_each_role_may_see(env, monkeypatch):
+    """The dashboard's right-hand column, after cPanel's: a customer gets the
+    address to point a domain at (its "Shared IP"); the server's own details
+    and the counts across every account are an administrator's."""
+    monkeypatch.setattr(dashboard.server_network, "ipv4_addresses", lambda: ["203.0.113.5"])
+    installed = {"mail": True, "dns": False, "application": False}
+    monkeypatch.setattr(dashboard.addons, "is_installed", lambda slug: installed.get(slug, False))
+
+    body = env.as_user("alice")
+    assert body["server"] == {"ipv4": "203.0.113.5"}
+    for key in ("accounts", "mail", "dns", "applications"):
+        assert key not in body
+
+    body = env.as_user("root_admin")
+    assert body["server"]["ipv4"] == "203.0.113.5"
+    assert {"hostname", "os", "kernel", "uptime_seconds", "panel_version"} <= set(body["server"])
+    assert set(body["accounts"]) == {"end_users", "resellers"}
+    assert body["mail"] == {"domains": 0, "mailboxes": 0}
+    assert "dns" not in body and "applications" not in body, "an addon that is not installed adds nothing"

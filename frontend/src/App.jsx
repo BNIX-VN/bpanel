@@ -15,7 +15,7 @@ import 'ace-builds/src-noconflict/theme-textmate';
 import 'ace-builds/src-noconflict/theme-tomorrow_night';
 import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, Eye, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle, Activity, BrickWall, Bug, LockKeyhole, PackageOpen, ScrollText, ShieldAlert, CheckCircle, Zap, Bell, Mail, Send, Cloud, Inbox, Forward, ShieldCheck } from 'lucide-react';
 import { Terminal } from './components/Terminal';
-import { Sparkline, UsageChart } from './components/UsageChart';
+import { UsageChart } from './components/UsageChart';
 import { LANGUAGES, t, useLanguage } from './i18n.js';
 import './shared/style.css';
 import './shared/brand.css';
@@ -70,6 +70,9 @@ const NAV_PARENT_PAGE = { 'waf-site': 'waf', 'malware-scan': 'malware' };
 
 // 'waf-site' is reached from the WAF overview rather than the sidebar, but it
 // still belongs to Settings so the menu stays open and WAF stays highlighted.
+// Which tool groups a viewer folded on the dashboard (a convenience, per browser).
+const DASHBOARD_COLLAPSED_KEY = 'bpanel.dashboard.collapsedTools';
+
 const PAGE_ROUTES = {
   dashboard: '/',
   websites: '/website',
@@ -98,6 +101,7 @@ const PAGE_ROUTES = {
   notifications: '/notifications',
   dns: '/dns',
   mail: '/email',
+  usage: '/resource-usage',
 };
 
 /* ---------------------------------------------------------------
@@ -829,6 +833,15 @@ function App() {
   const [topAccountsSort, setTopAccountsSort] = useState('cpu');
   // An account picked on the dashboard, opened for editing once Users has loaded.
   const [pendingEditUserId, setPendingEditUserId] = useState(null);
+  // The dashboard's tool panel: the search, and which groups are folded.
+  const [toolQuery, setToolQuery] = useState('');
+  const [collapsedTools, setCollapsedTools] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(DASHBOARD_COLLAPSED_KEY) || '[]');
+      return Array.isArray(saved) ? saved : [];
+    } catch { return []; }
+  });
+  const toolSearchRef = useRef(null);
   // The addon card whose details and panel are open on the Addons page.
   const [addonOpen, setAddonOpen] = useState('');
   // Demo mode addon: the accounts the login page offers, and the form that picks them.
@@ -5120,15 +5133,15 @@ function App() {
   useEffect(() => { if (currentUser) loadAddons(); }, [currentUser]);
   // Resource limits: live use while a page shows it.
   useEffect(() => {
-    if (!isAuthenticated || !limitsOn || !['dashboard', 'users'].includes(page)) return undefined;
+    if (!isAuthenticated || !limitsOn || !['dashboard', 'users', 'usage'].includes(page)) return undefined;
     loadLimitsInfo();
     const timer = window.setInterval(loadLimitsInfo, 15000);
     return () => window.clearInterval(timer);
   }, [isAuthenticated, page, limitsOn]);
-  // A customer's or reseller's dashboard charts: the agent adds a point every
-  // five minutes, so a minute between reads is plenty.
+  // The Resource usage page's charts: the agent adds a point every five
+  // minutes, so a minute between reads is plenty.
   useEffect(() => {
-    if (!isAuthenticated || page !== 'dashboard' || isAdmin || !limitsOn) return undefined;
+    if (!isAuthenticated || page !== 'usage' || isAdmin || !limitsOn) return undefined;
     loadLimitsHistory();
     const timer = window.setInterval(loadLimitsHistory, 60000);
     return () => window.clearInterval(timer);
@@ -5139,6 +5152,19 @@ function App() {
     if (isAuthenticated && page === 'dashboard' && isReseller) loadResellerPool();
     if (isAuthenticated && page === 'dashboard' && !isAdmin && mailAddonInstalled) loadMailInfo();
   }, [isAuthenticated, page, isReseller, isAdmin, mailAddonInstalled]);
+  // "/" jumps to the dashboard's tool search, as it does in cPanel.
+  useEffect(() => {
+    if (page !== 'dashboard') return undefined;
+    const onKey = event => {
+      if (event.key !== '/' || event.ctrlKey || event.metaKey || event.altKey) return;
+      const tag = (event.target?.tagName || '').toLowerCase();
+      if (['input', 'textarea', 'select'].includes(tag) || event.target?.isContentEditable) return;
+      event.preventDefault();
+      toolSearchRef.current?.focus();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [page]);
   useEffect(() => {
     if (page !== 'users' || pendingEditUserId == null) return;
     const user = users.find(item => item.id === pendingEditUserId);
@@ -5321,10 +5347,12 @@ function App() {
   const navItems = navSections.flatMap(section => section.items);
   const basePage = NAV_PARENT_PAGE[page] || page;
   // A page reached from Settings lights up Settings in the sidebar...
-  const navPage = settingsItems.some(([key]) => key === basePage) ? 'settings' : basePage;
+  // Resource usage is reached from the dashboard and keeps it lit.
+  const navPage = settingsItems.some(([key]) => key === basePage) ? 'settings' : basePage === 'usage' ? 'dashboard' : basePage;
   const activeNavItem = navItems.find(([key]) => key === navPage) || navItems[0];
   // ...and is still called by its own name at the top: "Firewall", not "Settings".
-  const pageItem = [...navItems, ...settingsItems].find(([key]) => key === basePage) || activeNavItem;
+  const hiddenPages = limitsOn && !isAdmin ? [['usage', 'Resource usage', Activity]] : [];
+  const pageItem = [...navItems, ...settingsItems, ...hiddenPages].find(([key]) => key === basePage) || activeNavItem;
   // Its title is a crumb back to Settings, as in OPanel.
   const settingsPageItem = settingsItems.find(([key]) => key === basePage);
 
@@ -5534,35 +5562,152 @@ function App() {
     </article>;
   }
 
-  // A dashboard figure: what is used now, against what is allowed, with a
-  // trend line where the addon keeps history and a meter where it does not.
-  function KpiTile({ icon: Icon, label, value, detail, percent, trend, trendLimit, floor }) {
+  // --- Dashboard, laid out as cPanel's home page ------------------------------
+  // Tools on the left, grouped and searchable; on the right what the account
+  // (or, for an administrator, the server) is and how much of it is used.
+  // OPanel's layout (operator, 2026-10-04): customers come from cPanel.
+
+  // One cPanel-style statistic: a label, used / limit, and a meter that turns
+  // amber at 80% and red at 95%, with an icon so colour is not the only sign.
+  function StatRow({ label, value, percent, tone = '' }) {
     const safePercent = percent == null ? null : clampPercent(percent);
-    const tone = safePercent == null ? '' : safePercent >= 90 ? ' tone-bad' : safePercent >= 75 ? ' tone-warn' : '';
-    return <article className={`kpi-tile${tone}`}>
-      <div className="kpi-head"><Icon size={15}/><span>{label}</span></div>
-      <strong>{value}</strong>
-      <small>{detail}</small>
-      {/* Until the agent has two points of history, the meter stands in. */}
-      {trend?.length >= 2
-        ? <Sparkline values={trend} limit={trendLimit} floor={floor}/>
-        : <div className={`resource-track${safePercent === null ? ' is-empty' : ''}`} aria-hidden={safePercent === null}>{safePercent !== null && <span style={{ width: `${safePercent}%` }}></span>}</div>}
-    </article>;
+    const level = tone || (safePercent == null ? '' : safePercent >= 95 ? 'bad' : safePercent >= 80 ? 'warn' : '');
+    return <div className={`stat-row${level ? ` tone-${level}` : ''}`}>
+      <span className="stat-row-label">{level ? <AlertCircle size={13} aria-hidden="true"/> : null}{label}</span>
+      <strong className="stat-row-value">{value}</strong>
+      {safePercent !== null && <span className={`resource-track${level ? ` tone-${level}` : ''}`} aria-hidden="true"><span style={{ width: `${safePercent}%` }}></span></span>}
+    </div>;
   }
 
-  function LimitRow({ label, value, percent, tone = '' }) {
-    const safePercent = percent == null ? null : clampPercent(percent);
-    const barTone = safePercent == null ? '' : safePercent >= 90 ? ' tone-bad' : safePercent >= 75 ? ' tone-warn' : '';
-    return <div className={`limit-row${tone ? ` tone-${tone}` : ''}`}>
-      <span>{label}</span>
-      <strong>{value}</strong>
-      {safePercent !== null && <div className={`resource-track${barTone}`}><span style={{ width: `${safePercent}%` }}></span></div>}
-    </div>;
+  function InfoRow({ label, value, title }) {
+    return <div className="info-row"><span>{label}</span><strong title={title || (typeof value === 'string' ? value : undefined)}>{value || '—'}</strong></div>;
   }
 
   function openUserFromDashboard(userId) {
     setPendingEditUserId(userId);
     navigateToPage('users');
+  }
+
+  // "3 d 4 h" / "5 h 12 min": how long the server has been up.
+  function formatUptime(seconds) {
+    const total = Math.max(0, Number(seconds) || 0);
+    const days = Math.floor(total / 86400);
+    const hours = Math.floor((total % 86400) / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    return days ? t('{days} d {hours} h', { days, hours }) : t('{hours} h {minutes} min', { hours, minutes });
+  }
+
+  // Accents and case set aside, so "tuong lua" finds "Tường lửa".
+  function normalizeSearch(text) {
+    return String(text || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\u0111/g, 'd').replace(/\u0110/g, 'D').toLowerCase();
+  }
+
+  // The tools on the dashboard, in cPanel's groups. Each opens its page (and,
+  // where there is one, its tab or its create form). An addon's tools appear
+  // only while it is installed, as its sidebar entry does.
+  function dashboardToolGroups() {
+    const go = (target, before) => () => { if (before) before(); navigateToPage(target); };
+    const groups = [];
+    if (canManageUsers) {
+      groups.push({ key: 'accounts', title: isReseller ? t('Customers') : t('Accounts'), icon: Users, tools: [
+        { key: 'users', label: isReseller ? t('Customers') : t('Panel users'), icon: Users, run: go('users', () => setUserTab('list')) },
+        { key: 'user-add', label: isReseller ? t('Add customer') : t('Add User'), icon: Plus, run: go('users', () => setUserTab('add')) },
+        { key: 'packages', label: t('Packages'), icon: PackageOpen, run: go('users', () => setUserTab('packages')) },
+      ] });
+    }
+    groups.push({ key: 'websites', title: t('Websites'), icon: Globe, tools: [
+      { key: 'websites', label: t('Websites'), icon: Globe, run: go('websites') },
+      // "New website" and "New database" arrive with their form open.
+      { key: 'site-new', label: t('New website'), icon: Plus, run: () => { setCreateFormOpen(true); navigateToPage('websites'); } },
+      ...(appsFeatureEnabled ? [{ key: 'applications', label: t('Applications'), icon: Boxes, run: go('applications') }] : []),
+      { key: 'ssl', label: t('SSL'), icon: Lock, run: go('ssl') },
+      { key: 'waf', label: 'WAF', icon: ShieldAlert, run: go('waf') },
+      ...(isAdmin ? [{ key: 'logs', label: t('Access logs'), icon: ScrollText, run: go('access-logs') }] : []),
+      ...(isAdmin ? [{ key: 'php', label: t('PHP config'), icon: Code2, run: go('php') }] : []),
+    ] });
+    groups.push({ key: 'files', title: t('Files'), icon: FolderOpen, tools: [
+      { key: 'files', label: t('File manager'), icon: FolderOpen, run: go('files') },
+      { key: 'sftp', label: t('SFTP accounts'), icon: KeyRound, run: go('sftp') },
+      { key: 'sftp-new', label: t('New SFTP account'), icon: Plus, run: () => {
+        navigateToPage('sftp');
+        window.setTimeout(() => document.querySelector('.sftp-form input')?.focus(), 150);
+      } },
+      { key: 'backups', label: t('Backups'), icon: Archive, run: go('backups') },
+    ] });
+    groups.push({ key: 'databases', title: t('Databases'), icon: Database, tools: [
+      { key: 'databases', label: t('Databases'), icon: Database, run: go('databases') },
+      { key: 'db-new', label: t('New database'), icon: Plus, run: () => { setDbCreateOpen(true); navigateToPage('databases'); } },
+    ] });
+    if (mailAddonInstalled) {
+      groups.push({ key: 'email', title: t('Email'), icon: Mail, tools: [
+        { key: 'mailboxes', label: t('Mailboxes'), icon: Inbox, run: go('mail', () => setMailTab('mailboxes')) },
+        { key: 'forwarders', label: t('Forwarders'), icon: Forward, run: go('mail', () => setMailTab('forwarders')) },
+      ] });
+    }
+    if (dnsAddonInstalled) {
+      groups.push({ key: 'domains', title: t('Domains'), icon: Network, tools: [
+        { key: 'dns', label: t('DNS Manager'), icon: Network, run: go('dns') },
+      ] });
+    }
+    groups.push({ key: 'security', title: t('Security'), icon: ShieldCheck, tools: [
+      { key: 'account-security', label: t('Account security'), icon: LockKeyhole, run: go('security') },
+      ...(isAdmin ? [{ key: 'firewall', label: t('Firewall'), icon: BrickWall, run: go('firewall') }] : []),
+      ...(isAdmin && malwareAddonInstalled ? [{ key: 'malware', label: t('Malware Scanner'), icon: Bug, run: go('malware') }] : []),
+    ] });
+    groups.push({ key: 'advanced', title: t('Advanced'), icon: SettingsIcon, tools: [
+      { key: 'cron', label: t('Cron'), icon: Clock, run: go('cron') },
+      ...(limitsOn && !isAdmin ? [{ key: 'usage', label: t('Resource usage'), icon: Activity, run: go('usage') }] : []),
+      ...(mcpAddonInstalled ? [{ key: 'mcp', label: t('AI assistants (MCP)'), icon: Bot, run: go('mcp') }] : []),
+      ...(isAdmin ? [
+        { key: 'services', label: t('Services'), icon: Server, run: go('services') },
+        ...(notificationsAddonInstalled ? [{ key: 'notifications', label: t('Notifications'), icon: Bell, run: go('notifications') }] : []),
+        { key: 'updates', label: t('Updates'), icon: RefreshCw, run: go('updates') },
+        { key: 'addons', label: t('Addons'), icon: PackageOpen, run: go('addons') },
+        { key: 'panel-settings', label: t('Panel settings'), icon: SettingsIcon, run: go('panel-settings') },
+      ] : []),
+    ] });
+    return groups;
+  }
+
+  function toggleToolGroup(key) {
+    setCollapsedTools(prev => {
+      const next = prev.includes(key) ? prev.filter(item => item !== key) : [...prev, key];
+      try { localStorage.setItem(DASHBOARD_COLLAPSED_KEY, JSON.stringify(next)); } catch { /* a convenience only */ }
+      return next;
+    });
+  }
+
+  // `order` places the panel when the page folds into one column (see
+  // .cp-layout): after the statistics for a customer, lower for an admin.
+  function renderToolPanel(order) {
+    const query = normalizeSearch(toolQuery.trim());
+    const groups = dashboardToolGroups()
+      .map(group => ({ ...group, tools: query ? group.tools.filter(tool => normalizeSearch(`${tool.label} ${group.title}`).includes(query)) : group.tools }))
+      .filter(group => group.tools.length > 0);
+    return <section className="section dash-card tools-panel" style={{ '--cp-order': order }}>
+      <label className="tools-search">
+        <Search size={16} aria-hidden="true"/>
+        <input ref={toolSearchRef} type="search" value={toolQuery} onChange={e => setToolQuery(e.target.value)}
+          placeholder={t('Search tools (press /)')} aria-label={t('Search tools')} />
+      </label>
+      {groups.length === 0 && <p className="hint">{t('No tool matches your search.')}</p>}
+      {groups.map(group => {
+        const open = !!query || !collapsedTools.includes(group.key);
+        return <div className={`tool-group${open ? ' is-open' : ''}`} key={group.key}>
+          <button type="button" className="tool-group-head" aria-expanded={open} onClick={() => toggleToolGroup(group.key)}>
+            <span className="tool-group-icon"><group.icon size={15}/></span>
+            <h3>{group.title}</h3>
+            <ChevronDown size={16} className="tool-group-chevron" aria-hidden="true"/>
+          </button>
+          {open && <div className="tool-grid">
+            {group.tools.map(tool => <button type="button" key={tool.key} className="tool-tile" onClick={tool.run}>
+              <span className="tool-icon"><tool.icon size={17}/></span>
+              <span className="tool-label">{tool.label}</span>
+            </button>)}
+          </div>}
+        </div>;
+      })}
+    </section>;
   }
 
   // The administrator's view of the Resource limits addon: who uses most now.
@@ -5576,7 +5721,7 @@ function App() {
       <span>{text}{limitText && <small> / {limitText}</small>}</span>
       {percent !== null && <span className={`resource-track${percent >= 90 ? ' tone-bad' : percent >= 75 ? ' tone-warn' : ''}`}><span style={{ width: `${percent}%` }}></span></span>}
     </span>;
-    return <section className="section dash-card">
+    return <section className="section dash-card" style={{ '--cp-order': 4 }}>
       <div className="dash-card-head">
         <span className="dash-card-icon"><Boxes size={16}/></span><h2>{t('Busiest accounts')}</h2>
         <div className="segmented-control compact" role="tablist" aria-label={t('Sort by')}>
@@ -5607,10 +5752,9 @@ function App() {
     const network = resourceUsage?.network || {};
     const networkTotal = (Number(network.rx_per_sec) || 0) + (Number(network.tx_per_sec) || 0);
 
-    // How things stand, not a second copy of the sidebar: the three groups of
-    // links that were here repeated it item for item. Until the summary
-    // arrives, the lists already loaded stand in for it.
+    // Until the summary arrives, the lists already loaded stand in for it.
     const sum = dashSummary || {};
+    const server = sum.server || {};
     const sites = sum.websites || { total: websites.length, suspended: 0, waf_on: websites.filter(site => site.waf_enabled).length };
     const ssl = sum.ssl || { total: websites.length, secured: websites.filter(site => site.ssl_enabled).length, unsecured: [], unsecured_count: 0 };
     const dbCount = sum.databases?.total ?? databases.length;
@@ -5623,51 +5767,46 @@ function App() {
       return `${two(d.getDate())}/${two(d.getMonth() + 1)} ${two(d.getHours())}:${two(d.getMinutes())}`;
     };
 
-    // Each card says how one thing stands, and how loudly: ok / warn / bad /
-    // neutral, drawn as the colour of its left edge. A customer's plan-usage
-    // card already counts websites and databases, so theirs start at SSL.
-    const sslCard = { key: 'ssl', icon: Lock, label: t('SSL'), value: `${ssl.secured}/${ssl.total}`,
-      detail: !ssl.total ? t('No websites yet') : ssl.unsecured_count ? t('{n} without SSL', { n: ssl.unsecured_count }) : t('All secured'),
-      tone: !ssl.total ? 'neutral' : ssl.unsecured_count ? 'warn' : 'ok' };
-    const cards = [];
+    // How each part stands, and how loudly: ok / warn / bad / neutral. On the
+    // right of the page, as a list a glance can take in.
+    const status = [];
     if (isAdmin) {
-      cards.push({ key: 'websites', icon: Globe, label: t('Websites'), value: String(sites.total),
-        detail: sites.suspended ? t('{n} suspended', { n: sites.suspended }) : sites.total ? t('All running') : t('No websites yet'),
-        tone: sites.suspended ? 'warn' : sites.total ? 'ok' : 'neutral' });
-      cards.push(sslCard);
-      cards.push({ key: 'databases', icon: Database, label: t('Databases'), value: String(dbCount), detail: 'MariaDB', tone: 'neutral' });
-      const backups = sum.backups;
-      cards.push({ key: 'backups', icon: Archive, label: t('Backups'),
-        value: backups?.last_run_at ? shortDate(backups.last_run_at) : '—',
-        detail: !backups ? t('Checking…') : !backups.schedules ? t('No schedule') : backups.failed ? t('Last run failed') : t('{n} schedule(s)', { n: backups.schedules }),
-        tone: !backups ? 'neutral' : !backups.schedules ? 'warn' : backups.failed ? 'bad' : 'ok' });
+      const services = sum.services;
+      status.push({ key: 'services', icon: Server, label: t('Services'),
+        value: services ? `${services.running}/${services.total}` : '—',
+        detail: services?.stopped?.length ? t('Stopped: {names}', { names: services.stopped.join(', ') }) : services ? t('All running') : t('Checking…'),
+        tone: !services ? 'neutral' : services.stopped?.length ? 'bad' : 'ok' });
+    }
+    status.push({ key: 'ssl', icon: Lock, label: t('SSL'), value: `${ssl.secured}/${ssl.total}`,
+      detail: !ssl.total ? t('No websites yet') : ssl.unsecured_count ? t('{n} without SSL', { n: ssl.unsecured_count }) : t('All secured'),
+      tone: !ssl.total ? 'neutral' : ssl.unsecured_count ? 'warn' : 'ok' });
+    if (isAdmin) {
       const firewallOn = sum.firewall?.enabled;
-      cards.push({ key: 'firewall', icon: BrickWall, label: t('Firewall'),
+      status.push({ key: 'firewall', icon: BrickWall, label: t('Firewall'),
         value: firewallOn === true ? t('On') : firewallOn === false ? t('Off') : '—', detail: 'iptables + ipset',
         tone: firewallOn === true ? 'ok' : firewallOn === false ? 'bad' : 'neutral' });
       const engine = sum.waf?.engine;
-      cards.push({ key: 'waf', icon: ShieldAlert, label: 'WAF',
+      status.push({ key: 'waf', icon: ShieldAlert, label: 'WAF',
         value: engine === 'on' ? t('On') : engine === 'off' ? t('Off') : '—', detail: t('ModSecurity engine'),
         tone: engine === 'on' ? 'ok' : engine === 'off' ? 'warn' : 'neutral' });
       const scanner = sum.malware;
       const lastScan = scanner?.last_scan;
-      cards.push({ key: 'malware', icon: Bug, label: t('Malware scanner'),
+      status.push({ key: 'malware', icon: Bug, label: t('Malware scanner'),
         value: !scanner ? '—' : scanner.addon === false ? t('Off') : !scanner.installed ? t('Not installed') : lastScan?.infected ? t('{n} threat(s)', { n: lastScan.infected }) : lastScan ? t('Clean') : t('No scan yet'),
         detail: scanner?.addon === false ? t('Not installed') : scanner?.running ? t('Scanning...') : lastScan ? shortDate(lastScan.finished_at) : t('Last scan'),
         tone: !scanner || scanner.addon === false ? 'neutral' : !scanner.installed ? 'warn' : lastScan?.infected ? 'bad' : lastScan ? 'ok' : 'neutral' });
-      const services = sum.services;
-      cards.push({ key: 'services', icon: Activity, label: t('Services'),
-        value: services ? `${services.running}/${services.total}` : '—',
-        detail: services?.stopped?.length ? t('Stopped: {names}', { names: services.stopped.join(', ') }) : services ? t('All running') : t('Checking…'),
-        tone: !services ? 'neutral' : services.stopped?.length ? 'bad' : 'ok' });
+      const backups = sum.backups;
+      status.push({ key: 'backups', icon: Archive, label: t('Backups'),
+        value: backups?.last_run_at ? shortDate(backups.last_run_at) : '—',
+        detail: !backups ? t('Checking…') : !backups.schedules ? t('No schedule') : backups.failed ? t('Last run failed') : t('{n} schedule(s)', { n: backups.schedules }),
+        tone: !backups ? 'neutral' : !backups.schedules ? 'warn' : backups.failed ? 'bad' : 'ok' });
     } else {
-      cards.push(sslCard);
       const wafOn = sites.waf_on ?? 0;
-      cards.push({ key: 'waf', icon: ShieldAlert, label: 'WAF', value: `${wafOn}/${sites.total}`,
+      status.push({ key: 'waf', icon: ShieldAlert, label: 'WAF', value: `${wafOn}/${sites.total}`,
         detail: !sites.total ? t('No websites yet') : wafOn === sites.total ? t('On for every website') : t('{n} website(s) without WAF', { n: sites.total - wafOn }),
         tone: !sites.total ? 'neutral' : wafOn === sites.total ? 'ok' : 'warn' });
       const twoFactor = !!currentUser?.totp_enabled;
-      cards.push({ key: 'security', icon: LockKeyhole, label: t('Account security'),
+      status.push({ key: 'security', icon: LockKeyhole, label: t('Account security'),
         value: twoFactor ? t('On') : t('Off'), detail: t('Two-factor sign-in'), tone: twoFactor ? 'ok' : 'warn' });
     }
 
@@ -5689,191 +5828,192 @@ function App() {
     if (!isAdmin && currentUser && !currentUser.totp_enabled) attention.push({ tone: 'info', text: t('Two-factor sign-in is off for your account.'), action: t('Turn on'), target: 'security' });
     if (isAdmin && sum.updates?.update_available) attention.push({ tone: 'info', text: t('Panel update {version} is available.', { version: sum.updates.latest_version }), action: t('Open'), target: 'updates' });
 
-    // The create forms open with the page, so "New website" is one click.
-    const quickActions = [
-      { key: 'site', icon: Plus, label: t('New website'), primary: true, run: () => { setCreateFormOpen(true); navigateToPage('websites'); } },
-      { key: 'db', icon: Database, label: t('New database'), run: () => { setDbCreateOpen(true); navigateToPage('databases'); } },
-      { key: 'ssl', icon: Lock, label: t('Set up SSL'), run: () => navigateToPage('ssl') },
-      { key: 'backup', icon: Archive, label: t('Back up a website'), run: () => navigateToPage('backups') },
-      { key: 'sftp', icon: KeyRound, label: t('New SFTP account'), run: () => {
-        navigateToPage('sftp');
-        window.setTimeout(() => document.querySelector('.sftp-form input')?.focus(), 150);
-      } },
-      ...(mailAddonInstalled ? [{ key: 'mail', icon: Mail, label: t('New mailbox'), run: () => { setMailTab('mailboxes'); navigateToPage('mail'); } }] : []),
-      ...(canManageUsers ? [{ key: 'users', icon: Users, label: isReseller ? t('Customers') : t('Panel users'), run: () => navigateToPage('users') }] : []),
-    ];
+    // Most urgent first; when nothing needs a look the administrator gets one
+    // quiet line, and a customer nothing at all.
+    const attentionCard = (attention.length > 0 || isAdmin) && <section className={`section dash-card cp-attention${attention.length ? '' : ' is-clear'}`} style={{ '--cp-order': 1 }}>
+      {attention.length === 0
+        ? <div className="attention-ok"><CheckCircle size={16}/> {dashSummary ? t('Everything looks fine.') : t('Checking…')}</div>
+        : <>
+            <div className="dash-card-head"><span className="dash-card-icon"><AlertCircle size={16}/></span><h2>{t('Needs attention')}</h2><span className="badge warn">{attention.length}</span></div>
+            <div className="attention-list">
+              {attention.map(item => <div className={`attention-item tone-${item.tone}`} key={item.text}>
+                {item.tone === 'info' ? <RefreshCw size={15}/> : <AlertCircle size={15}/>}
+                <span>{item.text}</span>
+                <button type="button" className="mini secondary" onClick={() => navigateToPage(item.target)}>{item.action}</button>
+              </div>)}
+            </div>
+          </>}
+    </section>;
 
-    // Needs attention, as a list: its own card on the administrator's
-    // dashboard, folded under the status rows on a customer's.
-    const attentionList = attention.length === 0
-      ? <div className="attention-ok"><CheckCircle size={16}/> {dashSummary ? t('Everything looks fine.') : t('Checking…')}</div>
-      : <div className="attention-list">
-          {attention.map(item => <div className={`attention-item tone-${item.tone}`} key={item.text}>
-            {item.tone === 'info' ? <RefreshCw size={15}/> : <AlertCircle size={15}/>}
-            <span>{item.text}</span>
-            <button type="button" className="mini secondary" onClick={() => navigateToPage(item.target)}>{item.action}</button>
-          </div>)}
-        </div>;
-    const quickActionsCard = <section className="section dash-card">
-      <div className="dash-card-head"><span className="dash-card-icon"><Zap size={16}/></span><h2>{t('Quick actions')}</h2></div>
-      <div className="quick-actions">
-        {quickActions.map(action => <button type="button" key={action.key} className={action.primary ? '' : 'secondary'} onClick={action.run}><action.icon size={15}/> {action.label}</button>)}
+    const statusCard = <section className="section side-card" style={{ '--cp-order': isAdmin ? 3 : 5 }}>
+      <h3 className="side-card-title">{t('Status')}</h3>
+      <div className="status-list">
+        {status.map(card => <button type="button" key={card.key} className={`status-row tone-${card.tone}`} onClick={() => navigateToPage(card.key)}>
+          <card.icon size={15}/><span>{card.label}</span><strong>{card.value}</strong><small>{card.detail}</small>
+        </button>)}
       </div>
     </section>;
 
     if (isAdmin) {
-      return <div className="dashboard">
-        <section className="section dash-card dash-resources">
-          <div className="dash-card-head"><span className="dash-card-icon"><Activity size={16}/></span><h2>{t('Server resources')}</h2></div>
-          <div className="resource-grid">
-            <ResourceCard icon={Cpu} label="CPU" value={formatPercent(cpu.percent)} percent={cpu.percent} detail={cpu.load?.length ? t('Load {load}', { load: cpu.load.join(' / ') }) : t('{count} cores', { count: cpu.cores || '--' })} />
-            <ResourceCard icon={MemoryStick} label="RAM" value={formatPercent(memory.percent)} percent={memory.percent} detail={`${formatBytes(memory.used)} / ${formatBytes(memory.total)}`} />
-            <ResourceCard icon={HardDrive} label={t('Disk')} value={formatPercent(disk.percent)} percent={disk.percent} detail={`${formatBytes(disk.used)} / ${formatBytes(disk.total)}`} />
-            <ResourceCard icon={Network} label={t('Network')} value={`${formatBytes(networkTotal)}/s`} detail={t('Down {down}/s / Up {up}/s', { down: formatBytes(network.rx_per_sec), up: formatBytes(network.tx_per_sec) })} />
-          </div>
-        </section>
-        {limitsOn && renderTopAccounts()}
-
-        {/* Eight cards for an administrator go 4 + 4; each opens its page. */}
-        <div className={`status-grid${cards.length > 4 ? ' many' : ''}`} style={{ '--status-cols': Math.min(4, cards.length) }}>
-          {cards.map(card => <button type="button" key={card.key} className={`status-card tone-${card.tone}`} onClick={() => navigateToPage(card.key)}>
-            <span className="status-card-head"><card.icon size={15}/><span>{card.label}</span></span>
-            <strong>{card.value}</strong>
-            <small>{card.detail}</small>
-          </button>)}
-        </div>
-
-        <div className="dash-bottom">
-          <section className="section dash-card">
-            <div className="dash-card-head"><span className="dash-card-icon"><AlertCircle size={16}/></span><h2>{t('Needs attention')}</h2></div>
-            {attentionList}
+      const accounts = sum.accounts || {};
+      return <div className="dashboard cp-layout">
+        <div className="cp-main">
+          {attentionCard}
+          <section className="section dash-card dash-resources" style={{ '--cp-order': 2 }}>
+            <div className="dash-card-head"><span className="dash-card-icon"><Activity size={16}/></span><h2>{t('Server resources')}</h2></div>
+            <div className="resource-grid">
+              <ResourceCard icon={Cpu} label="CPU" value={formatPercent(cpu.percent)} percent={cpu.percent} detail={cpu.load?.length ? t('Load {load}', { load: cpu.load.join(' / ') }) : t('{count} cores', { count: cpu.cores || '--' })} />
+              <ResourceCard icon={MemoryStick} label="RAM" value={formatPercent(memory.percent)} percent={memory.percent} detail={`${formatBytes(memory.used)} / ${formatBytes(memory.total)}`} />
+              <ResourceCard icon={HardDrive} label={t('Disk')} value={formatPercent(disk.percent)} percent={disk.percent} detail={`${formatBytes(disk.used)} / ${formatBytes(disk.total)}`} />
+              <ResourceCard icon={Network} label={t('Network')} value={`${formatBytes(networkTotal)}/s`} detail={t('Down {down}/s / Up {up}/s', { down: formatBytes(network.rx_per_sec), up: formatBytes(network.tx_per_sec) })} />
+            </div>
           </section>
-          {quickActionsCard}
+          {limitsOn && renderTopAccounts()}
+          {renderToolPanel(5)}
         </div>
+        <aside className="cp-side">
+          {statusCard}
+          <section className="section side-card" style={{ '--cp-order': 6 }}>
+            <h3 className="side-card-title">{t('Server information')}</h3>
+            <InfoRow label={t('Hostname')} value={server.hostname} />
+            <InfoRow label={t('IP address')} value={server.ipv4} />
+            <InfoRow label={t('Operating system')} value={server.os} />
+            <InfoRow label={t('Kernel')} value={server.kernel} />
+            <InfoRow label={t('Uptime')} value={server.uptime_seconds ? formatUptime(server.uptime_seconds) : ''} />
+            <InfoRow label="CPU" value={cpu.cores ? t('{count} cores', { count: cpu.cores }) : ''} />
+            <InfoRow label="RAM" value={memory.total ? formatBytes(memory.total) : ''} />
+            <InfoRow label={t('Panel version')} value={server.panel_version} />
+          </section>
+          <section className="section side-card" style={{ '--cp-order': 7 }}>
+            <h3 className="side-card-title">{t('Statistics')}</h3>
+            <StatRow label={t('Customers')} value={String(accounts.end_users ?? '—')} />
+            <StatRow label={t('Resellers')} value={String(accounts.resellers ?? '—')} />
+            <StatRow label={t('Websites')} value={sites.suspended ? t('{total} ({suspended} suspended)', { total: sites.total, suspended: sites.suspended }) : String(sites.total)} />
+            {sum.applications && <StatRow label={t('Applications')} value={String(sum.applications.total)} />}
+            <StatRow label={t('Databases')} value={String(dbCount)} />
+            {sum.mail && <StatRow label={t('Mail domains')} value={String(sum.mail.domains)} />}
+            {sum.mail && <StatRow label={t('Mailboxes')} value={String(sum.mail.mailboxes)} />}
+            {sum.dns && <StatRow label={t('DNS zones')} value={String(sum.dns.zones)} />}
+          </section>
+        </aside>
       </div>;
     }
 
     if (!currentUser) return null;
 
-    // A customer or reseller: a row of figures, the addon's history as charts,
-    // then the rest of the limits and how the account stands.
+    // A customer or reseller: cPanel's General Information and Statistics.
     const limitEntry = limitsOn ? limitsInfo?.accounts?.[currentUser.id] : null;
     const groupScope = isReseller && dashScope === 'group' && !!limitEntry?.group_limits;
     const now = (groupScope ? limitEntry?.group_usage : limitEntry?.usage) || {};
     const caps = (groupScope ? limitEntry?.group_limits : limitEntry?.limits) || {};
-    const history = limitsHistory?.[groupScope ? 'group' : 'account'] || {};
-    const dayPoints = history.day || [];
-    const rangePoints = (dashRange === 'week' ? history.week : history.day) || [];
     const pctOf = (used, limit) => limit > 0 ? ((Number(used) || 0) / limit) * 100 : null;
-    const limitText = (limit, format) => limit ? t('Limit {value}', { value: format(limit) }) : t('Unlimited');
-    const usedOf = (used, limit) => t('{used} of {limit}', { used, limit });
+    const usedOf = (used, limit, format = value => value) => limit ? `${format(used)} / ${format(limit)}` : `${format(used)} / ∞`;
+    const formatMbps = value => `${(Number(value) || 0).toFixed(1).replace(/\.0$/, '')} MB/s`;
+    const storageLimit = storageLimitBytes(currentUser);
+    const usedBytes = Math.max(0, Number(currentUser.storage_used_bytes) || 0);
+    const measuring = currentUser.storage_used_bytes == null || Number(currentUser.storage_used_bytes) < 0;
+    const siteLimit = Number(currentUser.website_limit) || 0;
+    const dbLimit = Number(currentUser.database_limit) || 0;
+    const mailboxLimit = Number(mailInfo?.mailbox_limit) || 0;
+    const primarySite = websites[0];
+    // /home/<user>/<domain> -> /home/<user>
+    const homeDir = (primarySite?.root_path || '').match(/^\/[^/]+\/[^/]+/)?.[0] || '';
+    const pool = resellerPool || {};
+    const shareDisk = pool[pool.pool_oversell ? 'used_storage_limit_mb' : 'allocated_storage_limit_mb'];
+    const stopped = (groupScope ? limitEntry?.group_oom_kills_day : limitEntry?.oom_kills_day) || 0;
+    // Disk speed has two limits; the meter follows whichever is closer.
+    const ioPercents = [pctOf(now.io_read_mbps, caps.io_read_mbps), pctOf(now.io_write_mbps, caps.io_write_mbps)].filter(value => value != null);
+
+    return <div className="dashboard cp-layout">
+      <div className="cp-main">
+        {attentionCard}
+        {renderToolPanel(3)}
+      </div>
+      <aside className="cp-side">
+        <section className="section side-card" style={{ '--cp-order': 2 }}>
+          <div className="side-card-head">
+            <h3 className="side-card-title">{t('Statistics')}</h3>
+            {isReseller && limitEntry?.group_limits && <div className="segmented-control compact" role="tablist" aria-label={t('Show')}>
+              <button type="button" role="tab" aria-selected={!groupScope} className={!groupScope ? 'active' : ''} onClick={() => setDashScope('account')}>{t('Me')}</button>
+              <button type="button" role="tab" aria-selected={groupScope} className={groupScope ? 'active' : ''} onClick={() => setDashScope('group')}>{t('Group')}</button>
+            </div>}
+          </div>
+          {groupScope && <p className="hint">{t('You and all your customers together.')}</p>}
+          {groupScope ? <>
+            <StatRow label={t('Customers')} value={usedOf(pool.customers ?? 0, pool.pool_user_limit)} percent={pctOf(pool.customers, pool.pool_user_limit)} />
+            <StatRow label={pool.pool_oversell ? t('Disk in use') : t('Disk handed out')} value={usedOf(shareDisk ?? 0, pool.pool_storage_limit_mb, formatMegabytes)} percent={pctOf(shareDisk, pool.pool_storage_limit_mb)} />
+          </> : <>
+            <StatRow label={t('Disk usage')} value={measuring ? t('measuring...') : (storageLimit ? `${formatBytes(usedBytes)} / ${formatBytes(storageLimit)}` : `${formatBytes(usedBytes)} / ∞`)} percent={storageLimit && !measuring ? pctOf(usedBytes, storageLimit) : null} />
+            <StatRow label={t('Websites')} value={usedOf(websites.length, siteLimit)} percent={pctOf(websites.length, siteLimit)} />
+            {appsFeatureEnabled && <StatRow label={t('Applications')} value={usedOf(siteApps.used ?? siteApps.items.length, siteApps.limit)} percent={pctOf(siteApps.used ?? siteApps.items.length, siteApps.limit)} />}
+            <StatRow label={t('Databases')} value={usedOf(databases.length, dbLimit)} percent={pctOf(databases.length, dbLimit)} />
+            {mailAddonInstalled && mailInfo && <StatRow label={t('Mailboxes')} value={usedOf(mailInfo.mailbox_count ?? 0, mailboxLimit)} percent={pctOf(mailInfo.mailbox_count, mailboxLimit)} />}
+          </>}
+          {limitEntry && <>
+            <StatRow label={t('CPU usage')} value={caps.cpu_percent ? `${formatCpuPercent(now.cpu_percent)} / ${caps.cpu_percent}%` : `${formatCpuPercent(now.cpu_percent)} / ∞`} percent={pctOf(now.cpu_percent, caps.cpu_percent)} />
+            <StatRow label={t('Physical memory')} value={usedOf(now.memory_mb ?? 0, caps.memory_mb, formatMegabytes)} percent={pctOf(now.memory_mb, caps.memory_mb)} />
+            <StatRow label={t('Processes')} value={usedOf(now.processes ?? 0, caps.process_limit)} percent={pctOf(now.processes, caps.process_limit)} />
+            <StatRow label={t('Disk read / write')} value={`${formatMbps(now.io_read_mbps)} / ${formatMbps(now.io_write_mbps)}`}
+              percent={ioPercents.length ? Math.max(...ioPercents) : null} />
+            <StatRow label={t('Stopped at the RAM limit (24 h)')} value={String(stopped)} tone={stopped ? 'bad' : ''} />
+            <button type="button" className="side-card-link" onClick={() => navigateToPage('usage')}><Activity size={14}/> {t('Resource usage over time')}</button>
+          </>}
+        </section>
+        <section className="section side-card" style={{ '--cp-order': 4 }}>
+          <h3 className="side-card-title">{t('General information')}</h3>
+          <InfoRow label={t('Account')} value={isReseller ? <>{currentUser.username} <span className="badge role-reseller">{t('Reseller')}</span></> : currentUser.username} title={currentUser.username} />
+          <InfoRow label={t('Email')} value={currentUser.email} />
+          <InfoRow label={t('Package')} value={currentUser.package_name || t('Custom')} />
+          <InfoRow label={t('Primary domain')} value={primarySite?.domain} />
+          <InfoRow label={t('Home directory')} value={homeDir} />
+          <InfoRow label={t('Server IP')} value={server.ipv4} />
+        </section>
+        {statusCard}
+      </aside>
+    </div>;
+  }
+
+  // cPanel's "Resource Usage": the addon's history for this account (and a
+  // reseller's group), a day of 5-minute points or a week of hours.
+  function renderResourceUsage() {
+    if (isAdmin || !limitsOn || !currentUser) return renderDashboard();
+    const limitEntry = limitsInfo?.accounts?.[currentUser.id];
+    const groupScope = isReseller && dashScope === 'group' && !!limitEntry?.group_limits;
+    const caps = (groupScope ? limitEntry?.group_limits : limitEntry?.limits) || {};
+    const history = limitsHistory?.[groupScope ? 'group' : 'account'] || {};
+    const points = (dashRange === 'week' ? history.week : history.day) || [];
     const formatWhen = (stamp, full) => {
       const date = new Date(stamp * 1000);
       if (full) return date.toLocaleString([], { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
       return dashRange === 'week' ? date.toLocaleDateString([], { day: '2-digit', month: '2-digit' }) : date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     };
+    const formatCount = value => String(Math.round(Number(value) || 0));
     const formatMbps = value => `${(Number(value) || 0).toFixed(1).replace(/\.0$/, '')} MB/s`;
-
-    const storageLimit = storageLimitBytes(currentUser);
-    const usedBytes = Number(currentUser.storage_used_bytes) || 0;
-    const siteLimit = Number(currentUser.website_limit) || 0;
-    const dbLimit = Number(currentUser.database_limit) || 0;
-    const cpuTile = { key: 'cpu', icon: Cpu, label: 'CPU', value: formatCpuPercent(now.cpu_percent), percent: pctOf(now.cpu_percent, caps.cpu_percent),
-      detail: limitText(caps.cpu_percent, value => `${value}%`), trend: dayPoints.map(point => point.cpu), trendLimit: caps.cpu_percent, floor: 5 };
-    const ramTile = { key: 'ram', icon: MemoryStick, label: 'RAM', value: formatMegabytes(now.memory_mb), percent: pctOf(now.memory_mb, caps.memory_mb),
-      detail: limitText(caps.memory_mb, formatMegabytes), trend: dayPoints.map(point => point.mem), trendLimit: caps.memory_mb, floor: 64 };
-    let kpis;
-    if (groupScope) {
-      const pool = resellerPool || {};
-      const shareDisk = pool[pool.pool_oversell ? 'used_storage_limit_mb' : 'allocated_storage_limit_mb'];
-      kpis = [cpuTile, ramTile,
-        { key: 'customers', icon: Users, label: t('Customers'), value: pool.pool_user_limit ? `${pool.customers ?? 0} / ${pool.pool_user_limit}` : String(pool.customers ?? 0),
-          percent: pctOf(pool.customers, pool.pool_user_limit), detail: pool.pool_user_limit ? t('Your share') : t('unlimited') },
-        { key: 'share-disk', icon: HardDrive, label: pool.pool_oversell ? t('Disk in use') : t('Disk handed out'), value: formatMegabytes(shareDisk),
-          percent: pctOf(shareDisk, pool.pool_storage_limit_mb), detail: pool.pool_storage_limit_mb ? usedOf(formatMegabytes(shareDisk), formatMegabytes(pool.pool_storage_limit_mb)) : t('unlimited') }];
-    } else {
-      const storageTile = { key: 'storage', icon: HardDrive, label: t('Storage'), value: storageLimit ? formatPercent(pctOf(usedBytes, storageLimit)) : formatBytes(usedBytes),
-        percent: storageLimit ? pctOf(usedBytes, storageLimit) : null, detail: storageLimit ? usedOf(formatBytes(usedBytes), formatBytes(storageLimit)) : t('unlimited') };
-      const sitesTile = { key: 'websites', icon: Globe, label: t('Websites'), value: siteLimit ? `${websites.length} / ${siteLimit}` : String(websites.length),
-        percent: pctOf(websites.length, siteLimit), detail: siteLimit ? usedOf(websites.length, siteLimit) : t('unlimited') };
-      const dbTile = { key: 'databases', icon: Database, label: t('Databases'), value: dbLimit ? `${databases.length} / ${dbLimit}` : String(databases.length),
-        percent: pctOf(databases.length, dbLimit), detail: dbLimit ? usedOf(databases.length, dbLimit) : t('unlimited') };
-      // With the addon, CPU and RAM lead and databases move to the details;
-      // without it, the package's own counts fill the row.
-      kpis = limitEntry ? [cpuTile, ramTile, storageTile, sitesTile] : [storageTile, sitesTile, dbTile];
-    }
-
-    const mailboxLimit = Number(mailInfo?.mailbox_limit) || 0;
-    const detailRows = [];
-    if (limitEntry) {
-      detailRows.push({ key: 'procs', label: t('Processes'), value: caps.process_limit ? `${now.processes ?? 0} / ${caps.process_limit}` : `${now.processes ?? 0}`, percent: pctOf(now.processes, caps.process_limit) });
-      detailRows.push({ key: 'io-read', label: t('Disk read'), value: caps.io_read_mbps ? `${formatMbps(now.io_read_mbps)} / ${formatMbps(caps.io_read_mbps)}` : formatMbps(now.io_read_mbps), percent: pctOf(now.io_read_mbps, caps.io_read_mbps) });
-      detailRows.push({ key: 'io-write', label: t('Disk write'), value: caps.io_write_mbps ? `${formatMbps(now.io_write_mbps)} / ${formatMbps(caps.io_write_mbps)}` : formatMbps(now.io_write_mbps), percent: pctOf(now.io_write_mbps, caps.io_write_mbps) });
-    }
-    if (!groupScope && limitEntry) {
-      detailRows.push({ key: 'databases', label: t('Databases'), value: dbLimit ? `${databases.length} / ${dbLimit}` : String(databases.length), percent: pctOf(databases.length, dbLimit) });
-    }
-    if (!groupScope && mailAddonInstalled && mailInfo) {
-      detailRows.push({ key: 'mailboxes', label: t('Mailboxes'), value: mailboxLimit ? `${mailInfo.mailbox_count ?? 0} / ${mailboxLimit}` : String(mailInfo.mailbox_count ?? 0), percent: pctOf(mailInfo.mailbox_count, mailboxLimit) });
-    }
-    if (limitEntry) {
-      const stopped = (groupScope ? limitEntry.group_oom_kills_day : limitEntry.oom_kills_day) || 0;
-      detailRows.push({ key: 'oom', label: t('Stopped at the RAM limit (24 h)'), value: String(stopped), tone: stopped ? 'bad' : '' });
-    }
-
-    const statusCard = <section className="section dash-card">
-      <div className="dash-card-head"><span className="dash-card-icon"><ShieldCheck size={16}/></span><h2>{t('Status')}</h2></div>
-      <div className="status-list">
-        {cards.map(card => <button type="button" key={card.key} className={`status-row tone-${card.tone}`} onClick={() => navigateToPage(card.key)}>
-          <card.icon size={15}/><span>{card.label}</span><strong>{card.value}</strong><small>{card.detail}</small>
-        </button>)}
-      </div>
-      {attention.length > 0 && attentionList}
-    </section>;
-
-    return <div className="dashboard">
-      {isReseller && limitEntry?.group_limits && <div className="dash-scope">
-        <div className="segmented-control" role="tablist" aria-label={t('Show')}>
-          <button type="button" role="tab" aria-selected={!groupScope} className={!groupScope ? 'active' : ''} onClick={() => setDashScope('account')}>{t('My account')}</button>
-          <button type="button" role="tab" aria-selected={groupScope} className={groupScope ? 'active' : ''} onClick={() => setDashScope('group')}>{t('My group')}</button>
-        </div>
-        {groupScope && <p className="hint">{t('You and all your customers together.')}</p>}
-      </div>}
-
-      <div className="kpi-grid" style={{ '--kpi-cols': kpis.length }}>
-        {kpis.map(({ key, ...tile }) => <KpiTile key={key} {...tile}/>)}
-      </div>
-
-      {limitEntry && <section className="section dash-card dash-history">
-        <div className="dash-card-head">
-          <span className="dash-card-icon"><Activity size={16}/></span>
-          <h2>{groupScope ? t("Your group's CPU and RAM") : t('CPU and RAM')}</h2>
+    const common = { points, when: formatWhen, emptyText: t('Not enough history yet: a point is added every 5 minutes.'),
+      limitText: t('Limit'), peakText: t('Peak'), averageText: t('Average') };
+    return <section className="section">
+      <div className="section-title">
+        <div><h2>{groupScope ? t("Your group's resource usage") : t('Resource usage')}</h2>
+          <p className="hint">{t('CPU, memory, processes and disk speed over the last day or week. The dashed line is the limit.')}</p></div>
+        <div className="actions">
+          {isReseller && limitEntry?.group_limits && <div className="segmented-control compact" role="tablist" aria-label={t('Show')}>
+            <button type="button" role="tab" aria-selected={!groupScope} className={!groupScope ? 'active' : ''} onClick={() => setDashScope('account')}>{t('Me')}</button>
+            <button type="button" role="tab" aria-selected={groupScope} className={groupScope ? 'active' : ''} onClick={() => setDashScope('group')}>{t('Group')}</button>
+          </div>}
           <div className="segmented-control compact" role="tablist" aria-label={t('Period')}>
             <button type="button" role="tab" aria-selected={dashRange === 'day'} className={dashRange === 'day' ? 'active' : ''} onClick={() => setDashRange('day')}>{t('24 hours')}</button>
             <button type="button" role="tab" aria-selected={dashRange === 'week'} className={dashRange === 'week' ? 'active' : ''} onClick={() => setDashRange('week')}>{t('7 days')}</button>
           </div>
         </div>
-        <div className="usage-charts">
-          <UsageChart title="CPU" points={rangePoints} pick={point => point.cpu} limit={caps.cpu_percent} format={formatCpuPercent} when={formatWhen} floor={10}
-            emptyText={t('Not enough history yet: a point is added every 5 minutes.')} limitText={t('Limit')} peakText={t('Peak')} averageText={t('Average')} />
-          <UsageChart title="RAM" points={rangePoints} pick={point => point.mem} limit={caps.memory_mb} format={formatMegabytes} when={formatWhen} floor={128}
-            emptyText={t('Not enough history yet: a point is added every 5 minutes.')} limitText={t('Limit')} peakText={t('Peak')} averageText={t('Average')} />
-        </div>
-      </section>}
-
-      <div className={`dash-bottom${detailRows.length ? '' : ' no-details'}`}>
-        {detailRows.length > 0 && <section className="section dash-card">
-          <div className="dash-card-head"><span className="dash-card-icon"><Boxes size={16}/></span><h2>{t('Limits')}</h2></div>
-          <div className="limit-rows">
-            {detailRows.map(({ key, ...row }) => <LimitRow key={key} {...row}/>)}
-          </div>
-        </section>}
-        <div className="dash-side">
-          {statusCard}
-          {quickActionsCard}
-        </div>
       </div>
-    </div>;
+      <div className="usage-charts">
+        <UsageChart {...common} title="CPU" pick={point => point.cpu} limit={caps.cpu_percent} format={formatCpuPercent} floor={10} />
+        <UsageChart {...common} title="RAM" pick={point => point.mem} limit={caps.memory_mb} format={formatMegabytes} floor={128} />
+        <UsageChart {...common} title={t('Processes')} pick={point => point.procs} limit={caps.process_limit} format={formatCount} floor={10} />
+        <UsageChart {...common} title={t('Disk read')} pick={point => point.io_r} limit={caps.io_read_mbps} format={formatMbps} floor={1} />
+        <UsageChart {...common} title={t('Disk write')} pick={point => point.io_w} limit={caps.io_write_mbps} format={formatMbps} floor={1} />
+      </div>
+    </section>;
   }
 
   function renderAdminOnly() {
@@ -10873,6 +11013,7 @@ function App() {
     if (page === 'settings') return renderSettingsHub();
     if (page === 'panel-settings') return renderPanelSettings();
     if (page === 'users') return renderUsers();
+    if (page === 'usage') return renderResourceUsage();
     return renderDashboard();
   }
 
