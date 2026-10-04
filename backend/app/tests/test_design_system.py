@@ -167,6 +167,8 @@ def test_a_label_from_an_array_goes_through_the_dictionary():
     allowed = {
         # ResourceCard is handed an already-translated string by its caller.
         "{label}</span></div>",
+        # So are the dashboard's limit rows (LimitRow), built with t().
+        "{label}</span>",
         # Product and file names: "Claude Code", "Cursor - .cursor/mcp.json".
         "{label}</strong>",
     }
@@ -185,9 +187,9 @@ def test_the_dashboard_headings_are_translated_where_they_are_drawn():
     """
     dashboard = _dashboard()
     assert "<h2>{t('Server resources')}</h2>" in dashboard
-    # Card labels are translated where they are built; the one left raw is
-    # WAF, which reads the same in both languages.
-    assert re.findall(r"label: '([^']+)'", dashboard) == ["WAF", "WAF"]
+    # Card labels are translated where they are built; the ones left raw are
+    # WAF, CPU and RAM, which read the same in both languages.
+    assert re.findall(r"label: '([^']+)'", dashboard) == ["WAF", "WAF", "CPU", "RAM"]
     assert "<p className=\"sidebar-section-title\">{t(section.title)}</p>" in APP
     assert "{pageItem?.[1] ? t(pageItem[1])" in APP
 

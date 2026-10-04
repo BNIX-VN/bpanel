@@ -39,7 +39,6 @@ from app.services.shell import shell
 logger = logging.getLogger("bpanel.resource_limits")
 
 AGENT_SOURCE = Path(__file__).resolve().parent.parent / "agents" / "bpanel_limits_agent.py"
-AGENT_INSTALLED = Path("/usr/local/sbin/bpanel-limits-agent")
 USAGE_FILE = Path("/run/bpanel-limits/usage.json")
 HISTORY_FILE = Path("/var/lib/bpanel-limits/history.json")
 # Where an account's processes come from before the agent moves them: PHP-FPM
@@ -65,17 +64,14 @@ def _agent_source() -> bytes:
     return AGENT_SOURCE.read_bytes().replace(b"\r\n", b"\n")
 
 
-def agent_current() -> bool:
-    try:
-        return AGENT_INSTALLED.read_bytes() == _agent_source()
-    except OSError:
-        return False
-
-
 def install_agent() -> None:
     """Hand the helper this release's agent. It installs it only if it matches
     the hash the helper itself carries, so a copy the panel user edited never
-    runs as root."""
+    runs as root.
+
+    Called when the addon is installed. A panel update installs the new agent
+    itself (update.sh, from the source it installs), so nothing here has to
+    compare the copies on a timer."""
     result = shell.privileged("limits-agent-install", input=_agent_source().decode("utf-8"), check=False)
     if result.returncode != 0:
         raise RuntimeError((result.stderr or result.stdout or "limits-agent-install failed").strip())
@@ -161,9 +157,6 @@ def sync(db: Session) -> None:
     """Hand the agent the current configuration. Raises if the helper refuses."""
     if not installed():
         return
-    if not agent_current():
-        # A panel update brought a new agent: the minute tick installs it.
-        install_agent()
     config = build_config(db)
     with _sync_lock:
         result = shell.privileged("limits-apply", input=json.dumps(config), check=False)
@@ -210,18 +203,47 @@ def _visible(db: Session, actor: User) -> list[User]:
     return [user for user in query.all() if not is_admin_role(user.role)]
 
 
+def oom_kills_last_day(entry) -> int:
+    """How many processes the memory limit stopped over the history's day.
+
+    The agent records the slice's running total at each point; a total that
+    went down means the slice was made again (a restart, a reboot), so the
+    count starts over from there rather than going negative.
+    """
+    points = entry.get("day") if isinstance(entry, dict) else None
+    if not isinstance(points, list):
+        return 0
+    kills, previous = 0, None
+    for point in points:
+        value = point.get("oom") if isinstance(point, dict) else None
+        if not isinstance(value, int):
+            continue
+        if previous is not None:
+            kills += value - previous if value >= previous else value
+        previous = value
+    return kills
+
+
 def overview(db: Session, actor: User) -> dict:
     """Limits and current use of every account the caller may see; for a
     reseller, its group's too."""
     data = _read_json(USAGE_FILE)
     slices = data.get("slices") if isinstance(data.get("slices"), dict) else {}
     stamp = data.get("time") if isinstance(data.get("time"), int) else None
+    past = _read_json(HISTORY_FILE)
     accounts = {}
     for user in _visible(db, actor):
-        entry = {"limits": _limits(user, RESOURCE_LIMIT_FIELDS), "usage": slices.get(account_slice(user))}
+        entry = {
+            "username": user.username,
+            "role": user.role,
+            "limits": _limits(user, RESOURCE_LIMIT_FIELDS),
+            "usage": slices.get(account_slice(user)),
+            "oom_kills_day": oom_kills_last_day(past.get(account_slice(user))),
+        }
         if is_reseller_role(user.role):
             entry["group_limits"] = _limits(user, GROUP_LIMIT_FIELDS)
             entry["group_usage"] = slices.get(group_slice(user))
+            entry["group_oom_kills_day"] = oom_kills_last_day(past.get(group_slice(user)))
         accounts[str(user.id)] = entry
     return {
         "installed": installed(),

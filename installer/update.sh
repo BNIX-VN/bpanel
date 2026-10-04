@@ -1375,10 +1375,16 @@ if [[ -z "${BPANEL_UPDATE_STAGE2:-}" && -f "$SOURCE_DIR/installer/update.sh" ]] 
   # The command line was consumed by the argument loop at the top, so the
   # second stage takes its configuration from the environment. exec replaces
   # this process, so the EXIT trap here never runs: the second stage is handed
-  # everything this one would have cleaned up.
+  # everything this one would have cleaned up. This stage's copy is read into
+  # a variable of its own first: bash expands assignments in front of a
+  # command left to right, each seeing the one before, so reading
+  # BPANEL_UPDATE_STABLE_COPY after it is set below gave the new copy's path,
+  # and every update that handed over left the first stage's copy in /tmp
+  # (seen on OPanel's port of this, 2026-10-04).
+  first_stage_copy="${BPANEL_UPDATE_STABLE_COPY:-}"
   BPANEL_UPDATE_STAGE2=1 \
   BPANEL_UPDATE_STABLE_COPY="$stage2_copy" \
-  BPANEL_UPDATE_PREVIOUS_COPY="${BPANEL_UPDATE_STABLE_COPY:-}" \
+  BPANEL_UPDATE_PREVIOUS_COPY="$first_stage_copy" \
   BPANEL_UPDATE_ORIGINAL_SCRIPT="$SOURCE_DIR/installer/update.sh" \
   BPANEL_UPDATE_REF_OVERRIDE="${UPDATE_REF:-}" \
   RELEASE_WORK_DIR="${RELEASE_WORK_DIR:-}" \
@@ -1542,6 +1548,22 @@ if id -u bpanel >/dev/null 2>&1; then
   sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper ipv6-apply >/dev/null 2>&1 || true
 else
   echo "  (bpanel user not found; skipping WAF install - run install.sh first)"
+fi
+
+# --- Resource limits agent -------------------------------------------------
+# Only where the addon is installed: an addon that is off has nothing on disk.
+# The agent runs as root, so it goes through the helper refreshed above, which
+# takes it only if it matches the hash that helper carries. The panel used to
+# compare the copies on its minute tick instead; this updater runs from the
+# release it installs (the handover above), so the update itself does it.
+LIMITS_AGENT_SOURCE="$SOURCE_DIR/backend/app/agents/bpanel_limits_agent.py"
+if [[ -f /etc/systemd/system/bpanel-limits.service && -f "$LIMITS_AGENT_SOURCE" ]] \
+  && id -u bpanel >/dev/null 2>&1 \
+  && ! cmp -s "$LIMITS_AGENT_SOURCE" /usr/local/sbin/bpanel-limits-agent; then
+  log "Updating the resource limits agent"
+  sudo -u bpanel env HOME="$APP_DIR" sudo -n /usr/local/sbin/bpanel-helper limits-agent-install \
+    <"$LIMITS_AGENT_SOURCE" >/dev/null \
+    || echo "  (warning: could not update the resource limits agent; reinstall the addon on the Addons page)"
 fi
 
 # --- Malware scanner: retrofit LMD on servers that already run the scanner --
