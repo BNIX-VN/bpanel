@@ -35,6 +35,7 @@ into the panel's folder for its kind before anything reads it.
 from __future__ import annotations
 
 import ftplib
+import os
 import posixpath
 import re
 import secrets
@@ -234,6 +235,21 @@ def _ensure_inbox() -> None:
         pass
 
 
+def _confined(folder: Path, *parts: str) -> Path:
+    """folder/parts, refused unless it stays inside folder.
+
+    The callers have already refused "..", separators and control characters;
+    this is the same rule in the form a path checker recognises - normalise,
+    then insist on the folder as a prefix - since the key arrives straight from
+    a request.
+    """
+    base = os.path.normpath(str(folder))
+    candidate = os.path.normpath(os.path.join(base, *parts))
+    if not candidate.startswith(base + os.sep):
+        raise RestoreSourceError("Not a backup in the panel's backup folder")
+    return Path(candidate)
+
+
 def local_archive(key: str) -> tuple[Path, str, str]:
     """The archive a local key names, its kind and where it is: users/<folder>/
     <file>.tar.gz, @da/<file> in the DA folder, or @inbox/<file> in the drop
@@ -245,13 +261,13 @@ def local_archive(key: str) -> tuple[Path, str, str]:
     if folder == DA_KEY:
         if not name.lower().endswith(da_import.ARCHIVE_SUFFIXES):
             raise RestoreSourceError("Not a DirectAdmin backup")
-        path = da_import.DA_BACKUP_DIR / name
+        path = _confined(da_import.DA_BACKUP_DIR, name)
         kind, where = KIND_DA, "da"
     elif folder == INBOX_KEY:
         kind = archive_kind(name)
         if not kind:
             raise RestoreSourceError("Not a backup file")
-        path = INBOX_DIR / name
+        path = _confined(INBOX_DIR, name)
         where = "inbox"
     else:
         return Path(local_path(key)), KIND_PANEL, "panel"
@@ -267,7 +283,7 @@ def local_path(key: str) -> str:
     if (len(parts) != 2 or any(part in {"", ".", ".."} or _CONTROL.search(part) for part in parts)
             or not parts[1].endswith(".tar.gz")):
         raise RestoreSourceError("Not a backup in the panel's backup folder")
-    path = users_dir() / parts[0] / parts[1]
+    path = _confined(users_dir(), parts[0], parts[1])
     if path.is_symlink():
         raise RestoreSourceError("Not a backup in the panel's backup folder")
     try:
