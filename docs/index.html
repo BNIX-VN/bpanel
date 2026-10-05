@@ -193,6 +193,7 @@ h2{margin:0;font-size:clamp(24px,2.8vw,32px);line-height:1.2;letter-spacing:-.02
 .shot{border-radius:12px;border:1px solid var(--border);box-shadow:var(--shadow);overflow:hidden;background:var(--surface)}
 @media (min-width:900px){
   .spot{grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);gap:56px}
+  .spot.flip{grid-template-columns:minmax(0,1.1fr) minmax(0,.9fr)}
   .spot.flip .spot-text{order:2}
 }
 
@@ -202,7 +203,7 @@ h2{margin:0;font-size:clamp(24px,2.8vw,32px);line-height:1.2;letter-spacing:-.02
 .support .card.featured{border-color:var(--primary);box-shadow:inset 0 0 0 1px var(--primary)}
 .badge{display:inline-block;margin-bottom:10px;padding:3px 10px;border-radius:999px;background:var(--primary-light);color:var(--primary-ink);font-size:12.5px;font-weight:800}
 
-.addons{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:14px}
+.addons{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
 .addon{padding:22px;border-radius:var(--radius);border:1px solid var(--border);background:var(--bg)}
 .addon h3{margin:0 0 6px;font-size:17px}
 .addon p{margin:0;color:var(--text-2);font-size:14.5px}
@@ -377,7 +378,7 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
       <div>
         <p class="eyebrow"><b>Mã nguồn mở</b><i class="dot"></i>Miễn phí<i class="dot"></i>Ubuntu 24.04</p>
         <h1 id="hero-title">Quản lý hosting <em>gọn nhẹ</em></h1>
-        <p class="lead">Quản lý website WordPress và PHP, database, SSL, backup, tường lửa, WAF và người dùng trong một giao diện web — sáng hoặc tối, tiếng Việt hoặc tiếng Anh. Chọn web server khi cài: <b>Nginx</b> hoặc <b>OpenLiteSpeed</b>.</p>
+        <p class="lead">Quản lý website WordPress và PHP, database, SSL, backup, tường lửa, WAF, khách hàng và đại lý trong một giao diện web — sáng hoặc tối, tiếng Việt hoặc tiếng Anh. Chọn web server khi cài: <b>Nginx</b> hoặc <b>OpenLiteSpeed</b>.</p>
         <div class="hero-cta">
           <a class="btn btn-primary" href="#cai-dat"><svg aria-hidden="true"><use href="#i-download"/></svg>Cài đặt ngay</a>
           <a class="btn btn-ghost" href="#demo"><svg aria-hidden="true"><use href="#i-play"/></svg>Xem bản demo</a>
@@ -392,7 +393,7 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
           <div class="browser-bar" aria-hidden="true"><i></i><i></i><i></i><span>bpanel.bnix.io.vn:2222</span></div>
           <picture>
             <source id="hero-dark" srcset="screenshots/29-dark-mode.png" media="(prefers-color-scheme: dark)">
-            <img src="screenshots/02-dashboard.png" width="1440" height="900" alt="Trang Tổng quan của BPanel: CPU, RAM, ổ đĩa, mạng, các thẻ trạng thái và việc cần xử lý" fetchpriority="high">
+            <img src="screenshots/02-dashboard.png" width="1440" height="900" alt="Trang Tổng quan của BPanel: việc cần xử lý, tài nguyên máy chủ, tài khoản dùng nhiều nhất, công cụ theo nhóm, trạng thái và thông tin máy chủ" fetchpriority="high">
           </picture>
         </div>
         <img class="phone" src="screenshots/30-mobile.png" width="390" height="844" alt="BPanel trên điện thoại" loading="lazy">
@@ -402,7 +403,7 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
     <div class="facts">
       <div class="fact"><strong>Nginx · OpenLiteSpeed</strong><span>Chọn web server khi cài</span></div>
       <div class="fact"><strong>S3 · SFTP · FTP</strong><span>Backup và khôi phục theo từng bước</span></div>
-      <div class="fact"><strong>WAF ModSecurity</strong><span>Bật tắt riêng cho từng website</span></div>
+      <div class="fact"><strong>Giới hạn CPU · RAM</strong><span>Cho từng tài khoản và nhóm đại lý</span></div>
       <div class="fact"><strong>Mỗi tài khoản một user</strong><span>Các tài khoản không đọc được file của nhau</span></div>
     </div>
 
@@ -464,10 +465,11 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
         <span class="icon"><svg aria-hidden="true"><use href="#i-server"/></svg></span>
         <h3>Hệ thống và khách hàng</h3>
         <ul>
-          <li>Tổng quan tài nguyên và việc cần xử lý</li>
-          <li>Tự điều chỉnh PHP và MariaDB theo RAM/CPU</li>
+          <li>Tổng quan kiểu cPanel: công cụ theo nhóm, tìm nhanh, thống kê đã dùng / giới hạn</li>
+          <li>Giới hạn CPU, RAM, số tiến trình và tốc độ đĩa cho từng tài khoản</li>
+          <li>Đại lý chia khách và dung lượng, có tuỳ chọn bán vượt</li>
           <li>Người dùng, gói dịch vụ, hạn mức website và dung lượng</li>
-          <li>API cấp phát và module WHMCS</li>
+          <li>Tự điều chỉnh PHP và MariaDB theo RAM/CPU; API cấp phát và module WHMCS</li>
         </ul>
       </article>
     </div>
@@ -553,6 +555,19 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
       </div>
       <img class="shot" src="screenshots/20-waf.png" width="1440" height="900" alt="Trang WAF: trạng thái, OWASP CRS và danh sách website" loading="lazy">
     </div>
+
+    <div class="spot flip">
+      <div class="spot-text">
+        <h3>Giới hạn tài nguyên cho từng tài khoản</h3>
+        <p>Mỗi khách một phần CPU, RAM, số tiến trình và tốc độ đọc/ghi đĩa, như CloudLinux LVE nhưng chạy bằng cgroup v2 có sẵn trong Ubuntu. Một website chạy quá tay không kéo chậm cả server.</p>
+        <ul>
+          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Đặt theo gói, theo tài khoản, và cho cả nhóm khách của một đại lý</span></li>
+          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Khách xem mức dùng và giới hạn của mình, biểu đồ 24 giờ hoặc 7 ngày</span></li>
+          <li><svg aria-hidden="true"><use href="#i-check"/></svg><span>Quản trị viên thấy ngay tài khoản dùng nhiều nhất, nhận cảnh báo khi một tài khoản chạm giới hạn RAM</span></li>
+        </ul>
+      </div>
+      <img class="shot" src="screenshots/31-resource-usage.png" width="1440" height="900" alt="Trang Mức dùng tài nguyên: giới hạn và mức dùng hiện tại, biểu đồ CPU, RAM, tiến trình và đọc/ghi đĩa" loading="lazy">
+    </div>
   </div>
 </section>
 
@@ -565,6 +580,7 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
       <p>Những phần không phải server nào cũng dùng được tách thành tiện ích, bật và tắt trong <b>Cài đặt → Tiện ích</b>.</p>
     </div>
     <div class="addons">
+      <article class="addon"><span class="icon"><svg aria-hidden="true"><use href="#i-scale"/></svg></span><h3>Giới hạn tài nguyên</h3><p>CPU, RAM, số tiến trình và tốc độ đọc/ghi đĩa cho từng tài khoản và nhóm đại lý, bằng cgroup v2.</p></article>
       <article class="addon"><span class="icon"><svg aria-hidden="true"><use href="#i-boxes"/></svg></span><h3>Application</h3><p>Chạy ứng dụng Node.js, container và Docker Compose sau Nginx.</p></article>
       <article class="addon"><span class="icon"><svg aria-hidden="true"><use href="#i-ban"/></svg></span><h3>Fail2ban</h3><p>Chặn các địa chỉ dò mật khẩu SSH.</p></article>
       <article class="addon"><span class="icon"><svg aria-hidden="true"><use href="#i-bug"/></svg></span><h3>Quét mã độc</h3><p>LMD + ClamAV: quét theo yêu cầu, theo lịch, giám sát thời gian thực và quét file tải lên.</p></article>
@@ -574,7 +590,7 @@ footer{padding:28px 0 40px;border-top:1px solid var(--border);color:var(--muted)
       <article class="addon"><span class="icon"><svg aria-hidden="true"><use href="#i-eye"/></svg></span><h3>Chế độ demo</h3><p>Tài khoản demo công khai cho quản trị và khách hàng: xem mọi trang, không thay đổi được gì, có nút đăng nhập nhanh.</p></article>
       <article class="addon"><span class="icon"><svg aria-hidden="true"><use href="#i-bell"/></svg></span><h3>Thông báo</h3><p>Cảnh báo quản trị viên qua email và Telegram: dịch vụ dừng, ổ đĩa đầy, backup lỗi, chứng chỉ sắp hết hạn…</p></article>
     </div>
-    <p class="note"><svg aria-hidden="true"><use href="#i-info"/></svg><span>Mọi tiện ích đều <b>tắt mặc định</b>. Gỡ tiện ích chỉ tắt tính năng, không xoá dữ liệu nó đã tạo; cài lại là dùng tiếp. Application, Quản lý DNS và Email hiện có trên bản Nginx (BPanel).</span></p>
+    <p class="note"><svg aria-hidden="true"><use href="#i-info"/></svg><span>Mọi tiện ích đều <b>tắt mặc định</b>. Gỡ tiện ích chỉ tắt tính năng, không xoá dữ liệu nó đã tạo; cài lại là dùng tiếp. Application hiện chỉ có trên bản Nginx (BPanel); các tiện ích khác có trên cả hai bản.</span></p>
   </div>
 </section>
 
@@ -684,7 +700,9 @@ opanel</pre>
       <details><summary>Có bản demo để xem thử không?</summary><p>Có, mỗi web server một bản. OpenLiteSpeed (OPanel): <a href="https://bpanel-ols.bnix.io.vn:2222/" rel="noopener" target="_blank">bpanel-ols.bnix.io.vn:2222</a>. Nginx (BPanel): <a href="https://bpanel.bnix.io.vn:2222" rel="noopener" target="_blank">bpanel.bnix.io.vn:2222</a>. Trang đăng nhập có sẵn nút đăng nhập một chạm vào tài khoản quản trị hoặc khách hàng. Bản demo chỉ để xem: mọi thay đổi đều bị từ chối.</p></details>
       <details><summary>Chạy được trên hệ điều hành nào?</summary><p>Ubuntu 24.04 LTS. Trình cài dừng lại nếu gặp hệ điều hành khác, để không để lại một server cài dở.</p></details>
       <details><summary>Tôi đang dùng DirectAdmin, chuyển sang được không?</summary><p>Được. Tab <b>Backup → Nhập DA</b> nhập backup của DirectAdmin; tab <b>Khôi phục</b> lấy được backup từ server này, từ đích lưu S3/SFTP, hoặc từ một máy chủ khác qua SFTP, FTP, FTPS.</p></details>
-      <details><summary>Khách hàng của tôi thấy gì?</summary><p>Người dùng thường chỉ quản lý website của mình: file, database, SSL, WordPress, cron và backup, trong giới hạn số website và dung lượng của gói. Phần server chỉ quản trị viên thấy.</p></details>
+      <details><summary>Khách hàng của tôi thấy gì?</summary><p>Người dùng thường chỉ quản lý website của mình: file, database, SSL, WordPress, cron và backup, trong giới hạn số website và dung lượng của gói, cùng mức dùng CPU và RAM của mình nếu bật tiện ích Giới hạn tài nguyên. Phần server chỉ quản trị viên thấy.</p></details>
+      <details><summary>Có giới hạn CPU, RAM cho từng khách không?</summary><p>Có, bằng tiện ích <b>Giới hạn tài nguyên</b>: CPU, RAM, số tiến trình và tốc độ đọc/ghi đĩa, đặt theo gói, theo tài khoản hoặc cho cả nhóm khách của một đại lý. Tiện ích dùng cgroup v2 của Ubuntu, nên không chạy được trong container. Gỡ tiện ích là bỏ mọi giới hạn, các giá trị đã đặt vẫn được giữ.</p></details>
+      <details><summary>Có làm đại lý (reseller) được không?</summary><p>Được. Quản trị viên cấp cho đại lý số khách và dung lượng; đại lý tự tạo khách, gói và giới hạn cho khách của mình. Bật <b>bán vượt</b> thì panel kiểm dung lượng khách thực dùng thay vì tổng hạn mức đã chia, như cPanel và DirectAdmin.</p></details>
       <details><summary>Có kết nối với WHMCS không?</summary><p>Có. BPanel có API cấp phát và một module WHMCS dùng chung cho BPanel và OPanel: tạo, tạm khoá, mở khoá, xoá tài khoản, đổi gói, đổi mật khẩu và đăng nhập một lần từ khu vực khách hàng.</p></details>
       <details><summary>Cập nhật có ảnh hưởng website đang chạy không?</summary><p>Dữ liệu, website và database giữ nguyên. Chạy <code>bpanel-update --release</code> (BPanel) hoặc <code>opanel-update</code> (OPanel), hoặc bấm cập nhật trong trang Cập nhật.</p></details>
       <details><summary>Gỡ một tiện ích có mất dữ liệu không?</summary><p>Không. Gỡ tiện ích chỉ tắt tính năng; dữ liệu nó đã tạo được giữ nguyên để lần cài sau dùng tiếp.</p></details>
@@ -758,7 +776,7 @@ opanel</pre>
 (() => {
   // The gallery: one list, filtered by the tabs; a click opens the full image.
   const shots = [
-    ['02-dashboard', 'Tổng quan', 'system'], ['03-websites', 'Danh sách website', 'web'],
+    ['02-dashboard', 'Tổng quan', 'system'], ['31-resource-usage', 'Mức dùng tài nguyên', 'system'], ['03-websites', 'Danh sách website', 'web'],
     ['04-website-settings', 'Cấu hình website', 'web'], ['04b-website-terminal', 'Terminal của website', 'web'],
     ['09-file-manager', 'Quản lý file', 'web'], ['05-applications', 'Ứng dụng Node.js / Docker', 'web'],
     ['06-ssl', 'SSL', 'web'], ['07-databases', 'Database', 'web'], ['08-cron', 'Cron', 'web'],

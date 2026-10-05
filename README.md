@@ -77,7 +77,7 @@ Chụp từ bản demo (giao diện tiếng Anh). Bấm vào ảnh để xem kí
 | <a href="docs/screenshots/18-settings.png"><img src="docs/screenshots/18-settings.png" alt="Cài đặt"></a><br>Cài đặt | <a href="docs/screenshots/26-panel-settings.png"><img src="docs/screenshots/26-panel-settings.png" alt="Cài đặt panel"></a><br>Cài đặt panel |
 | <a href="docs/screenshots/24-services.png"><img src="docs/screenshots/24-services.png" alt="Dịch vụ"></a><br>Dịch vụ | <a href="docs/screenshots/25-php.png"><img src="docs/screenshots/25-php.png" alt="Cấu hình PHP và extension"></a><br>Cấu hình PHP và extension |
 | <a href="docs/screenshots/27-updates.png"><img src="docs/screenshots/27-updates.png" alt="Cập nhật"></a><br>Cập nhật | <a href="docs/screenshots/28-addons.png"><img src="docs/screenshots/28-addons.png" alt="Tiện ích"></a><br>Tiện ích |
-| <a href="docs/screenshots/17-notifications.png"><img src="docs/screenshots/17-notifications.png" alt="Thông báo (addon)"></a><br>Thông báo (addon) |  |
+| <a href="docs/screenshots/17-notifications.png"><img src="docs/screenshots/17-notifications.png" alt="Thông báo (addon)"></a><br>Thông báo (addon) | <a href="docs/screenshots/31-resource-usage.png"><img src="docs/screenshots/31-resource-usage.png" alt="Mức dùng tài nguyên (addon)"></a><br>Mức dùng tài nguyên (addon) |
 
 ## Tính năng
 
