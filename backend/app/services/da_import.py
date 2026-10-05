@@ -254,6 +254,33 @@ def safe_upload_name(filename: str) -> str:
     return name
 
 
+def save_da_upload(filename: str, source_file) -> Path:
+    """Write an archive uploaded from the Restore tab into ``DA_BACKUP_DIR``.
+
+    Never over another archive: a name that is taken gets a suffix. Written as
+    a hidden .part and renamed once whole, so the list never offers half a
+    file.
+    """
+    name = safe_upload_name(filename)
+    ensure_backup_dir()
+    if not os.access(DA_BACKUP_DIR, os.W_OK):
+        raise RuntimeError(f"Cannot write to {DA_BACKUP_DIR}. Run bpanel-update.")
+    destination = DA_BACKUP_DIR / name
+    if destination.exists():
+        stem = _strip_archive_suffix(name)
+        destination = DA_BACKUP_DIR / f"{stem}-{secrets.token_hex(3)}{name[len(stem):]}"
+    partial = DA_BACKUP_DIR / f".{destination.name}.part"
+    try:
+        with open(partial, "wb") as out:
+            while chunk := source_file.read(1024 * 1024):
+                out.write(chunk)
+        partial.replace(destination)
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
+    return destination
+
+
 def resolve_backup_path(archive_path: str) -> Path:
     """Resolve a caller-supplied archive path inside ``DA_BACKUP_DIR``.
 
@@ -1499,7 +1526,7 @@ def scan_da_backup(archive_path: str) -> dict:
 # Public API — Import
 # ---------------------------------------------------------------------------
 
-def import_da_backup(archive_path: str, force: bool = False) -> dict:
+def import_da_backup(archive_path: str, force: bool = False, replace_own: bool = False) -> dict:
     """Import a DA backup archive into BPanel.
 
     Creates panel users, websites, nginx vhosts, MariaDB databases, and
@@ -1508,6 +1535,10 @@ def import_da_backup(archive_path: str, force: bool = False) -> dict:
     ``force`` is required to overwrite anything that already exists: without
     it, an import that collides with a live panel user or domain stops instead
     of deleting the running site.
+
+    ``replace_own`` is what the Restore tab promises: an account that already
+    exists is overwritten, with its own websites - but a domain that belongs
+    to another account still stops the import rather than deleting that site.
 
     Returns a summary dict with credentials (passwords are generated).
     """
@@ -1565,15 +1596,18 @@ def import_da_backup(archive_path: str, force: bool = False) -> dict:
             # for it, so a re-run of a finished import cannot wipe a live site.
             if not force:
                 conflicts = []
-                if db.query(User).filter(User.username == username).first():
+                existing_user = db.query(User).filter(User.username == username).first()
+                if existing_user and not replace_own:
                     conflicts.append(f"panel user '{username}'")
                 for domain in all_domains:
-                    if db.query(Website).filter(Website.domain == domain).first():
+                    site = db.query(Website).filter(Website.domain == domain).first()
+                    if site and not (replace_own and existing_user and site.owner_id == existing_user.id):
                         conflicts.append(f"website '{domain}'")
                 if conflicts:
-                    message = (
-                        "Already exists: " + ", ".join(conflicts)
-                        + ". Re-run with force to replace (this deletes the existing files and databases)."
+                    message = "Already exists: " + ", ".join(conflicts) + (
+                        ", owned by another account. Nothing was changed."
+                        if replace_own else
+                        ". Re-run with force to replace (this deletes the existing files and databases)."
                     )
                     item_summary["warnings"].append(message)
                     summary.append(item_summary)

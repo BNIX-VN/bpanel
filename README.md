@@ -21,6 +21,7 @@ web, với tiếng Việt và tiếng Anh, chế độ sáng và tối.
 - [Tường lửa](#tường-lửa)
 - [Người dùng, quyền và hạn mức](#người-dùng-quyền-và-hạn-mức)
 - [API cấp phát và module WHMCS](#api-cấp-phát-và-module-whmcs)
+- [Thư mục backup](#thư-mục-backup)
 - [Cấu hình](#cấu-hình)
 - [Lệnh thường dùng](#lệnh-thường-dùng)
 - [Mô hình bảo mật](#mô-hình-bảo-mật)
@@ -102,7 +103,9 @@ Chụp từ bản demo (giao diện tiếng Anh). Bấm vào ảnh để xem kí
 - Khôi phục theo từng bước như DirectAdmin: chọn nguồn (server này, đích lưu,
   hoặc máy chủ khác qua SFTP/FTP/FTPS), chọn tài khoản, khôi phục. Chạy nền và
   báo kết quả từng tài khoản.
-- Nhập backup từ DirectAdmin.
+- Khôi phục được cả backup DirectAdmin, chung một danh sách với backup của
+  panel; lấy thẳng từ máy DirectAdmin cũ qua SFTP/FTP. Backup lớn tải lên qua
+  SFTP: xem [Thư mục backup](#thư-mục-backup).
 
 **Bảo mật**
 
@@ -267,6 +270,51 @@ Hash của server trong WHMCS).
 dùng được một lần, hết hạn sau 5 phút. Tạm khoá sẽ tắt đăng nhập, huỷ mọi phiên
 đang mở và chuyển các website sang trang "tạm ngưng"; mở khoá khôi phục lại
 nguyên trạng.
+
+## Thư mục backup
+
+Backup của BPanel nằm trong `/var/backups/bpanel`, thuộc user `bpanel`, quyền `0750`:
+
+| Thư mục | Chứa gì |
+|---|---|
+| `users/<tài khoản>/` | Backup toàn bộ tài khoản, tạo tay hoặc theo lịch. |
+| `users/restore/` | Backup tài khoản đã tải lên. Bản lấy về từ đích lưu hoặc máy chủ khác cũng nằm tạm ở đây: khôi phục xong thì bị xoá, khôi phục lỗi thì được giữ lại. |
+| `<tên miền>/` | Backup của một website (file + SQL). |
+| `db-snapshots/` | Bản sao database của panel, chụp mỗi lần chạy `bpanel-update`, giữ 10 bản mới nhất. |
+
+Backup DirectAdmin nằm ở `/home/admin/bpanel_backups/da/`.
+
+Tab **Backup → Khôi phục** đọc tất cả trong một danh sách, mỗi dòng ghi rõ là
+backup của panel hay của DirectAdmin. Nút **Tải backup lên** tự nhận loại theo
+tên file (DirectAdmin đặt tên `user.<người tạo>.<tài khoản>.tar.zst`) và cất vào
+đúng thư mục. Chọn nguồn **Máy chủ khác** để lấy thẳng backup từ máy DirectAdmin
+cũ qua SFTP hoặc FTP, không phải tải về máy mình.
+
+Khôi phục một tài khoản đã có trên server sẽ ghi đè tài khoản đó cùng các website
+của nó. Nếu backup DirectAdmin có tên miền đang thuộc tài khoản khác, việc khôi
+phục dừng lại và không đụng tới website của tài khoản đó.
+
+### Tải backup lớn qua SFTP
+
+Trình duyệt chỉ tải lên được file đến khoảng 1 GB. File lớn hơn thì tải qua SFTP,
+giống cách làm của DirectAdmin:
+
+| | |
+|---|---|
+| Máy chủ | IP của server, cổng `22` |
+| User | `admin`, mật khẩu SFTP đặt ở trang **Tài khoản SFTP** |
+| Thư mục | `/backups` (trên server là `/home/admin/backups`) |
+
+Thả cả backup của panel lẫn backup DirectAdmin vào đó. Tải xong thì bấm **Tải lại**
+ở **Backup → Khôi phục → Server này**. Không cần chỉnh quyền gì: thư mục thuộc
+nhóm `bpanel`, nên panel đọc được ngay. File đang tải dở (đuôi `.filepart`,
+`.part`, hoặc vừa được ghi trong 1 phút) chưa hiện ra. Khi khôi phục, panel chuyển
+file sang thư mục của nó rồi mới đọc, nên sau đó file không còn trong `/backups`.
+Đăng nhập bằng `root` để tải lên cũng được, đặt file vào `/home/admin/backups`.
+
+Đừng để backup nằm lâu trong thư mục này: các website của admin chạy bằng chính
+user `admin`, nên nếu một website đó bị hack thì đọc được backup đang để ở đây.
+Không cần khôi phục nữa thì xoá file bằng nút thùng rác trên dòng của nó.
 
 ## Cấu hình
 

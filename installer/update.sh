@@ -897,6 +897,13 @@ install_panel_runtime() {
   install -d -o bpanel -g bpanel -m 0750 /home/admin/bpanel_backups/da
   install -d -o bpanel -g bpanel -m 0750 /var/lib/bpanel/da-import
   install -d -o bpanel -g bpanel -m 0750 /var/lib/bpanel/import-stage
+  # The admin's SFTP drop folder for large backups, which Restore > This server
+  # lists. setgid bpanel, so the panel can read what the admin's login uploads.
+  inbox_owner=root
+  id -u admin >/dev/null 2>&1 && inbox_owner=admin
+  install -d -o "$inbox_owner" -g bpanel -m 2770 /home/admin/backups
+  chown "$inbox_owner:bpanel" /home/admin/backups
+  chmod 2770 /home/admin/backups
   if [[ -f "$SOURCE_DIR/installer/files/bpanel-memory-guard" ]]; then
     install -m 0755 -o root -g root "$SOURCE_DIR/installer/files/bpanel-memory-guard" /usr/local/sbin/bpanel-memory-guard
     # Re-run every update: the servers that need this most are the ones

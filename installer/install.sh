@@ -641,6 +641,13 @@ setup_panel_user() {
   install -d -o bpanel -g bpanel -m 0750 /home/admin/bpanel_backups/da
   install -d -o bpanel -g bpanel -m 0750 /var/lib/bpanel/da-import
   install -d -o bpanel -g bpanel -m 0750 /var/lib/bpanel/import-stage
+  # The admin's SFTP drop folder for large backups, which Restore > This server
+  # lists. setgid bpanel, so the panel can read what the admin's login uploads.
+  inbox_owner=root
+  id -u admin >/dev/null 2>&1 && inbox_owner=admin
+  install -d -o "$inbox_owner" -g bpanel -m 2770 /home/admin/backups
+  chown "$inbox_owner:bpanel" /home/admin/backups
+  chmod 2770 /home/admin/backups
 
   # MariaDB: create an admin user that bpanel can use without password
   # (auth via a defaults-file in ~bpanel/.my.cnf, mode 0600).
