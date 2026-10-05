@@ -21,6 +21,7 @@ web, với tiếng Việt và tiếng Anh, chế độ sáng và tối.
 - [Tường lửa](#tường-lửa)
 - [Người dùng, quyền và hạn mức](#người-dùng-quyền-và-hạn-mức)
 - [API cấp phát và module WHMCS](#api-cấp-phát-và-module-whmcs)
+- [Thư mục backup](#thư-mục-backup)
 - [Cấu hình](#cấu-hình)
 - [Lệnh thường dùng](#lệnh-thường-dùng)
 - [Mô hình bảo mật](#mô-hình-bảo-mật)
@@ -102,7 +103,7 @@ Chụp từ bản demo (giao diện tiếng Anh). Bấm vào ảnh để xem kí
 - Khôi phục theo từng bước như DirectAdmin: chọn nguồn (server này, đích lưu,
   hoặc máy chủ khác qua SFTP/FTP/FTPS), chọn tài khoản, khôi phục. Chạy nền và
   báo kết quả từng tài khoản.
-- Nhập backup từ DirectAdmin.
+- Nhập backup từ DirectAdmin. Backup nằm ở đâu: xem [Thư mục backup](#thư-mục-backup).
 
 **Bảo mật**
 
@@ -267,6 +268,40 @@ Hash của server trong WHMCS).
 dùng được một lần, hết hạn sau 5 phút. Tạm khoá sẽ tắt đăng nhập, huỷ mọi phiên
 đang mở và chuyển các website sang trang "tạm ngưng"; mở khoá khôi phục lại
 nguyên trạng.
+
+## Thư mục backup
+
+Backup của BPanel nằm trong `/var/backups/bpanel`, thuộc user `bpanel`, quyền `0750`:
+
+| Thư mục | Chứa gì |
+|---|---|
+| `users/<tài khoản>/` | Backup toàn bộ tài khoản, tạo tay hoặc theo lịch. |
+| `users/restore/` | Backup tài khoản tải lên ở **Backup → Khôi phục → Tải backup lên**. Bản lấy về từ đích lưu hoặc máy chủ khác cũng nằm tạm ở đây: khôi phục xong thì bị xoá, khôi phục lỗi thì được giữ lại. |
+| `<tên miền>/` | Backup của một website (file + SQL) và file tải lên cho website đó. |
+| `db-snapshots/` | Bản sao database của panel, chụp mỗi lần chạy `bpanel-update`, giữ 10 bản mới nhất. |
+
+Tab **Khôi phục** với nguồn **Server này** liệt kê mọi file `.tar.gz` trong
+`users/*/`. Chỉ nhận backup tài khoản của BPanel hoặc OPanel. Backup gửi lên đích
+lưu S3/SFTP không giữ thêm bản trên server.
+
+Backup **DirectAdmin** đi đường riêng: tab **Backup → Nhập DA** lưu file tải lên
+vào `/home/admin/bpanel_backups/da/` và chỉ nhập file trong thư mục này (`.tar`,
+`.tar.gz`, `.tar.zst`, `.tar.bz2`, `.tar.xz`). Thư mục khôi phục ở trên không nhận
+backup DirectAdmin.
+
+File lớn có thể chép thẳng lên server bằng SSH/SFTP thay vì tải qua trình duyệt,
+rồi bấm **Tải lại** trên tab tương ứng:
+
+```bash
+# Backup tài khoản BPanel/OPanel
+cp user-khachhang-*.tar.gz /var/backups/bpanel/users/restore/
+chown bpanel:bpanel /var/backups/bpanel/users/restore/*.tar.gz
+
+# Backup DirectAdmin
+cp admin.root.admin.tar.zst /home/admin/bpanel_backups/da/
+chgrp bpanel /home/admin/bpanel_backups/da/*
+chmod 640 /home/admin/bpanel_backups/da/*
+```
 
 ## Cấu hình
 
