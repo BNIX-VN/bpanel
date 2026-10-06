@@ -7440,59 +7440,95 @@ mariadb_megabytes() {
   printf '%s\n' "$default"
 }
 
+# MariaDB on a hosting server shares the machine with every site's PHP
+# (operator, 2026-10-06; the same rules as OPanel). The buffer pool takes a
+# quarter of the RAM at most, and no more than 1.25 times the InnoDB data it
+# has to hold -- a pool larger than the data is memory the PHP-FPM workers
+# needed. Connections follow the PHP-FPM workers the pools may run, and
+# in-memory temporary tables stay small, since each connection may build one.
+mariadb_innodb_data_mb() {
+  local bytes
+  bytes="$(timeout 60 mariadb -NBe "SELECT COALESCE(SUM(data_length + index_length), 0) FROM information_schema.tables WHERE engine = 'InnoDB'" 2>/dev/null | tail -n1 || true)"
+  [[ "$bytes" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' $((bytes / 1048576))
+}
+
+php_fpm_children_total() {
+  local total=0 pool_file children
+  shopt -s nullglob
+  for pool_file in /etc/php/*/fpm/pool.d/bpanel-*.conf; do
+    children="$(awk -F= '/^[[:space:]]*pm\.max_children[[:space:]]*=/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' "$pool_file" 2>/dev/null || true)"
+    [[ "$children" =~ ^[0-9]+$ ]] && total=$((total + children))
+  done
+  shopt -u nullglob
+  printf '%s\n' "$total"
+}
+
 calculate_mariadb_tuning() {
-  local total_mb cpu_count buffer_default buffer_mb log_file_mb tmp_mb max_connections thread_cache
-  local table_open_cache open_files_limit packet_mb io_capacity
+  local total_mb cpu_count buffer_default buffer_floor buffer_mb log_file_mb tmp_mb max_connections thread_cache
+  local table_open_cache open_files_limit packet_mb io_capacity data_mb reserve_mb php_workers
   total_mb="$(php_fpm_total_memory_mb)"
   cpu_count="$(php_fpm_cpu_count)"
 
   if (( total_mb <= 1024 )); then
-    buffer_default=$((total_mb * 22 / 100))
-    max_connections=35
-    thread_cache=16
-    table_open_cache=512
-    tmp_mb=32
-    packet_mb=64
+    thread_cache=16; table_open_cache=512; packet_mb=64
   elif (( total_mb <= 2048 )); then
-    buffer_default=$((total_mb * 25 / 100))
-    max_connections=50
-    thread_cache=24
-    table_open_cache=512
-    tmp_mb=48
-    packet_mb=64
+    thread_cache=24; table_open_cache=512; packet_mb=64
   elif (( total_mb <= 4096 )); then
-    buffer_default=$((total_mb * 28 / 100))
-    max_connections=80
-    thread_cache=32
-    table_open_cache=1024
-    tmp_mb=64
-    packet_mb=96
+    thread_cache=32; table_open_cache=1024; packet_mb=96
   elif (( total_mb <= 8192 )); then
-    buffer_default=$((total_mb * 32 / 100))
-    max_connections=120
-    thread_cache=48
-    table_open_cache=1024
-    tmp_mb=96
-    packet_mb=128
+    thread_cache=48; table_open_cache=1024; packet_mb=128
   else
-    buffer_default=$((total_mb * 36 / 100))
-    max_connections=180
-    thread_cache=64
-    table_open_cache=2048
-    tmp_mb=128
-    packet_mb=128
+    thread_cache=64; table_open_cache=2048; packet_mb=128
   fi
 
+  if (( total_mb <= 4096 )); then
+    buffer_floor=256
+  elif (( total_mb <= 8192 )); then
+    buffer_floor=512
+  else
+    buffer_floor=1024
+  fi
+  buffer_default=$((total_mb * 25 / 100))
+  if data_mb="$(mariadb_innodb_data_mb)"; then
+    # Room for the data, but never below the floor: an import a minute after
+    # this runs should not start on a pool sized for an empty server.
+    local wanted=$((data_mb * 5 / 4))
+    (( wanted >= buffer_floor )) || wanted="$buffer_floor"
+    (( wanted < buffer_default )) && buffer_default="$wanted"
+  fi
   (( buffer_default >= 128 )) || buffer_default=128
-  (( buffer_default <= total_mb * 45 / 100 )) || buffer_default=$((total_mb * 45 / 100))
+  # In 128 MB steps, so a few MB of new data does not mean a new setting.
+  buffer_default=$(( (buffer_default + 127) / 128 * 128 ))
+  (( buffer_default <= total_mb * 25 / 100 || buffer_default <= 128 )) || buffer_default=$(( total_mb * 25 / 100 / 128 * 128 ))
+  (( buffer_default >= 128 )) || buffer_default=128
   buffer_mb="$(mariadb_megabytes "$(mariadb_tuning_value BPANEL_MARIADB_BUFFER_POOL_SIZE "${buffer_default}M")" "$buffer_default")"
   buffer_mb="$(positive_int_or_default "$buffer_mb" "$buffer_default" 128 "$((total_mb * 60 / 100))")"
+
+  # One connection for each PHP-FPM worker the pools may run, and twenty
+  # spare; with no pools yet, what the memory left over would hold.
+  php_workers="$(php_fpm_children_total)"
+  if (( php_workers < 1 )); then
+    reserve_mb=$((total_mb / 8))
+    (( reserve_mb >= 1024 )) || reserve_mb=1024
+    php_workers=$(( (total_mb - buffer_mb - reserve_mb) / 150 ))
+    (( php_workers >= 2 )) || php_workers=2
+  fi
+  max_connections=$((php_workers + 20))
+  (( max_connections >= 50 )) || max_connections=50
+  (( max_connections <= 500 )) || max_connections=500
+
+  if (( total_mb >= 15000 )); then
+    tmp_mb=64
+  else
+    tmp_mb=32
+  fi
 
   max_connections="$(positive_int_or_default "$(mariadb_tuning_value BPANEL_MARIADB_MAX_CONNECTIONS "$max_connections")" "$max_connections" 20 1000)"
   thread_cache="$(positive_int_or_default "$(mariadb_tuning_value BPANEL_MARIADB_THREAD_CACHE_SIZE "$thread_cache")" "$thread_cache" 8 256)"
   table_open_cache="$(positive_int_or_default "$(mariadb_tuning_value BPANEL_MARIADB_TABLE_OPEN_CACHE "$table_open_cache")" "$table_open_cache" 256 65535)"
   tmp_mb="$(mariadb_megabytes "$(mariadb_tuning_value BPANEL_MARIADB_TMP_TABLE_SIZE "${tmp_mb}M")" "$tmp_mb")"
-  tmp_mb="$(positive_int_or_default "$tmp_mb" 64 16 512)"
+  tmp_mb="$(positive_int_or_default "$tmp_mb" 32 16 512)"
   packet_mb="$(mariadb_megabytes "$(mariadb_tuning_value BPANEL_MARIADB_MAX_ALLOWED_PACKET "${packet_mb}M")" "$packet_mb")"
   packet_mb="$(positive_int_or_default "$packet_mb" 64 16 512)"
   log_file_mb=$((buffer_mb / 4))
@@ -7513,10 +7549,14 @@ calculate_mariadb_tuning() {
   MARIADB_OPEN_FILES_LIMIT="$open_files_limit"
 }
 
+# Writes the tuning file; returns 0 when it changed, 1 when it was already as
+# it should be.
 write_mariadb_tuning() {
   calculate_mariadb_tuning
   install -d -o root -g root -m 0755 "$(dirname "$MARIADB_TUNING_CONF")"
-  cat >"$MARIADB_TUNING_CONF" <<MYSQL
+  local staged changed=1
+  staged="$(mktemp)"
+  cat >"$staged" <<MYSQL
 # BPanel auto-tunes MariaDB for small and medium VPS plans.
 # Optional overrides in ${ENV_FILE}: BPANEL_MARIADB_BUFFER_POOL_SIZE,
 # BPANEL_MARIADB_MAX_CONNECTIONS, BPANEL_MARIADB_THREAD_CACHE_SIZE,
@@ -7543,6 +7583,14 @@ long_query_time = 2
 [server]
 open_files_limit = ${MARIADB_OPEN_FILES_LIMIT}
 MYSQL
+  if [[ -f "$MARIADB_TUNING_CONF" ]] && cmp -s "$staged" "$MARIADB_TUNING_CONF"; then
+    rm -f "$staged"
+  else
+    install -m 0644 -o root -g root "$staged" "$MARIADB_TUNING_CONF"
+    rm -f "$staged"
+    changed=0
+  fi
+  return "$changed"
 }
 
 ensure_mariadb_slow_log() {
@@ -7554,12 +7602,18 @@ ensure_mariadb_slow_log() {
   chmod 0640 "$log_file"
 }
 
+# Updates run this. It restarted MariaDB every time, dropping every site's
+# connections for nothing when the numbers had not moved; now only a setting
+# that changed costs a restart.
 retune_mariadb() {
-  write_mariadb_tuning
   ensure_mariadb_slow_log
-  mariadbd --help --verbose >/dev/null
-  systemctl restart mariadb
-  echo "Retuned MariaDB: innodb_buffer_pool_size=${MARIADB_INNODB_BUFFER_POOL_SIZE}, max_connections=${MARIADB_MAX_CONNECTIONS}, table_open_cache=${MARIADB_TABLE_OPEN_CACHE}."
+  if write_mariadb_tuning; then
+    mariadbd --help --verbose >/dev/null
+    systemctl restart mariadb
+    echo "Retuned MariaDB: innodb_buffer_pool_size=${MARIADB_INNODB_BUFFER_POOL_SIZE}, max_connections=${MARIADB_MAX_CONNECTIONS}, tmp_table_size=${MARIADB_TMP_TABLE_SIZE}."
+  else
+    echo "MariaDB tuning unchanged: innodb_buffer_pool_size=${MARIADB_INNODB_BUFFER_POOL_SIZE}, max_connections=${MARIADB_MAX_CONNECTIONS}, tmp_table_size=${MARIADB_TMP_TABLE_SIZE}."
+  fi
 }
 
 # --- clock --------------------------------------------------------------------
@@ -7786,7 +7840,7 @@ PY
 # /opt/bpanel belongs to the panel user, and root must never run something
 # that user could have edited. test_resource_limits.py keeps the two in step.
 LIMITS_AGENT="/usr/local/sbin/bpanel-limits-agent"
-LIMITS_AGENT_SHA256="499d95cd589595ae5ba9e68a8cb82f185cb1c44b8270a7918aec4cbcb77ea687"
+LIMITS_AGENT_SHA256="b4c055d42130bdf353b162a45bd30c0ed099d20b7252b7379323f5b224eafdbb"
 LIMITS_UNIT="/etc/systemd/system/bpanel-limits.service"
 LIMITS_DIR="/etc/bpanel-limits"
 LIMITS_STATE_DIR="/var/lib/bpanel-limits"
