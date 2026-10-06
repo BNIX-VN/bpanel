@@ -64,6 +64,9 @@ REVIEWED_READS = {
     "/api/provisioning/v1/accounts/{external_id}", "/api/provisioning/v1/accounts/{external_id}/usage",
     "/api/provisioning/v1/plans", "/api/provisioning/v1/tokens", "/api/services/list",
     "/api/services/resource-usage", "/api/services/system-info", "/api/sftp-accounts",
+    # The server pages behind the top bar's chips (2026-10-06): memory, disks
+    # and interface counters, as resource-usage. Not the process list.
+    "/api/system/disk", "/api/system/memory", "/api/system/traffic",
     "/api/sftp-accounts/limits", "/api/site-apps", "/api/site-apps/suggest-port",
     "/api/site-apps/{app_id}/logs", "/api/site-apps/{app_id}/status", "/api/site-runtimes/status",
     "/api/terminal/allowed-commands", "/api/updates/status", "/api/users", "/api/users/audit/log",

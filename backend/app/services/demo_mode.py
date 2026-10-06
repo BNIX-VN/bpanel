@@ -67,6 +67,9 @@ BLOCKED_READS = frozenset({
     "/api/mail/log",
     "/api/mail/rspamd/history",
     "/api/mail/rspamd/log",
+    # top -c: every process's command line, and a command line can carry a
+    # password (mysqldump -p..., a cron job's curl with a token).
+    "/api/system/processes",
 })
 
 _READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})

@@ -13,7 +13,7 @@ import 'ace-builds/src-noconflict/mode-text';
 import 'ace-builds/src-noconflict/mode-yaml';
 import 'ace-builds/src-noconflict/theme-textmate';
 import 'ace-builds/src-noconflict/theme-tomorrow_night';
-import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, Eye, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle, Activity, BrickWall, Bug, LockKeyhole, PackageOpen, ScrollText, ShieldAlert, CheckCircle, Zap, Bell, Mail, Send, Cloud, Inbox, Forward, ShieldCheck } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, Eye, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pause, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle, Activity, BrickWall, Bug, LockKeyhole, PackageOpen, ScrollText, ShieldAlert, CheckCircle, Zap, Bell, Mail, Send, Cloud, Inbox, Forward, ShieldCheck } from 'lucide-react';
 import { Terminal } from './components/Terminal';
 import { UsageChart } from './components/UsageChart';
 import { LANGUAGES, t, useLanguage } from './i18n.js';
@@ -102,6 +102,11 @@ const PAGE_ROUTES = {
   dns: '/dns',
   mail: '/email',
   usage: '/resource-usage',
+  // The server's own pages, behind the top bar's status chips (admin only).
+  processes: '/processes',
+  'ram-usage': '/ram-usage',
+  'disk-usage': '/disk-usage',
+  traffic: '/traffic',
 };
 
 /* ---------------------------------------------------------------
@@ -744,6 +749,13 @@ function App() {
   const [userTab, setUserTab] = useState('list');
   const [userSearch, setUserSearch] = useState('');
   const [resourceUsage, setResourceUsage] = useState(null);
+  // The server pages behind the top bar's status chips (admin only).
+  const [processTop, setProcessTop] = useState(null);
+  const [processPaused, setProcessPaused] = useState(false);
+  const [processFilter, setProcessFilter] = useState('');
+  const [memoryInfo, setMemoryInfo] = useState(null);
+  const [diskInfo, setDiskInfo] = useState(null);
+  const [trafficSamples, setTrafficSamples] = useState([]);
   const [dashSummary, setDashSummary] = useState(null);
   // Notifications addon: my own settings, and (administrators) the server's.
   const [notifyMe, setNotifyMe] = useState(null);
@@ -1776,8 +1788,34 @@ function App() {
   }
 
   async function loadResourceUsage() {
-    const data = await request('/services/resource-usage');
+    const data = await request('/services/resource-usage', { silent: true });
     if (data) setResourceUsage(data);
+  }
+
+  async function loadProcessTop() {
+    const data = await request('/system/processes', { silent: true });
+    if (data) setProcessTop(data);
+  }
+
+  async function loadMemoryInfo() {
+    const data = await request('/system/memory', { silent: true });
+    if (data) setMemoryInfo(data);
+  }
+
+  async function loadDiskInfo() {
+    const data = await request('/system/disk', { silent: true });
+    if (data) setDiskInfo(data);
+  }
+
+  async function rescanDisk() {
+    const data = await request('/system/disk/scan', { method: 'POST' }, 'Measuring disk usage...');
+    if (data) await loadDiskInfo();
+  }
+
+  // Two readings make a rate; the page keeps the last three minutes.
+  async function loadTraffic() {
+    const data = await request('/system/traffic', { silent: true });
+    if (data) setTrafficSamples(prev => [...prev, data].slice(-91));
   }
 
   // A reseller's share: customers and disk, nothing else.
@@ -4932,12 +4970,39 @@ function App() {
     loadNotifyLog();
   }, [isAuthenticated, page, notificationsAddonInstalled, isAdmin]);
 
+  // The top bar's CPU, RAM, disk and network chips, on every page.
   useEffect(() => {
-    if (!isAuthenticated || page !== 'dashboard' || !isAdmin) return undefined;
+    if (!isAuthenticated || !isAdmin) return undefined;
     loadResourceUsage();
-    const timer = setInterval(loadResourceUsage, 5000);
+    const timer = setInterval(loadResourceUsage, page === 'ram-usage' ? 5000 : 10000);
     return () => clearInterval(timer);
   }, [isAuthenticated, page, isAdmin]);
+  useEffect(() => {
+    if (!isAuthenticated || !isAdmin || page !== 'processes' || processPaused || currentUser?.demo) return undefined;
+    loadProcessTop();
+    const timer = setInterval(loadProcessTop, 3000);
+    return () => clearInterval(timer);
+  }, [isAuthenticated, isAdmin, page, processPaused, currentUser?.demo]);
+  useEffect(() => {
+    if (!isAuthenticated || !isAdmin || page !== 'ram-usage') return undefined;
+    loadMemoryInfo();
+    const timer = setInterval(loadMemoryInfo, 10000);
+    return () => clearInterval(timer);
+  }, [isAuthenticated, isAdmin, page]);
+  useEffect(() => {
+    if (!isAuthenticated || !isAdmin || page !== 'disk-usage') return undefined;
+    loadDiskInfo();
+    // Only while a scan runs: the filesystems themselves change slowly.
+    const timer = setInterval(() => { if (diskInfo?.scanning) loadDiskInfo(); }, 5000);
+    return () => clearInterval(timer);
+  }, [isAuthenticated, isAdmin, page, !!diskInfo?.scanning]);
+  useEffect(() => {
+    if (!isAuthenticated || !isAdmin || page !== 'traffic') return undefined;
+    setTrafficSamples([]);
+    loadTraffic();
+    const timer = setInterval(loadTraffic, 2000);
+    return () => clearInterval(timer);
+  }, [isAuthenticated, isAdmin, page]);
 
   useEffect(() => {
     if (!isAuthenticated || page !== 'services' || !isAdmin) return undefined;
@@ -5011,7 +5076,7 @@ function App() {
   useEffect(() => { if (currentUser) loadAddons(); }, [currentUser]);
   // Resource limits: live use while a page shows it.
   useEffect(() => {
-    if (!isAuthenticated || !limitsOn || !['dashboard', 'users', 'usage'].includes(page)) return undefined;
+    if (!isAuthenticated || !limitsOn || !['dashboard', 'users', 'usage', 'ram-usage'].includes(page)) return undefined;
     loadLimitsInfo();
     const timer = window.setInterval(loadLimitsInfo, 15000);
     return () => window.clearInterval(timer);
@@ -5211,6 +5276,12 @@ function App() {
       ['waf', 'WAF', ShieldAlert, 'Web application firewall for each website'],
       isAdmin && ['access-logs', 'Access logs', ScrollText, 'Visitors and what the WAF blocked'],
       ['security', 'Account security', LockKeyhole, 'Password, two-factor authentication and passkeys'],
+    ] },
+    { title: 'Server status', items: [
+      isAdmin && ['processes', 'Process monitor', Cpu, 'What is running now, as top -c shows it'],
+      isAdmin && ['ram-usage', 'RAM usage', MemoryStick, "Where the server's memory is"],
+      isAdmin && ['disk-usage', 'Disk usage', HardDrive, 'Disks, and what takes the space'],
+      isAdmin && ['traffic', 'Traffic', Network, 'Network traffic of each interface'],
     ] },
     { title: 'System', items: [
       isAdmin && ['panel-settings', 'Panel settings', SettingsIcon, 'Branding, panel address and certificate'],
@@ -5626,6 +5697,190 @@ function App() {
     </section>;
   }
 
+  // --- The server's own pages, behind the top bar's status chips -------------------------
+  // (operator, 2026-10-06: CPU, RAM, disk and network sit in the top bar; each
+  // opens its page.) Administrators only.
+  function statTone(percent) {
+    const value = Number(percent) || 0;
+    return value >= 90 ? 'bad' : value >= 75 ? 'warn' : 'ok';
+  }
+
+  function renderTopStats() {
+    const cpu = resourceUsage?.cpu || {};
+    const memory = resourceUsage?.memory || {};
+    const disk = resourceUsage?.disk || {};
+    const network = resourceUsage?.network || {};
+    const rate = (Number(network.rx_per_sec) || 0) + (Number(network.tx_per_sec) || 0);
+    const known = !!resourceUsage;
+    const chips = [
+      ['processes', Cpu, 'CPU', known ? formatPercent(cpu.percent) : '--', statTone(cpu.percent), 'CPU: open the process monitor'],
+      ['ram-usage', MemoryStick, 'RAM', known ? formatPercent(memory.percent) : '--', statTone(memory.percent), 'RAM: where the memory is'],
+      ['disk-usage', HardDrive, 'Disk', known ? formatPercent(disk.percent) : '--', statTone(disk.percent), 'Disk: what takes the space'],
+      ['traffic', Network, 'Network', known ? `${formatBytes(rate)}/s` : '--', 'ok', 'Network: traffic of each interface'],
+    ];
+    return <nav className="top-stats" aria-label={t('Server status')}>
+      {chips.map(([key, Icon, label, value, tone, title]) => <button key={key} type="button"
+        className={`top-stat tone-${tone}${page === key ? ' active' : ''}`} onClick={() => navigateToPage(key)} title={t(title)} aria-label={`${t(label)} ${value}`}>
+        <Icon size={14}/><span className="top-stat-label">{t(label)}</span><b>{value}</b>
+      </button>)}
+    </nav>;
+  }
+
+  // The version opens Updates for an administrator, with a dot while a newer
+  // release waits; anyone else sees the number only.
+  function renderTopVersion() {
+    if (!isAdmin) return <span className="top-version" title={t('Panel version')}>v{appVersion}</span>;
+    const waiting = resourceUsage?.panel_update?.update_available === true;
+    const latest = resourceUsage?.panel_update?.latest_version;
+    const title = waiting ? t('Panel update {version} is available.', { version: latest }) : t('Updates');
+    return <button type="button" className={`top-version${waiting ? ' has-update' : ''}${page === 'updates' ? ' active' : ''}`}
+      onClick={() => navigateToPage('updates')} title={title} aria-label={`${t('Panel version')} ${appVersion}. ${title}`}>
+      v{appVersion}{waiting && <i className="top-version-dot" aria-hidden="true" />}
+    </button>;
+  }
+
+  function renderProcessMonitor() {
+    const output = processTop?.output || '';
+    const lines = output.replace(/\s+$/, '').split('\n');
+    const headerEnd = lines.findIndex(line => /^\s*PID\s+USER\b/.test(line));
+    const needle = processFilter.trim().toLowerCase();
+    const shown = headerEnd < 0 || !needle ? lines
+      : [...lines.slice(0, headerEnd + 1), ...lines.slice(headerEnd + 1).filter(line => line.toLowerCase().includes(needle))];
+    const when = processTop?.time ? new Date(processTop.time * 1000).toLocaleTimeString() : '';
+    return <section className="section">
+      <div className="section-title">
+        <div><h2>{t('Process monitor')}</h2>
+          <p className="hint">{t('What the server is running, as top -c shows it. It refreshes every 3 seconds.')}</p></div>
+        <div className="actions">
+          <input className="process-filter" value={processFilter} onChange={e => setProcessFilter(e.target.value)} placeholder={t('Filter processes')} aria-label={t('Filter processes')} />
+          <button type="button" className="secondary" onClick={() => setProcessPaused(paused => !paused)}>
+            {processPaused ? <><Play size={14}/> {t('Resume')}</> : <><Pause size={14}/> {t('Pause')}</>}
+          </button>
+        </div>
+      </div>
+      <div className="process-terminal-wrap">
+        <div className="process-terminal-head"><span>top -c</span><small>{processPaused ? t('Paused') : when}</small></div>
+        <pre className="process-terminal" aria-live="off">{currentUser?.demo ? t('This is a demo: the process list is not shown.')
+          : output ? shown.join('\n') : t('Reading processes...')}</pre>
+      </div>
+    </section>;
+  }
+
+  function renderRamUsage() {
+    const memory = memoryInfo?.memory || resourceUsage?.memory;
+    const swap = memoryInfo?.swap || {};
+    const workers = memoryInfo?.php_workers || {};
+    return <>
+      <section className="section">
+        <div className="section-title"><div><h2>{t('RAM usage')}</h2>
+          <p className="hint">{t("The server's memory now, and what takes it.")}</p></div></div>
+        {memory ? <RamBreakdown memory={memory} /> : <p className="hint">{t('Reading memory...')}</p>}
+        <div className="info-rows ram-facts">
+          <InfoRow label={t('Swap')} value={swap.total ? `${formatBytes(swap.used)} / ${formatBytes(swap.total)}` : t('None')} />
+          <InfoRow label={t('MariaDB buffer pool (configured)')} value={memoryInfo ? formatMegabytes(memoryInfo.mariadb_pool_mb) : '--'} />
+          <InfoRow label={t('PHP-FPM workers at most (every pool)')} value={workers.pools ? t('{count} in {pools} pools', { count: workers.max_children, pools: workers.pools }) : '--'} />
+        </div>
+      </section>
+      {limitsOn && renderTopAccounts()}
+    </>;
+  }
+
+  function renderDiskUsage() {
+    const scan = diskInfo?.scan;
+    const labels = {
+      websites: 'Websites and email', databases: 'Databases', backups: 'Backups',
+      logs: 'Logs', panel: 'Panel', other: 'System and other',
+    };
+    const measured = scan?.time ? new Date(scan.time * 1000).toLocaleString() : '';
+    return <>
+      <section className="section">
+        <div className="section-title">
+          <div><h2>{t('Disk usage')}</h2>
+            <p className="hint">{diskInfo?.scanning ? t('Measuring what takes the space. On a large server this takes a few minutes.')
+              : measured ? t('What takes the space was measured at {time}.', { time: measured }) : t('What takes the space has not been measured yet.')}</p></div>
+          <div className="actions"><button type="button" className="secondary" disabled={!!loading || diskInfo?.scanning} onClick={rescanDisk}>
+            <RefreshCw size={14}/> {diskInfo?.scanning ? t('Measuring...') : t('Measure again')}</button></div>
+        </div>
+        {diskInfo?.scan_error && <p className="hint alarm">{diskInfo.scan_error}</p>}
+        {!diskInfo && <p className="hint">{t('Reading disks...')}</p>}
+        {(diskInfo?.filesystems || []).map(fs => {
+          const rows = [...(fs.parts || []).map(part => [part.key, labels[part.key] || part.key, part.bytes]),
+            ['free', 'Free', fs.available]];
+          return <div className="disk-fs" key={`${fs.device}-${fs.mount}`}>
+            <div className="ram-breakdown-head"><strong>{fs.mount}</strong>
+              <small>{fs.device} · {fs.type} · {formatBytes(fs.used)} / {formatBytes(fs.size)} ({formatPercent(fs.size ? fs.used / fs.size * 100 : 0)})</small></div>
+            <div className="ram-breakdown-bar" role="img" aria-label={rows.map(([, label, value]) => `${t(label)}: ${formatBytes(value)}`).join(', ')}>
+              {(fs.parts?.length ? rows : [['used', 'Used', fs.used], ['free', 'Free', fs.available]])
+                .map(([key, , value]) => <span key={key} className={`ram-part ram-${key}`} style={{ width: `${Math.max(0, Math.min(100, (Number(value) || 0) / (fs.size || 1) * 100))}%` }} />)}
+            </div>
+            {fs.parts?.length > 0 && <ul className="ram-breakdown-legend">
+              {rows.map(([key, label, value]) => <li key={key}><i className={`ram-swatch ram-${key}`} aria-hidden="true" /><span>{t(label)}</span><b>{formatBytes(value)}</b></li>)}
+            </ul>}
+          </div>;
+        })}
+      </section>
+      {(scan?.accounts || []).length > 0 && <section className="section">
+        <div className="section-title"><div><h2>{t('Largest accounts')}</h2>
+          <p className="hint">{t("Each account's websites on disk, measured with the rest.")}</p></div></div>
+        <div className="top-accounts disk-accounts">
+          <div className="top-accounts-row is-head" aria-hidden="true"><span>{t('Account')}</span><span>{t('Used')}</span></div>
+          {scan.accounts.map(row => {
+            const percent = row.limit_mb > 0 ? clampPercent(row.bytes / (row.limit_mb * 1024 * 1024) * 100) : null;
+            return <div className="top-accounts-row" key={row.username}>
+              <span className="top-accounts-name"><strong>{row.username}</strong></span>
+              <span className="top-accounts-meter" data-label={t('Used')}>
+                <span>{formatBytes(row.bytes)}<small> / {row.limit_mb > 0 ? formatMegabytes(row.limit_mb) : t('Unlimited')}</small></span>
+                {percent !== null && <span className={`resource-track${percent >= 90 ? ' tone-bad' : percent >= 75 ? ' tone-warn' : ''}`}><span style={{ width: `${percent}%` }}></span></span>}
+              </span>
+            </div>;
+          })}
+        </div>
+      </section>}
+    </>;
+  }
+
+  function renderTraffic() {
+    const samples = trafficSamples;
+    const last = samples[samples.length - 1];
+    const names = (last?.interfaces || []).map(item => item.name);
+    const when = (time, full) => new Date(time * 1000).toLocaleTimeString([], full ? {} : { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const rateFormat = value => `${formatBytes(value)}/s`;
+    const common = { when, emptyText: t('Collecting: a reading every 2 seconds.'), limitText: t('Limit'),
+      peakText: t('Peak'), averageText: t('Average') };
+    return <section className="section">
+      <div className="section-title"><div><h2>{t('Traffic')}</h2>
+        <p className="hint">{t('Each network interface, live while this page is open, and in total since the server started.')}</p></div></div>
+      {!last && <p className="hint">{t('Reading interfaces...')}</p>}
+      {names.map(name => {
+        const points = [];
+        for (let index = 1; index < samples.length; index += 1) {
+          const before = samples[index - 1].interfaces.find(item => item.name === name);
+          const now = samples[index].interfaces.find(item => item.name === name);
+          const seconds = samples[index].time - samples[index - 1].time;
+          if (!before || !now || seconds <= 0) continue;
+          points.push({ t: samples[index].time, rx: Math.max(0, (now.rx_bytes - before.rx_bytes) / seconds),
+            tx: Math.max(0, (now.tx_bytes - before.tx_bytes) / seconds) });
+        }
+        const total = last.interfaces.find(item => item.name === name);
+        const current = points[points.length - 1];
+        return <div className="traffic-iface" key={name}>
+          <div className="ram-breakdown-head"><strong>{name}</strong>
+            <small>{t('Now: down {down}, up {up}', { down: current ? rateFormat(current.rx) : '--', up: current ? rateFormat(current.tx) : '--' })}</small></div>
+          <div className="info-rows">
+            <InfoRow label={t('Received since start')} value={`${formatBytes(total.rx_bytes)} · ${t('{count} packets', { count: total.rx_packets.toLocaleString() })}`} />
+            <InfoRow label={t('Sent since start')} value={`${formatBytes(total.tx_bytes)} · ${t('{count} packets', { count: total.tx_packets.toLocaleString() })}`} />
+            {(total.rx_errors > 0 || total.tx_errors > 0) && <InfoRow label={t('Errors')} value={`${total.rx_errors} / ${total.tx_errors}`} />}
+          </div>
+          <div className="usage-charts">
+            <UsageChart {...common} points={points} title={t('Download')} pick={point => point.rx} format={rateFormat} floor={1024} unlimitedText={name} />
+            <UsageChart {...common} points={points} title={t('Upload')} pick={point => point.tx} format={rateFormat} floor={1024} unlimitedText={name} />
+          </div>
+        </div>;
+      })}
+      {last?.uptime_seconds > 0 && <p className="hint">{t('The server started {time} ago.', { time: formatUptime(last.uptime_seconds) })}</p>}
+    </section>;
+  }
+
   // The administrator's view of the Resource limits addon: who uses most now.
   function renderTopAccounts() {
     const rows = Object.entries(limitsInfo?.accounts || {}).map(([id, entry]) => ({ ...entry, id: Number(id), now: entry.usage || {}, caps: entry.limits || {} }));
@@ -5775,16 +6030,6 @@ function App() {
       return <div className="dashboard cp-layout">
         <div className="cp-main">
           {attentionCard}
-          <section className="section dash-card dash-resources" style={{ '--cp-order': 2 }}>
-            <div className="dash-card-head"><span className="dash-card-icon"><Activity size={16}/></span><h2>{t('Server resources')}</h2></div>
-            <div className="resource-grid">
-              <ResourceCard icon={Cpu} label="CPU" value={formatPercent(cpu.percent)} percent={cpu.percent} detail={cpu.load?.length ? t('Load {load}', { load: cpu.load.join(' / ') }) : t('{count} cores', { count: cpu.cores || '--' })} />
-              <ResourceCard icon={MemoryStick} label="RAM" value={formatPercent(memory.percent)} percent={memory.percent} detail={`${formatBytes(memory.used)} / ${formatBytes(memory.total)}`} />
-              <ResourceCard icon={HardDrive} label={t('Disk')} value={formatPercent(disk.percent)} percent={disk.percent} detail={`${formatBytes(disk.used)} / ${formatBytes(disk.total)}`} />
-              <ResourceCard icon={Network} label={t('Network')} value={`${formatBytes(networkTotal)}/s`} detail={t('Down {down}/s / Up {up}/s', { down: formatBytes(network.rx_per_sec), up: formatBytes(network.tx_per_sec) })} />
-            </div>
-            <RamBreakdown memory={memory} />
-          </section>
           {limitsOn && renderTopAccounts()}
           {renderToolPanel(5)}
         </div>
@@ -10814,6 +11059,10 @@ function App() {
   }
 
   function renderPage() {
+    if (page === 'processes') return isAdmin ? renderProcessMonitor() : renderDashboard();
+    if (page === 'ram-usage') return isAdmin ? renderRamUsage() : renderDashboard();
+    if (page === 'disk-usage') return isAdmin ? renderDiskUsage() : renderDashboard();
+    if (page === 'traffic') return isAdmin ? renderTraffic() : renderDashboard();
     if (page === 'websites') return renderWebsites();
     if (page === 'addons') return renderAddons();
     // DNS Manager (2026-09-29): administrators and customers, once installed.
@@ -10935,7 +11184,28 @@ function App() {
             </button>)}
           </div>)}
         </nav>
-        {appVersion && <div className="sidebar-version">v{appVersion}</div>}
+        <div className="sidebar-foot">
+          <div className="user-menu sidebar-user" ref={userMenuRef}>
+            <button type="button" className="user-menu-trigger" onClick={() => setUserMenuOpen(open => !open)} aria-haspopup="menu" aria-expanded={userMenuOpen} title={t('Logged in as')}>
+              <span className="user-avatar" aria-hidden="true">{(currentUser?.username || username || '?').slice(0, 1).toUpperCase()}</span>
+              <span className="user-menu-name">{currentUser?.username || username}</span>
+              <ChevronDown size={14} className="user-menu-chevron"/>
+            </button>
+            {userMenuOpen && <div className="user-menu-panel" role="menu">
+              <div className="user-menu-head">
+                <strong>{accountLabel}</strong>
+                <small>{currentUser?.email || t(roleLabel(currentUser?.role))}</small>
+              </div>
+              <button type="button" role="menuitem" onClick={() => { setUserMenuOpen(false); openProfileModal(); }}><KeyRound size={15}/>{t('Profile')}</button>
+              <button type="button" role="menuitem" onClick={() => { setUserMenuOpen(false); navigateToPage('security'); }}><LockKeyhole size={15}/>{t('Account security')}</button>
+              {currentUser?.impersonator && <button type="button" role="menuitem" onClick={() => { setUserMenuOpen(false); returnToImpersonator(); }}><ArrowLeft size={15}/>{t('Back to {name}', { name: currentUser.impersonator })}</button>}
+              <button type="button" role="menuitem" className="user-menu-logout" onClick={() => { setUserMenuOpen(false); logout(); }}><LogOut size={15}/>{t('Logout')}</button>
+              {appVersion && <small className="user-menu-version">{panelSettings.app_name || 'BPanel'} v{appVersion}</small>}
+            </div>}
+          </div>
+          <LanguageToggle language={language} onChange={changeLanguage} className="sidebar-tool"/>
+          <ThemeToggle theme={theme} onToggle={toggleTheme} className="sidebar-tool" size={15}/>
+        </div>
       </aside>
       <div className="content">
         <section className="topbar">
@@ -10944,31 +11214,14 @@ function App() {
           </button>
           <div className="page-title">
             {settingsPageItem
-              ? <h1 className="page-crumbs"><button type="button" onClick={() => navigateToPage('settings')}>{t('Settings')}</button><span aria-hidden="true">›</span>{t(settingsPageItem[1])}</h1>
+              ? <h1 className="page-crumbs"><button type="button" onClick={() => navigateToPage('settings')}>{t('Settings')}</button><span aria-hidden="true">›</span><span className="page-crumb-current">{t(settingsPageItem[1])}</span></h1>
               : <h1>{pageItem?.[1] ? t(pageItem[1]) : (panelSettings.app_name || 'BPanel')}</h1>}
           </div>
-          {/* The page title, then one account menu - profile, account security
-              and sign out live in it, as they do in OPanel. */}
+          {/* The page title, then the server's status and the version, as in
+              OPanel; the account menu is at the foot of the sidebar. */}
           <div className="top-actions">
-            <LanguageToggle language={language} onChange={changeLanguage} className="secondary compact-btn top-lang"/>
-            <ThemeToggle theme={theme} onToggle={toggleTheme} className="secondary compact-btn icon-only" size={15}/>
-            <div className="user-menu" ref={userMenuRef}>
-              <button type="button" className="user-menu-trigger" onClick={() => setUserMenuOpen(open => !open)} aria-haspopup="menu" aria-expanded={userMenuOpen} title={t('Logged in as')}>
-                <span className="user-avatar" aria-hidden="true">{(currentUser?.username || username || '?').slice(0, 1).toUpperCase()}</span>
-                <span className="user-menu-name">{currentUser?.username || username}</span>
-                <ChevronDown size={14} className="user-menu-chevron"/>
-              </button>
-              {userMenuOpen && <div className="user-menu-panel" role="menu">
-                <div className="user-menu-head">
-                  <strong>{accountLabel}</strong>
-                  <small>{currentUser?.email || t(roleLabel(currentUser?.role))}</small>
-                </div>
-                <button type="button" role="menuitem" onClick={() => { setUserMenuOpen(false); openProfileModal(); }}><KeyRound size={15}/>{t('Profile')}</button>
-                <button type="button" role="menuitem" onClick={() => { setUserMenuOpen(false); navigateToPage('security'); }}><LockKeyhole size={15}/>{t('Account security')}</button>
-                {currentUser?.impersonator && <button type="button" role="menuitem" onClick={() => { setUserMenuOpen(false); returnToImpersonator(); }}><ArrowLeft size={15}/>{t('Back to {name}', { name: currentUser.impersonator })}</button>}
-                <button type="button" role="menuitem" className="user-menu-logout" onClick={() => { setUserMenuOpen(false); logout(); }}><LogOut size={15}/>{t('Logout')}</button>
-              </div>}
-            </div>
+            {isAdmin && renderTopStats()}
+            {appVersion && renderTopVersion()}
           </div>
         </section>
         <div className="content-body">
