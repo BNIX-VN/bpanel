@@ -61,7 +61,9 @@ def test_the_dashboard_is_laid_out_as_cpanels_home():
     the sidebar cannot say: how much is used, and how things stand."""
     dashboard = _dashboard()
     assert "featureGroups" not in APP and "function FeatureTile(" not in APP
-    assert 'className="dashboard cp-layout"' in dashboard and "dash-resources" in dashboard
+    assert 'className="dashboard cp-layout"' in dashboard
+    # The server's CPU, RAM, disk and network moved to the top bar (2026-10-06).
+    assert "dash-resources" not in dashboard
     assert 'className={`status-row tone-${card.tone}`}' in dashboard
     for key in ("services", "ssl", "firewall", "waf", "malware", "backups"):
         assert f"key: '{key}'" in dashboard, key
@@ -102,6 +104,7 @@ def test_the_sidebar_holds_what_is_used_every_day():
     hub = APP.split("const settingsGroups = [")[1].split("const settingsItems = ")[0]
     hub_keys = re.findall(r"\['([a-z-]+)', '", hub)
     assert hub_keys == ["firewall", "waf", "access-logs", "security",
+                        "processes", "ram-usage", "disk-usage", "traffic",
                         "panel-settings", "services", "php", "updates", "addons"]
     assert not set(keys) & set(hub_keys), "a page in both places"
     assert "if (page === 'settings') return renderSettingsHub();" in APP
@@ -192,7 +195,7 @@ def test_the_dashboard_headings_are_translated_where_they_are_drawn():
     nav array still feeds the page title in the topbar.
     """
     dashboard = _dashboard()
-    assert "<h2>{t('Server resources')}</h2>" in dashboard
+    assert "<h2>{t('Needs attention')}</h2>" in dashboard
     # Card labels are translated where they are built; the one left raw is
     # WAF, which reads the same in both languages.
     assert re.findall(r"label: '([^']+)'", dashboard) == ["WAF", "WAF"]

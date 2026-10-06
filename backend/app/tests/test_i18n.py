@@ -193,11 +193,13 @@ def test_the_switch_is_two_letters_and_no_icon():
     assert "Languages," not in APP
 
 def test_the_switch_sits_with_the_theme_toggle():
-    """Where OPanel has them: the corners of the sign-in page, and the top bar."""
+    """Where OPanel has them: the corners of the sign-in page, and the foot of
+    the sidebar beside the account menu (2026-10-06: the top bar keeps the
+    server's status)."""
     assert '<ThemeToggle theme={theme} onToggle={toggleTheme} className="theme-toggle-btn"/>' in APP
     assert '<LanguageToggle language={language} onChange={changeLanguage} className="lang-toggle-btn"/>' in APP
-    assert '<LanguageToggle language={language} onChange={changeLanguage} className="secondary compact-btn top-lang"/>' in APP
-    assert '<ThemeToggle theme={theme} onToggle={toggleTheme} className="secondary compact-btn icon-only" size={15}/>' in APP
+    assert '<LanguageToggle language={language} onChange={changeLanguage} className="sidebar-tool"/>' in APP
+    assert '<ThemeToggle theme={theme} onToggle={toggleTheme} className="sidebar-tool" size={15}/>' in APP
 
 def test_changing_the_language_re_renders():
     """t() is read during render, so the tree has to render again. The hook

@@ -7952,7 +7952,54 @@ cmd="${1:-}"
 shift || true
 audit_log "$@"
 
+# The server pages behind the top bar's status chips (operator, 2026-10-06).
+# The API cannot see other users' processes (ProtectProc=invisible) nor read
+# every account's tree, so both of these run here, as root.
+process_top() {
+  # Two frames a second apart, the second one shown: top's first frame has no
+  # interval to measure %CPU over, so it lists every process at 0.0 in PID
+  # order -- a hundred kernel threads before anything that is busy.
+  COLUMNS=300 top -b -n 2 -d 1 -c -w 300 2>/dev/null | awk '/^top - /{frame++} frame == 2' | head -n 400
+}
+
+# What takes the disk space, one line each: key, bytes, path, device number.
+# du -x stays on the filesystem it starts on, and timeout keeps a huge /home
+# from holding the helper for ever. The panel adds the lines up per device.
+disk_usage_scan() {
+  local datadir path key bytes device
+  datadir="$(timeout 20 mariadb -NBe 'SELECT @@datadir' 2>/dev/null | tail -n1 || true)"
+  [[ -n "$datadir" && -d "$datadir" ]] || datadir="/var/lib/mysql"
+  while read -r key path; do
+    [[ -n "$path" && -d "$path" && ! -L "$path" ]] || continue
+    bytes="$(timeout 900 du -sxb -- "$path" 2>/dev/null | tail -n1 | awk '{print $1}' || true)"
+    [[ "$bytes" =~ ^[0-9]+$ ]] || continue
+    # The device, not df's mount point: inside the panel's sandbox every
+    # ReadWritePaths entry is a bind mount, so df would name /home and
+    # /opt/bpanel as filesystems of their own. A bind mount keeps the
+    # device's number.
+    device="$(stat -c %d -- "$path" 2>/dev/null || true)"
+    printf '%s\t%s\t%s\t%s\n' "$key" "$bytes" "$path" "${device:-0}"
+  done <<PATHS
+home /home
+databases ${datadir%/}
+backups ${BACKUP_ROOT%/}
+backups /home/admin/bpanel_backups
+backups ${BACKUP_INBOX%/}
+logs /var/log
+panel ${APP_DIR}
+PATHS
+}
+
 case "$cmd" in
+
+  process-top)
+    [[ $# -eq 0 ]] || deny "usage: process-top"
+    process_top
+    ;;
+  disk-usage-scan)
+    [[ $# -eq 0 ]] || deny "usage: disk-usage-scan"
+    disk_usage_scan
+    ;;
 
   # ---- systemctl --------------------------------------------------------
   systemctl)
