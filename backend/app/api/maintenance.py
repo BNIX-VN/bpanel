@@ -234,7 +234,11 @@ def _list_file_jobs(current_user: User, website_id: int | None = None) -> list[d
     return sorted(visible, key=lambda item: item.get("created_at", ""), reverse=True)[:10]
 
 
-def _public_backup_job(job: dict) -> dict:
+def _public_backup_job(job: dict, viewer_id: int | None = None) -> dict:
+    """What the page may read about a job. A DirectAdmin restore's generated
+    passwords are for the admin who ran it: another admin - the read-only demo
+    account among them - sees the rest of the row without them."""
+    reveal = viewer_id is not None and viewer_id == job.get("request_user_id")
     return {
         "job_id": job["job_id"],
         "kind": job["kind"],
@@ -251,7 +255,8 @@ def _public_backup_job(job: dict) -> dict:
         "started_at": job.get("started_at", ""),
         "finished_at": job.get("finished_at", ""),
         # A restore reports each account it was asked for.
-        "results": [dict(row) for row in job.get("results") or []],
+        "results": [{key: value for key, value in row.items() if reveal or key != "credentials"}
+                    for row in job.get("results") or []],
     }
 
 
@@ -292,7 +297,7 @@ def _list_backup_jobs(current_user: User) -> list[dict]:
     for job in jobs:
         if job.get("request_user_id") != current_user.id and not is_admin_role(current_user.role):
             continue
-        visible.append(_public_backup_job(job))
+        visible.append(_public_backup_job(job, current_user.id))
     return sorted(visible, key=lambda item: item.get("created_at", ""), reverse=True)[:12]
 
 
@@ -673,7 +678,7 @@ def get_backup_job(job_id: str, current_user: User = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Backup job not found")
     if job.get("request_user_id") != current_user.id and not is_admin_role(current_user.role):
         raise HTTPException(status_code=403, detail="Access denied")
-    return _public_backup_job(job)
+    return _public_backup_job(job, current_user.id)
 
 
 @router.post("/restore")
@@ -987,6 +992,27 @@ def create_sftp_target(
     return target
 
 
+def _save_restore_upload(file: UploadFile) -> tuple[str, str]:
+    """Keep one uploaded archive where its kind is restored from; return its
+    path and file name."""
+    kind = restore_sources.archive_kind(file.filename or "")
+    if kind == restore_sources.KIND_PANEL:
+        item = _save_user_restore_upload(file)
+        return item["backup_file"], item["filename"]
+    if kind != restore_sources.KIND_DA:
+        raise HTTPException(status_code=400, detail=(
+            f"{file.filename}: not a backup archive (.tar.gz, .tar.zst, .tar.bz2, .tar.xz or .tar)"))
+    from app.services import da_import
+
+    try:
+        path = da_import.save_da_upload(file.filename or "", file.file)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return str(path), path.name
+
+
 @router.post("/restore/upload")
 def restore_upload(
     request: Request,
@@ -997,8 +1023,9 @@ def restore_upload(
 ):
     """Upload backup, in step 2 of the Restore tab: into this server's restore
     folder, or on to the destination or server picked in step 1, where a
-    Refresh then lists it. Each file is checked to be an account backup
-    before it goes anywhere; a copy only passing through is not kept here."""
+    Refresh then lists it. A panel backup is checked to be an account backup
+    before it goes anywhere, a DirectAdmin one - told apart by its name - goes
+    to the DA folder; a copy only passing through is not kept here."""
     ensure_role(current_user.role, Role.admin)
     try:
         spec = RestoreSource.model_validate_json(source).model_dump()
@@ -1008,21 +1035,38 @@ def restore_upload(
         raise HTTPException(status_code=400, detail="No backup files uploaded")
     uploaded = []
     for file in files:
-        item = _save_user_restore_upload(file)
+        saved, name = _save_restore_upload(file)
         if spec["kind"] == "local":
-            uploaded.append(item["filename"])
+            uploaded.append(name)
             continue
         try:
-            uploaded.append(restore_sources.push(spec, item["backup_file"], db))
+            uploaded.append(restore_sources.push(spec, saved, db))
         except backup.SftpHostKeyMismatch as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except restore_sources.RestoreSourceError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         finally:
-            Path(item["backup_file"]).unlink(missing_ok=True)
+            Path(saved).unlink(missing_ok=True)
     log_action(db, current_user.id, "upload_restore_backups", restore_sources.describe(spec, db),
                ", ".join(uploaded), request=request)
     return {"uploaded": uploaded}
+
+
+@router.delete("/restore/local")
+def restore_delete_local(request: Request, key: str = Query(...), db: Session = Depends(get_db),
+                         current_user: User = Depends(get_current_user)):
+    """Delete an archive that was brought to this server to be restored: an
+    upload, a DirectAdmin archive, or one in the admin's SFTP folder. Account
+    backups in users/<account>/ stay under Backup user."""
+    ensure_role(current_user.role, Role.admin)
+    try:
+        name = restore_sources.delete_local(key)
+    except restore_sources.RestoreSourceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Could not delete it: {exc.strerror or exc}") from exc
+    log_action(db, current_user.id, "delete_restore_archive", name, request=request)
+    return {"deleted": name}
 
 
 @router.post("/restore/list")
@@ -1060,6 +1104,37 @@ def _set_restore_result(job_id: str, index: int, **updates) -> None:
             job["results"][index].update(updates)
 
 
+def _restore_directadmin(path: str) -> dict:
+    """One DirectAdmin archive through the importer, the way the Restore tab
+    promises: an account that exists here is overwritten with its own sites;
+    a domain of another account stops it. The generated passwords go back to
+    the job, which only an admin can read, as the DA Import tab showed them."""
+    from app.services import da_import
+
+    result = da_import.import_da_backup(path, replace_own=True)
+    summary = result.get("summary") or []
+    errors = result.get("errors") or []
+    imported = [domain for item in summary for domain in item.get("imported_domains") or []]
+    if not imported:
+        raise RuntimeError("; ".join(errors) or "Nothing was imported")
+    usernames = [item.get("username") for item in summary if item.get("username")]
+    message = f"Imported {len(imported)} domain(s): {', '.join(imported)}"
+    if errors:
+        message += ". " + "; ".join(errors)
+    return {"username": usernames[0] if usernames else "", "message": message[:500],
+            "credentials": result.get("credentials") or []}
+
+
+def _da_import_busy() -> bool:
+    """An import from the old DA Import endpoints is running."""
+    from app.services import da_import
+
+    with _da_bulk_import_jobs_lock:
+        if any(job["status"] in {"pending", "running"} for job in _da_bulk_import_jobs.values()):
+            return True
+    return da_import.detached_import_status()["status"] == "running"
+
+
 def _run_restore_job(job_id: str, request_user_id: int, source: dict, items: list[dict]) -> None:
     with _restore_run_lock:
         _set_backup_job(job_id, status="running", started_at=_now_iso(), message="Restoring")
@@ -1070,13 +1145,18 @@ def _run_restore_job(job_id: str, request_user_id: int, source: dict, items: lis
                 staged = ""
                 try:
                     _set_restore_result(job_id, index, status="fetching" if source["kind"] != "local" else "restoring")
+                    kind = restore_sources.key_kind(source, item["key"])
                     path, is_copy = restore_sources.fetch(source, item["key"], item.get("size") or 0, db)
                     staged = path if is_copy else ""
                     _set_restore_result(job_id, index, status="restoring")
-                    outcome = backup.restore_user_backup(path, db)
+                    if kind == restore_sources.KIND_DA:
+                        outcome = _restore_directadmin(path)
+                    else:
+                        outcome = backup.restore_user_backup(path, db)
                     username = outcome.get("username", "") if isinstance(outcome, dict) else ""
                     _set_restore_result(job_id, index, status="done", username=username or item.get("username", ""),
-                                        detail=outcome.get("message", "") if isinstance(outcome, dict) else "")
+                                        detail=outcome.get("message", "") if isinstance(outcome, dict) else "",
+                                        credentials=(outcome.get("credentials") or []) if isinstance(outcome, dict) else [])
                     restored += 1
                     if staged:
                         # The copy has done its job; 800 MB archives pile up.
@@ -1115,9 +1195,12 @@ def restore_run(payload: RestoreRunRequest, request: Request, db: Session = Depe
     for item in payload.items:
         try:
             name = restore_sources.check_key(source, item.key)
+            kind = restore_sources.key_kind(source, item.key)
         except restore_sources.RestoreSourceError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        results.append({"name": name, "username": item.username, "status": "queued", "detail": ""})
+        results.append({"name": name, "username": item.username, "kind": kind, "status": "queued", "detail": ""})
+    if any(row["kind"] == restore_sources.KIND_DA for row in results) and _da_import_busy():
+        raise HTTPException(status_code=429, detail="A DirectAdmin import is already running. Please wait.")
     job = _queue_backup_job(current_user, "user_restore", "Restore queued", results=results)
     # The source - another server's password included - goes to the worker
     # only; it is never kept in the job the page can read.
