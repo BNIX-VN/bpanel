@@ -59,15 +59,22 @@ jobs:
           python -c "import py_compile, glob; [py_compile.compile(f, doraise=True) for f in glob.glob('backend/app/**/*.py', recursive=True)]"
 
       - name: pip-audit
-        # Ignoring exactly the two advisories with no fixed version published.
-        # Anything else - including a new advisory against these same two
+        # Ignoring exactly the advisories with no fixed version published.
+        # Anything else - including a new advisory against these same
         # packages - fails the build. Re-check when upstream ships a release:
-        #   PYSEC-2026-2858  paramiko  (no fixed version as of 2026-09-07)
-        #   PYSEC-2026-1325  ecdsa     (no fixed version; transitive)
+        #   PYSEC-2026-2858  paramiko     (no fixed version as of 2026-09-07)
+        #   PYSEC-2026-1325  ecdsa        (no fixed version; transitive)
+        #   CVE-2026-85394   python-jose  (no release as of 2026-10-06, only a
+        #     commit). Algorithm confusion: a DER public key accepted as an
+        #     HMAC secret. It needs a service that verifies with a public key
+        #     and lets the token pick the algorithm; BPanel signs and verifies
+        #     with HS256 and its own secret, and every jwt.decode pins
+        #     algorithms=[ALGORITHM]. The way out for good is PyJWT.
         run: |
           pip-audit -r backend/requirements.txt --strict \
             --ignore-vuln PYSEC-2026-2858 \
-            --ignore-vuln PYSEC-2026-1325
+            --ignore-vuln PYSEC-2026-1325 \
+            --ignore-vuln CVE-2026-85394
 
       # --- Reporting ------------------------------------------------------
 
