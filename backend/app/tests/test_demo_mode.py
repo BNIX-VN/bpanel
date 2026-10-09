@@ -67,6 +67,9 @@ REVIEWED_READS = {
     # The server pages behind the top bar's chips (2026-10-06): memory, disks
     # and interface counters, as resource-usage. Not the process list.
     "/api/system/disk", "/api/system/memory", "/api/system/traffic",
+    # Git repositories (2026-10-09): never the deploy key's private half nor
+    # the token; the webhook URL is left out for a demo session.
+    "/api/git", "/api/git/repos/{repo_id}", "/api/git/repos/{repo_id}/operations/{operation_id}",
     "/api/sftp-accounts/limits", "/api/site-apps", "/api/site-apps/suggest-port",
     "/api/site-apps/{app_id}/logs", "/api/site-apps/{app_id}/status", "/api/site-runtimes/status",
     "/api/terminal/allowed-commands", "/api/updates/status", "/api/users", "/api/users/audit/log",
