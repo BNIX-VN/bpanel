@@ -24,6 +24,7 @@ APPLICATION = "application"
 DEMO = "demo"
 DNS = "dns"
 FAIL2BAN = "fail2ban"
+GIT = "git"
 LIMITS = "limits"
 MAIL = "mail"
 MALWARE = "malware"
@@ -83,6 +84,22 @@ CATALOGUE: dict[str, dict] = {
             "0 means unlimited, and every account starts unlimited: nothing changes until you set a limit.",
             "A process over its memory limit is stopped, which shows as an error on that website only. Set memory with some room to spare.",
             "Removing the addon lifts every limit at once; the limits you set stay with the accounts and packages.",
+        ],
+        "keeps_data_on_uninstall": True,
+    },
+    GIT: {
+        "name": "Git",
+        "version": "1.0.0",
+        "summary": "Git repositories in each account's home: clone, deploy, commit and push.",
+        "details": [
+            "Each account keeps git repositories anywhere in its home: clone one from GitHub, GitLab or Bitbucket, or start one in a folder that already has files.",
+            "Deploy pulls the latest code and runs the preset commands the account picks: composer install, npm ci, npm run build, artisan migrate and optimize, wp cache flush. Commit & push sends what changed on the server.",
+            "A private remote is reached with a deploy key the panel generates or an HTTPS token, and a webhook can deploy on every push.",
+            "Every git command runs as the account's own user.",
+        ],
+        "notes": [
+            "Turning the addon off hides the Git page and refuses its webhooks; the repositories and their files are kept.",
+            "Webhooks need the panel's address to be reachable from GitHub or GitLab.",
         ],
         "keeps_data_on_uninstall": True,
     },

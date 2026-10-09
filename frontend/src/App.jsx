@@ -1055,6 +1055,8 @@ function App() {
     if (page === 'databases' && isAdmin && users.length === 0) loadUsers();
   }, [page, isAdmin]);
   const mcpAddonInstalled = !!addons.items.find(item => item.slug === 'mcp')?.installed;
+  // Git is an addon (2026-10-10): in the sidebar only while installed.
+  const gitAddonInstalled = !!addons.items.find(item => item.slug === 'git')?.installed;
   const notificationsAddonInstalled = !!addons.items.find(item => item.slug === 'notifications')?.installed;
   const malwareAddonInstalled = !!addons.items.find(item => item.slug === 'malware')?.installed;
   const dnsAddonInstalled = !!addons.items.find(item => item.slug === 'dns')?.installed;
@@ -3606,7 +3608,7 @@ function App() {
 
   // Every extra login on the account, each with the website it reaches.
   async function loadGit() {
-    const data = await request('/git', { silent: true });
+    const data = await request('/git/overview', { silent: true });
     if (data) setGitInfo(data);
   }
 
@@ -5148,10 +5150,10 @@ function App() {
   }, [isAuthenticated, page, selectedWebsiteId]);
 
   useEffect(() => {
-    if (!isAuthenticated || page !== 'git') return;
+    if (!isAuthenticated || page !== 'git' || !gitAddonInstalled) return;
     loadGit();
     if (isAdmin) loadUsers();
-  }, [isAuthenticated, page]);
+  }, [isAuthenticated, page, gitAddonInstalled]);
 
   useEffect(() => {
     if (!currentSite) return;
@@ -5375,11 +5377,11 @@ function App() {
       ['cron', 'Cron', Clock],
       ['files', 'File manager', FolderOpen],
       ['sftp', 'SFTP accounts', KeyRound],
-      ['git', 'Git', GitBranch],
       ['backups', 'Backups', Archive],
       ...(canManageUsers ? [['users', 'Panel users', Users]] : []),
       ...(mailAddonInstalled ? [['mail', 'Email', Mail]] : []),
       ...(dnsAddonInstalled ? [['dns', 'DNS Manager', Network]] : []),
+      ...(gitAddonInstalled ? [['git', 'Git', GitBranch]] : []),
       ...(mcpAddonInstalled ? [['mcp', 'AI assistants (MCP)', Bot]] : []),
       ...(notificationsAddonInstalled && isAdmin ? [['notifications', 'Notifications', Bell]] : []),
       ...(malwareAddonInstalled && isAdmin ? [['malware', 'Malware Scanner', Bug]] : []),
@@ -5735,7 +5737,7 @@ function App() {
     groups.push({ key: 'files', title: t('Files'), icon: FolderOpen, tools: [
       { key: 'files', label: t('File manager'), icon: FolderOpen, run: go('files') },
       { key: 'sftp', label: t('SFTP accounts'), icon: KeyRound, run: go('sftp') },
-      { key: 'git', label: t('Git'), icon: GitBranch, run: go('git') },
+      ...(gitAddonInstalled ? [{ key: 'git', label: t('Git'), icon: GitBranch, run: go('git') }] : []),
       { key: 'sftp-new', label: t('New SFTP account'), icon: Plus, run: () => {
         navigateToPage('sftp');
         window.setTimeout(() => document.querySelector('.sftp-form input')?.focus(), 150);
@@ -7591,6 +7593,10 @@ function App() {
               {addon.slug === 'malware' && addon.installed && <div className="addon-panel">
                 <div className="addon-panel-head"><strong>{t('Scans, schedules and real-time protection')}</strong>
                   <button className="mini" onClick={() => navigateToPage('malware')}><Bug size={13}/> {t('Open Malware Scanner')}</button></div>
+              </div>}
+              {addon.slug === 'git' && addon.installed && <div className="addon-panel">
+                <div className="addon-panel-head"><strong>{t('Repositories, deploys and webhooks')}</strong>
+                  <button className="mini" onClick={() => navigateToPage('git')}><GitBranch size={13}/> {t('Open Git')}</button></div>
               </div>}
               {addon.slug === 'notifications' && addon.installed && <div className="addon-panel">
                 <div className="addon-panel-head"><strong>{t('Channels, recipients and events')}</strong>
@@ -11482,7 +11488,7 @@ function App() {
     if (page === 'ssl') return renderSsl();
     if (page === 'databases') return renderDatabases();
     if (page === 'sftp') return renderSftp();
-    if (page === 'git') return renderGit();
+    if (page === 'git') return gitAddonInstalled ? renderGit() : renderAddonMissing('git');
     if (page === 'cron') return renderCron();
     if (page === 'files') return renderFiles();
     if (page === 'backups') return renderBackups();

@@ -73,6 +73,13 @@ _busy_lock = threading.Lock()
 _session_factory = None
 
 
+def enabled() -> bool:
+    """Git is an addon (operator, 2026-10-10): off until an admin installs it."""
+    from app.services import addons
+
+    return addons.is_installed(addons.GIT)
+
+
 # --- Validation ----------------------------------------------------------------------
 
 def linux_user_for(owner: User) -> str:
