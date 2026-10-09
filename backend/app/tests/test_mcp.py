@@ -1261,6 +1261,8 @@ def test_every_addon_has_a_way_in_from_the_sidebar():
                   "demo": "isAdmin && ['addons', 'Addons', PackageOpen,",
                   # Administrators and customers alike (2026-09-29).
                   "dns": "dnsAddonInstalled ? [['dns', 'DNS Manager', Network]]",
+                  # Administrators and customers alike (2026-10-10).
+                  "git": "gitAddonInstalled ? [['git', 'Git', GitBranch]]",
                   # Administrators and customers alike (2026-09-29).
                   "mail": "mailAddonInstalled ? [['mail', 'Email', Mail]]",
                   # Administrators only (operator, 2026-09-27).

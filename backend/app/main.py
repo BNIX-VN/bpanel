@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import addons as addons_api, auth, dashboard, databases, demo_mode as demo_mode_api, dns as dns_api, fail2ban as fail2ban_api, firewall, mail as mail_api, maintenance, malware, mcp as mcp_api, notifications as notifications_api, packages, panel_settings as panel_settings_api, provisioning, resource_limits as resource_limits_api, server_monitor as server_monitor_api, services, sftp_accounts as sftp_accounts_api, site_apps as site_apps_api, terminal, updates, users, waf, websites
+from app.api import addons as addons_api, auth, dashboard, databases, demo_mode as demo_mode_api, dns as dns_api, fail2ban as fail2ban_api, firewall, mail as mail_api, maintenance, malware, mcp as mcp_api, notifications as notifications_api, packages, panel_settings as panel_settings_api, provisioning, resource_limits as resource_limits_api, server_monitor as server_monitor_api, services, git as git_api, sftp_accounts as sftp_accounts_api, site_apps as site_apps_api, terminal, updates, users, waf, websites
 from app.core.config import settings
 from app.core.database import run_migrations
 from app.core.version import APP_VERSION
@@ -195,6 +195,7 @@ app.include_router(dns_api.router, prefix="/api")
 app.include_router(mail_api.router, prefix="/api")
 app.include_router(resource_limits_api.router, prefix="/api")
 app.include_router(server_monitor_api.router, prefix="/api")
+app.include_router(git_api.router, prefix="/api")
 
 
 @app.get("/api/health")

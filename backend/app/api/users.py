@@ -24,7 +24,7 @@ from app.schemas.schemas import (
     UserUpdate,
 )
 from app.services.audit import log_action
-from app.services import demo_mode, mail, mariadb, nginx, reseller as reseller_pool, resource_limits, site_users, ssl, storage_quota, teardown, waf, wordpress
+from app.services import demo_mode, git_repos, mail, mariadb, nginx, reseller as reseller_pool, resource_limits, site_users, ssl, storage_quota, teardown, waf, wordpress
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -425,6 +425,8 @@ def delete_user(user_id: int, request: Request, db: Session = Depends(get_db), c
             db.delete(item)
         # Their mail is in the home that goes next; the rows go with it.
         mail.delete_for_owner(db, user)
+        # So are their git repositories.
+        git_repos.delete_for_owner(db, user)
         site_users.delete_panel_user(user.username)
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

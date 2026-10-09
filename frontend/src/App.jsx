@@ -13,7 +13,7 @@ import 'ace-builds/src-noconflict/mode-text';
 import 'ace-builds/src-noconflict/mode-yaml';
 import 'ace-builds/src-noconflict/theme-textmate';
 import 'ace-builds/src-noconflict/theme-tomorrow_night';
-import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, Eye, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pause, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle, Activity, BrickWall, Bug, LockKeyhole, PackageOpen, ScrollText, ShieldAlert, CheckCircle, Zap, Bell, Mail, Send, Cloud, Inbox, Forward, ShieldCheck } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, Eye, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pause, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle, Activity, BrickWall, Bug, LockKeyhole, PackageOpen, ScrollText, ShieldAlert, CheckCircle, Zap, Bell, Mail, Send, Cloud, Inbox, Forward, ShieldCheck, GitBranch, CloudDownload, CloudUpload, Rocket } from 'lucide-react';
 import { Terminal } from './components/Terminal';
 import { UsageChart } from './components/UsageChart';
 import { LANGUAGES, t, useLanguage } from './i18n.js';
@@ -102,6 +102,7 @@ const PAGE_ROUTES = {
   dns: '/dns',
   mail: '/email',
   usage: '/resource-usage',
+  git: '/git',
   // The server's own pages, behind the top bar's status chips (admin only).
   processes: '/processes',
   'ram-usage': '/ram-usage',
@@ -823,6 +824,17 @@ function App() {
   // login's (account null), which the panel password and 2FA code confirm.
   const [sftpPasswordFor, setSftpPasswordFor] = useState(null);
   const [showCreateSftp, setShowCreateSftp] = useState(false);
+  // Git repositories in the account's home (operator, 2026-10-09).
+  const BLANK_GIT_FORM = { owner_id: '', name: '', mode: 'clone', path: '', remote_url: '', branch: 'main', auth_type: 'none', https_username: '', https_token: '', deploy_commands: [], php_version: '' };
+  const [gitInfo, setGitInfo] = useState(null);
+  const [gitRepo, setGitRepo] = useState(null);
+  const [showCreateGit, setShowCreateGit] = useState(false);
+  const [gitForm, setGitForm] = useState(BLANK_GIT_FORM);
+  const [gitPushMessage, setGitPushMessage] = useState('');
+  const [gitDiscard, setGitDiscard] = useState(false);
+  const [gitBranchPick, setGitBranchPick] = useState('');
+  const [gitOpLog, setGitOpLog] = useState(null);
+  const [gitSettings, setGitSettings] = useState(null);
   const [siteApps, setSiteApps] = useState({ items: [], limit: 0, used: 0, memory_ceiling_mb: 512, port_range: [21000, 21999] });
   // Optional features. Until this has loaded nothing addon-owned is offered, so
   // a slow first request cannot flash a section that turns out not to be there.
@@ -1043,6 +1055,8 @@ function App() {
     if (page === 'databases' && isAdmin && users.length === 0) loadUsers();
   }, [page, isAdmin]);
   const mcpAddonInstalled = !!addons.items.find(item => item.slug === 'mcp')?.installed;
+  // Git is an addon (2026-10-10): in the sidebar only while installed.
+  const gitAddonInstalled = !!addons.items.find(item => item.slug === 'git')?.installed;
   const notificationsAddonInstalled = !!addons.items.find(item => item.slug === 'notifications')?.installed;
   const malwareAddonInstalled = !!addons.items.find(item => item.slug === 'malware')?.installed;
   const dnsAddonInstalled = !!addons.items.find(item => item.slug === 'dns')?.installed;
@@ -3593,6 +3607,93 @@ function App() {
   }
 
   // Every extra login on the account, each with the website it reaches.
+  async function loadGit() {
+    const data = await request('/git/overview', { silent: true });
+    if (data) setGitInfo(data);
+  }
+
+  async function openGitRepo(id, quiet = false) {
+    const data = await request(`/git/repos/${id}`, quiet ? { silent: true } : {}, quiet ? '' : t('Reading the repository...'));
+    if (data) {
+      setGitRepo(data);
+      if (!quiet) {
+        setGitOpLog(null); setGitSettings(null); setGitPushMessage(''); setGitDiscard(false);
+        setGitBranchPick(data.repo.branch);
+      }
+    }
+    return data;
+  }
+
+  function closeGitRepo() {
+    setGitRepo(null); setGitOpLog(null); setGitSettings(null);
+    loadGit();
+  }
+
+  async function createGitRepo() {
+    const body = { ...gitForm, name: gitForm.name.trim(), path: gitForm.path.trim(), remote_url: gitForm.remote_url.trim(),
+      branch: gitForm.branch.trim(), owner_id: isAdmin && gitForm.owner_id ? Number(gitForm.owner_id) : null };
+    const data = await request('/git/repos', { method: 'POST', body: JSON.stringify(body) },
+      t('Creating the repository...'));
+    if (data) {
+      setShowCreateGit(false);
+      setGitForm(BLANK_GIT_FORM);
+      await loadGit();
+      await openGitRepo(data.id);
+    }
+  }
+
+  async function gitAction(action, body, label, done) {
+    const repo = gitRepo?.repo;
+    if (!repo) return null;
+    const data = await request(`/git/repos/${repo.id}/${action}`, { method: 'POST', body: JSON.stringify(body || {}) }, label);
+    if (data) {
+      if (done) setNotice(done);
+      await openGitRepo(repo.id, true);
+    }
+    return data;
+  }
+
+  async function pushGit() {
+    const data = await gitAction('push', { message: gitPushMessage.trim() }, t('Starting the push...'), t('Commit & push started.'));
+    if (data) setGitPushMessage('');
+  }
+
+  async function regenerateGitKey() {
+    if (!confirm(t('Make a new deploy key? The old one stops working: add the new key on the remote.'))) return;
+    const repo = gitRepo?.repo;
+    const data = await request(`/git/repos/${repo.id}/ssh-key`, { method: 'POST' }, t('Making a new key...'));
+    if (data) { setNotice(t('New deploy key made.')); await openGitRepo(repo.id, true); }
+  }
+
+  async function rotateGitWebhook() {
+    if (!confirm(t('Make a new webhook URL? The old one stops working: update it on the remote.'))) return;
+    const repo = gitRepo?.repo;
+    const data = await request(`/git/repos/${repo.id}/webhook-token`, { method: 'POST' }, t('Saving...'));
+    if (data) { setNotice(t('New webhook URL made.')); await openGitRepo(repo.id, true); }
+  }
+
+  async function saveGitSettings() {
+    const repo = gitRepo?.repo;
+    const form = gitSettings;
+    const body = { ...form, name: form.name.trim(), remote_url: form.remote_url.trim() };
+    if (!body.https_token) delete body.https_token;
+    const data = await request(`/git/repos/${repo.id}`, { method: 'PATCH', body: JSON.stringify(body) }, t('Saving...'));
+    if (data) { setNotice(t('Repository settings saved.')); setGitSettings(null); await openGitRepo(repo.id, true); }
+  }
+
+  async function deleteGitRepo() {
+    const repo = gitRepo?.repo;
+    if (!repo || !confirm(t('Remove {name} from the panel? Its files stay in {path}.', { name: repo.name, path: repo.path }))) return;
+    const data = await request(`/git/repos/${repo.id}`, { method: 'DELETE' }, t('Removing...'));
+    if (data) { setNotice(t('{name} removed from the panel.', { name: repo.name })); closeGitRepo(); }
+  }
+
+  async function toggleGitOperation(operation) {
+    if (gitOpLog?.id === operation.id) { setGitOpLog(null); return; }
+    const data = await request(`/git/repos/${gitRepo.repo.id}/operations/${operation.id}`, { silent: true });
+    if (data) setGitOpLog(data);
+  }
+
   async function loadSftpAccounts() {
     const data = await request('/sftp-accounts', {}, t('Loading SFTP accounts...'));
     if (Array.isArray(data)) setSftpAccounts(data);
@@ -4970,6 +5071,20 @@ function App() {
     loadNotifyLog();
   }, [isAuthenticated, page, notificationsAddonInstalled, isAdmin]);
 
+  useEffect(() => {
+    const repo = gitRepo?.repo;
+    const running = repo && (repo.busy || gitRepo.operations?.[0]?.status === 'running');
+    if (!isAuthenticated || page !== 'git' || !running) return undefined;
+    const timer = setInterval(async () => {
+      const data = await openGitRepo(repo.id, true);
+      if (data && gitOpLog && data.operations?.some(op => op.id === gitOpLog.id)) {
+        const log = await request(`/git/repos/${repo.id}/operations/${gitOpLog.id}`, { silent: true });
+        if (log) setGitOpLog(log);
+      }
+    }, 2500);
+    return () => clearInterval(timer);
+  }, [isAuthenticated, page, gitRepo?.repo?.id, gitRepo?.repo?.busy, gitRepo?.operations?.[0]?.status, gitOpLog?.id]);
+
   // The top bar's CPU, RAM, disk and network chips, on every page.
   useEffect(() => {
     if (!isAuthenticated || !isAdmin) return undefined;
@@ -5033,6 +5148,12 @@ function App() {
     setCreatedSftpInfo(null);
     loadSftpAccounts();
   }, [isAuthenticated, page, selectedWebsiteId]);
+
+  useEffect(() => {
+    if (!isAuthenticated || page !== 'git' || !gitAddonInstalled) return;
+    loadGit();
+    if (isAdmin) loadUsers();
+  }, [isAuthenticated, page, gitAddonInstalled]);
 
   useEffect(() => {
     if (!currentSite) return;
@@ -5260,6 +5381,7 @@ function App() {
       ...(canManageUsers ? [['users', 'Panel users', Users]] : []),
       ...(mailAddonInstalled ? [['mail', 'Email', Mail]] : []),
       ...(dnsAddonInstalled ? [['dns', 'DNS Manager', Network]] : []),
+      ...(gitAddonInstalled ? [['git', 'Git', GitBranch]] : []),
       ...(mcpAddonInstalled ? [['mcp', 'AI assistants (MCP)', Bot]] : []),
       ...(notificationsAddonInstalled && isAdmin ? [['notifications', 'Notifications', Bell]] : []),
       ...(malwareAddonInstalled && isAdmin ? [['malware', 'Malware Scanner', Bug]] : []),
@@ -5615,6 +5737,7 @@ function App() {
     groups.push({ key: 'files', title: t('Files'), icon: FolderOpen, tools: [
       { key: 'files', label: t('File manager'), icon: FolderOpen, run: go('files') },
       { key: 'sftp', label: t('SFTP accounts'), icon: KeyRound, run: go('sftp') },
+      ...(gitAddonInstalled ? [{ key: 'git', label: t('Git'), icon: GitBranch, run: go('git') }] : []),
       { key: 'sftp-new', label: t('New SFTP account'), icon: Plus, run: () => {
         navigateToPage('sftp');
         window.setTimeout(() => document.querySelector('.sftp-form input')?.focus(), 150);
@@ -7471,6 +7594,10 @@ function App() {
                 <div className="addon-panel-head"><strong>{t('Scans, schedules and real-time protection')}</strong>
                   <button className="mini" onClick={() => navigateToPage('malware')}><Bug size={13}/> {t('Open Malware Scanner')}</button></div>
               </div>}
+              {addon.slug === 'git' && addon.installed && <div className="addon-panel">
+                <div className="addon-panel-head"><strong>{t('Repositories, deploys and webhooks')}</strong>
+                  <button className="mini" onClick={() => navigateToPage('git')}><GitBranch size={13}/> {t('Open Git')}</button></div>
+              </div>}
               {addon.slug === 'notifications' && addon.installed && <div className="addon-panel">
                 <div className="addon-panel-head"><strong>{t('Channels, recipients and events')}</strong>
                   <button className="mini" onClick={() => navigateToPage('notifications')}><Bell size={13}/> {t('Open Notifications')}</button></div>
@@ -8302,6 +8429,293 @@ function App() {
         </div>
         <p className="hint">{t('The database, its MariaDB user and its password stay as they are; only who manages it in the panel changes. A database linked to a website moves with that website.')}</p>
       </div>}
+    </section>;
+  }
+
+  // --- Git repositories (operator, 2026-10-09) ------------------------------------------
+  function gitOpLabel(action) {
+    return { clone: t('Clone'), init: t('Create'), deploy: t('Deploy'), push: t('Commit & push'), checkout: t('Switch branch') }[action] || action;
+  }
+
+  function gitOpStatus(status) {
+    return status === 'done' ? ['ok', t('Done')] : status === 'failed' ? ['danger', t('Failed')] : ['warn', t('Running')];
+  }
+
+  function gitWhen(iso) {
+    return iso ? new Date(iso).toLocaleString() : '';
+  }
+
+  function gitRepoState(repo) {
+    const last = repo.last_operation;
+    if (repo.busy || last?.status === 'running') return <span className="badge warn">{t('Running: {action}', { action: gitOpLabel(last?.action) })}</span>;
+    if (!repo.ready) return <span className="badge warn">{t('Not set up yet')}</span>;
+    if (!last) return <span className="badge ok">{t('Ready')}</span>;
+    const [tone, statusText] = gitOpStatus(last.status);
+    return <span className="git-row-last"><span className={`badge ${tone}`}>{gitOpLabel(last.action)}: {statusText}</span><small>{gitWhen(last.finished_at || last.started_at)}</small></span>;
+  }
+
+  function renderGitPresetChoice(selected, onChange) {
+    const presets = gitInfo?.presets || [];
+    return <div className="git-presets">
+      {presets.map(preset => <label className="check-line" key={preset.key}>
+        <input type="checkbox" checked={selected.includes(preset.key)}
+          onChange={e => onChange(e.target.checked ? presets.map(p => p.key).filter(key => key === preset.key || selected.includes(key)) : selected.filter(key => key !== preset.key))} />
+        <code>{preset.command}</code>
+      </label>)}
+    </div>;
+  }
+
+  function renderGitAuthFields(form, set, { editing = false } = {}) {
+    return <>
+      <div className="field"><span className="field-label">{t('Access')}</span>
+        <select value={form.auth_type} onChange={e => set({ auth_type: e.target.value })}>
+          <option value="none">{t('Public repository')}</option>
+          <option value="ssh">{t('Deploy key (SSH)')}</option>
+          <option value="https">{t('Access token (HTTPS)')}</option>
+        </select>
+      </div>
+      {form.auth_type === 'https' && <>
+        <div className="field"><span className="field-label">{t('HTTPS username')}</span>
+          <input value={form.https_username} maxLength={100} placeholder="git" autoComplete="off" onChange={e => set({ https_username: e.target.value })} /></div>
+        <div className="field"><span className="field-label">{t('Access token')}</span>
+          <input type="password" value={form.https_token} maxLength={4000} autoComplete="new-password"
+            placeholder={editing ? t('Leave empty to keep the saved token') : 'ghp_…'} onChange={e => set({ https_token: e.target.value })} /></div>
+      </>}
+    </>;
+  }
+
+  function renderGitPhpField(form, set) {
+    return <div className="field"><span className="field-label">{t('PHP for the commands')}</span>
+      <select value={form.php_version} onChange={e => set({ php_version: e.target.value })}>
+        <option value="">{t('Panel default ({version})', { version: gitInfo?.default_php_version || '' })}</option>
+        {(gitInfo?.php_versions || []).map(version => <option key={version} value={version}>PHP {version}</option>)}
+      </select>
+    </div>;
+  }
+
+  function renderGit() {
+    if (gitRepo) return renderGitRepo();
+    const info = gitInfo || {};
+    const repos = info.repos || [];
+    const form = gitForm;
+    const set = patch => setGitForm(prev => ({ ...prev, ...patch }));
+    const owner = isAdmin && form.owner_id ? users.find(user => user.id === Number(form.owner_id)) : currentUser;
+    const home = owner ? `/home/${owner.username.toLowerCase()}/` : '/home/…/';
+    const createOpen = showCreateGit || (!!gitInfo && repos.length === 0);
+    const canCreate = !!form.name.trim() && !!form.path.trim() && !!form.branch.trim()
+      && (form.mode === 'init' || !!form.remote_url.trim()) && (form.auth_type !== 'https' || !!form.https_token.trim());
+    return <section className="section">
+      <div className="section-title">
+        <div><h2>{t('Git repositories')}</h2>
+          <p className="hint">{t("Clone a repository from GitHub, GitLab or Bitbucket anywhere in the account's home, or start one in a folder that already has files. Deploy pulls the latest code and runs the commands you pick; Commit & push sends what changed on the server.")}</p></div>
+        <div className="actions">
+          <button className="secondary" disabled={!!loading} onClick={loadGit}><RefreshCw size={14}/> {t('Refresh')}</button>
+          {!createOpen && <button type="button" onClick={() => setShowCreateGit(true)}><Plus size={15}/> {t('New repository')}</button>}
+        </div>
+      </div>
+
+      {createOpen && <div className="create-inline">
+        <div className="create-inline-head">
+          <strong>{t('New repository')}</strong>
+          {repos.length > 0 && <button type="button" className="secondary icon-only mini" onClick={() => setShowCreateGit(false)} aria-label={t('Close')} title={t('Close')}><X size={15}/></button>}
+        </div>
+        <div className="segmented-control" role="tablist" aria-label={t('New repository')}>
+          <button type="button" role="tab" aria-selected={form.mode === 'clone'} className={form.mode === 'clone' ? 'active' : ''} onClick={() => set({ mode: 'clone' })}>{t('Clone from a URL')}</button>
+          <button type="button" role="tab" aria-selected={form.mode === 'init'} className={form.mode === 'init' ? 'active' : ''} onClick={() => set({ mode: 'init' })}>{t('New repository in a folder')}</button>
+        </div>
+        <p className="hint">{form.mode === 'clone'
+          ? t('The folder must be empty or new; the panel creates it.')
+          : t('The folder may already have files: commit them and push them to an empty remote repository.')}</p>
+        <div className="git-create-grid">
+          {isAdmin && <div className="field"><span className="field-label">{t('Account')}</span>
+            <select value={form.owner_id} onChange={e => set({ owner_id: e.target.value })}>
+              <option value="">{currentUser?.username}</option>
+              {users.filter(user => user.id !== currentUser?.id).map(user => <option key={user.id} value={user.id}>{user.username}</option>)}
+            </select>
+          </div>}
+          <div className="field"><span className="field-label">{t('Name')}</span>
+            <input value={form.name} maxLength={64} placeholder="shop" onChange={e => set({ name: e.target.value })} /></div>
+          <div className="field git-path-field"><span className="field-label">{t('Folder')}</span>
+            <div className="prefixed-input"><span>{home}</span>
+              <input value={form.path} maxLength={400} placeholder="example.com/public_html" onChange={e => set({ path: e.target.value.replace(/^\/+/, '') })} /></div></div>
+          <div className="field"><span className="field-label">{form.mode === 'clone' ? t('Repository URL') : t('Remote URL (optional)')}</span>
+            <input value={form.remote_url} maxLength={500} placeholder="https://github.com/owner/repo.git" onChange={e => set({ remote_url: e.target.value })} /></div>
+          <div className="field"><span className="field-label">{t('Branch')}</span>
+            <input value={form.branch} maxLength={100} placeholder="main" onChange={e => set({ branch: e.target.value })} /></div>
+          {renderGitAuthFields(form, set)}
+          {renderGitPhpField(form, set)}
+        </div>
+        {form.auth_type === 'ssh' && <p className="hint">{t('Use the SSH URL (git@github.com:owner/repo.git). The panel makes a key for this repository; add it as a deploy key on the remote, then press Clone.')}</p>}
+        <div className="field"><span className="field-label">{t('Run after each deploy')}</span>
+          {renderGitPresetChoice(form.deploy_commands, commands => set({ deploy_commands: commands }))}</div>
+        <div className="actions">
+          <button type="button" disabled={!canCreate || !!loading} onClick={createGitRepo}>
+            {form.mode === 'clone' ? <><CloudDownload size={14}/> {form.auth_type === 'ssh' ? t('Continue') : t('Clone')}</> : <><Plus size={14}/> {t('Create repository')}</>}
+          </button>
+        </div>
+      </div>}
+
+      {gitInfo && repos.length === 0 && !createOpen && <EmptyState icon={GitBranch} message="No repositories yet." />}
+      {repos.length > 0 && <div className="table">
+        {repos.map(repo => <div className="row git-row" key={repo.id} role="button" tabIndex={0}
+          onClick={() => openGitRepo(repo.id)} onKeyDown={e => { if (e.key === 'Enter') openGitRepo(repo.id); }}>
+          <span className="git-row-name"><strong>{repo.name}</strong><small>{isAdmin ? `${repo.owner} · ` : ''}~/{repo.relative_path}</small></span>
+          <span className="git-row-remote"><code>{repo.remote_url || t('No remote')}</code></span>
+          <span><span className="badge"><GitBranch size={11}/> {repo.branch}</span></span>
+          <span className="git-row-state">{gitRepoState(repo)}</span>
+        </div>)}
+      </div>}
+    </section>;
+  }
+
+  function renderGitRepo() {
+    const { repo, status, status_error: statusError, operations = [] } = gitRepo;
+    const running = repo.busy || operations[0]?.status === 'running';
+    const presets = gitInfo?.presets || [];
+    const commands = repo.deploy_commands.map(key => presets.find(p => p.key === key)?.command || key);
+    const head = status?.head;
+    const branches = [...new Set([repo.branch, ...(status?.local_branches || []), ...(status?.remote_branches || [])])].sort();
+    const lastFailed = operations[0]?.status === 'failed';
+    return <>
+      <section className="section">
+        <div className="section-title">
+          <div className="waf-detail-title">
+            <button className="secondary" onClick={closeGitRepo}><ArrowLeft size={14}/> {t('Git')}</button>
+            <div><h2>{repo.name}</h2>
+              <p className="hint">{[isAdmin ? `${t('Account')}: ${repo.owner}` : '', repo.path].filter(Boolean).join(' · ')}</p></div>
+          </div>
+          <div className="actions">
+            <button className="secondary" disabled={!!loading} onClick={() => openGitRepo(repo.id)}><RefreshCw size={14}/> {t('Refresh')}</button>
+            <button className="secondary" onClick={() => setGitSettings(gitSettings ? null : {
+              name: repo.name, remote_url: repo.remote_url, auth_type: repo.auth_type, https_username: repo.https_username,
+              https_token: '', deploy_commands: repo.deploy_commands, php_version: repo.php_version, webhook_enabled: repo.webhook_enabled,
+            })}><SettingsIcon size={14}/> {t('Settings')}</button>
+            <button className="danger" disabled={!!loading || running} onClick={deleteGitRepo}><Trash2 size={14}/> {t('Remove')}</button>
+          </div>
+        </div>
+        {running && <p className="hint git-running"><RefreshCw size={13} className="spin"/> {t('Working: {action}…', { action: gitOpLabel(operations[0]?.action) })}</p>}
+
+        {!repo.ready && <div className="info-box git-setup">
+          {repo.auth_type === 'ssh' && <>
+            <strong>{t('1. Add this deploy key to the repository')}</strong>
+            <p className="hint">{t('GitHub: Settings → Deploy keys → Add deploy key. GitLab: Settings → Repository → Deploy keys. Allow write access if you will push from the panel.')}</p>
+            {renderCopyBlock(t('Deploy key'), repo.ssh_public_key, { multiline: true })}
+            <strong>{t('2. Clone')}</strong>
+          </>}
+          {lastFailed && <p className="hint alarm">{t('The last attempt failed: its output is under Activity.')}</p>}
+          <div className="actions">
+            {repo.remote_url
+              ? <button disabled={running || !!loading} onClick={() => gitAction('start', { mode: 'clone' }, t('Starting the clone...'), t('Clone started.'))}><CloudDownload size={14}/> {t('Clone now')}</button>
+              : <button disabled={running || !!loading} onClick={() => gitAction('start', { mode: 'init' }, t('Creating the repository...'), t('Repository created.'))}><Plus size={14}/> {t('Create repository')}</button>}
+          </div>
+        </div>}
+
+        {repo.ready && <>
+          <div className="info-rows git-facts">
+            <InfoRow label={t('Branch')} value={status?.branch || repo.branch} />
+            <InfoRow label={t('Last commit')} value={head ? `${head.short} · ${head.subject}` : '—'} title={head ? `${head.hash}\n${head.author} · ${gitWhen(head.date)}` : ''} />
+            <InfoRow label={t('Remote')} value={repo.remote_url || t('No remote')} />
+            {status?.upstream && <InfoRow label={t('Against the remote')} value={t('{ahead} ahead, {behind} behind', { ahead: status.ahead, behind: status.behind })} />}
+            {status && <InfoRow label={t('Changed on the server')} value={t('{count} files', { count: status.changes_total })} />}
+          </div>
+          {statusError && <p className="hint alarm">{statusError}</p>}
+          <div className="git-actions-grid">
+            <div className="git-card">
+              <strong><Rocket size={15}/> {t('Deploy')}</strong>
+              <p className="hint">{commands.length
+                ? t('Pulls the latest {branch} from the remote, then runs: {commands}.', { branch: repo.branch, commands: commands.join(', ') })
+                : t('Pulls the latest {branch} from the remote.', { branch: repo.branch })}</p>
+              <label className="check-line"><input type="checkbox" checked={gitDiscard} onChange={e => setGitDiscard(e.target.checked)} /> {t('Discard changes made on the server')}</label>
+              <div className="actions"><button disabled={running || !!loading || !repo.remote_url}
+                onClick={() => gitAction('deploy', { discard_local: gitDiscard }, t('Starting the deploy...'), t('Deploy started.'))}><CloudDownload size={14}/> {t('Deploy now')}</button></div>
+            </div>
+            <div className="git-card">
+              <strong><CloudUpload size={15}/> {t('Commit & push')}</strong>
+              <p className="hint">{t('Commits every change in the folder and pushes it to {branch}.', { branch: repo.branch })}</p>
+              <input value={gitPushMessage} maxLength={500} placeholder={t('Commit message')} aria-label={t('Commit message')} onChange={e => setGitPushMessage(e.target.value)} />
+              <div className="actions"><button disabled={running || !!loading || !gitPushMessage.trim() || !repo.remote_url} onClick={pushGit}><CloudUpload size={14}/> {t('Commit & push')}</button></div>
+            </div>
+            <div className="git-card">
+              <strong><GitBranch size={15}/> {t('Branch')}</strong>
+              <p className="hint">{t('Switch the folder to another branch; Deploy and the webhook then follow it.')}</p>
+              <select value={gitBranchPick} aria-label={t('Branch')} onChange={e => setGitBranchPick(e.target.value)}>
+                {branches.map(branch => <option key={branch} value={branch}>{branch}</option>)}
+              </select>
+              <div className="actions"><button className="secondary" disabled={running || !!loading || !gitBranchPick || gitBranchPick === repo.branch}
+                onClick={() => gitAction('checkout', { branch: gitBranchPick }, t('Switching branch...'), t('Branch switch started.'))}>{t('Switch')}</button></div>
+            </div>
+          </div>
+          {status?.changes?.length > 0 && <details className="git-details">
+            <summary>{t('Changed files ({count})', { count: status.changes_total })}</summary>
+            <pre className="git-log">{status.changes.map(change => `${change.code} ${change.path}`).join('\n')}</pre>
+          </details>}
+          {status?.log?.length > 0 && <details className="git-details" open>
+            <summary>{t('Recent commits')}</summary>
+            <div className="git-commits">
+              {status.log.map(commit => <div className="git-commit" key={commit.hash}>
+                <code>{commit.short}</code><span>{commit.subject}</span><small>{commit.author} · {gitWhen(commit.date)}</small>
+              </div>)}
+            </div>
+          </details>}
+        </>}
+      </section>
+
+      {gitSettings && renderGitSettings(repo)}
+
+      <section className="section">
+        <div className="section-title"><div><h2>{t('Activity')}</h2>
+          <p className="hint">{t('The last operations on this repository, with their output.')}</p></div></div>
+        {operations.length === 0 && <p className="hint">{t('Nothing yet.')}</p>}
+        {operations.length > 0 && <div className="table">
+          {operations.map(operation => {
+            const [tone, statusText] = gitOpStatus(operation.status);
+            const moved = operation.commit_before && operation.commit_after && operation.commit_before !== operation.commit_after;
+            return <div key={operation.id} className="git-op">
+              <div className="row git-op-row">
+                <span className="git-op-action"><strong>{gitOpLabel(operation.action)}</strong>{operation.trigger === 'webhook' && <span className="badge">webhook</span>}</span>
+                <span><span className={`badge ${tone}`}>{statusText}</span></span>
+                <span className="hint">{gitWhen(operation.started_at)}</span>
+                <span className="hint"><code>{moved ? `${operation.commit_before.slice(0, 7)} → ${operation.commit_after.slice(0, 7)}` : (operation.commit_after || '').slice(0, 7)}</code></span>
+                <span className="row-actions"><button className="mini secondary" onClick={() => toggleGitOperation(operation)}>{gitOpLog?.id === operation.id ? t('Hide output') : t('Show output')}</button></span>
+              </div>
+              {gitOpLog?.id === operation.id && <pre className="git-log">{gitOpLog.log || t('No output.')}</pre>}
+            </div>;
+          })}
+        </div>}
+      </section>
+    </>;
+  }
+
+  function renderGitSettings(repo) {
+    const form = gitSettings;
+    const set = patch => setGitSettings(prev => ({ ...prev, ...patch }));
+    const webhookUrl = repo.webhook_path ? `${window.location.origin}${repo.webhook_path}` : '';
+    return <section className="section">
+      <div className="section-title"><div><h2>{t('Repository settings')}</h2></div></div>
+      <div className="git-create-grid">
+        <div className="field"><span className="field-label">{t('Name')}</span>
+          <input value={form.name} maxLength={64} onChange={e => set({ name: e.target.value })} /></div>
+        <div className="field"><span className="field-label">{t('Remote URL')}</span>
+          <input value={form.remote_url} maxLength={500} placeholder="https://github.com/owner/repo.git" onChange={e => set({ remote_url: e.target.value })} /></div>
+        {renderGitAuthFields(form, set, { editing: repo.auth_type === 'https' && repo.has_token })}
+        {renderGitPhpField(form, set)}
+      </div>
+      <div className="field"><span className="field-label">{t('Run after each deploy')}</span>
+        {renderGitPresetChoice(form.deploy_commands, commands => set({ deploy_commands: commands }))}</div>
+      <label className="check-line"><input type="checkbox" checked={form.webhook_enabled} onChange={e => set({ webhook_enabled: e.target.checked })} /> {t('Deploy by itself when {branch} is pushed (webhook)', { branch: repo.branch })}</label>
+      {repo.webhook_enabled && webhookUrl && <div className="git-secret">
+        {renderCopyBlock(t('Webhook URL'), webhookUrl)}
+        <p className="hint">{t('GitHub: Settings → Webhooks → Add webhook, content type application/json, just the push event. GitLab: Settings → Webhooks, Push events. The address must be reachable from the internet.')}</p>
+        <div className="actions"><button type="button" className="mini secondary" disabled={!!loading} onClick={rotateGitWebhook}><RotateCcw size={13}/> {t('New webhook URL')}</button></div>
+      </div>}
+      {repo.auth_type === 'ssh' && repo.ssh_public_key && <div className="git-secret">
+        {renderCopyBlock(t('Deploy key'), repo.ssh_public_key, { multiline: true })}
+        <div className="actions"><button type="button" className="mini secondary" disabled={!!loading} onClick={regenerateGitKey}><KeyRound size={13}/> {t('New deploy key')}</button></div>
+      </div>}
+      <div className="actions">
+        <button type="button" className="secondary-light" onClick={() => setGitSettings(null)}>{t('Cancel')}</button>
+        <button type="button" disabled={!!loading || !form.name.trim()} onClick={saveGitSettings}><Save size={14}/> {t('Save')}</button>
+      </div>
     </section>;
   }
 
@@ -11074,6 +11488,7 @@ function App() {
     if (page === 'ssl') return renderSsl();
     if (page === 'databases') return renderDatabases();
     if (page === 'sftp') return renderSftp();
+    if (page === 'git') return gitAddonInstalled ? renderGit() : renderAddonMissing('git');
     if (page === 'cron') return renderCron();
     if (page === 'files') return renderFiles();
     if (page === 'backups') return renderBackups();

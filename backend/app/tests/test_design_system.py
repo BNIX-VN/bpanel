@@ -97,8 +97,9 @@ def test_the_sidebar_holds_what_is_used_every_day():
     Settings page, which is a page and not a collapsed submenu."""
     sidebar = APP.split("const navSections = [")[1].split("].filter(section")[0]
     keys = re.findall(r"\['([a-z-]+)', '", sidebar)
+    # Git is an addon (2026-10-10): in the sidebar only while installed.
     assert keys == ["dashboard", "websites", "applications", "ssl", "databases", "cron", "files",
-                    "sftp", "backups", "users", "mail", "dns", "mcp", "notifications", "malware", "settings"]
+                    "sftp", "backups", "users", "mail", "dns", "git", "mcp", "notifications", "malware", "settings"]
     assert sidebar.count("{ key: ") == 1, "one list, no groups"
     assert "sidebar-subnav" not in APP and "settingsMenuOpen" not in APP
     hub = APP.split("const settingsGroups = [")[1].split("const settingsItems = ")[0]
