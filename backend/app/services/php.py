@@ -107,13 +107,16 @@ def read_php_ini(php_version: str) -> dict:
     values["max_input_vars"] = int(values["max_input_vars"])
     # The OPcache sizes the page set, None where Auto-tune's value stands, and
     # what PHP runs with now for the placeholders.
-    custom = _read_keys(Path(f"/etc/php/{php_version}/fpm/conf.d/99-bpanel.ini"), OPCACHE_SIZE_KEYS)
+    # The version from the allowlist itself, not the caller's string: the path
+    # is then built from a constant.
+    known_version = SUPPORTED_PHP_VERSIONS[SUPPORTED_PHP_VERSIONS.index(php_version)]
+    custom = _read_keys(Path(f"/etc/php/{known_version}/fpm/conf.d/99-bpanel.ini"), OPCACHE_SIZE_KEYS)
     for key in OPCACHE_SIZE_KEYS:
         values[key.replace(".", "_")] = int(custom[key]) if str(custom.get(key, "")).isdigit() else None
     try:
         from app.services import php_tune
 
-        live = php_tune.current_values(php_version)
+        live = php_tune.current_values(known_version)
     except Exception:  # noqa: BLE001 - the form still opens without the hints
         live = {}
     values["opcache_effective"] = {key.replace(".", "_"): live.get(key, "") for key in OPCACHE_SIZE_KEYS}
