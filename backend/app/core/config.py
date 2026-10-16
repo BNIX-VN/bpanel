@@ -9,7 +9,10 @@ class Settings(BaseSettings):
     app_name: str = "BPanel"
     app_env: str = "development"
     secret_key: str = DEFAULT_SECRET_KEY
-    access_token_expire_minutes: int = 120  # was 720; shorter window if a token is stolen
+    # Six hours without a request ends a session; any request past half of it
+    # renews the cookie (operator, 2026-10-16: two hours signed people out
+    # mid-work). Was 720, then 120.
+    access_token_expire_minutes: int = 360
     # A session is silently re-issued while it is in use (see the slide-session
     # middleware), so this is really an *idle* timeout: leave the panel alone
     # this long and the next visit asks for the password again.

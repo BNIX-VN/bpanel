@@ -229,14 +229,15 @@ def consume_phpmyadmin_sso(token: str, request: Request):
 @router.post("/{database_id}/phpmyadmin-sso")
 def create_phpmyadmin_sso(database_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     item = get_accessible_database(database_id, db, current_user)
+    # A temporary login for this visit, not the website's: the panel does not
+    # know the password of a database imported from DirectAdmin (see
+    # mariadb.create_sso_login).
     try:
-        db_password = decrypt(item.db_password)
-    except RuntimeError:
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to access stored database password; please re-save the password in panel settings",
-        )
-    token = create_phpmyadmin_token(item.db_user, db_password, item.db_name)
+        sso_user, sso_password = mariadb.create_sso_login(item.db_name)
+    except (RuntimeError, ValueError, OSError) as exc:
+        logger.warning("phpMyAdmin login for %s could not be made: %s", item.db_name, exc)
+        raise HTTPException(status_code=500, detail="Could not open phpMyAdmin for this database") from exc
+    token = create_phpmyadmin_token(sso_user, sso_password, item.db_name)
     log_action(
         db,
         current_user.id,

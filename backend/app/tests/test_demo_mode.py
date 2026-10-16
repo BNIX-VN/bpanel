@@ -208,10 +208,16 @@ def test_signing_out_of_a_demo_account_does_not_sign_out_the_other_visitors(env)
     assert env.client.get("/api/users", headers=other_visitor).status_code == 200
 
 
-def test_signing_out_of_an_ordinary_account_still_ends_every_session(env):
+def test_signing_out_ends_this_session_and_everywhere_ends_every_one(env):
+    """A sign-out ends one session (operator, 2026-10-16: it used to end every
+    session of the account); "everywhere" still ends them all - but not for a
+    demo account, which every visitor shares."""
     env.turn_on()
     assert env.client.post("/api/auth/logout", headers=env.as_("owner")).status_code == 200
+    assert env.user("owner").token_version == 0
+    assert env.client.post("/api/auth/logout-all", headers=env.as_("owner")).status_code == 200
     assert env.user("owner").token_version == 1
+    assert env.client.post("/api/auth/logout-all", headers=env.as_("demo")).status_code in (400, 403)
 
 
 def test_nothing_is_restricted_while_the_addon_is_off(env):
