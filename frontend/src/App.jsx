@@ -103,6 +103,7 @@ const PAGE_ROUTES = {
   mail: '/email',
   usage: '/resource-usage',
   git: '/git',
+  terminal: '/terminal',
   // The server's own pages, behind the top bar's status chips (admin only).
   processes: '/processes',
   'ram-usage': '/ram-usage',
@@ -1051,6 +1052,11 @@ function App() {
   // A reseller manages its customers and packages, never the server.
   const isReseller = currentUser?.role === 'reseller';
   const canManageUsers = isAdmin || isReseller;
+  // The browser terminal: the server says whether this session may open one
+  // (a customer whose package has it, or an admin logged in as one). A reseller
+  // puts it in its packages only if the administrator gave it the right to.
+  const canOpenTerminal = !!currentUser?.terminal;
+  const canGrantTerminal = isAdmin || (isReseller && !!currentUser?.terminal_enabled);
 
   useEffect(() => {
     setAssignPreview(null);
@@ -2036,7 +2042,7 @@ function App() {
     }
     const data = await request('/packages', {
       method: 'POST',
-      body: JSON.stringify({ name: newPackage.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, mail_accounts_limit: Number(newPackage.mail_accounts_limit || 0), database_limit: Number(newPackage.database_limit || 0), ...(limitsOn ? limitValues(newPackage) : {}) }),
+      body: JSON.stringify({ name: newPackage.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, mail_accounts_limit: Number(newPackage.mail_accounts_limit || 0), database_limit: Number(newPackage.database_limit || 0), ...(canGrantTerminal ? { terminal_enabled: !!newPackage.terminal_enabled } : {}), ...(limitsOn ? limitValues(newPackage) : {}) }),
     }, t('Creating package...'));
     if (data) {
       setNotice(`Created package ${data.name}.`);
@@ -2053,6 +2059,7 @@ function App() {
       storage_limit_mb: item.storage_limit_mb ?? 1024,
       mail_accounts_limit: item.mail_accounts_limit ?? 10,
       database_limit: item.database_limit ?? 5,
+      terminal_enabled: !!item.terminal_enabled,
       ...limitValues(item),
     });
   }
@@ -2076,7 +2083,7 @@ function App() {
     }
     const data = await request(`/packages/${packageId}`, {
       method: 'PATCH',
-      body: JSON.stringify({ name: editingPackageForm.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, mail_accounts_limit: Number(editingPackageForm.mail_accounts_limit || 0), database_limit: Number(editingPackageForm.database_limit || 0), ...(limitsOn ? limitValues(editingPackageForm) : {}) }),
+      body: JSON.stringify({ name: editingPackageForm.name.trim(), website_limit: websiteLimit, storage_limit_mb: storageLimitMb, mail_accounts_limit: Number(editingPackageForm.mail_accounts_limit || 0), database_limit: Number(editingPackageForm.database_limit || 0), ...(canGrantTerminal ? { terminal_enabled: !!editingPackageForm.terminal_enabled } : {}), ...(limitsOn ? limitValues(editingPackageForm) : {}) }),
     }, t('Updating package...'));
     if (data) {
       setNotice(`Updated package ${data.name}.`);
@@ -5405,6 +5412,7 @@ function App() {
       ['cron', 'Cron', Clock],
       ['files', 'File manager', FolderOpen],
       ['sftp', 'SFTP accounts', KeyRound],
+      ...(canOpenTerminal ? [['terminal', 'Terminal', TerminalIcon]] : []),
       ['backups', 'Backups', Archive],
       ...(canManageUsers ? [['users', 'Panel users', Users]] : []),
       ...(mailAddonInstalled ? [['mail', 'Email', Mail]] : []),
@@ -5766,6 +5774,7 @@ function App() {
       { key: 'files', label: t('File manager'), icon: FolderOpen, run: go('files') },
       { key: 'sftp', label: t('SFTP accounts'), icon: KeyRound, run: go('sftp') },
       ...(gitAddonInstalled ? [{ key: 'git', label: t('Git'), icon: GitBranch, run: go('git') }] : []),
+      ...(canOpenTerminal ? [{ key: 'terminal', label: t('Terminal'), icon: TerminalIcon, run: go('terminal') }] : []),
       { key: 'sftp-new', label: t('New SFTP account'), icon: Plus, run: () => {
         navigateToPage('sftp');
         window.setTimeout(() => document.querySelector('.sftp-form input')?.focus(), 150);
@@ -8052,9 +8061,23 @@ function App() {
         <h2>{t('Terminal -')} {terminalViewer.domain}</h2>
         <button className="secondary-light" onClick={() => setTerminalViewer(null)}><X size={14}/> {t('Close')}</button>
       </div>
-      <div style={{ height: '500px', marginTop: '8px' }}>
-        <Terminal websiteId={terminalViewer.id} apiBase={API} />
-      </div>
+      <Terminal websiteId={terminalViewer.id} apiBase={API} />
+    </section>;
+  }
+
+  // The account's own terminal, in its home. From a website's row it starts in
+  // the website's folder with the website's PHP instead.
+  function renderTerminalPage() {
+    if (!canOpenTerminal) {
+      return <section className="section"><h2>{t('Terminal')}</h2>
+        <p className="hint">{isAdmin || isReseller
+          ? t("Administrators and resellers open a customer's terminal by logging in as the customer.")
+          : t("The terminal is not part of this account's package.")}</p></section>;
+    }
+    return <section className="section">
+      <div className="section-title"><div><h2>{t('Terminal')}</h2>
+        <p className="hint">{t("A shell in your home folder, in a sandbox of its own. To start in a website's folder with its PHP version, open the terminal from the website's row.")}</p></div></div>
+      <Terminal apiBase={API} />
     </section>;
   }
 
@@ -8220,7 +8243,7 @@ function App() {
               <div className="site-feature-actions">
                 <button className="site-icon-button secondary-light" data-tooltip="Files" title={t('Files')} aria-label={t('Open file manager for {domain}', { domain: site.domain })} disabled={!!loading} onClick={() => openWebsiteFileManager(site)}><FolderOpen size={15}/></button>
                 <button className="site-icon-button secondary-light" data-tooltip="Logs" title={t('Logs')} aria-label={t('View logs for {domain}', { domain: site.domain })} disabled={!!loading} onClick={() => openWebsiteLogs(site)}><FileText size={15}/></button>
-                <button className="site-icon-button secondary-light" data-tooltip="Terminal" title={t('Terminal')} aria-label={t('Open terminal for {domain}', { domain: site.domain })} disabled={!!loading} onClick={() => openWebsiteTerminal(site)}><TerminalIcon size={15}/></button>
+                {canOpenTerminal && <button className="site-icon-button secondary-light" data-tooltip="Terminal" title={t('Terminal')} aria-label={t('Open terminal for {domain}', { domain: site.domain })} disabled={!!loading} onClick={() => openWebsiteTerminal(site)}><TerminalIcon size={15}/></button>}
                 <button className="site-icon-button secondary-light" data-tooltip="Settings" title={t('Settings')} aria-label={t('Edit settings for {domain}', { domain: site.domain })} disabled={!!loading} onClick={() => openNginxCustom(site)}><SettingsIcon size={15}/></button>
                 {!site.wordpress_installed && <button className="site-icon-button secondary-light" data-tooltip={t('Install WP')} title={t('Install WordPress')} aria-label={t('Install WordPress on {domain}', { domain: site.domain })} disabled={!!loading} onClick={() => openWordPressInstaller(site)}><Download size={15}/></button>}
                 {site.wordpress_installed && <button className="site-icon-button secondary-light" data-tooltip={t('Update WP')} title={t('Update WordPress')} aria-label={t('Update WordPress on {domain}', { domain: site.domain })} disabled={!!loading} onClick={() => openWordPressUpdate(site)}><RefreshCw size={15}/></button>}
@@ -11221,6 +11244,7 @@ function App() {
     if (mailAddonInstalled) chips.push([Mail, t('{n} mailboxes', { n: item.mail_accounts_limit ?? 10 })]);
     if (limitsOn && item.cpu_percent) chips.push([Cpu, `CPU ${item.cpu_percent}%`]);
     if (limitsOn && item.memory_mb) chips.push([MemoryStick, `RAM ${formatMegabytes(item.memory_mb)}`]);
+    if (item.terminal_enabled) chips.push([TerminalIcon, t('Terminal')]);
     return <div className="plan-chips">{chips.map(([Icon, text]) => <span className="plan-chip" key={text}><Icon size={13}/>{text}</span>)}</div>;
   }
 
@@ -11236,7 +11260,9 @@ function App() {
           <label><span>{t('Disk (MB)')}</span><input type="number" min="0" max="1048576" value={form.storage_limit_mb} onChange={set('storage_limit_mb')} /></label>
           <label><span>{t('Databases')}</span><input type="number" min="0" max="10000" value={form.database_limit} onChange={set('database_limit')} /></label>
           {mailAddonInstalled && <label><span>{t('Mailboxes')}</span><input type="number" min="0" max="1000" value={form.mail_accounts_limit} onChange={set('mail_accounts_limit')} /></label>}
+          {canGrantTerminal && <label className="check-line span-all"><input type="checkbox" checked={!!form.terminal_enabled} onChange={e => setForm(prev => ({ ...prev, terminal_enabled: e.target.checked }))} /> {t('Browser terminal')}</label>}
         </div>
+        {canGrantTerminal && <p className="hint">{t("A real shell as the account's own Linux user, in a sandbox: its own home only, its own processes, no root. Administrators and resellers open it by logging in as the customer.")}</p>}
       </fieldset>
       {limitsOn && renderLimitInputs(form, setForm)}
     </div>;
@@ -11529,6 +11555,7 @@ function App() {
     if (page === 'databases') return renderDatabases();
     if (page === 'sftp') return renderSftp();
     if (page === 'git') return gitAddonInstalled ? renderGit() : renderAddonMissing('git');
+    if (page === 'terminal') return renderTerminalPage();
     if (page === 'cron') return renderCron();
     if (page === 'files') return renderFiles();
     if (page === 'backups') return renderBackups();

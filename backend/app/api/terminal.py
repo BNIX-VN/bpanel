@@ -1,28 +1,43 @@
-"""Terminal API endpoints."""
+"""The browser terminal (operator, 2026-10-17): a real shell over a WebSocket.
 
+GET  /terminal/info          whether this account may open one, and the rules
+WS   /terminal/ws            a shell in the account's home
+WS   /terminal/ws/{site_id}  a shell in the website's directory, with its PHP
+
+On the socket the browser sends keystrokes as binary frames and control
+messages as JSON text ({"type": "resize", "cols", "rows"}); the panel sends the
+terminal's output as binary frames and its own messages as JSON text:
+{"type": "ready", ...} once the shell runs, {"type": "closed", "reason", "code"}
+just before it closes the socket. services/terminal.py holds the rules and the
+sandbox.
+"""
+from __future__ import annotations
+
+import asyncio
 import json
 import logging
-from pathlib import Path
+import os
+import time
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
-from jose import JWTError, jwt
-from pydantic import BaseModel
-from sqlalchemy.orm import Session
-from starlette.concurrency import run_in_threadpool
+from fastapi import APIRouter, Depends, HTTPException, WebSocket
+from starlette.websockets import WebSocketDisconnect, WebSocketState
 
-from app.api.deps import get_current_user
+from app.api.deps import _user_from_token, get_current_user
 from app.core.config import settings
-from app.core.database import get_db
-from app.core.access import can_access_owner, ensure_owner_access
-from app.core.permissions import is_admin_role
-from app.core.security import ALGORITHM
+from app.core.database import SessionLocal
 from app.models.entities import RevokedToken, User, Website
-from app.services import demo_mode, terminal
+from app.services import resource_limits, site_users, terminal
+from app.services.audit import log_action
 
 logger = logging.getLogger("bpanel.terminal")
-
 router = APIRouter(prefix="/terminal", tags=["terminal"])
+
+# How often a running session checks that its account may still have it.
+RECHECK_SECONDS = 15
+# Output waiting for a slow browser; past this the PTY is not read until it drains.
+MAX_QUEUED_CHUNKS = 64
+MAX_INPUT_BYTES = 64 * 1024
 
 
 def _origin_allowed(websocket: WebSocket) -> bool:
@@ -36,313 +51,260 @@ def _origin_allowed(websocket: WebSocket) -> bool:
     allowed = {item.rstrip("/") for item in settings.cors_origins}
     if settings.panel_url:
         allowed.add(settings.panel_url.rstrip("/"))
-    return not allowed or origin in allowed
+    return bool(allowed) and origin in allowed
 
 
-def _current_user_from_session_cookie(websocket: WebSocket, db: Session) -> User | None:
-    token = websocket.cookies.get("bpanel_session")
-    if not token:
-        return None
+def _rules() -> dict:
+    return {"max_sessions": terminal.MAX_SESSIONS_PER_ACCOUNT,
+            "idle_minutes": terminal.IDLE_SECONDS // 60,
+            "max_hours": terminal.MAX_SECONDS // 3600}
+
+
+@router.get("/info")
+def terminal_info(current_user: User = Depends(get_current_user)):
+    problem = terminal.access_problem(current_user)
+    return {"allowed": problem is None, "problem": problem,
+            "detail": terminal.PROBLEM_TEXT.get(problem) if problem else None,
+            "sessions": len(terminal.sessions_of(current_user.id)), **_rules()}
+
+
+def _still_allowed(user_id: int, payload: dict) -> bool:
+    """The browser session that opened the shell is still signed in, and the
+    account may still have a shell. Expiry is left out: idle and the eight
+    hours are the session's own limits, and a sliding sign-in renews the
+    cookie, not the token this socket was opened with."""
+    db = SessionLocal()
     try:
-        payload = jwt.decode(token, settings.secret_key, algorithms=[ALGORITHM])
-        username = payload.get("sub")
-        token_version = int(payload.get("tv", 0))
+        user = db.query(User).filter(User.id == user_id).first()
+        if user is None or (user.token_version or 0) != int(payload.get("tv", 0)):
+            return False
         jti = payload.get("jti")
-        if not username:
-            return None
-    except (JWTError, ValueError):
-        return None
-    user = db.query(User).filter(User.username == username).first()
-    if user is None or not user.is_active:
-        return None
-    if (user.token_version or 0) != token_version:
-        return None
-    if jti and db.query(RevokedToken.id).filter(RevokedToken.jti == jti).first():
-        return None
-    return user
+        if jti and db.query(RevokedToken.id).filter(RevokedToken.jti == jti).first():
+            return False
+        return terminal.access_problem(user) is None
+    finally:
+        db.close()
 
 
-def may_use_terminal(current_user: User) -> bool:
-    """Whether this account is allowed a shell at all.
-
-    Separate from website ownership: owning a site says which site you may act
-    on, not whether the terminal is part of what you are paying for. Admins
-    always may - they administer the server.
-    """
-    if is_admin_role(current_user.role):
-        return True
-    return bool(getattr(current_user, "terminal_enabled", False))
+def _audit(user_id: int, action: str, target: str, detail: str, websocket: WebSocket) -> None:
+    db = SessionLocal()
+    try:
+        log_action(db, user_id, action, target, detail, request=websocket)
+    finally:
+        db.close()
 
 
-async def get_user_website(
-    website_id: int,
-    db: Session,
-    current_user: User,
-) -> Website:
-    """Get website, verify ownership, and verify terminal is permitted."""
-    website = db.query(Website).filter(Website.id == website_id).first()
-    if not website:
-        raise HTTPException(status_code=404, detail="Website not found")
-    # Check ownership or admin role
-    ensure_owner_access(db, current_user, website.owner_id)
-    # Owning the site is not the same as being entitled to a shell on it. The
-    # frontend hides the terminal for accounts without it, but hiding a button
-    # is not access control - this endpoint answers curl just as happily.
-    if not may_use_terminal(current_user):
-        raise HTTPException(status_code=403, detail="Terminal is not enabled for your account.")
-    return website
+async def _refuse(websocket: WebSocket, code: int, reason: str) -> None:
+    # Accept first: a close before the handshake reaches the browser as a bare
+    # 1006, and the page could not say why.
+    await websocket.accept()
+    await websocket.send_json({"type": "closed", "reason": reason, "code": code})
+    await websocket.close(code=code, reason=reason[:120])
 
 
-class TerminalExecRequest(BaseModel):
-    """Request model for terminal command execution."""
-
-    command: str
-
-
-class TerminalExecResponse(BaseModel):
-    """Response model for terminal command execution."""
-
-    exit_code: int
-    stdout: str
-    stderr: str
-
-
-@router.post("/exec/{website_id}", response_model=TerminalExecResponse)
-async def exec_command(
-    website_id: int,
-    request: TerminalExecRequest,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Execute a single command as the website user.
-
-    This endpoint is suitable for non-interactive commands like:
-    - php artisan migrate
-    - composer install
-    - npm run build
-    """
-    website = await get_user_website(website_id, db, current_user)
-
-    # terminal.exec_command is subprocess.run under the hood, with a timeout of
-    # up to 915s for composer/npm/git/curl and friends. This handler is async,
-    # so calling it inline would block the one uvicorn event loop that serves
-    # every other tenant, the admin UI and /auth/login for that whole time -
-    # `curl <host-that-never-answers>` is enough. Hand it to the threadpool.
-    result = await run_in_threadpool(
-        terminal.exec_command,
-        website.linux_user,
-        request.command,
-        cwd=terminal.default_cwd(website.root_path),
-        php_version=getattr(website, "php_version", None),
-    )
-
-    return TerminalExecResponse(
-        exit_code=result.exit_code,
-        stdout=result.stdout,
-        stderr=result.stderr,
-    )
-
-
-@router.get("/allowed-commands")
-async def list_allowed_commands(
-    current_user: User = Depends(get_current_user),
-):
-    """List all allowed commands for terminal access."""
-    return {"commands": sorted(terminal.ALLOWED_COMMANDS)}
+@router.websocket("/ws")
+async def terminal_home(websocket: WebSocket):
+    await _serve(websocket, None)
 
 
 @router.websocket("/ws/{website_id}")
-async def terminal_websocket(
-    websocket: WebSocket,
-    website_id: int,
-    db: Session = Depends(get_db),
-):
-    """WebSocket endpoint for interactive terminal sessions.
+async def terminal_website(websocket: WebSocket, website_id: int):
+    await _serve(websocket, website_id)
 
-    Auth is handled via cookies (bpanel_session and bpanel_csrf) passed
-    automatically by the browser.
 
-    Messages:
-    - Client -> Server: {"type": "input", "data": "command\n"}
-    - Client -> Server: {"type": "resize", "cols": 80, "rows": 24}
-    - Client -> Server: {"type": "ping"}
-    - Server -> Client: {"type": "output", "data": "output text"}
-    - Server -> Client: {"type": "exit", "code": 0}
-    - Server -> Client: {"type": "pong"}
-    """
+async def _serve(websocket: WebSocket, website_id: int | None) -> None:
     if not _origin_allowed(websocket):
-        await websocket.close(code=4003, reason="Origin not allowed")
+        await _refuse(websocket, 4003, "origin")
         return
-
-    # Get token and validate step by step for better error messages
     token = websocket.cookies.get("bpanel_session")
     if not token:
-        await websocket.close(code=4001, reason="No session cookie")
+        await _refuse(websocket, 4001, "signed-out")
         return
 
-    # Decode and validate JWT
+    db = SessionLocal()
     try:
-        payload = jwt.decode(token, settings.secret_key, algorithms=[ALGORITHM])
-        username = payload.get("sub")
-        token_version = int(payload.get("tv", 0))
-        jti = payload.get("jti")
-        if not username:
-            await websocket.close(code=4001, reason="Invalid token: missing username")
+        try:
+            user, payload = _user_from_token(token, db, websocket)
+        except HTTPException:
+            await _refuse(websocket, 4001, "signed-out")
             return
-    except jwt.ExpiredSignatureError:
-        await websocket.close(code=4001, reason="Session expired")
-        return
-    except jwt.JWTClaimsError:
-        await websocket.close(code=4001, reason="Invalid token: claims error")
-        return
-    except JWTError:
-        await websocket.close(code=4001, reason="Invalid token")
-        return
+        problem = terminal.access_problem(user)
+        if problem:
+            await _refuse(websocket, 4003, problem)
+            return
+        if website_id is None:
+            linux_user = site_users.linux_user_for_panel_username(user.username)
+            cwd, php_version, target = f"/home/{linux_user}", None, "home"
+        else:
+            website = db.query(Website).filter(Website.id == website_id).first()
+            # A customer's own websites only: no one reaches this with another role.
+            if website is None or website.owner_id != user.id:
+                await _refuse(websocket, 4004, "not-found")
+                return
+            try:
+                linux_user = site_users.validate_linux_user(website.linux_user or "")
+                cwd = terminal.default_cwd(website.root_path)
+            except (ValueError, RuntimeError):
+                await _refuse(websocket, 4004, "not-found")
+                return
+            php_version, target = website.php_version, website.domain
+        user_id, impersonator = user.id, str(payload.get("imp") or "")
+        slice_name = resource_limits.account_slice(user)
+    finally:
+        db.close()
 
-    # Check user exists and is active
-    user = db.query(User).filter(User.username == username).first()
-    if user is None:
-        await websocket.close(code=4001, reason="User not found")
+    if not terminal.available():
+        await _refuse(websocket, 4005, "unavailable")
         return
-    if not user.is_active:
-        await websocket.close(code=4001, reason="User account is disabled")
-        return
-
-    # Check token version
-    if (user.token_version or 0) != token_version:
-        await websocket.close(code=4001, reason="Session invalidated")
-        return
-
-    # Check if token is revoked
-    if jti and db.query(RevokedToken.id).filter(RevokedToken.jti == jti).first():
-        await websocket.close(code=4001, reason="Session revoked")
-        return
-
-    current_user = user
-
-    # The REST side refuses a demo visitor in get_current_user; this door does
-    # not pass through it, so it asks the same question itself.
-    if demo_mode.is_demo_session(current_user, payload):
-        await websocket.close(code=4003, reason=demo_mode.REFUSED_READ)
-        return
-
-    # Get website
-    website = db.query(Website).filter(Website.id == website_id).first()
-    if not website:
-        await websocket.close(code=4004, reason="Website not found")
-        return
-
-    # Check ownership
-    if not can_access_owner(db, current_user, website.owner_id):
-        await websocket.close(code=4003, reason="Access denied")
-        return
-
-    # ...and the same entitlement check the REST endpoint makes. Both doors
-    # have to be locked: the websocket is reachable without ever touching
-    # /terminal/exec.
-    if not may_use_terminal(current_user):
-        await websocket.close(code=4003, reason="Terminal is not enabled for your account")
-        return
-
-    if not website.linux_user:
-        await websocket.close(code=4004, reason="Website runtime user is missing")
-        return
-
-    root_path = Path(website.root_path)
-    if not root_path.exists() or not root_path.is_dir():
-        await websocket.close(code=4005, reason="Website root path does not exist or is not accessible")
+    session = terminal.reserve(user_id, linux_user, target)
+    if session is None:
+        await _refuse(websocket, 4008, "too-many")
         return
 
     await websocket.accept()
-    cwd = terminal.default_cwd(website.root_path)
-    await websocket.send_json({"type": "cwd", "data": cwd})
-
+    cols, rows = terminal.clamp_size(websocket.query_params.get("cols"), websocket.query_params.get("rows"))
     try:
-        while True:
-            message = await websocket.receive_text()
-
-            try:
-                msg = json.loads(message)
-            except json.JSONDecodeError:
-                await websocket.send_json({
-                    "type": "error",
-                    "data": "Invalid JSON message"
-                })
-                continue
-
-            msg_type = msg.get("type")
-
-            if msg_type == "ping":
-                await websocket.send_json({"type": "pong"})
-            elif msg_type == "input":
-                command = (msg.get("data", "") or "").strip()
-                if not command:
-                    await websocket.send_json({"type": "exit", "code": 0})
-                    continue
-                if command in {"clear", "cls"}:
-                    await websocket.send_json({"type": "clear"})
-                    await websocket.send_json({"type": "exit", "code": 0})
-                    continue
-
-                try:
-                    argv = terminal.split_command(command)
-                except ValueError as exc:
-                    await websocket.send_json({"type": "output", "data": f"{exc}\r\n"})
-                    await websocket.send_json({"type": "exit", "code": 2})
-                    continue
-
-                if argv[0] == "cd":
-                    if len(argv) > 2:
-                        await websocket.send_json({"type": "output", "data": "usage: cd [path]\r\n"})
-                        await websocket.send_json({"type": "exit", "code": 2})
-                        continue
-                    try:
-                        cwd = terminal.resolve_cwd(website.root_path, cwd, argv[1] if len(argv) == 2 else "")
-                    except ValueError as exc:
-                        await websocket.send_json({"type": "output", "data": f"{exc}\r\n"})
-                        await websocket.send_json({"type": "exit", "code": 1})
-                        continue
-                    await websocket.send_json({"type": "cwd", "data": cwd})
-                    await websocket.send_json({"type": "exit", "code": 0})
-                    continue
-
-                # Same reason as the REST door above: blocking here stalls the
-                # shared event loop, not just this socket.
-                result = await run_in_threadpool(
-                    terminal.exec_command,
-                    website.linux_user,
-                    command,
-                    cwd=cwd,
-                    php_version=getattr(website, "php_version", None),
-                )
-                await websocket.send_json({
-                    "type": "output",
-                    "data": result.stdout + result.stderr,
-                })
-                await websocket.send_json({
-                    "type": "exit",
-                    "code": result.exit_code,
-                })
-            elif msg_type == "resize":
-                # Terminal resize - can be used for PTY support in future
-                pass
-            else:
-                await websocket.send_json({
-                    "type": "error",
-                    "data": f"Unknown message type: {msg_type}"
-                })
-
-    except WebSocketDisconnect:
-        pass  # Client disconnected
+        process, master = terminal.spawn(session, cwd, php_version, slice_name, cols, rows)
     except Exception:
-        # The exception text stays server-side. It carries paths, module names
-        # and occasionally command output, and the client asking for it is an
-        # end user with a shell on one site, not an operator.
-        logger.exception("Terminal websocket failed for website %s", website_id)
+        logger.exception("terminal %s did not start", session.unit)
+        terminal.release(session)
+        await websocket.send_json({"type": "closed", "reason": "failed", "code": 4500})
+        await websocket.close(code=4500)
+        return
+
+    detail = f"session={session.id} user={linux_user} cwd={cwd}"
+    if impersonator:
+        detail += f" by={impersonator}"
+    await asyncio.to_thread(_audit, user_id, "terminal_open", target, detail, websocket)
+    started = time.monotonic()
+    reason = "closed"
+    try:
+        reason = await _bridge(websocket, session, process, master, payload, cwd, php_version)
+    finally:
+        await asyncio.to_thread(terminal.hang_up, process, master)
+        await asyncio.to_thread(terminal.stop_unit, session.unit)
+        terminal.release(session)
+        code = terminal.exit_status(process)
+        if websocket.application_state == WebSocketState.CONNECTED and websocket.client_state == WebSocketState.CONNECTED:
+            try:
+                await websocket.send_json({"type": "closed", "reason": reason, "code": code})
+                await websocket.close(code=1000)
+            except Exception:
+                pass
+        minutes = round((time.monotonic() - started) / 60, 1)
+        await asyncio.to_thread(_audit, user_id, "terminal_close", target,
+                                f"session={session.id} reason={reason} minutes={minutes}", websocket)
+
+
+async def _bridge(websocket, session, process, master, payload, cwd, php_version) -> str:
+    """Copy between the socket and the PTY until one side ends; returns why."""
+    loop = asyncio.get_running_loop()
+    output: asyncio.Queue = asyncio.Queue()
+    closing: asyncio.Future = loop.create_future()
+    reading = True
+
+    def request_close(reason: str) -> None:
+        def settle():
+            if not closing.done():
+                closing.set_result(reason)
+        loop.call_soon_threadsafe(settle)
+
+    session.close_request = request_close
+
+    def on_readable():
+        nonlocal reading
         try:
-            await websocket.send_json({
-                "type": "error",
-                "data": "Server error. Check the panel logs for details."
-            })
+            data = os.read(master, 65536)
+        except BlockingIOError:
+            return
+        except OSError:  # EIO: the shell has gone
+            data = b""
+        if not data:
+            loop.remove_reader(master)
+            reading = False
+            output.put_nowait(None)
+            return
+        output.put_nowait(data)
+        if output.qsize() > MAX_QUEUED_CHUNKS:
+            loop.remove_reader(master)
+            reading = False
+
+    loop.add_reader(master, on_readable)
+
+    async def send_output():
+        nonlocal reading
+        while True:
+            data = await output.get()
+            if data is None:
+                return "exit"
+            while not output.empty() and len(data) < 256 * 1024:
+                more = output.get_nowait()
+                if more is None:
+                    await websocket.send_bytes(data)
+                    return "exit"
+                data += more
+            await websocket.send_bytes(data)
+            # Read again once the browser has caught up, even if the shell has
+            # exited meanwhile: what it wrote last, and the end, are still there.
+            if not reading and output.qsize() < MAX_QUEUED_CHUNKS // 4:
+                reading = True
+                loop.add_reader(master, on_readable)
+
+    async def write_all(data: bytes):
+        view = memoryview(data)
+        while view:
+            try:
+                written = os.write(master, view)
+                view = view[written:]
+            except BlockingIOError:
+                await asyncio.sleep(0.02)
+
+    async def receive_input():
+        while True:
+            message = await websocket.receive()
+            if message["type"] == "websocket.disconnect":
+                return "closed"
+            data = message.get("bytes")
+            if data is not None:
+                session.last_input = time.monotonic()
+                await write_all(data[:MAX_INPUT_BYTES])
+                continue
+            try:
+                control = json.loads(message.get("text") or "")
+            except ValueError:
+                continue
+            if not isinstance(control, dict):
+                continue
+            if control.get("type") == "resize":
+                terminal.set_size(master, control.get("cols"), control.get("rows"))
+
+    async def watch():
+        while True:
+            await asyncio.sleep(RECHECK_SECONDS)
+            now = time.monotonic()
+            if now - session.started >= terminal.MAX_SECONDS:
+                return "max-time"
+            if now - session.last_input >= terminal.IDLE_SECONDS:
+                return "idle"
+            if not await asyncio.to_thread(_still_allowed, session.user_id, payload):
+                return "access-changed"
+
+    await websocket.send_json({"type": "ready", "cwd": cwd, "php": php_version or None,
+                               "user": session.linux_user, **_rules()})
+    tasks = [asyncio.ensure_future(job) for job in (send_output(), receive_input(), watch(), closing)]
+    try:
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        finished = next(iter(done))
+        try:
+            return finished.result()
+        except WebSocketDisconnect:
+            return "closed"
         except Exception:
-            pass  # WebSocket already closed
+            logger.exception("terminal %s failed", session.unit)
+            return "failed"
+    finally:
+        session.close_request = None
+        if reading:
+            loop.remove_reader(master)
+        for task in tasks:
+            task.cancel()

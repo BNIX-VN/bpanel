@@ -8,7 +8,7 @@ from app.core.database import get_db
 from app.core.permissions import Role, ensure_role, is_reseller_role
 from app.models.entities import User, UserPackage
 from app.schemas.schemas import RESOURCE_LIMIT_FIELDS, UserPackageCreate, UserPackageOut, UserPackageUpdate
-from app.services import reseller as reseller_pool, resource_limits
+from app.services import reseller as reseller_pool, resource_limits, terminal
 from app.services.audit import log_action
 
 router = APIRouter(prefix="/packages", tags=["packages"])
@@ -154,9 +154,15 @@ def update_package(
         user.website_limit = package.website_limit
         user.storage_limit_mb = package.storage_limit_mb
         user.database_limit = package.database_limit
+        # The terminal is the package's to give (2026-10-17): its accounts
+        # follow it, as they do its limits.
+        user.terminal_enabled = bool(package.terminal_enabled)
         for field in RESOURCE_LIMIT_FIELDS:
             setattr(user, field, int(getattr(package, field) or 0))
     db.commit()
+    if not package.terminal_enabled:
+        for user in assigned:
+            terminal.end_sessions(user.id, "access-changed")
     if assigned:
         resource_limits.sync_in_background()
     db.refresh(package)

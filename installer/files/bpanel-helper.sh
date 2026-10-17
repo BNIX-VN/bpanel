@@ -6827,6 +6827,102 @@ finally:
 PY
 }
 
+# --- web terminal --------------------------------------------------------------
+# A browser shell (operator, 2026-10-17). Each session is a transient systemd
+# unit, and every part of its sandbox is decided here, never by the panel:
+# it runs as the account's own Linux user in the account's resource-limits
+# slice; it sees its own home and nothing of the other homes, a private /tmp
+# and IPC, its own processes only, on a read-only system; it cannot gain
+# privileges (no sudo, no setuid, no capabilities); it still reaches the
+# network and MariaDB's socket. Two sessions are two units, each with its own
+# /tmp. The panel holds the terminal (systemd-run --pty): when it closes it,
+# the shell is hung up and the unit stops with everything it started.
+TERMINAL_UNIT_RE='^bpanel-term-[a-z_][a-z0-9_-]{0,31}-[0-9a-f]{12}$'
+TERMINAL_SLICE_RE='^hosting(-r[0-9]{1,9})?(-a[0-9]{1,9})?\.slice$'
+# Panel state, logs, other accounts' configuration and keys: not there at all
+# inside a session, whatever their modes say.
+TERMINAL_HIDDEN_PATHS="/opt/bpanel /opt/bpanel-source /etc/bpanel /var/lib/bpanel /var/lib/bpanel-sftp /var/lib/bpanel-limits /run/bpanel-limits /run/bpanel-git /var/backups /var/log /etc/nginx /etc/php/5.6/fpm /etc/php/7.4/fpm /etc/php/8.0/fpm /etc/php/8.1/fpm /etc/php/8.2/fpm /etc/php/8.3/fpm /etc/php/8.4/fpm /etc/php/8.5/fpm /run/php /etc/mysql /var/lib/mysql /etc/letsencrypt /etc/ssl/private /var/spool/cron /etc/sudoers.d /home/admin"
+
+require_terminal_user() {
+  local user="$1" uid
+  require_linux_user "$user"
+  uid=$(id -u "$user" 2>/dev/null) || deny "panel Linux user does not exist: $user"
+  (( uid >= 1000 && uid < 60000 )) || deny "not a hosting account user: $user"
+  # Every hosting account's Linux user is in the SFTP group; nothing else is.
+  local groups
+  groups=" $(id -nG "$user") "
+  [[ "$groups" == *" $BPANEL_SFTP_GROUP "* ]] || deny "not a hosting account user: $user"
+  # Never one that sudo trusts (Ubuntu's old "admin" group among them), even
+  # though the sandbox could not use it.
+  case "$groups" in
+    *" sudo "*|*" admin "*|*" wheel "*|*" root "*) deny "not a hosting account user: $user" ;;
+  esac
+  [[ -d "$HOME_ROOT/$user" && ! -L "$HOME_ROOT/$user" ]] || deny "home directory is missing: $HOME_ROOT/$user"
+}
+
+# The home itself is root's (the SFTP chroot needs that), so a shell could not
+# keep its history or a tool its cache. These few are made the user's own,
+# only when nothing is there yet.
+terminal_prepare_home() {
+  local user="$1" group="$2" home="$HOME_ROOT/$1" name
+  for name in .cache .config .local .composer .npm .wp-cli; do
+    [[ -e "$home/$name" || -L "$home/$name" ]] || install -d -o "$user" -g "$group" -m 0700 "$home/$name"
+  done
+  [[ -e "$home/.bash_history" || -L "$home/.bash_history" ]] || install -o "$user" -g "$group" -m 0600 /dev/null "$home/.bash_history"
+}
+
+terminal_session() {
+  local user="$1" unit="$2" cwd_arg="$3" php_version="$4" slice="$5" group home cwd path_value php_dir="" hidden=() p props
+  require_terminal_user "$user"
+  [[ "$unit" =~ $TERMINAL_UNIT_RE ]] || deny "invalid terminal unit name: $unit"
+  [[ "$unit" == "bpanel-term-$user-"* ]] || deny "terminal unit does not belong to $user: $unit"
+  [[ "$slice" =~ $TERMINAL_SLICE_RE ]] || deny "invalid slice: $slice"
+  cwd=$(require_terminal_cwd "$cwd_arg" "$user") || exit 1
+  group=$(id -gn "$user")
+  home="$HOME_ROOT/$user"
+  path_value="/usr/local/bin:/usr/bin:/bin"
+  if [[ "$php_version" != "-" ]]; then
+    require_php_version "$php_version"
+    [[ -x "/usr/bin/php${php_version}" ]] || deny "PHP CLI is not installed: php${php_version}"
+    # A directory whose `php` is this version, so composer and wp-cli
+    # (#!/usr/bin/env php) run on it too.
+    php_dir="/run/bpanel-term/php${php_version}"
+    install -d -o root -g root -m 0755 /run/bpanel-term "$php_dir"
+    ln -sfn "/usr/bin/php${php_version}" "$php_dir/php"
+  fi
+  terminal_prepare_home "$user" "$group"
+  for p in $TERMINAL_HIDDEN_PATHS; do hidden+=("-$p"); done
+  props=(
+    -p "User=$user" -p "Group=$group" -p "WorkingDirectory=$cwd"
+    -p ProtectSystem=strict -p ProtectHome=tmpfs -p "BindPaths=$home" -p "ReadWritePaths=$home"
+    -p PrivateTmp=yes -p PrivateIPC=yes -p PrivateDevices=yes
+    -p ProtectProc=invisible -p ProcSubset=pid
+    -p NoNewPrivileges=yes -p RestrictSUIDSGID=yes -p "CapabilityBoundingSet=" -p "AmbientCapabilities="
+    -p ProtectKernelTunables=yes -p ProtectKernelModules=yes -p ProtectKernelLogs=yes
+    -p ProtectControlGroups=yes -p ProtectClock=yes -p ProtectHostname=yes
+    -p RestrictNamespaces=yes -p LockPersonality=yes -p RestrictRealtime=yes
+    -p "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK"
+    -p SystemCallArchitectures=native -p "SystemCallFilter=@system-service" -p KeyringMode=private
+    -p "InaccessiblePaths=${hidden[*]}"
+    # The panel closes a session at eight hours; this is the floor under it.
+    -p RuntimeMaxSec=8h
+    # Within the account's own limits when the addon sets them; a fork bomb
+    # stops here when it does not. Out of memory, a shell goes before a site.
+    -p TasksMax=512 -p OOMScoreAdjust=500 -p UMask=0022
+    # An interactive bash ignores SIGTERM: stopping sends SIGHUP as well, and
+    # waits five seconds, not ninety, before killing what is left.
+    -p SendSIGHUP=yes -p TimeoutStopSec=5
+    -E "HOME=$home" -E "USER=$user" -E "LOGNAME=$user" -E SHELL=/bin/bash
+    -E TERM=xterm-256color -E LANG=C.UTF-8 -E "COMPOSER_HOME=$home/.composer"
+    -E "npm_config_cache=$home/.npm"
+  )
+  # The website's PHP first, so `php`, composer and wp-cli use its version.
+  if [[ -n "$php_dir" ]]; then path_value="$php_dir:$path_value"; fi
+  props+=(-E "PATH=$path_value")
+  exec systemd-run --pty --quiet --collect --unit="$unit" --slice="$slice" \
+    --description="Terminal of $user" "${props[@]}" /bin/bash -l
+}
+
 require_terminal_cwd() {
   local path="$1" user="$2" resolved
   require_linux_user "$user"
@@ -9999,6 +10095,15 @@ PY
     ;;
 
   # ---- terminal command execution as panel Linux user ------------------
+  terminal-session)
+    # Args: <site-user> <unit> <cwd> <php-version|-> <slice>
+    [[ $# -eq 5 ]] || deny "usage: terminal-session <site-user> <unit> <cwd> <php-version|-> <slice>"
+    terminal_session "$@"
+    ;;
+  terminal-stop)
+    [[ $# -eq 1 && "$1" =~ $TERMINAL_UNIT_RE ]] || deny "usage: terminal-stop <unit>"
+    systemctl stop "$1.service" 2>/dev/null || true
+    ;;
   terminal-exec)
     # Execute a whitelisted command as the panel Linux user
     # Args: <site-user> <cwd> [--timeout=<sec>] [--php-version=<version>] <command> [args...]

@@ -24,7 +24,7 @@ from app.schemas.schemas import (
     UserUpdate,
 )
 from app.services.audit import log_action
-from app.services import demo_mode, git_repos, mail, mariadb, nginx, reseller as reseller_pool, resource_limits, site_users, ssl, storage_quota, teardown, waf, wordpress
+from app.services import demo_mode, git_repos, mail, mariadb, nginx, reseller as reseller_pool, resource_limits, site_users, ssl, storage_quota, teardown, terminal, waf, wordpress
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -376,6 +376,10 @@ def update_user(user_id: int, payload: UserUpdate, request: Request, db: Session
 
     db.commit()
     db.refresh(user)
+    # A shell the account is no longer entitled to ends now, not at its next
+    # check.
+    if not user.is_active or not user.terminal_enabled or role_changed:
+        terminal.end_sessions(user.id, "access-changed")
     if active_changed:
         # A suspended account's mailboxes keep receiving but cannot sign in.
         mail.sync_quietly(db)
@@ -427,6 +431,8 @@ def delete_user(user_id: int, request: Request, db: Session = Depends(get_db), c
         mail.delete_for_owner(db, user)
         # So are their git repositories.
         git_repos.delete_for_owner(db, user)
+        # userdel refuses a user with processes still running.
+        terminal.end_sessions(user.id, "account-deleted")
         site_users.delete_panel_user(user.username)
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

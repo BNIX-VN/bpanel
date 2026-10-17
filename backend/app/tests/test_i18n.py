@@ -19,6 +19,8 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SRC = PROJECT_ROOT / "frontend" / "src"
 APP = (SRC / "App.jsx").read_text(encoding="utf-8")
+# The components translate too (the terminal's messages live in its own file).
+COMPONENTS = "".join(path.read_text(encoding="utf-8") for path in sorted((SRC / "components").glob("*.jsx")))
 I18N = (SRC / "i18n.js").read_text(encoding="utf-8")
 VI = (SRC / "locales" / "vi.js").read_text(encoding="utf-8")
 
@@ -85,7 +87,7 @@ def test_every_key_is_a_string_something_actually_shows():
     # found. A confirm() dialog with a blank line in it is the same problem one
     # character further on: the source spells the newline \n, the string the
     # panel shows - and so the key - has a real one.
-    unescaped = (APP.replace("\\'", "'").replace('\\"', '"')
+    unescaped = ((APP + COMPONENTS).replace("\\'", "'").replace('\\"', '"')
                  .replace("\\n", "\n").replace("\\t", "\t"))
     orphans = [k for k in DICTIONARY if k not in unescaped and k not in api]
     assert not orphans, f"{len(orphans)} keys match nothing: {orphans[:10]}"
