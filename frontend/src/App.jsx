@@ -8076,7 +8076,7 @@ function App() {
     }
     return <section className="section">
       <div className="section-title"><div><h2>{t('Terminal')}</h2>
-        <p className="hint">{t("A shell in your home folder, in a sandbox of its own. To start in a website's folder with its PHP version, open the terminal from the website's row.")}</p></div></div>
+        <p className="hint">{t("A shell in your home folder. To start in a website's folder with its PHP version, open the terminal from the website's row.")}</p></div></div>
       <Terminal apiBase={API} />
     </section>;
   }
@@ -11262,7 +11262,7 @@ function App() {
           {mailAddonInstalled && <label><span>{t('Mailboxes')}</span><input type="number" min="0" max="1000" value={form.mail_accounts_limit} onChange={set('mail_accounts_limit')} /></label>}
         </div>
         {canGrantTerminal && <label className="check-line"><input type="checkbox" checked={!!form.terminal_enabled} onChange={e => setForm(prev => ({ ...prev, terminal_enabled: e.target.checked }))} /> {t('Browser terminal')}</label>}
-        {canGrantTerminal && <p className="hint">{t("A real shell as the account's own Linux user, in a sandbox: its own home only, its own processes, no root. Administrators and resellers open it by logging in as the customer.")}</p>}
+        {canGrantTerminal && <p className="hint">{t("A shell as the account's own Linux user: it sees its own home and its own processes only, with no root access. Administrators and resellers open it by logging in as the customer.")}</p>}
       </fieldset>
       {limitsOn && renderLimitInputs(form, setForm)}
     </div>;
