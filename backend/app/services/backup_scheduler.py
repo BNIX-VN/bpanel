@@ -210,3 +210,10 @@ if __name__ == "__main__":
         resource_limits.sync_quietly()
     except Exception as exc:  # noqa: BLE001 - never fail the backup run for it
         print(f"BPanel resource limits tick failed: {exc}")
+    # And for the phpMyAdmin logins past their time.
+    try:
+        from app.services import mariadb
+
+        mariadb.drop_expired_sso_logins()
+    except Exception as exc:  # noqa: BLE001 - never fail the backup run for it
+        print(f"BPanel phpMyAdmin login cleanup failed: {exc}")

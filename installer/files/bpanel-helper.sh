@@ -4488,6 +4488,18 @@ validate_php_config_file() {
         [[ "$value" =~ ^[0-9]{1,7}$ ]] || deny "invalid integer value for $key"
         (( 10#$value >= 100 && 10#$value <= 1000000 )) || deny "max_input_vars out of range"
         ;;
+      opcache.memory_consumption)
+        [[ "$value" =~ ^[0-9]{1,5}$ ]] || deny "invalid integer value for $key"
+        (( 10#$value >= 32 && 10#$value <= 8192 )) || deny "$key out of range"
+        ;;
+      opcache.interned_strings_buffer)
+        [[ "$value" =~ ^[0-9]{1,4}$ ]] || deny "invalid integer value for $key"
+        (( 10#$value >= 4 && 10#$value <= 1024 )) || deny "$key out of range"
+        ;;
+      opcache.max_accelerated_files)
+        [[ "$value" =~ ^[0-9]{1,7}$ ]] || deny "invalid integer value for $key"
+        (( 10#$value >= 200 && 10#$value <= 1000000 )) || deny "$key out of range"
+        ;;
       *)
         deny "unsupported PHP config directive: $key"
         ;;

@@ -27,6 +27,11 @@ def update_php_ini(payload: PhpConfigUpdate) -> str:
         f"max_execution_time = {int(payload.max_execution_time)}",
         f"max_input_time = {int(payload.max_input_time)}",
         f"max_input_vars = {int(payload.max_input_vars)}",
+        *[f"{key} = {int(value)}" for key, value in (
+            ("opcache.memory_consumption", payload.opcache_memory_consumption),
+            ("opcache.interned_strings_buffer", payload.opcache_interned_strings_buffer),
+            ("opcache.max_accelerated_files", payload.opcache_max_accelerated_files),
+        ) if value],
         "",
     ])
     target = Path(f"/etc/php/{php_version}/fpm/conf.d/99-bpanel.ini")
@@ -100,7 +105,39 @@ def read_php_ini(php_version: str) -> dict:
     values["max_execution_time"] = int(values["max_execution_time"])
     values["max_input_time"] = int(values["max_input_time"])
     values["max_input_vars"] = int(values["max_input_vars"])
+    # The OPcache sizes the page set, None where Auto-tune's value stands, and
+    # what PHP runs with now for the placeholders.
+    # The version from the allowlist itself, not the caller's string: the path
+    # is then built from a constant.
+    known_version = SUPPORTED_PHP_VERSIONS[SUPPORTED_PHP_VERSIONS.index(php_version)]
+    custom = _read_keys(Path(f"/etc/php/{known_version}/fpm/conf.d/99-bpanel.ini"), OPCACHE_SIZE_KEYS)
+    for key in OPCACHE_SIZE_KEYS:
+        values[key.replace(".", "_")] = int(custom[key]) if str(custom.get(key, "")).isdigit() else None
+    try:
+        from app.services import php_tune
+
+        live = php_tune.current_values(known_version)
+    except Exception:  # noqa: BLE001 - the form still opens without the hints
+        live = {}
+    values["opcache_effective"] = {key.replace(".", "_"): live.get(key, "") for key in OPCACHE_SIZE_KEYS}
     return values
+
+
+OPCACHE_SIZE_KEYS = ("opcache.memory_consumption", "opcache.interned_strings_buffer", "opcache.max_accelerated_files")
+
+
+def _read_keys(path: Path, keys) -> dict:
+    found: dict = {}
+    if not path.exists():
+        return found
+    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = line.strip()
+        if not line or line.startswith(";") or "=" not in line:
+            continue
+        key, value = [part.strip() for part in line.split("=", 1)]
+        if key in keys:
+            found[key] = value
+    return found
 
 
 # The extensions the PHP config page offers, one apt package each

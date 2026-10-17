@@ -595,7 +595,8 @@ def restore_user_backup(backup_file: str, db) -> dict:
             role=Role.end_user.value,
             is_active=bool(user_info.get("is_active", True)),
             website_limit=int(user_info.get("website_limit") or 5),
-            storage_limit_mb=int(user_info.get("storage_limit_mb") or 1024),
+            # 0 is unlimited, not "missing": `or 1024` turned it into 1 GB.
+            storage_limit_mb=int(user_info["storage_limit_mb"]) if user_info.get("storage_limit_mb") is not None else 1024,
             # Its own SFTP secret, like every other creation path. Leaving this
             # NULL would claim the Linux password is the panel password, which
             # is not true here - and NULL is what tells the panel an account is

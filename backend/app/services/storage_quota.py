@@ -42,9 +42,18 @@ class StorageQuotaExceeded(ValueError):
 
 
 def user_storage_limit_bytes(user: User) -> int | None:
+    """The account's disk limit, or None for none.
+
+    0 is unlimited, as the user and package forms say (operator, 2026-10-16):
+    it used to mean 0 bytes, so an account set to 0 could not create a
+    website at all.
+    """
     if is_admin_role(user.role):
         return None
-    return max(0, int(user.storage_limit_mb or 0)) * BYTES_PER_MB
+    limit_mb = int(user.storage_limit_mb or 0)
+    if limit_mb <= 0:
+        return None
+    return limit_mb * BYTES_PER_MB
 
 
 def path_usage_bytes(path: str | Path) -> int:

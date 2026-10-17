@@ -216,3 +216,83 @@ def dump_database_file(db_name: str, output_dir: Path) -> Path:
     if settings.command_dry_run and not target.exists():
         target.write_text(f"-- DRY RUN database dump for {safe_name}\n", encoding="utf-8")
     return target
+
+
+# --- phpMyAdmin single sign-on --------------------------------------------------------
+# A login of its own for each phpMyAdmin visit, rather than the website's: a
+# database imported from DirectAdmin keeps its user's original password hash,
+# so the panel never learns the password and had stored an empty one - and
+# every phpMyAdmin sign-in to it failed (operator, 2026-10-16). A temporary
+# user also keeps the site's real password out of phpMyAdmin's session.
+SSO_USER_PREFIX = "bpsso_"
+SSO_LOGIN_TTL_SECONDS = 8 * 3600
+SSO_STATE_FILE = Path("/var/lib/bpanel/pma-sso-logins.json")
+
+
+def _read_sso_state() -> dict:
+    import json
+
+    try:
+        data = json.loads(SSO_STATE_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {str(k): float(v) for k, v in data.items()} if isinstance(data, dict) else {}
+
+
+def _write_sso_state(state: dict) -> None:
+    import json
+    import os
+
+    SSO_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = SSO_STATE_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(state), encoding="utf-8")
+    os.chmod(tmp, 0o600)
+    tmp.replace(SSO_STATE_FILE)
+
+
+def _grant_target(db_name: str) -> str:
+    """`db`.* with _ escaped: unescaped, a database-level grant reads _ as a
+    wildcard, so `shop_db` would also cover `shopXdb`."""
+    escaped = _validate_identifier(db_name).replace("_", "\\_")
+    return f"`{escaped}`.*"
+
+
+def create_sso_login(db_name: str) -> tuple[str, str]:
+    """A MariaDB login for one phpMyAdmin visit to one database."""
+    import time
+
+    drop_expired_sso_logins()
+    user = SSO_USER_PREFIX + secrets.token_hex(5)
+    password = random_password(32)
+    _run_sql(
+        f"CREATE USER {_quote_sql_string(user)}@'localhost' IDENTIFIED BY {_quote_sql_string(password)};\n"
+        f"GRANT ALL PRIVILEGES ON {_grant_target(db_name)} TO {_quote_sql_string(user)}@'localhost';\n"
+    )
+    state = _read_sso_state()
+    state[user] = time.time() + SSO_LOGIN_TTL_SECONDS
+    _write_sso_state(state)
+    return user, password
+
+
+def drop_expired_sso_logins(drop_all: bool = False) -> int:
+    """Drop the phpMyAdmin logins past their time, and any the state file lost
+    track of. Run before each new one and on the scheduler's minute tick."""
+    import time
+
+    state = _read_sso_state()
+    now = time.time()
+    doomed = {user for user, expires in state.items() if drop_all or expires <= now}
+    listed = shell.run(_mysql_args(["-N", "-B"]), check=False, sensitive=True,
+                       input=f"SELECT user FROM mysql.user WHERE user LIKE {_quote_sql_string(SSO_USER_PREFIX + '%')};\n")
+    for line in (listed.stdout or "").splitlines():
+        user = line.strip()
+        if user.startswith(SSO_USER_PREFIX) and user not in state:
+            doomed.add(user)
+    doomed = {user for user in doomed if user.startswith(SSO_USER_PREFIX) and all(ch in IDENTIFIER_CHARS for ch in user)}
+    if not doomed:
+        return 0
+    _run_sql("".join(f"DROP USER IF EXISTS {_quote_sql_string(user)}@'localhost';\n" for user in sorted(doomed)), check=False)
+    for user in doomed:
+        state.pop(user, None)
+    _write_sso_state(state)
+    return len(doomed)

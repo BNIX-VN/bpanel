@@ -1,3 +1,5 @@
+import logging
+import time
 from hmac import compare_digest
 from typing import Optional
 
@@ -15,6 +17,26 @@ from app.services import demo_mode
 
 # auto_error=False because the token may instead be in an HttpOnly cookie.
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
+# One line per credential turned away, with why (operator, 2026-10-16: people
+# were being signed out and nothing said by what). journalctl -u bpanel-api |
+# grep auth-reject.
+auth_logger = logging.getLogger("bpanel.auth")
+
+
+def _log_reject(request: Optional[Request], reason: str, payload: Optional[dict] = None,
+                username: str = "-", **extra) -> None:
+    now = time.time()
+    fields = {"reason": reason, "user": (payload or {}).get("sub") or username or "-"}
+    if request is not None:
+        fields["ip"] = request.client.host if request.client else "-"
+        fields["path"] = request.url.path
+    if payload:
+        if payload.get("iat") is not None:
+            fields["age_s"] = int(now - float(payload["iat"]))
+        if payload.get("exp") is not None:
+            fields["exp_in_s"] = int(float(payload["exp"]) - now)
+    fields.update(extra)
+    auth_logger.warning("auth-reject " + " ".join(f"{key}={value}" for key, value in fields.items()))
 
 
 def _credentials_exception() -> HTTPException:
@@ -36,7 +58,7 @@ def _resolve_token(
     return None
 
 
-def _user_from_token(token: str, db: Session) -> tuple[User, dict]:
+def _user_from_token(token: str, db: Session, request: Optional[Request] = None) -> tuple[User, dict]:
     credentials_exception = _credentials_exception()
     try:
         payload = jwt.decode(token, settings.secret_key, algorithms=[ALGORITHM])
@@ -46,19 +68,29 @@ def _user_from_token(token: str, db: Session) -> tuple[User, dict]:
         if username is None:
             raise credentials_exception
     except (JWTError, ValueError) as exc:
+        unverified: dict = {}
+        try:
+            unverified = jwt.get_unverified_claims(token)
+        except (JWTError, ValueError):
+            pass
+        _log_reject(request, f"bad-or-expired-token:{exc.__class__.__name__}", unverified)
         raise credentials_exception from exc
 
     user = db.query(User).filter(User.username == username).first()
     if user is None:
+        _log_reject(request, "unknown-user", payload)
         raise credentials_exception
     # Impersonated sessions (admin "Login as") may target suspended users.
     # The `imp` claim is only set by the impersonate endpoint which already
     # verified the caller is an admin, so the bypass is safe.
     if not user.is_active and not payload.get("imp"):
+        _log_reject(request, "user-inactive", payload)
         raise credentials_exception
     if (user.token_version or 0) != token_version:
+        _log_reject(request, "token-version-mismatch", payload, tv_token=token_version, tv_db=user.token_version or 0)
         raise credentials_exception
     if jti and db.query(RevokedToken.id).filter(RevokedToken.jti == jti).first():
+        _log_reject(request, "token-revoked", payload)
         raise credentials_exception
     return user, payload
 
@@ -84,6 +116,8 @@ def _enforce_cookie_csrf(request: Request, bearer_token: Optional[str], session_
                 or not csrf_header
                 or not compare_digest(csrf_cookie, csrf_header)
             ):
+                _log_reject(request, "csrf-missing-or-invalid", getattr(request.state, "jwt_payload", None),
+                            cookie=bool(csrf_cookie), header=bool(csrf_header))
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="CSRF token missing or invalid",
@@ -100,7 +134,7 @@ def get_current_user_optional(
     if not token:
         return None
     try:
-        user, payload = _user_from_token(token, db)
+        user, payload = _user_from_token(token, db, request)
     except HTTPException as exc:
         if exc.status_code == status.HTTP_401_UNAUTHORIZED:
             return None
@@ -122,7 +156,7 @@ def get_current_user(
     token = _resolve_token(bearer_token, session_cookie)
     if not token:
         raise _credentials_exception()
-    user, payload = _user_from_token(token, db)
+    user, payload = _user_from_token(token, db, request)
     _attach_auth_state(request, token, payload)
     _enforce_cookie_csrf(request, bearer_token, session_cookie)
     # Every signed-in request passes here, so this is where a demo account is
