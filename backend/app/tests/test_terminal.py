@@ -239,3 +239,35 @@ def test_losing_it_or_the_account_ends_the_sessions():
     assert 'terminal.end_sessions(user.id, "access-changed")' in inspect.getsource(users_api.update_user)
     delete = inspect.getsource(users_api.delete_user)
     assert delete.index("terminal.end_sessions") < delete.index("site_users.delete_panel_user")
+
+
+def test_older_accounts_take_their_packages_setting():
+    """0030 had switched the terminal on for every account then; a real shell
+    is the package's to give (operator, 2026-10-17)."""
+    import importlib.util
+
+    from sqlalchemy import text
+
+    from app.models.entities import UserPackage
+
+    spec = importlib.util.spec_from_file_location(
+        "m0048", Path(__file__).resolve().parents[2] / "alembic" / "versions" / "0048_terminal_follows_package.py")
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine)()
+    shell, plain = UserPackage(name="Shell", slug="shell", terminal_enabled=True), UserPackage(name="Plain", slug="plain", terminal_enabled=False)
+    db.add_all([shell, plain])
+    db.commit()
+    people = {
+        "on_shell": account(username="on_shell", terminal_enabled=False, package_id=shell.id),
+        "on_plain": account(username="on_plain", terminal_enabled=True, package_id=plain.id),
+        "no_package": account(username="no_package", terminal_enabled=True),
+    }
+    db.add_all(people.values())
+    db.commit()
+    db.execute(text(migration.FOLLOW_PACKAGE))
+    db.commit()
+    got = {name: db.get(User, user.id).terminal_enabled for name, user in people.items()}
+    assert got == {"on_shell": True, "on_plain": False, "no_package": False}
