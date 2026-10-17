@@ -11260,8 +11260,8 @@ function App() {
           <label><span>{t('Disk (MB)')}</span><input type="number" min="0" max="1048576" value={form.storage_limit_mb} onChange={set('storage_limit_mb')} /></label>
           <label><span>{t('Databases')}</span><input type="number" min="0" max="10000" value={form.database_limit} onChange={set('database_limit')} /></label>
           {mailAddonInstalled && <label><span>{t('Mailboxes')}</span><input type="number" min="0" max="1000" value={form.mail_accounts_limit} onChange={set('mail_accounts_limit')} /></label>}
-          {canGrantTerminal && <label className="check-line span-all"><input type="checkbox" checked={!!form.terminal_enabled} onChange={e => setForm(prev => ({ ...prev, terminal_enabled: e.target.checked }))} /> {t('Browser terminal')}</label>}
         </div>
+        {canGrantTerminal && <label className="check-line"><input type="checkbox" checked={!!form.terminal_enabled} onChange={e => setForm(prev => ({ ...prev, terminal_enabled: e.target.checked }))} /> {t('Browser terminal')}</label>}
         {canGrantTerminal && <p className="hint">{t("A real shell as the account's own Linux user, in a sandbox: its own home only, its own processes, no root. Administrators and resellers open it by logging in as the customer.")}</p>}
       </fieldset>
       {limitsOn && renderLimitInputs(form, setForm)}
