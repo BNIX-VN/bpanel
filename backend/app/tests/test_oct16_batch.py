@@ -149,3 +149,22 @@ def test_the_helper_accepts_the_opcache_sizes():
     validate = HELPER.split("\nvalidate_php_config_file() {", 1)[1].split("\n}\n", 1)[0]
     for key in ("opcache.memory_consumption)", "opcache.interned_strings_buffer)", "opcache.max_accelerated_files)"):
         assert key in validate, key
+
+
+def test_the_page_is_asked_for_again_every_time(monkeypatch, tmp_path):
+    """A tab brought back after sleep was drawn from the cache and showed the
+    sign-in form with nothing wrong on the server."""
+    from fastapi.testclient import TestClient
+
+    from app import main
+
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "index.html").write_text("<!doctype html><title>panel</title>", encoding="utf-8")
+    (tmp_path / "robots.txt").write_text("User-agent: *", encoding="utf-8")
+    monkeypatch.setattr(main, "frontend_dist", tmp_path)
+    client = TestClient(main.app)
+    for path in ("/", "/websites", "/index.html"):
+        response = client.get(path)
+        assert response.status_code == 200 and "panel" in response.text
+        assert response.headers.get("cache-control") == "no-cache", path
+    assert "no-cache" not in client.get("/robots.txt").headers.get("cache-control", "")
