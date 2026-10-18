@@ -33,6 +33,7 @@ import './shared/style.css';
 import './shared/brand.css';
 import './shared/ui.css';
 import './shared/file-manager.css';
+import './shared/sn-local.css';
 import './sn-tokens.css';
 import './dashboard.css';
 import './pages/Databases.css';
