@@ -19,7 +19,7 @@ import { UsageChart } from './components/UsageChart';
 import HubTabs from './components/HubTabs';
 import NotificationBell from './components/NotificationBell.jsx';
 import Drawer from './components/Drawer.jsx';
-import { DialogHost, confirmDialog } from './components/Dialog.jsx';
+import { DialogHost, confirmDialog, promptDialog } from './components/Dialog.jsx';
 import { Checkbox, Field, PasswordField } from './components/Form.jsx';
 import ActionMenu from './components/ActionMenu.jsx';
 import PageHeader from './components/PageHeader.jsx';
@@ -1439,7 +1439,7 @@ function App() {
   }
 
   async function removePasskey(credential) {
-    if (!confirm(`Delete passkey ${credential.name}? That device will no longer be able to sign in.`)) return;
+    if (!(await confirmDialog({ message: `Delete passkey ${credential.name}? That device will no longer be able to sign in.`, danger: true }))) return;
     await request(`/auth/passkey/credentials/${credential.id}`, { method: 'DELETE' }, t('Deleting passkey...'));
     await loadPasskeyStatus();
   }
@@ -1730,7 +1730,7 @@ function App() {
   }
 
   async function revokeApiToken(token) {
-    if (!confirm(t('Delete API token {name}? WHMCS using it stops working at once.', { name: token.name }))) return;
+    if (!(await confirmDialog({ message: t('Delete API token {name}? WHMCS using it stops working at once.', { name: token.name }), danger: true }))) return;
     const data = await request(`/provisioning/v1/tokens/${token.id}`, { method: 'DELETE' }, t('Deleting token...'));
     if (data) {
       setNotice(t('API token {name} deleted.', { name: token.name }));
@@ -2055,11 +2055,11 @@ function App() {
   async function submitPasswordChange(user, password) {
     const payload = { password };
     if (user.id === currentUser?.id) {
-      const currentPassword = prompt(t('Enter your current password to confirm:'));
+      const currentPassword = await promptDialog({ label: t('Enter your current password to confirm:'), type: 'password' });
       if (!currentPassword) return false;
       payload.current_password = currentPassword;
       if (currentUser?.totp_enabled) {
-        const code = prompt(t('Enter your 2FA code:'));
+        const code = await promptDialog({ label: t('Enter your 2FA code:'), type: 'code' });
         if (!code) return false;
         payload.code = code.trim();
       }
@@ -2135,7 +2135,7 @@ function App() {
   }
 
   async function deletePackage(item) {
-    if (!confirm(`Delete package ${item.name}?`)) return;
+    if (!(await confirmDialog({ message: `Delete package ${item.name}?`, danger: true }))) return;
     const data = await request(`/packages/${item.id}`, { method: 'DELETE' }, `Deleting ${item.name}...`);
     if (data) {
       setNotice(`Deleted package ${item.name}.`);
@@ -2145,16 +2145,17 @@ function App() {
   }
 
   async function changeUserPassword(user) {
-    const password = prompt(`Enter a new password for ${user.username} (minimum 12 characters):`);
+    const password = await promptDialog({ title: t('New password for {name}', { name: user.username }), label: t('New password'),
+      type: 'password', minLength: 12, generate: true, hint: t('At least 12 characters.') });
     if (!password) return;
     if (password.length < 12) { setError(t('Password must be at least 12 characters.')); return; }
     const payload = { password };
     if (user.id === currentUser?.id) {
-      const currentPassword = prompt('Enter your current password to confirm this change:');
+      const currentPassword = await promptDialog({ label: 'Enter your current password to confirm this change:', type: 'password' });
       if (!currentPassword) return;
       payload.current_password = currentPassword;
       if (currentUser?.totp_enabled) {
-        const code = prompt('Enter the 6-digit code from your authenticator:');
+        const code = await promptDialog({ label: 'Enter the 6-digit code from your authenticator:', type: 'code' });
         if (!code) return;
         payload.code = code.trim();
       }
@@ -2165,7 +2166,7 @@ function App() {
 
   async function deletePanelUser(user) {
     if (!user || user.id === currentUser?.id) return;
-    if (!confirm(`Delete panel user ${user.username} and permanently delete all owned websites, files, databases, SSL certificates, and Linux user data?`)) return;
+    if (!(await confirmDialog({ message: `Delete panel user ${user.username} and permanently delete all owned websites, files, databases, SSL certificates, and Linux user data?`, danger: true }))) return;
     const data = await request(`/users/${user.id}`, { method: 'DELETE' }, `Deleting user ${user.username}...`);
     if (data) {
       const count = data.deleted_websites?.length || 0;
@@ -2180,7 +2181,7 @@ function App() {
   async function suspendUser(user) {
     if (!user || user.id === currentUser?.id) return;
     const siteCount = websites.filter(w => w.owner_id === user.id).length;
-    if (!confirm(t('Suspend user {name}? This will block login, disable all {n} website(s), lock SFTP, and kill active sessions.', { name: user.username, n: siteCount }))) return;
+    if (!(await confirmDialog(t('Suspend user {name}? This will block login, disable all {n} website(s), lock SFTP, and kill active sessions.', { name: user.username, n: siteCount })))) return;
     const data = await request(`/users/${user.id}/suspend`, { method: 'POST' }, `Suspending user ${user.username}...`);
     if (data) {
       await loadUsers();
@@ -2190,7 +2191,7 @@ function App() {
 
   async function unsuspendUser(user) {
     if (!user || user.id === currentUser?.id) return;
-    if (!confirm(`Unsuspend user ${user.username}? This will restore login, websites, and SFTP access.`)) return;
+    if (!(await confirmDialog(`Unsuspend user ${user.username}? This will restore login, websites, and SFTP access.`))) return;
     const data = await request(`/users/${user.id}/unsuspend`, { method: 'POST' }, `Unsuspending user ${user.username}...`);
     if (data) {
       await loadUsers();
@@ -2201,13 +2202,13 @@ function App() {
   async function quickLoginUser(user) {
     if (!user) return;
     const suspendedNote = user.is_active ? '' : ' This user is SUSPENDED — websites and SFTP are disabled.';
-    if (!confirm(`Login as ${user.username}?${suspendedNote}`)) return;
+    if (!(await confirmDialog(`Login as ${user.username}?${suspendedNote}`))) return;
     // Impersonation re-prompts TOTP when the calling admin has 2FA enabled.
     // Try without the code first; if the backend says one is required, ask
     // and resend. Sending the OTP via FormData keeps it out of the URL.
     let body;
     if (currentUser?.totp_enabled) {
-      const code = prompt(`Enter the 6-digit code from your authenticator to confirm impersonation of ${user.username}:`);
+      const code = await promptDialog({ label: `Enter the 6-digit code from your authenticator to confirm impersonation of ${user.username}:`, type: 'code' });
       if (!code) return;
       body = new URLSearchParams({ otp: code.trim() });
     }
@@ -2220,7 +2221,7 @@ function App() {
     );
     // Handle case where backend says 2FA is required (e.g., stale user object).
     if (data?.requires_2fa) {
-      const code = prompt(`Enter the 6-digit code from your authenticator to confirm impersonation of ${user.username}:`);
+      const code = await promptDialog({ label: `Enter the 6-digit code from your authenticator to confirm impersonation of ${user.username}:`, type: 'code' });
       if (!code) return;
       const retryBody = new URLSearchParams({ otp: code.trim() });
       const retryData = await request(
@@ -2264,11 +2265,11 @@ function App() {
   }
 
   async function setupTwoFactorAuth() {
-    const currentPassword = prompt('Enter your current password to generate a new 2FA secret:');
+    const currentPassword = await promptDialog({ label: 'Enter your current password to generate a new 2FA secret:', type: 'password' });
     if (!currentPassword) return;
     const payload = { current_password: currentPassword };
     if (currentUser?.totp_enabled) {
-      const code = prompt('Enter the 6-digit code from your authenticator:');
+      const code = await promptDialog({ label: 'Enter the 6-digit code from your authenticator:', type: 'code' });
       if (!code) return;
       payload.code = code.trim();
     }
@@ -2291,7 +2292,7 @@ function App() {
   }
 
   async function disableTwoFactorAuth() {
-    const currentPassword = prompt('Enter your current password to disable 2FA:');
+    const currentPassword = await promptDialog({ label: 'Enter your current password to disable 2FA:', type: 'password' });
     if (!currentPassword) return;
     const data = await request(
       '/auth/2fa/disable',
@@ -2307,7 +2308,7 @@ function App() {
   }
 
   async function resetUserTwoFactor(user) {
-    if (!confirm(`Reset 2FA for ${user.username}?`)) return;
+    if (!(await confirmDialog(`Reset 2FA for ${user.username}?`))) return;
     const data = await request(`/users/${user.id}/2fa/reset`, { method: 'POST' }, `Resetting 2FA for ${user.username}...`);
     if (data?.message) { setNotice(data.message); await loadUsers(); }
   }
@@ -2323,9 +2324,9 @@ function App() {
       setError(ipv6.detail || 'This server has no IPv6 address, so this feature cannot be used.');
       return;
     }
-    if (!confirm(t(enable
+    if (!(await confirmDialog(t(enable
       ? 'Enable IPv6 for every website and the panel?\n\nBPanel adds listen [::] to every website\'s nginx config, checks it with nginx -t, and rolls back on any error. The panel restarts.'
-      : 'Disable IPv6?\n\nWebsites and the panel will accept IPv4 only. If a domain still has an AAAA record, visitors arriving over IPv6 will not get through.'))) return;
+      : 'Disable IPv6?\n\nWebsites and the panel will accept IPv4 only. If a domain still has an AAAA record, visitors arriving over IPv6 will not get through.')))) return;
     const data = await request('/panel-settings/ipv6', {
       method: 'POST',
       body: JSON.stringify({ enabled: enable }),
@@ -2349,7 +2350,7 @@ function App() {
   async function saveMalwareSchedule(scope) {
     const entry = malwareSchedulesForm[scope] || {};
     if (scope === 'server' && entry.enabled && malwareScanStatus?.memory_warning) {
-      if (!confirm(`${malwareScanStatus.memory_warning}\n\nSchedule the whole-server scan anyway?`)) return;
+      if (!(await confirmDialog(`${malwareScanStatus.memory_warning}\n\nSchedule the whole-server scan anyway?`))) return;
     }
     const body = { [scope]: { enabled: !!entry.enabled, weekday: Number(entry.weekday ?? 6), hour: Number(entry.hour ?? 3) } };
     const data = await request('/malware/schedule', { method: 'PUT', body: JSON.stringify(body) }, t('Saving scan schedule...'));
@@ -2361,17 +2362,16 @@ function App() {
   }
 
   async function toggleMalwareRealtime(enabled) {
-    if (enabled && !confirm(t('Turn on real-time protection? The panel watches website directories and scans new files as they appear. If it is not installed yet, the panel installs it (1-3 minutes).'))) return;
+    if (enabled && !(await confirmDialog(t('Turn on real-time protection? The panel watches website directories and scans new files as they appear. If it is not installed yet, the panel installs it (1-3 minutes).')))) return;
     const data = await request('/malware/realtime', { method: 'POST', body: JSON.stringify({ enabled }) },
       enabled ? 'Turning on real-time protection...' : 'Turning off...');
     if (data) { setMalwareScanStatus(data); setNotice(t(enabled ? 'Real-time protection is on (level 2).' : 'Real-time protection is off.')); }
   }
 
   async function toggleMalwareScanOnUpload(enabled) {
-    if (enabled && !malwareScanStatus?.clamd_running && !confirm(
-      'This server has no resident clamd, so every uploaded file reloads the whole signature database: '
+    if (enabled && !malwareScanStatus?.clamd_running && !(await confirmDialog('This server has no resident clamd, so every uploaded file reloads the whole signature database: '
       + 'measured at 28 seconds and over 1 GB of RAM for a 20 MB file. The scan runs in the background so nobody waits on it, '
-      + 'but the server pays that for every file. Turn it on anyway?')) return;
+      + 'but the server pays that for every file. Turn it on anyway?'))) return;
     const data = await request('/malware/scan-on-upload', { method: 'POST', body: JSON.stringify({ enabled }) },
       enabled ? 'Turning on scan-on-upload...' : 'Turning off...');
     if (data) { setMalwareScanStatus(data); setNotice(enabled ? 'Uploaded files are scanned.' : 'Uploaded files are no longer scanned.'); }
@@ -2390,7 +2390,7 @@ function App() {
   async function runMalwareScan() {
     if (!scanTargetWebsiteId) return;
     if (scanTargetWebsiteId === 'server' && malwareScanStatus?.memory_warning) {
-      if (!confirm(`${malwareScanStatus.memory_warning}\n\nScan the whole server anyway?`)) return;
+      if (!(await confirmDialog(`${malwareScanStatus.memory_warning}\n\nScan the whole server anyway?`))) return;
     }
     setScanResults(null);
     setScanJob(null);
@@ -2641,7 +2641,7 @@ function App() {
 
   async function deleteWebsiteAlias(site, alias) {
     const label = alias.mode === 'redirect' ? 'redirect' : 'alias';
-    if (!confirm(`Remove ${label} ${alias.domain} from ${site.domain}?`)) return;
+    if (!(await confirmDialog({ message: `Remove ${label} ${alias.domain} from ${site.domain}?`, danger: true, confirmLabel: t('Remove') }))) return;
     const data = await request(`/websites/${site.id}/aliases/${alias.id}`, { method: 'DELETE' }, `Removing ${label} ${alias.domain}...`);
     if (data) {
       setNotice(`Removed ${label} ${alias.domain}.`);
@@ -2836,7 +2836,7 @@ function App() {
     const question = record.mail
       ? t('The Email addon keeps this record for {domain} and writes it again when the email settings of {domain} change. Delete the {type} record of {name} anyway?', { domain: record.mail, type: record.type, name: record.name })
       : t('Delete the {type} record of {name}: {value}?', { type: record.type, name: record.name, value: record.value });
-    if (!confirm(question)) return;
+    if (!(await confirmDialog(question))) return;
     const data = await request(`${dnsPath(dnsZone.zone)}/records/delete`, { method: 'POST', body: JSON.stringify(dnsRecordKey(record)) }, t('Deleting the record...'));
     if (!data) return;
     applyDnsRecords(data);
@@ -2845,7 +2845,7 @@ function App() {
   }
 
   async function restoreDnsDefaults() {
-    if (!confirm(t('Put back the records the panel manages for {zone}: nameservers, websites and email. Records you added are kept.', { zone: dnsZone.zone.name }))) return;
+    if (!(await confirmDialog(t('Put back the records the panel manages for {zone}: nameservers, websites and email. Records you added are kept.', { zone: dnsZone.zone.name })))) return;
     const data = await request(`${dnsPath(dnsZone.zone)}/defaults`, { method: 'POST' }, t("Restoring the panel's records..."));
     if (!data) return;
     applyDnsRecords(data);
@@ -2853,9 +2853,11 @@ function App() {
   }
 
   async function deleteDnsZone(zone) {
-    const typed = prompt(t('Every record of {zone} is deleted, and the domain stops resolving once its nameservers point here. Type the domain name to confirm.', { zone: zone.name }));
-    if (typed === null) return;
-    if (typed.trim().toLowerCase().replace(/\.$/, '') !== zone.name) { setError(t('The name did not match; nothing was deleted.')); return; }
+    const ok = await confirmDialog({
+      title: t('Delete zone'), subject: zone.name, danger: true, typeToConfirm: zone.name,
+      message: t('Every record of {zone} is deleted, and the domain stops resolving once its nameservers point here.', { zone: zone.name }),
+    });
+    if (!ok) return;
     const data = await request(dnsPath(zone), { method: 'DELETE' }, t('Deleting the zone...'));
     if (!data) return;
     setNotice(t('Zone {zone} deleted.', { zone: zone.name }));
@@ -2953,9 +2955,11 @@ function App() {
   }
 
   async function deleteMailDomain(domain) {
-    const typed = prompt(t('This deletes every mailbox of {domain} with all its mail, and its forwarders. It cannot be undone.\n\nType the domain name to confirm:', { domain: domain.domain }));
-    if (typed === null) return;
-    if (typed.trim().toLowerCase() !== domain.domain) { setError(t('The name did not match; nothing was deleted.')); return; }
+    const ok = await confirmDialog({
+      title: t('Delete email for {domain}', { domain: domain.domain }), subject: domain.domain, danger: true, typeToConfirm: domain.domain,
+      message: t('This deletes every mailbox of {domain} with all its mail, and its forwarders. It cannot be undone.', { domain: domain.domain }),
+    });
+    if (!ok) return;
     const data = await request(`/mail/domains/${domain.id}?confirm=${encodeURIComponent(domain.domain)}`, { method: 'DELETE' }, t('Deleting...'));
     if (data) {
       setNotice(t('Email for {domain} deleted.', { domain: domain.domain }));
@@ -2977,14 +2981,14 @@ function App() {
   }
 
   async function rotateMailDkim(domain) {
-    if (!confirm(t('Make a new DKIM key for {domain}?\n\nMail is signed with the new key at once, so update the DKIM record in DNS right away: until you do, receivers cannot verify the signature.', { domain: domain.domain }))) return;
+    if (!(await confirmDialog(t('Make a new DKIM key for {domain}?\n\nMail is signed with the new key at once, so update the DKIM record in DNS right away: until you do, receivers cannot verify the signature.', { domain: domain.domain })))) return;
     const data = await request(`/mail/domains/${domain.id}/dkim/rotate`, { method: 'POST' }, t('Creating a new key...'));
     if (data) { setNotice(t('New DKIM key created. Update the DKIM record.')); openMailDns(domain); }
   }
 
   async function toggleWebmailHost(domain, enabled) {
-    if (enabled && !confirm(t("Serve webmail at webmail.{domain}?\n\nIts A record must already point at this server: a Let's Encrypt certificate is issued for it now.", { domain: domain.domain }))) return;
-    if (!enabled && !confirm(t("Stop serving webmail at webmail.{domain}? Webmail stays available on the server's own address.", { domain: domain.domain }))) return;
+    if (enabled && !(await confirmDialog(t("Serve webmail at webmail.{domain}?\n\nIts A record must already point at this server: a Let's Encrypt certificate is issued for it now.", { domain: domain.domain })))) return;
+    if (!enabled && !(await confirmDialog(t("Stop serving webmail at webmail.{domain}? Webmail stays available on the server's own address.", { domain: domain.domain })))) return;
     const data = await request(`/mail/domains/${domain.id}/webmail-host`, { method: 'POST', body: JSON.stringify({ enabled }) },
       enabled ? t('Issuing a certificate for webmail.{domain}...', { domain: domain.domain }) : t('Removing...'));
     if (data) {
@@ -3017,13 +3021,13 @@ function App() {
   }
 
   async function setMailboxEnabled(box, enabled) {
-    if (!enabled && !confirm(t('Suspend {address}?\n\nIt keeps receiving mail, but nobody can sign in to it or send from it until it is resumed.', { address: box.address }))) return;
+    if (!enabled && !(await confirmDialog(t('Suspend {address}?\n\nIt keeps receiving mail, but nobody can sign in to it or send from it until it is resumed.', { address: box.address })))) return;
     const data = await request(`/mail/mailboxes/${box.id}`, { method: 'PUT', body: JSON.stringify({ enabled }) }, t('Saving...'));
     if (data) { setNotice(enabled ? t('{address} resumed.', { address: box.address }) : t('{address} suspended.', { address: box.address })); loadMailboxes(); }
   }
 
   async function deleteMailbox(box) {
-    if (!confirm(t('Delete {address} and all of its mail?\n\nThis cannot be undone.', { address: box.address }))) return;
+    if (!(await confirmDialog({ message: t('Delete {address} and all of its mail?\n\nThis cannot be undone.', { address: box.address }), danger: true }))) return;
     const data = await request(`/mail/mailboxes/${box.id}`, { method: 'DELETE' }, t('Deleting...'));
     if (data) { setNotice(t('{address} deleted.', { address: box.address })); loadMailboxes(); loadMailInfo(); }
   }
@@ -3058,7 +3062,7 @@ function App() {
   }
 
   async function deleteForwarder(item) {
-    if (!confirm(t('Delete the forwarder {address}?', { address: item.address }))) return;
+    if (!(await confirmDialog({ message: t('Delete the forwarder {address}?', { address: item.address }), danger: true }))) return;
     const data = await request(`/mail/forwarders/${item.id}`, { method: 'DELETE' }, t('Deleting...'));
     if (data) { setNotice(t('{address} deleted.', { address: item.address })); loadForwarders(); loadMailInfo(); }
   }
@@ -3114,7 +3118,7 @@ function App() {
   }
 
   async function deleteRelay(relay) {
-    if (!confirm(t('Delete the relay {name}?\n\nDomains that use it go back to the default relay.', { name: relay.name }))) return;
+    if (!(await confirmDialog({ message: t('Delete the relay {name}?\n\nDomains that use it go back to the default relay.', { name: relay.name }), danger: true }))) return;
     const data = await request(`/mail/relays/${relay.id}`, { method: 'DELETE' }, t('Deleting...'));
     if (data) { setMailRelays(data); setNotice(t('{name} deleted.', { name: relay.name })); }
   }
@@ -3160,7 +3164,7 @@ function App() {
   }
 
   async function allowMailSender(value) {
-    if (!confirm(t('Never block mail from {sender}?', { sender: value }))) return;
+    if (!(await confirmDialog(t('Never block mail from {sender}?', { sender: value })))) return;
     const data = await request('/mail/rspamd/allow', { method: 'POST', body: JSON.stringify({ value }) }, t('Saving...'));
     if (data) {
       setNotice(t('{sender} is on the allowlist. Ask the sender to send the message again.', { sender: value }));
@@ -3210,13 +3214,12 @@ function App() {
     const label = addon?.name || slug;
     if (!install) {
       // Removing an addon takes what it does away, so the admin types its
-      // name rather than clicking through a generic confirm. The name shown
-      // (in either language) or the slug is accepted.
-      const typed = window.prompt(t('Remove {name} and stop what it is doing?\n\nType the addon name to confirm:', { name: t(label) }));
-      if (typed === null) return;
-      const answer = typed.trim().toLowerCase();
-      const accepted = [label, t(label), slug].map(name => String(name || '').trim().toLowerCase());
-      if (!accepted.includes(answer)) { setError(t('Name did not match; nothing was removed.')); return; }
+      // name rather than clicking through a generic confirm.
+      const ok = await confirmDialog({
+        title: t('Remove {name}?', { name: t(label) }), subject: t(label), danger: true, confirmLabel: t('Remove'),
+        message: t('It stops what it is doing.'), typeToConfirm: t(label),
+      });
+      if (!ok) return;
     }
     const data = await request(`/addons/${slug}/${install ? 'install' : 'uninstall'}`, { method: 'POST' },
       install ? t('Installing {name}...', { name: t(label) }) : t('Removing {name}...', { name: t(label) }));
@@ -3395,7 +3398,7 @@ function App() {
   }
 
   async function deleteSiteApp(app) {
-    if (!confirm(`Delete application ${app.name}? Its files stay on disk; only the runtime is removed.`)) return;
+    if (!(await confirmDialog({ message: `Delete application ${app.name}? Its files stay on disk; only the runtime is removed.`, danger: true }))) return;
     const data = await request(`/site-apps/${app.id}`, { method: 'DELETE' }, t('Deleting application...'));
     if (data) {
       setNotice(`Deleted ${app.name}.`);
@@ -3476,7 +3479,7 @@ function App() {
 
   async function resetNginxDefault() {
     if (!nginxCustomEditing) return;
-    if (!confirm(`Clear Custom Nginx for ${nginxCustomEditing.domain}?`)) return;
+    if (!(await confirmDialog({ message: `Clear Custom Nginx for ${nginxCustomEditing.domain}?`, danger: true, confirmLabel: t('Clear') }))) return;
     const data = await request(`/websites/${nginxCustomEditing.id}/nginx-custom`, {
       method: 'PUT',
       body: JSON.stringify({ nginx_custom: '' }),
@@ -3634,13 +3637,14 @@ function App() {
   }
 
   async function changeDbPassword(id) {
-    const newPass = prompt('Enter a new database password, minimum 12 characters:');
+    const newPass = await promptDialog({ title: t('Change database password'), label: t('New password'),
+      type: 'password', minLength: 12, generate: true, hint: t('At least 12 characters.') });
     if (!newPass) return;
     await request(`/databases/${id}/password`, { method: 'POST', body: JSON.stringify({ password: newPass }) }, t('Changing database password...'));
   }
 
   async function deleteDatabase(id, dbName) {
-    if (!confirm(`Delete database "${dbName}"? This action cannot be undone.`)) return;
+    if (!(await confirmDialog({ message: `Delete database "${dbName}"? This action cannot be undone.`, danger: true }))) return;
     const data = await request(`/databases/${id}`, { method: 'DELETE' }, t('Deleting database...'));
     if (data) {
       setNotice(`Database "${dbName}" deleted successfully.`);
@@ -3748,14 +3752,14 @@ function App() {
   }
 
   async function regenerateGitKey() {
-    if (!confirm(t('Make a new deploy key? The old one stops working: add the new key on the remote.'))) return;
+    if (!(await confirmDialog(t('Make a new deploy key? The old one stops working: add the new key on the remote.')))) return;
     const repo = gitRepo?.repo;
     const data = await request(`/git/repos/${repo.id}/ssh-key`, { method: 'POST' }, t('Making a new key...'));
     if (data) { setNotice(t('New deploy key made.')); await openGitRepo(repo.id, true); }
   }
 
   async function rotateGitWebhook() {
-    if (!confirm(t('Make a new webhook URL? The old one stops working: update it on the remote.'))) return;
+    if (!(await confirmDialog(t('Make a new webhook URL? The old one stops working: update it on the remote.')))) return;
     const repo = gitRepo?.repo;
     const data = await request(`/git/repos/${repo.id}/webhook-token`, { method: 'POST' }, t('Saving...'));
     if (data) { setNotice(t('New webhook URL made.')); await openGitRepo(repo.id, true); }
@@ -3772,7 +3776,7 @@ function App() {
 
   async function deleteGitRepo() {
     const repo = gitRepo?.repo;
-    if (!repo || !confirm(t('Remove {name} from the panel? Its files stay in {path}.', { name: repo.name, path: repo.path }))) return;
+    if (!repo || !(await confirmDialog({ message: t('Remove {name} from the panel? Its files stay in {path}.', { name: repo.name, path: repo.path }), danger: true, confirmLabel: t('Remove') }))) return;
     const data = await request(`/git/repos/${repo.id}`, { method: 'DELETE' }, t('Removing...'));
     if (data) { setNotice(t('{name} removed from the panel.', { name: repo.name })); closeGitRepo(); }
   }
@@ -3828,14 +3832,14 @@ function App() {
   }
 
   async function deleteSftpAccount(account) {
-    if (!confirm(t('Delete SFTP account {name}? Files in its folder are kept.', { name: account.username }))) return;
+    if (!(await confirmDialog({ message: t('Delete SFTP account {name}? Files in its folder are kept.', { name: account.username }), danger: true }))) return;
     await request(`/sftp-accounts/${account.id}`, { method: 'DELETE' }, t('Removing SFTP account...'));
     if (createdSftpInfo?.id === account.id) setCreatedSftpInfo(null);
     await loadSftpAccounts();
   }
 
   async function deleteCron(index) {
-    if (!confirm(`Delete cron #${index}?`)) return;
+    if (!(await confirmDialog({ message: `Delete cron #${index}?`, danger: true }))) return;
     index = Number(index);
     if (Number.isNaN(index)) return;
     const data = await request('/maintenance/cron', { method: 'DELETE', body: JSON.stringify({ website_id: Number(selectedWebsiteId), index }) }, t('Deleting cron job...'));
@@ -3903,7 +3907,7 @@ function App() {
 
   async function makeFileDirectory() {
     if (!hasFileTarget()) return;
-    const name = prompt('Folder name:');
+    const name = await promptDialog({ label: 'Folder name:' });
     if (!name) return;
     const data = await request('/maintenance/files/mkdir', { method: 'POST', body: JSON.stringify({ ...fileTargetBody(), path: fileListPath || '', name }) }, t('Creating folder...'));
     if (data) await listFiles(fileListPath);
@@ -3911,7 +3915,7 @@ function App() {
 
   async function makeFile() {
     if (!hasFileTarget()) return;
-    const name = prompt('File name:', 'new-file.txt');
+    const name = await promptDialog({ label: 'File name:', defaultValue: 'new-file.txt', select: 'name' });
     if (!name) return;
     const data = await request('/maintenance/files/create', { method: 'POST', body: JSON.stringify({ ...fileTargetBody(), path: fileListPath || '', name }) }, t('Creating file...'));
     if (data) {
@@ -3923,7 +3927,7 @@ function App() {
 
   async function renameFileItem(item) {
     if (!item) return;
-    const newName = prompt('New name:', item.name);
+    const newName = await promptDialog({ label: 'New name:', defaultValue: item.name, select: 'name' });
     if (!newName || newName === item.name) return;
     const data = await request('/maintenance/files/rename', { method: 'POST', body: JSON.stringify({ ...fileTargetBody(), path: item.path, new_name: newName }) }, t('Renaming...'));
     if (data) await listFiles(fileListPath);
@@ -3967,7 +3971,7 @@ function App() {
 
   async function deleteSelectedFiles() {
     if (selectedFilePaths.length === 0) return;
-    if (!confirm(t('Delete {n} selected item(s)?', { n: selectedFilePaths.length }))) return;
+    if (!(await confirmDialog({ message: t('Delete {n} selected item(s)?', { n: selectedFilePaths.length }), danger: true }))) return;
     const data = await request('/maintenance/files/delete', { method: 'POST', body: JSON.stringify({ ...fileTargetBody(), paths: selectedFilePaths }) }, t('Deleting selected files...'));
     if (data) { await listFiles(fileListPath); await loadCurrentUser(); }
   }
@@ -3975,7 +3979,7 @@ function App() {
   async function transferFileItems(action, paths) {
     if (!hasFileTarget() || !paths?.length) return;
     const verb = action === 'copy' ? 'Copy' : 'Move';
-    const destination = prompt(`${verb} to folder:`, fileListPath || 'public_html');
+    const destination = await promptDialog({ label: `${verb} to folder:`, defaultValue: fileListPath || 'public_html' });
     if (destination === null) return;
     const targetPath = destination.trim() || fileListPath || 'public_html';
     const data = await request(`/maintenance/files/${action}`, {
@@ -3996,7 +4000,7 @@ function App() {
   async function archiveSelectedFiles() {
     if (selectedFilePaths.length === 0) return;
     const ext = archiveFormat === 'tar.gz' ? 'tar.gz' : 'zip';
-    const outputName = prompt('Archive file name:', `archive-${Date.now()}.${ext}`);
+    const outputName = await promptDialog({ label: 'Archive file name:', defaultValue: `archive-${Date.now()}.${ext}`, select: 'name' });
     if (!outputName) return;
     const data = await request('/maintenance/files/archive', {
       method: 'POST',
@@ -4007,7 +4011,7 @@ function App() {
 
   async function extractArchiveFile(path) {
     if (!hasFileTarget() || !path) return;
-    const destination = prompt('Extract to folder:', fileListPath || '.');
+    const destination = await promptDialog({ label: 'Extract to folder:', defaultValue: fileListPath || '.' });
     if (destination === null) return;
     const targetPath = destination.trim() || fileListPath || '.';
     const data = await request('/maintenance/files/extract', {
@@ -4252,7 +4256,7 @@ function App() {
 
   async function runBackupScheduleNow(item) {
     const who = scheduleUserLabel(item);
-    if (!confirm(`Run this schedule now?\n\n${who} - ${item.schedule}\n\nThis is the real thing: the same accounts, the same destination and the same stored name. Only the timing is skipped.`)) return;
+    if (!(await confirmDialog(`Run this schedule now?\n\n${who} - ${item.schedule}\n\nThis is the real thing: the same accounts, the same destination and the same stored name. Only the timing is skipped.`))) return;
     const data = await request(`/maintenance/backup-schedules/${item.id}/run`, { method: 'POST' }, t('Starting...'));
     if (data) {
       setNotice(data.detail || 'Running now.');
@@ -4279,7 +4283,7 @@ function App() {
   }
 
   async function deleteBackupSchedule(id) {
-    if (!confirm(t('Delete this backup schedule?'))) return;
+    if (!(await confirmDialog({ message: t('Delete this backup schedule?'), danger: true }))) return;
     const data = await request(`/maintenance/backup-schedules/${id}`, { method: 'DELETE' }, t('Deleting backup schedule...'));
     if (data) await loadBackupSchedules();
   }
@@ -4406,7 +4410,7 @@ function App() {
   }
 
   async function deleteRestoreArchive(item) {
-    if (!confirm(t('Delete {name} from this server?', { name: item.name }))) return;
+    if (!(await confirmDialog({ message: t('Delete {name} from this server?', { name: item.name }), danger: true }))) return;
     const data = await request(`/maintenance/restore/local?key=${encodeURIComponent(item.key)}`, { method: 'DELETE' },
       t('Deleting...'));
     if (data) {
@@ -4423,7 +4427,7 @@ function App() {
     const picked = restoreGroupsOf(restoreListing).filter(group => restorePicks.includes(group.id));
     if (picked.length === 0) return;
     const names = picked.map(group => group.username || chosenRestoreBackup(group).name).join(', ');
-    if (!confirm(`${t('Restore {n} user(s)? An account that already exists on this server is overwritten with what is in its backup.', { n: picked.length })}\n\n${names}`)) return;
+    if (!(await confirmDialog(`${t('Restore {n} user(s)? An account that already exists on this server is overwritten with what is in its backup.', { n: picked.length })}\n\n${names}`))) return;
     const data = await request('/maintenance/restore/run', {
       method: 'POST',
       body: JSON.stringify({
@@ -4443,7 +4447,7 @@ function App() {
   }
 
   async function deleteSftpTarget(id) {
-    if (!confirm(t('Delete this SFTP target?'))) return;
+    if (!(await confirmDialog({ message: t('Delete this SFTP target?'), danger: true }))) return;
     const data = await request(`/maintenance/sftp-targets/${id}`, { method: 'DELETE' }, t('Deleting SFTP target...'));
     if (data) await loadSftpTargets();
   }
@@ -4464,7 +4468,7 @@ function App() {
   }
 
   async function restoreBackup(file) {
-    if (!confirm(`Restore this backup to the current website?\n${file}`)) return;
+    if (!(await confirmDialog(`Restore this backup to the current website?\n${file}`))) return;
     await request('/maintenance/restore', { method: 'POST', body: JSON.stringify({ website_id: Number(selectedWebsiteId), backup_file: file }) }, t('Restoring backup...'));
   }
 
@@ -4502,7 +4506,7 @@ function App() {
   }
 
   async function restoreUserBackup(file) {
-    if (!confirm(`Restore this full user backup? Missing panel user and websites will be created.\n${file}`)) return;
+    if (!(await confirmDialog(`Restore this full user backup? Missing panel user and websites will be created.\n${file}`))) return;
     const data = await request('/maintenance/user-restore', { method: 'POST', body: JSON.stringify({ backup_file: file }) }, t('Restoring full user backup...'));
     if (data) {
       setNotice(`Restored user ${data.username}. Websites: ${data.websites?.length || 0}`);
@@ -4514,7 +4518,7 @@ function App() {
   }
 
   async function deleteUserBackup(file) {
-    if (!confirm(`Delete this full user backup?\n${file}`)) return;
+    if (!(await confirmDialog({ message: `Delete this full user backup?\n${file}`, danger: true }))) return;
     const data = await request(`/maintenance/user-backups?backup_file=${encodeURIComponent(file)}`, { method: 'DELETE' }, t('Deleting full user backup...'));
     if (data) {
       await listUserBackups();
@@ -4523,7 +4527,7 @@ function App() {
   }
 
   async function deleteRestoreBackup(file) {
-    if (!confirm(`Delete this restore backup?\n${file}`)) return;
+    if (!(await confirmDialog({ message: `Delete this restore backup?\n${file}`, danger: true }))) return;
     const data = await request(`/maintenance/user-restore-backups?backup_file=${encodeURIComponent(file)}`, { method: 'DELETE' }, t('Deleting restore backup...'));
     if (data) {
       await loadRestoreBackups();
@@ -4592,7 +4596,7 @@ function App() {
   }
 
   async function deleteBackup(file) {
-    if (!confirm(`Delete this backup?\n${file}`)) return;
+    if (!(await confirmDialog({ message: `Delete this backup?\n${file}`, danger: true }))) return;
     const data = await request(`/maintenance/backups/${selectedWebsiteId}?backup_file=${encodeURIComponent(file)}`, { method: 'DELETE' }, t('Deleting backup...'));
     if (data) await listBackups();
   }
@@ -4694,7 +4698,7 @@ function App() {
   }
 
   async function restorePhpDefaults() {
-    if (!confirm(`Restore default PHP ${phpConfig.php_version} values?`)) return;
+    if (!(await confirmDialog(`Restore default PHP ${phpConfig.php_version} values?`))) return;
     const data = await request('/maintenance/php-config/defaults', {
       method: 'POST',
       body: JSON.stringify({ php_version: phpConfig.php_version }),
@@ -4733,7 +4737,7 @@ function App() {
   }
 
   async function installPhpVersion(version) {
-    if (!confirm(`Install PHP ${version}? This will install php${version}-fpm via apt.`)) return;
+    if (!(await confirmDialog(`Install PHP ${version}? This will install php${version}-fpm via apt.`))) return;
     const data = await request(`/maintenance/php-versions/${version}/install`, { method: 'POST' }, `Installing PHP ${version}...`);
     if (data) { setNotice(`PHP ${version} installed successfully.`); await loadPhpVersions(); await loadServiceNames(); }
   }
@@ -4770,11 +4774,11 @@ function App() {
   }
 
   async function enableFirewall() {
-    if (!confirm(t('Enable the firewall now? SSH, the panel port and 80/443/465/587 stay open automatically.'))) return;
+    if (!(await confirmDialog(t('Enable the firewall now? SSH, the panel port and 80/443/465/587 stay open automatically.')))) return;
     await runFirewallAction('/firewall/enable', { method: 'POST' }, t('Enabling firewall...'));
   }
   async function disableFirewall() {
-    if (!confirm(t('Disable the firewall? Every port will be reachable again.'))) return;
+    if (!(await confirmDialog(t('Disable the firewall? Every port will be reachable again.')))) return;
     await runFirewallAction('/firewall/disable', { method: 'POST' }, t('Disabling firewall...'));
   }
   async function reloadFirewall() { await runFirewallAction('/firewall/reload', { method: 'POST' }, t('Reloading firewall...')); }
@@ -4782,13 +4786,13 @@ function App() {
   async function openFirewallPort() { await runFirewallAction('/firewall/allow-port', { method: 'POST', body: JSON.stringify({ port: firewallPort, protocol: firewallProtocol }) }, t('Opening port...')); }
   async function allowFirewallIp() { await runFirewallAction('/firewall/allow-ip', { method: 'POST', body: JSON.stringify({ ip: firewallAllowIp, port: firewallAllowPort || null, protocol: firewallAllowProtocol }) }, t('Allowing IP...')); }
   async function blockFirewallIp() {
-    if (!confirm(`Block ${firewallBlockIp || 'this IP'}?`)) return;
+    if (!(await confirmDialog(`Block ${firewallBlockIp || 'this IP'}?`))) return;
     await runFirewallAction('/firewall/block-ip', { method: 'POST', body: JSON.stringify({ ip: firewallBlockIp, port: firewallBlockPort || null, protocol: firewallBlockProtocol }) }, t('Blocking IP...'));
   }
   async function deleteFirewallRule(numberOverride = firewallDeleteNumber) {
     const ruleNumber = String(numberOverride || '').trim();
     if (!ruleNumber) return;
-    if (!confirm(`Delete firewall rule #${ruleNumber}?`)) return;
+    if (!(await confirmDialog({ message: `Delete firewall rule #${ruleNumber}?`, danger: true }))) return;
     await runFirewallAction(`/firewall/rules/${encodeURIComponent(ruleNumber)}`, { method: 'DELETE' }, t('Deleting rule...'));
     setFirewallDeleteNumber('');
   }
@@ -4823,7 +4827,7 @@ function App() {
   }
 
   async function deleteFirewallBlocklistUrl(url) {
-    if (!confirm(`Delete blocklist URL?\n${url}`)) return;
+    if (!(await confirmDialog({ message: `Delete blocklist URL?\n${url}`, danger: true }))) return;
     const data = await request('/firewall/blocklists/delete', { method: 'POST', body: JSON.stringify({ url }) }, t('Deleting IP blocklist URL...'));
     if (data) {
       setNotice((data.stdout || data.stderr || 'IP blocklist URL removed.').trim());
@@ -4933,10 +4937,8 @@ function App() {
   }
 
   async function saveCrsMode(mode) {
-    if (mode === 'block' && !confirm(
-      t('Switch OWASP CRS to blocking?') + '\n\n'
-      + t('Websites with CRS on will start refusing requests that score above the threshold. Run Detect only first and read the logs, or a request somebody depends on may be the one it stops.')
-    )) return;
+    if (mode === 'block' && !(await confirmDialog(t('Switch OWASP CRS to blocking?') + '\n\n'
+      + t('Websites with CRS on will start refusing requests that score above the threshold. Run Detect only first and read the logs, or a request somebody depends on may be the one it stops.')))) return;
     const data = await request('/waf/crs', {
       method: 'PUT',
       body: JSON.stringify({ mode }),
@@ -4947,7 +4949,7 @@ function App() {
   async function toggleSiteCrs(config) {
     const turningOn = !config.crs_enabled;
     const domain = config.domain;
-    if (turningOn && !confirm(t('Turn on OWASP CRS for {domain}? It uses about {n} MB of server RAM.', { domain, n: crs?.rss_mb_per_site || 50 }))) return;
+    if (turningOn && !(await confirmDialog(t('Turn on OWASP CRS for {domain}? It uses about {n} MB of server RAM.', { domain, n: crs?.rss_mb_per_site || 50 })))) return;
     const data = await request(`/waf/websites/${config.website_id}/crs`, {
       method: 'PUT',
       body: JSON.stringify({ enabled: turningOn }),
@@ -5013,7 +5015,7 @@ function App() {
   async function clearWafAccessLogs() {
     const selected = websites.find(site => String(site.id) === String(wafAccessLogFilters.websiteId));
     const label = selected?.domain || 'all websites';
-    if (!confirm(`Clear access logs for ${label}?`)) return;
+    if (!(await confirmDialog({ message: `Clear access logs for ${label}?`, danger: true, confirmLabel: t('Clear') }))) return;
     const params = new URLSearchParams();
     if (wafAccessLogFilters.websiteId) params.set('website_id', wafAccessLogFilters.websiteId);
     const suffix = params.toString() ? `?${params.toString()}` : '';
@@ -5054,7 +5056,7 @@ function App() {
   }
 
   async function runOsUpdate() {
-    if (!confirm(t('Run apt-get update && apt-get upgrade now?'))) return;
+    if (!(await confirmDialog(t('Run apt-get update && apt-get upgrade now?')))) return;
     setOsUpdating(true);
     const data = await request('/updates/os/run', { method: 'POST' }, t('Updating OS packages...'));
     setOsUpdating(false);
@@ -5067,7 +5069,7 @@ function App() {
   }
 
   async function runPanelUpdate() {
-    if (!confirm(t('Update BPanel from GitHub now? The API may restart and this page will reload when done.'))) return;
+    if (!(await confirmDialog(t('Update BPanel from GitHub now? The API may restart and this page will reload when done.')))) return;
     setPanelUpdating(true);
     setShowUpdateLog(true);
     setPanelUpdateLog([]);
@@ -10376,7 +10378,7 @@ function App() {
           <div><h2>{t('Signed-in devices')}</h2>
             <p className="hint">{t('Signing out ends this browser only. Sign out everywhere ends every session of this account, on other browsers and devices too.')}</p></div>
           <button className="secondary" disabled={!!loading || !!currentUser?.impersonator || !!currentUser?.demo}
-            onClick={() => { if (confirm(t('Sign out of every browser and device, this one included?'))) logout({ everywhere: true }); }}>
+            onClick={async () => { if (await confirmDialog(t('Sign out of every browser and device, this one included?'))) logout({ everywhere: true }); }}>
             <LogOut size={14}/> {t('Sign out everywhere')}</button>
         </div>
       </section>
@@ -11346,7 +11348,7 @@ function App() {
 
   async function revokeMcpToken(token) {
     const owner = token.username && token.username !== currentUser?.username ? ` (${token.username})` : '';
-    if (!window.confirm(t('Revoke MCP token "{name}"{owner}? Anything using it stops working at once.', { name: token.name, owner }))) return;
+    if (!(await confirmDialog({ message: t('Revoke MCP token "{name}"{owner}? Anything using it stops working at once.', { name: token.name, owner }), danger: true, confirmLabel: t('Revoke') }))) return;
     const data = await request(`/mcp/tokens/${token.id}`, { method: 'DELETE' }, t('Revoking...'));
     if (data) {
       setNotice(t('Token revoked.'));

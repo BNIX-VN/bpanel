@@ -27,6 +27,22 @@
  */
 
 export const vi = {
+  "Remove {name}?": "Gỡ {name}?",
+  "It stops what it is doing.": "Nó sẽ ngừng mọi việc đang làm.",
+  "Every record of {zone} is deleted, and the domain stops resolving once its nameservers point here.": "Mọi bản ghi của {zone} sẽ bị xoá, và tên miền sẽ ngừng phân giải khi nameserver của nó trỏ về đây.",
+  "Delete email for {domain}": "Xoá email của {domain}",
+  "This deletes every mailbox of {domain} with all its mail, and its forwarders. It cannot be undone.": "Thao tác này xoá mọi hộp thư của {domain} cùng toàn bộ thư bên trong, và các chuyển tiếp của nó. Không thể hoàn tác.",
+  "New password for {name}": "Mật khẩu mới cho {name}",
+  "At least 12 characters.": "Tối thiểu 12 ký tự.",
+  "Please confirm": "Vui lòng xác nhận",
+  "Confirm": "Xác nhận",
+  "OK": "OK",
+  "Enter a value": "Nhập giá trị",
+  "This field is required.": "Trường này là bắt buộc.",
+  "At least {count} characters.": "Tối thiểu {count} ký tự.",
+  "At most {count} characters.": "Tối đa {count} ký tự.",
+  "Enter a number.": "Hãy nhập một số.",
+  "Type {word} to confirm": "Gõ {word} để xác nhận",
   "Checking…": "Đang kiểm tra…",
   "Everything is fine.": "Mọi thứ đều ổn.",
   "{count} thing(s) need attention": "{count} việc cần xử lý",
