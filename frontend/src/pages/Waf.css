@@ -1,0 +1,54 @@
+/* Ported from SNPanel's pages/Waf.css, out of its cascade layer: BPanel's
+   element rules are unlayered and would win over a layered class. */
+/* The WAF page: one switch per website. See pages/Waf.jsx and WafSite.jsx. */
+
+.waf-status-line{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:4px}
+.waf-no-engine{margin:10px 0 0;padding:8px 12px;border:1px solid var(--warning-border);border-radius:var(--radius-md);background:var(--warning-bg);color:var(--warning-text)}
+
+.waf-sites{display:grid;gap:8px}
+.waf-site-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;gap:12px;align-items:center;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius-md);background:var(--surface)}
+.waf-site-name{display:grid;gap:2px;min-width:0}
+.waf-site-name strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.waf-site-name small{font-size:var(--text-sm);color:var(--text-muted);font-weight:600}
+.waf-legacy{color:var(--warning-text)}
+.waf-site-badges{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+
+/* The switch is the shared one (components/Switch.jsx). */
+
+/* A website's own page: the same switch, and a line on what it means. */
+.waf-site-switch{display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--border);border-radius:var(--radius-md);background:var(--surface-alt);margin-top:4px}
+.waf-site-switch>div{display:grid;gap:2px;min-width:0}
+.waf-site-switch strong{font-size:var(--text-md)}
+.waf-site-switch small{font-size:var(--text-sm);color:var(--text-secondary)}
+
+/* SRV-09: a switch with its words (components/Switch.jsx), the state as
+   saved in a badge apart, the long explanations behind "Learn more". */
+.waf-switch-row,.lsws-throttle-switches .sn-switch{align-items:flex-start;margin:4px 0}
+.waf-switch-row .sn-switch-track,.lsws-throttle-switches .sn-switch-track{margin-top:1px}
+.lsws-throttle-switches{display:grid;gap:6px;margin:8px 0 4px}
+.waf-more{margin:4px 0 10px}
+.waf-more>summary{cursor:pointer;width:max-content;max-width:100%;color:var(--primary-ink);font-size:var(--text-sm);font-weight:600}
+.waf-more>summary:focus-visible{outline:2px solid var(--primary);outline-offset:2px;border-radius:var(--radius-sm)}
+.waf-more[open]>summary{margin-bottom:6px}
+.waf-more .hint{margin:0 0 6px}
+.waf-unsaved{color:var(--warning-text);font-weight:600}
+
+@media (max-width:640px){
+  .waf-site-row{grid-template-columns:auto minmax(0,1fr) auto;row-gap:8px}
+  .waf-site-badges{grid-column:2 / -1;grid-row:2;justify-content:flex-start}
+  .waf-configure-label{display:none}
+}
+
+/* The global bad bots editor, from SNPanel brand.css. */
+.global-bots{display:grid;gap:12px}
+.global-bots-add{display:grid;grid-template-columns:minmax(0,1fr) max-content minmax(0,220px);gap:8px;align-items:center}
+.global-bots-filter{min-width:0}
+.global-bots-list{display:flex;flex-wrap:wrap;gap:6px;max-height:260px;overflow-y:auto;padding:10px;border:1px solid var(--border);border-radius:8px}
+.global-bot-chip{display:inline-flex;align-items:center;gap:6px;padding:3px 6px 3px 9px;border:1px solid var(--border);border-radius:999px;background:var(--surface-muted,transparent)}
+.global-bot-chip code{font-size:var(--text-sm)}
+.global-bot-chip button{padding:2px;min-width:0;width:20px;height:20px;display:grid;place-items:center;border-radius:999px;line-height:0;background:transparent;border:none;color:var(--text-muted)}
+.global-bot-chip button:hover:not(:disabled){background:var(--danger-bg,var(--surface-alt));color:var(--danger,#b91c1c)}
+.global-bots-paste summary{cursor:pointer;font-weight:600;color:var(--text-secondary);margin-bottom:8px}
+.global-bots-paste textarea{width:100%;min-width:0;margin-bottom:8px}
+.global-bots-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+@media (max-width:760px){.global-bots-add{grid-template-columns:minmax(0,1fr)}}

@@ -1,0 +1,28 @@
+/* Ported from SNPanel's pages/WafAccessLogs.css, out of its cascade layer: BPanel's
+   element rules are unlayered and would win over a layered class. */
+/* Access logs (pages/WafAccessLogs.jsx): one bar of labelled filters, the
+   count, the table, and clearing at the foot. */
+.al-filters{display:flex;flex-wrap:wrap;align-items:end;gap:8px 10px}
+.al-filter{display:grid;gap:4px;flex:1 1 150px;min-width:0}
+.al-filter>span{font-size:var(--text-xs);font-weight:600;color:var(--text-secondary)}
+.al-filter select,.al-filter input{width:100%;min-width:0;height:40px;min-height:40px;padding-top:0;padding-bottom:0}
+.al-filter-grow{flex:2 1 240px}
+.al-filter-small{flex:0 1 130px}
+.al-filter-refresh{flex:0 1 190px}
+.al-filters>button{flex:none}
+.al-count{margin:0;color:var(--text-secondary);font-size:var(--text-sm);font-weight:600}
+.al-count small{font-weight:500;color:var(--text-muted)}
+.access-log-table .access-log-time{white-space:nowrap}
+/* The time on one line, its duration under it; the reason readable. */
+.access-log-panel .access-log-table td .access-log-time+small{display:block;margin:2px 0 0;white-space:nowrap}
+.access-log-panel .access-log-table td[data-label]:nth-child(8){min-width:150px}
+.al-foot{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px}
+.al-foot .hint{margin:0;flex:1 1 300px}
+.al-clear{margin-left:auto}
+
+@media (max-width:640px){
+  .al-filter,.al-filter-small,.al-filter-refresh{flex:1 1 calc(50% - 10px)}
+  .al-filter-grow{flex:1 1 100%}
+  .al-filters>button{flex:1 1 100%}
+  .al-clear{flex:1 1 100%}
+}

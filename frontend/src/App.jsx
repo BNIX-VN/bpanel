@@ -13,7 +13,7 @@ import 'ace-builds/src-noconflict/mode-text';
 import 'ace-builds/src-noconflict/mode-yaml';
 import 'ace-builds/src-noconflict/theme-textmate';
 import 'ace-builds/src-noconflict/theme-tomorrow_night';
-import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, Eye, UserCog, FolderKey, ArrowRightLeft, ShieldOff, ArrowUp, ArrowDown, CornerLeftUp, FolderPlus, FilePlus, FilePen, PencilLine, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pause, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle, Activity, BrickWall, Bug, LockKeyhole, PackageOpen, ScrollText, ShieldAlert, CheckCircle, Zap, Bell, Mail, Send, Cloud, Inbox, Forward, ShieldCheck, GitBranch, CloudDownload, CloudUpload, Rocket } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, Eye, UserCog, FolderKey, ArrowRightLeft, ShieldOff, ShieldQuestion, RotateCw, OctagonAlert, TriangleAlert, ArrowUp, ArrowDown, CornerLeftUp, FolderPlus, FilePlus, FilePen, PencilLine, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pause, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle, Activity, BrickWall, Bug, LockKeyhole, PackageOpen, ScrollText, ShieldAlert, CheckCircle, Zap, Bell, Mail, Send, Cloud, Inbox, Forward, ShieldCheck, GitBranch, CloudDownload, CloudUpload, Rocket } from 'lucide-react';
 import { Terminal } from './components/Terminal';
 import { UsageChart } from './components/UsageChart';
 import HubTabs from './components/HubTabs';
@@ -49,6 +49,9 @@ import './pages/Backups.css';
 import './pages/Processes.css';
 import './pages/Updates.css';
 import './pages/PhpConfig.css';
+import './pages/Firewall.css';
+import './pages/Waf.css';
+import './pages/WafAccessLogs.css';
 import './bpanel.css';
 
 const API = import.meta.env.VITE_API_URL || '/api';
@@ -999,6 +1002,8 @@ function App() {
   const [fileContent, setFileContent] = useState('');
   const [selectedFilePaths, setSelectedFilePaths] = useState([]);
   const [archiveFormat, setArchiveFormat] = useState('zip');
+  // The firewall's one address form: whether it allows or blocks.
+  const [firewallRuleAction, setFirewallRuleAction] = useState('allow');
   // The PHP page's extension filter.
   const [phpExtFind, setPhpExtFind] = useState('');
   // The backups page's side sheets: a new schedule, a new destination.
@@ -1045,6 +1050,12 @@ function App() {
   // The global list as typed, one bot per line; the backend splits and
   // cleans it.
   const [globalBotText, setGlobalBotText] = useState('');
+  // The WAF page's global bot editor: open or not, the one being added, the
+  // list's filter and a pasted list.
+  const [wafBotsOpen, setWafBotsOpen] = useState(false);
+  const [wafNewBot, setWafNewBot] = useState('');
+  const [wafBotFilter, setWafBotFilter] = useState('');
+  const [wafBotPaste, setWafBotPaste] = useState('');
   const [crs, setCrs] = useState(null);
   // The list for the one site being configured.
   const [siteBotText, setSiteBotText] = useState('');
@@ -10013,13 +10024,10 @@ function App() {
     const pages = Math.max(1, Math.ceil(matching.length / size));
     const page = Math.min(firewallIpPage, pages);
     const items = matching.slice((page - 1) * size, page * size);
-    return <section className="section firewall-ip-page">
-      <div className="section-title">
-        <div className="waf-detail-title">
-          <button className="secondary" onClick={() => setShowFirewallIpList(false)}><ArrowLeft size={14}/> {t('Firewall')}</button>
-          <div><h2>{t('Blocked and allowed addresses')}</h2><p className="hint">{t('{blocked} blocked · {allowed} allowed', counts)}</p></div>
-        </div>
-      </div>
+    return <>
+      <PageHeader breadcrumbs={[{ label: t('Firewall'), onClick: () => setShowFirewallIpList(false) }, { label: t('Blocked and allowed addresses') }]}
+        title={t('Blocked and allowed addresses')} subtitle={t('{blocked} blocked · {allowed} allowed', counts)}/>
+      <section className="section firewall-ip-page">
       <div className="firewall-ip-toolbar">
         <input value={firewallIpQuery} autoFocus aria-label={t('Search addresses')} placeholder={t('Search an IP or network')}
                onChange={e => { setFirewallIpQuery(e.target.value); setFirewallIpPage(1); }} />
@@ -10043,19 +10051,27 @@ function App() {
         <span className="hint">{t('Page {page} of {pages} · {total} addresses', { page, pages, total: matching.length })}</span>
         <button className="mini secondary" disabled={page >= pages} onClick={() => setFirewallIpPage(page + 1)}>{t('Next')}</button>
       </div>}
-    </section>;
+      </section>
+    </>;
   }
 
+  // The firewall, as SNPanel's (pages/Firewall.jsx there): its state on a
+  // card of its own with one switch; the open ports, a form and a row each;
+  // the addresses allowed or blocked, from one form; Fail2ban; the IP
+  // blocklists; what the helper printed under Technical details.
   function renderFirewall() {
-    if (!isAdmin) return <section className="section"><h2>{t('Firewall')}</h2><p className="hint">{t('No permission.')}</p></section>;
+    if (!isAdmin) return <section className="section"><p className="hint">{t('No permission.')}</p></section>;
     if (showFirewallIpList) return renderFirewallAddresses();
-    const firewallText = firewallStatus?.stdout || firewallStatus?.stderr || t('Click Refresh to load status.');
-    const blocklistText = firewallBlocklists?.stdout || firewallBlocklists?.stderr || t('No blocklist status loaded.');
+    const busy = !!loading;
+    const firewallText = firewallStatus?.stdout || firewallStatus?.stderr || '';
+    const blocklistText = firewallBlocklists?.stdout || firewallBlocklists?.stderr || '';
     const blocklistUrls = parseFirewallBlocklistUrls(blocklistText);
     const allRules = firewallStatus?.rules || [];
     // A port rule has no address: the ports the panel always keeps open, then
-    // the ones opened here, which can be closed again from their chip.
+    // the ones opened here, which can be closed again.
     const openPorts = allRules.filter(rule => rule.action === 'ALLOW' && !rule.ip && rule.port);
+    const ownPorts = openPorts.filter(rule => !rule.protected);
+    const lockedPorts = openPorts.filter(rule => rule.protected);
     const ipRules = allRules.filter(rule => !rule.protected && rule.ip);
     const ipCounts = {
       blocked: ipRules.filter(rule => rule.action === 'DENY').length,
@@ -10063,118 +10079,177 @@ function App() {
     };
     // The helper prints `Status: enabled|disabled` as its first line. Read that
     // rather than pattern-matching the whole dump, which carries the word
-    // "disabled" in other contexts too.
+    // "disabled" in other contexts too. "Chain active: no" is a firewall
+    // turned on whose rules are not in force.
     const statusLine = (firewallText.split('\n').find(line => line.startsWith('Status:')) || '').toLowerCase();
-    const enabled = statusLine.includes('enabled');
-    const stateKnown = statusLine !== '';
-    // "Chain active: no" is a firewall turned on whose rules are not in force
-    // (UFW still in charge, or ipset missing): the dashboard and the alert
-    // call that off, so the page must not call it on.
     const chainLine = (firewallText.split('\n').find(line => line.startsWith('Chain active:')) || '').toLowerCase();
-    const notApplied = enabled && chainLine.includes('no');
-    return <>
-      <section className="section">
-        <div className="section-title">
-          <div>
-            <h2>{t('Firewall (iptables)')}{' '}
-              {stateKnown && <span className={notApplied ? 'badge bad' : enabled ? 'badge ok' : 'badge warn'}>{notApplied ? t('On, not applied') : enabled ? t('On') : t('Off')}</span>}
-            </h2>
-            <p className="hint">{t('SSH, the panel port and 80/443/465/587 are always kept open.')}</p>
+    const state = !firewallStatus ? 'loading'
+      : statusLine.includes('enabled') ? (chainLine.includes('no') ? 'idle' : 'on')
+        : statusLine.includes('disabled') ? 'off' : 'unknown';
+    const StateIcon = { loading: ShieldQuestion, on: ShieldCheck, idle: ShieldAlert, off: ShieldOff, unknown: ShieldQuestion }[state];
+    const title = {
+      loading: t('Loading firewall status…'),
+      on: t('The firewall is on'),
+      idle: t('The firewall is on, but not enforcing'),
+      off: t('The firewall is off'),
+      unknown: t('The firewall did not report its state'),
+    }[state];
+    const hint = {
+      loading: '',
+      on: t('Connections are refused unless a rule below or an always-open port lets them in.'),
+      idle: t('The firewall is turned on, but its rules are not in force: this server still filters with UFW, or iptables and ipset are missing. An update from an older release can leave it so.'),
+      off: t('Every port on this server can be reached.'),
+      unknown: t('What the helper said is under Technical details.'),
+    }[state];
+    const blocking = firewallRuleAction === 'block';
+    const ruleIp = blocking ? firewallBlockIp : firewallAllowIp;
+    const rulePort = blocking ? firewallBlockPort : firewallAllowPort;
+    const ruleProtocol = blocking ? firewallBlockProtocol : firewallAllowProtocol;
+    const setRuleIp = blocking ? setFirewallBlockIp : setFirewallAllowIp;
+    const setRulePort = blocking ? setFirewallBlockPort : setFirewallAllowPort;
+    const setRuleProtocol = blocking ? setFirewallBlockProtocol : setFirewallAllowProtocol;
+    const portText = rule => `${rule.port}/${String(rule.protocol || 'tcp').toUpperCase()}`;
+    return <div className="fw-page">
+      <section className="section fw-status" data-state={state}>
+        <div className="fw-status-head">
+          <span className="fw-status-icon"><StateIcon size={22} aria-hidden="true"/></span>
+          <div className="fw-status-text">
+            <h2>{title}</h2>
+            {hint && <p className="hint">{hint}</p>}
           </div>
-          <div className="actions">
-            <button className="secondary" disabled={!!loading} onClick={loadFirewall}><RefreshCw size={14}/> {t('Refresh')}</button>
-            <button className="secondary" disabled={!!loading || (stateKnown && !enabled)} onClick={reloadFirewall}>{t('Reload')}</button>
-            <button className="danger-light" disabled={!!loading || (stateKnown && !enabled)} onClick={disableFirewall}>{t('Disable')}</button>
-            <button disabled={!!loading || (stateKnown && enabled)} onClick={enableFirewall}><Shield size={14}/> {t('Enable')}</button>
+          <div className="fw-status-actions">
+            <button type="button" className="secondary icon-button" disabled={busy} onClick={() => { loadFirewall(); loadFirewallBlocklists(); }}
+              aria-label={t('Refresh')} title={t('Refresh')}><RefreshCw size={16} aria-hidden="true"/></button>
+            <button type="button" className="secondary" disabled={busy || state === 'off'} onClick={reloadFirewall}><RotateCw size={15} aria-hidden="true"/> {t('Reload rules')}</button>
+            {/* On or off is the firewall's state: a switch, asked before
+                it changes anything. */}
+            <Switch checked={state === 'on' || state === 'idle'} disabled={busy || state === 'loading'}
+              onChange={on => (on ? enableFirewall() : disableFirewall())}>{t('Firewall')}</Switch>
           </div>
         </div>
-        {notApplied && <div className="firewall-not-applied">
-          <p>{t('The firewall is turned on, but its rules are not in force: this server still filters with UFW, or iptables and ipset are missing. An update from an older release can leave it so.')}</p>
-          <button disabled={!!loading} onClick={repairFirewall}><Shield size={14}/> {t('Repair the firewall')}</button>
+        {state === 'idle' && <div className="fw-banners">
+          <div className="fw-banner" data-tone="warn" role="status">
+            <TriangleAlert size={18} aria-hidden="true"/>
+            <span>{t('Its rules are saved but not loaded, so nothing is being filtered.')}</span>
+            <button type="button" disabled={busy} onClick={repairFirewall}><Shield size={14} aria-hidden="true"/> {t('Repair the firewall')}</button>
+          </div>
         </div>}
-        <div className="info-box firewall-open-ports">
-          <strong>{t('Open ports')}</strong>
-          {openPorts.length > 0 ? <div className="firewall-port-list">
-            {openPorts.map(item => <span className="firewall-port-chip" key={`${item.protocol}-${item.port}-${item.zone}-${item.id}`}>
-              <code>{item.port}/{String(item.protocol || 'tcp').toUpperCase()}</code>
-              <small>{item.zone || 'UserZone'}</small>
-              {!item.protected && <button type="button" className="firewall-port-remove" disabled={!!loading}
-                title={t('Close port {port}', { port: `${item.port}/${String(item.protocol || 'tcp').toUpperCase()}` })}
-                aria-label={t('Close port {port}', { port: `${item.port}/${String(item.protocol || 'tcp').toUpperCase()}` })}
-                onClick={() => deleteFirewallRule(item.id)}><X size={12}/></button>}
-            </span>)}
-          </div> : <p className="hint">{firewallStatus ? t('No open port rules found.') : t('Loading…')}</p>}
+      </section>
+
+      <section className="section fw-open-ports">
+        <div className="fw-section-head">
+          <h2>{t('Open ports')}</h2>
+          <p className="hint">{t('Let anyone reach a port on this server - for a service of your own, such as an application on 8080.')}</p>
         </div>
-        <div className="firewall-ip-summary">
-          <span><strong>{t('Addresses')}</strong> {t('{blocked} blocked · {allowed} allowed', ipCounts)}</span>
-          <button className="secondary" disabled={!firewallStatus} onClick={() => { setFirewallIpQuery(''); setFirewallIpAction(''); setFirewallIpPage(1); setShowFirewallIpList(true); }}><Ban size={14}/> {t('View list')}</button>
+        <form className="fw-port-form" onSubmit={e => { e.preventDefault(); if (firewallPort.trim()) openFirewallPort(); }}>
+          <label><span>{t('Port')}</span>
+            <input value={firewallPort} onChange={e => setFirewallPort(e.target.value)} placeholder={t('e.g. {example}', { example: '8080' })} inputMode="numeric" autoComplete="off" />
+          </label>
+          <label><span>{t('Protocol')}</span>
+            <select value={firewallProtocol} onChange={e => setFirewallProtocol(e.target.value)}><option value="tcp">TCP</option><option value="udp">UDP</option></select>
+          </label>
+          <button type="submit" disabled={busy || !firewallPort.trim()}><Plus size={15} aria-hidden="true"/> {t('Open port')}</button>
+        </form>
+        <ul className="fw-port-rows" aria-label={t('Open ports')}>
+          {ownPorts.map(item => <li key={item.id} className="fw-port-row">
+            <code className="fw-port-name">{portText(item)}</code>
+            <span className="fw-port-note">{item.zone || <span className="data-table-muted">{t('No note')}</span>}</span>
+            <button type="button" className="secondary-light danger-hover fw-port-close-btn" disabled={busy} onClick={() => deleteFirewallRule(item.id)}
+              aria-label={t('Close port {port}', { port: portText(item) })}><X size={14} aria-hidden="true"/> {t('Close port')}</button>
+          </li>)}
+          {ownPorts.length === 0 && <li className="fw-port-row fw-port-none">{firewallStatus ? t('No port is open for a service of your own yet.') : t('Loading…')}</li>}
+          {lockedPorts.length > 0 && <li className="fw-port-row always" title={t('Always open: the panel needs it')}>
+            <span className="fw-port-lock"><Lock size={14} aria-hidden="true"/> {t('Locked')}</span>
+            <span className="fw-port-locked">{lockedPorts.map(item => <code key={item.id}>{portText(item)}</code>)}</span>
+            <span className="fw-port-note fw-port-legend">{t('SSH, the panel port and 80/443/465/587 are always kept open.')}</span>
+          </li>}
+        </ul>
+      </section>
+
+      <section className="section fw-rules">
+        <div className="fw-section-head fw-section-head-row">
+          <div>
+            <h2>{t('IP addresses')}</h2>
+            <p className="hint">{t('Allow or block an address or a network - on every port, or only on some.')}</p>
+          </div>
+          <button type="button" className="secondary" disabled={!firewallStatus}
+            onClick={() => { setFirewallIpQuery(''); setFirewallIpAction(''); setFirewallIpPage(1); setShowFirewallIpList(true); }}>
+            <Ban size={15} aria-hidden="true"/> {t('{blocked} blocked · {allowed} allowed', ipCounts)}</button>
         </div>
-        <details className="raw-output firewall-status">
-          <summary>{t('iptables status')}</summary>
-          <div className="raw-output-body">
-          <pre>{firewallText}</pre>
+        <form className="fw-rule-form" onSubmit={e => { e.preventDefault(); if (ruleIp.trim()) (blocking ? blockFirewallIp() : allowFirewallIp()); }}>
+          <label><span>{t('Action')}</span>
+            <select value={firewallRuleAction} onChange={e => setFirewallRuleAction(e.target.value)}>
+              <option value="allow">{t('Allow')}</option>
+              <option value="block">{t('Block')}</option>
+            </select>
+          </label>
+          <label><span>{t('From address')}</span>
+            <input value={ruleIp} onChange={e => setRuleIp(e.target.value)} placeholder={t('e.g. {example}', { example: '203.0.113.7' })} spellCheck="false" autoComplete="off" />
+          </label>
+          <label><span>{t('Port (optional)')}</span>
+            <input value={rulePort} onChange={e => setRulePort(e.target.value)} placeholder={t('All ports')} inputMode="numeric" autoComplete="off" />
+          </label>
+          <label><span>{t('Protocol')}</span>
+            <select value={ruleProtocol} onChange={e => setRuleProtocol(e.target.value)} disabled={!rulePort.trim()} title={rulePort.trim() ? undefined : t('Only for a rule with a port')}>
+              <option value="tcp">TCP</option><option value="udp">UDP</option>
+            </select>
+          </label>
+          <button type="submit" className={blocking ? 'danger' : undefined} disabled={busy || !ruleIp.trim()}>
+            <Plus size={15} aria-hidden="true"/> {blocking ? t('Add block') : t('Add allow')}
+          </button>
+        </form>
+      </section>
+
+      {renderFirewallFail2ban()}
+
+      <section className="section fw-blocklists">
+        <div className="fw-section-head fw-section-head-row">
+          <div>
+            <h2>{t('IP blocklists')}</h2>
+            <p className="hint">{t('TXT files are fetched daily at 01:00 and enforced by ipset, so large lists do not create thousands of firewall rules.')}</p>
+          </div>
+          <button type="button" className="secondary" disabled={busy || blocklistUrls.length === 0} onClick={updateFirewallBlocklistsNow}>
+            <RefreshCw size={15} aria-hidden="true"/> {t('Update now')}
+          </button>
+        </div>
+        <form className="fw-url-form" onSubmit={e => { e.preventDefault(); if (firewallBlocklistUrl.trim()) addFirewallBlocklistUrl(); }}>
+          <input value={firewallBlocklistUrl} onChange={e => setFirewallBlocklistUrl(e.target.value)}
+            placeholder={t('e.g. {example}', { example: 'https://example.com/blocklist.txt' })} aria-label={t('List URL')} spellCheck="false" autoComplete="off" />
+          <button type="submit" disabled={busy || !firewallBlocklistUrl.trim()}><Plus size={15} aria-hidden="true"/> {t('Add list')}</button>
+        </form>
+        {blocklistUrls.length > 0 && <ul className="fw-url-list">
+          {blocklistUrls.map(url => <li key={url}>
+            <code title={url}>{url}</code>
+            <button type="button" className="secondary icon-button danger-hover" disabled={busy} onClick={() => deleteFirewallBlocklistUrl(url)}
+              aria-label={t('Remove list {url}', { url })} title={t('Remove list {url}', { url })}><Trash2 size={15} aria-hidden="true"/></button>
+          </li>)}
+        </ul>}
+      </section>
+
+      <details className="fw-details">
+        <summary>{t('Technical details')}</summary>
+        <div className="fw-details-body">
+          <h3>{t('Firewall status')}</h3>
+          <pre>{firewallText || t('Not loaded yet.')}</pre>
           <div className="firewall-delete-inline">
             <label><span>{t('Delete rule #')}</span><input value={firewallDeleteNumber} onChange={e => setFirewallDeleteNumber(e.target.value)} placeholder="12" inputMode="numeric" /></label>
-            <button className="danger" disabled={!!loading || !firewallDeleteNumber} onClick={() => deleteFirewallRule()}>{t('Delete')}</button>
+            <button type="button" className="danger" disabled={busy || !firewallDeleteNumber} onClick={() => deleteFirewallRule()}>{t('Delete')}</button>
           </div>
-          </div>
-        </details>
-      </section>
-      <div className="firewall-rule-forms">
-      <section className="section">
-        <h2>{t('Open port')}</h2>
-        <div className="firewall-form">
-          <label><span>{t('Port')}</span><input value={firewallPort} onChange={e => setFirewallPort(e.target.value)} placeholder="80" inputMode="numeric" /></label>
-          <label><span>{t('Protocol')}</span><select value={firewallProtocol} onChange={e => setFirewallProtocol(e.target.value)}><option value="tcp">TCP</option><option value="udp">UDP</option></select></label>
-          <button disabled={!!loading || !firewallPort} onClick={openFirewallPort}>{t('Open port')}</button>
+          <h3>{t('IP blocklist status')}</h3>
+          <pre>{blocklistText || t('Not loaded yet.')}</pre>
         </div>
-      </section>
-      <section className="section">
-        <h2>{t('Allow IP')}</h2>
-        <div className="firewall-form">
-          <label><span>{t('IP / CIDR')}</span><input value={firewallAllowIp} onChange={e => setFirewallAllowIp(e.target.value)} placeholder="1.2.3.4" /></label>
-          <label><span>{t('Port (optional)')}</span><input value={firewallAllowPort} onChange={e => setFirewallAllowPort(e.target.value)} placeholder="22" inputMode="numeric" /></label>
-          <label><span>{t('Protocol')}</span><select value={firewallAllowProtocol} onChange={e => setFirewallAllowProtocol(e.target.value)}><option value="tcp">TCP</option><option value="udp">UDP</option></select></label>
-          <button disabled={!!loading || !firewallAllowIp} onClick={allowFirewallIp}>{t('Allow')}</button>
-        </div>
-      </section>
-      <section className="section">
-        <h2>{t('Block IP')}</h2>
-        <div className="firewall-form">
-          <label><span>{t('IP / CIDR')}</span><input value={firewallBlockIp} onChange={e => setFirewallBlockIp(e.target.value)} placeholder="5.6.7.8" /></label>
-          <label><span>{t('Port (optional)')}</span><input value={firewallBlockPort} onChange={e => setFirewallBlockPort(e.target.value)} placeholder={t('All ports')} inputMode="numeric" /></label>
-          <label><span>{t('Protocol')}</span><select value={firewallBlockProtocol} onChange={e => setFirewallBlockProtocol(e.target.value)}><option value="tcp">TCP</option><option value="udp">UDP</option></select></label>
-          <button className="danger" disabled={!!loading || !firewallBlockIp} onClick={blockFirewallIp}>{t('Block')}</button>
-        </div>
-      </section>
-      </div>
-      {renderFirewallFail2ban()}
-      <section className="section">
-        <div className="section-title">
-          <div><h2>{t('Blocklist URLs')}</h2><p className="hint">{t('TXT files are fetched daily at 01:00 and enforced by ipset, so large lists do not create thousands of firewall rules.')}</p></div>
-          <button className="secondary" disabled={!!loading} onClick={loadFirewallBlocklists}><RefreshCw size={14}/> {t('Refresh')}</button>
-        </div>
-        <div className="firewall-form firewall-blocklist-form">
-          <label><span>{t('TXT URL')}</span><input value={firewallBlocklistUrl} onChange={e => setFirewallBlocklistUrl(e.target.value)} placeholder="https://example.com/blocklist.txt" /></label>
-          <button disabled={!!loading || !firewallBlocklistUrl.trim()} onClick={addFirewallBlocklistUrl}><Plus size={14}/> {t('Add URL')}</button>
-          <button className="secondary-light" disabled={!!loading} onClick={updateFirewallBlocklistsNow}><RefreshCw size={14}/> {t('Update now')}</button>
-        </div>
-        {blocklistUrls.length > 0 && <div className="table firewall-blocklist-table">
-          {blocklistUrls.map(url => <div className="firewall-rule" key={url}>
-            <span>{url}</span>
-            <div className="firewall-rule-actions"><button className="danger" disabled={!!loading} onClick={() => deleteFirewallBlocklistUrl(url)}><Trash2 size={14}/> {t('Delete')}</button></div>
-          </div>)}
-        </div>}
-        <details className="raw-output firewall-status"><summary>{t('Blocklist status')}</summary><pre>{blocklistText}</pre></details>
-      </section>
-    </>;
+      </details>
+    </div>;
   }
 
+  // The WAF, as SNPanel's (pages/Waf.jsx there): one switch per website,
+  // the engine's state and how many sites it protects above them; the global
+  // bad bots as chips; then BPanel's OWASP rule set and global custom rules.
   function renderWaf() {
     // The status probe prints whether the ModSecurity module is there; that is
-    // all the list needs to say. The full dump stays folded below it.
+    // all the list needs to say. The full dump stays folded below.
     const wafProbe = `${wafRules.status?.stdout || ''}`;
-    const wafEngine = /ModSecurity module:\s*not installed/.test(wafProbe) ? 'off' : /ModSecurity module:\s*installed/.test(wafProbe) ? 'on' : 'unknown';
+    const engine = /ModSecurity module:\s*not installed/.test(wafProbe) ? false : /ModSecurity module:\s*installed/.test(wafProbe) ? true : null;
     const statusText = wafRules.status?.stdout || wafRules.status?.stderr || t('Click Refresh to load WAF status.');
     // The effective list, not the site's own: a site with nothing of its own
     // still enforces the global list, and reporting "No bots" for it was a lie.
@@ -10182,56 +10257,96 @@ function App() {
     const botCountFor = id => (rowFor(id)?.effective_blocked_bots || []).length;
     const ownCountFor = id => (rowFor(id)?.blocked_bots || []).length;
     const savedGlobalRules = wafRules.custom_rules || '';
+    const protectedCount = websites.filter(site => site.waf_enabled).length;
+    const globalBots = globalBotText.split('\n').map(line => line.trim()).filter(Boolean);
+    const savedBots = botBlocks?.global_blocked_bots || [];
+    const botsChanged = JSON.stringify(globalBots) !== JSON.stringify(savedBots);
+    const addBots = (text) => {
+      const more = String(text || '').split(/[\n,]+/).map(line => line.trim()).filter(Boolean).filter(name => !globalBots.includes(name));
+      if (more.length) setGlobalBotText([...globalBots, ...more].join('\n'));
+    };
+    const removeBot = (name) => setGlobalBotText(globalBots.filter(item => item !== name).join('\n'));
+    const filter = wafBotFilter.trim().toLowerCase();
     return <>
+      <PageHeader subtitle={t("One switch per website: the panel's rules and the OWASP rule set, blocking attacks before they reach the site.")}
+        onRefresh={() => { loadBotBlocks(); if (isAdmin) { loadWafRules(); loadCrs(); } }} refreshDisabled={!!loading}/>
+      {isAdmin && <div className="waf-status-line">
+        {engine === null
+          ? <span className="hint">{t('Reading the WAF status…')}</span>
+          : <span className={engine ? 'badge ok' : 'badge bad'}>{engine ? t('Engine installed') : t('Engine not available')}</span>}
+        <span className="badge">{t('{count} of {total} website(s) protected', { count: protectedCount, total: websites.length })}</span>
+      </div>}
+
+      <section className="section">
+        <div className="section-title"><h2>{isAdmin ? t('Websites') : t('Your websites')}</h2></div>
+        {websites.length === 0 && <EmptyState icon={Globe} message={t('No websites yet.')} />}
+        <div className="waf-sites">
+          {websites.map(site => {
+            const bots = botCountFor(site.id);
+            return <div className="waf-site-row" key={site.id}>
+              <Switch checked={!!site.waf_enabled} disabled={!!loading || engine === false}
+                onChange={() => toggleWebsiteWaf(site)} label={t('WAF for {domain}', { domain: site.domain })}
+                title={site.waf_enabled ? t('Turn the WAF off for {domain}', { domain: site.domain }) : t('Turn the WAF on for {domain}', { domain: site.domain })}/>
+              <div className="waf-site-name">
+                <strong>{site.domain}</strong>
+                <small>{site.waf_enabled ? t('Protected') : t('Not protected')}</small>
+              </div>
+              <div className="waf-site-badges">
+                <span className={site.http_flood_enabled ? 'badge ok' : 'badge'}>{site.http_flood_enabled ? t('Flood on') : t('Flood off')}</span>
+                <span className={bots > 0 ? 'badge ok' : 'badge'}
+                  title={ownCountFor(site.id) > 0 ? t('{n} set on this website, the rest from the global list', { n: ownCountFor(site.id) }) : t('All from the global list')}
+                >{bots > 0 ? t('{n} bot(s)', { n: bots }) : t('No bots')}</span>
+              </div>
+              <button type="button" className="secondary-light" disabled={!!loading} onClick={() => openWafSite(site.id)}
+                aria-label={t('Configure {domain}', { domain: site.domain })}><SettingsIcon size={14} aria-hidden="true"/> <span className="waf-configure-label">{t('Configure')}</span></button>
+            </div>;
+          })}
+        </div>
+      </section>
+
       {isAdmin && <section className="section">
         <div className="section-title">
           <div>
-            <h2>{t('Global bad bot')} <span className="badge">{(botBlocks?.global_blocked_bots || []).length}</span></h2>
-            <p className="hint">{t('One bot per line, applied to every website. A request whose User-Agent contains the text gets 403 — plain text, no regex.')}</p>
+            <h2>{t('Global bad bots')}</h2>
+            <p className="hint">{savedBots.length > 0
+              ? t('Blocked on every website on this server. A site can add more of its own from its page. Currently {count} bot(s).', { count: savedBots.length })
+              : t('Blocked on every website on this server. A site can add more of its own from its page. Nothing blocked globally yet.')}</p>
           </div>
-          <button className="secondary" disabled={!!loading} onClick={loadBotBlocks}><RefreshCw size={14}/> {t('Refresh')}</button>
+          <button type="button" className="secondary-light" disabled={!!loading} onClick={() => setWafBotsOpen(open => !open)}>{wafBotsOpen ? t('Hide') : t('Edit')}</button>
         </div>
-        <textarea className="code-editor badbot-input" value={globalBotText} onChange={e => setGlobalBotText(e.target.value)}
-          spellCheck={false}
-          placeholder={'AhrefsBot\nSemrushBot\nMJ12bot\nGPTBot\nBytespider'} />
-        {botBlocks?.max_bots ? <p className="hint">{t('Up to {n} bots.', { n: botBlocks.max_bots })}</p> : null}
-        <div className="actions"><button disabled={!!loading} onClick={() => saveGlobalBots(globalBotText)}><Shield size={14}/> {t('Save and apply to all websites')}</button></div>
+        {wafBotsOpen && <div className="global-bots">
+          <div className="global-bots-add">
+            <input value={wafNewBot} placeholder={t('Add one bot, e.g. Amazonbot')} onChange={e => setWafNewBot(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addBots(wafNewBot); setWafNewBot(''); } }} />
+            <button type="button" disabled={!wafNewBot.trim()} onClick={() => { addBots(wafNewBot); setWafNewBot(''); }}><Plus size={14}/> {t('Add')}</button>
+            <input className="global-bots-filter" value={wafBotFilter} placeholder={t('Filter the list')} onChange={e => setWafBotFilter(e.target.value)} />
+          </div>
+          <div className="global-bots-list">
+            {globalBots.length === 0 && <p className="hint">{t('No bots yet. Add one above, or paste a list below.')}</p>}
+            {globalBots.filter(name => !filter || name.toLowerCase().includes(filter)).map(name => <span className="global-bot-chip" key={name}>
+              <code>{name}</code>
+              <button type="button" title={t('Remove {name}', { name })} aria-label={t('Remove {name}', { name })} onClick={() => removeBot(name)}><X size={12}/></button>
+            </span>)}
+          </div>
+          <details className="global-bots-paste">
+            <summary>{t('Paste a list')}</summary>
+            <textarea className="code-editor" rows={6} spellCheck={false} value={wafBotPaste} onChange={e => setWafBotPaste(e.target.value)}
+              placeholder={'AhrefsBot\nSemrushBot\nMJ12bot'} />
+            <button type="button" disabled={!wafBotPaste.trim()} onClick={() => { addBots(wafBotPaste); setWafBotPaste(''); }}><Plus size={14}/> {t('Add to list')}</button>
+          </details>
+          <div className="global-bots-actions">
+            <button type="button" disabled={!!loading} onClick={() => saveGlobalBots(globalBotText)}>
+              <Shield size={14}/> {t('Save and apply to all {count} website(s)', { count: websites.length })}
+            </button>
+            <button type="button" className="secondary-light" disabled={!!loading || !botsChanged} onClick={() => setGlobalBotText(savedBots.join('\n'))}>{t('Reset')}</button>
+            <span className="hint">
+              {t('{n} bot(s)', { n: globalBots.length })}
+              {botBlocks?.max_bots ? ` · ${t('at most {max}', { max: botBlocks.max_bots })}` : ''}
+              {botsChanged ? ` · ${t('unsaved changes')}` : ''}
+            </span>
+          </div>
+        </div>}
       </section>}
-
-      <section className="section">
-        <div className="section-title">
-          <div>
-            <h2>{isAdmin ? t('Websites') : t('Your websites')} {isAdmin && <span className={wafEngine === 'on' ? 'badge ok' : wafEngine === 'off' ? 'badge warn' : 'badge'}>{wafEngine === 'on' ? t('WAF engine on') : wafEngine === 'off' ? t('WAF engine off') : t('WAF engine: checking…')}</span>}</h2>
-            <p className="hint">{t('Open a website to configure its rules and bad bots.')}</p>
-          </div>
-          <button className="secondary" disabled={!!loading} onClick={() => { loadBotBlocks(); if (isAdmin) { loadWafRules(); loadCrs(); } }}><RefreshCw size={14}/> {t('Refresh')}</button>
-        </div>
-        {websites.length === 0
-          ? <EmptyState icon={Globe} message={t('No websites yet.')} />
-          : <div className="waf-site-table">
-              {websites.map(site => {
-                const bots = botCountFor(site.id);
-                // No CRS here: "WAF on" beside "CRS block" read as two things
-                // to worry about. CRS is switched on the site's own page.
-                return <button key={site.id} type="button" className="waf-site-row"
-                  disabled={!!loading} onClick={() => openWafSite(site.id)}>
-                  <span className="waf-site-domain">{site.domain}</span>
-                  <span className="waf-site-badges">
-                    <span className={site.waf_enabled ? 'badge ok' : 'badge'}>{site.waf_enabled ? t('WAF on') : t('WAF off')}</span>
-                    <span className={site.http_flood_enabled ? 'badge ok' : 'badge'}>{site.http_flood_enabled ? t('Flood on') : t('Flood off')}</span>
-                    <span className={bots > 0 ? 'badge ok' : 'badge'}
-                      title={ownCountFor(site.id) > 0 ? t('{n} set on this website, the rest from the global list', { n: ownCountFor(site.id) }) : t('All from the global list')}
-                    >{bots > 0 ? t('{n} bot(s)', { n: bots }) : t('No bots')}</span>
-                  </span>
-                  <span className="waf-site-open">{t('Configure')}</span>
-                </button>;
-              })}
-            </div>}
-        {isAdmin && <details className="raw-output firewall-status">
-          <summary>{t('WAF status')}</summary>
-          <pre>{statusText}</pre>
-        </details>}
-      </section>
 
       {isAdmin && <section className="section">
         <div className="section-title">
@@ -10243,7 +10358,6 @@ function App() {
             </h2>
             <p className="hint">{t('Inspects each request for SQL injection, XSS and similar attacks. Each website turns it on from its own page.')}</p>
           </div>
-          <button className="secondary" disabled={!!loading} onClick={loadCrs}><RefreshCw size={14}/> {t('Refresh')}</button>
         </div>
         {!crs && <p className="hint">{t('Click Refresh to load status.')}</p>}
         {crs && <>
@@ -10260,12 +10374,8 @@ function App() {
           </div>
           <div className="segmented-control">
             {[['off', 'Off'], ['detect', 'Detect only'], ['block', 'Block']].map(([value, label]) => (
-              <button
-                key={value}
-                className={crs.mode === value ? 'active' : ''}
-                disabled={!!loading || crs.mode === value}
-                onClick={() => saveCrsMode(value)}
-              >{t(label)}</button>
+              <button type="button" key={value} className={crs.mode === value ? 'active' : ''}
+                disabled={!!loading || crs.mode === value} onClick={() => saveCrsMode(value)}>{t(label)}</button>
             ))}
           </div>
           <p className="hint">
@@ -10293,6 +10403,11 @@ function App() {
           <button type="button" className="secondary-light" disabled={!!loading || wafGlobalRules === savedGlobalRules} onClick={() => setWafGlobalRules(savedGlobalRules)}>{t('Reset')}</button>
         </div>
       </section>}
+
+      {isAdmin && <details className="fw-details">
+        <summary>{t('Technical details')}</summary>
+        <div className="fw-details-body"><h3>{t('WAF status')}</h3><pre>{statusText}</pre></div>
+      </details>}
     </>;
   }
 
@@ -10314,20 +10429,12 @@ function App() {
     // whether this account may write them.
     const mayEditCustomRules = wafSiteConfig?.may_edit_custom_rules !== false;
     return <>
-      <section className="section">
-        <div className="section-title waf-detail-head">
-          <div className="waf-detail-title">
-            <button className="secondary-light" onClick={() => navigateToPage('waf')}><ArrowLeft size={14}/> {t('All websites')}</button>
-            <div><h2>{wafSiteConfig?.domain || selectedSite?.domain || t('Website')}</h2><p className="hint">{t('WAF configuration for this website.')}</p></div>
-          </div>
-          <div className="waf-detail-actions">
-            <span className={selectedSite?.waf_enabled ? 'badge ok' : 'badge'}>{selectedSite?.waf_enabled ? t('WAF on') : t('WAF off')}</span>
-            <button disabled={!selectedWafWebsiteId || !!loading} onClick={() => selectedSite && toggleWebsiteWaf(selectedSite)}>
-              <Shield size={14}/> {selectedSite?.waf_enabled ? t('Disable WAF') : t('Enable WAF')}
-            </button>
-          </div>
-        </div>
-      </section>
+      {/* As SNPanel's WafSite: the way back in the breadcrumbs, the WAF's
+          on/off as the page's one switch. */}
+      <PageHeader breadcrumbs={[{ label: t('WAF'), onClick: () => navigateToPage('waf') }, { label: wafSiteConfig?.domain || selectedSite?.domain || t('Website') }]}
+        title={wafSiteConfig?.domain || selectedSite?.domain || t('Website')} subtitle={t('WAF configuration for this website.')}
+        actions={<Switch checked={!!selectedSite?.waf_enabled} disabled={!selectedSite || !!loading}
+          onChange={() => selectedSite && toggleWebsiteWaf(selectedSite)}>{selectedSite?.waf_enabled ? t('WAF on') : t('WAF off')}</Switch>}/>
 
       {!wafSiteConfig && websites.length === 0 && <section className="section"><EmptyState icon={Globe} message={t('No websites yet.')} /></section>}
 
@@ -10428,85 +10535,95 @@ function App() {
     </>;
   }
 
+  // Access logs, as SNPanel's (pages/WafAccessLogs.jsx there): Refresh and
+  // Export in the page's head, one bar of labelled filters, the count, the
+  // table, and clearing at the foot.
   function renderWafAccessLogs() {
     const rows = wafAccessLogs.items || [];
     const total = Number(wafAccessLogs.total || 0);
-    const entryCount = total >= 1000 ? `${(total / 1000).toFixed(1)}k` : String(total);
+    const selectedSite = websites.find(site => String(site.id) === String(wafAccessLogFilters.websiteId));
     return <>
-      <section className="access-log-hero">
-        <div>
-          <p className="eyebrow">{t('Protected Traffic')}</p>
-          <h1>{t('Access Logs')}</h1>
-        </div>
-        <div className="access-log-hero-actions">
-          <button className="secondary-light icon-only" onClick={() => loadWafAccessLogs(wafAccessLogFilters, true)} disabled={!!loading} aria-label={t('Refresh logs')} title={t('Refresh logs')}><RefreshCw size={16}/></button>
-          <button className="secondary-light icon-only" onClick={() => navigateToPage('waf')} aria-label={t('Open WAF settings')} title={t('Open WAF settings')}><ExternalLink size={16}/></button>
-        </div>
-      </section>
-      <section className="section access-log-section">
-        <div className="access-log-toolbar">
-          <div className="access-log-title">
-            <strong>{t('Access Logs')}</strong>
-            <span>{entryCount} {t('entries')}</span>
-            <button className="secondary-light" onClick={exportWafAccessLogs} disabled={!rows.length}><Download size={14}/> {t('Export')}</button>
-            <button className="danger-light" onClick={clearWafAccessLogs} disabled={!!loading || websites.length === 0}><Trash2 size={14}/> {t('Clear')}</button>
+      <PageHeader subtitle={t('Protected traffic across every website.')}
+        onRefresh={() => loadWafAccessLogs(wafAccessLogFilters, true)} refreshDisabled={!!loading}
+        actions={<>
+          <button type="button" className="secondary-light" disabled={rows.length === 0} onClick={exportWafAccessLogs}><Download size={14}/> {t('Export')}</button>
+          {selectedSite && <a className="button-link secondary-light" href={websiteUrl(selectedSite)} target="_blank" rel="noopener noreferrer"><ExternalLink size={14}/> {t('Open website')}</a>}
+        </>}/>
+      <section className="section access-logs-section">
+        <div className="access-log-panel">
+          <form className="al-filters" onSubmit={e => { e.preventDefault(); applyWafAccessLogFilters(); }}>
+            <label className="al-filter"><span>{t('Website')}</span>
+              <select value={wafAccessLogFilters.websiteId} onChange={e => updateWafAccessLogFilters({ websiteId: e.target.value }, true)}>
+                <option value="">{t('All websites')}</option>
+                {websites.map(site => <option key={site.id} value={site.id}>{site.domain}</option>)}
+              </select>
+            </label>
+            <label className="al-filter"><span>{t('Verdict')}</span>
+              <select value={wafAccessLogFilters.verdict} onChange={e => updateWafAccessLogFilters({ verdict: e.target.value }, true)}>
+                <option value="all">{t('All verdicts')}</option>
+                <option value="block">{t('Blocked')}</option>
+                <option value="allow">{t('Allowed')}</option>
+                <option value="error">{t('Errors')}</option>
+              </select>
+            </label>
+            <label className="al-filter al-filter-grow"><span>{t('Search')}</span>
+              <input type="search" value={wafAccessLogFilters.query} onChange={e => updateWafAccessLogFilters({ query: e.target.value })} placeholder={t('A path, an address, a reason')} />
+            </label>
+            <label className="al-filter al-filter-small"><span>{t('Rows')}</span>
+              <select value={wafAccessLogFilters.limit} onChange={e => updateWafAccessLogFilters({ limit: Number(e.target.value) }, true)}>
+                {[50, 100, 200, 500].map(size => <option key={size} value={size}>{t('{n} / page', { n: size })}</option>)}
+              </select>
+            </label>
+            <label className="al-filter al-filter-refresh"><span>{t('Automatic refresh')}</span>
+              <select value={wafAccessLogFilters.refresh} onChange={e => updateWafAccessLogFilters({ refresh: Number(e.target.value) })}>
+                <option value={0}>{t('Manual refresh')}</option>
+                <option value={5}>{t('Refresh 5s')}</option>
+                <option value={10}>{t('Refresh 10s')}</option>
+                <option value={30}>{t('Refresh 30s')}</option>
+              </select>
+            </label>
+            <button type="submit" disabled={!!loading}><Search size={14}/> {t('Apply')}</button>
+          </form>
+          <p className="al-count" aria-live="polite">{t('{count} entries', { count: total.toLocaleString() })}
+            {rows.length > 0 && rows.length < total ? <small> · {t('{count} shown', { count: rows.length.toLocaleString() })}</small> : null}</p>
+          <div className="access-log-table-wrap">
+            <table className="access-log-table">
+              <thead>
+                <tr>
+                  <th>{t('Verdict')}</th>
+                  <th>{t('Time')}</th>
+                  <th>{t('Site')}</th>
+                  <th>{t('Method')}</th>
+                  <th>{t('Path')}</th>
+                  <th>IP</th>
+                  <th>{t('Country')}</th>
+                  <th>{t('Reason')}</th>
+                  <th>{t('Status')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(item => <tr key={item.id}>
+                  <td data-label={t('Verdict')}><span className={`verdict-pill ${item.verdict === 'allow' ? 'allow' : item.verdict === 'error' ? 'error' : 'block'}`}>{t(accessLogVerdictLabel(item.verdict))}</span></td>
+                  <td data-label={t('Time')}><span className="access-log-time">{formatAccessLogTime(item.timestamp) || '-'}</span><small>{item.duration_ms || 0} ms</small></td>
+                  <td data-label={t('Site')}><span className="access-log-site">{item.domain}</span></td>
+                  <td data-label={t('Method')}>{item.method || '-'}</td>
+                  <td data-label={t('Path')}><code className="access-log-path">{item.path || '-'}</code></td>
+                  <td data-label="IP"><span className="access-log-ip">{item.ip || '-'}</span></td>
+                  <td data-label={t('Country')}>{accessLogCountryLabel(item)}</td>
+                  <td data-label={t('Reason')}>{item.reason || (item.verdict === 'block' ? t('Blocked') : item.verdict === 'error' ? t('Error') : t('Allowed'))}</td>
+                  <td data-label={t('Status')}>{item.status || '-'}</td>
+                </tr>)}
+              </tbody>
+            </table>
+            {rows.length === 0 && <EmptyState icon={Shield} message={t('No access log entries match the current filters.')} />}
           </div>
-          <div className="access-log-filters">
-            <select value={wafAccessLogFilters.websiteId} onChange={e => updateWafAccessLogFilters({ websiteId: e.target.value }, true)}>
-              <option value="">{t('All websites')}</option>
-              {websites.map(site => <option key={site.id} value={site.id}>{site.domain}</option>)}
-            </select>
-            <select value={wafAccessLogFilters.verdict} onChange={e => updateWafAccessLogFilters({ verdict: e.target.value }, true)}>
-              <option value="all">{t('All verdicts')}</option>
-              <option value="block">{t('Block')}</option>
-              <option value="allow">{t('Allow')}</option>
-              <option value="error">{t('Error')}</option>
-            </select>
-            {/* The search runs on Enter: every request reads the logs afresh. */}
-            <input value={wafAccessLogFilters.query} onChange={e => updateWafAccessLogFilters({ query: e.target.value })} onKeyDown={e => { if (e.key === 'Enter') applyWafAccessLogFilters(); }} placeholder={t('Filter logs')} />
-            <select value={wafAccessLogFilters.limit} onChange={e => updateWafAccessLogFilters({ limit: Number(e.target.value) }, true)}>
-              {[50, 100, 200, 500].map(size => <option key={size} value={size}>{size} {t('/ page')}</option>)}
-            </select>
-            <select value={wafAccessLogFilters.refresh} onChange={e => updateWafAccessLogFilters({ refresh: Number(e.target.value) })} title={t('Auto refresh')}>
-              <option value={0}>{t('Auto refresh off')}</option>
-              <option value={5}>{t('Refresh 5s')}</option>
-              <option value={10}>{t('Refresh 10s')}</option>
-              <option value={30}>{t('Refresh 30s')}</option>
-            </select>
+          <div className="al-foot">
+            {(wafAccessLogs.missing || []).length > 0 && <p className="hint">{t('Missing log files: {list}', { list: wafAccessLogs.missing.join(', ') })}</p>}
+            <button type="button" className="secondary-light danger-hover al-clear" disabled={!!loading || websites.length === 0} onClick={clearWafAccessLogs}>
+              <Trash2 size={14}/> {selectedSite ? t('Clear the logs of {domain}', { domain: selectedSite.domain }) : t("Clear every website's logs")}
+            </button>
           </div>
         </div>
-        <div className="access-log-table-wrap">
-          <table className="access-log-table">
-            <thead>
-              <tr>
-                <th>{t('Verdict')}</th>
-                <th>{t('Time')}</th>
-                <th>{t('Site')}</th>
-                <th>{t('Method')}</th>
-                <th>{t('Path')}</th>
-                <th>IP</th>
-                <th>{t('Reason')}</th>
-                <th>{t('Status')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map(item => <tr key={item.id}>
-                <td><span className={`verdict-pill ${item.verdict === 'allow' ? 'allow' : item.verdict === 'error' ? 'error' : 'block'}`}>{t(accessLogVerdictLabel(item.verdict))}</span></td>
-                <td><span>{formatAccessLogTime(item.timestamp) || '-'}</span><small>{item.duration_ms || 0} ms</small></td>
-                <td><span>{item.domain}</span></td>
-                <td>{item.method || '-'}</td>
-                <td><span className="access-log-path">{item.path || '-'}</span></td>
-                <td><span>{item.ip || '-'}</span><small>{accessLogCountryLabel(item) === '-' ? '' : accessLogCountryLabel(item)}</small></td>
-                <td>{item.reason || (item.verdict === 'block' ? t('Blocked') : item.verdict === 'error' ? t('Error') : t('Allowed'))}</td>
-                <td>{item.status || '-'}</td>
-              </tr>)}
-            </tbody>
-          </table>
-          {rows.length === 0 && <EmptyState icon={Shield} message={t('No access log entries match the current filters.')} />}
-        </div>
-        {(wafAccessLogs.missing || []).length > 0 && <div className="access-log-footer">
-          <span>{t('Missing log files:')} {wafAccessLogs.missing.join(', ')}</span>
-        </div>}
       </section>
     </>;
   }
