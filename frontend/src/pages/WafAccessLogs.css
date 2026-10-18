@@ -26,3 +26,24 @@
   .al-filters>button{flex:1 1 100%}
   .al-clear{flex:1 1 100%}
 }
+
+/* From SNPanel's brand.css: the panel the filters, count and table sit in,
+   and the table as one card per request on a narrow screen. */
+.access-log-panel{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px;background:var(--surface)}
+.access-log-panel .access-log-table-wrap{border:1px solid var(--border);border-radius:var(--radius-sm)}
+.access-log-site,.access-log-time,.access-log-ip{display:block;font-weight:600}
+.verdict-pill{white-space:nowrap}
+@media (max-width:950px){
+  .access-log-table thead{display:none}
+  .access-log-table,.access-log-table tbody,.access-log-table tr,.access-log-table td{display:block;width:100%}
+  .access-log-table tr{padding:10px;border-bottom:1px solid var(--border)}
+  .access-log-table tr:last-child{border-bottom:0}
+  .access-log-table td{display:grid;grid-template-columns:88px minmax(0,1fr);gap:8px;align-items:start}
+  .access-log-table td::before{content:attr(data-label);color:var(--text-muted);font-size:var(--text-xs);font-weight:800;text-transform:uppercase}
+  .access-log-table code{max-width:100%;white-space:normal;word-break:break-word}
+  .access-log-panel .access-log-table td .access-log-time+small{grid-column:2}
+}
+@media (max-width:560px){
+  .access-log-panel{padding:10px}
+  .access-log-table td{grid-template-columns:74px minmax(0,1fr)}
+}

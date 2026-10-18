@@ -52,6 +52,8 @@ import './pages/PhpConfig.css';
 import './pages/Firewall.css';
 import './pages/Waf.css';
 import './pages/WafAccessLogs.css';
+import './pages/Addons.css';
+import './pages/Malware.css';
 import './bpanel.css';
 
 const API = import.meta.env.VITE_API_URL || '/api';
@@ -6362,17 +6364,14 @@ function App() {
     const pages = Math.max(1, Math.ceil(rows.length / size));
     const current = Math.min(notifyLogPage, pages);
     const shown = rows.slice((current - 1) * size, current * size);
-    return <section className="section notify-log-page">
-      <div className="section-title">
-        <div className="waf-detail-title">
-          <button className="secondary" onClick={() => setShowNotifyLog(false)}><ArrowLeft size={14}/> {t('Notifications')}</button>
-          <div><h2>{t('Send log')}</h2><p className="hint">{t('The last 100 messages sent, and the ones that failed.')}</p></div>
-        </div>
-        <select value={notifyLogStatus} aria-label={t('Show')} onChange={e => { setNotifyLogStatus(e.target.value); setNotifyLogPage(1); }}>
+    return <>
+      <PageHeader breadcrumbs={[{ label: t('Notifications'), onClick: () => setShowNotifyLog(false) }, { label: t('Send log') }]}
+        title={t('Send log')} subtitle={t('The last 100 messages sent, and the ones that failed.')}
+        actions={<select value={notifyLogStatus} aria-label={t('Show')} onChange={e => { setNotifyLogStatus(e.target.value); setNotifyLogPage(1); }}>
           <option value="">{t('All')}</option><option value="sent">{t('Sent')}</option>
           <option value="failed">{t('Failed')}</option>
-        </select>
-      </div>
+        </select>}/>
+      <section className="section notify-log-page">
       {shown.length > 0 ? <ul className="notify-log-list">
         {shown.map(row => <li key={row.id}>
           <span className={`badge ${row.status === 'sent' ? 'ok' : 'bad'}`}>{row.status === 'sent' ? t('Sent') : t('Failed')}</span>
@@ -6387,7 +6386,8 @@ function App() {
         <span className="hint">{t('Page {page} of {pages}', { page: current, pages })}</span>
         <button className="mini secondary" disabled={current >= pages} onClick={() => setNotifyLogPage(current + 1)}>{t('Next')}</button>
       </div>}
-    </section>;
+      </section>
+    </>;
   }
 
   function renderNotificationsPage() {
@@ -6401,16 +6401,9 @@ function App() {
       <span className="notify-event-text">{t(ev.label)}<small>{t(ev.hint)}</small></span>
     </label>;
     return <>
-      <section className="section">
-        <div className="section-title">
-          <div>
-            <h2>{t('Notifications')}</h2>
-            <p className="hint">{t('Email and Telegram alerts for administrators. Hosting customers are not notified.')}</p>
-          </div>
-          <button className="secondary" disabled={!!loading} onClick={() => { loadNotifyMe(); loadNotifySettings(); }}><RefreshCw size={14}/> {t('Refresh')}</button>
-        </div>
-        {!me && !s && <p className="hint">{t('Loading…')}</p>}
-      </section>
+      <PageHeader subtitle={t('Email and Telegram alerts for administrators. Hosting customers are not notified.')}
+        onRefresh={() => { loadNotifyMe(); loadNotifySettings(); }} refreshDisabled={!!loading}/>
+      {!me && !s && <section className="section"><p className="hint">{t('Loading…')}</p></section>}
 
       {s && <section className="section">
         <div className="section-title">
@@ -6541,21 +6534,23 @@ function App() {
     </>;
   }
 
-  // Which addon a page belongs to decides the words: this said
-  // "Applications" on the Malware, MCP and Notifications pages too.
+  // A page whose addon is not installed, as SNPanel's AddonMissing: what is
+  // missing, and for an administrator the way to the addon's row.
   function renderAddonMissing(slug = 'application') {
     const addon = addons.items.find(item => item.slug === slug);
-    const name = addon?.name || 'Application';
+    const name = addon ? addonLabel(addon, t) : t('Application');
     const installed = !!addon?.installed;
     // Until the list is in, which addon is missing is not known yet.
     if (!addons.loaded) return <section className="section"><p className="hint">{t('Loading…')}</p></section>;
     return <section className="section">
-      <h2>{t(name)}</h2>
-      <div className="info-box"><AlertCircle size={14}/> {slug === 'application' && installed
-        ? t('Your package does not include Applications. Contact an administrator to upgrade.')
-        : isAdmin ? t('The {name} addon is not installed. Install it on the Addons page.', { name: t(name) })
-          : t('{name} is not available on this server.', { name: t(name) })}</div>
-      {isAdmin && !installed && <div className="actions"><button onClick={() => navigateToPage('addons')}><PackageOpen size={14}/> {t('Open Addons')}</button></div>}
+      <EmptyState icon={Boxes}
+        message={slug === 'application' && installed
+          ? t('Your package does not include Applications. Contact an administrator to upgrade.')
+          : isAdmin ? t('The {name} addon is not installed. Install it on the Addons page.', { name })
+            : t('{name} is not available on this server.', { name })}
+        action={isAdmin && !installed
+          ? { label: t('Go to Addons'), icon: Boxes, disabled: !!loading, onClick: () => { navigateToPage('addons'); setTimeout(() => document.getElementById(`addon-${slug}`)?.scrollIntoView({ block: 'center' }), 300); } }
+          : undefined}/>
     </section>;
   }
 
@@ -6800,17 +6795,12 @@ function App() {
   function renderDns() {
     if (dnsZone) return renderDnsZone();
     if (isAdmin && dnsTab === 'settings') return renderDnsSettings();
-    return <section className="section dns-page">
-      <div className="section-title">
-        <div><h2>{t('DNS Manager')}</h2>
-          <p className="hint">{isAdmin ? t('Every domain on the panel, answered by this server.') : t('The DNS records of your domains, answered by this server.')}</p></div>
-        <div className="actions">
-          {isAdmin && <button type="button" className="secondary" onClick={() => setDnsTab('settings')}><SettingsIcon size={14}/> {t('Settings')}</button>}
-          <button type="button" className="secondary" disabled={!!loading} onClick={() => { loadDnsInfo(); loadDnsZones(); }}><RefreshCw size={14}/> {t('Refresh')}</button>
-        </div>
-      </div>
-      {renderDnsZones()}
-    </section>;
+    return <>
+      <PageHeader subtitle={isAdmin ? t('Every domain on the panel, answered by this server.') : t('The DNS records of your domains, answered by this server.')}
+        onRefresh={() => { loadDnsInfo(); loadDnsZones(); }} refreshDisabled={!!loading}
+        actions={isAdmin && <button type="button" className="secondary-light" onClick={() => setDnsTab('settings')}><SettingsIcon size={14}/> {t('Settings')}</button>}/>
+      <section className="section dns-page">{renderDnsZones()}</section>
+    </>;
   }
 
   function renderCopyBlock(title, text, { multiline = false, copiedMessage } = {}) {
@@ -7493,104 +7483,69 @@ function App() {
     </div>;
   }
 
+  // Addons, as SNPanel's (pages/Addons.jsx there): one row per addon - what
+  // it is, whether it is installed, the button that changes that - and what
+  // it does in detail, with what to know first, one click further down.
   function renderAddons() {
-    if (!isAdmin) return <section className="section"><h2>{t('Addons')}</h2><p className="hint">{t('No permission.')}</p></section>;
+    if (!isAdmin) return <section className="section"><EmptyState icon={Boxes} message={t('No permission.')} /></section>;
     const openMail = tab => { setMailTab(tab); navigateToPage('mail'); };
-    return <section className="section">
-      <div className="section-title">
-        <div>
-          <h2>{t('Addons')}</h2>
-          <p className="hint">{t('Optional components this panel release can install for you. Each one ships with the panel, so a new addon arrives with a panel update.')}</p>
-        </div>
-        <button className="secondary-light" disabled={!!loading} onClick={loadAddons}><RefreshCw size={14}/> {t('Refresh')}</button>
-      </div>
-
-      {addons.loaded && addons.items.length === 0 && <p className="hint">{t('No addons in this release.')}</p>}
-
-      <div className="addon-grid">
-        {addons.items.map(addon => {
-          const open = addonOpen === addon.slug;
-          // BPanel installs and removes within the request and has no
-          // start/stop, so an addon is installed or it is not.
-          const stateBadge = addon.installed
-            ? <span className="badge ok">{t('Installed')}</span>
-            : <span className="badge">{t('Not installed')}</span>;
-          const version = addon.installed ? (addon.installed_version || addon.version) : addon.version;
-          const installedAt = addon.installed_at ? new Date(addon.installed_at) : null;
-          return <div className="addon-card" key={addon.slug}>
-            <div className="addon-card-head">
-              <div className="addon-card-title">
-                <PackageOpen size={16}/>
-                <strong>{t(addon.name)}</strong>
-                {version && <span className="hint addon-version">v{version}</span>}
-              </div>
-              {stateBadge}
-            </div>
-            <p className="addon-summary">{t(addon.summary)}</p>
-            {addon.installed && addon.installed_version && addon.installed_version !== addon.version &&
-              <p className="hint">{t('v{version} available', { version: addon.version })}</p>}
-            {addon.installed && installedAt && <p className="hint">{t('Installed')} {Number.isNaN(installedAt.getTime()) ? addon.installed_at : installedAt.toLocaleString()}</p>}
-
-            <div className="actions addon-actions">
-              {!addon.installed && <button disabled={!!loading} onClick={() => setAddonInstalled(addon.slug, true)}>
-                <Download size={14}/> {t('Install')}</button>}
-              {/* What an addon installs and what to know first can be read
-                  before installing it, not only in Manage afterwards. */}
-              <button className="secondary-light" disabled={!!loading} onClick={() => setAddonOpen(open ? '' : addon.slug)}>
-                {addon.installed ? <SettingsIcon size={14}/> : <FileText size={14}/>} {open ? t('Hide') : addon.installed ? t('Manage') : t('Details')}</button>
-              {addon.installed && <button className="danger-light" disabled={!!loading}
-                onClick={() => setAddonInstalled(addon.slug, false)}><Trash2 size={14}/> {t('Remove')}</button>}
-            </div>
-
-            {open && <div className="addon-detail">
-              {addon.details?.length > 0 && <p className="addon-description">{addon.details.map(line => t(line)).join(' ')}</p>}
-              {addon.notes?.length > 0 && <ul className="addon-notes">
-                {addon.notes.map((note, idx) => <li key={idx}>{t(note)}</li>)}
-              </ul>}
-              {addon.slug === 'application' && addon.installed && <div className="addon-panel">
-                <div className="addon-panel-head"><strong>{t('Node.js apps, containers and Docker Compose')}</strong>
-                  <button className="mini" onClick={() => navigateToPage('applications')}><Boxes size={13}/> {t('Open Applications')}</button></div>
-              </div>}
-              {addon.slug === 'fail2ban' && addon.installed && <div className="addon-panel">
-                <div className="addon-panel-head"><strong>{t('Status and banned addresses')}</strong>
-                  <button className="mini" onClick={() => navigateToPage('firewall')}><Shield size={13}/> {t('Open Firewall')}</button></div>
-              </div>}
-              {addon.slug === 'mcp' && addon.installed && <div className="addon-panel">
-                <div className="addon-panel-head"><strong>{t('Tokens and client setup')}</strong>
-                  <button className="mini" onClick={() => navigateToPage('mcp')}><Bot size={13}/> {t('Open AI assistants (MCP)')}</button></div>
-                <p className="hint">{t('Endpoint:')} <code>{`${window.location.origin}/api/mcp`}</code></p>
-              </div>}
-              {addon.slug === 'demo' && addon.installed && renderDemoAccounts()}
-              {addon.slug === 'mail' && addon.installed && <div className="addon-panel">
-                <div className="addon-panel-head"><strong>{t('Mailboxes, relays, the spam filter and server settings')}</strong></div>
-                <div className="actions">
-                  <button type="button" className="mini" onClick={() => openMail('mailboxes')}><Mail size={13}/> {t('Open Email')}</button>
-                  <button type="button" className="mini secondary" onClick={() => openMail('relay')}><Send size={13}/> {t('Relays')}</button>
-                  <button type="button" className="mini secondary" onClick={() => openMail('rspamd')}><ShieldCheck size={13}/> Rspamd</button>
-                  <button type="button" className="mini secondary" onClick={() => openMail('server')}><Server size={13}/> {t('Server')}</button>
+    return <>
+      <PageHeader subtitle={t('Optional components this panel release can install for you. Each one ships with the panel, so a new addon arrives with a panel update.')}
+        onRefresh={loadAddons} refreshDisabled={!!loading}/>
+      <section className="section">
+        <div className="addon-rows">
+          {addons.items.map(addon => {
+            const version = addon.installed ? (addon.installed_version || addon.version) : addon.version;
+            const installedAt = addon.installed_at ? new Date(addon.installed_at) : null;
+            const label = addonLabel(addon, t);
+            return <article id={`addon-${addon.slug}`} className={`addon-row${addon.installed ? ' installed' : ''}`} key={addon.slug}>
+              <div className="addon-row-main">
+                <span className="addon-row-icon has-feature-icon"><FeatureIcon name={addonFeatureIcon(addon.slug)} size={36} muted={!addon.installed}/></span>
+                <div className="addon-row-text">
+                  <div className="addon-row-head">
+                    <strong>{label}</strong>
+                    {version && <code>v{version}</code>}
+                    <span className={`badge ${addon.installed ? 'ok' : ''}`}>{addon.installed ? t('Installed') : t('Not installed')}</span>
+                    {addon.installed && addon.installed_version && addon.installed_version !== addon.version
+                      && <span className="badge">{t('v{version} available', { version: addon.version })}</span>}
+                  </div>
+                  <p className="addon-row-summary">{t(addon.summary)}</p>
+                  {addon.installed && installedAt && <p className="addon-row-summary">{t('Installed')} {Number.isNaN(installedAt.getTime()) ? addon.installed_at : installedAt.toLocaleString()}</p>}
                 </div>
-              </div>}
-              {addon.slug === 'dns' && addon.installed && <div className="addon-panel">
-                <div className="addon-panel-head"><strong>{t('Zones, records and nameservers')}</strong>
-                  <button className="mini" onClick={() => navigateToPage('dns')}><Network size={13}/> {t('Open DNS Manager')}</button></div>
-              </div>}
-              {addon.slug === 'malware' && addon.installed && <div className="addon-panel">
-                <div className="addon-panel-head"><strong>{t('Scans, schedules and real-time protection')}</strong>
-                  <button className="mini" onClick={() => navigateToPage('malware')}><Bug size={13}/> {t('Open Malware Scanner')}</button></div>
-              </div>}
-              {addon.slug === 'git' && addon.installed && <div className="addon-panel">
-                <div className="addon-panel-head"><strong>{t('Repositories, deploys and webhooks')}</strong>
-                  <button className="mini" onClick={() => navigateToPage('git')}><GitBranch size={13}/> {t('Open Git')}</button></div>
-              </div>}
-              {addon.slug === 'notifications' && addon.installed && <div className="addon-panel">
-                <div className="addon-panel-head"><strong>{t('Channels, recipients and events')}</strong>
-                  <button className="mini" onClick={() => navigateToPage('notifications')}><Bell size={13}/> {t('Open Notifications')}</button></div>
-              </div>}
-            </div>}
-          </div>;
-        })}
-      </div>
-    </section>;
+                <div className="addon-row-actions">
+                  {addon.installed
+                    ? <>
+                      {ADDON_META[addon.slug]?.page && ADDON_META[addon.slug].page !== 'addons'
+                        && <button type="button" className="secondary-light" disabled={!!loading} onClick={() => navigateToPage(ADDON_META[addon.slug].page)}>{t('Open')}</button>}
+                      <button type="button" className="secondary-light danger-hover" disabled={!!loading} onClick={() => setAddonInstalled(addon.slug, false)}
+                        aria-label={t('Uninstall {name}', { name: label })} title={t('Uninstall {name}', { name: label })}><Trash2 size={14} aria-hidden="true"/> <span className="addon-row-label">{t('Uninstall')}</span></button>
+                    </>
+                    : <button type="button" disabled={!!loading} onClick={() => setAddonInstalled(addon.slug, true)}><Download size={14} aria-hidden="true"/> {t('Install')}</button>}
+                </div>
+              </div>
+              <details className="addon-row-more">
+                <summary>{addon.installed ? t('Details') : t('Details and what to know first')}</summary>
+                {addon.details?.length > 0 && <ul className="addon-details">
+                  {addon.details.map((line, index) => <li key={index}>{t(line)}</li>)}
+                </ul>}
+                {addon.notes?.length > 0 && <div className="addon-notes">
+                  <strong><AlertCircle size={13} aria-hidden="true"/> {addon.installed ? t('Keep in mind') : t('Before you turn it on')}</strong>
+                  <ul>{addon.notes.map((line, index) => <li key={index}>{t(line)}</li>)}</ul>
+                </div>}
+                {addon.slug === 'mcp' && addon.installed && <p className="hint">{t('Endpoint:')} <code>{`${window.location.origin}/api/mcp`}</code></p>}
+                {addon.slug === 'demo' && addon.installed && renderDemoAccounts()}
+                {addon.slug === 'mail' && addon.installed && <div className="actions">
+                  <button type="button" className="mini secondary-light" onClick={() => openMail('relay')}><Send size={13}/> {t('Relays')}</button>
+                  <button type="button" className="mini secondary-light" onClick={() => openMail('rspamd')}><ShieldCheck size={13}/> Rspamd</button>
+                  <button type="button" className="mini secondary-light" onClick={() => openMail('server')}><Server size={13}/> {t('Server')}</button>
+                </div>}
+              </details>
+            </article>;
+          })}
+          {addons.loaded && addons.items.length === 0 && <EmptyState icon={Boxes} message={t('No addons in this release.')} />}
+        </div>
+      </section>
+    </>;
   }
 
   function renderApplications() {
@@ -8259,9 +8214,10 @@ function App() {
         : site.ssl_mode === 'shared' ? t('Shared cert')
           : site.ssl_mode === 'cloudflare' ? t('Wildcard') : t('SSL OK');
     return <>
+    <PageHeader subtitle={t('{secured} of {total} secured', { secured: securedCount, total: websites.length })}/>
     <section className="section" id="ssl-manage">
       <h2>{t('SSL Certificate')}</h2>
-      <WebsiteSelect />
+      <Field label={t('Website')}><WebsiteSelect /></Field>
       {currentSite && <div className="info-box" style={{marginTop:8}}>
         <strong>{currentSite.domain}</strong>
         <span className={currentSite.ssl_enabled ? 'badge ok' : 'badge'} style={{justifySelf:'start'}}>{sslLabel}</span>
@@ -10549,8 +10505,7 @@ function App() {
           <button type="button" className="secondary-light" disabled={rows.length === 0} onClick={exportWafAccessLogs}><Download size={14}/> {t('Export')}</button>
           {selectedSite && <a className="button-link secondary-light" href={websiteUrl(selectedSite)} target="_blank" rel="noopener noreferrer"><ExternalLink size={14}/> {t('Open website')}</a>}
         </>}/>
-      <section className="section access-logs-section">
-        <div className="access-log-panel">
+      <div className="access-log-panel">
           <form className="al-filters" onSubmit={e => { e.preventDefault(); applyWafAccessLogFilters(); }}>
             <label className="al-filter"><span>{t('Website')}</span>
               <select value={wafAccessLogFilters.websiteId} onChange={e => updateWafAccessLogFilters({ websiteId: e.target.value }, true)}>
@@ -10623,8 +10578,7 @@ function App() {
               <Trash2 size={14}/> {selectedSite ? t('Clear the logs of {domain}', { domain: selectedSite.domain }) : t("Clear every website's logs")}
             </button>
           </div>
-        </div>
-      </section>
+      </div>
     </>;
   }
 
@@ -10702,6 +10656,7 @@ function App() {
     const pk = passkeyStatus || {};
     const keys = pk.credentials || [];
     return <>
+      <PageHeader subtitle={t('How you sign in to this panel: sessions, passkeys and the authenticator app.')}/>
       <section className="section">
         <div className="section-title">
           <div><h2>{t('Signed-in devices')}</h2>
@@ -10882,14 +10837,11 @@ function App() {
       const finished = job.finished_at ? new Date(job.finished_at) : null;
       const seconds = started && finished ? Math.max(0, Math.round((finished - started) / 1000)) : null;
       const duration = seconds == null ? '—' : seconds >= 3600 ? `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m` : seconds >= 60 ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : `${seconds}s`;
-      return <section className="section scan-detail">
-        <div className="section-title">
-          <div className="waf-detail-title">
-            <button className="secondary" onClick={() => setMalwareDetailJob(null)}><ArrowLeft size={14}/> {t('Malware scanner')}</button>
-            <div><h2>{scanJobTitle(job)}</h2><p className="hint">{scanJobStamp(job)}</p></div>
-          </div>
-          <span className={scanJobBadgeClass(job)}>{scanStatusLabel(job.status)}</span>
-        </div>
+      return <>
+        <PageHeader breadcrumbs={[{ label: t('Malware scanner'), onClick: () => setMalwareDetailJob(null) }, { label: scanJobTitle(job) }]}
+          title={scanJobTitle(job)} subtitle={scanJobStamp(job)}
+          actions={<span className={scanJobBadgeClass(job)}>{scanStatusLabel(job.status)}</span>}/>
+        <section className="section scan-detail">
         <div className="scan-detail-stats">
           <div><small>{t('Files scanned')}</small><strong>{job.scanned || 0}{job.total_files ? ` / ${job.total_files}` : ''}</strong></div>
           <div><small>{t('Threats found')}</small><strong className={job.infected > 0 ? 'text-danger' : ''}>{job.infected || 0}</strong></div>
@@ -10906,14 +10858,23 @@ function App() {
           <summary>{t('Scan log')}</summary>
           <pre className="malware-scan-log">{job.log.join('\n')}</pre>
         </details>}
-      </section>;
+        </section>
+      </>;
     }
 
+    const scheduleDirty = ['websites', 'server'].some(scope =>
+      JSON.stringify(malwareSchedulesForm[scope] || {}) !== JSON.stringify(malwareSchedules[scope] || {}));
+    const saveSchedules = async () => {
+      for (const scope of ['websites', 'server']) {
+        if (JSON.stringify(malwareSchedulesForm[scope] || {}) !== JSON.stringify(malwareSchedules[scope] || {})) await saveMalwareSchedule(scope);
+      }
+    };
     return <>
+      <PageHeader subtitle={t('Scans the websites, and the whole server, with Linux Malware Detect and ClamAV.')}
+        onRefresh={() => { loadMalwareScanStatus(); loadMalwareSchedule(); }} refreshDisabled={!!loading}/>
       <section className="section">
         <div className="section-title">
           <div>
-            <h2>{t('Malware Scanner')}</h2>
             <p className="hint badge-row">
               {mwActive ? <span className="badge ok">{t('Active')}</span>
                 : mwEnabled && !mwInstalled ? <span className="badge warn">{t('Installing...')}</span>
@@ -10928,7 +10889,6 @@ function App() {
               </span>}
             </p>
           </div>
-          <button className="secondary" disabled={!!loading} onClick={loadMalwareScanStatus}><RefreshCw size={14}/> {t('Refresh')}</button>
         </div>
         {mw.memory_warning && <div className="info-box malware-ram-warning">
           <strong><AlertCircle size={15}/>{t('Memory warning')}</strong>
@@ -10967,9 +10927,8 @@ function App() {
                 : <span className={mw.realtime_enabled ? 'badge ok' : 'badge'}>{mw.realtime_enabled ? t('On') : t('Off')}</span>}</strong>
               <p className="hint">{t('Watches the website directories continuously and checks new files in short batches (~15 seconds). Catches something arriving over SFTP or through a plugin at once, instead of waiting for the next Level 1 scheduled scan.')}</p>
             </div>
-            {mw.realtime_enabled
-              ? <button className="danger" disabled={!!loading} onClick={() => toggleMalwareRealtime(false)}>{t('Turn off')}</button>
-              : <button disabled={!!loading} onClick={() => toggleMalwareRealtime(true)}><Shield size={14}/> {t('Turn on')}</button>}
+            <Switch checked={!!mw.realtime_enabled} disabled={!!loading} onChange={on => toggleMalwareRealtime(on)}
+              label={t('Real-time protection')}><span>{mw.realtime_enabled ? t('On') : t('Off')}</span></Switch>
           </div>
         </div>}
 
@@ -10981,9 +10940,8 @@ function App() {
               {mw.signature_filter === 'on' && !mw.clamd_running && <p className="hint">{t('With the filtered signatures a scan loads in about 2 seconds and 200 MB.')}</p>}
               {!mw.scan_on_upload_is_cheap && <p className="hint">{t('This server has no resident clamd — start one first and each scan drops to milliseconds.')}</p>}
             </div>
-            {mw.scan_on_upload
-              ? <button className="danger" disabled={!!loading} onClick={() => toggleMalwareScanOnUpload(false)}>{t('Turn off')}</button>
-              : <button disabled={!!loading} onClick={() => toggleMalwareScanOnUpload(true)}><Shield size={14}/> {t('Turn on')}</button>}
+            <Switch checked={!!mw.scan_on_upload} disabled={!!loading} onChange={on => toggleMalwareScanOnUpload(on)}
+              label={t('Scan uploaded files')}><span>{mw.scan_on_upload ? t('On') : t('Off')}</span></Switch>
           </div>
         </div>}
 
@@ -11058,61 +11016,48 @@ function App() {
 
       {/* Weekly, and shown in Vietnam time: the API holds weekday and hour in
           UTC, and utcScheduleToVn / vnScheduleToUtc convert at the form. */}
-      {mwEnabled && [
-        {
-          scope: 'server',
-          title: t('Full server scan'),
-          root: '/',
-          intro: t('Walks the whole VPS as root, so malware parked in /tmp, /root or a home folder outside public_html is found too. Heavier than a website scan and hungry for memory: best run weekly, at a quiet hour.'),
-        },
-        {
-          scope: 'websites',
-          title: t('Website scan (/home)'),
-          root: '/home',
-          intro: t('Scans every website’s files under /home. Each run is a full scan; the incremental scan of recently changed files is run by hand above.'),
-        },
-      ].map(({ scope, title, root, intro }) => {
-        const form = malwareSchedulesForm[scope] || {};
-        const saved = malwareSchedules[scope] || {};
-        // form.weekday/hour are UTC on the wire; show and edit them as VN time.
-        const vn = utcScheduleToVn(form.weekday ?? 6, form.hour ?? 3);
-        const setField = patch => setMalwareSchedulesForm(prev => ({ ...prev, [scope]: { ...prev[scope], ...patch } }));
-        const setVn = patch => setField(vnScheduleToUtc(patch.weekday ?? vn.weekday, patch.hour ?? vn.hour));
-        return <section className="section" key={scope}>
-          <div className="section-title">
-            <div>
-              <h2>{title}</h2>
-              <p className="hint">{intro}</p>
-            </div>
-            <button className="secondary" disabled={!!loading} onClick={loadMalwareSchedule}><RefreshCw size={14}/> {t('Refresh')}</button>
-          </div>
-          <div className="info-box">
-            <strong>{t('Scheduled scan')} <code>{root}</code></strong>
+      {mwEnabled && <section className="section">
+        <div className="section-title">
+          <div>
+            <h2>{t('Automatic schedule')}</h2>
             <p className="hint">{t('The panel scans on its own, with nobody pressing anything. Pick an hour when few visitors are around.')}</p>
-            <div className="scan-schedule-form">
-              <label><span>{t('Enabled')}</span>
-                <select value={form.enabled ? 'on' : 'off'} onChange={e => setField({ enabled: e.target.value === 'on' })}>
-                  <option value="off">{t('Off')}</option>
-                  <option value="on">{t('On')}</option>
-                </select>
+          </div>
+          <button type="button" disabled={!!loading || !scheduleDirty} onClick={saveSchedules}><Clock size={14}/> {t('Save schedule')}</button>
+        </div>
+        <div className="malware-sched-list">
+          {[
+            { scope: 'websites', title: t('Website scan (/home)'), intro: t('Scans every website’s files under /home. Each run is a full scan; the incremental scan of recently changed files is run by hand above.') },
+            { scope: 'server', title: t('Full server scan'), intro: t('Walks the whole VPS as root, so malware parked in /tmp, /root or a home folder outside public_html is found too. Heavier than a website scan and hungry for memory: best run weekly, at a quiet hour.') },
+          ].map(({ scope, title, intro }) => {
+            const form = malwareSchedulesForm[scope] || {};
+            const saved = malwareSchedules[scope] || {};
+            // form.weekday/hour are UTC on the wire; show and edit them as VN time.
+            const vn = utcScheduleToVn(form.weekday ?? 6, form.hour ?? 3);
+            const setField = patch => setMalwareSchedulesForm(prev => ({ ...prev, [scope]: { ...prev[scope], ...patch } }));
+            const setVn = patch => setField(vnScheduleToUtc(patch.weekday ?? vn.weekday, patch.hour ?? vn.hour));
+            return <div className={`malware-sched-row${form.enabled ? ' on' : ''}`} key={scope} title={intro}>
+              <label className="malware-sched-toggle">
+                <input type="checkbox" checked={!!form.enabled} onChange={e => setField({ enabled: e.target.checked })} />
+                <span>{title}</span>
               </label>
-              <label><span>{t('Day of week')}</span>
-                <select value={vn.weekday} disabled={!form.enabled} onChange={e => setVn({ weekday: Number(e.target.value) })}>
+              <div className="malware-sched-when">
+                <select value={vn.weekday} disabled={!form.enabled} aria-label={t('Day of week')} onChange={e => setVn({ weekday: Number(e.target.value) })}>
                   {WEEKDAY_LABELS.map((label, index) => <option key={label} value={index}>{t(label)}</option>)}
                 </select>
-              </label>
-              <label><span>{t('Hour')}</span>
-                <input type="number" min="0" max="23" value={vn.hour} disabled={!form.enabled} onChange={e => setVn({ hour: Math.min(23, Math.max(0, Number(e.target.value) || 0)) })} />
-              </label>
-              <button disabled={!!loading} onClick={() => saveMalwareSchedule(scope)}><Clock size={14}/> {t('Save schedule')}</button>
-            </div>
-            {saved.enabled && saved.next_run_at && <p className="hint" style={{marginTop:8}}>{t('Next:')} <strong>{fmtStamp(saved.next_run_at)}</strong></p>}
-            {saved.last_run_at && <p className="hint" style={{marginTop:8}}>
-              {t('Last scheduled run:')} {fmtStamp(saved.last_run_at)} — <span className={saved.last_status === 'infected' ? 'badge danger' : saved.last_status === 'error' ? 'badge bad' : 'badge ok'}>{scanStatusLabel(saved.last_status)}</span> {saved.last_message || ''}
-            </p>}
-          </div>
-        </section>;
-      })}
+                <select value={vn.hour} disabled={!form.enabled} aria-label={t('Hour')} onChange={e => setVn({ hour: Number(e.target.value) })}>
+                  {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>)}
+                </select>
+              </div>
+              <div className="malware-sched-meta">
+                {saved.enabled && saved.next_run_at && <span>{t('Next:')} <strong>{fmtStamp(saved.next_run_at)}</strong></span>}
+                {saved.last_run_at && <span className={saved.last_status === 'infected' ? 'badge danger' : saved.last_status === 'error' ? 'badge bad' : 'badge ok'}>
+                  {fmtStamp(saved.last_run_at)} · {scanStatusLabel(saved.last_status)}
+                </span>}
+              </div>
+            </div>;
+          })}
+        </div>
+      </section>}
     </>;
   }
 
@@ -11753,14 +11698,9 @@ function App() {
     const mine = mcpTokens.filter(token => token.user_id === currentUser?.id);
     const others = mcpTokens.filter(token => token.user_id !== currentUser?.id);
     return <>
+      <PageHeader subtitle={<>{t('Connect Claude Code, Cursor, VS Code or another MCP client to this panel. A token acts as your account: it sees your websites, databases and backups')}{isAdmin ? t(' (as an administrator, every account’s)') : ''} {t('and nothing else. With actions allowed it can also edit your websites’ files, so an assistant can build and fix your sites; deleting a file always asks you first in the client.')}</>}
+        onRefresh={loadMcpTokens} refreshDisabled={!!loading}/>
       <section className="section">
-        <div className="section-title">
-          <div>
-            <h2>{t('AI assistants (MCP)')}</h2>
-            <p className="hint">{t('Connect Claude Code, Cursor, VS Code or another MCP client to this panel. A token acts as your account: it sees your websites, databases and backups')}{isAdmin ? t(' (as an administrator, every account’s)') : ''} {t('and nothing else. With actions allowed it can also edit your websites’ files, so an assistant can build and fix your sites; deleting a file always asks you first in the client.')}</p>
-          </div>
-          <button className="secondary" disabled={!!loading} onClick={loadMcpTokens}><RefreshCw size={14}/> {t('Refresh')}</button>
-        </div>
         {/* An administrator reaches the page while the addon is off; nothing
             answers on the endpoint until it is installed. */}
         {!enabled && <div className="info-box"><AlertCircle size={14}/> {t('MCP is not running on this panel. Install or start the')} <strong>{t('AI assistants (MCP)')}</strong> {t('addon on the Addons page first.')}

@@ -123,3 +123,12 @@
   .fw-status-actions{width:100%}
   .fw-status-actions>button:not(.icon-button){flex:1}
 }
+
+/* Fail2ban's banned addresses: a grid of address + Unban, not one long
+   column of rows. */
+.addon-ban-table{display:block;width:100%}
+.addon-ban-table thead{display:none}
+.addon-ban-table tbody{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px}
+.addon-ban-table tr{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 8px 6px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface)}
+.addon-ban-table td{display:block;padding:0;border:0;font-family:Consolas,'SFMono-Regular','Liberation Mono',Menlo,monospace;font-size:var(--text-sm)}
+.addon-ban-table td:last-child{font-family:inherit}
