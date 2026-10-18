@@ -1,6 +1,7 @@
 import hashlib
 import json
 import math
+import os
 import re
 import tempfile
 from contextlib import contextmanager
@@ -1148,6 +1149,21 @@ def _replace_http_flood_block(content: str, enabled: bool, domain: str | None = 
 FASTCGI_CACHE_OFF_MARK = "# BPANEL FASTCGI CACHE OFF"
 
 
+def _read_managed_vhost(target: Path) -> Optional[str]:
+    """A vhost the panel wrote, or None when there is none yet. Only inside
+    the sites folder: the name comes from a domain (DOMAIN_RE already), and
+    this says so where the file is opened."""
+    base = os.path.normpath(settings.nginx_sites_available)
+    candidate = os.path.normpath(str(target))
+    if not candidate.startswith(base + os.sep):
+        raise ValueError("Refusing to read a vhost outside the sites folder")
+    try:
+        with open(candidate, encoding="utf-8") as handle:
+            return handle.read()
+    except OSError:
+        return None
+
+
 def _without_fastcgi_cache(content: str) -> str:
     cleaned = _replace_fastcgi_cache_blocks(content, False)
     return re.sub(r"(    server_name [^;]+;)", lambda match: f"{match.group(1)}\n    {FASTCGI_CACHE_OFF_MARK}", cleaned, count=1)
@@ -1434,19 +1450,15 @@ def rewrite_vhost(
     # a PHP version change, a new alias, an update that touches nginx.py -
     # silently dropped the block, because the callers that rebuild a vhost do
     # not all know about bot lists. Pass an explicit list (or []) to set it.
-    if blocked_bots is None and not settings.command_dry_run and target.exists():
-        try:
-            blocked_bots = blocked_bots_in_vhost(target.read_text(encoding="utf-8"))
-        except OSError:
-            blocked_bots = None
+    current_vhost = None
+    if (blocked_bots is None or fastcgi_cache is None) and not settings.command_dry_run:
+        current_vhost = _read_managed_vhost(target)
+    if blocked_bots is None and current_vhost is not None:
+        blocked_bots = blocked_bots_in_vhost(current_vhost)
     # The page cache follows the same contract: None keeps what this vhost
     # has - off only where the website's Nginx cache was turned off.
     if fastcgi_cache is None:
-        try:
-            fastcgi_cache = not (not settings.command_dry_run and target.exists()
-                                 and FASTCGI_CACHE_OFF_MARK in target.read_text(encoding="utf-8"))
-        except OSError:
-            fastcgi_cache = True
+        fastcgi_cache = not (current_vhost is not None and FASTCGI_CACHE_OFF_MARK in current_vhost)
     content = render_vhost(
         domain,
         root_path,

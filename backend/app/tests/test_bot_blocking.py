@@ -181,6 +181,7 @@ def test_a_full_rewrite_keeps_the_block_that_is_already_there(tmp_path, monkeypa
         encoding="utf-8",
     )
     monkeypatch.setattr(nginx.settings, "command_dry_run", False)
+    monkeypatch.setattr(nginx.settings, "nginx_sites_available", str(tmp_path))
     monkeypatch.setattr(nginx, "_vhost_path", lambda d: vhost)
 
     captured = {}
