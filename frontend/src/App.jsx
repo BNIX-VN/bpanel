@@ -13,7 +13,7 @@ import 'ace-builds/src-noconflict/mode-text';
 import 'ace-builds/src-noconflict/mode-yaml';
 import 'ace-builds/src-noconflict/theme-textmate';
 import 'ace-builds/src-noconflict/theme-tomorrow_night';
-import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, Eye, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pause, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle, Activity, BrickWall, Bug, LockKeyhole, PackageOpen, ScrollText, ShieldAlert, CheckCircle, Zap, Bell, Mail, Send, Cloud, Inbox, Forward, ShieldCheck, GitBranch, CloudDownload, CloudUpload, Rocket } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, Eye, UserCog, FolderKey, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pause, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle, Activity, BrickWall, Bug, LockKeyhole, PackageOpen, ScrollText, ShieldAlert, CheckCircle, Zap, Bell, Mail, Send, Cloud, Inbox, Forward, ShieldCheck, GitBranch, CloudDownload, CloudUpload, Rocket } from 'lucide-react';
 import { Terminal } from './components/Terminal';
 import { UsageChart } from './components/UsageChart';
 import HubTabs from './components/HubTabs';
@@ -33,7 +33,12 @@ import './shared/style.css';
 import './shared/brand.css';
 import './shared/ui.css';
 import './shared/file-manager.css';
+import './sn-tokens.css';
 import './dashboard.css';
+import './pages/Databases.css';
+import './pages/Sftp.css';
+import './pages/Cron.css';
+import './pages/Git.css';
 import './bpanel.css';
 
 const API = import.meta.env.VITE_API_URL || '/api';
@@ -776,6 +781,8 @@ function App() {
   const [aliasModes, setAliasModes] = useState({});
   const [databases, setDatabases] = useState([]);
   const [dbCreateOpen, setDbCreateOpen] = useState(false);
+  // Create was pressed: the sheet then says under each field what is wrong.
+  const [dbCreateTried, setDbCreateTried] = useState(false);
   const [dbSearch, setDbSearch] = useState('');
   const [newDatabase, setNewDatabase] = useState({ db_name: '', db_user: '', db_password: '' });
   const [createdDbInfo, setCreatedDbInfo] = useState(null);
@@ -2485,8 +2492,10 @@ function App() {
       const user = users.find(item => String(item.id) === String(assignDbUserId));
       setNotice(t('Assigned database {name} to {user}', { name: data.db_name, user: user?.username || assignDbUserId }));
       setAssignDbId('');
+      setAssignDbUserId('');
       await loadDatabases();
     }
+    return !!data;
   }
 
   async function createWordPress() {
@@ -3680,6 +3689,7 @@ function App() {
       setNewDatabase({ db_name: '', db_user: '', db_password: '' });
       await refreshAll();
     }
+    return !!data;
   }
 
   async function addCron() {
@@ -8308,10 +8318,15 @@ function App() {
     </>;
   }
 
+  // The databases, as SNPanel's (pages/Databases.jsx there): one table row
+  // each - its name, user, website and owner - with phpMyAdmin as the one
+  // button and the rest (SQL download, password, owner, delete) in a
+  // labelled "…" menu. A new database and a change of owner are side sheets.
   function renderDatabases() {
-    // Filtered here, as OPanel's list is: the page already holds them all.
+    // Filtered here: the page already holds them all.
     const dbQuery = dbSearch.trim().toLowerCase();
     const siteById = new Map(websites.map(site => [String(site.id), site.domain]));
+    const ownerName = (id) => users.find(user => user.id === id)?.username || (id === currentUser?.id ? currentUser?.username : `#${id}`);
     const filteredDatabases = dbQuery
       ? databases.filter(db => (db.db_name || '').toLowerCase().includes(dbQuery)
           || (db.db_user || '').toLowerCase().includes(dbQuery)
@@ -8323,90 +8338,125 @@ function App() {
       });
       doCopy.then(() => { setCopiedField(field); setTimeout(() => setCopiedField(null), 2000); }).catch(() => setError(t('Copy failed.')));
     }
-    const createOpen = dbCreateOpen || databases.length === 0;
-    const openCreate = () => {
-      setDbCreateOpen(true);
-      setTimeout(() => { const el = document.getElementById('create-database-name'); el?.scrollIntoView({ behavior: 'smooth', block: 'center' }); el?.focus(); }, 0);
+    const copyButton = (text, field) => <button type="button" className="mini secondary-light" title={copiedField === field ? t('Copied') : t('Copy')} aria-label={t('Copy')}
+      onClick={() => copyToClipboard(text, field)}>{copiedField === field ? <Check size={12} style={{ color: 'var(--success)' }}/> : <Copy size={12}/>}</button>;
+    const openCreate = () => { setDbCreateTried(false); setDbCreateOpen(true); };
+    const closeCreate = () => { setDbCreateOpen(false); setDbCreateTried(false); };
+    // The create form's problems, said under each field once Create was
+    // pressed - the same rules createDatabase() holds it to.
+    const validName = /^[a-zA-Z0-9_]+$/;
+    const createProblems = {
+      name: !newDatabase.db_name.trim() ? t('Type a name for the database.')
+        : !validName.test(newDatabase.db_name.trim()) ? t('A database name is letters, digits and underscores only.') : '',
+      user: newDatabase.db_user.trim() && !validName.test(newDatabase.db_user.trim()) ? t('A database user is letters, digits and underscores only.') : '',
+      password: newDatabase.db_password && newDatabase.db_password.trim().length < 12 ? t('The password must be at least 12 characters.')
+        : /[^\x20-\x7E]/.test(newDatabase.db_password || '') ? t('The password can only use plain ASCII characters.') : '',
     };
-    return <section className="section">
-      <div className="section-title">
-        <h2>{t('Databases')}</h2>
-        <div className="actions">
-          <button className="secondary" disabled={!!loading} onClick={() => loadDatabases(true)}><RefreshCw size={15}/> {t('Refresh')}</button>
-          {!createOpen && <button type="button" onClick={openCreate}><Plus size={15}/> {t('New database')}</button>}
-        </div>
-      </div>
-      {createOpen && <div className="create-inline">
-        <div className="create-inline-head">
-          <strong>{t('Create database')}</strong>
-          {databases.length > 0 && <button type="button" className="secondary icon-only mini" onClick={() => setDbCreateOpen(false)} aria-label={t('Close')} title={t('Close')}><X size={15}/></button>}
-        </div>
-      <div className="form-row">
-        <input id="create-database-name" name="new-db-name" autoComplete="off" value={newDatabase.db_name} onChange={e => setNewDatabase(prev => ({ ...prev, db_name: e.target.value }))} placeholder="database_name" />
-        <input name="new-db-user" autoComplete="off" value={newDatabase.db_user} onChange={e => setNewDatabase(prev => ({ ...prev, db_user: e.target.value }))} placeholder={t('db_user (default = db_name)')} />
-        {/* new-password, or the browser offers the panel's own password here. */}
-        <input name="new-db-password" autoComplete="new-password" value={newDatabase.db_password} onChange={e => setNewDatabase(prev => ({ ...prev, db_password: e.target.value }))} placeholder={t('password (min 12 chars)')} />
-        <button type="button" className="mini secondary-light" title={t('Generate random password')} onClick={() => setNewDatabase(prev => ({ ...prev, db_password: generateRandomPassword() }))}><Dices size={13}/></button>
-        <button disabled={!!loading || !newDatabase.db_name.trim()} onClick={createDatabase}><Plus size={15}/> {t('Create database')}</button>
-      </div>
-      </div>}
-      {createdDbInfo && <div className="info-box db-created-box">
-        <div className="db-created-head"><strong>{t('Database created successfully')}</strong><button className="mini secondary-light" onClick={() => setCreatedDbInfo(null)}><X size={13}/></button></div>
-        <div className="db-created-grid">
-          <label>{t('Database')}</label><span>{createdDbInfo.db_name} <button className="mini secondary-light" title={copiedField === 'db_name' ? t('Copied!') : t('Copy')} onClick={() => copyToClipboard(createdDbInfo.db_name, 'db_name')}>{copiedField === 'db_name' ? <Check size={12} style={{color:'var(--success)'}}/> : <Copy size={12}/>}</button></span>
-          <label>{t('User')}</label><span>{createdDbInfo.db_user} <button className="mini secondary-light" title={copiedField === 'db_user' ? t('Copied!') : t('Copy')} onClick={() => copyToClipboard(createdDbInfo.db_user, 'db_user')}>{copiedField === 'db_user' ? <Check size={12} style={{color:'var(--success)'}}/> : <Copy size={12}/>}</button></span>
-          <label>{t('Password')}</label><span><code>{createdDbInfo.db_password}</code> <button className="mini secondary-light" title={copiedField === 'db_password' ? t('Copied!') : t('Copy')} onClick={() => copyToClipboard(createdDbInfo.db_password, 'db_password')}>{copiedField === 'db_password' ? <Check size={12} style={{color:'var(--success)'}}/> : <Copy size={12}/>}</button></span>
-        </div>
-      </div>}
-      {databases.length === 0 && !createdDbInfo && <EmptyState icon={Database} message={t('No databases found.')} action={{ label: t('New database'), icon: Plus, onClick: openCreate }} />}
-      {databases.length > 0 && <div className="list-search">
-        <Search size={15}/>
-        <NoAutofillInput name="database-search" value={dbSearch} onChange={e => setDbSearch(e.target.value)} placeholder={t('Filter databases…')} />
-        {dbSearch && <button className="mini secondary-light" aria-label={t('Clear search')} onClick={() => setDbSearch('')}><X size={13}/></button>}
-        <span className="hint">{dbQuery
-          ? t('{shown} of {total}', { shown: filteredDatabases.length, total: databases.length })
-          : (databases.length === 1 ? t('{n} database', { n: databases.length }) : t('{n} databases', { n: databases.length }))}</span>
-      </div>}
-      {databases.length > 0 && filteredDatabases.length === 0 && <EmptyState icon={Database} message={t('No database matches “{query}”.', { query: dbSearch })} />}
-      <div className="table">
-        {filteredDatabases.map(db => {
-          // The site a database belongs to, where it belongs to one.
-          const dbSite = siteById.get(String(db.website_id));
-          const dbOwner = isAdmin ? (users.find(user => user.id === db.owner_id)?.username || `#${db.owner_id}`) : '';
-          return <div className="row db-row" key={db.id}>
-          <span><strong>{db.db_name}</strong>{dbSite && <small className="db-owner">{dbSite}</small>}{dbOwner && <small className="db-owner">{t('Owner:')} {dbOwner}</small>}</span>
-          <span className="db-user"><small>{t('User')}</small> {db.db_user}</span>
-          <span className="db-actions">
-            <button className="mini secondary" disabled={!!loading} onClick={() => openPhpMyAdmin(db.id)}>phpMyAdmin</button>
-            <button className="mini secondary-light" disabled={!!loading} title={t('Download SQL dump')}
-                    aria-label={t('Download SQL dump of {name}', { name: db.db_name })}
-                    onClick={() => downloadDatabase(db.id, db.db_name)}><Download size={14}/></button>
-            <button className="mini secondary-light" disabled={!!loading} title={t('Change database password')}
-                    aria-label={t('Change the password for {name}', { name: db.db_name })}
-                    onClick={() => changeDbPassword(db.id)}><KeyRound size={14}/></button>
-            <button className="mini danger" disabled={!!loading} title={t('Delete database')}
-                    aria-label={t('Delete {name}', { name: db.db_name })}
-                    onClick={() => deleteDatabase(db.id, db.db_name)}><Trash2 size={14}/></button>
-          </span>
-        </div>})}
-      </div>
-      <p className="hint">{t('Click phpMyAdmin to sign in directly. Token expires after 60s.')}</p>
-      {isAdmin && databases.length > 0 && <div className="section" style={{marginTop:16}}>
-        <h2>{t('Assign database to user')}</h2>
-        <div className="assign-row">
-          <select value={assignDbId} onChange={e => setAssignDbId(e.target.value)}>
-            <option value="">{t('Select database')}</option>
-            {databases.map(db => <option key={db.id} value={db.id}>{db.db_name}</option>)}
-          </select>
-          <select value={assignDbUserId} onChange={e => setAssignDbUserId(e.target.value)}>
-            <option value="">{t('Select user')}</option>
-            {users.map(user => <option key={user.id} value={user.id}>{user.username} ({t(roleLabel(user.role))})</option>)}
-          </select>
-          <button disabled={!assignDbId || !assignDbUserId || !!loading} onClick={assignDatabaseToUser}>{t('Assign')}</button>
-        </div>
-        <p className="hint">{t('The database, its MariaDB user and its password stay as they are; only who manages it in the panel changes. A database linked to a website moves with that website.')}</p>
-      </div>}
-    </section>;
+    const createBad = Object.values(createProblems).some(Boolean);
+    async function submitCreate(event) {
+      event.preventDefault();
+      if (createBad) {
+        setDbCreateTried(true);
+        setTimeout(() => document.querySelector('#db-create-form [aria-invalid="true"]')?.focus(), 0);
+        return;
+      }
+      if (await createDatabase()) closeCreate();
+    }
+    const moving = assignDbId ? databases.find(db => String(db.id) === String(assignDbId)) : null;
+    const rowMenu = (db) => [
+      { label: t('Download as SQL'), icon: Download, disabled: !!loading, onClick: () => downloadDatabase(db.id, db.db_name) },
+      { label: t('Change password'), icon: KeyRound, disabled: !!loading, onClick: () => changeDbPassword(db.id) },
+      { label: t('Change owner'), icon: UserCog, hidden: !isAdmin, disabled: !!loading,
+        onClick: () => { setAssignDbId(String(db.id)); setAssignDbUserId(String(db.owner_id)); } },
+      'separator',
+      { label: t('Delete database'), icon: Trash2, danger: true, disabled: !!loading, onClick: () => deleteDatabase(db.id, db.db_name) },
+    ];
+    return <>
+      <PageHeader
+        subtitle={dbQuery ? t('{shown} of {total}', { shown: filteredDatabases.length, total: databases.length })
+          : (databases.length === 1 ? t('{n} database', { n: databases.length }) : t('{n} databases', { n: databases.length }))}
+        onRefresh={() => loadDatabases(true)} refreshDisabled={!!loading}
+        actions={<button type="button" onClick={openCreate}><Plus size={15} aria-hidden="true"/> {t('New database')}</button>}/>
+      <section className="section dbt-section">
+        {createdDbInfo && <div className="info-box db-created-box">
+          <div className="db-created-head"><strong>{t('Database created successfully')}</strong>
+            <button type="button" className="mini secondary-light" onClick={() => setCreatedDbInfo(null)} aria-label={t('Close')}><X size={13}/></button></div>
+          <div className="db-created-grid">
+            <label>{t('Database')}</label><span>{createdDbInfo.db_name} {copyButton(createdDbInfo.db_name, 'db_name')}</span>
+            <label>{t('User')}</label><span>{createdDbInfo.db_user} {copyButton(createdDbInfo.db_user, 'db_user')}</span>
+            <label>{t('Password')}</label><span><code>{createdDbInfo.db_password}</code> {copyButton(createdDbInfo.db_password, 'db_password')}</span>
+          </div>
+        </div>}
+        {databases.length > 0 && <div className="list-search">
+          <Search size={16} aria-hidden="true"/>
+          <NoAutofillInput name="database-search" value={dbSearch} onChange={e => setDbSearch(e.target.value)}
+            placeholder={t('Search by database or user name')} aria-label={t('Search databases')} />
+          {dbSearch && <button type="button" className="secondary-light icon-button" onClick={() => setDbSearch('')}
+            aria-label={t('Clear the search')} title={t('Clear the search')}><X size={15}/></button>}
+        </div>}
+        {databases.length === 0 && <EmptyState icon={Database} title={t('No databases yet.')} message={t('A database for a website or an application: MariaDB, with phpMyAdmin.')}
+          action={{ label: t('New database'), icon: Plus, onClick: openCreate }} />}
+        {databases.length > 0 && filteredDatabases.length === 0 && <EmptyState icon={Search} message={t('No databases match this search.')}
+          action={{ label: t('Clear the search'), icon: X, secondary: true, onClick: () => setDbSearch('') }} />}
+        {filteredDatabases.length > 0 && <div className={`dbt${isAdmin ? ' with-owner' : ''}`} role="table" aria-label={t('Databases')}>
+          <div className="dbt-row dbt-head" role="row">
+            <span role="columnheader">{t('Database')}</span>
+            <span role="columnheader">{t('User')}</span>
+            <span role="columnheader">{t('Website')}</span>
+            {isAdmin && <span role="columnheader">{t('Owner')}</span>}
+            <span role="columnheader"><span className="sr-only">{t('Actions')}</span></span>
+          </div>
+          {filteredDatabases.map(db => <div className="dbt-row" role="row" key={db.id}>
+            <span role="cell" className="dbt-name"><Database size={15} aria-hidden="true"/><strong>{db.db_name}</strong></span>
+            <span role="cell" data-label={t('User')}><code>{db.db_user}</code></span>
+            <span role="cell" data-label={t('Website')}>{siteById.get(String(db.website_id)) || <span className="dbt-muted">{t('No website')}</span>}</span>
+            {isAdmin && <span role="cell" data-label={t('Owner')}>{ownerName(db.owner_id)}</span>}
+            <span role="cell" className="dbt-actions">
+              <button type="button" className="secondary-light" disabled={!!loading} onClick={() => openPhpMyAdmin(db.id)}
+                title={t('Open {name} in phpMyAdmin', { name: db.db_name })}><ExternalLink size={14} aria-hidden="true"/> phpMyAdmin</button>
+              <ActionMenu label={t('More actions for {name}', { name: db.db_name })} items={rowMenu(db)}/>
+            </span>
+          </div>)}
+        </div>}
+        {databases.length > 0 && <p className="hint">{t('phpMyAdmin signs you in directly; the link works for 60 seconds.')}</p>}
+      </section>
+      <Drawer open={dbCreateOpen} onClose={closeCreate} title={t('New database')} subtitle={t('A MariaDB database, with a user of its own.')}
+        footer={<>
+          {dbCreateTried && createBad && <span className="sn-drawer-foot-note" role="alert">{t('Some fields need attention.')}</span>}
+          <button type="button" className="secondary-light" onClick={closeCreate}>{t('Cancel')}</button>
+          <button type="submit" form="db-create-form" disabled={!!loading}><Plus size={15} aria-hidden="true"/> {t('Create database')}</button>
+        </>}>
+        <form id="db-create-form" noValidate onSubmit={submitCreate}>
+          <Field label={t('Database name')} required error={dbCreateTried ? createProblems.name : ''} hint={t('Letters, digits and underscores.')}>
+            <input name="new-db-name" value={newDatabase.db_name} onChange={e => setNewDatabase(prev => ({ ...prev, db_name: e.target.value }))}
+              placeholder={t('e.g. {example}', { example: 'shop' })} autoComplete="off" spellCheck={false} />
+          </Field>
+          <Field label={t('Database user')} optional error={dbCreateTried ? createProblems.user : ''} hint={t('The database name, if left empty.')}>
+            <input name="new-db-user" value={newDatabase.db_user} onChange={e => setNewDatabase(prev => ({ ...prev, db_user: e.target.value }))}
+              autoComplete="off" spellCheck={false} />
+          </Field>
+          <Field label={t('Password')} optional error={dbCreateTried ? createProblems.password : ''} hint={t('At least 12 characters. Left empty, one is made for you.')}>
+            <PasswordField value={newDatabase.db_password} onChange={v => setNewDatabase(prev => ({ ...prev, db_password: v }))}
+              generate copy onGenerate={() => generateRandomPassword()} />
+          </Field>
+        </form>
+      </Drawer>
+      <Drawer open={!!moving} onClose={() => { setAssignDbId(''); setAssignDbUserId(''); }}
+        title={moving ? t('Change the owner of {name}', { name: moving.db_name }) : ''}
+        subtitle={t('The database, its MariaDB user and its password stay as they are; only who manages it in the panel changes. A database linked to a website moves with that website.')}
+        footer={<>
+          <button type="button" className="secondary-light" onClick={() => { setAssignDbId(''); setAssignDbUserId(''); }}>{t('Cancel')}</button>
+          <button type="submit" form="db-move-form" disabled={!!loading || !assignDbUserId}>{t('Save')}</button>
+        </>}>
+        {moving && <form id="db-move-form" onSubmit={(e) => { e.preventDefault(); assignDatabaseToUser(); }}>
+          <Field label={t('Owner')}>
+            <select value={assignDbUserId} onChange={e => setAssignDbUserId(e.target.value)}>
+              {users.map(user => <option key={user.id} value={user.id}>{user.username} ({t(roleLabel(user.role))})</option>)}
+            </select>
+          </Field>
+        </form>}
+      </Drawer>
+    </>;
   }
 
   // --- Git repositories (operator, 2026-10-09) ------------------------------------------
@@ -8470,6 +8520,9 @@ function App() {
     </div>;
   }
 
+  // Git repositories, laid out as SNPanel lays out its lists: the page's
+  // header with Refresh and "New repository", one table row a repository
+  // (opening it), and the new one made in a side sheet.
   function renderGit() {
     if (gitRepo) return renderGitRepo();
     const info = gitInfo || {};
@@ -8478,71 +8531,75 @@ function App() {
     const set = patch => setGitForm(prev => ({ ...prev, ...patch }));
     const owner = isAdmin && form.owner_id ? users.find(user => user.id === Number(form.owner_id)) : currentUser;
     const home = owner ? `/home/${owner.username.toLowerCase()}/` : '/home/…/';
-    const createOpen = showCreateGit || (!!gitInfo && repos.length === 0);
     const canCreate = !!form.name.trim() && !!form.path.trim() && !!form.branch.trim()
       && (form.mode === 'init' || !!form.remote_url.trim()) && (form.auth_type !== 'https' || !!form.https_token.trim());
-    return <section className="section">
-      <div className="section-title">
-        <div><h2>{t('Git repositories')}</h2>
-          <p className="hint">{t("Clone a repository from GitHub, GitLab or Bitbucket anywhere in the account's home, or start one in a folder that already has files. Deploy pulls the latest code and runs the commands you pick; Commit & push sends what changed on the server.")}</p></div>
-        <div className="actions">
-          <button className="secondary" disabled={!!loading} onClick={loadGit}><RefreshCw size={14}/> {t('Refresh')}</button>
-          {!createOpen && <button type="button" onClick={() => setShowCreateGit(true)}><Plus size={15}/> {t('New repository')}</button>}
-        </div>
-      </div>
-
-      {createOpen && <div className="create-inline">
-        <div className="create-inline-head">
-          <strong>{t('New repository')}</strong>
-          {repos.length > 0 && <button type="button" className="secondary icon-only mini" onClick={() => setShowCreateGit(false)} aria-label={t('Close')} title={t('Close')}><X size={15}/></button>}
-        </div>
-        <div className="segmented-control" role="tablist" aria-label={t('New repository')}>
-          <button type="button" role="tab" aria-selected={form.mode === 'clone'} className={form.mode === 'clone' ? 'active' : ''} onClick={() => set({ mode: 'clone' })}>{t('Clone from a URL')}</button>
-          <button type="button" role="tab" aria-selected={form.mode === 'init'} className={form.mode === 'init' ? 'active' : ''} onClick={() => set({ mode: 'init' })}>{t('New repository in a folder')}</button>
-        </div>
-        <p className="hint">{form.mode === 'clone'
+    const closeCreate = () => setShowCreateGit(false);
+    return <>
+      <PageHeader subtitle={t("Clone a repository from GitHub, GitLab or Bitbucket anywhere in the account's home, or start one in a folder that already has files. Deploy pulls the latest code and runs the commands you pick; Commit & push sends what changed on the server.")}
+        onRefresh={loadGit} refreshDisabled={!!loading}
+        actions={<button type="button" onClick={() => setShowCreateGit(true)}><Plus size={15} aria-hidden="true"/> {t('New repository')}</button>}/>
+      <section className="section dbt-section">
+        {gitInfo && repos.length === 0 && <EmptyState icon={GitBranch} title={t('No repositories yet.')}
+          message={t('Clone one from a URL, or start one in a folder that already has files.')}
+          action={{ label: t('New repository'), icon: Plus, onClick: () => setShowCreateGit(true) }} />}
+        {repos.length > 0 && <div className="dbt git-table" role="table" aria-label={t('Git repositories')}>
+          <div className="dbt-row dbt-head" role="row">
+            <span role="columnheader">{t('Repository')}</span>
+            <span role="columnheader">{t('Remote')}</span>
+            <span role="columnheader">{t('Branch')}</span>
+            <span role="columnheader">{t('State')}</span>
+          </div>
+          {repos.map(repo => <div className="dbt-row is-link" role="row" key={repo.id} tabIndex={0}
+            onClick={() => openGitRepo(repo.id)} onKeyDown={e => { if (e.key === 'Enter') openGitRepo(repo.id); }}
+            aria-label={t('Open {name}', { name: repo.name })}>
+            <span role="cell" className="dbt-name"><GitBranch size={15} aria-hidden="true"/><strong>{repo.name}</strong>
+              <small className="git-row-path">{isAdmin ? `${repo.owner} · ` : ''}~/{repo.relative_path}</small></span>
+            <span role="cell" data-label={t('Remote')}><code>{repo.remote_url || t('No remote')}</code></span>
+            <span role="cell" data-label={t('Branch')}><span className="badge"><GitBranch size={11} aria-hidden="true"/> {repo.branch}</span></span>
+            <span role="cell" data-label={t('State')} className="git-row-state">{gitRepoState(repo)}</span>
+          </div>)}
+        </div>}
+      </section>
+      <Drawer open={showCreateGit} onClose={closeCreate} wide title={t('New repository')}
+        subtitle={form.mode === 'clone'
           ? t('The folder must be empty or new; the panel creates it.')
-          : t('The folder may already have files: commit them and push them to an empty remote repository.')}</p>
-        <div className="git-create-grid">
-          {isAdmin && <div className="field"><span className="field-label">{t('Account')}</span>
-            <select value={form.owner_id} onChange={e => set({ owner_id: e.target.value })}>
-              <option value="">{currentUser?.username}</option>
-              {users.filter(user => user.id !== currentUser?.id).map(user => <option key={user.id} value={user.id}>{user.username}</option>)}
-            </select>
-          </div>}
-          <div className="field"><span className="field-label">{t('Name')}</span>
-            <input value={form.name} maxLength={64} placeholder="shop" onChange={e => set({ name: e.target.value })} /></div>
-          <div className="field git-path-field"><span className="field-label">{t('Folder')}</span>
-            <div className="prefixed-input"><span>{home}</span>
-              <input value={form.path} maxLength={400} placeholder="example.com/public_html" onChange={e => set({ path: e.target.value.replace(/^\/+/, '') })} /></div></div>
-          <div className="field"><span className="field-label">{form.mode === 'clone' ? t('Repository URL') : t('Remote URL (optional)')}</span>
-            <input value={form.remote_url} maxLength={500} placeholder="https://github.com/owner/repo.git" onChange={e => set({ remote_url: e.target.value })} /></div>
-          <div className="field"><span className="field-label">{t('Branch')}</span>
-            <input value={form.branch} maxLength={100} placeholder="main" onChange={e => set({ branch: e.target.value })} /></div>
-          {renderGitAuthFields(form, set)}
-          {renderGitPhpField(form, set)}
-        </div>
-        {form.auth_type === 'ssh' && <p className="hint">{t('Use the SSH URL (git@github.com:owner/repo.git). The panel makes a key for this repository; add it as a deploy key on the remote, then press Clone.')}</p>}
-        <div className="field"><span className="field-label">{t('Run after each deploy')}</span>
-          {renderGitPresetChoice(form.deploy_commands, commands => set({ deploy_commands: commands }))}</div>
-        <div className="actions">
-          <button type="button" disabled={!canCreate || !!loading} onClick={createGitRepo}>
-            {form.mode === 'clone' ? <><CloudDownload size={14}/> {form.auth_type === 'ssh' ? t('Continue') : t('Clone')}</> : <><Plus size={14}/> {t('Create repository')}</>}
+          : t('The folder may already have files: commit them and push them to an empty remote repository.')}
+        footer={<>
+          <button type="button" className="secondary-light" onClick={closeCreate}>{t('Cancel')}</button>
+          <button type="submit" form="git-create-form" disabled={!canCreate || !!loading}>
+            {form.mode === 'clone' ? <><CloudDownload size={14} aria-hidden="true"/> {form.auth_type === 'ssh' ? t('Continue') : t('Clone')}</> : <><Plus size={14} aria-hidden="true"/> {t('Create repository')}</>}
           </button>
-        </div>
-      </div>}
-
-      {gitInfo && repos.length === 0 && !createOpen && <EmptyState icon={GitBranch} message={t('No repositories yet.')} />}
-      {repos.length > 0 && <div className="table">
-        {repos.map(repo => <div className="row git-row" key={repo.id} role="button" tabIndex={0}
-          onClick={() => openGitRepo(repo.id)} onKeyDown={e => { if (e.key === 'Enter') openGitRepo(repo.id); }}>
-          <span className="git-row-name"><strong>{repo.name}</strong><small>{isAdmin ? `${repo.owner} · ` : ''}~/{repo.relative_path}</small></span>
-          <span className="git-row-remote"><code>{repo.remote_url || t('No remote')}</code></span>
-          <span><span className="badge"><GitBranch size={11}/> {repo.branch}</span></span>
-          <span className="git-row-state">{gitRepoState(repo)}</span>
-        </div>)}
-      </div>}
-    </section>;
+        </>}>
+        <form id="git-create-form" className="git-drawer-form" onSubmit={(e) => { e.preventDefault(); if (canCreate) createGitRepo(); }}>
+          <div className="segmented-control" role="tablist" aria-label={t('New repository')}>
+            <button type="button" role="tab" aria-selected={form.mode === 'clone'} className={form.mode === 'clone' ? 'active' : ''} onClick={() => set({ mode: 'clone' })}>{t('Clone from a URL')}</button>
+            <button type="button" role="tab" aria-selected={form.mode === 'init'} className={form.mode === 'init' ? 'active' : ''} onClick={() => set({ mode: 'init' })}>{t('New repository in a folder')}</button>
+          </div>
+          <div className="git-create-grid">
+            {isAdmin && <div className="field"><span className="field-label">{t('Account')}</span>
+              <select value={form.owner_id} onChange={e => set({ owner_id: e.target.value })}>
+                <option value="">{currentUser?.username}</option>
+                {users.filter(user => user.id !== currentUser?.id).map(user => <option key={user.id} value={user.id}>{user.username}</option>)}
+              </select>
+            </div>}
+            <div className="field"><span className="field-label">{t('Name')}</span>
+              <input value={form.name} maxLength={64} placeholder="shop" onChange={e => set({ name: e.target.value })} /></div>
+            <div className="field git-path-field"><span className="field-label">{t('Folder')}</span>
+              <div className="prefixed-input"><span>{home}</span>
+                <input value={form.path} maxLength={400} placeholder="example.com/public_html" onChange={e => set({ path: e.target.value.replace(/^\/+/, '') })} /></div></div>
+            <div className="field"><span className="field-label">{form.mode === 'clone' ? t('Repository URL') : t('Remote URL (optional)')}</span>
+              <input value={form.remote_url} maxLength={500} placeholder="https://github.com/owner/repo.git" onChange={e => set({ remote_url: e.target.value })} /></div>
+            <div className="field"><span className="field-label">{t('Branch')}</span>
+              <input value={form.branch} maxLength={100} placeholder="main" onChange={e => set({ branch: e.target.value })} /></div>
+            {renderGitAuthFields(form, set)}
+            {renderGitPhpField(form, set)}
+          </div>
+          {form.auth_type === 'ssh' && <p className="hint">{t('Use the SSH URL (git@github.com:owner/repo.git). The panel makes a key for this repository; add it as a deploy key on the remote, then press Clone.')}</p>}
+          <div className="field"><span className="field-label">{t('Run after each deploy')}</span>
+            {renderGitPresetChoice(form.deploy_commands, commands => set({ deploy_commands: commands }))}</div>
+        </form>
+      </Drawer>
+    </>;
   }
 
   function renderGitRepo() {
@@ -8696,130 +8753,119 @@ function App() {
     </section>;
   }
 
+  // SFTP, as SNPanel's (pages/Sftp.jsx there): every login of the account in
+  // one list - its main login first, then the extra ones, each shut into one
+  // website - with the password change folding open under its row. A new
+  // login is made in a side sheet; its password is shown once, above the list.
   function renderSftp() {
     const host = sftpAccounts.find(account => account.host)?.host || window.location.hostname;
     const port = 22;
     const mainUsername = currentUser?.sftp_username || currentUser?.username || '';
-    // Extra SFTP accounts are not limited, as in OPanel.
-    const createOpen = showCreateSftp;
     const canCreate = !!selectedWebsiteId && newSftpAccount.label.trim().length >= 2;
     const editing = sftpPasswordFor;
     const editingOwn = !!editing && !editing.account;
     const canSavePassword = !!editing && editing.password.length >= 12
       && (!editingOwn || (!!editing.current_password && (!currentUser?.totp_enabled || editing.code.trim().length >= 6)));
+    const startEditing = (account) => setSftpPasswordFor(editing && (editing.account?.id ?? null) === (account?.id ?? null)
+      ? null : { account, password: generateRandomPassword(), current_password: '', code: '' });
+    const passwordForm = () => <form className="sftp-inline" aria-label={t('Change password')}
+      onSubmit={(e) => { e.preventDefault(); if (canSavePassword) saveSftpPassword(); }}>
+      <div className="sftp-field">
+        <label htmlFor="sftp-new-password">{t('New password')}</label>
+        <PasswordField id="sftp-new-password" value={editing.password} revealed copy generate
+          onChange={(value) => setSftpPasswordFor(prev => ({ ...prev, password: value }))} />
+      </div>
+      {editingOwn && <div className="sftp-field">
+        <label htmlFor="sftp-proof-password">{t('Current panel password')}</label>
+        <input id="sftp-proof-password" type="password" autoComplete="current-password" value={editing.current_password}
+          onChange={e => setSftpPasswordFor(prev => ({ ...prev, current_password: e.target.value }))} />
+      </div>}
+      {editingOwn && currentUser?.totp_enabled && <div className="sftp-field">
+        <label htmlFor="sftp-proof-code">{t('Authenticator code')}</label>
+        <input id="sftp-proof-code" inputMode="numeric" autoComplete="one-time-code" maxLength={12} value={editing.code}
+          onChange={e => setSftpPasswordFor(prev => ({ ...prev, code: e.target.value }))} />
+      </div>}
+      <p className="hint sftp-inline-note">{t('Copy it before saving — it is not shown again. Open sessions of this login keep running until they disconnect.')}</p>
+      <div className="sftp-inline-actions">
+        <button type="submit" disabled={!!loading || !canSavePassword}><Save size={14} aria-hidden="true"/> {t('Save')}</button>
+        <button type="button" className="secondary" onClick={() => setSftpPasswordFor(null)}>{t('Cancel')}</button>
+      </div>
+    </form>;
+    const closeCreate = () => setShowCreateSftp(false);
     return <>
-      <section className="section">
-        <div className="section-title">
-          <div><h2>{t('SFTP connection')}</h2>
-            <p className="hint">{t('Use FileZilla, WinSCP, Cyberduck or any SFTP client. SSH shells are not available; each login only sees its own folder.')}</p></div>
-          <button className="secondary" disabled={!!loading} onClick={loadSftpAccounts}><RefreshCw size={14}/> {t('Refresh')}</button>
-        </div>
-        <div className="sftp-connect-grid">
-          {renderCopyBlock(t('Host'), host)}
-          {renderCopyBlock(t('Port'), String(port))}
-          {mainUsername && renderCopyBlock(t('Username'), mainUsername)}
-        </div>
-        {mainUsername && <div className="info-box sftp-primary">
-          <strong>{t('Your main login')}</strong>
-          {currentUser?.sftp_password_set_at
-            ? <p className="hint">{t('Separate from your panel password. Changing one does not change the other.')} {t('It reaches every website on this account.')}</p>
-            : <p className="hint alarm">{t('This login still uses your panel password. Anyone who guesses it over SFTP is also in the panel. Set a separate password — your panel password will stop working for SFTP the moment you do.')}</p>}
-          <div className="actions"><button className="mini secondary" onClick={() => setSftpPasswordFor({ account: null, password: generateRandomPassword(), current_password: '', code: '' })}><KeyRound size={13}/> {t('Change password')}</button></div>
+      <PageHeader subtitle={t('Connect with FileZilla, WinSCP or any SFTP app - host {host}, port {port}. Each account sees only its own folder.', { host, port })}
+        onRefresh={loadSftpAccounts} refreshDisabled={!!loading}
+        actions={<button type="button" onClick={() => setShowCreateSftp(true)}><Plus size={15} aria-hidden="true"/> {t('Add an SFTP account')}</button>}/>
+      <section className="section sftp-page" aria-label={t('SFTP accounts')}>
+        {createdSftpInfo && <div className="sftp-shown" role="status">
+          <span>{t('Password of {name}:', { name: createdSftpInfo.username })}</span>
+          {createdSftpInfo.password ? <code>{createdSftpInfo.password}</code> : <span>{t('as you typed it')}</span>}
+          {createdSftpInfo.password && <button type="button" className="mini secondary-light"
+            onClick={() => copyText(createdSftpInfo.password, t('Copied to clipboard.'))}><Copy size={13} aria-hidden="true"/> {t('Copy')}</button>}
+          <button type="button" className="mini secondary-light" onClick={() => setCreatedSftpInfo(null)} aria-label={t('Close')}><X size={13} aria-hidden="true"/></button>
+          <small>{t('Folder: {folder}', { folder: createdSftpInfo.path })}{createdSftpInfo.password ? ` · ${t('Shown this once. Copy it now.')}` : ''}</small>
         </div>}
+        <ul className="sftp-list">
+          {mainUsername && <li>
+            <FolderKey size={16} aria-hidden="true"/>
+            <div className="sftp-row-text">
+              <strong><code>{mainUsername}</code> <span className="badge">{t('Main')}</span></strong>
+              <small>{currentUser?.sftp_password_set_at
+                ? t('Every website on this account · a password of its own')
+                : t('Every website on this account · the panel password')}</small>
+              {!currentUser?.sftp_password_set_at && <small className="sftp-warn">{t('Anyone who guesses the panel password over SFTP is also in the panel. Set a separate password: the panel password stops working for SFTP the moment you do.')}</small>}
+            </div>
+            <div className="sftp-row-actions">
+              <button type="button" className="secondary-light" disabled={!!loading} aria-expanded={editingOwn}
+                onClick={() => startEditing(null)}><KeyRound size={14} aria-hidden="true"/> {t('Change password')}</button>
+            </div>
+            {editingOwn && passwordForm()}
+          </li>}
+          {sftpAccounts.map(account => <li key={account.id} className={account.is_active ? '' : 'off'}>
+            <FolderKey size={16} aria-hidden="true"/>
+            <div className="sftp-row-text">
+              <strong><code>{account.username}</code>{account.label && <span className="sftp-label">{account.label}</span>}
+                {!account.is_active && <span className="badge">{t('Suspended')}</span>}</strong>
+              <small>{account.domain ? `${account.domain} · ` : ''}{t('Folder: {folder}', { folder: account.path })}</small>
+            </div>
+            <div className="sftp-row-actions">
+              <button type="button" className="secondary-light" disabled={!!loading} aria-expanded={editing?.account?.id === account.id}
+                onClick={() => startEditing(account)}><KeyRound size={14} aria-hidden="true"/> {t('Change password')}</button>
+              <button type="button" className="danger icon-button" disabled={!!loading} onClick={() => deleteSftpAccount(account)}
+                aria-label={t('Delete {name}', { name: account.username })} title={t('Delete {name}', { name: account.username })}><Trash2 size={14} aria-hidden="true"/></button>
+            </div>
+            {editing?.account?.id === account.id && passwordForm()}
+          </li>)}
+        </ul>
+        {sftpAccounts.length === 0 && <p className="hint">{t('A separate login and password for one website — for a developer or designer who should see that website and nothing else.')}</p>}
         {mainUsername && renderCopyBlock(t('Command line'), `sftp -P ${port} ${mainUsername}@${host}`)}
       </section>
-
-      <section className="section">
-        <div className="section-title">
-          <div><h2>{t('Extra SFTP accounts')}</h2>
-            <p className="hint">{t('A separate login and password for one website — for a developer or designer who should see that website and nothing else.')}</p></div>
-          <div className="actions">
-            {!createOpen && <button type="button" onClick={() => setShowCreateSftp(true)}><Plus size={15}/> {t('New SFTP account')}</button>}
+      <Drawer open={showCreateSftp} onClose={closeCreate} title={t('New SFTP account')}
+        subtitle={t('A login of its own, shut into one website.')}
+        footer={<>
+          <button type="button" className="secondary-light" onClick={closeCreate}>{t('Cancel')}</button>
+          <button type="submit" form="sftp-add-form" disabled={!!loading || !canCreate}><Plus size={14} aria-hidden="true"/> {t('Create account')}</button>
+        </>}>
+        <form id="sftp-add-form" className="sftp-add-form sftp-drawer-form" aria-label={t('New SFTP account')}
+          onSubmit={(e) => { e.preventDefault(); if (canCreate) createSftpAccount(); }}>
+          <div className="sftp-field">
+            <label>{t('Website')}</label>
+            <WebsiteSelect />
           </div>
-        </div>
-
-        {createOpen && <div className="create-inline">
-          <div className="create-inline-head">
-            <strong>{t('New SFTP account')}</strong>
-            <button type="button" className="secondary icon-only mini" onClick={() => setShowCreateSftp(false)} aria-label={t('Close')} title={t('Close')}><X size={15}/></button>
+          <div className="sftp-field">
+            <label htmlFor="sftp-add-name">{t('Name')}</label>
+            <input id="sftp-add-name" value={newSftpAccount.label} maxLength={32} autoComplete="off" spellCheck={false} placeholder={t('e.g. {example}', { example: 'designer' })}
+              onChange={e => setNewSftpAccount(prev => ({ ...prev, label: e.target.value }))} />
+            <small className="hint">{t('At least 2 characters. It names the login; the website decides what it can reach.')}</small>
           </div>
-          <div className="sftp-create-grid">
-            <div className="field"><span className="field-label">{t('Website')}</span><WebsiteSelect /></div>
-            <div className="field"><span className="field-label">{t('Name')}</span>
-              <input value={newSftpAccount.label} maxLength={32} placeholder={t('Name, e.g. designer')} aria-label={t('SFTP account name')}
-                onChange={e => setNewSftpAccount(prev => ({ ...prev, label: e.target.value }))} />
-            </div>
-            <div className="field"><span className="field-label">{t('Password')}</span>
-              <div className="password-with-generate">
-                <input value={newSftpAccount.password} placeholder={t('password (empty = generate)')} aria-label={t('SFTP password')}
-                  onChange={e => setNewSftpAccount(prev => ({ ...prev, password: e.target.value }))} />
-                <button type="button" className="secondary icon-only" title={t('Generate random password')} aria-label={t('Generate random password')} onClick={() => setNewSftpAccount(prev => ({ ...prev, password: generateRandomPassword() }))}><Dices size={15}/></button>
-              </div>
-            </div>
-            <button className="sftp-create-submit" disabled={!canCreate || !!loading} onClick={createSftpAccount}><Plus size={14}/> {t('Create')}</button>
+          <div className="sftp-field">
+            <label htmlFor="sftp-add-password">{t('Password')}</label>
+            <PasswordField id="sftp-add-password" value={newSftpAccount.password} generate copy placeholder={t('Empty: one is generated')}
+              onChange={(value) => setNewSftpAccount(prev => ({ ...prev, password: value }))} />
           </div>
           <p className="hint">{t('Each account reaches one website and nothing else — not your other sites, and not the server. It signs in over SFTP on port 22 with its own password, which is separate from your panel password.')}</p>
-        </div>}
-
-        {createdSftpInfo && <div className="info-box">
-          <div className="create-inline-head">
-            <strong>{t('SFTP account ready')}</strong>
-            <button type="button" className="secondary icon-only mini" onClick={() => setCreatedSftpInfo(null)} aria-label={t('Close')} title={t('Close')}><X size={15}/></button>
-          </div>
-          <div className="sftp-connect-grid">
-            {renderCopyBlock(t('Host'), createdSftpInfo.host)}
-            {renderCopyBlock(t('Port'), String(createdSftpInfo.port))}
-            {renderCopyBlock(t('Username'), createdSftpInfo.username)}
-            {createdSftpInfo.password && renderCopyBlock(t('Password'), createdSftpInfo.password)}
-          </div>
-          <p className="hint">{t('Folder')}: <code>{createdSftpInfo.path}</code></p>
-          {createdSftpInfo.password && <p className="hint">{t('This password is shown once. It is not stored anywhere the panel can read it back.')}</p>}
-        </div>}
-
-        {sftpAccounts.length === 0 && !createOpen && !createdSftpInfo && <EmptyState icon={KeyRound} message={t('No extra SFTP accounts yet.')} />}
-        {sftpAccounts.length > 0 && <div className="table">
-          {sftpAccounts.map(account => <div className="row sftp-row" key={account.id}>
-            <span className="sftp-row-name"><strong>{account.username}</strong><small>{account.label}{account.is_active ? '' : ` · ${t('Suspended')}`}</small></span>
-            <span className="sftp-row-folder"><code>{account.path}</code>{account.domain && <small>{account.domain}</small>}</span>
-            <span className="row-actions">
-              <button className="mini secondary" disabled={!!loading} onClick={() => setSftpPasswordFor({ account, password: generateRandomPassword(), current_password: '', code: '' })}><KeyRound size={13}/> {t('Change password')}</button>
-              <button className="mini danger" disabled={!!loading} onClick={() => deleteSftpAccount(account)} aria-label={t('Delete {name}', { name: account.username })} title={t('Delete')}><Trash2 size={13}/></button>
-            </span>
-          </div>)}
-        </div>}
-      </section>
-
-      {editing && <div className="modal-overlay" onClick={() => setSftpPasswordFor(null)}>
-        <div className="modal-card" onClick={e => e.stopPropagation()}>
-          <div className="modal-header">
-            <h3>{t('New password')} — {editing.account ? editing.account.username : mainUsername}</h3>
-            <button className="secondary-light" onClick={() => setSftpPasswordFor(null)} aria-label={t('Close')}><X size={16}/></button>
-          </div>
-          <div className="modal-body">
-            <div className="password-with-generate">
-              <input value={editing.password} onChange={e => setSftpPasswordFor(prev => ({ ...prev, password: e.target.value }))} aria-label={t('New password')} />
-              <button type="button" className="secondary icon-only" title={t('Generate random password')} aria-label={t('Generate random password')} onClick={() => setSftpPasswordFor(prev => ({ ...prev, password: generateRandomPassword() }))}><Dices size={15}/></button>
-              <button type="button" className="secondary icon-only" title={t('Copy')} aria-label={t('Copy')} onClick={() => copyText(editing.password, t('Copied to clipboard.'))}><Copy size={15}/></button>
-            </div>
-            {editingOwn && <>
-              <label className="field"><span className="field-label">{t('Current password')}</span>
-                <input type="password" value={editing.current_password} autoComplete="current-password" placeholder={t('Required to confirm')}
-                  onChange={e => setSftpPasswordFor(prev => ({ ...prev, current_password: e.target.value }))} />
-              </label>
-              {currentUser?.totp_enabled && <label className="field"><span className="field-label">{t('2FA code')}</span>
-                <input value={editing.code} maxLength={12} inputMode="numeric" placeholder={t('6-digit code')}
-                  onChange={e => setSftpPasswordFor(prev => ({ ...prev, code: e.target.value }))} />
-              </label>}
-            </>}
-            <p className="hint">{t('Copy it before saving — it is not shown again. Open sessions of this login keep running until they disconnect.')}</p>
-            {editingOwn && <p className="hint">{t('Separate from your panel password. Changing one does not change the other.')}</p>}
-          </div>
-          <div className="modal-actions">
-            <button className="secondary-light" onClick={() => setSftpPasswordFor(null)}>{t('Cancel')}</button>
-            <button disabled={!!loading || !canSavePassword} onClick={saveSftpPassword}><Save size={14}/> {t('Save')}</button>
-          </div>
-        </div>
-      </div>}
+        </form>
+      </Drawer>
     </>;
   }
 
@@ -8833,7 +8879,7 @@ function App() {
   function renderSchedulePicker(key, value, onChange, inputId) {
     const preset = CRON_PRESETS.find(([expr]) => expr === normalizeCron(value));
     const custom = customSchedules[key] || !preset;
-    return <div className="schedule-picker">
+    return <div className="schedule-picker cron-schedule">
       <select value={custom ? 'custom' : preset[0]} onChange={e => {
         const next = e.target.value;
         if (next === 'custom') {
@@ -8847,7 +8893,7 @@ function App() {
         {CRON_PRESETS.map(([expr, label]) => <option key={expr} value={expr}>{t(label)}</option>)}
         <option value="custom">{t('Custom…')}</option>
       </select>
-      <input id={inputId} value={value} spellCheck={false} placeholder="*/15 * * * *" aria-label={t('Cron expression')}
+      <input id={inputId} className="cron-schedule-input" value={value} spellCheck={false} placeholder="*/15 * * * *" aria-label={t('Cron expression')}
         onChange={e => { setCustomSchedules(prev => ({ ...prev, [key]: true })); onChange(e.target.value); }} />
     </div>;
   }
@@ -8868,40 +8914,49 @@ function App() {
     ];
   }
 
+  // Cron, as SNPanel's (pages/Cron.jsx there): the website, a schedule picked
+  // by name beside its expression, the command, and the jobs below - each
+  // expression in a box with its preset's name.
   function renderCron() {
     const sitePhpVersion = cronPhpInfo.php_version || currentSite?.php_version || '';
     const sitePhpBinary = cronPhpInfo.php_binary || (sitePhpVersion ? `/usr/bin/php${sitePhpVersion}` : 'php');
     const templates = cronCommandTemplates(currentSite);
     const template = templates.find(([, , command]) => command === cronCommand.trim());
-    return <section className="section">
-      <div className="section-title">
-        <div><h2>{t('Cron manager')}</h2></div>
-        <button className="secondary" disabled={!selectedWebsiteId || !!loading} onClick={listCron}><RefreshCw size={14}/> {t('Refresh')}</button>
-      </div>
-      <div className="cron-builder">
-        <div className="field"><span className="field-label">{t('Website')}</span><WebsiteSelect /></div>
-        <div className="field"><span className="field-label">{t('Schedule')}</span>{renderSchedulePicker('cron', cronSchedule, setCronSchedule, 'cron-schedule-input')}</div>
-        <div className="field"><span className="field-label">{t('Command template')}</span>
-          <select value={template ? template[0] : 'custom'} onChange={e => { const picked = templates.find(([key]) => key === e.target.value); if (picked) setCronCommand(picked[2]); }}>
-            {templates.map(([key, label]) => <option key={key} value={key}>{t(label)}</option>)}
-            <option value="custom">{t('Custom command')}</option>
-          </select>
+    const presetName = (expr) => CRON_PRESETS.find(([value]) => value === normalizeCron(expr))?.[1];
+    return <>
+      <PageHeader subtitle={selectedWebsiteId
+        ? t('Cron runs as {user} for the selected website.', { user: cronUser || currentSite?.linux_user || 'www-data' })
+        : t('Pick a website to see and add its cron jobs.')}
+        onRefresh={listCron} refreshDisabled={!selectedWebsiteId || !!loading}/>
+      <section className="section">
+        <div className="cron-builder">
+          <div className="field"><span className="field-label">{t('Website')}</span><WebsiteSelect /></div>
+          <div className="field"><span className="field-label">{t('Schedule')}</span>{renderSchedulePicker('cron', cronSchedule, setCronSchedule, 'cron-schedule-input')}</div>
+          <div className="field"><span className="field-label">{t('Command template')}</span>
+            <select value={template ? template[0] : 'custom'} onChange={e => { const picked = templates.find(([key]) => key === e.target.value); if (picked) setCronCommand(picked[2]); }}>
+              {templates.map(([key, label]) => <option key={key} value={key}>{t(label)}</option>)}
+              <option value="custom">{t('Custom command')}</option>
+            </select>
+          </div>
+          <div className="field"><span className="field-label">{t('Command')}</span>
+            <input value={cronCommand} spellCheck={false} onChange={e => setCronCommand(e.target.value)} placeholder="php -q cron.php >/dev/null 2>&1" />
+          </div>
+          <button type="button" className="cron-add" disabled={!selectedWebsiteId || !cronCommand.trim() || !!loading} onClick={addCron}><Plus size={14} aria-hidden="true"/> {t('Add cron')}</button>
         </div>
-        <div className="field"><span className="field-label">{t('Command')}</span>
-          <input value={cronCommand} spellCheck={false} onChange={e => setCronCommand(e.target.value)} placeholder="php -q cron.php >/dev/null 2>&1" />
+        {selectedWebsiteId && <div className="cron-help">
+          <p>{t('Write {php} and BPanel rewrites it to {binary} - the PHP CLI this website is set to, so the job never runs on the server default version.', { php: <code>php</code>, binary: <code>{sitePhpBinary}</code> })}</p>
+          <p className="cron-help-note">{t('Only WP-CLI maintenance commands, or a {ext} file inside {folder}, are accepted.', { ext: <code>.php</code>, folder: <code>public_html</code> })}</p>
+        </div>}
+        <div className="cron-list">
+          {selectedWebsiteId && cronItems.length === 0 && <EmptyState icon={Clock} message={t('No cron jobs found for this website.')} />}
+          {cronItems.map(item => <div className="cron-item" key={`${item.index}-${item.line}`}>
+            <span className="badge">#{item.index}</span>
+            <span><strong><code className="cron-item-expr">{item.schedule}</code>{presetName(item.schedule) && <em className="cron-item-when">{t(presetName(item.schedule))}</em>}</strong><small>{item.command || item.line}</small></span>
+            <button type="button" className="mini danger" disabled={!!loading} onClick={() => deleteCron(item.index)} aria-label={t('Delete')} title={t('Delete')}><Trash2 size={13}/></button>
+          </div>)}
         </div>
-        <button className="cron-add" disabled={!selectedWebsiteId || !cronCommand.trim() || !!loading} onClick={addCron}><Plus size={14}/> {t('Add cron')}</button>
-      </div>
-      {selectedWebsiteId && <p className="hint">{t('Cron runs as')} <strong>{cronUser || currentSite?.linux_user || 'www-data'}</strong> {t('for the selected website. Accepted commands:')} {t('WP-CLI maintenance commands, or a')} <code>.php</code> {t('file inside public_html.')} {t('Write')} <code>php</code> {t('and BPanel rewrites it to')} <code>{sitePhpBinary}</code>.</p>}
-      <div className="cron-list">
-        {selectedWebsiteId && cronItems.length === 0 && <EmptyState icon={Clock} message={t('No cron jobs found for this website.')} />}
-        {cronItems.map(item => <div className="cron-item" key={`${item.index}-${item.line}`}>
-          <span className="badge">#{item.index}</span>
-          <span><strong>{cronScheduleLabel(item.schedule)} <code className="cron-expr">{item.schedule}</code></strong><small>{item.command || item.line}</small></span>
-          <button className="mini danger" disabled={!!loading} onClick={() => deleteCron(item.index)} aria-label={t('Delete')} title={t('Delete')}><Trash2 size={13}/></button>
-        </div>)}
-      </div>
-    </section>;
+      </section>
+    </>;
   }
 
   function renderChmodDialog() {

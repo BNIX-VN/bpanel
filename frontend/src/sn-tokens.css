@@ -1,0 +1,66 @@
+/* The tokens SNPanel's stylesheets use and BPanel's shared/style.css does not
+   define (SNPanel's theme.css): its type and spacing scales, a sunken
+   surface and the soft tints. Only names BPanel lacks - its own colours,
+   radii and fonts stay as they are. Imported once, from App.jsx, so the page
+   stylesheets ported from SNPanel (pages/*.css) read the same values. */
+:root{
+  --text-2xs:11px;
+  --text-xs:12px;
+  --text-sm:13px;
+  --text-base:14px;
+  --text-md:15px;
+  --text-lg:16px;
+  --text-xl:18px;
+  --text-2xl:20px;
+  --text-3xl:24px;
+  --text-4xl:30px;
+  --space-1:4px;
+  --space-2:8px;
+  --space-3:12px;
+  --space-4:16px;
+  --space-5:20px;
+  --space-6:24px;
+  --space-8:32px;
+  --space-10:40px;
+  --space-12:48px;
+  --radius-full:999px;
+  --surface-sunken:#eef2f7;
+  --tint-blue-bg:#e8f2fb;
+  --tint-blue-fg:#00579f;
+  --tint-rose-bg:#fdecef;
+  --tint-rose-fg:#be123c;
+  --tint-teal-bg:#e3f5f2;
+  --tint-teal-fg:#0f766e;
+  --tint-slate-bg:#eef2f7;
+  --tint-slate-fg:#475569;
+  --tint-violet-bg:#f1ecfe;
+  --tint-violet-fg:#6d28d9;
+}
+:root[data-theme="dark"]{
+  --surface-sunken:#101720;
+  --tint-blue-bg:#0e2a44;
+  --tint-blue-fg:#7fbdf2;
+  --tint-rose-bg:#3b1520;
+  --tint-rose-fg:#fda4af;
+  --tint-teal-bg:#0b2f2c;
+  --tint-teal-fg:#5eead4;
+  --tint-slate-bg:#222c37;
+  --tint-slate-fg:#cbd5e1;
+  --tint-violet-bg:#28204a;
+  --tint-violet-fg:#c4b5fd;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --surface-sunken:#101720;
+    --tint-blue-bg:#0e2a44;
+    --tint-blue-fg:#7fbdf2;
+    --tint-rose-bg:#3b1520;
+    --tint-rose-fg:#fda4af;
+    --tint-teal-bg:#0b2f2c;
+    --tint-teal-fg:#5eead4;
+    --tint-slate-bg:#222c37;
+    --tint-slate-fg:#cbd5e1;
+    --tint-violet-bg:#28204a;
+    --tint-violet-fg:#c4b5fd;
+  }
+}
