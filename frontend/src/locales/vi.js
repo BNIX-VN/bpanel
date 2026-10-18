@@ -27,6 +27,13 @@
  */
 
 export const vi = {
+  "Mon": "Thứ 2",
+  "Tue": "Thứ 3",
+  "Wed": "Thứ 4",
+  "Thu": "Thứ 5",
+  "Fri": "Thứ 6",
+  "Sat": "Thứ 7",
+  "Sun": "Chủ nhật",
   "Uninstall {name}": "Gỡ {name}",
   "Uninstall": "Gỡ",
   "Details and what to know first": "Chi tiết và những điều cần biết trước",

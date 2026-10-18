@@ -276,4 +276,11 @@ PART17 = {
     "Real-time protection": "Bảo vệ thời gian thực",
     "Automatic schedule": "Lịch tự động",
     "How you sign in to this panel: sessions, passkeys and the authenticator app.": "Cách bạn đăng nhập panel: phiên đăng nhập, passkey và ứng dụng xác thực.",
+    "Mon": "Thứ 2",
+    "Tue": "Thứ 3",
+    "Wed": "Thứ 4",
+    "Thu": "Thứ 5",
+    "Fri": "Thứ 6",
+    "Sat": "Thứ 7",
+    "Sun": "Chủ nhật",
 }
