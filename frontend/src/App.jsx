@@ -13,7 +13,7 @@ import 'ace-builds/src-noconflict/mode-text';
 import 'ace-builds/src-noconflict/mode-yaml';
 import 'ace-builds/src-noconflict/theme-textmate';
 import 'ace-builds/src-noconflict/theme-tomorrow_night';
-import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, Eye, UserCog, FolderKey, ArrowRightLeft, ShieldOff, ShieldQuestion, RotateCw, OctagonAlert, TriangleAlert, ArrowUp, ArrowDown, CornerLeftUp, FolderPlus, FilePlus, FilePen, PencilLine, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pause, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle, Activity, BrickWall, Bug, LockKeyhole, PackageOpen, ScrollText, ShieldAlert, CheckCircle, Zap, Bell, Mail, Send, Cloud, Inbox, Forward, ShieldCheck, GitBranch, CloudDownload, CloudUpload, Rocket } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, Eye, UserCog, FolderKey, ArrowRightLeft, ShieldOff, ShieldQuestion, RotateCw, OctagonAlert, TriangleAlert, ArrowUp, ArrowDown, CornerLeftUp, FolderPlus, FilePlus, FilePen, PencilLine, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pause, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle, Activity, BrickWall, Bug, LockKeyhole, PackageOpen, ScrollText, ShieldAlert, CheckCircle, Zap, Bell, Mail, Send, Cloud, Inbox, Forward, ShieldCheck, GitBranch, CloudDownload, CloudUpload, Rocket, LayoutDashboard, SlidersHorizontal } from 'lucide-react';
 import { Terminal } from './components/Terminal';
 import { UsageChart } from './components/UsageChart';
 import HubTabs from './components/HubTabs';
@@ -54,6 +54,7 @@ import './pages/Waf.css';
 import './pages/WafAccessLogs.css';
 import './pages/Addons.css';
 import './pages/Malware.css';
+import './pages/WebsiteDetail.css';
 import './bpanel.css';
 
 const API = import.meta.env.VITE_API_URL || '/api';
@@ -290,7 +291,22 @@ const ROUTE_PAGES = new Map([
   ['/api-tokens', 'panel-settings'],
 ]);
 
+// One website's page: /website/<domain>, or /website/<domain>/<tab>.
+const WEBSITE_TABS = ['overview', 'domains', 'ssl', 'php', 'security', 'logs', 'advanced'];
+
+function websiteFromPathname(pathname) {
+  const match = /^\/website\/([^/]+)(?:\/([a-z]+))?\/?$/i.exec(String(pathname || ''));
+  if (!match) return null;
+  const tab = String(match[2] || 'overview').toLowerCase();
+  return { domain: decodeURIComponent(match[1]).toLowerCase(), tab: WEBSITE_TABS.includes(tab) ? tab : 'overview' };
+}
+
+function websiteRoute(domain, tab = 'overview') {
+  return `/website/${encodeURIComponent(domain)}${tab && tab !== 'overview' ? `/${tab}` : ''}`;
+}
+
 function pageFromPathname(pathname) {
+  if (websiteFromPathname(pathname)) return 'website';
   const normalized = `/${String(pathname || '').replace(/^\/+|\/+$/g, '')}`.toLowerCase();
   return ROUTE_PAGES.get(normalized) || 'dashboard';
 }
@@ -1004,6 +1020,10 @@ function App() {
   const [fileContent, setFileContent] = useState('');
   const [selectedFilePaths, setSelectedFilePaths] = useState([]);
   const [archiveFormat, setArchiveFormat] = useState('zip');
+  // One website's page: which website and tab its address names, and
+  // whether its Advanced tab has the terminal open.
+  const [siteWhere, setSiteWhere] = useState(() => websiteFromPathname(window.location.pathname) || { domain: '', tab: 'overview' });
+  const [siteTermOpen, setSiteTermOpen] = useState(false);
   // The firewall's one address form: whether it allows or blocks.
   const [firewallRuleAction, setFirewallRuleAction] = useState('allow');
   // The PHP page's extension filter.
@@ -1169,9 +1189,12 @@ function App() {
   const navigateToPage = useCallback((nextPage, options = {}) => {
     // A hub's own address opens its first tab this role may see.
     if (isHubKey(nextPage)) nextPage = hubLanding(nextPage, navCtxRef.current) || 'dashboard';
-    const route = routeForPage(nextPage);
+    // A page with an address of its own (one website's) passes it as `path`.
+    const route = options.path || routeForPage(nextPage);
     if (!route) return;
     const nextUrl = route;
+    const where = websiteFromPathname(route);
+    if (where) setSiteWhere(where);
     if (!options.replace && window.location.pathname !== route) {
       window.history.pushState({}, '', nextUrl);
     } else if (options.replace && window.location.pathname !== route) {
@@ -5170,7 +5193,11 @@ function App() {
 
   useEffect(() => {
     if (standaloneEditor) return undefined;
-    const syncPageFromLocation = () => setPage(pageFromPathname(window.location.pathname));
+    const syncPageFromLocation = () => {
+      const where = websiteFromPathname(window.location.pathname);
+      if (where) setSiteWhere(where);
+      setPage(pageFromPathname(window.location.pathname));
+    };
     syncPageFromLocation();
     window.addEventListener('popstate', syncPageFromLocation);
     return () => window.removeEventListener('popstate', syncPageFromLocation);
@@ -5494,6 +5521,29 @@ function App() {
     if (!isAuthenticated || page !== 'waf-site' || selectedWafWebsiteId || websites.length === 0) return;
     loadWebsiteWafConfig(websites[0].id, false);
   }, [isAuthenticated, page, selectedWafWebsiteId, websites.length]);
+
+  // One website's page: the site becomes the panel's current one (SSL and
+  // files follow it), its settings load once, and each tab loads what it
+  // shows.
+  const siteDetailLoaded = useRef('');
+  useEffect(() => {
+    if (page !== 'website') { siteDetailLoaded.current = ''; setSiteTermOpen(false); return; }
+    if (!isAuthenticated) return;
+    const site = websites.find(item => String(item.domain || '').toLowerCase() === siteWhere.domain);
+    if (!site) return;
+    if (siteDetailLoaded.current !== String(site.id)) {
+      siteDetailLoaded.current = String(site.id);
+      setSelectedWebsiteId(String(site.id));
+      openNginxCustom(site);
+    }
+    if (siteWhere.tab === 'ssl') { loadCfZone(site.id); loadSslSources(site.id); }
+    if (siteWhere.tab === 'security') {
+      loadWebsiteWafConfig(site.id, false);
+      loadBotBlocks();
+      if (isAdmin) { loadWafRules(); loadCrs(); }
+    }
+    if (siteWhere.tab === 'logs') loadWebsiteLog(site, 'access', 200, site.domain);
+  }, [isAuthenticated, page, siteWhere.domain, siteWhere.tab, websites.length]);
 
   useEffect(() => { setMobileMenuOpen(false); }, [page]);
 
@@ -8039,8 +8089,8 @@ function App() {
     const closeCreate = () => setCreateFormOpen(false);
     const siteMenuItems = (site) => [
       { label: t('Files'), icon: FolderOpen, onClick: () => openWebsiteFileManager(site) },
-      { label: t('Logs'), icon: FileText, onClick: () => openWebsiteLogs(site) },
-      canOpenTerminal ? { label: t('Terminal'), icon: TerminalIcon, onClick: () => openWebsiteTerminal(site) } : null,
+      { label: t('Logs'), icon: FileText, onClick: () => navigateToPage('website', { path: websiteRoute(site.domain, 'logs') }) },
+      canOpenTerminal ? { label: t('Terminal'), icon: TerminalIcon, onClick: () => { setSiteTermOpen(true); navigateToPage('website', { path: websiteRoute(site.domain, 'advanced') }); } } : null,
       site.wordpress_installed
         ? { label: t('Update WordPress'), icon: RefreshCw, disabled: !!loading, onClick: () => openWordPressUpdate(site) }
         : { label: t('Install WordPress'), icon: Download, disabled: !!loading, onClick: () => openWordPressInstaller(site) },
@@ -8153,45 +8203,328 @@ function App() {
             </div>
             <div className="site-actions" aria-label={t('Website actions for {domain}', { domain: site.domain })}>
               <div className="site-feature-actions">
-                <button className="secondary-light" disabled={!!loading} onClick={() => openNginxCustom(site)}>
-                  <SettingsIcon size={14} aria-hidden="true"/> {t('Settings')}</button>
+                <button className="secondary-light" onClick={() => navigateToPage('website', { path: websiteRoute(site.domain) })}>
+                  <SettingsIcon size={14} aria-hidden="true"/> {t('Manage')}</button>
                 <ActionMenu label={t('More actions for {domain}', { domain: site.domain })} items={siteMenuItems(site)}/>
               </div>
             </div>
           </article>
-          {nginxCustomEditing?.id === site.id && renderNginxEditor()}
-          {logViewer?.id === site.id && renderWebsiteLogViewer()}
-          {terminalViewer?.id === site.id && renderWebsiteTerminal()}
-          {wpPanel && String(wpPanel.website_id) === String(site.id) && <div className="wp-manager-panel">
-            <div className="user-edit-heading">
-              <strong>{wpPanel.mode === 'update' ? t('Update WordPress on {domain}', { domain: site.domain }) : t('Install WordPress on {domain}', { domain: site.domain })}</strong>
-              <button className="user-edit-close secondary-light" aria-label={t('Close')} onClick={() => setWordpressInstaller(null)}><X size={16}/></button>
-            </div>
-            {wpPanel.mode !== 'update' ? <div className="user-edit-grid">
-              <p className="hint">{t('Creates a database, downloads WordPress, configures vhost.')}</p>
-              <label><span>{t('Site title')}</span><input value={wpPanel.title} onChange={e => setWordpressInstaller(prev => ({ ...prev, title: e.target.value }))} /></label>
-              <label><span>{t('Admin username')}</span><input value={wpPanel.admin_user} onChange={e => setWordpressInstaller(prev => ({ ...prev, admin_user: e.target.value }))} /></label>
-              <label><span>{t('Admin email')}</span><input type="email" value={wpPanel.admin_email} onChange={e => setWordpressInstaller(prev => ({ ...prev, admin_email: e.target.value }))} /></label>
-              <label><span>{t('Admin password')}</span><input type="password" autoComplete="new-password" value={wpPanel.admin_password} onChange={e => setWordpressInstaller(prev => ({ ...prev, admin_password: e.target.value }))} placeholder={t('Min 10 characters')} /></label>
-              <div className="user-edit-actions">
-                <button className="secondary-light" onClick={() => setWordpressInstaller(null)}>{t('Cancel')}</button>
-                <button disabled={!!loading || !wpPanel.admin_user || !wpPanel.admin_email || String(wpPanel.admin_password || '').length < 10} onClick={installWordPressOnSite}><Download size={14}/> {t('Install WordPress')}</button>
-              </div>
-            </div> : <div>
-              <p className="hint">{t('Updates WordPress core, all plugins, and all themes to the latest version.')}</p>
-              <div className="user-edit-actions">
-                <button className="secondary-light" onClick={() => setWordpressInstaller(null)}>{t('Cancel')}</button>
-                <button disabled={!!loading} onClick={() => updateWordPressAll(site)}><RefreshCw size={14}/> {t('Update All')}</button>
-              </div>
-            </div>}
-          </div>}
+          {renderWordPressPanel(site)}
           </div>)}
         </div>
       </section>
     </>;
   }
 
-  function renderSsl() {
+  // WordPress installed on, or updated for, one website: under its card in
+  // the list, or on its Overview.
+  function renderWordPressPanel(site) {
+    const wpPanel = wordpressInstaller;
+    if (!wpPanel || String(wpPanel.website_id) !== String(site.id)) return null;
+    return <div className="wp-manager-panel">
+      <div className="user-edit-heading">
+        <strong>{wpPanel.mode === 'update' ? t('Update WordPress on {domain}', { domain: site.domain }) : t('Install WordPress on {domain}', { domain: site.domain })}</strong>
+        <button className="user-edit-close secondary-light" aria-label={t('Close')} onClick={() => setWordpressInstaller(null)}><X size={16}/></button>
+      </div>
+      {wpPanel.mode !== 'update' ? <div className="user-edit-grid">
+        <p className="hint">{t('Creates a database, downloads WordPress, configures vhost.')}</p>
+        <label><span>{t('Site title')}</span><input value={wpPanel.title} onChange={e => setWordpressInstaller(prev => ({ ...prev, title: e.target.value }))} /></label>
+        <label><span>{t('Admin username')}</span><input value={wpPanel.admin_user} onChange={e => setWordpressInstaller(prev => ({ ...prev, admin_user: e.target.value }))} /></label>
+        <label><span>{t('Admin email')}</span><input type="email" value={wpPanel.admin_email} onChange={e => setWordpressInstaller(prev => ({ ...prev, admin_email: e.target.value }))} /></label>
+        <label><span>{t('Admin password')}</span><input type="password" autoComplete="new-password" value={wpPanel.admin_password} onChange={e => setWordpressInstaller(prev => ({ ...prev, admin_password: e.target.value }))} placeholder={t('Min 10 characters')} /></label>
+        <div className="user-edit-actions">
+          <button className="secondary-light" onClick={() => setWordpressInstaller(null)}>{t('Cancel')}</button>
+          <button disabled={!!loading || !wpPanel.admin_user || !wpPanel.admin_email || String(wpPanel.admin_password || '').length < 10} onClick={installWordPressOnSite}><Download size={14}/> {t('Install WordPress')}</button>
+        </div>
+      </div> : <div>
+        <p className="hint">{t('Updates WordPress core, all plugins, and all themes to the latest version.')}</p>
+        <div className="user-edit-actions">
+          <button className="secondary-light" onClick={() => setWordpressInstaller(null)}>{t('Cancel')}</button>
+          <button disabled={!!loading} onClick={() => updateWordPressAll(site)}><RefreshCw size={14}/> {t('Update All')}</button>
+        </div>
+      </div>}
+    </div>;
+  }
+
+  // One website's page, as SNPanel's (pages/WebsiteDetail.jsx there): its
+  // tabs - Overview, Domains, SSL, PHP, Security, Logs, Advanced - each with
+  // its own one action, instead of the settings, logs and terminal that
+  // opened under its card in the list. Each tab has an address of its own:
+  // /website/<domain>/<tab>.
+  function renderWebsiteDetail() {
+    const site = websites.find(item => String(item.domain || '').toLowerCase() === siteWhere.domain);
+    const backToList = { label: t('Websites'), onClick: () => navigateToPage('websites') };
+    if (!site) {
+      return <>
+        <PageHeader breadcrumbs={[backToList, { label: siteWhere.domain }]}/>
+        <section className="section">
+          {websites.length === 0 && loading
+            ? <p className="hint">{t('Loading…')}</p>
+            : <EmptyState icon={Globe} title={t('No website {domain} here.', { domain: siteWhere.domain })}
+              message={t('It may have been deleted, or it belongs to an account you cannot see.')}
+              action={{ label: t('All websites'), icon: Globe, onClick: () => navigateToPage('websites') }}/>}
+        </section>
+      </>;
+    }
+    const goTab = next => navigateToPage('website', { path: websiteRoute(site.domain, next) });
+    const tabs = [
+      { id: 'overview', label: t('Overview'), icon: LayoutDashboard },
+      { id: 'domains', label: t('Domains'), icon: Globe, badge: (site.aliases || []).length || undefined },
+      { id: 'ssl', label: 'SSL', icon: Lock },
+      { id: 'php', label: 'PHP', icon: Code2 },
+      { id: 'security', label: t('Security'), icon: ShieldCheck },
+      { id: 'logs', label: t('Logs'), icon: FileText },
+      { id: 'advanced', label: t('Advanced'), icon: SlidersHorizontal },
+    ].map(item => ({ ...item, href: websiteRoute(site.domain, item.id) }));
+    const tab = tabs.some(item => item.id === siteWhere.tab) ? siteWhere.tab : 'overview';
+    const owner = users.find(user => String(user.id) === String(site.owner_id));
+    const typeLabel = t(APP_TYPE_LABELS[site.app_type || 'wordpress'] || site.app_type);
+    const facts = [typeLabel];
+    if (site.app_type !== 'static' && !isProxiedAppType(site.app_type)) facts.push(`PHP ${site.php_version}`);
+    if (canManageUsers && owner) facts.push(t('Owner: {name}', { name: owner.username }));
+    const menuItems = [
+      { label: t('File manager'), icon: FolderOpen, onClick: () => openWebsiteFileManager(site) },
+      site.wordpress_installed
+        ? { label: t('Update WordPress'), icon: RefreshCw, disabled: !!loading, onClick: () => updateWordPressAll(site) }
+        : { label: t('Install WordPress'), icon: Download, disabled: !!loading, onClick: () => { goTab('overview'); openWordPressInstaller(site); } },
+      'separator',
+      { label: t('Delete website'), icon: Trash2, danger: true, disabled: !!loading, onClick: async () => { if (await deleteWebsite(site.id)) navigateToPage('websites'); } },
+    ];
+    return <>
+      <PageHeader breadcrumbs={[backToList, { label: site.domain }]} title={site.domain} subtitle={facts.join(' · ')}
+        onRefresh={() => loadWebsiteList('', true)} refreshDisabled={!!loading}
+        actions={<>
+          <a className="button-link secondary-light" href={websiteUrl(site)} target="_blank" rel="noopener noreferrer"><ExternalLink size={14} aria-hidden="true"/> {t('Open website')}</a>
+          <ActionMenu label={t('More actions for {domain}', { domain: site.domain })} items={menuItems}/>
+        </>}/>
+      <Tabs className="wsd-tabs" label={t('Website sections')} value={tab} onChange={goTab} tabs={tabs}/>
+      {tab === 'overview' && renderSiteOverview(site, owner, typeLabel, goTab)}
+      {tab === 'domains' && renderSiteDomains(site, goTab)}
+      {tab === 'ssl' && renderSsl(true)}
+      {tab === 'php' && renderSitePhp(site)}
+      {tab === 'security' && (String(selectedWafWebsiteId) === String(site.id) && wafSiteConfig
+        ? renderWafSite(true)
+        : <section className="section"><p className="hint">{t('Loading…')}</p></section>)}
+      {tab === 'logs' && renderSiteLogs(site)}
+      {tab === 'advanced' && renderSiteAdvanced(site)}
+    </>;
+  }
+
+  function renderSiteOverview(site, owner, typeLabel, goTab) {
+    const rewrite = NGINX_REWRITE_MODES.find(mode => mode.value === site.nginx_rewrite_mode);
+    const sslModes = { manual: t('Manual SSL'), cloudflare: t('Wildcard SSL'), shared: t('Existing certificate') };
+    const php = site.app_type === 'static' || isProxiedAppType(site.app_type) ? '' : site.php_version;
+    const servingApp = isProxiedAppType(site.app_type) ? siteApps.items.find(app => String(app.id) === String(site.app_id)) : null;
+    const locale = language === 'vi' ? 'vi-VN' : 'en-GB';
+    return <div className="wsd-overview">
+      <section className="section wsd-card">
+        <h2 className="wsd-card-title">{t('About this website')}</h2>
+        <dl className="wsd-facts">
+          <div><dt>{t('Address')}</dt><dd><a href={websiteUrl(site)} target="_blank" rel="noopener noreferrer">{websiteUrl(site)} <ExternalLink size={12} aria-hidden="true"/></a></dd></div>
+          <div><dt>{t('Type')}</dt><dd>{typeLabel}</dd></div>
+          {php && <div><dt>{t('PHP version')}</dt><dd>{php}</dd></div>}
+          {site.app_type === 'php' && rewrite && rewrite.value !== 'none' && <div><dt>{t('Nginx rewrite')}</dt><dd>{t(rewrite.label)}</dd></div>}
+          {servingApp && <div><dt>{t('Application')}</dt><dd>{servingApp.name} · :{servingApp.port}</dd></div>}
+          {canManageUsers && owner && <div><dt>{t('Owner')}</dt><dd>{owner.username}</dd></div>}
+          {site.linux_user && <div><dt>{t('Linux user')}</dt><dd><code>{site.linux_user}</code></dd></div>}
+          <div><dt>{t('Folder')}</dt><dd><code>{site.root_path}</code></dd></div>
+          <div><dt>SSL</dt><dd>
+            <span className={`badge ${site.ssl_enabled ? 'ok' : ''}`}>{site.ssl_enabled ? (sslModes[site.ssl_mode] || t('SSL Enabled')) : t('SSL Disabled')}</span>
+            {site.ssl_updated_at && <small>{t('Updated')} {new Date(site.ssl_updated_at).toLocaleDateString(locale)}</small>}
+            <button type="button" className="link-button" onClick={() => goTab('ssl')}>{t('Manage SSL')}</button>
+          </dd></div>
+          <div><dt>WAF</dt><dd>
+            <span className={`badge ${site.waf_enabled ? 'ok' : ''}`}>{site.waf_enabled ? t('WAF on') : t('WAF off')}</span>
+            {site.http_flood_enabled && <span className="badge ok">{t('HTTP Flood')}</span>}
+            <button type="button" className="link-button" onClick={() => goTab('security')}>{t('Security settings')}</button>
+          </dd></div>
+          <div><dt>{t('Domains')}</dt><dd>
+            {t('{count} extra domain(s)', { count: (site.aliases || []).length })}
+            <button type="button" className="link-button" onClick={() => goTab('domains')}>{t('Manage domains')}</button>
+          </dd></div>
+        </dl>
+      </section>
+
+      <section className="section wsd-card">
+        <h2 className="wsd-card-title">WordPress</h2>
+        {site.wordpress_installed
+          ? <>
+            <p className="hint">{t('WordPress is installed here.')}</p>
+            <div className="wsd-actions">
+              <button type="button" className="secondary-light" disabled={!!loading} onClick={() => updateWordPressAll(site)}><RefreshCw size={14} aria-hidden="true"/> {t('Update WordPress (core + plugins + themes)')}</button>
+            </div>
+          </>
+          : isProxiedAppType(site.app_type) || site.app_type === 'static'
+            ? <p className="hint">{t('This website does not run PHP, so WordPress cannot be installed on it.')}</p>
+            : <>
+              <p className="hint">{t('Creates a database, downloads WordPress, configures vhost.')}</p>
+              <div className="wsd-actions">
+                <button type="button" className="secondary-light" disabled={!!loading} onClick={() => openWordPressInstaller(site)}><Download size={14} aria-hidden="true"/> {t('Install WordPress')}</button>
+              </div>
+            </>}
+        {renderWordPressPanel(site)}
+      </section>
+
+      <section className="section wsd-card wsd-shortcuts">
+        <h2 className="wsd-card-title">{t('Shortcuts')}</h2>
+        <div className="wsd-actions">
+          <button type="button" className="secondary-light" disabled={!!loading} onClick={() => openWebsiteFileManager(site)}><FolderOpen size={14} aria-hidden="true"/> {t('File manager')}</button>
+          <button type="button" className="secondary-light" onClick={() => goTab('logs')}><FileText size={14} aria-hidden="true"/> {t('Logs')}</button>
+          {canOpenTerminal && <button type="button" className="secondary-light" onClick={() => { setSiteTermOpen(true); goTab('advanced'); }}><TerminalIcon size={14} aria-hidden="true"/> {t('Terminal')}</button>}
+          <button type="button" className="secondary-light" onClick={() => navigateToPage('backups')}><Archive size={14} aria-hidden="true"/> {t('Backups')}</button>
+        </div>
+      </section>
+    </div>;
+  }
+
+  function renderSiteDomains(site, goTab) {
+    const draft = aliasDrafts[site.id] || '';
+    const mode = aliasModes[site.id] || 'alias';
+    const aliases = site.aliases || [];
+    return <section className="section">
+      <PageHeader title={t('Domains')} subtitle={t('Alias serves the same app. Redirect sends visitors to {domain}.', { domain: site.domain })}/>
+      <ul className="wsd-domain-list">
+        <li><Globe size={14} aria-hidden="true"/><strong>{site.domain}</strong><span className="badge ok">{t('Main')}</span></li>
+        {aliases.map(alias => <li key={alias.id}>
+          <Globe size={14} aria-hidden="true"/><strong>{alias.domain}</strong>
+          <span className="badge">{alias.mode === 'redirect' ? t('Redirect') : t('Alias')}</span>
+          <button type="button" className="mini secondary-light" disabled={!!loading} onClick={() => deleteWebsiteAlias(site, alias)}
+            aria-label={t('Remove {domain}', { domain: alias.domain })}><X size={13} aria-hidden="true"/> {t('Remove')}</button>
+        </li>)}
+      </ul>
+      {aliases.length === 0 && <p className="hint">{t('No extra domains')}</p>}
+      <form className="wsd-domain-form" onSubmit={e => { e.preventDefault(); if (draft.trim()) addWebsiteAlias(site); }}>
+        <Field label={t('New domain')}>
+          <input value={draft} onChange={e => setAliasDrafts(prev => ({ ...prev, [site.id]: e.target.value }))}
+            placeholder={t('e.g. {example}', { example: 'www.example.com' })} disabled={!!loading} autoCapitalize="none" spellCheck={false}/>
+        </Field>
+        <Field label={t('Kind')}>
+          <select value={mode} onChange={e => setAliasModes(prev => ({ ...prev, [site.id]: e.target.value }))} disabled={!!loading}>
+            <option value="alias">{t('Alias')}</option>
+            <option value="redirect">{t('Redirect')}</option>
+          </select>
+        </Field>
+        <button type="submit" disabled={!!loading || !draft.trim()}><Plus size={14} aria-hidden="true"/> {t('Add domain')}</button>
+      </form>
+      <p className="hint">{t('A new domain gets its certificate on the {tab} tab: install or renew SSL there.', { tab: <button type="button" className="link-button" onClick={() => goTab('ssl')}>SSL</button> })}</p>
+    </section>;
+  }
+
+  function renderSitePhp(site) {
+    const ready = nginxCustomEditing?.id === site.id;
+    const base = websiteConfigForm(ready ? nginxCustomEditing.site || site : site);
+    const form = ready ? websiteSettingsForm : base;
+    const appType = form.app_type || 'wordpress';
+    const proxied = isProxiedAppType(appType);
+    const rewriteFixed = appType !== 'php';
+    const dirty = ready && ['app_type', 'php_version', 'app_id', 'nginx_rewrite_mode'].some(key => String(form[key] ?? '') !== String(base[key] ?? ''));
+    const set = patch => setWebsiteSettingsForm(prev => ({ ...prev, ...patch }));
+    return <section className="section">
+      <PageHeader title={t('How the website runs')} subtitle={t('Managed settings rewrite the main vhost safely. Custom Nginx is still stored as a separate include.')}/>
+      <div className="wsd-form-grid">
+        <Field label={t('Website mode')}>
+          <select value={appType} disabled={!ready || !!loading} onChange={e => set({
+            app_type: e.target.value,
+            nginx_rewrite_mode: e.target.value === 'php' ? form.nginx_rewrite_mode || 'none' : e.target.value === 'wordpress' ? 'front_controller' : 'none',
+          })}>
+            {WEBSITE_MODES.map(([value, label]) => <option key={value} value={value} disabled={value === 'application' && !appsFeatureEnabled}>{t(label)}</option>)}
+          </select>
+        </Field>
+        {proxied && <Field label={t('Application')}>
+          <select value={form.app_id || ''} disabled={!ready || !!loading} onChange={e => set({ app_id: e.target.value })}>
+            <option value="">{t('Select an application')}</option>
+            {siteApps.items.map(app => <option key={app.id} value={app.id}>{app.name} · {SITE_APP_KIND_LABELS[app.kind] || app.kind} · :{app.port}</option>)}
+          </select>
+        </Field>}
+        {appType !== 'static' && !proxied && <Field label={t('PHP version')}>
+          <select value={form.php_version} disabled={!ready || !!loading} onChange={e => set({ php_version: e.target.value })}>
+            {phpVersions.installed.map(v => <option key={v} value={v}>PHP {v}</option>)}
+          </select>
+        </Field>}
+        <Field label={t('Nginx rewrite')} hint={rewriteFixed ? t('Set by the website mode.') : ''}>
+          <select value={rewriteFixed ? (appType === 'wordpress' ? 'front_controller' : 'none') : form.nginx_rewrite_mode}
+            disabled={!ready || !!loading || rewriteFixed} onChange={e => set({ nginx_rewrite_mode: e.target.value })}>
+            {NGINX_REWRITE_MODES.map(mode => <option key={mode.value} value={mode.value}>{t(mode.label)}</option>)}
+          </select>
+        </Field>
+      </div>
+      <div className={`wsd-savebar${dirty ? ' is-dirty' : ''}`}>
+        <span role="status">{dirty ? t('Unsaved changes') : ''}</span>
+        {dirty && <button type="button" className="secondary-light" disabled={!!loading} onClick={() => setWebsiteSettingsForm(base)}><RotateCcw size={14} aria-hidden="true"/> {t('Undo changes')}</button>}
+        <button type="button" disabled={!ready || !dirty || !!loading} onClick={saveWebsiteSettings}><Save size={14} aria-hidden="true"/> {t('Save changes')}</button>
+      </div>
+    </section>;
+  }
+
+  function renderSiteLogs(site) {
+    const log = logViewer?.id === site.id ? logViewer : null;
+    const kind = log?.kind || 'access';
+    const lines = log?.lines || 200;
+    return <section className="section wsd-logs">
+      <PageHeader title={t('Nginx logs')} subtitle={log?.path || `/var/log/nginx/${site.domain}.${kind}.log`}
+        onRefresh={() => loadWebsiteLog(site.id, kind, lines, site.domain)} refreshDisabled={!!loading}/>
+      <div className="log-toolbar">
+        <div className="segmented-control" role="group" aria-label={t('Log')}>
+          {[['access', t('Access')], ['error', t('Errors (PHP + server)')]].map(([id, label]) => <button key={id} type="button" aria-pressed={kind === id}
+            className={kind === id ? 'active' : ''} disabled={!!loading} onClick={() => loadWebsiteLog(site.id, id, lines, site.domain)}>{label}</button>)}
+        </div>
+        <select value={lines} onChange={e => loadWebsiteLog(site.id, kind, Number(e.target.value), site.domain)} disabled={!!loading} aria-label={t('Lines')}>
+          {[100, 200, 500, 1000, 2000].map(n => <option key={n} value={n}>{t('{n} lines', { n })}</option>)}
+        </select>
+      </div>
+      <pre className="log-output">{!log ? t('Loading…') : log.exists
+        ? (log.content || t('Log is empty.'))
+        : (kind === 'error' ? t('No errors logged yet.') : t('Log file has not been created yet.'))}</pre>
+    </section>;
+  }
+
+  function renderSiteAdvanced(site) {
+    const editor = nginxCustomEditing?.id === site.id ? nginxCustomEditing : null;
+    const full = editor?.mode === 'full';
+    return <div className="wsd-advanced">
+      <section className="section">
+        <PageHeader title={full ? t('Full Nginx config') : t('Custom Nginx')}
+          subtitle={full ? t('This is read-only. BPanel manages the main vhost template.') : t('Optional extra directives only. Use Nginx rewrite on the PHP tab for location / routing.')}/>
+        {!editor ? <p className="hint">{t('Loading…')}</p> : <>
+          <textarea className="code-editor" value={editor.content || ''} readOnly={full} spellCheck={false} rows={full ? 18 : 10}
+            onChange={e => setNginxCustomEditing(prev => ({ ...prev, content: e.target.value, customContent: e.target.value }))}
+            aria-label={full ? t('Full Nginx config') : t('Custom Nginx')}/>
+          <div className="wsd-savebar">
+            <span role="status"></span>
+            {full
+              ? <button type="button" className="secondary-light" onClick={() => setNginxCustomEditing(prev => ({ ...prev, mode: 'custom', content: prev?.customContent ?? '' }))}><X size={14} aria-hidden="true"/> {t('Close the full config')}</button>
+              : <>
+                <button type="button" className="secondary-light" disabled={!!loading} onClick={resetNginxDefault}><RotateCcw size={14} aria-hidden="true"/> {t('Reset custom')}</button>
+                <button type="button" disabled={!!loading} onClick={saveNginxCustom}><Save size={14} aria-hidden="true"/> {t('Save and reload Nginx')}</button>
+              </>}
+          </div>
+        </>}
+      </section>
+      {isAdmin && !full && <p className="hint wsd-fullvhost">
+        <button type="button" className="link-button" disabled={!editor || !!loading} onClick={viewFullNginxConfig}><FileText size={13} aria-hidden="true"/> {t('View the full Nginx config')}</button>
+      </p>}
+
+      <section className="section" id="wsd-terminal">
+        <PageHeader title={t('Terminal')} subtitle={canOpenTerminal
+          ? t("A real bash shell as this website's owner, starting in the website's folder.")
+          : isAdmin || isReseller
+            ? t("Administrators and resellers open a customer's terminal by logging in as the customer.")
+            : t("The terminal is not part of this account's package.")}
+          actions={canOpenTerminal && (siteTermOpen
+            ? <button type="button" className="secondary-light" onClick={() => setSiteTermOpen(false)}><X size={14} aria-hidden="true"/> {t('Close terminal')}</button>
+            : <button type="button" className="secondary-light" onClick={() => setSiteTermOpen(true)}><TerminalIcon size={14} aria-hidden="true"/> {t('Open terminal')}</button>)}/>
+        {canOpenTerminal && siteTermOpen && <div className="wsd-terminal"><Terminal websiteId={site.id} apiBase={API} /></div>}
+      </section>
+
+      <section className="section wsd-danger">
+        <PageHeader title={t('Delete this website')} subtitle={t('Removes its web server configuration and certificate; you choose whether its files and databases go too.')}
+          actions={<button type="button" className="danger" disabled={!!loading} onClick={async () => { if (await deleteWebsite(site.id)) navigateToPage('websites'); }}>
+            <Trash2 size={14} aria-hidden="true"/> {t('Delete website')}</button>}/>
+      </section>
+    </div>;
+  }
+
+  function renderSsl(embedded = false) {
     // Named as OPanel names them. BPanel's modes: a Cloudflare wildcard, a
     // certificate borrowed from another site ("shared"), one uploaded by hand,
     // or Let's Encrypt.
@@ -8214,10 +8547,10 @@ function App() {
         : site.ssl_mode === 'shared' ? t('Shared cert')
           : site.ssl_mode === 'cloudflare' ? t('Wildcard') : t('SSL OK');
     return <>
-    <PageHeader subtitle={t('{secured} of {total} secured', { secured: securedCount, total: websites.length })}/>
+    {!embedded && <PageHeader subtitle={t('{secured} of {total} secured', { secured: securedCount, total: websites.length })}/>}
     <section className="section" id="ssl-manage">
       <h2>{t('SSL Certificate')}</h2>
-      <Field label={t('Website')}><WebsiteSelect /></Field>
+      {!embedded && <Field label={t('Website')}><WebsiteSelect /></Field>}
       {currentSite && <div className="info-box" style={{marginTop:8}}>
         <strong>{currentSite.domain}</strong>
         <span className={currentSite.ssl_enabled ? 'badge ok' : 'badge'} style={{justifySelf:'start'}}>{sslLabel}</span>
@@ -8276,7 +8609,7 @@ function App() {
         <button className="manual-ssl-submit" disabled={!selectedWebsiteId || !!loading} onClick={installManualSsl}><Upload size={15}/> {t('Install Manual SSL')}</button>
       </div>}
     </section>
-    {websites.length > 0 && <section className="section">
+    {!embedded && websites.length > 0 && <section className="section">
       <div className="section-title">
         <div><h2>{t('All websites')}</h2><p className="hint">{t('{secured} of {total} secured', { secured: securedCount, total: websites.length })}</p></div>
       </div>
@@ -10370,7 +10703,7 @@ function App() {
   // Its own route (/waf-site), so a reload or a shared link comes back to the
   // same website; drawn as OPanel draws its in-page site view, the way back
   // first.
-  function renderWafSite() {
+  function renderWafSite(embedded = false) {
     const selectedSite = websites.find(site => String(site.id) === String(selectedWafWebsiteId));
     const groupedRules = (wafSiteConfig?.default_rules || wafRules.default_rule_definitions || []).reduce((groups, rule) => {
       const category = rule.category || 'General';
@@ -10387,8 +10720,8 @@ function App() {
     return <>
       {/* As SNPanel's WafSite: the way back in the breadcrumbs, the WAF's
           on/off as the page's one switch. */}
-      <PageHeader breadcrumbs={[{ label: t('WAF'), onClick: () => navigateToPage('waf') }, { label: wafSiteConfig?.domain || selectedSite?.domain || t('Website') }]}
-        title={wafSiteConfig?.domain || selectedSite?.domain || t('Website')} subtitle={t('WAF configuration for this website.')}
+      <PageHeader breadcrumbs={embedded ? undefined : [{ label: t('WAF'), onClick: () => navigateToPage('waf') }, { label: wafSiteConfig?.domain || selectedSite?.domain || t('Website') }]}
+        title={embedded ? t('Web application firewall') : (wafSiteConfig?.domain || selectedSite?.domain || t('Website'))} subtitle={t('WAF configuration for this website.')}
         actions={<Switch checked={!!selectedSite?.waf_enabled} disabled={!selectedSite || !!loading}
           onChange={() => selectedSite && toggleWebsiteWaf(selectedSite)}>{selectedSite?.waf_enabled ? t('WAF on') : t('WAF off')}</Switch>}/>
 
@@ -11788,6 +12121,7 @@ function App() {
     if (page === 'disk-usage') return isAdmin ? renderDiskUsage() : renderDashboard();
     if (page === 'traffic') return isAdmin ? renderTraffic() : renderDashboard();
     if (page === 'websites') return renderWebsites();
+    if (page === 'website') return renderWebsiteDetail();
     if (page === 'addons') return renderAddons();
     // DNS Manager (2026-09-29): administrators and customers, once installed.
     if (page === 'dns') return dnsAddonInstalled ? renderDns() : renderAddonMissing('dns');
