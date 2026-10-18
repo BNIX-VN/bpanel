@@ -2012,7 +2012,7 @@ export const vi = {
   "Saving the record...": "Đang lưu bản ghi...",
   "Saving website WAF rules...": "Đang lưu rule WAF của website...",
   "Saving...": "Đang lưu...",
-  "Scan": "Lần quét",
+  "Scan": "Quét",
   "Scan Now": "Quét ngay",
   "Scan failed": "Quét thất bại",
   "Scan finished.": "Đã quét xong.",
