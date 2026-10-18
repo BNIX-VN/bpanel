@@ -13,7 +13,7 @@ import 'ace-builds/src-noconflict/mode-text';
 import 'ace-builds/src-noconflict/mode-yaml';
 import 'ace-builds/src-noconflict/theme-textmate';
 import 'ace-builds/src-noconflict/theme-tomorrow_night';
-import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, Eye, UserCog, FolderKey, ArrowRightLeft, ShieldOff, ShieldQuestion, RotateCw, OctagonAlert, TriangleAlert, ArrowUp, ArrowDown, CornerLeftUp, FolderPlus, FilePlus, FilePen, PencilLine, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pause, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle, Activity, BrickWall, Bug, LockKeyhole, PackageOpen, ScrollText, ShieldAlert, CheckCircle, Zap, Bell, Mail, Send, Cloud, Inbox, Forward, ShieldCheck, GitBranch, CloudDownload, CloudUpload, Rocket, LayoutDashboard, SlidersHorizontal } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, Eye, UserCog, FolderKey, ArrowRightLeft, ShieldOff, ShieldQuestion, RotateCw, OctagonAlert, TriangleAlert, ArrowUp, ArrowDown, CornerLeftUp, FolderPlus, FilePlus, FilePen, PencilLine, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pause, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle, Activity, BrickWall, Bug, LockKeyhole, PackageOpen, ScrollText, ShieldAlert, CheckCircle, Zap, Bell, Mail, Send, Cloud, Inbox, Forward, ShieldCheck, GitBranch, CloudDownload, CloudUpload, Rocket, LayoutDashboard, SlidersHorizontal, Gauge, LineChart } from 'lucide-react';
 import { Terminal } from './components/Terminal';
 import { UsageChart } from './components/UsageChart';
 import HubTabs from './components/HubTabs';
@@ -55,6 +55,7 @@ import './pages/WafAccessLogs.css';
 import './pages/Addons.css';
 import './pages/Malware.css';
 import './pages/WebsiteDetail.css';
+import './pages/AccountResources.css';
 import './bpanel.css';
 
 const API = import.meta.env.VITE_API_URL || '/api';
@@ -137,6 +138,7 @@ const PAGE_ROUTES = {
   // The server's own pages, behind the top bar's status chips (admin only).
   processes: '/processes',
   'ram-usage': '/ram-usage',
+  'account-resources': '/account-resources',
   'disk-usage': '/disk-usage',
   traffic: '/traffic',
 };
@@ -928,7 +930,6 @@ function App() {
   const [limitsHistory, setLimitsHistory] = useState(null);
   const [dashRange, setDashRange] = useState('day');
   const [dashScope, setDashScope] = useState('account');
-  const [topAccountsSort, setTopAccountsSort] = useState('cpu');
   // An account picked on the dashboard, opened for editing once Users has loaded.
   const [pendingEditUserId, setPendingEditUserId] = useState(null);
   // The dashboard's tool panel: the search, and which groups are folded.
@@ -1022,6 +1023,13 @@ function App() {
   const [fileContent, setFileContent] = useState('');
   const [selectedFilePaths, setSelectedFilePaths] = useState([]);
   const [archiveFormat, setArchiveFormat] = useState('zip');
+  // Server › Account resources: the find box, the sort, and the account
+  // whose charts are open with their history and period.
+  const [arFind, setArFind] = useState('');
+  const [arSort, setArSort] = useState({ key: 'cpu', desc: true });
+  const [arOpen, setArOpen] = useState(null);
+  const [arHistory, setArHistory] = useState(null);
+  const [arRange, setArRange] = useState('day');
   // One website's page: which website and tab its address names, and
   // whether its Advanced tab has the terminal open.
   const [siteWhere, setSiteWhere] = useState(() => websiteFromPathname(window.location.pathname) || { domain: '', tab: 'overview' });
@@ -5547,6 +5555,14 @@ function App() {
     if (siteWhere.tab === 'logs') loadWebsiteLog(site, 'access', 200, site.domain);
   }, [isAuthenticated, page, siteWhere.domain, siteWhere.tab, websites.length]);
 
+  // Account resources: read again every 10 seconds while the page is open.
+  useEffect(() => {
+    if (!isAuthenticated || page !== 'account-resources' || !isAdmin || !limitsOn) return undefined;
+    loadLimitsInfo();
+    const timer = setInterval(loadLimitsInfo, 10000);
+    return () => clearInterval(timer);
+  }, [isAuthenticated, page, isAdmin, limitsOn]);
+
   useEffect(() => { setMobileMenuOpen(false); }, [page]);
 
   // The account menu closes on a click anywhere else, on Escape, and on navigation.
@@ -5572,7 +5588,7 @@ function App() {
   const navCtx = {
     isAdmin, isReseller, canOpenTerminal, appsFeatureEnabled,
     mailAddonInstalled, dnsAddonInstalled, gitAddonInstalled, mcpAddonInstalled,
-    notificationsAddonInstalled, malwareAddonInstalled,
+    notificationsAddonInstalled, malwareAddonInstalled, limitsOn,
   };
   navCtxRef.current = navCtx;
   // A hub's own address typed or bookmarked (/server, /settings): its first
@@ -5952,7 +5968,6 @@ function App() {
           <button type="button" className="dash-section-head" aria-expanded={open} aria-controls={`dash-section-${section.key}`}
             onClick={() => toggleToolGroup(section.key)}>
             <h3>{section.title}</h3>
-            <span className="dash-section-count">{section.tiles.length + (section.key === 'extensions' ? missingAddons.length : 0)}</span>
             <ChevronDown size={16} className="dash-section-chevron" aria-hidden="true"/>
           </button>
           {open && <div className="dash-tiles" id={`dash-section-${section.key}`}>
@@ -5985,7 +6000,6 @@ function App() {
           <InfoRow label={t('PHP-FPM workers at most (every pool)')} value={workers.pools ? t('{count} in {pools} pools', { count: workers.max_children, pools: workers.pools }) : '--'} />
         </div>
       </section>
-      {limitsOn && renderTopAccounts()}
     </>;
   }
 
@@ -6082,39 +6096,124 @@ function App() {
     </>;
   }
 
-  // The administrator's view of the Resource limits addon: who uses most now.
-  function renderTopAccounts() {
-    const rows = Object.entries(limitsInfo?.accounts || {}).map(([id, entry]) => ({ ...entry, id: Number(id), now: entry.usage || {}, caps: entry.limits || {} }));
-    if (!rows.length) return null;
-    const measure = topAccountsSort === 'memory' ? row => Number(row.now.memory_mb) || 0 : row => Number(row.now.cpu_percent) || 0;
-    const top = rows.sort((a, b) => measure(b) - measure(a) || (b.oom_kills_day || 0) - (a.oom_kills_day || 0)).slice(0, 5);
-    const share = (used, limit) => limit > 0 ? clampPercent((Number(used) || 0) / limit * 100) : null;
-    const meter = (label, text, percent, limitText) => <span className="top-accounts-meter" data-label={label}>
-      <span>{text}{limitText && <small> / {limitText}</small>}</span>
-      {percent !== null && <span className={`resource-track${percent >= 90 ? ' tone-bad' : percent >= 75 ? ' tone-warn' : ''}`}><span style={{ width: `${percent}%` }}></span></span>}
+  // Server › Account resources, as SNPanel's (pages/AccountResources.jsx
+  // there): every account's CPU, RAM and processes beside its limits, and how
+  // often the RAM limit stopped it, in a table that sorts by any column and
+  // finds an account; a row opens its charts. It replaces the Dashboard's
+  // "Busiest accounts" (operator, 2026-10-18).
+  function renderAccountResources() {
+    if (!limitsOn) {
+      return <section className="section">
+        <EmptyState icon={Gauge} title={t('Resource limits are off')}
+          message={t('The panel does not hold accounts to CPU, RAM and process limits on this server, so there is nothing to measure them against.')}
+          action={{ label: t('Go to Addons'), icon: Boxes, onClick: () => navigateToPage('addons') }}/>
+      </section>;
+    }
+    const all = Object.entries(limitsInfo?.accounts || {}).map(([id, entry]) => ({ ...entry, id: Number(id), now: entry.usage || null, caps: entry.limits || {} }));
+    const needle = arFind.trim().toLowerCase();
+    const columns = [
+      ['username', t('Account'), row => row.username],
+      ['cpu', 'CPU', row => Number(row.now?.cpu_percent ?? -1)],
+      ['ram', 'RAM', row => Number(row.now?.memory_mb ?? -1)],
+      ['procs', t('Processes'), row => Number(row.now?.processes ?? -1)],
+      ['io', 'IO', row => Number(row.now?.io_read_mbps ?? -1) + Number(row.now?.io_write_mbps ?? 0)],
+      ['oom', t('Stopped (24 h)'), row => Number(row.oom_kills_day || 0)],
+    ];
+    const column = columns.find(([key]) => key === arSort.key) || columns[1];
+    const rows = all.filter(row => !needle || row.username.toLowerCase().includes(needle)).sort((a, b) => {
+      const x = column[2](a);
+      const y = column[2](b);
+      const order = typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y));
+      return (arSort.desc ? -order : order) || a.username.localeCompare(b.username);
+    });
+    const sortBy = key => setArSort(prev => (prev.key === key ? { key, desc: !prev.desc } : { key, desc: key !== 'username' }));
+    const share = (used, limit) => (limit > 0 && used != null ? clampPercent((Number(used) || 0) / limit * 100) : null);
+    const figure = (text, capText, percent) => <span className={`ar-figure${percent >= 90 ? ' tone-bad' : percent >= 75 ? ' tone-warn' : ''}`}>
+      <span className="ar-value">{text}</span>
+      {capText ? <span className="ar-cap">/ {capText}</span> : <span className="ar-cap is-none">{t('no limit')}</span>}
+      {percent !== null && <span className="ar-track" aria-hidden="true"><span style={{ width: `${percent}%` }}/></span>}
     </span>;
-    return <section className="section dash-card">
-      <div className="dash-card-head">
-        <span className="dash-card-icon"><Boxes size={16}/></span><h2>{t('Busiest accounts')}</h2>
-        <div className="segmented-control compact" role="tablist" aria-label={t('Sort by')}>
-          <button type="button" role="tab" aria-selected={topAccountsSort === 'cpu'} className={topAccountsSort === 'cpu' ? 'active' : ''} onClick={() => setTopAccountsSort('cpu')}>CPU</button>
-          <button type="button" role="tab" aria-selected={topAccountsSort === 'memory'} className={topAccountsSort === 'memory' ? 'active' : ''} onClick={() => setTopAccountsSort('memory')}>RAM</button>
+    const head = (key, label) => <th key={key} scope="col" className={`ar-col-${key}`} aria-sort={arSort.key === key ? (arSort.desc ? 'descending' : 'ascending') : 'none'}>
+      <button type="button" className="ar-sort" onClick={() => sortBy(key)}>{label}
+        {arSort.key === key && (arSort.desc ? <ArrowDown size={12} aria-hidden="true"/> : <ArrowUp size={12} aria-hidden="true"/>)}</button>
+    </th>;
+    const open = all.find(row => row.id === arOpen);
+    return <>
+      <PageHeader subtitle={t('CPU, RAM and processes of every account beside its limits, and how often the RAM limit stopped it. A row opens its charts.')}
+        onRefresh={loadLimitsInfo} refreshDisabled={!!loading}/>
+      <section className="section ar-page">
+        <div className="ar-toolbar">
+          <label className="ar-field ar-find"><span className="sr-only">{t('Find an account')}</span>
+            <input type="search" value={arFind} onChange={e => setArFind(e.target.value)} placeholder={t('Find an account')} aria-label={t('Find an account')}/>
+          </label>
         </div>
+        {!limitsInfo && <p className="hint">{t('Loading…')}</p>}
+        {limitsInfo && !limitsInfo.running && <p className="hint">{t('The resource limits agent is not running, so these figures are not current.')}</p>}
+        {limitsInfo && <p className="hint ar-note">{t('{shown} of {total} accounts', { shown: rows.length, total: all.length })} · {t('Read again every 10 seconds while this page is open.')}</p>}
+        {limitsInfo && all.length === 0 && <EmptyState icon={Gauge} title={t('No account yet')} message={t('An account appears here once it is created.')}/>}
+        {all.length > 0 && <div className="data-table-wrap ar-table-wrap">
+          <table className="data-table ar-table">
+            <thead><tr>{columns.map(([key, label]) => head(key, label))}</tr></thead>
+            <tbody>
+              {rows.map(row => <tr key={row.id} className={row.oom_kills_day ? 'has-faults' : undefined}>
+                <td className="ar-col-username" data-label={t('Account')}>
+                  <button type="button" className="ar-open" onClick={() => openAccountResources(row.id)} title={t('Charts of {name}', { name: row.username })}>
+                    <LineChart size={14} aria-hidden="true"/> {row.username}
+                  </button>
+                  {row.role === 'reseller' && <em className="ar-role">{t('Reseller')}</em>}
+                </td>
+                <td className="ar-col-cpu" data-label="CPU">{figure(row.now ? formatCpuPercent(row.now.cpu_percent) : '—', row.caps.cpu_percent ? `${row.caps.cpu_percent}%` : '', share(row.now?.cpu_percent, row.caps.cpu_percent))}</td>
+                <td className="ar-col-ram" data-label="RAM">{figure(row.now ? formatMegabytes(row.now.memory_mb) : '—', row.caps.memory_mb ? formatMegabytes(row.caps.memory_mb) : '', share(row.now?.memory_mb, row.caps.memory_mb))}</td>
+                <td className="ar-col-procs" data-label={t('Processes')}>{figure(row.now ? String(row.now.processes ?? 0) : '—', row.caps.process_limit ? String(row.caps.process_limit) : '', share(row.now?.processes, row.caps.process_limit))}</td>
+                <td className="ar-col-io" data-label="IO">
+                  <span className="ar-io"><small>{t('Read')}</small> {row.now ? formatMbps(row.now.io_read_mbps) : '—'}</span>
+                  <span className="ar-io"><small>{t('Write')}</small> {row.now ? formatMbps(row.now.io_write_mbps) : '—'}</span>
+                </td>
+                <td className="ar-col-oom" data-label={t('Stopped (24 h)')}><span className={`ar-fault${row.oom_kills_day ? ' is-hit' : ''}`}>{row.oom_kills_day || 0}</span></td>
+              </tr>)}
+            </tbody>
+          </table>
+          {rows.length === 0 && <p className="hint ar-empty">{t('No account matches {text}.', { text: arFind.trim() })}</p>}
+        </div>}
+      </section>
+      {open && renderAccountResourceSheet(open)}
+    </>;
+  }
+
+  // One account's charts over the last day or week, in a side sheet.
+  function renderAccountResourceSheet(row) {
+    const points = (arRange === 'week' ? arHistory?.account?.week : arHistory?.account?.day) || [];
+    const caps = row.caps || {};
+    const formatWhen = (stamp, full) => {
+      const date = new Date(stamp * 1000);
+      if (full) return date.toLocaleString([], { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+      return arRange === 'week' ? date.toLocaleDateString([], { day: '2-digit', month: '2-digit' }) : date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    };
+    const formatCount = value => String(Math.round(Number(value) || 0));
+    const common = { points, when: formatWhen, emptyText: t('Not enough history yet: a point is added every 5 minutes.'),
+      limitText: t('Limit'), unlimitedText: t('Unlimited'), peakText: t('Peak'), averageText: t('Average') };
+    return <Drawer open wide onClose={() => setArOpen(null)} title={row.username}
+      subtitle={t('CPU, memory, processes and disk speed over the last day or week. The dashed line is the limit.')}
+      footer={<button type="button" className="secondary-light" onClick={() => setArOpen(null)}>{t('Close')}</button>}>
+      <div className="segmented-control compact" role="tablist" aria-label={t('Period')}>
+        <button type="button" role="tab" aria-selected={arRange === 'day'} className={arRange === 'day' ? 'active' : ''} onClick={() => setArRange('day')}>{t('24 hours')}</button>
+        <button type="button" role="tab" aria-selected={arRange === 'week'} className={arRange === 'week' ? 'active' : ''} onClick={() => setArRange('week')}>{t('7 days')}</button>
       </div>
-      {limitsInfo && !limitsInfo.running && <p className="hint">{t('The resource limits agent is not running, so these figures are not current.')}</p>}
-      <div className="top-accounts">
-        <div className="top-accounts-row is-head" aria-hidden="true">
-          <span>{t('Account')}</span><span>CPU</span><span>RAM</span><span>{t('Processes')}</span><span>{t('Stopped (24 h)')}</span>
-        </div>
-        {top.map(row => <button type="button" className="top-accounts-row" key={row.id} onClick={() => openUserFromDashboard(row.id)} title={t('Open {name}', { name: row.username })}>
-          <span className="top-accounts-name"><strong>{row.username}</strong>{row.role === 'reseller' && <em>{t('Reseller')}</em>}</span>
-          {meter('CPU', formatCpuPercent(row.now.cpu_percent), share(row.now.cpu_percent, row.caps.cpu_percent), row.caps.cpu_percent ? `${row.caps.cpu_percent}%` : '')}
-          {meter('RAM', formatMegabytes(row.now.memory_mb), share(row.now.memory_mb, row.caps.memory_mb), row.caps.memory_mb ? formatMegabytes(row.caps.memory_mb) : '')}
-          <span className="top-accounts-procs" data-label={t('Processes')}>{row.now.processes ?? 0}{row.caps.process_limit ? <small> / {row.caps.process_limit}</small> : null}</span>
-          <span className={`top-accounts-oom${row.oom_kills_day ? ' tone-bad' : ''}`} data-label={t('Stopped (24 h)')}>{row.oom_kills_day || 0}</span>
-        </button>)}
-      </div>
-    </section>;
+      {!arHistory ? <p className="hint">{t('Loading…')}</p> : <div className="usage-charts ar-charts">
+        <UsageChart {...common} title="CPU" pick={point => point.cpu} limit={caps.cpu_percent} format={formatCpuPercent} floor={10} />
+        <UsageChart {...common} title="RAM" pick={point => point.mem} limit={caps.memory_mb} format={formatMegabytes} floor={128} />
+        <UsageChart {...common} title={t('Processes')} pick={point => point.procs} limit={caps.process_limit} format={formatCount} floor={10} />
+        <UsageChart {...common} title={t('Disk read')} pick={point => point.io_r} limit={caps.io_read_mbps} format={formatMbps} floor={0.1} />
+        <UsageChart {...common} title={t('Disk write')} pick={point => point.io_w} limit={caps.io_write_mbps} format={formatMbps} floor={0.1} />
+      </div>}
+    </Drawer>;
+  }
+
+  async function openAccountResources(userId) {
+    setArOpen(userId);
+    setArHistory(null);
+    const data = await request(`/resource-limits/${userId}/history`, { silent: true });
+    if (data) setArHistory(data);
   }
 
   function renderDashboard() {
@@ -6208,7 +6307,6 @@ function App() {
       return <div className="dashboard cp-layout">
         <div className="cp-main">
           {renderFeaturesCard()}
-          {limitsOn && renderTopAccounts()}
         </div>
         <aside className="cp-side">
           {statusCard}
@@ -12146,6 +12244,7 @@ function App() {
   function renderPage() {
     if (page === 'processes') return isAdmin ? renderProcessMonitor() : renderDashboard();
     if (page === 'ram-usage') return isAdmin ? renderRamUsage() : renderDashboard();
+    if (page === 'account-resources') return isAdmin ? renderAccountResources() : renderDashboard();
     if (page === 'disk-usage') return isAdmin ? renderDiskUsage() : renderDashboard();
     if (page === 'traffic') return isAdmin ? renderTraffic() : renderDashboard();
     if (page === 'websites') return renderWebsites();

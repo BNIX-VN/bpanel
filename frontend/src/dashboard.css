@@ -18,7 +18,6 @@
 .dash-section-head:hover:not(:disabled){background:none;color:var(--primary-ink, var(--primary-text))}
 .dash-section-head:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
 .dash-section-head h3{margin:0;font-size:14px;font-weight:700;color:inherit}
-.dash-section-count{min-width:22px;padding:1px 7px;border-radius:999px;background:var(--surface-alt);color:var(--text-secondary);font-size:12px;font-weight:600;text-align:center}
 .dash-section-chevron{margin-left:auto;color:var(--text-secondary);flex:none;transition:transform .15s}
 .dash-section:not(.is-open) .dash-section-chevron{transform:rotate(-90deg)}
 .dash-tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:8px;padding:2px 0 14px}
@@ -48,6 +47,9 @@ button.dash-tile-link{width:100%;white-space:normal;font:inherit;cursor:pointer}
   display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:baseline;gap:2px 8px;padding:9px 10px 6px;
   border:1px solid var(--border);border-radius:var(--radius-md);background:var(--surface-alt);color:var(--text);text-decoration:none;
 }
+/* A button: the panel's own button rules (a fixed height, inline-flex,
+   centred) cut the sparkline off below the figure. */
+button.dash-figure{height:auto;min-height:0;width:100%;display:grid;justify-content:stretch;text-align:left;white-space:normal;font:inherit;cursor:pointer;box-shadow:none}
 .dash-figure:hover{border-color:var(--border-hover);background:var(--surface-hover);color:var(--text)}
 .dash-figure-label{font-size:12px;font-weight:600;color:var(--text-secondary)}
 .dash-figure strong{font-size:15px;font-variant-numeric:tabular-nums}

@@ -54,6 +54,7 @@ export const PAGE_TITLES = {
   'ram-usage': msg('RAM usage'),
   'disk-usage': msg('Disk usage'),
   traffic: msg('Traffic'),
+  'account-resources': msg('Account resources'),
 };
 
 // The facts a role's navigation depends on, from App:
@@ -68,6 +69,7 @@ export const HUBS = [
     { page: 'ram-usage', label: 'RAM' },
     { page: 'disk-usage', label: msg('Disk') },
     { page: 'traffic', label: msg('Traffic') },
+    { page: 'account-resources', label: msg('Account resources'), when: (c) => c.limitsOn },
     { page: 'php', label: msg('PHP config') },
     { page: 'services', label: msg('Services') },
     { page: 'updates', label: msg('Updates') },

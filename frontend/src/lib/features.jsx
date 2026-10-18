@@ -55,6 +55,7 @@ export const TILES = {
   ram: { label: 'RAM', icon: 'ram', page: 'ram-usage', roles: ['admin'] },
   disk: { label: msg('Disk'), icon: 'disk', page: 'disk-usage', roles: ['admin'] },
   traffic: { label: msg('Network traffic'), icon: 'traffic', page: 'traffic', roles: ['admin'] },
+  'account-resources': { label: msg('Account resources'), icon: 'resource-usage', page: 'account-resources', roles: ['admin'], when: (c) => c.limitsOn },
   'api-tokens': { label: msg('API tokens'), icon: 'api-tokens', page: 'panel-settings', before: 'apiTokens', roles: ['admin'] },
   notifications: { label: msg('Notifications'), icon: 'notifications', page: 'notifications', addon: 'notifications', roles: ['admin'] },
   updates: { label: msg('Updates'), icon: 'updates', page: 'updates', roles: ['admin'] },
@@ -73,7 +74,7 @@ const ADMIN = [
   ['databases', msg('Databases'), ['databases', 'database-add', 'phpmyadmin']],
   ['files', msg('Files and backups'), ['files', 'sftp', 'sftp-add', 'backups', 'git', 'terminal']],
   ['security', msg('Security'), ['firewall', 'waf', 'access-logs', 'malware', 'account-security']],
-  ['server', msg('Server'), ['php', 'services', 'processes', 'ram', 'disk', 'traffic', 'updates']],
+  ['server', msg('Server'), ['php', 'services', 'processes', 'ram', 'disk', 'traffic', 'account-resources', 'updates']],
   ['advanced', msg('Advanced'), ['cron', 'mcp', 'api-tokens', 'notifications', 'panel-settings']],
   ['extensions', msg('Extensions'), ['addons']],
 ];
