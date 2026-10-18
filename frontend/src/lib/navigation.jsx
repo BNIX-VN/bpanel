@@ -5,9 +5,8 @@
 //
 // This first pass is deliberately conservative: nothing an existing customer
 // could already reach stops being reachable. Mail, DNS, Git, AI assistants
-// and Applications stay flat sidebar entries (BPanel has no Dashboard tool
-// tiles yet to move them to - that is a later phase, matching OPanel's own
-// history). Only pages that already lived inside the Settings tile grid
+// and Applications are addons, opened from their Dashboard tiles rather
+// than the sidebar (see sidebarItems). Only pages that already lived inside the Settings tile grid
 // (Server status, Security, System) move into hubs, and Files/SFTP/Terminal
 // - three always-present pages with nothing addon-gated about the grouping
 // itself - fold into one Files hub.
@@ -15,7 +14,7 @@
 // A page key is App's (PAGE_ROUTES there); a hub's key is either its first
 // page (files) or an address of its own (server, security-center, config)
 // that opens its first tab.
-import { Archive, Bot, Boxes, Clock, Database, FolderOpen, GitBranch, Globe, Home, Lock, Mail, Network, Server, Settings, ShieldCheck, Users } from 'lucide-react';
+import { Archive, Clock, Database, FolderOpen, Globe, Home, Lock, Server, Settings, ShieldCheck, Users } from 'lucide-react';
 
 const msg = (text) => text;
 
@@ -113,26 +112,19 @@ export function hubLanding(key, ctx) {
   return hub ? visibleTabs(hub, ctx)[0]?.page || null : null;
 }
 
-// The sidebar of each role: [key, label, icon]. Conservative on purpose (see
-// the file header): every addon BPanel already reaches from a flat sidebar
-// entry keeps doing that here, except malware and notifications, which moved
-// into the hubs above - reachable the same as before, just not duplicated.
+// The sidebar of each role: [key, label, icon]. Everyday pages only: an
+// addon (Applications, Email, DNS, Git, AI assistants) is opened from its
+// Dashboard tile, never from here (operator, 2026-10-18: "Các addon mới cài
+// vào không cần hiện trên left sidebar, chỉ cần hiển thị ở Dashboard").
 export function sidebarItems(ctx) {
-  const apps = ctx.appsFeatureEnabled ? [['applications', msg('Applications'), Boxes]] : [];
-  const mail = ctx.mailAddonInstalled ? [['mail', msg('Email'), Mail]] : [];
-  const dns = ctx.dnsAddonInstalled ? [['dns', msg('DNS Manager'), Network]] : [];
-  const git = ctx.gitAddonInstalled ? [['git', 'Git', GitBranch]] : [];
-  const mcp = ctx.mcpAddonInstalled ? [['mcp', msg('AI assistants (MCP)'), Bot]] : [];
   const common = [
     ['dashboard', msg('Dashboard'), Home],
     ['websites', msg('Websites'), Globe],
-    ...apps,
     ['ssl', 'SSL', Lock],
     ['databases', msg('Databases'), Database],
     ['cron', msg('Cron'), Clock],
     ['files', msg('Files'), FolderOpen],
     ['backups', msg('Backups'), Archive],
-    ...mail, ...dns, ...git, ...mcp,
   ];
   if (ctx.isAdmin) {
     return [

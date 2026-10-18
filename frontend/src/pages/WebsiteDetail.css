@@ -39,7 +39,9 @@
 .wsd-advanced .site-web-block,.wsd-plain .site-web-block{border:0;padding:0;background:transparent}
 .wsd-advanced .code-editor{margin-top:12px;width:100%}
 .wsd-fullvhost{margin:-4px 0 0}
-.wsd-terminal{height:600px;margin-top:12px;min-width:0}
+/* The terminal sizes itself (its bar, screen and rules): a fixed height here
+   let it run over the section below. */
+.wsd-terminal{margin-top:12px;min-width:0}
 .wsd-term-off{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:8px}
 .wsd-term-off .hint{margin:0}
 .wsd-danger{border-color:var(--danger-border)}
@@ -53,5 +55,4 @@
   .wsd-domain-form>button{width:100%}
   .wsd-actions>button,.wsd-actions>.button-link{flex:1 1 calc(50% - 8px)}
   .wsd-savebar>button{flex:1}
-  .wsd-terminal{height:520px}
 }

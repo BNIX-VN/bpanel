@@ -973,6 +973,8 @@ function App() {
   const [mailboxEdit, setMailboxEdit] = useState(null);
   const [forwarderEdit, setForwarderEdit] = useState(null);
   const [mailDomainForm, setMailDomainForm] = useState({ domain: '', owner_id: '' });
+  // Turn on email: a domain typed by hand instead of picked from the list.
+  const [mailDomainOther, setMailDomainOther] = useState(false);
   const [catchAllDraft, setCatchAllDraft] = useState({});
   const [mailDns, setMailDns] = useState(null);
   const [mailRelays, setMailRelays] = useState(null);
@@ -5869,6 +5871,9 @@ function App() {
       newDatabase: () => setDbCreateOpen(true),
       mailMailboxes: () => setMailTab('mailboxes'),
       mailForwarders: () => setMailTab('forwarders'),
+      mailDomains: () => setMailTab('domains'),
+      mailRelay: () => setMailTab('relay'),
+      apiTokens: () => setPanelSettingsTab('api'),
     };
     actions[name]?.();
   }
@@ -5947,6 +5952,7 @@ function App() {
           <button type="button" className="dash-section-head" aria-expanded={open} aria-controls={`dash-section-${section.key}`}
             onClick={() => toggleToolGroup(section.key)}>
             <h3>{section.title}</h3>
+            <span className="dash-section-count">{section.tiles.length + (section.key === 'extensions' ? missingAddons.length : 0)}</span>
             <ChevronDown size={16} className="dash-section-chevron" aria-hidden="true"/>
           </button>
           {open && <div className="dash-tiles" id={`dash-section-${section.key}`}>
@@ -7034,9 +7040,21 @@ function App() {
         <div className="mail-create-grid">
           {isAdmin
             ? <div className="field"><span className="field-label">{t('Domain')}</span>
-                <input list="mail-domain-candidates" value={mailDomainForm.domain} placeholder="example.com" spellCheck={false}
-                  onChange={e => setMailDomainForm(prev => ({ ...prev, domain: e.target.value.trim().toLowerCase() }))} />
-                <datalist id="mail-domain-candidates">{candidates.map(name => <option key={name} value={name} />)}</datalist>
+                {mailDomainOther || candidates.length === 0
+                  ? <div className="mail-domain-other">
+                    <input value={mailDomainForm.domain} placeholder="example.com" spellCheck={false} autoCapitalize="none" autoFocus={mailDomainOther}
+                      onChange={e => setMailDomainForm(prev => ({ ...prev, domain: e.target.value.trim().toLowerCase() }))} />
+                    {candidates.length > 0 && <button type="button" className="secondary-light"
+                      onClick={() => { setMailDomainOther(false); setMailDomainForm(prev => ({ ...prev, domain: '' })); }}>{t('Pick from the list')}</button>}
+                  </div>
+                  : <select value={mailDomainForm.domain} onChange={e => {
+                    if (e.target.value === '__other') { setMailDomainOther(true); setMailDomainForm(prev => ({ ...prev, domain: '' })); }
+                    else setMailDomainForm(prev => ({ ...prev, domain: e.target.value }));
+                  }}>
+                    <option value="">{t('Choose a domain on this server')}</option>
+                    {candidates.map(name => <option key={name} value={name}>{name}</option>)}
+                    <option value="__other">{t('Another domain…')}</option>
+                  </select>}
               </div>
             : <div className="field"><span className="field-label">{t('Domain')}</span>
                 <select value={mailDomainForm.domain} onChange={e => setMailDomainForm(prev => ({ ...prev, domain: e.target.value }))}>
@@ -8102,27 +8120,37 @@ function App() {
         title={websites.length ? t('Create website') : t('Attach first domain')}
         footer={<button type="submit" form="website-create-form" disabled={!!loading || !domain}><Plus size={15} aria-hidden="true"/> {t('Create')}</button>}>
         <form id="website-create-form" onSubmit={(e) => { e.preventDefault(); createWordPress(); }}>
-        <div className="form-row create-site-row">
-          <input id="create-website-domain" value={domain} onChange={e => setDomain(e.target.value)} placeholder="domain.com" />
-          {isReseller && users.length > 0 && <select value={siteOwnerId} onChange={e => setSiteOwnerId(e.target.value)} aria-label={t('Owner')} title={t('Owner')}>
-            <option value="">{t('For yourself')}</option>
-            {users.filter(u => u.id !== currentUser?.id).map(u => <option key={u.id} value={u.id}>{t('For {name}', { name: u.username })}</option>)}
-          </select>}
-          <select value={siteType} onChange={e => setSiteType(e.target.value)}>
-            {WEBSITE_MODES.map(([value, label]) => <option
-              key={value}
-              value={value}
-              disabled={value === 'application' && !appsFeatureEnabled}
-            >{t(label)}</option>)}
-          </select>
-          {siteType === 'application'
-            ? <select value={createSiteAppId} onChange={e => setCreateSiteAppId(e.target.value)}>
-              <option value="">{t('Select an application')}</option>
-              {siteApps.items.map(app => <option key={app.id} value={app.id}>{app.name} · {SITE_APP_KIND_LABELS[app.kind] || app.kind} · :{app.port}</option>)}
+        <div className="sn-drawer-grid create-site-fields">
+          <Field className="is-wide" label={t('Domain')}>
+            <input id="create-website-domain" value={domain} onChange={e => setDomain(e.target.value)} placeholder="domain.com" autoCapitalize="none" spellCheck={false} />
+          </Field>
+          {isReseller && users.length > 0 && <Field className="is-wide" label={t('Owner')}>
+            <select value={siteOwnerId} onChange={e => setSiteOwnerId(e.target.value)}>
+              <option value="">{t('For yourself')}</option>
+              {users.filter(u => u.id !== currentUser?.id).map(u => <option key={u.id} value={u.id}>{t('For {name}', { name: u.username })}</option>)}
             </select>
-            : <select value={phpVersion} onChange={e => setPhpVersion(e.target.value)}>
-              {phpVersions.installed.map(v => <option key={v} value={v}>PHP {v}</option>)}
-            </select>}
+          </Field>}
+          <Field label={t('Website type')}>
+            <select value={siteType} onChange={e => setSiteType(e.target.value)}>
+              {WEBSITE_MODES.map(([value, label]) => <option
+                key={value}
+                value={value}
+                disabled={value === 'application' && !appsFeatureEnabled}
+              >{t(label)}</option>)}
+            </select>
+          </Field>
+          {siteType === 'application'
+            ? <Field label={t('Application')}>
+              <select value={createSiteAppId} onChange={e => setCreateSiteAppId(e.target.value)}>
+                <option value="">{t('Select an application')}</option>
+                {siteApps.items.map(app => <option key={app.id} value={app.id}>{app.name} · {SITE_APP_KIND_LABELS[app.kind] || app.kind} · :{app.port}</option>)}
+              </select>
+            </Field>
+            : <Field label={t('PHP version')}>
+              <select value={phpVersion} onChange={e => setPhpVersion(e.target.value)}>
+                {phpVersions.installed.map(v => <option key={v} value={v}>PHP {v}</option>)}
+              </select>
+            </Field>}
         </div>
         {siteType === 'application' && siteApps.items.length === 0 && <p className="hint">{t('No applications installed yet. Install one on the')}<button type="button" className="link-button" onClick={() => navigateToPage('applications')}>{t('Applications')}</button> page first.
         </p>}
@@ -9841,7 +9869,7 @@ function App() {
                   {users.map(user => <option key={user.id} value={user.id}>{user.username}</option>)}
                 </select>
               </Field>
-              <Field label={t('Destination')} hint={t('A copy goes there; the backup stays on this server too.')}>
+              <Field label={t('Destination')}>
                 <select value={selectedSftpTargetId} onChange={e => setSelectedSftpTargetId(e.target.value)}>
                   <option value="">{t('Local only')}</option>
                   {sftpTargets.map(target => <option key={target.id} value={target.id}>{target.name}</option>)}

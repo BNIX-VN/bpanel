@@ -18,6 +18,7 @@
 .dash-section-head:hover:not(:disabled){background:none;color:var(--primary-ink, var(--primary-text))}
 .dash-section-head:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
 .dash-section-head h3{margin:0;font-size:14px;font-weight:700;color:inherit}
+.dash-section-count{min-width:22px;padding:1px 7px;border-radius:999px;background:var(--surface-alt);color:var(--text-secondary);font-size:12px;font-weight:600;text-align:center}
 .dash-section-chevron{margin-left:auto;color:var(--text-secondary);flex:none;transition:transform .15s}
 .dash-section:not(.is-open) .dash-section-chevron{transform:rotate(-90deg)}
 .dash-tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:8px;padding:2px 0 14px}

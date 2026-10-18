@@ -35,10 +35,12 @@ export const TILES = {
   // Databases
   databases: { label: msg('Databases'), icon: 'databases', page: 'databases' },
   'database-add': { label: msg('New database'), icon: 'database-add', page: 'databases', before: 'newDatabase' },
+  phpmyadmin: { label: 'phpMyAdmin', icon: 'phpmyadmin', page: 'databases' },
   // Email
   mailboxes: { label: msg('Mailboxes'), icon: 'mail', page: 'mail', before: 'mailMailboxes', addon: 'mail' },
   forwarders: { label: msg('Forwarders'), icon: 'forwarders', page: 'mail', before: 'mailForwarders', addon: 'mail' },
-  // Domains
+  'mail-domains': { label: msg('Mail domains'), icon: 'domains', page: 'mail', before: 'mailDomains', addon: 'mail' },
+  'mail-relay': { label: msg('SMTP relay'), icon: 'mail-relay', page: 'mail', before: 'mailRelay', addon: 'mail', roles: ['admin'] },
   dns: { label: msg('DNS Manager'), icon: 'dns', page: 'dns', addon: 'dns' },
   // Security
   'account-security': { label: msg('Account security'), icon: 'account-security', page: 'security' },
@@ -49,33 +51,39 @@ export const TILES = {
   usage: { label: msg('Resource usage'), icon: 'resource-usage', page: 'usage', roles: ['reseller', 'customer'], when: (c) => c.limitsOn },
   mcp: { label: msg('AI assistants (MCP)'), icon: 'mcp', page: 'mcp', addon: 'mcp' },
   services: { label: msg('Services'), icon: 'services', page: 'services', roles: ['admin'] },
+  processes: { label: msg('Processes'), icon: 'processes', page: 'processes', roles: ['admin'] },
+  ram: { label: 'RAM', icon: 'ram', page: 'ram-usage', roles: ['admin'] },
+  disk: { label: msg('Disk'), icon: 'disk', page: 'disk-usage', roles: ['admin'] },
+  traffic: { label: msg('Network traffic'), icon: 'traffic', page: 'traffic', roles: ['admin'] },
+  'api-tokens': { label: msg('API tokens'), icon: 'api-tokens', page: 'panel-settings', before: 'apiTokens', roles: ['admin'] },
   notifications: { label: msg('Notifications'), icon: 'notifications', page: 'notifications', addon: 'notifications', roles: ['admin'] },
   updates: { label: msg('Updates'), icon: 'updates', page: 'updates', roles: ['admin'] },
   addons: { label: msg('Addons'), icon: 'addons', page: 'addons', roles: ['admin'] },
   'panel-settings': { label: msg('Panel settings'), icon: 'panel-settings', page: 'panel-settings', roles: ['admin'] },
 };
 
-// The Dashboard's sections, in order - the same groups dashboardToolGroups()
-// used, for each role.
+// The Dashboard's sections, in order, for each role - SNPanel's own
+// (lib/features.jsx there): Accounts, Websites and domains, Email,
+// Databases, Files and backups, Security, Server, Advanced, Extensions.
+// Addons are reached from here, not from the sidebar.
 const ADMIN = [
   ['accounts', msg('Accounts'), ['users', 'user-add', 'packages']],
-  ['websites', msg('Websites'), ['websites', 'website-add', 'applications', 'ssl', 'waf', 'access-logs', 'php']],
-  ['files', msg('Files'), ['files', 'sftp', 'git', 'terminal', 'sftp-add', 'backups']],
-  ['databases', msg('Databases'), ['databases', 'database-add']],
-  ['email', msg('Email'), ['mailboxes', 'forwarders']],
-  ['domains', msg('Domains'), ['dns']],
-  ['security', msg('Security'), ['account-security', 'firewall', 'malware']],
-  ['advanced', msg('Advanced'), ['cron', 'mcp', 'services', 'notifications', 'updates', 'panel-settings']],
+  ['websites', msg('Websites and domains'), ['websites', 'website-add', 'ssl', 'dns', 'applications']],
+  ['email', msg('Email'), ['mailboxes', 'forwarders', 'mail-domains', 'mail-relay']],
+  ['databases', msg('Databases'), ['databases', 'database-add', 'phpmyadmin']],
+  ['files', msg('Files and backups'), ['files', 'sftp', 'sftp-add', 'backups', 'git', 'terminal']],
+  ['security', msg('Security'), ['firewall', 'waf', 'access-logs', 'malware', 'account-security']],
+  ['server', msg('Server'), ['php', 'services', 'processes', 'ram', 'disk', 'traffic', 'updates']],
+  ['advanced', msg('Advanced'), ['cron', 'mcp', 'api-tokens', 'notifications', 'panel-settings']],
   ['extensions', msg('Extensions'), ['addons']],
 ];
 const CUSTOMER = [
-  ['websites', msg('Websites'), ['websites', 'website-add', 'applications', 'ssl', 'waf']],
-  ['files', msg('Files'), ['files', 'sftp', 'git', 'terminal', 'sftp-add', 'backups']],
-  ['databases', msg('Databases'), ['databases', 'database-add']],
-  ['email', msg('Email'), ['mailboxes', 'forwarders']],
-  ['domains', msg('Domains'), ['dns']],
-  ['security', msg('Security'), ['account-security']],
-  ['advanced', msg('Advanced'), ['cron', 'usage', 'mcp']],
+  ['websites', msg('Websites and domains'), ['websites', 'website-add', 'ssl', 'dns', 'applications']],
+  ['email', msg('Email'), ['mailboxes', 'forwarders', 'mail-domains']],
+  ['databases', msg('Databases'), ['databases', 'database-add', 'phpmyadmin']],
+  ['files', msg('Files and backups'), ['files', 'sftp', 'sftp-add', 'backups', 'git', 'terminal']],
+  ['security', msg('Security'), ['account-security', 'waf']],
+  ['advanced', msg('Advanced'), ['cron', 'mcp', 'usage']],
 ];
 const RESELLER = [
   ['accounts', msg('Customers'), ['users', 'user-add', 'packages']],

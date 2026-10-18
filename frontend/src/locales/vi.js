@@ -27,6 +27,17 @@
  */
 
 export const vi = {
+  "SMTP relay": "SMTP relay",
+  "Cron": "Cron",
+  "Network traffic": "Lưu lượng mạng",
+  "API tokens": "API Token",
+  "Websites and domains": "Website và tên miền",
+  "Email": "Email",
+  "Files and backups": "File và backup",
+  "Website type": "Loại website",
+  "Pick from the list": "Chọn từ danh sách",
+  "Choose a domain on this server": "Chọn một tên miền trên server",
+  "Another domain…": "Tên miền khác…",
   "No website {domain} here.": "Không có website {domain} ở đây.",
   "It may have been deleted, or it belongs to an account you cannot see.": "Có thể website đã bị xóa, hoặc thuộc một tài khoản bạn không xem được.",
   "Overview": "Tổng quan",
