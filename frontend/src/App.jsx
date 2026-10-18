@@ -18,6 +18,12 @@ import { Terminal } from './components/Terminal';
 import { UsageChart } from './components/UsageChart';
 import HubTabs from './components/HubTabs';
 import NotificationBell from './components/NotificationBell.jsx';
+import Drawer from './components/Drawer.jsx';
+import { DialogHost, confirmDialog } from './components/Dialog.jsx';
+import { Checkbox, Field, PasswordField } from './components/Form.jsx';
+import ActionMenu from './components/ActionMenu.jsx';
+import PageHeader from './components/PageHeader.jsx';
+import EmptyState from './components/EmptyState.jsx';
 import { PAGE_TITLES, hubLanding, hubOf, isHubKey, sidebarItems, sidebarKeyOf } from './lib/navigation';
 import { FeatureIcon } from './icons/feature/index.js';
 import { TILES, dashboardSections, tileLabel, tileVisible } from './lib/features.jsx';
@@ -2522,10 +2528,27 @@ function App() {
     }
   }
 
+  // Its vhost and certificate always go; its files and its databases as the
+  // dialog's boxes say - unticked, they stay with the account.
   async function deleteWebsite(id) {
-    if (!confirm(t('Delete this website including files, vhost, database, and its SSL certificate?'))) return;
-    const data = await request(`/websites/${id}?delete_files=true&delete_database=true`, { method: 'DELETE' }, t('Deleting website...'));
-    if (data) refreshAll();
+    const site = websites.find(item => String(item.id) === String(id));
+    const dbs = databases.filter(db => String(db.website_id) === String(id));
+    const choice = await confirmDialog({
+      title: t('Delete website'), subject: site?.domain, danger: true, typeToConfirm: site?.domain,
+      message: t('Its web server configuration and certificate are removed. Untick what should stay with the account.'),
+      options: [
+        { name: 'files', label: t('Delete its files'), hint: site?.root_path, checked: true },
+        { name: 'databases', label: t('Delete its databases'), hint: dbs.length ? dbs.map(db => db.db_name).join(', ') : t('No database is attached to this website.'), checked: true, disabled: dbs.length === 0 },
+      ],
+      confirmLabel: t('Delete website'),
+    });
+    if (!choice) return false;
+    const data = await request(`/websites/${id}?delete_files=${!!choice.files}&delete_database=${!!choice.databases}`, { method: 'DELETE' }, t('Deleting website...'));
+    if (data) {
+      setNotice(t('Deleted {domain}.', { domain: site?.domain || '' }));
+      refreshAll();
+    }
+    return !!data;
   }
 
   async function enableSsl(id) {
@@ -5578,18 +5601,6 @@ function App() {
     </select>;
   }
 
-  function EmptyState({ icon: Icon = AlertCircle, message = 'No data yet', action }) {
-    /* Translated here rather than at each call site. Several callers pass a
-     * ternary - message={searching ? 'No matches.' : 'None yet.'} - and a
-     * wrapper looking for message="..." cannot see inside one. Doing it here
-     * covers every caller, including the ones written tomorrow. */
-    return <div className="empty-state">
-      <Icon size={40} />
-      <p>{t(message)}</p>
-      {action && <button type="button" className="mini secondary-light" onClick={action.onClick}>{action.icon ? <action.icon size={14}/> : null} {action.label}</button>}
-    </div>;
-  }
-
   function formatBytes(value) {
     const amount = Number(value);
     if (!Number.isFinite(amount) || amount < 0) return '--';
@@ -8041,12 +8052,22 @@ function App() {
       : site.ssl_mode === 'cloudflare' ? t('Wildcard')
         : site.ssl_mode === 'shared' ? t('Shared cert') : t('SSL OK');
     const wpPanel = wordpressInstaller;
+    const closeCreate = () => setCreateFormOpen(false);
+    const siteMenuItems = (site) => [
+      { label: t('Files'), icon: FolderOpen, onClick: () => openWebsiteFileManager(site) },
+      { label: t('Logs'), icon: FileText, onClick: () => openWebsiteLogs(site) },
+      canOpenTerminal ? { label: t('Terminal'), icon: TerminalIcon, onClick: () => openWebsiteTerminal(site) } : null,
+      site.wordpress_installed
+        ? { label: t('Update WordPress'), icon: RefreshCw, disabled: !!loading, onClick: () => openWordPressUpdate(site) }
+        : { label: t('Install WordPress'), icon: Download, disabled: !!loading, onClick: () => openWordPressInstaller(site) },
+      'separator',
+      { label: t('Delete website'), icon: Trash2, danger: true, disabled: !!loading, onClick: () => deleteWebsite(site.id) },
+    ];
     return <>
-      {createOpen && <section className="section create-panel">
-        <div className="section-title">
-          <h2>{t('Create website')}</h2>
-          {websites.length > 0 && <button type="button" className="secondary icon-only mini" onClick={() => setCreateFormOpen(false)} aria-label={t('Close')} title={t('Close')}><X size={15}/></button>}
-        </div>
+      <Drawer open={createOpen} onClose={websites.length > 0 ? closeCreate : undefined}
+        title={websites.length ? t('Create website') : t('Attach first domain')}
+        footer={<button type="submit" form="website-create-form" disabled={!!loading || !domain}><Plus size={15} aria-hidden="true"/> {t('Create')}</button>}>
+        <form id="website-create-form" onSubmit={(e) => { e.preventDefault(); createWordPress(); }}>
         <div className="form-row create-site-row">
           <input id="create-website-domain" value={domain} onChange={e => setDomain(e.target.value)} placeholder="domain.com" />
           {isReseller && users.length > 0 && <select value={siteOwnerId} onChange={e => setSiteOwnerId(e.target.value)} aria-label={t('Owner')} title={t('Owner')}>
@@ -8068,21 +8089,23 @@ function App() {
             : <select value={phpVersion} onChange={e => setPhpVersion(e.target.value)}>
               {phpVersions.installed.map(v => <option key={v} value={v}>PHP {v}</option>)}
             </select>}
-          {wpFieldsEnabled && <input value={adminEmail} onChange={e => setAdminEmail(e.target.value)} placeholder="admin@domain.com" />}
-          {wpFieldsEnabled && <input value={wpAdminUser} onChange={e => setWpAdminUser(e.target.value)} placeholder={t('WP admin user')} />}
-          {wpFieldsEnabled && <input value={wpAdminPassword} onChange={e => setWpAdminPassword(e.target.value)} placeholder={t('WP admin password')} type="password" />}
-          <button disabled={!!loading || !domain} onClick={createWordPress}><Plus size={15}/> {t('Create')}</button>
         </div>
         {siteType === 'application' && siteApps.items.length === 0 && <p className="hint">{t('No applications installed yet. Install one on the')}<button type="button" className="link-button" onClick={() => navigateToPage('applications')}>{t('Applications')}</button> page first.
         </p>}
-        {siteType === 'wordpress' && <label className="check-line">
-          <input type="checkbox" checked={installWordPress} onChange={e => setInstallWordPress(e.target.checked)} />
-          {t('Install WordPress (creates database, downloads WP, configures vhost)')}
-        </label>}
-        <label className="check-line">
-          <input type="checkbox" checked={sslAfterCreate} onChange={e => setCreateSslMode(e.target.checked ? 'letsencrypt' : 'none')} />
-          {t('Set up SSL after creating')}
-        </label>
+        {siteType === 'wordpress' && <Checkbox checked={installWordPress} onChange={setInstallWordPress}
+          label={t('Install WordPress (creates database, downloads WP, configures vhost)')}/>}
+        {wpFieldsEnabled && <div className="sn-drawer-section">
+          <h3>{t('WordPress administrator')}</h3>
+          <div className="sn-drawer-grid">
+            <Field label={t('Admin user')}><input value={wpAdminUser} onChange={e => setWpAdminUser(e.target.value)} placeholder={t('WP admin user')} autoComplete="off"/></Field>
+            <Field label={t('Admin email')} optional><input type="email" value={adminEmail} onChange={e => setAdminEmail(e.target.value)} placeholder="admin@domain.com"/></Field>
+            <Field className="is-wide" label={t('Admin password')} optional hint={t('Leave blank for a random one')}>
+              <PasswordField value={wpAdminPassword} onChange={setWpAdminPassword} generate copy/>
+            </Field>
+          </div>
+        </div>}
+        <Checkbox checked={sslAfterCreate} onChange={(v) => setCreateSslMode(v ? 'letsencrypt' : 'none')}
+          label={t('Set up SSL after creating')}/>
         {sslAfterCreate && <div className="create-ssl-box">
           <div className="segmented ssl-mode-tabs">
             <button className={createSslMode === 'letsencrypt' ? 'active' : ''} onClick={() => setCreateSslMode('letsencrypt')}><Lock size={13}/> Let's Encrypt</button>
@@ -8108,15 +8131,13 @@ function App() {
           : siteType === 'application'
             ? 'Nginx will forward this domain to the selected application on 127.0.0.1, including WebSocket upgrades.'
             : 'A virtual host will be created with public_html/ folder. Upload your PHP, HTML, or static files via File Manager.')}</p>
-      </section>}
+        </form>
+      </Drawer>
       <section className="section">
-        <div className="section-title">
-          <h2>{t('Website list')}</h2>
-          <div className="actions">
-            <button className="secondary" disabled={!!loading} onClick={() => loadWebsiteList('', true)}><RefreshCw size={15}/> {t('Refresh')}</button>
-            {!createOpen && <button type="button" onClick={openCreate}><Plus size={15}/> {t('New website')}</button>}
-          </div>
-        </div>
+        <PageHeader subtitle={wsQuery ? t('{shown} of {total}', { shown: filteredWebsites.length, total: websites.length })
+          : (websites.length === 1 ? t('{n} website', { n: websites.length }) : t('{n} websites', { n: websites.length }))}
+          onRefresh={() => loadWebsiteList('', true)} refreshDisabled={!!loading}
+          actions={!createOpen && <button type="button" onClick={openCreate}><Plus size={15} aria-hidden="true"/> {t('New website')}</button>}/>
         {websites.length > 0 && <div className="website-search">
           <Search size={15}/>
           <NoAutofillInput name="website-search" value={websiteSearch} onChange={e => setWebsiteSearch(e.target.value)} placeholder={t('Filter domains…')} />
@@ -8125,7 +8146,7 @@ function App() {
             ? t('{shown} of {total}', { shown: filteredWebsites.length, total: websites.length })
             : (websites.length === 1 ? t('{n} website', { n: websites.length }) : t('{n} websites', { n: websites.length }))}</span>
         </div>}
-        {websites.length === 0 && <EmptyState icon={Globe} message="No websites yet." action={{ label: t('New website'), icon: Plus, onClick: openCreate }} />}
+        {websites.length === 0 && <EmptyState icon={Globe} message={t('No websites yet.')} action={{ label: t('New website'), icon: Plus, onClick: openCreate }} />}
         {websites.length > 0 && filteredWebsites.length === 0 && <EmptyState icon={Globe} message={t('No domain matches “{query}”.', { query: websiteSearch })} />}
         <div className="site-grid">
           {filteredWebsites.map(site => <div className="site-stack" key={site.id}>
@@ -8148,13 +8169,9 @@ function App() {
             </div>
             <div className="site-actions" aria-label={t('Website actions for {domain}', { domain: site.domain })}>
               <div className="site-feature-actions">
-                <button className="site-icon-button secondary-light" data-tooltip="Files" title={t('Files')} aria-label={t('Open file manager for {domain}', { domain: site.domain })} disabled={!!loading} onClick={() => openWebsiteFileManager(site)}><FolderOpen size={15}/></button>
-                <button className="site-icon-button secondary-light" data-tooltip="Logs" title={t('Logs')} aria-label={t('View logs for {domain}', { domain: site.domain })} disabled={!!loading} onClick={() => openWebsiteLogs(site)}><FileText size={15}/></button>
-                {canOpenTerminal && <button className="site-icon-button secondary-light" data-tooltip="Terminal" title={t('Terminal')} aria-label={t('Open terminal for {domain}', { domain: site.domain })} disabled={!!loading} onClick={() => openWebsiteTerminal(site)}><TerminalIcon size={15}/></button>}
-                <button className="site-icon-button secondary-light" data-tooltip="Settings" title={t('Settings')} aria-label={t('Edit settings for {domain}', { domain: site.domain })} disabled={!!loading} onClick={() => openNginxCustom(site)}><SettingsIcon size={15}/></button>
-                {!site.wordpress_installed && <button className="site-icon-button secondary-light" data-tooltip={t('Install WP')} title={t('Install WordPress')} aria-label={t('Install WordPress on {domain}', { domain: site.domain })} disabled={!!loading} onClick={() => openWordPressInstaller(site)}><Download size={15}/></button>}
-                {site.wordpress_installed && <button className="site-icon-button secondary-light" data-tooltip={t('Update WP')} title={t('Update WordPress')} aria-label={t('Update WordPress on {domain}', { domain: site.domain })} disabled={!!loading} onClick={() => openWordPressUpdate(site)}><RefreshCw size={15}/></button>}
-                <button className="site-icon-button danger" data-tooltip="Delete" title={t('Delete')} aria-label={t('Delete {name}', { name: site.domain })} disabled={!!loading} onClick={() => deleteWebsite(site.id)}><Trash2 size={15}/></button>
+                <button className="secondary-light" disabled={!!loading} onClick={() => openNginxCustom(site)}>
+                  <SettingsIcon size={14} aria-hidden="true"/> {t('Settings')}</button>
+                <ActionMenu label={t('More actions for {domain}', { domain: site.domain })} items={siteMenuItems(site)}/>
               </div>
             </div>
           </article>
@@ -8339,7 +8356,7 @@ function App() {
           <label>{t('Password')}</label><span><code>{createdDbInfo.db_password}</code> <button className="mini secondary-light" title={copiedField === 'db_password' ? t('Copied!') : t('Copy')} onClick={() => copyToClipboard(createdDbInfo.db_password, 'db_password')}>{copiedField === 'db_password' ? <Check size={12} style={{color:'var(--success)'}}/> : <Copy size={12}/>}</button></span>
         </div>
       </div>}
-      {databases.length === 0 && !createdDbInfo && <EmptyState icon={Database} message="No databases found." action={{ label: t('New database'), icon: Plus, onClick: openCreate }} />}
+      {databases.length === 0 && !createdDbInfo && <EmptyState icon={Database} message={t('No databases found.')} action={{ label: t('New database'), icon: Plus, onClick: openCreate }} />}
       {databases.length > 0 && <div className="list-search">
         <Search size={15}/>
         <NoAutofillInput name="database-search" value={dbSearch} onChange={e => setDbSearch(e.target.value)} placeholder={t('Filter databases…')} />
@@ -8513,7 +8530,7 @@ function App() {
         </div>
       </div>}
 
-      {gitInfo && repos.length === 0 && !createOpen && <EmptyState icon={GitBranch} message="No repositories yet." />}
+      {gitInfo && repos.length === 0 && !createOpen && <EmptyState icon={GitBranch} message={t('No repositories yet.')} />}
       {repos.length > 0 && <div className="table">
         {repos.map(repo => <div className="row git-row" key={repo.id} role="button" tabIndex={0}
           onClick={() => openGitRepo(repo.id)} onKeyDown={e => { if (e.key === 'Enter') openGitRepo(repo.id); }}>
@@ -8875,7 +8892,7 @@ function App() {
       </div>
       {selectedWebsiteId && <p className="hint">{t('Cron runs as')} <strong>{cronUser || currentSite?.linux_user || 'www-data'}</strong> {t('for the selected website. Accepted commands:')} {t('WP-CLI maintenance commands, or a')} <code>.php</code> {t('file inside public_html.')} {t('Write')} <code>php</code> {t('and BPanel rewrites it to')} <code>{sitePhpBinary}</code>.</p>}
       <div className="cron-list">
-        {selectedWebsiteId && cronItems.length === 0 && <EmptyState icon={Clock} message="No cron jobs found for this website." />}
+        {selectedWebsiteId && cronItems.length === 0 && <EmptyState icon={Clock} message={t('No cron jobs found for this website.')} />}
         {cronItems.map(item => <div className="cron-item" key={`${item.index}-${item.line}`}>
           <span className="badge">#{item.index}</span>
           <span><strong>{cronScheduleLabel(item.schedule)} <code className="cron-expr">{item.schedule}</code></strong><small>{item.command || item.line}</small></span>
@@ -11665,4 +11682,4 @@ function App() {
   </main>;
 }
 
-createRoot(document.getElementById('root')).render(<App />);
+createRoot(document.getElementById('root')).render(<><App /><DialogHost /></>);
