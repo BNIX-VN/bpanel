@@ -27,6 +27,8 @@
   padding:14px 8px 11px;border:1px solid var(--border);border-radius:var(--radius-md);background:var(--surface);
   color:var(--text);text-decoration:none;text-align:center;transition:border-color .15s,background-color .15s,box-shadow .15s;
 }
+/* A button, not OPanel's link: it fills its cell and wraps its label. */
+button.dash-tile-link{width:100%;white-space:normal;font:inherit;cursor:pointer}
 .dash-tile-link:hover{background:var(--surface-hover);border-color:var(--primary-soft, var(--primary-border));color:var(--text)}
 .dash-tile-link:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
 /* Wraps between words only, never inside one. */

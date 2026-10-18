@@ -13,10 +13,11 @@ import 'ace-builds/src-noconflict/mode-text';
 import 'ace-builds/src-noconflict/mode-yaml';
 import 'ace-builds/src-noconflict/theme-textmate';
 import 'ace-builds/src-noconflict/theme-tomorrow_night';
-import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, Eye, UserCog, FolderKey, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pause, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle, Activity, BrickWall, Bug, LockKeyhole, PackageOpen, ScrollText, ShieldAlert, CheckCircle, Zap, Bell, Mail, Send, Cloud, Inbox, Forward, ShieldCheck, GitBranch, CloudDownload, CloudUpload, Rocket } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, Eye, UserCog, FolderKey, ArrowRightLeft, ShieldOff, ArrowUp, ArrowDown, CornerLeftUp, FolderPlus, FilePlus, FilePen, PencilLine, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pause, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle, Activity, BrickWall, Bug, LockKeyhole, PackageOpen, ScrollText, ShieldAlert, CheckCircle, Zap, Bell, Mail, Send, Cloud, Inbox, Forward, ShieldCheck, GitBranch, CloudDownload, CloudUpload, Rocket } from 'lucide-react';
 import { Terminal } from './components/Terminal';
 import { UsageChart } from './components/UsageChart';
 import HubTabs from './components/HubTabs';
+import Tabs from './components/Tabs.jsx';
 import NotificationBell from './components/NotificationBell.jsx';
 import Drawer from './components/Drawer.jsx';
 import { DialogHost, confirmDialog, promptDialog } from './components/Dialog.jsx';
@@ -40,6 +41,9 @@ import './pages/Databases.css';
 import './pages/Sftp.css';
 import './pages/Cron.css';
 import './pages/Git.css';
+import './pages/Users.css';
+import './pages/Files.css';
+import './pages/Backups.css';
 import './bpanel.css';
 
 const API = import.meta.env.VITE_API_URL || '/api';
@@ -791,6 +795,11 @@ function App() {
   const [users, setUsers] = useState([]);
   const [packages, setPackages] = useState([]);
   const [userTab, setUserTab] = useState('list');
+  // The users page: its role filter, the resellers unfolded, and its sheets.
+  const [userFilter, setUserFilter] = useState('all');
+  const [expandedResellers, setExpandedResellers] = useState([]);
+  const [packageSheet, setPackageSheet] = useState(false);
+  const [moveDomainOpen, setMoveDomainOpen] = useState(false);
   const [userSearch, setUserSearch] = useState('');
   const [resourceUsage, setResourceUsage] = useState(null);
   // The last 30 readings of loadResourceUsage, for the Dashboard's sparklines.
@@ -985,6 +994,11 @@ function App() {
   const [fileContent, setFileContent] = useState('');
   const [selectedFilePaths, setSelectedFilePaths] = useState([]);
   const [archiveFormat, setArchiveFormat] = useState('zip');
+  // The backups page's side sheets: a new schedule, a new destination.
+  const [scheduleSheet, setScheduleSheet] = useState(false);
+  const [destinationSheet, setDestinationSheet] = useState(false);
+  // The file list's order: a column and a direction, folders always first.
+  const [fileSort, setFileSort] = useState({ key: 'name', dir: 'asc' });
   const [editorCursor, setEditorCursor] = useState({ line: 1, column: 1 });
   const [newUser, setNewUser] = useState({ username: '', email: '', password: '', role: 'end_user', package_id: '', website_limit: 5, storage_limit_mb: 1024, mail_accounts_limit: 10, database_limit: 10, reseller_id: '', pool_user_limit: 0, pool_storage_limit_mb: 0, pool_oversell: false, cpu_percent: 0, memory_mb: 0, process_limit: 0, io_read_mbps: 0, io_write_mbps: 0, group_cpu_percent: 0, group_memory_mb: 0, group_process_limit: 0, group_io_read_mbps: 0, group_io_write_mbps: 0 });
   // A reseller's share of the server and what it has handed out (GET /users/pool).
@@ -2097,6 +2111,7 @@ function App() {
       setNewPackage({ name: '', website_limit: 5, storage_limit_mb: 1024, mail_accounts_limit: 10, database_limit: 5 });
       await loadPackages();
     }
+    return !!data;
   }
 
   function startEditingPackage(item) {
@@ -2484,6 +2499,7 @@ function App() {
     if (!assignWebsiteId || !assignUserId) return;
     const data = await request(`/websites/${assignWebsiteId}`, { method: 'PATCH', body: JSON.stringify({ owner_id: Number(assignUserId) }) }, t('Assigning domain to user...'));
     if (data) { setNotice(`Assigned domain ${data.domain} to user ID ${assignUserId}`); await refreshAll(); }
+    return !!data;
   }
 
   async function assignDatabaseToUser() {
@@ -3980,10 +3996,13 @@ function App() {
     await listFiles(fileListPath);
   }
 
-  async function deleteSelectedFiles() {
-    if (selectedFilePaths.length === 0) return;
-    if (!(await confirmDialog({ message: t('Delete {n} selected item(s)?', { n: selectedFilePaths.length }), danger: true }))) return;
-    const data = await request('/maintenance/files/delete', { method: 'POST', body: JSON.stringify({ ...fileTargetBody(), paths: selectedFilePaths }) }, t('Deleting selected files...'));
+  async function deleteSelectedFiles(paths = selectedFilePaths) {
+    if (paths.length === 0) return;
+    const message = paths.length === 1
+      ? t('Delete {name}?', { name: paths[0].split('/').pop() })
+      : t('Delete {n} selected item(s)?', { n: paths.length });
+    if (!(await confirmDialog({ message, danger: true }))) return;
+    const data = await request('/maintenance/files/delete', { method: 'POST', body: JSON.stringify({ ...fileTargetBody(), paths }) }, t('Deleting selected files...'));
     if (data) { await listFiles(fileListPath); await loadCurrentUser(); }
   }
 
@@ -4000,22 +4019,23 @@ function App() {
     if (data) { await listFiles(fileListPath); await loadCurrentUser(); }
   }
 
-  async function copySelectedFiles() {
-    await transferFileItems('copy', selectedFilePaths);
+  // A row's own menu passes its one path; the selection bar passes none.
+  async function copySelectedFiles(paths = selectedFilePaths) {
+    await transferFileItems('copy', paths);
   }
 
-  async function moveSelectedFiles() {
-    await transferFileItems('move', selectedFilePaths);
+  async function moveSelectedFiles(paths = selectedFilePaths) {
+    await transferFileItems('move', paths);
   }
 
-  async function archiveSelectedFiles() {
+  async function archiveSelectedFiles(format = archiveFormat) {
     if (selectedFilePaths.length === 0) return;
-    const ext = archiveFormat === 'tar.gz' ? 'tar.gz' : 'zip';
+    const ext = format === 'tar.gz' ? 'tar.gz' : 'zip';
     const outputName = await promptDialog({ label: 'Archive file name:', defaultValue: `archive-${Date.now()}.${ext}`, select: 'name' });
     if (!outputName) return;
     const data = await request('/maintenance/files/archive', {
       method: 'POST',
-      body: JSON.stringify({ ...fileTargetBody(), base_path: fileListPath || '', paths: selectedFilePaths, output_name: outputName, format: archiveFormat }),
+      body: JSON.stringify({ ...fileTargetBody(), base_path: fileListPath || '', paths: selectedFilePaths, output_name: outputName, format: ext }),
     }, t('Creating archive...'));
     if (data) { await listFiles(fileListPath); await loadCurrentUser(); }
   }
@@ -4254,6 +4274,7 @@ function App() {
       setNotice(t('Backup schedule saved.'));
       await loadBackupSchedules();
     }
+    return !!data;
   }
 
   // Component level on purpose: renderBackups draws with these and
@@ -4330,6 +4351,7 @@ function App() {
       setNewSftpTarget({ name: '', kind: newSftpTarget.kind, host: '', port: 22, username: '', password: '', private_key: '', remote_path: '/backups/bpanel', endpoint: '', region: '', bucket: '', access_key: '', secret_key: '', prefix: '', secure: true });
       await loadSftpTargets();
     }
+    return !!data;
   }
 
   // A source is 'local', 'target:<id>' (a Backup Destination) or 'remote'.
@@ -9022,102 +9044,154 @@ function App() {
     </div>;
   }
 
+  // The file manager, as SNPanel's (pages/Files.jsx there): what can be done
+  // in the folder is the toolbar; what can be done with a selection is a bar
+  // under it, there only while something is ticked; each row's own actions
+  // are one "…" menu. The columns sort, folders first.
   function renderFiles() {
-    const allSelected = files.length > 0 && selectedFilePaths.length === files.length;
     const activeFileApp = currentFileApp();
     // The websites whose files these are: their own folders are not served.
     const servedDomains = activeFileApp
       ? websites.filter(site => String(site.app_id || '') === String(activeFileApp.id)).map(site => site.domain)
       : [];
     const targetKey = fileTargetKey();
+    const hasTarget = hasFileTarget();
     // A finished extraction leaves the list on its own; a failed one stays
     // until it is dismissed.
     const visibleFileJobs = fileJobs
       .filter(job => (job.target_key || `site:${job.website_id}`) === targetKey && job.status !== 'done')
       .slice(0, 4);
-    const selectedArchive = selectedFilePaths.length === 1
-      ? files.find(item => item.path === selectedFilePaths[0] && isArchiveFile(item))
-      : null;
-    const selectedChmodItems = files.filter(item => selectedFilePaths.includes(item.path));
-    return <section className="section">
+    const allSelected = files.length > 0 && selectedFilePaths.length === files.length;
+    const selectedItems = files.filter(item => selectedFilePaths.includes(item.path));
+    const selectedArchive = selectedItems.length === 1 && isArchiveFile(selectedItems[0]) ? selectedItems[0] : null;
+    const firstDir = { name: 'asc', modified: 'desc', size: 'desc' };
+    const compare = (a, b) => {
+      if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
+      const x = String(a.name).toLowerCase();
+      const y = String(b.name).toLowerCase();
+      const byName = x < y ? -1 : x > y ? 1 : 0;
+      const factor = fileSort.dir === 'desc' ? -1 : 1;
+      if (fileSort.key === 'modified') return ((Number(a.modified) || 0) - (Number(b.modified) || 0)) * factor || byName;
+      if (fileSort.key === 'size') return (a.is_dir ? 0 : ((Number(a.size) || 0) - (Number(b.size) || 0)) * factor) || byName;
+      return byName * factor;
+    };
+    const shownFiles = [...files].sort(compare);
+    const sortHeading = (column, label, className = '') => {
+      const active = fileSort.key === column;
+      const Arrow = fileSort.dir === 'asc' ? ArrowUp : ArrowDown;
+      return <button type="button" className={`file-sort ${className} ${active ? 'active' : ''}`}
+        onClick={() => setFileSort(prev => (prev.key === column ? { key: column, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { key: column, dir: firstDir[column] }))}
+        aria-label={active
+          ? t('{column}: sorted {order}. Sort the other way', { column: label, order: fileSort.dir === 'asc' ? t('ascending') : t('descending') })
+          : t('Sort by {column}', { column: label })}>
+        {label}{active && <Arrow size={12} aria-hidden="true"/>}
+      </button>;
+    };
+    return <>
       {renderChmodDialog()}
-      <div className="section-title">
-        <div><h2>{t('File manager')}</h2></div>
-        <button className="secondary" disabled={!hasFileTarget() || !!loading} onClick={() => listFiles(fileListPath)}><RefreshCw size={14}/> {t('Refresh')}</button>
-      </div>
-      <div className="file-manager">
-        <div className="file-panel">
-          <div className="file-controls">
-            <FileTargetSelect />
-            {activeFileApp
-              ? <div className="file-meta">
-                <span>{t('Application:')} <strong>{activeFileApp.name}</strong></span>
-                {servedDomains.length > 0 && <span>{t('Serves:')} <strong>{servedDomains.join(', ')}</strong></span>}
-                <span>{t('Root:')} <strong>{activeFileApp.directory}{fileListPath ? `/${fileListPath}` : ''}</strong></span>
-                {currentUser && !isAdmin && <span>{t('Storage:')} <strong>{storageUsageText(currentUser)}</strong></span>}
+      <PageHeader onRefresh={() => listFiles(fileListPath)} refreshDisabled={!hasTarget || !!loading}/>
+      <section className="section">
+        <div className="file-manager">
+          <div className="file-panel">
+            <div className="file-controls">
+              <FileTargetSelect />
+              {activeFileApp
+                ? <div className="file-meta">
+                  <span>{t('Application:')} <strong>{activeFileApp.name}</strong></span>
+                  {servedDomains.length > 0 && <span>{t('Serves:')} <strong>{servedDomains.join(', ')}</strong></span>}
+                  <span>{t('Root:')} <strong>{activeFileApp.directory}{fileListPath ? `/${fileListPath}` : ''}</strong></span>
+                  {currentUser && !isAdmin && <span>{t('Storage:')} <strong>{storageUsageText(currentUser)}</strong></span>}
+                </div>
+                : currentSite && <div className="file-meta">
+                  <span>{t('Website:')} <strong>{currentSite.domain}</strong></span>
+                  <span>{t('Root:')} <strong>{currentSite.root_path}{fileListPath ? `/${fileListPath}` : ''}</strong></span>
+                  {currentUser && !isAdmin && <span>{t('Storage:')} <strong>{storageUsageText(currentUser)}</strong></span>}
+                </div>}
+              <div className="path-pill breadcrumb-line">
+                <button className="crumb" disabled={!hasTarget || fileListPath === ''} onClick={() => listFiles('')}>{t('root')}</button>
+                {fileBreadcrumbs(fileListPath).map(crumb => <button className="crumb" key={crumb.path} onClick={() => listFiles(crumb.path)}>{crumb.label}</button>)}
               </div>
-              : currentSite && <div className="file-meta">
-                <span>{t('Website:')} <strong>{currentSite.domain}</strong></span>
-                <span>{t('Root:')} <strong>{currentSite.root_path}{fileListPath ? `/${fileListPath}` : ''}</strong></span>
-                {currentUser && !isAdmin && <span>{t('Storage:')} <strong>{storageUsageText(currentUser)}</strong></span>}
+              <div className="file-toolbar fm-toolbar">
+                <button className="secondary-light" disabled={!hasTarget || fileListPath === '' || !!loading} onClick={() => listFiles(parentFilePath(fileListPath))}><CornerLeftUp size={14} aria-hidden="true"/> {t('Up')}</button>
+                <button className="secondary-light" disabled={!hasTarget || !!loading} onClick={makeFileDirectory}><FolderPlus size={14} aria-hidden="true"/> {t('New folder')}</button>
+                <button className="secondary-light" disabled={!hasTarget || !!loading} onClick={makeFile}><FilePlus size={14} aria-hidden="true"/> {t('New file')}</button>
+                <label className={`upload-button ${(!hasTarget || !!loading) ? 'disabled' : ''}`}>
+                  <Upload size={14} aria-hidden="true"/> {t('Upload')}
+                  <input type="file" disabled={!hasTarget || !!loading} onChange={e => { uploadSiteFile(e.target.files?.[0]); e.target.value = ''; }} />
+                </label>
+              </div>
+              {selectedFilePaths.length > 0 && <div className="fm-selection" role="region" aria-label={t('Selected items')}>
+                <strong>{t('{count} selected', { count: selectedFilePaths.length })}</strong>
+                <div className="fm-selection-actions">
+                  <button className="secondary-light" disabled={!!loading} onClick={() => copySelectedFiles()}><Copy size={14} aria-hidden="true"/> {t('Copy')}</button>
+                  <button className="secondary-light" disabled={!!loading} onClick={() => moveSelectedFiles()}><MoveRight size={14} aria-hidden="true"/> {t('Move')}</button>
+                  <ActionMenu text={t('Archive')} icon={Archive} label={t('Compress the selection')} disabled={!!loading} items={[
+                    { label: t('Compress as {format}', { format: '.zip' }), icon: Archive, onClick: () => archiveSelectedFiles('zip') },
+                    { label: t('Compress as {format}', { format: '.tar.gz' }), icon: Archive, onClick: () => archiveSelectedFiles('tar.gz') },
+                  ]}/>
+                  {selectedArchive && <button className="secondary-light" disabled={!!loading} onClick={() => extractArchiveFile(selectedArchive.path)}><ArchiveRestore size={14} aria-hidden="true"/> {t('Extract')}</button>}
+                  <button className="secondary-light" disabled={!!loading} onClick={() => openChmodDialog(selectedItems)}><Lock size={14} aria-hidden="true"/> {t('Permissions')}</button>
+                  <button className="danger" disabled={!!loading} onClick={() => deleteSelectedFiles()}><Trash2 size={14} aria-hidden="true"/> {t('Delete')}</button>
+                </div>
+                <button type="button" className="secondary-light fm-selection-clear" onClick={() => setSelectedFilePaths([])}><X size={14} aria-hidden="true"/> {t('Clear selection')}</button>
               </div>}
-            <div className="path-pill breadcrumb-line">
-              <button className="crumb" disabled={!hasFileTarget() || fileListPath === ''} onClick={() => listFiles('')}>{t('root')}</button>
-              {fileBreadcrumbs(fileListPath).map(crumb => <button className="crumb" key={crumb.path} onClick={() => listFiles(crumb.path)}>{crumb.label}</button>)}
+              {visibleFileJobs.length > 0 && <div className="file-job-list">
+                {visibleFileJobs.map(job => <div className={`file-job ${job.status}`} key={job.job_id}>
+                  <Clock size={14} aria-hidden="true"/>
+                  <span><strong>{job.archive_path?.split('/').pop() || t('Archive')}</strong> {job.status === 'error' ? t('failed') : job.status}</span>
+                  {job.error && <small>{job.error}</small>}
+                  <button type="button" className="file-job-dismiss" onClick={() => dismissFileJob(job.job_id)} aria-label={t('Dismiss')} title={t('Dismiss')}><X size={13} aria-hidden="true"/></button>
+                </div>)}
+              </div>}
             </div>
-            <div className="file-toolbar">
-              <button className="secondary" disabled={!hasFileTarget() || fileListPath === '' || !!loading} onClick={() => listFiles(parentFilePath(fileListPath))}>{t('Up')}</button>
-              <button className="secondary" disabled={!hasFileTarget() || !!loading} onClick={makeFileDirectory}><Plus size={14}/> {t('Folder')}</button>
-              <button className="secondary" disabled={!hasFileTarget() || !!loading} onClick={makeFile}><FileText size={14}/> {t('File')}</button>
-              <label className={`upload-button ${(!hasFileTarget() || !!loading) ? 'disabled' : ''}`}>
-                <Upload size={14}/> {t('Upload')}
-                <input type="file" disabled={!hasFileTarget() || !!loading} onChange={e => { uploadSiteFile(e.target.files?.[0]); e.target.value = ''; }} />
-              </label>
-              <select value={archiveFormat} onChange={e => setArchiveFormat(e.target.value)} disabled={!hasFileTarget() || !!loading}>
-                <option value="zip">zip</option>
-                <option value="tar.gz">tar.gz</option>
-              </select>
-              <button className="secondary" disabled={selectedFilePaths.length === 0 || !!loading} onClick={copySelectedFiles}><Copy size={14}/> {t('Copy')}</button>
-              <button className="secondary" disabled={selectedFilePaths.length === 0 || !!loading} onClick={moveSelectedFiles}><MoveRight size={14}/> {t('Move')}</button>
-              <button className="secondary" disabled={selectedFilePaths.length === 0 || !!loading} onClick={archiveSelectedFiles}><Archive size={14}/> {t('Archive')}</button>
-              <button className="secondary" disabled={!selectedArchive || !!loading} onClick={() => extractArchiveFile(selectedArchive.path)}><PackageOpen size={14}/> {t('Extract')}</button>
-              <button className="secondary" disabled={selectedChmodItems.length === 0 || !!loading} onClick={() => openChmodDialog(selectedChmodItems)}><Lock size={14}/> {t('Permissions')}</button>
-              <button className="danger" disabled={selectedFilePaths.length === 0 || !!loading} onClick={deleteSelectedFiles}><Trash2 size={14}/> {t('Delete')}</button>
-            </div>
-            {visibleFileJobs.length > 0 && <div className="file-job-list">
-              {visibleFileJobs.map(job => <div className={`file-job ${job.status}`} key={job.job_id}>
-                <Clock size={14}/>
-                <span><strong>{job.archive_path?.split('/').pop() || t('Archive')}</strong> {job.status === 'done' ? t('completed') : job.status === 'error' ? t('failed') : job.status}</span>
-                {job.error && <small>{job.error}</small>}
-                <button className="file-job-dismiss" onClick={() => dismissFileJob(job.job_id)} aria-label={t('Dismiss')} title={t('Dismiss')}><X size={13}/></button>
-              </div>)}
-            </div>}
-          </div>
-          <div className="file-list-header">
-            <label><input type="checkbox" checked={allSelected} onChange={toggleAllFiles} disabled={files.length === 0} /> {t('Select')}</label>
-            <span>{t('{n} item(s)', { n: files.length })}</span>
-          </div>
-          <div className="file-list">
-            {files.length === 0 && <div className="empty-box">{t('No files in this folder.')}</div>}
-            {files.map(item => <div className={`file-item ${selectedFilePaths.includes(item.path) ? 'selected' : ''}`} key={item.path}>
-              <input type="checkbox" checked={selectedFilePaths.includes(item.path)} onChange={() => toggleFileSelection(item.path)} />
-              <button className="file-name" onClick={() => item.is_dir ? listFiles(item.path) : (isTextEditable(item) ? openFileEditorTab(item.path) : downloadFile(item.path))}>
-                {item.is_dir ? <FolderOpen size={16}/> : <FileText size={16}/>} <strong>{item.name}</strong>
-              </button>
-              <button type="button" className="file-mode" disabled={!!loading} title={t('Change permissions')} aria-label={t('Change permissions of {name}', { name: item.name })}
-                onClick={() => openChmodDialog(item)}>{item.mode || '---'}</button>
-              <span className="file-size">{item.is_dir ? t('Folder') : formatBytes(item.size)}{item.modified ? <span className="file-date-inline"> · {formatFileTime(item.modified)}</span> : null}</span>
-              <span className="file-date" title={formatFileTime(item.modified, true)}>{formatFileTime(item.modified)}</span>
-              <div className="file-row-actions">
-                {!item.is_dir && <button className="mini secondary-light" disabled={!!loading} onClick={() => downloadFile(item.path)} aria-label={t('Download')} title={t('Download')}><Download size={13}/></button>}
-                {isArchiveFile(item) && <button className="mini secondary-light" disabled={!!loading} onClick={() => extractArchiveFile(item.path)}><PackageOpen size={13}/> {t('Extract')}</button>}
-                <button className="mini secondary-light" disabled={!!loading} onClick={() => renameFileItem(item)}>{t('Rename')}</button>
+            <div className="file-list">
+              <div className="file-list-header">
+                <input type="checkbox" checked={allSelected} ref={el => { if (el) el.indeterminate = selectedFilePaths.length > 0 && !allSelected; }}
+                  onChange={toggleAllFiles} disabled={files.length === 0} aria-label={t('Select all')}/>
+                <div className="file-col-name">
+                  {sortHeading('name', t('Name'))}
+                  <span className="file-count">{t('{n} item(s)', { n: files.length })}</span>
+                </div>
+                <span className="file-col-mode">{t('Permissions')}</span>
+                {sortHeading('size', t('Size'), 'file-col-size')}
+                {sortHeading('modified', t('Modified'), 'file-col-date')}
+                <span className="file-col-actions" aria-hidden="true"></span>
               </div>
-            </div>)}
+              {files.length === 0 && <div className="empty-box">{t('No files in this folder.')}</div>}
+              {shownFiles.map(item => <div className={`file-item ${selectedFilePaths.includes(item.path) ? 'selected' : ''}`} key={item.path}>
+                <input type="checkbox" checked={selectedFilePaths.includes(item.path)} onChange={() => toggleFileSelection(item.path)} aria-label={t('Select {name}', { name: item.name })}/>
+                <button className="file-name" onClick={() => item.is_dir ? listFiles(item.path) : (isTextEditable(item) ? openFileEditorTab(item.path) : downloadFile(item.path))}>
+                  {item.is_dir ? <FolderOpen size={16}/> : <FileText size={16}/>} <strong>{item.name}</strong>
+                </button>
+                <button type="button" className="file-mode" disabled={!!loading}
+                  title={t('Permissions {value} - click to change', { value: item.mode || '---' })}
+                  aria-label={t('Change permissions of {name}', { name: item.name })}
+                  onClick={() => openChmodDialog(item)}>{item.mode || '---'}</button>
+                <span className="file-facts">
+                  <span className="file-size">{item.is_dir ? t('Folder') : formatBytes(item.size)}</span>
+                  <time className="file-date" title={formatFileTime(item.modified, true)}>{formatFileTime(item.modified)}</time>
+                </span>
+                <div className="file-row-actions">
+                  <ActionMenu label={t('More actions for {name}', { name: item.name })} items={[
+                    { label: t('Open'), icon: FolderOpen, hidden: !item.is_dir, onClick: () => listFiles(item.path) },
+                    { label: t('Edit in a new tab'), icon: FilePen, hidden: item.is_dir || !isTextEditable(item), onClick: () => openFileEditorTab(item.path) },
+                    { label: t('Download'), icon: Download, hidden: item.is_dir, disabled: !!loading, onClick: () => downloadFile(item.path) },
+                    { label: t('Extract'), icon: ArchiveRestore, hidden: !isArchiveFile(item), disabled: !!loading, onClick: () => extractArchiveFile(item.path) },
+                    'separator',
+                    { label: t('Rename'), icon: PencilLine, disabled: !!loading, onClick: () => renameFileItem(item) },
+                    { label: t('Copy'), icon: Copy, disabled: !!loading, onClick: () => copySelectedFiles([item.path]) },
+                    { label: t('Move'), icon: MoveRight, disabled: !!loading, onClick: () => moveSelectedFiles([item.path]) },
+                    { label: t('Permissions'), icon: Lock, disabled: !!loading, onClick: () => openChmodDialog(item) },
+                    'separator',
+                    { label: t('Delete'), icon: Trash2, danger: true, disabled: !!loading, onClick: () => deleteSelectedFiles([item.path]) },
+                  ]}/>
+                </div>
+              </div>)}
+            </div>
           </div>
         </div>
-      </div>
-    </section>;
+      </section>
+    </>;
   }
 
   // ISO time from the server as the file manager shows times.
@@ -9343,8 +9417,14 @@ function App() {
     </div>;
   }
 
+  // Backups, as SNPanel's (pages/Backups.jsx there): one Refresh in the
+  // page's head for the tab shown; Backup (a website, or for an administrator
+  // a whole account), Restore, Schedules, Destinations and Logs as tabs;
+  // what is still running listed above them; each file's Download and Restore
+  // as buttons and the rest in a "…" menu; a new schedule or destination in a
+  // side sheet; a backup asks first, saying what goes in and where it goes.
   function renderBackups() {
-    const selectedBackupUser = users.find(user => String(user.id) === String(selectedBackupUserId));
+    const busy = !!loading;
     const jobTitle = job => ({ site_backup: t('Website backup'), user_backup: t('Full user backup'), sftp_backup: t('SFTP backup'), user_restore: t('Restore') }[job.kind] || t('Backup task'));
     const jobDetail = job => job.error || job.remote_file || job.backup_file || job.message || job.status;
     const jobTimestamp = job => {
@@ -9352,264 +9432,314 @@ function App() {
       if (!stamp) return t('No timestamp');
       const date = new Date(stamp);
       return Number.isNaN(date.getTime()) ? stamp : new Intl.DateTimeFormat('en-GB', {
-        timeZone: 'Asia/Ho_Chi_Minh',
-        hour12: false,
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric',
+        timeZone: 'Asia/Ho_Chi_Minh', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric',
       }).format(date).replace(',', '');
     };
+    const jobBadge = job => <span className={job.status === 'done' ? 'badge ok' : job.status === 'error' ? 'badge bad' : 'badge'}>{job.status}</span>;
     const nameSuffixLabels = { none: 'Append: nothing', day_of_week: 'Append: day of week', week_of_month: 'Append: week of month', full_date: 'Append: full date' };
-    const backupTabs = isAdmin
-      ? [
-        ['website', 'Backup website', Globe],
-        ['user', 'Backup user', Users],
-        ['restore', 'Restore', RotateCcw],
-        ['schedule', 'Scheduled backups', Clock],
-        ['destination', 'Backup Destination', Network],
-        ['logs', 'Backup logs', FileText],
-      ]
-      : [
-        ['website', 'Backup website', Globe],
-        ['logs', 'Backup logs', FileText],
-      ];
-    const activeBackupTab = backupTabs.some(([id]) => id === backupTab) ? backupTab : 'website';
+    const tabs = [
+      { id: 'website', label: t('Backup'), icon: Archive },
+      { id: 'restore', label: t('Restore'), icon: RotateCcw, hidden: !isAdmin },
+      { id: 'schedule', label: t('Schedules'), icon: Clock, hidden: !isAdmin },
+      { id: 'destination', label: t('Destinations'), icon: Network, hidden: !isAdmin },
+      { id: 'logs', label: t('Logs'), icon: FileText },
+    ];
+    const wanted = backupTab === 'user' ? 'website' : backupTab;
+    const active = tabs.some(tab => tab.id === wanted && !tab.hidden) ? wanted : 'website';
+    const scope = isAdmin && backupTab === 'user' ? 'user' : 'website';
+    const runningJobs = backupJobs.filter(job => job.status === 'running' || job.status === 'queued');
+    const targetName = id => sftpTargets.find(target => target.id === id)?.name;
 
-    return <section className="section backups-page">
-      <h2>{t('Backups')}</h2>
-      <div className="segmented-control backup-tabs" role="tablist" aria-label={t('Backup sections')}>
-        {backupTabs.map(([id, label, Icon]) => <button
-          key={id}
-          type="button"
-          role="tab"
-          aria-selected={activeBackupTab === id}
-          className={activeBackupTab === id ? 'active' : ''}
-          onClick={() => setBackupTab(id)}
-        ><Icon size={14}/>{t(label)}</button>)}
+    async function confirmSiteBackup() {
+      const site = websites.find(item => String(item.id) === String(selectedWebsiteId));
+      if (!site) return;
+      const dbs = databases.filter(db => String(db.website_id) === String(site.id));
+      const ok = await confirmDialog({
+        title: t('Back up {domain}?', { domain: site.domain }),
+        body: <><dl className="bk-summary">
+          <div><dt>{t('What goes in')}</dt><dd>
+            {t('The files in {path}', { path: <code>{site.root_path}</code> })}
+            <br/>{dbs.length ? t('An SQL export of {count} database(s): {names}', { count: dbs.length, names: dbs.map(db => db.db_name).join(', ') }) : t('No database is attached to this website.')}
+          </dd></div>
+          <div><dt>{t('Where it goes')}</dt><dd>{t("This server, in the website's backup list: download or restore it from there.")}</dd></div>
+        </dl><p className="hint">{t('It runs on the server: you can leave this page.')}</p></>,
+        confirmLabel: t('Create backup'), wide: true,
+      });
+      if (ok) createBackup();
+    }
+    async function confirmUserBackup() {
+      const user = users.find(item => String(item.id) === String(selectedBackupUserId));
+      if (!user) return;
+      const sites = websites.filter(site => String(site.owner_id) === String(user.id));
+      const dbs = databases.filter(db => String(db.owner_id) === String(user.id));
+      const target = targetName(Number(selectedSftpTargetId));
+      const ok = await confirmDialog({
+        title: t('Back up the account {name}?', { name: user.username }),
+        body: <><dl className="bk-summary">
+          <div><dt>{t('What goes in')}</dt><dd>{t('The panel account, {sites} website(s) and {dbs} database(s): their files, database dumps and what a restore needs.', { sites: sites.length, dbs: dbs.length })}</dd></div>
+          <div><dt>{t('Where it goes')}</dt><dd>{target ? t('This server, and a copy to {name}.', { name: target }) : t('This server only.')}</dd></div>
+        </dl><p className="hint">{t('It runs on the server: you can leave this page.')}</p></>,
+        confirmLabel: t('Create backup'), wide: true,
+      });
+      if (ok) createUserBackup();
+    }
+
+    const refreshers = {
+      website: scope === 'user' ? refreshUserBackupArea : refreshBackupArea,
+      restore: () => { loadRestoreBackups(); },
+      schedule: refreshScheduledBackupArea,
+      destination: loadSftpTargets,
+      logs: () => loadBackupJobs(true),
+    };
+    const subtitles = {
+      website: scope === 'user'
+        ? t('Includes the panel user, all owned websites, source files, database dumps, and restore metadata.')
+        : t('Backups include website source files and a database SQL export.'),
+      restore: t('Put accounts back from their backups: pick where the backups are, tick the accounts, press Restore.'),
+      schedule: t('Runs a full user backup on a schedule, with an optional off-server destination.'),
+      destination: t('Where off-server backup copies are sent. SFTP, or any S3-compatible object storage.'),
+      logs: t('Recent queued, running, completed, and failed backup tasks.'),
+    };
+    const scheduleReady = newBackupSchedule.all_users || (newBackupSchedule.user_ids || []).length > 0;
+    const destinationReady = !!newSftpTarget.name && (newSftpTarget.kind === 's3'
+      ? (!!newSftpTarget.endpoint && !!newSftpTarget.bucket && !!newSftpTarget.access_key && !!newSftpTarget.secret_key)
+      : (!!newSftpTarget.host && !!newSftpTarget.username && (!!newSftpTarget.password || !!newSftpTarget.private_key)));
+    const setTarget = key => e => setNewSftpTarget(prev => ({ ...prev, [key]: e.target.value }));
+    const backupRow = (file, { onDownload, onRestore, restoreLabel, onDelete, sub, restoreDisabled = false }) => <div className="backup-item" key={file}>
+      <span>{file.split('/').pop()}{sub && <small>{sub}</small>}</span>
+      <div className="actions bk-row-actions">
+        <button className="secondary-light" disabled={busy} onClick={() => onDownload(file)}><Download size={14} aria-hidden="true"/> {t('Download')}</button>
+        <button className="secondary-light" disabled={busy || restoreDisabled} onClick={() => onRestore(file)}><RotateCcw size={14} aria-hidden="true"/> {restoreLabel}</button>
+        <ActionMenu label={t('More actions for {name}', { name: file.split('/').pop() })} items={[
+          { label: t('Delete'), icon: Trash2, danger: true, disabled: busy, onClick: () => onDelete(file) },
+        ]}/>
       </div>
+    </div>;
 
-      {activeBackupTab === 'logs' && <div className="backup-tab-panel backup-logs-panel">
-        <div className="backup-panel-title">
-          <div><h3>{t('Backup logs')}</h3><p className="hint">{t('Recent queued, running, completed, and failed backup tasks.')}</p></div>
-          <button className="secondary" disabled={!!loading} onClick={() => loadBackupJobs(true)}><RefreshCw size={14}/> {t('Refresh')}</button>
-        </div>
-        {backupJobs.length === 0 && <EmptyState icon={FileText} message={t('No backup logs found.')} />}
-        {backupJobs.length > 0 && <div className="backup-job-list">
-          {backupJobs.map(job => <div className={`backup-job ${job.status}`} key={job.job_id}>
-            <Clock size={14}/>
-            <span>
-              <strong>{jobTitle(job)}</strong>
-              <small>{jobDetail(job)}</small>
-              {/* No percentage: the server reports a task as queued, running
-                  or finished, nothing in between. */}
-              {(job.status === 'running' || job.status === 'queued') && <span className="job-progress">
-                <span className="progress-bar indeterminate"><span className="progress-bar-fill" /></span>
-              </span>}
-              <small className="backup-job-time">{jobTimestamp(job)}</small>
-            </span>
-            <span className={job.status === 'done' ? 'badge ok' : job.status === 'error' ? 'badge bad' : 'badge'}>{job.status}</span>
+    return <>
+      <PageHeader subtitle={subtitles[active]} onRefresh={refreshers[active]} refreshDisabled={busy}/>
+      <section className="section backups-page">
+        <Tabs label={t('Backup sections')} value={active} onChange={setBackupTab} tabs={tabs.filter(tab => !tab.hidden)}/>
+        {active !== 'logs' && runningJobs.length > 0 && <div className="backup-job-list">
+          {runningJobs.map(job => <div className={`backup-job ${job.status}`} key={job.job_id}>
+            <Clock size={14} aria-hidden="true"/>
+            <span><strong>{jobTitle(job)}</strong><small>{jobDetail(job)}</small></span>
+            {jobBadge(job)}
           </div>)}
         </div>}
-      </div>}
 
-      {activeBackupTab === 'website' && <div className="backup-tab-panel">
-        <div className="backup-panel-title">
-          <div><h3>{t('Backup website')}</h3><p className="hint">{t('Backups include website source files and a database SQL export.')}</p></div>
-        </div>
-        <WebsiteSelect />
-        <div className="actions backup-toolbar">
-          <button disabled={!selectedWebsiteId || !!loading} onClick={createBackup}><Plus size={14}/> {t('Create backup')}</button>
-          <button className="secondary" disabled={!selectedWebsiteId || !!loading} onClick={refreshBackupArea}><RefreshCw size={14}/> {t('Refresh')}</button>
-          <label className="upload-button secondary">
-            <Upload size={14}/> {t('Upload backup')}
-            <input type="file" accept=".tar.gz,application/gzip" onChange={e => { uploadBackup(e.target.files?.[0]); e.target.value = ''; }} />
-          </label>
-        </div>
-        {backups.length === 0 && selectedWebsiteId && <EmptyState icon={Archive} message={t('No backups found for this website.')} action={{ label: t('Create backup'), icon: Plus, onClick: () => { if (!loading) createBackup(); } }} />}
-        <div className="backup-list">
-          {backups.map(file => <div className="backup-item" key={file}>
-            <span>{file.split('/').pop()}</span>
-            <div className="actions">
-              <button className="secondary" disabled={!!loading} onClick={() => downloadBackup(file)}><Download size={14}/> {t('Download')}</button>
-              <button className="secondary" disabled={!!loading} onClick={() => restoreBackup(file)}><RotateCcw size={14}/> {t('Restore')}</button>
-              <button className="danger" disabled={!!loading} onClick={() => deleteBackup(file)} aria-label={t('Delete')} title={t('Delete')}><Trash2 size={14}/></button>
+        {active === 'website' && <div className="backup-tab-panel">
+          {isAdmin && <div className="segmented-control bk-scope" role="group" aria-label={t('What to back up')}>
+            {[['website', t('A website'), Globe], ['user', t('A whole account'), Users]].map(([id, label, Icon]) => <button key={id} type="button"
+              aria-pressed={scope === id} className={scope === id ? 'active' : ''} onClick={() => setBackupTab(id)}>
+              <Icon size={14} aria-hidden="true"/> {label}</button>)}
+          </div>}
+          {scope === 'website' && <>
+            <div className="bk-form bk-site-form">
+              <Field label={t('Website')}><WebsiteSelect /></Field>
+              <div className="bk-actions">
+                <button disabled={!selectedWebsiteId || busy} onClick={confirmSiteBackup}><Plus size={14} aria-hidden="true"/> {t('Create backup')}</button>
+                <label className="upload-button secondary-light">
+                  <Upload size={14} aria-hidden="true"/> {t('Upload backup')}
+                  <input type="file" accept=".tar.gz,application/gzip" onChange={e => { uploadBackup(e.target.files?.[0]); e.target.value = ''; }} />
+                </label>
+              </div>
             </div>
-          </div>)}
-        </div>
-      </div>}
-
-      {isAdmin && activeBackupTab === 'user' && <div className="backup-tab-panel">
-        <div className="backup-panel-title">
-          <div><h3>{t('Backup user')}</h3><p className="hint">{t('Includes the panel user, all owned websites, source files, database dumps, and restore metadata.')}</p></div>
-          <button className="secondary" disabled={!!loading} onClick={refreshUserBackupArea}><RefreshCw size={14}/> {t('Reload')}</button>
-        </div>
-        <div className="sftp-run-row user-backup-row backup-run-row">
-          <select value={selectedBackupUserId} onChange={e => setSelectedBackupUserId(e.target.value)}>
-            <option value="">{t('Select user')}</option>
-            {users.map(user => <option key={user.id} value={user.id}>{user.username}</option>)}
-          </select>
-          <select value={selectedSftpTargetId} onChange={e => setSelectedSftpTargetId(e.target.value)}>
-            <option value="">{t('Local only')}</option>
-            {sftpTargets.map(target => <option key={target.id} value={target.id}>{target.name}</option>)}
-          </select>
-          <button disabled={!selectedBackupUserId || !!loading} onClick={createUserBackup}><Archive size={14}/> {t('Create backup')}</button>
-        </div>
-        {selectedBackupUser && <p className="hint">{t('Current user:')} <strong>{selectedBackupUser.username}</strong></p>}
-        <div className="actions backup-subactions">
-          <button className="secondary" disabled={!selectedBackupUserId || !!loading} onClick={() => listUserBackups()}><RefreshCw size={14}/> {t('Refresh list')}</button>
-        </div>
-        {selectedBackupUserId && userBackups.length === 0 && <EmptyState icon={Archive} message={t('No user backups found.')} />}
-        <div className="backup-list">
-          {userBackups.map(file => <div className="backup-item" key={file}>
-            <span>{file.split('/').pop()}</span>
-            <div className="actions">
-              <button className="secondary" disabled={!!loading} onClick={() => downloadUserBackup(file)}><Download size={14}/> {t('Download')}</button>
-              <button className="secondary" disabled={!!loading} onClick={() => restoreUserBackup(file)}><RotateCcw size={14}/> {t('Restore user')}</button>
-              <button className="danger" disabled={!!loading} onClick={() => deleteUserBackup(file)} aria-label={t('Delete')} title={t('Delete')}><Trash2 size={14}/></button>
+            {backups.length === 0 && selectedWebsiteId && <EmptyState compact icon={Archive} message={t('No backups found for this website.')} />}
+            <div className="backup-list">
+              {backups.map(file => backupRow(file, { onDownload: downloadBackup, onRestore: restoreBackup, restoreLabel: t('Restore'), onDelete: deleteBackup }))}
             </div>
-          </div>)}
-        </div>
+          </>}
+          {isAdmin && scope === 'user' && <>
+            <div className="bk-form bk-user-form">
+              <Field label={t('User')}>
+                <select value={selectedBackupUserId} onChange={e => setSelectedBackupUserId(e.target.value)}>
+                  <option value="">{t('Select user')}</option>
+                  {users.map(user => <option key={user.id} value={user.id}>{user.username}</option>)}
+                </select>
+              </Field>
+              <Field label={t('Destination')} hint={t('A copy goes there; the backup stays on this server too.')}>
+                <select value={selectedSftpTargetId} onChange={e => setSelectedSftpTargetId(e.target.value)}>
+                  <option value="">{t('Local only')}</option>
+                  {sftpTargets.map(target => <option key={target.id} value={target.id}>{target.name}</option>)}
+                </select>
+              </Field>
+              <div className="bk-actions">
+                <button disabled={!selectedBackupUserId || busy} onClick={confirmUserBackup}><Archive size={14} aria-hidden="true"/> {t('Create backup')}</button>
+              </div>
+            </div>
+            {selectedBackupUserId && userBackups.length === 0 && <EmptyState compact icon={Archive} message={t('No user backups found.')} />}
+            <div className="backup-list">
+              {userBackups.map(file => backupRow(file, { onDownload: downloadUserBackup, onRestore: restoreUserBackup, restoreLabel: t('Restore user'), onDelete: deleteUserBackup }))}
+            </div>
+            <div className="bk-sched-section">
+              <PageHeader title={t('Restore folder')} subtitle={restoreBackupDir || '/var/backups/bpanel/users/restore'}
+                actions={<label className="upload-button secondary-light">
+                  <Upload size={14} aria-hidden="true"/> {t('Upload backups')}
+                  <input type="file" multiple accept=".tar.gz,application/gzip" onChange={e => { uploadUserBackups(e.target.files); e.target.value = ''; }} />
+                </label>}/>
+              {restoreBackups.length === 0 && <EmptyState compact icon={ArchiveRestore} message={t('No backups found here.')} />}
+              <div className="backup-list">
+                {restoreBackups.map(item => backupRow(item.backup_file, {
+                  onDownload: downloadUserBackup, onRestore: restoreUserBackup, restoreLabel: t('Restore user'), onDelete: deleteRestoreBackup,
+                  restoreDisabled: !item.valid,
+                  sub: item.valid ? `${item.source === 'opanel' ? 'OPanel · ' : ''}` + t('{user} - {n} website(s)', { user: item.username || t('unknown user'), n: item.websites || 0 }) : (item.error || t('Invalid backup')),
+                }))}
+              </div>
+            </div>
+          </>}
+        </div>}
 
-        <div className="backup-panel-title backup-subtitle">
-          <div><h3>{t('Restore folder')}</h3><p className="hint">{restoreBackupDir || '/var/backups/bpanel/users/restore'}</p></div>
-          <div className="actions">
-            <button className="secondary" disabled={!!loading} onClick={loadRestoreBackups}><RefreshCw size={14}/> {t('Refresh')}</button>
-            <label className="upload-button secondary">
-              <Upload size={14}/> {t('Upload backups')}
-              <input type="file" multiple accept=".tar.gz,application/gzip" onChange={e => { uploadUserBackups(e.target.files); e.target.value = ''; }} />
-            </label>
+        {isAdmin && active === 'restore' && renderRestoreWizard()}
+
+        {isAdmin && active === 'schedule' && <div className="backup-tab-panel bk-schedules">
+          <div className="bk-sched-section">
+            <PageHeader title={<>{t('Full backups')} <span className="badge bk-engine">{t('Whole accounts')}</span></>}
+              subtitle={t('With a destination, the backups are kept there only: each one is removed from this server once it has uploaded, and stays here only if the upload fails.')}
+              actions={<button type="button" onClick={() => setScheduleSheet(true)}><Plus size={15} aria-hidden="true"/> {t('Add schedule')}</button>}/>
+            {backupSchedules.length === 0 && <EmptyState compact icon={Clock} message={t('No backup schedules yet.')} />}
+            {backupSchedules.length > 0 && <div className="backup-list">
+              {backupSchedules.map(item => {
+                const suffix = item.name_suffix && item.name_suffix !== 'full_date' && nameSuffixLabels[item.name_suffix];
+                return <div className="backup-item bk-schedule-row" key={item.id}>
+                  <span>
+                    {scheduleUserLabel(item)} · <code>{item.schedule}</code> · {cronScheduleLabel(item.schedule)} · {targetName(item.target_id) || t('Local only')}{suffix ? ` · ${t(suffix)}` : ''}
+                    {item.last_status === 'running'
+                      ? <><small>{item.last_message || t('Running')}</small>
+                        <span className="job-progress"><span className="progress-bar indeterminate"><span className="progress-bar-fill" /></span></span></>
+                      : <small>
+                        {item.last_status === 'ok' && <span className="badge ok">{t('OK')}</span>}
+                        {item.last_status === 'error' && <span className="badge bad">{t('Failed')}</span>}
+                        {' '}{item.last_message || t('Not run yet')}
+                      </small>}
+                  </span>
+                  <div className="actions bk-row-actions">
+                    <button className="secondary-light" disabled={busy || item.last_status === 'running'} onClick={() => runBackupScheduleNow(item)}><Play size={14} aria-hidden="true"/> {t('Run now')}</button>
+                    <ActionMenu label={t('More actions for {name}', { name: scheduleUserLabel(item) })} items={[
+                      { label: t('Delete schedule'), icon: Trash2, danger: true, disabled: busy, onClick: () => deleteBackupSchedule(item.id) },
+                    ]}/>
+                  </div>
+                </div>;
+              })}
+            </div>}
           </div>
-        </div>
-        {restoreBackups.length === 0 && <EmptyState icon={ArchiveRestore} message={t('No backups found here.')} />}
-        <div className="backup-list">
-          {restoreBackups.map(item => <div className="backup-item" key={item.backup_file}>
-            <span>{item.filename || item.backup_file.split('/').pop()}<small>{item.valid ? `${item.source === 'opanel' ? 'OPanel · ' : ''}` + t('{user} - {n} website(s)', { user: item.username || t('unknown user'), n: item.websites || 0 }) : (item.error || t('Invalid backup'))}</small></span>
-            <div className="actions">
-              <button className="secondary" disabled={!!loading} onClick={() => downloadUserBackup(item.backup_file)}><Download size={14}/> {t('Download')}</button>
-              <button className="secondary" disabled={!!loading || !item.valid} onClick={() => restoreUserBackup(item.backup_file)}><RotateCcw size={14}/> {t('Restore user')}</button>
-              <button className="danger" disabled={!!loading} onClick={() => deleteRestoreBackup(item.backup_file)} aria-label={t('Delete')} title={t('Delete')}><Trash2 size={14}/></button>
+        </div>}
+
+        {isAdmin && active === 'destination' && <div className="backup-tab-panel bk-destinations">
+          <div className="bk-sched-section">
+            <PageHeader title={t('Destinations')} subtitle={t('Every place backups go.')}
+              actions={<button type="button" onClick={() => setDestinationSheet(true)}><Plus size={15} aria-hidden="true"/> {t('Add destination')}</button>}/>
+            {sftpTargets.length === 0 && <EmptyState compact icon={Network} message={t('No backup destinations found.')} />}
+            <div className="backup-list">
+              {sftpTargets.map(target => {
+                const uses = backupSchedules.filter(item => item.target_id === target.id).length;
+                return <div className="backup-item" key={target.id}>
+                  <span>
+                    <span className="badge">{target.kind === 's3' ? 'S3' : 'SFTP'}</span>{' '}{target.name}
+                    <small>{target.kind === 's3'
+                      ? `${target.endpoint}/${target.bucket}${target.prefix ? '/' + target.prefix : ''}`
+                      : `${target.username}@${target.host}:${target.remote_path}`}{uses ? ` · ${t('Full backups: {count} schedule(s)', { count: uses })}` : ''}</small>
+                  </span>
+                  <div className="actions bk-row-actions">
+                    <ActionMenu label={t('More actions for {name}', { name: target.name })} items={[
+                      { label: t('Delete'), icon: Trash2, danger: true, disabled: busy, onClick: () => deleteSftpTarget(target.id) },
+                    ]}/>
+                  </div>
+                </div>;
+              })}
             </div>
-          </div>)}
-        </div>
-      </div>}
-
-      {isAdmin && activeBackupTab === 'restore' && renderRestoreWizard()}
-
-      {isAdmin && activeBackupTab === 'schedule' && <div className="backup-tab-panel">
-        <div className="backup-panel-title">
-          <div><h3>{t('Scheduled backups')}</h3><p className="hint">{t('Runs a full user backup on a schedule, with an optional off-server destination.')} {t('With a destination, the backups are kept there only: each one is removed from this server once it has uploaded, and stays here only if the upload fails.')}</p></div>
-          <button className="secondary" disabled={!!loading} onClick={refreshScheduledBackupArea}><RefreshCw size={14}/> {t('Refresh')}</button>
-        </div>
-        <div className="backup-schedule-builder with-name">
-          <div className="field"><span className="field-label">{t('Accounts')}</span>
-            <label className="check-line">
-              <input type="checkbox" checked={!!newBackupSchedule.all_users} onChange={e => setNewBackupSchedule(prev => ({ ...prev, all_users: e.target.checked }))} />
-              {t('All users')}
-            </label>
-            {!newBackupSchedule.all_users && <select multiple value={newBackupSchedule.user_ids || []} onChange={e => setNewBackupSchedule(prev => ({ ...prev, user_ids: Array.from(e.target.selectedOptions, option => option.value) }))}>
-              {users.map(user => <option key={user.id} value={String(user.id)}>{user.username}</option>)}
-            </select>}
           </div>
-          <div className="field"><span className="field-label">{t('Schedule')}</span>{renderSchedulePicker('backup', newBackupSchedule.schedule, value => setNewBackupSchedule(prev => ({ ...prev, schedule: value })), 'backup-schedule-input')}</div>
-          <div className="field"><span className="field-label">{t('Destination')}</span>
+        </div>}
+
+        {active === 'logs' && <div className="backup-tab-panel backup-logs-panel">
+          {backupJobs.length === 0 && <EmptyState icon={FileText} message={t('No backup logs found.')} />}
+          {backupJobs.length > 0 && <div className="backup-job-list">
+            {backupJobs.map(job => <div className={`backup-job ${job.status}`} key={job.job_id}>
+              <Clock size={14} aria-hidden="true"/>
+              <span>
+                <strong>{jobTitle(job)}</strong>
+                <small>{jobDetail(job)}</small>
+                {(job.status === 'running' || job.status === 'queued') && <span className="job-progress">
+                  <span className="progress-bar indeterminate"><span className="progress-bar-fill" /></span>
+                </span>}
+                <small className="backup-job-time">{jobTimestamp(job)}</small>
+              </span>
+              {jobBadge(job)}
+            </div>)}
+          </div>}
+        </div>}
+      </section>
+
+      <Drawer open={scheduleSheet} onClose={() => setScheduleSheet(false)} title={t('Add schedule')} subtitle={t('Full backups')}
+        footer={<>
+          <button type="button" className="secondary-light" onClick={() => setScheduleSheet(false)}>{t('Cancel')}</button>
+          <button type="submit" form="bk-schedule-form" disabled={!scheduleReady || busy}><Clock size={14} aria-hidden="true"/> {t('Add schedule')}</button>
+        </>}>
+        <form id="bk-schedule-form" className="bk-sheet-form" onSubmit={async (e) => { e.preventDefault(); if (await createBackupSchedule()) setScheduleSheet(false); }}>
+          <Field label={t('Users')}>
+            <div className="bk-users">
+              <Checkbox checked={!!newBackupSchedule.all_users} label={t('All users')}
+                onChange={on => setNewBackupSchedule(prev => ({ ...prev, all_users: on }))}/>
+              {!newBackupSchedule.all_users && <select multiple value={newBackupSchedule.user_ids || []} aria-label={t('Users')}
+                onChange={e => setNewBackupSchedule(prev => ({ ...prev, user_ids: Array.from(e.target.selectedOptions, option => option.value) }))}>
+                {users.map(user => <option key={user.id} value={String(user.id)}>{user.username}</option>)}
+              </select>}
+            </div>
+          </Field>
+          <Field label={t('Schedule')}>{renderSchedulePicker('backup', newBackupSchedule.schedule, value => setNewBackupSchedule(prev => ({ ...prev, schedule: value })), 'backup-schedule-input')}</Field>
+          <Field label={t('Destination')}>
             <select value={newBackupSchedule.target_id} onChange={e => setNewBackupSchedule(prev => ({ ...prev, target_id: e.target.value }))}>
               <option value="">{t('Local only')}</option>
               {sftpTargets.map(target => <option key={target.id} value={target.id}>{target.name}</option>)}
             </select>
-          </div>
-          <div className="field"><span className="field-label">{t('Stored file name')}</span>
-            <select value={newBackupSchedule.name_suffix} aria-label={t('Stored file name')}
-              onChange={e => setNewBackupSchedule(prev => ({ ...prev, name_suffix: e.target.value }))}>
-              <option value="none">{t('Append: nothing')}</option>
-              <option value="day_of_week">{t('Append: day of week')}</option>
-              <option value="week_of_month">{t('Append: week of month')}</option>
-              <option value="full_date">{t('Append: full date')}</option>
+          </Field>
+          <Field label={t('Stored file name')} hint={t('The name suffix decides how many copies are kept: nothing keeps one per account, day of week keeps seven, week of month five, and full date one a day until retention removes it.')}>
+            <select value={newBackupSchedule.name_suffix} onChange={e => setNewBackupSchedule(prev => ({ ...prev, name_suffix: e.target.value }))}>
+              {Object.entries(nameSuffixLabels).map(([value, label]) => <option key={value} value={value}>{t(label)}</option>)}
             </select>
+          </Field>
+        </form>
+      </Drawer>
+
+      <Drawer open={destinationSheet} onClose={() => setDestinationSheet(false)} title={t('Add destination')}
+        subtitle={newSftpTarget.kind === 's3'
+          ? t('Works with S3 and anything that speaks its API: Wasabi, Backblaze B2, DigitalOcean Spaces, Cloudflare R2, MinIO. The bucket is checked before the target is saved, so a destination that cannot be reached never gets attached to a schedule.')
+          : t('An SFTP server the backups are copied to.')}
+        footer={<>
+          <button type="button" className="secondary-light" onClick={() => setDestinationSheet(false)}>{t('Cancel')}</button>
+          <button type="submit" form="bk-destination-form" disabled={!destinationReady || busy}><Plus size={14} aria-hidden="true"/> {t('Save destination')}</button>
+        </>}>
+        <form id="bk-destination-form" className="bk-sheet-form" onSubmit={async (e) => { e.preventDefault(); if (await createSftpTarget()) setDestinationSheet(false); }}>
+          <div className="sn-drawer-grid">
+            <Field label={t('Destination name')} required><input value={newSftpTarget.name} onChange={setTarget('name')} autoComplete="off" /></Field>
+            <Field label={t('Destination type')}>
+              <select value={newSftpTarget.kind} onChange={setTarget('kind')}>
+                <option value="sftp">SFTP</option>
+                <option value="s3">{t('S3 compatible')}</option>
+              </select>
+            </Field>
           </div>
-          <button className="backup-schedule-add" disabled={(!newBackupSchedule.all_users && (!newBackupSchedule.user_ids || newBackupSchedule.user_ids.length === 0)) || !!loading} onClick={createBackupSchedule}><Clock size={14}/> {t('Schedule')}</button>
-        </div>
-        <p className="hint">{t('The name suffix decides how many copies are kept: nothing keeps one per account, day of week keeps seven, week of month five, and full date one a day until retention removes it.')}</p>
-        <div className="backup-list">
-          {backupSchedules.map(item => {
-            const scheduleTarget = sftpTargets.find(target => target.id === item.target_id);
-            const suffix = item.name_suffix && item.name_suffix !== 'full_date' && nameSuffixLabels[item.name_suffix];
-            return <div className="backup-item" key={item.id}>
-              <span>{scheduleUserLabel(item)} - {cronScheduleLabel(item.schedule)}{scheduleTarget ? ` - ${scheduleTarget.name}` : ''}{suffix ? ` - ${t(suffix)}` : ''}
-                {item.last_status === 'running'
-                  ? <>
-                    <small>{item.last_message || t('Running')}</small>
-                    <span className="job-progress">
-                      <span className="progress-bar indeterminate"><span className="progress-bar-fill" /></span>
-                    </span>
-                  </>
-                  : <small>{item.last_status}: {item.last_message || t('not run yet')}</small>}
-              </span>
-              <div className="actions">
-                <button className="secondary" disabled={!!loading || item.last_status === 'running'} onClick={() => runBackupScheduleNow(item)}><Play size={14}/> {t('Run now')}</button>
-                <button className="danger" disabled={!!loading} onClick={() => deleteBackupSchedule(item.id)} aria-label={t('Delete')} title={t('Delete')}><Trash2 size={14}/></button>
-              </div>
-            </div>;
-          })}
-        </div>
-      </div>}
-
-      {isAdmin && activeBackupTab === 'destination' && <div className="backup-tab-panel">
-        <div className="backup-panel-title">
-          <div><h3>{t('Backup Destination')}</h3><p className="hint">{t('Where off-server backup copies are sent. SFTP, or any S3-compatible object storage.')}</p></div>
-          <button className="secondary" disabled={!!loading} onClick={loadSftpTargets}><RefreshCw size={14}/> {t('Refresh')}</button>
-        </div>
-        <div className="sftp-form sftp-target-form">
-          <input value={newSftpTarget.name} onChange={e => setNewSftpTarget(prev => ({ ...prev, name: e.target.value }))} placeholder={t('Destination name')} />
-          <select value={newSftpTarget.kind} onChange={e => setNewSftpTarget(prev => ({ ...prev, kind: e.target.value }))} aria-label={t('Destination type')}>
-            <option value="sftp">SFTP</option>
-            <option value="s3">{t('S3 compatible')}</option>
-          </select>
-
-          {newSftpTarget.kind === 'sftp' ? <>
-            <input value={newSftpTarget.host} onChange={e => setNewSftpTarget(prev => ({ ...prev, host: e.target.value }))} placeholder={t('Host')} />
-            <input value={newSftpTarget.port} onChange={e => setNewSftpTarget(prev => ({ ...prev, port: e.target.value }))} placeholder="22" inputMode="numeric" />
-            <input value={newSftpTarget.username} onChange={e => setNewSftpTarget(prev => ({ ...prev, username: e.target.value }))} placeholder={t('Username')} />
-            <input value={newSftpTarget.password} onChange={e => setNewSftpTarget(prev => ({ ...prev, password: e.target.value }))} placeholder={t('Password')} type="password" />
-            <input value={newSftpTarget.remote_path} onChange={e => setNewSftpTarget(prev => ({ ...prev, remote_path: e.target.value }))} placeholder="/backups/bpanel" />
-            <textarea value={newSftpTarget.private_key} onChange={e => setNewSftpTarget(prev => ({ ...prev, private_key: e.target.value }))} placeholder={t('Private key (optional)')} rows={4} />
-          </> : <>
-            <input id="s3-bucket" value={newSftpTarget.bucket} onChange={e => setNewSftpTarget(prev => ({ ...prev, bucket: e.target.value }))} placeholder={t('Bucket')} />
-            <input id="s3-endpoint" value={newSftpTarget.endpoint} onChange={e => setNewSftpTarget(prev => ({ ...prev, endpoint: e.target.value }))} placeholder="s3.wasabisys.com" />
-            <input id="s3-region" value={newSftpTarget.region} onChange={e => setNewSftpTarget(prev => ({ ...prev, region: e.target.value }))} placeholder={t('Region (optional)')} />
-            <input id="s3-access" value={newSftpTarget.access_key} onChange={e => setNewSftpTarget(prev => ({ ...prev, access_key: e.target.value }))} placeholder={t('Access key')} />
-            <input id="s3-secret" value={newSftpTarget.secret_key} onChange={e => setNewSftpTarget(prev => ({ ...prev, secret_key: e.target.value }))} placeholder={t('Secret key')} type="password" />
-            <input id="s3-prefix" value={newSftpTarget.prefix} onChange={e => setNewSftpTarget(prev => ({ ...prev, prefix: e.target.value }))} placeholder={t('Prefix, e.g. bpanel/nightly (optional)')} />
-            <label className="check-line">
-              <input id="s3-secure" type="checkbox" checked={!!newSftpTarget.secure} onChange={e => setNewSftpTarget(prev => ({ ...prev, secure: e.target.checked }))} />
-              {t('Use HTTPS')}
-            </label>
-          </>}
-
-          <button disabled={!!loading || !newSftpTarget.name || (newSftpTarget.kind === 's3'
-            ? (!newSftpTarget.endpoint || !newSftpTarget.bucket || !newSftpTarget.access_key || !newSftpTarget.secret_key)
-            : (!newSftpTarget.host || !newSftpTarget.username || (!newSftpTarget.password && !newSftpTarget.private_key)))}
-            onClick={createSftpTarget}><Plus size={14}/> {t('Save destination')}</button>
-        </div>
-        {newSftpTarget.kind === 's3' && <p className="hint">{t('Works with S3 and anything that speaks its API: Wasabi, Backblaze B2, DigitalOcean Spaces, Cloudflare R2, MinIO. The bucket is checked before the target is saved, so a destination that cannot be reached never gets attached to a schedule.')}</p>}
-        {sftpTargets.length === 0 && <EmptyState icon={Network} message={t('No backup destinations found.')} />}
-        <div className="backup-list">
-          {sftpTargets.map(target => <div className="backup-item" key={target.id}>
-            <span>
-              <span className="badge">{target.kind === 's3' ? 'S3' : 'SFTP'}</span>{' '}
-              {target.name} &mdash; {target.kind === 's3'
-                ? `${target.endpoint}/${target.bucket}${target.prefix ? '/' + target.prefix : ''}`
-                : `${target.username}@${target.host}:${target.remote_path}`}
-            </span>
-            <span className="backup-item-actions">
-              <button className="danger" disabled={!!loading} onClick={() => deleteSftpTarget(target.id)} aria-label={t('Delete')} title={t('Delete')}><Trash2 size={14}/></button>
-            </span>
-          </div>)}
-        </div>
-      </div>}
-    </section>;
+          {newSftpTarget.kind === 'sftp' ? <div className="sn-drawer-grid">
+            <Field label={t('Host')} required><input value={newSftpTarget.host} onChange={setTarget('host')} autoComplete="off" spellCheck={false} /></Field>
+            <Field label={t('Port')}><input value={newSftpTarget.port} onChange={setTarget('port')} placeholder="22" inputMode="numeric" /></Field>
+            <Field label={t('Username')} required><input value={newSftpTarget.username} onChange={setTarget('username')} autoComplete="off" spellCheck={false} /></Field>
+            <Field label={t('Password')}><PasswordField value={newSftpTarget.password} autoComplete="off" onChange={value => setNewSftpTarget(prev => ({ ...prev, password: value }))} /></Field>
+            <Field className="is-wide" label={t('Remote folder')}><input value={newSftpTarget.remote_path} onChange={setTarget('remote_path')} placeholder="/backups/bpanel" spellCheck={false} /></Field>
+            <Field className="is-wide" label={t('Private key (optional)')} optional hint={t('A password or a private key: one is enough.')}>
+              <textarea value={newSftpTarget.private_key} onChange={setTarget('private_key')} rows={4} spellCheck={false} />
+            </Field>
+          </div> : <div className="sn-drawer-grid">
+            <Field label={t('Bucket')} required><input id="s3-bucket" value={newSftpTarget.bucket} onChange={setTarget('bucket')} spellCheck={false} /></Field>
+            <Field label={t('Endpoint')} required><input id="s3-endpoint" value={newSftpTarget.endpoint} onChange={setTarget('endpoint')} placeholder="s3.wasabisys.com" spellCheck={false} /></Field>
+            <Field label={t('Region (optional)')} optional><input id="s3-region" value={newSftpTarget.region} onChange={setTarget('region')} spellCheck={false} /></Field>
+            <Field label={t('Access key')} required><input id="s3-access" value={newSftpTarget.access_key} onChange={setTarget('access_key')} autoComplete="off" spellCheck={false} /></Field>
+            <Field label={t('Secret key')} required><PasswordField id="s3-secret" value={newSftpTarget.secret_key} autoComplete="off" onChange={value => setNewSftpTarget(prev => ({ ...prev, secret_key: value }))} /></Field>
+            <Field label={t('Prefix, e.g. bpanel/nightly (optional)')} optional><input id="s3-prefix" value={newSftpTarget.prefix} onChange={setTarget('prefix')} spellCheck={false} /></Field>
+            <Checkbox className="is-wide" checked={!!newSftpTarget.secure} label={t('Use HTTPS')} onChange={on => setNewSftpTarget(prev => ({ ...prev, secure: on }))}/>
+          </div>}
+        </form>
+      </Drawer>
+    </>;
   }
 
   function renderServices() {
@@ -11063,27 +11193,233 @@ function App() {
     </div>;
   }
 
+  // Users & packages, as SNPanel's (pages/Users.jsx there): a filter by role
+  // (a reseller's, by state) and a search over one table - who each account
+  // is, its role, its package, its disk, its state - with Edit and the other
+  // actions behind "…"; a reseller's customers fold under it. An account and a
+  // package are edited in side sheets, and added in them; moving a domain to
+  // another account is a sheet too. The forms in the sheets are BPanel's own
+  // (renderUserFields, renderPackageFields).
   function renderUsers() {
-    if (!canManageUsers) return <section className="section"><h2>{t('Users')}</h2><p className="hint">{t('No permission.')}</p></section>;
-    const activeUserTab = userTab || 'list';
+    if (!canManageUsers) return <section className="section"><p className="hint">{t('No permission.')}</p></section>;
+    // "Add user" is a side sheet over the list: the 'add' tab (the Dashboard's
+    // tile) opens it there.
+    const tab = userTab === 'packages' ? 'packages' : 'list';
+    const refresh = () => { loadUsers(); loadPackages(); if (isReseller) loadResellerPool(); };
+    const roleBadge = (role) => <span className={`badge role-${role}`}>{t(roleLabel(role))}</span>;
+    const openMove = (user) => { setAssignWebsiteId(''); setAssignUserId(user ? String(user.id) : ''); setMoveDomainOpen(true); };
+    const packageInUse = (item) => users.some(user => user.package_id === item.id);
+
+    function userRow(user, children = [], child = false) {
+      const self = user.id === currentUser?.id;
+      const open = expandedResellers.includes(user.id);
+      const toggle = () => setExpandedResellers(prev => (prev.includes(user.id) ? prev.filter(id => id !== user.id) : [...prev, user.id]));
+      return <React.Fragment key={user.id}>
+        <div className={`ust-row${child ? ' is-child' : ''}${user.is_active ? '' : ' is-suspended'}${editingUser?.id === user.id ? ' is-editing' : ''}`} role="row">
+          <span role="cell" className="ust-account">
+            <span className="users-avatar" aria-hidden="true">{(user.username || '?').charAt(0).toUpperCase()}</span>
+            <span className="ust-name"><strong>{user.username}</strong>{user.email && <small>{user.email}</small>}</span>
+          </span>
+          <div className="ust-meta">
+            {isAdmin && <span role="cell" className="ust-role" data-label={t('Role')}>
+              {roleBadge(user.role)}
+              {user.reseller_id && !child && <small>{t('via {name}', { name: resellerName(user.reseller_id) })}</small>}
+              {children.length > 0 && <button type="button" className="ust-expand" aria-expanded={open} onClick={toggle}
+                aria-label={open ? t('Hide the customers of {name}', { name: user.username }) : t('Show the customers of {name}', { name: user.username })}>
+                <ChevronDown size={14} aria-hidden="true"/>{t('{count} customer(s)', { count: children.length })}</button>}
+            </span>}
+            <span role="cell" className="ust-package" data-label={t('Package')}>
+              {user.role === 'admin' ? <span className="ust-muted" title={t('Administrators are not bound by website or storage limits.')}>—</span>
+                : user.package_name || <span className="ust-muted">{t('Own limits')}</span>}
+            </span>
+            <span role="cell" className="ust-use" data-label={t('Disk')}>{renderUserDisk(user)}</span>
+            {limitsOn && <span role="cell" className="ust-use" data-label={t('CPU / RAM')} title={t('Resource use now')}>{renderUserResources(user)}</span>}
+            <span role="cell" className="ust-status" data-label={t('Status')}>
+              <span className={`ust-state ${user.is_active ? 'is-on' : 'is-off'}`}><i aria-hidden="true"></i>{user.is_active ? t('Active') : t('Suspended')}</span>
+              {user.totp_enabled && <span className="ust-flag" role="img" aria-label={t('Two-step verification is on')} title={t('Two-step verification is on')}><ShieldCheck size={14} aria-hidden="true"/></span>}
+            </span>
+          </div>
+          <span role="cell" className="ust-actions">
+            {(isAdmin || !self) && <button type="button" className="secondary-light" disabled={!!loading} onClick={() => startEditingUser(user)}
+              aria-label={t('Edit {name}', { name: user.username })}><Pencil size={14} aria-hidden="true"/> {t('Edit')}</button>}
+            <ActionMenu label={t('More actions for {name}', { name: user.username })} items={[
+              { label: t('Log in as'), icon: LogIn, hidden: self, disabled: !!loading, onClick: () => quickLoginUser(user) },
+              { label: t('Move a domain to {name}', { name: user.username }), icon: ArrowRightLeft, hidden: !isAdmin || websites.length === 0, disabled: !!loading, onClick: () => openMove(user) },
+              { label: t('Reset 2FA'), icon: ShieldOff, hidden: self || !user.totp_enabled, disabled: !!loading, onClick: () => resetUserTwoFactor(user) },
+              user.is_active
+                ? { label: t('Suspend'), icon: Ban, hidden: self, disabled: !!loading, onClick: () => suspendUser(user) }
+                : { label: t('Unsuspend'), icon: Play, hidden: self, disabled: !!loading, onClick: () => unsuspendUser(user) },
+              'separator',
+              { label: t('Delete {name}', { name: user.username }), icon: Trash2, danger: true, hidden: self, disabled: !!loading, onClick: () => deletePanelUser(user) },
+            ]}/>
+          </span>
+        </div>
+        {open && children.map(kid => userRow(kid, [], true))}
+      </React.Fragment>;
+    }
+
+    function renderUserList() {
+      const needle = userSearch.trim().toLowerCase();
+      const matches = (user) => !needle || `${user.username || ''}\n${user.email || ''}`.toLowerCase().includes(needle);
+      const count = (test) => users.filter(test).length;
+      const filters = isAdmin
+        ? [['all', t('All'), () => true], ['admin', t('Admins'), u => u.role === 'admin'],
+          ['reseller', t('Resellers'), u => u.role === 'reseller'], ['end_user', t('Customers'), u => u.role === 'end_user']]
+        : [['all', t('All'), () => true], ['active', t('Active'), u => u.is_active], ['suspended', t('Suspended'), u => !u.is_active]];
+      const chosen = filters.find(([id]) => id === userFilter) || filters[0];
+      const shown = users.filter(chosen[2]).filter(matches);
+      // An administrator's resellers carry their customers, folded, in All and
+      // in Resellers; a search, or the Customers filter, lists everyone flat.
+      const nest = isAdmin && !needle && (chosen[0] === 'all' || chosen[0] === 'reseller');
+      const resellerIds = new Set(users.filter(u => u.role === 'reseller').map(u => u.id));
+      const customersOf = (user) => (nest && user.role === 'reseller' ? users.filter(u => u.reseller_id === user.id && u.role === 'end_user') : []);
+      const top = nest ? shown.filter(u => !(u.role === 'end_user' && u.reseller_id && resellerIds.has(u.reseller_id))) : shown;
+      return <section className="section">
+        <div className="users-toolbar ust-toolbar">
+          <Tabs className={`ust-filter${filters.length === 4 ? ' is-four' : ''}`} label={isAdmin ? t('Show accounts by role') : t('Show customers by state')} value={chosen[0]} onChange={setUserFilter}
+            tabs={filters.map(([id, label, test]) => ({ id, label, badge: count(test) }))}/>
+          <label className="users-search"><Search size={15} aria-hidden="true"/>
+            <input type="search" value={userSearch} onChange={e => setUserSearch(e.target.value)}
+              aria-label={t('Search by username or email')} placeholder={t('Search by username or email')}/>
+          </label>
+        </div>
+        {users.length === 0 && <EmptyState icon={Users} message={isReseller ? t('No customers yet.') : t('No users found.')}/>}
+        {users.length > 0 && shown.length === 0 && <EmptyState icon={Search} message={needle ? t('No users match the search.') : t('No accounts here.')}/>}
+        {shown.length > 0 && <div className={`ust${isAdmin ? ' with-role' : ''}${limitsOn ? ' with-resources' : ''}`} role="table" aria-label={isReseller ? t('Customers') : t('Panel users')}>
+          <div className="ust-row ust-head" role="row">
+            <span role="columnheader">{t('Account')}</span>
+            <div className="ust-meta">
+              {isAdmin && <span role="columnheader">{t('Role')}</span>}
+              <span role="columnheader">{t('Package')}</span>
+              <span role="columnheader">{t('Disk')}</span>
+              {limitsOn && <span role="columnheader">{t('CPU / RAM')}</span>}
+              <span role="columnheader">{t('Status')}</span>
+            </div>
+            <span role="columnheader"><span className="sr-only">{t('Actions')}</span></span>
+          </div>
+          {top.map(user => userRow(user, customersOf(user)))}
+        </div>}
+      </section>;
+    }
+
+    function renderPackageList() {
+      return <section className="section">
+        {packages.length === 0 && <EmptyState icon={PackageOpen} message={t('No packages yet.')}
+          action={{ label: t('New package'), icon: Plus, onClick: () => setPackageSheet(true) }}/>}
+        {packages.length > 0 && <div className="ust ust-plans" role="table" aria-label={t('Packages')}>
+          <div className="ust-row ust-head" role="row"><span role="columnheader">{t('Package')}</span><span role="columnheader">{t('Status')}</span><span role="columnheader"><span className="sr-only">{t('Actions')}</span></span></div>
+          {packages.map(item => <div className={`ust-row${String(editingPackageId) === String(item.id) ? ' is-editing' : ''}`} role="row" key={item.id}>
+            <span role="cell" className="ust-account">
+              <span className="users-avatar" aria-hidden="true"><PackageOpen size={16}/></span>
+              <span><strong>{item.name}</strong>{packageChips(item)}</span>
+            </span>
+            <span role="cell" data-label={t('Status')}><span className={packageInUse(item) ? 'badge ok' : 'badge'}>{packageInUse(item) ? t('In use') : t('Not in use')}</span></span>
+            <span role="cell" className="ust-actions">
+              <button type="button" className="secondary-light" disabled={!!loading} onClick={() => startEditingPackage(item)}
+                aria-label={t('Edit {name}', { name: item.name })}><Pencil size={14} aria-hidden="true"/> {t('Edit')}</button>
+              <ActionMenu label={t('More actions for {name}', { name: item.name })} items={[
+                { label: t('Delete {name}', { name: item.name }), icon: Trash2, danger: true, disabled: !!loading || packageInUse(item),
+                  hint: packageInUse(item) ? t('Package is in use') : undefined, onClick: () => deletePackage(item) },
+              ]}/>
+            </span>
+          </div>)}
+        </div>}
+      </section>;
+    }
+
+    const site = websites.find(item => String(item.id) === String(assignWebsiteId));
+    const sameOwner = site && String(site.owner_id) === String(assignUserId);
+    const siteOwner = (item) => users.find(u => String(u.id) === String(item.owner_id))?.username;
+    const closeAdd = () => setUserTab('list');
+    const editingPackage = editingPackageId ? packages.find(item => String(item.id) === String(editingPackageId)) : null;
+    // The app and the databases behind the website move with it.
+    const movingWith = [
+      ...(assignPreview?.application ? [t('application {name}', { name: assignPreview.application })] : []),
+      ...(assignPreview?.databases || []).map(name => t('database {name}', { name })),
+    ];
+
     return <>
-      <section className="section">
-        <div className="section-title">
-          <div>{isReseller
-            ? <><h2>{t('Customers')}</h2><p className="hint">{t("Your customers' accounts, your packages, and new customers.")}</p></>
-            : <><h2>{t('Panel Users')}</h2><p className="hint">{t('Manage panel accounts, hosting packages, and create new users.')}</p></>}</div>
-          <button className="secondary" disabled={!!loading} onClick={() => { loadUsers(); loadPackages(); if (isReseller) loadResellerPool(); }}><RefreshCw size={14}/> {t('Refresh')}</button>
-        </div>
-        <div className="tab-bar" role="tablist" aria-label={t('Panel user sections')}>
-          <button type="button" role="tab" aria-selected={activeUserTab === 'list'} className={activeUserTab === 'list' ? 'tab active' : 'tab'} onClick={() => setUserTab('list')}><Users size={14}/> {t('List Users')}</button>
-          <button type="button" role="tab" aria-selected={activeUserTab === 'packages'} className={activeUserTab === 'packages' ? 'tab active' : 'tab'} onClick={() => setUserTab('packages')}><PackageOpen size={14}/> {t('Packages')}</button>
-          <button type="button" role="tab" aria-selected={activeUserTab === 'add'} className={activeUserTab === 'add' ? 'tab active' : 'tab'} onClick={() => setUserTab('add')}><Plus size={14}/> {t('Add User')}</button>
-        </div>
-      </section>
+      <PageHeader className="ust-header"
+        subtitle={isReseller ? t("Your customers' accounts, your packages, and new customers.")
+          : tab === 'packages' ? t('Manage provisioning plans for WHMCS and billing systems.') : t('Manage panel accounts, hosting packages, and create new users.')}
+        onRefresh={refresh} refreshDisabled={!!loading}
+        actions={tab === 'packages'
+          ? <button type="button" onClick={() => setPackageSheet(true)}><Plus size={15} aria-hidden="true"/> {t('New package')}</button>
+          : <>
+            {isAdmin && websites.length > 0 && <button type="button" className="secondary-light" onClick={() => openMove(null)}><ArrowRightLeft size={15} aria-hidden="true"/> {t('Move a domain')}</button>}
+            <button type="button" onClick={() => setUserTab('add')}><Plus size={15} aria-hidden="true"/> {isReseller ? t('Add customer') : t('Add User')}</button>
+          </>}/>
       {renderResellerPool()}
-      {activeUserTab === 'list' && renderUsersListTab()}
-      {activeUserTab === 'packages' && renderUsersPackagesTab()}
-      {activeUserTab === 'add' && renderUsersAddTab()}
+      <Tabs label={t('Panel user sections')} value={tab} onChange={setUserTab} tabs={[
+        { id: 'list', icon: Users, label: isReseller ? t('Customers') : t('List Users') },
+        { id: 'packages', icon: PackageOpen, label: t('Packages') },
+      ]}/>
+      {tab === 'list' && renderUserList()}
+      {tab === 'packages' && renderPackageList()}
+
+      <Drawer open={userTab === 'add'} onClose={closeAdd} wide className="ust-drawer"
+        title={isReseller ? t('Add customer') : t('Add panel user')}
+        subtitle={t('Panel username is also the Linux user. Select a package to auto-fill limits.')}
+        footer={<>
+          <button type="button" className="secondary-light" onClick={closeAdd}>{t('Cancel')}</button>
+          <button type="button" disabled={!!loading || !newUser.username || !newUser.password} onClick={createUser}>
+            <Plus size={14} aria-hidden="true"/> {isReseller ? t('Create customer') : t('Create user')}</button>
+        </>}>
+        {renderUserFields(newUser, setNewUser, { creating: true, applyPackage: applyPackageToNewUser })}
+      </Drawer>
+
+      <Drawer open={!!editingUser} onClose={cancelEditingUser} wide className="ust-drawer"
+        title={editingUser ? t('Edit {name}', { name: editingUser.username }) : ''}
+        subtitle={editingUser ? `${editingUser.id === currentUser?.id ? t('Role is locked for the active admin session.') : t('Role changes sign the user out of existing sessions.')}${editingUserForm.role === 'admin' ? ` ${t('Admin accounts bypass website and storage limits.')}` : ''}` : null}
+        footer={<>
+          <button type="button" className="secondary-light" onClick={cancelEditingUser}>{t('Cancel')}</button>
+          <button type="button" disabled={!!loading || !editingUserForm.email?.trim()} onClick={updatePanelUser}><Save size={14} aria-hidden="true"/> {t('Save changes')}</button>
+        </>}>
+        {editingUser && renderUserFields(editingUserForm, setEditingUserForm, { user: editingUser, applyPackage: applyPackageToEditingUser })}
+      </Drawer>
+
+      <Drawer open={packageSheet} onClose={() => setPackageSheet(false)} wide className="ust-drawer" title={t('New package')}
+        subtitle={isReseller ? t("Your own packages: only you see them, to fill in your customers' limits.") : t('Manage provisioning plans for WHMCS and billing systems.')}
+        footer={<>
+          <button type="button" className="secondary-light" onClick={() => setPackageSheet(false)}>{t('Cancel')}</button>
+          <button type="button" disabled={!!loading || !newPackage.name.trim()} onClick={async () => { if (await createPackage()) setPackageSheet(false); }}><Plus size={14} aria-hidden="true"/> {t('Add package')}</button>
+        </>}>
+        {renderPackageFields(newPackage, setNewPackage)}
+      </Drawer>
+
+      <Drawer open={!!editingPackage} onClose={cancelEditingPackage} wide className="ust-drawer"
+        title={editingPackage ? t('Edit {name}', { name: editingPackage.name }) : ''}
+        footer={<>
+          <button type="button" className="secondary-light" onClick={cancelEditingPackage}>{t('Cancel')}</button>
+          <button type="button" disabled={!!loading || !editingPackageForm.name.trim()} onClick={() => updatePackage(editingPackage.id)}><Save size={14} aria-hidden="true"/> {t('Save')}</button>
+        </>}>
+        {editingPackage && renderPackageFields(editingPackageForm, setEditingPackageForm)}
+      </Drawer>
+
+      {isAdmin && <Drawer open={moveDomainOpen} onClose={() => setMoveDomainOpen(false)} title={t('Move a domain')}
+        subtitle={t('Give a website to another account.')}
+        footer={<>
+          <button type="button" className="secondary-light" onClick={() => setMoveDomainOpen(false)}>{t('Cancel')}</button>
+          <button type="button" disabled={!assignWebsiteId || !assignUserId || sameOwner || !!loading}
+            onClick={async () => { if (await assignDomainToUser()) setMoveDomainOpen(false); }}><ArrowRightLeft size={14} aria-hidden="true"/> {t('Move domain')}</button>
+        </>}>
+        <div className="form-sections">
+          <Field label={t('Domain')} required>
+            <select value={assignWebsiteId} onChange={e => setAssignWebsiteId(e.target.value)}>
+              <option value="">{t('Select domain')}</option>
+              {websites.map(item => <option key={item.id} value={item.id}>{siteOwner(item) ? `${item.domain} · ${siteOwner(item)}` : item.domain}</option>)}
+            </select>
+          </Field>
+          <Field label={t('New owner')} required error={sameOwner ? t('The domain already belongs to this account.') : ''}>
+            <select value={assignUserId} onChange={e => setAssignUserId(e.target.value)}>
+              <option value="">{t('Select user')}</option>
+              {users.map(user => <option key={user.id} value={user.id}>{user.username} ({t(roleLabel(user.role))})</option>)}
+            </select>
+          </Field>
+          {movingWith.length > 0 && <p className="hint">{t('Moves with this website:')} <strong>{movingWith.join(', ')}</strong>.
+            {assignPreview?.application ? ` ${t('The application restarts once.')}` : ''}</p>}
+        </div>
+      </Drawer>}
     </>;
   }
 
@@ -11121,100 +11457,7 @@ function App() {
     </span>;
   }
 
-  function renderUsersListTab() {
-    const query = userSearch.trim().toLowerCase();
-    const shown = query
-      ? users.filter(user => user.username.toLowerCase().includes(query) || (user.email || '').toLowerCase().includes(query))
-      : users;
-    return <>
-      <section className="section">
-        {users.length > 0 && <div className="users-toolbar">
-          <label className="users-search">
-            <Search size={15}/>
-            <input type="search" value={userSearch} onChange={e => setUserSearch(e.target.value)} placeholder={t('Search by username or email')} aria-label={t('Search by username or email')} />
-          </label>
-          <span className="users-count">{t('{shown} of {total}', { shown: shown.length, total: users.length })}</span>
-        </div>}
-        {users.length === 0 && <EmptyState icon={Users} message={t('No users found.')} />}
-        {users.length > 0 && shown.length === 0 && <p className="hint">{t('No account matches your search.')}</p>}
-        {shown.length > 0 && <div className={`users-table${limitsOn ? ' with-resources' : ''}`}>
-          <div className="users-row users-head" aria-hidden="true">
-            <span>{t('Account')}</span><span>{t('Role')}</span><span>{t('Disk')}</span>{limitsOn && <span>{t('CPU / RAM')}</span>}<span></span>
-          </div>
-          {shown.map(user => {
-            const self = user.id === currentUser?.id;
-            const editing = editingUser?.id === user.id;
-            return <div className={`users-item${editing ? ' is-editing' : ''}${user.is_active ? '' : ' is-suspended'}`} key={user.id}>
-              <div className="users-row">
-                {/* BPanel's package and 2FA sit under the name, with the email. */}
-                <div className="users-account">
-                  <span className="users-avatar" aria-hidden="true">{(user.username || '?').slice(0, 1).toUpperCase()}</span>
-                  <div><strong>{user.username}</strong>
-                    <small>{[user.email, user.role === 'admin' ? '' : (user.package_name || t('Custom')), user.totp_enabled ? '2FA' : ''].filter(Boolean).join(' · ')}</small></div>
-                </div>
-                <div className="users-meta">
-                  <div className="users-badges" data-label={t('Role')}>
-                    <span className={`badge role-${user.role}`}>{t(roleLabel(user.role))}</span>
-                    <span className={`badge ${user.is_active ? 'ok' : 'warn'}`}>{user.is_active ? t('Active') : t('Suspended')}</span>
-                    {isAdmin && user.reseller_id && <span className="badge" title={t('Reseller')}>{t('via {name}', { name: resellerName(user.reseller_id) })}</span>}
-                  </div>
-                  <div className="users-cell" data-label={t('Disk')}>{renderUserDisk(user)}</div>
-                  {limitsOn && <div className="users-cell" data-label={t('CPU / RAM')} title={t('Resource use now')}>{renderUserResources(user)}</div>}
-                </div>
-                <div className="users-actions">
-                  {(isAdmin || !self) && <button type="button" className={`mini ${editing ? '' : 'secondary-light'}`} disabled={!!loading} onClick={() => editing ? cancelEditingUser() : startEditingUser(user)}><Pencil size={14}/> {t('Edit')}</button>}
-                  {!self && <button type="button" className="mini secondary-light" disabled={!!loading} onClick={() => quickLoginUser(user)}><LogIn size={14}/> {t('Login as')}</button>}
-                  {!self && user.totp_enabled && <button type="button" className="mini secondary-light icon-button" disabled={!!loading} onClick={() => resetUserTwoFactor(user)} title={t('Reset 2FA')} aria-label={t('Reset 2FA')}><KeyRound size={14}/></button>}
-                  {!self && (user.is_active
-                    ? <button type="button" className="mini secondary-light icon-button is-suspend" disabled={!!loading} onClick={() => suspendUser(user)} title={t('Suspend')} aria-label={t('Suspend')}><Ban size={14}/></button>
-                    : <button type="button" className="mini secondary-light icon-button" disabled={!!loading} onClick={() => unsuspendUser(user)} title={t('Unsuspend')} aria-label={t('Unsuspend')}><CheckCircle size={14}/></button>)}
-                  {!self && <button type="button" className="mini danger icon-button" disabled={!!loading} onClick={() => deletePanelUser(user)} aria-label={t('Delete {name}', { name: user.username })} title={t('Delete')}><Trash2 size={14}/></button>}
-                </div>
-              </div>
-              {editing && <div className="user-edit-panel">
-                <div className="user-edit-heading">
-                  <div><strong>{t('Edit')} {user.username}</strong><small>
-                    {self ? t('Role is locked for the active admin session.') : t('Role changes sign the user out of existing sessions.')}
-                    {editingUserForm.role === 'admin' ? ` ${t('Admin accounts bypass website and storage limits.')}` : ''}
-                  </small></div>
-                  <button type="button" className="user-edit-close secondary-light" onClick={cancelEditingUser} aria-label={t('Close user editor')} title={t('Close user editor')}><X size={16}/></button>
-                </div>
-                {renderUserFields(editingUserForm, setEditingUserForm, { user, applyPackage: applyPackageToEditingUser })}
-                <div className="user-edit-actions">
-                  <button type="button" className="secondary-light" onClick={cancelEditingUser}>{t('Cancel')}</button>
-                  <button type="button" disabled={!!loading || !editingUserForm.email.trim()} onClick={updatePanelUser}><Save size={14}/> {t('Save changes')}</button>
-                </div>
-              </div>}
-            </div>;
-          })}
-        </div>}
-      </section>
-      {isAdmin && users.length > 0 && websites.length > 0 && <section className="section">
-        <div className="section-title"><div><h2>{t('Assign domain to user')}</h2><p className="hint">{t('Give a website to another account.')}</p></div></div>
-        <div className="assign-row">
-          <select value={assignWebsiteId} onChange={e => setAssignWebsiteId(e.target.value)} aria-label={t('Select domain')}>
-            <option value="">{t('Select domain')}</option>
-            {websites.map(site => <option key={site.id} value={site.id}>{site.domain}</option>)}
-          </select>
-          <select value={assignUserId} onChange={e => setAssignUserId(e.target.value)} aria-label={t('Select user')}>
-            <option value="">{t('Select user')}</option>
-            {users.map(user => <option key={user.id} value={user.id}>{user.username} ({t(roleLabel(user.role))})</option>)}
-          </select>
-          <button type="button" disabled={!assignWebsiteId || !assignUserId || !!loading} onClick={assignDomainToUser}>{t('Assign')}</button>
-        </div>
-        {(() => {
-          // The app and the databases behind the website move with it: the
-          // app's code sits in its owner's home, out of anyone else's reach.
-          const moving = [
-            ...(assignPreview?.application ? [t('application {name}', { name: assignPreview.application })] : []),
-            ...(assignPreview?.databases || []).map(name => t('database {name}', { name })),
-          ];
-          return moving.length > 0 && <p className="hint">{t('Moves with this website:')} <strong>{moving.join(', ')}</strong>.
-            {assignPreview?.application ? ` ${t('The application restarts once.')}` : ''}</p>;
-        })()}
-      </section>}
-    </>;
-  }
+
 
   // A package's limits as short chips: what it gives at a glance.
   function packageChips(item) {
@@ -11250,73 +11493,9 @@ function App() {
     </div>;
   }
 
-  function renderUsersPackagesTab() {
-    const packageInUse = item => users.some(user => user.package_id === item.id);
-    return <>
-      <section className="section">
-        <div className="section-title">
-          <div><h2>{t('New package')}</h2><p className="hint">{isReseller ? t("Your own packages: only you see them, to fill in your customers' limits.") : t('Manage provisioning plans for WHMCS and billing systems.')}</p></div>
-        </div>
-        <div className="user-edit-panel is-form">
-          {renderPackageFields(newPackage, setNewPackage)}
-          <div className="user-edit-actions">
-            <button type="button" disabled={!!loading || !newPackage.name.trim()} onClick={createPackage}><Plus size={14}/> {t('Add package')}</button>
-          </div>
-        </div>
-      </section>
-      <section className="section">
-        <div className="section-title">
-          <div><h2>{t('Hosting Packages')}</h2></div>
-          <button type="button" className="secondary" disabled={!!loading} onClick={loadPackages}><RefreshCw size={14}/> {t('Refresh')}</button>
-        </div>
-        {packages.length === 0 && <p className="hint">{t('No packages yet. Create one above.')}</p>}
-        {packages.length > 0 && <div className="users-table plans">
-          {packages.map(item => {
-            const editing = String(editingPackageId) === String(item.id);
-            return <div className={`users-item${editing ? ' is-editing' : ''}`} key={item.id}>
-              <div className="users-row plan-row">
-                <div className="users-account">
-                  <span className="users-avatar" aria-hidden="true"><PackageOpen size={16}/></span>
-                  <div><strong>{item.name}</strong>{packageChips(item)}</div>
-                </div>
-                <span className={packageInUse(item) ? 'badge ok' : 'badge'}>{packageInUse(item) ? t('In use') : t('Not in use')}</span>
-                <div className="users-actions">
-                  <button type="button" className={`mini ${editing ? '' : 'secondary-light'}`} disabled={!!loading} onClick={() => editing ? cancelEditingPackage() : startEditingPackage(item)}><Pencil size={14}/> {t('Edit')}</button>
-                  <button type="button" className="mini danger icon-button" disabled={!!loading || packageInUse(item)} onClick={() => deletePackage(item)}
-                    aria-label={t('Delete {name}', { name: item.name })} title={packageInUse(item) ? t('Package is in use') : t('Delete')}><Trash2 size={14}/></button>
-                </div>
-              </div>
-              {editing && <div className="user-edit-panel">
-                <div className="user-edit-heading">
-                  <div><strong>{t('Edit')} {item.name}</strong></div>
-                  <button type="button" className="user-edit-close secondary-light" onClick={cancelEditingPackage} aria-label={t('Close')} title={t('Close')}><X size={16}/></button>
-                </div>
-                {renderPackageFields(editingPackageForm, setEditingPackageForm)}
-                <div className="user-edit-actions">
-                  <button type="button" className="secondary-light" onClick={cancelEditingPackage}>{t('Cancel')}</button>
-                  <button type="button" disabled={!!loading || !editingPackageForm.name.trim()} onClick={() => updatePackage(item.id)}><Save size={14}/> {t('Save')}</button>
-                </div>
-              </div>}
-            </div>;
-          })}
-        </div>}
-      </section>
-    </>;
-  }
 
-  function renderUsersAddTab() {
-    return <section className="section">
-      <div className="section-title">
-        <div><h2>{isReseller ? t('Add customer') : t('Add panel user')}</h2><p className="hint">{t('Panel username is also the Linux user. Select a package to auto-fill limits.')}</p></div>
-      </div>
-      <div className="user-edit-panel is-form">
-        {renderUserFields(newUser, setNewUser, { creating: true, applyPackage: applyPackageToNewUser })}
-        <div className="user-edit-actions">
-          <button type="button" disabled={!!loading || !newUser.username || !newUser.password} onClick={createUser}><Plus size={14}/> {isReseller ? t('Create customer') : t('Create user')}</button>
-        </div>
-      </div>
-    </section>;
-  }
+
+
 
   function renderStandaloneEditor() {
     const editorLineCount = Math.max(1, String(fileContent || '').split('\n').length);

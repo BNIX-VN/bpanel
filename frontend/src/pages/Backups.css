@@ -1,0 +1,130 @@
+/* Ported from SNPanel's pages/Backups.css, out of its cascade layer: BPanel's
+   element rules are unlayered and would win over a layered class. */
+/* Backups: the labelled forms of the user, schedule and destination tabs.
+   The lists and tabs are the shared .backup-* rules in brand.css. See
+   pages/Backups.jsx; the destinations and the restore have their own, beside
+   components/BackupDestinations.jsx and components/BackupRestore.jsx. */
+
+.bk-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:var(--space-3);align-items:start}
+.bk-field{display:grid;gap:6px;min-width:0}
+.bk-field>label,.bk-label{font-size:var(--text-sm);font-weight:600;color:var(--text-secondary)}
+.bk-field .hint{margin:0;font-size:var(--text-sm)}
+.bk-field code{font-family:var(--font-mono);font-size:var(--text-sm);color:var(--text);word-break:break-all}
+.bk-span-2{grid-column:span 2}
+.bk-span-all{grid-column:1 / -1}
+.bk-actions{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:var(--space-2)}
+.bk-actions .bk-note{flex:1 1 320px;margin:0}
+.bk-note,.bk-warn{font-size:var(--text-sm)}
+
+/* ---- backup user ---- */
+.bk-user-form{grid-template-columns:minmax(200px,1fr) minmax(200px,1fr) max-content;align-items:end}
+
+/* ---- schedules ---- */
+.bk-schedule-form{grid-template-columns:minmax(200px,280px) minmax(0,1fr);gap:var(--space-4)}
+.bk-schedule-form select[multiple]{min-height:120px;padding-block:8px}
+/* When and where: a label beside each control, the controls one width. */
+.bk-when{display:grid;gap:var(--space-3);min-width:0}
+.bk-row{display:grid;grid-template-columns:180px minmax(0,1fr);gap:var(--space-3);align-items:center}
+.bk-row>label{font-size:var(--text-sm);font-weight:600;color:var(--text-secondary)}
+.bk-row>select,.bk-row>.cron-schedule,.bk-control{max-width:520px;min-width:0}
+.bk-control{display:grid;gap:4px}
+.bk-control .hint{margin:0;font-size:var(--text-sm)}
+.bk-control code{font-family:var(--font-mono);font-size:var(--text-sm);color:var(--text);word-break:break-all}
+.bk-keep{grid-template-columns:110px minmax(0,1fr);align-items:center;gap:var(--space-2)}
+.bk-schedule-form{padding:12px;background:var(--surface-alt);border:1px solid var(--border);border-radius:var(--radius-lg)}
+/* A schedule's row is words, not a path: they wrap whole. */
+.backups-page .bk-schedule-row>span{word-break:normal;overflow-wrap:anywhere}
+.backups-page .backup-item code{font-family:var(--font-mono);font-size:var(--text-sm);font-weight:600}
+.backups-page .backup-item small .badge{margin-right:4px}
+
+/* ---- destinations: the checkbox and warning their form shares ---- */
+.bk-check{display:flex;align-items:flex-start;gap:var(--space-2);align-self:end;padding:8px 0;cursor:pointer}
+.bk-check input{flex:none;width:16px;height:16px;min-height:0;margin:2px 0 0;padding:0;accent-color:var(--primary)}
+.bk-check span{display:grid;gap:2px;font-weight:600;color:var(--text)}
+.bk-check small{font-weight:500;color:var(--text-muted);font-size:var(--text-sm)}
+.bk-warn{display:flex;align-items:center;gap:var(--space-2);margin:0;padding:8px 12px;border:1px solid var(--warning-border);border-radius:var(--radius-md);background:var(--warning-bg);color:var(--warning-text)}
+.bk-warn svg{flex:none}
+
+@media (max-width:760px){
+  .bk-user-form,.bk-schedule-form{grid-template-columns:1fr}
+  .bk-span-2{grid-column:auto}
+  .bk-row{grid-template-columns:1fr;gap:6px}
+  .bk-row>select,.bk-row>.cron-schedule,.bk-control{max-width:none}
+  .bk-actions{justify-content:stretch}
+  .bk-actions button{flex:1 1 auto}
+}
+
+/* DirectAdmin import: the upload's progress and the per-part report. */
+.da-upload-progress{max-width:none;margin:10px 0}
+.da-upload-progress>span{flex:0 1 auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:60%}
+.da-user-block.warn{border-left:3px solid var(--warning-text,#b45309)}
+.da-report-table td:last-child{word-break:break-word;min-width:220px}
+.da-report-table td .badge{white-space:nowrap}
+.da-user-head .badge{margin-left:4px}
+
+/* cPanel import: the account's name, the choices, the sites table. */
+.cp-account-form{grid-template-columns:minmax(200px,360px);margin:10px 0}
+.cp-options{display:flex;flex-wrap:wrap;gap:8px 18px;margin:12px 0 8px}
+.cp-sites-table td small{display:block;font-weight:500}
+.cp-sites-table td code{font-family:var(--font-mono);font-size:var(--text-sm);word-break:break-all}
+/* The per-site checkbox: the global input{width:100%} made it as wide as its cell. */
+.cp-sites-table input[type=checkbox]{width:16px;height:16px;min-height:0;margin:0;flex:none;accent-color:var(--primary)}
+
+/* What an import brings, part by part, and the zones and mailboxes the
+   DNS Manager and Email addons would take (components/ImportParts.jsx). */
+.import-parts{margin:12px 0 4px}
+.import-parts input[type=checkbox]{width:16px;height:16px;min-height:0;margin:0;flex:none;accent-color:var(--primary)}
+.import-parts .badge{white-space:normal}
+.import-parts-list{margin:8px 0 6px;padding-left:18px}
+.import-parts-list li{margin:2px 0}
+.import-parts-list small{font-weight:500}
+
+
+/* All seven tabs in sight: OPanel's strip does not wrap and hides its scroll
+   bar, so the tabs that did not fit were off the screen with nothing to say
+   so. Wider than a phone they keep one line while it holds them and go on
+   to a second when it does not; on a phone, two to a line. */
+@media (width>700px){.segmented-control.backup-tabs{flex-wrap:wrap}}
+@media (width<=700px){
+  .segmented-control.backup-tabs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:4px;overflow:visible}
+  .segmented-control.backup-tabs button,
+  .segmented-control.backup-tabs button:hover:not(:disabled){justify-content:flex-start;min-width:0;height:auto;min-height:40px;padding:6px 8px;white-space:normal;text-align:left;line-height:1.25}
+}
+
+
+/* ---- Backup & Restore as one page (NAV-04) ---- */
+.bk-scope{margin:0 0 4px;display:inline-flex}
+.bk-site-form{grid-template-columns:minmax(220px,420px) max-content;align-items:end}
+.bk-row-actions{display:flex;align-items:center;gap:6px;flex-wrap:nowrap}
+.backups-page .backup-item .bk-row-actions{display:flex;grid-template-columns:none}
+.bk-engine{margin-left:6px;vertical-align:middle;font-size:11.5px}
+.bk-schedules{display:grid;gap:22px}
+.bk-sched-section{display:grid;gap:10px}
+.bk-sched-section .sn-page-header,.bk-destinations .sn-page-header{margin:0}
+.bk-destinations{display:grid;gap:22px}
+.bk-dest-type.local{color:var(--text-secondary)}
+.bk-dest-used{display:flex;flex-wrap:wrap;gap:4px;margin-top:3px}
+.bk-dest-used .badge{font-size:11.5px}
+.bk-dest-keybox{min-height:84px;font-family:var(--font-mono);font-size:var(--text-sm)}
+.ib-keeps-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px}
+.ib-includes,.ib-keeps{display:grid;gap:8px;margin:0;padding:12px;border:1px solid var(--border);border-radius:var(--radius-md)}
+.ib-includes legend,.ib-keeps legend{padding:0 4px;font-size:13px;font-weight:700;color:var(--text)}
+.ib-repo-mode{display:grid;gap:4px}
+.ib-where{margin:10px 0}
+.bk-summary{display:grid;gap:10px;margin:0}
+.bk-summary>div{display:grid;gap:2px}
+.bk-summary dt{color:var(--text-muted);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.03em}
+.bk-summary dd{margin:0;color:var(--text);font-size:13.5px;line-height:1.5}
+@media (max-width:760px){
+  .bk-scope{display:flex}
+  .bk-scope button{flex:1}
+  .bk-site-form{grid-template-columns:1fr}
+  .bk-site-form .bk-actions>*{flex:1 1 100%;justify-content:center}
+  .backups-page .backup-item .bk-row-actions{flex-wrap:wrap}
+  .backups-page .backup-item .bk-row-actions>button{flex:1 1 auto}
+  .ib-keeps-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+.bk-sheet-form{display:grid;gap:14px}
+.bk-users{display:grid;gap:8px}
+.bk-users select[multiple]{min-height:140px;padding-block:8px}
+.backups-page>.sn-tabs{margin-bottom:0}
