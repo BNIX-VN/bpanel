@@ -17,12 +17,17 @@ import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown
 import { Terminal } from './components/Terminal';
 import { UsageChart } from './components/UsageChart';
 import HubTabs from './components/HubTabs';
+import NotificationBell from './components/NotificationBell.jsx';
 import { PAGE_TITLES, hubLanding, hubOf, isHubKey, sidebarItems, sidebarKeyOf } from './lib/navigation';
+import { FeatureIcon } from './icons/feature/index.js';
+import { TILES, dashboardSections, tileLabel, tileVisible } from './lib/features.jsx';
+import { ADDON_META, addonFeatureIcon, addonLabel } from './lib/addons.jsx';
 import { LANGUAGES, t, useLanguage } from './i18n.js';
 import './shared/style.css';
 import './shared/brand.css';
 import './shared/ui.css';
 import './shared/file-manager.css';
+import './dashboard.css';
 import './bpanel.css';
 
 const API = import.meta.env.VITE_API_URL || '/api';
@@ -221,6 +226,20 @@ function LanguageToggle({ language, onChange, className = '' }) {
   return <button type="button" className={className} onClick={() => onChange(next)} aria-label={label} title={label}>
     <span className="lang-code">{language === 'vi' ? 'VI' : 'EN'}</span>
   </button>;
+}
+
+// A line of the last readings, scaled to 0-100 (or to its own peak). The
+// Dashboard's Server card draws CPU/RAM/Disk/Network this way.
+function Sparkline({ values: readings, max = 100 }) {
+  if (!readings || readings.length === 0) return <svg className="dash-spark" viewBox="0 0 80 22" aria-hidden="true"/>;
+  const values = readings.length === 1 ? [readings[0], readings[0]] : readings;
+  const top = Math.max(max || 0, ...values, 1);
+  const step = 80 / (values.length - 1);
+  const points = values.map((value, i) => `${(i * step).toFixed(1)},${(20 - (Math.max(0, value) / top) * 18).toFixed(1)}`);
+  return <svg className="dash-spark" viewBox="0 0 80 22" aria-hidden="true" preserveAspectRatio="none">
+    <polyline className="dash-spark-area" points={`0,22 ${points.join(' ')} 80,22`}/>
+    <polyline className="dash-spark-line" points={points.join(' ')}/>
+  </svg>;
 }
 
 const EDITOR_FONT_FAMILY = "Consolas, 'SFMono-Regular', 'Liberation Mono', Menlo, monospace";
@@ -760,6 +779,8 @@ function App() {
   const [userTab, setUserTab] = useState('list');
   const [userSearch, setUserSearch] = useState('');
   const [resourceUsage, setResourceUsage] = useState(null);
+  // The last 30 readings of loadResourceUsage, for the Dashboard's sparklines.
+  const [usageHistory, setUsageHistory] = useState([]);
   // The server pages behind the top bar's status chips (admin only).
   const [processTop, setProcessTop] = useState(null);
   const [processPaused, setProcessPaused] = useState(false);
@@ -768,6 +789,7 @@ function App() {
   const [diskInfo, setDiskInfo] = useState(null);
   const [trafficSamples, setTrafficSamples] = useState([]);
   const [dashSummary, setDashSummary] = useState(null);
+  const [dashSummaryChecking, setDashSummaryChecking] = useState(false);
   // Notifications addon: my own settings, and (administrators) the server's.
   const [notifyMe, setNotifyMe] = useState(null);
   const [notifySettings, setNotifySettings] = useState(null);
@@ -1831,13 +1853,22 @@ function App() {
   }
 
   async function loadDashboardSummary() {
+    setDashSummaryChecking(true);
     const data = await request('/dashboard/summary', { silent: true });
     if (data) setDashSummary(data);
+    setDashSummaryChecking(false);
   }
 
   async function loadResourceUsage() {
     const data = await request('/services/resource-usage', { silent: true });
-    if (data) setResourceUsage(data);
+    if (data) {
+      setResourceUsage(data);
+      const network = data.network || {};
+      setUsageHistory(prev => [...prev, {
+        cpu: Number(data.cpu?.percent) || 0, memory: Number(data.memory?.percent) || 0, disk: Number(data.disk?.percent) || 0,
+        network: (Number(network.rx_per_sec) || 0) + (Number(network.tx_per_sec) || 0),
+      }].slice(-30));
+    }
   }
 
   async function loadProcessTop() {
@@ -5087,9 +5118,16 @@ function App() {
     return () => window.removeEventListener('keydown', handler);
   }, [standaloneEditor, isAuthenticated, selectedWebsiteId, filePath, fileContent]);
 
+  // What needs attention (the header's bell) and the Dashboard's own cards:
+  // one summary, kept warm on every page, not only while the Dashboard
+  // itself is open.
   useEffect(() => {
-    if (isAuthenticated && page === 'dashboard') loadDashboardSummary();
-  }, [isAuthenticated, page]);
+    if (!isAuthenticated) return undefined;
+    loadDashboardSummary();
+    const tick = () => { if (!document.hidden) loadDashboardSummary(); };
+    const timer = setInterval(tick, 5 * 60 * 1000);
+    return () => clearInterval(timer);
+  }, [isAuthenticated]);
 
   useEffect(() => {
     // 'malware-scan' is the address a scan used to open at; a scan is now a
@@ -5123,7 +5161,8 @@ function App() {
     return () => clearInterval(timer);
   }, [isAuthenticated, page, gitRepo?.repo?.id, gitRepo?.repo?.busy, gitRepo?.operations?.[0]?.status, gitOpLog?.id]);
 
-  // The top bar's CPU, RAM, disk and network chips, on every page.
+  // CPU, RAM, disk and network: the Dashboard's figures and their
+  // sparklines, kept warm on every page an administrator is on.
   useEffect(() => {
     if (!isAuthenticated || !isAdmin) return undefined;
     loadResourceUsage();
@@ -5703,73 +5742,37 @@ function App() {
     return String(text || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\u0111/g, 'd').replace(/\u0110/g, 'D').toLowerCase();
   }
 
-  // The tools on the dashboard, in cPanel's groups. Each opens its page (and,
-  // where there is one, its tab or its create form). An addon's tools appear
-  // only while it is installed, as its sidebar entry does.
-  function dashboardToolGroups() {
-    const go = (target, before) => () => { if (before) before(); navigateToPage(target); };
-    const groups = [];
-    if (canManageUsers) {
-      groups.push({ key: 'accounts', title: isReseller ? t('Customers') : t('Accounts'), icon: Users, tools: [
-        { key: 'users', label: isReseller ? t('Customers') : t('Panel users'), icon: Users, run: go('users', () => setUserTab('list')) },
-        { key: 'user-add', label: isReseller ? t('Add customer') : t('Add User'), icon: Plus, run: go('users', () => setUserTab('add')) },
-        { key: 'packages', label: t('Packages'), icon: PackageOpen, run: go('users', () => setUserTab('packages')) },
-      ] });
-    }
-    groups.push({ key: 'websites', title: t('Websites'), icon: Globe, tools: [
-      { key: 'websites', label: t('Websites'), icon: Globe, run: go('websites') },
-      // "New website" and "New database" arrive with their form open.
-      { key: 'site-new', label: t('New website'), icon: Plus, run: () => { setCreateFormOpen(true); navigateToPage('websites'); } },
-      ...(appsFeatureEnabled ? [{ key: 'applications', label: t('Applications'), icon: Boxes, run: go('applications') }] : []),
-      { key: 'ssl', label: t('SSL'), icon: Lock, run: go('ssl') },
-      { key: 'waf', label: 'WAF', icon: ShieldAlert, run: go('waf') },
-      ...(isAdmin ? [{ key: 'logs', label: t('Access logs'), icon: ScrollText, run: go('access-logs') }] : []),
-      ...(isAdmin ? [{ key: 'php', label: t('PHP config'), icon: Code2, run: go('php') }] : []),
-    ] });
-    groups.push({ key: 'files', title: t('Files'), icon: FolderOpen, tools: [
-      { key: 'files', label: t('File manager'), icon: FolderOpen, run: go('files') },
-      { key: 'sftp', label: t('SFTP accounts'), icon: KeyRound, run: go('sftp') },
-      ...(gitAddonInstalled ? [{ key: 'git', label: t('Git'), icon: GitBranch, run: go('git') }] : []),
-      ...(canOpenTerminal ? [{ key: 'terminal', label: t('Terminal'), icon: TerminalIcon, run: go('terminal') }] : []),
-      { key: 'sftp-new', label: t('New SFTP account'), icon: Plus, run: () => {
-        navigateToPage('sftp');
-        window.setTimeout(() => document.querySelector('.sftp-form input')?.focus(), 150);
-      } },
-      { key: 'backups', label: t('Backups'), icon: Archive, run: go('backups') },
-    ] });
-    groups.push({ key: 'databases', title: t('Databases'), icon: Database, tools: [
-      { key: 'databases', label: t('Databases'), icon: Database, run: go('databases') },
-      { key: 'db-new', label: t('New database'), icon: Plus, run: () => { setDbCreateOpen(true); navigateToPage('databases'); } },
-    ] });
-    if (mailAddonInstalled) {
-      groups.push({ key: 'email', title: t('Email'), icon: Mail, tools: [
-        { key: 'mailboxes', label: t('Mailboxes'), icon: Inbox, run: go('mail', () => setMailTab('mailboxes')) },
-        { key: 'forwarders', label: t('Forwarders'), icon: Forward, run: go('mail', () => setMailTab('forwarders')) },
-      ] });
-    }
-    if (dnsAddonInstalled) {
-      groups.push({ key: 'domains', title: t('Domains'), icon: Network, tools: [
-        { key: 'dns', label: t('DNS Manager'), icon: Network, run: go('dns') },
-      ] });
-    }
-    groups.push({ key: 'security', title: t('Security'), icon: ShieldCheck, tools: [
-      { key: 'account-security', label: t('Account security'), icon: LockKeyhole, run: go('security') },
-      ...(isAdmin ? [{ key: 'firewall', label: t('Firewall'), icon: BrickWall, run: go('firewall') }] : []),
-      ...(isAdmin && malwareAddonInstalled ? [{ key: 'malware', label: t('Malware Scanner'), icon: Bug, run: go('malware') }] : []),
-    ] });
-    groups.push({ key: 'advanced', title: t('Advanced'), icon: SettingsIcon, tools: [
-      { key: 'cron', label: t('Cron'), icon: Clock, run: go('cron') },
-      ...(limitsOn && !isAdmin ? [{ key: 'usage', label: t('Resource usage'), icon: Activity, run: go('usage') }] : []),
-      ...(mcpAddonInstalled ? [{ key: 'mcp', label: t('AI assistants (MCP)'), icon: Bot, run: go('mcp') }] : []),
-      ...(isAdmin ? [
-        { key: 'services', label: t('Services'), icon: Server, run: go('services') },
-        ...(notificationsAddonInstalled ? [{ key: 'notifications', label: t('Notifications'), icon: Bell, run: go('notifications') }] : []),
-        { key: 'updates', label: t('Updates'), icon: RefreshCw, run: go('updates') },
-        { key: 'addons', label: t('Addons'), icon: PackageOpen, run: go('addons') },
-        { key: 'panel-settings', label: t('Panel settings'), icon: SettingsIcon, run: go('panel-settings') },
-      ] : []),
-    ] });
-    return groups;
+  // The way a tile's `before`/`after` names resolve to an App action: the
+  // tab or form a page opens on, or a field focused once it has rendered.
+  function dashboardBeforeAction(name) {
+    const actions = {
+      usersList: () => setUserTab('list'),
+      usersAdd: () => setUserTab('add'),
+      usersPackages: () => setUserTab('packages'),
+      newWebsite: () => setCreateFormOpen(true),
+      newDatabase: () => setDbCreateOpen(true),
+      mailMailboxes: () => setMailTab('mailboxes'),
+      mailForwarders: () => setMailTab('forwarders'),
+    };
+    actions[name]?.();
+  }
+  function dashboardAfterAction(name) {
+    if (name === 'focusSftpForm') window.setTimeout(() => document.querySelector('.sftp-form input')?.focus(), 150);
+  }
+  // A tile's own role/addon/package facts (lib/features.jsx).
+  function dashboardNavCtx() {
+    return {
+      isAdmin, isReseller, appsFeatureEnabled, canOpenTerminal, limitsOn,
+      installed: (slug) => !!addons.items.find(item => item.slug === slug)?.installed,
+    };
+  }
+  // Opens a tile's page, running its before/after action if it names one.
+  function openDashboardTile(key) {
+    const tile = TILES[key];
+    if (!tile) return;
+    if (tile.before) dashboardBeforeAction(tile.before);
+    navigateToPage(tile.page);
+    if (tile.after) dashboardAfterAction(tile.after);
   }
 
   function toggleToolGroup(key) {
@@ -5780,33 +5783,59 @@ function App() {
     });
   }
 
-  // `order` places the panel when the page folds into one column (see
-  // .cp-layout): after the statistics for a customer, lower for an admin.
-  function renderToolPanel(order) {
-    const query = normalizeSearch(toolQuery.trim());
-    const groups = dashboardToolGroups()
-      .map(group => ({ ...group, tools: query ? group.tools.filter(tool => normalizeSearch(`${tool.label} ${group.title}`).includes(query)) : group.tools }))
-      .filter(group => group.tools.length > 0);
-    return <section className="section dash-card tools-panel" style={{ '--cp-order': order }}>
+  // The Dashboard's features: one tile each (lib/features.jsx), in sections
+  // that fold, searchable with "/" - the picture each has from
+  // icons/feature. An administrator also sees each addon not installed yet,
+  // greyed, in Extensions, as the way to install it.
+  function renderFeaturesCard() {
+    const ctx = dashboardNavCtx();
+    const needle = normalizeSearch(toolQuery.trim());
+    const sections = dashboardSections(ctx)
+      .map(([key, title, keys]) => ({ key, title: t(title), tiles: keys.filter(tileKey => tileVisible(tileKey, ctx)) }))
+      .map(section => ({ ...section, tiles: section.tiles.filter(tileKey => !needle || normalizeSearch(`${t(tileLabel(TILES[tileKey], ctx))} ${section.title}`).includes(needle)) }));
+    const missingAddons = isAdmin
+      ? addons.items.filter(addon => !addon.installed && ADDON_META[addon.slug] && addon.slug !== 'demo'
+          && (!needle || normalizeSearch(`${addonLabel(addon, t)} ${t('Addons')}`).includes(needle)))
+      : [];
+    const shownSections = sections.filter(section => section.tiles.length > 0 || (section.key === 'extensions' && missingAddons.length > 0));
+    const sitesTotal = dashSummary?.websites?.total ?? websites.length;
+    const tile = (key) => {
+      const item = TILES[key];
+      return <div key={key} className="dash-tile">
+        <button type="button" className="dash-tile-link" onClick={() => openDashboardTile(key)}>
+          <FeatureIcon name={item.icon} size={40}/><span className="dash-tile-label">{t(tileLabel(item, ctx))}</span>
+        </button>
+      </div>;
+    };
+    const missingTile = (addon) => <div key={`addon-${addon.slug}`} className="dash-tile is-missing">
+      <button type="button" className="dash-tile-link" onClick={() => navigateToPage('addons')}
+        aria-label={t('{name}: not installed. Open Addons to install it.', { name: addonLabel(addon, t) })}>
+        <span className="dash-tile-art"><FeatureIcon name={addonFeatureIcon(addon.slug)} size={40} muted/>
+          <span className="dash-tile-badge" aria-hidden="true"><Download size={11}/></span></span>
+        <span className="dash-tile-label">{addonLabel(addon, t)}</span>
+        <small className="dash-tile-note">{t('Not installed')}</small>
+      </button>
+    </div>;
+    return <section className="section dash-card dash-features" aria-label={t('Features')}>
       <label className="tools-search">
         <Search size={16} aria-hidden="true"/>
         <input ref={toolSearchRef} type="search" value={toolQuery} onChange={e => setToolQuery(e.target.value)}
           placeholder={t('Search tools (press /)')} aria-label={t('Search tools')} />
       </label>
-      {groups.length === 0 && <p className="hint">{t('No tool matches your search.')}</p>}
-      {groups.map(group => {
-        const open = !!query || !collapsedTools.includes(group.key);
-        return <div className={`tool-group${open ? ' is-open' : ''}`} key={group.key}>
-          <button type="button" className="tool-group-head" aria-expanded={open} onClick={() => toggleToolGroup(group.key)}>
-            <span className="tool-group-icon"><group.icon size={15}/></span>
-            <h3>{group.title}</h3>
-            <ChevronDown size={16} className="tool-group-chevron" aria-hidden="true"/>
+      {shownSections.length === 0 && <p className="hint">{t('No tool matches your search.')}</p>}
+      {dashSummary && sitesTotal === 0 && !needle
+        && <p className="hint dash-first-hint"><Plus size={13} aria-hidden="true"/> {t('No website yet: start with New website.')}</p>}
+      {shownSections.map(section => {
+        const open = !!needle || !collapsedTools.includes(section.key);
+        return <div key={section.key} className={`dash-section${open ? ' is-open' : ''}`}>
+          <button type="button" className="dash-section-head" aria-expanded={open} aria-controls={`dash-section-${section.key}`}
+            onClick={() => toggleToolGroup(section.key)}>
+            <h3>{section.title}</h3>
+            <ChevronDown size={16} className="dash-section-chevron" aria-hidden="true"/>
           </button>
-          {open && <div className="tool-grid">
-            {group.tools.map(tool => <button type="button" key={tool.key} className="tool-tile" onClick={tool.run}>
-              <span className="tool-icon"><tool.icon size={17}/></span>
-              <span className="tool-label">{tool.label}</span>
-            </button>)}
+          {open && <div className="dash-tiles" id={`dash-section-${section.key}`}>
+            {section.tiles.map(tile)}
+            {section.key === 'extensions' && missingAddons.map(missingTile)}
           </div>}
         </div>;
       })}
@@ -5966,7 +5995,7 @@ function App() {
       <span>{text}{limitText && <small> / {limitText}</small>}</span>
       {percent !== null && <span className={`resource-track${percent >= 90 ? ' tone-bad' : percent >= 75 ? ' tone-warn' : ''}`}><span style={{ width: `${percent}%` }}></span></span>}
     </span>;
-    return <section className="section dash-card" style={{ '--cp-order': 4 }}>
+    return <section className="section dash-card">
       <div className="dash-card-head">
         <span className="dash-card-icon"><Boxes size={16}/></span><h2>{t('Busiest accounts')}</h2>
         <div className="segmented-control compact" role="tablist" aria-label={t('Sort by')}>
@@ -6056,41 +6085,9 @@ function App() {
         value: twoFactor ? t('On') : t('Off'), detail: t('Two-factor sign-in'), tone: twoFactor ? 'ok' : 'warn' });
     }
 
-    // Things that want a look, most urgent first.
-    const attention = [];
-    if (isAdmin && sum.services?.stopped?.length) attention.push({ tone: 'bad', text: t('Stopped: {names}', { names: sum.services.stopped.join(', ') }), action: t('Open'), target: 'services' });
-    if (isAdmin && sum.firewall?.enabled === false) attention.push({ tone: 'bad', text: t('The firewall is off.'), action: t('Open'), target: 'firewall' });
-    if (isAdmin && sum.malware?.last_scan?.infected) attention.push({ tone: 'bad', text: t('The last malware scan found {n} threat(s).', { n: sum.malware.last_scan.infected }), action: t('Open'), target: 'malware' });
-    if (isAdmin && sum.backups?.failed) attention.push({ tone: 'bad', text: t('{n} scheduled backup(s) failed on their last run.', { n: sum.backups.failed }), action: t('Open'), target: 'backups' });
-    if (ssl.unsecured_count) attention.push({ tone: 'warn', text: t('{n} website(s) without SSL: {domains}', {
-      n: ssl.unsecured_count, domains: ssl.unsecured.join(', ') + (ssl.unsecured_count > ssl.unsecured.length ? '…' : ''),
-    }), action: t('Set up SSL'), target: 'ssl' });
-    if (sites.suspended) attention.push({ tone: 'warn', text: t('{n} website(s) suspended.', { n: sites.suspended }), action: t('Open'), target: 'websites' });
-    if (isAdmin && sum.waf?.engine === 'off') attention.push({ tone: 'warn', text: t('The WAF engine is not installed.'), action: t('Open'), target: 'waf' });
-    // An addon that is off is not a fault: only the scanner's addon being on
-    // while LMD and ClamAV are missing wants a look.
-    if (isAdmin && sum.malware?.addon && !sum.malware.installed) attention.push({ tone: 'warn', text: t('The malware scanner is not installed.'), action: t('Open'), target: 'malware' });
-    if (!isAdmin && currentUser && !currentUser.totp_enabled) attention.push({ tone: 'info', text: t('Two-factor sign-in is off for your account.'), action: t('Turn on'), target: 'security' });
-    if (isAdmin && sum.updates?.update_available) attention.push({ tone: 'info', text: t('Panel update {version} is available.', { version: sum.updates.latest_version }), action: t('Open'), target: 'updates' });
+    // What needs attention is the header's bell (components/NotificationBell.jsx) now.
 
-    // Most urgent first; when nothing needs a look the administrator gets one
-    // quiet line, and a customer nothing at all.
-    const attentionCard = (attention.length > 0 || isAdmin) && <section className={`section dash-card cp-attention${attention.length ? '' : ' is-clear'}`} style={{ '--cp-order': 1 }}>
-      {attention.length === 0
-        ? <div className="attention-ok"><CheckCircle size={16}/> {dashSummary ? t('Everything looks fine.') : t('Checking…')}</div>
-        : <>
-            <div className="dash-card-head"><span className="dash-card-icon"><AlertCircle size={16}/></span><h2>{t('Needs attention')}</h2><span className="badge warn">{attention.length}</span></div>
-            <div className="attention-list">
-              {attention.map(item => <div className={`attention-item tone-${item.tone}`} key={item.text}>
-                {item.tone === 'info' ? <RefreshCw size={15}/> : <AlertCircle size={15}/>}
-                <span>{item.text}</span>
-                <button type="button" className="mini secondary" onClick={() => navigateToPage(item.target)}>{item.action}</button>
-              </div>)}
-            </div>
-          </>}
-    </section>;
-
-    const statusCard = <section className="section side-card" style={{ '--cp-order': isAdmin ? 3 : 5 }}>
+    const statusCard = <section className="section side-card">
       <h3 className="side-card-title">{t('Status')}</h3>
       <div className="status-list">
         {status.map(card => <button type="button" key={card.key} className={`status-row tone-${card.tone}`} onClick={() => navigateToPage(card.key)}>
@@ -6101,16 +6098,30 @@ function App() {
 
     if (isAdmin) {
       const accounts = sum.accounts || {};
+      const history = usageHistory || [];
+      const figureTone = (percent) => (percent === null ? 'ok' : percent >= 90 ? 'bad' : percent >= 75 ? 'warn' : 'ok');
+      const pct = value => (resourceUsage ? formatPercent(value) : '—');
+      const figure = (page, label, value, percent, values, max) => <button type="button" key={page}
+        className={`dash-figure tone-${figureTone(percent)}`} onClick={() => navigateToPage(page)}>
+        <span className="dash-figure-label">{label}</span>
+        <strong>{value}</strong>
+        <Sparkline values={values} max={max}/>
+      </button>;
       return <div className="dashboard cp-layout">
         <div className="cp-main">
-          {attentionCard}
+          {renderFeaturesCard()}
           {limitsOn && renderTopAccounts()}
-          {renderToolPanel(5)}
         </div>
         <aside className="cp-side">
           {statusCard}
-          <section className="section side-card" style={{ '--cp-order': 6 }}>
+          <section className="section side-card">
             <h3 className="side-card-title">{t('Server information')}</h3>
+            <div className="dash-figures">
+              {figure('processes', 'CPU', pct(cpu.percent), resourceUsage ? Number(cpu.percent) || 0 : null, history.map(h => h.cpu))}
+              {figure('ram-usage', 'RAM', pct(memory.percent), resourceUsage ? Number(memory.percent) || 0 : null, history.map(h => h.memory))}
+              {figure('disk-usage', t('Disk'), pct(disk.percent), resourceUsage ? Number(disk.percent) || 0 : null, history.map(h => h.disk))}
+              {figure('traffic', t('Network'), resourceUsage ? `${formatBytes(networkTotal)}/s` : '—', null, history.map(h => h.network), 0)}
+            </div>
             <InfoRow label={t('Hostname')} value={server.hostname} />
             <InfoRow label={t('IP address')} value={server.ipv4} />
             <InfoRow label={t('Operating system')} value={server.os} />
@@ -6120,7 +6131,7 @@ function App() {
             <InfoRow label="RAM" value={memory.total ? formatBytes(memory.total) : ''} />
             <InfoRow label={t('Panel version')} value={server.panel_version} />
           </section>
-          <section className="section side-card" style={{ '--cp-order': 7 }}>
+          <section className="section side-card">
             <h3 className="side-card-title">{t('Statistics')}</h3>
             <StatRow label={t('Customers')} value={String(accounts.end_users ?? '—')} />
             <StatRow label={t('Resellers')} value={String(accounts.resellers ?? '—')} />
@@ -6161,11 +6172,10 @@ function App() {
 
     return <div className="dashboard cp-layout">
       <div className="cp-main">
-        {attentionCard}
-        {renderToolPanel(3)}
+        {renderFeaturesCard()}
       </div>
       <aside className="cp-side">
-        <section className="section side-card" style={{ '--cp-order': 2 }}>
+        <section className="section side-card">
           <div className="side-card-head">
             <h3 className="side-card-title">{t('Statistics')}</h3>
             {isReseller && limitEntry?.group_limits && <div className="segmented-control compact" role="tablist" aria-label={t('Show')}>
@@ -6194,7 +6204,7 @@ function App() {
             <button type="button" className="side-card-link" onClick={() => navigateToPage('usage')}><Activity size={14}/> {t('Resource usage over time')}</button>
           </>}
         </section>
-        <section className="section side-card" style={{ '--cp-order': 4 }}>
+        <section className="section side-card">
           <h3 className="side-card-title">{t('General information')}</h3>
           <InfoRow label={t('Account')} value={isReseller ? <>{currentUser.username} <span className="badge role-reseller">{t('Reseller')}</span></> : currentUser.username} title={currentUser.username} />
           <InfoRow label={t('Email')} value={currentUser.email} />
@@ -11584,6 +11594,8 @@ function App() {
               them; the server's figures are the Dashboard's, and the version
               is in the account's menu, opening Updates. */}
           <div className="top-actions">
+            {currentUser && <NotificationBell summary={dashSummary} checking={dashSummaryChecking} isAdmin={isAdmin}
+              currentUser={currentUser} navigateToPage={navigateToPage} onRefresh={loadDashboardSummary}/>}
             <LanguageToggle language={language} onChange={changeLanguage} className="top-tool"/>
             <ThemeToggle theme={theme} onToggle={toggleTheme} className="top-tool" size={15}/>
             <div className="user-menu top-user" ref={userMenuRef}>
