@@ -98,9 +98,13 @@ def test_the_sidebar_holds_what_is_used_every_day():
     navigation = (SRC / "lib" / "navigation.jsx").read_text(encoding="utf-8")
     sidebar = navigation.split("export function sidebarItems(")[1].split("\n}\n")[0]
     keys = re.findall(r"\['([a-z-]+)', ", sidebar)
-    assert keys == ["dashboard", "websites", "ssl", "databases", "cron", "files", "backups",
+    # The WordPress Manager is the one addon there, last, while installed
+    # (operator, 2026-10-19), as SNPanel has it.
+    assert keys == ["wordpress", "dashboard", "websites", "ssl", "databases", "cron", "files", "backups",
                     "users", "server", "security-center", "config", "users"]
-    for addon in ("mail", "dns", "git", "mcp", "applications", "wordpress"):
+    assert "const wordpress = ctx.wordpressAddonInstalled ? [['wordpress'," in sidebar
+    assert "      ...wordpress,\n    ];" in sidebar and "return [...common, ...wordpress];" in sidebar
+    for addon in ("mail", "dns", "git", "mcp", "applications"):
         assert f"'{addon}'" not in sidebar, addon
     hubs = navigation.split("export const HUBS = [")[1].split("\n];")[0]
     tabs = re.findall(r"\{ page: '([a-z-]+)'", hubs)

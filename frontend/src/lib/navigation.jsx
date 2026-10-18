@@ -15,6 +15,7 @@
 // page (files) or an address of its own (server, security-center, config)
 // that opens its first tab.
 import { Archive, Clock, Database, FolderOpen, Globe, Home, Lock, Server, Settings, ShieldCheck, Users } from 'lucide-react';
+import WordPressGlyph from '../icons/WordPressGlyph.jsx';
 
 const msg = (text) => text;
 
@@ -118,8 +119,12 @@ export function hubLanding(key, ctx) {
 // The sidebar of each role: [key, label, icon]. Everyday pages only: an
 // addon (Applications, Email, DNS, Git, AI assistants) is opened from its
 // Dashboard tile, never from here (operator, 2026-10-18: "Các addon mới cài
-// vào không cần hiện trên left sidebar, chỉ cần hiển thị ở Dashboard").
+// vào không cần hiện trên left sidebar, chỉ cần hiển thị ở Dashboard") -
+// except the WordPress Manager, last, while installed (operator,
+// 2026-10-19: "Đem Wordpress manager ra menu bên trái (cuối cùng)"), as
+// SNPanel has it.
 export function sidebarItems(ctx) {
+  const wordpress = ctx.wordpressAddonInstalled ? [['wordpress', msg('WordPress Manager'), WordPressGlyph]] : [];
   const common = [
     ['dashboard', msg('Dashboard'), Home],
     ['websites', msg('Websites'), Globe],
@@ -136,12 +141,13 @@ export function sidebarItems(ctx) {
       ['server', msg('Server'), Server],
       ['security-center', msg('Security'), ShieldCheck],
       ['config', msg('Settings'), Settings],
+      ...wordpress,
     ];
   }
   if (ctx.isReseller) {
-    return [...common, ['users', msg('Customers'), Users]];
+    return [...common, ['users', msg('Customers'), Users], ...wordpress];
   }
-  return common;
+  return [...common, ...wordpress];
 }
 
 // Pages that belong under a sidebar entry without being a tab of it.

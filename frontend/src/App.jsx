@@ -5592,7 +5592,7 @@ function App() {
   const navCtx = {
     isAdmin, isReseller, canOpenTerminal, appsFeatureEnabled,
     mailAddonInstalled, dnsAddonInstalled, gitAddonInstalled, mcpAddonInstalled,
-    notificationsAddonInstalled, malwareAddonInstalled, limitsOn,
+    notificationsAddonInstalled, malwareAddonInstalled, limitsOn, wordpressAddonInstalled,
   };
   navCtxRef.current = navCtx;
   // A hub's own address typed or bookmarked (/server, /settings): its first

@@ -508,4 +508,6 @@ PART17 = {
     "Empty the cache": "Xóa cache",
     "A post you change shows at once to you, signed in; visitors see it within 10 minutes, or at once after Empty the cache.": "Bài viết bạn sửa hiện ngay với bạn (đang đăng nhập); khách sẽ thấy trong vòng 10 phút, hoặc ngay sau khi bấm Xóa cache.",
     "Fail2ban": "Fail2ban",
+    "A restore point before every update": "Tạo điểm khôi phục trước mỗi lần cập nhật",
+    "The files without the uploads, and the database, only when you take one; the newest two are kept, in the account's home.": "Các tệp (trừ thư mục uploads) và cơ sở dữ liệu, chỉ khi bạn tự tạo; giữ hai bản mới nhất, trong thư mục home của tài khoản.",
 }

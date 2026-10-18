@@ -27,6 +27,8 @@
  */
 
 export const vi = {
+  "A restore point before every update": "Tạo điểm khôi phục trước mỗi lần cập nhật",
+  "The files without the uploads, and the database, only when you take one; the newest two are kept, in the account's home.": "Các tệp (trừ thư mục uploads) và cơ sở dữ liệu, chỉ khi bạn tự tạo; giữ hai bản mới nhất, trong thư mục home của tài khoản.",
   "Every WordPress in the websites: updates, plugins, themes, one-click sign-in and Nginx cache.": "Mọi WordPress trong các website: cập nhật, plugin, theme, đăng nhập một chạm và cache Nginx.",
   "Finds every WordPress in the accounts' websites - the website itself and the folders under it - and keeps what each one runs: WordPress, its plugins and themes and which have updates, its administrators.": "Tìm mọi WordPress trong website của các tài khoản - ở chính website và các thư mục bên dưới - và ghi lại những gì mỗi site đang chạy: WordPress, plugin, theme, cái nào có bản cập nhật, và các quản trị viên.",
   "From the panel: update everything or one thing, switch plugins and themes on and off, add them from wordpress.org or a .zip, delete them, turn maintenance mode and debugging on and off, sign in to wp-admin with one click, and give an administrator a new password.": "Ngay trong panel: cập nhật tất cả hoặc từng thứ, bật tắt plugin và theme, thêm từ wordpress.org hoặc file .zip, xóa chúng, bật tắt chế độ bảo trì và debug, đăng nhập wp-admin một chạm, và đặt mật khẩu mới cho quản trị viên.",
