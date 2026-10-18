@@ -50,6 +50,8 @@ export const vi = {
   "Generate password": "Tạo mật khẩu",
   "Breadcrumb": "Đường dẫn",
   "More actions for {domain}": "Thêm hành động cho {domain}",
+  "Delete website": "Xoá website",
+  "Attach first domain": "Gắn tên miền đầu tiên",
   " (as an administrator, every account’s)": " (nếu là quản trị viên: của mọi tài khoản)",
   " at {when}": " lúc {when}",
   " · last used {date}": " · dùng lần cuối {date}",

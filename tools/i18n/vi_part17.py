@@ -26,4 +26,6 @@ PART17 = {
     "Generate password": "Tạo mật khẩu",
     "Breadcrumb": "Đường dẫn",
     "More actions for {domain}": "Thêm hành động cho {domain}",
+    "Delete website": "Xoá website",
+    "Attach first domain": "Gắn tên miền đầu tiên",
 }
