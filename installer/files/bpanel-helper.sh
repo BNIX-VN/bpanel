@@ -10035,6 +10035,111 @@ PY
     exec runuser -u www-data -- env HOME=/var/www WP_CLI_PHP_ARGS='-d pcre.jit=0' php -d pcre.jit=0 /usr/local/bin/wp --info
     ;;
 
+  # ---- WordPress Manager (addon) ---------------------------------------
+  # Restore points: a WordPress's files (without its uploads and caches) in
+  # the account's own home, /home/<user>/.bpanel-wp-points/<install>/<when>/
+  # files.tar.gz, made, put back and removed as the account itself: never as
+  # root on a tree its owner controls. The database dump beside it is
+  # WP-CLI's (wp-site).
+  wp-point-create|wp-point-restore)
+    [[ $# -eq 3 ]] || deny "usage: $cmd <site-user> <wordpress-path> <point-dir>"
+    user="$1"; path="$2"; point="$3"
+    require_linux_user "$user"
+    target=$(require_managed_path "$path" "$user")
+    [[ "$point" =~ ^/home/${user}/\.bpanel-wp-points/[a-f0-9]{16}/[0-9]{8}T[0-9]{6}$ ]] || deny "invalid restore point: $point"
+    if [[ "$cmd" == "wp-point-create" ]]; then
+      # The home itself is root's (the SFTP jail): the account cannot make a
+      # folder at its top, so the points' folder is made for it, as its own.
+      install -d -o "$user" -g "$user" -m 0700 "$HOME_ROOT/$user/.bpanel-wp-points"
+      exec runuser -u "$user" -- bash -c '
+        set -euo pipefail
+        umask 077
+        mkdir -p "$1"
+        tar -czf "$1/files.tar.gz" -C "$2" --exclude=./wp-content/uploads --exclude=./wp-content/cache \
+          --exclude=./wp-content/upgrade --exclude=./wp-content/updraft --exclude=./wp-content/ai1wm-backups .
+        du -sb "$1" | cut -f1
+      ' _ "$point" "$target"
+    fi
+    [[ -f "$point/files.tar.gz" ]] || deny "restore point has no files: $point"
+    # Put back over what is there: a file added since the point stays, every
+    # file the point had comes back as it was.
+    exec runuser -u "$user" -- tar -xzf "$point/files.tar.gz" -C "$target"
+    ;;
+
+  wp-point-delete)
+    [[ $# -eq 2 ]] || deny "usage: wp-point-delete <site-user> <point-dir>"
+    user="$1"; point="$2"
+    require_linux_user "$user"
+    [[ "$point" =~ ^/home/${user}/\.bpanel-wp-points/[a-f0-9]{16}/[0-9]{8}T[0-9]{6}$ ]] || deny "invalid restore point: $point"
+    exec runuser -u "$user" -- rm -rf -- "$point"
+    ;;
+
+  wp-stage-dir)
+    # The account's scratch folder for a WordPress export or an upload: made
+    # for it (its home is root's, the SFTP jail), as its own, private.
+    [[ $# -eq 1 ]] || deny "usage: wp-stage-dir <site-user>"
+    require_linux_user "$1"
+    install -d -o "$1" -g "$1" -m 0700 "$HOME_ROOT/$1/.bpanel-wp-stage"
+    echo "$HOME_ROOT/$1/.bpanel-wp-stage"
+    ;;
+
+  wp-stage-clear)
+    [[ $# -eq 1 ]] || deny "usage: wp-stage-clear <site-user>"
+    require_linux_user "$1"
+    stage="$HOME_ROOT/$1/.bpanel-wp-stage"
+    [[ -d "$stage" && ! -L "$stage" ]] || exit 0
+    exec runuser -u "$1" -- find "$stage" -mindepth 1 -delete
+    ;;
+
+  wp-copy)
+    # A WordPress's files into another folder of the same account, as the
+    # account: a staging copy, or one pushed back ("keep-config" leaves the
+    # target's wp-config.php and .user.ini alone). Caches are not copied.
+    [[ $# -eq 4 ]] || deny "usage: wp-copy <site-user> <from> <to> <all|keep-config>"
+    user="$1"; mode="$4"
+    require_linux_user "$user"
+    from=$(require_managed_path "$2" "$user")
+    to=$(require_managed_path "$3" "$user")
+    [[ "$mode" == all || "$mode" == keep-config ]] || deny "invalid copy mode"
+    [[ "$from" != "$to" && "$to" != "$from"/* && "$from" != "$to"/* ]] || deny "the two folders overlap"
+    [[ -d "$from" ]] || deny "no folder to copy from: $from"
+    copy_args=(-a --exclude=/wp-content/cache/ --exclude=/wp-content/litespeed/ --exclude=/.well-known/)
+    if [[ "$mode" == keep-config ]]; then copy_args+=(--exclude=/wp-config.php --exclude=/.user.ini); fi
+    runuser -u "$user" -- mkdir -p "$to"
+    exec runuser -u "$user" -- rsync "${copy_args[@]}" "$from/" "$to/"
+    ;;
+
+  wp-upload-place)
+    # An uploaded plugin or theme .zip, from the panel's waiting folder into
+    # the account's scratch folder, owned by the account.
+    [[ $# -eq 3 ]] || deny "usage: wp-upload-place <site-user> <staged> <name>"
+    user="$1"; staged="$2"; name="$3"
+    require_linux_user "$user"
+    [[ "$staged" =~ ^/var/lib/bpanel/wp-uploads/[a-f0-9]{24}\.zip$ && -f "$staged" && ! -L "$staged" ]] || deny "invalid upload: $staged"
+    [[ "$name" =~ ^[A-Za-z0-9._-]{1,80}\.zip$ ]] || deny "invalid file name: $name"
+    install -d -o "$user" -g "$user" -m 0700 "$HOME_ROOT/$user/.bpanel-wp-stage"
+    install -o "$user" -g "$user" -m 0600 "$staged" "$HOME_ROOT/$user/.bpanel-wp-stage/$name"
+    echo "$HOME_ROOT/$user/.bpanel-wp-stage/$name"
+    ;;
+
+  fastcgi-cache-purge)
+    # One website's pages out of Nginx's FastCGI cache: the cache key is
+    # "$scheme$request_method$host$request_uri", and each cached file holds
+    # it on a "KEY: " line, so the site's files are the ones whose key has
+    # its host right before the first slash. Prints how many went.
+    [[ $# -eq 1 ]] || deny "usage: fastcgi-cache-purge <domain>"
+    domain="$1"
+    require_domain "$domain"
+    cache_dir=/var/cache/nginx/bpanel-fastcgi
+    [[ -d "$cache_dir" && ! -L "$cache_dir" ]] || { echo 0; exit 0; }
+    host_re=$(printf '%s' "$domain" | sed 's/[.]/\\./g')
+    count=0
+    while IFS= read -r -d '' file; do
+      rm -f -- "$file" && count=$((count + 1))
+    done < <(grep -rlZ -a -E "^KEY: https?(GET|HEAD)${host_re}/" "$cache_dir" 2>/dev/null || true)
+    echo "$count"
+    ;;
+
   wp-site)
     # WP-CLI bootstraps the target install's own wp-config.php and active
     # plugins, so this is tenant-authored PHP. It needs the same confinement

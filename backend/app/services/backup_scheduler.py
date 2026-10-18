@@ -217,3 +217,11 @@ if __name__ == "__main__":
         mariadb.drop_expired_sso_logins()
     except Exception as exc:  # noqa: BLE001 - never fail the backup run for it
         print(f"BPanel phpMyAdmin login cleanup failed: {exc}")
+    # And for the WordPress Manager's daily check: a few installs a minute
+    # whose last read is a day old. A no-op without the addon.
+    try:
+        from app.services import wp_extras
+
+        wp_extras.daily_tick()
+    except Exception as exc:  # noqa: BLE001 - never fail the backup run for it
+        print(f"BPanel WordPress daily check failed: {exc}")

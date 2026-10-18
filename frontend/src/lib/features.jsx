@@ -20,6 +20,7 @@ export const TILES = {
   // Websites and domains
   websites: { label: msg('Websites'), icon: 'websites', page: 'websites' },
   'website-add': { label: msg('New website'), icon: 'website-add', page: 'websites', before: 'newWebsite' },
+  wordpress: { label: msg('WordPress Manager'), icon: 'wordpress', page: 'wordpress', addon: 'wordpress' },
   applications: { label: msg('Applications'), icon: 'applications', page: 'applications', when: (c) => c.appsFeatureEnabled },
   ssl: { label: 'SSL', icon: 'ssl', page: 'ssl' },
   waf: { label: 'WAF', icon: 'waf', page: 'waf' },
@@ -69,7 +70,7 @@ export const TILES = {
 // Addons are reached from here, not from the sidebar.
 const ADMIN = [
   ['accounts', msg('Accounts'), ['users', 'user-add', 'packages']],
-  ['websites', msg('Websites and domains'), ['websites', 'website-add', 'ssl', 'dns', 'applications']],
+  ['websites', msg('Websites and domains'), ['websites', 'website-add', 'ssl', 'dns', 'wordpress', 'applications']],
   ['email', msg('Email'), ['mailboxes', 'forwarders', 'mail-domains', 'mail-relay']],
   ['databases', msg('Databases'), ['databases', 'database-add', 'phpmyadmin']],
   ['files', msg('Files and backups'), ['files', 'sftp', 'sftp-add', 'backups', 'git', 'terminal']],
@@ -79,7 +80,7 @@ const ADMIN = [
   ['extensions', msg('Extensions'), ['addons']],
 ];
 const CUSTOMER = [
-  ['websites', msg('Websites and domains'), ['websites', 'website-add', 'ssl', 'dns', 'applications']],
+  ['websites', msg('Websites and domains'), ['websites', 'website-add', 'ssl', 'dns', 'wordpress', 'applications']],
   ['email', msg('Email'), ['mailboxes', 'forwarders', 'mail-domains']],
   ['databases', msg('Databases'), ['databases', 'database-add', 'phpmyadmin']],
   ['files', msg('Files and backups'), ['files', 'sftp', 'sftp-add', 'backups', 'git', 'terminal']],

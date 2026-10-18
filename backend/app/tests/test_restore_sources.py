@@ -252,7 +252,7 @@ def test_the_restore_tab_asks_source_details_users_then_the_button():
     """OPanel's restore wizard: the source tiles, what that source needs, the
     accounts, then the button. Upload backups sits in step 2 of every source
     and puts the archives into the source picked in step 1."""
-    assert "{isAdmin && activeBackupTab === 'restore' && renderRestoreWizard()}" in APP
+    assert "{isAdmin && active === 'restore' && renderRestoreWizard()}" in APP
     tab = APP.split("  function renderRestoreWizard() {")[1].split("\n  function ")[0]
     steps = ["{t('Source')}", "{t(restoreStepTwo)}", "{t('Accounts to restore')}", "restore-step-no\">4</span>{t('Restore')}"]
     positions = [tab.index(step) for step in steps]

@@ -431,6 +431,10 @@ def delete_user(user_id: int, request: Request, db: Session = Depends(get_db), c
         mail.delete_for_owner(db, user)
         # So are their git repositories.
         git_repos.delete_for_owner(db, user)
+        # And the WordPress the WordPress Manager found in their websites.
+        from app.models.entities import WpInstall
+
+        db.query(WpInstall).filter(WpInstall.owner_id == user.id).delete(synchronize_session=False)
         # userdel refuses a user with processes still running.
         terminal.end_sessions(user.id, "account-deleted")
         site_users.delete_panel_user(user.username)

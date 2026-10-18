@@ -67,6 +67,12 @@ REVIEWED_READS = {
     # The server pages behind the top bar's chips (2026-10-06): memory, disks
     # and interface counters, as resource-usage. Not the process list.
     "/api/system/disk", "/api/system/memory", "/api/system/traffic",
+    # WordPress Manager (2026-10-18): what each WordPress runs and its tasks;
+    # the one-time sign-in link and a new password are POSTs, which a demo
+    # session cannot make.
+    "/api/wordpress/info", "/api/wordpress", "/api/wordpress/installs/{install_id}",
+    "/api/wordpress/jobs/{job_id}", "/api/wordpress/installs/{install_id}/search",
+    "/api/wordpress/installs/{install_id}/clone-targets",
     # Git repositories (2026-10-09): never the deploy key's private half nor
     # the token; the webhook URL is left out for a demo session.
     "/api/git/info", "/api/git/overview", "/api/git/repos/{repo_id}",

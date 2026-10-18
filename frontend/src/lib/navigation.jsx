@@ -41,6 +41,7 @@ export const PAGE_TITLES = {
   'waf-site': 'WAF',
   'malware-scan': msg('Malware Scanner'),
   'access-logs': msg('Access logs'),
+  wordpress: msg('WordPress Manager'),
   updates: msg('Updates'),
   addons: msg('Addons'),
   mcp: msg('AI assistants (MCP)'),

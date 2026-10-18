@@ -27,6 +27,8 @@ import PageHeader from './components/PageHeader.jsx';
 import EmptyState from './components/EmptyState.jsx';
 import Switch from './components/Switch.jsx';
 import ProcessesPage from './pages/Processes.jsx';
+import WordPressPage from './pages/WordPress.jsx';
+import { PanelContext } from './lib/panel-context.jsx';
 import { PAGE_TITLES, hubLanding, hubOf, isHubKey, sidebarItems, sidebarKeyOf } from './lib/navigation';
 import { FeatureIcon } from './icons/feature/index.js';
 import { TILES, dashboardSections, tileLabel, tileVisible } from './lib/features.jsx';
@@ -134,6 +136,7 @@ const PAGE_ROUTES = {
   mail: '/email',
   usage: '/resource-usage',
   git: '/git',
+  wordpress: '/wordpress',
   terminal: '/terminal',
   // The server's own pages, behind the top bar's status chips (admin only).
   processes: '/processes',
@@ -1172,6 +1175,7 @@ function App() {
   const mcpAddonInstalled = !!addons.items.find(item => item.slug === 'mcp')?.installed;
   // Git is an addon (2026-10-10): in the sidebar only while installed.
   const gitAddonInstalled = !!addons.items.find(item => item.slug === 'git')?.installed;
+  const wordpressAddonInstalled = !!addons.items.find(item => item.slug === 'wordpress')?.installed;
   const notificationsAddonInstalled = !!addons.items.find(item => item.slug === 'notifications')?.installed;
   const malwareAddonInstalled = !!addons.items.find(item => item.slug === 'malware')?.installed;
   const dnsAddonInstalled = !!addons.items.find(item => item.slug === 'dns')?.installed;
@@ -10104,7 +10108,11 @@ function App() {
           </Field>
           <Field label={t('Stored file name')} hint={t('The name suffix decides how many copies are kept: nothing keeps one per account, day of week keeps seven, week of month five, and full date one a day until retention removes it.')}>
             <select value={newBackupSchedule.name_suffix} onChange={e => setNewBackupSchedule(prev => ({ ...prev, name_suffix: e.target.value }))}>
-              {Object.entries(nameSuffixLabels).map(([value, label]) => <option key={value} value={value}>{t(label)}</option>)}
+              {/* Spelled out: the four the API accepts (a test compares them). */}
+              <option value="none">{t('Append: nothing')}</option>
+              <option value="day_of_week">{t('Append: day of week')}</option>
+              <option value="week_of_month">{t('Append: week of month')}</option>
+              <option value="full_date">{t('Append: full date')}</option>
             </select>
           </Field>
         </form>
@@ -12260,6 +12268,13 @@ function App() {
     if (page === 'databases') return renderDatabases();
     if (page === 'sftp') return renderSftp();
     if (page === 'git') return gitAddonInstalled ? renderGit() : renderAddonMissing('git');
+    // The WordPress Manager is a page of its own (pages/WordPress.jsx, OPanel's),
+    // reading what it needs from App through PanelContext.
+    if (page === 'wordpress') return wordpressAddonInstalled
+      ? <PanelContext.Provider value={{ isAdmin, loading, navigateToPage, request, setError, setNotice, formatBytes, wordpressEnabled: wordpressAddonInstalled }}>
+        <WordPressPage/>
+      </PanelContext.Provider>
+      : renderAddonMissing('wordpress');
     if (page === 'terminal') return renderTerminalPage();
     if (page === 'cron') return renderCron();
     if (page === 'files') return renderFiles();

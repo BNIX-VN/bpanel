@@ -55,8 +55,9 @@ def test_the_dashboard_counts_an_unapplied_chain_as_off(monkeypatch, output, exp
 def test_the_page_reads_the_chain_as_the_dashboard_does():
     page = _between(APP, "  function renderFirewall() {", "\n  function ")
     assert "line.startsWith('Chain active:')" in page
-    assert "const notApplied = enabled && chainLine.includes('no');" in page
-    assert "t('On, not applied')" in page
+    # On, but its chain not in force: "idle", said in words, with Repair.
+    assert "statusLine.includes('enabled') ? (chainLine.includes('no') ? 'idle' : 'on')" in page
+    assert "t('The firewall is on, but not enforcing')" in page
     assert "onClick={repairFirewall}" in page
     assert "runFirewallAction('/firewall/repair', { method: 'POST' }" in APP
 

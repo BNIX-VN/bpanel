@@ -391,7 +391,13 @@ def test_the_bot_lists_who_wrote_to_it_without_using_up_the_messages(env, monkey
 
 
 def test_the_page_and_its_menu_entry_are_for_administrators():
-    app = (PROJECT_ROOT / "frontend" / "src" / "App.jsx").read_text(encoding="utf-8")
-    assert "...(notificationsAddonInstalled && isAdmin ? [['notifications', 'Notifications', Bell]] : [])," in app
+    src = PROJECT_ROOT / "frontend" / "src"
+    app = (src / "App.jsx").read_text(encoding="utf-8")
+    features = (src / "lib" / "features.jsx").read_text(encoding="utf-8")
+    navigation = (src / "lib" / "navigation.jsx").read_text(encoding="utf-8")
+    assert "page: 'notifications', addon: 'notifications', roles: ['admin']" in features
+    config = navigation.split("{ key: 'config',")[1].split("] },")[0]
+    assert "roles: ['admin']" in config and "when: (c) => c.notificationsAddonInstalled" in config
     assert "if (page === 'notifications') return !isAdmin ? renderAdminOnly() :" in app
     assert "quota_percent" not in app
+

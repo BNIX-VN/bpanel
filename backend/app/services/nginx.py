@@ -1142,6 +1142,17 @@ def _replace_http_flood_block(content: str, enabled: bool, domain: str | None = 
     raise ValueError("Cannot find server block for HTTP flood directives")
 
 
+# Left in a WordPress vhost whose Nginx cache was turned off (the WordPress
+# Manager's Nginx cache tab), so a rewrite that does not know the website's
+# setting keeps it off.
+FASTCGI_CACHE_OFF_MARK = "# BPANEL FASTCGI CACHE OFF"
+
+
+def _without_fastcgi_cache(content: str) -> str:
+    cleaned = _replace_fastcgi_cache_blocks(content, False)
+    return re.sub(r"(    server_name [^;]+;)", lambda match: f"{match.group(1)}\n    {FASTCGI_CACHE_OFF_MARK}", cleaned, count=1)
+
+
 def _replace_fastcgi_cache_blocks(content: str, enabled: bool = True) -> str:
     server_pattern = re.compile(
         r"\n?    # BPANEL FASTCGI CACHE SERVER BEGIN\n.*?\n    # BPANEL FASTCGI CACHE SERVER END",
@@ -1282,6 +1293,7 @@ def render_vhost(
     redirects: list[str] | tuple[str, ...] | None = None,
     app_port: int | None = None,
     blocked_bots=None,
+    fastcgi_cache: bool = True,
 ) -> str:
     server_names = _server_names(domain, aliases)
     safe_domain = server_names[0]
@@ -1333,6 +1345,8 @@ def render_vhost(
     # exactly the same thing. Done before the redirect vhosts are appended so
     # it lands in the primary server block, which is the one that serves.
     rendered = _replace_bot_block(rendered, blocked_bots)
+    if app_type == "wordpress" and not fastcgi_cache:
+        rendered = _without_fastcgi_cache(rendered)
     if ssl_cert_path or ssl_key_path:
         rendered = apply_manual_ssl_config(rendered, ssl_cert_path or "", ssl_key_path or "", ssl_ca_path)
     return _append_redirect_vhosts(rendered, domain, redirects, ssl_cert_path, ssl_key_path, ssl_ca_path)
@@ -1410,6 +1424,7 @@ def rewrite_vhost(
     redirects: list[str] | tuple[str, ...] | None = None,
     app_port: int | None = None,
     blocked_bots=None,
+    fastcgi_cache: bool | None = None,
 ) -> str:
     target = _vhost_path(domain)
     if app_type in PROXIED_APP_TYPES:
@@ -1424,6 +1439,14 @@ def rewrite_vhost(
             blocked_bots = blocked_bots_in_vhost(target.read_text(encoding="utf-8"))
         except OSError:
             blocked_bots = None
+    # The page cache follows the same contract: None keeps what this vhost
+    # has - off only where the website's Nginx cache was turned off.
+    if fastcgi_cache is None:
+        try:
+            fastcgi_cache = not (not settings.command_dry_run and target.exists()
+                                 and FASTCGI_CACHE_OFF_MARK in target.read_text(encoding="utf-8"))
+        except OSError:
+            fastcgi_cache = True
     content = render_vhost(
         domain,
         root_path,
@@ -1443,6 +1466,7 @@ def rewrite_vhost(
         redirects=None,
         app_port=app_port,
         blocked_bots=blocked_bots,
+        fastcgi_cache=fastcgi_cache,
     )
     if settings.command_dry_run:
         return _append_redirect_vhosts(content, domain, redirects, ssl_cert_path, ssl_key_path, ssl_ca_path)

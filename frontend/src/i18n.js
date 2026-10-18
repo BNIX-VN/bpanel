@@ -107,7 +107,7 @@ export function t(text, values) {
   // A value that is an element (`{ word: <code>x</code> }`) cannot become
   // text: the sentence is handed back as parts for React to render.
   if (!Object.values(values).some((value) => value !== null && typeof value === 'object')) {
-    return out.replace(/\{(\w+)\}/g, (whole, name) => (own(name) ? String(values[name]) : whole));
+    return out.replace(/\{(\w+)\}/g, (whole, name) => (Object.prototype.hasOwnProperty.call(values, name) ? String(values[name]) : whole));
   }
   const parts = [];
   let last = 0;
