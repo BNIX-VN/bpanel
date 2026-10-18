@@ -25,6 +25,8 @@ import { Checkbox, Field, PasswordField } from './components/Form.jsx';
 import ActionMenu from './components/ActionMenu.jsx';
 import PageHeader from './components/PageHeader.jsx';
 import EmptyState from './components/EmptyState.jsx';
+import Switch from './components/Switch.jsx';
+import ProcessesPage from './pages/Processes.jsx';
 import { PAGE_TITLES, hubLanding, hubOf, isHubKey, sidebarItems, sidebarKeyOf } from './lib/navigation';
 import { FeatureIcon } from './icons/feature/index.js';
 import { TILES, dashboardSections, tileLabel, tileVisible } from './lib/features.jsx';
@@ -44,6 +46,9 @@ import './pages/Git.css';
 import './pages/Users.css';
 import './pages/Files.css';
 import './pages/Backups.css';
+import './pages/Processes.css';
+import './pages/Updates.css';
+import './pages/PhpConfig.css';
 import './bpanel.css';
 
 const API = import.meta.env.VITE_API_URL || '/api';
@@ -994,6 +999,8 @@ function App() {
   const [fileContent, setFileContent] = useState('');
   const [selectedFilePaths, setSelectedFilePaths] = useState([]);
   const [archiveFormat, setArchiveFormat] = useState('zip');
+  // The PHP page's extension filter.
+  const [phpExtFind, setPhpExtFind] = useState('');
   // The backups page's side sheets: a new schedule, a new destination.
   const [scheduleSheet, setScheduleSheet] = useState(false);
   const [destinationSheet, setDestinationSheet] = useState(false);
@@ -5888,31 +5895,11 @@ function App() {
     </section>;
   }
 
+  // The process monitor, as SNPanel's: a table read from top -c that sorts
+  // by any column and filters by account and text (pages/Processes.jsx).
   function renderProcessMonitor() {
-    const output = processTop?.output || '';
-    const lines = output.replace(/\s+$/, '').split('\n');
-    const headerEnd = lines.findIndex(line => /^\s*PID\s+USER\b/.test(line));
-    const needle = processFilter.trim().toLowerCase();
-    const shown = headerEnd < 0 || !needle ? lines
-      : [...lines.slice(0, headerEnd + 1), ...lines.slice(headerEnd + 1).filter(line => line.toLowerCase().includes(needle))];
-    const when = processTop?.time ? new Date(processTop.time * 1000).toLocaleTimeString() : '';
-    return <section className="section">
-      <div className="section-title">
-        <div><h2>{t('Process monitor')}</h2>
-          <p className="hint">{t('What the server is running, as top -c shows it. It refreshes every 3 seconds.')}</p></div>
-        <div className="actions">
-          <input className="process-filter" value={processFilter} onChange={e => setProcessFilter(e.target.value)} placeholder={t('Filter processes')} aria-label={t('Filter processes')} />
-          <button type="button" className="secondary" onClick={() => setProcessPaused(paused => !paused)}>
-            {processPaused ? <><Play size={14}/> {t('Resume')}</> : <><Pause size={14}/> {t('Pause')}</>}
-          </button>
-        </div>
-      </div>
-      <div className="process-terminal-wrap">
-        <div className="process-terminal-head"><span>top -c</span><small>{processPaused ? t('Paused') : when}</small></div>
-        <pre className="process-terminal" aria-live="off">{currentUser?.demo ? t('This is a demo: the process list is not shown.')
-          : output ? shown.join('\n') : t('Reading processes...')}</pre>
-      </div>
-    </section>;
+    return <ProcessesPage currentUser={currentUser} formatBytes={formatBytes} processFilter={processFilter} processPaused={processPaused}
+      processTop={processTop} setProcessFilter={setProcessFilter} setProcessPaused={setProcessPaused}/>;
   }
 
   function renderRamUsage() {
@@ -5920,9 +5907,8 @@ function App() {
     const swap = memoryInfo?.swap || {};
     const workers = memoryInfo?.php_workers || {};
     return <>
+      <PageHeader subtitle={t("The server's memory now, and what takes it.")}/>
       <section className="section">
-        <div className="section-title"><div><h2>{t('RAM usage')}</h2>
-          <p className="hint">{t("The server's memory now, and what takes it.")}</p></div></div>
         {memory ? <RamBreakdown memory={memory} /> : <p className="hint">{t('Reading memory...')}</p>}
         <div className="info-rows ram-facts">
           <InfoRow label={t('Swap')} value={swap.total ? `${formatBytes(swap.used)} / ${formatBytes(swap.total)}` : t('None')} />
@@ -5942,14 +5928,11 @@ function App() {
     };
     const measured = scan?.time ? new Date(scan.time * 1000).toLocaleString() : '';
     return <>
+      <PageHeader subtitle={diskInfo?.scanning ? t('Measuring what takes the space. On a large server this takes a few minutes.')
+        : measured ? t('What takes the space was measured at {time}.', { time: measured }) : t('What takes the space has not been measured yet.')}
+        onRefresh={rescanDisk} refreshing={!!diskInfo?.scanning} refreshDisabled={!!loading}
+        refreshLabel={diskInfo?.scanning ? t('Measuring...') : t('Measure again')}/>
       <section className="section">
-        <div className="section-title">
-          <div><h2>{t('Disk usage')}</h2>
-            <p className="hint">{diskInfo?.scanning ? t('Measuring what takes the space. On a large server this takes a few minutes.')
-              : measured ? t('What takes the space was measured at {time}.', { time: measured }) : t('What takes the space has not been measured yet.')}</p></div>
-          <div className="actions"><button type="button" className="secondary" disabled={!!loading || diskInfo?.scanning} onClick={rescanDisk}>
-            <RefreshCw size={14}/> {diskInfo?.scanning ? t('Measuring...') : t('Measure again')}</button></div>
-        </div>
         {diskInfo?.scan_error && <p className="hint alarm">{diskInfo.scan_error}</p>}
         {!diskInfo && <p className="hint">{t('Reading disks...')}</p>}
         {(diskInfo?.filesystems || []).map(fs => {
@@ -5969,8 +5952,7 @@ function App() {
         })}
       </section>
       {(scan?.accounts || []).length > 0 && <section className="section">
-        <div className="section-title"><div><h2>{t('Largest accounts')}</h2>
-          <p className="hint">{t("Each account's websites on disk, measured with the rest.")}</p></div></div>
+        <PageHeader title={t('Largest accounts')} subtitle={t("Each account's websites on disk, measured with the rest.")}/>
         <div className="top-accounts disk-accounts">
           <div className="top-accounts-row is-head" aria-hidden="true"><span>{t('Account')}</span><span>{t('Used')}</span></div>
           {scan.accounts.map(row => {
@@ -5996,9 +5978,9 @@ function App() {
     const rateFormat = value => `${formatBytes(value)}/s`;
     const common = { when, emptyText: t('Collecting: a reading every 2 seconds.'), limitText: t('Limit'),
       peakText: t('Peak'), averageText: t('Average') };
-    return <section className="section">
-      <div className="section-title"><div><h2>{t('Traffic')}</h2>
-        <p className="hint">{t('Each network interface, live while this page is open, and in total since the server started.')}</p></div></div>
+    return <>
+      <PageHeader subtitle={t('Each network interface, live while this page is open, and in total since the server started.')}/>
+      <section className="section">
       {!last && <p className="hint">{t('Reading interfaces...')}</p>}
       {names.map(name => {
         const points = [];
@@ -6027,7 +6009,8 @@ function App() {
         </div>;
       })}
       {last?.uptime_seconds > 0 && <p className="hint">{t('The server started {time} ago.', { time: formatUptime(last.uptime_seconds) })}</p>}
-    </section>;
+      </section>
+    </>;
   }
 
   // The administrator's view of the Resource limits addon: who uses most now.
@@ -9742,86 +9725,99 @@ function App() {
     </>;
   }
 
+  // Services, as SNPanel's: the page's Refresh in its head, and each
+  // service only the buttons that apply - a running one restarts or stops,
+  // a stopped one starts; while its state is unknown, all of them.
   function renderServices() {
-    return <section className="section">
-      <div className="section-title">
-        <div><h2>{t('Services')}</h2><p className="hint">{t('Auto-refreshes every 10s')}</p></div>
-        <button className="secondary" disabled={!!loading} onClick={checkAllServices}><RefreshCw size={15}/> {t('Refresh')}</button>
-      </div>
-      {/* A running service's Start and a stopped one's Stop are disabled, so
-          the enabled button is the obvious next step. */}
-      <div className="service-grid">
-        {serviceNames.map(name => {
-          const state = serviceStates[name];
-          const text = `${state?.stdout || ''} ${state?.stderr || ''}`;
-          const active = text.includes('active (running)');
-          const inactive = text.includes('inactive') || text.includes('failed');
-          const canStop = !['bpanel-api', 'redis-server'].includes(name);
-          return <div className="service-card" key={name}>
-            <div><strong>{name}</strong><span className={active ? 'badge ok' : inactive ? 'badge bad' : 'badge'}>{active ? t('Running') : inactive ? t('Stopped') : '...'}</span></div>
-            {isAdmin && <div className="service-actions">
-              <button className="secondary" disabled={active} onClick={() => runServiceAction(name, 'start')}><Play size={13}/> {t('Start')}</button>
-              {canStop && <button className="danger-light" disabled={inactive} onClick={() => runServiceAction(name, 'stop')}><Square size={13}/> {t('Stop')}</button>}
-              <button className="secondary" onClick={() => runServiceAction(name, 'restart')}><RotateCcw size={13}/> {t('Restart')}</button>
-            </div>}
-          </div>;
-        })}
-      </div>
-    </section>;
+    return <>
+      <PageHeader subtitle={t('Auto-refreshes every 10s')} onRefresh={checkAllServices} refreshDisabled={!!loading}/>
+      <section className="section">
+        <div className="service-grid">
+          {serviceNames.map(name => {
+            const state = serviceStates[name];
+            const text = `${state?.stdout || ''} ${state?.stderr || ''}`;
+            const active = text.includes('active (running)');
+            const inactive = text.includes('inactive') || text.includes('failed');
+            const canStop = !['bpanel-api', 'redis-server'].includes(name);
+            return <div className="service-card" key={name}>
+              <div>
+                <div className="service-name"><strong>{name}</strong></div>
+                <span className={active ? 'badge ok' : inactive ? 'badge bad' : 'badge'}>{active ? t('Running') : inactive ? t('Stopped') : '...'}</span>
+              </div>
+              {isAdmin && <div className="service-actions">
+                {!active && <button type="button" className="mini" onClick={() => runServiceAction(name, 'start')}><Play size={13}/> {t('Start')}</button>}
+                {!inactive && <button type="button" className="mini secondary-light" onClick={() => runServiceAction(name, 'restart')}><RotateCcw size={13}/> {t('Restart')}</button>}
+                {active && canStop && <button type="button" className="mini secondary-light" onClick={() => runServiceAction(name, 'stop')}><Square size={13}/> {t('Stop')}</button>}
+              </div>}
+            </div>;
+          })}
+        </div>
+      </section>
+    </>;
   }
 
+  // PHP extensions, server-wide, as SNPanel heads its own: a title with a
+  // find box, then BPanel's table of every version (BPanel installs an
+  // extension per version, so the versions are its columns).
   function renderPhpExtensions() {
     const versions = phpExtensions.versions || [];
     // Nothing to draw until the table has loaded: an empty list here is the
     // request still on its way, not a server without PHP.
     if (versions.length === 0) return null;
-    return <div className="user-create-card php-ext-card" style={{ marginTop: 16 }}>
+    const needle = phpExtFind.trim().toLowerCase();
+    const list = (phpExtensions.extensions || []).filter(ext => !needle || ext.name.toLowerCase().includes(needle));
+    return <div className="php-ext-card" aria-labelledby="php-ext-title">
       <div className="php-ext-head">
-        <h3>{t('PHP extensions')}</h3>
-        <p className="hint">{t('Server-wide: every website on a PHP version gets its extensions. Installing one reloads PHP-FPM; removing is not offered here, since a website may depend on it.')}</p>
+        <h2 id="php-ext-title">{t('PHP extensions')}</h2>
+        <input type="search" className="php-ext-find" value={phpExtFind} onChange={e => setPhpExtFind(e.target.value)} placeholder={t('Find an extension')} aria-label={t('Find an extension')} />
       </div>
-      <div className="php-ext-table-wrap">
-        <table className="php-ext-table">
+      <p className="hint">{t('Server-wide: every website on a PHP version gets its extensions. Installing one reloads PHP-FPM; removing is not offered here, since a website may depend on it.')}</p>
+      <div className="data-table-wrap">
+        <table className="data-table php-ext-table">
           <thead><tr>
-            <th>{t('Extension')}</th>
-            {versions.map(v => <th key={v}>PHP {v}</th>)}
-            <th aria-label={t('Install all')}></th>
+            <th scope="col">{t('Extension')}</th>
+            {versions.map(v => <th scope="col" key={v}>PHP {v}</th>)}
+            <th scope="col"><span className="sr-only">{t('Install all')}</span></th>
           </tr></thead>
           <tbody>
-            {phpExtensions.extensions.map(ext => {
+            {list.map(ext => {
               const missingOn = versions.filter(v => ext.versions[v] === 'available');
               return <tr key={ext.name}>
                 <td><code>{ext.name}</code></td>
                 {versions.map(v => {
                   const state = ext.versions[v];
                   if (state === 'installed' || state === 'builtin') {
-                    return <td key={v}><span className="php-ext-installed" title={state === 'builtin' ? t('Built into PHP') : ''}>{t('Installed')}</span></td>;
+                    return <td key={v}><span className="badge ok" title={state === 'builtin' ? t('Built into PHP') : ''}>{t('Installed')}</span></td>;
                   }
                   if (state === 'available') {
-                    return <td key={v}><button className="mini secondary-light php-ext-install" disabled={!!loading}
-                      title={t('Install on PHP {version}', { version: v })} aria-label={t('Install {extension} on PHP {version}', { extension: ext.name, version: v })}
-                      onClick={() => installPhpExtension(ext.name, [v])}><Download size={14}/></button></td>;
+                    return <td key={v}><button type="button" className="mini secondary-light" disabled={!!loading}
+                      aria-label={t('Install {extension} on PHP {version}', { extension: ext.name, version: v })}
+                      onClick={() => installPhpExtension(ext.name, [v])}><Plus size={13}/> {t('Install')}</button></td>;
                   }
-                  return <td key={v}><span className="php-ext-na" title={t('Not in repository')}>—</span></td>;
+                  return <td key={v}><span className="data-table-muted" title={t('Not in repository')}>—</span></td>;
                 })}
-                <td className="php-ext-all">{missingOn.length > 0 && <button className="mini secondary" disabled={!!loading}
+                <td className="php-ext-all">{missingOn.length > 1 && <button type="button" className="mini" disabled={!!loading}
                   onClick={() => installPhpExtension(ext.name, missingOn)}>{t('Install all')}</button>}</td>
               </tr>;
             })}
           </tbody>
         </table>
       </div>
+      {list.length === 0 && <p className="hint">{t('No extension matches {text}.', { text: phpExtFind.trim() })}</p>}
     </div>;
   }
 
+  // PHP, as SNPanel's (pages/PhpConfig.jsx there): the version every card
+  // below is about and the ones to install; its php.ini limits with OPcache
+  // under them; what auto tune would change, as a table; the extensions.
   function renderPhpConfig() {
-    if (!isAdmin) return <section className="section"><h2>{t('PHP config')}</h2><p className="hint">{t('You do not have permission to edit PHP config.')}</p></section>;
+    if (!isAdmin) return <section className="section"><p className="hint">{t('You do not have permission to edit PHP config.')}</p></section>;
     const notInstalled = sortPhpVersions(phpVersions.supported.filter(v => !phpVersions.installed.includes(v)));
-    const opcacheOn = !!phpTune?.opcache_enabled;
     // The settings Auto-tune would actually change. A row that already
     // matches, or one pinned by the form above (it always wins - PHP reads it
     // last), is not a decision to make.
     const tuneChanges = (phpTune?.settings || []).filter(row => row.changes && !row.overridden_value);
+    const pinned = (phpTune?.settings || []).filter(row => row.changes && row.overridden_value).length;
     // Every pool on a server is sized from the same CPU/RAM/pool-count budget,
     // so they normally all carry identical numbers. Collapse to "N/N pools
     // run X" and list only the ones that do not match.
@@ -9830,79 +9826,111 @@ function App() {
     (phpTune?.pools || []).forEach(p => { (poolGroups[poolKey(p)] ||= []).push(p); });
     const [commonPools, ...restPoolGroups] = Object.values(poolGroups).sort((a, b) => b.length - a.length);
     const poolOutliers = restPoolGroups.flat();
-    return <section className="section">
-      <div className="section-title">
-        <div><h2>{t('PHP Configuration')}</h2></div>
+    const chooseVersion = v => { setPhpConfig(prev => ({ ...prev, php_version: v })); loadPhpConfig(v); loadPhpTune(v); };
+    const limitField = (key, props = {}) => <label key={key} className="php-limit"><span>{key}</span>
+      <input value={phpConfig[key] ?? ''} onChange={e => setPhpConfig(prev => ({ ...prev, [key]: e.target.value }))} spellCheck={false} autoComplete="off" {...props} /></label>;
+    return <>
+      <PageHeader subtitle={t('The settings, auto tune and extensions below are for the version chosen here.')}/>
+      <div className="php-page">
+        <section className="section php-versions">
+          <h3 className="php-versions-title">{t('PHP versions')}</h3>
+          <div className="php-versions-row">
+            <label className="php-version-pick"><span>{t('PHP version')}</span>
+              <select value={phpConfig.php_version} onChange={e => chooseVersion(e.target.value)}>
+                {phpVersions.installed.map(v => <option key={v} value={v}>PHP {v}</option>)}
+              </select>
+            </label>
+            {notInstalled.length > 0 && <div className="php-install">
+              <span>{t('Install another')}</span>
+              <div className="php-install-grid">
+                {notInstalled.map(v => <button type="button" key={v} className="secondary-light" disabled={!!loading} onClick={() => installPhpVersion(v)}><Plus size={14} aria-hidden="true"/> PHP {v}</button>)}
+              </div>
+            </div>}
+          </div>
+        </section>
+
+        <section className="section">
+          <PageHeader title={t('php.ini limits of PHP {version}', { version: phpConfig.php_version })} subtitle={t('Written last, so they win over auto tune for the same setting.')}/>
+          <div className="user-create-card php-config-card">
+            <label><span>display_errors</span><select value={phpConfig.display_errors} onChange={e => setPhpConfig(prev => ({ ...prev, display_errors: e.target.value }))}>
+              <option value="Off">{t('Off (production)')}</option><option value="On">{t('On (debug)')}</option>
+            </select></label>
+            {limitField('max_execution_time', { type: 'number', inputMode: 'numeric' })}
+            {limitField('max_input_time', { type: 'number', inputMode: 'numeric' })}
+            {limitField('max_input_vars', { type: 'number', inputMode: 'numeric' })}
+            {limitField('memory_limit', { placeholder: '1024M' })}
+            {limitField('post_max_size', { placeholder: '1024M' })}
+            {limitField('upload_max_filesize', { placeholder: '1024M' })}
+            {/* OPcache: on or off for this version (switched at once through
+                its own endpoint, so Auto-tune never turns it back on behind
+                the admin's back), and its sizes. */}
+            <div className="php-config-sub">
+              <div className="php-opcache-head">
+                <h3><Zap size={16} aria-hidden="true"/> OPcache</h3>
+                {phpTune && <span className={phpTune.opcache_enabled ? 'badge ok' : 'badge'}>{phpTune.opcache_enabled ? t('OPcache on') : t('OPcache off')}</span>}
+                <Switch checked={!!phpTune?.opcache_enabled} disabled={!!loading || !phpTune} onChange={toggleOpcache}
+                  label={t('OPcache for PHP {version}', { version: phpTune?.php_version || phpConfig.php_version })}/>
+              </div>
+            </div>
+            {OPCACHE_SIZE_FIELDS.map(([key, directive, min, max, example]) => <label key={key} className="php-limit"><span>{directive}</span>
+              <input type="number" min={min} max={max} value={phpConfig[key] ?? ''} placeholder={String(phpConfig.opcache_effective?.[key] || example)}
+                onChange={e => setPhpConfig(prev => ({ ...prev, [key]: e.target.value }))} />
+              <small className="php-limit-note">{t('Empty keeps the Auto-tune value.')}</small></label>)}
+            <div className="php-config-actions">
+              <button type="button" className="secondary-light" disabled={!!loading} onClick={restorePhpDefaults}><RotateCcw size={14}/> {t('Restore defaults')}</button>
+              <button type="button" disabled={!!loading} onClick={updatePhpConfig}><Save size={14}/> {t('Save')}</button>
+            </div>
+          </div>
+        </section>
+
+        <section className="section php-tune-section">
+          <PageHeader title={t('PHP auto tune')}
+            subtitle={phpTune ? t('Recommended for this server: {cpus} CPU, {memory} MB RAM.', { cpus: phpTune.facts?.cpu_count ?? '—', memory: phpTune.facts?.total_memory_mb ?? '—' }) : null}
+            actions={!phpTuneOpen && <button type="button" className="secondary-light" disabled={!!loading} onClick={() => { setPhpTuneOpen(true); loadPhpTune(phpConfig.php_version); }}><Zap size={14}/> {t('Auto-tune')}</button>}/>
+          {phpTuneOpen && phpTune && <>
+            {tuneChanges.length > 0
+              ? <>
+                <p className="php-tune-lead"><AlertCircle size={15} aria-hidden="true"/> {t('Auto tune will change {n} setting(s) for PHP {version}', { n: tuneChanges.length, version: phpTune.php_version })}</p>
+                <div className="data-table-wrap">
+                  <table className="data-table php-tune-table">
+                    <thead><tr><th scope="col">{t('Setting')}</th><th scope="col">{t('Now')}</th><th scope="col">{t('Recommended')}</th></tr></thead>
+                    <tbody>
+                      {tuneChanges.map(row => <tr key={row.key}>
+                        <td><code>{row.key}</code></td>
+                        <td className="php-tune-now">{row.current || <span className="data-table-muted">{t('unset')}</span>}</td>
+                        <td className="php-tune-new"><strong>{row.value}</strong></td>
+                      </tr>)}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+              : <div className="notice php-tune-diff"><Check size={14}/> {t('PHP {version} already matches what auto tune recommends for this machine.', { version: phpTune.php_version })}</div>}
+            {pinned > 0 && <p className="hint">{t('{count} other recommended setting(s) are kept as the php.ini limits above set them.', { count: pinned })}</p>}
+            {commonPools && <p className="hint">{t('PHP-FPM pools: {n}/{total} run pm.max_children={children}, idle {idle}, up to {requests} requests per process.', {
+              n: commonPools.length, total: phpTune.pools.length, children: commonPools[0].max_children || '—',
+              idle: commonPools[0].idle_timeout || '—', requests: commonPools[0].max_requests || '—',
+            })}{poolOutliers.length > 0 ? ' ' + t('{n} other pool(s) run different settings:', { n: poolOutliers.length }) : ''}</p>}
+            {poolOutliers.length > 0 && <ul className="php-tune-pool-outliers">
+              {poolOutliers.map(p => <li key={p.pool}>
+                <code>{p.pool}</code>
+                <span>pm.max_children={p.max_children || '—'}, {t('idle {idle}, up to {requests} requests', { idle: p.idle_timeout || '—', requests: p.max_requests || '—' })}</span>
+              </li>)}
+            </ul>}
+            {phpTuneApplied && <div className="notice php-tune-result"><strong><Check size={14}/> {t('PHP {version} tuned.', { version: phpTune.php_version })}</strong></div>}
+            <div className="php-tune-actions">
+              <button type="button" disabled={!!loading} className={tuneChanges.length ? undefined : 'secondary-light'} onClick={applyPhpTune}><Cpu size={14}/> {t('Apply Auto-tune to PHP')} {phpTune.php_version}</button>
+              <button type="button" className="secondary-light" onClick={() => setPhpTuneOpen(false)}>{t('Dismiss')}</button>
+            </div>
+          </>}
+          {!phpTuneOpen && <p className="hint">{t('What auto tune would change for this server, before anything changes.')}</p>}
+        </section>
+
+        <section className="section">{renderPhpExtensions()}</section>
       </div>
-      <div className="user-create-card">
-        <label><span>{t('PHP version')}</span><select value={phpConfig.php_version} onChange={e => { const v = e.target.value; setPhpConfig(prev => ({ ...prev, php_version: v })); loadPhpConfig(v); loadPhpTune(v); }}>
-          {phpVersions.installed.map(v => <option key={v} value={v}>PHP {v}</option>)}
-        </select></label>
-        <label><span>display_errors</span><select value={phpConfig.display_errors} onChange={e => setPhpConfig(prev => ({ ...prev, display_errors: e.target.value }))}>
-          <option value="Off">{t('Off (production)')}</option><option value="On">{t('On (debug)')}</option>
-        </select></label>
-        {/* Switched straight away through its own endpoint, not saved with the
-            form: Auto-tune must not turn it back on behind the admin's back. */}
-        <label className="php-opcache-toggle"><span>{t('OPcache')}</span>
-          <button
-            type="button"
-            className={opcacheOn ? 'toggle-on' : 'secondary'}
-            aria-pressed={opcacheOn}
-            disabled={!!loading || !phpTune}
-            onClick={toggleOpcache}
-            title={t('OPcache is {state} for PHP {version}. Press to switch it.', { state: opcacheOn ? t('on') : t('off'), version: phpTune?.php_version || phpConfig.php_version })}
-          >
-            <Zap size={14}/> {opcacheOn ? t('Enabled') : t('Disabled')}
-          </button>
-        </label>
-        <label><span>max_execution_time</span><input type="number" value={phpConfig.max_execution_time} onChange={e => setPhpConfig(prev => ({ ...prev, max_execution_time: e.target.value }))} /></label>
-        <label><span>max_input_time</span><input type="number" value={phpConfig.max_input_time} onChange={e => setPhpConfig(prev => ({ ...prev, max_input_time: e.target.value }))} /></label>
-        <label><span>max_input_vars</span><input type="number" value={phpConfig.max_input_vars} onChange={e => setPhpConfig(prev => ({ ...prev, max_input_vars: e.target.value }))} /></label>
-        <label><span>memory_limit</span><input value={phpConfig.memory_limit} onChange={e => setPhpConfig(prev => ({ ...prev, memory_limit: e.target.value }))} placeholder="1024M" /></label>
-        <label><span>post_max_size</span><input value={phpConfig.post_max_size} onChange={e => setPhpConfig(prev => ({ ...prev, post_max_size: e.target.value }))} placeholder="1024M" /></label>
-        <label><span>upload_max_filesize</span><input value={phpConfig.upload_max_filesize} onChange={e => setPhpConfig(prev => ({ ...prev, upload_max_filesize: e.target.value }))} placeholder="1024M" /></label>
-        {OPCACHE_SIZE_FIELDS.map(([key, directive, min, max, example]) => <label key={key}><span>{directive}</span>
-          <input type="number" min={min} max={max} value={phpConfig[key] ?? ''} placeholder={String(phpConfig.opcache_effective?.[key] || example)}
-            title={t('Empty keeps the Auto-tune value.')} onChange={e => setPhpConfig(prev => ({ ...prev, [key]: e.target.value }))} /></label>)}
-        <button className="secondary-light" disabled={!!loading} onClick={restorePhpDefaults}><RotateCcw size={14}/> {t('Restore defaults')}</button>
-        <button className="secondary-light" disabled={!!loading} onClick={() => { setPhpTuneOpen(true); loadPhpTune(phpConfig.php_version); }}><Zap size={14}/> {t('Auto-tune')}</button>
-        <button disabled={!!loading} onClick={updatePhpConfig}>{t('Save')}</button>
-      </div>
-      {phpTuneOpen && phpTune && <div className="user-create-card php-tune-card" style={{ marginTop: 16, borderColor: 'var(--accent)' }}>
-        <h3>{t('⚡ Auto-tune Recommendation')}</h3>
-        <p className="hint">{t('Based on {ram} MB RAM, {cores} CPU cores and {pools} PHP pool(s).', { ram: phpTune.facts?.total_memory_mb, cores: phpTune.facts?.cpu_count, pools: phpTune.facts?.pool_count ?? 0 })}</p>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 24px', margin: '12px 0', fontSize: '0.9em' }}>
-          {(phpTune.settings || []).map(row => <div key={row.key}>
-            <strong>{row.key}:</strong> {row.value}
-            {row.changes && !row.overridden_value ? <small> ({t('now {value}', { value: row.current || t('unset') })})</small> : null}
-          </div>)}
-        </div>
-        <p className="hint">{tuneChanges.length > 0
-          ? t('Auto tune will change {n} setting(s) for PHP {version}', { n: tuneChanges.length, version: phpTune.php_version })
-          : t('PHP {version} already matches what auto tune recommends for this machine.', { version: phpTune.php_version })}</p>
-        {commonPools && <p className="hint">{t('PHP-FPM pools: {n}/{total} run pm.max_children={children}, idle {idle}, up to {requests} requests per process.', {
-          n: commonPools.length, total: phpTune.pools.length, children: commonPools[0].max_children || '—',
-          idle: commonPools[0].idle_timeout || '—', requests: commonPools[0].max_requests || '—',
-        })}{poolOutliers.length > 0 ? ' ' + t('{n} other pool(s) run different settings:', { n: poolOutliers.length }) : ''}</p>}
-        {poolOutliers.length > 0 && <ul className="php-tune-pool-outliers">
-          {poolOutliers.map(p => <li key={p.pool}>
-            <code>{p.pool}</code>
-            <span>pm.max_children={p.max_children || '—'}, {t('idle {idle}, up to {requests} requests', { idle: p.idle_timeout || '—', requests: p.max_requests || '—' })}</span>
-          </li>)}
-        </ul>}
-        {phpTuneApplied && <p className="hint"><Check size={14}/> {t('PHP {version} tuned.', { version: phpTune.php_version })}</p>}
-        <button disabled={!!loading} onClick={applyPhpTune}><Zap size={14}/> {t('Apply Auto-tune to PHP')} {phpTune.php_version}</button>
-        <button className="secondary-light" style={{ marginLeft: 8 }} onClick={() => setPhpTuneOpen(false)}>{t('Dismiss')}</button>
-      </div>}
-      {renderPhpExtensions()}
-      {notInstalled.length > 0 && <div className="user-create-card" style={{ marginTop: 16 }}>
-        <h3>{t('Install PHP')}</h3>
-        <div className="php-install-grid">
-          {notInstalled.map(v => <button key={v} className="secondary" disabled={!!loading} onClick={() => installPhpVersion(v)}>+ PHP {v}</button>)}
-        </div>
-      </div>}
-    </section>;
+    </>;
   }
+
+
 
   // Fail2ban is managed where the rest of the firewall is: its bans are
   // firewall rules. Turning it on and off is the Addons page's job.
@@ -10483,44 +10511,42 @@ function App() {
     </>;
   }
 
+  // Updates, as SNPanel's: the panel's release with its one action, the
+  // update, beside "Check releases"; then the operating system's packages,
+  // updated now (a secondary action) or by themselves on a schedule.
   function renderUpdates() {
-    if (!isAdmin) return <section className="section"><h2>{t('Updates')}</h2><p className="hint">{t('No permission.')}</p></section>;
+    if (!isAdmin) return <section className="section"><p className="hint">{t('No permission.')}</p></section>;
     const statusText = updatesStatus?.stdout || updatesStatus?.stderr || t('Click View logs to load update logs.');
     const panelUpdate = updatesStatus?.panel || {};
     // Three states, not two. `update_available` is null when the release check
     // could not tell, and "unknown" must not be dressed up as "up to date".
     const hasUpdate = panelUpdate.update_available;
-    const panelBadge = hasUpdate === true ? t('Update available')
-      : hasUpdate === false ? t('Up to date') : t('Unknown');
-    const panelBadgeClass = hasUpdate === true ? 'badge warn'
-      : hasUpdate === false ? 'badge ok' : 'badge';
+    const panelBadge = hasUpdate === true ? t('Update available') : hasUpdate === false ? t('Up to date') : t('Unknown');
+    const panelBadgeClass = hasUpdate === true ? 'badge warn' : hasUpdate === false ? 'badge ok' : 'badge';
     const currentPanelVersion = panelUpdate.current_version || appVersion || '';
     const latestPanelVersion = panelUpdate.latest_version || '';
     return <>
+      <PageHeader subtitle={t('OS packages update with {manager}; the panel updates with {command}.', { manager: <code>apt</code>, command: <code>bpanel-update</code> })}
+        actions={<button type="button" className="secondary-light" disabled={!!loading} onClick={toggleUpdateLog}>{showUpdateLog ? <X size={14}/> : <FileText size={14}/>} {showUpdateLog ? t('Hide logs') : t('View logs')}</button>}/>
       <section className="section">
-        <div className="section-title">
-          <div><h2>{t('Updates')}</h2><p className="hint">{t('OS packages use apt; panel updates use')} <code>bpanel-update</code>.</p></div>
-          <button className="secondary-light" disabled={!!loading} onClick={toggleUpdateLog}>{showUpdateLog ? <X size={14}/> : <FileText size={14}/>} {showUpdateLog ? t('Hide logs') : t('View logs')}</button>
-        </div>
         <div className="info-box update-version-box">
           <div className="update-version-head"><strong>{t('Panel release')}</strong><span className={panelBadgeClass}>{panelBadge}</span></div>
           <div className="update-version-grid">
-            <span>{t('Current')} <strong>{currentPanelVersion ? `v${currentPanelVersion}` : t('unknown')}</strong></span>
-            <span>{t('Latest')} <strong>{latestPanelVersion ? `v${latestPanelVersion}` : t('unknown')}</strong></span>
-            <span>{t('Checked')} <strong>{panelUpdate.last_checked_at || t('never')}</strong></span>
-            <span>{t('State file')} <strong>{panelUpdate.state_file || '/var/lib/bpanel/update-status.json'}</strong></span>
+            <span>{t('Current {version}', { version: <strong>{currentPanelVersion ? `v${currentPanelVersion}` : t('unknown')}</strong> })}</span>
+            <span>{t('Latest {version}', { version: <strong>{latestPanelVersion ? `v${latestPanelVersion}` : t('unknown')}</strong> })}</span>
+            <span>{t('Checked {when}', { when: <strong>{panelUpdate.last_checked_at || t('never')}</strong> })}</span>
           </div>
-          {panelUpdate.check_error && <p className="hint">{t('Release check failed:')} {panelUpdate.check_error}</p>}
+          {panelUpdate.check_error && <p className="hint update-check-problem">{t('Release check failed:')} {panelUpdate.check_error}</p>}
           {panelUpdate.last_update_status && <p className="hint">{t('Last update:')} {panelUpdate.last_update_status}{panelUpdate.last_update_ref ? ` (${panelUpdate.last_update_ref})` : ''}{panelUpdate.last_update_finished_at ? t(' at {when}', { when: panelUpdate.last_update_finished_at }) : ''}</p>}
         </div>
-        <div className="actions">
-          <button className="secondary-light" disabled={!!loading} onClick={() => loadUpdates(true)}><RefreshCw size={14}/> {t('Refresh status')}</button>
-          <button className="secondary" disabled={!!loading || osUpdating} onClick={runOsUpdate}><RefreshCw size={14} className={osUpdating ? 'spin' : ''}/> {osUpdating ? t('Updating OS...') : t('Update OS now')}</button>
+        <div className="actions update-actions">
+          <button type="button" className="secondary-light" disabled={!!loading} onClick={() => loadUpdates(true)}><RefreshCw size={14}/> {t('Check releases')}</button>
           {/* Releases, not a branch: until a newer one is out there is nothing to install. */}
-          <button disabled={!!loading || panelUpdating || hasUpdate !== true} onClick={runPanelUpdate}><RotateCcw size={14} className={panelUpdating ? 'spin' : ''}/> {panelUpdating ? t('Updating panel...') : t('Update panel now')}</button>
+          <button type="button" className={hasUpdate === true ? undefined : 'secondary-light'} disabled={!!loading || panelUpdating || hasUpdate !== true} onClick={runPanelUpdate}
+            title={hasUpdate === true ? undefined : t('No newer release is known.')}><Download size={14} className={panelUpdating ? 'spin' : ''}/> {panelUpdating ? t('Updating panel...') : t('Update panel now')}</button>
         </div>
         {showUpdateLog && <div className="info-box firewall-status update-log-box">
-          <div className="update-log-head"><strong>{t('Update logs')}</strong><button className="secondary-light" disabled={!!loading} onClick={() => loadUpdates(true)}><RefreshCw size={13}/> {t('Refresh')}</button></div>
+          <div className="update-log-head"><strong>{t('Update logs')}</strong><button type="button" className="secondary-light" disabled={!!loading} onClick={() => loadUpdates(true)}><RefreshCw size={13}/> {t('Refresh')}</button></div>
           <pre>{statusText}</pre>
         </div>}
         {/* Number(...) > 0, not the bare value: a progress of 0 made this
@@ -10536,19 +10562,19 @@ function App() {
             </div>
             <div className="progress-bar"><div className="progress-bar-fill" style={{ width: `${Number(panelUpdate.progress_percent) || 0}%` }} /></div>
             {panelUpdate.progress_message && <p className="hint update-progress-msg">{panelUpdate.progress_message}</p>}
-            {panelUpdateLog.length > 0 && (
-              <pre className="update-progress-log">{panelUpdateLog.join('\n')}</pre>
-            )}
+            {panelUpdateLog.length > 0 && <pre className="update-progress-log">{panelUpdateLog.join('\n')}</pre>}
           </div>
         )}
       </section>
       <section className="section">
-        <h2>{t('Auto Update OS')}</h2>
+        <PageHeader title={t('Operating system')} subtitle={t("Package updates for the server itself, separate from the panel's.")}
+          actions={<button type="button" className="secondary-light" disabled={!!loading || osUpdating} onClick={runOsUpdate}><RefreshCw size={14} className={osUpdating ? 'spin' : ''}/> {osUpdating ? t('Updating OS...') : t('Update OS now')}</button>}/>
+        <h3 className="updates-os-title">{t('Auto Update OS')}</h3>
         <div className="firewall-form updates-os-form">
-          <label><span>{t('Enabled')}</span><select value={osAutoUpdate.enabled ? 'on' : 'off'} onChange={e => setOsAutoUpdate(prev => ({ ...prev, enabled: e.target.value === 'on' }))}><option value="on">{t('On')}</option><option value="off">{t('Off')}</option></select></label>
+          <label><span>{t('Status')}</span><select value={osAutoUpdate.enabled ? 'on' : 'off'} onChange={e => setOsAutoUpdate(prev => ({ ...prev, enabled: e.target.value === 'on' }))}><option value="on">{t('On')}</option><option value="off">{t('Off')}</option></select></label>
           <label><span>{t('Mode')}</span><select value={osAutoUpdate.mode} onChange={e => setOsAutoUpdate(prev => ({ ...prev, mode: e.target.value }))}><option value="security">{t('Security')}</option><option value="all">{t('All packages')}</option></select></label>
           <label><span>{t('Auto reboot')}</span><select value={osAutoUpdate.auto_reboot ? 'on' : 'off'} onChange={e => setOsAutoUpdate(prev => ({ ...prev, auto_reboot: e.target.value === 'on' }))}><option value="off">{t('Off')}</option><option value="on">{t('On')}</option></select></label>
-          <button disabled={!!loading} onClick={saveOsAutoUpdate}>{t('Save OS auto update')}</button>
+          <button type="button" disabled={!!loading} onClick={saveOsAutoUpdate}>{t('Save OS auto update')}</button>
         </div>
       </section>
     </>;

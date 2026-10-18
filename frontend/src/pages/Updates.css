@@ -1,0 +1,4 @@
+/* Updates (App.jsx renderUpdates), as SNPanel's pages/Updates.css: the
+   panel's release with its update, then the operating system's packages. */
+.update-actions{justify-content:flex-start}
+.updates-os-title{margin:var(--space-2) 0 var(--space-2);font-size:var(--text-base)}
