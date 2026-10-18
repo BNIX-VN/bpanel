@@ -16,6 +16,8 @@ import 'ace-builds/src-noconflict/theme-tomorrow_night';
 import { Archive, ArchiveRestore, ArrowLeft, Ban, Bot, Boxes, Check, ChevronDown, Clock, Code2, Copy, Cpu, Database, Dices, ExternalLink, Eye, FileText, FolderOpen, Globe, HardDrive, Home, Image, KeyRound, Lock, LogIn, LogOut, MemoryStick, Menu, Moon, MoveRight, Network, Pause, Pencil, Save, Search, Server, Settings as SettingsIcon, Shield, Sun, Trash2, TerminalIcon, Users, X, RefreshCw, Plus, Download, Upload, Play, Square, RotateCcw, AlertCircle, Activity, BrickWall, Bug, LockKeyhole, PackageOpen, ScrollText, ShieldAlert, CheckCircle, Zap, Bell, Mail, Send, Cloud, Inbox, Forward, ShieldCheck, GitBranch, CloudDownload, CloudUpload, Rocket } from 'lucide-react';
 import { Terminal } from './components/Terminal';
 import { UsageChart } from './components/UsageChart';
+import HubTabs from './components/HubTabs';
+import { PAGE_TITLES, hubLanding, hubOf, isHubKey, sidebarItems, sidebarKeyOf } from './lib/navigation';
 import { LANGUAGES, t, useLanguage } from './i18n.js';
 import './shared/style.css';
 import './shared/brand.css';
@@ -63,13 +65,6 @@ function composeWebPorts(plan, wanted) {
   return service?.container_ports || [];
 }
 
-// Pages opened from inside another page instead of the sidebar. They have no
-// nav entry of their own, so without this the header falls back to the first
-// item and titles the page "Dashboard".
-const NAV_PARENT_PAGE = { 'waf-site': 'waf', 'malware-scan': 'malware' };
-
-// 'waf-site' is reached from the WAF overview rather than the sidebar, but it
-// still belongs to Settings so the menu stays open and WAF stays highlighted.
 // Which tool groups a viewer folded on the dashboard (a convenience, per browser).
 const DASHBOARD_COLLAPSED_KEY = 'bpanel.dashboard.collapsedTools';
 
@@ -84,9 +79,12 @@ const PAGE_ROUTES = {
   files: '/filemanager',
   backups: '/backups',
   users: '/users',
-  settings: '/settings',
   'panel-settings': '/panel-settings',
   security: '/security',
+  // The hubs' own addresses (lib/navigation.jsx): each opens its first tab.
+  server: '/server',
+  'security-center': '/security-center',
+  config: '/settings',
   php: '/php',
   firewall: '/firewall',
   waf: '/waf',
@@ -1095,7 +1093,12 @@ function App() {
     ? `${currentUser?.username || username} - ${currentUser.package_name}`
     : (currentUser?.username || username);
 
+  // The role's navigation facts, kept current for navigateToPage, which is
+  // made once (see navCtx below).
+  const navCtxRef = useRef({});
   const navigateToPage = useCallback((nextPage, options = {}) => {
+    // A hub's own address opens its first tab this role may see.
+    if (isHubKey(nextPage)) nextPage = hubLanding(nextPage, navCtxRef.current) || 'dashboard';
     const route = routeForPage(nextPage);
     if (!route) return;
     const nextUrl = route;
@@ -5394,74 +5397,27 @@ function App() {
     return role === 'admin' ? 'Admin' : 'End user';
   }
 
-  // The sidebar in three labelled groups, as OPanel has it - what a site
-  // needs, what guards it, and the server itself - so nothing hides behind a
-  // collapsed "Settings". Labels are English and go through t() when drawn.
-  // The sidebar holds what is used every day (operator, 2026-09-27); the rest
-  // is one click further, on the Settings page. An addon shows only once it
-  // is on - Application, AI assistants, Notifications.
-  // One plain list, top to bottom, as in OPanel: the everyday pages, the
-  // addons that are on, then Settings.
-  const navSections = [
-    { key: 'main', items: [
-      ['dashboard', 'Dashboard', Home],
-      ['websites', 'Websites', Globe],
-      ...(appsFeatureEnabled ? [['applications', 'Applications', Boxes]] : []),
-      ['ssl', 'SSL', Lock],
-      ['databases', 'Databases', Database],
-      ['cron', 'Cron', Clock],
-      ['files', 'File manager', FolderOpen],
-      ['sftp', 'SFTP accounts', KeyRound],
-      ...(canOpenTerminal ? [['terminal', 'Terminal', TerminalIcon]] : []),
-      ['backups', 'Backups', Archive],
-      ...(canManageUsers ? [['users', 'Panel users', Users]] : []),
-      ...(mailAddonInstalled ? [['mail', 'Email', Mail]] : []),
-      ...(dnsAddonInstalled ? [['dns', 'DNS Manager', Network]] : []),
-      ...(gitAddonInstalled ? [['git', 'Git', GitBranch]] : []),
-      ...(mcpAddonInstalled ? [['mcp', 'AI assistants (MCP)', Bot]] : []),
-      ...(notificationsAddonInstalled && isAdmin ? [['notifications', 'Notifications', Bell]] : []),
-      ...(malwareAddonInstalled && isAdmin ? [['malware', 'Malware Scanner', Bug]] : []),
-      ['settings', 'Settings', SettingsIcon],
-    ] },
-  ].filter(section => section.items.length > 0)
-    // A reseller's "Panel users" are its customers, and the page says so.
-    .map(section => ({ ...section, items: section.items.map(item => (isReseller && item[0] === 'users' ? ['users', 'Customers', item[2]] : item)) }));
-
-  // Everything else, on the Settings page: [page, label, icon, summary].
-  const settingsGroups = [
-    { title: 'Security', items: [
-      isAdmin && ['firewall', 'Firewall', BrickWall, 'Open ports, blocked addresses and blocklists'],
-      ['waf', 'WAF', ShieldAlert, 'Web application firewall for each website'],
-      isAdmin && ['access-logs', 'Access logs', ScrollText, 'Visitors and what the WAF blocked'],
-      ['security', 'Account security', LockKeyhole, 'Password, two-factor authentication and passkeys'],
-    ] },
-    { title: 'Server status', items: [
-      isAdmin && ['processes', 'Process monitor', Cpu, 'What is running now, as top -c shows it'],
-      isAdmin && ['ram-usage', 'RAM usage', MemoryStick, "Where the server's memory is"],
-      isAdmin && ['disk-usage', 'Disk usage', HardDrive, 'Disks, and what takes the space'],
-      isAdmin && ['traffic', 'Traffic', Network, 'Network traffic of each interface'],
-    ] },
-    { title: 'System', items: [
-      isAdmin && ['panel-settings', 'Panel settings', SettingsIcon, 'Branding, panel address and certificate'],
-      isAdmin && ['services', 'Services', Activity, "Start, stop and check the server's daemons"],
-      isAdmin && ['php', 'PHP config', Code2, 'PHP versions, limits and extensions'],
-      isAdmin && ['updates', 'Updates', RefreshCw, 'Panel and system updates'],
-      isAdmin && ['addons', 'Addons', PackageOpen, 'Install and turn on optional features'],
-    ] },
-  ].map(group => ({ ...group, items: group.items.filter(Boolean) })).filter(group => group.items.length > 0);
-  const settingsItems = settingsGroups.flatMap(group => group.items);
-
-  const navItems = navSections.flatMap(section => section.items);
-  const basePage = NAV_PARENT_PAGE[page] || page;
-  // A page reached from Settings lights up Settings in the sidebar...
-  // Resource usage is reached from the dashboard and keeps it lit.
-  const navPage = settingsItems.some(([key]) => key === basePage) ? 'settings' : basePage === 'usage' ? 'dashboard' : basePage;
-  const activeNavItem = navItems.find(([key]) => key === navPage) || navItems[0];
-  // ...and is still called by its own name at the top: "Firewall", not "Settings".
-  const hiddenPages = limitsOn && !isAdmin ? [['usage', 'Resource usage', Activity]] : [];
-  const pageItem = [...navItems, ...settingsItems, ...hiddenPages].find(([key]) => key === basePage) || activeNavItem;
-  // Its title is a crumb back to Settings, as in OPanel.
-  const settingsPageItem = settingsItems.find(([key]) => key === basePage);
+  // Where everything is (lib/navigation.jsx): the sidebar's everyday pages,
+  // and the Server/Security/Settings hubs with their pages as tabs, as
+  // SNPanel and OPanel's own current shell lay it out.
+  const navCtx = {
+    isAdmin, isReseller, canOpenTerminal, appsFeatureEnabled,
+    mailAddonInstalled, dnsAddonInstalled, gitAddonInstalled, mcpAddonInstalled,
+    notificationsAddonInstalled, malwareAddonInstalled,
+  };
+  navCtxRef.current = navCtx;
+  // A hub's own address typed or bookmarked (/server, /settings): its first
+  // tab, once the account is known.
+  useEffect(() => {
+    if (currentUser && isHubKey(page)) navigateToPage(page, { replace: true });
+  }, [page, currentUser, navigateToPage]);
+  const sideItems = sidebarItems(navCtx);
+  const sidebarPage = sidebarKeyOf(page, navCtx, sideItems);
+  const activeHub = hubOf(page, navCtx);
+  const litItem = sideItems.find(([key]) => key === sidebarPage) || sideItems[0];
+  const pageTitle = t(PAGE_TITLES[page] || litItem?.[1] || 'Dashboard');
+  // A newer release waiting: a dot on the avatar and its line in the menu.
+  const panelWaiting = isAdmin && resourceUsage?.panel_update?.update_available === true;
 
   function renderNotifications() {
     const errorMessage = formatApiError(error, '').trim();
@@ -5855,48 +5811,6 @@ function App() {
         </div>;
       })}
     </section>;
-  }
-
-  // --- The server's own pages, behind the top bar's status chips -------------------------
-  // (operator, 2026-10-06: CPU, RAM, disk and network sit in the top bar; each
-  // opens its page.) Administrators only.
-  function statTone(percent) {
-    const value = Number(percent) || 0;
-    return value >= 90 ? 'bad' : value >= 75 ? 'warn' : 'ok';
-  }
-
-  function renderTopStats() {
-    const cpu = resourceUsage?.cpu || {};
-    const memory = resourceUsage?.memory || {};
-    const disk = resourceUsage?.disk || {};
-    const network = resourceUsage?.network || {};
-    const rate = (Number(network.rx_per_sec) || 0) + (Number(network.tx_per_sec) || 0);
-    const known = !!resourceUsage;
-    const chips = [
-      ['processes', Cpu, 'CPU', known ? formatPercent(cpu.percent) : '--', statTone(cpu.percent), 'CPU: open the process monitor'],
-      ['ram-usage', MemoryStick, 'RAM', known ? formatPercent(memory.percent) : '--', statTone(memory.percent), 'RAM: where the memory is'],
-      ['disk-usage', HardDrive, 'Disk', known ? formatPercent(disk.percent) : '--', statTone(disk.percent), 'Disk: what takes the space'],
-      ['traffic', Network, 'Network', known ? `${formatBytes(rate)}/s` : '--', 'ok', 'Network: traffic of each interface'],
-    ];
-    return <nav className="top-stats" aria-label={t('Server status')}>
-      {chips.map(([key, Icon, label, value, tone, title]) => <button key={key} type="button"
-        className={`top-stat tone-${tone}${page === key ? ' active' : ''}`} onClick={() => navigateToPage(key)} title={t(title)} aria-label={`${t(label)} ${value}`}>
-        <Icon size={14}/><span className="top-stat-label">{t(label)}</span><b>{value}</b>
-      </button>)}
-    </nav>;
-  }
-
-  // The version opens Updates for an administrator, with a dot while a newer
-  // release waits; anyone else sees the number only.
-  function renderTopVersion() {
-    if (!isAdmin) return <span className="top-version" title={t('Panel version')}>v{appVersion}</span>;
-    const waiting = resourceUsage?.panel_update?.update_available === true;
-    const latest = resourceUsage?.panel_update?.latest_version;
-    const title = waiting ? t('Panel update {version} is available.', { version: latest }) : t('Updates');
-    return <button type="button" className={`top-version${waiting ? ' has-update' : ''}${page === 'updates' ? ' active' : ''}`}
-      onClick={() => navigateToPage('updates')} title={title} aria-label={`${t('Panel version')} ${appVersion}. ${title}`}>
-      v{appVersion}{waiting && <i className="top-version-dot" aria-hidden="true" />}
-    </button>;
   }
 
   function renderProcessMonitor() {
@@ -6575,23 +6489,6 @@ function App() {
         </div>
       </section>}
     </>;
-  }
-
-  function renderSettingsHub() {
-    return <section className="section settings-hub">
-      <div className="section-title">
-        <div><h2>{t('Settings')}</h2><p className="hint">{t('Security, server and panel configuration.')}</p></div>
-      </div>
-      {settingsGroups.map(group => <div className="settings-hub-group" key={group.title}>
-        <h3>{t(group.title)}</h3>
-        <div className="settings-hub-grid">
-          {group.items.map(([key, label, Icon, summary]) => <button key={key} type="button" className="settings-tile" onClick={() => navigateToPage(key)}>
-            <span className="settings-tile-icon"><Icon size={18}/></span>
-            <span className="settings-tile-text"><strong>{t(label)}</strong><small>{t(summary)}</small></span>
-          </button>)}
-        </div>
-      </div>)}
-    </section>;
   }
 
   // Which addon a page belongs to decides the words: this said
@@ -11574,7 +11471,6 @@ function App() {
     if (page === 'mcp') return (mcpAddonInstalled || isAdmin) ? renderMcp() : renderAddonMissing('mcp');
     // Administrators only (operator, 2026-09-27): customers get no notifications.
     if (page === 'notifications') return !isAdmin ? renderAdminOnly() : notificationsAddonInstalled ? renderNotificationsPage() : renderAddonMissing('notifications');
-    if (page === 'settings') return renderSettingsHub();
     if (page === 'panel-settings') return renderPanelSettings();
     if (page === 'users') return renderUsers();
     if (page === 'usage') return renderResourceUsage();
@@ -11642,7 +11538,7 @@ function App() {
 
   if (standaloneEditor) return renderStandaloneEditor();
 
-  const ActiveIcon = pageItem?.[2] || Home;
+  const ActiveIcon = litItem?.[2] || Home;
 
   return <main className="app-shell">
     <section className="layout">
@@ -11659,51 +11555,60 @@ function App() {
           <button className="sidebar-close" onClick={() => setMobileMenuOpen(false)} aria-label={t('Close menu')}><X size={18}/></button>
         </div>
         <nav className="sidebar-nav">
-          {navSections.map(section => <div className="sidebar-section" key={section.key}>
-            {section.title && <p className="sidebar-section-title">{t(section.title)}</p>}
-            {section.items.map(([key, label, Icon]) => <button key={key} type="button" className={navPage === key ? 'active' : ''} onClick={() => navigateToPage(key)} aria-current={navPage === key ? 'page' : undefined}>
-              <Icon size={16}/><span>{t(label)}</span>
-            </button>)}
-          </div>)}
-        </nav>
-        <div className="sidebar-foot">
-          <div className="user-menu sidebar-user" ref={userMenuRef}>
-            <button type="button" className="user-menu-trigger" onClick={() => setUserMenuOpen(open => !open)} aria-haspopup="menu" aria-expanded={userMenuOpen} title={t('Logged in as')}>
-              <span className="user-avatar" aria-hidden="true">{(currentUser?.username || username || '?').slice(0, 1).toUpperCase()}</span>
-              <span className="user-menu-name">{currentUser?.username || username}</span>
-              <ChevronDown size={14} className="user-menu-chevron"/>
-            </button>
-            {userMenuOpen && <div className="user-menu-panel" role="menu">
-              <div className="user-menu-head">
-                <strong>{accountLabel}</strong>
-                <small>{currentUser?.email || t(roleLabel(currentUser?.role))}</small>
-              </div>
-              <button type="button" role="menuitem" onClick={() => { setUserMenuOpen(false); openProfileModal(); }}><KeyRound size={15}/>{t('Profile')}</button>
-              <button type="button" role="menuitem" onClick={() => { setUserMenuOpen(false); navigateToPage('security'); }}><LockKeyhole size={15}/>{t('Account security')}</button>
-              {currentUser?.impersonator && <button type="button" role="menuitem" onClick={() => { setUserMenuOpen(false); returnToImpersonator(); }}><ArrowLeft size={15}/>{t('Back to {name}', { name: currentUser.impersonator })}</button>}
-              <button type="button" role="menuitem" className="user-menu-logout" onClick={() => { setUserMenuOpen(false); logout(); }}><LogOut size={15}/>{t('Logout')}</button>
-              {appVersion && <small className="user-menu-version">{panelSettings.app_name || 'BPanel'} v{appVersion}</small>}
-            </div>}
+          <div className="sidebar-section">
+            {sideItems.map(([key, label, Icon]) => {
+              const current = sidebarPage === key;
+              return <button key={key} type="button" className={current ? 'active' : ''} onClick={() => navigateToPage(key)} aria-current={current ? 'page' : undefined}>
+                <Icon size={16}/><span>{t(label)}</span>
+              </button>;
+            })}
           </div>
-          <LanguageToggle language={language} onChange={changeLanguage} className="sidebar-tool"/>
-          <ThemeToggle theme={theme} onToggle={toggleTheme} className="sidebar-tool" size={15}/>
-        </div>
+        </nav>
       </aside>
       <div className="content">
         <section className="topbar">
           <button className="mobile-nav-toggle" onClick={() => setMobileMenuOpen(o => !o)} aria-expanded={mobileMenuOpen} aria-label={t('Toggle navigation')}>
-            <Menu size={20}/><span><ActiveIcon size={17}/>{t(pageItem?.[1] || 'Menu')}</span>
+            <Menu size={20}/><span><ActiveIcon size={17}/>{pageTitle}</span>
           </button>
           <div className="page-title">
-            {settingsPageItem
-              ? <h1 className="page-crumbs"><button type="button" onClick={() => navigateToPage('settings')}>{t('Settings')}</button><span aria-hidden="true">›</span><span className="page-crumb-current">{t(settingsPageItem[1])}</span></h1>
-              : <h1>{pageItem?.[1] ? t(pageItem[1]) : (panelSettings.app_name || 'BPanel')}</h1>}
+            {activeHub && activeHub.tabs.length > 1
+              ? <h1 className="page-crumbs">
+                {/* The hub, a link to its first tab; then the page. */}
+                <button type="button" onClick={() => navigateToPage(activeHub.tabs[0].page)}>{t(activeHub.hub.title)}</button>
+                <span aria-hidden="true">›</span>
+                <span className="page-crumb-current">{pageTitle}</span>
+              </h1>
+              : <h1>{pageTitle}</h1>}
           </div>
-          {/* The page title, then the server's status and the version, as in
-              OPanel; the account menu is at the foot of the sidebar. */}
+          {/* The language, the theme and the account's menu, as SNPanel has
+              them; the server's figures are the Dashboard's, and the version
+              is in the account's menu, opening Updates. */}
           <div className="top-actions">
-            {isAdmin && renderTopStats()}
-            {appVersion && renderTopVersion()}
+            <LanguageToggle language={language} onChange={changeLanguage} className="top-tool"/>
+            <ThemeToggle theme={theme} onToggle={toggleTheme} className="top-tool" size={15}/>
+            <div className="user-menu top-user" ref={userMenuRef}>
+              <button type="button" className="user-menu-trigger" onClick={() => setUserMenuOpen(open => !open)} aria-haspopup="menu" aria-expanded={userMenuOpen} title={t('Logged in as')}>
+                <span className="user-avatar" aria-hidden="true">{(currentUser?.username || username || '?').slice(0, 1).toUpperCase()}{panelWaiting && <i className="user-menu-dot"/>}</span>
+                <span className="user-menu-name">{currentUser?.username || username}</span>
+                <ChevronDown size={14} className="user-menu-chevron"/>
+              </button>
+              {userMenuOpen && <div className="user-menu-panel" role="menu">
+                <div className="user-menu-head">
+                  <strong>{accountLabel}</strong>
+                  <small>{currentUser?.email || t(roleLabel(currentUser?.role))}</small>
+                </div>
+                <button type="button" role="menuitem" onClick={() => { setUserMenuOpen(false); openProfileModal(); }}><KeyRound size={15}/>{t('Profile')}</button>
+                <button type="button" role="menuitem" onClick={() => { setUserMenuOpen(false); navigateToPage('security'); }}><LockKeyhole size={15}/>{t('Account security')}</button>
+                {currentUser?.impersonator && <button type="button" role="menuitem" onClick={() => { setUserMenuOpen(false); returnToImpersonator(); }}><ArrowLeft size={15}/>{t('Back to {name}', { name: currentUser.impersonator })}</button>}
+                {/* The panel's own version, and whether an update is waiting,
+                    is an administrator's concern - an end user sees neither. */}
+                {appVersion && isAdmin && <button type="button" role="menuitem" className={`user-menu-version-item${panelWaiting ? ' has-update' : ''}`} onClick={() => { setUserMenuOpen(false); navigateToPage('updates'); }}>
+                  <RefreshCw size={15}/><span>{panelSettings.app_name || 'BPanel'} v{appVersion}</span>
+                  <small>{panelWaiting ? t('Panel update {version} is available.', { version: resourceUsage?.panel_update?.latest_version }) : t('Updates')}</small>
+                </button>}
+                <button type="button" role="menuitem" className="user-menu-logout" onClick={() => { setUserMenuOpen(false); logout(); }}><LogOut size={15}/>{t('Logout')}</button>
+              </div>}
+            </div>
           </div>
         </section>
         <div className="content-body">
@@ -11712,6 +11617,8 @@ function App() {
             <LogIn size={15}/> <span>{t('You are logged in as {name}.', { name: currentUser.username })}</span>
             <button type="button" className="mini" disabled={!!loading} onClick={returnToImpersonator}><ArrowLeft size={14}/> {t('Back to {name}', { name: currentUser.impersonator })}</button>
           </div>}
+          {/* The hub's pages as tabs, under the top bar. */}
+          <HubTabs found={activeHub} page={page} navigateToPage={navigateToPage} routeForPage={routeForPage}/>
           {renderPage()}
           {loading && <div className="loading"><span></span>{t(loading)}</div>}
         </div>
