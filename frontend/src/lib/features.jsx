@@ -15,7 +15,7 @@ const msg = (text) => text;
 export const TILES = {
   // Accounts
   users: { label: msg('Panel users'), labels: { reseller: msg('Customers') }, icon: 'users', page: 'users', before: 'usersList', roles: ['admin', 'reseller'] },
-  'user-add': { label: msg('Add user'), labels: { reseller: msg('Add customer') }, icon: 'user-add', page: 'users', before: 'usersAdd', roles: ['admin', 'reseller'] },
+  'user-add': { label: msg('Add User'), labels: { reseller: msg('Add customer') }, icon: 'user-add', page: 'users', before: 'usersAdd', roles: ['admin', 'reseller'] },
   packages: { label: msg('Packages'), icon: 'packages', page: 'users', before: 'usersPackages', roles: ['admin', 'reseller'] },
   // Websites and domains
   websites: { label: msg('Websites'), icon: 'websites', page: 'websites' },
